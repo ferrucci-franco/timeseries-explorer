@@ -1,0 +1,10 @@
+# Ignore everything
+*
+
+# Allow specific file types in root
+!*.js
+!*.html
+!*.css
+
+# Allow .gitignore itself
+!.gitignore

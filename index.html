@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenModelica Result Viewer</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+<body class="theme-light">
+    <!-- Top Bar -->
+    <div class="top-bar">
+        <div class="top-bar-left">
+            <h1 data-i18n="appTitle">OpenModelica Result Viewer</h1>
+            <span id="file-name" class="file-name"></span>
+        </div>
+        <div class="top-bar-right">
+            <!-- Language Selector -->
+            <div class="language-selector">
+                <button class="lang-btn active" data-lang="en">EN</button>
+                <button class="lang-btn" data-lang="fr">FR</button>
+                <button class="lang-btn" data-lang="es">ES</button>
+                <button class="lang-btn" data-lang="it">IT</button>
+            </div>
+
+            <!-- Theme Toggle -->
+            <button id="theme-toggle" class="icon-btn" title="Toggle theme">
+                <span class="icon">🌙</span>
+            </button>
+
+            <!-- Action Buttons -->
+            <button id="load-new-file" class="icon-btn" title="Load new file">
+                <span class="icon">📂</span>
+            </button>
+            <button id="toggle-sidebar" class="icon-btn" title="Toggle sidebar">
+                <span class="icon">📋</span>
+            </button>
+            <button id="auto-zoom" class="icon-btn" title="Auto-fit all plots" disabled>
+                <span class="icon">⛶</span>
+            </button>
+            <button id="clear-plots" class="icon-btn" title="Clear all plots" disabled>
+                <span class="icon">🗑️</span>
+            </button>
+            <button id="reload-file" class="icon-btn" title="Reload file" disabled>
+                <span class="icon">🔄</span>
+            </button>
+            <button id="reset-layout" class="icon-btn" title="Reset layout">
+                <span class="icon">🪟</span>
+            </button>
+            <button id="load-example-btn" class="icon-btn" title="Load example">
+                <span class="icon">🎓</span>
+            </button>
+            <button id="help-btn" class="icon-btn" title="Help">
+                <span class="icon">❓</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Sidebar -->
+        <div id="sidebar" class="sidebar">
+            <!-- Resize Handle -->
+            <div class="sidebar-resize-handle"></div>
+
+            <!-- Files Panel -->
+            <div class="sidebar-section" id="files-section">
+                <h3 data-i18n="files">Files</h3>
+                <div id="files-list" class="files-list"></div>
+            </div>
+
+            <!-- Variables Panel -->
+            <div class="sidebar-section">
+                <div class="section-header">
+                    <h3 data-i18n="variables">Variables</h3>
+                    <div class="tree-controls">
+                        <button id="toggle-descriptions" class="tree-control-btn">
+                            <span>📝</span>
+                        </button>
+                        <button id="expand-all" class="tree-control-btn">
+                            <span>⬇</span>
+                        </button>
+                        <button id="collapse-all" class="tree-control-btn">
+                            <span>⬆</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="variables-tree" class="variables-tree">
+                    <!-- Tree will be populated here -->
+                </div>
+            </div>
+
+            <!-- Layout Configuration -->
+            <div class="sidebar-section">
+                <h3 data-i18n="layout">Layout</h3>
+                <p class="layout-hint" data-i18n="layoutHint">Hover a panel to split or close it.</p>
+            </div>
+
+            <!-- Options -->
+            <div class="sidebar-section">
+                <h3 data-i18n="options">Options</h3>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="link-time-axes" checked>
+                    <span data-i18n="linkTimeAxes">Link time axes</span>
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="sync-hover">
+                    <span data-i18n="syncHover">Synchronized hover</span>
+                </label>
+                <!-- Legend position -->
+                <div class="options-group">
+                    <span class="options-group-label" data-i18n="legendPosition">Legend</span>
+                    <label class="radio-label">
+                        <input type="radio" name="legend-pos" value="overlay" checked>
+                        <span data-i18n="legendOverlay">Overlay (top-left)</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="legend-pos" value="above">
+                        <span data-i18n="legendBelow">Above plot</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="legend-pos" value="right">
+                        <span data-i18n="legendRight">Right of plot</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Author footer -->
+            <div class="sidebar-author">
+                Franco FERRUCCI &nbsp;·&nbsp;
+                <a href="https://ferrucci-franco.github.io/electronics/" target="_blank" rel="noopener">ferrucci-franco.github.io</a>
+            </div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="content-area">
+            <!-- File Drop Zone (Initial) -->
+            <div id="drop-zone" class="drop-zone active">
+                <div class="drop-zone-content">
+                    <span class="icon">📁</span>
+                    <h2 data-i18n="dragFile">Drag & drop a .mat file here</h2>
+                    <p data-i18n="or">or</p>
+                    <button id="file-select-btn" class="primary-btn" data-i18n="selectFile">Select File</button>
+                    <input type="file" id="file-input" accept=".mat" style="display: none;">
+                </div>
+            </div>
+
+            <!-- Plots Area -->
+            <div id="plots-area" class="plots-area">
+                <!-- Layout panels rendered here by LayoutManager -->
+            </div>
+        </div>
+    </div>
+
+    <script src="example-data.js"></script>
+    <script src="mat-parser.js"></script>
+    <script src="i18n.js"></script>
+    <script src="modal.js"></script>
+    <script src="layout-manager.js"></script>
+    <script src="plot-manager.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
