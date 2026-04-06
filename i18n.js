@@ -9,7 +9,7 @@ const i18n = {
     translations: {
         en: {
             // App title
-            appTitle: 'OpenModelica Result Viewer',
+            appTitle: 'OpenModelica/Dymola Result Viewer',
 
             // Top bar
             variables: 'Variables',
@@ -108,7 +108,7 @@ const i18n = {
 
         fr: {
             // App title
-            appTitle: 'Visualiseur de résultats OpenModelica',
+            appTitle: 'Visualiseur de résultats OpenModelica/Dymola',
 
             // Top bar
             variables: 'Variables',
@@ -206,7 +206,7 @@ const i18n = {
 
         es: {
             // App title
-            appTitle: 'Visor de resultados OpenModelica',
+            appTitle: 'Visor de resultados OpenModelica/Dymola',
 
             // Top bar
             variables: 'Variables',
@@ -304,7 +304,7 @@ const i18n = {
 
         it: {
             // App title
-            appTitle: 'Visualizzatore risultati OpenModelica',
+            appTitle: 'Visualizzatore risultati OpenModelica/Dymola',
 
             // Top bar
             variables: 'Variabili',
