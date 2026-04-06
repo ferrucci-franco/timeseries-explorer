@@ -388,6 +388,9 @@ class PlotManager {
         } else {
             const t = plot.traces[plot.traces.length - 1];
             Plotly.addTraces(plot.div, this._buildTimeTrace(t));
+            // Update Y axis title: clear when 2+ traces (X/time label always stays)
+            const layout = this._buildTimeLayout(plot);
+            Plotly.relayout(plot.div, { 'yaxis.title': layout.yaxis.title });
         }
     }
 
@@ -525,12 +528,27 @@ class PlotManager {
             const panelEl = plot.div.closest('.layout-panel');
             this._addOneMarkerTrace(plot, plot.phaseTraces[plot.phaseTraces.length - 1]);
         });
-        // Update legend visibility only (no scene keys → no camera reset)
+        // Update legend and axis titles (no scene keys → no camera reset for 3D)
         const { bg, gridColor, legendBg } = this._colors();
-        Plotly.relayout(plot.div, {
+        const relayoutUpdate = {
             showlegend: true,
             legend: this._legendConfig(legendBg, gridColor),
-        });
+        };
+        if (plot.mode === 'phase2d') {
+            const layout = this._buildPhase2DLayout(plot);
+            relayoutUpdate['xaxis.title'] = layout.xaxis.title;
+            relayoutUpdate['yaxis.title'] = layout.yaxis.title;
+        } else if (plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
+            const isTimez = plot.mode === 'phase2dt';
+            const layout = this._buildPhase3DLayout(plot, isTimez);
+            // Read current camera so relayout doesn't reset it
+            const cam = plot.div._fullLayout?.scene?.camera;
+            relayoutUpdate['scene.xaxis.title'] = layout.scene.xaxis.title;
+            relayoutUpdate['scene.yaxis.title'] = layout.scene.yaxis.title;
+            relayoutUpdate['scene.zaxis.title'] = layout.scene.zaxis.title;
+            if (cam) relayoutUpdate['scene.camera'] = cam;
+        }
+        Plotly.relayout(plot.div, relayoutUpdate);
     }
 
     _destroyChart(panelId) {
@@ -712,12 +730,13 @@ class PlotManager {
         const firstTrace = plot.traces[0];
         const timeVar  = firstTrace ? this._getTimeVar(firstTrace.fileId) : this._getTimeVar();
         const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
+        const multiTrace = plot.traces.length > 1;
         const units    = [...new Set(plot.traces.map(t => {
             const d = this.files.get(t.fileId)?.data;
             const v = d?.variables[t.varName];
             return v ? this._extractUnit(v.description) : '';
         }).filter(Boolean))];
-        const yTitle = units.length === 1 ? units[0] : '';
+        const yTitle = (!multiTrace && units.length === 1) ? units[0] : '';
 
         return {
             paper_bgcolor: bg, plot_bgcolor: bg,
@@ -726,7 +745,7 @@ class PlotManager {
             xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
                      title: { text: `Time [${timeUnit}]`, font: { size: 10 } } },
             yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
-                     title: yTitle ? { text: yTitle, font: { size: 10 } } : undefined },
+                     title: (yTitle && !multiTrace) ? { text: yTitle, font: { size: 10 } } : { text: '' } },
             legend: this._legendConfig(legendBg, gridColor),
             margin:    this._marginConfig(),
             autosize:  true,
@@ -754,6 +773,7 @@ class PlotManager {
     _buildPhase2DLayout(plot) {
         const { bg, gridColor, fontColor, legendBg } = this._colors();
         const first = plot.phaseTraces[0] || {};
+        const multiTrace = plot.phaseTraces.length > 1;
         const xu = this._varUnit(first.x, first.fileId);
         const yu = this._varUnit(first.y, first.fileId);
         return {
@@ -762,9 +782,9 @@ class PlotManager {
             showlegend: true,
             legend: this._legendConfig(legendBg, gridColor),
             xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
-                     title: { text: xu ? `${first.x} [${xu}]` : (first.x || 'X'), font: { size: 10 } } },
+                     title: multiTrace ? { text: '' } : { text: xu ? `${first.x} [${xu}]` : (first.x || 'X'), font: { size: 10 } } },
             yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
-                     title: { text: yu ? `${first.y} [${yu}]` : (first.y || 'Y'), font: { size: 10 } } },
+                     title: multiTrace ? { text: '' } : { text: yu ? `${first.y} [${yu}]` : (first.y || 'Y'), font: { size: 10 } } },
             margin: { l: 60, r: 15, t: 10, b: 50 },
             autosize: true, hovermode: 'closest',
         };
@@ -828,6 +848,7 @@ class PlotManager {
             zLabel = zu ? `${first.z} [${zu}]` : (first.z || 'Z');
         }
 
+        const multiTrace = plot.phaseTraces.length > 1;
         const axisStyle = { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor,
                             backgroundcolor: bg, showbackground: true, zeroline: false };
         return {
@@ -836,9 +857,9 @@ class PlotManager {
             showlegend: true,
             legend: this._legendConfig(legendBg, gridColor),
             scene: {
-                xaxis: { ...axisStyle, title: { text: xLabel } },
-                yaxis: { ...axisStyle, title: { text: yLabel } },
-                zaxis: { ...axisStyle, title: { text: zLabel } },
+                xaxis: { ...axisStyle, title: multiTrace ? { text: '' } : { text: xLabel } },
+                yaxis: { ...axisStyle, title: (multiTrace && !isTimez) ? { text: '' } : { text: yLabel } },
+                zaxis: { ...axisStyle, title: multiTrace ? { text: '' } : { text: zLabel } },
                 camera: { projection: { type: plot.projection || 'orthographic' } },
                 bgcolor: bg,
             },
