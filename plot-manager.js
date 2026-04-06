@@ -731,12 +731,13 @@ class PlotManager {
         const timeVar  = firstTrace ? this._getTimeVar(firstTrace.fileId) : this._getTimeVar();
         const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
         const multiTrace = plot.traces.length > 1;
-        const units    = [...new Set(plot.traces.map(t => {
-            const d = this.files.get(t.fileId)?.data;
-            const v = d?.variables[t.varName];
-            return v ? this._extractUnit(v.description) : '';
-        }).filter(Boolean))];
-        const yTitle = (!multiTrace && units.length === 1) ? units[0] : '';
+        let yTitle = '';
+        if (!multiTrace && firstTrace) {
+            const d = this.files.get(firstTrace.fileId)?.data;
+            const v = d?.variables[firstTrace.varName];
+            const unit = v ? this._extractUnit(v.description) : '';
+            yTitle = unit ? `${firstTrace.varName} [${unit}]` : firstTrace.varName;
+        }
 
         return {
             paper_bgcolor: bg, plot_bgcolor: bg,
