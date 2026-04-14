@@ -584,4 +584,42 @@ class MatParser {
         }
         return count;
     }
+
+    /**
+     * Find the derivative variable name for a given variable.
+     * Tries "der(name)" first, then common OpenModelica patterns.
+     * @param {string} varName - e.g. "pendulum.phi"
+     * @param {Object} variables - flat dict of all variables
+     * @returns {string|null} - derivative variable name if found
+     */
+    findDerivative(varName, variables) {
+        // Most common: der(varName)
+        const derName = `der(${varName})`;
+        if (variables[derName]) return derName;
+        return null;
+    }
+
+    /**
+     * Detect vector siblings for a variable like "x[1]" → ["x[1]","x[2]","x[3]"].
+     * @param {string} varName - e.g. "body.x[1]"
+     * @param {Object} variables - flat dict of all variables
+     * @returns {string[]|null} - sorted array of sibling names, or null if not a vector
+     */
+    findVectorSiblings(varName, variables) {
+        const m = varName.match(/^(.+)\[(\d+)\]$/);
+        if (!m) return null;
+        const base = m[1];
+        const siblings = [];
+        for (const name of Object.keys(variables)) {
+            const sm = name.match(/^(.+)\[(\d+)\]$/);
+            if (sm && sm[1] === base) siblings.push(name);
+        }
+        if (siblings.length < 2) return null;
+        siblings.sort((a, b) => {
+            const ia = parseInt(a.match(/\[(\d+)\]$/)[1]);
+            const ib = parseInt(b.match(/\[(\d+)\]$/)[1]);
+            return ia - ib;
+        });
+        return siblings;
+    }
 }

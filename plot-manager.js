@@ -4,7 +4,7 @@
  * Panel modes:
  *   'timeseries'  — one or more variables vs time (default)
  *   'phase2d'     — x(t) vs y(t)  → 2-D scatter
- *   'phase2dt'    — x(t) vs y(t) vs t → 3-D scatter (z = time)
+ *   'phase2dt'    — x(t) vs y(t) vs t → 3-D scatter (plotly X=time, Y=var x, Z=var y)
  *   'phase3d'     — x(t) vs y(t) vs z(t) → 3-D scatter
  *
  * Panel state per panelId:
@@ -12,7 +12,8 @@
  */
 
 class PlotManager {
-    constructor() {
+    constructor(parser) {
+        this.parser         = parser || null;
         this.plots          = new Map();
         this.files          = new Map();   // fileId → { name, data }
         this.activeFileId   = null;
@@ -21,6 +22,7 @@ class PlotManager {
         this.legendPosition = 'overlay';
         this._syncing       = false;
         this.syncHover      = false;
+        this.hoverProximity = true;
         this._hovering      = false;
 
         this.onPanelMount   = (id, el) => this._mountPanel(id, el);
@@ -161,7 +163,15 @@ class PlotManager {
     setTheme(theme)            { this.theme = theme;          this._relayoutAll(); }
     setSyncAxes(v)             { this.syncAxes = v; }
     setLegendPosition(pos)     { this.legendPosition = pos;   this._relayoutAll(); }
-    setSyncHover(v)            { this.syncHover = v; if (!v) this._clearHoverMarkers(); }
+    setSyncHover(v) {
+        this.syncHover = v;
+        document.body.classList.toggle('sync-hover-active', v);
+        if (!v) this._clearHoverMarkers();
+    }
+    setHoverProximity(v) {
+        this.hoverProximity = v;
+        this._relayoutAll();
+    }
 
     resizeAll() {
         for (const [, plot] of this.plots) {
@@ -201,7 +211,11 @@ class PlotManager {
 
         // Re-create chart if this panel already had data (after language/layout re-render)
         if (this._hasContent(plot)) {
-            this._createChart(panelId, panelEl);
+            if (plot.mode === 'state-anim') {
+                this._createStateAnimChart(panelId, panelEl);
+            } else {
+                this._createChart(panelId, panelEl);
+            }
         } else {
             this._updatePlaceholder(panelId, panelEl);
         }
@@ -210,6 +224,7 @@ class PlotManager {
     _unmountPanel(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        this._stopAnim(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); }
         if (plot.div)            { Plotly.purge(plot.div); }
         this.plots.delete(panelId);  // panel is gone from DOM — remove completely
@@ -221,12 +236,17 @@ class PlotManager {
         const plot = this.plots.get(panelId);
         if (!plot || plot.mode === mode) return;
 
+        // Stop animation if running
+        this._stopAnim(plot);
+
         // Tear down existing chart
         this._destroyChart(panelId);
         plot.mode         = mode;
         plot.traces       = [];
         plot.phaseTraces  = [];
         plot.phasePending = { x: null, y: null, z: null, fileId: null };
+        plot.stateSlots   = { x: [], dx: [], fileId: null };
+        plot.animFrame    = 0;
 
         // Update UI — re-inject all buttons so view labels reflect the new mode
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
@@ -335,17 +355,24 @@ class PlotManager {
                 : i18n.t('dropToAddTrace');
         }
 
+        // State-anim mode
+        if (mode === 'state-anim') {
+            const sx = plot.stateSlots?.x || [];
+            if (sx.length === 0) return i18n.t('dropStateX1');
+            if (sx.length === 1) return i18n.t('dropStateX2');
+            return i18n.t('dropStateX3');
+        }
+
         // Phase modes: guide axis by axis
-        // When pending is empty, we're starting a new trace
         switch (mode) {
             case 'phase2d':
-                return !pp.x ? '① Drop X variable here' : '② Drop Y variable here';
+                return !pp.x ? i18n.t('dropX') : i18n.t('dropY');
             case 'phase2dt':
-                return !pp.x ? '① Drop X variable here' : '② Drop Y variable here (time = automatic)';
+                return !pp.x ? i18n.t('dropX') : i18n.t('dropYAutoTime');
             case 'phase3d':
-                return !pp.x ? '① Drop X variable here'
-                     : !pp.y ? '② Drop Y variable here'
-                     :         '③ Drop Z variable here';
+                return !pp.x ? i18n.t('dropX')
+                     : !pp.y ? i18n.t('dropY')
+                     :         i18n.t('dropZ');
         }
         return i18n.t('dropVariableHere');
     }
@@ -364,6 +391,8 @@ class PlotManager {
 
         if (plot.mode === 'timeseries') {
             this._addTimeseries(panelId, varName, panelEl, plot);
+        } else if (plot.mode === 'state-anim') {
+            this._addStateAnimVar(panelId, varName, panelEl, plot);
         } else {
             this._addPhaseVar(panelId, varName, panelEl, plot);
         }
@@ -439,7 +468,7 @@ class PlotManager {
         if (placeholder) placeholder.style.display = 'none';
 
         const div = document.createElement('div');
-        div.className = 'plotly-container';
+        div.className = `plotly-container plotly-mode-${plot.mode}`;
         panelEl.appendChild(div);
         plot.div = div;
 
@@ -448,27 +477,58 @@ class PlotManager {
 
         Plotly.newPlot(div, traces, layout, config).then(() => {
             this._refreshActionBtns(panelId);
-            // Apply home camera for 3D modes (overrides Plotly's default asymmetric view)
+            // Apply home camera and axis decorations for 3D modes
             if (this._is3D(plot.mode)) {
                 this._setCamera(panelId, 'home');
+                this._add3DAxisDecorations(plot);
             }
             // Axis sync, hover sync, and scroll-wheel pan (timeseries only)
             if (plot.mode === 'timeseries') {
                 div.on('plotly_relayout', (ed) => this._onRelayout(panelId, ed));
                 div.on('plotly_hover',    (ed) => this._onHover(panelId, ed));
                 div.on('plotly_unhover',  ()   => this._onUnhover(panelId));
-                // Restore default scroll-wheel zoom (Plotly handles this natively via scrollZoom)
-                // No custom wheel listener needed.
-
-                // Middle-mouse-button pan: switch dragmode before Plotly sees the mousedown
+            }
+            // Pan gestures for 2D plots:
+            //   Middle-click: toggle Plotly's native pan dragmode (works with button 1).
+            //   Right-click:  custom pan — Plotly's drag only reacts to button 0, so we
+            //                 manipulate axis ranges directly on mousemove.
+            if (plot.mode === 'timeseries' || plot.mode === 'phase2d') {
                 div.addEventListener('mousedown', (e) => {
-                    if (e.button !== 1) return;
+                    if (e.button === 1) {
+                        e.preventDefault();
+                        Plotly.relayout(div, { dragmode: 'pan' });
+                        document.addEventListener('mouseup', () => {
+                            Plotly.relayout(div, { dragmode: 'zoom' });
+                        }, { once: true });
+                        return;
+                    }
+                    if (e.button !== 2) return;
+                    const fl = div._fullLayout;
+                    const xa = fl?.xaxis, ya = fl?.yaxis;
+                    if (!xa || !ya || !xa._length || !ya._length) return;
                     e.preventDefault();
-                    Plotly.relayout(div, { dragmode: 'pan' });
-                    document.addEventListener('mouseup', () => {
-                        Plotly.relayout(div, { dragmode: 'zoom' });
-                    }, { once: true });
+                    e.stopPropagation();
+                    const startX = e.clientX, startY = e.clientY;
+                    const x0 = xa.range.slice(), y0 = ya.range.slice();
+                    const xLen = xa._length, yLen = ya._length;
+                    const onMove = (mv) => {
+                        const xSpan = x0[1] - x0[0];
+                        const ySpan = y0[1] - y0[0];
+                        const dx = -((mv.clientX - startX) / xLen) * xSpan;
+                        const dy =  ((mv.clientY - startY) / yLen) * ySpan;
+                        Plotly.relayout(div, {
+                            'xaxis.range': [x0[0] + dx, x0[1] + dx],
+                            'yaxis.range': [y0[0] + dy, y0[1] + dy],
+                        });
+                    };
+                    const onUp = () => {
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                    };
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
                 }, { capture: true });
+                div.addEventListener('contextmenu', (e) => e.preventDefault());
             }
             // Track legend visibility in our own state so it survives re-renders.
             // We match by trace name, not by curveNumber, because marker traces inserted via
@@ -520,9 +580,11 @@ class PlotManager {
 
     _updatePhaseChart(panelId, plot) {
         if (!plot.div) return;
-        // Add only the newest trace — never touches the camera/scene
+        // Add only the newest phase trace — never touches the camera/scene.
+        // Note: _buildPhase2DTraces appends an __origin__ cross AFTER the phase traces,
+        // so we index by phaseTraces.length-1 rather than allTraces.length-1.
         const allTraces = this._buildPlotData(plot).traces;
-        const newTrace = allTraces[allTraces.length - 1];
+        const newTrace = allTraces[plot.phaseTraces.length - 1];
         Plotly.addTraces(plot.div, newTrace).then(() => {
             // Add a corresponding marker trace for hover sync
             const panelEl = plot.div.closest('.layout-panel');
@@ -546,6 +608,10 @@ class PlotManager {
             relayoutUpdate['scene.xaxis.title'] = layout.scene.xaxis.title;
             relayoutUpdate['scene.yaxis.title'] = layout.scene.yaxis.title;
             relayoutUpdate['scene.zaxis.title'] = layout.scene.zaxis.title;
+            // Update axis ranges so added traces expand the box (autorange:false is used)
+            relayoutUpdate['scene.xaxis.range'] = layout.scene.xaxis.range;
+            relayoutUpdate['scene.yaxis.range'] = layout.scene.yaxis.range;
+            relayoutUpdate['scene.zaxis.range'] = layout.scene.zaxis.range;
             if (cam) relayoutUpdate['scene.camera'] = cam;
         }
         Plotly.relayout(plot.div, relayoutUpdate);
@@ -554,20 +620,35 @@ class PlotManager {
     _destroyChart(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        this._stopAnim(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
-        if (plot.div)            { Plotly.purge(plot.div); plot.div.remove(); plot.div = null; }
+        // Reset dynamic trace indices
+        delete plot._arrowXIdx;
+        delete plot._arrowDxIdx;
+        delete plot._xAbsMax;
+        delete plot._yAbsMax;
+        if (plot.div) {
+            // Remove state-anim container if present (wraps the plot div)
+            const saContainer = plot.div.closest('.state-anim-container');
+            if (saContainer) { Plotly.purge(plot.div); saContainer.remove(); }
+            else { Plotly.purge(plot.div); plot.div.remove(); }
+            plot.div = null;
+        }
     }
 
     _clearPanel(panelId) {
+        const existing = this.plots.get(panelId);
+        if (existing) this._stopAnim(existing);
         this._destroyChart(panelId);
 
-        // Reset state to empty timeseries (keep panel alive with fresh state)
-        const existing = this.plots.get(panelId);
+        // Reset state to empty (keep panel alive with fresh state)
         if (existing) {
             existing.traces        = [];
             existing.phaseTraces   = [];
             existing.phasePending  = { x: null, y: null, z: null };
             existing.markerTraceIdx = null;
+            existing.stateSlots    = { x: [], dx: [], fileId: null };
+            existing.animFrame     = 0;
             // keep existing.mode so the user's mode choice is preserved
         }
 
@@ -588,7 +669,22 @@ class PlotManager {
         const has = this._hasContent(plot);
         const csvBtn = panelEl.querySelector('.csv-export-btn');
         if (csvBtn) csvBtn.disabled = !has;
-        // 🗑️ has no disabled state — always clickable
+        const compareBtn = panelEl.querySelector('.compare-files-btn');
+        if (compareBtn) {
+            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && this.files.size > 1);
+        }
+        // Show view-btn-group for 3D modes and state-anim (2D or 3D) with content
+        const isAnim = plot?.mode === 'state-anim' && has;
+        const is3DMode = this._is3D(plot?.mode) || this._isStateAnim3D(plot);
+        const showGroup = is3DMode || isAnim;
+        const viewGroup = panelEl.querySelector('.view-btn-group');
+        if (viewGroup) {
+            viewGroup.style.display = showGroup ? '' : 'none';
+            // Hide plane/Iso buttons for 2D state-anim (only Home stays)
+            viewGroup.querySelectorAll('.view-btn-3d-only').forEach(btn => {
+                btn.style.display = is3DMode ? '' : 'none';
+            });
+        }
     }
 
     _exportCSV(panelId) {
@@ -662,6 +758,37 @@ class PlotManager {
                 columns.push(Array.from(yv.data));
                 columns.push(Array.from(zv.data));
             }
+        } else if (plot.mode === 'state-anim') {
+            const slots = plot.stateSlots;
+            const d = this.files.get(slots.fileId)?.data;
+            if (d) {
+                const timeVar  = this._getTimeVar(slots.fileId);
+                if (timeVar) {
+                    const timeUnit = this._extractUnit(timeVar.description) || 's';
+                    headers.push(`time [${timeUnit}]`);
+                    columns.push(Array.from(timeVar.data));
+                }
+                const dim = Math.min(slots.x.length, slots.x.length >= 3 ? 3 : 2);
+                // State variables first
+                for (let i = 0; i < dim; i++) {
+                    const name = slots.x[i];
+                    const v = d.variables[name];
+                    if (!v) continue;
+                    const u = this._extractUnit(v.description);
+                    headers.push(u ? `${name} [${u}]` : name);
+                    columns.push(Array.from(v.data));
+                }
+                // Then derivatives
+                for (let i = 0; i < dim; i++) {
+                    const name = slots.dx[i];
+                    if (!name) continue;
+                    const v = d.variables[name];
+                    if (!v) continue;
+                    const u = this._extractUnit(v.description);
+                    headers.push(u ? `${name} [${u}]` : name);
+                    columns.push(Array.from(v.data));
+                }
+            }
         }
 
         if (!columns.length) return;
@@ -681,14 +808,94 @@ class PlotManager {
         URL.revokeObjectURL(url);
     }
 
+    _compareAcrossFiles(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim') return;
+
+        // Collect variables used and which files already contribute traces
+        const vars = new Set();
+        const existingFileIds = new Set();
+        if (plot.mode === 'timeseries') {
+            for (const t of plot.traces) { vars.add(t.varName); existingFileIds.add(t.fileId); }
+        } else {
+            for (const pt of plot.phaseTraces) {
+                vars.add(pt.x); vars.add(pt.y);
+                if (pt.z) vars.add(pt.z);
+                existingFileIds.add(pt.fileId);
+            }
+        }
+
+        const otherFiles = [...this.files.entries()].filter(([fid]) => !existingFileIds.has(fid));
+        if (otherFiles.length === 0) {
+            Modal.alert(i18n.t('compareFilesErrorTitle'), i18n.t('compareFilesNoOthers'));
+            return;
+        }
+
+        // Validate every other file has all required variables; abort on first missing
+        for (const [, entry] of otherFiles) {
+            for (const v of vars) {
+                if (!entry.data.variables[v]) {
+                    const body = i18n.t('compareFilesErrorBody')
+                        .replace('{file}', entry.name)
+                        .replace('{var}', v);
+                    Modal.alert(i18n.t('compareFilesErrorTitle'), body, { html: true });
+                    return;
+                }
+            }
+        }
+
+        // Clone traces with the new fileId for each other file. Dedupe originals first so
+        // that running overlay a second time (after loading more files) doesn't multiply
+        // copies by the number of files already overlaid.
+        if (plot.mode === 'timeseries') {
+            const seen = new Set();
+            const originals = plot.traces.filter(t => {
+                if (seen.has(t.varName)) return false;
+                seen.add(t.varName);
+                return true;
+            });
+            for (const [fid] of otherFiles) {
+                for (const t of originals) {
+                    plot.traces.push({
+                        varName: t.varName,
+                        color:   this._nextColor(plot.traces.length),
+                        fileId:  fid,
+                        visible: t.visible ?? true,
+                    });
+                }
+            }
+        } else {
+            const seen = new Set();
+            const originals = plot.phaseTraces.filter(pt => {
+                const key = `${pt.x}\u0000${pt.y}\u0000${pt.z || ''}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+            for (const [fid] of otherFiles) {
+                for (const pt of originals) {
+                    plot.phaseTraces.push({
+                        x: pt.x, y: pt.y, z: pt.z || null,
+                        color:   this._nextColor(plot.phaseTraces.length),
+                        fileId:  fid,
+                        visible: pt.visible ?? true,
+                    });
+                }
+            }
+        }
+
+        this._rebuildPanel(panelId);
+    }
+
     // ─── Trace / layout builders ───────────────────────────────────
 
     _buildPlotData(plot) {
         switch (plot.mode) {
-            case 'phase2d':  return { traces: this._buildPhase2DTraces(plot),  layout: this._buildPhase2DLayout(plot)  };
-            case 'phase2dt': return { traces: this._buildPhase2DtTraces(plot), layout: this._buildPhase3DLayout(plot, true)  };
-            case 'phase3d':  return { traces: this._buildPhase3DTraces(plot),  layout: this._buildPhase3DLayout(plot, false) };
-            default:         return { traces: plot.traces.map(t => this._buildTimeTrace(t)).filter(Boolean), layout: this._buildTimeLayout(plot) };
+            case 'phase2d':    return { traces: this._buildPhase2DTraces(plot),  layout: this._buildPhase2DLayout(plot)  };
+            case 'phase2dt':   return { traces: this._buildPhase2DtTraces(plot), layout: this._buildPhase3DLayout(plot, true)  };
+            case 'phase3d':    return { traces: this._buildPhase3DTraces(plot),  layout: this._buildPhase3DLayout(plot, false) };
+            case 'state-anim': return { traces: this._buildStateAnimTraces(plot), layout: this._buildStateAnimLayout(plot) };
+            default:           return { traces: plot.traces.map(t => this._buildTimeTrace(t)).filter(Boolean), layout: this._buildTimeLayout(plot) };
         }
     }
 
@@ -750,13 +957,13 @@ class PlotManager {
             legend: this._legendConfig(legendBg, gridColor),
             margin:    this._marginConfig(),
             autosize:  true,
-            hovermode: 'x',
+            hovermode: this.hoverProximity ? 'closest' : 'x',
         };
     }
 
     // ── Phase 2D ──
     _buildPhase2DTraces(plot) {
-        return plot.phaseTraces.map(pt => {
+        const traces = plot.phaseTraces.map(pt => {
             const d = this.files.get(pt.fileId)?.data;
             if (!d) return null;
             const xVar = d.variables[pt.x], yVar = d.variables[pt.y];
@@ -769,6 +976,21 @@ class PlotManager {
                 line: { color: pt.color, width: 1.5 },
             };
         }).filter(Boolean);
+        traces.push(this._originCross2D());
+        return traces;
+    }
+
+    /** Small cross marker at (0,0) used as origin indicator for 2D plots. */
+    _originCross2D() {
+        const { fontColor } = this._colors();
+        // 'cross-thin-open' is a thin + glyph; size controls overall length,
+        // marker.line.width controls stroke thickness. Color follows theme.
+        return {
+            x: [0], y: [0], type: 'scatter', mode: 'markers',
+            marker: { symbol: 'cross-thin-open', size: 20, color: fontColor,
+                      line: { color: fontColor, width: 1.2 } },
+            showlegend: false, hoverinfo: 'skip', name: '__origin__',
+        };
     }
 
     _buildPhase2DLayout(plot) {
@@ -783,9 +1005,9 @@ class PlotManager {
             showlegend: true,
             legend: this._legendConfig(legendBg, gridColor),
             xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
-                     title: multiTrace ? { text: '' } : { text: xu ? `${first.x} [${xu}]` : (first.x || 'X'), font: { size: 10 } } },
+                     title: { text: multiTrace ? 'x' : (xu ? `${first.x} [${xu}]` : (first.x || 'X')), font: { size: 10 } } },
             yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
-                     title: multiTrace ? { text: '' } : { text: yu ? `${first.y} [${yu}]` : (first.y || 'Y'), font: { size: 10 } } },
+                     title: { text: multiTrace ? 'y' : (yu ? `${first.y} [${yu}]` : (first.y || 'Y')), font: { size: 10 } } },
             margin: { l: 60, r: 15, t: 10, b: 50 },
             autosize: true, hovermode: 'closest',
         };
@@ -800,7 +1022,7 @@ class PlotManager {
             const timeVar = this._getTimeVar(pt.fileId);
             if (!xVar || !yVar) return null;
             return {
-                x: xVar.data, y: timeVar ? timeVar.data : [], z: yVar.data,
+                x: timeVar ? timeVar.data : [], y: xVar.data, z: yVar.data,
                 name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
                 type: 'scatter3d', mode: 'lines',
                 visible: pt.visible ?? true,
@@ -829,19 +1051,20 @@ class PlotManager {
     _buildPhase3DLayout(plot, isTimez) {
         const { bg, gridColor, fontColor, legendBg } = this._colors();
         const first = plot.phaseTraces[0] || {};
-        const xu = this._varUnit(first.x, first.fileId);
         const timeVar  = this._getTimeVar(first.fileId);
         const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
 
-        // phase2dt: plotly X=var1, Y=time, Z=var2
-        // phase3d:  plotly X=var1, Y=var2, Z=var3
+        // phase2dt: plotly X=time,  Y=var x, Z=var y
+        // phase3d:  plotly X=var x, Y=var y, Z=var z
         let xLabel, yLabel, zLabel;
         if (isTimez) {
+            const yu = this._varUnit(first.x, first.fileId);
             const zu = this._varUnit(first.y, first.fileId);
-            xLabel = xu ? `${first.x} [${xu}]` : (first.x || 'X');
-            yLabel = `Time [${timeUnit}]`;
-            zLabel = zu ? `${first.y} [${zu}]` : (first.y || 'Z');
+            xLabel = `Time [${timeUnit}]`;
+            yLabel = yu ? `${first.x} [${yu}]` : (first.x || 'x');
+            zLabel = zu ? `${first.y} [${zu}]` : (first.y || 'y');
         } else {
+            const xu = this._varUnit(first.x, first.fileId);
             const yu = this._varUnit(first.y, first.fileId);
             const zu = this._varUnit(first.z, first.fileId);
             xLabel = xu ? `${first.x} [${xu}]` : (first.x || 'X');
@@ -850,23 +1073,721 @@ class PlotManager {
         }
 
         const multiTrace = plot.phaseTraces.length > 1;
+        // Build explicit axis ranges that include 0 so the origin-anchored decoration
+        // lines (red/green/blue) don't trigger autorange expansion when added.
+        const xArrays = [], yArrays = [], zArrays = [];
+        for (const pt of plot.phaseTraces) {
+            if (pt.visible === false) continue;
+            const d = this.files.get(pt.fileId)?.data;
+            if (!d) continue;
+            if (isTimez) {
+                const tv = this._getTimeVar(pt.fileId);
+                xArrays.push(tv?.data);
+                yArrays.push(d.variables[pt.x]?.data);
+                zArrays.push(d.variables[pt.y]?.data);
+            } else {
+                xArrays.push(d.variables[pt.x]?.data);
+                yArrays.push(d.variables[pt.y]?.data);
+                zArrays.push(d.variables[pt.z]?.data);
+            }
+        }
+        const xRange = this._rangeIncluding0(xArrays);
+        const yRange = this._rangeIncluding0(yArrays);
+        const zRange = this._rangeIncluding0(zArrays);
         const axisStyle = { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor,
-                            backgroundcolor: bg, showbackground: true, zeroline: false };
+                            backgroundcolor: bg, showbackground: true, zeroline: false,
+                            autorange: false };
+        // Bold axis-coloured titles match the red/green/blue arrows
+        const xTitleFont = { color: '#e74c3c', size: 13, family: 'system-ui, sans-serif', weight: 700 };
+        const yTitleFont = { color: '#2ecc71', size: 13, family: 'system-ui, sans-serif', weight: 700 };
+        const zTitleFont = { color: '#3498db', size: 13, family: 'system-ui, sans-serif', weight: 700 };
         return {
             paper_bgcolor: bg,
             font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
             showlegend: true,
             legend: this._legendConfig(legendBg, gridColor),
             scene: {
-                xaxis: { ...axisStyle, title: multiTrace ? { text: '' } : { text: xLabel } },
-                yaxis: { ...axisStyle, title: (multiTrace && !isTimez) ? { text: '' } : { text: yLabel } },
-                zaxis: { ...axisStyle, title: multiTrace ? { text: '' } : { text: zLabel } },
-                camera: { projection: { type: plot.projection || 'orthographic' } },
+                xaxis: { ...axisStyle, range: xRange,
+                         title: { text: (multiTrace && !isTimez) ? 'x' : xLabel, font: xTitleFont },
+                         showspikes: true, spikecolor: '#e74c3c', spikethickness: 3, spikesides: false },
+                yaxis: { ...axisStyle, range: yRange,
+                         title: { text: multiTrace ? (isTimez ? 'x' : 'y') : yLabel, font: yTitleFont },
+                         showspikes: true, spikecolor: '#2ecc71', spikethickness: 3, spikesides: false },
+                zaxis: { ...axisStyle, range: zRange,
+                         title: { text: multiTrace ? (isTimez ? 'y' : 'z') : zLabel, font: zTitleFont },
+                         showspikes: true, spikecolor: '#3498db', spikethickness: 3, spikesides: false },
+                camera: {
+                    // phase2dt default view is rotated around the Z (var y / up) axis so time
+                    // (plotly X) reads from the lower-right toward the upper-left of the screen,
+                    // with var x (plotly Y) going toward the lower-left and var y (plotly Z) up.
+                    eye: isTimez ? { x: 1.25, y: -1.25, z: 1.25 } : { x: 1.25, y: 1.25, z: 1.25 },
+                    up:  { x: 0, y: 0, z: 1 },
+                    center: { x: 0, y: 0, z: 0 },
+                    projection: { type: plot.projection || 'orthographic' },
+                },
                 bgcolor: bg,
+                aspectmode: 'cube',
             },
             margin:   { l: 0, r: 0, t: 10, b: 0 },
             autosize: true,
         };
+    }
+
+    // ─── State Animation mode ────────────────────────────────────────
+
+    _addStateAnimVar(panelId, varName, panelEl, plot) {
+        const slots = plot.stateSlots;
+        if (!slots.fileId) slots.fileId = this.activeFileId;
+        const d = this.files.get(slots.fileId)?.data;
+        if (!d) return;
+
+        // If dropping a vector component like x[1], auto-fill siblings
+        const siblings = this.parser.findVectorSiblings(varName, d.variables);
+        if (siblings && slots.x.length === 0) {
+            slots.x = siblings.slice(0, 3); // max 3 for 3D
+        } else if (slots.x.length < 3) {
+            if (!slots.x.includes(varName)) slots.x.push(varName);
+        }
+
+        // Auto-detect derivatives
+        slots.dx = slots.x.map(name => this.parser.findDerivative(name, d.variables));
+
+        // Need at least 2 state variables to render
+        if (slots.x.length >= 2) {
+            if (plot.div) {
+                this._destroyChart(panelId);
+            }
+            this._createStateAnimChart(panelId, panelEl);
+        } else {
+            this._updatePlaceholder(panelId, panelEl);
+            if (plot.div) this._setPendingOverlay(panelId, panelEl, true);
+        }
+    }
+
+    _createStateAnimChart(panelId, panelEl) {
+        const plot = this.plots.get(panelId);
+        if (!plot || plot.stateSlots.x.length < 2) return;
+
+        const placeholder = panelEl.querySelector('.layout-panel-placeholder');
+        if (placeholder) placeholder.style.display = 'none';
+        this._setPendingOverlay(panelId, panelEl, false);
+
+        // Remove any old anim container and clean up stale state from a prior
+        // mount (split-window re-render reuses the plot state without going
+        // through _destroyChart).
+        this._stopAnim(plot);
+        if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
+        if (plot.div) { try { Plotly.purge(plot.div); } catch (_) {} plot.div = null; }
+        delete plot._arrowXIdx;
+        delete plot._arrowDxIdx;
+        delete plot._xAbsMax;
+        delete plot._yAbsMax;
+        const oldContainer = panelEl.querySelector('.state-anim-container');
+        if (oldContainer) oldContainer.remove();
+
+        // Build container with plot + controls
+        const container = document.createElement('div');
+        container.className = 'state-anim-container';
+
+        // Slot info bar — two rows: state variables and derivatives
+        const slotBar = document.createElement('div');
+        slotBar.className = 'state-anim-slots';
+        const slots = plot.stateSlots;
+        const is3D = slots.x.length >= 3;
+
+        const dim = is3D ? 3 : 2;
+        const labels = ['x₁', 'x₂', 'x₃'];
+
+        let xHtml = '<div class="sa-slot-row"><b>State:</b> ';
+        const xCells = slots.x.slice(0, dim).map((n, i) =>
+            `${labels[i]} = <span class="sa-slot-var">${n}</span>`);
+        if (!is3D) {
+            // Only 2 states set — invite the user to drop a 3rd curve.
+            xCells.push(`${labels[2]} = <span class="sa-slot-noder">${i18n.t('saSlotX3Hint')}</span>`);
+        }
+        xHtml += xCells.join(' &nbsp;·&nbsp; ');
+        xHtml += '</div>';
+
+        let dxHtml = '<div class="sa-slot-row"><b>dx/dt:</b> ';
+        const dxCells = slots.dx.slice(0, dim).map((der, i) =>
+            der
+                ? `d${labels[i]}/dt = <span class="sa-slot-der">${der}</span>`
+                : `d${labels[i]}/dt = <span class="sa-slot-noder">not found</span>`);
+        if (!is3D) {
+            dxCells.push(`d${labels[2]}/dt = <span class="sa-slot-noder">${i18n.t('saSlotDx3Hint')}</span>`);
+        }
+        dxHtml += dxCells.join(' &nbsp;·&nbsp; ');
+        dxHtml += '</div>';
+
+        slotBar.innerHTML = xHtml + dxHtml;
+        container.appendChild(slotBar);
+
+        // Plot div
+        const div = document.createElement('div');
+        div.className = `plotly-container plotly-mode-state-anim`;
+        container.appendChild(div);
+        plot.div = div;
+
+        // Controls bar
+        const controls = document.createElement('div');
+        controls.className = 'state-anim-controls';
+        controls.innerHTML = `
+            <button class="sa-btn sa-play-btn" title="${i18n.t('saPlay')}">▶</button>
+            <input type="range" class="sa-scrubber" min="0" max="100" value="0" title="${i18n.t('saScrubber')}">
+            <span class="sa-time-label">t = 0</span>
+            <select class="sa-speed" title="${i18n.t('saSpeed')}">
+                <option value="0.05">×0.05</option>
+                <option value="0.1">×0.10</option>
+                <option value="0.25">×0.25</option>
+                <option value="0.5">×0.5</option>
+                <option value="1" selected>×1</option>
+                <option value="2">×2</option>
+                <option value="5">×5</option>
+            </select>
+            <label class="sa-toggle" title="${i18n.t('saFull')}"><input type="checkbox" class="sa-chk-full" checked><span>${i18n.t('saFullLabel')}</span></label>
+            <label class="sa-toggle" title="${i18n.t('saTrace')}"><input type="checkbox" class="sa-chk-trace" checked><span>${i18n.t('saTraceLabel')}</span></label>
+            <label class="sa-toggle" title="${i18n.t('saArrowX')}"><input type="checkbox" class="sa-chk-arrow" checked><span>x⃗</span></label>
+            <label class="sa-toggle" title="${i18n.t('saArrowDx')}"><input type="checkbox" class="sa-chk-dx" checked><span>dx/dt</span></label>
+            <label class="sa-toggle" title="${i18n.t('saNorm')}"><input type="checkbox" class="sa-chk-norm" checked><span>${i18n.t('saNormLabel')}</span></label>
+            <label class="sa-toggle sa-toggle-dzoom" title="${i18n.t('saDZoom')}"><input type="checkbox" class="sa-chk-dzoom"><span>${i18n.t('saDZoomLabel')}</span></label>
+        `;
+        container.appendChild(controls);
+        // Hide "Zoom on x" for 3D (not supported)
+        if (is3D) controls.querySelector('.sa-toggle-dzoom').style.display = 'none';
+        panelEl.appendChild(container);
+
+        // Get data
+        const d = this.files.get(slots.fileId)?.data;
+        const timeVar = this._getTimeVar(slots.fileId);
+        if (!d || !timeVar) return;
+        const nPts = timeVar.data.length;
+
+        // Set scrubber range
+        const scrubber = controls.querySelector('.sa-scrubber');
+        scrubber.max = nPts - 1;
+
+        // Build initial Plotly chart
+        const { traces, layout } = this._buildPlotData(plot);
+        const config = { responsive: true, displayModeBar: false, scrollZoom: true };
+        Plotly.newPlot(div, traces, layout, config).then(() => {
+            // Add bold axis lines + arrowheads for 3D
+            if (is3D) this._add3DAxisDecorations(plot);
+            this._stateAnimUpdateFrame(plot, 0);
+            // Resize observer
+            let timer;
+            const ro = new ResizeObserver(() => {
+                clearTimeout(timer);
+                timer = setTimeout(() => Plotly.Plots.resize(div), 50);
+            });
+            ro.observe(panelEl);
+            plot.resizeObserver = ro;
+
+            // Auto-pause on drag: pause animation while user interacts with the plot
+            let wasPlaying = false;
+            div.addEventListener('mousedown', () => {
+                if (plot.animPlaying) {
+                    wasPlaying = true;
+                    this._stopAnim(plot);
+                }
+            });
+            document.addEventListener('mouseup', () => {
+                if (wasPlaying) {
+                    wasPlaying = false;
+                    this._stateAnimTogglePlay(panelId);
+                }
+            });
+        });
+
+        // Bind controls
+        const playBtn = controls.querySelector('.sa-play-btn');
+        playBtn.addEventListener('click', () => this._stateAnimTogglePlay(panelId));
+
+        scrubber.addEventListener('input', () => {
+            this._stopAnim(plot);
+            playBtn.textContent = '▶';
+            this._stateAnimUpdateFrame(plot, parseInt(scrubber.value));
+        });
+
+        controls.querySelector('.sa-speed').addEventListener('change', (e) => {
+            plot.animSpeed = parseFloat(e.target.value);
+        });
+
+        controls.querySelector('.sa-chk-full').addEventListener('change', (e) => {
+            plot.stateConfig.showFullTrace = e.target.checked;
+            // Toggle via opacity (not `visible`) so axis ranges don't recompute
+            if (plot.div) Plotly.restyle(plot.div, { opacity: e.target.checked ? 1 : 0 }, [0]);
+        });
+        controls.querySelector('.sa-chk-trace').addEventListener('change', (e) => {
+            plot.stateConfig.showTrace = e.target.checked;
+            this._stateAnimUpdateFrame(plot, plot.animFrame);
+        });
+        controls.querySelector('.sa-chk-arrow').addEventListener('change', (e) => {
+            plot.stateConfig.showArrowX = e.target.checked;
+            this._stateAnimUpdateFrame(plot, plot.animFrame);
+        });
+        controls.querySelector('.sa-chk-dx').addEventListener('change', (e) => {
+            plot.stateConfig.showArrowDx = e.target.checked;
+            this._stateAnimUpdateFrame(plot, plot.animFrame);
+        });
+        controls.querySelector('.sa-chk-norm').addEventListener('change', (e) => {
+            plot.stateConfig.normalizeDx = e.target.checked;
+            this._stateAnimUpdateFrame(plot, plot.animFrame);
+        });
+        controls.querySelector('.sa-chk-dzoom').addEventListener('change', (e) => {
+            plot.stateConfig.dynamicZoom = e.target.checked;
+            if (!e.target.checked && plot.div) {
+                this._stateAnimResetView(plot);
+            }
+            this._stateAnimUpdateFrame(plot, plot.animFrame);
+        });
+
+        this._refreshActionBtns(panelId);
+    }
+
+    _buildStateAnimTraces(plot) {
+        // Static traces: full trajectory (dim) + current partial trace + markers
+        const slots = plot.stateSlots;
+        const d = this.files.get(slots.fileId)?.data;
+        if (!d) return [];
+        const is3D = slots.x.length >= 3;
+
+        const xData = d.variables[slots.x[0]]?.data || [];
+        const yData = d.variables[slots.x[1]]?.data || [];
+        const zData = is3D ? (d.variables[slots.x[2]]?.data || []) : null;
+
+        const traces = [];
+
+        // 0: Full trajectory (faded). Toggled via opacity (not `visible`) so the
+        // trace still contributes to autorange → axis ranges stay stable when
+        // the user hides it (no annoying dynamic zoom-out).
+        const trajColor = is3D ? 'rgba(130,130,130,0.75)' : 'rgba(150,150,150,0.3)';
+        const showFull = plot.stateConfig?.showFullTrace !== false;
+        const fullTraj = {
+            x: xData, y: yData,
+            name: 'Full trajectory', mode: 'lines',
+            line: { color: trajColor, width: 1 },
+            opacity: showFull ? 1 : 0,
+            showlegend: false, hoverinfo: 'skip',
+        };
+        if (is3D) { fullTraj.z = zData; fullTraj.type = 'scatter3d'; }
+        traces.push(fullTraj);
+
+        // 1: Partial trace (up to current frame, vivid)
+        const partialTraj = {
+            x: [], y: [],
+            name: 'Trace', mode: 'lines',
+            line: { color: '#2196F3', width: 2 },
+            showlegend: false, hoverinfo: 'skip',
+        };
+        if (is3D) { partialTraj.z = []; partialTraj.type = 'scatter3d'; }
+        traces.push(partialTraj);
+
+        // 2: Current point marker
+        const marker = {
+            x: [xData[0]], y: [yData[0]],
+            name: 'State', mode: 'markers',
+            marker: { size: 8, color: '#ff9800', line: { color: '#fff', width: 1.5 } },
+            showlegend: false, hoverinfo: 'skip',
+        };
+        if (is3D) { marker.z = [zData ? zData[0] : 0]; marker.type = 'scatter3d'; }
+        traces.push(marker);
+
+        // Origin cross for 2D state-anim
+        if (!is3D) traces.push(this._originCross2D());
+
+        return traces;
+    }
+
+    _buildStateAnimLayout(plot) {
+        const { bg, gridColor, fontColor } = this._colors();
+        const slots = plot.stateSlots;
+        const is3D = slots.x.length >= 3;
+
+        const xu = this._varUnit(slots.x[0], slots.fileId);
+        const yu = this._varUnit(slots.x[1], slots.fileId);
+
+        if (is3D) {
+            const zu = this._varUnit(slots.x[2], slots.fileId);
+            const xTitleFont = { color: '#e74c3c', size: 13, family: 'system-ui, sans-serif', weight: 700 };
+            const yTitleFont = { color: '#2ecc71', size: 13, family: 'system-ui, sans-serif', weight: 700 };
+            const zTitleFont = { color: '#3498db', size: 13, family: 'system-ui, sans-serif', weight: 700 };
+            // Explicit ranges including 0 so origin-anchored axis lines don't expand autorange.
+            const d = this.files.get(slots.fileId)?.data;
+            const xRange = this._rangeIncluding0([d?.variables[slots.x[0]]?.data]);
+            const yRange = this._rangeIncluding0([d?.variables[slots.x[1]]?.data]);
+            const zRange = this._rangeIncluding0([d?.variables[slots.x[2]]?.data]);
+            return {
+                paper_bgcolor: bg, plot_bgcolor: bg,
+                font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
+                showlegend: false,
+                scene: {
+                    xaxis: { range: xRange, autorange: false,
+                             title: { text: xu ? `${slots.x[0]} [${xu}]` : slots.x[0], font: xTitleFont }, gridcolor: gridColor,
+                             showspikes: true, spikecolor: '#e74c3c', spikethickness: 3, spikesides: false },
+                    yaxis: { range: yRange, autorange: false,
+                             title: { text: yu ? `${slots.x[1]} [${yu}]` : slots.x[1], font: yTitleFont }, gridcolor: gridColor,
+                             showspikes: true, spikecolor: '#2ecc71', spikethickness: 3, spikesides: false },
+                    zaxis: { range: zRange, autorange: false,
+                             title: { text: zu ? `${slots.x[2]} [${zu}]` : slots.x[2], font: zTitleFont }, gridcolor: gridColor,
+                             showspikes: true, spikecolor: '#3498db', spikethickness: 3, spikesides: false },
+                    bgcolor: bg,
+                    camera: {
+                        eye: { x: 1.5, y: 1.5, z: 1.2 },
+                        projection: { type: plot.projection || 'orthographic' },
+                    },
+                    aspectmode: 'cube',
+                },
+                margin: { l: 10, r: 10, t: 10, b: 10 },
+                autosize: true,
+            };
+        }
+
+        return {
+            paper_bgcolor: bg, plot_bgcolor: bg,
+            font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
+            showlegend: false,
+            xaxis: { title: { text: xu ? `${slots.x[0]} [${xu}]` : slots.x[0], font: { size: 10 } },
+                     gridcolor: gridColor, linecolor: gridColor, zeroline: true, zerolinecolor: gridColor },
+            yaxis: { title: { text: yu ? `${slots.x[1]} [${yu}]` : slots.x[1], font: { size: 10 } },
+                     gridcolor: gridColor, linecolor: gridColor, zeroline: true, zerolinecolor: gridColor },
+            margin: this._marginConfig(),
+            autosize: true,
+            // annotations will be updated per frame
+            annotations: [],
+        };
+    }
+
+    _stateAnimUpdateFrame(plot, frame) {
+        if (!plot.div) return;
+        const slots = plot.stateSlots;
+        const d = this.files.get(slots.fileId)?.data;
+        const timeVar = this._getTimeVar(slots.fileId);
+        if (!d || !timeVar) return;
+
+        const nPts = timeVar.data.length;
+        frame = Math.max(0, Math.min(nPts - 1, frame));
+        plot.animFrame = frame;
+
+        const is3D = slots.x.length >= 3;
+        const cfg = plot.stateConfig;
+
+        const xAll = d.variables[slots.x[0]]?.data || [];
+        const yAll = d.variables[slots.x[1]]?.data || [];
+        const zAll = is3D ? (d.variables[slots.x[2]]?.data || []) : null;
+
+        const xNow = xAll[frame] || 0;
+        const yNow = yAll[frame] || 0;
+        const zNow = is3D ? (zAll ? zAll[frame] : 0) : 0;
+
+        if (is3D) {
+            // ── 3D path: direct data mutation (no Plotly API per frame) ──
+            this._ensure3DArrowTraces(plot, xNow, yNow, zNow);
+            const traces = plot.div.data;
+
+            // Trace 1: partial trajectory
+            traces[1].x = cfg.showTrace ? xAll.slice(0, frame + 1) : [];
+            traces[1].y = cfg.showTrace ? yAll.slice(0, frame + 1) : [];
+            traces[1].z = cfg.showTrace ? zAll.slice(0, frame + 1) : [];
+
+            // Trace 2: current point marker
+            traces[2].x = [xNow]; traces[2].y = [yNow]; traces[2].z = [zNow];
+
+            // Arrow x (origin → state) — index stored on plot
+            const axIdx = plot._arrowXIdx, dxIdx = plot._arrowDxIdx;
+            if (axIdx !== undefined) {
+                if (cfg.showArrowX) {
+                    traces[axIdx].x = [0, xNow]; traces[axIdx].y = [0, yNow]; traces[axIdx].z = [0, zNow];
+                    traces[axIdx].visible = true;
+                } else {
+                    traces[axIdx].x = []; traces[axIdx].y = []; traces[axIdx].z = [];
+                    traces[axIdx].visible = false;
+                }
+            }
+
+            // Arrow dx/dt
+            if (dxIdx !== undefined) {
+                const dx0Var = slots.dx[0] ? d.variables[slots.dx[0]] : null;
+                const dx1Var = slots.dx[1] ? d.variables[slots.dx[1]] : null;
+                const dx2Var = slots.dx[2] ? d.variables[slots.dx[2]] : null;
+                if (cfg.showArrowDx && dx0Var && dx1Var && dx2Var) {
+                    let dxVal = dx0Var.data[frame] || 0;
+                    let dyVal = dx1Var.data[frame] || 0;
+                    let dzVal = dx2Var.data[frame] || 0;
+                    if (cfg.normalizeDx) {
+                        const mag = Math.sqrt(dxVal * dxVal + dyVal * dyVal + dzVal * dzVal);
+                        if (mag > 1e-12) {
+                            const scale = Math.max(Math.abs(xNow), Math.abs(yNow), Math.abs(zNow), 1) * 0.25;
+                            dxVal = (dxVal / mag) * scale;
+                            dyVal = (dyVal / mag) * scale;
+                            dzVal = (dzVal / mag) * scale;
+                        }
+                    }
+                    traces[dxIdx].x = [xNow, xNow + dxVal]; traces[dxIdx].y = [yNow, yNow + dyVal]; traces[dxIdx].z = [zNow, zNow + dzVal];
+                    traces[dxIdx].visible = true;
+                } else {
+                    traces[dxIdx].x = []; traces[dxIdx].y = []; traces[dxIdx].z = [];
+                    traces[dxIdx].visible = false;
+                }
+            }
+
+            // Throttled redraw during animation (~12fps) to leave room for mouse events.
+            // When not animating (scrubber, checkbox toggle), always update immediately.
+            const now3D = performance.now();
+            const throttle = plot.animPlaying ? 80 : 0;
+            if (!plot._lastPlotlyUpdate || now3D - plot._lastPlotlyUpdate >= throttle) {
+                plot._lastPlotlyUpdate = now3D;
+
+                Plotly.redraw(plot.div);
+            }
+
+        } else {
+            // ── 2D path ──
+            // Batch restyle for traces 1 (partial) and 2 (marker)
+            const partialX = cfg.showTrace ? xAll.slice(0, frame + 1) : [];
+            const partialY = cfg.showTrace ? yAll.slice(0, frame + 1) : [];
+            Plotly.restyle(plot.div, {
+                x: [partialX, [xNow]],
+                y: [partialY, [yNow]],
+            }, [1, 2]);
+
+            // Annotations for arrows (2D only)
+            const annotations = [];
+            if (cfg.showArrowX) {
+                annotations.push({
+                    x: xNow, y: yNow, xref: 'x', yref: 'y',
+                    ax: 0, ay: 0, axref: 'x', ayref: 'y',
+                    showarrow: true,
+                    arrowhead: 3, arrowsize: 1.3, arrowwidth: 2.5,
+                    arrowcolor: '#ff9800',
+                });
+            }
+            if (cfg.showArrowDx) {
+                const dx0Var = slots.dx[0] ? d.variables[slots.dx[0]] : null;
+                const dx1Var = slots.dx[1] ? d.variables[slots.dx[1]] : null;
+                if (dx0Var && dx1Var) {
+                    let dxVal = dx0Var.data[frame] || 0;
+                    let dyVal = dx1Var.data[frame] || 0;
+                    if (cfg.normalizeDx) {
+                        // Normalize in pixel space so the arrow has a constant on-screen length
+                        // regardless of direction or axis aspect asymmetry.
+                        const fl = plot.div._fullLayout;
+                        const xa = fl?.xaxis, ya = fl?.yaxis;
+                        const xRange = xa?.range, yRange = ya?.range;
+                        const xLenPx = xa?._length, yLenPx = ya?._length;
+                        if (xRange && yRange && xLenPx && yLenPx) {
+                            const dpx = Math.abs(xRange[1] - xRange[0]) / xLenPx; // data per pixel (x)
+                            const dpy = Math.abs(yRange[1] - yRange[0]) / yLenPx; // data per pixel (y)
+                            const magPx = Math.sqrt((dxVal / dpx) ** 2 + (dyVal / dpy) ** 2);
+                            if (magPx > 1e-12) {
+                                const targetPx = Math.min(xLenPx, yLenPx) * 0.12;
+                                dxVal = (dxVal / magPx) * targetPx;
+                                dyVal = (dyVal / magPx) * targetPx;
+                            }
+                        } else {
+                            // Fallback before layout is ready: per-axis data-range scaling
+                            const mag = Math.sqrt(dxVal * dxVal + dyVal * dyVal);
+                            if (mag > 1e-12) {
+                                const xScale = xRange ? Math.abs(xRange[1] - xRange[0]) * 0.12 : 1;
+                                const yScale = yRange ? Math.abs(yRange[1] - yRange[0]) * 0.12 : xScale;
+                                dxVal = (dxVal / mag) * xScale;
+                                dyVal = (dyVal / mag) * yScale;
+                            }
+                        }
+                    }
+                    annotations.push({
+                        x: xNow + dxVal, y: yNow + dyVal, xref: 'x', yref: 'y',
+                        ax: xNow, ay: yNow, axref: 'x', ayref: 'y',
+                        showarrow: true,
+                        arrowhead: 3, arrowsize: 1.3, arrowwidth: 2,
+                        arrowcolor: '#9c27b0',
+                    });
+                }
+            }
+
+            // Single relayout for annotations + optional dynamic zoom
+            const layoutUpdate = { annotations };
+            if (cfg.dynamicZoom) {
+                // Per-axis data extents (cached): each axis zooms proportionally to
+                // its own scale so Y doesn't get stretched/shrunk when X and Y have
+                // very different magnitudes.
+                if (plot._xAbsMax === undefined) {
+                    let xm = 0, ym = 0;
+                    for (let i = 0; i < xAll.length; i++) {
+                        const ax = Math.abs(xAll[i]); if (ax > xm) xm = ax;
+                        const ay = Math.abs(yAll[i]); if (ay > ym) ym = ay;
+                    }
+                    plot._xAbsMax = xm || 1;
+                    plot._yAbsMax = ym || 1;
+                }
+                const halfX = Math.max(Math.abs(xNow) * 1.8, plot._xAbsMax * 0.1);
+                const halfY = Math.max(Math.abs(yNow) * 1.8, plot._yAbsMax * 0.1);
+                layoutUpdate['xaxis.range'] = [xNow - halfX, xNow + halfX];
+                layoutUpdate['yaxis.range'] = [yNow - halfY, yNow + halfY];
+            }
+            Plotly.relayout(plot.div, layoutUpdate);
+        }
+
+        // Update scrubber and time label
+        const panelEl = plot.div.closest('.layout-panel') || plot.div.closest('.state-anim-container')?.parentElement;
+        if (panelEl) {
+            const scrubber = panelEl.querySelector('.sa-scrubber');
+            if (scrubber) scrubber.value = frame;
+            const timeLabel = panelEl.querySelector('.sa-time-label');
+            const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
+            if (timeLabel) timeLabel.textContent = `t = ${timeVar.data[frame].toPrecision(4)} ${timeUnit}`;
+        }
+    }
+
+    /** Add bold axis lines with arrowhead cones to any 3D plot. */
+    _add3DAxisDecorations(plot) {
+        if (!plot.div?._fullLayout?.scene) return;
+        const sc = plot.div._fullLayout.scene;
+        // Both phase3d and state-anim now set explicit origin-including ranges at
+        // layout-build time (with autorange:false), so sc.*.range is reliable and
+        // already carries the "+axis must have room" extension.
+        const xR = sc.xaxis.range, yR = sc.yaxis.range, zR = sc.zaxis.range;
+        // Standard axis colors: X=red, Y=green, Z=blue
+        const xCol = '#e74c3c', yCol = '#2ecc71', zCol = '#3498db';
+        const isAnim = plot.mode === 'state-anim';
+        // ─── Equal-visual-length axis lines (arbitrary box shape) ───
+        // Let ar_i be the aspectratio for axis i (visual edge-length ratio).
+        // Visual length of a data-segment L_i along axis i ∝ L_i × ar_i / span_i.
+        // For equal visual length across axes: L_i = C × span_i / ar_i.
+        // Constraint: |L_i| ≤ extent_i (origin→visible-edge distance along chosen direction)
+        //             ⇒ C ≤ extent_i × ar_i / span_i.
+        const ar = sc.aspectratio || { x: 1, y: 1, z: 1 };
+        const arX = ar.x || 1, arY = ar.y || 1, arZ = ar.z || 1;
+        const xSpan = Math.max(Math.abs(xR[1] - xR[0]), 1e-12);
+        const ySpan = Math.max(Math.abs(yR[1] - yR[0]), 1e-12);
+        const zSpan = Math.max(Math.abs(zR[1] - zR[0]), 1e-12);
+        // Always draw along +X, +Y, +Z (right-hand convention).
+        // Since every range is forced to include 0 at layout time, the positive side
+        // always has at least the padding amount of room.
+        const xSign = 1, ySign = 1, zSign = 1;
+        const xExtent = Math.max(xR[1], 0);
+        const yExtent = Math.max(yR[1], 0);
+        const zExtent = Math.max(zR[1], 0);
+        const cMax = Math.min(
+            xExtent * arX / xSpan,
+            yExtent * arY / ySpan,
+            zExtent * arZ / zSpan,
+        );
+        // Line-length scale factor:
+        //   state-anim (3D): 0.55 × cMax — user feedback OK
+        //   non-animated (phase3d, phase2dt): 0.85/3 × cMax — user wants them ~3× shorter
+        const C = cMax * (isAnim ? 0.55 : 0.85 / 3);
+        const xEnd = xSign * C * xSpan / arX;
+        const yEnd = ySign * C * ySpan / arY;
+        const zEnd = zSign * C * zSpan / arZ;
+        Plotly.addTraces(plot.div, [
+            { type: 'scatter3d', mode: 'lines',
+              x: [0, xEnd], y: [0, 0], z: [0, 0],
+              line: { color: xCol, width: 5 },
+              showlegend: false, hoverinfo: 'skip', name: '__axis__' },
+            { type: 'scatter3d', mode: 'lines',
+              x: [0, 0], y: [0, yEnd], z: [0, 0],
+              line: { color: yCol, width: 5 },
+              showlegend: false, hoverinfo: 'skip', name: '__axis__' },
+            { type: 'scatter3d', mode: 'lines',
+              x: [0, 0], y: [0, 0], z: [0, zEnd],
+              line: { color: zCol, width: 5 },
+              showlegend: false, hoverinfo: 'skip', name: '__axis__' },
+        ]);
+    }
+
+    /** Lazily add state-vector arrow traces for 3D state-anim (called once). */
+    _ensure3DArrowTraces(plot, xNow, yNow, zNow) {
+        if (plot._arrowXIdx !== undefined) return; // already added
+        const startIdx = plot.div.data.length;
+        Plotly.addTraces(plot.div, [
+            {
+                x: [0, xNow], y: [0, yNow], z: [0, zNow],
+                type: 'scatter3d', mode: 'lines+markers',
+                line: { color: '#ff9800', width: 5 },
+                marker: { size: [0, 4], color: '#ff9800' },
+                showlegend: false, hoverinfo: 'skip', name: '__arrow_x__',
+            },
+            {
+                x: [xNow, xNow], y: [yNow, yNow], z: [zNow, zNow],
+                type: 'scatter3d', mode: 'lines+markers',
+                line: { color: '#9c27b0', width: 5 },
+                marker: { size: [0, 4], color: '#9c27b0' },
+                showlegend: false, hoverinfo: 'skip', name: '__arrow_dx__',
+            },
+        ]);
+        plot._arrowXIdx  = startIdx;
+        plot._arrowDxIdx = startIdx + 1;
+    }
+
+    /** Reset the state-anim view to fit all data. */
+    _stateAnimResetView(plot) {
+        if (!plot.div) return;
+        const is3D = plot.stateSlots.x.length >= 3;
+        if (is3D) {
+            // Find panelId to reuse _setCamera
+            const panelId = [...this.plots.entries()].find(([, p]) => p === plot)?.[0];
+            if (panelId) this._setCamera(panelId, 'home');
+        } else {
+            Plotly.relayout(plot.div, {
+                'xaxis.autorange': true,
+                'yaxis.autorange': true,
+            });
+        }
+    }
+
+    _stateAnimTogglePlay(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        const playBtn = panelEl?.querySelector('.sa-play-btn');
+
+        if (plot.animPlaying) {
+            this._stopAnim(plot);
+            if (playBtn) playBtn.textContent = '▶';
+        } else {
+            plot.animPlaying = true;
+            if (playBtn) playBtn.textContent = '⏸';
+
+            const timeVar = this._getTimeVar(plot.stateSlots.fileId);
+            if (!timeVar) return;
+            const nPts = timeVar.data.length;
+            const totalDuration = timeVar.data[nPts - 1] - timeVar.data[0];
+            // Base wall-clock duration for a full playthrough at ×1 speed (Tend-independent)
+            const BASE_WALLCLOCK_SEC = 20;
+
+            let lastT = performance.now();
+            const step = () => {
+                if (!plot.animPlaying || !plot.div) return;
+                const now = performance.now();
+                const dt = (now - lastT) / 1000; // seconds elapsed
+                lastT = now;
+
+                // Advance so a full playthrough takes BASE_WALLCLOCK_SEC / speed, regardless of Tend
+                const simTimeDelta = dt * (totalDuration / BASE_WALLCLOCK_SEC) * plot.animSpeed;
+                const currentSimTime = timeVar.data[plot.animFrame];
+                const targetSimTime = currentSimTime + simTimeDelta;
+
+                // Find next frame
+                let nextFrame = plot.animFrame;
+                while (nextFrame < nPts - 1 && timeVar.data[nextFrame] < targetSimTime) nextFrame++;
+
+                if (nextFrame >= nPts - 1) {
+                    // Loop back to start
+                    nextFrame = 0;
+                    lastT = performance.now();
+                }
+
+                this._stateAnimUpdateFrame(plot, nextFrame);
+                plot.animRAF = requestAnimationFrame(step);
+            };
+            plot.animRAF = requestAnimationFrame(step);
+        }
+    }
+
+    _stopAnim(plot) {
+        if (!plot) return;
+        plot.animPlaying = false;
+        if (plot.animRAF) { cancelAnimationFrame(plot.animRAF); plot.animRAF = null; }
     }
 
     // ─── Axis sync (timeseries only) ───────────────────────────────
@@ -991,7 +1912,7 @@ class PlotManager {
                         const tidx = this._findTimeIdx(tvar?.data, xVal);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
-                        Plotly.restyle(plot.div, { x: [[xv.data[tidx]]], y: [[xVal]], z: [[yv.data[tidx]]], visible: true }, [midx]);
+                        Plotly.restyle(plot.div, { x: [[xVal]], y: [[xv.data[tidx]]], z: [[yv.data[tidx]]], visible: true }, [midx]);
                     });
                 }
                 const lines = [`<b>t = ${xVal.toPrecision(5)} ${timeUnit}</b>`];
@@ -1042,9 +1963,16 @@ class PlotManager {
                     }
                 });
                 this._showInfoBox(panelEl, lines.join('<br>'));
+
+            } else if (plot.mode === 'state-anim') {
+                // Sync: jump state-anim to the hovered time
+                const tvar = this._getTimeVar(plot.stateSlots.fileId);
+                if (tvar) {
+                    const tidx = this._findTimeIdx(tvar.data, xVal);
+                    this._stateAnimUpdateFrame(plot, tidx);
+                }
             }
         }
-
         this._hovering = false;
     }
 
@@ -1154,23 +2082,27 @@ class PlotManager {
     _setCamera(panelId, preset) {
         const plot = this.plots.get(panelId);
         if (!plot?.div) return;
-        // Plotly's own default is eye=(1.25,1.25,1.25), up=(0,0,1)
+        // Plotly's own default is eye=(1.25,1.25,1.25), up=(0,0,1).
+        // phase2dt rotates the home eye around the Z (up) axis so time (plotly X) reads
+        // from lower-right toward upper-left, var x (plotly Y) toward lower-left, var y up.
         const is2dt = plot.mode === 'phase2dt';
         const cameras = {
-            home:  { eye: { x: 1.25, y: 1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
-            // top/Xt: looking down Z axis.
-            // phase3d: up=Y → X right, Y up (XY plane)
-            // phase2dt: up=X → Y(time) right, X(var1) up (tX / "Xt" view)
-            top:   is2dt
-                ? { eye: { x: 0, y: 0, z: 2 }, center: { x: 0, y: 0, z: 0 }, up: { x: 1, y: 0, z: 0 } }
-                : { eye: { x: 0, y: 0, z: 2 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 1, z: 0 } },
+            home:  is2dt
+                ? { eye: { x: 1.25, y: -1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }
+                : { eye: { x: 1.25, y:  1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
+            top:   { eye: { x: 0, y: 0, z: 2 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 1, z: 0 } },
             front: { eye: { x: 0,    y: -2,   z: 0    }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
             yz:    { eye: { x: 2,    y: 0,    z: 0    }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
         };
         const cam = cameras[preset] || cameras.home;
-        Plotly.relayout(plot.div, {
+        const layoutUpdate = {
             'scene.camera': { ...cam, projection: { type: plot.projection || 'orthographic' } },
-        });
+        };
+        // Note: don't re-enable autorange here — explicit ranges (set at layout-build time
+        // and including origin) are what lets the origin-anchored axis lines render at
+        // equal visual length. Re-enabling autorange would let the axis lines themselves
+        // expand the scene and break that property.
+        Plotly.relayout(plot.div, layoutUpdate);
     }
 
     _toggleProjection(panelId, panelEl) {
@@ -1186,6 +2118,55 @@ class PlotManager {
             projBtn.classList.toggle('active', isOrtho);
             projBtn.title = i18n.t(isOrtho ? 'projIsometric' : 'projPerspective');
         }
+    }
+
+    /**
+     * Animate a 90° (or arbitrary angle) rotation of the 3D camera around an axis.
+     * axis: 'x', 'y', or 'z'
+     * angle: radians to rotate (e.g. Math.PI/2)
+     * duration: animation duration in ms
+     */
+    _animateRotation(panelId, axis, angle, duration) {
+        const plot = this.plots.get(panelId);
+        if (!plot?.div) return;
+
+        // Read current camera
+        const cam = plot.div.layout?.scene?.camera || {};
+        const eye0 = { ...(cam.eye || { x: 1.25, y: 1.25, z: 1.25 }) };
+        const up0  = { ...(cam.up  || { x: 0, y: 0, z: 1 }) };
+        const center = cam.center || { x: 0, y: 0, z: 0 };
+
+        const rotateVec = (v, theta) => {
+            const c = Math.cos(theta), s = Math.sin(theta);
+            switch (axis) {
+                case 'x': return { x: v.x, y: v.y * c - v.z * s, z: v.y * s + v.z * c };
+                case 'y': return { x: v.x * c + v.z * s, y: v.y, z: -v.x * s + v.z * c };
+                case 'z': return { x: v.x * c - v.y * s, y: v.x * s + v.y * c, z: v.z };
+            }
+        };
+
+        // Relative eye vector (eye - center)
+        const rel0 = { x: eye0.x - center.x, y: eye0.y - center.y, z: eye0.z - center.z };
+
+        const startTime = performance.now();
+        const step = () => {
+            const elapsed = performance.now() - startTime;
+            const t = Math.min(elapsed / duration, 1);
+            // Ease in-out
+            const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+            const theta = angle * ease;
+
+            const rel = rotateVec(rel0, theta);
+            const up  = rotateVec(up0, theta);
+
+            Plotly.relayout(plot.div, {
+                'scene.camera.eye': { x: center.x + rel.x, y: center.y + rel.y, z: center.z + rel.z },
+                'scene.camera.up': up,
+            });
+
+            if (t < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
     }
 
     // ─── Mode buttons injected into panel toolbar ──────────────────
@@ -1209,6 +2190,7 @@ class PlotManager {
             { id: 'phase2d',    label: '2D',  titleKey: 'modePhase2d'   },
             { id: 'phase2dt',   label: '2D+t',titleKey: 'modePhase2dt'  },
             { id: 'phase3d',    label: '3D',  titleKey: 'modePhase3d'   },
+            { id: 'state-anim', label: '▶x',  titleKey: 'modeStateAnim' },
         ];
         modes.forEach(m => {
             const btn = document.createElement('button');
@@ -1231,19 +2213,29 @@ class PlotManager {
         const is2dt = currentMode === 'phase2dt';
         const views = [
             { preset: 'home',  label: '⌂',                titleKey: 'viewHome'  },
-            { preset: 'top',   label: is2dt ? 'Xt' : 'XY', titleKey: 'viewTop'   },
-            { preset: 'front', label: is2dt ? 'XY' : 'XZ',  titleKey: 'viewFront' },
-            { preset: 'yz',    label: is2dt ? 'Yt' : 'YZ', titleKey: 'viewSide'  },
+            { preset: 'top',   label: is2dt ? 'x vs t' : 'XY', titleKey: is2dt ? 'view2dtXt' : 'viewTop'   },
+            { preset: 'front', label: is2dt ? 'y vs t' : 'XZ', titleKey: is2dt ? 'view2dtYt' : 'viewFront' },
+            { preset: 'yz',    label: is2dt ? 'y vs x' : 'YZ', titleKey: is2dt ? 'view2dtXY' : 'viewSide'  },
         ];
 
         views.forEach(v => {
             const btn = document.createElement('button');
-            btn.className = 'layout-toolbar-btn view-btn';
+            btn.className = 'layout-toolbar-btn view-btn' + (v.preset !== 'home' ? ' view-btn-3d-only' : '');
             btn.textContent = v.label;
             btn.title = i18n.t(v.titleKey);
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._setCamera(panelId, v.preset === 'yz' ? 'yz' : v.preset);
+                if (v.preset === 'home') {
+                    // Home works for both 2D (autorange) and 3D (camera reset)
+                    const p = this.plots.get(panelId);
+                    if (p?.mode === 'state-anim' && p.stateSlots.x.length < 3) {
+                        this._stateAnimResetView(p);
+                    } else {
+                        this._setCamera(panelId, 'home');
+                    }
+                } else {
+                    this._setCamera(panelId, v.preset === 'yz' ? 'yz' : v.preset);
+                }
             });
             viewGroup.appendChild(btn);
         });
@@ -1251,7 +2243,7 @@ class PlotManager {
         // Projection toggle button (Iso / Persp)
         const isOrtho = !plot || plot.projection === 'orthographic';
         const projBtn = document.createElement('button');
-        projBtn.className = 'layout-toolbar-btn view-btn proj-btn' + (isOrtho ? ' active' : '');
+        projBtn.className = 'layout-toolbar-btn view-btn proj-btn view-btn-3d-only' + (isOrtho ? ' active' : '');
         projBtn.textContent = 'Iso';
         projBtn.title = i18n.t(isOrtho ? 'projIsometric' : 'projPerspective');
         projBtn.addEventListener('click', (e) => {
@@ -1260,7 +2252,40 @@ class PlotManager {
         });
         viewGroup.appendChild(projBtn);
 
+        // Rotation buttons (90° animated rotation around each axis)
+        const rotAxes = [
+            { axis: 'z', label: '⟳Z', title: 'Rotate 90° around Z' },
+            { axis: 'x', label: '⟳X', title: 'Rotate 90° around X' },
+            { axis: 'y', label: '⟳Y', title: 'Rotate 90° around Y' },
+        ];
+        rotAxes.forEach(r => {
+            const btn = document.createElement('button');
+            btn.className = 'layout-toolbar-btn view-btn view-btn-3d-only rot-btn';
+            btn.textContent = r.label;
+            btn.title = r.title;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._animateRotation(panelId, r.axis, Math.PI / 2, 400);
+            });
+            viewGroup.appendChild(btn);
+        });
+
         toolbar.appendChild(viewGroup);
+
+        // Compare (overlay traces from other files) — left of CSV
+        const compareBtn = document.createElement('button');
+        compareBtn.className = 'layout-toolbar-btn panel-action-btn compare-files-btn';
+        compareBtn.textContent = '⧉';
+        compareBtn.title = i18n.t('compareFiles');
+        const canCompare = this._hasContent(plot)
+            && plot.mode !== 'state-anim'
+            && this.files.size > 1;
+        compareBtn.disabled = !canCompare;
+        compareBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._compareAcrossFiles(panelId);
+        });
+        toolbar.appendChild(compareBtn);
 
         // CSV export button — pushed to far right, 🗑️ follows immediately after
         const csvBtn = document.createElement('button');
@@ -1288,7 +2313,7 @@ class PlotManager {
 
     _updateModeButtons(panelEl, activeMode) {
         panelEl.querySelectorAll('.mode-btn').forEach(btn => {
-            const modeMap = { '📈': 'timeseries', '2D': 'phase2d', '2D+t': 'phase2dt', '3D': 'phase3d' };
+            const modeMap = { '📈': 'timeseries', '2D': 'phase2d', '2D+t': 'phase2dt', '3D': 'phase3d', '▶x': 'state-anim' };
             btn.classList.toggle('active', modeMap[btn.textContent] === activeMode);
         });
     }
@@ -1313,20 +2338,23 @@ class PlotManager {
 
         let msg;
         switch (mode) {
+            case 'state-anim': {
+                const sx = plot ? (plot.stateSlots?.x || []) : [];
+                msg = sx.length === 0 ? i18n.t('dropStateX1')
+                    : sx.length === 1 ? i18n.t('dropStateX2Short')
+                    :                   i18n.t('dropStateX3');
+                break;
+            }
             case 'phase2d':
-                msg = !pp.x
-                    ? '① Drop X variable here'
-                    : '② Drop Y variable here';
+                msg = !pp.x ? i18n.t('dropX') : i18n.t('dropY');
                 break;
             case 'phase2dt':
-                msg = !pp.x
-                    ? '① Drop X variable here'
-                    : '② Drop Y variable here (time = automatic)';
+                msg = !pp.x ? i18n.t('dropX') : i18n.t('dropYAutoTime');
                 break;
             case 'phase3d':
-                msg = !pp.x ? '① Drop X variable here'
-                    : !pp.y ? '② Drop Y variable here'
-                    :         '③ Drop Z variable here';
+                msg = !pp.x ? i18n.t('dropX')
+                    : !pp.y ? i18n.t('dropY')
+                    :         i18n.t('dropZ');
                 break;
             default: // timeseries
                 msg = i18n.t('dropVariableHere');
@@ -1340,25 +2368,50 @@ class PlotManager {
         if (!this.data) return;
         for (const [, plot] of this.plots) {
             if (!plot.div) continue;
-            if (this._is3D(plot.mode)) {
-                // Build the new layout but preserve the current camera
+            if (this._is3D(plot.mode) || this._isStateAnim3D(plot)) {
                 const layout = this._buildPlotData(plot).layout;
                 const currentCamera = plot.div._fullLayout?.scene?.camera;
-                if (currentCamera) layout.scene.camera = currentCamera;
+                if (currentCamera && layout.scene) layout.scene.camera = currentCamera;
                 Plotly.relayout(plot.div, layout);
+                this._refreshAxisDecorations(plot);
             } else {
                 Plotly.relayout(plot.div, this._buildPlotData(plot).layout);
+                // Origin cross marker color follows theme — restyle it
+                this._refreshOriginCross(plot);
             }
         }
+    }
+
+    /** Re-apply axis decoration colors (no-op now; X/Y/Z colors are theme-independent). */
+    _refreshAxisDecorations(plot) {
+        // Lines and diamond tips use fixed X=red, Y=green, Z=blue regardless of theme.
+        // Function kept as a hook in case future styling needs theme refresh.
+        void plot;
+    }
+
+    /** Re-apply theme color to the 2D origin cross marker. */
+    _refreshOriginCross(plot) {
+        if (!plot?.div?.data) return;
+        const { fontColor } = this._colors();
+        plot.div.data.forEach((t, i) => {
+            if (t.name === '__origin__') {
+                Plotly.restyle(plot.div, {
+                    'marker.color': fontColor,
+                    'marker.line.color': fontColor,
+                }, [i]);
+            }
+        });
     }
 
     _hasContent(plot) {
         if (!plot) return false;
         if (plot.mode === 'timeseries') return plot.traces.length > 0;
+        if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= 2;
         return plot.phaseTraces.length > 0;
     }
 
     _is3D(mode) { return mode === 'phase2dt' || mode === 'phase3d'; }
+    _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && plot.stateSlots?.x?.length >= 3; }
 
     _rebuildPanel(panelId) {
         const plot = this.plots.get(panelId);
@@ -1368,7 +2421,11 @@ class PlotManager {
         this._destroyChart(panelId);
         plot.markerTraceIdx = null;
         if (this._hasContent(plot)) {
-            this._createChart(panelId, panelEl);
+            if (plot.mode === 'state-anim') {
+                this._createStateAnimChart(panelId, panelEl);
+            } else {
+                this._createChart(panelId, panelEl);
+            }
         } else {
             const ph = panelEl.querySelector('.layout-panel-placeholder');
             if (ph) { ph.style.display = ''; ph.classList.remove('drag-over'); }
@@ -1391,6 +2448,13 @@ class PlotManager {
             projection: 'orthographic',                    // 3D camera projection
             markerTraceIdx: null,                          // index of the hover-marker trace in plot.div.data
             resizeObserver: null,
+            // state-anim mode
+            stateSlots:   { x: [], dx: [], fileId: null }, // x: [varName,...], dx: [derName,...]
+            stateConfig:  { showFullTrace: true, showTrace: true, showArrowX: true, showArrowDx: true, normalizeDx: true, dynamicZoom: false },
+            animFrame:    0,                               // current time index
+            animPlaying:  false,
+            animSpeed:    1,
+            animRAF:      null,
         };
     }
 
@@ -1398,6 +2462,36 @@ class PlotManager {
         const d = fileId ? this.files.get(fileId)?.data : null;
         if (!d) return null;
         return Object.values(d.variables).find(v => v.kind === 'abscissa') || null;
+    }
+
+    /**
+     * Compute a range [min, max] that covers every finite value in `arrays` AND includes 0,
+     * with a symmetric relative `pad` on each side. Used for 3D scene axes so the
+     * origin-anchored axis lines can be drawn without triggering Plotly autorange expansion.
+     *
+     * If the positive side is too small (e.g. all-negative data like [-20, 0]), the upper
+     * bound is extended so the positive side is at least `minPositiveFrac` of the negative
+     * extent. Without this, the +axis line would be constrained to the tiny padding region
+     * and would force the other two lines to match that length — visibly tiny.
+     */
+    _rangeIncluding0(arrays, pad = 0.05, minPositiveFrac = 0.3) {
+        let lo = Infinity, hi = -Infinity;
+        for (const arr of arrays) {
+            if (!arr) continue;
+            for (const v of arr) {
+                if (Number.isFinite(v)) {
+                    if (v < lo) lo = v;
+                    if (v > hi) hi = v;
+                }
+            }
+        }
+        if (!Number.isFinite(lo)) { lo = -1; hi = 1; }
+        lo = Math.min(lo, 0);
+        hi = Math.max(hi, 0);
+        // Guarantee the +axis line has meaningful room to draw.
+        if (lo < 0) hi = Math.max(hi, -lo * minPositiveFrac);
+        const span = Math.max(hi - lo, 1e-12);
+        return [lo - pad * span, hi + pad * span];
     }
 
     _varUnit(varName, fileId = this.activeFileId) {

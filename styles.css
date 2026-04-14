@@ -151,6 +151,63 @@ body {
     cursor: not-allowed;
 }
 
+/* Example dropdown menu */
+.example-menu-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.example-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 220px;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    padding: 4px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+}
+
+.example-menu[hidden] { display: none; }
+
+.example-menu-item {
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+.example-menu-item:hover:not(:disabled) {
+    background-color: var(--hover-bg);
+}
+
+.example-menu-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.example-menu-item .example-name { flex: 1; }
+
+.example-menu-item .example-badge {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 1px 6px;
+}
+
 /* ============================================
    Main Container
    ============================================ */
@@ -255,6 +312,42 @@ body {
     background-color: var(--primary-color);
     color: white;
     border-color: var(--primary-color);
+}
+
+/* Variable filter input */
+.variable-filter {
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    border-radius: 6px;
+    font-size: 0.85rem;
+    margin-bottom: 0.6rem;
+    transition: border-color 0.2s;
+    box-sizing: border-box;
+}
+
+.variable-filter:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.variable-filter::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.7;
+}
+
+/* Parameter sub-section label in sorted view */
+.tree-param-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.5rem 0.5rem 0.15rem;
+    margin-top: 0.25rem;
+    border-top: 1px dashed var(--border-color);
 }
 
 /* Variables Tree */
@@ -604,8 +697,10 @@ body {
     flex-shrink: 0;
 }
 
-.csv-export-btn {
+.compare-files-btn {
     margin-left: auto;
+    font-size: 1rem;
+    line-height: 1;
 }
 
 /* ── File list (sidebar) ────────────────────────────────────── */
@@ -764,6 +859,16 @@ body {
 }
 
 .trash-panel-btn:hover {
+    background-color: #e53935 !important;
+    border-color: #e53935 !important;
+    color: white !important;
+}
+
+.close-panel-btn {
+    order: 999;
+}
+
+.close-panel-btn:hover {
     background-color: #e53935 !important;
     border-color: #e53935 !important;
     color: white !important;
@@ -955,6 +1060,13 @@ body {
     margin-bottom: 1rem;
 }
 
+.modal-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.75rem;
+}
+
 .modal-message {
     font-size: 1rem;
     line-height: 1.5;
@@ -1023,6 +1135,140 @@ body {
 
 .sidebar-author a:hover {
     text-decoration: underline;
+}
+
+/* ============================================
+   State Animation mode
+   ============================================ */
+.state-anim-container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.state-anim-container .plotly-container {
+    flex: 1;
+    min-height: 0;
+}
+
+.state-anim-slots {
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.sa-slot-row {
+    padding: 1px 0;
+}
+
+.sa-slot-row b {
+    color: var(--text-primary);
+    display: inline-block;
+    min-width: 42px;
+}
+
+.sa-slot-var {
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.sa-slot-der {
+    color: var(--success-color);
+    font-weight: 600;
+}
+
+.sa-slot-noder {
+    color: var(--text-muted);
+    opacity: 0.8;
+    font-style: italic;
+}
+
+.sa-slot-noder .sa-emoji {
+    font-style: normal;
+}
+
+.state-anim-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    background: var(--bg-tertiary);
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.sa-btn {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 3px 8px;
+    line-height: 1.2;
+    transition: background-color 0.15s;
+}
+
+.sa-btn:hover {
+    background-color: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+.sa-scrubber {
+    flex: 1;
+    min-width: 60px;
+    cursor: pointer;
+    accent-color: var(--primary-color);
+}
+
+.sa-time-label {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    min-width: 90px;
+    text-align: center;
+    font-family: 'Consolas', 'Courier New', monospace;
+}
+
+.sa-speed {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    padding: 2px 4px;
+    cursor: pointer;
+}
+
+.sa-toggle {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.sa-toggle input[type="checkbox"] {
+    cursor: pointer;
+    margin: 0;
+}
+
+/* ============================================
+   Synchronized hover — hide Plotly native tooltips
+   ============================================ */
+body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
+    display: none !important;
 }
 
 /* ============================================

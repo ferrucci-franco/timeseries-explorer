@@ -42,12 +42,9 @@
             <button id="reset-layout" class="icon-btn" title="Reset layout">
                 <span class="icon">🪟</span>
             </button>
-            <div class="example-menu-wrap">
-                <button id="load-example-btn" class="icon-btn" title="Load example" aria-haspopup="true" aria-expanded="false">
-                    <span class="icon">🎓</span>
-                </button>
-                <div id="example-menu" class="example-menu" role="menu" hidden></div>
-            </div>
+            <button id="load-example-btn" class="icon-btn" title="Load example">
+                <span class="icon">🎓</span>
+            </button>
             <button id="help-btn" class="icon-btn" title="Help">
                 <span class="icon">❓</span>
             </button>
@@ -111,12 +108,12 @@
                     <span data-i18n="linkTimeAxes">Link time axes</span>
                 </label>
                 <label class="checkbox-label">
-                    <input type="checkbox" id="hover-proximity" checked>
-                    <span data-i18n="hoverProximity">Hover by proximity</span>
-                </label>
-                <label class="checkbox-label">
                     <input type="checkbox" id="sync-hover">
                     <span data-i18n="syncHover">Synchronized hover</span>
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="hover-proximity">
+                    <span data-i18n="hoverProximity">Hover by proximity</span>
                 </label>
                 <!-- Legend position -->
                 <div class="options-group">
@@ -152,7 +149,7 @@
                     <h2 data-i18n="dragFile">Drag & drop a .mat file here</h2>
                     <p data-i18n="or">or</p>
                     <button id="file-select-btn" class="primary-btn" data-i18n="selectFile">Select File</button>
-                    <input type="file" id="file-input" accept=".mat" multiple style="display: none;">
+                    <input type="file" id="file-input" accept=".mat" style="display: none;">
                 </div>
             </div>
 

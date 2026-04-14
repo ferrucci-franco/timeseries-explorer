@@ -159,6 +159,7 @@ class LayoutManager {
         const btnSplitD = this._makeToolbarBtn('▼', i18n.t('splitDown'),   () => this.splitPanel(node.id, 'h', false));
         const btnSplitU = this._makeToolbarBtn('▲', i18n.t('splitUp'),     () => this.splitPanel(node.id, 'h', true));
         const btnClose  = this._makeToolbarBtn('✕', i18n.t('closePanel'),  () => this.closePanel(node.id));
+        btnClose.classList.add('close-panel-btn');
 
         // Hide close button on root panel
         if (this.root.id === node.id) {

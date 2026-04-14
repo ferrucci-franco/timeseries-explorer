@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Equal-visual-length axis lines — arbitrary box shape</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  body { font-family: sans-serif; margin: 12px; background: #1a1a1a; color: #eee; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .cell { width: 500px; }
+  .cell h3 { margin: 4px 0 2px; font-size: 13px; }
+  .cell .meta { font-size: 11px; color: #aaa; margin-bottom: 4px; font-family: monospace; white-space: pre-wrap; }
+  .plot { width: 500px; height: 460px; background: #111; }
+  button { margin: 4px 4px 12px 0; padding: 4px 10px; }
+  .note { font-size: 12px; color: #aaa; max-width: 1100px; }
+  code { background: #222; padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h2>Scenario A: xR=[-10,10], yR=[-1,1], zR=[-100,100] — non-cubic box shapes</h2>
+<p class="note">
+Each plot uses <code>aspectmode:'manual'</code> with a different <code>aspectratio</code> so
+the rendered box is <b>not</b> a cube. The 3 axis lines must still appear equal on-screen.<br>
+Formula: <code>L_i = C × span_i / ar_i</code> where <code>ar_i</code> is the aspectratio for axis i.
+We cap C so every line endpoint stays inside its range.
+</p>
+
+<div>
+  <label>K factor: <input id="kFactor" type="number" step="0.05" value="0.85" style="width:70px"></label>
+  <button onclick="render()">Re-render</button>
+</div>
+
+<div class="row" id="grid"></div>
+
+<script>
+const scA = { xR:[-10, 10], yR:[-1, 1], zR:[-100, 100] };
+
+// Direction toward larger-magnitude end of the range, and max origin→edge distance along it.
+function signAndExtent(R) {
+  const sign = Math.abs(R[1]) >= Math.abs(R[0]) ? 1 : -1;
+  const extent = sign > 0 ? Math.max(R[1], 0) : Math.max(-R[0], 0);
+  return { sign, extent };
+}
+
+// General formula: L_i = C × span_i / ar_i.
+// Constraint |L_i| ≤ extent_i ⇒ C ≤ extent_i × ar_i / span_i for every axis.
+function computeLines(sc, aspectratio, kUser) {
+  const { xR, yR, zR } = sc;
+  const xSpan = Math.abs(xR[1]-xR[0]);
+  const ySpan = Math.abs(yR[1]-yR[0]);
+  const zSpan = Math.abs(zR[1]-zR[0]);
+  const X = signAndExtent(xR), Y = signAndExtent(yR), Z = signAndExtent(zR);
+
+  const Cmax = Math.min(
+    X.extent * aspectratio.x / xSpan,
+    Y.extent * aspectratio.y / ySpan,
+    Z.extent * aspectratio.z / zSpan,
+  );
+  const C = kUser * Cmax;
+
+  const xEnd = X.sign * C * xSpan / aspectratio.x;
+  const yEnd = Y.sign * C * ySpan / aspectratio.y;
+  const zEnd = Z.sign * C * zSpan / aspectratio.z;
+
+  // visRatio_i = |L_i| × ar_i / span_i  →  should be identical (= C) across axes.
+  const visRatio = {
+    x: Math.abs(xEnd) * aspectratio.x / xSpan,
+    y: Math.abs(yEnd) * aspectratio.y / ySpan,
+    z: Math.abs(zEnd) * aspectratio.z / zSpan,
+  };
+  return { xEnd, yEnd, zEnd, C, Cmax, visRatio };
+}
+
+function buildFig(sc, calc, aspectratio, title) {
+  const { xEnd, yEnd, zEnd } = calc;
+  const traces = [
+    { type:'scatter3d', mode:'lines', x:[0,xEnd], y:[0,0], z:[0,0],
+      line:{color:'#e74c3c', width:6}, showlegend:false, hoverinfo:'skip' },
+    { type:'scatter3d', mode:'lines', x:[0,0], y:[0,yEnd], z:[0,0],
+      line:{color:'#2ecc71', width:6}, showlegend:false, hoverinfo:'skip' },
+    { type:'scatter3d', mode:'lines', x:[0,0], y:[0,0], z:[0,zEnd],
+      line:{color:'#3498db', width:6}, showlegend:false, hoverinfo:'skip' },
+    { type:'scatter3d', mode:'markers',
+      x:[xEnd, 0,    0   ],
+      y:[0,    yEnd, 0   ],
+      z:[0,    0,    zEnd],
+      marker:{ size:5, color:['#e74c3c','#2ecc71','#3498db'] },
+      showlegend:false, hoverinfo:'skip' },
+    // Sample trajectory so spike lines have something to attach to on hover
+    (() => {
+      const N = 40, xS = sc.xR[0], xE = sc.xR[1];
+      const yS = sc.yR[0], yE = sc.yR[1];
+      const zS = sc.zR[0], zE = sc.zR[1];
+      const x = [], y = [], z = [];
+      for (let i = 0; i < N; i++) {
+        const t = i/(N-1);
+        x.push(xS + (xE-xS)*t);
+        y.push(yS + (yE-yS)*(0.5 + 0.4*Math.sin(6*t)));
+        z.push(zS + (zE-zS)*(0.5 + 0.4*Math.cos(6*t)));
+      }
+      return { type:'scatter3d', mode:'lines+markers',
+               x, y, z,
+               line:{ color:'#ff9800', width:3 },
+               marker:{ size:3, color:'#ff9800' },
+               showlegend:false, name:'trajectory' };
+    })(),
+  ];
+  const layout = {
+    paper_bgcolor:'#111', plot_bgcolor:'#111',
+    margin:{ l:0, r:0, t:28, b:0 },
+    title:{ text:title, font:{color:'#eee', size:12} },
+    scene:{
+      aspectmode:'manual',
+      aspectratio,
+      xaxis:{ range:sc.xR, title:{ text:'<b>X</b>', font:{ color:'#e74c3c', size:14 } },
+              color:'#ccc', gridcolor:'#333',
+              showspikes:true, spikecolor:'#e74c3c', spikethickness:3, spikesides:false },
+      yaxis:{ range:sc.yR, title:{ text:'<b>Y</b>', font:{ color:'#2ecc71', size:14 } },
+              color:'#ccc', gridcolor:'#333',
+              showspikes:true, spikecolor:'#2ecc71', spikethickness:3, spikesides:false },
+      zaxis:{ range:sc.zR, title:{ text:'<b>Z</b>', font:{ color:'#3498db', size:14 } },
+              color:'#ccc', gridcolor:'#333',
+              showspikes:true, spikecolor:'#3498db', spikethickness:3, spikesides:false },
+      camera:{ eye:{ x:1.6, y:1.6, z:1.2 } },
+    },
+  };
+  return { traces, layout };
+}
+
+function render() {
+  const kUser = parseFloat(document.getElementById('kFactor').value) || 0.85;
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+
+  const variants = [
+    { ar:{x:1, y:1,   z:1   }, label:"aspectratio = 1 : 1 : 1  (cube)" },
+    { ar:{x:1, y:2,   z:1   }, label:"aspectratio = 1 : 2 : 1  (y-longer box)" },
+    { ar:{x:2, y:1,   z:0.5 }, label:"aspectratio = 2 : 1 : 0.5  (mixed)" },
+    { ar:{x:1, y:0.4, z:1.5 }, label:"aspectratio = 1 : 0.4 : 1.5  (tall & narrow Y)" },
+  ];
+
+  for (const v of variants) {
+    const cell = document.createElement('div'); cell.className = 'cell';
+    const h    = document.createElement('h3'); h.textContent = v.label;
+    const meta = document.createElement('div'); meta.className = 'meta';
+    const plot = document.createElement('div'); plot.className = 'plot';
+    cell.appendChild(h); cell.appendChild(meta); cell.appendChild(plot);
+    grid.appendChild(cell);
+
+    const c = buildFig ? null : null;
+    const calc = computeLines(scA, v.ar, kUser);
+    const equal = Math.abs(calc.visRatio.x-calc.visRatio.y) < 1e-9
+               && Math.abs(calc.visRatio.y-calc.visRatio.z) < 1e-9;
+    meta.textContent =
+      `C = ${calc.C.toFixed(4)}    Cmax = ${calc.Cmax.toFixed(4)}\n` +
+      `ends: xEnd=${calc.xEnd.toFixed(3)}  yEnd=${calc.yEnd.toFixed(4)}  zEnd=${calc.zEnd.toFixed(2)}\n` +
+      `visRatio (|L|·ar/span): x=${calc.visRatio.x.toFixed(4)}  y=${calc.visRatio.y.toFixed(4)}  z=${calc.visRatio.z.toFixed(4)} ` +
+      (equal ? '✓ equal (⇒ equal on-screen length)' : '✗ mismatch');
+
+    const fig = buildFig(scA, calc, v.ar, v.label);
+    Plotly.newPlot(plot, fig.traces, fig.layout, { displayModeBar:false, responsive:true });
+  }
+}
+render();
+</script>
+</body>
+</html>

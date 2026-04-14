@@ -93,6 +93,74 @@ const Modal = {
     },
 
     /**
+     * Show an informational/error dialog with a single close button.
+     * @param {string} title - Short heading
+     * @param {string} body  - Body message (plain text or HTML if options.html)
+     * @param {Object} [options] - { icon, html }
+     */
+    alert(title, body, options = {}) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            const modal = document.createElement('div');
+            modal.className = 'modal-dialog modal-dialog-alert';
+
+            const content = document.createElement('div');
+            content.className = 'modal-content';
+
+            const icon = document.createElement('div');
+            icon.className = 'modal-icon';
+            icon.textContent = options.icon || '⚠️';
+            content.appendChild(icon);
+
+            if (title) {
+                const titleDiv = document.createElement('div');
+                titleDiv.className = 'modal-title';
+                titleDiv.textContent = title;
+                content.appendChild(titleDiv);
+            }
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'modal-message';
+            if (options.html) messageDiv.innerHTML = body;
+            else              messageDiv.textContent = body;
+            content.appendChild(messageDiv);
+
+            const buttons = document.createElement('div');
+            buttons.className = 'modal-buttons';
+
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'modal-btn modal-btn-confirm';
+            closeBtn.textContent = i18n.t('compareFilesClose') || 'Close';
+            closeBtn.addEventListener('click', () => { this.close(overlay); resolve(); });
+
+            buttons.appendChild(closeBtn);
+            content.appendChild(buttons);
+            modal.appendChild(content);
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            setTimeout(() => closeBtn.focus(), 100);
+
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) { this.close(overlay); resolve(); }
+            });
+
+            const escHandler = (e) => {
+                if (e.key === 'Escape') {
+                    this.close(overlay);
+                    resolve();
+                    document.removeEventListener('keydown', escHandler);
+                }
+            };
+            document.addEventListener('keydown', escHandler);
+
+            requestAnimationFrame(() => overlay.classList.add('show'));
+        });
+    },
+
+    /**
      * Close and remove a modal
      * @param {HTMLElement} overlay - The overlay element to remove
      */

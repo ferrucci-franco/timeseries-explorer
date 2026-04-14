@@ -2,6 +2,18 @@
  * OpenModelica Viewer - Main Application
  */
 
+const EXAMPLES = [
+    {
+        id: 'pendulum',
+        nameKey: 'examplePendulum',
+        baseName: 'ExampleSimplePendulum',
+        getDataB64: () => (typeof EXAMPLE_DATA_B64 !== 'undefined' ? EXAMPLE_DATA_B64 : null),
+        applyLayout: (pm, fileId, panels) => pm.setExampleLayout(fileId, panels),
+    },
+    { id: 'placeholder1', nameKey: 'examplePlaceholder1', getDataB64: () => null },
+    { id: 'placeholder2', nameKey: 'examplePlaceholder2', getDataB64: () => null },
+];
+
 class OpenModelicaViewer {
     constructor() {
         this.parser      = new MatParser();
@@ -10,9 +22,12 @@ class OpenModelicaViewer {
         this.theme       = 'light';
         this.language    = 'en';
         this.showDescriptions = false;
+        this.sortAlphabetical = false;
+        this._currentTree     = null;
+        this._filterText      = '';
 
         this.layoutManager = new LayoutManager('plots-area');
-        this.plotManager   = new PlotManager();
+        this.plotManager   = new PlotManager(this.parser);
 
         this.layoutManager.onPanelMount   = (id, el) => this.plotManager.onPanelMount(id, el);
         this.layoutManager.onPanelUnmount = (id)     => this.plotManager.onPanelUnmount(id);
@@ -182,6 +197,17 @@ class OpenModelicaViewer {
             document.getElementById('file-input').click();
         });
 
+        document.getElementById('toggle-sort').addEventListener('click', (e) => {
+            this.sortAlphabetical = !this.sortAlphabetical;
+            e.currentTarget.classList.toggle('active', this.sortAlphabetical);
+            if (this._currentTree) this._renderFilteredTree();
+        });
+
+        document.getElementById('variable-filter').addEventListener('input', (e) => {
+            this._filterText = e.target.value.trim().toLowerCase();
+            if (this._currentTree) this._renderFilteredTree();
+        });
+
         document.getElementById('expand-all').addEventListener('click',   () => this.expandAllTree());
         document.getElementById('collapse-all').addEventListener('click', () => this.collapseAllTree());
 
@@ -189,9 +215,10 @@ class OpenModelicaViewer {
             document.getElementById('file-input').click();
         });
 
-        document.getElementById('file-input').addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) { this.loadFile(file); e.target.value = ''; }
+        document.getElementById('file-input').addEventListener('change', async (e) => {
+            const files = Array.from(e.target.files || []);
+            e.target.value = '';
+            for (const f of files) await this.loadFile(f);
         });
 
         document.getElementById('link-time-axes').addEventListener('change', (e) => {
@@ -200,6 +227,10 @@ class OpenModelicaViewer {
 
         document.getElementById('sync-hover').addEventListener('change', (e) => {
             this.plotManager.setSyncHover(e.target.checked);
+        });
+
+        document.getElementById('hover-proximity').addEventListener('change', (e) => {
+            this.plotManager.setHoverProximity(e.target.checked);
         });
 
         document.querySelectorAll('input[name="legend-pos"]').forEach(radio => {
@@ -222,31 +253,95 @@ class OpenModelicaViewer {
             });
         });
 
-        document.getElementById('load-example-btn').addEventListener('click', () => {
-            this.loadExample().catch(err => {
-                console.error('Example load failed:', err);
-                alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
-            });
-        });
+        this._initExampleMenu();
 
         document.getElementById('help-btn').addEventListener('click', () => this.showHelp());
     }
 
-    async loadExample() {
+    _initExampleMenu() {
+        const btn  = document.getElementById('load-example-btn');
+        const menu = document.getElementById('example-menu');
+
+        const close = () => {
+            menu.hidden = true;
+            btn.setAttribute('aria-expanded', 'false');
+        };
+        const open = () => {
+            this._renderExampleMenu();
+            menu.hidden = false;
+            btn.setAttribute('aria-expanded', 'true');
+        };
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menu.hidden ? open() : close();
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) close();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !menu.hidden) close();
+        });
+
+        this._closeExampleMenu = close;
+    }
+
+    _renderExampleMenu() {
+        const menu = document.getElementById('example-menu');
+        menu.innerHTML = '';
+        for (const ex of EXAMPLES) {
+            const item = document.createElement('button');
+            item.className = 'example-menu-item';
+            item.type = 'button';
+            item.setAttribute('role', 'menuitem');
+
+            const available = ex.getDataB64() != null;
+            item.disabled = !available;
+
+            const name = document.createElement('span');
+            name.className = 'example-name';
+            name.textContent = i18n.t(ex.nameKey);
+            item.appendChild(name);
+
+            if (!available) {
+                const badge = document.createElement('span');
+                badge.className = 'example-badge';
+                badge.textContent = i18n.t('exampleComingSoon');
+                item.appendChild(badge);
+            }
+
+            item.addEventListener('click', () => {
+                this._closeExampleMenu();
+                if (!available) return;
+                this.loadExample(ex.id).catch(err => {
+                    console.error('Example load failed:', err);
+                    alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+                });
+            });
+            menu.appendChild(item);
+        }
+    }
+
+    async loadExample(exampleId = 'pendulum') {
+        const ex = EXAMPLES.find(e => e.id === exampleId);
+        if (!ex) throw new Error(`Unknown example: ${exampleId}`);
+        const b64 = ex.getDataB64();
+        if (b64 == null) return;
         if (this.plotManager.hasAnyTraces()) {
             const ok = await Modal.confirm(i18n.t('loadExampleWarning'), { icon: '🎓' });
             if (!ok) return;
         }
 
         // Decode embedded base64 data — works with file:// and http:// alike
-        const binary = atob(EXAMPLE_DATA_B64);
+        const binary = atob(b64);
         const buffer = new ArrayBuffer(binary.length);
         const view   = new Uint8Array(buffer);
         for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
 
         const data   = await this.parser.parse(buffer);
 
-        const baseName   = 'ExampleSimplePendulum';
+        const baseName   = ex.baseName;
         const existingId = [...this.files.entries()].find(([,e]) => e.name === baseName)?.[0];
         let fileId = existingId;
         if (!fileId) {
@@ -272,7 +367,7 @@ class OpenModelicaViewer {
         const [tlId, trId, blId, brId] = panels;
 
         // Set state directly — no addTrace, avoids async race conditions
-        this.plotManager.setExampleLayout(fileId, { tlId, trId, blId, brId });
+        ex.applyLayout(this.plotManager, fileId, { tlId, trId, blId, brId });
 
         document.getElementById('drop-zone').classList.remove('active');
         this._updateTopBar();
@@ -282,7 +377,7 @@ class OpenModelicaViewer {
     }
 
     showHelp() {
-        const sections = ['1','2','3','4'];
+        const sections = ['1','2','3','4','5'];
 
         const backdrop = document.createElement('div');
         backdrop.className = 'help-backdrop';
@@ -338,12 +433,12 @@ class OpenModelicaViewer {
 
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
 
-        dropZone.addEventListener('drop', (e) => {
+        dropZone.addEventListener('drop', async (e) => {
             e.preventDefault();
             dropZone.classList.remove('dragging');
-            const file = e.dataTransfer.files[0];
-            if (file && file.name.endsWith('.mat')) this.loadFile(file);
-            else alert(i18n.t('invalidFile'));
+            const files = Array.from(e.dataTransfer.files || []).filter(f => f.name.endsWith('.mat'));
+            if (!files.length) { alert(i18n.t('invalidFile')); return; }
+            for (const f of files) await this.loadFile(f);
         });
     }
 
@@ -380,13 +475,62 @@ class OpenModelicaViewer {
     // ─── Variables tree ────────────────────────────────────────────
 
     renderVariablesTree(tree) {
-        const container = document.getElementById('variables-tree');
-        container.innerHTML = '';
-        this.renderTreeNode(tree, container, 0);
+        this._currentTree = tree;
+        this._renderFilteredTree();
     }
 
-    renderTreeNode(node, parentElement, level) {
-        for (const [name, child] of Object.entries(node._children || {})) {
+    _renderFilteredTree() {
+        const container = document.getElementById('variables-tree');
+        container.innerHTML = '';
+        const filter = this._filterText;
+        const autoExpand = filter.length > 0;
+        this._renderTreeNode(this._currentTree, container, 0, filter, autoExpand);
+    }
+
+    /**
+     * Check if a tree node (or any descendant) contains a variable whose
+     * full name matches the filter text (substring, case-insensitive).
+     */
+    _nodeMatchesFilter(node, filter) {
+        if (!filter) return true;
+        for (const variable of Object.values(node._variables || {})) {
+            if (variable.name.toLowerCase().includes(filter)) return true;
+        }
+        for (const child of Object.values(node._children || {})) {
+            if (this._nodeMatchesFilter(child, filter)) return true;
+        }
+        return false;
+    }
+
+    _renderTreeNode(node, parentElement, level, filter, autoExpand) {
+        // Collect children entries
+        let childrenEntries = Object.entries(node._children || {});
+        if (this.sortAlphabetical) {
+            childrenEntries.sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
+        }
+
+        // Collect variable entries, split into vars and params when sorting
+        let allVarEntries = Object.entries(node._variables || {});
+
+        // Filter children and variables
+        if (filter) {
+            childrenEntries = childrenEntries.filter(([, child]) => this._nodeMatchesFilter(child, filter));
+            allVarEntries = allVarEntries.filter(([, v]) => v.name.toLowerCase().includes(filter));
+        }
+
+        let varEntries, paramEntries;
+        if (this.sortAlphabetical) {
+            varEntries   = allVarEntries.filter(([, v]) => v.kind !== 'parameter');
+            paramEntries = allVarEntries.filter(([, v]) => v.kind === 'parameter');
+            varEntries.sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
+            paramEntries.sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
+        } else {
+            varEntries   = allVarEntries;
+            paramEntries = [];
+        }
+
+        // Render children (sub-components)
+        for (const [name, child] of childrenEntries) {
             const nodeDiv  = document.createElement('div');
             nodeDiv.className = 'tree-node';
 
@@ -394,7 +538,7 @@ class OpenModelicaViewer {
             itemDiv.className = 'tree-item';
 
             const toggle = document.createElement('span');
-            toggle.className = 'tree-toggle';
+            toggle.className = 'tree-toggle' + (autoExpand ? ' expanded' : '');
             toggle.textContent = '▸';
 
             const icon  = document.createElement('span');
@@ -412,7 +556,7 @@ class OpenModelicaViewer {
             itemDiv.append(toggle, icon, label, info);
 
             const childrenDiv = document.createElement('div');
-            childrenDiv.className = 'tree-children collapsed';
+            childrenDiv.className = 'tree-children' + (autoExpand ? '' : ' collapsed');
 
             itemDiv.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -420,12 +564,26 @@ class OpenModelicaViewer {
                 toggle.classList.toggle('expanded', !collapsed);
             });
 
-            this.renderTreeNode(child, childrenDiv, level + 1);
+            this._renderTreeNode(child, childrenDiv, level + 1, filter, autoExpand);
             nodeDiv.append(itemDiv, childrenDiv);
             parentElement.appendChild(nodeDiv);
         }
 
-        for (const [name, variable] of Object.entries(node._variables || {})) {
+        // Render variables (non-parameter when sorted, all when unsorted)
+        this._renderVarLeaves(varEntries, parentElement);
+
+        // Render parameters sub-section (only when sorting is active and there are params)
+        if (this.sortAlphabetical && paramEntries.length > 0) {
+            const paramLabel = document.createElement('div');
+            paramLabel.className = 'tree-param-label';
+            paramLabel.textContent = 'Parameters';
+            parentElement.appendChild(paramLabel);
+            this._renderVarLeaves(paramEntries, parentElement);
+        }
+    }
+
+    _renderVarLeaves(entries, parentElement) {
+        for (const [name, variable] of entries) {
             const nodeDiv = document.createElement('div');
             nodeDiv.className = 'tree-node';
 
