@@ -7,6 +7,7 @@ const EXAMPLES = [
         id: 'pendulum',
         nameKey: 'examplePendulum',
         baseName: 'ExampleSimplePendulum',
+        script: 'example-data.js',
         getDataB64: () => (typeof EXAMPLE_DATA_B64 !== 'undefined' ? EXAMPLE_DATA_B64 : null),
         applyLayout: (pm, fileId, panels) => pm.setExampleLayout(fileId, panels),
     },
@@ -19,12 +20,15 @@ class OpenModelicaViewer {
         this.parser      = new MatParser();
         this.files       = new Map();   // fileId → { file, name }
         this._nextFileId = 1;
-        this.theme       = 'light';
+        this.theme       = OpenModelicaViewer.getStartupTheme();
         this.language    = 'en';
         this.showDescriptions = false;
-        this.sortAlphabetical = false;
+        this.sortAlphabetical = true;
         this._currentTree     = null;
         this._filterText      = '';
+        this._loadedScripts   = new Set();
+        this.derivedByFile    = new Map();
+        this._suggestionIndex = 0;
 
         this.layoutManager = new LayoutManager('plots-area');
         this.plotManager   = new PlotManager(this.parser);
@@ -32,6 +36,7 @@ class OpenModelicaViewer {
         this.layoutManager.onPanelMount   = (id, el) => this.plotManager.onPanelMount(id, el);
         this.layoutManager.onPanelUnmount = (id)     => this.plotManager.onPanelUnmount(id);
 
+        this.applyTheme(this.theme);
         this.initEventListeners();
         this.initDragAndDrop();
         this.initSidebarResize();
@@ -93,6 +98,7 @@ class OpenModelicaViewer {
         if (!buffer) throw new Error('No buffer available');
 
         const data = await this.parser.parse(buffer);
+        this._reapplyDerivedVariables(id, data);
 
         this.plotManager.updateFileData(id, data);
         this._updateTopBar();
@@ -109,6 +115,7 @@ class OpenModelicaViewer {
 
         this.plotManager.removeFile(fileId);
         this.files.delete(fileId);
+        this.derivedByFile.delete(fileId);
 
         // Switch sidebar to new active file (if any)
         const newActiveId = this.plotManager.activeFileId;
@@ -202,6 +209,7 @@ class OpenModelicaViewer {
             e.currentTarget.classList.toggle('active', this.sortAlphabetical);
             if (this._currentTree) this._renderFilteredTree();
         });
+        document.getElementById('toggle-sort').classList.toggle('active', this.sortAlphabetical);
 
         document.getElementById('variable-filter').addEventListener('input', (e) => {
             this._filterText = e.target.value.trim().toLowerCase();
@@ -210,6 +218,18 @@ class OpenModelicaViewer {
 
         document.getElementById('expand-all').addEventListener('click',   () => this.expandAllTree());
         document.getElementById('collapse-all').addEventListener('click', () => this.collapseAllTree());
+
+        document.getElementById('derived-toggle').addEventListener('click', () => this._toggleDerivedForm(true));
+        document.getElementById('derived-cancel').addEventListener('click', () => this._toggleDerivedForm(false));
+        document.getElementById('derived-create').addEventListener('click', () => this.createDerivedVariable());
+        document.getElementById('derived-formula').addEventListener('input', (e) => this._updateDerivedSuggestions(e));
+        document.getElementById('derived-formula').addEventListener('keydown', (e) => this._handleDerivedFormulaKeydown(e));
+        document.getElementById('derived-name').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') this.createDerivedVariable();
+        });
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.derived-formula-wrap')) this._hideDerivedSuggestions();
+        });
 
         document.getElementById('file-select-btn').addEventListener('click', () => {
             document.getElementById('file-input').click();
@@ -296,7 +316,7 @@ class OpenModelicaViewer {
             item.type = 'button';
             item.setAttribute('role', 'menuitem');
 
-            const available = ex.getDataB64() != null;
+            const available = ex.getDataB64() != null || !!ex.script;
             item.disabled = !available;
 
             const name = document.createElement('span');
@@ -326,6 +346,7 @@ class OpenModelicaViewer {
     async loadExample(exampleId = 'pendulum') {
         const ex = EXAMPLES.find(e => e.id === exampleId);
         if (!ex) throw new Error(`Unknown example: ${exampleId}`);
+        await this._ensureExampleData(ex);
         const b64 = ex.getDataB64();
         if (b64 == null) return;
         if (this.plotManager.hasAnyTraces()) {
@@ -350,6 +371,7 @@ class OpenModelicaViewer {
             this.plotManager.addFile(fileId, baseName, data);
         } else {
             this.files.get(fileId).buffer = buffer;
+            this._reapplyDerivedVariables(fileId, data);
             this.plotManager.updateFileData(fileId, data);
         }
         this.plotManager.setActiveFile(fileId);
@@ -374,6 +396,29 @@ class OpenModelicaViewer {
         this._renderFilesList();
         this._updateActionButtons();
         this.renderVariablesTree(data.tree);
+    }
+
+    async _ensureExampleData(example) {
+        if (example.getDataB64() != null || !example.script) return;
+        await this._loadScriptOnce(example.script);
+    }
+
+    _loadScriptOnce(src) {
+        if (this._loadedScripts.has(src)) return Promise.resolve();
+        if ([...document.scripts].some(s => s.getAttribute('src') === src)) {
+            this._loadedScripts.add(src);
+            return Promise.resolve();
+        }
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = () => {
+                this._loadedScripts.add(src);
+                resolve();
+            };
+            script.onerror = () => reject(new Error(`Cannot load script: ${src}`));
+            document.head.appendChild(script);
+        });
     }
 
     showHelp() {
@@ -447,32 +492,408 @@ class OpenModelicaViewer {
     initSidebarResize() {
         const sidebar = document.getElementById('sidebar');
         const handle  = document.querySelector('.sidebar-resize-handle');
+        const proxy = document.createElement('div');
+        proxy.className = 'sidebar-resize-proxy';
+        document.body.appendChild(proxy);
         let isResizing = false, startX = 0, startWidth = 0;
+        const edgeWidth = 14;
 
-        handle.addEventListener('mousedown', (e) => {
+        const updateProxy = () => {
+            const rect = sidebar.getBoundingClientRect();
+            const hidden = sidebar.classList.contains('hidden') || rect.width < 2;
+            proxy.style.display = hidden ? 'none' : '';
+            proxy.style.left = `${rect.right - 6}px`;
+            proxy.style.top = `${rect.top}px`;
+            proxy.style.height = `${rect.height}px`;
+        };
+
+        const startResize = (e) => {
             isResizing = true; startX = e.clientX; startWidth = sidebar.offsetWidth;
             handle.classList.add('resizing');
+            proxy.classList.add('resizing');
+            sidebar.classList.add('resizing');
             document.body.style.cursor = 'ew-resize';
             document.body.style.userSelect = 'none';
+            proxy.setPointerCapture?.(e.pointerId);
             e.preventDefault();
+        };
+
+        handle.addEventListener('pointerdown', startResize);
+        proxy.addEventListener('pointerdown', startResize);
+
+        sidebar.addEventListener('pointerdown', (e) => {
+            const rect = sidebar.getBoundingClientRect();
+            const nearRightEdge = rect.right - e.clientX <= edgeWidth;
+            if (nearRightEdge && !sidebar.classList.contains('hidden')) startResize(e);
+        }, true);
+
+        sidebar.addEventListener('pointermove', (e) => {
+            if (isResizing || sidebar.classList.contains('hidden')) return;
+            const rect = sidebar.getBoundingClientRect();
+            sidebar.classList.toggle('resize-ready', rect.right - e.clientX <= edgeWidth);
         });
 
-        document.addEventListener('mousemove', (e) => {
+        document.addEventListener('pointermove', (e) => {
             if (!isResizing) return;
             const w = Math.max(200, Math.min(600, startWidth + e.clientX - startX));
             sidebar.style.width = w + 'px';
+            updateProxy();
         });
 
-        document.addEventListener('mouseup', () => {
+        document.addEventListener('pointerup', (e) => {
             if (!isResizing) return;
             isResizing = false;
             handle.classList.remove('resizing');
+            proxy.classList.remove('resizing');
+            sidebar.classList.remove('resizing');
+            sidebar.classList.remove('resize-ready');
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
+            proxy.releasePointerCapture?.(e.pointerId);
+            updateProxy();
         });
+
+        window.addEventListener('resize', updateProxy);
+        new ResizeObserver(updateProxy).observe(sidebar);
+        updateProxy();
     }
 
     // ─── Variables tree ────────────────────────────────────────────
+
+    // ─── Derived variables ─────────────────────────────────────────
+
+    createDerivedVariable() {
+        const fileId = this.activeFileId;
+        const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+        const nameInput = document.getElementById('derived-name');
+        const formulaInput = document.getElementById('derived-formula');
+        const name = nameInput.value.trim();
+        const formula = formulaInput.value.trim();
+
+        try {
+            if (!data) throw new Error('Load a .mat file first.');
+            if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) throw new Error('Use a simple name, for example slip or motor.slip.');
+            if (!formula) throw new Error('Enter a formula.');
+            const existing = data.variables[name];
+            if (existing && !existing.derived) throw new Error(`Variable "${name}" already exists.`);
+
+            const result = this._evaluateDerivedFormula(formula, data);
+            const variable = {
+                name,
+                data: result.values,
+                description: `Derived: ${formula}`,
+                kind: 'variable',
+                dataType: this.parser._detectDataType(result.values, 'variable'),
+                interpolation: 'linear',
+                derived: true,
+                formula
+            };
+
+            data.variables[name] = variable;
+            if (!this.derivedByFile.has(fileId)) this.derivedByFile.set(fileId, new Map());
+            this.derivedByFile.get(fileId).set(name, { name, formula, variable });
+
+            this._setDerivedMessage(`Created ${name}`, 'ok');
+            nameInput.value = '';
+            formulaInput.value = '';
+            this._hideDerivedSuggestions();
+            this._renderFilteredTree();
+            this._toggleDerivedForm(false);
+            this._rebuildPlotsUsingVariable(fileId, name);
+        } catch (err) {
+            this._setDerivedMessage(err?.message || String(err), 'error');
+        }
+    }
+
+    _evaluateDerivedFormula(formula, data) {
+        const timeVar = this._getActiveTimeVar(data);
+        if (!timeVar?.data?.length) throw new Error('No time vector found.');
+        const tokens = this._tokenizeDerivedFormula(formula, data.variables);
+        const ast = this._parseDerivedExpression(tokens);
+        const n = timeVar.data.length;
+        const evaluated = this._evalDerivedNode(ast, data, n);
+        const values = evaluated.kind === 'series' ? evaluated.values : Array.from({ length: n }, () => evaluated.value);
+        return { values };
+    }
+
+    _tokenizeDerivedFormula(formula, variables) {
+        const tokens = [];
+        let i = 0;
+        while (i < formula.length) {
+            const ch = formula[i];
+            if (/\s/.test(ch)) { i++; continue; }
+            if ('+-*/()'.includes(ch)) { tokens.push({ type: ch, value: ch }); i++; continue; }
+            if (ch === '`') {
+                const end = formula.indexOf('`', i + 1);
+                if (end < 0) throw new Error('Missing closing backtick.');
+                const name = formula.slice(i + 1, end);
+                if (!variables[name]) throw new Error(`Unknown variable "${name}".`);
+                tokens.push({ type: 'name', value: name });
+                i = end + 1;
+                continue;
+            }
+            if (/\d|\./.test(ch)) {
+                const match = formula.slice(i).match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/);
+                if (!match) throw new Error(`Unexpected "." at position ${i + 1}.`);
+                tokens.push({ type: 'number', value: Number(match[0]) });
+                i += match[0].length;
+                continue;
+            }
+            if (/[A-Za-z_]/.test(ch)) {
+                let j = i + 1;
+                while (j < formula.length && /[A-Za-z0-9_.\[\]]/.test(formula[j])) j++;
+                const name = formula.slice(i, j);
+                if (!variables[name]) throw new Error(`Unknown variable "${name}".`);
+                tokens.push({ type: 'name', value: name });
+                i = j;
+                continue;
+            }
+            throw new Error(`Unexpected "${ch}" at position ${i + 1}.`);
+        }
+        return tokens;
+    }
+
+    _parseDerivedExpression(tokens) {
+        let pos = 0;
+        const peek = () => tokens[pos];
+        const take = (type) => (peek()?.type === type ? tokens[pos++] : null);
+        const parseFactor = () => {
+            if (take('+')) return parseFactor();
+            if (take('-')) return { type: 'unary', op: '-', expr: parseFactor() };
+            const token = peek();
+            if (!token) throw new Error('Unexpected end of formula.');
+            if (take('number')) return { type: 'number', value: token.value };
+            if (take('name')) return { type: 'name', value: token.value };
+            if (take('(')) {
+                const expr = parseAddSub();
+                if (!take(')')) throw new Error('Missing closing parenthesis.');
+                return expr;
+            }
+            throw new Error(`Unexpected "${token.value}".`);
+        };
+        const parseMulDiv = () => {
+            let node = parseFactor();
+            while (peek()?.type === '*' || peek()?.type === '/') {
+                const op = tokens[pos++].type;
+                node = { type: 'binary', op, left: node, right: parseFactor() };
+            }
+            return node;
+        };
+        const parseAddSub = () => {
+            let node = parseMulDiv();
+            while (peek()?.type === '+' || peek()?.type === '-') {
+                const op = tokens[pos++].type;
+                node = { type: 'binary', op, left: node, right: parseMulDiv() };
+            }
+            return node;
+        };
+        const ast = parseAddSub();
+        if (pos < tokens.length) throw new Error(`Unexpected "${tokens[pos].value}".`);
+        return ast;
+    }
+
+    _evalDerivedNode(node, data, n) {
+        if (node.type === 'number') return { kind: 'scalar', value: node.value };
+        if (node.type === 'name') {
+            const variable = data.variables[node.value];
+            if (!variable) throw new Error(`Unknown variable "${node.value}".`);
+            if (variable.kind === 'parameter' || variable.data.length === 1) return { kind: 'scalar', value: Number(variable.data[0]) };
+            if (variable.data.length !== n) throw new Error(`"${node.value}" has ${variable.data.length} points, but time has ${n}.`);
+            return { kind: 'series', values: variable.data };
+        }
+        if (node.type === 'unary') {
+            const v = this._evalDerivedNode(node.expr, data, n);
+            return v.kind === 'scalar' ? { kind: 'scalar', value: -v.value } : { kind: 'series', values: v.values.map(x => -x) };
+        }
+        const left = this._evalDerivedNode(node.left, data, n);
+        const right = this._evalDerivedNode(node.right, data, n);
+        const apply = (a, b) => node.op === '+' ? a + b : node.op === '-' ? a - b : node.op === '*' ? a * b : a / b;
+        if (left.kind === 'scalar' && right.kind === 'scalar') return { kind: 'scalar', value: apply(left.value, right.value) };
+        const values = new Array(n);
+        for (let i = 0; i < n; i++) values[i] = apply(left.kind === 'series' ? left.values[i] : left.value, right.kind === 'series' ? right.values[i] : right.value);
+        return { kind: 'series', values };
+    }
+
+    _getActiveTimeVar(data) {
+        return Object.values(data.variables).find(v => v.kind === 'abscissa') || null;
+    }
+
+    _reapplyDerivedVariables(fileId, data) {
+        const derived = this.derivedByFile.get(fileId);
+        if (!derived) return;
+        for (const [name, entry] of derived) {
+            try {
+                const result = this._evaluateDerivedFormula(entry.formula, data);
+                const variable = {
+                    name,
+                    data: result.values,
+                    description: `Derived: ${entry.formula}`,
+                    kind: 'variable',
+                    dataType: this.parser._detectDataType(result.values, 'variable'),
+                    interpolation: 'linear',
+                    derived: true,
+                    formula: entry.formula
+                };
+                data.variables[name] = variable;
+                entry.variable = variable;
+            } catch (err) {
+                console.warn(`Could not reapply derived variable ${name}:`, err);
+            }
+        }
+    }
+
+    _removeDerivedVariable(name) {
+        const fileId = this.activeFileId;
+        const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+        if (!fileId || !data) return;
+        this.derivedByFile.get(fileId)?.delete(name);
+        delete data.variables[name];
+        for (const [panelId, plot] of this.plotManager.plots) {
+            const beforeTs = plot.traces.length;
+            const beforePh = plot.phaseTraces.length;
+            plot.traces = plot.traces.filter(t => !(t.fileId === fileId && t.varName === name));
+            plot.phaseTraces = plot.phaseTraces.filter(t => !(t.fileId === fileId && (t.x === name || t.y === name || t.z === name)));
+            if (beforeTs !== plot.traces.length || beforePh !== plot.phaseTraces.length) this.plotManager._rebuildPanel(panelId);
+        }
+        this._renderFilteredTree();
+    }
+
+    _rebuildPlotsUsingVariable(fileId, name) {
+        for (const [panelId, plot] of this.plotManager.plots) {
+            const usesTimeseries = plot.traces.some(t => t.fileId === fileId && t.varName === name);
+            const usesPhase = plot.phaseTraces.some(t => t.fileId === fileId && (t.x === name || t.y === name || t.z === name));
+            if (usesTimeseries || usesPhase) this.plotManager._rebuildPanel(panelId);
+        }
+    }
+
+    _toggleDerivedForm(show) {
+        const form = document.getElementById('derived-form');
+        form.classList.toggle('collapsed', !show);
+        if (show) {
+            this._scrollDerivedFormIntoView();
+            document.getElementById('derived-name').focus();
+        }
+        else {
+            this._setDerivedMessage('', '');
+            this._hideDerivedSuggestions();
+        }
+    }
+
+    _scrollDerivedFormIntoView() {
+        const section = document.querySelector('.derived-section');
+        const sidebar = document.getElementById('sidebar');
+        if (!section || !sidebar) return;
+        requestAnimationFrame(() => {
+            sidebar.scrollTo({
+                top: sidebar.scrollHeight,
+                behavior: 'smooth'
+            });
+        });
+    }
+
+    _setDerivedMessage(message, type) {
+        const el = document.getElementById('derived-message');
+        el.textContent = message;
+        el.className = `derived-message${type ? ' ' + type : ''}`;
+    }
+
+    _getDerivedSuggestions(prefix) {
+        const data = this.plotManager.data;
+        if (!data || !prefix) return [];
+        const needle = prefix.toLowerCase();
+        return Object.values(data.variables)
+            .filter(v => v.kind !== 'abscissa' && v.name.toLowerCase().includes(needle))
+            .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+            .slice(0, 8);
+    }
+
+    _updateDerivedSuggestions(e) {
+        const input = e.target;
+        const left = input.value.slice(0, input.selectionStart);
+        const match = left.match(/`?([A-Za-z0-9_.\[\]]*)$/);
+        const prefix = match ? match[1] : '';
+        const suggestions = this._getDerivedSuggestions(prefix);
+        const box = document.getElementById('derived-suggestions');
+        box.innerHTML = '';
+        this._suggestionIndex = 0;
+        if (!suggestions.length) { box.hidden = true; return; }
+        for (const variable of suggestions) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'derived-suggestion';
+            const name = document.createElement('span');
+            name.className = 'derived-suggestion-name';
+            name.textContent = variable.name;
+            const kind = document.createElement('span');
+            kind.className = 'derived-suggestion-kind';
+            kind.textContent = variable.kind === 'parameter' ? 'param' : 'var';
+            btn.append(name, kind);
+            btn.addEventListener('mousedown', (ev) => {
+                ev.preventDefault();
+                this._insertDerivedSuggestion(variable.name);
+            });
+            box.appendChild(btn);
+        }
+        this._markActiveSuggestion();
+        this._positionDerivedSuggestions();
+        box.hidden = false;
+    }
+
+    _handleDerivedFormulaKeydown(e) {
+        const box = document.getElementById('derived-suggestions');
+        const items = [...box.querySelectorAll('.derived-suggestion')];
+        if (!box.hidden && items.length) {
+            if (e.key === 'ArrowDown') { e.preventDefault(); this._suggestionIndex = (this._suggestionIndex + 1) % items.length; this._markActiveSuggestion(); return; }
+            if (e.key === 'ArrowUp') { e.preventDefault(); this._suggestionIndex = (this._suggestionIndex - 1 + items.length) % items.length; this._markActiveSuggestion(); return; }
+            if (e.key === 'Tab' || e.key === 'Enter') {
+                e.preventDefault();
+                this._insertDerivedSuggestion(items[this._suggestionIndex].querySelector('.derived-suggestion-name').textContent);
+                return;
+            }
+            if (e.key === 'Escape') { this._hideDerivedSuggestions(); return; }
+        }
+        if (e.key === 'Enter') this.createDerivedVariable();
+    }
+
+    _insertDerivedSuggestion(name) {
+        const input = document.getElementById('derived-formula');
+        const start = input.selectionStart;
+        const end = input.selectionEnd;
+        const left = input.value.slice(0, start);
+        const right = input.value.slice(end);
+        const match = left.match(/`?[A-Za-z0-9_.\[\]]*$/);
+        const replaceStart = match ? start - match[0].length : start;
+        const insert = /^[A-Za-z_][A-Za-z0-9_.\[\]]*$/.test(name) ? name : `\`${name}\``;
+        input.value = input.value.slice(0, replaceStart) + insert + right;
+        const cursor = replaceStart + insert.length;
+        input.setSelectionRange(cursor, cursor);
+        input.focus();
+        this._hideDerivedSuggestions();
+    }
+
+    _markActiveSuggestion() {
+        const items = [...document.querySelectorAll('#derived-suggestions .derived-suggestion')];
+        items.forEach((item, i) => item.classList.toggle('active', i === this._suggestionIndex));
+    }
+
+    _hideDerivedSuggestions() {
+        const box = document.getElementById('derived-suggestions');
+        if (box) box.hidden = true;
+    }
+
+    _positionDerivedSuggestions() {
+        const input = document.getElementById('derived-formula');
+        const box = document.getElementById('derived-suggestions');
+        const sidebar = document.getElementById('sidebar');
+        if (!input || !box || !sidebar) return;
+        const inputRect = input.getBoundingClientRect();
+        const sidebarRect = sidebar.getBoundingClientRect();
+        const spaceBelow = sidebarRect.bottom - inputRect.bottom;
+        const spaceAbove = inputRect.top - sidebarRect.top;
+        const openUp = spaceBelow < 170 && spaceAbove > spaceBelow;
+        box.classList.toggle('open-up', openUp);
+        box.style.maxHeight = `${Math.max(96, Math.min(180, (openUp ? spaceAbove : spaceBelow) - 12))}px`;
+    }
 
     renderVariablesTree(tree) {
         this._currentTree = tree;
@@ -485,6 +906,48 @@ class OpenModelicaViewer {
         const filter = this._filterText;
         const autoExpand = filter.length > 0;
         this._renderTreeNode(this._currentTree, container, 0, filter, autoExpand);
+        this._renderDerivedTreeSection(container, filter, autoExpand);
+    }
+
+    _renderDerivedTreeSection(parentElement, filter, autoExpand) {
+        const fileId = this.activeFileId;
+        const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+        const entries = Object.entries(data?.variables || {})
+            .filter(([, variable]) => variable.derived)
+            .filter(([, variable]) => !filter || variable.name.toLowerCase().includes(filter));
+        if (!entries.length) return;
+        entries.sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
+
+        const nodeDiv = document.createElement('div');
+        nodeDiv.className = 'tree-node';
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'tree-item';
+        const expanded = true;
+        const toggle = document.createElement('span');
+        toggle.className = 'tree-toggle' + (expanded ? ' expanded' : '');
+        toggle.textContent = '▸';
+        const icon = document.createElement('span');
+        icon.className = 'tree-icon';
+        icon.textContent = 'fx';
+        const label = document.createElement('span');
+        label.className = 'tree-label';
+        label.textContent = i18n.t('derivedVariables');
+        const info = document.createElement('span');
+        info.className = 'tree-info';
+        info.textContent = `(${entries.length})`;
+        itemDiv.classList.add('derived-tree-header');
+        itemDiv.append(toggle, icon, label, info);
+
+        const childrenDiv = document.createElement('div');
+        childrenDiv.className = 'tree-children derived-tree-children' + (expanded ? '' : ' collapsed');
+        itemDiv.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const collapsed = childrenDiv.classList.toggle('collapsed');
+            toggle.classList.toggle('expanded', !collapsed);
+        });
+        this._renderVarLeaves(entries, childrenDiv, { derivedActions: true });
+        nodeDiv.append(itemDiv, childrenDiv);
+        parentElement.appendChild(nodeDiv);
     }
 
     /**
@@ -582,13 +1045,13 @@ class OpenModelicaViewer {
         }
     }
 
-    _renderVarLeaves(entries, parentElement) {
+    _renderVarLeaves(entries, parentElement, options = {}) {
         for (const [name, variable] of entries) {
             const nodeDiv = document.createElement('div');
-            nodeDiv.className = 'tree-node';
+            nodeDiv.className = 'tree-node' + (variable.derived ? ' tree-node-derived' : '');
 
             const itemDiv = document.createElement('div');
-            itemDiv.className = 'tree-item';
+            itemDiv.className = 'tree-item' + (variable.derived ? ' tree-item-derived' : '');
             itemDiv.setAttribute('draggable', 'true');
             itemDiv.setAttribute('data-var-name', variable.name);
 
@@ -609,6 +1072,18 @@ class OpenModelicaViewer {
             info.textContent = this.parser.getVariableInfo(variable);
 
             itemDiv.append(spacer, icon, label, info);
+            if (options.derivedActions) {
+                const remove = document.createElement('button');
+                remove.className = 'tree-derived-remove';
+                remove.textContent = 'x';
+                remove.title = 'Remove';
+                remove.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this._removeDerivedVariable(variable.name);
+                });
+                remove.addEventListener('dragstart', (e) => e.preventDefault());
+                itemDiv.appendChild(remove);
+            }
 
             if (variable.description) {
                 const descDiv = document.createElement('div');
@@ -646,6 +1121,11 @@ class OpenModelicaViewer {
 
     // ─── Theme & language ──────────────────────────────────────────
 
+    static getStartupTheme() {
+        const hour = new Date().getHours();
+        return hour >= 7 && hour < 18 ? 'light' : 'dark';
+    }
+
     setLanguage(lang) {
         this.language = lang;
         i18n.setLanguage(lang);
@@ -653,12 +1133,19 @@ class OpenModelicaViewer {
             btn.classList.toggle('active', btn.getAttribute('data-lang') === lang);
         });
         this._renderFilesList();
+        if (this._currentTree) this._renderFilteredTree();
         this.layoutManager.render();
     }
 
     toggleTheme() {
         this.theme = this.theme === 'light' ? 'dark' : 'light';
-        document.body.className = `theme-${this.theme}`;
+        this.applyTheme(this.theme);
+    }
+
+    applyTheme(theme) {
+        this.theme = theme;
+        document.body.classList.remove('theme-light', 'theme-dark');
+        document.body.classList.add(`theme-${this.theme}`);
         document.querySelector('#theme-toggle .icon').textContent = this.theme === 'light' ? '🌙' : '☀️';
         this.plotManager.setTheme(this.theme);
     }

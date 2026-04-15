@@ -182,7 +182,7 @@ class PlotManager {
     autoZoomAll() {
         for (const [id, plot] of this.plots) {
             if (!plot.div) continue;
-            if (this._is3D(plot.mode)) {
+            if (this._is3D(plot.mode) || this._isStateAnim3D(plot)) {
                 this._setCamera(id, 'home');
             } else {
                 Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
@@ -232,9 +232,11 @@ class PlotManager {
 
     // ─── Mode switching ────────────────────────────────────────────
 
-    _setMode(panelId, mode) {
+    _setMode(panelId, mode, stateAnimDim = null) {
         const plot = this.plots.get(panelId);
-        if (!plot || plot.mode === mode) return;
+        if (!plot) return;
+        const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
+        if (plot.mode === mode && plot.stateAnimDim === nextDim) return;
 
         // Stop animation if running
         this._stopAnim(plot);
@@ -242,10 +244,12 @@ class PlotManager {
         // Tear down existing chart
         this._destroyChart(panelId);
         plot.mode         = mode;
+        plot.stateAnimDim = nextDim;
         plot.traces       = [];
         plot.phaseTraces  = [];
         plot.phasePending = { x: null, y: null, z: null, fileId: null };
         plot.stateSlots   = { x: [], dx: [], fileId: null };
+        plot.equalAspect2D = false;
         plot.animFrame    = 0;
 
         // Update UI — re-inject all buttons so view labels reflect the new mode
@@ -358,9 +362,10 @@ class PlotManager {
         // State-anim mode
         if (mode === 'state-anim') {
             const sx = plot.stateSlots?.x || [];
+            const dim = plot.stateAnimDim || 2;
             if (sx.length === 0) return i18n.t('dropStateX1');
             if (sx.length === 1) return i18n.t('dropStateX2');
-            return i18n.t('dropStateX3');
+            return dim === 3 ? i18n.t('dropStateX3') : i18n.t('dropVariableHere');
         }
 
         // Phase modes: guide axis by axis
@@ -648,6 +653,7 @@ class PlotManager {
             existing.phasePending  = { x: null, y: null, z: null };
             existing.markerTraceIdx = null;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
+            existing.equalAspect2D = false;
             existing.animFrame     = 0;
             // keep existing.mode so the user's mode choice is preserved
         }
@@ -669,6 +675,12 @@ class PlotManager {
         const has = this._hasContent(plot);
         const csvBtn = panelEl.querySelector('.csv-export-btn');
         if (csvBtn) csvBtn.disabled = !has;
+        const statsBtn = panelEl.querySelector('.panel-stats-btn');
+        if (statsBtn) statsBtn.disabled = !has;
+        const equalAspectBtn = panelEl.querySelector('.equal-aspect-btn');
+        if (equalAspectBtn) {
+            equalAspectBtn.classList.toggle('active', !!plot?.equalAspect2D);
+        }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {
             compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && this.files.size > 1);
@@ -836,8 +848,8 @@ class PlotManager {
             for (const v of vars) {
                 if (!entry.data.variables[v]) {
                     const body = i18n.t('compareFilesErrorBody')
-                        .replace('{file}', entry.name)
-                        .replace('{var}', v);
+                        .replace('{file}', this._escapeHTML(entry.name))
+                        .replace('{var}', this._escapeHTML(v));
                     Modal.alert(i18n.t('compareFilesErrorTitle'), body, { html: true });
                     return;
                 }
@@ -887,6 +899,92 @@ class PlotManager {
         this._rebuildPanel(panelId);
     }
 
+    _showPanelStats(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot || !this._hasContent(plot)) return;
+
+        const entries = [];
+        const addVar = (fileId, varName) => {
+            const d = this.files.get(fileId)?.data;
+            const variable = d?.variables[varName];
+            if (!variable) return;
+            const stats = this._statsForValues(variable.data);
+            if (!stats) return;
+            entries.push({
+                name: this._traceName(varName, fileId),
+                unit: this._extractUnit(variable.description),
+                ...stats,
+            });
+        };
+
+        if (plot.mode === 'timeseries') {
+            plot.traces.forEach(t => addVar(t.fileId, t.varName));
+        } else if (plot.mode === 'state-anim') {
+            plot.stateSlots.x.forEach(v => addVar(plot.stateSlots.fileId, v));
+            plot.stateSlots.dx.filter(Boolean).forEach(v => addVar(plot.stateSlots.fileId, v));
+        } else {
+            plot.phaseTraces.forEach(pt => {
+                addVar(pt.fileId, pt.x);
+                addVar(pt.fileId, pt.y);
+                if (pt.z) addVar(pt.fileId, pt.z);
+            });
+        }
+
+        if (!entries.length) {
+            Modal.alert(i18n.t('panelStatsTitle'), i18n.t('statsNoNumeric'), { icon: 'Σ' });
+            return;
+        }
+
+        const fmt = value => Number.isFinite(value) ? value.toPrecision(6) : '';
+        const rows = entries.map(e => `
+            <tr>
+                <td>${this._escapeHTML(e.name)}</td>
+                <td>${this._escapeHTML(e.unit)}</td>
+                <td>${fmt(e.min)}</td>
+                <td>${fmt(e.max)}</td>
+                <td>${fmt(e.mean)}</td>
+                <td>${fmt(e.rms)}</td>
+            </tr>
+        `).join('');
+        const body = `
+            <div class="stats-table-wrap">
+                <table class="stats-table">
+                    <thead>
+                        <tr>
+                            <th>${this._escapeHTML(i18n.t('statsVariable'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsUnit'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsMin'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsMax'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsMean'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsRms'))}</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
+        Modal.alert(i18n.t('panelStatsTitle'), body, { icon: 'Σ', html: true, className: 'modal-dialog-stats' });
+    }
+
+    _statsForValues(values) {
+        if (!values || !values.length) return null;
+        let n = 0;
+        let sum = 0;
+        let sumSq = 0;
+        let min = Infinity;
+        let max = -Infinity;
+        for (const value of values) {
+            if (!Number.isFinite(value)) continue;
+            n++;
+            sum += value;
+            sumSq += value * value;
+            if (value < min) min = value;
+            if (value > max) max = value;
+        }
+        if (!n) return null;
+        return { min, max, mean: sum / n, rms: Math.sqrt(sumSq / n) };
+    }
+
     // ─── Trace / layout builders ───────────────────────────────────
 
     _buildPlotData(plot) {
@@ -908,8 +1006,10 @@ class PlotManager {
         const timeVar  = this._getTimeVar(t.fileId);
         const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
         const unit     = this._extractUnit(variable.description);
-        const unitStr  = unit ? ` [${unit}]` : '';
         const name     = this._traceName(t.varName, t.fileId);
+        const hoverName = this._escapeHTML(name);
+        const hoverTimeUnit = this._escapeHTML(timeUnit);
+        const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
 
         if (variable.kind === 'parameter') {
             const tStart = timeVar ? timeVar.data[0]                       : 0;
@@ -919,16 +1019,20 @@ class PlotManager {
                 name, type: 'scatter', mode: 'lines',
                 visible: t.visible ?? true,
                 line: { color: t.color, width: 1.5, dash: 'dash' },
-                hovertemplate: `<b>Time [${timeUnit}]</b> = %{x:.4g}<br><b>${name}</b>${unitStr} = ${variable.data[0]}<extra></extra>`,
+                hovertemplate: `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br><b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(variable.data[0])}<extra></extra>`,
             };
         }
         const isStep = variable.dataType === 'boolean' || variable.dataType === 'integer';
+        const useGL = !isStep && variable.data.length >= PlotManager.GL_POINT_THRESHOLD;
+        const line = useGL
+            ? { color: t.color, width: 1.5 }
+            : { color: t.color, width: 1.5, shape: isStep ? 'hv' : 'linear' };
         return {
             x: timeVar ? timeVar.data : [], y: variable.data,
-            name, type: 'scatter', mode: 'lines',
+            name, type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
             visible: t.visible ?? true,
-            line: { color: t.color, width: 1.5, shape: isStep ? 'hv' : 'linear' },
-            hovertemplate: `<b>Time [${timeUnit}]</b> = %{x:.4g}<br><b>${name}</b>${unitStr} = %{y:.4g}<extra></extra>`,
+            line,
+            hovertemplate: `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br><b>${hoverName}</b>${unitStr} = %{y:.4g}<extra></extra>`,
         };
     }
 
@@ -968,10 +1072,11 @@ class PlotManager {
             if (!d) return null;
             const xVar = d.variables[pt.x], yVar = d.variables[pt.y];
             if (!xVar || !yVar) return null;
+            const useGL = xVar.data.length >= PlotManager.GL_POINT_THRESHOLD || yVar.data.length >= PlotManager.GL_POINT_THRESHOLD;
             return {
                 x: xVar.data, y: yVar.data,
                 name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
-                type: 'scatter', mode: 'lines',
+                type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
                 visible: pt.visible ?? true,
                 line: { color: pt.color, width: 1.5 },
             };
@@ -1007,7 +1112,8 @@ class PlotManager {
             xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
                      title: { text: multiTrace ? 'x' : (xu ? `${first.x} [${xu}]` : (first.x || 'X')), font: { size: 10 } } },
             yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
-                     title: { text: multiTrace ? 'y' : (yu ? `${first.y} [${yu}]` : (first.y || 'Y')), font: { size: 10 } } },
+                     title: { text: multiTrace ? 'y' : (yu ? `${first.y} [${yu}]` : (first.y || 'Y')), font: { size: 10 } },
+                     ...(plot.equalAspect2D ? { scaleanchor: 'x', scaleratio: 1 } : {}) },
             margin: { l: 60, r: 15, t: 10, b: 50 },
             autosize: true, hovermode: 'closest',
         };
@@ -1141,19 +1247,16 @@ class PlotManager {
         const d = this.files.get(slots.fileId)?.data;
         if (!d) return;
 
-        // If dropping a vector component like x[1], auto-fill siblings
-        const siblings = this.parser.findVectorSiblings(varName, d.variables);
-        if (siblings && slots.x.length === 0) {
-            slots.x = siblings.slice(0, 3); // max 3 for 3D
-        } else if (slots.x.length < 3) {
-            if (!slots.x.includes(varName)) slots.x.push(varName);
+        const dim = plot.stateAnimDim || 2;
+        if (slots.x.length < dim && !slots.x.includes(varName)) {
+            slots.x.push(varName);
         }
 
         // Auto-detect derivatives
         slots.dx = slots.x.map(name => this.parser.findDerivative(name, d.variables));
 
         // Need at least 2 state variables to render
-        if (slots.x.length >= 2) {
+        if (slots.x.length >= dim) {
             if (plot.div) {
                 this._destroyChart(panelId);
             }
@@ -1166,7 +1269,8 @@ class PlotManager {
 
     _createStateAnimChart(panelId, panelEl) {
         const plot = this.plots.get(panelId);
-        if (!plot || plot.stateSlots.x.length < 2) return;
+        const dim = plot?.stateAnimDim || 2;
+        if (!plot || plot.stateSlots.x.length < dim) return;
 
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) placeholder.style.display = 'none';
@@ -1193,29 +1297,20 @@ class PlotManager {
         const slotBar = document.createElement('div');
         slotBar.className = 'state-anim-slots';
         const slots = plot.stateSlots;
-        const is3D = slots.x.length >= 3;
-
-        const dim = is3D ? 3 : 2;
+        const is3D = dim === 3;
         const labels = ['x₁', 'x₂', 'x₃'];
 
         let xHtml = '<div class="sa-slot-row"><b>State:</b> ';
         const xCells = slots.x.slice(0, dim).map((n, i) =>
-            `${labels[i]} = <span class="sa-slot-var">${n}</span>`);
-        if (!is3D) {
-            // Only 2 states set — invite the user to drop a 3rd curve.
-            xCells.push(`${labels[2]} = <span class="sa-slot-noder">${i18n.t('saSlotX3Hint')}</span>`);
-        }
+            `${labels[i]} = <span class="sa-slot-var">${this._escapeHTML(n)}</span>`);
         xHtml += xCells.join(' &nbsp;·&nbsp; ');
         xHtml += '</div>';
 
         let dxHtml = '<div class="sa-slot-row"><b>dx/dt:</b> ';
         const dxCells = slots.dx.slice(0, dim).map((der, i) =>
             der
-                ? `d${labels[i]}/dt = <span class="sa-slot-der">${der}</span>`
+                ? `d${labels[i]}/dt = <span class="sa-slot-der">${this._escapeHTML(der)}</span>`
                 : `d${labels[i]}/dt = <span class="sa-slot-noder">not found</span>`);
-        if (!is3D) {
-            dxCells.push(`d${labels[2]}/dt = <span class="sa-slot-noder">${i18n.t('saSlotDx3Hint')}</span>`);
-        }
         dxHtml += dxCells.join(' &nbsp;·&nbsp; ');
         dxHtml += '</div>';
 
@@ -1449,7 +1544,8 @@ class PlotManager {
             xaxis: { title: { text: xu ? `${slots.x[0]} [${xu}]` : slots.x[0], font: { size: 10 } },
                      gridcolor: gridColor, linecolor: gridColor, zeroline: true, zerolinecolor: gridColor },
             yaxis: { title: { text: yu ? `${slots.x[1]} [${yu}]` : slots.x[1], font: { size: 10 } },
-                     gridcolor: gridColor, linecolor: gridColor, zeroline: true, zerolinecolor: gridColor },
+                     gridcolor: gridColor, linecolor: gridColor, zeroline: true, zerolinecolor: gridColor,
+                     ...(plot.equalAspect2D ? { scaleanchor: 'x', scaleratio: 1 } : {}) },
             margin: this._marginConfig(),
             autosize: true,
             // annotations will be updated per frame
@@ -1854,7 +1950,7 @@ class PlotManager {
                     });
                     Plotly.restyle(plot.div, { x: [xs], y: [ys], visible: true }, [plot.markerTraceIdx]);
                 }
-                const lines = [`<b>t = ${xVal.toPrecision(5)} ${timeUnit}</b>`];
+                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
                 plot.traces.forEach(t => {
                     if (t.visible === 'legendonly' || t.visible === false) return;
                     const d    = this.files.get(t.fileId)?.data;
@@ -1864,7 +1960,7 @@ class PlotManager {
                     if (v && v.kind !== 'parameter' && v.data) {
                         const unit  = this._extractUnit(v.description);
                         const label = this._traceName(t.varName, t.fileId);
-                        lines.push(`<span style="color:${t.color}">●</span> ${label} = ${v.data[tidx].toPrecision(5)}${unit ? ' ' + unit : ''}`);
+                        lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatHTMLNumber(v.data[tidx])}${unit ? ' ' + this._escapeHTML(unit) : ''}`);
                     }
                 });
                 this._showInfoBox(panelEl, lines.join('<br>'));
@@ -1884,7 +1980,7 @@ class PlotManager {
                         Plotly.restyle(plot.div, { x: [[xv.data[tidx]]], y: [[yv.data[tidx]]], visible: true }, [midx]);
                     });
                 }
-                const lines = [`<b>t = ${xVal.toPrecision(5)} ${timeUnit}</b>`];
+                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
                 plot.phaseTraces.forEach(pt2 => {
                     if (pt2.visible === 'legendonly' || pt2.visible === false) return;
                     const d = this.files.get(pt2.fileId)?.data;
@@ -1894,8 +1990,8 @@ class PlotManager {
                         const tvar = this._getTimeVar(pt2.fileId);
                         const tidx = this._findTimeIdx(tvar?.data, xVal);
                         const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${pt2.x} = ${xv.data[tidx].toPrecision(5)}${xu ? ' ' + xu : ''}`);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${pt2.y} = ${yv.data[tidx].toPrecision(5)}${yu ? ' ' + yu : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xv.data[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(yv.data[tidx])}${yu ? ' ' + this._escapeHTML(yu) : ''}`);
                     }
                 });
                 this._showInfoBox(panelEl, lines.join('<br>'));
@@ -1915,7 +2011,7 @@ class PlotManager {
                         Plotly.restyle(plot.div, { x: [[xVal]], y: [[xv.data[tidx]]], z: [[yv.data[tidx]]], visible: true }, [midx]);
                     });
                 }
-                const lines = [`<b>t = ${xVal.toPrecision(5)} ${timeUnit}</b>`];
+                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
                 plot.phaseTraces.forEach(pt2 => {
                     if (pt2.visible === 'legendonly' || pt2.visible === false) return;
                     const d = this.files.get(pt2.fileId)?.data;
@@ -1925,8 +2021,8 @@ class PlotManager {
                         const tvar = this._getTimeVar(pt2.fileId);
                         const tidx = this._findTimeIdx(tvar?.data, xVal);
                         const xu = this._extractUnit(xv.description), zu = this._extractUnit(yv.description);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${pt2.x} = ${xv.data[tidx].toPrecision(5)}${xu ? ' ' + xu : ''}`);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${pt2.y} = ${yv.data[tidx].toPrecision(5)}${zu ? ' ' + zu : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xv.data[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(yv.data[tidx])}${zu ? ' ' + this._escapeHTML(zu) : ''}`);
                     }
                 });
                 this._showInfoBox(panelEl, lines.join('<br>'));
@@ -1946,7 +2042,7 @@ class PlotManager {
                         Plotly.restyle(plot.div, { x: [[xv.data[tidx]]], y: [[yv.data[tidx]]], z: [[zv.data[tidx]]], visible: true }, [midx]);
                     });
                 }
-                const lines = [`<b>t = ${xVal.toPrecision(5)} ${timeUnit}</b>`];
+                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
                 plot.phaseTraces.forEach(pt2 => {
                     if (pt2.visible === 'legendonly' || pt2.visible === false) return;
                     const d = this.files.get(pt2.fileId)?.data;
@@ -1958,7 +2054,7 @@ class PlotManager {
                         [xv, yv, zv].forEach((v, vi) => {
                             const name = [pt2.x, pt2.y, pt2.z][vi];
                             const u = this._extractUnit(v.description);
-                            lines.push(`<span style="color:${pt2.color}">●</span> ${name} = ${v.data[tidx].toPrecision(5)}${u ? ' ' + u : ''}`);
+                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(name)} = ${this._formatHTMLNumber(v.data[tidx])}${u ? ' ' + this._escapeHTML(u) : ''}`);
                         });
                     }
                 });
@@ -2189,17 +2285,21 @@ class PlotManager {
             { id: 'timeseries', label: '📈', titleKey: 'modeTimeseries' },
             { id: 'phase2d',    label: '2D',  titleKey: 'modePhase2d'   },
             { id: 'phase2dt',   label: '2D+t',titleKey: 'modePhase2dt'  },
-            { id: 'phase3d',    label: '3D',  titleKey: 'modePhase3d'   },
-            { id: 'state-anim', label: '▶x',  titleKey: 'modeStateAnim' },
+            { id: 'phase3d',    label: '3D',     titleKey: 'modePhase3d'   },
+            { id: 'state-anim', label: '▶x 2D',  titleKey: 'modeStateAnim2d', stateAnimDim: 2 },
+            { id: 'state-anim', label: '▶x 3D',  titleKey: 'modeStateAnim3d', stateAnimDim: 3 },
         ];
         modes.forEach(m => {
             const btn = document.createElement('button');
-            btn.className = 'layout-toolbar-btn mode-btn' + (m.id === currentMode ? ' active' : '');
+            const isActive = m.id === currentMode && (m.id !== 'state-anim' || (plot?.stateAnimDim || 2) === m.stateAnimDim);
+            btn.className = 'layout-toolbar-btn mode-btn' + (isActive ? ' active' : '');
             btn.textContent = m.label;
+            btn.dataset.mode = m.id;
+            if (m.stateAnimDim) btn.dataset.stateAnimDim = String(m.stateAnimDim);
             btn.title = i18n.t(m.titleKey);
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._setMode(panelId, m.id);
+                this._setMode(panelId, m.id, m.stateAnimDim || null);
             });
             modeGroup.appendChild(btn);
         });
@@ -2272,6 +2372,18 @@ class PlotManager {
 
         toolbar.appendChild(viewGroup);
 
+        if (this._supportsEqualAspect2D(plot)) {
+            const equalAspectBtn = document.createElement('button');
+            equalAspectBtn.className = 'layout-toolbar-btn panel-action-btn equal-aspect-btn' + (plot?.equalAspect2D ? ' active' : '');
+            equalAspectBtn.textContent = '1:1';
+            equalAspectBtn.title = i18n.t('equalAspect2D');
+            equalAspectBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleEqualAspect2D(panelId);
+            });
+            toolbar.appendChild(equalAspectBtn);
+        }
+
         // Compare (overlay traces from other files) — left of CSV
         const compareBtn = document.createElement('button');
         compareBtn.className = 'layout-toolbar-btn panel-action-btn compare-files-btn';
@@ -2287,7 +2399,19 @@ class PlotManager {
         });
         toolbar.appendChild(compareBtn);
 
-        // CSV export button — pushed to far right, 🗑️ follows immediately after
+        // Quick numeric summary for reports and lab analysis
+        const statsBtn = document.createElement('button');
+        statsBtn.className = 'layout-toolbar-btn panel-action-btn panel-stats-btn';
+        statsBtn.textContent = 'Σ';
+        statsBtn.title = i18n.t('panelStats');
+        statsBtn.disabled = !this._hasContent(plot);
+        statsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._showPanelStats(panelId);
+        });
+        toolbar.appendChild(statsBtn);
+
+        // CSV export button - pushed to far right, 🗑️ follows immediately after
         const csvBtn = document.createElement('button');
         csvBtn.className = 'layout-toolbar-btn panel-action-btn csv-export-btn';
         csvBtn.textContent = 'CSV';
@@ -2312,15 +2436,37 @@ class PlotManager {
     }
 
     _updateModeButtons(panelEl, activeMode) {
+        const panelId = panelEl.dataset.id;
+        const plot = panelId ? this.plots.get(panelId) : null;
         panelEl.querySelectorAll('.mode-btn').forEach(btn => {
-            const modeMap = { '📈': 'timeseries', '2D': 'phase2d', '2D+t': 'phase2dt', '3D': 'phase3d', '▶x': 'state-anim' };
-            btn.classList.toggle('active', modeMap[btn.textContent] === activeMode);
+            const mode = btn.dataset.mode;
+            const dim = btn.dataset.stateAnimDim ? Number(btn.dataset.stateAnimDim) : null;
+            btn.classList.toggle('active', mode === activeMode && (!dim || dim === (plot?.stateAnimDim || 2)));
         });
     }
 
     _toggle3DViewButtons(panelEl, show) {
         const group = panelEl.querySelector('.view-btn-group');
         if (group) group.style.display = show ? '' : 'none';
+    }
+
+    _supportsEqualAspect2D(plot) {
+        return !!plot && (plot.mode === 'phase2d' || (plot.mode === 'state-anim' && (plot.stateAnimDim || 2) === 2));
+    }
+
+    _toggleEqualAspect2D(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!this._supportsEqualAspect2D(plot)) return;
+        plot.equalAspect2D = !plot.equalAspect2D;
+        if (plot.div) {
+            const update = plot.equalAspect2D
+                ? { 'yaxis.scaleanchor': 'x', 'yaxis.scaleratio': 1 }
+                : { 'yaxis.scaleanchor': null, 'yaxis.scaleratio': null, 'xaxis.autorange': true, 'yaxis.autorange': true };
+            Plotly.relayout(plot.div, update);
+        }
+        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        const btn = panelEl?.querySelector('.equal-aspect-btn');
+        if (btn) btn.classList.toggle('active', plot.equalAspect2D);
     }
 
     // ─── Placeholder text ──────────────────────────────────────────
@@ -2340,9 +2486,11 @@ class PlotManager {
         switch (mode) {
             case 'state-anim': {
                 const sx = plot ? (plot.stateSlots?.x || []) : [];
+                const dim = plot ? (plot.stateAnimDim || 2) : 2;
                 msg = sx.length === 0 ? i18n.t('dropStateX1')
                     : sx.length === 1 ? i18n.t('dropStateX2Short')
-                    :                   i18n.t('dropStateX3');
+                    : dim === 3 ?        i18n.t('dropStateX3')
+                    :                    i18n.t('dropVariableHere');
                 break;
             }
             case 'phase2d':
@@ -2406,12 +2554,12 @@ class PlotManager {
     _hasContent(plot) {
         if (!plot) return false;
         if (plot.mode === 'timeseries') return plot.traces.length > 0;
-        if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= 2;
+        if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= (plot.stateAnimDim || 2);
         return plot.phaseTraces.length > 0;
     }
 
     _is3D(mode) { return mode === 'phase2dt' || mode === 'phase3d'; }
-    _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && plot.stateSlots?.x?.length >= 3; }
+    _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) === 3 && plot.stateSlots?.x?.length >= 3; }
 
     _rebuildPanel(panelId) {
         const plot = this.plots.get(panelId);
@@ -2447,9 +2595,11 @@ class PlotManager {
             phasePending: { x: null, y: null, z: null, fileId: null },  // phase trace being built
             projection: 'orthographic',                    // 3D camera projection
             markerTraceIdx: null,                          // index of the hover-marker trace in plot.div.data
+            equalAspect2D: false,
             resizeObserver: null,
             // state-anim mode
             stateSlots:   { x: [], dx: [], fileId: null }, // x: [varName,...], dx: [derName,...]
+            stateAnimDim: 2,
             stateConfig:  { showFullTrace: true, showTrace: true, showArrowX: true, showArrowDx: true, normalizeDx: true, dynamicZoom: false },
             animFrame:    0,                               // current time index
             animPlaying:  false,
@@ -2512,12 +2662,33 @@ class PlotManager {
 
     _findTimeIdx(times, xVal) {
         if (!times || !times.length) return 0;
-        let idx = 0, minDist = Infinity;
-        for (let i = 0; i < times.length; i++) {
-            const d = Math.abs(times[i] - xVal);
-            if (d < minDist) { minDist = d; idx = i; }
+        if (times.length === 1 || xVal <= times[0]) return 0;
+        const last = times.length - 1;
+        if (xVal >= times[last]) return last;
+
+        let lo = 0;
+        let hi = last;
+        while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (times[mid] <= xVal) lo = mid;
+            else hi = mid;
         }
-        return idx;
+
+        return (xVal - times[lo]) <= (times[hi] - xVal) ? lo : hi;
+    }
+
+    _escapeHTML(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+        }[ch]));
+    }
+
+    _formatHTMLNumber(value) {
+        return Number.isFinite(value) ? value.toPrecision(5) : this._escapeHTML(value);
     }
 
     _extractUnit(description) {
@@ -2557,6 +2728,7 @@ class PlotManager {
         '#2196F3', '#FF5722', '#4CAF50', '#FF9800',
         '#9C27B0', '#00BCD4', '#F44336', '#8BC34A',
     ];
+    static GL_POINT_THRESHOLD = 50000;
 
     _nextColor(idx) { return PlotManager.COLORS[idx % PlotManager.COLORS.length]; }
 }

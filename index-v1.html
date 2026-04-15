@@ -8,6 +8,9 @@
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 </head>
 <body class="theme-light">
+    <script>
+        document.body.className = `theme-${new Date().getHours() >= 7 && new Date().getHours() < 18 ? 'light' : 'dark'}`;
+    </script>
     <!-- Top Bar -->
     <div class="top-bar">
         <div class="top-bar-left">
@@ -130,6 +133,28 @@
                         <input type="radio" name="legend-pos" value="right">
                         <span data-i18n="legendRight">Right of plot</span>
                     </label>
+                </div>
+            </div>
+
+            <!-- Derived Variables -->
+            <div class="sidebar-section derived-section">
+                <div class="section-header">
+                    <h3 data-i18n="derivedVariables">Derived variables</h3>
+                    <button id="derived-toggle" class="tree-control-btn" title="Create derived variable">
+                        <span>+</span>
+                    </button>
+                </div>
+                <div id="derived-form" class="derived-form collapsed">
+                    <input id="derived-name" class="derived-input" type="text" placeholder="name">
+                    <div class="derived-formula-wrap">
+                        <input id="derived-formula" class="derived-input" type="text" placeholder="x / y * 100" autocomplete="off">
+                        <div id="derived-suggestions" class="derived-suggestions" hidden></div>
+                    </div>
+                    <div id="derived-message" class="derived-message"></div>
+                    <div class="derived-actions">
+                        <button id="derived-create" class="derived-create-btn">Create</button>
+                        <button id="derived-cancel" class="derived-cancel-btn">Cancel</button>
+                    </div>
                 </div>
             </div>
 

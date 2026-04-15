@@ -106,7 +106,7 @@ class MatParser {
                 continue;
             }
 
-            let values = dm[row].slice();  // Copy row
+            let values = dm[row];
             if (negate) {
                 values = values.map(v => -v);
             }

@@ -153,6 +153,7 @@ class LayoutManager {
         // Toolbar
         const toolbar = document.createElement('div');
         toolbar.className = 'layout-panel-toolbar';
+        this._bindToolbarScroll(toolbar);
 
         const btnSplitR = this._makeToolbarBtn('▶', i18n.t('splitRight'),  () => this.splitPanel(node.id, 'v', false));
         const btnSplitL = this._makeToolbarBtn('◀', i18n.t('splitLeft'),   () => this.splitPanel(node.id, 'v', true));
@@ -222,6 +223,48 @@ class LayoutManager {
         btn.title = title;
         btn.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
         return btn;
+    }
+
+    _bindToolbarScroll(toolbar) {
+        if (toolbar._scrollBound) return;
+        toolbar._scrollBound = true;
+
+        const updateScrollHints = () => {
+            const max = Math.max(0, toolbar.scrollWidth - toolbar.clientWidth);
+            toolbar.classList.toggle('can-scroll-left', toolbar.scrollLeft > 1);
+            toolbar.classList.toggle('can-scroll-right', toolbar.scrollLeft < max - 1);
+            toolbar.classList.toggle('is-scrollable', max > 1);
+        };
+
+        toolbar.addEventListener('wheel', (e) => {
+            const max = Math.max(0, toolbar.scrollWidth - toolbar.clientWidth);
+            if (max <= 1) return;
+
+            const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+            if (!delta) return;
+
+            const before = toolbar.scrollLeft;
+            toolbar.scrollLeft = Math.max(0, Math.min(max, before + delta));
+            if (toolbar.scrollLeft !== before) {
+                e.preventDefault();
+                e.stopPropagation();
+                updateScrollHints();
+            }
+        }, { passive: false });
+
+        toolbar.addEventListener('scroll', updateScrollHints, { passive: true });
+
+        if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(updateScrollHints);
+            ro.observe(toolbar);
+            toolbar._scrollResizeObserver = ro;
+        }
+
+        const mo = new MutationObserver(() => requestAnimationFrame(updateScrollHints));
+        mo.observe(toolbar, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+        toolbar._scrollMutationObserver = mo;
+
+        requestAnimationFrame(updateScrollHints);
     }
 
     // ─── Resize ────────────────────────────────────────────────────

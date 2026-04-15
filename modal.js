@@ -105,6 +105,9 @@ const Modal = {
 
             const modal = document.createElement('div');
             modal.className = 'modal-dialog modal-dialog-alert';
+            if (options.className) {
+                modal.classList.add(...String(options.className).split(/\s+/).filter(Boolean));
+            }
 
             const content = document.createElement('div');
             content.className = 'modal-content';
