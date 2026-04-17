@@ -148,6 +148,7 @@ class PlotManager {
         plot.stateAnimDim = 3;
         plot.projection = 'orthographic';
         plot.animSpeed = 0.25;
+        plot.autoPlayOnRender = true;
         plot.showCameraOverlay = false;
         plot.homeCamera = {
             eye: { x: 2.7443, y: -1.2215, z: 1.5367 },
@@ -1560,6 +1561,11 @@ class PlotManager {
                     this._stateAnimTogglePlay(panelId);
                 }
             });
+
+            if (plot.autoPlayOnRender && plot.div === div) {
+                plot.autoPlayOnRender = false;
+                this._stateAnimTogglePlay(panelId);
+            }
         });
 
         // Bind controls
@@ -2805,6 +2811,7 @@ class PlotManager {
             animPlaying:  false,
             animSpeed:    1,
             animRAF:      null,
+            autoPlayOnRender: false,
         };
     }
 
