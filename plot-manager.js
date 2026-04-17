@@ -1656,7 +1656,7 @@ class PlotManager {
         const marker = {
             x: [xData[0]], y: [yData[0]],
             name: 'State', mode: 'markers',
-            marker: { size: 8, color: '#ff9800', line: { color: '#fff', width: 1.5 } },
+            marker: { size: is3D ? 5 : 8, color: '#ff9800', line: { color: '#fff', width: 1.5 } },
             showlegend: false, hoverinfo: 'skip',
         };
         if (is3D) { marker.z = [zData ? zData[0] : 0]; marker.type = 'scatter3d'; }
