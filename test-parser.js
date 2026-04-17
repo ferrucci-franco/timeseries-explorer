@@ -38,6 +38,7 @@ async function parseFile(path) {
         'ExampleSimplePendulum.mat',
         'python/ControlledDCMotor_res.mat',
         'python/ElasticCollisionV3_res.mat',
+        'python/LorenzSystem_res.mat',
         'python/Rectifier_res.mat',
         'python/SimplePendulum_res.mat',
     ]) {

@@ -11,9 +11,32 @@ const EXAMPLES = [
         getDataB64: () => (typeof EXAMPLE_DATA_B64 !== 'undefined' ? EXAMPLE_DATA_B64 : null),
         applyLayout: (pm, fileId, panels) => pm.setExampleLayout(fileId, panels),
     },
-    { id: 'placeholder1', nameKey: 'examplePlaceholder1', getDataB64: () => null },
+    {
+        id: 'lorenz',
+        nameKey: 'exampleLorenz',
+        baseName: 'LorenzSystem_res',
+        script: 'lorenz-data.js',
+        grid: { rows: 1, cols: 1 },
+        getDataB64: () => (typeof LORENZ_DATA_B64 !== 'undefined' ? LORENZ_DATA_B64 : null),
+        applyLayout: (pm, fileId, panels) => pm.setLorenzExampleLayout(fileId, panels),
+    },
     { id: 'placeholder2', nameKey: 'examplePlaceholder2', getDataB64: () => null },
 ];
+
+const DERIVED_FUNCTIONS = [
+    { name: 'sqrt', arity: 1 },
+    { name: 'abs', arity: 1 },
+    { name: 'log', arity: 1 },
+    { name: 'log10', arity: 1 },
+    { name: 'power', arity: 2 },
+    { name: 'root', arity: 2 },
+];
+
+const DERIVED_FUNCTION_ALIASES = new Map([
+    ['pow', 'power'],
+    ['square', 'square'],
+    ['sqr', 'square'],
+]);
 
 class OpenModelicaViewer {
     constructor() {
@@ -29,6 +52,10 @@ class OpenModelicaViewer {
         this._loadedScripts   = new Set();
         this.derivedByFile    = new Map();
         this._suggestionIndex = 0;
+        this.selectedVariables = new Set();
+        this._exampleLoading = false;
+        this._exampleLoadToken = null;
+        this._exampleLoadingEscHandler = null;
 
         this.layoutManager = new LayoutManager('plots-area');
         this.plotManager   = new PlotManager(this.parser);
@@ -41,6 +68,7 @@ class OpenModelicaViewer {
         this.initDragAndDrop();
         this.initSidebarResize();
         i18n.setLanguage('en');
+        this._setDropZoneStatus(false);
 
         this.layoutManager.render();
     }
@@ -55,11 +83,12 @@ class OpenModelicaViewer {
         try {
             document.getElementById('file-name').textContent = `Loading ${file.name}…`;
             const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+            const contentHash = await this._hashBuffer(buffer);
             const data   = await this.parser.parse(buffer);
 
             const fileId   = `f${this._nextFileId++}`;
             const baseName = file.name.replace(/\.mat$/i, '');
-            this.files.set(fileId, { file, buffer, name: baseName });
+            this.files.set(fileId, { file, buffer, contentHash, name: baseName });
 
             // PlotManager takes ownership of the data
             this.plotManager.addFile(fileId, baseName, data);
@@ -69,6 +98,7 @@ class OpenModelicaViewer {
 
             this._updateTopBar();
             this._renderFilesList();
+            this._clearVariableSelection();
             this.renderVariablesTree(data.tree);
             this._updateActionButtons();
 
@@ -88,6 +118,63 @@ class OpenModelicaViewer {
 
         document.getElementById('file-name').textContent = `Loading ${entry.name}.mat…`;
 
+        const buffer = await this._readLatestBuffer(entry);
+        const contentHash = await this._hashBuffer(buffer);
+
+        const data = await this.parser.parse(buffer);
+        this._reapplyDerivedVariables(id, data);
+
+        entry.buffer = buffer;
+        entry.contentHash = contentHash;
+        this.plotManager.updateFileData(id, data);
+        this._updateTopBar();
+        this._clearVariableSelection();
+        this.renderVariablesTree(data.tree);
+    }
+
+    async reloadActiveFileAsNewVersion() {
+        const sourceId = this.plotManager.activeFileId;
+        if (!sourceId) return;
+        const source = this.files.get(sourceId);
+        if (!source) return;
+
+        const name = this._nextVersionName(source.name);
+        document.getElementById('file-name').textContent = `Loading ${name}.mat…`;
+
+        const buffer = await this._readLatestBuffer(source);
+        const contentHash = await this._hashBuffer(buffer);
+        const sourceHash = source.contentHash || (source.buffer ? await this._hashBuffer(source.buffer) : '');
+        if (!source.contentHash && sourceHash) source.contentHash = sourceHash;
+        if (sourceHash && contentHash === sourceHash) {
+            document.getElementById('file-name').textContent = `${source.name}.mat`;
+            await Modal.alert(i18n.t('reloadAsNewVersion'), i18n.t('reloadUnchangedNoVersion'), { icon: '🔄' });
+            this._updateTopBar();
+            return;
+        }
+
+        const data = await this.parser.parse(buffer);
+
+        const fileId = `f${this._nextFileId++}`;
+        this._copyDerivedDefinitions(sourceId, fileId);
+        this._reapplyDerivedVariables(fileId, data);
+        this.files.set(fileId, {
+            file: source.file,
+            buffer,
+            contentHash,
+            name,
+        });
+        this.plotManager.addFile(fileId, name, data);
+        this.plotManager.setActiveFile(fileId);
+
+        document.getElementById('drop-zone').classList.remove('active');
+        this._updateTopBar();
+        this._renderFilesList();
+        this._clearVariableSelection();
+        this.renderVariablesTree(data.tree);
+        this._updateActionButtons();
+    }
+
+    async _readLatestBuffer(entry) {
         // Try native File.arrayBuffer() first (most reliable for re-reads),
         // then fall back to the cached buffer from initial load.
         let buffer;
@@ -96,13 +183,51 @@ class OpenModelicaViewer {
         }
         if (!buffer) buffer = entry.buffer;
         if (!buffer) throw new Error('No buffer available');
+        return buffer;
+    }
 
-        const data = await this.parser.parse(buffer);
-        this._reapplyDerivedVariables(id, data);
+    _nextVersionName(name) {
+        const base = String(name || 'results').replace(/\s+#\d+$/, '');
+        let maxVersion = 1;
+        for (const { name: existingName } of this.files.values()) {
+            if (existingName === base) {
+                maxVersion = Math.max(maxVersion, 1);
+                continue;
+            }
+            const match = String(existingName).match(new RegExp(`^${this._escapeRegExp(base)}\\s+#(\\d+)$`));
+            if (match) maxVersion = Math.max(maxVersion, Number(match[1]));
+        }
+        return `${base} #${maxVersion + 1}`;
+    }
 
-        this.plotManager.updateFileData(id, data);
-        this._updateTopBar();
-        this.renderVariablesTree(data.tree);
+    _escapeRegExp(text) {
+        return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    async _hashBuffer(buffer) {
+        if (typeof crypto !== 'undefined' && crypto.subtle?.digest) {
+            const digest = await crypto.subtle.digest('SHA-256', buffer);
+            return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        const bytes = new Uint8Array(buffer);
+        let hash = 2166136261;
+        for (let i = 0; i < bytes.length; i++) {
+            hash ^= bytes[i];
+            hash = Math.imul(hash, 16777619) >>> 0;
+        }
+        return `fnv1a32:${bytes.length}:${hash.toString(16).padStart(8, '0')}`;
+    }
+
+    _copyDerivedDefinitions(sourceId, targetId) {
+        const sourceDerived = this.derivedByFile.get(sourceId);
+        if (!sourceDerived?.size) return;
+
+        const targetDerived = new Map();
+        for (const [name, entry] of sourceDerived) {
+            targetDerived.set(name, { name, formula: entry.formula, variable: null });
+        }
+        this.derivedByFile.set(targetId, targetDerived);
     }
 
     async removeFile(fileId) {
@@ -116,6 +241,7 @@ class OpenModelicaViewer {
         this.plotManager.removeFile(fileId);
         this.files.delete(fileId);
         this.derivedByFile.delete(fileId);
+        this._clearVariableSelection();
 
         // Switch sidebar to new active file (if any)
         const newActiveId = this.plotManager.activeFileId;
@@ -135,6 +261,7 @@ class OpenModelicaViewer {
     setActiveFile(fileId) {
         if (!this.files.has(fileId)) return;
         this.plotManager.setActiveFile(fileId);
+        this._clearVariableSelection();
         const d = this.plotManager.files.get(fileId)?.data;
         if (d) this.renderVariablesTree(d.tree);
         this._updateTopBar();
@@ -150,6 +277,7 @@ class OpenModelicaViewer {
     _updateActionButtons() {
         const hasFiles = this.files.size > 0;
         document.getElementById('reload-file').disabled  = !hasFiles;
+        document.getElementById('reload-file-menu-btn').disabled = !hasFiles;
         document.getElementById('auto-zoom').disabled    = !hasFiles;
         document.getElementById('clear-plots').disabled  = !hasFiles;
     }
@@ -203,6 +331,7 @@ class OpenModelicaViewer {
         document.getElementById('load-new-file').addEventListener('click', () => {
             document.getElementById('file-input').click();
         });
+        this._initOpenFileMenu();
 
         document.getElementById('toggle-sort').addEventListener('click', (e) => {
             this.sortAlphabetical = !this.sortAlphabetical;
@@ -219,6 +348,10 @@ class OpenModelicaViewer {
         document.getElementById('expand-all').addEventListener('click',   () => this.expandAllTree());
         document.getElementById('collapse-all').addEventListener('click', () => this.collapseAllTree());
 
+        document.getElementById('derived-help-toggle').addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleDerivedHelpPopover();
+        });
         document.getElementById('derived-toggle').addEventListener('click', () => this._toggleDerivedForm(true));
         document.getElementById('derived-cancel').addEventListener('click', () => this._toggleDerivedForm(false));
         document.getElementById('derived-create').addEventListener('click', () => this.createDerivedVariable());
@@ -229,6 +362,19 @@ class OpenModelicaViewer {
         });
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.derived-formula-wrap')) this._hideDerivedSuggestions();
+            if (!e.target.closest('#derived-help-popover') && !e.target.closest('#derived-help-toggle')) {
+                this._toggleDerivedHelpPopover(false);
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !document.getElementById('derived-help-popover')?.hidden) {
+                e.preventDefault();
+                this._toggleDerivedHelpPopover(false);
+                return;
+            }
+            if (e.key === 'Escape' && this.selectedVariables.size > 0) {
+                this._clearVariableSelection();
+            }
         });
 
         document.getElementById('file-select-btn').addEventListener('click', () => {
@@ -272,10 +418,196 @@ class OpenModelicaViewer {
                 this._updateTopBar();
             });
         });
+        this._initReloadFileMenu();
 
         this._initExampleMenu();
 
         document.getElementById('help-btn').addEventListener('click', () => this.showHelp());
+    }
+
+    _initOpenFileMenu() {
+        const btn  = document.getElementById('open-file-menu-btn');
+        const menu = document.getElementById('open-file-menu');
+        if (!btn || !menu) return;
+
+        const close = () => {
+            menu.hidden = true;
+            btn.setAttribute('aria-expanded', 'false');
+        };
+        const open = () => {
+            this._renderOpenFileMenu();
+            menu.hidden = false;
+            btn.setAttribute('aria-expanded', 'true');
+        };
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menu.hidden ? open() : close();
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) close();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !menu.hidden) close();
+        });
+
+        this._closeOpenFileMenu = close;
+    }
+
+    _renderOpenFileMenu() {
+        const menu = document.getElementById('open-file-menu');
+        menu.innerHTML = '';
+
+        const tempItem = document.createElement('button');
+        tempItem.className = 'example-menu-item';
+        tempItem.type = 'button';
+        tempItem.setAttribute('role', 'menuitem');
+        tempItem.textContent = i18n.t('openOpenModelicaTemp');
+        tempItem.addEventListener('click', () => {
+            this._closeOpenFileMenu?.();
+            this._copyOpenModelicaTempPathAndOpenPicker();
+        });
+        menu.appendChild(tempItem);
+    }
+
+    _initReloadFileMenu() {
+        const btn  = document.getElementById('reload-file-menu-btn');
+        const menu = document.getElementById('reload-file-menu');
+        if (!btn || !menu) return;
+
+        const close = () => {
+            menu.hidden = true;
+            btn.setAttribute('aria-expanded', 'false');
+        };
+        const open = () => {
+            this._renderReloadFileMenu();
+            menu.hidden = false;
+            btn.setAttribute('aria-expanded', 'true');
+        };
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (btn.disabled) return;
+            menu.hidden ? open() : close();
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!menu.hidden && !menu.contains(e.target) && !btn.contains(e.target)) close();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !menu.hidden) close();
+        });
+
+        this._closeReloadFileMenu = close;
+    }
+
+    _renderReloadFileMenu() {
+        const menu = document.getElementById('reload-file-menu');
+        menu.innerHTML = '';
+
+        const versionItem = document.createElement('button');
+        versionItem.className = 'example-menu-item';
+        versionItem.type = 'button';
+        versionItem.setAttribute('role', 'menuitem');
+        versionItem.textContent = i18n.t('reloadAsNewVersion');
+        versionItem.disabled = !this.activeFileId;
+        versionItem.addEventListener('click', () => {
+            this._closeReloadFileMenu?.();
+            this.reloadActiveFileAsNewVersion().catch(err => {
+                console.error('Reload as new version failed:', err);
+                alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+                this._updateTopBar();
+            });
+        });
+        menu.appendChild(versionItem);
+    }
+
+    async _copyOpenModelicaTempPathAndOpenPicker() {
+        const candidates = this._getOpenModelicaTempCandidates();
+        if (!candidates.length) {
+            await Modal.alert(i18n.t('openOpenModelicaTemp'), i18n.t('openModelicaTempNoPath'), { icon: '📁' });
+            document.getElementById('file-input').click();
+            return;
+        }
+
+        const path = candidates[0];
+        const copied = await this._copyTextToClipboard(path);
+        const messageKey = copied ? 'openModelicaTempPathCopied' : 'openModelicaTempPathCopyFailed';
+        await Modal.alert(i18n.t('openOpenModelicaTemp'), i18n.t(messageKey).replace('{path}', path), {
+            icon: '📋',
+            className: 'modal-dialog-temp-path',
+        });
+
+        document.getElementById('file-input').click();
+    }
+
+    async _copyTextToClipboard(text) {
+        if (navigator.clipboard?.writeText) {
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch (_) {}
+        }
+
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.setAttribute('readonly', '');
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            return document.execCommand('copy');
+        } catch (_) {
+            return false;
+        } finally {
+            document.body.removeChild(textArea);
+        }
+    }
+
+    _getOpenModelicaTempCandidates() {
+        const userHome = this._inferWindowsUserHomeFromLocation();
+        if (userHome) {
+            return [
+                `${userHome}\\AppData\\Local\\Temp\\OpenModelica\\OMEdit`,
+                `${userHome}\\AppData\\Local\\Temp\\OpenModelica`,
+            ];
+        }
+
+        const linuxUser = this._inferLinuxUserFromLocation();
+        if (linuxUser) {
+            return [
+                `/tmp/OpenModelica${linuxUser}/OMEdit`,
+                `/tmp/OpenModelica${linuxUser}`,
+            ];
+        }
+
+        return [];
+    }
+
+    _inferWindowsUserHomeFromLocation() {
+        let path = '';
+        try {
+            path = decodeURIComponent(window.location.href);
+        } catch (_) {
+            path = window.location.href;
+        }
+
+        const match = path.match(/^file:\/\/\/([A-Za-z]:\/Users\/[^/]+)/i);
+        return match ? match[1].replace(/\//g, '\\') : '';
+    }
+
+    _inferLinuxUserFromLocation() {
+        let path = '';
+        try {
+            path = decodeURIComponent(window.location.href);
+        } catch (_) {
+            path = window.location.href;
+        }
+
+        const match = path.match(/^file:\/\/\/home\/([^/]+)/i);
+        return match ? match[1] : '';
     }
 
     _initExampleMenu() {
@@ -335,6 +667,7 @@ class OpenModelicaViewer {
                 this._closeExampleMenu();
                 if (!available) return;
                 this.loadExample(ex.id).catch(err => {
+                    this._setExampleLoading(false);
                     console.error('Example load failed:', err);
                     alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
                 });
@@ -344,58 +677,195 @@ class OpenModelicaViewer {
     }
 
     async loadExample(exampleId = 'pendulum') {
+        if (this._exampleLoading) return;
         const ex = EXAMPLES.find(e => e.id === exampleId);
         if (!ex) throw new Error(`Unknown example: ${exampleId}`);
-        await this._ensureExampleData(ex);
-        const b64 = ex.getDataB64();
-        if (b64 == null) return;
+
         if (this.plotManager.hasAnyTraces()) {
             const ok = await Modal.confirm(i18n.t('loadExampleWarning'), { icon: '🎓' });
             if (!ok) return;
         }
 
-        // Decode embedded base64 data — works with file:// and http:// alike
-        const binary = atob(b64);
-        const buffer = new ArrayBuffer(binary.length);
-        const view   = new Uint8Array(buffer);
-        for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+        const token = this._setExampleLoading(true, i18n.t(ex.nameKey));
+        const isCancelled = () => !token || token.cancelled || this._exampleLoadToken !== token;
 
-        const data   = await this.parser.parse(buffer);
+        try {
+            await this._waitForExampleCancelWindow(token);
+            if (isCancelled()) return;
 
-        const baseName   = ex.baseName;
-        const existingId = [...this.files.entries()].find(([,e]) => e.name === baseName)?.[0];
-        let fileId = existingId;
-        if (!fileId) {
-            fileId = `f${this._nextFileId++}`;
-            this.files.set(fileId, { file: null, buffer, name: baseName });
-            this.plotManager.addFile(fileId, baseName, data);
-        } else {
-            this.files.get(fileId).buffer = buffer;
-            this._reapplyDerivedVariables(fileId, data);
-            this.plotManager.updateFileData(fileId, data);
+            await this._ensureExampleData(ex);
+            if (isCancelled()) return;
+
+            const b64 = ex.getDataB64();
+            if (b64 == null) return;
+
+            // Decode embedded base64 data — works with file:// and http:// alike
+            const binary = atob(b64);
+            const buffer = new ArrayBuffer(binary.length);
+            const view   = new Uint8Array(buffer);
+            for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+
+            const contentHash = await this._hashBuffer(buffer);
+            const data   = await this.parser.parse(buffer);
+            await this._yieldToBrowser();
+            if (isCancelled()) return;
+
+            token.committed = true;
+            const baseName   = ex.baseName;
+            const existingId = [...this.files.entries()].find(([,e]) => e.name === baseName)?.[0];
+            let fileId = existingId;
+            if (!fileId) {
+                fileId = `f${this._nextFileId++}`;
+                this.files.set(fileId, { file: null, buffer, contentHash, name: baseName });
+                this.plotManager.addFile(fileId, baseName, data);
+            } else {
+                this.files.get(fileId).buffer = buffer;
+                this.files.get(fileId).contentHash = contentHash;
+                this._reapplyDerivedVariables(fileId, data);
+                this.plotManager.updateFileData(fileId, data);
+            }
+            this.plotManager.setActiveFile(fileId);
+
+            const grid = ex.grid || { rows: 2, cols: 2 };
+
+            // Clear plots and build the example layout grid
+            this.plotManager.clearAll();
+            this.layoutManager.resetToGrid(grid.rows, grid.cols);
+
+            // Wait for panels to mount
+            await new Promise(r => setTimeout(r, 50));
+            if (isCancelled()) return;
+
+            // Collect panel IDs in DOM order: TL, TR, BL, BR for 2×2 examples,
+            // or panelId for single-panel examples.
+            const panels = [...document.querySelectorAll('.layout-panel')].map(el => el.dataset.id);
+            if (panels.length < grid.rows * grid.cols) return;
+            const [tlId, trId, blId, brId] = panels;
+
+            // Set state directly — no addTrace, avoids async race conditions
+            ex.applyLayout(this.plotManager, fileId, { panelId: panels[0], panels, tlId, trId, blId, brId });
+
+            document.getElementById('drop-zone').classList.remove('active');
+            this._updateTopBar();
+            this._renderFilesList();
+            this._updateActionButtons();
+            this._clearVariableSelection();
+            this.renderVariablesTree(data.tree);
+        } finally {
+            if (this._exampleLoadToken === token) this._setExampleLoading(false);
         }
-        this.plotManager.setActiveFile(fileId);
+    }
 
-        // Clear plots and build 2×2 grid
-        this.plotManager.clearAll();
-        this.layoutManager.resetToGrid(2, 2);
+    _setExampleLoading(loading, exampleName = '') {
+        this._exampleLoading = loading;
+        const btn = document.getElementById('load-example-btn');
+        const fileName = document.getElementById('file-name');
+        const message = i18n.t('loadingExample').replace('{name}', exampleName);
 
-        // Wait for panels to mount
-        await new Promise(r => setTimeout(r, 50));
+        if (loading) {
+            const token = { cancelled: false };
+            this._exampleLoadToken = token;
+            if (btn) btn.disabled = true;
+            this._setDropZoneStatus(true, message);
+            this._showExampleLoadingOverlay(message, token);
+            if (fileName) fileName.textContent = message;
+            return token;
+        }
 
-        // Collect panel IDs in DOM order: TL, TR, BL, BR
-        const panels = [...document.querySelectorAll('.layout-panel')].map(el => el.dataset.id);
-        if (panels.length < 4) return;
-        const [tlId, trId, blId, brId] = panels;
+        if (this._exampleLoadToken) this._exampleLoadToken.cancelled = true;
+        this._exampleLoadToken = null;
+        if (btn) btn.disabled = false;
+        this._setDropZoneStatus(false);
+        this._hideExampleLoadingOverlay();
+        if (fileName) {
+            if (this.activeFileId) this._updateTopBar();
+            else fileName.textContent = '';
+        }
+        return null;
+    }
 
-        // Set state directly — no addTrace, avoids async race conditions
-        ex.applyLayout(this.plotManager, fileId, { tlId, trId, blId, brId });
+    _showExampleLoadingOverlay(message, token) {
+        this._hideExampleLoadingOverlay();
 
-        document.getElementById('drop-zone').classList.remove('active');
-        this._updateTopBar();
-        this._renderFilesList();
-        this._updateActionButtons();
-        this.renderVariablesTree(data.tree);
+        const overlay = document.createElement('div');
+        overlay.id = 'example-loading-overlay';
+        overlay.className = 'example-loading-overlay';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.setAttribute('aria-live', 'assertive');
+
+        const dialog = document.createElement('div');
+        dialog.className = 'example-loading-dialog';
+
+        const spinner = document.createElement('div');
+        spinner.className = 'example-loading-spinner';
+        spinner.setAttribute('aria-hidden', 'true');
+
+        const title = document.createElement('div');
+        title.className = 'example-loading-title';
+        title.textContent = message;
+
+        const hint = document.createElement('div');
+        hint.className = 'example-loading-hint';
+        hint.textContent = i18n.t('loadingExampleCancelHint');
+
+        dialog.append(spinner, title, hint);
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        this._exampleLoadingEscHandler = (e) => {
+            if (e.key !== 'Escape' || this._exampleLoadToken !== token) return;
+            if (token.committed) return;
+            e.preventDefault();
+            e.stopPropagation();
+            token.cancelled = true;
+            this._setExampleLoading(false);
+        };
+        document.addEventListener('keydown', this._exampleLoadingEscHandler, true);
+        requestAnimationFrame(() => overlay.classList.add('show'));
+        overlay.tabIndex = -1;
+        overlay.focus({ preventScroll: true });
+    }
+
+    _hideExampleLoadingOverlay() {
+        if (this._exampleLoadingEscHandler) {
+            document.removeEventListener('keydown', this._exampleLoadingEscHandler, true);
+            this._exampleLoadingEscHandler = null;
+        }
+
+        const overlay = document.getElementById('example-loading-overlay');
+        if (!overlay) return;
+        overlay.classList.remove('show');
+        setTimeout(() => overlay.remove(), 220);
+    }
+
+    _waitForExampleCancelWindow(token, ms = 450) {
+        return new Promise(resolve => {
+            const started = performance.now();
+            const tick = () => {
+                if (!token || token.cancelled || this._exampleLoadToken !== token) {
+                    resolve();
+                    return;
+                }
+                if (performance.now() - started >= ms) {
+                    resolve();
+                    return;
+                }
+                requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+        });
+    }
+
+    _yieldToBrowser() {
+        return new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    _setDropZoneStatus(show, message = '') {
+        const status = document.getElementById('drop-zone-status');
+        if (!status) return;
+        status.hidden = !show;
+        status.textContent = show ? message : '';
     }
 
     async _ensureExampleData(example) {
@@ -407,7 +877,7 @@ class OpenModelicaViewer {
         if (this._loadedScripts.has(src)) return Promise.resolve();
         if ([...document.scripts].some(s => s.getAttribute('src') === src)) {
             this._loadedScripts.add(src);
-            return Promise.resolve();
+            return;
         }
         return new Promise((resolve, reject) => {
             const script = document.createElement('script');
@@ -422,7 +892,7 @@ class OpenModelicaViewer {
     }
 
     showHelp() {
-        const sections = ['1','2','3','4','5'];
+        const sections = ['1','2','3','4','5','6','7','8'];
 
         const backdrop = document.createElement('div');
         backdrop.className = 'help-backdrop';
@@ -584,6 +1054,7 @@ class OpenModelicaViewer {
                 description: `Derived: ${formula}`,
                 kind: 'variable',
                 dataType: this.parser._detectDataType(result.values, 'variable'),
+                isConstant: this.parser._isConstantValues(result.values),
                 interpolation: 'linear',
                 derived: true,
                 formula
@@ -622,7 +1093,7 @@ class OpenModelicaViewer {
         while (i < formula.length) {
             const ch = formula[i];
             if (/\s/.test(ch)) { i++; continue; }
-            if ('+-*/()'.includes(ch)) { tokens.push({ type: ch, value: ch }); i++; continue; }
+            if ('+-*/^(),'.includes(ch)) { tokens.push({ type: ch, value: ch }); i++; continue; }
             if (ch === '`') {
                 const end = formula.indexOf('`', i + 1);
                 if (end < 0) throw new Error('Missing closing backtick.');
@@ -643,6 +1114,13 @@ class OpenModelicaViewer {
                 let j = i + 1;
                 while (j < formula.length && /[A-Za-z0-9_.\[\]]/.test(formula[j])) j++;
                 const name = formula.slice(i, j);
+                const nextNonSpace = this._nextNonSpaceChar(formula, j);
+                const functionName = this._normalizeDerivedFunctionName(name);
+                if (nextNonSpace === '(' && functionName) {
+                    tokens.push({ type: 'func', value: functionName });
+                    i = j;
+                    continue;
+                }
                 if (!variables[name]) throw new Error(`Unknown variable "${name}".`);
                 tokens.push({ type: 'name', value: name });
                 i = j;
@@ -653,17 +1131,39 @@ class OpenModelicaViewer {
         return tokens;
     }
 
+    _nextNonSpaceChar(text, start) {
+        let i = start;
+        while (i < text.length && /\s/.test(text[i])) i++;
+        return text[i] || '';
+    }
+
+    _normalizeDerivedFunctionName(name) {
+        const lower = String(name).toLowerCase();
+        if (DERIVED_FUNCTIONS.some(fn => fn.name === lower)) return lower;
+        return DERIVED_FUNCTION_ALIASES.get(lower) || '';
+    }
+
     _parseDerivedExpression(tokens) {
         let pos = 0;
         const peek = () => tokens[pos];
         const take = (type) => (peek()?.type === type ? tokens[pos++] : null);
-        const parseFactor = () => {
-            if (take('+')) return parseFactor();
-            if (take('-')) return { type: 'unary', op: '-', expr: parseFactor() };
+        const parsePrimary = () => {
             const token = peek();
             if (!token) throw new Error('Unexpected end of formula.');
             if (take('number')) return { type: 'number', value: token.value };
             if (take('name')) return { type: 'name', value: token.value };
+            if (take('func')) {
+                const name = token.value;
+                if (!take('(')) throw new Error(`Missing opening parenthesis after "${name}".`);
+                const args = [];
+                if (!take(')')) {
+                    do {
+                        args.push(parseAddSub());
+                    } while (take(','));
+                    if (!take(')')) throw new Error(`Missing closing parenthesis for "${name}".`);
+                }
+                return { type: 'func', name, args };
+            }
             if (take('(')) {
                 const expr = parseAddSub();
                 if (!take(')')) throw new Error('Missing closing parenthesis.');
@@ -671,11 +1171,23 @@ class OpenModelicaViewer {
             }
             throw new Error(`Unexpected "${token.value}".`);
         };
+        const parsePower = () => {
+            let node = parsePrimary();
+            if (take('^')) {
+                node = { type: 'binary', op: '^', left: node, right: parseUnary() };
+            }
+            return node;
+        };
+        const parseUnary = () => {
+            if (take('+')) return parseUnary();
+            if (take('-')) return { type: 'unary', op: '-', expr: parseUnary() };
+            return parsePower();
+        };
         const parseMulDiv = () => {
-            let node = parseFactor();
+            let node = parseUnary();
             while (peek()?.type === '*' || peek()?.type === '/') {
                 const op = tokens[pos++].type;
-                node = { type: 'binary', op, left: node, right: parseFactor() };
+                node = { type: 'binary', op, left: node, right: parseUnary() };
             }
             return node;
         };
@@ -705,13 +1217,96 @@ class OpenModelicaViewer {
             const v = this._evalDerivedNode(node.expr, data, n);
             return v.kind === 'scalar' ? { kind: 'scalar', value: -v.value } : { kind: 'series', values: v.values.map(x => -x) };
         }
+        if (node.type === 'func') return this._evalDerivedFunction(node, data, n);
         const left = this._evalDerivedNode(node.left, data, n);
         const right = this._evalDerivedNode(node.right, data, n);
-        const apply = (a, b) => node.op === '+' ? a + b : node.op === '-' ? a - b : node.op === '*' ? a * b : a / b;
+        const apply = (a, b) => {
+            switch (node.op) {
+                case '+': return a + b;
+                case '-': return a - b;
+                case '*': return a * b;
+                case '/': return a / b;
+                case '^': return Math.pow(a, b);
+                default: throw new Error(`Unknown operator "${node.op}".`);
+            }
+        };
         if (left.kind === 'scalar' && right.kind === 'scalar') return { kind: 'scalar', value: apply(left.value, right.value) };
         const values = new Array(n);
         for (let i = 0; i < n; i++) values[i] = apply(left.kind === 'series' ? left.values[i] : left.value, right.kind === 'series' ? right.values[i] : right.value);
         return { kind: 'series', values };
+    }
+
+    _evalDerivedFunction(node, data, n) {
+        const name = node.name;
+        const args = node.args.map(arg => this._evalDerivedNode(arg, data, n));
+        const arity = args.length;
+        const requireArity = (expected, label = name) => {
+            if (arity !== expected) throw new Error(`${label}() expects ${expected} argument${expected === 1 ? '' : 's'}.`);
+        };
+        const valueAt = (arg, i) => arg.kind === 'series' ? arg.values[i] : arg.value;
+        const mapUnary = (fn) => {
+            const a = args[0];
+            if (a.kind === 'scalar') return { kind: 'scalar', value: fn(a.value) };
+            return { kind: 'series', values: a.values.map(fn) };
+        };
+        const mapBinary = (fn) => {
+            const [a, b] = args;
+            if (a.kind === 'scalar' && b.kind === 'scalar') return { kind: 'scalar', value: fn(a.value, b.value) };
+            const values = new Array(n);
+            for (let i = 0; i < n; i++) values[i] = fn(valueAt(a, i), valueAt(b, i));
+            return { kind: 'series', values };
+        };
+
+        if (name === 'sqrt') {
+            requireArity(1, name);
+            return mapUnary(v => Math.sqrt(v));
+        }
+        if (name === 'abs') {
+            requireArity(1, name);
+            return mapUnary(v => Math.abs(v));
+        }
+        if (name === 'log') {
+            requireArity(1, name);
+            return mapUnary(v => Math.log(v));
+        }
+        if (name === 'log10') {
+            requireArity(1, name);
+            return mapUnary(v => Math.log10(v));
+        }
+        if (name === 'square') {
+            requireArity(1, name);
+            return mapUnary(v => v * v);
+        }
+        if (name === 'root') {
+            requireArity(2, name);
+            return mapBinary((v, degree) => this._nthRoot(v, degree));
+        }
+        if (name === 'power') {
+            requireArity(2, name);
+            return mapBinary((v, exponent) => Math.pow(v, exponent));
+        }
+        throw new Error(`Unknown function "${name}".`);
+    }
+
+    _nthRoot(value, degree) {
+        const d = Number(degree);
+        if (!Number.isFinite(d) || d === 0) return NaN;
+        const rounded = Math.round(d);
+        const isIntegerDegree = Math.abs(d - rounded) <= 1e-12;
+        let result;
+        if (value < 0 && isIntegerDegree && rounded % 2 !== 0) {
+            result = -Math.pow(Math.abs(value), 1 / rounded);
+        } else {
+            result = Math.pow(value, 1 / d);
+        }
+        return this._cleanDerivedNumber(result);
+    }
+
+    _cleanDerivedNumber(value) {
+        if (!Number.isFinite(value)) return value;
+        const rounded = Math.round(value);
+        const tolerance = Math.max(1, Math.abs(value)) * 1e-12;
+        return Math.abs(value - rounded) <= tolerance ? rounded : value;
     }
 
     _getActiveTimeVar(data) {
@@ -730,6 +1325,7 @@ class OpenModelicaViewer {
                     description: `Derived: ${entry.formula}`,
                     kind: 'variable',
                     dataType: this.parser._detectDataType(result.values, 'variable'),
+                    isConstant: this.parser._isConstantValues(result.values),
                     interpolation: 'linear',
                     derived: true,
                     formula: entry.formula
@@ -797,14 +1393,34 @@ class OpenModelicaViewer {
         el.className = `derived-message${type ? ' ' + type : ''}`;
     }
 
+    _toggleDerivedHelpPopover(show) {
+        const popover = document.getElementById('derived-help-popover');
+        const button = document.getElementById('derived-help-toggle');
+        if (!popover || !button) return;
+        const willShow = typeof show === 'boolean' ? show : popover.hidden;
+        popover.hidden = !willShow;
+        button.classList.toggle('active', willShow);
+        button.setAttribute('aria-expanded', String(willShow));
+    }
+
     _getDerivedSuggestions(prefix) {
         const data = this.plotManager.data;
         if (!data || !prefix) return [];
         const needle = prefix.toLowerCase();
-        return Object.values(data.variables)
-            .filter(v => v.kind !== 'abscissa' && v.name.toLowerCase().includes(needle))
+        const functionSuggestions = DERIVED_FUNCTIONS
+            .filter(fn => fn.name.startsWith(needle))
+            .map(fn => ({ type: 'function', name: fn.name, kind: 'fn' }));
+        const variableSuggestions = Object.entries(data.variables)
+            .map(([name, variable]) => ({ name: variable.name || name, variable }))
+            .filter(({ name, variable }) => variable.kind !== 'abscissa' && name.toLowerCase().includes(needle))
             .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-            .slice(0, 8);
+            .slice(0, Math.max(0, 8 - functionSuggestions.length))
+            .map(({ name, variable }) => ({
+                type: 'variable',
+                name,
+                kind: variable.kind === 'parameter' ? 'param' : 'var',
+            }));
+        return [...functionSuggestions, ...variableSuggestions];
     }
 
     _updateDerivedSuggestions(e) {
@@ -817,20 +1433,22 @@ class OpenModelicaViewer {
         box.innerHTML = '';
         this._suggestionIndex = 0;
         if (!suggestions.length) { box.hidden = true; return; }
-        for (const variable of suggestions) {
+        for (const suggestion of suggestions) {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'derived-suggestion';
+            btn.dataset.suggestionType = suggestion.type;
+            btn.dataset.suggestionName = suggestion.name;
             const name = document.createElement('span');
             name.className = 'derived-suggestion-name';
-            name.textContent = variable.name;
+            name.textContent = suggestion.name;
             const kind = document.createElement('span');
             kind.className = 'derived-suggestion-kind';
-            kind.textContent = variable.kind === 'parameter' ? 'param' : 'var';
+            kind.textContent = suggestion.kind;
             btn.append(name, kind);
             btn.addEventListener('mousedown', (ev) => {
                 ev.preventDefault();
-                this._insertDerivedSuggestion(variable.name);
+                this._insertDerivedSuggestion(suggestion);
             });
             box.appendChild(btn);
         }
@@ -847,7 +1465,7 @@ class OpenModelicaViewer {
             if (e.key === 'ArrowUp') { e.preventDefault(); this._suggestionIndex = (this._suggestionIndex - 1 + items.length) % items.length; this._markActiveSuggestion(); return; }
             if (e.key === 'Tab' || e.key === 'Enter') {
                 e.preventDefault();
-                this._insertDerivedSuggestion(items[this._suggestionIndex].querySelector('.derived-suggestion-name').textContent);
+                this._insertDerivedSuggestionFromElement(items[this._suggestionIndex]);
                 return;
             }
             if (e.key === 'Escape') { this._hideDerivedSuggestions(); return; }
@@ -855,7 +1473,15 @@ class OpenModelicaViewer {
         if (e.key === 'Enter') this.createDerivedVariable();
     }
 
-    _insertDerivedSuggestion(name) {
+    _insertDerivedSuggestionFromElement(item) {
+        if (!item) return;
+        this._insertDerivedSuggestion({
+            type: item.dataset.suggestionType,
+            name: item.dataset.suggestionName,
+        });
+    }
+
+    _insertDerivedSuggestion(suggestion) {
         const input = document.getElementById('derived-formula');
         const start = input.selectionStart;
         const end = input.selectionEnd;
@@ -863,9 +1489,13 @@ class OpenModelicaViewer {
         const right = input.value.slice(end);
         const match = left.match(/`?[A-Za-z0-9_.\[\]]*$/);
         const replaceStart = match ? start - match[0].length : start;
-        const insert = /^[A-Za-z_][A-Za-z0-9_.\[\]]*$/.test(name) ? name : `\`${name}\``;
+        const name = suggestion?.name || '';
+        const isFunction = suggestion?.type === 'function';
+        const insert = isFunction
+            ? `${name}()`
+            : (/^[A-Za-z_][A-Za-z0-9_.\[\]]*$/.test(name) ? name : `\`${name}\``);
         input.value = input.value.slice(0, replaceStart) + insert + right;
-        const cursor = replaceStart + insert.length;
+        const cursor = replaceStart + insert.length - (isFunction ? 1 : 0);
         input.setSelectionRange(cursor, cursor);
         input.focus();
         this._hideDerivedSuggestions();
@@ -907,6 +1537,33 @@ class OpenModelicaViewer {
         const autoExpand = filter.length > 0;
         this._renderTreeNode(this._currentTree, container, 0, filter, autoExpand);
         this._renderDerivedTreeSection(container, filter, autoExpand);
+    }
+
+    _clearVariableSelection() {
+        if (!this.selectedVariables || this.selectedVariables.size === 0) return;
+        this.selectedVariables.clear();
+        this._syncVariableSelectionUI();
+    }
+
+    _toggleVariableSelection(varName) {
+        if (this.selectedVariables.has(varName)) {
+            this.selectedVariables.delete(varName);
+        } else {
+            this.selectedVariables.add(varName);
+        }
+        this._syncVariableSelectionUI();
+    }
+
+    _syncVariableSelectionUI() {
+        document.querySelectorAll('.tree-item[data-var-name]').forEach(item => {
+            item.classList.toggle('selected', this.selectedVariables.has(item.dataset.varName));
+        });
+    }
+
+    _selectedVariableNamesForDrag(varName) {
+        if (!this.selectedVariables.has(varName)) return [varName];
+        const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
+        return [...this.selectedVariables].filter(name => data?.variables?.[name]);
     }
 
     _renderDerivedTreeSection(parentElement, filter, autoExpand) {
@@ -1052,6 +1709,7 @@ class OpenModelicaViewer {
 
             const itemDiv = document.createElement('div');
             itemDiv.className = 'tree-item' + (variable.derived ? ' tree-item-derived' : '');
+            itemDiv.classList.toggle('selected', this.selectedVariables.has(variable.name));
             itemDiv.setAttribute('draggable', 'true');
             itemDiv.setAttribute('data-var-name', variable.name);
 
@@ -1094,12 +1752,29 @@ class OpenModelicaViewer {
                 nodeDiv.appendChild(itemDiv);
             }
 
+            itemDiv.addEventListener('click', (e) => {
+                if (e.target.closest('.tree-derived-remove')) return;
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    this._toggleVariableSelection(variable.name);
+                } else if (this.selectedVariables.size > 0) {
+                    this._clearVariableSelection();
+                }
+            });
             itemDiv.addEventListener('dragstart', (e) => {
-                e.dataTransfer.setData('text/plain', variable.name);
+                const varNames = this._selectedVariableNamesForDrag(variable.name);
+                e.dataTransfer.setData('application/x-openmodelica-variables', JSON.stringify({
+                    type: 'variables',
+                    names: varNames,
+                }));
+                e.dataTransfer.setData('text/plain', varNames[0] || variable.name);
                 e.dataTransfer.effectAllowed = 'copy';
+                document.querySelectorAll('.tree-item.selected').forEach(item => item.classList.add('dragging'));
                 itemDiv.classList.add('dragging');
             });
-            itemDiv.addEventListener('dragend', () => itemDiv.classList.remove('dragging'));
+            itemDiv.addEventListener('dragend', () => {
+                document.querySelectorAll('.tree-item.dragging').forEach(item => item.classList.remove('dragging'));
+            });
 
             parentElement.appendChild(nodeDiv);
         }

@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenModelica/Dymola Result Viewer</title>
     <link rel="stylesheet" href="styles.css">
-    <script src="plotly-2.27.0.min.js"></script>
 </head>
 <body class="theme-light">
     <script>
@@ -27,12 +26,24 @@
             </div>
 
             <!-- Action Buttons -->
-            <button id="load-new-file" class="icon-btn" title="Load new file">
-                <span class="icon">📂</span>
-            </button>
-            <button id="reload-file" class="icon-btn" title="Reload file" disabled>
-                <span class="icon">🔄</span>
-            </button>
+            <div class="open-file-split">
+                <button id="load-new-file" class="icon-btn open-file-main" title="Load new file">
+                    <span class="icon">📂</span>
+                </button>
+                <button id="open-file-menu-btn" class="icon-btn open-file-menu-btn" title="More open options" aria-haspopup="true" aria-expanded="false">
+                    <span class="icon">▾</span>
+                </button>
+                <div id="open-file-menu" class="example-menu open-file-menu" role="menu" hidden></div>
+            </div>
+            <div class="open-file-split reload-file-split">
+                <button id="reload-file" class="icon-btn open-file-main" title="Reload file" disabled>
+                    <span class="icon">🔄</span>
+                </button>
+                <button id="reload-file-menu-btn" class="icon-btn open-file-menu-btn" title="More reload options" aria-haspopup="true" aria-expanded="false" disabled>
+                    <span class="icon">▾</span>
+                </button>
+                <div id="reload-file-menu" class="example-menu open-file-menu" role="menu" hidden></div>
+            </div>
             <button id="toggle-sidebar" class="icon-btn" title="Toggle sidebar">
                 <span class="icon">◧</span>
             </button>
@@ -100,10 +111,50 @@
                 </div>
             </div>
 
-            <!-- Layout Configuration -->
-            <div class="sidebar-section">
-                <h3 data-i18n="layout">Layout</h3>
-                <p class="layout-hint" data-i18n="layoutHint">Hover a panel to split or close it.</p>
+            <!-- Derived Variables -->
+            <div class="sidebar-section derived-section">
+                <div class="section-header">
+                    <h3 data-i18n="derivedVariables">Derived variables</h3>
+                    <div class="derived-header-controls">
+                        <button id="derived-help-toggle" class="tree-control-btn derived-help-toggle" title="Formula help" aria-haspopup="dialog" aria-expanded="false" aria-controls="derived-help-popover">
+                            <span>?</span>
+                        </button>
+                        <button id="derived-toggle" class="tree-control-btn" title="Create derived variable">
+                            <span>+</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="derived-help-popover" class="derived-help-popover" role="dialog" aria-labelledby="derived-help-title" hidden>
+                    <div class="derived-help-title" id="derived-help-title" data-i18n="derivedHelpTitle">Formula help</div>
+                    <div class="derived-help-row">
+                        <span class="derived-help-label" data-i18n="derivedHelpOperators">Operators</span>
+                        <code>+ - * / ^ ( )</code>
+                    </div>
+                    <div class="derived-help-row">
+                        <span class="derived-help-label" data-i18n="derivedHelpFunctions">Functions</span>
+                        <code>sqrt(x), abs(x), log(x), log10(x), power(x,n), root(x,n)</code>
+                    </div>
+                    <div class="derived-help-row">
+                        <span class="derived-help-label" data-i18n="derivedHelpVariables">Variables</span>
+                        <span data-i18n="derivedHelpVariablesText">Start typing to autocomplete variable and function names.</span>
+                    </div>
+                    <div class="derived-help-row">
+                        <span class="derived-help-label" data-i18n="derivedHelpExample">Example</span>
+                        <code>x / y^2 * 100</code>
+                    </div>
+                </div>
+                <div id="derived-form" class="derived-form collapsed">
+                    <input id="derived-name" class="derived-input" type="text" placeholder="name">
+                    <div class="derived-formula-wrap">
+                        <input id="derived-formula" class="derived-input" type="text" placeholder="x / y^2 * 100" data-i18n="derivedFormulaPlaceholder" autocomplete="off">
+                        <div id="derived-suggestions" class="derived-suggestions" hidden></div>
+                    </div>
+                    <div id="derived-message" class="derived-message"></div>
+                    <div class="derived-actions">
+                        <button id="derived-create" class="derived-create-btn">Create</button>
+                        <button id="derived-cancel" class="derived-cancel-btn">Cancel</button>
+                    </div>
+                </div>
             </div>
 
             <!-- Options -->
@@ -139,26 +190,10 @@
                 </div>
             </div>
 
-            <!-- Derived Variables -->
-            <div class="sidebar-section derived-section">
-                <div class="section-header">
-                    <h3 data-i18n="derivedVariables">Derived variables</h3>
-                    <button id="derived-toggle" class="tree-control-btn" title="Create derived variable">
-                        <span>+</span>
-                    </button>
-                </div>
-                <div id="derived-form" class="derived-form collapsed">
-                    <input id="derived-name" class="derived-input" type="text" placeholder="name">
-                    <div class="derived-formula-wrap">
-                        <input id="derived-formula" class="derived-input" type="text" placeholder="x / y * 100" autocomplete="off">
-                        <div id="derived-suggestions" class="derived-suggestions" hidden></div>
-                    </div>
-                    <div id="derived-message" class="derived-message"></div>
-                    <div class="derived-actions">
-                        <button id="derived-create" class="derived-create-btn">Create</button>
-                        <button id="derived-cancel" class="derived-cancel-btn">Cancel</button>
-                    </div>
-                </div>
+            <!-- Layout Configuration -->
+            <div class="sidebar-section">
+                <h3 data-i18n="layout">Layout</h3>
+                <p class="layout-hint" data-i18n="layoutHint">Hover a panel to split or close it.</p>
             </div>
 
             <!-- Author footer -->
@@ -177,6 +212,7 @@
                     <h2 data-i18n="dragFile">Drag & drop a .mat file here</h2>
                     <p data-i18n="or">or</p>
                     <button id="file-select-btn" class="primary-btn" data-i18n="selectFile">Select File</button>
+                    <div id="drop-zone-status" class="drop-zone-status">Loading application...</div>
                     <input type="file" id="file-input" accept=".mat" multiple style="display: none;">
                 </div>
             </div>
@@ -188,6 +224,7 @@
         </div>
     </div>
 
+    <script src="plotly-2.27.0.min.js"></script>
     <script src="mat-parser.js"></script>
     <script src="i18n.js"></script>
     <script src="modal.js"></script>

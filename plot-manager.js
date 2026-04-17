@@ -139,6 +139,36 @@ class PlotManager {
         }
     }
 
+    setLorenzExampleLayout(fileId, { panelId, brId, tlId }) {
+        const id = panelId || brId || tlId;
+        const plot = this.plots.get(id);
+        if (!plot) return;
+
+        plot.mode = 'state-anim';
+        plot.stateAnimDim = 3;
+        plot.projection = 'orthographic';
+        plot.animSpeed = 0.25;
+        plot.showCameraOverlay = false;
+        plot.homeCamera = {
+            eye: { x: 2.7443, y: -1.2215, z: 1.5367 },
+            up: { x: 0, y: 0, z: 1 },
+            center: { x: 0.147, y: 0.2334, z: -0.1396 },
+        };
+        plot.stateSlots = { x: ['x', 'y', 'z'], dx: ['der(x)', 'der(y)', 'der(z)'], fileId };
+        plot.stateConfig = {
+            showFullTrace: true,
+            showTrace: true,
+            showArrowX: true,
+            showArrowDx: true,
+            normalizeDx: true,
+            dynamicZoom: false,
+        };
+
+        const panelEl = document.querySelector(`.layout-panel[data-id="${id}"]`);
+        if (panelEl) this._injectModeButtons(id, panelEl, 'state-anim');
+        this._rebuildPanel(id);
+    }
+
     hasAnyTraces() {
         for (const [, plot] of this.plots) {
             if (plot.traces.length > 0 || plot.phaseTraces.length > 0) return true;
@@ -326,9 +356,87 @@ class PlotManager {
         panelEl.addEventListener('drop', (e) => {
             e.preventDefault();
             hideDragHint();
-            const varName = e.dataTransfer.getData('text/plain');
-            if (varName && this.data) this.addTrace(panelId, varName, panelEl);
+            const varNames = this._getDroppedVariableNames(e.dataTransfer);
+            if (!varNames.length || !this.data) return;
+            if (varNames.length > 1) {
+                this._addDroppedVariables(panelId, varNames, panelEl);
+            } else {
+                this.addTrace(panelId, varNames[0], panelEl);
+            }
         });
+    }
+
+    _getDroppedVariableNames(dataTransfer) {
+        const raw = dataTransfer.getData('application/x-openmodelica-variables');
+        if (raw) {
+            try {
+                const payload = JSON.parse(raw);
+                if (payload?.type === 'variables' && Array.isArray(payload.names)) {
+                    return payload.names.filter(Boolean);
+                }
+            } catch (_) {}
+        }
+        const varName = dataTransfer.getData('text/plain');
+        return varName ? [varName] : [];
+    }
+
+    _addDroppedVariables(panelId, varNames, panelEl) {
+        if (!this.plots.has(panelId)) this.plots.set(panelId, this._makeState());
+        const plot = this.plots.get(panelId);
+        const names = varNames.filter(varName => {
+            const variable = this.data?.variables?.[varName];
+            return variable && variable.kind !== 'abscissa';
+        });
+        if (!names.length) return;
+
+        if (plot.mode === 'timeseries') {
+            names.forEach(varName => this.addTrace(panelId, varName, panelEl));
+            return;
+        }
+
+        if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
+            const groupSize = plot.mode === 'phase3d' ? 3 : 2;
+            plot.phasePending = { x: null, y: null, z: null, fileId: null };
+            let added = 0;
+            for (let i = 0; i + groupSize - 1 < names.length; i += groupSize) {
+                plot.phaseTraces.push({
+                    x: names[i],
+                    y: names[i + 1],
+                    z: groupSize === 3 ? names[i + 2] : null,
+                    color: this._nextColor(plot.phaseTraces.length),
+                    fileId: this.activeFileId,
+                });
+                added += 1;
+            }
+            if (added > 0) {
+                if (!plot.div) this._createChart(panelId, panelEl);
+                else this._updatePhaseChart(panelId, plot);
+                this._setPendingOverlay(panelId, panelEl, false);
+            } else {
+                this._updatePlaceholder(panelId, panelEl);
+            }
+            return;
+        }
+
+        if (plot.mode === 'state-anim') {
+            const dim = plot.stateAnimDim || 2;
+            if (plot.div) this._destroyChart(panelId);
+            plot.stateSlots = { x: names.slice(0, dim), dx: [], fileId: this.activeFileId };
+            const data = this.files.get(this.activeFileId)?.data;
+            if (data) {
+                plot.stateSlots.dx = plot.stateSlots.x.map(name => this.parser.findDerivative(name, data.variables));
+            }
+            if (plot.stateSlots.x.length >= dim) {
+                this._createStateAnimChart(panelId, panelEl);
+            } else {
+                const placeholder = panelEl.querySelector('.layout-panel-placeholder');
+                if (placeholder) placeholder.style.display = '';
+                this._updatePlaceholder(panelId, panelEl);
+            }
+            return;
+        }
+
+        this.addTrace(panelId, names[0], panelEl);
     }
 
     /** Show or hide a persistent "waiting for next variable" overlay on top of an existing chart. */
@@ -355,7 +463,7 @@ class PlotManager {
         // Timeseries: always accept more variables
         if (mode === 'timeseries') {
             return plot.traces.length === 0
-                ? i18n.t('dropVariableHere')
+                ? i18n.t('dropTimeseriesMulti')
                 : i18n.t('dropToAddTrace');
         }
 
@@ -363,7 +471,7 @@ class PlotManager {
         if (mode === 'state-anim') {
             const sx = plot.stateSlots?.x || [];
             const dim = plot.stateAnimDim || 2;
-            if (sx.length === 0) return i18n.t('dropStateX1');
+            if (sx.length === 0) return dim === 3 ? i18n.t('dropState3dMulti') : i18n.t('dropState2dMulti');
             if (sx.length === 1) return i18n.t('dropStateX2');
             return dim === 3 ? i18n.t('dropStateX3') : i18n.t('dropVariableHere');
         }
@@ -371,11 +479,11 @@ class PlotManager {
         // Phase modes: guide axis by axis
         switch (mode) {
             case 'phase2d':
-                return !pp.x ? i18n.t('dropX') : i18n.t('dropY');
+                return !pp.x ? i18n.t('dropPhase2dMulti') : i18n.t('dropY');
             case 'phase2dt':
-                return !pp.x ? i18n.t('dropX') : i18n.t('dropYAutoTime');
+                return !pp.x ? i18n.t('dropPhase2dtMulti') : i18n.t('dropYAutoTime');
             case 'phase3d':
-                return !pp.x ? i18n.t('dropX')
+                return !pp.x ? i18n.t('dropPhase3dMulti')
                      : !pp.y ? i18n.t('dropY')
                      :         i18n.t('dropZ');
         }
@@ -421,7 +529,7 @@ class PlotManager {
             this._createChart(panelId, panelEl);
         } else {
             const t = plot.traces[plot.traces.length - 1];
-            Plotly.addTraces(plot.div, this._buildTimeTrace(t));
+            Plotly.addTraces(plot.div, this._buildTimeTrace(t)).then(() => this._installLegendHoverHint(plot.div));
             // Update Y axis title: clear when 2+ traces (X/time label always stays)
             const layout = this._buildTimeLayout(plot);
             Plotly.relayout(plot.div, { 'yaxis.title': layout.yaxis.title });
@@ -541,20 +649,42 @@ class PlotManager {
             const toggleVisByName = (clickedName) => {
                 if (clickedName === '__hover__') return;
                 if (plot.mode === 'timeseries') {
-                    const t = plot.traces.find(t => t.varName === clickedName);
+                    const t = plot.traces.find(t => this._traceName(t.varName, t.fileId) === clickedName);
                     if (t) t.visible = (t.visible === 'legendonly') ? true : 'legendonly';
                 } else {
                     const t = plot.phaseTraces.find(pt => {
-                        const n = plot.mode === 'phase3d'
-                            ? `${pt.x} / ${pt.y} / ${pt.z}`
-                            : `${pt.x} vs ${pt.y}`;
-                        return n === clickedName;
+                        return this._phaseTraceName(plot, pt) === clickedName;
                     });
                     if (t) t.visible = (t.visible === 'legendonly') ? true : 'legendonly';
                 }
             };
+            const removeByLegendName = (clickedName) => {
+                if (!clickedName || clickedName === '__hover__') return false;
+                if (plot.mode === 'timeseries') {
+                    const idx = plot.traces.findIndex(t => this._traceName(t.varName, t.fileId) === clickedName);
+                    if (idx < 0) return false;
+                    plot.traces.splice(idx, 1);
+                } else {
+                    const idx = plot.phaseTraces.findIndex(pt => this._phaseTraceName(plot, pt) === clickedName);
+                    if (idx < 0) return false;
+                    plot.phaseTraces.splice(idx, 1);
+                }
+                this._rebuildPanel(panelId);
+                return true;
+            };
+            let lastMouseDownHadShift = false;
+            div.addEventListener('mousedown', (e) => {
+                lastMouseDownHadShift = !!e.shiftKey;
+            }, { capture: true });
             div.on('plotly_legendclick', (ed) => {
-                toggleVisByName(ed.data[ed.curveNumber]?.name);
+                const clickedName = ed.data[ed.curveNumber]?.name;
+                const shiftClick = !!(ed.event?.shiftKey || lastMouseDownHadShift);
+                lastMouseDownHadShift = false;
+                if (shiftClick) {
+                    removeByLegendName(clickedName);
+                    return false;
+                }
+                toggleVisByName(clickedName);
             });
             // Double-click isolates one trace (or restores all). Read _fullData after it settles.
             div.on('plotly_legenddoubleclick', () => {
@@ -570,6 +700,8 @@ class PlotManager {
                     });
                 }, 50);
             });
+            div.on('plotly_afterplot', () => this._installLegendHoverHint(div));
+            this._installLegendHoverHint(div);
             // Pre-allocate marker trace for hover sync on all modes
             this._initMarkerTrace(plot);
             // Resize observer
@@ -594,6 +726,7 @@ class PlotManager {
             // Add a corresponding marker trace for hover sync
             const panelEl = plot.div.closest('.layout-panel');
             this._addOneMarkerTrace(plot, plot.phaseTraces[plot.phaseTraces.length - 1]);
+            this._installLegendHoverHint(plot.div);
         });
         // Update legend and axis titles (no scene keys → no camera reset for 3D)
         const { bg, gridColor, legendBg } = this._colors();
@@ -622,6 +755,21 @@ class PlotManager {
         Plotly.relayout(plot.div, relayoutUpdate);
     }
 
+    _installLegendHoverHint(div) {
+        if (!div) return;
+        requestAnimationFrame(() => {
+            const items = div.querySelectorAll('.legend .traces');
+            items.forEach(item => {
+                let title = [...item.children].find(child => child.tagName?.toLowerCase() === 'title');
+                if (!title) {
+                    title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                    item.insertBefore(title, item.firstChild);
+                }
+                title.textContent = i18n.t('legendHint');
+            });
+        });
+    }
+
     _destroyChart(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
@@ -639,6 +787,7 @@ class PlotManager {
             else { Plotly.purge(plot.div); plot.div.remove(); }
             plot.div = null;
         }
+        plot.cameraOverlayEl = null;
     }
 
     _clearPanel(panelId) {
@@ -654,6 +803,8 @@ class PlotManager {
             existing.markerTraceIdx = null;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
+            existing.showCameraOverlay = false;
+            existing.homeCamera = null;
             existing.animFrame     = 0;
             // keep existing.mode so the user's mode choice is preserved
         }
@@ -1022,7 +1173,7 @@ class PlotManager {
                 hovertemplate: `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br><b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(variable.data[0])}<extra></extra>`,
             };
         }
-        const isStep = variable.dataType === 'boolean' || variable.dataType === 'integer';
+        const isStep = variable.dataType === 'boolean';
         const useGL = !isStep && variable.data.length >= PlotManager.GL_POINT_THRESHOLD;
         const line = useGL
             ? { color: t.color, width: 1.5 }
@@ -1323,21 +1474,36 @@ class PlotManager {
         container.appendChild(div);
         plot.div = div;
 
+        if (is3D && plot.showCameraOverlay) {
+            const cameraOverlay = document.createElement('pre');
+            cameraOverlay.className = 'camera-debug-overlay';
+            cameraOverlay.textContent = 'camera: loading...';
+            container.appendChild(cameraOverlay);
+            plot.cameraOverlayEl = cameraOverlay;
+        } else {
+            plot.cameraOverlayEl = null;
+        }
+
         // Controls bar
         const controls = document.createElement('div');
         controls.className = 'state-anim-controls';
+        const speedOptions = [
+            [0.05, '×0.05'],
+            [0.1,  '×0.10'],
+            [0.25, '×0.25'],
+            [0.5,  '×0.5'],
+            [1,    '×1'],
+            [2,    '×2'],
+            [5,    '×5'],
+        ]
+            .map(([v, label]) => `<option value="${v}"${Math.abs((plot.animSpeed || 1) - v) < 1e-9 ? ' selected' : ''}>${label}</option>`)
+            .join('');
         controls.innerHTML = `
             <button class="sa-btn sa-play-btn" title="${i18n.t('saPlay')}">▶</button>
             <input type="range" class="sa-scrubber" min="0" max="100" value="0" title="${i18n.t('saScrubber')}">
             <span class="sa-time-label">t = 0</span>
             <select class="sa-speed" title="${i18n.t('saSpeed')}">
-                <option value="0.05">×0.05</option>
-                <option value="0.1">×0.10</option>
-                <option value="0.25">×0.25</option>
-                <option value="0.5">×0.5</option>
-                <option value="1" selected>×1</option>
-                <option value="2">×2</option>
-                <option value="5">×5</option>
+                ${speedOptions}
             </select>
             <label class="sa-toggle" title="${i18n.t('saFull')}"><input type="checkbox" class="sa-chk-full" checked><span>${i18n.t('saFullLabel')}</span></label>
             <label class="sa-toggle" title="${i18n.t('saTrace')}"><input type="checkbox" class="sa-chk-trace" checked><span>${i18n.t('saTraceLabel')}</span></label>
@@ -1368,6 +1534,9 @@ class PlotManager {
             // Add bold axis lines + arrowheads for 3D
             if (is3D) this._add3DAxisDecorations(plot);
             this._stateAnimUpdateFrame(plot, 0);
+            this._updateCameraOverlay(plot);
+            div.on('plotly_relayout', () => this._updateCameraOverlay(plot));
+            div.on('plotly_afterplot', () => this._updateCameraOverlay(plot));
             // Resize observer
             let timer;
             const ro = new ResizeObserver(() => {
@@ -1527,7 +1696,7 @@ class PlotManager {
                              showspikes: true, spikecolor: '#3498db', spikethickness: 3, spikesides: false },
                     bgcolor: bg,
                     camera: {
-                        eye: { x: 1.5, y: 1.5, z: 1.2 },
+                        ...(plot.homeCamera || { eye: { x: 1.5, y: 1.5, z: 1.2 } }),
                         projection: { type: plot.projection || 'orthographic' },
                     },
                     aspectmode: 'cube',
@@ -2175,6 +2344,29 @@ class PlotManager {
 
     // ─── 3D camera views ───────────────────────────────────────────
 
+    _updateCameraOverlay(plot) {
+        if (!plot?.cameraOverlayEl || !plot.div) return;
+        const camera = plot.div._fullLayout?.scene?.camera || plot.div.layout?.scene?.camera || {};
+        const projection = camera.projection?.type || plot.projection || 'orthographic';
+        const eye = camera.eye || { x: 1.25, y: 1.25, z: 1.25 };
+        const up = camera.up || { x: 0, y: 0, z: 1 };
+        const center = camera.center || { x: 0, y: 0, z: 0 };
+        const fmtObj = (obj) => `{ x: ${this._fmtCameraNumber(obj.x)}, y: ${this._fmtCameraNumber(obj.y)}, z: ${this._fmtCameraNumber(obj.z)} }`;
+
+        plot.cameraOverlayEl.textContent =
+            `camera\n` +
+            `projection: ${projection}\n` +
+            `eye: ${fmtObj(eye)}\n` +
+            `up: ${fmtObj(up)}\n` +
+            `center: ${fmtObj(center)}`;
+    }
+
+    _fmtCameraNumber(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return '0';
+        return n.toFixed(4).replace(/\.?0+$/, '');
+    }
+
     _setCamera(panelId, preset) {
         const plot = this.plots.get(panelId);
         if (!plot?.div) return;
@@ -2183,9 +2375,9 @@ class PlotManager {
         // from lower-right toward upper-left, var x (plotly Y) toward lower-left, var y up.
         const is2dt = plot.mode === 'phase2dt';
         const cameras = {
-            home:  is2dt
+            home:  plot.homeCamera || (is2dt
                 ? { eye: { x: 1.25, y: -1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }
-                : { eye: { x: 1.25, y:  1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
+                : { eye: { x: 1.25, y:  1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }),
             top:   { eye: { x: 0, y: 0, z: 2 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 1, z: 0 } },
             front: { eye: { x: 0,    y: -2,   z: 0    }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
             yz:    { eye: { x: 2,    y: 0,    z: 0    }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
@@ -2198,7 +2390,7 @@ class PlotManager {
         // and including origin) are what lets the origin-anchored axis lines render at
         // equal visual length. Re-enabling autorange would let the axis lines themselves
         // expand the scene and break that property.
-        Plotly.relayout(plot.div, layoutUpdate);
+        Plotly.relayout(plot.div, layoutUpdate).then(() => this._updateCameraOverlay(plot));
     }
 
     _toggleProjection(panelId, panelEl) {
@@ -2206,7 +2398,8 @@ class PlotManager {
         if (!plot) return;
         plot.projection = plot.projection === 'orthographic' ? 'perspective' : 'orthographic';
         if (plot.div) {
-            Plotly.relayout(plot.div, { 'scene.camera.projection.type': plot.projection });
+            Plotly.relayout(plot.div, { 'scene.camera.projection.type': plot.projection })
+                .then(() => this._updateCameraOverlay(plot));
         }
         const projBtn = panelEl.querySelector('.proj-btn');
         if (projBtn) {
@@ -2487,27 +2680,31 @@ class PlotManager {
             case 'state-anim': {
                 const sx = plot ? (plot.stateSlots?.x || []) : [];
                 const dim = plot ? (plot.stateAnimDim || 2) : 2;
-                msg = sx.length === 0 ? i18n.t('dropStateX1')
+                msg = sx.length === 0 ? (dim === 3 ? i18n.t('dropState3dMulti') : i18n.t('dropState2dMulti'))
                     : sx.length === 1 ? i18n.t('dropStateX2Short')
                     : dim === 3 ?        i18n.t('dropStateX3')
                     :                    i18n.t('dropVariableHere');
                 break;
             }
             case 'phase2d':
-                msg = !pp.x ? i18n.t('dropX') : i18n.t('dropY');
+                msg = !pp.x ? i18n.t('dropPhase2dMulti') : i18n.t('dropY');
                 break;
             case 'phase2dt':
-                msg = !pp.x ? i18n.t('dropX') : i18n.t('dropYAutoTime');
+                msg = !pp.x ? i18n.t('dropPhase2dtMulti') : i18n.t('dropYAutoTime');
                 break;
             case 'phase3d':
-                msg = !pp.x ? i18n.t('dropX')
+                msg = !pp.x ? i18n.t('dropPhase3dMulti')
                     : !pp.y ? i18n.t('dropY')
                     :         i18n.t('dropZ');
                 break;
             default: // timeseries
-                msg = i18n.t('dropVariableHere');
+                msg = i18n.t('dropTimeseriesMulti');
         }
-        placeholder.innerHTML = `<span>${msg}</span>`;
+        placeholder.innerHTML = `
+            <span>${msg}</span>
+            <small>${i18n.t('multiSelectHint')}</small>
+            <small>${i18n.t('legendHint')}</small>
+        `;
     }
 
     // ─── Helpers ───────────────────────────────────────────────────
@@ -2601,6 +2798,9 @@ class PlotManager {
             stateSlots:   { x: [], dx: [], fileId: null }, // x: [varName,...], dx: [derName,...]
             stateAnimDim: 2,
             stateConfig:  { showFullTrace: true, showTrace: true, showArrowX: true, showArrowDx: true, normalizeDx: true, dynamicZoom: false },
+            showCameraOverlay: false,
+            cameraOverlayEl: null,
+            homeCamera: null,
             animFrame:    0,                               // current time index
             animPlaying:  false,
             animSpeed:    1,
@@ -2658,6 +2858,13 @@ class PlotManager {
             if (f) return `${label} [${f.name}]`;
         }
         return label;
+    }
+
+    _phaseTraceName(plot, pt) {
+        const label = plot.mode === 'phase3d'
+            ? `${pt.x} / ${pt.y} / ${pt.z}`
+            : `${pt.x} vs ${pt.y}`;
+        return this._traceName(label, pt.fileId);
     }
 
     _findTimeIdx(times, xVal) {

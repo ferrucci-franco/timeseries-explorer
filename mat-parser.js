@@ -16,6 +16,12 @@ class MatParser {
             4: 2,  // uint16
             5: 1   // uint8
         };
+        this._utf8Decoder = typeof TextDecoder !== 'undefined'
+            ? new TextDecoder('utf-8', { fatal: true })
+            : null;
+        this._latin1Decoder = typeof TextDecoder !== 'undefined'
+            ? new TextDecoder('windows-1252')
+            : null;
     }
 
     /**
@@ -122,8 +128,9 @@ class MatParser {
                 1: 'linear'
             }[Math.abs(interp)] || String(interp);
 
-            // Detect data type
+            // Detect data type and shape hints from numeric values
             const dataType = this._detectDataType(values, kind);
+            const isConstant = this._isConstantValues(values);
 
             const variable = {
                 name: varName,
@@ -131,6 +138,7 @@ class MatParser {
                 description: descriptions[i],
                 kind: kind,
                 dataType: dataType,
+                isConstant: isConstant,
                 interpolation: interpStr,
                 negate: negate
             };
@@ -338,15 +346,32 @@ class MatParser {
     _charsToStrings(data2d) {
         const strings = [];
         for (const row of data2d) {
-            let str = '';
+            const bytes = [];
             for (const c of row) {
                 const ci = Math.floor(c);
                 if (ci === 0) break;
-                str += String.fromCharCode(ci);
+                bytes.push(ci & 0xff);
             }
-            strings.push(str.trim());
+            strings.push(this._decodeCharBytes(bytes).trim());
         }
         return strings;
+    }
+
+    _decodeCharBytes(bytes) {
+        if (!bytes.length) return '';
+
+        const data = new Uint8Array(bytes);
+        if (this._utf8Decoder) {
+            try {
+                return this._utf8Decoder.decode(data);
+            } catch (_) {
+                if (this._latin1Decoder) return this._latin1Decoder.decode(data);
+            }
+        }
+
+        let str = '';
+        for (const b of bytes) str += String.fromCharCode(b);
+        return str;
     }
 
     /**
@@ -503,14 +528,13 @@ class MatParser {
      * @private
      * @param {Array} values - Array of numerical values
      * @param {string} kind - Variable kind (abscissa, parameter, variable)
-     * @returns {string} - Data type: 'boolean', 'integer', 'real'
+     * @returns {string} - Data type: 'boolean' or 'real'
      */
     _detectDataType(values, _kind) {
         if (!values || values.length === 0) {
             return 'real';
         }
 
-        let allInteger = true;
         let allBooleanValues = true;
         let hasZero = false;
         let hasOne = false;
@@ -523,16 +547,10 @@ class MatParser {
                 continue;
             }
 
-            // Check if integer
-            if (v !== Math.floor(v)) {
-                allInteger = false;
-                allBooleanValues = false;
-                break; // Found a decimal - it's real
-            }
-
             // Check if boolean (only 0 or 1)
             if (v !== 0 && v !== 1) {
                 allBooleanValues = false;
+                break;
             } else {
                 // Track if we have both 0 and 1
                 if (v === 0) hasZero = true;
@@ -542,8 +560,22 @@ class MatParser {
 
         // Only boolean if it has BOTH 0 and 1 values (not just constant 0 or constant 1)
         if (allBooleanValues && hasZero && hasOne) return 'boolean';
-        if (allInteger) return 'integer';
         return 'real';
+    }
+
+    /**
+     * Detect whether all samples are exactly equal.
+     * @private
+     * @param {Array} values - Array of numerical values
+     * @returns {boolean}
+     */
+    _isConstantValues(values) {
+        if (!values || values.length === 0) return false;
+        const first = values[0];
+        for (let i = 1; i < values.length; i++) {
+            if (values[i] !== first) return false;
+        }
+        return true;
     }
 
     /**
@@ -564,8 +596,6 @@ class MatParser {
         switch (variable.dataType) {
             case 'boolean':
                 return '🔘';  // Boolean
-            case 'integer':
-                return '🔢';  // Integer
             case 'real':
             default:
                 return '📈';  // Real/continuous
