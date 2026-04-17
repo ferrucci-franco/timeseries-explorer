@@ -526,7 +526,22 @@ class OpenModelicaViewer {
     async _copyOpenModelicaTempPathAndOpenPicker() {
         const candidates = this._getOpenModelicaTempCandidates();
         if (!candidates.length) {
-            await Modal.alert(i18n.t('openOpenModelicaTemp'), i18n.t('openModelicaTempNoPath'), { icon: '📁' });
+            const fallbackPaths = this._getOpenModelicaTempFallbackPaths();
+            const path = this._getLikelyOpenModelicaTempPath(fallbackPaths);
+            const copied = await this._copyTextToClipboard(path);
+            const messageKey = copied ? 'openModelicaTempFallbackPathCopied' : 'openModelicaTempFallbackPathCopyFailed';
+
+            await Modal.alert(
+                i18n.t('openOpenModelicaTemp'),
+                i18n.t(messageKey)
+                    .replaceAll('{path}', path)
+                    .replaceAll('{windowsPath}', fallbackPaths.windows)
+                    .replaceAll('{linuxPath}', fallbackPaths.linux),
+                {
+                    icon: '📋',
+                    className: 'modal-dialog-temp-path',
+                },
+            );
             document.getElementById('file-input').click();
             return;
         }
@@ -584,6 +599,19 @@ class OpenModelicaViewer {
         }
 
         return [];
+    }
+
+    _getOpenModelicaTempFallbackPaths() {
+        return {
+            windows: 'C:\\Users\\<username>\\AppData\\Local\\Temp\\OpenModelica\\OMEdit',
+            linux: '/tmp/OpenModelica<username>/OMEdit',
+        };
+    }
+
+    _getLikelyOpenModelicaTempPath(paths) {
+        const platform = `${navigator.userAgent || ''} ${navigator.platform || ''}`.toLowerCase();
+        if (platform.includes('linux')) return paths.linux;
+        return paths.windows;
     }
 
     _inferWindowsUserHomeFromLocation() {
