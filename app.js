@@ -77,7 +77,7 @@ class OpenModelicaViewer {
 
     get activeFileId() { return this.plotManager.activeFileId; }
 
-    async loadFile(file) {
+    async loadFile(file, options = {}) {
         if (!file.name.endsWith('.mat')) { alert(i18n.t('invalidFile')); return; }
 
         try {
@@ -88,7 +88,7 @@ class OpenModelicaViewer {
 
             const fileId   = `f${this._nextFileId++}`;
             const baseName = file.name.replace(/\.mat$/i, '');
-            this.files.set(fileId, { file, buffer, contentHash, name: baseName });
+            this.files.set(fileId, { file, fileHandle: options.fileHandle || null, buffer, contentHash, name: baseName });
 
             // PlotManager takes ownership of the data
             this.plotManager.addFile(fileId, baseName, data);
@@ -118,7 +118,7 @@ class OpenModelicaViewer {
 
         document.getElementById('file-name').textContent = `Loading ${entry.name}.mat…`;
 
-        const buffer = await this._readLatestBuffer(entry);
+        const buffer = await this._readLatestBuffer(entry, { allowRepick: true });
         const contentHash = await this._hashBuffer(buffer);
 
         const data = await this.parser.parse(buffer);
@@ -141,7 +141,7 @@ class OpenModelicaViewer {
         const name = this._nextVersionName(source.name);
         document.getElementById('file-name').textContent = `Loading ${name}.mat…`;
 
-        const buffer = await this._readLatestBuffer(source);
+        const buffer = await this._readLatestBuffer(source, { allowRepick: true });
         const contentHash = await this._hashBuffer(buffer);
         const sourceHash = source.contentHash || (source.buffer ? await this._hashBuffer(source.buffer) : '');
         if (!source.contentHash && sourceHash) source.contentHash = sourceHash;
@@ -159,6 +159,7 @@ class OpenModelicaViewer {
         this._reapplyDerivedVariables(fileId, data);
         this.files.set(fileId, {
             file: source.file,
+            fileHandle: source.fileHandle || null,
             buffer,
             contentHash,
             name,
@@ -174,9 +175,36 @@ class OpenModelicaViewer {
         this._updateActionButtons();
     }
 
-    async _readLatestBuffer(entry) {
-        // Try native File.arrayBuffer() first (most reliable for re-reads),
-        // then fall back to the cached buffer from initial load.
+    async _readLatestBuffer(entry, options = {}) {
+        if (!entry.fileHandle && options.allowRepick && this._canUseFileSystemPicker()) {
+            try {
+                const picked = await this._pickSingleMatFileWithHandle();
+                if (!picked) {
+                    const err = new Error('File selection cancelled');
+                    err.name = 'AbortError';
+                    throw err;
+                }
+                entry.file = picked.file;
+                entry.fileHandle = picked.fileHandle;
+            } catch (err) {
+                if (err?.name === 'AbortError') throw err;
+                console.warn('Could not get a live file handle; falling back to stored file snapshot.', err);
+            }
+        }
+
+        if (entry.fileHandle?.getFile) {
+            try {
+                const file = await entry.fileHandle.getFile();
+                const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+                entry.file = file;
+                return buffer;
+            } catch (err) {
+                console.warn('Could not read latest file handle; falling back to stored file snapshot.', err);
+            }
+        }
+
+        // In Firefox the File object is refreshed on re-read. In Chromium it may
+        // be a snapshot, so the FileSystemFileHandle path above is preferred.
         let buffer;
         if (entry.file?.arrayBuffer) {
             try { buffer = await entry.file.arrayBuffer(); } catch (_) {}
@@ -184,6 +212,50 @@ class OpenModelicaViewer {
         if (!buffer) buffer = entry.buffer;
         if (!buffer) throw new Error('No buffer available');
         return buffer;
+    }
+
+    _canUseFileSystemPicker() {
+        return typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function';
+    }
+
+    async _pickMatFilesWithHandles(options = {}) {
+        const handles = await window.showOpenFilePicker({
+            multiple: options.multiple !== false,
+            types: [{
+                description: 'MAT files',
+                accept: { 'application/octet-stream': ['.mat'] },
+            }],
+        });
+
+        const picked = [];
+        for (const fileHandle of handles) {
+            const file = await fileHandle.getFile();
+            if (file.name.endsWith('.mat')) picked.push({ file, fileHandle });
+        }
+        return picked;
+    }
+
+    async _pickSingleMatFileWithHandle() {
+        if (!this._canUseFileSystemPicker()) return null;
+        const [picked] = await this._pickMatFilesWithHandles({ multiple: false });
+        return picked || null;
+    }
+
+    async _openMatFilesFromUser() {
+        if (this._canUseFileSystemPicker()) {
+            try {
+                const picked = await this._pickMatFilesWithHandles({ multiple: true });
+                for (const { file, fileHandle } of picked) {
+                    await this.loadFile(file, { fileHandle });
+                }
+                return;
+            } catch (err) {
+                if (err?.name === 'AbortError') return;
+                console.warn('File System Access picker failed; using file input fallback.', err);
+            }
+        }
+
+        document.getElementById('file-input').click();
     }
 
     _nextVersionName(name) {
@@ -329,7 +401,10 @@ class OpenModelicaViewer {
 
         // 📂 — just open file picker, no confirmation
         document.getElementById('load-new-file').addEventListener('click', () => {
-            document.getElementById('file-input').click();
+            this._openMatFilesFromUser().catch(err => {
+                console.error('Open file failed:', err);
+                alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+            });
         });
         this._initOpenFileMenu();
 
@@ -378,7 +453,10 @@ class OpenModelicaViewer {
         });
 
         document.getElementById('file-select-btn').addEventListener('click', () => {
-            document.getElementById('file-input').click();
+            this._openMatFilesFromUser().catch(err => {
+                console.error('Open file failed:', err);
+                alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+            });
         });
 
         document.getElementById('file-input').addEventListener('change', async (e) => {
@@ -413,6 +491,7 @@ class OpenModelicaViewer {
 
         document.getElementById('reload-file').addEventListener('click', () => {
             this.reloadActiveFile().catch(err => {
+                if (err?.name === 'AbortError') { this._updateTopBar(); return; }
                 console.error('Reload failed:', err);
                 alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
                 this._updateTopBar();
@@ -515,6 +594,7 @@ class OpenModelicaViewer {
         versionItem.addEventListener('click', () => {
             this._closeReloadFileMenu?.();
             this.reloadActiveFileAsNewVersion().catch(err => {
+                if (err?.name === 'AbortError') { this._updateTopBar(); return; }
                 console.error('Reload as new version failed:', err);
                 alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
                 this._updateTopBar();
