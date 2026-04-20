@@ -118,7 +118,7 @@ class OpenModelicaViewer {
 
         document.getElementById('file-name').textContent = `Loading ${entry.name}.mat…`;
 
-        const buffer = await this._readLatestBuffer(entry, { allowRepick: true });
+        const buffer = await this._readLatestBuffer(entry);
         const contentHash = await this._hashBuffer(buffer);
 
         const data = await this.parser.parse(buffer);
@@ -141,7 +141,7 @@ class OpenModelicaViewer {
         const name = this._nextVersionName(source.name);
         document.getElementById('file-name').textContent = `Loading ${name}.mat…`;
 
-        const buffer = await this._readLatestBuffer(source, { allowRepick: true });
+        const buffer = await this._readLatestBuffer(source);
         const contentHash = await this._hashBuffer(buffer);
         const sourceHash = source.contentHash || (source.buffer ? await this._hashBuffer(source.buffer) : '');
         if (!source.contentHash && sourceHash) source.contentHash = sourceHash;
@@ -175,23 +175,7 @@ class OpenModelicaViewer {
         this._updateActionButtons();
     }
 
-    async _readLatestBuffer(entry, options = {}) {
-        if (!entry.fileHandle && options.allowRepick && this._canUseFileSystemPicker()) {
-            try {
-                const picked = await this._pickSingleMatFileWithHandle();
-                if (!picked) {
-                    const err = new Error('File selection cancelled');
-                    err.name = 'AbortError';
-                    throw err;
-                }
-                entry.file = picked.file;
-                entry.fileHandle = picked.fileHandle;
-            } catch (err) {
-                if (err?.name === 'AbortError') throw err;
-                console.warn('Could not get a live file handle; falling back to stored file snapshot.', err);
-            }
-        }
-
+    async _readLatestBuffer(entry) {
         if (entry.fileHandle?.getFile) {
             try {
                 const file = await entry.fileHandle.getFile();
@@ -201,6 +185,20 @@ class OpenModelicaViewer {
             } catch (err) {
                 console.warn('Could not read latest file handle; falling back to stored file snapshot.', err);
             }
+        }
+
+        if (this._shouldReselectFileForReload(entry)) {
+            const file = await this._promptForReloadReselect(entry);
+            if (!file) {
+                const err = new Error('File selection cancelled');
+                err.name = 'AbortError';
+                throw err;
+            }
+            if (!file.name.endsWith('.mat')) throw new Error(i18n.t('invalidFile'));
+
+            entry.file = file;
+            entry.fileHandle = null;
+            return file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file);
         }
 
         // In Firefox the File object is refreshed on re-read. In Chromium it may
@@ -214,8 +212,113 @@ class OpenModelicaViewer {
         return buffer;
     }
 
+    _shouldReselectFileForReload(entry) {
+        return !entry.fileHandle && this._isChromeOrEdge();
+    }
+
+    _isChromeOrEdge() {
+        const brands = navigator.userAgentData?.brands?.map(b => b.brand).join(' ') || '';
+        if (/\b(Google Chrome|Microsoft Edge)\b/.test(brands)) return true;
+
+        const ua = navigator.userAgent || '';
+        return /\bEdg\//.test(ua) || (
+            /\bChrome\//.test(ua) &&
+            !/\b(Firefox|FxiOS|OPR|Opera|SamsungBrowser)\b/.test(ua)
+        );
+    }
+
+    _promptForReloadReselect(entry) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            const modal = document.createElement('div');
+            modal.className = 'modal-dialog modal-dialog-alert';
+
+            const content = document.createElement('div');
+            content.className = 'modal-content';
+
+            const icon = document.createElement('div');
+            icon.className = 'modal-icon';
+            icon.textContent = '🔄';
+            content.appendChild(icon);
+
+            const title = document.createElement('div');
+            title.className = 'modal-title';
+            title.textContent = i18n.t('reloadReselectTitle');
+            content.appendChild(title);
+
+            const message = document.createElement('div');
+            message.className = 'modal-message';
+            message.style.whiteSpace = 'pre-line';
+            message.textContent = i18n.t('reloadReselectBody').replace('{file}', `${entry.name}.mat`);
+            content.appendChild(message);
+
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.mat';
+            input.style.display = 'none';
+            document.body.appendChild(input);
+
+            const buttons = document.createElement('div');
+            buttons.className = 'modal-buttons';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'modal-btn modal-btn-cancel';
+            cancelBtn.textContent = i18n.t('cancel');
+
+            const selectBtn = document.createElement('button');
+            selectBtn.className = 'modal-btn modal-btn-confirm';
+            selectBtn.textContent = i18n.t('reloadReselectSelect');
+
+            buttons.append(cancelBtn, selectBtn);
+            content.appendChild(buttons);
+            modal.appendChild(content);
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            let settled = false;
+            const finish = (file = null) => {
+                if (settled) return;
+                settled = true;
+                document.removeEventListener('keydown', escHandler);
+                window.removeEventListener('focus', focusHandler);
+                input.remove();
+                Modal.close(overlay);
+                resolve(file);
+            };
+
+            const focusHandler = () => {
+                setTimeout(() => {
+                    if (!settled && !input.files?.length) finish(null);
+                }, 350);
+            };
+
+            const escHandler = (e) => {
+                if (e.key === 'Escape') finish(null);
+            };
+
+            cancelBtn.addEventListener('click', () => finish(null));
+            selectBtn.addEventListener('click', () => {
+                window.addEventListener('focus', focusHandler);
+                input.click();
+            });
+            input.addEventListener('change', () => finish(input.files?.[0] || null));
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) finish(null);
+            });
+            document.addEventListener('keydown', escHandler);
+
+            setTimeout(() => selectBtn.focus(), 100);
+            requestAnimationFrame(() => overlay.classList.add('show'));
+        });
+    }
+
     _canUseFileSystemPicker() {
-        return typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function';
+        return typeof window !== 'undefined' &&
+            window.location?.protocol !== 'file:' &&
+            window.isSecureContext !== false &&
+            typeof window.showOpenFilePicker === 'function';
     }
 
     async _pickMatFilesWithHandles(options = {}) {
@@ -235,12 +338,6 @@ class OpenModelicaViewer {
         return picked;
     }
 
-    async _pickSingleMatFileWithHandle() {
-        if (!this._canUseFileSystemPicker()) return null;
-        const [picked] = await this._pickMatFilesWithHandles({ multiple: false });
-        return picked || null;
-    }
-
     async _openMatFilesFromUser() {
         if (this._canUseFileSystemPicker()) {
             try {
@@ -256,6 +353,34 @@ class OpenModelicaViewer {
         }
 
         document.getElementById('file-input').click();
+    }
+
+    async _getDroppedMatFiles(dataTransfer) {
+        const picked = [];
+        const items = Array.from(dataTransfer?.items || []);
+        const canReadDroppedHandles = items.some(item => (
+            item.kind === 'file' && typeof item.getAsFileSystemHandle === 'function'
+        ));
+
+        if (canReadDroppedHandles) {
+            for (const item of items) {
+                if (item.kind !== 'file' || typeof item.getAsFileSystemHandle !== 'function') continue;
+                try {
+                    const fileHandle = await item.getAsFileSystemHandle();
+                    if (fileHandle?.kind !== 'file') continue;
+                    const file = await fileHandle.getFile();
+                    if (file.name.endsWith('.mat')) picked.push({ file, fileHandle });
+                } catch (err) {
+                    console.warn('Could not read dropped file handle.', err);
+                }
+            }
+
+            if (picked.length) return picked;
+        }
+
+        return Array.from(dataTransfer?.files || [])
+            .filter(file => file.name.endsWith('.mat'))
+            .map(file => ({ file, fileHandle: null }));
     }
 
     _nextVersionName(name) {
@@ -545,7 +670,10 @@ class OpenModelicaViewer {
         tempItem.textContent = i18n.t('openOpenModelicaTemp');
         tempItem.addEventListener('click', () => {
             this._closeOpenFileMenu?.();
-            this._copyOpenModelicaTempPathAndOpenPicker();
+            this._copyOpenModelicaTempPathAndOpenPicker().catch(err => {
+                console.error('Open OpenModelica temp failed:', err);
+                alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+            });
         });
         menu.appendChild(tempItem);
     }
@@ -622,7 +750,7 @@ class OpenModelicaViewer {
                     className: 'modal-dialog-temp-path',
                 },
             );
-            document.getElementById('file-input').click();
+            await this._openMatFilesFromUser();
             return;
         }
 
@@ -634,7 +762,7 @@ class OpenModelicaViewer {
             className: 'modal-dialog-temp-path',
         });
 
-        document.getElementById('file-input').click();
+        await this._openMatFilesFromUser();
     }
 
     async _copyTextToClipboard(text) {
@@ -1059,9 +1187,11 @@ class OpenModelicaViewer {
         dropZone.addEventListener('drop', async (e) => {
             e.preventDefault();
             dropZone.classList.remove('dragging');
-            const files = Array.from(e.dataTransfer.files || []).filter(f => f.name.endsWith('.mat'));
+            const files = await this._getDroppedMatFiles(e.dataTransfer);
             if (!files.length) { alert(i18n.t('invalidFile')); return; }
-            for (const f of files) await this.loadFile(f);
+            for (const { file, fileHandle } of files) {
+                await this.loadFile(file, { fileHandle });
+            }
         });
     }
 
