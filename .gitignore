@@ -1,10 +1,14 @@
-# Ignore everything
+# Ignore everything by default.
 *
 
-# Allow specific file types in root
-!*.js
-!*.html
-!*.css
+# Keep local/archive material out of sync.
+/old/
+/.codex/
+/.claude/
+/python/
 
-# Allow .gitignore itself
-!.gitignore
+# Sync only the root app files.
+!/.gitignore
+!/*.js
+!/*.html
+!/*.css

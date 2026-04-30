@@ -21,6 +21,8 @@ class PlotManager {
         this.syncAxes       = true;
         this.legendPosition = 'overlay';
         this._syncing       = false;
+        this._syncSourcePanelId = null;
+        this._pendingAxisSync = null;
         this.syncHover      = false;
         this.hoverProximity = true;
         this._hovering      = false;
@@ -2064,15 +2066,40 @@ class PlotManager {
     // ─── Axis sync (timeseries only) ───────────────────────────────
 
     _onRelayout(sourcePanelId, eventData) {
-        if (!this.syncAxes || this._syncing) return;
-        const hasRange     = eventData['xaxis.range[0]'] !== undefined;
-        const hasAutorange = eventData['xaxis.autorange'] === true;
-        if (!hasRange && !hasAutorange) return;
+        if (!this.syncAxes) return;
 
-        const update = hasAutorange
-            ? { 'xaxis.autorange': true }
-            : { 'xaxis.range[0]': eventData['xaxis.range[0]'], 'xaxis.range[1]': eventData['xaxis.range[1]'] };
+        const update = this._xAxisUpdateFromRelayout(eventData);
+        if (!update) return;
 
+        if (this._syncing) {
+            if (sourcePanelId === this._syncSourcePanelId) {
+                this._pendingAxisSync = { sourcePanelId, update };
+            }
+            return;
+        }
+
+        this._syncXAxisUpdate(sourcePanelId, update);
+    }
+
+    _xAxisUpdateFromRelayout(eventData) {
+        if (!eventData) return null;
+        if (eventData['xaxis.autorange'] === true) return { 'xaxis.autorange': true };
+
+        const range = eventData['xaxis.range'];
+        if (Array.isArray(range) && range.length >= 2) {
+            return { 'xaxis.range': [range[0], range[1]] };
+        }
+
+        const r0 = eventData['xaxis.range[0]'];
+        const r1 = eventData['xaxis.range[1]'];
+        if (r0 !== undefined && r1 !== undefined) {
+            return { 'xaxis.range': [r0, r1] };
+        }
+
+        return null;
+    }
+
+    _syncXAxisUpdate(sourcePanelId, update) {
         const targets = [];
         for (const [id, plot] of this.plots) {
             if (id !== sourcePanelId && plot.div && plot.mode === 'timeseries') targets.push(plot.div);
@@ -2080,8 +2107,16 @@ class PlotManager {
         if (targets.length === 0) return;
 
         this._syncing = true;
+        this._syncSourcePanelId = sourcePanelId;
         Promise.all(targets.map(div => Plotly.relayout(div, update)))
-            .finally(() => { this._syncing = false; });
+            .finally(() => {
+                this._syncing = false;
+                this._syncSourcePanelId = null;
+
+                const pending = this._pendingAxisSync;
+                this._pendingAxisSync = null;
+                if (pending) this._syncXAxisUpdate(pending.sourcePanelId, pending.update);
+            });
     }
 
     // ─── Synchronized hover ────────────────────────────────────────
