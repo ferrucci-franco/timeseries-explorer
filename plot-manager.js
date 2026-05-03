@@ -38,9 +38,14 @@ class PlotManager {
         return this.activeFileId ? (this.files.get(this.activeFileId)?.data ?? null) : null;
     }
 
-    addFile(fileId, name, data) {
+    addFile(fileId, name, data, transform = null) {
         const wasOne = this.files.size === 1;
-        this.files.set(fileId, { name, data });
+        this.files.set(fileId, {
+            name,
+            data,
+            transform: this._normalizeFileTransform(transform),
+            _transformCache: null,
+        });
         this.activeFileId = fileId;
         // If going 1→2 files, rebuild all panels so legend labels gain [filename]
         if (wasOne) this._rebuildAllPanels();
@@ -86,12 +91,31 @@ class PlotManager {
         const entry = this.files.get(fileId);
         if (!entry) return;
         entry.data = newData;
+        entry._transformCache = null;
         // Rebuild every panel that has at least one trace from this file
         for (const [panelId, plot] of this.plots) {
             const uses = plot.traces.some(t => t.fileId === fileId) ||
-                         plot.phaseTraces.some(t => t.fileId === fileId);
-            if (uses) this._rebuildPanel(panelId);
+                         plot.phaseTraces.some(t => t.fileId === fileId) ||
+                         plot.stateSlots?.fileId === fileId;
+            if (uses) this._rebuildPanel(panelId, { preserveView: true });
         }
+    }
+
+    setFileTransform(fileId, transform) {
+        const entry = this.files.get(fileId);
+        if (!entry) return;
+        entry.transform = this._normalizeFileTransform(transform);
+        entry._transformCache = null;
+        for (const [panelId, plot] of this.plots) {
+            const uses = plot.traces.some(t => t.fileId === fileId) ||
+                         plot.phaseTraces.some(t => t.fileId === fileId) ||
+                         plot.stateSlots?.fileId === fileId;
+            if (uses) this._rebuildPanel(panelId, { preserveView: true });
+        }
+    }
+
+    getFileTransform(fileId) {
+        return this._normalizeFileTransform(this.files.get(fileId)?.transform);
     }
 
     setExampleLayout(fileId, { tlId, trId, blId, brId }) {
@@ -259,6 +283,11 @@ class PlotManager {
         if (!plot) return;
         this._stopAnim(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); }
+        if (plot._cursorDocListeners) {
+            document.removeEventListener('mousemove', plot._cursorDocListeners.move);
+            document.removeEventListener('mouseup',   plot._cursorDocListeners.up);
+            plot._cursorDocListeners = null;
+        }
         if (plot.div)            { Plotly.purge(plot.div); }
         this.plots.delete(panelId);  // panel is gone from DOM — remove completely
     }
@@ -283,6 +312,7 @@ class PlotManager {
         plot.phasePending = { x: null, y: null, z: null, fileId: null };
         plot.stateSlots   = { x: [], dx: [], fileId: null };
         plot.equalAspect2D = false;
+        plot.cursors = this._defaultCursors();
         plot.animFrame    = 0;
 
         // Update UI — re-inject all buttons so view labels reflect the new mode
@@ -522,6 +552,7 @@ class PlotManager {
         plot.traces.splice(idx, 1);
         Plotly.deleteTraces(plot.div, idx);
         if (plot.traces.length === 0) this._clearPanel(panelId);
+        else this._syncCursorDisplay(panelId, plot);
     }
 
     _addTimeseries(panelId, varName, panelEl, plot) {
@@ -536,6 +567,7 @@ class PlotManager {
             // Update Y axis title: clear when 2+ traces (X/time label always stays)
             const layout = this._buildTimeLayout(plot);
             Plotly.relayout(plot.div, { 'yaxis.title': layout.yaxis.title });
+            this._syncCursorDisplay(panelId, plot);
         }
     }
 
@@ -579,6 +611,8 @@ class PlotManager {
     _createChart(panelId, panelEl) {
         const plot = this.plots.get(panelId);
         if (!this._hasContent(plot)) return;
+        const restoreView = plot._pendingViewRestore || null;
+        delete plot._pendingViewRestore;
 
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) placeholder.style.display = 'none';
@@ -593,11 +627,14 @@ class PlotManager {
 
         Plotly.newPlot(div, traces, layout, config).then(() => {
             this._refreshActionBtns(panelId);
-            // Apply home camera and axis decorations for 3D modes
-            if (this._is3D(plot.mode)) {
-                this._setCamera(panelId, 'home');
+            const finish3DSetup = () => {
+                if (!this._is3D(plot.mode)) return;
                 this._add3DAxisDecorations(plot);
-            }
+            };
+            const viewPromise = restoreView
+                ? this._restorePlotView(plot, restoreView)
+                : (this._is3D(plot.mode) ? this._setCamera(panelId, 'home') : Promise.resolve());
+            Promise.resolve(viewPromise).then(finish3DSetup);
             // Axis sync, hover sync, and scroll-wheel pan (timeseries only)
             if (plot.mode === 'timeseries') {
                 div.on('plotly_relayout', (ed) => this._onRelayout(panelId, ed));
@@ -688,6 +725,7 @@ class PlotManager {
                     return false;
                 }
                 toggleVisByName(clickedName);
+                setTimeout(() => this._syncCursorDisplay(panelId, plot), 0);
             });
             // Double-click isolates one trace (or restores all). Read _fullData after it settles.
             div.on('plotly_legenddoubleclick', () => {
@@ -707,6 +745,8 @@ class PlotManager {
             this._installLegendHoverHint(div);
             // Pre-allocate marker trace for hover sync on all modes
             this._initMarkerTrace(plot);
+            this._installCursorHandlers(panelId, plot);
+            this._syncCursorDisplay(panelId, plot);
             // Resize observer
             let timer;
             const ro = new ResizeObserver(() => {
@@ -783,6 +823,12 @@ class PlotManager {
         delete plot._arrowDxIdx;
         delete plot._xAbsMax;
         delete plot._yAbsMax;
+        if (plot._cursorDocListeners) {
+            document.removeEventListener('mousemove', plot._cursorDocListeners.move);
+            document.removeEventListener('mouseup',   plot._cursorDocListeners.up);
+            plot._cursorDocListeners = null;
+        }
+        delete plot._cursorHandlersDiv;
         if (plot.div) {
             // Remove state-anim container if present (wraps the plot div)
             const saContainer = plot.div.closest('.state-anim-container');
@@ -806,6 +852,7 @@ class PlotManager {
             existing.markerTraceIdx = null;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
+            existing.cursors = this._defaultCursors();
             existing.showCameraOverlay = false;
             existing.homeCamera = null;
             existing.animFrame     = 0;
@@ -817,6 +864,7 @@ class PlotManager {
             const placeholder = panelEl.querySelector('.layout-panel-placeholder');
             if (placeholder) { placeholder.style.display = ''; placeholder.classList.remove('drag-over'); }
             this._setPendingOverlay(panelId, panelEl, false);
+            this._hideCursorBox(panelEl);
             this._updatePlaceholder(panelId, panelEl);
         }
         this._refreshActionBtns(panelId);
@@ -838,6 +886,12 @@ class PlotManager {
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {
             compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && this.files.size > 1);
+        }
+        const cursorBtn = panelEl.querySelector('.cursor-btn');
+        if (cursorBtn) {
+            const enabled = has && plot?.mode === 'timeseries';
+            cursorBtn.disabled = !enabled;
+            cursorBtn.classList.toggle('active', !!plot?.cursors?.enabled);
         }
         // Show view-btn-group for 3D modes and state-anim (2D or 3D) with content
         const isAnim = plot?.mode === 'state-anim' && has;
@@ -864,7 +918,7 @@ class PlotManager {
             // Use first trace's file for the time column
             const firstFid = plot.traces[0]?.fileId;
             const timeVar  = this._getTimeVar(firstFid);
-            const times    = timeVar?.data ?? [];
+            const times    = firstFid ? this._getTransformedTimeData(firstFid) : [];
             const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
             headers.push(`time [${timeUnit}]`);
             columns.push(times);
@@ -875,12 +929,12 @@ class PlotManager {
                 const u    = this._extractUnit(v.description);
                 const name = this._traceName(t.varName, t.fileId);
                 headers.push(u ? `${name} [${u}]` : name);
-                columns.push(v.kind === 'parameter' ? Array.from(times).map(() => v.data[0]) : Array.from(v.data));
+                columns.push(Array.from(this._getTransformedVariableData(t.fileId, t.varName)));
             }
         } else if (plot.mode === 'phase2dt') {
             const firstFid = plot.phaseTraces[0]?.fileId;
             const timeVar  = this._getTimeVar(firstFid);
-            const times    = timeVar?.data ?? [];
+            const times    = firstFid ? this._getTransformedTimeData(firstFid) : [];
             const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
             headers.push(`time [${timeUnit}]`);
             columns.push(times);
@@ -893,8 +947,8 @@ class PlotManager {
                 const nx = this._traceName(pt.x, pt.fileId), ny = this._traceName(pt.y, pt.fileId);
                 headers.push(xu ? `${nx} [${xu}]` : nx);
                 headers.push(yu ? `${ny} [${yu}]` : ny);
-                columns.push(Array.from(xv.data));
-                columns.push(Array.from(yv.data));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.x)));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.y)));
             }
         } else if (plot.mode === 'phase2d') {
             for (const pt of plot.phaseTraces) {
@@ -906,8 +960,8 @@ class PlotManager {
                 const nx = this._traceName(pt.x, pt.fileId), ny = this._traceName(pt.y, pt.fileId);
                 headers.push(xu ? `${nx} [${xu}]` : nx);
                 headers.push(yu ? `${ny} [${yu}]` : ny);
-                columns.push(Array.from(xv.data));
-                columns.push(Array.from(yv.data));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.x)));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.y)));
             }
         } else if (plot.mode === 'phase3d') {
             for (const pt of plot.phaseTraces) {
@@ -920,9 +974,9 @@ class PlotManager {
                 headers.push(xu ? `${nx} [${xu}]` : nx);
                 headers.push(yu ? `${ny} [${yu}]` : ny);
                 headers.push(zu ? `${nz} [${zu}]` : nz);
-                columns.push(Array.from(xv.data));
-                columns.push(Array.from(yv.data));
-                columns.push(Array.from(zv.data));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.x)));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.y)));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.z)));
             }
         } else if (plot.mode === 'state-anim') {
             const slots = plot.stateSlots;
@@ -932,7 +986,7 @@ class PlotManager {
                 if (timeVar) {
                     const timeUnit = this._extractUnit(timeVar.description) || 's';
                     headers.push(`time [${timeUnit}]`);
-                    columns.push(Array.from(timeVar.data));
+                    columns.push(Array.from(this._getTransformedTimeData(slots.fileId)));
                 }
                 const dim = Math.min(slots.x.length, slots.x.length >= 3 ? 3 : 2);
                 // State variables first
@@ -942,7 +996,7 @@ class PlotManager {
                     if (!v) continue;
                     const u = this._extractUnit(v.description);
                     headers.push(u ? `${name} [${u}]` : name);
-                    columns.push(Array.from(v.data));
+                    columns.push(Array.from(this._getTransformedVariableData(slots.fileId, name)));
                 }
                 // Then derivatives
                 for (let i = 0; i < dim; i++) {
@@ -952,7 +1006,7 @@ class PlotManager {
                     if (!v) continue;
                     const u = this._extractUnit(v.description);
                     headers.push(u ? `${name} [${u}]` : name);
-                    columns.push(Array.from(v.data));
+                    columns.push(Array.from(this._getTransformedVariableData(slots.fileId, name, { includeYOffset: false })));
                 }
             }
         }
@@ -1062,7 +1116,7 @@ class PlotManager {
             const d = this.files.get(fileId)?.data;
             const variable = d?.variables[varName];
             if (!variable) return;
-            const stats = this._statsForValues(variable.data);
+            const stats = this._statsForValues(this._getTransformedVariableData(fileId, varName));
             if (!stats) return;
             entries.push({
                 name: this._traceName(varName, fileId),
@@ -1139,6 +1193,115 @@ class PlotManager {
         return { min, max, mean: sum / n, rms: Math.sqrt(sumSq / n) };
     }
 
+    _normalizeFileTransform(transform = null) {
+        const t = transform || {};
+        const finiteOrZero = (value) => {
+            const n = Number(value);
+            return Number.isFinite(n) ? n : 0;
+        };
+        const finiteOrNull = (value) => {
+            if (value === '' || value === null || value === undefined) return null;
+            const n = Number(value);
+            return Number.isFinite(n) ? n : null;
+        };
+        return {
+            timeShift: finiteOrZero(t.timeShift),
+            yOffset: finiteOrZero(t.yOffset),
+            cropStart: finiteOrNull(t.cropStart),
+            cropEnd: finiteOrNull(t.cropEnd),
+        };
+    }
+
+    _isFileTransformActive(transform) {
+        const t = this._normalizeFileTransform(transform);
+        return t.timeShift !== 0 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    }
+
+    _fileTransform(fileId) {
+        return this._normalizeFileTransform(this.files.get(fileId)?.transform);
+    }
+
+    _transformCache(fileId) {
+        const entry = this.files.get(fileId);
+        if (!entry) return null;
+        if (!entry._transformCache) entry._transformCache = { indexData: null, series: new Map() };
+        return entry._transformCache;
+    }
+
+    _getTransformIndexData(fileId) {
+        const cache = this._transformCache(fileId);
+        if (cache?.indexData) return cache.indexData;
+
+        const timeVar = this._getTimeVar(fileId);
+        const rawTimes = timeVar?.data || [];
+        const transform = this._fileTransform(fileId);
+        const cropped = transform.cropStart !== null || transform.cropEnd !== null;
+
+        let result;
+        if (!rawTimes.length) {
+            result = { indexes: null, times: [] };
+        } else if (transform.timeShift === 0 && !cropped) {
+            result = { indexes: null, times: rawTimes };
+        } else {
+            let lo = transform.cropStart ?? -Infinity;
+            let hi = transform.cropEnd ?? Infinity;
+            if (lo > hi) [lo, hi] = [hi, lo];
+
+            const indexes = [];
+            const times = [];
+            for (let i = 0; i < rawTimes.length; i++) {
+                const rawTime = rawTimes[i];
+                if (!cropped || (rawTime >= lo && rawTime <= hi)) {
+                    indexes.push(i);
+                    times.push(rawTime + transform.timeShift);
+                }
+            }
+            result = { indexes: cropped ? indexes : null, times };
+        }
+
+        if (cache) cache.indexData = result;
+        return result;
+    }
+
+    _getTransformedTimeData(fileId = this.activeFileId) {
+        return this._getTransformIndexData(fileId).times;
+    }
+
+    _getTransformedVariableData(fileId, varName, options = {}) {
+        const includeYOffset = options.includeYOffset !== false;
+        const d = this.files.get(fileId)?.data;
+        const variable = d?.variables?.[varName];
+        if (!variable) return [];
+        if (variable.kind === 'abscissa') return this._getTransformedTimeData(fileId);
+
+        const transform = this._fileTransform(fileId);
+        const yOffset = includeYOffset ? transform.yOffset : 0;
+        const indexData = this._getTransformIndexData(fileId);
+        const cache = this._transformCache(fileId);
+        const cacheKey = `${varName}\u0000${includeYOffset ? 'y' : 'n'}`;
+        if (cache?.series.has(cacheKey)) return cache.series.get(cacheKey);
+
+        let values;
+        if (variable.kind === 'parameter') {
+            const base = Number(variable.data?.[0]);
+            const value = Number.isFinite(base) ? base + yOffset : base;
+            const n = Math.max(1, indexData.times.length);
+            values = new Array(n).fill(value);
+        } else if (!indexData.indexes && yOffset === 0) {
+            values = variable.data;
+        } else if (!indexData.indexes) {
+            values = variable.data.map(v => Number.isFinite(v) ? v + yOffset : v);
+        } else {
+            values = indexData.indexes.map(i => {
+                const v = variable.data[i];
+                return Number.isFinite(v) ? v + yOffset : v;
+            });
+        }
+
+        if (cache) cache.series.set(cacheKey, values);
+        return values;
+    }
+
     // ─── Trace / layout builders ───────────────────────────────────
 
     _buildPlotData(plot) {
@@ -1158,6 +1321,8 @@ class PlotManager {
         const variable = fileData.variables[t.varName];
         if (!variable) return null;
         const timeVar  = this._getTimeVar(t.fileId);
+        const timeData = this._getTransformedTimeData(t.fileId);
+        const values   = this._getTransformedVariableData(t.fileId, t.varName);
         const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
         const unit     = this._extractUnit(variable.description);
         const name     = this._traceName(t.varName, t.fileId);
@@ -1166,23 +1331,24 @@ class PlotManager {
         const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
 
         if (variable.kind === 'parameter') {
-            const tStart = timeVar ? timeVar.data[0]                       : 0;
-            const tEnd   = timeVar ? timeVar.data[timeVar.data.length - 1] : 1;
+            const tStart = timeData.length ? timeData[0] : 0;
+            const tEnd   = timeData.length ? timeData[timeData.length - 1] : 1;
+            const yValue = values.length ? values[0] : variable.data[0];
             return {
-                x: [tStart, tEnd], y: [variable.data[0], variable.data[0]],
+                x: [tStart, tEnd], y: [yValue, yValue],
                 name, type: 'scatter', mode: 'lines',
                 visible: t.visible ?? true,
                 line: { color: t.color, width: 1.5, dash: 'dash' },
-                hovertemplate: `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br><b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(variable.data[0])}<extra></extra>`,
+                hovertemplate: `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br><b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}<extra></extra>`,
             };
         }
         const isStep = variable.dataType === 'boolean';
-        const useGL = !isStep && variable.data.length >= PlotManager.GL_POINT_THRESHOLD;
+        const useGL = !isStep && values.length >= PlotManager.GL_POINT_THRESHOLD;
         const line = useGL
             ? { color: t.color, width: 1.5 }
             : { color: t.color, width: 1.5, shape: isStep ? 'hv' : 'linear' };
         return {
-            x: timeVar ? timeVar.data : [], y: variable.data,
+            x: timeData, y: values,
             name, type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
             visible: t.visible ?? true,
             line,
@@ -1226,9 +1392,11 @@ class PlotManager {
             if (!d) return null;
             const xVar = d.variables[pt.x], yVar = d.variables[pt.y];
             if (!xVar || !yVar) return null;
-            const useGL = xVar.data.length >= PlotManager.GL_POINT_THRESHOLD || yVar.data.length >= PlotManager.GL_POINT_THRESHOLD;
+            const xData = this._getTransformedVariableData(pt.fileId, pt.x);
+            const yData = this._getTransformedVariableData(pt.fileId, pt.y);
+            const useGL = xData.length >= PlotManager.GL_POINT_THRESHOLD || yData.length >= PlotManager.GL_POINT_THRESHOLD;
             return {
-                x: xVar.data, y: yVar.data,
+                x: xData, y: yData,
                 name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
                 type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
                 visible: pt.visible ?? true,
@@ -1282,7 +1450,9 @@ class PlotManager {
             const timeVar = this._getTimeVar(pt.fileId);
             if (!xVar || !yVar) return null;
             return {
-                x: timeVar ? timeVar.data : [], y: xVar.data, z: yVar.data,
+                x: timeVar ? this._getTransformedTimeData(pt.fileId) : [],
+                y: this._getTransformedVariableData(pt.fileId, pt.x),
+                z: this._getTransformedVariableData(pt.fileId, pt.y),
                 name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
                 type: 'scatter3d', mode: 'lines',
                 visible: pt.visible ?? true,
@@ -1299,7 +1469,9 @@ class PlotManager {
             const xVar = d.variables[pt.x], yVar = d.variables[pt.y], zVar = d.variables[pt.z];
             if (!xVar || !yVar || !zVar) return null;
             return {
-                x: xVar.data, y: yVar.data, z: zVar.data,
+                x: this._getTransformedVariableData(pt.fileId, pt.x),
+                y: this._getTransformedVariableData(pt.fileId, pt.y),
+                z: this._getTransformedVariableData(pt.fileId, pt.z),
                 name: this._traceName(`${pt.x} / ${pt.y} / ${pt.z}`, pt.fileId),
                 type: 'scatter3d', mode: 'lines',
                 visible: pt.visible ?? true,
@@ -1342,13 +1514,13 @@ class PlotManager {
             if (!d) continue;
             if (isTimez) {
                 const tv = this._getTimeVar(pt.fileId);
-                xArrays.push(tv?.data);
-                yArrays.push(d.variables[pt.x]?.data);
-                zArrays.push(d.variables[pt.y]?.data);
+                xArrays.push(tv ? this._getTransformedTimeData(pt.fileId) : []);
+                yArrays.push(d.variables[pt.x] ? this._getTransformedVariableData(pt.fileId, pt.x) : []);
+                zArrays.push(d.variables[pt.y] ? this._getTransformedVariableData(pt.fileId, pt.y) : []);
             } else {
-                xArrays.push(d.variables[pt.x]?.data);
-                yArrays.push(d.variables[pt.y]?.data);
-                zArrays.push(d.variables[pt.z]?.data);
+                xArrays.push(d.variables[pt.x] ? this._getTransformedVariableData(pt.fileId, pt.x) : []);
+                yArrays.push(d.variables[pt.y] ? this._getTransformedVariableData(pt.fileId, pt.y) : []);
+                zArrays.push(d.variables[pt.z] ? this._getTransformedVariableData(pt.fileId, pt.z) : []);
             }
         }
         const xRange = this._rangeIncluding0(xArrays);
@@ -1425,6 +1597,8 @@ class PlotManager {
         const plot = this.plots.get(panelId);
         const dim = plot?.stateAnimDim || 2;
         if (!plot || plot.stateSlots.x.length < dim) return;
+        const restoreView = plot._pendingViewRestore || null;
+        delete plot._pendingViewRestore;
 
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) placeholder.style.display = 'none';
@@ -1524,7 +1698,8 @@ class PlotManager {
         const d = this.files.get(slots.fileId)?.data;
         const timeVar = this._getTimeVar(slots.fileId);
         if (!d || !timeVar) return;
-        const nPts = timeVar.data.length;
+        const nPts = this._getTransformedTimeData(slots.fileId).length;
+        if (!nPts) return;
 
         // Set scrubber range
         const scrubber = controls.querySelector('.sa-scrubber');
@@ -1534,10 +1709,16 @@ class PlotManager {
         const { traces, layout } = this._buildPlotData(plot);
         const config = { responsive: true, displayModeBar: false, scrollZoom: true };
         Plotly.newPlot(div, traces, layout, config).then(() => {
-            // Add bold axis lines + arrowheads for 3D
-            if (is3D) this._add3DAxisDecorations(plot);
-            this._stateAnimUpdateFrame(plot, 0);
-            this._updateCameraOverlay(plot);
+            const restoreAndDecorate = () => {
+                if (restoreView) return this._restorePlotView(plot, restoreView);
+                return Promise.resolve();
+            };
+            restoreAndDecorate().then(() => {
+                // Add bold axis lines + arrowheads for 3D
+                if (is3D) this._add3DAxisDecorations(plot);
+                this._stateAnimUpdateFrame(plot, Math.min(plot.animFrame || 0, nPts - 1));
+                this._updateCameraOverlay(plot);
+            });
             div.on('plotly_relayout', () => this._updateCameraOverlay(plot));
             div.on('plotly_afterplot', () => this._updateCameraOverlay(plot));
             // Resize observer
@@ -1623,9 +1804,9 @@ class PlotManager {
         if (!d) return [];
         const is3D = slots.x.length >= 3;
 
-        const xData = d.variables[slots.x[0]]?.data || [];
-        const yData = d.variables[slots.x[1]]?.data || [];
-        const zData = is3D ? (d.variables[slots.x[2]]?.data || []) : null;
+        const xData = d.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : [];
+        const yData = d.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : [];
+        const zData = is3D && d.variables[slots.x[2]] ? this._getTransformedVariableData(slots.fileId, slots.x[2]) : null;
 
         const traces = [];
 
@@ -1685,9 +1866,9 @@ class PlotManager {
             const zTitleFont = { color: '#3498db', size: 13, family: 'system-ui, sans-serif', weight: 700 };
             // Explicit ranges including 0 so origin-anchored axis lines don't expand autorange.
             const d = this.files.get(slots.fileId)?.data;
-            const xRange = this._rangeIncluding0([d?.variables[slots.x[0]]?.data]);
-            const yRange = this._rangeIncluding0([d?.variables[slots.x[1]]?.data]);
-            const zRange = this._rangeIncluding0([d?.variables[slots.x[2]]?.data]);
+            const xRange = this._rangeIncluding0([d?.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : []]);
+            const yRange = this._rangeIncluding0([d?.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : []]);
+            const zRange = this._rangeIncluding0([d?.variables[slots.x[2]] ? this._getTransformedVariableData(slots.fileId, slots.x[2]) : []]);
             return {
                 paper_bgcolor: bg, plot_bgcolor: bg,
                 font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
@@ -1737,16 +1918,18 @@ class PlotManager {
         const timeVar = this._getTimeVar(slots.fileId);
         if (!d || !timeVar) return;
 
-        const nPts = timeVar.data.length;
+        const timeData = this._getTransformedTimeData(slots.fileId);
+        const nPts = timeData.length;
+        if (!nPts) return;
         frame = Math.max(0, Math.min(nPts - 1, frame));
         plot.animFrame = frame;
 
         const is3D = slots.x.length >= 3;
         const cfg = plot.stateConfig;
 
-        const xAll = d.variables[slots.x[0]]?.data || [];
-        const yAll = d.variables[slots.x[1]]?.data || [];
-        const zAll = is3D ? (d.variables[slots.x[2]]?.data || []) : null;
+        const xAll = d.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : [];
+        const yAll = d.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : [];
+        const zAll = is3D && d.variables[slots.x[2]] ? this._getTransformedVariableData(slots.fileId, slots.x[2]) : null;
 
         const xNow = xAll[frame] || 0;
         const yNow = yAll[frame] || 0;
@@ -1783,9 +1966,12 @@ class PlotManager {
                 const dx1Var = slots.dx[1] ? d.variables[slots.dx[1]] : null;
                 const dx2Var = slots.dx[2] ? d.variables[slots.dx[2]] : null;
                 if (cfg.showArrowDx && dx0Var && dx1Var && dx2Var) {
-                    let dxVal = dx0Var.data[frame] || 0;
-                    let dyVal = dx1Var.data[frame] || 0;
-                    let dzVal = dx2Var.data[frame] || 0;
+                    const dx0Data = this._getTransformedVariableData(slots.fileId, slots.dx[0], { includeYOffset: false });
+                    const dx1Data = this._getTransformedVariableData(slots.fileId, slots.dx[1], { includeYOffset: false });
+                    const dx2Data = this._getTransformedVariableData(slots.fileId, slots.dx[2], { includeYOffset: false });
+                    let dxVal = dx0Data[frame] || 0;
+                    let dyVal = dx1Data[frame] || 0;
+                    let dzVal = dx2Data[frame] || 0;
                     if (cfg.normalizeDx) {
                         const mag = Math.sqrt(dxVal * dxVal + dyVal * dyVal + dzVal * dzVal);
                         if (mag > 1e-12) {
@@ -1838,8 +2024,10 @@ class PlotManager {
                 const dx0Var = slots.dx[0] ? d.variables[slots.dx[0]] : null;
                 const dx1Var = slots.dx[1] ? d.variables[slots.dx[1]] : null;
                 if (dx0Var && dx1Var) {
-                    let dxVal = dx0Var.data[frame] || 0;
-                    let dyVal = dx1Var.data[frame] || 0;
+                    const dx0Data = this._getTransformedVariableData(slots.fileId, slots.dx[0], { includeYOffset: false });
+                    const dx1Data = this._getTransformedVariableData(slots.fileId, slots.dx[1], { includeYOffset: false });
+                    let dxVal = dx0Data[frame] || 0;
+                    let dyVal = dx1Data[frame] || 0;
                     if (cfg.normalizeDx) {
                         // Normalize in pixel space so the arrow has a constant on-screen length
                         // regardless of direction or axis aspect asymmetry.
@@ -1907,7 +2095,7 @@ class PlotManager {
             if (scrubber) scrubber.value = frame;
             const timeLabel = panelEl.querySelector('.sa-time-label');
             const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
-            if (timeLabel) timeLabel.textContent = `t = ${timeVar.data[frame].toPrecision(4)} ${timeUnit}`;
+            if (timeLabel) timeLabel.textContent = `t = ${timeData[frame].toPrecision(4)} ${timeUnit}`;
         }
     }
 
@@ -2023,8 +2211,10 @@ class PlotManager {
 
             const timeVar = this._getTimeVar(plot.stateSlots.fileId);
             if (!timeVar) return;
-            const nPts = timeVar.data.length;
-            const totalDuration = timeVar.data[nPts - 1] - timeVar.data[0];
+            const timeData = this._getTransformedTimeData(plot.stateSlots.fileId);
+            const nPts = timeData.length;
+            if (!nPts) return;
+            const totalDuration = timeData[nPts - 1] - timeData[0];
             // Base wall-clock duration for a full playthrough at ×1 speed (Tend-independent)
             const BASE_WALLCLOCK_SEC = 20;
 
@@ -2037,12 +2227,12 @@ class PlotManager {
 
                 // Advance so a full playthrough takes BASE_WALLCLOCK_SEC / speed, regardless of Tend
                 const simTimeDelta = dt * (totalDuration / BASE_WALLCLOCK_SEC) * plot.animSpeed;
-                const currentSimTime = timeVar.data[plot.animFrame];
+                const currentSimTime = timeData[plot.animFrame];
                 const targetSimTime = currentSimTime + simTimeDelta;
 
                 // Find next frame
                 let nextFrame = plot.animFrame;
-                while (nextFrame < nPts - 1 && timeVar.data[nextFrame] < targetSimTime) nextFrame++;
+                while (nextFrame < nPts - 1 && timeData[nextFrame] < targetSimTime) nextFrame++;
 
                 if (nextFrame >= nPts - 1) {
                     // Loop back to start
@@ -2141,11 +2331,11 @@ class PlotManager {
 
             if (plot.mode === 'timeseries') {
                 Plotly.relayout(plot.div, {
-                    shapes: [{
+                    shapes: this._panelGuideShapes(plot, [{
                         type: 'line', xref: 'x', yref: 'paper',
                         x0: xVal, x1: xVal, y0: 0, y1: 1,
                         line: { color: 'rgba(120,120,120,0.6)', width: 1, dash: 'dot' },
-                    }]
+                    }]),
                 });
                 if (plot.markerTraceIdx != null) {
                     const xs = [], ys = [];
@@ -2153,9 +2343,10 @@ class PlotManager {
                         const hidden  = t.visible === 'legendonly' || t.visible === false;
                         const d       = this.files.get(t.fileId)?.data;
                         const v       = d?.variables[t.varName];
-                        const tvar    = this._getTimeVar(t.fileId);
-                        const tidx    = this._findTimeIdx(tvar?.data, xVal);
-                        if (!hidden && v && v.kind !== 'parameter' && v.data) { xs.push(xVal); ys.push(v.data[tidx]); }
+                        const tdata   = this._getTransformedTimeData(t.fileId);
+                        const tidx    = this._findTimeIdx(tdata, xVal);
+                        const ydata   = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
+                        if (!hidden && v && v.kind !== 'parameter' && ydata.length) { xs.push(xVal); ys.push(ydata[tidx]); }
                         else { xs.push(null); ys.push(null); }
                     });
                     Plotly.restyle(plot.div, { x: [xs], y: [ys], visible: true }, [plot.markerTraceIdx]);
@@ -2165,12 +2356,13 @@ class PlotManager {
                     if (t.visible === 'legendonly' || t.visible === false) return;
                     const d    = this.files.get(t.fileId)?.data;
                     const v    = d?.variables[t.varName];
-                    const tvar = this._getTimeVar(t.fileId);
-                    const tidx = this._findTimeIdx(tvar?.data, xVal);
-                    if (v && v.kind !== 'parameter' && v.data) {
+                    const tdata = this._getTransformedTimeData(t.fileId);
+                    const tidx = this._findTimeIdx(tdata, xVal);
+                    const ydata = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
+                    if (v && v.kind !== 'parameter' && ydata.length) {
                         const unit  = this._extractUnit(v.description);
                         const label = this._traceName(t.varName, t.fileId);
-                        lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatHTMLNumber(v.data[tidx])}${unit ? ' ' + this._escapeHTML(unit) : ''}`);
+                        lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatHTMLNumber(ydata[tidx])}${unit ? ' ' + this._escapeHTML(unit) : ''}`);
                     }
                 });
                 this._showInfoBox(panelEl, lines.join('<br>'));
@@ -2183,11 +2375,13 @@ class PlotManager {
                         if (!d) return;
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                         if (!xv || !yv) return;
-                        const tvar = this._getTimeVar(pt2.fileId);
-                        const tidx = this._findTimeIdx(tvar?.data, xVal);
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
-                        Plotly.restyle(plot.div, { x: [[xv.data[tidx]]], y: [[yv.data[tidx]]], visible: true }, [midx]);
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                        Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], visible: true }, [midx]);
                     });
                 }
                 const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
@@ -2197,11 +2391,13 @@ class PlotManager {
                     if (!d) return;
                     const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                     if (xv && yv) {
-                        const tvar = this._getTimeVar(pt2.fileId);
-                        const tidx = this._findTimeIdx(tvar?.data, xVal);
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
                         const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xv.data[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(yv.data[tidx])}${yu ? ' ' + this._escapeHTML(yu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${yu ? ' ' + this._escapeHTML(yu) : ''}`);
                     }
                 });
                 this._showInfoBox(panelEl, lines.join('<br>'));
@@ -2214,11 +2410,13 @@ class PlotManager {
                         if (!d) return;
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                         if (!xv || !yv) return;
-                        const tvar = this._getTimeVar(pt2.fileId);
-                        const tidx = this._findTimeIdx(tvar?.data, xVal);
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
-                        Plotly.restyle(plot.div, { x: [[xVal]], y: [[xv.data[tidx]]], z: [[yv.data[tidx]]], visible: true }, [midx]);
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                        Plotly.restyle(plot.div, { x: [[xVal]], y: [[xdata[tidx]]], z: [[ydata[tidx]]], visible: true }, [midx]);
                     });
                 }
                 const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
@@ -2228,11 +2426,13 @@ class PlotManager {
                     if (!d) return;
                     const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                     if (xv && yv) {
-                        const tvar = this._getTimeVar(pt2.fileId);
-                        const tidx = this._findTimeIdx(tvar?.data, xVal);
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
                         const xu = this._extractUnit(xv.description), zu = this._extractUnit(yv.description);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xv.data[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(yv.data[tidx])}${zu ? ' ' + this._escapeHTML(zu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${zu ? ' ' + this._escapeHTML(zu) : ''}`);
                     }
                 });
                 this._showInfoBox(panelEl, lines.join('<br>'));
@@ -2245,11 +2445,14 @@ class PlotManager {
                         if (!d) return;
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
                         if (!xv || !yv || !zv) return;
-                        const tvar = this._getTimeVar(pt2.fileId);
-                        const tidx = this._findTimeIdx(tvar?.data, xVal);
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
-                        Plotly.restyle(plot.div, { x: [[xv.data[tidx]]], y: [[yv.data[tidx]]], z: [[zv.data[tidx]]], visible: true }, [midx]);
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                        const zdata = this._getTransformedVariableData(pt2.fileId, pt2.z);
+                        Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], z: [[zdata[tidx]]], visible: true }, [midx]);
                     });
                 }
                 const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
@@ -2259,12 +2462,14 @@ class PlotManager {
                     if (!d) return;
                     const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
                     if (xv && yv && zv) {
-                        const tvar = this._getTimeVar(pt2.fileId);
-                        const tidx = this._findTimeIdx(tvar?.data, xVal);
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
                         [xv, yv, zv].forEach((v, vi) => {
                             const name = [pt2.x, pt2.y, pt2.z][vi];
+                            const dataName = [pt2.x, pt2.y, pt2.z][vi];
+                            const values = this._getTransformedVariableData(pt2.fileId, dataName);
                             const u = this._extractUnit(v.description);
-                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(name)} = ${this._formatHTMLNumber(v.data[tidx])}${u ? ' ' + this._escapeHTML(u) : ''}`);
+                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(name)} = ${this._formatHTMLNumber(values[tidx])}${u ? ' ' + this._escapeHTML(u) : ''}`);
                         });
                     }
                 });
@@ -2274,7 +2479,7 @@ class PlotManager {
                 // Sync: jump state-anim to the hovered time
                 const tvar = this._getTimeVar(plot.stateSlots.fileId);
                 if (tvar) {
-                    const tidx = this._findTimeIdx(tvar.data, xVal);
+                    const tidx = this._findTimeIdx(this._getTransformedTimeData(plot.stateSlots.fileId), xVal);
                     this._stateAnimUpdateFrame(plot, tidx);
                 }
             }
@@ -2293,7 +2498,7 @@ class PlotManager {
             const panelEl = plot.div.closest('.layout-panel');
             this._hideInfoBox(panelEl);
             if (plot.mode === 'timeseries') {
-                Plotly.relayout(plot.div, { shapes: [] });
+                Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot) });
             }
             if (plot.markerTraceIdx != null) {
                 const idxList = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx : [plot.markerTraceIdx];
@@ -2322,6 +2527,403 @@ class PlotManager {
     _hideInfoBox(panelEl) {
         if (!panelEl) return;
         const box = panelEl.querySelector('.hover-info-box');
+        if (box) box.style.display = 'none';
+    }
+
+    // ─── Measurement cursors (time-series panels) ─────────────────
+
+    _defaultCursors() {
+        return { enabled: false, a: null, b: null, traceA: null, traceB: null };
+    }
+
+    _toggleCursors(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot || plot.mode !== 'timeseries' || !plot.div) return;
+        if (!plot.cursors) plot.cursors = this._defaultCursors();
+        plot.cursors.enabled = !plot.cursors.enabled;
+        if (plot.cursors.enabled) {
+            this._initializeCursorPositionsInView(plot);
+            this._ensureCursorBoxDrag(panelId, plot);
+        }
+        else this._hideCursorBox(plot.div.closest('.layout-panel'));
+        this._syncCursorDisplay(panelId, plot);
+        this._refreshActionBtns(panelId);
+    }
+
+    _ensureCursorPositions(plot) {
+        const range = plot.div?._fullLayout?.xaxis?.range;
+        const trace = this._resolveCursorTrace(plot, 'a') || this._resolveCursorTrace(plot, 'b');
+        const times = trace ? this._getTransformedTimeData(trace.fileId) : [];
+        const start = Number.isFinite(range?.[0]) ? range[0] : times[0];
+        const end = Number.isFinite(range?.[1]) ? range[1] : times[times.length - 1];
+        if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+        const span = end - start || 1;
+        if (!Number.isFinite(plot.cursors.a)) plot.cursors.a = start + span * 0.25;
+        if (!Number.isFinite(plot.cursors.b)) plot.cursors.b = start + span * 0.75;
+    }
+
+    _initializeCursorPositionsInView(plot) {
+        const range = plot.div?._fullLayout?.xaxis?.range;
+        const trace = this._resolveCursorTrace(plot, 'a') || this._resolveCursorTrace(plot, 'b');
+        const times = trace ? this._getTransformedTimeData(trace.fileId) : [];
+        const start = Number.isFinite(range?.[0]) ? range[0] : times[0];
+        const end = Number.isFinite(range?.[1]) ? range[1] : times[times.length - 1];
+        if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+        const span = end - start || 1;
+        plot.cursors.a = start + span * 0.25;
+        plot.cursors.b = start + span * 0.75;
+    }
+
+    _resolveCursorTrace(plot, which) {
+        if (!plot?.traces?.length || !plot.cursors) return null;
+        const visibleTraces = plot.traces.filter(t => t.visible !== false && t.visible !== 'legendonly');
+        if (!visibleTraces.length) return null;
+        const key = which === 'b' ? 'traceB' : 'traceA';
+        if (!plot.cursors[key] && plot.cursors.trace) {
+            plot.cursors[key] = plot.cursors.trace;
+        }
+        const preferred = plot.cursors[key];
+        if (preferred) {
+            const found = visibleTraces.find(t => t.fileId === preferred.fileId && t.varName === preferred.varName);
+            if (found) return found;
+        }
+        const fallback = which === 'b'
+            ? (visibleTraces[1] || visibleTraces[0])
+            : visibleTraces[0];
+        if (fallback) plot.cursors[key] = { fileId: fallback.fileId, varName: fallback.varName };
+        return fallback;
+    }
+
+    _sameCursorTrace(traceA, traceB) {
+        return !!(traceA && traceB && traceA.fileId === traceB.fileId && traceA.varName === traceB.varName);
+    }
+
+    _cursorShapes(plot) {
+        if (!plot?.cursors?.enabled) return [];
+        const c = plot.cursors;
+        if (!Number.isFinite(c.a) || !Number.isFinite(c.b)) return [];
+        const traceA = this._resolveCursorTrace(plot, 'a');
+        const traceB = this._resolveCursorTrace(plot, 'b');
+        const colorA = traceA?.color || '#ff9800';
+        const colorB = traceB?.color || '#2196f3';
+        const sameTrace = this._sameCursorTrace(traceA, traceB);
+        const shapes = [
+            this._cursorShape(c.a, colorA, 'solid'),
+            this._cursorShape(c.b, colorB, sameTrace ? 'dash' : 'solid'),
+        ];
+        const dotPairs = [
+            { trace: traceA, x: c.a, color: colorA },
+            { trace: traceB, x: c.b, color: colorB },
+        ];
+        for (const { trace, x, color } of dotPairs) {
+            if (!trace) continue;
+            const times  = this._getTransformedTimeData(trace.fileId);
+            const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+            const mode   = this._traceInterpolationMode(trace);
+            const y = this._interpolateAt(times, values, x, mode);
+            if (!Number.isFinite(y)) continue;
+            shapes.push(this._cursorDotShape(x, y, color));
+        }
+        return shapes;
+    }
+
+    _cursorShape(x, color, dash = 'solid') {
+        return {
+            type: 'line',
+            xref: 'x',
+            yref: 'paper',
+            x0: x,
+            x1: x,
+            y0: 0,
+            y1: 1,
+            line: { color, width: 2, dash },
+        };
+    }
+
+    _cursorDotShape(x, y, color) {
+        const r = 5;
+        return {
+            type: 'circle',
+            xref: 'x', yref: 'y',
+            xsizemode: 'pixel', ysizemode: 'pixel',
+            xanchor: x, yanchor: y,
+            x0: -r, x1: r, y0: -r, y1: r,
+            fillcolor: color,
+            line: { color, width: 0 },
+        };
+    }
+
+    _traceInterpolationMode(trace) {
+        if (!trace) return 'linear';
+        const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+        if (!variable) return 'linear';
+        if (variable.dataType === 'boolean') return 'step';
+        return 'linear';
+    }
+
+    _panelGuideShapes(plot, extra = []) {
+        return [...this._cursorShapes(plot), ...extra];
+    }
+
+    _syncCursorDisplay(panelId, plot) {
+        if (!plot?.div || plot.mode !== 'timeseries') return;
+        if (plot.cursors?.enabled) this._ensureCursorPositions(plot);
+        Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot) });
+        this._updateCursorBox(panelId, plot);
+    }
+
+    _installCursorHandlers(panelId, plot) {
+        if (!plot?.div || plot._cursorHandlersDiv === plot.div) return;
+        if (plot._cursorDocListeners) {
+            document.removeEventListener('mousemove', plot._cursorDocListeners.move);
+            document.removeEventListener('mouseup',   plot._cursorDocListeners.up);
+            plot._cursorDocListeners = null;
+        }
+        plot._cursorHandlersDiv = plot.div;
+
+        let dragging = null;
+        const cursorNearPointer = (event) => {
+            if (!plot.cursors?.enabled || plot.mode !== 'timeseries') return null;
+            const xa = plot.div?._fullLayout?.xaxis;
+            if (!xa || !Number.isFinite(plot.cursors.a) || !Number.isFinite(plot.cursors.b)) return null;
+            const x = this._eventToXValue(plot.div, event);
+            if (!Number.isFinite(x)) return null;
+            const range = xa.range;
+            const span = Math.abs(range[1] - range[0]) || 1;
+            const xLen = Math.abs(xa._length) || 1;
+            const tolerance = (5 / xLen) * span;
+            const da = Math.abs(x - plot.cursors.a);
+            const db = Math.abs(x - plot.cursors.b);
+            const near = Math.min(da, db);
+            if (near > tolerance) return null;
+            return da <= db ? 'a' : 'b';
+        };
+
+        plot.div.addEventListener('mousedown', (event) => {
+            if (event.button !== 0) return;
+            const hit = cursorNearPointer(event);
+            if (!hit) return;
+            dragging = hit;
+            event.preventDefault();
+            event.stopPropagation();
+            document.body.classList.add('cursor-dragging');
+        }, true);
+
+        plot.div.addEventListener('mousemove', (event) => {
+            if (dragging || !plot.cursors?.enabled) return;
+            const near = !!cursorNearPointer(event);
+            plot.div.style.cursor = near ? 'ew-resize' : '';
+            plot.div.closest('.layout-panel')?.classList.toggle('cursor-near', near);
+        });
+
+        plot.div.addEventListener('mouseleave', () => {
+            if (!dragging && plot.div) plot.div.style.cursor = '';
+            plot.div?.closest('.layout-panel')?.classList.remove('cursor-near');
+        });
+
+        const onDocMove = (event) => {
+            if (!dragging || !plot.div) return;
+            const x = this._eventToXValue(plot.div, event);
+            if (!Number.isFinite(x)) return;
+            plot.cursors[dragging] = x;
+            this._syncCursorDisplay(panelId, plot);
+        };
+        const onDocUp = () => {
+            if (!dragging) return;
+            dragging = null;
+            document.body.classList.remove('cursor-dragging');
+            plot.div?.closest('.layout-panel')?.classList.remove('cursor-near');
+        };
+        document.addEventListener('mousemove', onDocMove);
+        document.addEventListener('mouseup',   onDocUp);
+        plot._cursorDocListeners = { move: onDocMove, up: onDocUp };
+    }
+
+    _eventToXValue(div, event) {
+        const xa = div?._fullLayout?.xaxis;
+        if (!xa?.range) return NaN;
+        const rect = div.getBoundingClientRect();
+        const pixel = event.clientX - rect.left - (xa._offset || 0);
+        if (typeof xa.p2c === 'function') return xa.p2c(pixel);
+        const frac = pixel / (xa._length || rect.width || 1);
+        return xa.range[0] + frac * (xa.range[1] - xa.range[0]);
+    }
+
+    _interpolateAt(times, values, x, mode = 'linear') {
+        if (!times?.length || !values?.length || !Number.isFinite(x)) return NaN;
+        const last = Math.min(times.length, values.length) - 1;
+        if (last < 0) return NaN;
+        if (x <= times[0]) return values[0];
+        if (x >= times[last]) return values[last];
+        let lo = 0, hi = last;
+        while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (times[mid] <= x) lo = mid;
+            else hi = mid;
+        }
+        if (mode === 'step') return values[lo];
+        const t0 = times[lo], t1 = times[hi];
+        const y0 = values[lo], y1 = values[hi];
+        if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 === t0) return y0;
+        if (!Number.isFinite(y0) || !Number.isFinite(y1)) return NaN;
+        return y0 + (y1 - y0) * ((x - t0) / (t1 - t0));
+    }
+
+    _updateCursorBox(panelId, plot) {
+        const panelEl = plot.div?.closest('.layout-panel');
+        if (!panelEl) return;
+        if (!plot.cursors?.enabled) {
+            this._hideCursorBox(panelEl);
+            return;
+        }
+        const traceA = this._resolveCursorTrace(plot, 'a');
+        const traceB = this._resolveCursorTrace(plot, 'b');
+        if (!traceA && !traceB) {
+            this._showCursorBox(panelEl, i18n.t('cursorsNoTrace'));
+            return;
+        }
+        const aX = plot.cursors.a;
+        const bX = plot.cursors.b;
+        const measure = (trace, x) => {
+            if (!trace) return { y: NaN, timeUnit: 's', yUnit: '', name: '' };
+            const times    = this._getTransformedTimeData(trace.fileId);
+            const values   = this._getTransformedVariableData(trace.fileId, trace.varName);
+            const mode     = this._traceInterpolationMode(trace);
+            const y        = this._interpolateAt(times, values, x, mode);
+            const timeVar  = this._getTimeVar(trace.fileId);
+            const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+            return {
+                y,
+                timeUnit: timeVar ? this._extractUnit(timeVar.description) : 's',
+                yUnit:    variable ? this._extractUnit(variable.description) : '',
+                name:     this._traceName(trace.varName, trace.fileId),
+            };
+        };
+        const a = measure(traceA, aX);
+        const b = measure(traceB, bX);
+        const dx = bX - aX;
+        const dy = b.y - a.y;
+        const slope = dx !== 0 ? dy / dx : NaN;
+        const sameTrace = this._sameCursorTrace(traceA, traceB);
+        const sameUnit  = a.yUnit === b.yUnit;
+        const timeUnit  = a.timeUnit || b.timeUnit;
+        const unit = (u) => u ? ` ${this._escapeHTML(u)}` : '';
+        const colorA = traceA?.color || '#ff9800';
+        const colorB = traceB?.color || '#2196f3';
+        const visibleTraces = plot.traces
+            .filter(t => t.visible !== false && t.visible !== 'legendonly');
+        const buildOptions = (selectedTrace) => visibleTraces
+            .map((t, index) => {
+                const selected = selectedTrace && t.fileId === selectedTrace.fileId && t.varName === selectedTrace.varName ? ' selected' : '';
+                return `<option value="${index}"${selected}>${this._escapeHTML(this._traceName(t.varName, t.fileId))}</option>`;
+            })
+            .join('');
+        const traceLabel = this._escapeHTML(i18n.t('cursorTraceLabel'));
+        const selectorsHTML = `
+            <label class="cursor-trace-select" data-cursor="a">
+                <span><b style="color:${colorA}">A</b> ${traceLabel}</span>
+                <select>${buildOptions(traceA)}</select>
+            </label>
+            <label class="cursor-trace-select" data-cursor="b">
+                <span><b style="color:${colorB}">B</b> ${traceLabel}</span>
+                <select>${buildOptions(traceB)}</select>
+            </label>
+        `;
+        const moveIcon = `<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>`;
+        const html = `
+            <div class="cursor-info-header">
+                <span class="cursor-info-title">${moveIcon}${this._escapeHTML(i18n.t('cursorsToggle'))}</span>
+            </div>
+            ${selectorsHTML}
+            <div class="cursor-info-values">
+                <div><b style="color:${colorA}">A</b> x=${this._formatHTMLNumber(aX)}${unit(timeUnit)} y=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
+                <div><b style="color:${colorB}">B</b> x=${this._formatHTMLNumber(bX)}${unit(timeUnit)} y=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
+                <div>ΔX=${this._formatHTMLNumber(dx)}${unit(timeUnit)}</div>
+                <div>ΔY=${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
+                <div>ΔY/ΔX=${this._formatHTMLNumber(slope)}</div>
+            </div>
+        `;
+        this._showCursorBox(panelEl, html, panelId, plot);
+    }
+
+    _showCursorBox(panelEl, html, panelId = null, plot = null) {
+        let box = panelEl.querySelector('.cursor-info-box');
+        if (!box) {
+            box = document.createElement('div');
+            box.className = 'cursor-info-box';
+            panelEl.appendChild(box);
+        }
+        box.innerHTML = html;
+        if (panelId && plot) {
+            box.querySelectorAll('.cursor-trace-select').forEach(label => {
+                const which = label.getAttribute('data-cursor');
+                const select = label.querySelector('select');
+                if (!select || (which !== 'a' && which !== 'b')) return;
+                select.addEventListener('change', (event) => {
+                    const visibleTraces = plot.traces
+                        .filter(t => t.visible !== false && t.visible !== 'legendonly');
+                    const selectedTrace = visibleTraces[Number(event.target.value)];
+                    if (!selectedTrace) return;
+                    const key = which === 'b' ? 'traceB' : 'traceA';
+                    plot.cursors[key] = { fileId: selectedTrace.fileId, varName: selectedTrace.varName };
+                    this._syncCursorDisplay(panelId, plot);
+                });
+            });
+        }
+        if (panelId && plot) this._ensureCursorBoxDrag(panelId, plot);
+        this._applyCursorBoxPosition(panelEl, box, plot);
+        box.style.display = 'block';
+    }
+
+    _applyCursorBoxPosition(panelEl, box, plot) {
+        const pos = plot?.cursors?.boxPos;
+        if (!pos) return;
+        box.style.left = `${pos.x}px`;
+        box.style.top = `${pos.y}px`;
+        box.style.right = 'auto';
+    }
+
+    _ensureCursorBoxDrag(panelId, plot) {
+        const panelEl = plot.div?.closest('.layout-panel');
+        const box = panelEl?.querySelector('.cursor-info-box');
+        if (!panelEl || !box || box._dragBound) return;
+        box._dragBound = true;
+        let drag = null;
+
+        box.addEventListener('mousedown', (event) => {
+            if (!event.target.closest('.cursor-info-header')) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const panelRect = panelEl.getBoundingClientRect();
+            const boxRect = box.getBoundingClientRect();
+            drag = {
+                offsetX: event.clientX - boxRect.left,
+                offsetY: event.clientY - boxRect.top,
+                panelRect,
+            };
+            document.body.classList.add('cursor-box-dragging');
+        });
+
+        document.addEventListener('mousemove', (event) => {
+            if (!drag) return;
+            const rect = panelEl.getBoundingClientRect();
+            const maxX = Math.max(0, rect.width - box.offsetWidth - 6);
+            const maxY = Math.max(0, rect.height - box.offsetHeight - 6);
+            const x = Math.max(6, Math.min(maxX, event.clientX - rect.left - drag.offsetX));
+            const y = Math.max(6, Math.min(maxY, event.clientY - rect.top - drag.offsetY));
+            plot.cursors.boxPos = { x, y };
+            this._applyCursorBoxPosition(panelEl, box, plot);
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (!drag) return;
+            drag = null;
+            document.body.classList.remove('cursor-box-dragging');
+        });
+    }
+
+    _hideCursorBox(panelEl) {
+        const box = panelEl?.querySelector('.cursor-info-box');
         if (box) box.style.display = 'none';
     }
 
@@ -2633,6 +3235,17 @@ class PlotManager {
         });
         toolbar.appendChild(compareBtn);
 
+        const cursorBtn = document.createElement('button');
+        cursorBtn.className = 'layout-toolbar-btn panel-action-btn cursor-btn' + (plot?.cursors?.enabled ? ' active' : '');
+        cursorBtn.textContent = 'A|B';
+        cursorBtn.title = i18n.t('cursorsToggle');
+        cursorBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
+        cursorBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleCursors(panelId);
+        });
+        toolbar.appendChild(cursorBtn);
+
         // Quick numeric summary for reports and lab analysis
         const statsBtn = document.createElement('button');
         statsBtn.className = 'layout-toolbar-btn panel-action-btn panel-stats-btn';
@@ -2799,12 +3412,14 @@ class PlotManager {
     _is3D(mode) { return mode === 'phase2dt' || mode === 'phase3d'; }
     _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) === 3 && plot.stateSlots?.x?.length >= 3; }
 
-    _rebuildPanel(panelId) {
+    _rebuildPanel(panelId, options = {}) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         if (!panelEl) return;
+        const restoreView = options.preserveView ? this._capturePlotView(plot) : null;
         this._destroyChart(panelId);
+        if (restoreView) plot._pendingViewRestore = restoreView;
         plot.markerTraceIdx = null;
         if (this._hasContent(plot)) {
             if (plot.mode === 'state-anim') {
@@ -2884,6 +3499,44 @@ class PlotManager {
         if (lo < 0) hi = Math.max(hi, -lo * minPositiveFrac);
         const span = Math.max(hi - lo, 1e-12);
         return [lo - pad * span, hi + pad * span];
+    }
+
+    _capturePlotView(plot) {
+        if (!plot?.div?._fullLayout) return null;
+        const fl = plot.div._fullLayout;
+        if (this._is3D(plot.mode) || this._isStateAnim3D(plot)) {
+            const scene = fl.scene;
+            if (!scene) return null;
+            return {
+                mode: '3d',
+                camera: scene.camera ? JSON.parse(JSON.stringify(scene.camera)) : null,
+                xRange: scene.xaxis?.range ? [...scene.xaxis.range] : null,
+                yRange: scene.yaxis?.range ? [...scene.yaxis.range] : null,
+                zRange: scene.zaxis?.range ? [...scene.zaxis.range] : null,
+            };
+        }
+
+        return {
+            mode: '2d',
+            xRange: fl.xaxis?.range ? [...fl.xaxis.range] : null,
+            yRange: fl.yaxis?.range ? [...fl.yaxis.range] : null,
+        };
+    }
+
+    _restorePlotView(plot, view) {
+        if (!plot?.div || !view) return Promise.resolve();
+        const update = {};
+        if (view.mode === '3d') {
+            if (view.xRange) update['scene.xaxis.range'] = view.xRange;
+            if (view.yRange) update['scene.yaxis.range'] = view.yRange;
+            if (view.zRange) update['scene.zaxis.range'] = view.zRange;
+            if (view.camera) update['scene.camera'] = view.camera;
+        } else {
+            if (view.xRange) update['xaxis.range'] = view.xRange;
+            if (view.yRange) update['yaxis.range'] = view.yRange;
+        }
+        if (!Object.keys(update).length) return Promise.resolve();
+        return Plotly.relayout(plot.div, update).then(() => this._updateCameraOverlay(plot));
     }
 
     _varUnit(varName, fileId = this.activeFileId) {

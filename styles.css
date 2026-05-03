@@ -1107,6 +1107,12 @@ body {
     gap: 3px;
 }
 
+.file-list-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
 .file-entry {
     display: flex;
     align-items: center;
@@ -1131,6 +1137,10 @@ body {
     border-color: var(--primary-color);
 }
 
+.file-entry.transformed:not(.active) {
+    border-color: var(--primary-color);
+}
+
 .file-entry-name {
     flex: 1;
     overflow: hidden;
@@ -1139,6 +1149,7 @@ body {
     min-width: 0;
 }
 
+.file-entry-transform,
 .file-entry-close {
     flex-shrink: 0;
     background: none;
@@ -1151,8 +1162,80 @@ body {
     line-height: 1;
 }
 
+.file-entry-transform {
+    font-size: 0.82rem;
+}
+
+.file-entry-transform[aria-expanded="true"],
+.file-entry.transformed .file-entry-transform {
+    opacity: 1;
+}
+
 .file-entry-close:hover {
     opacity: 1;
+}
+
+.file-entry-transform:hover {
+    opacity: 1;
+}
+
+.file-transform-panel {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    padding: 7px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+}
+
+.file-transform-title {
+    grid-column: 1 / -1;
+    margin-top: 2px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.file-transform-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+}
+
+.file-transform-field input {
+    width: 100%;
+    min-width: 0;
+    padding: 4px 5px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+}
+
+.file-transform-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.file-transform-actions button {
+    padding: 4px 7px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.7rem;
+}
+
+.file-transform-actions button:hover {
+    background: var(--hover-bg);
+    color: var(--text-primary);
 }
 
 /* ── Help modal ──────────────────────────────────────────────── */
@@ -1406,6 +1489,86 @@ body {
     display: none;
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     max-width: 260px;
+}
+
+.cursor-info-box {
+    position: absolute;
+    top: 42px;
+    right: 10px;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 0.74rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+    pointer-events: auto;
+    z-index: 16;
+    display: none;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+    max-width: min(320px, calc(100% - 20px));
+}
+
+.cursor-info-title {
+    font-weight: 700;
+    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.cursor-info-move-icon {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    vertical-align: middle;
+}
+
+.cursor-info-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    cursor: move;
+    user-select: none;
+}
+
+.cursor-trace-select {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+}
+
+.cursor-trace-select select {
+    min-width: 0;
+    flex: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    padding: 2px 4px;
+}
+
+.cursor-info-values {
+    pointer-events: none;
+}
+
+body.cursor-dragging {
+    cursor: ew-resize;
+    user-select: none;
+}
+
+body.cursor-box-dragging {
+    cursor: move;
+    user-select: none;
+}
+
+.layout-panel.cursor-near,
+.layout-panel.cursor-near .plotly-container,
+.layout-panel.cursor-near .plotly-container * {
+    cursor: ew-resize !important;
 }
 
 /* Plotly container inside a panel */
