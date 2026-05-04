@@ -38,9 +38,12 @@ const DERIVED_FUNCTION_ALIASES = new Map([
     ['sqr', 'square'],
 ]);
 
+const RESULT_FILE_EXTENSIONS = ['.mat', '.csv'];
+
 class OpenModelicaViewer {
     constructor() {
         this.parser      = new MatParser();
+        this.csvParser   = new CsvParser(this.parser);
         this.files       = new Map();   // fileId → { file, name }
         this._nextFileId = 1;
         this.theme       = OpenModelicaViewer.getStartupTheme();
@@ -53,6 +56,7 @@ class OpenModelicaViewer {
         this.derivedByFile    = new Map();
         this._suggestionIndex = 0;
         this.selectedVariables = new Set();
+        this._expandedFileTransforms = new Set();
         this._exampleLoading = false;
         this._exampleLoadToken = null;
         this._exampleLoadingEscHandler = null;
@@ -78,20 +82,22 @@ class OpenModelicaViewer {
     get activeFileId() { return this.plotManager.activeFileId; }
 
     async loadFile(file, options = {}) {
-        if (!file.name.endsWith('.mat')) { alert(i18n.t('invalidFile')); return; }
+        if (!this._isSupportedResultFileName(file.name)) { alert(i18n.t('invalidFile')); return; }
 
         try {
             document.getElementById('file-name').textContent = `Loading ${file.name}…`;
             const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
             const contentHash = await this._hashBuffer(buffer);
-            const data   = await this.parser.parse(buffer);
+            const data   = await this._parseResultBuffer(file.name, buffer);
 
             const fileId   = `f${this._nextFileId++}`;
-            const baseName = file.name.replace(/\.mat$/i, '');
-            this.files.set(fileId, { file, fileHandle: options.fileHandle || null, buffer, contentHash, name: baseName });
+            const extension = this._fileExtension(file.name);
+            const baseName = this._fileBaseName(file.name);
+            const transform = this._defaultFileTransform();
+            this.files.set(fileId, { file, fileHandle: options.fileHandle || null, buffer, contentHash, name: baseName, extension, transform });
 
             // PlotManager takes ownership of the data
-            this.plotManager.addFile(fileId, baseName, data);
+            this.plotManager.addFile(fileId, baseName, data, transform);
 
             // Hide drop zone after first file
             document.getElementById('drop-zone').classList.remove('active');
@@ -116,12 +122,12 @@ class OpenModelicaViewer {
         const entry = this.files.get(id);
         if (!entry) return;
 
-        document.getElementById('file-name').textContent = `Loading ${entry.name}.mat…`;
+        document.getElementById('file-name').textContent = `Loading ${this._fileDisplayName(entry)}…`;
 
         const buffer = await this._readLatestBuffer(entry);
         const contentHash = await this._hashBuffer(buffer);
 
-        const data = await this.parser.parse(buffer);
+        const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer);
         this._reapplyDerivedVariables(id, data);
 
         entry.buffer = buffer;
@@ -139,20 +145,20 @@ class OpenModelicaViewer {
         if (!source) return;
 
         const name = this._nextVersionName(source.name);
-        document.getElementById('file-name').textContent = `Loading ${name}.mat…`;
+        document.getElementById('file-name').textContent = `Loading ${name}${source.extension || '.mat'}…`;
 
         const buffer = await this._readLatestBuffer(source);
         const contentHash = await this._hashBuffer(buffer);
         const sourceHash = source.contentHash || (source.buffer ? await this._hashBuffer(source.buffer) : '');
         if (!source.contentHash && sourceHash) source.contentHash = sourceHash;
         if (sourceHash && contentHash === sourceHash) {
-            document.getElementById('file-name').textContent = `${source.name}.mat`;
+            document.getElementById('file-name').textContent = this._fileDisplayName(source);
             await Modal.alert(i18n.t('reloadAsNewVersion'), i18n.t('reloadUnchangedNoVersion'), { icon: '🔄' });
             this._updateTopBar();
             return;
         }
 
-        const data = await this.parser.parse(buffer);
+        const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer);
 
         const fileId = `f${this._nextFileId++}`;
         this._copyDerivedDefinitions(sourceId, fileId);
@@ -163,8 +169,10 @@ class OpenModelicaViewer {
             buffer,
             contentHash,
             name,
+            extension: source.extension || '.mat',
+            transform: this._normalizeFileTransform(source.transform),
         });
-        this.plotManager.addFile(fileId, name, data);
+        this.plotManager.addFile(fileId, name, data, this.files.get(fileId).transform);
         this.plotManager.setActiveFile(fileId);
 
         document.getElementById('drop-zone').classList.remove('active');
@@ -180,7 +188,9 @@ class OpenModelicaViewer {
             try {
                 const file = await entry.fileHandle.getFile();
                 const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+                if (!this._isSupportedResultFileName(file.name)) throw new Error(i18n.t('invalidFile'));
                 entry.file = file;
+                entry.extension = this._fileExtension(file.name);
                 return buffer;
             } catch (err) {
                 console.warn('Could not read latest file handle; falling back to stored file snapshot.', err);
@@ -194,10 +204,11 @@ class OpenModelicaViewer {
                 err.name = 'AbortError';
                 throw err;
             }
-            if (!file.name.endsWith('.mat')) throw new Error(i18n.t('invalidFile'));
+            if (!this._isSupportedResultFileName(file.name)) throw new Error(i18n.t('invalidFile'));
 
             entry.file = file;
             entry.fileHandle = null;
+            entry.extension = this._fileExtension(file.name);
             return file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file);
         }
 
@@ -251,12 +262,12 @@ class OpenModelicaViewer {
             const message = document.createElement('div');
             message.className = 'modal-message';
             message.style.whiteSpace = 'pre-line';
-            message.textContent = i18n.t('reloadReselectBody').replace('{file}', `${entry.name}.mat`);
+            message.textContent = i18n.t('reloadReselectBody').replace('{file}', this._fileDisplayName(entry));
             content.appendChild(message);
 
             const input = document.createElement('input');
             input.type = 'file';
-            input.accept = '.mat';
+            input.accept = RESULT_FILE_EXTENSIONS.join(',');
             input.style.display = 'none';
             document.body.appendChild(input);
 
@@ -321,27 +332,30 @@ class OpenModelicaViewer {
             typeof window.showOpenFilePicker === 'function';
     }
 
-    async _pickMatFilesWithHandles(options = {}) {
+    async _pickResultFilesWithHandles(options = {}) {
         const handles = await window.showOpenFilePicker({
             multiple: options.multiple !== false,
             types: [{
-                description: 'MAT files',
-                accept: { 'application/octet-stream': ['.mat'] },
+                description: 'MAT and CSV result files',
+                accept: {
+                    'application/octet-stream': ['.mat'],
+                    'text/csv': ['.csv'],
+                },
             }],
         });
 
         const picked = [];
         for (const fileHandle of handles) {
             const file = await fileHandle.getFile();
-            if (file.name.endsWith('.mat')) picked.push({ file, fileHandle });
+            if (this._isSupportedResultFileName(file.name)) picked.push({ file, fileHandle });
         }
         return picked;
     }
 
-    async _openMatFilesFromUser() {
+    async _openResultFilesFromUser() {
         if (this._canUseFileSystemPicker()) {
             try {
-                const picked = await this._pickMatFilesWithHandles({ multiple: true });
+                const picked = await this._pickResultFilesWithHandles({ multiple: true });
                 for (const { file, fileHandle } of picked) {
                     await this.loadFile(file, { fileHandle });
                 }
@@ -355,7 +369,7 @@ class OpenModelicaViewer {
         document.getElementById('file-input').click();
     }
 
-    async _getDroppedMatFiles(dataTransfer) {
+    async _getDroppedResultFiles(dataTransfer) {
         const picked = [];
         const items = Array.from(dataTransfer?.items || []);
         const canReadDroppedHandles = items.some(item => (
@@ -369,7 +383,7 @@ class OpenModelicaViewer {
                     const fileHandle = await item.getAsFileSystemHandle();
                     if (fileHandle?.kind !== 'file') continue;
                     const file = await fileHandle.getFile();
-                    if (file.name.endsWith('.mat')) picked.push({ file, fileHandle });
+                    if (this._isSupportedResultFileName(file.name)) picked.push({ file, fileHandle });
                 } catch (err) {
                     console.warn('Could not read dropped file handle.', err);
                 }
@@ -379,8 +393,32 @@ class OpenModelicaViewer {
         }
 
         return Array.from(dataTransfer?.files || [])
-            .filter(file => file.name.endsWith('.mat'))
+            .filter(file => this._isSupportedResultFileName(file.name))
             .map(file => ({ file, fileHandle: null }));
+    }
+
+    _isSupportedResultFileName(filename) {
+        return RESULT_FILE_EXTENSIONS.includes(this._fileExtension(filename));
+    }
+
+    _fileExtension(filename) {
+        const match = String(filename || '').toLowerCase().match(/\.[^.]+$/);
+        return match ? match[0] : '';
+    }
+
+    _fileBaseName(filename) {
+        return String(filename || 'results').replace(/\.[^.]+$/i, '');
+    }
+
+    _fileDisplayName(entry) {
+        return `${entry?.name || ''}${entry?.extension || '.mat'}`;
+    }
+
+    async _parseResultBuffer(filename, buffer) {
+        const extension = this._fileExtension(filename);
+        if (extension === '.csv') return this.csvParser.parse(buffer);
+        if (extension === '.mat') return this.parser.parse(buffer);
+        throw new Error(i18n.t('invalidFile'));
     }
 
     _nextVersionName(name) {
@@ -438,6 +476,7 @@ class OpenModelicaViewer {
         this.plotManager.removeFile(fileId);
         this.files.delete(fileId);
         this.derivedByFile.delete(fileId);
+        this._expandedFileTransforms.delete(fileId);
         this._clearVariableSelection();
 
         // Switch sidebar to new active file (if any)
@@ -467,8 +506,8 @@ class OpenModelicaViewer {
 
     _updateTopBar() {
         const id   = this.plotManager.activeFileId;
-        const name = id ? (this.files.get(id)?.name ?? '') : '';
-        document.getElementById('file-name').textContent = name ? `${name}.mat` : '';
+        const entry = id ? this.files.get(id) : null;
+        document.getElementById('file-name').textContent = entry ? this._fileDisplayName(entry) : '';
     }
 
     _updateActionButtons() {
@@ -482,15 +521,32 @@ class OpenModelicaViewer {
     _renderFilesList() {
         const list = document.getElementById('files-list');
         list.innerHTML = '';
-        for (const [fileId, { name }] of this.files) {
+        for (const [fileId, entryData] of this.files) {
+            const { name } = entryData;
+            const item = document.createElement('div');
+            item.className = 'file-list-item';
+
             const entry = document.createElement('div');
-            entry.className = 'file-entry' + (fileId === this.activeFileId ? ' active' : '');
+            entry.className = 'file-entry' +
+                (fileId === this.activeFileId ? ' active' : '') +
+                (this._isFileTransformActive(entryData.transform) ? ' transformed' : '');
+            entry.dataset.fileId = fileId;
 
             const nameSpan = document.createElement('span');
             nameSpan.className = 'file-entry-name';
             nameSpan.textContent = name;
-            nameSpan.title = name + '.mat';
+            nameSpan.title = this._fileDisplayName(entryData);
             nameSpan.addEventListener('click', () => this.setActiveFile(fileId));
+
+            const transformBtn = document.createElement('button');
+            transformBtn.className = 'file-entry-transform';
+            transformBtn.textContent = '⚙';
+            transformBtn.title = i18n.t('fileTransformTitle');
+            transformBtn.setAttribute('aria-expanded', String(this._expandedFileTransforms.has(fileId)));
+            transformBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleFileTransformPanel(fileId);
+            });
 
             const closeBtn = document.createElement('button');
             closeBtn.className = 'file-entry-close';
@@ -499,8 +555,121 @@ class OpenModelicaViewer {
             closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.removeFile(fileId); });
 
             entry.appendChild(nameSpan);
+            entry.appendChild(transformBtn);
             entry.appendChild(closeBtn);
-            list.appendChild(entry);
+            item.appendChild(entry);
+            if (this._expandedFileTransforms.has(fileId)) {
+                item.appendChild(this._renderFileTransformPanel(fileId, entryData));
+            }
+            list.appendChild(item);
+        }
+    }
+
+    _defaultFileTransform() {
+        return { timeShift: 0, yOffset: 0, cropStart: null, cropEnd: null };
+    }
+
+    _normalizeFileTransform(transform = null) {
+        const t = transform || {};
+        const finiteOrZero = (value) => {
+            const n = Number(value);
+            return Number.isFinite(n) ? n : 0;
+        };
+        const finiteOrNull = (value) => {
+            if (value === '' || value === null || value === undefined) return null;
+            const n = Number(value);
+            return Number.isFinite(n) ? n : null;
+        };
+        return {
+            timeShift: finiteOrZero(t.timeShift),
+            yOffset: finiteOrZero(t.yOffset),
+            cropStart: finiteOrNull(t.cropStart),
+            cropEnd: finiteOrNull(t.cropEnd),
+        };
+    }
+
+    _isFileTransformActive(transform) {
+        const t = this._normalizeFileTransform(transform);
+        return t.timeShift !== 0 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    }
+
+    _toggleFileTransformPanel(fileId) {
+        if (this._expandedFileTransforms.has(fileId)) this._expandedFileTransforms.delete(fileId);
+        else this._expandedFileTransforms.add(fileId);
+        this._renderFilesList();
+    }
+
+    _renderFileTransformPanel(fileId, entryData) {
+        const transform = this._normalizeFileTransform(entryData.transform);
+        const panel = document.createElement('div');
+        panel.className = 'file-transform-panel';
+        panel.addEventListener('click', e => e.stopPropagation());
+
+        const makeInput = (key, label, value, placeholder = '0') => {
+            const wrap = document.createElement('label');
+            wrap.className = 'file-transform-field';
+
+            const span = document.createElement('span');
+            span.textContent = label;
+
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.step = 'any';
+            input.inputMode = 'decimal';
+            input.placeholder = placeholder;
+            input.value = value === null || value === undefined ? '' : String(value);
+            input.addEventListener('change', () => this._updateFileTransform(fileId, { [key]: input.value }));
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') input.blur();
+            });
+
+            wrap.append(span, input);
+            return wrap;
+        };
+
+        const cropTitle = document.createElement('div');
+        cropTitle.className = 'file-transform-title';
+        cropTitle.textContent = i18n.t('fileCropTitle');
+        panel.append(
+            cropTitle,
+            makeInput('cropStart', i18n.t('cropStartLabel'), transform.cropStart, 'auto'),
+            makeInput('cropEnd', i18n.t('cropEndLabel'), transform.cropEnd, 'auto'),
+        );
+
+        const offsetTitle = document.createElement('div');
+        offsetTitle.className = 'file-transform-title';
+        offsetTitle.textContent = i18n.t('fileOffsetTitle');
+        panel.append(
+            offsetTitle,
+            makeInput('timeShift', 'Δt', transform.timeShift),
+            makeInput('yOffset', 'Δy', transform.yOffset),
+        );
+
+        const actions = document.createElement('div');
+        actions.className = 'file-transform-actions';
+        const resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.textContent = i18n.t('resetTransform');
+        resetBtn.addEventListener('click', () => {
+            this._updateFileTransform(fileId, this._defaultFileTransform(), { rerender: true });
+        });
+        actions.appendChild(resetBtn);
+        panel.appendChild(actions);
+
+        return panel;
+    }
+
+    _updateFileTransform(fileId, patch, options = {}) {
+        const entry = this.files.get(fileId);
+        if (!entry) return;
+        entry.transform = this._normalizeFileTransform({ ...entry.transform, ...patch });
+        this.plotManager.setFileTransform(fileId, entry.transform);
+        if (options.rerender) this._renderFilesList();
+        else {
+            const isActive = this._isFileTransformActive(entry.transform);
+            for (const row of document.querySelectorAll('#files-list .file-entry')) {
+                if (row.dataset.fileId === fileId) row.classList.toggle('transformed', isActive);
+            }
         }
     }
 
@@ -526,7 +695,7 @@ class OpenModelicaViewer {
 
         // 📂 — just open file picker, no confirmation
         document.getElementById('load-new-file').addEventListener('click', () => {
-            this._openMatFilesFromUser().catch(err => {
+            this._openResultFilesFromUser().catch(err => {
                 console.error('Open file failed:', err);
                 alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
             });
@@ -578,7 +747,7 @@ class OpenModelicaViewer {
         });
 
         document.getElementById('file-select-btn').addEventListener('click', () => {
-            this._openMatFilesFromUser().catch(err => {
+            this._openResultFilesFromUser().catch(err => {
                 console.error('Open file failed:', err);
                 alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
             });
@@ -750,7 +919,7 @@ class OpenModelicaViewer {
                     className: 'modal-dialog-temp-path',
                 },
             );
-            await this._openMatFilesFromUser();
+            await this._openResultFilesFromUser();
             return;
         }
 
@@ -762,7 +931,7 @@ class OpenModelicaViewer {
             className: 'modal-dialog-temp-path',
         });
 
-        await this._openMatFilesFromUser();
+        await this._openResultFilesFromUser();
     }
 
     async _copyTextToClipboard(text) {
@@ -952,8 +1121,9 @@ class OpenModelicaViewer {
             let fileId = existingId;
             if (!fileId) {
                 fileId = `f${this._nextFileId++}`;
-                this.files.set(fileId, { file: null, buffer, contentHash, name: baseName });
-                this.plotManager.addFile(fileId, baseName, data);
+                const transform = this._defaultFileTransform();
+                this.files.set(fileId, { file: null, buffer, contentHash, name: baseName, extension: '.mat', transform });
+                this.plotManager.addFile(fileId, baseName, data, transform);
             } else {
                 this.files.get(fileId).buffer = buffer;
                 this.files.get(fileId).contentHash = contentHash;
@@ -1128,7 +1298,7 @@ class OpenModelicaViewer {
     }
 
     showHelp() {
-        const sections = ['1','2','3','4','5','6','7','8'];
+        const sections = ['1','2','3','4','5','6','7','8','9'];
 
         const backdrop = document.createElement('div');
         backdrop.className = 'help-backdrop';
@@ -1187,7 +1357,7 @@ class OpenModelicaViewer {
         dropZone.addEventListener('drop', async (e) => {
             e.preventDefault();
             dropZone.classList.remove('dragging');
-            const files = await this._getDroppedMatFiles(e.dataTransfer);
+            const files = await this._getDroppedResultFiles(e.dataTransfer);
             if (!files.length) { alert(i18n.t('invalidFile')); return; }
             for (const { file, fileHandle } of files) {
                 await this.loadFile(file, { fileHandle });
@@ -1279,7 +1449,7 @@ class OpenModelicaViewer {
         const formula = formulaInput.value.trim();
 
         try {
-            if (!data) throw new Error('Load a .mat file first.');
+            if (!data) throw new Error('Load a .mat or .csv file first.');
             if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) throw new Error('Use a simple name, for example slip or motor.slip.');
             if (!formula) throw new Error('Enter a formula.');
             const existing = data.variables[name];

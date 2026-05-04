@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenModelica/Dymola Result Viewer</title>
+    <title>OpenModelica/Dymola & CSV Result Viewer</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body class="theme-light">
@@ -13,7 +13,7 @@
     <!-- Top Bar -->
     <div class="top-bar">
         <div class="top-bar-left">
-            <h1 data-i18n="appTitle">OpenModelica/Dymola Result Viewer</h1>
+            <h1 data-i18n="appTitle">OpenModelica/Dymola & CSV Result Viewer</h1>
             <span id="file-name" class="file-name"></span>
         </div>
         <div class="top-bar-right">
@@ -209,11 +209,11 @@
             <div id="drop-zone" class="drop-zone active">
                 <div class="drop-zone-content">
                     <span class="icon">📁</span>
-                    <h2 data-i18n="dragFile">Drag & drop a .mat file here</h2>
+                    <h2 data-i18n="dragFile">Drag & drop a .mat or .csv file here</h2>
                     <p data-i18n="or">or</p>
                     <button id="file-select-btn" class="primary-btn" data-i18n="selectFile">Select File</button>
                     <div id="drop-zone-status" class="drop-zone-status">Loading application...</div>
-                    <input type="file" id="file-input" accept=".mat" multiple style="display: none;">
+                    <input type="file" id="file-input" accept=".mat,.csv" multiple style="display: none;">
                 </div>
             </div>
 
@@ -226,6 +226,7 @@
 
     <script src="plotly-2.27.0.min.js"></script>
     <script src="mat-parser.js"></script>
+    <script src="csv-parser.js"></script>
     <script src="i18n.js"></script>
     <script src="modal.js"></script>
     <script src="layout-manager.js"></script>

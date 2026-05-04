@@ -9,7 +9,7 @@ const i18n = {
     translations: {
         en: {
             // App title
-            appTitle: 'OpenModelica/Dymola Result Viewer',
+            appTitle: 'OpenModelica/Dymola & CSV Result Viewer',
 
             // Top bar
             variables: 'Variables',
@@ -34,14 +34,14 @@ const i18n = {
             hoverProximity: 'Hover by proximity',
 
             // Drop zone
-            dragFile: 'Drag & drop a .mat file here',
+            dragFile: 'Drag & drop a .mat or .csv file here',
             or: 'or',
             selectFile: 'Select File',
 
             // Messages
             fileLoaded: 'File loaded successfully',
             errorLoading: 'Error loading file',
-            invalidFile: 'Invalid .mat file',
+            invalidFile: 'Invalid .mat or .csv file',
 
             // Tree
             component: 'Component',
@@ -87,6 +87,12 @@ const i18n = {
             loadingExampleCancelHint: 'Press Escape to cancel.',
             files: 'Files',
             closeFile: 'Remove file',
+            fileTransformTitle: 'Align this file',
+            fileCropTitle: 'Crop',
+            fileOffsetTitle: 'Offset',
+            cropStartLabel: 'Start',
+            cropEndLabel: 'End',
+            resetTransform: 'Reset alignment',
             closeFileWarning: 'This file has plots loaded. Removing it will delete those plots. Continue?',
 
             // Layout panels
@@ -129,6 +135,12 @@ const i18n = {
             saNorm:          'Normalize dx/dt to a fixed display length',
             saDZoom:         'Auto-zoom to follow the state during animation',
             compareFiles:          'Overlay traces from all loaded files',
+            cursorsToggle:         'Measurement cursors',
+            cursorsNoTrace:        'No visible trace selected.',
+            cursorTraceLabel:      'Trace',
+            cursorNextMax:         'Jump to next relative maximum (Shift+click for previous)',
+            cursorNextMin:         'Jump to next relative minimum (Shift+click for previous)',
+            cursorNextZero:        'Jump to next zero crossing (Shift+click for previous)',
 
             // Cursors & FFT
             cursorA: 'Cursor A',
@@ -191,10 +203,10 @@ const i18n = {
             cancel: 'Cancel',
 
             // Help modal
-            helpTitle: 'Help — OpenModelica & Dymola Result Viewer',
+            helpTitle: 'Help — OpenModelica/Dymola & CSV Result Viewer',
             helpClose: 'Close',
             helpSec1Title: 'Purpose',
-            helpSec1Body: 'This application opens simulation result files in <b>.mat</b> format produced by <b>OpenModelica</b> and <b>Dymola</b>. Both simulators store time-series results in the same binary MAT v4 format.<br>Load a file by dragging it onto the drop zone, or by clicking the <b>📂</b> button in the top bar. Reload the active file at any time with <b>🔄</b>.',
+            helpSec1Body: 'This application opens simulation result files in <b>.mat</b> format produced by <b>OpenModelica</b> and <b>Dymola</b>, and also <b>.csv</b> files from any source (spreadsheets, lab instruments, custom scripts, …) with a header row followed by numeric values. For CSV files, the first column is treated as time. Headers may include units in brackets or parentheses (e.g. <code>voltage [V]</code>, <code>temperature (C)</code>) and they are picked up automatically.<br>Load a file by dragging it onto the drop zone, or by clicking the <b>📂</b> button in the top bar. Reload the active file at any time with <b>🔄</b>.',
             helpSec2Title: 'Plot types',
             helpSec2Body: 'Drag variables from the sidebar onto any panel. All modes support multiple traces in the same panel — keep dragging to add more.<ul><li><b>Time series (📈)</b> — one or more variables plotted against time. Each dragged variable adds a new trace.</li><li><b>Phase 2D</b> — two variables plotted against each other (X vs Y). Drop X first, then Y. Each X/Y pair creates a new trace.</li><li><b>Phase 2D+t</b> — same as Phase 2D but time is shown as the third axis, producing a 3D curve in space.</li><li><b>Phase 3D</b> — three variables in 3D space. Drop X, then Y, then Z. Each triplet creates a new trace.</li></ul>',
             helpSec3Title: 'Where to find result files',
@@ -208,12 +220,14 @@ const i18n = {
             helpSec7Title: 'Derived variables',
             helpSec7Body: 'Use <b>Derived variables</b> to create new signals from loaded variables and parameters. The formula box supports <code>+ - * / ^</code>, parentheses, and functions such as <code>sqrt(x)</code>, <code>abs(x)</code>, <code>log(x)</code>, <code>log10(x)</code>, <code>power(x,n)</code>, and <code>root(x,n)</code>. Start typing to autocomplete variable and function names, or click the yellow <b>?</b> button next to <b>+</b> for a compact formula reference.',
             helpSec8Title: 'OpenModelica temporary folder',
-            helpSec8Body: 'The dropdown next to <b>📂</b> can automatically copy the likely OpenModelica temporary folder path. Paste it into the file picker address bar to reach recent OMEdit result files faster, especially when OpenModelica writes simulations to its temporary directory.'
+            helpSec8Body: 'The dropdown next to <b>📂</b> can automatically copy the likely OpenModelica temporary folder path. Paste it into the file picker address bar to reach recent OMEdit result files faster, especially when OpenModelica writes simulations to its temporary directory.',
+            helpSec9Title: 'Measurement cursors',
+            helpSec9Body: 'In <b>time-series</b> mode, click the <b>A|B</b> button in the panel toolbar to enable two vertical measurement cursors. Drag either cursor with the mouse to position it. The floating info box shows the (x, y) coordinates at each cursor and the deltas <b>ΔX</b>, <b>ΔY</b>, and <b>ΔY/ΔX</b> between them, with units inferred from the trace.<ul><li>For each cursor (A and B), three small icons let it snap to the next <b>relative maximum</b>, the next <b>relative minimum</b>, or the next <b>zero crossing</b> of the selected trace. Hold <b>Shift</b> while clicking to search backward instead of forward.</li><li>If a panel has several traces, use the <b>A Trace</b> and <b>B Trace</b> dropdowns to pick which trace each cursor measures. The two cursors can target different traces — useful for finding the time offset between signals.</li><li>The info box itself is draggable; grab its header to move it out of the way.</li><li>Cursors are available only in time-series mode; the button is disabled in phase (2D, 2D+t, 3D) and state-animation modes.</li></ul>'
         },
 
         fr: {
             // App title
-            appTitle: 'Visualiseur de résultats OpenModelica/Dymola',
+            appTitle: 'Visualiseur de résultats OpenModelica/Dymola & CSV',
 
             // Top bar
             variables: 'Variables',
@@ -238,14 +252,14 @@ const i18n = {
             hoverProximity: 'Survol par proximité',
 
             // Drop zone
-            dragFile: 'Glissez-déposez un fichier .mat ici',
+            dragFile: 'Glissez-déposez un fichier .mat ou .csv ici',
             or: 'ou',
             selectFile: 'Sélectionner un fichier',
 
             // Messages
             fileLoaded: 'Fichier chargé avec succès',
             errorLoading: 'Erreur de chargement du fichier',
-            invalidFile: 'Fichier .mat invalide',
+            invalidFile: 'Fichier .mat ou .csv invalide',
 
             // Tree
             component: 'Composant',
@@ -291,6 +305,12 @@ const i18n = {
             loadingExampleCancelHint: 'Appuyez sur Échap pour annuler.',
             files: 'Fichiers',
             closeFile: 'Supprimer le fichier',
+            fileTransformTitle: 'Aligner ce fichier',
+            fileCropTitle: 'Recadrage',
+            fileOffsetTitle: 'Décalage',
+            cropStartLabel: 'Début',
+            cropEndLabel: 'Fin',
+            resetTransform: 'Réinitialiser l\'alignement',
             closeFileWarning: 'Ce fichier a des graphiques chargés. Le supprimer effacera ces graphiques. Continuer ?',
 
             // Layout panels
@@ -333,6 +353,12 @@ const i18n = {
             saNorm:          'Normaliser dx/dt à une longueur d\'affichage fixe',
             saDZoom:         'Zoom automatique pour suivre l\'état pendant l\'animation',
             compareFiles:          'Superposer les tracés de tous les fichiers chargés',
+            cursorsToggle:         'Curseurs de mesure',
+            cursorsNoTrace:        'Aucune trace visible sélectionnée.',
+            cursorTraceLabel:      'Trace',
+            cursorNextMax:         'Aller au prochain maximum relatif (Maj+clic pour précédent)',
+            cursorNextMin:         'Aller au prochain minimum relatif (Maj+clic pour précédent)',
+            cursorNextZero:        'Aller au prochain passage par zéro (Maj+clic pour précédent)',
 
             // Cursors & FFT
             cursorA: 'Curseur A',
@@ -394,10 +420,10 @@ const i18n = {
             confirm: 'Confirmer',
             cancel: 'Annuler',
 
-            helpTitle: 'Aide — Visualiseur de résultats OpenModelica & Dymola',
+            helpTitle: 'Aide — Visualiseur de résultats OpenModelica/Dymola & CSV',
             helpClose: 'Fermer',
             helpSec1Title: 'Objectif',
-            helpSec1Body: 'Cette application ouvre les fichiers de résultats de simulation au format <b>.mat</b> produits par <b>OpenModelica</b> et <b>Dymola</b>. Les deux simulateurs stockent les résultats temporels dans le même format binaire MAT v4.<br>Chargez un fichier en le faisant glisser sur la zone de dépôt, ou en cliquant sur le bouton <b>📂</b> dans la barre supérieure. Rechargez le fichier actif à tout moment avec <b>🔄</b>.',
+            helpSec1Body: 'Cette application ouvre les fichiers de résultats de simulation au format <b>.mat</b> produits par <b>OpenModelica</b> et <b>Dymola</b>, ainsi que des fichiers <b>.csv</b> de toute provenance (tableurs, instruments de laboratoire, scripts personnalisés, …) avec une ligne d\'en-tête suivie de valeurs numériques. Pour les CSV, la première colonne est traitée comme le temps. Les en-têtes peuvent inclure des unités entre crochets ou parenthèses (par exemple <code>tension [V]</code>, <code>température (C)</code>) ; elles sont reconnues automatiquement.<br>Chargez un fichier en le faisant glisser sur la zone de dépôt, ou en cliquant sur le bouton <b>📂</b> dans la barre supérieure. Rechargez le fichier actif à tout moment avec <b>🔄</b>.',
             helpSec2Title: 'Types de graphiques',
             helpSec2Body: 'Faites glisser les variables depuis la barre latérale vers un panneau. Tous les modes supportent plusieurs traces dans le même panneau.<ul><li><b>Série temporelle (📈)</b> — une ou plusieurs variables en fonction du temps. Chaque variable glissée ajoute une trace.</li><li><b>Phase 2D</b> — deux variables représentées l\'une en fonction de l\'autre (X vs Y). Déposez X en premier, puis Y. Chaque paire crée une trace.</li><li><b>Phase 2D+t</b> — identique à Phase 2D, mais le temps est affiché comme troisième axe (courbe 3D dans l\'espace).</li><li><b>Phase 3D</b> — trois variables dans un espace 3D. Déposez X, puis Y, puis Z. Chaque triplet crée une trace.</li></ul>',
             helpSec3Title: 'Où trouver les fichiers de résultats',
@@ -411,12 +437,14 @@ const i18n = {
             helpSec7Title: 'Variables dérivées',
             helpSec7Body: 'Utilisez les <b>variables dérivées</b> pour créer de nouveaux signaux à partir des variables et paramètres chargés. Le champ de formule accepte <code>+ - * / ^</code>, les parenthèses, et des fonctions comme <code>sqrt(x)</code>, <code>abs(x)</code>, <code>log(x)</code>, <code>log10(x)</code>, <code>power(x,n)</code> et <code>root(x,n)</code>. Commencez à taper pour compléter les noms de variables et de fonctions, ou cliquez sur le bouton jaune <b>?</b> près de <b>+</b> pour une référence compacte.',
             helpSec8Title: 'Dossier temporaire OpenModelica',
-            helpSec8Body: 'Le menu déroulant à côté de <b>📂</b> peut copier automatiquement le chemin probable du dossier temporaire OpenModelica. Collez-le dans la barre d\'adresse du sélecteur de fichiers pour atteindre plus vite les résultats récents d\'OMEdit, surtout quand OpenModelica écrit les simulations dans son dossier temporaire.'
+            helpSec8Body: 'Le menu déroulant à côté de <b>📂</b> peut copier automatiquement le chemin probable du dossier temporaire OpenModelica. Collez-le dans la barre d\'adresse du sélecteur de fichiers pour atteindre plus vite les résultats récents d\'OMEdit, surtout quand OpenModelica écrit les simulations dans son dossier temporaire.',
+            helpSec9Title: 'Curseurs de mesure',
+            helpSec9Body: 'En mode <b>série temporelle</b>, cliquez sur le bouton <b>A|B</b> de la barre d\'outils du panneau pour activer deux curseurs de mesure verticaux. Déplacez chaque curseur à la souris pour le positionner. La boîte d\'information flottante affiche les coordonnées (x, y) à chaque curseur ainsi que les deltas <b>ΔX</b>, <b>ΔY</b> et <b>ΔY/ΔX</b> entre eux, avec les unités déduites de la trace.<ul><li>Pour chaque curseur (A et B), trois petites icônes permettent de sauter au prochain <b>maximum relatif</b>, au prochain <b>minimum relatif</b>, ou au prochain <b>passage par zéro</b> de la trace sélectionnée. Maintenez <b>Maj</b> en cliquant pour rechercher vers l\'arrière plutôt que vers l\'avant.</li><li>Si un panneau contient plusieurs traces, utilisez les listes déroulantes <b>A Trace</b> et <b>B Trace</b> pour choisir la trace que chaque curseur mesure. Les deux curseurs peuvent cibler des traces différentes — utile pour trouver le décalage temporel entre deux signaux.</li><li>La boîte d\'information elle-même est déplaçable ; saisissez son en-tête pour la décaler.</li><li>Les curseurs ne sont disponibles qu\'en mode série temporelle ; le bouton est désactivé dans les modes phase (2D, 2D+t, 3D) et animation d\'état.</li></ul>'
         },
 
         es: {
             // App title
-            appTitle: 'Visor de resultados OpenModelica/Dymola',
+            appTitle: 'Visor de resultados OpenModelica/Dymola & CSV',
 
             // Top bar
             variables: 'Variables',
@@ -441,14 +469,14 @@ const i18n = {
             hoverProximity: 'Hover por proximidad',
 
             // Drop zone
-            dragFile: 'Arrastra un archivo .mat aquí',
+            dragFile: 'Arrastra un archivo .mat o .csv aquí',
             or: 'o',
             selectFile: 'Seleccionar archivo',
 
             // Messages
             fileLoaded: 'Archivo cargado con éxito',
             errorLoading: 'Error al cargar el archivo',
-            invalidFile: 'Archivo .mat inválido',
+            invalidFile: 'Archivo .mat o .csv inválido',
 
             // Tree
             component: 'Componente',
@@ -494,6 +522,12 @@ const i18n = {
             loadingExampleCancelHint: 'Presiona Escape para cancelar.',
             files: 'Archivos',
             closeFile: 'Eliminar archivo',
+            fileTransformTitle: 'Alinear este archivo',
+            fileCropTitle: 'Recorte',
+            fileOffsetTitle: 'Desplazamiento',
+            cropStartLabel: 'Inicio',
+            cropEndLabel: 'Fin',
+            resetTransform: 'Reiniciar alineación',
             closeFileWarning: 'Este archivo tiene gráficos cargados. Eliminarlo borrará esos gráficos. ¿Continuar?',
 
             // Layout panels
@@ -536,6 +570,12 @@ const i18n = {
             saNorm:          'Normalizar dx/dt a una longitud de visualización fija',
             saDZoom:         'Zoom automático para seguir el estado durante la animación',
             compareFiles:          'Superponer trazas de todos los archivos cargados',
+            cursorsToggle:         'Cursores de medición',
+            cursorsNoTrace:        'No hay una traza visible seleccionada.',
+            cursorTraceLabel:      'Traza',
+            cursorNextMax:         'Saltar al próximo máximo relativo (Mayús+clic para anterior)',
+            cursorNextMin:         'Saltar al próximo mínimo relativo (Mayús+clic para anterior)',
+            cursorNextZero:        'Saltar al próximo cruce por cero (Mayús+clic para anterior)',
 
             // Cursors & FFT
             cursorA: 'Cursor A',
@@ -597,10 +637,10 @@ const i18n = {
             confirm: 'Confirmar',
             cancel: 'Cancelar',
 
-            helpTitle: 'Ayuda — Visor de resultados OpenModelica & Dymola',
+            helpTitle: 'Ayuda — Visor de resultados OpenModelica/Dymola & CSV',
             helpClose: 'Cerrar',
             helpSec1Title: 'Propósito',
-            helpSec1Body: 'Esta aplicación abre archivos de resultados de simulación en formato <b>.mat</b> producidos por <b>OpenModelica</b> y <b>Dymola</b>. Ambos simuladores almacenan resultados de series temporales en el mismo formato binario MAT v4.<br>Cargue un archivo arrastrándolo a la zona de descarga, o haciendo clic en el botón <b>📂</b> de la barra superior. Recargue el archivo activo en cualquier momento con <b>🔄</b>.',
+            helpSec1Body: 'Esta aplicación abre archivos de resultados de simulación en formato <b>.mat</b> producidos por <b>OpenModelica</b> y <b>Dymola</b>, y también archivos <b>.csv</b> de cualquier origen (hojas de cálculo, instrumentos de laboratorio, scripts personalizados, …) con una fila de títulos seguida de valores numéricos. En CSV, la primera columna se interpreta como tiempo. Los encabezados pueden incluir unidades entre corchetes o paréntesis (por ejemplo <code>voltaje [V]</code>, <code>temperatura (C)</code>); se reconocen automáticamente.<br>Cargue un archivo arrastrándolo a la zona de descarga, o haciendo clic en el botón <b>📂</b> de la barra superior. Recargue el archivo activo en cualquier momento con <b>🔄</b>.',
             helpSec2Title: 'Tipos de gráficos',
             helpSec2Body: 'Arrastre variables desde la barra lateral hacia cualquier panel. Todos los modos admiten múltiples trazas en el mismo panel.<ul><li><b>Serie temporal (📈)</b> — una o más variables en función del tiempo. Cada variable arrastrada agrega una traza.</li><li><b>Fase 2D</b> — dos variables representadas entre sí (X vs Y). Suelte primero X, luego Y. Cada par crea una traza.</li><li><b>Fase 2D+t</b> — igual que Fase 2D, pero el tiempo se muestra como tercer eje (curva 3D en el espacio).</li><li><b>Fase 3D</b> — tres variables en un espacio 3D. Suelte X, luego Y, luego Z. Cada triplete crea una traza.</li></ul>',
             helpSec3Title: 'Dónde encontrar los archivos de resultados',
@@ -614,12 +654,14 @@ const i18n = {
             helpSec7Title: 'Variables derivadas',
             helpSec7Body: 'Use <b>Variables derivadas</b> para crear nuevas señales a partir de variables y parámetros cargados. El recuadro de fórmula acepta <code>+ - * / ^</code>, paréntesis y funciones como <code>sqrt(x)</code>, <code>abs(x)</code>, <code>log(x)</code>, <code>log10(x)</code>, <code>power(x,n)</code> y <code>root(x,n)</code>. Empiece a escribir para autocompletar nombres de variables y funciones, o haga clic en el botón amarillo <b>?</b> junto al <b>+</b> para ver una referencia compacta.',
             helpSec8Title: 'Directorio temporal de OpenModelica',
-            helpSec8Body: 'El menú desplegable junto a <b>📂</b> puede copiar automáticamente la ruta probable del directorio temporal de OpenModelica. Péguela en la barra de dirección del selector de archivos para llegar más rápido a los resultados recientes de OMEdit, especialmente cuando OpenModelica escribe las simulaciones en su directorio temporal.'
+            helpSec8Body: 'El menú desplegable junto a <b>📂</b> puede copiar automáticamente la ruta probable del directorio temporal de OpenModelica. Péguela en la barra de dirección del selector de archivos para llegar más rápido a los resultados recientes de OMEdit, especialmente cuando OpenModelica escribe las simulaciones en su directorio temporal.',
+            helpSec9Title: 'Cursores de medida',
+            helpSec9Body: 'En modo <b>serie temporal</b>, haga clic en el botón <b>A|B</b> de la barra de herramientas del panel para activar dos cursores verticales de medida. Arrastre cada cursor con el ratón para colocarlo. La caja de información flotante muestra las coordenadas (x, y) en cada cursor y los deltas <b>ΔX</b>, <b>ΔY</b> y <b>ΔY/ΔX</b> entre ellos, con las unidades deducidas de la traza.<ul><li>Para cada cursor (A y B), tres pequeños iconos permiten saltar al siguiente <b>máximo relativo</b>, al siguiente <b>mínimo relativo</b>, o al siguiente <b>cruce por cero</b> de la traza seleccionada. Mantenga <b>Mayús</b> al hacer clic para buscar hacia atrás en lugar de hacia adelante.</li><li>Si un panel contiene varias trazas, utilice las listas desplegables <b>A Trace</b> y <b>B Trace</b> para elegir qué traza mide cada cursor. Los dos cursores pueden apuntar a trazas distintas — útil para hallar el desfase temporal entre dos señales.</li><li>La caja de información se puede arrastrar; sujete su encabezado para moverla.</li><li>Los cursores solo están disponibles en modo serie temporal; el botón está desactivado en modos fase (2D, 2D+t, 3D) y animación de estado.</li></ul>'
         },
 
         it: {
             // App title
-            appTitle: 'Visualizzatore risultati OpenModelica/Dymola',
+            appTitle: 'Visualizzatore risultati OpenModelica/Dymola & CSV',
 
             // Top bar
             variables: 'Variabili',
@@ -644,14 +686,14 @@ const i18n = {
             hoverProximity: 'Hover per prossimità',
 
             // Drop zone
-            dragFile: 'Trascina un file .mat qui',
+            dragFile: 'Trascina un file .mat o .csv qui',
             or: 'oppure',
             selectFile: 'Seleziona file',
 
             // Messages
             fileLoaded: 'File caricato con successo',
             errorLoading: 'Errore nel caricamento del file',
-            invalidFile: 'File .mat non valido',
+            invalidFile: 'File .mat o .csv non valido',
 
             // Tree
             component: 'Componente',
@@ -697,6 +739,12 @@ const i18n = {
             loadingExampleCancelHint: 'Premi Escape per annullare.',
             files: 'File',
             closeFile: 'Rimuovi file',
+            fileTransformTitle: 'Allinea questo file',
+            fileCropTitle: 'Ritaglio',
+            fileOffsetTitle: 'Scostamento',
+            cropStartLabel: 'Inizio',
+            cropEndLabel: 'Fine',
+            resetTransform: 'Reimposta allineamento',
             closeFileWarning: 'Questo file ha grafici caricati. Rimuoverlo cancellerà quei grafici. Continuare?',
 
             // Layout panels
@@ -739,6 +787,12 @@ const i18n = {
             saNorm:          'Normalizza dx/dt a una lunghezza di visualizzazione fissa',
             saDZoom:         'Zoom automatico per seguire lo stato durante l\'animazione',
             compareFiles:          'Sovrapporre tracce da tutti i file caricati',
+            cursorsToggle:         'Cursori di misura',
+            cursorsNoTrace:        'Nessuna traccia visibile selezionata.',
+            cursorTraceLabel:      'Traccia',
+            cursorNextMax:         'Vai al prossimo massimo relativo (Maiusc+clic per precedente)',
+            cursorNextMin:         'Vai al prossimo minimo relativo (Maiusc+clic per precedente)',
+            cursorNextZero:        'Vai al prossimo passaggio per zero (Maiusc+clic per precedente)',
 
             // Cursors & FFT
             cursorA: 'Cursore A',
@@ -800,10 +854,10 @@ const i18n = {
             confirm: 'Conferma',
             cancel: 'Annulla',
 
-            helpTitle: 'Guida — Visualizzatore risultati OpenModelica & Dymola',
+            helpTitle: 'Guida — Visualizzatore risultati OpenModelica/Dymola & CSV',
             helpClose: 'Chiudi',
             helpSec1Title: 'Scopo',
-            helpSec1Body: 'Questa applicazione apre file di risultati di simulazione in formato <b>.mat</b> prodotti da <b>OpenModelica</b> e <b>Dymola</b>. Entrambi i simulatori memorizzano i risultati delle serie temporali nello stesso formato binario MAT v4.<br>Caricare un file trascinandolo nella zona di rilascio, oppure facendo clic sul pulsante <b>📂</b> nella barra superiore. Ricaricare il file attivo in qualsiasi momento con <b>🔄</b>.',
+            helpSec1Body: 'Questa applicazione apre file di risultati di simulazione in formato <b>.mat</b> prodotti da <b>OpenModelica</b> e <b>Dymola</b>, e anche file <b>.csv</b> di qualsiasi origine (fogli di calcolo, strumenti di laboratorio, script personalizzati, …) con una riga di intestazione seguita da valori numerici. Nei CSV, la prima colonna viene trattata come tempo. Le intestazioni possono includere unità tra parentesi quadre o tonde (ad esempio <code>tensione [V]</code>, <code>temperatura (C)</code>); vengono riconosciute automaticamente.<br>Caricare un file trascinandolo nella zona di rilascio, oppure facendo clic sul pulsante <b>📂</b> nella barra superiore. Ricaricare il file attivo in qualsiasi momento con <b>🔄</b>.',
             helpSec2Title: 'Tipi di grafici',
             helpSec2Body: 'Trascinare le variabili dalla barra laterale su qualsiasi pannello. Tutti i modi supportano più tracce nello stesso pannello.<ul><li><b>Serie temporale (📈)</b> — una o più variabili in funzione del tempo. Ogni variabile trascinata aggiunge una traccia.</li><li><b>Fase 2D</b> — due variabili rappresentate l\'una in funzione dell\'altra (X vs Y). Rilasciare prima X, poi Y. Ogni coppia crea una traccia.</li><li><b>Fase 2D+t</b> — uguale a Fase 2D, ma il tempo è mostrato come terzo asse (curva 3D nello spazio).</li><li><b>Fase 3D</b> — tre variabili in uno spazio 3D. Rilasciare X, poi Y, poi Z. Ogni terzetto crea una traccia.</li></ul>',
             helpSec3Title: 'Dove trovare i file di risultati',
@@ -817,7 +871,9 @@ const i18n = {
             helpSec7Title: 'Variabili derivate',
             helpSec7Body: 'Usare le <b>variabili derivate</b> per creare nuovi segnali dalle variabili e dai parametri caricati. Il campo formula supporta <code>+ - * / ^</code>, parentesi e funzioni come <code>sqrt(x)</code>, <code>abs(x)</code>, <code>log(x)</code>, <code>log10(x)</code>, <code>power(x,n)</code> e <code>root(x,n)</code>. Iniziare a digitare per completare automaticamente nomi di variabili e funzioni, oppure fare clic sul pulsante giallo <b>?</b> accanto a <b>+</b> per una guida compatta.',
             helpSec8Title: 'Cartella temporanea OpenModelica',
-            helpSec8Body: 'Il menu a discesa accanto a <b>📂</b> può copiare automaticamente il percorso probabile della cartella temporanea di OpenModelica. Incollarlo nella barra indirizzi del selettore file per raggiungere più rapidamente i risultati recenti di OMEdit, soprattutto quando OpenModelica scrive le simulazioni nella propria cartella temporanea.'
+            helpSec8Body: 'Il menu a discesa accanto a <b>📂</b> può copiare automaticamente il percorso probabile della cartella temporanea di OpenModelica. Incollarlo nella barra indirizzi del selettore file per raggiungere più rapidamente i risultati recenti di OMEdit, soprattutto quando OpenModelica scrive le simulazioni nella propria cartella temporanea.',
+            helpSec9Title: 'Cursori di misura',
+            helpSec9Body: 'In modalità <b>serie temporale</b>, fare clic sul pulsante <b>A|B</b> nella barra degli strumenti del pannello per attivare due cursori di misura verticali. Trascinare ciascun cursore con il mouse per posizionarlo. La casella informativa mobile mostra le coordinate (x, y) di ogni cursore e i delta <b>ΔX</b>, <b>ΔY</b> e <b>ΔY/ΔX</b> tra loro, con le unità dedotte dalla traccia.<ul><li>Per ogni cursore (A e B), tre piccole icone permettono di saltare al successivo <b>massimo relativo</b>, al successivo <b>minimo relativo</b>, o al successivo <b>passaggio per zero</b> della traccia selezionata. Tenere premuto <b>Maiusc</b> mentre si fa clic per cercare all\'indietro anziché in avanti.</li><li>Se un pannello contiene più tracce, usare i menu a discesa <b>A Trace</b> e <b>B Trace</b> per scegliere quale traccia misura ogni cursore. I due cursori possono puntare a tracce diverse — utile per trovare lo sfasamento temporale tra due segnali.</li><li>La casella informativa è essa stessa trascinabile; afferrarne l\'intestazione per spostarla.</li><li>I cursori sono disponibili solo in modalità serie temporale; il pulsante è disabilitato nelle modalità fase (2D, 2D+t, 3D) e animazione di stato.</li></ul>'
         }
     },
 

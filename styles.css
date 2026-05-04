@@ -1163,7 +1163,16 @@ body {
 }
 
 .file-entry-transform {
-    font-size: 0.82rem;
+    font-size: 0.95rem;
+    opacity: 0.85;
+}
+
+.theme-light .file-entry-transform {
+    color: var(--derived-color);
+}
+
+.theme-dark .file-entry-transform {
+    color: var(--warning-color);
 }
 
 .file-entry-transform[aria-expanded="true"],
@@ -1549,6 +1558,29 @@ body {
     color: var(--text-primary);
     font-size: 0.72rem;
     padding: 2px 4px;
+}
+
+.cursor-extremum-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    background: var(--bg-primary);
+    cursor: pointer;
+    line-height: 0;
+}
+
+.cursor-extremum-btn:hover {
+    background: var(--bg-secondary, rgba(127,127,127,0.15));
+}
+
+.cursor-extremum-btn svg {
+    pointer-events: none;
 }
 
 .cursor-info-values {

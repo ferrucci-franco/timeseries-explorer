@@ -2661,6 +2661,85 @@ class PlotManager {
         return 'linear';
     }
 
+    _findNextExtremum(times, values, fromX, type, direction = 'next') {
+        const n = Math.min(times?.length || 0, values?.length || 0);
+        if (n < 3) return NaN;
+        const matches = (i) => {
+            const v = values[i], vp = values[i - 1], vn = values[i + 1];
+            if (!Number.isFinite(v) || !Number.isFinite(vp) || !Number.isFinite(vn)) return false;
+            if (type === 'max') return v > vp && v > vn;
+            if (type === 'min') return v < vp && v < vn;
+            return false;
+        };
+        if (direction === 'prev') {
+            let i = n - 2;
+            while (i >= 1 && times[i] >= fromX) i--;
+            for (; i >= 1; i--) {
+                if (matches(i)) return times[i];
+            }
+            return NaN;
+        }
+        let i = 0;
+        while (i < n && times[i] <= fromX) i++;
+        if (i < 1) i = 1;
+        for (; i < n - 1; i++) {
+            if (matches(i)) return times[i];
+        }
+        return NaN;
+    }
+
+    _findNextZeroCrossing(times, values, fromX, mode, direction = 'next') {
+        const n = Math.min(times?.length || 0, values?.length || 0);
+        if (n < 2) return NaN;
+        const segmentCrossing = (i) => {
+            const v0 = values[i - 1], v1 = values[i];
+            const t0 = times[i - 1],  t1 = times[i];
+            if (!Number.isFinite(v0) || !Number.isFinite(v1)) return NaN;
+            if (!Number.isFinite(t0) || !Number.isFinite(t1)) return NaN;
+            if (mode === 'step') {
+                return Math.sign(v0) !== Math.sign(v1) ? t1 : NaN;
+            }
+            if (v1 === 0) return t1;
+            if (v0 === 0) return t0;
+            if ((v0 < 0 && v1 > 0) || (v0 > 0 && v1 < 0)) {
+                return t0 + (-v0) * (t1 - t0) / (v1 - v0);
+            }
+            return NaN;
+        };
+        if (direction === 'prev') {
+            for (let i = n - 1; i >= 1; i--) {
+                const tCross = segmentCrossing(i);
+                if (Number.isFinite(tCross) && tCross < fromX) return tCross;
+            }
+            return NaN;
+        }
+        for (let i = 1; i < n; i++) {
+            const tCross = segmentCrossing(i);
+            if (Number.isFinite(tCross) && tCross > fromX) return tCross;
+        }
+        return NaN;
+    }
+
+    _jumpCursorTo(panelId, which, target, direction = 'next') {
+        const plot = this.plots.get(panelId);
+        if (!plot?.cursors?.enabled) return;
+        const trace = this._resolveCursorTrace(plot, which);
+        if (!trace) return;
+        const cursorX = plot.cursors[which];
+        if (!Number.isFinite(cursorX)) return;
+        const times  = this._getTransformedTimeData(trace.fileId);
+        const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+        let nextX = NaN;
+        if (target === 'max' || target === 'min') {
+            nextX = this._findNextExtremum(times, values, cursorX, target, direction);
+        } else if (target === 'zero') {
+            nextX = this._findNextZeroCrossing(times, values, cursorX, this._traceInterpolationMode(trace), direction);
+        }
+        if (!Number.isFinite(nextX)) return;
+        plot.cursors[which] = nextX;
+        this._syncCursorDisplay(panelId, plot);
+    }
+
     _panelGuideShapes(plot, extra = []) {
         return [...this._cursorShapes(plot), ...extra];
     }
@@ -2819,14 +2898,27 @@ class PlotManager {
             })
             .join('');
         const traceLabel = this._escapeHTML(i18n.t('cursorTraceLabel'));
+        const maxIcon  = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M1 11 Q 8 0 15 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+        const minIcon  = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M1 1 Q 8 12 15 1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+        const zeroIcon = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M1 6 H 15" stroke="currentColor" stroke-width="0.8" opacity="0.55" fill="none"/><path d="M2.5 1.5 Q 6 6 8 6 Q 10 6 13.5 10.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/><circle cx="8" cy="6" r="1.4" fill="currentColor"/></svg>`;
+        const maxTitle  = this._escapeHTML(i18n.t('cursorNextMax'));
+        const minTitle  = this._escapeHTML(i18n.t('cursorNextMin'));
+        const zeroTitle = this._escapeHTML(i18n.t('cursorNextZero'));
+        const buildExtremaBtns = (which, color) => `
+            <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="max"  style="color:${color}" title="${maxTitle} (${which.toUpperCase()})"  aria-label="${maxTitle} (${which.toUpperCase()})">${maxIcon}</button>
+            <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="min"  style="color:${color}" title="${minTitle} (${which.toUpperCase()})"  aria-label="${minTitle} (${which.toUpperCase()})">${minIcon}</button>
+            <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="zero" style="color:${color}" title="${zeroTitle} (${which.toUpperCase()})" aria-label="${zeroTitle} (${which.toUpperCase()})">${zeroIcon}</button>
+        `;
         const selectorsHTML = `
             <label class="cursor-trace-select" data-cursor="a">
                 <span><b style="color:${colorA}">A</b> ${traceLabel}</span>
                 <select>${buildOptions(traceA)}</select>
+                ${buildExtremaBtns('a', colorA)}
             </label>
             <label class="cursor-trace-select" data-cursor="b">
                 <span><b style="color:${colorB}">B</b> ${traceLabel}</span>
                 <select>${buildOptions(traceB)}</select>
+                ${buildExtremaBtns('b', colorB)}
             </label>
         `;
         const moveIcon = `<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>`;
@@ -2867,6 +2959,18 @@ class PlotManager {
                     const key = which === 'b' ? 'traceB' : 'traceA';
                     plot.cursors[key] = { fileId: selectedTrace.fileId, varName: selectedTrace.varName };
                     this._syncCursorDisplay(panelId, plot);
+                });
+            });
+            box.querySelectorAll('.cursor-extremum-btn').forEach(btn => {
+                const which  = btn.getAttribute('data-cursor');
+                const target = btn.getAttribute('data-target');
+                if ((which !== 'a' && which !== 'b') || !['max', 'min', 'zero'].includes(target)) return;
+                btn.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const direction = e.shiftKey ? 'prev' : 'next';
+                    this._jumpCursorTo(panelId, which, target, direction);
                 });
             });
         }
