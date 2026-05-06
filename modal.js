@@ -12,6 +12,7 @@ const Modal = {
      */
     confirm(message, options = {}) {
         return new Promise((resolve) => {
+            const previousActive = document.activeElement;
             // Create overlay
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
@@ -43,18 +44,10 @@ const Modal = {
             const cancelBtn = document.createElement('button');
             cancelBtn.className = 'modal-btn modal-btn-cancel';
             cancelBtn.textContent = i18n.t('cancel');
-            cancelBtn.addEventListener('click', () => {
-                this.close(overlay);
-                resolve(false);
-            });
 
             const confirmBtn = document.createElement('button');
             confirmBtn.className = 'modal-btn modal-btn-confirm';
             confirmBtn.textContent = i18n.t('confirm');
-            confirmBtn.addEventListener('click', () => {
-                this.close(overlay);
-                resolve(true);
-            });
 
             buttons.appendChild(cancelBtn);
             buttons.appendChild(confirmBtn);
@@ -64,26 +57,35 @@ const Modal = {
             overlay.appendChild(modal);
             document.body.appendChild(overlay);
 
+            let settled = false;
+            const finish = (result) => {
+                if (settled) return;
+                settled = true;
+                document.removeEventListener('keydown', escHandler);
+                this.close(overlay, previousActive);
+                resolve(result);
+            };
+
             // Focus confirm button
             setTimeout(() => confirmBtn.focus(), 100);
 
             // Close on overlay click
             overlay.addEventListener('click', (e) => {
                 if (e.target === overlay) {
-                    this.close(overlay);
-                    resolve(false);
+                    finish(false);
                 }
             });
 
             // Close on ESC key
             const escHandler = (e) => {
                 if (e.key === 'Escape') {
-                    this.close(overlay);
-                    resolve(false);
-                    document.removeEventListener('keydown', escHandler);
+                    finish(false);
                 }
             };
             document.addEventListener('keydown', escHandler);
+
+            cancelBtn.addEventListener('click', () => finish(false));
+            confirmBtn.addEventListener('click', () => finish(true));
 
             // Animate in
             requestAnimationFrame(() => {
@@ -100,6 +102,7 @@ const Modal = {
      */
     alert(title, body, options = {}) {
         return new Promise((resolve) => {
+            const previousActive = document.activeElement;
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
 
@@ -136,7 +139,6 @@ const Modal = {
             const closeBtn = document.createElement('button');
             closeBtn.className = 'modal-btn modal-btn-confirm';
             closeBtn.textContent = i18n.t('compareFilesClose') || 'Close';
-            closeBtn.addEventListener('click', () => { this.close(overlay); resolve(); });
 
             buttons.appendChild(closeBtn);
             content.appendChild(buttons);
@@ -144,20 +146,28 @@ const Modal = {
             overlay.appendChild(modal);
             document.body.appendChild(overlay);
 
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                document.removeEventListener('keydown', escHandler);
+                this.close(overlay, previousActive);
+                resolve();
+            };
+
             setTimeout(() => closeBtn.focus(), 100);
 
             overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) { this.close(overlay); resolve(); }
+                if (e.target === overlay) finish();
             });
 
             const escHandler = (e) => {
                 if (e.key === 'Escape') {
-                    this.close(overlay);
-                    resolve();
-                    document.removeEventListener('keydown', escHandler);
+                    finish();
                 }
             };
             document.addEventListener('keydown', escHandler);
+            closeBtn.addEventListener('click', finish);
 
             requestAnimationFrame(() => overlay.classList.add('show'));
         });
@@ -167,12 +177,17 @@ const Modal = {
      * Close and remove a modal
      * @param {HTMLElement} overlay - The overlay element to remove
      */
-    close(overlay) {
+    close(overlay, previousActive = null) {
+        overlay.style.pointerEvents = 'none';
         overlay.classList.remove('show');
         setTimeout(() => {
             if (overlay.parentNode) {
                 overlay.parentNode.removeChild(overlay);
             }
+            if (previousActive && typeof previousActive.focus === 'function' && document.contains(previousActive)) {
+                try { previousActive.focus({ preventScroll: true }); } catch (_) {}
+            }
+            window.dispatchEvent(new Event('resize'));
         }, 300);
     }
 };

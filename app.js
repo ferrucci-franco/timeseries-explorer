@@ -540,7 +540,7 @@ class OpenModelicaViewer {
 
             const transformBtn = document.createElement('button');
             transformBtn.className = 'file-entry-transform';
-            transformBtn.textContent = '⚙';
+            transformBtn.textContent = '⛭';
             transformBtn.title = i18n.t('fileTransformTitle');
             transformBtn.setAttribute('aria-expanded', String(this._expandedFileTransforms.has(fileId)));
             transformBtn.addEventListener('click', (e) => {
@@ -566,7 +566,7 @@ class OpenModelicaViewer {
     }
 
     _defaultFileTransform() {
-        return { timeShift: 0, yOffset: 0, cropStart: null, cropEnd: null };
+        return { timeShift: 0, gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
     }
 
     _normalizeFileTransform(transform = null) {
@@ -582,6 +582,10 @@ class OpenModelicaViewer {
         };
         return {
             timeShift: finiteOrZero(t.timeShift),
+            gain: (() => {
+                const n = Number(t.gain);
+                return Number.isFinite(n) ? n : 1;
+            })(),
             yOffset: finiteOrZero(t.yOffset),
             cropStart: finiteOrNull(t.cropStart),
             cropEnd: finiteOrNull(t.cropEnd),
@@ -590,7 +594,7 @@ class OpenModelicaViewer {
 
     _isFileTransformActive(transform) {
         const t = this._normalizeFileTransform(transform);
-        return t.timeShift !== 0 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+        return t.timeShift !== 0 || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
     }
 
     _toggleFileTransformPanel(fileId) {
@@ -605,7 +609,7 @@ class OpenModelicaViewer {
         panel.className = 'file-transform-panel';
         panel.addEventListener('click', e => e.stopPropagation());
 
-        const makeInput = (key, label, value, placeholder = '0') => {
+        const makeInput = (key, label, value, placeholder = '0', options = {}) => {
             const wrap = document.createElement('label');
             wrap.className = 'file-transform-field';
 
@@ -614,7 +618,7 @@ class OpenModelicaViewer {
 
             const input = document.createElement('input');
             input.type = 'number';
-            input.step = 'any';
+            input.step = options.step || 'any';
             input.inputMode = 'decimal';
             input.placeholder = placeholder;
             input.value = value === null || value === undefined ? '' : String(value);
@@ -643,6 +647,14 @@ class OpenModelicaViewer {
             offsetTitle,
             makeInput('timeShift', 'Δt', transform.timeShift),
             makeInput('yOffset', 'Δy', transform.yOffset),
+        );
+
+        const gainTitle = document.createElement('div');
+        gainTitle.className = 'file-transform-title';
+        gainTitle.textContent = i18n.t('fileGainTitle');
+        panel.append(
+            gainTitle,
+            makeInput('gain', i18n.t('gainLabel'), transform.gain, '1', { step: '0.1' }),
         );
 
         const actions = document.createElement('div');
@@ -1298,7 +1310,7 @@ class OpenModelicaViewer {
     }
 
     showHelp() {
-        const sections = ['1','2','3','4','5','6','7','8','9'];
+        const sections = ['1','2','5','3','10','4','6','7','8','9'];
 
         const backdrop = document.createElement('div');
         backdrop.className = 'help-backdrop';

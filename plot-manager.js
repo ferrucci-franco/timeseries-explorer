@@ -1206,6 +1206,10 @@ class PlotManager {
         };
         return {
             timeShift: finiteOrZero(t.timeShift),
+            gain: (() => {
+                const n = Number(t.gain);
+                return Number.isFinite(n) ? n : 1;
+            })(),
             yOffset: finiteOrZero(t.yOffset),
             cropStart: finiteOrNull(t.cropStart),
             cropEnd: finiteOrNull(t.cropEnd),
@@ -1214,7 +1218,7 @@ class PlotManager {
 
     _isFileTransformActive(transform) {
         const t = this._normalizeFileTransform(transform);
-        return t.timeShift !== 0 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+        return t.timeShift !== 0 || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
     }
 
     _fileTransform(fileId) {
@@ -1275,27 +1279,27 @@ class PlotManager {
         if (variable.kind === 'abscissa') return this._getTransformedTimeData(fileId);
 
         const transform = this._fileTransform(fileId);
+        const gain = transform.gain;
         const yOffset = includeYOffset ? transform.yOffset : 0;
         const indexData = this._getTransformIndexData(fileId);
         const cache = this._transformCache(fileId);
-        const cacheKey = `${varName}\u0000${includeYOffset ? 'y' : 'n'}`;
+        const cacheKey = `${varName}\u0000${includeYOffset ? 'y' : 'n'}\u0000${gain}`;
         if (cache?.series.has(cacheKey)) return cache.series.get(cacheKey);
+
+        const transformValue = (value) => Number.isFinite(value) ? value * gain + yOffset : value;
 
         let values;
         if (variable.kind === 'parameter') {
             const base = Number(variable.data?.[0]);
-            const value = Number.isFinite(base) ? base + yOffset : base;
+            const value = transformValue(base);
             const n = Math.max(1, indexData.times.length);
             values = new Array(n).fill(value);
-        } else if (!indexData.indexes && yOffset === 0) {
+        } else if (!indexData.indexes && gain === 1 && yOffset === 0) {
             values = variable.data;
         } else if (!indexData.indexes) {
-            values = variable.data.map(v => Number.isFinite(v) ? v + yOffset : v);
+            values = variable.data.map(transformValue);
         } else {
-            values = indexData.indexes.map(i => {
-                const v = variable.data[i];
-                return Number.isFinite(v) ? v + yOffset : v;
-            });
+            values = indexData.indexes.map(i => transformValue(variable.data[i]));
         }
 
         if (cache) cache.series.set(cacheKey, values);
@@ -1684,7 +1688,7 @@ class PlotManager {
             </select>
             <label class="sa-toggle" title="${i18n.t('saFull')}"><input type="checkbox" class="sa-chk-full" checked><span>${i18n.t('saFullLabel')}</span></label>
             <label class="sa-toggle" title="${i18n.t('saTrace')}"><input type="checkbox" class="sa-chk-trace" checked><span>${i18n.t('saTraceLabel')}</span></label>
-            <label class="sa-toggle" title="${i18n.t('saArrowX')}"><input type="checkbox" class="sa-chk-arrow" checked><span>x⃗</span></label>
+            <label class="sa-toggle" title="${i18n.t('saArrowX')}"><input type="checkbox" class="sa-chk-arrow" checked><span class="sa-vector-label" aria-label="x vector"><span class="sa-vector-base">x</span><span class="sa-vector-arrow" aria-hidden="true">→</span></span></label>
             <label class="sa-toggle" title="${i18n.t('saArrowDx')}"><input type="checkbox" class="sa-chk-dx" checked><span>dx/dt</span></label>
             <label class="sa-toggle" title="${i18n.t('saNorm')}"><input type="checkbox" class="sa-chk-norm" checked><span>${i18n.t('saNormLabel')}</span></label>
             <label class="sa-toggle sa-toggle-dzoom" title="${i18n.t('saDZoom')}"><input type="checkbox" class="sa-chk-dzoom"><span>${i18n.t('saDZoomLabel')}</span></label>
@@ -2318,173 +2322,177 @@ class PlotManager {
         const xVal = pt.x;   // hovered time value
 
         this._hovering = true;
+        try {
+            // Time unit from source panel's first trace
+            const srcPlot    = this.plots.get(sourcePanelId);
+            const srcFid     = srcPlot?.traces?.[0]?.fileId ?? this.activeFileId;
+            const srcTimeVar = this._getTimeVar(srcFid);
+            const timeUnit   = srcTimeVar ? this._extractUnit(srcTimeVar.description) : 's';
 
-        // Time unit from source panel's first trace
-        const srcPlot    = this.plots.get(sourcePanelId);
-        const srcFid     = srcPlot?.traces?.[0]?.fileId ?? this.activeFileId;
-        const srcTimeVar = this._getTimeVar(srcFid);
-        const timeUnit   = srcTimeVar ? this._extractUnit(srcTimeVar.description) : 's';
+            for (const [, plot] of this.plots) {
+                if (!plot.div || !plot.div.isConnected) continue;
+                const panelEl = plot.div.closest('.layout-panel');
 
-        for (const [, plot] of this.plots) {
-            if (!plot.div) continue;
-            const panelEl = plot.div.closest('.layout-panel');
-
-            if (plot.mode === 'timeseries') {
-                Plotly.relayout(plot.div, {
-                    shapes: this._panelGuideShapes(plot, [{
-                        type: 'line', xref: 'x', yref: 'paper',
-                        x0: xVal, x1: xVal, y0: 0, y1: 1,
-                        line: { color: 'rgba(120,120,120,0.6)', width: 1, dash: 'dot' },
-                    }]),
-                });
-                if (plot.markerTraceIdx != null) {
-                    const xs = [], ys = [];
+                if (plot.mode === 'timeseries') {
+                    Plotly.relayout(plot.div, {
+                        shapes: this._panelGuideShapes(plot, [{
+                            type: 'line', xref: 'x', yref: 'paper',
+                            x0: xVal, x1: xVal, y0: 0, y1: 1,
+                            line: { color: 'rgba(120,120,120,0.6)', width: 1, dash: 'dot' },
+                        }]),
+                    });
+                    if (plot.markerTraceIdx != null) {
+                        const xs = [], ys = [];
+                        plot.traces.forEach(t => {
+                            const hidden  = t.visible === 'legendonly' || t.visible === false;
+                            const d       = this.files.get(t.fileId)?.data;
+                            const v       = d?.variables[t.varName];
+                            const tdata   = this._getTransformedTimeData(t.fileId);
+                            const tidx    = this._findTimeIdx(tdata, xVal);
+                            const ydata   = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
+                            if (!hidden && v && v.kind !== 'parameter' && ydata.length) { xs.push(xVal); ys.push(ydata[tidx]); }
+                            else { xs.push(null); ys.push(null); }
+                        });
+                        Plotly.restyle(plot.div, { x: [xs], y: [ys], visible: true }, [plot.markerTraceIdx]);
+                    }
+                    const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
                     plot.traces.forEach(t => {
-                        const hidden  = t.visible === 'legendonly' || t.visible === false;
-                        const d       = this.files.get(t.fileId)?.data;
-                        const v       = d?.variables[t.varName];
-                        const tdata   = this._getTransformedTimeData(t.fileId);
-                        const tidx    = this._findTimeIdx(tdata, xVal);
-                        const ydata   = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
-                        if (!hidden && v && v.kind !== 'parameter' && ydata.length) { xs.push(xVal); ys.push(ydata[tidx]); }
-                        else { xs.push(null); ys.push(null); }
+                        if (t.visible === 'legendonly' || t.visible === false) return;
+                        const d    = this.files.get(t.fileId)?.data;
+                        const v    = d?.variables[t.varName];
+                        const tdata = this._getTransformedTimeData(t.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const ydata = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
+                        if (v && v.kind !== 'parameter' && ydata.length) {
+                            const unit  = this._extractUnit(v.description);
+                            const label = this._traceName(t.varName, t.fileId);
+                            lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatHTMLNumber(ydata[tidx])}${unit ? ' ' + this._escapeHTML(unit) : ''}`);
+                        }
                     });
-                    Plotly.restyle(plot.div, { x: [xs], y: [ys], visible: true }, [plot.markerTraceIdx]);
-                }
-                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
-                plot.traces.forEach(t => {
-                    if (t.visible === 'legendonly' || t.visible === false) return;
-                    const d    = this.files.get(t.fileId)?.data;
-                    const v    = d?.variables[t.varName];
-                    const tdata = this._getTransformedTimeData(t.fileId);
-                    const tidx = this._findTimeIdx(tdata, xVal);
-                    const ydata = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
-                    if (v && v.kind !== 'parameter' && ydata.length) {
-                        const unit  = this._extractUnit(v.description);
-                        const label = this._traceName(t.varName, t.fileId);
-                        lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatHTMLNumber(ydata[tidx])}${unit ? ' ' + this._escapeHTML(unit) : ''}`);
-                    }
-                });
-                this._showInfoBox(panelEl, lines.join('<br>'));
+                    this._showInfoBox(panelEl, lines.join('<br>'));
 
-            } else if (plot.mode === 'phase2d') {
-                if (plot.markerTraceIdx != null) {
-                    plot.phaseTraces.forEach((pt2, i) => {
-                        const hidden = pt2.visible === 'legendonly' || pt2.visible === false;
+                } else if (plot.mode === 'phase2d') {
+                    if (plot.markerTraceIdx != null) {
+                        plot.phaseTraces.forEach((pt2, i) => {
+                            const hidden = pt2.visible === 'legendonly' || pt2.visible === false;
+                            const d = this.files.get(pt2.fileId)?.data;
+                            if (!d) return;
+                            const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
+                            if (!xv || !yv) return;
+                            const tdata = this._getTransformedTimeData(pt2.fileId);
+                            const tidx = this._findTimeIdx(tdata, xVal);
+                            const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
+                            if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                            const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                            const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                            Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], visible: true }, [midx]);
+                        });
+                    }
+                    const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                    plot.phaseTraces.forEach(pt2 => {
+                        if (pt2.visible === 'legendonly' || pt2.visible === false) return;
                         const d = this.files.get(pt2.fileId)?.data;
                         if (!d) return;
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
-                        if (!xv || !yv) return;
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
-                        const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
-                        if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
-                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
-                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
-                        Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], visible: true }, [midx]);
+                        if (xv && yv) {
+                            const tdata = this._getTransformedTimeData(pt2.fileId);
+                            const tidx = this._findTimeIdx(tdata, xVal);
+                            const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                            const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                            const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
+                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
+                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${yu ? ' ' + this._escapeHTML(yu) : ''}`);
+                        }
                     });
-                }
-                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
-                plot.phaseTraces.forEach(pt2 => {
-                    if (pt2.visible === 'legendonly' || pt2.visible === false) return;
-                    const d = this.files.get(pt2.fileId)?.data;
-                    if (!d) return;
-                    const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
-                    if (xv && yv) {
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
-                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
-                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
-                        const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${yu ? ' ' + this._escapeHTML(yu) : ''}`);
-                    }
-                });
-                this._showInfoBox(panelEl, lines.join('<br>'));
+                    this._showInfoBox(panelEl, lines.join('<br>'));
 
-            } else if (plot.mode === 'phase2dt') {
-                if (plot.markerTraceIdx != null) {
-                    plot.phaseTraces.forEach((pt2, i) => {
-                        const hidden = pt2.visible === 'legendonly' || pt2.visible === false;
+                } else if (plot.mode === 'phase2dt') {
+                    if (plot.markerTraceIdx != null) {
+                        plot.phaseTraces.forEach((pt2, i) => {
+                            const hidden = pt2.visible === 'legendonly' || pt2.visible === false;
+                            const d = this.files.get(pt2.fileId)?.data;
+                            if (!d) return;
+                            const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
+                            if (!xv || !yv) return;
+                            const tdata = this._getTransformedTimeData(pt2.fileId);
+                            const tidx = this._findTimeIdx(tdata, xVal);
+                            const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
+                            if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                            const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                            const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                            Plotly.restyle(plot.div, { x: [[xVal]], y: [[xdata[tidx]]], z: [[ydata[tidx]]], visible: true }, [midx]);
+                        });
+                    }
+                    const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                    plot.phaseTraces.forEach(pt2 => {
+                        if (pt2.visible === 'legendonly' || pt2.visible === false) return;
                         const d = this.files.get(pt2.fileId)?.data;
                         if (!d) return;
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
-                        if (!xv || !yv) return;
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
-                        const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
-                        if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
-                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
-                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
-                        Plotly.restyle(plot.div, { x: [[xVal]], y: [[xdata[tidx]]], z: [[ydata[tidx]]], visible: true }, [midx]);
+                        if (xv && yv) {
+                            const tdata = this._getTransformedTimeData(pt2.fileId);
+                            const tidx = this._findTimeIdx(tdata, xVal);
+                            const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                            const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                            const xu = this._extractUnit(xv.description), zu = this._extractUnit(yv.description);
+                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
+                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${zu ? ' ' + this._escapeHTML(zu) : ''}`);
+                        }
                     });
-                }
-                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
-                plot.phaseTraces.forEach(pt2 => {
-                    if (pt2.visible === 'legendonly' || pt2.visible === false) return;
-                    const d = this.files.get(pt2.fileId)?.data;
-                    if (!d) return;
-                    const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
-                    if (xv && yv) {
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
-                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
-                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
-                        const xu = this._extractUnit(xv.description), zu = this._extractUnit(yv.description);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
-                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${zu ? ' ' + this._escapeHTML(zu) : ''}`);
-                    }
-                });
-                this._showInfoBox(panelEl, lines.join('<br>'));
+                    this._showInfoBox(panelEl, lines.join('<br>'));
 
-            } else if (plot.mode === 'phase3d') {
-                if (plot.markerTraceIdx != null) {
-                    plot.phaseTraces.forEach((pt2, i) => {
-                        const hidden = pt2.visible === 'legendonly' || pt2.visible === false;
+                } else if (plot.mode === 'phase3d') {
+                    if (plot.markerTraceIdx != null) {
+                        plot.phaseTraces.forEach((pt2, i) => {
+                            const hidden = pt2.visible === 'legendonly' || pt2.visible === false;
+                            const d = this.files.get(pt2.fileId)?.data;
+                            if (!d) return;
+                            const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
+                            if (!xv || !yv || !zv) return;
+                            const tdata = this._getTransformedTimeData(pt2.fileId);
+                            const tidx = this._findTimeIdx(tdata, xVal);
+                            const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
+                            if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                            const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                            const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                            const zdata = this._getTransformedVariableData(pt2.fileId, pt2.z);
+                            Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], z: [[zdata[tidx]]], visible: true }, [midx]);
+                        });
+                    }
+                    const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                    plot.phaseTraces.forEach(pt2 => {
+                        if (pt2.visible === 'legendonly' || pt2.visible === false) return;
                         const d = this.files.get(pt2.fileId)?.data;
                         if (!d) return;
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
-                        if (!xv || !yv || !zv) return;
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
-                        const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
-                        if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
-                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
-                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
-                        const zdata = this._getTransformedVariableData(pt2.fileId, pt2.z);
-                        Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], z: [[zdata[tidx]]], visible: true }, [midx]);
+                        if (xv && yv && zv) {
+                            const tdata = this._getTransformedTimeData(pt2.fileId);
+                            const tidx = this._findTimeIdx(tdata, xVal);
+                            [xv, yv, zv].forEach((v, vi) => {
+                                const name = [pt2.x, pt2.y, pt2.z][vi];
+                                const dataName = [pt2.x, pt2.y, pt2.z][vi];
+                                const values = this._getTransformedVariableData(pt2.fileId, dataName);
+                                const u = this._extractUnit(v.description);
+                                lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(name)} = ${this._formatHTMLNumber(values[tidx])}${u ? ' ' + this._escapeHTML(u) : ''}`);
+                            });
+                        }
                     });
-                }
-                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
-                plot.phaseTraces.forEach(pt2 => {
-                    if (pt2.visible === 'legendonly' || pt2.visible === false) return;
-                    const d = this.files.get(pt2.fileId)?.data;
-                    if (!d) return;
-                    const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
-                    if (xv && yv && zv) {
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
-                        [xv, yv, zv].forEach((v, vi) => {
-                            const name = [pt2.x, pt2.y, pt2.z][vi];
-                            const dataName = [pt2.x, pt2.y, pt2.z][vi];
-                            const values = this._getTransformedVariableData(pt2.fileId, dataName);
-                            const u = this._extractUnit(v.description);
-                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(name)} = ${this._formatHTMLNumber(values[tidx])}${u ? ' ' + this._escapeHTML(u) : ''}`);
-                        });
-                    }
-                });
-                this._showInfoBox(panelEl, lines.join('<br>'));
+                    this._showInfoBox(panelEl, lines.join('<br>'));
 
-            } else if (plot.mode === 'state-anim') {
-                // Sync: jump state-anim to the hovered time
-                const tvar = this._getTimeVar(plot.stateSlots.fileId);
-                if (tvar) {
-                    const tidx = this._findTimeIdx(this._getTransformedTimeData(plot.stateSlots.fileId), xVal);
-                    this._stateAnimUpdateFrame(plot, tidx);
+                } else if (plot.mode === 'state-anim') {
+                    const tvar = this._getTimeVar(plot.stateSlots.fileId);
+                    if (tvar) {
+                        const tidx = this._findTimeIdx(this._getTransformedTimeData(plot.stateSlots.fileId), xVal);
+                        this._stateAnimUpdateFrame(plot, tidx);
+                    }
                 }
             }
+        } catch (error) {
+            console.error('Synchronized hover failed:', error);
+            this._clearHoverMarkers();
+        } finally {
+            this._hovering = false;
         }
-        this._hovering = false;
     }
 
     _onUnhover(sourcePanelId) {
@@ -2544,34 +2552,78 @@ class PlotManager {
         if (plot.cursors.enabled) {
             this._initializeCursorPositionsInView(plot);
             this._ensureCursorBoxDrag(panelId, plot);
+            this._syncCursorDisplay(panelId, plot);
+            this._refreshActionBtns(panelId);
+        } else {
+            document.body.classList.remove('cursor-dragging', 'cursor-box-dragging');
+            plot.div.style.cursor = '';
+            plot.div.closest('.layout-panel')?.classList.remove('cursor-near');
+            this._hideCursorBox(plot.div.closest('.layout-panel'));
+            this._rebuildPanel(panelId, { preserveView: true });
         }
-        else this._hideCursorBox(plot.div.closest('.layout-panel'));
-        this._syncCursorDisplay(panelId, plot);
-        this._refreshActionBtns(panelId);
     }
 
     _ensureCursorPositions(plot) {
-        const range = plot.div?._fullLayout?.xaxis?.range;
-        const trace = this._resolveCursorTrace(plot, 'a') || this._resolveCursorTrace(plot, 'b');
-        const times = trace ? this._getTransformedTimeData(trace.fileId) : [];
-        const start = Number.isFinite(range?.[0]) ? range[0] : times[0];
-        const end = Number.isFinite(range?.[1]) ? range[1] : times[times.length - 1];
-        if (!Number.isFinite(start) || !Number.isFinite(end)) return;
-        const span = end - start || 1;
-        if (!Number.isFinite(plot.cursors.a)) plot.cursors.a = start + span * 0.25;
-        if (!Number.isFinite(plot.cursors.b)) plot.cursors.b = start + span * 0.75;
+        this._ensureCursorPosition(plot, 'a', 0.25);
+        this._ensureCursorPosition(plot, 'b', 0.75);
     }
 
     _initializeCursorPositionsInView(plot) {
+        this._initializeCursorPositionInView(plot, 'a', 0.25);
+        this._initializeCursorPositionInView(plot, 'b', 0.75);
+    }
+
+    _cursorTraceBounds(trace) {
+        if (!trace) return null;
+        const times = this._getTransformedTimeData(trace.fileId);
+        if (!times?.length) return null;
+        const start = times[0];
+        const end = times[times.length - 1];
+        if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+        return start <= end ? { start, end } : { start: end, end: start };
+    }
+
+    _cursorViewBounds(plot, trace) {
+        const traceBounds = this._cursorTraceBounds(trace);
+        if (!traceBounds) return null;
         const range = plot.div?._fullLayout?.xaxis?.range;
-        const trace = this._resolveCursorTrace(plot, 'a') || this._resolveCursorTrace(plot, 'b');
-        const times = trace ? this._getTransformedTimeData(trace.fileId) : [];
-        const start = Number.isFinite(range?.[0]) ? range[0] : times[0];
-        const end = Number.isFinite(range?.[1]) ? range[1] : times[times.length - 1];
-        if (!Number.isFinite(start) || !Number.isFinite(end)) return;
-        const span = end - start || 1;
-        plot.cursors.a = start + span * 0.25;
-        plot.cursors.b = start + span * 0.75;
+        const viewStart = Number.isFinite(range?.[0]) ? range[0] : traceBounds.start;
+        const viewEnd = Number.isFinite(range?.[1]) ? range[1] : traceBounds.end;
+        const overlapStart = Math.max(traceBounds.start, Math.min(viewStart, viewEnd));
+        const overlapEnd = Math.min(traceBounds.end, Math.max(viewStart, viewEnd));
+        if (Number.isFinite(overlapStart) && Number.isFinite(overlapEnd) && overlapStart <= overlapEnd) {
+            return { start: overlapStart, end: overlapEnd };
+        }
+        return traceBounds;
+    }
+
+    _clampCursorX(plot, which, x) {
+        if (!Number.isFinite(x)) return x;
+        const trace = this._resolveCursorTrace(plot, which);
+        const bounds = this._cursorTraceBounds(trace);
+        if (!bounds) return x;
+        return Math.max(bounds.start, Math.min(bounds.end, x));
+    }
+
+    _ensureCursorPosition(plot, which, fraction) {
+        if (!plot?.cursors) return;
+        const trace = this._resolveCursorTrace(plot, which);
+        const bounds = this._cursorViewBounds(plot, trace);
+        if (!bounds) return;
+        const span = bounds.end - bounds.start;
+        const target = bounds.start + (span || 0) * fraction;
+        plot.cursors[which] = Number.isFinite(plot.cursors[which])
+            ? this._clampCursorX(plot, which, plot.cursors[which])
+            : this._clampCursorX(plot, which, target);
+    }
+
+    _initializeCursorPositionInView(plot, which, fraction) {
+        if (!plot?.cursors) return;
+        const trace = this._resolveCursorTrace(plot, which);
+        const bounds = this._cursorViewBounds(plot, trace);
+        if (!bounds) return;
+        const span = bounds.end - bounds.start;
+        plot.cursors[which] = this._clampCursorX(plot, which, bounds.start + (span || 0) * fraction);
     }
 
     _resolveCursorTrace(plot, which) {
@@ -2804,7 +2856,7 @@ class PlotManager {
             if (!dragging || !plot.div) return;
             const x = this._eventToXValue(plot.div, event);
             if (!Number.isFinite(x)) return;
-            plot.cursors[dragging] = x;
+            plot.cursors[dragging] = this._clampCursorX(plot, dragging, x);
             this._syncCursorDisplay(panelId, plot);
         };
         const onDocUp = () => {
@@ -2958,6 +3010,7 @@ class PlotManager {
                     if (!selectedTrace) return;
                     const key = which === 'b' ? 'traceB' : 'traceA';
                     plot.cursors[key] = { fileId: selectedTrace.fileId, varName: selectedTrace.varName };
+                    plot.cursors[which] = this._clampCursorX(plot, which, plot.cursors[which]);
                     this._syncCursorDisplay(panelId, plot);
                 });
             });
