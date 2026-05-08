@@ -20,6 +20,8 @@ class PlotManager {
         this.theme          = 'light';
         this.syncAxes       = true;
         this.legendPosition = 'overlay';
+        this.timeseriesVisualMaxPoints = PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
+        this.phaseVisualMaxPoints = null;
         this._syncing       = false;
         this._syncSourcePanelId = null;
         this._pendingAxisSync = null;
@@ -220,6 +222,14 @@ class PlotManager {
     setTheme(theme)            { this.theme = theme;          this._relayoutAll(); }
     setSyncAxes(v)             { this.syncAxes = v; }
     setLegendPosition(pos)     { this.legendPosition = pos;   this._relayoutAll(); }
+    setTimeseriesDownsamplingLimit(limit) {
+        this.timeseriesVisualMaxPoints = this._normalizeTimeseriesDownsamplingLimit(limit);
+        this._refreshAllTimeseriesVisuals();
+    }
+    setPhaseDownsamplingLimit(limit) {
+        this.phaseVisualMaxPoints = this._normalizePhaseDownsamplingLimit(limit);
+        this._refreshAllPhaseVisuals();
+    }
     setSyncHover(v) {
         this.syncHover = v;
         document.body.classList.toggle('sync-hover-active', v);
@@ -239,11 +249,7 @@ class PlotManager {
     autoZoomAll() {
         for (const [id, plot] of this.plots) {
             if (!plot.div) continue;
-            if (this._is3D(plot.mode) || this._isStateAnim3D(plot)) {
-                this._setCamera(id, 'home');
-            } else {
-                Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
-            }
+            this._autoScalePlot(id, plot);
         }
     }
 
@@ -634,7 +640,14 @@ class PlotManager {
             const viewPromise = restoreView
                 ? this._restorePlotView(plot, restoreView)
                 : (this._is3D(plot.mode) ? this._setCamera(panelId, 'home') : Promise.resolve());
-            Promise.resolve(viewPromise).then(finish3DSetup);
+            Promise.resolve(viewPromise).then(() => {
+                if (plot.mode === 'timeseries') this._refreshTimeseriesVisuals(panelId, plot);
+                finish3DSetup();
+            });
+            div.on('plotly_doubleclick', () => {
+                this._autoScalePlot(panelId, plot);
+                return false;
+            });
             // Axis sync, hover sync, and scroll-wheel pan (timeseries only)
             if (plot.mode === 'timeseries') {
                 div.on('plotly_relayout', (ed) => this._onRelayout(panelId, ed));
@@ -1306,6 +1319,123 @@ class PlotManager {
         return values;
     }
 
+    _pickIndexed(values, indexes) {
+        if (!Array.isArray(indexes) || !indexes.length) return values;
+        const picked = new Array(indexes.length);
+        for (let i = 0; i < indexes.length; i++) picked[i] = values[indexes[i]];
+        return picked;
+    }
+
+    _downsampleStrideIndexes(length, target) {
+        if (!Number.isFinite(length) || length <= 0) return [];
+        if (target == null || length <= target) return Array.from({ length }, (_, i) => i);
+        const last = length - 1;
+        const indexes = [0];
+        const innerTarget = Math.max(0, target - 2);
+        for (let i = 1; i <= innerTarget; i++) {
+            const idx = Math.round((i * last) / (innerTarget + 1));
+            if (idx > indexes[indexes.length - 1] && idx < last) indexes.push(idx);
+        }
+        if (indexes[indexes.length - 1] !== last) indexes.push(last);
+        return indexes;
+    }
+
+    _downsampleTimeseries(xValues, yValues, target = PlotManager.VISUAL_MAX_POINTS_TIMESERIES) {
+        const n = Math.min(xValues?.length || 0, yValues?.length || 0);
+        if (n <= target || n <= 2) return { x: xValues, y: yValues };
+
+        const bucketCount = Math.max(1, Math.floor((target - 2) / 2));
+        const bucketSize = Math.max(1, Math.ceil((n - 2) / bucketCount));
+        const indexes = [0];
+
+        for (let start = 1; start < n - 1; start += bucketSize) {
+            const end = Math.min(n - 1, start + bucketSize);
+            let minIdx = start;
+            let maxIdx = start;
+            let minVal = yValues[start];
+            let maxVal = yValues[start];
+
+            for (let i = start + 1; i < end; i++) {
+                const value = yValues[i];
+                if (!Number.isFinite(value)) continue;
+                if (!Number.isFinite(minVal) || value < minVal) { minVal = value; minIdx = i; }
+                if (!Number.isFinite(maxVal) || value > maxVal) { maxVal = value; maxIdx = i; }
+            }
+
+            if (minIdx === maxIdx) {
+                if (minIdx > indexes[indexes.length - 1]) indexes.push(minIdx);
+            } else if (minIdx < maxIdx) {
+                if (minIdx > indexes[indexes.length - 1]) indexes.push(minIdx);
+                if (maxIdx > indexes[indexes.length - 1]) indexes.push(maxIdx);
+            } else {
+                if (maxIdx > indexes[indexes.length - 1]) indexes.push(maxIdx);
+                if (minIdx > indexes[indexes.length - 1]) indexes.push(minIdx);
+            }
+        }
+
+        if (indexes[indexes.length - 1] !== n - 1) indexes.push(n - 1);
+        return {
+            x: this._pickIndexed(xValues, indexes),
+            y: this._pickIndexed(yValues, indexes),
+        };
+    }
+
+    _lowerBound(sortedValues, target) {
+        let lo = 0;
+        let hi = sortedValues.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (sortedValues[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    _upperBound(sortedValues, target) {
+        let lo = 0;
+        let hi = sortedValues.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (sortedValues[mid] <= target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    _buildTimeseriesVisualData(timeData, values, visibleRange = null, isStep = false) {
+        const n = Math.min(timeData?.length || 0, values?.length || 0);
+        if (n <= 0) return { x: timeData || [], y: values || [] };
+        const target = this.timeseriesVisualMaxPoints;
+        if (target == null) return { x: timeData, y: values };
+        if (isStep || !visibleRange || visibleRange[0] == null || visibleRange[1] == null) {
+            return isStep ? { x: timeData, y: values } : this._downsampleTimeseries(timeData, values, target);
+        }
+
+        let [minX, maxX] = visibleRange;
+        if (minX > maxX) [minX, maxX] = [maxX, minX];
+        let start = this._lowerBound(timeData, minX);
+        let end = this._upperBound(timeData, maxX);
+        start = Math.max(0, start - 1);
+        end = Math.min(n, end + 1);
+        if (end - start <= 0) return { x: timeData, y: values };
+
+        const sliceX = timeData.slice(start, end);
+        const sliceY = values.slice(start, end);
+        if (sliceX.length <= target) {
+            return { x: sliceX, y: sliceY };
+        }
+        return this._downsampleTimeseries(sliceX, sliceY, target);
+    }
+
+    _buildPhaseVisualSeries(seriesList) {
+        const target = this.phaseVisualMaxPoints;
+        if (target == null) return seriesList;
+        const length = Math.min(...seriesList.map(series => series?.length || 0));
+        if (!Number.isFinite(length) || length <= 0 || length <= target) return seriesList;
+        const indexes = this._downsampleStrideIndexes(length, target);
+        return seriesList.map(series => this._pickIndexed(series, indexes));
+    }
+
     // ─── Trace / layout builders ───────────────────────────────────
 
     _buildPlotData(plot) {
@@ -1319,7 +1449,7 @@ class PlotManager {
     }
 
     // ── Timeseries ──
-    _buildTimeTrace(t) {
+    _buildTimeTrace(t, visibleRange = null) {
         const fileData = this.files.get(t.fileId)?.data;
         if (!fileData) return null;
         const variable = fileData.variables[t.varName];
@@ -1348,11 +1478,12 @@ class PlotManager {
         }
         const isStep = variable.dataType === 'boolean';
         const useGL = !isStep && values.length >= PlotManager.GL_POINT_THRESHOLD;
+        const visual = this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep);
         const line = useGL
             ? { color: t.color, width: 1.5 }
             : { color: t.color, width: 1.5, shape: isStep ? 'hv' : 'linear' };
         return {
-            x: timeData, y: values,
+            x: visual.x, y: visual.y,
             name, type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
             visible: t.visible ?? true,
             line,
@@ -1398,9 +1529,10 @@ class PlotManager {
             if (!xVar || !yVar) return null;
             const xData = this._getTransformedVariableData(pt.fileId, pt.x);
             const yData = this._getTransformedVariableData(pt.fileId, pt.y);
+            const [xVisual, yVisual] = this._buildPhaseVisualSeries([xData, yData]);
             const useGL = xData.length >= PlotManager.GL_POINT_THRESHOLD || yData.length >= PlotManager.GL_POINT_THRESHOLD;
             return {
-                x: xData, y: yData,
+                x: xVisual, y: yVisual,
                 name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
                 type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
                 visible: pt.visible ?? true,
@@ -1453,10 +1585,15 @@ class PlotManager {
             const xVar = d.variables[pt.x], yVar = d.variables[pt.y];
             const timeVar = this._getTimeVar(pt.fileId);
             if (!xVar || !yVar) return null;
+            const [timeVisual, xVisual, yVisual] = this._buildPhaseVisualSeries([
+                timeVar ? this._getTransformedTimeData(pt.fileId) : [],
+                this._getTransformedVariableData(pt.fileId, pt.x),
+                this._getTransformedVariableData(pt.fileId, pt.y),
+            ]);
             return {
-                x: timeVar ? this._getTransformedTimeData(pt.fileId) : [],
-                y: this._getTransformedVariableData(pt.fileId, pt.x),
-                z: this._getTransformedVariableData(pt.fileId, pt.y),
+                x: timeVisual,
+                y: xVisual,
+                z: yVisual,
                 name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
                 type: 'scatter3d', mode: 'lines',
                 visible: pt.visible ?? true,
@@ -1472,10 +1609,15 @@ class PlotManager {
             if (!d) return null;
             const xVar = d.variables[pt.x], yVar = d.variables[pt.y], zVar = d.variables[pt.z];
             if (!xVar || !yVar || !zVar) return null;
+            const [xVisual, yVisual, zVisual] = this._buildPhaseVisualSeries([
+                this._getTransformedVariableData(pt.fileId, pt.x),
+                this._getTransformedVariableData(pt.fileId, pt.y),
+                this._getTransformedVariableData(pt.fileId, pt.z),
+            ]);
             return {
-                x: this._getTransformedVariableData(pt.fileId, pt.x),
-                y: this._getTransformedVariableData(pt.fileId, pt.y),
-                z: this._getTransformedVariableData(pt.fileId, pt.z),
+                x: xVisual,
+                y: yVisual,
+                z: zVisual,
                 name: this._traceName(`${pt.x} / ${pt.y} / ${pt.z}`, pt.fileId),
                 type: 'scatter3d', mode: 'lines',
                 visible: pt.visible ?? true,
@@ -1513,7 +1655,7 @@ class PlotManager {
         // lines (red/green/blue) don't trigger autorange expansion when added.
         const xArrays = [], yArrays = [], zArrays = [];
         for (const pt of plot.phaseTraces) {
-            if (pt.visible === false) continue;
+            if (!this._isVisible(pt)) continue;
             const d = this.files.get(pt.fileId)?.data;
             if (!d) continue;
             if (isTimez) {
@@ -2193,10 +2335,8 @@ class PlotManager {
             const panelId = [...this.plots.entries()].find(([, p]) => p === plot)?.[0];
             if (panelId) this._setCamera(panelId, 'home');
         } else {
-            Plotly.relayout(plot.div, {
-                'xaxis.autorange': true,
-                'yaxis.autorange': true,
-            });
+            const panelId = [...this.plots.entries()].find(([, p]) => p === plot)?.[0];
+            if (panelId) this._autoScalePlot(panelId, plot);
         }
     }
 
@@ -2260,10 +2400,21 @@ class PlotManager {
     // ─── Axis sync (timeseries only) ───────────────────────────────
 
     _onRelayout(sourcePanelId, eventData) {
-        if (!this.syncAxes) return;
-
         const update = this._xAxisUpdateFromRelayout(eventData);
         if (!update) return;
+
+        const plot = this.plots.get(sourcePanelId);
+        if (plot?.mode === 'timeseries') {
+            const autorangeRequested = update['xaxis.autorange'] === true || eventData?.['yaxis.autorange'] === true;
+            if (autorangeRequested) {
+                this._autoScalePlot(sourcePanelId, plot);
+            } else {
+                const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
+                this._refreshTimeseriesVisuals(sourcePanelId, plot, visibleRange);
+            }
+        }
+
+        if (!this.syncAxes) return;
 
         if (this._syncing) {
             if (sourcePanelId === this._syncSourcePanelId) {
@@ -2293,16 +2444,48 @@ class PlotManager {
         return null;
     }
 
+    _refreshTimeseriesVisuals(panelId, plot = this.plots.get(panelId), visibleRange = null) {
+        if (!plot?.div || plot.mode !== 'timeseries') return;
+        const range = visibleRange
+            || plot.div._fullLayout?.xaxis?.range
+            || plot.div.layout?.xaxis?.range
+            || null;
+        plot.traces.forEach((t, idx) => {
+            const built = this._buildTimeTrace(t, range);
+            if (!built) return;
+            Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
+        });
+    }
+
+    _refreshAllTimeseriesVisuals() {
+        for (const [panelId, plot] of this.plots) {
+            if (plot?.div && plot.mode === 'timeseries') {
+                this._refreshTimeseriesVisuals(panelId, plot);
+            }
+        }
+    }
+
+    _refreshAllPhaseVisuals() {
+        for (const [panelId, plot] of this.plots) {
+            if (plot?.div && (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d')) {
+                this._rebuildPanel(panelId, { preserveView: true });
+            }
+        }
+    }
+
     _syncXAxisUpdate(sourcePanelId, update) {
         const targets = [];
         for (const [id, plot] of this.plots) {
-            if (id !== sourcePanelId && plot.div && plot.mode === 'timeseries') targets.push(plot.div);
+            if (id !== sourcePanelId && plot.div && plot.mode === 'timeseries') targets.push({ id, plot, div: plot.div });
         }
         if (targets.length === 0) return;
 
         this._syncing = true;
         this._syncSourcePanelId = sourcePanelId;
-        Promise.all(targets.map(div => Plotly.relayout(div, update)))
+        Promise.all(targets.map(({ id, plot, div }) => Plotly.relayout(div, update).then(() => {
+            const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
+            this._refreshTimeseriesVisuals(id, plot, visibleRange);
+        })))
             .finally(() => {
                 this._syncing = false;
                 this._syncSourcePanelId = null;
@@ -3319,13 +3502,9 @@ class PlotManager {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (v.preset === 'home') {
-                    // Home works for both 2D (autorange) and 3D (camera reset)
+                    // Home performs a true autoscale in every mode.
                     const p = this.plots.get(panelId);
-                    if (p?.mode === 'state-anim' && p.stateSlots.x.length < 3) {
-                        this._stateAnimResetView(p);
-                    } else {
-                        this._setCamera(panelId, 'home');
-                    }
+                    this._autoScalePlot(panelId, p);
                 } else {
                     this._setCamera(panelId, v.preset === 'yz' ? 'yz' : v.preset);
                 }
@@ -3568,6 +3747,141 @@ class PlotManager {
 
     _is3D(mode) { return mode === 'phase2dt' || mode === 'phase3d'; }
     _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) === 3 && plot.stateSlots?.x?.length >= 3; }
+    _normalizeTimeseriesDownsamplingLimit(limit) {
+        if (limit == null || limit === false) return null;
+        const n = Number(limit);
+        return Number.isFinite(n) && n > 0 ? Math.round(n) : PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
+    }
+    _normalizePhaseDownsamplingLimit(limit) {
+        if (limit == null || limit === false) return null;
+        const n = Number(limit);
+        return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+    }
+
+    _isVisible(traceState) {
+        return !!traceState && traceState.visible !== false && traceState.visible !== 'legendonly';
+    }
+
+    _padRange(min, max, pad = 0.05) {
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return [-1, 1];
+        if (min === max) {
+            const delta = Math.max(Math.abs(min) * pad, 1e-9, 1);
+            return [min - delta, max + delta];
+        }
+        const span = max - min;
+        return [min - span * pad, max + span * pad];
+    }
+
+    _finiteExtent(arrays) {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const arr of arrays) {
+            if (!arr) continue;
+            for (const value of arr) {
+                if (!Number.isFinite(value)) continue;
+                if (value < min) min = value;
+                if (value > max) max = value;
+            }
+        }
+        return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+    }
+
+    _autoScalePlot(panelId, plot = this.plots.get(panelId)) {
+        if (!plot?.div) return Promise.resolve();
+
+        if (plot.mode === 'timeseries') {
+            const visibleTraces = plot.traces.filter(t => this._isVisible(t));
+            if (!visibleTraces.length) {
+                return Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
+            }
+
+            const xArrays = [];
+            const yArrays = [];
+            for (const t of visibleTraces) {
+                const d = this.files.get(t.fileId)?.data;
+                const v = d?.variables?.[t.varName];
+                if (!d || !v || v.kind === 'parameter') continue;
+                xArrays.push(this._getTransformedTimeData(t.fileId));
+                yArrays.push(this._getTransformedVariableData(t.fileId, t.varName));
+            }
+
+            const xExtent = this._finiteExtent(xArrays);
+            const yExtent = this._finiteExtent(yArrays);
+            const update = {};
+            if (xExtent) update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+            else update['xaxis.autorange'] = true;
+            if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+            else update['yaxis.autorange'] = true;
+            return Plotly.relayout(plot.div, update);
+        }
+
+        if (plot.mode === 'phase2d') {
+            const visibleTraces = plot.phaseTraces.filter(pt => this._isVisible(pt));
+            if (!visibleTraces.length) {
+                return Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
+            }
+
+            const xArrays = [];
+            const yArrays = [];
+            for (const pt of visibleTraces) {
+                const d = this.files.get(pt.fileId)?.data;
+                if (!d?.variables?.[pt.x] || !d?.variables?.[pt.y]) continue;
+                xArrays.push(this._getTransformedVariableData(pt.fileId, pt.x));
+                yArrays.push(this._getTransformedVariableData(pt.fileId, pt.y));
+            }
+
+            const xExtent = this._finiteExtent(xArrays);
+            const yExtent = this._finiteExtent(yArrays);
+            const update = {};
+            if (xExtent) update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+            else update['xaxis.autorange'] = true;
+            if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+            else update['yaxis.autorange'] = true;
+            return Plotly.relayout(plot.div, update);
+        }
+
+        if (this._is3D(plot.mode)) {
+            const layout = this._buildPhase3DLayout(plot, plot.mode === 'phase2dt');
+            const update = {
+                'scene.xaxis.range': layout.scene.xaxis.range,
+                'scene.yaxis.range': layout.scene.yaxis.range,
+                'scene.zaxis.range': layout.scene.zaxis.range,
+            };
+            const is2dt = plot.mode === 'phase2dt';
+            const homeCamera = plot.homeCamera || (is2dt
+                ? { eye: { x: 1.25, y: -1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }
+                : { eye: { x: 1.25, y: 1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } });
+            update['scene.camera'] = { ...homeCamera, projection: { type: plot.projection || 'orthographic' } };
+            return Plotly.relayout(plot.div, update).then(() => this._updateCameraOverlay(plot));
+        }
+
+        if (plot.mode === 'state-anim') {
+            const dim = plot.stateAnimDim || 2;
+            if (dim >= 3) {
+                this._stateAnimResetView(plot);
+                return Promise.resolve();
+            }
+
+            const xName = plot.stateSlots?.x?.[0];
+            const yName = plot.stateSlots?.x?.[1];
+            const fileId = plot.stateSlots?.fileId;
+            const d = this.files.get(fileId)?.data;
+            if (!d?.variables?.[xName] || !d?.variables?.[yName]) {
+                return Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
+            }
+
+            const xExtent = this._finiteExtent([this._getTransformedVariableData(fileId, xName)]);
+            const yExtent = this._finiteExtent([this._getTransformedVariableData(fileId, yName)]);
+            const update = {};
+            if (xExtent) update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+            else update['xaxis.autorange'] = true;
+            if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+            else update['yaxis.autorange'] = true;
+            return Plotly.relayout(plot.div, update);
+        }
+
+        return Promise.resolve();
+    }
 
     _rebuildPanel(panelId, options = {}) {
         const plot = this.plots.get(panelId);
@@ -3788,6 +4102,7 @@ class PlotManager {
         '#9C27B0', '#00BCD4', '#F44336', '#8BC34A',
     ];
     static GL_POINT_THRESHOLD = 50000;
+    static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 4000;
 
     _nextColor(idx) { return PlotManager.COLORS[idx % PlotManager.COLORS.length]; }
 }

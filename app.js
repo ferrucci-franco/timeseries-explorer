@@ -39,6 +39,7 @@ const DERIVED_FUNCTION_ALIASES = new Map([
 ]);
 
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv'];
+const RELOAD_AS_NEW_VERSION_STORAGE_KEY = 'omv_reload_as_new_version';
 
 class OpenModelicaViewer {
     constructor() {
@@ -60,6 +61,7 @@ class OpenModelicaViewer {
         this._exampleLoading = false;
         this._exampleLoadToken = null;
         this._exampleLoadingEscHandler = null;
+        this.reloadAsNewVersionMode = OpenModelicaViewer.getStoredReloadAsNewVersionMode();
 
         this.layoutManager = new LayoutManager('plots-area');
         this.plotManager   = new PlotManager(this.parser);
@@ -75,6 +77,8 @@ class OpenModelicaViewer {
         this._setDropZoneStatus(false);
 
         this.layoutManager.render();
+        this._updateActionButtons();
+        this._applyReloadModeUI();
     }
 
     // ─── File management ───────────────────────────────────────────
@@ -513,9 +517,12 @@ class OpenModelicaViewer {
     _updateActionButtons() {
         const hasFiles = this.files.size > 0;
         document.getElementById('reload-file').disabled  = !hasFiles;
-        document.getElementById('reload-file-menu-btn').disabled = !hasFiles;
         document.getElementById('auto-zoom').disabled    = !hasFiles;
         document.getElementById('clear-plots').disabled  = !hasFiles;
+        const reloadModeToggle = document.getElementById('reload-as-version-toggle');
+        const reloadModeSwitch = document.getElementById('reload-as-version-switch');
+        if (reloadModeToggle) reloadModeToggle.disabled = !hasFiles;
+        if (reloadModeSwitch) reloadModeSwitch.classList.toggle('disabled', !hasFiles);
     }
 
     _renderFilesList() {
@@ -733,6 +740,10 @@ class OpenModelicaViewer {
             e.stopPropagation();
             this._toggleDerivedHelpPopover();
         });
+        document.getElementById('timeseries-downsampling-help-toggle').addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleTimeseriesDownsamplingHelpPopover();
+        });
         document.getElementById('derived-toggle').addEventListener('click', () => this._toggleDerivedForm(true));
         document.getElementById('derived-cancel').addEventListener('click', () => this._toggleDerivedForm(false));
         document.getElementById('derived-create').addEventListener('click', () => this.createDerivedVariable());
@@ -746,11 +757,19 @@ class OpenModelicaViewer {
             if (!e.target.closest('#derived-help-popover') && !e.target.closest('#derived-help-toggle')) {
                 this._toggleDerivedHelpPopover(false);
             }
+            if (!e.target.closest('#timeseries-downsampling-help-popover') && !e.target.closest('#timeseries-downsampling-help-toggle')) {
+                this._toggleTimeseriesDownsamplingHelpPopover(false);
+            }
         });
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && !document.getElementById('derived-help-popover')?.hidden) {
                 e.preventDefault();
                 this._toggleDerivedHelpPopover(false);
+                return;
+            }
+            if (e.key === 'Escape' && !document.getElementById('timeseries-downsampling-help-popover')?.hidden) {
+                e.preventDefault();
+                this._toggleTimeseriesDownsamplingHelpPopover(false);
                 return;
             }
             if (e.key === 'Escape' && this.selectedVariables.size > 0) {
@@ -783,6 +802,15 @@ class OpenModelicaViewer {
             this.plotManager.setHoverProximity(e.target.checked);
         });
 
+        document.getElementById('timeseries-downsampling').addEventListener('change', (e) => {
+            const raw = e.target.value;
+            this.plotManager.setTimeseriesDownsamplingLimit(raw === 'none' ? null : Number(raw));
+        });
+        document.getElementById('phase-downsampling').addEventListener('change', (e) => {
+            const raw = e.target.value;
+            this.plotManager.setPhaseDownsamplingLimit(raw === 'none' ? null : Number(raw));
+        });
+
         document.querySelectorAll('input[name="legend-pos"]').forEach(radio => {
             radio.addEventListener('change', (e) => this.plotManager.setLegendPosition(e.target.value));
         });
@@ -796,14 +824,20 @@ class OpenModelicaViewer {
         document.getElementById('clear-plots').addEventListener('click', () => this.plotManager.clearAll());
 
         document.getElementById('reload-file').addEventListener('click', () => {
-            this.reloadActiveFile().catch(err => {
+            const action = this.reloadAsNewVersionMode ? this.reloadActiveFileAsNewVersion() : this.reloadActiveFile();
+            action.catch(err => {
                 if (err?.name === 'AbortError') { this._updateTopBar(); return; }
                 console.error('Reload failed:', err);
                 alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
                 this._updateTopBar();
             });
         });
-        this._initReloadFileMenu();
+        const reloadModeToggle = document.getElementById('reload-as-version-toggle');
+        if (reloadModeToggle) {
+            reloadModeToggle.checked = !!this.reloadAsNewVersionMode;
+            reloadModeToggle.addEventListener('change', (e) => this._setReloadAsNewVersionMode(e.target.checked));
+        }
+        this._applyReloadModeUI();
 
         this._initExampleMenu();
 
@@ -859,57 +893,30 @@ class OpenModelicaViewer {
         menu.appendChild(tempItem);
     }
 
-    _initReloadFileMenu() {
-        const btn  = document.getElementById('reload-file-menu-btn');
-        const menu = document.getElementById('reload-file-menu');
-        if (!btn || !menu) return;
-
-        const close = () => {
-            menu.hidden = true;
-            btn.setAttribute('aria-expanded', 'false');
-        };
-        const open = () => {
-            this._renderReloadFileMenu();
-            menu.hidden = false;
-            btn.setAttribute('aria-expanded', 'true');
-        };
-
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (btn.disabled) return;
-            menu.hidden ? open() : close();
-        });
-
-        document.addEventListener('click', (e) => {
-            if (!menu.hidden && !menu.contains(e.target) && !btn.contains(e.target)) close();
-        });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !menu.hidden) close();
-        });
-
-        this._closeReloadFileMenu = close;
+    _setReloadAsNewVersionMode(enabled) {
+        this.reloadAsNewVersionMode = !!enabled;
+        try {
+            localStorage.setItem(RELOAD_AS_NEW_VERSION_STORAGE_KEY, this.reloadAsNewVersionMode ? '1' : '0');
+        } catch (_) {}
+        this._applyReloadModeUI();
     }
 
-    _renderReloadFileMenu() {
-        const menu = document.getElementById('reload-file-menu');
-        menu.innerHTML = '';
-
-        const versionItem = document.createElement('button');
-        versionItem.className = 'example-menu-item';
-        versionItem.type = 'button';
-        versionItem.setAttribute('role', 'menuitem');
-        versionItem.textContent = i18n.t('reloadAsNewVersion');
-        versionItem.disabled = !this.activeFileId;
-        versionItem.addEventListener('click', () => {
-            this._closeReloadFileMenu?.();
-            this.reloadActiveFileAsNewVersion().catch(err => {
-                if (err?.name === 'AbortError') { this._updateTopBar(); return; }
-                console.error('Reload as new version failed:', err);
-                alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
-                this._updateTopBar();
-            });
-        });
-        menu.appendChild(versionItem);
+    _applyReloadModeUI() {
+        const reloadBtn = document.getElementById('reload-file');
+        const toggle = document.getElementById('reload-as-version-toggle');
+        const switchEl = document.getElementById('reload-as-version-switch');
+        const enabled = !!(reloadBtn && !reloadBtn.disabled);
+        if (toggle) toggle.checked = enabled && !!this.reloadAsNewVersionMode;
+        if (switchEl) {
+            switchEl.classList.toggle('active', enabled && !!this.reloadAsNewVersionMode);
+            switchEl.title = i18n.t(this.reloadAsNewVersionMode ? 'reloadModeNewVersion' : 'reloadModeReplace');
+        }
+        if (reloadBtn) {
+            reloadBtn.title = i18n.t(this.reloadAsNewVersionMode ? 'reloadAsNewVersion' : 'reloadFile');
+            reloadBtn.classList.toggle('active', enabled && !!this.reloadAsNewVersionMode);
+            reloadBtn.classList.toggle('reload-as-new', enabled && !!this.reloadAsNewVersionMode);
+            reloadBtn.dataset.modeLabel = enabled && this.reloadAsNewVersionMode ? 'AS NEW' : '';
+        }
     }
 
     async _copyOpenModelicaTempPathAndOpenPicker() {
@@ -1823,6 +1830,16 @@ class OpenModelicaViewer {
         button.setAttribute('aria-expanded', String(willShow));
     }
 
+    _toggleTimeseriesDownsamplingHelpPopover(show) {
+        const popover = document.getElementById('timeseries-downsampling-help-popover');
+        const button = document.getElementById('timeseries-downsampling-help-toggle');
+        if (!popover || !button) return;
+        const willShow = typeof show === 'boolean' ? show : popover.hidden;
+        popover.hidden = !willShow;
+        button.classList.toggle('active', willShow);
+        button.setAttribute('aria-expanded', String(willShow));
+    }
+
     _getDerivedSuggestions(prefix) {
         const data = this.plotManager.data;
         if (!data || !prefix) return [];
@@ -2221,12 +2238,21 @@ class OpenModelicaViewer {
         return hour >= 7 && hour < 18 ? 'light' : 'dark';
     }
 
+    static getStoredReloadAsNewVersionMode() {
+        try {
+            return localStorage.getItem(RELOAD_AS_NEW_VERSION_STORAGE_KEY) === '1';
+        } catch (_) {
+            return false;
+        }
+    }
+
     setLanguage(lang) {
         this.language = lang;
         i18n.setLanguage(lang);
         document.querySelectorAll('.lang-btn').forEach(btn => {
             btn.classList.toggle('active', btn.getAttribute('data-lang') === lang);
         });
+        this._applyReloadModeUI();
         this._renderFilesList();
         if (this._currentTree) this._renderFilteredTree();
         this.layoutManager.render();
