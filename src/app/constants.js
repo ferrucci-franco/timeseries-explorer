@@ -1,4 +1,4 @@
-const PUBLIC_BASE = import.meta.env.BASE_URL;
+const PUBLIC_BASE = import.meta.env?.BASE_URL || './public/';
 
 const EXAMPLES = [
     {
