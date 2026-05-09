@@ -4,6 +4,7 @@
 # Standard generated folders
 /node_modules/
 /dist/
+/portable-dist/
 
 # Keep local/archive material out of sync.
 /old/
@@ -17,6 +18,7 @@
 !/*.js
 !/*.html
 !/*.css
+!/*.bat
 !/package.json
 !/package-lock.json
 !/README.md
@@ -27,3 +29,9 @@
 !/public/**
 !/docs/
 !/docs/**
+!/scripts/
+!/scripts/**
+
+# Generated download artifacts stay local.
+/public/downloads/*.zip
+/public/downloads/standalone.json

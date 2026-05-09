@@ -1,6 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
-import { APP_VERSION, EXAMPLES, RELOAD_AS_NEW_VERSION_STORAGE_KEY } from '../constants.js';
+import { APP_VERSION, EXAMPLES, RELOAD_AS_NEW_VERSION_STORAGE_KEY, STANDALONE_MANIFEST_PATH } from '../constants.js';
 
 export function installUiMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -322,27 +322,42 @@ proto._getLikelyOpenModelicaTempPath = function(paths) {
 };
 
 proto._inferWindowsUserHomeFromLocation = function() {
-    let path = '';
-    try {
-        path = decodeURIComponent(window.location.href);
-    } catch (_) {
-        path = window.location.href;
+    const candidates = this._getDecodedLocationCandidates();
+    for (const candidate of candidates) {
+        const normalized = candidate.replace(/\\/g, '/');
+        const match = normalized.match(/(?:^file:\/\/\/|^\/)?([A-Za-z]:\/Users\/[^/]+)/i);
+        if (match) return match[1].replace(/\//g, '\\');
     }
-
-    const match = path.match(/^file:\/\/\/([A-Za-z]:\/Users\/[^/]+)/i);
-    return match ? match[1].replace(/\//g, '\\') : '';
+    return '';
 };
 
 proto._inferLinuxUserFromLocation = function() {
-    let path = '';
-    try {
-        path = decodeURIComponent(window.location.href);
-    } catch (_) {
-        path = window.location.href;
+    const candidates = this._getDecodedLocationCandidates();
+    for (const candidate of candidates) {
+        const normalized = candidate.replace(/\\/g, '/');
+        const match = normalized.match(/(?:^file:\/\/)?\/home\/([^/]+)/i);
+        if (match) return match[1];
+    }
+    return '';
+};
+
+proto._getDecodedLocationCandidates = function() {
+    const rawCandidates = [
+        window.location.href,
+        window.location.pathname,
+        window.location.toString?.() || '',
+    ].filter(Boolean);
+
+    const decoded = [];
+    for (const value of rawCandidates) {
+        try {
+            decoded.push(decodeURIComponent(value));
+        } catch (_) {
+            decoded.push(value);
+        }
     }
 
-    const match = path.match(/^file:\/\/\/home\/([^/]+)/i);
-    return match ? match[1] : '';
+    return [...new Set(decoded)];
 };
 
 proto._initExampleMenu = function() {
@@ -481,8 +496,8 @@ proto._renderExtraMenu = function() {
     }, { badgeKey: 'exampleComingSoon' });
 
     const standaloneItem = makeAction('📦', 'extraStandalone', () => {
-        Modal.alert(i18n.t('extraStandalone'), i18n.t('extraStandaloneSoonBody'), { icon: '📦' });
-    }, { badgeKey: 'exampleComingSoon' });
+        this._downloadStandalonePackage();
+    });
 
     const versionRow = document.createElement('div');
     versionRow.className = 'example-menu-item extra-menu-static';
@@ -502,6 +517,25 @@ proto._renderExtraMenu = function() {
     versionRow.append(versionIcon, versionLabel, versionValue);
 
     menu.append(feedbackItem, standaloneItem, versionRow);
+};
+
+proto._downloadStandalonePackage = async function() {
+    try {
+        const response = await fetch(STANDALONE_MANIFEST_PATH, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Missing manifest: ${response.status}`);
+
+        const manifest = await response.json();
+        if (!manifest?.zipUrl) throw new Error('Missing zipUrl in manifest');
+
+        const link = document.createElement('a');
+        link.href = manifest.zipUrl;
+        link.download = manifest.fileName || '';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    } catch {
+        Modal.alert(i18n.t('extraStandalone'), i18n.t('extraStandaloneUnavailableBody'), { icon: '📦' });
+    }
 };
 
 proto.loadExample = async function(exampleId = 'pendulum') {
