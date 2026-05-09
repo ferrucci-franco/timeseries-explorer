@@ -1,14 +1,29 @@
 # Ignore everything by default.
 *
 
+# Standard generated folders
+/node_modules/
+/dist/
+
 # Keep local/archive material out of sync.
 /old/
+/backup/
 /.codex/
 /.claude/
 /python/
 
-# Sync only the root app files.
+# Track project source and metadata.
 !/.gitignore
 !/*.js
 !/*.html
 !/*.css
+!/package.json
+!/package-lock.json
+!/README.md
+!/CONTRIBUTING.md
+!/src/
+!/src/**
+!/public/
+!/public/**
+!/docs/
+!/docs/**

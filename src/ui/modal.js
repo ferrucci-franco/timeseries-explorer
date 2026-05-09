@@ -3,6 +3,8 @@
  * Provides custom modal dialogs with better UX than browser's native confirm()
  */
 
+import i18n from '../i18n/index.js';
+
 const Modal = {
     /**
      * Show a confirmation dialog
@@ -138,7 +140,7 @@ const Modal = {
 
             const closeBtn = document.createElement('button');
             closeBtn.className = 'modal-btn modal-btn-confirm';
-            closeBtn.textContent = i18n.t('compareFilesClose') || 'Close';
+            closeBtn.textContent = i18n.t('helpClose');
 
             buttons.appendChild(closeBtn);
             content.appendChild(buttons);
@@ -191,3 +193,5 @@ const Modal = {
         }, 300);
     }
 };
+
+export default Modal;

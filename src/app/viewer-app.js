@@ -1,0 +1,114 @@
+import MatParser from '../parsers/mat-parser.js';
+import CsvParser from '../parsers/csv-parser.js';
+import i18n from '../i18n/index.js';
+import Modal from '../ui/modal.js';
+import LayoutManager from '../ui/layout-manager.js';
+import PlotManager from '../plots/plot-manager.js';
+import { RELOAD_AS_NEW_VERSION_STORAGE_KEY } from './constants.js';
+import { installFileMethods } from './methods/file-methods.js';
+import { installUiMethods } from './methods/ui-methods.js';
+import { installDerivedMethods } from './methods/derived-methods.js';
+import { installTreeMethods } from './methods/tree-methods.js';
+
+class OpenModelicaViewer {
+    constructor() {
+        this.parser      = new MatParser();
+        this.csvParser   = new CsvParser(this.parser);
+        this.files       = new Map();   // fileId → { file, name }
+        this._nextFileId = 1;
+        this.theme       = OpenModelicaViewer.getStartupTheme();
+        this.language    = 'en';
+        this.showDescriptions = false;
+        this.sortAlphabetical = true;
+        this._currentTree     = null;
+        this._filterText      = '';
+        this._loadedScripts   = new Set();
+        this.derivedByFile    = new Map();
+        this._suggestionIndex = 0;
+        this.selectedVariables = new Set();
+        this._expandedFileTransforms = new Set();
+        this._exampleLoading = false;
+        this._exampleLoadToken = null;
+        this._exampleLoadingEscHandler = null;
+        this.reloadAsNewVersionMode = OpenModelicaViewer.getStoredReloadAsNewVersionMode();
+
+        this.layoutManager = new LayoutManager('plots-area');
+        this.plotManager   = new PlotManager(this.parser);
+
+        this.layoutManager.onPanelMount   = (id, el) => this.plotManager.onPanelMount(id, el);
+        this.layoutManager.onPanelUnmount = (id)     => this.plotManager.onPanelUnmount(id);
+
+        this.applyTheme(this.theme);
+        this.initEventListeners();
+        this.initDragAndDrop();
+        this.initSidebarResize();
+        i18n.setLanguage('en');
+        this._setDropZoneStatus(false);
+
+        this.layoutManager.render();
+        this._updateActionButtons();
+        this._applyReloadModeUI();
+    }
+
+    // ─── File management ───────────────────────────────────────────
+
+    get activeFileId() { return this.plotManager.activeFileId; }
+
+    // ─── Theme & language ──────────────────────────────────────────
+
+    static getStartupTheme() {
+        const hour = new Date().getHours();
+        return hour >= 7 && hour < 18 ? 'light' : 'dark';
+    }
+
+    static getStoredReloadAsNewVersionMode() {
+        try {
+            return localStorage.getItem(RELOAD_AS_NEW_VERSION_STORAGE_KEY) === '1';
+        } catch (_) {
+            return false;
+        }
+    }
+
+    setLanguage(lang) {
+        this.language = lang;
+        i18n.setLanguage(lang);
+        document.querySelectorAll('.lang-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-lang') === lang);
+        });
+        this._applyReloadModeUI();
+        this._renderFilesList();
+        if (this._currentTree) this._renderFilteredTree();
+        this.layoutManager.render();
+    }
+
+    toggleTheme() {
+        this.theme = this.theme === 'light' ? 'dark' : 'light';
+        this.applyTheme(this.theme);
+    }
+
+    applyTheme(theme) {
+        this.theme = theme;
+        document.body.classList.remove('theme-light', 'theme-dark');
+        document.body.classList.add(`theme-${this.theme}`);
+        document.querySelector('#theme-toggle .icon').textContent = this.theme === 'light' ? '🌙' : '☀️';
+        this.plotManager.setTheme(this.theme);
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────
+
+    _readAsArrayBuffer(file) {
+        return new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload  = (e) => resolve(e.target.result);
+            r.onerror = () => reject(new Error(`Cannot read file: ${file.name}`));
+            r.readAsArrayBuffer(file);
+        });
+    }
+}
+
+installFileMethods(OpenModelicaViewer);
+installUiMethods(OpenModelicaViewer);
+installDerivedMethods(OpenModelicaViewer);
+installTreeMethods(OpenModelicaViewer);
+
+export default OpenModelicaViewer;

@@ -1,3 +1,5 @@
+import i18n from '../i18n/index.js';
+
 /**
  * LayoutManager — recursive binary split layout engine
  *
@@ -8,7 +10,7 @@
  * direction 'h' → horizontal divider → top/bottom children
  * direction 'v' → vertical divider  → left/right children
  */
-class LayoutManager {
+export default class LayoutManager {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
         this.root = this._makePanel();

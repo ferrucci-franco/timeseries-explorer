@@ -1,0 +1,1630 @@
+import i18n from '../i18n/index.js';
+import Modal from '../ui/modal.js';
+import { installPlotDataMethods } from './methods/data-methods.js';
+import { installPlotStateMethods } from './methods/state-methods.js';
+import { installPlotInteractionMethods } from './methods/interaction-methods.js';
+
+/**
+ * PlotManager — Plotly chart lifecycle tied to the dynamic layout
+ *
+ * Panel modes:
+ *   'timeseries'  — one or more variables vs time (default)
+ *   'phase2d'     — x(t) vs y(t)  → 2-D scatter
+ *   'phase2dt'    — x(t) vs y(t) vs t → 3-D scatter (plotly X=time, Y=var x, Z=var y)
+ *   'phase3d'     — x(t) vs y(t) vs z(t) → 3-D scatter
+ *
+ * Panel state per panelId:
+ *   { div, mode, traces:[{varName,color}], phaseTraces:[{x,y,z,color}], phasePending:{x,y,z}, resizeObserver }
+ */
+
+class PlotManager {
+    constructor(parser) {
+        this.parser         = parser || null;
+        this.plots          = new Map();
+        this.files          = new Map();   // fileId → { name, data }
+        this.activeFileId   = null;
+        this.theme          = 'light';
+        this.syncAxes       = true;
+        this.legendPosition = 'overlay';
+        this.timeseriesVisualMaxPoints = PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
+        this.phaseVisualMaxPoints = null;
+        this._syncing       = false;
+        this._syncSourcePanelId = null;
+        this._pendingAxisSync = null;
+        this.syncHover      = false;
+        this.hoverProximity = true;
+        this._hovering      = false;
+
+        this.onPanelMount   = (id, el) => this._mountPanel(id, el);
+        this.onPanelUnmount = (id)     => this._unmountPanel(id);
+    }
+
+    // ─── Public API ────────────────────────────────────────────────
+
+    /** Active file's data — used as fallback / for addTrace validation */
+    get data() {
+        return this.activeFileId ? (this.files.get(this.activeFileId)?.data ?? null) : null;
+    }
+
+    addFile(fileId, name, data, transform = null) {
+        const wasOne = this.files.size === 1;
+        this.files.set(fileId, {
+            name,
+            data,
+            transform: this._normalizeFileTransform(transform),
+            _transformCache: null,
+        });
+        this.activeFileId = fileId;
+        // If going 1→2 files, rebuild all panels so legend labels gain [filename]
+        if (wasOne) this._rebuildAllPanels();
+    }
+
+    setActiveFile(fileId) {
+        if (this.files.has(fileId)) this.activeFileId = fileId;
+    }
+
+    removeFile(fileId) {
+        const goingToOne = this.files.size === 2;
+        const affectedPanels = new Set();
+
+        for (const [panelId, plot] of this.plots) {
+            if (plot.mode === 'timeseries') {
+                const before = plot.traces.length;
+                plot.traces = plot.traces.filter(t => t.fileId !== fileId);
+                if (plot.traces.length < before) affectedPanels.add(panelId);
+            } else {
+                const before = plot.phaseTraces.length;
+                plot.phaseTraces = plot.phaseTraces.filter(t => t.fileId !== fileId);
+                if (plot.phaseTraces.length < before) affectedPanels.add(panelId);
+                if (plot.phasePending?.fileId === fileId) {
+                    plot.phasePending = { x: null, y: null, z: null, fileId: null };
+                }
+            }
+        }
+
+        this.files.delete(fileId);
+        if (this.activeFileId === fileId) {
+            this.activeFileId = this.files.size > 0 ? [...this.files.keys()][0] : null;
+        }
+
+        // If going 2→1, rebuild all (legend labels lose [filename]); else rebuild affected only
+        if (goingToOne) {
+            this._rebuildAllPanels();
+        } else {
+            for (const id of affectedPanels) this._rebuildPanel(id);
+        }
+    }
+
+    updateFileData(fileId, newData) {
+        const entry = this.files.get(fileId);
+        if (!entry) return;
+        entry.data = newData;
+        entry._transformCache = null;
+        // Rebuild every panel that has at least one trace from this file
+        for (const [panelId, plot] of this.plots) {
+            const uses = plot.traces.some(t => t.fileId === fileId) ||
+                         plot.phaseTraces.some(t => t.fileId === fileId) ||
+                         plot.stateSlots?.fileId === fileId;
+            if (uses) this._rebuildPanel(panelId, { preserveView: true });
+        }
+    }
+
+    setFileTransform(fileId, transform) {
+        const entry = this.files.get(fileId);
+        if (!entry) return;
+        entry.transform = this._normalizeFileTransform(transform);
+        entry._transformCache = null;
+        for (const [panelId, plot] of this.plots) {
+            const uses = plot.traces.some(t => t.fileId === fileId) ||
+                         plot.phaseTraces.some(t => t.fileId === fileId) ||
+                         plot.stateSlots?.fileId === fileId;
+            if (uses) this._rebuildPanel(panelId, { preserveView: true });
+        }
+    }
+
+    getFileTransform(fileId) {
+        return this._normalizeFileTransform(this.files.get(fileId)?.transform);
+    }
+
+    setExampleLayout(fileId, { tlId, trId, blId, brId }) {
+        const c = this._nextColor.bind(this);
+
+        // Top-left: timeseries theta + omega
+        const tl = this.plots.get(tlId);
+        if (tl) {
+            tl.mode = 'timeseries';
+            tl.traces = [
+                { varName: 'theta', color: c(0), fileId },
+                { varName: 'omega', color: c(1), fileId },
+            ];
+            this._rebuildPanel(tlId);
+        }
+
+        // Bottom-left: timeseries Ekin + Epot + Etot
+        const bl = this.plots.get(blId);
+        if (bl) {
+            bl.mode = 'timeseries';
+            bl.traces = [
+                { varName: 'Ekin', color: c(0), fileId },
+                { varName: 'Epot', color: c(1), fileId },
+                { varName: 'Etot', color: c(2), fileId },
+            ];
+            this._rebuildPanel(blId);
+        }
+
+        // Top-right: phase2dt x vs y
+        const tr = this.plots.get(trId);
+        if (tr) {
+            tr.mode = 'phase2dt';
+            tr.phaseTraces = [{ x: 'x', y: 'y', z: null, color: c(0), fileId }];
+            const trEl = document.querySelector(`.layout-panel[data-id="${trId}"]`);
+            if (trEl) this._injectModeButtons(trId, trEl, 'phase2dt');
+            this._rebuildPanel(trId);
+        }
+
+        // Bottom-right: phase2d theta vs omega
+        const br = this.plots.get(brId);
+        if (br) {
+            br.mode = 'phase2d';
+            br.phaseTraces = [{ x: 'theta', y: 'omega', z: null, color: c(0), fileId }];
+            const brEl = document.querySelector(`.layout-panel[data-id="${brId}"]`);
+            if (brEl) this._injectModeButtons(brId, brEl, 'phase2d');
+            this._rebuildPanel(brId);
+        }
+    }
+
+    setLorenzExampleLayout(fileId, { panelId, brId, tlId }) {
+        const id = panelId || brId || tlId;
+        const plot = this.plots.get(id);
+        if (!plot) return;
+
+        plot.mode = 'state-anim';
+        plot.stateAnimDim = 3;
+        plot.projection = 'orthographic';
+        plot.animSpeed = 0.25;
+        plot.autoPlayOnRender = true;
+        plot.showCameraOverlay = false;
+        plot.homeCamera = {
+            eye: { x: 2.7443, y: -1.2215, z: 1.5367 },
+            up: { x: 0, y: 0, z: 1 },
+            center: { x: 0.147, y: 0.2334, z: -0.1396 },
+        };
+        plot.stateSlots = { x: ['x', 'y', 'z'], dx: ['der(x)', 'der(y)', 'der(z)'], fileId };
+        plot.stateConfig = {
+            showFullTrace: true,
+            showTrace: true,
+            showArrowX: true,
+            showArrowDx: true,
+            normalizeDx: true,
+            dynamicZoom: false,
+        };
+
+        const panelEl = document.querySelector(`.layout-panel[data-id="${id}"]`);
+        if (panelEl) this._injectModeButtons(id, panelEl, 'state-anim');
+        this._rebuildPanel(id);
+    }
+
+    hasAnyTraces() {
+        for (const [, plot] of this.plots) {
+            if (plot.traces.length > 0 || plot.phaseTraces.length > 0) return true;
+        }
+        return false;
+    }
+
+    /** Like _setMode but returns a Promise so callers can await mode change. */
+    setModeAsync(panelId, mode) {
+        this._setMode(panelId, mode);
+        return Promise.resolve();
+    }
+
+    hasTracesForFile(fileId) {
+        for (const [, plot] of this.plots) {
+            if (plot.traces.some(t => t.fileId === fileId)) return true;
+            if (plot.phaseTraces.some(t => t.fileId === fileId)) return true;
+        }
+        return false;
+    }
+
+    setTheme(theme)            { this.theme = theme;          this._relayoutAll(); }
+    setSyncAxes(v)             { this.syncAxes = v; }
+    setLegendPosition(pos)     { this.legendPosition = pos;   this._relayoutAll(); }
+    setTimeseriesDownsamplingLimit(limit) {
+        this.timeseriesVisualMaxPoints = this._normalizeTimeseriesDownsamplingLimit(limit);
+        this._refreshAllTimeseriesVisuals();
+    }
+    setPhaseDownsamplingLimit(limit) {
+        this.phaseVisualMaxPoints = this._normalizePhaseDownsamplingLimit(limit);
+        this._refreshAllPhaseVisuals();
+    }
+    setSyncHover(v) {
+        this.syncHover = v;
+        document.body.classList.toggle('sync-hover-active', v);
+        if (!v) this._clearHoverMarkers();
+    }
+    setHoverProximity(v) {
+        this.hoverProximity = v;
+        this._relayoutAll();
+    }
+
+    resizeAll() {
+        for (const [, plot] of this.plots) {
+            if (plot.div) Plotly.Plots.resize(plot.div);
+        }
+    }
+
+    autoZoomAll() {
+        for (const [id, plot] of this.plots) {
+            if (!plot.div) continue;
+            this._autoScalePlot(id, plot);
+        }
+    }
+
+    clearAll() {
+        for (const [id] of this.plots) this._clearPanel(id);
+    }
+
+    // ─── Panel lifecycle ───────────────────────────────────────────
+
+    _mountPanel(panelId, panelEl) {
+        // Ensure state exists (may already exist after a re-render)
+        if (!this.plots.has(panelId)) {
+            this.plots.set(panelId, this._makeState());
+        }
+        const plot = this.plots.get(panelId);
+
+        // Inject mode buttons into the panel toolbar
+        this._injectModeButtons(panelId, panelEl, plot.mode);
+
+        // Set up drop handlers
+        this._bindDropHandlers(panelId, panelEl);
+
+        // Re-create chart if this panel already had data (after language/layout re-render)
+        if (this._hasContent(plot)) {
+            if (plot.mode === 'state-anim') {
+                this._createStateAnimChart(panelId, panelEl);
+            } else {
+                this._createChart(panelId, panelEl);
+            }
+        } else {
+            this._updatePlaceholder(panelId, panelEl);
+        }
+    }
+
+    _unmountPanel(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        this._stopAnim(plot);
+        if (plot.resizeObserver) { plot.resizeObserver.disconnect(); }
+        if (plot._cursorDocListeners) {
+            document.removeEventListener('mousemove', plot._cursorDocListeners.move);
+            document.removeEventListener('mouseup',   plot._cursorDocListeners.up);
+            plot._cursorDocListeners = null;
+        }
+        if (plot.div)            { Plotly.purge(plot.div); }
+        this.plots.delete(panelId);  // panel is gone from DOM — remove completely
+    }
+
+    // ─── Mode switching ────────────────────────────────────────────
+
+    _setMode(panelId, mode, stateAnimDim = null) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
+        if (plot.mode === mode && plot.stateAnimDim === nextDim) return;
+
+        // Stop animation if running
+        this._stopAnim(plot);
+
+        // Tear down existing chart
+        this._destroyChart(panelId);
+        plot.mode         = mode;
+        plot.stateAnimDim = nextDim;
+        plot.traces       = [];
+        plot.phaseTraces  = [];
+        plot.phasePending = { x: null, y: null, z: null, fileId: null };
+        plot.stateSlots   = { x: [], dx: [], fileId: null };
+        plot.equalAspect2D = false;
+        plot.cursors = this._defaultCursors();
+        plot.animFrame    = 0;
+
+        // Update UI — re-inject all buttons so view labels reflect the new mode
+        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        if (!panelEl) return;
+        const placeholder = panelEl.querySelector('.layout-panel-placeholder');
+        if (placeholder) { placeholder.style.display = ''; placeholder.classList.remove('drag-over'); }
+        this._injectModeButtons(panelId, panelEl, mode);
+        this._updatePlaceholder(panelId, panelEl);
+    }
+
+    // ─── Drop handling ─────────────────────────────────────────────
+
+    _bindDropHandlers(panelId, panelEl) {
+        if (panelEl._dropBound) return;
+        panelEl._dropBound = true;
+
+        // Create a persistent overlay that sits on top of the plot during drag
+        const overlay = document.createElement('div');
+        overlay.className = 'drop-overlay';
+        panelEl.appendChild(overlay);
+
+        const getPlaceholder = () => panelEl.querySelector('.layout-panel-placeholder');
+        const hasChart = () => { const p = this.plots.get(panelId); return !!(p && p.div); };
+
+        const showDragHint = () => {
+            const msg = this._dropMessage(panelId);
+            if (hasChart()) {
+                // Existing plot: show transparent overlay on top
+                overlay.innerHTML = `<span>${msg}</span>`;
+                overlay.classList.add('active');
+            } else {
+                // Empty panel: update the placeholder text in-place (no position shift)
+                const ph = getPlaceholder();
+                if (ph) {
+                    ph.dataset.savedHtml = ph.innerHTML;
+                    ph.innerHTML = `<span>${msg}</span>`;
+                    ph.classList.add('drag-over');
+                }
+            }
+        };
+
+        const hideDragHint = () => {
+            // If a pending trace is in progress AND a chart already exists, keep overlay visible
+            const p = this.plots.get(panelId);
+            const hasPending = p && p.div && p.mode !== 'timeseries' && p.phasePending && p.phasePending.x;
+            if (hasPending) {
+                overlay.classList.add('active', 'pending');
+                overlay.innerHTML = `<span>${this._dropMessage(panelId)}</span>`;
+            } else {
+                overlay.classList.remove('active', 'pending');
+            }
+            const ph = getPlaceholder();
+            if (ph) {
+                ph.classList.remove('drag-over');
+                if (ph.dataset.savedHtml !== undefined) {
+                    ph.innerHTML = ph.dataset.savedHtml;
+                    delete ph.dataset.savedHtml;
+                }
+            }
+        };
+
+        panelEl.addEventListener('dragover', (e) => {
+            if (!this.data) return;
+            e.preventDefault();
+            showDragHint();
+        });
+
+        panelEl.addEventListener('dragleave', (e) => {
+            if (panelEl.contains(e.relatedTarget)) return;
+            hideDragHint();
+        });
+
+        panelEl.addEventListener('drop', (e) => {
+            e.preventDefault();
+            hideDragHint();
+            const varNames = this._getDroppedVariableNames(e.dataTransfer);
+            if (!varNames.length || !this.data) return;
+            if (varNames.length > 1) {
+                this._addDroppedVariables(panelId, varNames, panelEl);
+            } else {
+                this.addTrace(panelId, varNames[0], panelEl);
+            }
+        });
+    }
+
+    _getDroppedVariableNames(dataTransfer) {
+        const raw = dataTransfer.getData('application/x-openmodelica-variables');
+        if (raw) {
+            try {
+                const payload = JSON.parse(raw);
+                if (payload?.type === 'variables' && Array.isArray(payload.names)) {
+                    return payload.names.filter(Boolean);
+                }
+            } catch (_) {}
+        }
+        const varName = dataTransfer.getData('text/plain');
+        return varName ? [varName] : [];
+    }
+
+    _addDroppedVariables(panelId, varNames, panelEl) {
+        if (!this.plots.has(panelId)) this.plots.set(panelId, this._makeState());
+        const plot = this.plots.get(panelId);
+        const names = varNames.filter(varName => {
+            const variable = this.data?.variables?.[varName];
+            return variable && variable.kind !== 'abscissa';
+        });
+        if (!names.length) return;
+
+        if (plot.mode === 'timeseries') {
+            names.forEach(varName => this.addTrace(panelId, varName, panelEl));
+            return;
+        }
+
+        if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
+            const groupSize = plot.mode === 'phase3d' ? 3 : 2;
+            plot.phasePending = { x: null, y: null, z: null, fileId: null };
+            let added = 0;
+            for (let i = 0; i + groupSize - 1 < names.length; i += groupSize) {
+                plot.phaseTraces.push({
+                    x: names[i],
+                    y: names[i + 1],
+                    z: groupSize === 3 ? names[i + 2] : null,
+                    color: this._nextColor(plot.phaseTraces.length),
+                    fileId: this.activeFileId,
+                });
+                added += 1;
+            }
+            if (added > 0) {
+                if (!plot.div) this._createChart(panelId, panelEl);
+                else this._updatePhaseChart(panelId, plot);
+                this._setPendingOverlay(panelId, panelEl, false);
+            } else {
+                this._updatePlaceholder(panelId, panelEl);
+            }
+            return;
+        }
+
+        if (plot.mode === 'state-anim') {
+            const dim = plot.stateAnimDim || 2;
+            if (plot.div) this._destroyChart(panelId);
+            plot.stateSlots = { x: names.slice(0, dim), dx: [], fileId: this.activeFileId };
+            const data = this.files.get(this.activeFileId)?.data;
+            if (data) {
+                plot.stateSlots.dx = plot.stateSlots.x.map(name => this.parser.findDerivative(name, data.variables));
+            }
+            if (plot.stateSlots.x.length >= dim) {
+                this._createStateAnimChart(panelId, panelEl);
+            } else {
+                const placeholder = panelEl.querySelector('.layout-panel-placeholder');
+                if (placeholder) placeholder.style.display = '';
+                this._updatePlaceholder(panelId, panelEl);
+            }
+            return;
+        }
+
+        this.addTrace(panelId, names[0], panelEl);
+    }
+
+    /** Show or hide a persistent "waiting for next variable" overlay on top of an existing chart. */
+    _setPendingOverlay(panelId, panelEl, show) {
+        const overlay = panelEl.querySelector('.drop-overlay');
+        if (!overlay) return;
+        if (show) {
+            overlay.innerHTML = `<span>${this._dropMessage(panelId)}</span>`;
+            overlay.classList.add('active', 'pending');
+        } else {
+            overlay.classList.remove('active', 'pending');
+        }
+    }
+
+    /** Message shown in the drop overlay depending on mode and current state. */
+    _dropMessage(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return i18n.t('dropVariableHere');
+
+        const pp   = plot.phasePending;
+        const mode = plot.mode;
+        const n    = plot.phaseTraces.length; // completed traces
+
+        // Timeseries: always accept more variables
+        if (mode === 'timeseries') {
+            return plot.traces.length === 0
+                ? i18n.t('dropTimeseriesMulti')
+                : i18n.t('dropToAddTrace');
+        }
+
+        // State-anim mode
+        if (mode === 'state-anim') {
+            const sx = plot.stateSlots?.x || [];
+            const dim = plot.stateAnimDim || 2;
+            if (sx.length === 0) return dim === 3 ? i18n.t('dropState3dMulti') : i18n.t('dropState2dMulti');
+            if (sx.length === 1) return i18n.t('dropStateX2');
+            return dim === 3 ? i18n.t('dropStateX3') : i18n.t('dropVariableHere');
+        }
+
+        // Phase modes: guide axis by axis
+        switch (mode) {
+            case 'phase2d':
+                return !pp.x ? i18n.t('dropPhase2dMulti') : i18n.t('dropY');
+            case 'phase2dt':
+                return !pp.x ? i18n.t('dropPhase2dtMulti') : i18n.t('dropYAutoTime');
+            case 'phase3d':
+                return !pp.x ? i18n.t('dropPhase3dMulti')
+                     : !pp.y ? i18n.t('dropY')
+                     :         i18n.t('dropZ');
+        }
+        return i18n.t('dropVariableHere');
+    }
+
+    // ─── Adding variables ──────────────────────────────────────────
+
+    addTrace(panelId, varName, panelEl) {
+        if (!this.data) return;
+        const variable = this.data.variables[varName];
+        if (!variable || variable.kind === 'abscissa') return;
+
+        if (!this.plots.has(panelId)) {
+            this.plots.set(panelId, this._makeState());
+        }
+        const plot = this.plots.get(panelId);
+
+        if (plot.mode === 'timeseries') {
+            this._addTimeseries(panelId, varName, panelEl, plot);
+        } else if (plot.mode === 'state-anim') {
+            this._addStateAnimVar(panelId, varName, panelEl, plot);
+        } else {
+            this._addPhaseVar(panelId, varName, panelEl, plot);
+        }
+    }
+
+    removeTrace(panelId, varName) {
+        const plot = this.plots.get(panelId);
+        if (!plot || !plot.div || plot.mode !== 'timeseries') return;
+        const idx = plot.traces.findIndex(t => t.varName === varName);
+        if (idx === -1) return;
+        plot.traces.splice(idx, 1);
+        Plotly.deleteTraces(plot.div, idx);
+        if (plot.traces.length === 0) this._clearPanel(panelId);
+        else this._syncCursorDisplay(panelId, plot);
+    }
+
+    _addTimeseries(panelId, varName, panelEl, plot) {
+        if (plot.traces.find(t => t.varName === varName && t.fileId === this.activeFileId)) return; // deduplicate
+        plot.traces.push({ varName, color: this._nextColor(plot.traces.length), fileId: this.activeFileId });
+
+        if (!plot.div) {
+            this._createChart(panelId, panelEl);
+        } else {
+            const t = plot.traces[plot.traces.length - 1];
+            Plotly.addTraces(plot.div, this._buildTimeTrace(t)).then(() => this._installLegendHoverHint(plot.div));
+            // Update Y axis title: clear when 2+ traces (X/time label always stays)
+            const layout = this._buildTimeLayout(plot);
+            Plotly.relayout(plot.div, { 'yaxis.title': layout.yaxis.title });
+            this._syncCursorDisplay(panelId, plot);
+        }
+    }
+
+    _addPhaseVar(panelId, varName, panelEl, plot) {
+        const pp   = plot.phasePending;
+        const mode = plot.mode;
+
+        // Fill the next empty slot in the pending trace
+        if (!pp.x)                         { pp.x = varName; pp.fileId = this.activeFileId; }
+        else if (!pp.y)                    { pp.y = varName; }
+        else if (mode === 'phase3d' && !pp.z) { pp.z = varName; }
+        else {
+            // All slots full for this trace → start a new one
+            pp.x = varName; pp.fileId = this.activeFileId;
+            pp.y = null;
+            pp.z = null;
+        }
+
+        const ready = (mode === 'phase2d'  && pp.x && pp.y)          ||
+                      (mode === 'phase2dt' && pp.x && pp.y)          ||
+                      (mode === 'phase3d'  && pp.x && pp.y && pp.z);
+
+        if (ready) {
+            // Commit pending → completed trace
+            const color = this._nextColor(plot.phaseTraces.length);
+            plot.phaseTraces.push({ x: pp.x, y: pp.y, z: pp.z || null, color, fileId: pp.fileId });
+            plot.phasePending = { x: null, y: null, z: null, fileId: null };
+
+            if (!plot.div) this._createChart(panelId, panelEl);
+            else           this._updatePhaseChart(panelId, plot);
+            this._setPendingOverlay(panelId, panelEl, false);
+        } else {
+            this._updatePlaceholder(panelId, panelEl);
+            // Only show overlay hint when a chart already exists (placeholder handles the empty case)
+            if (plot.div) this._setPendingOverlay(panelId, panelEl, true);
+        }
+    }
+
+    // ─── Chart creation ────────────────────────────────────────────
+
+    _createChart(panelId, panelEl) {
+        const plot = this.plots.get(panelId);
+        if (!this._hasContent(plot)) return;
+        const restoreView = plot._pendingViewRestore || null;
+        delete plot._pendingViewRestore;
+
+        const placeholder = panelEl.querySelector('.layout-panel-placeholder');
+        if (placeholder) placeholder.style.display = 'none';
+
+        const div = document.createElement('div');
+        div.className = `plotly-container plotly-mode-${plot.mode}`;
+        panelEl.appendChild(div);
+        plot.div = div;
+
+        const { traces, layout } = this._buildPlotData(plot);
+        const config = { responsive: true, displayModeBar: true, displaylogo: false, scrollZoom: true };
+
+        Plotly.newPlot(div, traces, layout, config).then(() => {
+            this._refreshActionBtns(panelId);
+            const finish3DSetup = () => {
+                if (!this._is3D(plot.mode)) return;
+                this._add3DAxisDecorations(plot);
+            };
+            const viewPromise = restoreView
+                ? this._restorePlotView(plot, restoreView)
+                : (this._is3D(plot.mode) ? this._setCamera(panelId, 'home') : Promise.resolve());
+            Promise.resolve(viewPromise).then(() => {
+                if (plot.mode === 'timeseries') this._refreshTimeseriesVisuals(panelId, plot);
+                finish3DSetup();
+            });
+            div.on('plotly_doubleclick', () => {
+                this._autoScalePlot(panelId, plot);
+                return false;
+            });
+            // Axis sync, hover sync, and scroll-wheel pan (timeseries only)
+            if (plot.mode === 'timeseries') {
+                div.on('plotly_relayout', (ed) => this._onRelayout(panelId, ed));
+                div.on('plotly_hover',    (ed) => this._onHover(panelId, ed));
+                div.on('plotly_unhover',  ()   => this._onUnhover(panelId));
+            }
+            // Pan gestures for 2D plots:
+            //   Middle-click: toggle Plotly's native pan dragmode (works with button 1).
+            //   Right-click:  custom pan — Plotly's drag only reacts to button 0, so we
+            //                 manipulate axis ranges directly on mousemove.
+            if (plot.mode === 'timeseries' || plot.mode === 'phase2d') {
+                div.addEventListener('mousedown', (e) => {
+                    if (e.button === 1) {
+                        e.preventDefault();
+                        Plotly.relayout(div, { dragmode: 'pan' });
+                        document.addEventListener('mouseup', () => {
+                            Plotly.relayout(div, { dragmode: 'zoom' });
+                        }, { once: true });
+                        return;
+                    }
+                    if (e.button !== 2) return;
+                    const fl = div._fullLayout;
+                    const xa = fl?.xaxis, ya = fl?.yaxis;
+                    if (!xa || !ya || !xa._length || !ya._length) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const startX = e.clientX, startY = e.clientY;
+                    const x0 = xa.range.slice(), y0 = ya.range.slice();
+                    const xLen = xa._length, yLen = ya._length;
+                    const onMove = (mv) => {
+                        const xSpan = x0[1] - x0[0];
+                        const ySpan = y0[1] - y0[0];
+                        const dx = -((mv.clientX - startX) / xLen) * xSpan;
+                        const dy =  ((mv.clientY - startY) / yLen) * ySpan;
+                        Plotly.relayout(div, {
+                            'xaxis.range': [x0[0] + dx, x0[1] + dx],
+                            'yaxis.range': [y0[0] + dy, y0[1] + dy],
+                        });
+                    };
+                    const onUp = () => {
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                    };
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                }, { capture: true });
+                div.addEventListener('contextmenu', (e) => e.preventDefault());
+            }
+            // Track legend visibility in our own state so it survives re-renders.
+            // We match by trace name, not by curveNumber, because marker traces inserted via
+            // Plotly.addTraces shift the indices and make curveNumber unreliable.
+            const toggleVisByName = (clickedName) => {
+                if (clickedName === '__hover__') return;
+                if (plot.mode === 'timeseries') {
+                    const t = plot.traces.find(t => this._traceName(t.varName, t.fileId) === clickedName);
+                    if (t) t.visible = (t.visible === 'legendonly') ? true : 'legendonly';
+                } else {
+                    const t = plot.phaseTraces.find(pt => {
+                        return this._phaseTraceName(plot, pt) === clickedName;
+                    });
+                    if (t) t.visible = (t.visible === 'legendonly') ? true : 'legendonly';
+                }
+            };
+            const removeByLegendName = (clickedName) => {
+                if (!clickedName || clickedName === '__hover__') return false;
+                if (plot.mode === 'timeseries') {
+                    const idx = plot.traces.findIndex(t => this._traceName(t.varName, t.fileId) === clickedName);
+                    if (idx < 0) return false;
+                    plot.traces.splice(idx, 1);
+                } else {
+                    const idx = plot.phaseTraces.findIndex(pt => this._phaseTraceName(plot, pt) === clickedName);
+                    if (idx < 0) return false;
+                    plot.phaseTraces.splice(idx, 1);
+                }
+                this._rebuildPanel(panelId);
+                return true;
+            };
+            let lastMouseDownHadShift = false;
+            div.addEventListener('mousedown', (e) => {
+                lastMouseDownHadShift = !!e.shiftKey;
+            }, { capture: true });
+            div.on('plotly_legendclick', (ed) => {
+                const clickedName = ed.data[ed.curveNumber]?.name;
+                const shiftClick = !!(ed.event?.shiftKey || lastMouseDownHadShift);
+                lastMouseDownHadShift = false;
+                if (shiftClick) {
+                    removeByLegendName(clickedName);
+                    return false;
+                }
+                toggleVisByName(clickedName);
+                setTimeout(() => this._syncCursorDisplay(panelId, plot), 0);
+            });
+            // Double-click isolates one trace (or restores all). Read _fullData after it settles.
+            div.on('plotly_legenddoubleclick', () => {
+                setTimeout(() => {
+                    if (!plot.div || !plot.div._fullData) return;
+                    const realTraces = plot.mode === 'timeseries' ? plot.traces : plot.phaseTraces;
+                    plot.div._fullData.forEach(fd => {
+                        if (fd.name === '__hover__') return;
+                        const t = realTraces.find(rt =>
+                            plot.mode === 'timeseries' ? rt.varName === fd.name : false
+                        );
+                        if (t) t.visible = fd.visible ?? true;
+                    });
+                }, 50);
+            });
+            div.on('plotly_afterplot', () => this._installLegendHoverHint(div));
+            this._installLegendHoverHint(div);
+            // Pre-allocate marker trace for hover sync on all modes
+            this._initMarkerTrace(plot);
+            this._installCursorHandlers(panelId, plot);
+            this._syncCursorDisplay(panelId, plot);
+            // Resize observer
+            let timer;
+            const ro = new ResizeObserver(() => {
+                clearTimeout(timer);
+                timer = setTimeout(() => Plotly.Plots.resize(div), 50);
+            });
+            ro.observe(panelEl);
+            plot.resizeObserver = ro;
+        });
+    }
+
+    _updatePhaseChart(panelId, plot) {
+        if (!plot.div) return;
+        // Add only the newest phase trace — never touches the camera/scene.
+        // Note: _buildPhase2DTraces appends an __origin__ cross AFTER the phase traces,
+        // so we index by phaseTraces.length-1 rather than allTraces.length-1.
+        const allTraces = this._buildPlotData(plot).traces;
+        const newTrace = allTraces[plot.phaseTraces.length - 1];
+        Plotly.addTraces(plot.div, newTrace).then(() => {
+            // Add a corresponding marker trace for hover sync
+            const panelEl = plot.div.closest('.layout-panel');
+            this._addOneMarkerTrace(plot, plot.phaseTraces[plot.phaseTraces.length - 1]);
+            this._installLegendHoverHint(plot.div);
+        });
+        // Update legend and axis titles (no scene keys → no camera reset for 3D)
+        const { bg, gridColor, legendBg } = this._colors();
+        const relayoutUpdate = {
+            showlegend: true,
+            legend: this._legendConfig(legendBg, gridColor),
+        };
+        if (plot.mode === 'phase2d') {
+            const layout = this._buildPhase2DLayout(plot);
+            relayoutUpdate['xaxis.title'] = layout.xaxis.title;
+            relayoutUpdate['yaxis.title'] = layout.yaxis.title;
+        } else if (plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
+            const isTimez = plot.mode === 'phase2dt';
+            const layout = this._buildPhase3DLayout(plot, isTimez);
+            // Read current camera so relayout doesn't reset it
+            const cam = plot.div._fullLayout?.scene?.camera;
+            relayoutUpdate['scene.xaxis.title'] = layout.scene.xaxis.title;
+            relayoutUpdate['scene.yaxis.title'] = layout.scene.yaxis.title;
+            relayoutUpdate['scene.zaxis.title'] = layout.scene.zaxis.title;
+            // Update axis ranges so added traces expand the box (autorange:false is used)
+            relayoutUpdate['scene.xaxis.range'] = layout.scene.xaxis.range;
+            relayoutUpdate['scene.yaxis.range'] = layout.scene.yaxis.range;
+            relayoutUpdate['scene.zaxis.range'] = layout.scene.zaxis.range;
+            if (cam) relayoutUpdate['scene.camera'] = cam;
+        }
+        Plotly.relayout(plot.div, relayoutUpdate);
+    }
+
+    _installLegendHoverHint(div) {
+        if (!div) return;
+        requestAnimationFrame(() => {
+            const items = div.querySelectorAll('.legend .traces');
+            items.forEach(item => {
+                let title = [...item.children].find(child => child.tagName?.toLowerCase() === 'title');
+                if (!title) {
+                    title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                    item.insertBefore(title, item.firstChild);
+                }
+                title.textContent = i18n.t('legendHint');
+            });
+        });
+    }
+
+    _destroyChart(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        this._stopAnim(plot);
+        if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
+        // Reset dynamic trace indices
+        delete plot._arrowXIdx;
+        delete plot._arrowDxIdx;
+        delete plot._xAbsMax;
+        delete plot._yAbsMax;
+        if (plot._cursorDocListeners) {
+            document.removeEventListener('mousemove', plot._cursorDocListeners.move);
+            document.removeEventListener('mouseup',   plot._cursorDocListeners.up);
+            plot._cursorDocListeners = null;
+        }
+        delete plot._cursorHandlersDiv;
+        if (plot.div) {
+            // Remove state-anim container if present (wraps the plot div)
+            const saContainer = plot.div.closest('.state-anim-container');
+            if (saContainer) { Plotly.purge(plot.div); saContainer.remove(); }
+            else { Plotly.purge(plot.div); plot.div.remove(); }
+            plot.div = null;
+        }
+        plot.cameraOverlayEl = null;
+    }
+
+    _clearPanel(panelId) {
+        const existing = this.plots.get(panelId);
+        if (existing) this._stopAnim(existing);
+        this._destroyChart(panelId);
+
+        // Reset state to empty (keep panel alive with fresh state)
+        if (existing) {
+            existing.traces        = [];
+            existing.phaseTraces   = [];
+            existing.phasePending  = { x: null, y: null, z: null };
+            existing.markerTraceIdx = null;
+            existing.stateSlots    = { x: [], dx: [], fileId: null };
+            existing.equalAspect2D = false;
+            existing.cursors = this._defaultCursors();
+            existing.showCameraOverlay = false;
+            existing.homeCamera = null;
+            existing.animFrame     = 0;
+            // keep existing.mode so the user's mode choice is preserved
+        }
+
+        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        if (panelEl) {
+            const placeholder = panelEl.querySelector('.layout-panel-placeholder');
+            if (placeholder) { placeholder.style.display = ''; placeholder.classList.remove('drag-over'); }
+            this._setPendingOverlay(panelId, panelEl, false);
+            this._hideCursorBox(panelEl);
+            this._updatePlaceholder(panelId, panelEl);
+        }
+        this._refreshActionBtns(panelId);
+    }
+
+    _refreshActionBtns(panelId) {
+        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        if (!panelEl) return;
+        const plot = this.plots.get(panelId);
+        const has = this._hasContent(plot);
+        const csvBtn = panelEl.querySelector('.csv-export-btn');
+        if (csvBtn) csvBtn.disabled = !has;
+        const statsBtn = panelEl.querySelector('.panel-stats-btn');
+        if (statsBtn) statsBtn.disabled = !has;
+        const equalAspectBtn = panelEl.querySelector('.equal-aspect-btn');
+        if (equalAspectBtn) {
+            equalAspectBtn.classList.toggle('active', !!plot?.equalAspect2D);
+        }
+        const compareBtn = panelEl.querySelector('.compare-files-btn');
+        if (compareBtn) {
+            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && this.files.size > 1);
+        }
+        const cursorBtn = panelEl.querySelector('.cursor-btn');
+        if (cursorBtn) {
+            const enabled = has && plot?.mode === 'timeseries';
+            cursorBtn.disabled = !enabled;
+            cursorBtn.classList.toggle('active', !!plot?.cursors?.enabled);
+        }
+        // Show view-btn-group for 3D modes and state-anim (2D or 3D) with content
+        const isAnim = plot?.mode === 'state-anim' && has;
+        const is3DMode = this._is3D(plot?.mode) || this._isStateAnim3D(plot);
+        const showGroup = is3DMode || isAnim;
+        const viewGroup = panelEl.querySelector('.view-btn-group');
+        if (viewGroup) {
+            viewGroup.style.display = showGroup ? '' : 'none';
+            // Hide plane/Iso buttons for 2D state-anim (only Home stays)
+            viewGroup.querySelectorAll('.view-btn-3d-only').forEach(btn => {
+                btn.style.display = is3DMode ? '' : 'none';
+            });
+        }
+    }
+
+    _exportCSV(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot || !this._hasContent(plot)) return;
+
+        const headers = [];
+        const columns = [];
+
+        if (plot.mode === 'timeseries') {
+            // Use first trace's file for the time column
+            const firstFid = plot.traces[0]?.fileId;
+            const timeVar  = this._getTimeVar(firstFid);
+            const times    = firstFid ? this._getTransformedTimeData(firstFid) : [];
+            const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
+            headers.push(`time [${timeUnit}]`);
+            columns.push(times);
+            for (const t of plot.traces) {
+                const d = this.files.get(t.fileId)?.data;
+                const v = d?.variables[t.varName];
+                if (!v) continue;
+                const u    = this._extractUnit(v.description);
+                const name = this._traceName(t.varName, t.fileId);
+                headers.push(u ? `${name} [${u}]` : name);
+                columns.push(Array.from(this._getTransformedVariableData(t.fileId, t.varName)));
+            }
+        } else if (plot.mode === 'phase2dt') {
+            const firstFid = plot.phaseTraces[0]?.fileId;
+            const timeVar  = this._getTimeVar(firstFid);
+            const times    = firstFid ? this._getTransformedTimeData(firstFid) : [];
+            const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
+            headers.push(`time [${timeUnit}]`);
+            columns.push(times);
+            for (const pt of plot.phaseTraces) {
+                const d = this.files.get(pt.fileId)?.data;
+                if (!d) continue;
+                const xv = d.variables[pt.x], yv = d.variables[pt.y];
+                if (!xv || !yv) continue;
+                const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
+                const nx = this._traceName(pt.x, pt.fileId), ny = this._traceName(pt.y, pt.fileId);
+                headers.push(xu ? `${nx} [${xu}]` : nx);
+                headers.push(yu ? `${ny} [${yu}]` : ny);
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.x)));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.y)));
+            }
+        } else if (plot.mode === 'phase2d') {
+            for (const pt of plot.phaseTraces) {
+                const d = this.files.get(pt.fileId)?.data;
+                if (!d) continue;
+                const xv = d.variables[pt.x], yv = d.variables[pt.y];
+                if (!xv || !yv) continue;
+                const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
+                const nx = this._traceName(pt.x, pt.fileId), ny = this._traceName(pt.y, pt.fileId);
+                headers.push(xu ? `${nx} [${xu}]` : nx);
+                headers.push(yu ? `${ny} [${yu}]` : ny);
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.x)));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.y)));
+            }
+        } else if (plot.mode === 'phase3d') {
+            for (const pt of plot.phaseTraces) {
+                const d = this.files.get(pt.fileId)?.data;
+                if (!d) continue;
+                const xv = d.variables[pt.x], yv = d.variables[pt.y], zv = d.variables[pt.z];
+                if (!xv || !yv || !zv) continue;
+                const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description), zu = this._extractUnit(zv.description);
+                const nx = this._traceName(pt.x, pt.fileId), ny = this._traceName(pt.y, pt.fileId), nz = this._traceName(pt.z, pt.fileId);
+                headers.push(xu ? `${nx} [${xu}]` : nx);
+                headers.push(yu ? `${ny} [${yu}]` : ny);
+                headers.push(zu ? `${nz} [${zu}]` : nz);
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.x)));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.y)));
+                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.z)));
+            }
+        } else if (plot.mode === 'state-anim') {
+            const slots = plot.stateSlots;
+            const d = this.files.get(slots.fileId)?.data;
+            if (d) {
+                const timeVar  = this._getTimeVar(slots.fileId);
+                if (timeVar) {
+                    const timeUnit = this._extractUnit(timeVar.description) || 's';
+                    headers.push(`time [${timeUnit}]`);
+                    columns.push(Array.from(this._getTransformedTimeData(slots.fileId)));
+                }
+                const dim = Math.min(slots.x.length, slots.x.length >= 3 ? 3 : 2);
+                // State variables first
+                for (let i = 0; i < dim; i++) {
+                    const name = slots.x[i];
+                    const v = d.variables[name];
+                    if (!v) continue;
+                    const u = this._extractUnit(v.description);
+                    headers.push(u ? `${name} [${u}]` : name);
+                    columns.push(Array.from(this._getTransformedVariableData(slots.fileId, name)));
+                }
+                // Then derivatives
+                for (let i = 0; i < dim; i++) {
+                    const name = slots.dx[i];
+                    if (!name) continue;
+                    const v = d.variables[name];
+                    if (!v) continue;
+                    const u = this._extractUnit(v.description);
+                    headers.push(u ? `${name} [${u}]` : name);
+                    columns.push(Array.from(this._getTransformedVariableData(slots.fileId, name, { includeYOffset: false })));
+                }
+            }
+        }
+
+        if (!columns.length) return;
+
+        const nRows = Math.max(...columns.map(c => c.length));
+        const rows  = [headers.join(',')];
+        for (let i = 0; i < nRows; i++) {
+            rows.push(columns.map(c => (c[i] !== undefined ? c[i] : '')).join(','));
+        }
+
+        const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `${plot.mode}_export.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    _compareAcrossFiles(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim') return;
+
+        // Collect variables used and which files already contribute traces
+        const vars = new Set();
+        const existingFileIds = new Set();
+        if (plot.mode === 'timeseries') {
+            for (const t of plot.traces) { vars.add(t.varName); existingFileIds.add(t.fileId); }
+        } else {
+            for (const pt of plot.phaseTraces) {
+                vars.add(pt.x); vars.add(pt.y);
+                if (pt.z) vars.add(pt.z);
+                existingFileIds.add(pt.fileId);
+            }
+        }
+
+        const otherFiles = [...this.files.entries()].filter(([fid]) => !existingFileIds.has(fid));
+        if (otherFiles.length === 0) {
+            Modal.alert(i18n.t('compareFilesErrorTitle'), i18n.t('compareFilesNoOthers'));
+            return;
+        }
+
+        // Validate every other file has all required variables; abort on first missing
+        for (const [, entry] of otherFiles) {
+            for (const v of vars) {
+                if (!entry.data.variables[v]) {
+                    const body = i18n.t('compareFilesErrorBody')
+                        .replace('{file}', this._escapeHTML(entry.name))
+                        .replace('{var}', this._escapeHTML(v));
+                    Modal.alert(i18n.t('compareFilesErrorTitle'), body, { html: true });
+                    return;
+                }
+            }
+        }
+
+        // Clone traces with the new fileId for each other file. Dedupe originals first so
+        // that running overlay a second time (after loading more files) doesn't multiply
+        // copies by the number of files already overlaid.
+        if (plot.mode === 'timeseries') {
+            const seen = new Set();
+            const originals = plot.traces.filter(t => {
+                if (seen.has(t.varName)) return false;
+                seen.add(t.varName);
+                return true;
+            });
+            for (const [fid] of otherFiles) {
+                for (const t of originals) {
+                    plot.traces.push({
+                        varName: t.varName,
+                        color:   this._nextColor(plot.traces.length),
+                        fileId:  fid,
+                        visible: t.visible ?? true,
+                    });
+                }
+            }
+        } else {
+            const seen = new Set();
+            const originals = plot.phaseTraces.filter(pt => {
+                const key = `${pt.x}\u0000${pt.y}\u0000${pt.z || ''}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+            for (const [fid] of otherFiles) {
+                for (const pt of originals) {
+                    plot.phaseTraces.push({
+                        x: pt.x, y: pt.y, z: pt.z || null,
+                        color:   this._nextColor(plot.phaseTraces.length),
+                        fileId:  fid,
+                        visible: pt.visible ?? true,
+                    });
+                }
+            }
+        }
+
+        this._rebuildPanel(panelId);
+    }
+
+    _showPanelStats(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot || !this._hasContent(plot)) return;
+
+        const entries = [];
+        const addVar = (fileId, varName) => {
+            const d = this.files.get(fileId)?.data;
+            const variable = d?.variables[varName];
+            if (!variable) return;
+            const stats = this._statsForValues(this._getTransformedVariableData(fileId, varName));
+            if (!stats) return;
+            entries.push({
+                name: this._traceName(varName, fileId),
+                unit: this._extractUnit(variable.description),
+                ...stats,
+            });
+        };
+
+        if (plot.mode === 'timeseries') {
+            plot.traces.forEach(t => addVar(t.fileId, t.varName));
+        } else if (plot.mode === 'state-anim') {
+            plot.stateSlots.x.forEach(v => addVar(plot.stateSlots.fileId, v));
+            plot.stateSlots.dx.filter(Boolean).forEach(v => addVar(plot.stateSlots.fileId, v));
+        } else {
+            plot.phaseTraces.forEach(pt => {
+                addVar(pt.fileId, pt.x);
+                addVar(pt.fileId, pt.y);
+                if (pt.z) addVar(pt.fileId, pt.z);
+            });
+        }
+
+        if (!entries.length) {
+            Modal.alert(i18n.t('panelStatsTitle'), i18n.t('statsNoNumeric'), { icon: 'Σ' });
+            return;
+        }
+
+        const fmt = value => Number.isFinite(value) ? value.toPrecision(6) : '';
+        const rows = entries.map(e => `
+            <tr>
+                <td>${this._escapeHTML(e.name)}</td>
+                <td>${this._escapeHTML(e.unit)}</td>
+                <td>${fmt(e.min)}</td>
+                <td>${fmt(e.max)}</td>
+                <td>${fmt(e.mean)}</td>
+                <td>${fmt(e.rms)}</td>
+            </tr>
+        `).join('');
+        const body = `
+            <div class="stats-table-wrap">
+                <table class="stats-table">
+                    <thead>
+                        <tr>
+                            <th>${this._escapeHTML(i18n.t('statsVariable'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsUnit'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsMin'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsMax'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsMean'))}</th>
+                            <th>${this._escapeHTML(i18n.t('statsRms'))}</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        `;
+        Modal.alert(i18n.t('panelStatsTitle'), body, { icon: 'Σ', html: true, className: 'modal-dialog-stats' });
+    }
+
+    _statsForValues(values) {
+        if (!values || !values.length) return null;
+        let n = 0;
+        let sum = 0;
+        let sumSq = 0;
+        let min = Infinity;
+        let max = -Infinity;
+        for (const value of values) {
+            if (!Number.isFinite(value)) continue;
+            n++;
+            sum += value;
+            sumSq += value * value;
+            if (value < min) min = value;
+            if (value > max) max = value;
+        }
+        if (!n) return null;
+        return { min, max, mean: sum / n, rms: Math.sqrt(sumSq / n) };
+    }
+
+
+    // ─── Helpers ───────────────────────────────────────────────────
+
+    _relayoutAll() {
+        if (!this.data) return;
+        for (const [, plot] of this.plots) {
+            if (!plot.div) continue;
+            if (this._is3D(plot.mode) || this._isStateAnim3D(plot)) {
+                const layout = this._buildPlotData(plot).layout;
+                const currentCamera = plot.div._fullLayout?.scene?.camera;
+                if (currentCamera && layout.scene) layout.scene.camera = currentCamera;
+                Plotly.relayout(plot.div, layout);
+                this._refreshAxisDecorations(plot);
+            } else {
+                Plotly.relayout(plot.div, this._buildPlotData(plot).layout);
+                // Origin cross marker color follows theme — restyle it
+                this._refreshOriginCross(plot);
+            }
+        }
+    }
+
+    /** Re-apply axis decoration colors (no-op now; X/Y/Z colors are theme-independent). */
+    _refreshAxisDecorations(plot) {
+        // Lines and diamond tips use fixed X=red, Y=green, Z=blue regardless of theme.
+        // Function kept as a hook in case future styling needs theme refresh.
+        void plot;
+    }
+
+    /** Re-apply theme color to the 2D origin cross marker. */
+    _refreshOriginCross(plot) {
+        if (!plot?.div?.data) return;
+        const { fontColor } = this._colors();
+        plot.div.data.forEach((t, i) => {
+            if (t.name === '__origin__') {
+                Plotly.restyle(plot.div, {
+                    'marker.color': fontColor,
+                    'marker.line.color': fontColor,
+                }, [i]);
+            }
+        });
+    }
+
+    _hasContent(plot) {
+        if (!plot) return false;
+        if (plot.mode === 'timeseries') return plot.traces.length > 0;
+        if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= (plot.stateAnimDim || 2);
+        return plot.phaseTraces.length > 0;
+    }
+
+    _is3D(mode) { return mode === 'phase2dt' || mode === 'phase3d'; }
+    _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) === 3 && plot.stateSlots?.x?.length >= 3; }
+    _normalizeTimeseriesDownsamplingLimit(limit) {
+        if (limit == null || limit === false) return null;
+        const n = Number(limit);
+        return Number.isFinite(n) && n > 0 ? Math.round(n) : PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
+    }
+    _normalizePhaseDownsamplingLimit(limit) {
+        if (limit == null || limit === false) return null;
+        const n = Number(limit);
+        return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+    }
+
+    _isVisible(traceState) {
+        return !!traceState && traceState.visible !== false && traceState.visible !== 'legendonly';
+    }
+
+    _padRange(min, max, pad = 0.05) {
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return [-1, 1];
+        if (min === max) {
+            const delta = Math.max(Math.abs(min) * pad, 1e-9, 1);
+            return [min - delta, max + delta];
+        }
+        const span = max - min;
+        return [min - span * pad, max + span * pad];
+    }
+
+    _finiteExtent(arrays) {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const arr of arrays) {
+            if (!arr) continue;
+            for (const value of arr) {
+                if (!Number.isFinite(value)) continue;
+                if (value < min) min = value;
+                if (value > max) max = value;
+            }
+        }
+        return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+    }
+
+    _autoScalePlot(panelId, plot = this.plots.get(panelId)) {
+        if (!plot?.div) return Promise.resolve();
+
+        if (plot.mode === 'timeseries') {
+            const visibleTraces = plot.traces.filter(t => this._isVisible(t));
+            if (!visibleTraces.length) {
+                return Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
+            }
+
+            const xArrays = [];
+            const yArrays = [];
+            for (const t of visibleTraces) {
+                const d = this.files.get(t.fileId)?.data;
+                const v = d?.variables?.[t.varName];
+                if (!d || !v || v.kind === 'parameter') continue;
+                xArrays.push(this._getTransformedTimeData(t.fileId));
+                yArrays.push(this._getTransformedVariableData(t.fileId, t.varName));
+            }
+
+            const xExtent = this._finiteExtent(xArrays);
+            const yExtent = this._finiteExtent(yArrays);
+            const update = {};
+            if (xExtent) update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+            else update['xaxis.autorange'] = true;
+            if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+            else update['yaxis.autorange'] = true;
+            return Plotly.relayout(plot.div, update);
+        }
+
+        if (plot.mode === 'phase2d') {
+            const visibleTraces = plot.phaseTraces.filter(pt => this._isVisible(pt));
+            if (!visibleTraces.length) {
+                return Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
+            }
+
+            const xArrays = [];
+            const yArrays = [];
+            for (const pt of visibleTraces) {
+                const d = this.files.get(pt.fileId)?.data;
+                if (!d?.variables?.[pt.x] || !d?.variables?.[pt.y]) continue;
+                xArrays.push(this._getTransformedVariableData(pt.fileId, pt.x));
+                yArrays.push(this._getTransformedVariableData(pt.fileId, pt.y));
+            }
+
+            const xExtent = this._finiteExtent(xArrays);
+            const yExtent = this._finiteExtent(yArrays);
+            const update = {};
+            if (xExtent) update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+            else update['xaxis.autorange'] = true;
+            if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+            else update['yaxis.autorange'] = true;
+            return Plotly.relayout(plot.div, update);
+        }
+
+        if (this._is3D(plot.mode)) {
+            const layout = this._buildPhase3DLayout(plot, plot.mode === 'phase2dt');
+            const update = {
+                'scene.xaxis.range': layout.scene.xaxis.range,
+                'scene.yaxis.range': layout.scene.yaxis.range,
+                'scene.zaxis.range': layout.scene.zaxis.range,
+            };
+            const is2dt = plot.mode === 'phase2dt';
+            const homeCamera = plot.homeCamera || (is2dt
+                ? { eye: { x: 1.25, y: -1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }
+                : { eye: { x: 1.25, y: 1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } });
+            update['scene.camera'] = { ...homeCamera, projection: { type: plot.projection || 'orthographic' } };
+            return Plotly.relayout(plot.div, update).then(() => this._updateCameraOverlay(plot));
+        }
+
+        if (plot.mode === 'state-anim') {
+            const dim = plot.stateAnimDim || 2;
+            if (dim >= 3) {
+                this._stateAnimResetView(plot);
+                return Promise.resolve();
+            }
+
+            const xName = plot.stateSlots?.x?.[0];
+            const yName = plot.stateSlots?.x?.[1];
+            const fileId = plot.stateSlots?.fileId;
+            const d = this.files.get(fileId)?.data;
+            if (!d?.variables?.[xName] || !d?.variables?.[yName]) {
+                return Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
+            }
+
+            const xExtent = this._finiteExtent([this._getTransformedVariableData(fileId, xName)]);
+            const yExtent = this._finiteExtent([this._getTransformedVariableData(fileId, yName)]);
+            const update = {};
+            if (xExtent) update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+            else update['xaxis.autorange'] = true;
+            if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+            else update['yaxis.autorange'] = true;
+            return Plotly.relayout(plot.div, update);
+        }
+
+        return Promise.resolve();
+    }
+
+    _rebuildPanel(panelId, options = {}) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        if (!panelEl) return;
+        const restoreView = options.preserveView ? this._capturePlotView(plot) : null;
+        this._destroyChart(panelId);
+        if (restoreView) plot._pendingViewRestore = restoreView;
+        plot.markerTraceIdx = null;
+        if (this._hasContent(plot)) {
+            if (plot.mode === 'state-anim') {
+                this._createStateAnimChart(panelId, panelEl);
+            } else {
+                this._createChart(panelId, panelEl);
+            }
+        } else {
+            const ph = panelEl.querySelector('.layout-panel-placeholder');
+            if (ph) { ph.style.display = ''; ph.classList.remove('drag-over'); }
+            this._setPendingOverlay(panelId, panelEl, false);
+            this._updatePlaceholder(panelId, panelEl);
+            this._refreshActionBtns(panelId);
+        }
+    }
+
+    _rebuildAllPanels() {
+        for (const [id] of this.plots) this._rebuildPanel(id);
+    }
+
+    _makeState() {
+        return {
+            div: null, mode: 'timeseries',
+            traces: [],                                    // timeseries: [{varName, color}]
+            phaseTraces: [],                               // phase: [{x, y, z, color}] — completed traces
+            phasePending: { x: null, y: null, z: null, fileId: null },  // phase trace being built
+            projection: 'orthographic',                    // 3D camera projection
+            markerTraceIdx: null,                          // index of the hover-marker trace in plot.div.data
+            equalAspect2D: false,
+            resizeObserver: null,
+            // state-anim mode
+            stateSlots:   { x: [], dx: [], fileId: null }, // x: [varName,...], dx: [derName,...]
+            stateAnimDim: 2,
+            stateConfig:  { showFullTrace: true, showTrace: true, showArrowX: true, showArrowDx: true, normalizeDx: true, dynamicZoom: false },
+            showCameraOverlay: false,
+            cameraOverlayEl: null,
+            homeCamera: null,
+            animFrame:    0,                               // current time index
+            animPlaying:  false,
+            animSpeed:    1,
+            animRAF:      null,
+            autoPlayOnRender: false,
+        };
+    }
+
+    _getTimeVar(fileId = this.activeFileId) {
+        const d = fileId ? this.files.get(fileId)?.data : null;
+        if (!d) return null;
+        return Object.values(d.variables).find(v => v.kind === 'abscissa') || null;
+    }
+
+    /**
+     * Compute a range [min, max] that covers every finite value in `arrays` AND includes 0,
+     * with a symmetric relative `pad` on each side. Used for 3D scene axes so the
+     * origin-anchored axis lines can be drawn without triggering Plotly autorange expansion.
+     *
+     * If the positive side is too small (e.g. all-negative data like [-20, 0]), the upper
+     * bound is extended so the positive side is at least `minPositiveFrac` of the negative
+     * extent. Without this, the +axis line would be constrained to the tiny padding region
+     * and would force the other two lines to match that length — visibly tiny.
+     */
+    _rangeIncluding0(arrays, pad = 0.05, minPositiveFrac = 0.3) {
+        let lo = Infinity, hi = -Infinity;
+        for (const arr of arrays) {
+            if (!arr) continue;
+            for (const v of arr) {
+                if (Number.isFinite(v)) {
+                    if (v < lo) lo = v;
+                    if (v > hi) hi = v;
+                }
+            }
+        }
+        if (!Number.isFinite(lo)) { lo = -1; hi = 1; }
+        lo = Math.min(lo, 0);
+        hi = Math.max(hi, 0);
+        // Guarantee the +axis line has meaningful room to draw.
+        if (lo < 0) hi = Math.max(hi, -lo * minPositiveFrac);
+        const span = Math.max(hi - lo, 1e-12);
+        return [lo - pad * span, hi + pad * span];
+    }
+
+    _capturePlotView(plot) {
+        if (!plot?.div?._fullLayout) return null;
+        const fl = plot.div._fullLayout;
+        if (this._is3D(plot.mode) || this._isStateAnim3D(plot)) {
+            const scene = fl.scene;
+            if (!scene) return null;
+            return {
+                mode: '3d',
+                camera: scene.camera ? JSON.parse(JSON.stringify(scene.camera)) : null,
+                xRange: scene.xaxis?.range ? [...scene.xaxis.range] : null,
+                yRange: scene.yaxis?.range ? [...scene.yaxis.range] : null,
+                zRange: scene.zaxis?.range ? [...scene.zaxis.range] : null,
+            };
+        }
+
+        return {
+            mode: '2d',
+            xRange: fl.xaxis?.range ? [...fl.xaxis.range] : null,
+            yRange: fl.yaxis?.range ? [...fl.yaxis.range] : null,
+        };
+    }
+
+    _restorePlotView(plot, view) {
+        if (!plot?.div || !view) return Promise.resolve();
+        const update = {};
+        if (view.mode === '3d') {
+            if (view.xRange) update['scene.xaxis.range'] = view.xRange;
+            if (view.yRange) update['scene.yaxis.range'] = view.yRange;
+            if (view.zRange) update['scene.zaxis.range'] = view.zRange;
+            if (view.camera) update['scene.camera'] = view.camera;
+        } else {
+            if (view.xRange) update['xaxis.range'] = view.xRange;
+            if (view.yRange) update['yaxis.range'] = view.yRange;
+        }
+        if (!Object.keys(update).length) return Promise.resolve();
+        return Plotly.relayout(plot.div, update).then(() => this._updateCameraOverlay(plot));
+    }
+
+    _varUnit(varName, fileId = this.activeFileId) {
+        if (!varName) return '';
+        const d = fileId ? this.files.get(fileId)?.data : null;
+        if (!d) return '';
+        const v = d.variables[varName];
+        return v ? this._extractUnit(v.description) : '';
+    }
+
+    _traceName(label, fileId) {
+        if (this.files.size >= 2 && fileId) {
+            const f = this.files.get(fileId);
+            if (f) return `${label} [${f.name}]`;
+        }
+        return label;
+    }
+
+    _phaseTraceName(plot, pt) {
+        const label = plot.mode === 'phase3d'
+            ? `${pt.x} / ${pt.y} / ${pt.z}`
+            : `${pt.x} vs ${pt.y}`;
+        return this._traceName(label, pt.fileId);
+    }
+
+    _findTimeIdx(times, xVal) {
+        if (!times || !times.length) return 0;
+        if (times.length === 1 || xVal <= times[0]) return 0;
+        const last = times.length - 1;
+        if (xVal >= times[last]) return last;
+
+        let lo = 0;
+        let hi = last;
+        while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (times[mid] <= xVal) lo = mid;
+            else hi = mid;
+        }
+
+        return (xVal - times[lo]) <= (times[hi] - xVal) ? lo : hi;
+    }
+
+    _escapeHTML(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+        }[ch]));
+    }
+
+    _formatHTMLNumber(value) {
+        return Number.isFinite(value) ? value.toPrecision(5) : this._escapeHTML(value);
+    }
+
+    _extractUnit(description) {
+        if (!description) return '';
+        const match = description.match(/\[([^\]]+)\]/);
+        if (!match) return '';
+        const parts = match[1].split('|');
+        return (parts[1] ?? parts[0]).trim();
+    }
+
+    _colors() {
+        const isDark   = this.theme === 'dark';
+        return {
+            bg:        isDark ? '#2d2d2d' : '#ffffff',
+            gridColor: isDark ? '#3d3d3d' : '#e8e8e8',
+            fontColor: isDark ? '#d0d0d0' : '#333333',
+            legendBg:  isDark ? 'rgba(30,30,30,0.85)' : 'rgba(255,255,255,0.85)',
+        };
+    }
+
+    _legendConfig(legendBg, gridColor) {
+        const base = { showlegend: true, bgcolor: legendBg, bordercolor: gridColor, borderwidth: 1, font: { size: 10 } };
+        switch (this.legendPosition) {
+            case 'above':   return { ...base, orientation: 'h', x: 0.5, xanchor: 'center', y: 1.02, yanchor: 'bottom' };
+            case 'right':   return { ...base, x: 1.02, y: 0.5, xanchor: 'left', yanchor: 'middle' };
+            default:        return { ...base, x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top' };
+        }
+    }
+
+    _marginConfig() {
+        return this.legendPosition === 'above'
+            ? { l: 55, r: 15, t: 50, b: 40 }
+            : { l: 55, r: 15, t: 10, b: 40 };
+    }
+
+    static COLORS = [
+        '#2196F3', '#FF5722', '#4CAF50', '#FF9800',
+        '#9C27B0', '#00BCD4', '#F44336', '#8BC34A',
+    ];
+    static GL_POINT_THRESHOLD = 50000;
+    static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 4000;
+
+    _nextColor(idx) { return PlotManager.COLORS[idx % PlotManager.COLORS.length]; }
+}
+
+installPlotDataMethods(PlotManager);
+installPlotStateMethods(PlotManager);
+installPlotInteractionMethods(PlotManager);
+
+export default PlotManager;

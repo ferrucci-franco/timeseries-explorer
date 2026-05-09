@@ -6,7 +6,7 @@
  * structure of variables and components.
  */
 
-class MatParser {
+export default class MatParser {
     constructor() {
         this.ELEM_SIZES = {
             0: 8,  // double

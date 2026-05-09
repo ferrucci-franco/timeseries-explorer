@@ -1,0 +1,1306 @@
+import i18n from '../../i18n/index.js';
+
+export function installPlotInteractionMethods(TargetClass) {
+    const proto = TargetClass.prototype;
+    const PlotManager = TargetClass;
+proto._onRelayout = function(sourcePanelId, eventData) {
+    const update = this._xAxisUpdateFromRelayout(eventData);
+    if (!update) return;
+
+    const plot = this.plots.get(sourcePanelId);
+    if (plot?.mode === 'timeseries') {
+        const autorangeRequested = update['xaxis.autorange'] === true || eventData?.['yaxis.autorange'] === true;
+        if (autorangeRequested) {
+            this._autoScalePlot(sourcePanelId, plot);
+        } else {
+            const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
+            this._refreshTimeseriesVisuals(sourcePanelId, plot, visibleRange);
+        }
+    }
+
+    if (!this.syncAxes) return;
+
+    if (this._syncing) {
+        if (sourcePanelId === this._syncSourcePanelId) {
+            this._pendingAxisSync = { sourcePanelId, update };
+        }
+        return;
+    }
+
+    this._syncXAxisUpdate(sourcePanelId, update);
+};
+
+proto._xAxisUpdateFromRelayout = function(eventData) {
+    if (!eventData) return null;
+    if (eventData['xaxis.autorange'] === true) return { 'xaxis.autorange': true };
+
+    const range = eventData['xaxis.range'];
+    if (Array.isArray(range) && range.length >= 2) {
+        return { 'xaxis.range': [range[0], range[1]] };
+    }
+
+    const r0 = eventData['xaxis.range[0]'];
+    const r1 = eventData['xaxis.range[1]'];
+    if (r0 !== undefined && r1 !== undefined) {
+        return { 'xaxis.range': [r0, r1] };
+    }
+
+    return null;
+};
+
+proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelId), visibleRange = null) {
+    if (!plot?.div || plot.mode !== 'timeseries') return;
+    const range = visibleRange
+        || plot.div._fullLayout?.xaxis?.range
+        || plot.div.layout?.xaxis?.range
+        || null;
+    plot.traces.forEach((t, idx) => {
+        const built = this._buildTimeTrace(t, range);
+        if (!built) return;
+        Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
+    });
+};
+
+proto._refreshAllTimeseriesVisuals = function() {
+    for (const [panelId, plot] of this.plots) {
+        if (plot?.div && plot.mode === 'timeseries') {
+            this._refreshTimeseriesVisuals(panelId, plot);
+        }
+    }
+};
+
+proto._refreshAllPhaseVisuals = function() {
+    for (const [panelId, plot] of this.plots) {
+        if (plot?.div && (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d')) {
+            this._rebuildPanel(panelId, { preserveView: true });
+        }
+    }
+};
+
+proto._syncXAxisUpdate = function(sourcePanelId, update) {
+    const targets = [];
+    for (const [id, plot] of this.plots) {
+        if (id !== sourcePanelId && plot.div && plot.mode === 'timeseries') targets.push({ id, plot, div: plot.div });
+    }
+    if (targets.length === 0) return;
+
+    this._syncing = true;
+    this._syncSourcePanelId = sourcePanelId;
+    Promise.all(targets.map(({ id, plot, div }) => Plotly.relayout(div, update).then(() => {
+        const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
+        this._refreshTimeseriesVisuals(id, plot, visibleRange);
+    })))
+        .finally(() => {
+            this._syncing = false;
+            this._syncSourcePanelId = null;
+
+            const pending = this._pendingAxisSync;
+            this._pendingAxisSync = null;
+            if (pending) this._syncXAxisUpdate(pending.sourcePanelId, pending.update);
+        });
+};
+
+// ─── Synchronized hover ────────────────────────────────────────
+
+proto._onHover = function(sourcePanelId, eventData) {
+    if (!this.syncHover || this._hovering) return;
+    const pt = eventData.points?.[0];
+    if (pt == null) return;
+    const xVal = pt.x;   // hovered time value
+
+    this._hovering = true;
+    try {
+        // Time unit from source panel's first trace
+        const srcPlot    = this.plots.get(sourcePanelId);
+        const srcFid     = srcPlot?.traces?.[0]?.fileId ?? this.activeFileId;
+        const srcTimeVar = this._getTimeVar(srcFid);
+        const timeUnit   = srcTimeVar ? this._extractUnit(srcTimeVar.description) : 's';
+
+        for (const [, plot] of this.plots) {
+            if (!plot.div || !plot.div.isConnected) continue;
+            const panelEl = plot.div.closest('.layout-panel');
+
+            if (plot.mode === 'timeseries') {
+                Plotly.relayout(plot.div, {
+                    shapes: this._panelGuideShapes(plot, [{
+                        type: 'line', xref: 'x', yref: 'paper',
+                        x0: xVal, x1: xVal, y0: 0, y1: 1,
+                        line: { color: 'rgba(120,120,120,0.6)', width: 1, dash: 'dot' },
+                    }]),
+                });
+                if (plot.markerTraceIdx != null) {
+                    const xs = [], ys = [];
+                    plot.traces.forEach(t => {
+                        const hidden  = t.visible === 'legendonly' || t.visible === false;
+                        const d       = this.files.get(t.fileId)?.data;
+                        const v       = d?.variables[t.varName];
+                        const tdata   = this._getTransformedTimeData(t.fileId);
+                        const tidx    = this._findTimeIdx(tdata, xVal);
+                        const ydata   = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
+                        if (!hidden && v && v.kind !== 'parameter' && ydata.length) { xs.push(xVal); ys.push(ydata[tidx]); }
+                        else { xs.push(null); ys.push(null); }
+                    });
+                    Plotly.restyle(plot.div, { x: [xs], y: [ys], visible: true }, [plot.markerTraceIdx]);
+                }
+                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                plot.traces.forEach(t => {
+                    if (t.visible === 'legendonly' || t.visible === false) return;
+                    const d    = this.files.get(t.fileId)?.data;
+                    const v    = d?.variables[t.varName];
+                    const tdata = this._getTransformedTimeData(t.fileId);
+                    const tidx = this._findTimeIdx(tdata, xVal);
+                    const ydata = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
+                    if (v && v.kind !== 'parameter' && ydata.length) {
+                        const unit  = this._extractUnit(v.description);
+                        const label = this._traceName(t.varName, t.fileId);
+                        lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatHTMLNumber(ydata[tidx])}${unit ? ' ' + this._escapeHTML(unit) : ''}`);
+                    }
+                });
+                this._showInfoBox(panelEl, lines.join('<br>'));
+
+            } else if (plot.mode === 'phase2d') {
+                if (plot.markerTraceIdx != null) {
+                    plot.phaseTraces.forEach((pt2, i) => {
+                        const hidden = pt2.visible === 'legendonly' || pt2.visible === false;
+                        const d = this.files.get(pt2.fileId)?.data;
+                        if (!d) return;
+                        const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
+                        if (!xv || !yv) return;
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
+                        if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                        Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], visible: true }, [midx]);
+                    });
+                }
+                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                plot.phaseTraces.forEach(pt2 => {
+                    if (pt2.visible === 'legendonly' || pt2.visible === false) return;
+                    const d = this.files.get(pt2.fileId)?.data;
+                    if (!d) return;
+                    const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
+                    if (xv && yv) {
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                        const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${yu ? ' ' + this._escapeHTML(yu) : ''}`);
+                    }
+                });
+                this._showInfoBox(panelEl, lines.join('<br>'));
+
+            } else if (plot.mode === 'phase2dt') {
+                if (plot.markerTraceIdx != null) {
+                    plot.phaseTraces.forEach((pt2, i) => {
+                        const hidden = pt2.visible === 'legendonly' || pt2.visible === false;
+                        const d = this.files.get(pt2.fileId)?.data;
+                        if (!d) return;
+                        const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
+                        if (!xv || !yv) return;
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
+                        if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                        Plotly.restyle(plot.div, { x: [[xVal]], y: [[xdata[tidx]]], z: [[ydata[tidx]]], visible: true }, [midx]);
+                    });
+                }
+                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                plot.phaseTraces.forEach(pt2 => {
+                    if (pt2.visible === 'legendonly' || pt2.visible === false) return;
+                    const d = this.files.get(pt2.fileId)?.data;
+                    if (!d) return;
+                    const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
+                    if (xv && yv) {
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                        const xu = this._extractUnit(xv.description), zu = this._extractUnit(yv.description);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.x)} = ${this._formatHTMLNumber(xdata[tidx])}${xu ? ' ' + this._escapeHTML(xu) : ''}`);
+                        lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(pt2.y)} = ${this._formatHTMLNumber(ydata[tidx])}${zu ? ' ' + this._escapeHTML(zu) : ''}`);
+                    }
+                });
+                this._showInfoBox(panelEl, lines.join('<br>'));
+
+            } else if (plot.mode === 'phase3d') {
+                if (plot.markerTraceIdx != null) {
+                    plot.phaseTraces.forEach((pt2, i) => {
+                        const hidden = pt2.visible === 'legendonly' || pt2.visible === false;
+                        const d = this.files.get(pt2.fileId)?.data;
+                        if (!d) return;
+                        const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
+                        if (!xv || !yv || !zv) return;
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
+                        if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                        const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
+                        const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
+                        const zdata = this._getTransformedVariableData(pt2.fileId, pt2.z);
+                        Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], z: [[zdata[tidx]]], visible: true }, [midx]);
+                    });
+                }
+                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                plot.phaseTraces.forEach(pt2 => {
+                    if (pt2.visible === 'legendonly' || pt2.visible === false) return;
+                    const d = this.files.get(pt2.fileId)?.data;
+                    if (!d) return;
+                    const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
+                    if (xv && yv && zv) {
+                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tidx = this._findTimeIdx(tdata, xVal);
+                        [xv, yv, zv].forEach((v, vi) => {
+                            const name = [pt2.x, pt2.y, pt2.z][vi];
+                            const dataName = [pt2.x, pt2.y, pt2.z][vi];
+                            const values = this._getTransformedVariableData(pt2.fileId, dataName);
+                            const u = this._extractUnit(v.description);
+                            lines.push(`<span style="color:${pt2.color}">●</span> ${this._escapeHTML(name)} = ${this._formatHTMLNumber(values[tidx])}${u ? ' ' + this._escapeHTML(u) : ''}`);
+                        });
+                    }
+                });
+                this._showInfoBox(panelEl, lines.join('<br>'));
+
+            } else if (plot.mode === 'state-anim') {
+                const tvar = this._getTimeVar(plot.stateSlots.fileId);
+                if (tvar) {
+                    const tidx = this._findTimeIdx(this._getTransformedTimeData(plot.stateSlots.fileId), xVal);
+                    this._stateAnimUpdateFrame(plot, tidx);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Synchronized hover failed:', error);
+        this._clearHoverMarkers();
+    } finally {
+        this._hovering = false;
+    }
+};
+
+proto._onUnhover = function(sourcePanelId) {
+    if (!this.syncHover) return;
+    this._clearHoverMarkers();
+};
+
+proto._clearHoverMarkers = function() {
+    for (const [, plot] of this.plots) {
+        if (!plot.div) continue;
+        const panelEl = plot.div.closest('.layout-panel');
+        this._hideInfoBox(panelEl);
+        if (plot.mode === 'timeseries') {
+            Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot) });
+        }
+        if (plot.markerTraceIdx != null) {
+            const idxList = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx : [plot.markerTraceIdx];
+            idxList.forEach(i => {
+                const is3d = plot.mode === 'phase2dt' || plot.mode === 'phase3d';
+                const upd = is3d ? { x: [[null]], y: [[null]], z: [[null]], visible: false }
+                                : { x: [[null]], y: [[null]], visible: false };
+                Plotly.restyle(plot.div, upd, [i]);
+            });
+        }
+    }
+};
+
+proto._showInfoBox = function(panelEl, html) {
+    if (!panelEl) return;
+    let box = panelEl.querySelector('.hover-info-box');
+    if (!box) {
+        box = document.createElement('div');
+        box.className = 'hover-info-box';
+        panelEl.appendChild(box);
+    }
+    box.innerHTML = html;
+    box.style.display = 'block';
+};
+
+proto._hideInfoBox = function(panelEl) {
+    if (!panelEl) return;
+    const box = panelEl.querySelector('.hover-info-box');
+    if (box) box.style.display = 'none';
+};
+
+// ─── Measurement cursors (time-series panels) ─────────────────
+
+proto._defaultCursors = function() {
+    return { enabled: false, a: null, b: null, traceA: null, traceB: null };
+};
+
+proto._toggleCursors = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'timeseries' || !plot.div) return;
+    if (!plot.cursors) plot.cursors = this._defaultCursors();
+    plot.cursors.enabled = !plot.cursors.enabled;
+    if (plot.cursors.enabled) {
+        this._initializeCursorPositionsInView(plot);
+        this._ensureCursorBoxDrag(panelId, plot);
+        this._syncCursorDisplay(panelId, plot);
+        this._refreshActionBtns(panelId);
+    } else {
+        document.body.classList.remove('cursor-dragging', 'cursor-box-dragging');
+        plot.div.style.cursor = '';
+        plot.div.closest('.layout-panel')?.classList.remove('cursor-near');
+        this._hideCursorBox(plot.div.closest('.layout-panel'));
+        this._rebuildPanel(panelId, { preserveView: true });
+    }
+};
+
+proto._ensureCursorPositions = function(plot) {
+    this._ensureCursorPosition(plot, 'a', 0.25);
+    this._ensureCursorPosition(plot, 'b', 0.75);
+};
+
+proto._initializeCursorPositionsInView = function(plot) {
+    this._initializeCursorPositionInView(plot, 'a', 0.25);
+    this._initializeCursorPositionInView(plot, 'b', 0.75);
+};
+
+proto._cursorTraceBounds = function(trace) {
+    if (!trace) return null;
+    const times = this._getTransformedTimeData(trace.fileId);
+    if (!times?.length) return null;
+    const start = times[0];
+    const end = times[times.length - 1];
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    return start <= end ? { start, end } : { start: end, end: start };
+};
+
+proto._cursorViewBounds = function(plot, trace) {
+    const traceBounds = this._cursorTraceBounds(trace);
+    if (!traceBounds) return null;
+    const range = plot.div?._fullLayout?.xaxis?.range;
+    const viewStart = Number.isFinite(range?.[0]) ? range[0] : traceBounds.start;
+    const viewEnd = Number.isFinite(range?.[1]) ? range[1] : traceBounds.end;
+    const overlapStart = Math.max(traceBounds.start, Math.min(viewStart, viewEnd));
+    const overlapEnd = Math.min(traceBounds.end, Math.max(viewStart, viewEnd));
+    if (Number.isFinite(overlapStart) && Number.isFinite(overlapEnd) && overlapStart <= overlapEnd) {
+        return { start: overlapStart, end: overlapEnd };
+    }
+    return traceBounds;
+};
+
+proto._clampCursorX = function(plot, which, x) {
+    if (!Number.isFinite(x)) return x;
+    const trace = this._resolveCursorTrace(plot, which);
+    const bounds = this._cursorTraceBounds(trace);
+    if (!bounds) return x;
+    return Math.max(bounds.start, Math.min(bounds.end, x));
+};
+
+proto._ensureCursorPosition = function(plot, which, fraction) {
+    if (!plot?.cursors) return;
+    const trace = this._resolveCursorTrace(plot, which);
+    const bounds = this._cursorViewBounds(plot, trace);
+    if (!bounds) return;
+    const span = bounds.end - bounds.start;
+    const target = bounds.start + (span || 0) * fraction;
+    plot.cursors[which] = Number.isFinite(plot.cursors[which])
+        ? this._clampCursorX(plot, which, plot.cursors[which])
+        : this._clampCursorX(plot, which, target);
+};
+
+proto._initializeCursorPositionInView = function(plot, which, fraction) {
+    if (!plot?.cursors) return;
+    const trace = this._resolveCursorTrace(plot, which);
+    const bounds = this._cursorViewBounds(plot, trace);
+    if (!bounds) return;
+    const span = bounds.end - bounds.start;
+    plot.cursors[which] = this._clampCursorX(plot, which, bounds.start + (span || 0) * fraction);
+};
+
+proto._resolveCursorTrace = function(plot, which) {
+    if (!plot?.traces?.length || !plot.cursors) return null;
+    const visibleTraces = plot.traces.filter(t => t.visible !== false && t.visible !== 'legendonly');
+    if (!visibleTraces.length) return null;
+    const key = which === 'b' ? 'traceB' : 'traceA';
+    if (!plot.cursors[key] && plot.cursors.trace) {
+        plot.cursors[key] = plot.cursors.trace;
+    }
+    const preferred = plot.cursors[key];
+    if (preferred) {
+        const found = visibleTraces.find(t => t.fileId === preferred.fileId && t.varName === preferred.varName);
+        if (found) return found;
+    }
+    const fallback = which === 'b'
+        ? (visibleTraces[1] || visibleTraces[0])
+        : visibleTraces[0];
+    if (fallback) plot.cursors[key] = { fileId: fallback.fileId, varName: fallback.varName };
+    return fallback;
+};
+
+proto._sameCursorTrace = function(traceA, traceB) {
+    return !!(traceA && traceB && traceA.fileId === traceB.fileId && traceA.varName === traceB.varName);
+};
+
+proto._cursorShapes = function(plot) {
+    if (!plot?.cursors?.enabled) return [];
+    const c = plot.cursors;
+    if (!Number.isFinite(c.a) || !Number.isFinite(c.b)) return [];
+    const traceA = this._resolveCursorTrace(plot, 'a');
+    const traceB = this._resolveCursorTrace(plot, 'b');
+    const colorA = traceA?.color || '#ff9800';
+    const colorB = traceB?.color || '#2196f3';
+    const sameTrace = this._sameCursorTrace(traceA, traceB);
+    const shapes = [
+        this._cursorShape(c.a, colorA, 'solid'),
+        this._cursorShape(c.b, colorB, sameTrace ? 'dash' : 'solid'),
+    ];
+    const dotPairs = [
+        { trace: traceA, x: c.a, color: colorA },
+        { trace: traceB, x: c.b, color: colorB },
+    ];
+    for (const { trace, x, color } of dotPairs) {
+        if (!trace) continue;
+        const times  = this._getTransformedTimeData(trace.fileId);
+        const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+        const mode   = this._traceInterpolationMode(trace);
+        const y = this._interpolateAt(times, values, x, mode);
+        if (!Number.isFinite(y)) continue;
+        shapes.push(this._cursorDotShape(x, y, color));
+    }
+    return shapes;
+};
+
+proto._cursorShape = function(x, color, dash = 'solid') {
+    return {
+        type: 'line',
+        xref: 'x',
+        yref: 'paper',
+        x0: x,
+        x1: x,
+        y0: 0,
+        y1: 1,
+        line: { color, width: 2, dash },
+    };
+};
+
+proto._cursorDotShape = function(x, y, color) {
+    const r = 5;
+    return {
+        type: 'circle',
+        xref: 'x', yref: 'y',
+        xsizemode: 'pixel', ysizemode: 'pixel',
+        xanchor: x, yanchor: y,
+        x0: -r, x1: r, y0: -r, y1: r,
+        fillcolor: color,
+        line: { color, width: 0 },
+    };
+};
+
+proto._traceInterpolationMode = function(trace) {
+    if (!trace) return 'linear';
+    const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+    if (!variable) return 'linear';
+    if (variable.dataType === 'boolean') return 'step';
+    return 'linear';
+};
+
+proto._findNextExtremum = function(times, values, fromX, type, direction = 'next') {
+    const n = Math.min(times?.length || 0, values?.length || 0);
+    if (n < 3) return NaN;
+    const matches = (i) => {
+        const v = values[i], vp = values[i - 1], vn = values[i + 1];
+        if (!Number.isFinite(v) || !Number.isFinite(vp) || !Number.isFinite(vn)) return false;
+        if (type === 'max') return v > vp && v > vn;
+        if (type === 'min') return v < vp && v < vn;
+        return false;
+    };
+    if (direction === 'prev') {
+        let i = n - 2;
+        while (i >= 1 && times[i] >= fromX) i--;
+        for (; i >= 1; i--) {
+            if (matches(i)) return times[i];
+        }
+        return NaN;
+    }
+    let i = 0;
+    while (i < n && times[i] <= fromX) i++;
+    if (i < 1) i = 1;
+    for (; i < n - 1; i++) {
+        if (matches(i)) return times[i];
+    }
+    return NaN;
+};
+
+proto._findNextZeroCrossing = function(times, values, fromX, mode, direction = 'next') {
+    const n = Math.min(times?.length || 0, values?.length || 0);
+    if (n < 2) return NaN;
+    const segmentCrossing = (i) => {
+        const v0 = values[i - 1], v1 = values[i];
+        const t0 = times[i - 1],  t1 = times[i];
+        if (!Number.isFinite(v0) || !Number.isFinite(v1)) return NaN;
+        if (!Number.isFinite(t0) || !Number.isFinite(t1)) return NaN;
+        if (mode === 'step') {
+            return Math.sign(v0) !== Math.sign(v1) ? t1 : NaN;
+        }
+        if (v1 === 0) return t1;
+        if (v0 === 0) return t0;
+        if ((v0 < 0 && v1 > 0) || (v0 > 0 && v1 < 0)) {
+            return t0 + (-v0) * (t1 - t0) / (v1 - v0);
+        }
+        return NaN;
+    };
+    if (direction === 'prev') {
+        for (let i = n - 1; i >= 1; i--) {
+            const tCross = segmentCrossing(i);
+            if (Number.isFinite(tCross) && tCross < fromX) return tCross;
+        }
+        return NaN;
+    }
+    for (let i = 1; i < n; i++) {
+        const tCross = segmentCrossing(i);
+        if (Number.isFinite(tCross) && tCross > fromX) return tCross;
+    }
+    return NaN;
+};
+
+proto._jumpCursorTo = function(panelId, which, target, direction = 'next') {
+    const plot = this.plots.get(panelId);
+    if (!plot?.cursors?.enabled) return;
+    const trace = this._resolveCursorTrace(plot, which);
+    if (!trace) return;
+    const cursorX = plot.cursors[which];
+    if (!Number.isFinite(cursorX)) return;
+    const times  = this._getTransformedTimeData(trace.fileId);
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+    let nextX = NaN;
+    if (target === 'max' || target === 'min') {
+        nextX = this._findNextExtremum(times, values, cursorX, target, direction);
+    } else if (target === 'zero') {
+        nextX = this._findNextZeroCrossing(times, values, cursorX, this._traceInterpolationMode(trace), direction);
+    }
+    if (!Number.isFinite(nextX)) return;
+    plot.cursors[which] = nextX;
+    this._syncCursorDisplay(panelId, plot);
+};
+
+proto._panelGuideShapes = function(plot, extra = []) {
+    return [...this._cursorShapes(plot), ...extra];
+};
+
+proto._syncCursorDisplay = function(panelId, plot) {
+    if (!plot?.div || plot.mode !== 'timeseries') return;
+    if (plot.cursors?.enabled) this._ensureCursorPositions(plot);
+    Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot) });
+    this._updateCursorBox(panelId, plot);
+};
+
+proto._installCursorHandlers = function(panelId, plot) {
+    if (!plot?.div || plot._cursorHandlersDiv === plot.div) return;
+    if (plot._cursorDocListeners) {
+        document.removeEventListener('mousemove', plot._cursorDocListeners.move);
+        document.removeEventListener('mouseup',   plot._cursorDocListeners.up);
+        plot._cursorDocListeners = null;
+    }
+    plot._cursorHandlersDiv = plot.div;
+
+    let dragging = null;
+    const cursorNearPointer = (event) => {
+        if (!plot.cursors?.enabled || plot.mode !== 'timeseries') return null;
+        const xa = plot.div?._fullLayout?.xaxis;
+        if (!xa || !Number.isFinite(plot.cursors.a) || !Number.isFinite(plot.cursors.b)) return null;
+        const x = this._eventToXValue(plot.div, event);
+        if (!Number.isFinite(x)) return null;
+        const range = xa.range;
+        const span = Math.abs(range[1] - range[0]) || 1;
+        const xLen = Math.abs(xa._length) || 1;
+        const tolerance = (5 / xLen) * span;
+        const da = Math.abs(x - plot.cursors.a);
+        const db = Math.abs(x - plot.cursors.b);
+        const near = Math.min(da, db);
+        if (near > tolerance) return null;
+        return da <= db ? 'a' : 'b';
+    };
+
+    plot.div.addEventListener('mousedown', (event) => {
+        if (event.button !== 0) return;
+        const hit = cursorNearPointer(event);
+        if (!hit) return;
+        dragging = hit;
+        event.preventDefault();
+        event.stopPropagation();
+        document.body.classList.add('cursor-dragging');
+    }, true);
+
+    plot.div.addEventListener('mousemove', (event) => {
+        if (dragging || !plot.cursors?.enabled) return;
+        const near = !!cursorNearPointer(event);
+        plot.div.style.cursor = near ? 'ew-resize' : '';
+        plot.div.closest('.layout-panel')?.classList.toggle('cursor-near', near);
+    });
+
+    plot.div.addEventListener('mouseleave', () => {
+        if (!dragging && plot.div) plot.div.style.cursor = '';
+        plot.div?.closest('.layout-panel')?.classList.remove('cursor-near');
+    });
+
+    const onDocMove = (event) => {
+        if (!dragging || !plot.div) return;
+        const x = this._eventToXValue(plot.div, event);
+        if (!Number.isFinite(x)) return;
+        plot.cursors[dragging] = this._clampCursorX(plot, dragging, x);
+        this._syncCursorDisplay(panelId, plot);
+    };
+    const onDocUp = () => {
+        if (!dragging) return;
+        dragging = null;
+        document.body.classList.remove('cursor-dragging');
+        plot.div?.closest('.layout-panel')?.classList.remove('cursor-near');
+    };
+    document.addEventListener('mousemove', onDocMove);
+    document.addEventListener('mouseup',   onDocUp);
+    plot._cursorDocListeners = { move: onDocMove, up: onDocUp };
+};
+
+proto._eventToXValue = function(div, event) {
+    const xa = div?._fullLayout?.xaxis;
+    if (!xa?.range) return NaN;
+    const rect = div.getBoundingClientRect();
+    const pixel = event.clientX - rect.left - (xa._offset || 0);
+    if (typeof xa.p2c === 'function') return xa.p2c(pixel);
+    const frac = pixel / (xa._length || rect.width || 1);
+    return xa.range[0] + frac * (xa.range[1] - xa.range[0]);
+};
+
+proto._interpolateAt = function(times, values, x, mode = 'linear') {
+    if (!times?.length || !values?.length || !Number.isFinite(x)) return NaN;
+    const last = Math.min(times.length, values.length) - 1;
+    if (last < 0) return NaN;
+    if (x <= times[0]) return values[0];
+    if (x >= times[last]) return values[last];
+    let lo = 0, hi = last;
+    while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (times[mid] <= x) lo = mid;
+        else hi = mid;
+    }
+    if (mode === 'step') return values[lo];
+    const t0 = times[lo], t1 = times[hi];
+    const y0 = values[lo], y1 = values[hi];
+    if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 === t0) return y0;
+    if (!Number.isFinite(y0) || !Number.isFinite(y1)) return NaN;
+    return y0 + (y1 - y0) * ((x - t0) / (t1 - t0));
+};
+
+proto._updateCursorBox = function(panelId, plot) {
+    const panelEl = plot.div?.closest('.layout-panel');
+    if (!panelEl) return;
+    if (!plot.cursors?.enabled) {
+        this._hideCursorBox(panelEl);
+        return;
+    }
+    const traceA = this._resolveCursorTrace(plot, 'a');
+    const traceB = this._resolveCursorTrace(plot, 'b');
+    if (!traceA && !traceB) {
+        this._showCursorBox(panelEl, i18n.t('cursorsNoTrace'));
+        return;
+    }
+    const aX = plot.cursors.a;
+    const bX = plot.cursors.b;
+    const measure = (trace, x) => {
+        if (!trace) return { y: NaN, timeUnit: 's', yUnit: '', name: '' };
+        const times    = this._getTransformedTimeData(trace.fileId);
+        const values   = this._getTransformedVariableData(trace.fileId, trace.varName);
+        const mode     = this._traceInterpolationMode(trace);
+        const y        = this._interpolateAt(times, values, x, mode);
+        const timeVar  = this._getTimeVar(trace.fileId);
+        const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+        return {
+            y,
+            timeUnit: timeVar ? this._extractUnit(timeVar.description) : 's',
+            yUnit:    variable ? this._extractUnit(variable.description) : '',
+            name:     this._traceName(trace.varName, trace.fileId),
+        };
+    };
+    const a = measure(traceA, aX);
+    const b = measure(traceB, bX);
+    const dx = bX - aX;
+    const dy = b.y - a.y;
+    const slope = dx !== 0 ? dy / dx : NaN;
+    const sameTrace = this._sameCursorTrace(traceA, traceB);
+    const sameUnit  = a.yUnit === b.yUnit;
+    const timeUnit  = a.timeUnit || b.timeUnit;
+    const unit = (u) => u ? ` ${this._escapeHTML(u)}` : '';
+    const colorA = traceA?.color || '#ff9800';
+    const colorB = traceB?.color || '#2196f3';
+    const visibleTraces = plot.traces
+        .filter(t => t.visible !== false && t.visible !== 'legendonly');
+    const buildOptions = (selectedTrace) => visibleTraces
+        .map((t, index) => {
+            const selected = selectedTrace && t.fileId === selectedTrace.fileId && t.varName === selectedTrace.varName ? ' selected' : '';
+            return `<option value="${index}"${selected}>${this._escapeHTML(this._traceName(t.varName, t.fileId))}</option>`;
+        })
+        .join('');
+    const traceLabel = this._escapeHTML(i18n.t('cursorTraceLabel'));
+    const maxIcon  = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M1 11 Q 8 0 15 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+    const minIcon  = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M1 1 Q 8 12 15 1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+    const zeroIcon = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M1 6 H 15" stroke="currentColor" stroke-width="0.8" opacity="0.55" fill="none"/><path d="M2.5 1.5 Q 6 6 8 6 Q 10 6 13.5 10.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/><circle cx="8" cy="6" r="1.4" fill="currentColor"/></svg>`;
+    const maxTitle  = this._escapeHTML(i18n.t('cursorNextMax'));
+    const minTitle  = this._escapeHTML(i18n.t('cursorNextMin'));
+    const zeroTitle = this._escapeHTML(i18n.t('cursorNextZero'));
+    const buildExtremaBtns = (which, color) => `
+        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="max"  style="color:${color}" title="${maxTitle} (${which.toUpperCase()})"  aria-label="${maxTitle} (${which.toUpperCase()})">${maxIcon}</button>
+        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="min"  style="color:${color}" title="${minTitle} (${which.toUpperCase()})"  aria-label="${minTitle} (${which.toUpperCase()})">${minIcon}</button>
+        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="zero" style="color:${color}" title="${zeroTitle} (${which.toUpperCase()})" aria-label="${zeroTitle} (${which.toUpperCase()})">${zeroIcon}</button>
+    `;
+    const selectorsHTML = `
+        <label class="cursor-trace-select" data-cursor="a">
+            <span><b style="color:${colorA}">A</b> ${traceLabel}</span>
+            <select>${buildOptions(traceA)}</select>
+            ${buildExtremaBtns('a', colorA)}
+        </label>
+        <label class="cursor-trace-select" data-cursor="b">
+            <span><b style="color:${colorB}">B</b> ${traceLabel}</span>
+            <select>${buildOptions(traceB)}</select>
+            ${buildExtremaBtns('b', colorB)}
+        </label>
+    `;
+    const moveIcon = `<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>`;
+    const html = `
+        <div class="cursor-info-header">
+            <span class="cursor-info-title">${moveIcon}${this._escapeHTML(i18n.t('cursorsToggle'))}</span>
+        </div>
+        ${selectorsHTML}
+        <div class="cursor-info-values">
+            <div><b style="color:${colorA}">A</b> x=${this._formatHTMLNumber(aX)}${unit(timeUnit)} y=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
+            <div><b style="color:${colorB}">B</b> x=${this._formatHTMLNumber(bX)}${unit(timeUnit)} y=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
+            <div>ΔX=${this._formatHTMLNumber(dx)}${unit(timeUnit)}</div>
+            <div>ΔY=${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
+            <div>ΔY/ΔX=${this._formatHTMLNumber(slope)}</div>
+        </div>
+    `;
+    this._showCursorBox(panelEl, html, panelId, plot);
+};
+
+proto._showCursorBox = function(panelEl, html, panelId = null, plot = null) {
+    let box = panelEl.querySelector('.cursor-info-box');
+    if (!box) {
+        box = document.createElement('div');
+        box.className = 'cursor-info-box';
+        panelEl.appendChild(box);
+    }
+    box.innerHTML = html;
+    if (panelId && plot) {
+        box.querySelectorAll('.cursor-trace-select').forEach(label => {
+            const which = label.getAttribute('data-cursor');
+            const select = label.querySelector('select');
+            if (!select || (which !== 'a' && which !== 'b')) return;
+            select.addEventListener('change', (event) => {
+                const visibleTraces = plot.traces
+                    .filter(t => t.visible !== false && t.visible !== 'legendonly');
+                const selectedTrace = visibleTraces[Number(event.target.value)];
+                if (!selectedTrace) return;
+                const key = which === 'b' ? 'traceB' : 'traceA';
+                plot.cursors[key] = { fileId: selectedTrace.fileId, varName: selectedTrace.varName };
+                plot.cursors[which] = this._clampCursorX(plot, which, plot.cursors[which]);
+                this._syncCursorDisplay(panelId, plot);
+            });
+        });
+        box.querySelectorAll('.cursor-extremum-btn').forEach(btn => {
+            const which  = btn.getAttribute('data-cursor');
+            const target = btn.getAttribute('data-target');
+            if ((which !== 'a' && which !== 'b') || !['max', 'min', 'zero'].includes(target)) return;
+            btn.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const direction = e.shiftKey ? 'prev' : 'next';
+                this._jumpCursorTo(panelId, which, target, direction);
+            });
+        });
+    }
+    if (panelId && plot) this._ensureCursorBoxDrag(panelId, plot);
+    this._applyCursorBoxPosition(panelEl, box, plot);
+    box.style.display = 'block';
+};
+
+proto._applyCursorBoxPosition = function(panelEl, box, plot) {
+    const pos = plot?.cursors?.boxPos;
+    if (!pos) return;
+    box.style.left = `${pos.x}px`;
+    box.style.top = `${pos.y}px`;
+    box.style.right = 'auto';
+};
+
+proto._ensureCursorBoxDrag = function(panelId, plot) {
+    const panelEl = plot.div?.closest('.layout-panel');
+    const box = panelEl?.querySelector('.cursor-info-box');
+    if (!panelEl || !box || box._dragBound) return;
+    box._dragBound = true;
+    let drag = null;
+
+    box.addEventListener('mousedown', (event) => {
+        if (!event.target.closest('.cursor-info-header')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const panelRect = panelEl.getBoundingClientRect();
+        const boxRect = box.getBoundingClientRect();
+        drag = {
+            offsetX: event.clientX - boxRect.left,
+            offsetY: event.clientY - boxRect.top,
+            panelRect,
+        };
+        document.body.classList.add('cursor-box-dragging');
+    });
+
+    document.addEventListener('mousemove', (event) => {
+        if (!drag) return;
+        const rect = panelEl.getBoundingClientRect();
+        const maxX = Math.max(0, rect.width - box.offsetWidth - 6);
+        const maxY = Math.max(0, rect.height - box.offsetHeight - 6);
+        const x = Math.max(6, Math.min(maxX, event.clientX - rect.left - drag.offsetX));
+        const y = Math.max(6, Math.min(maxY, event.clientY - rect.top - drag.offsetY));
+        plot.cursors.boxPos = { x, y };
+        this._applyCursorBoxPosition(panelEl, box, plot);
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!drag) return;
+        drag = null;
+        document.body.classList.remove('cursor-box-dragging');
+    });
+};
+
+proto._hideCursorBox = function(panelEl) {
+    const box = panelEl?.querySelector('.cursor-info-box');
+    if (box) box.style.display = 'none';
+};
+
+/** Add hidden marker trace(s) for hover sync. Called once after newPlot. */
+proto._initMarkerTrace = function(plot) {
+    if (!plot.div) return;
+
+    if (plot.mode === 'timeseries') {
+        const markerTrace = {
+            x: [null], y: [null], type: 'scatter', mode: 'markers',
+            marker: { size: 9, color: plot.traces.map(t => t.color), line: { color: '#fff', width: 1.5 } },
+            showlegend: false, hoverinfo: 'skip', visible: false, name: '__hover__',
+        };
+        Plotly.addTraces(plot.div, markerTrace).then(() => {
+            plot.markerTraceIdx = plot.div.data.length - 1;
+        });
+    } else if (plot.mode === 'phase2d') {
+        const traces = plot.phaseTraces.map(pt => ({
+            x: [null], y: [null], type: 'scatter', mode: 'markers',
+            marker: { size: 10, color: pt.color, line: { color: '#fff', width: 1.5 } },
+            showlegend: false, hoverinfo: 'skip', visible: false, name: '__hover__',
+        }));
+        if (!traces.length) return;
+        Plotly.addTraces(plot.div, traces).then(() => {
+            const n = plot.div.data.length;
+            plot.markerTraceIdx = traces.map((_, i) => n - traces.length + i);
+        });
+    } else if (plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
+        const traces = plot.phaseTraces.map(pt => ({
+            x: [null], y: [null], z: [null], type: 'scatter3d', mode: 'markers',
+            marker: { size: 5, color: pt.color, line: { color: '#fff', width: 1 } },
+            showlegend: false, hoverinfo: 'skip', visible: false, name: '__hover__',
+        }));
+        if (!traces.length) return;
+        Plotly.addTraces(plot.div, traces).then(() => {
+            const n = plot.div.data.length;
+            plot.markerTraceIdx = traces.map((_, i) => n - traces.length + i);
+        });
+    }
+};
+
+proto._addOneMarkerTrace = function(plot, pt) {
+    if (!plot.div || !pt) return;
+    const is3d = plot.mode === 'phase2dt' || plot.mode === 'phase3d';
+    const trace = is3d
+        ? { x: [null], y: [null], z: [null], type: 'scatter3d', mode: 'markers',
+            marker: { size: 5, color: pt.color, line: { color: '#fff', width: 1 } },
+            showlegend: false, hoverinfo: 'skip', visible: false, name: '__hover__' }
+        : { x: [null], y: [null], type: 'scatter', mode: 'markers',
+            marker: { size: 10, color: pt.color, line: { color: '#fff', width: 1.5 } },
+            showlegend: false, hoverinfo: 'skip', visible: false, name: '__hover__' };
+    Plotly.addTraces(plot.div, trace).then(() => {
+        const newIdx = plot.div.data.length - 1;
+        if (plot.markerTraceIdx == null) {
+            plot.markerTraceIdx = [newIdx];
+        } else {
+            plot.markerTraceIdx = [...(Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx : [plot.markerTraceIdx]), newIdx];
+        }
+    });
+};
+
+// ─── 3D camera views ───────────────────────────────────────────
+
+proto._updateCameraOverlay = function(plot) {
+    if (!plot?.cameraOverlayEl || !plot.div) return;
+    const camera = plot.div._fullLayout?.scene?.camera || plot.div.layout?.scene?.camera || {};
+    const projection = camera.projection?.type || plot.projection || 'orthographic';
+    const eye = camera.eye || { x: 1.25, y: 1.25, z: 1.25 };
+    const up = camera.up || { x: 0, y: 0, z: 1 };
+    const center = camera.center || { x: 0, y: 0, z: 0 };
+    const fmtObj = (obj) => `{ x: ${this._fmtCameraNumber(obj.x)}, y: ${this._fmtCameraNumber(obj.y)}, z: ${this._fmtCameraNumber(obj.z)} }`;
+
+    plot.cameraOverlayEl.textContent =
+        `camera\n` +
+        `projection: ${projection}\n` +
+        `eye: ${fmtObj(eye)}\n` +
+        `up: ${fmtObj(up)}\n` +
+        `center: ${fmtObj(center)}`;
+};
+
+proto._fmtCameraNumber = function(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '0';
+    return n.toFixed(4).replace(/\.?0+$/, '');
+};
+
+proto._setCamera = function(panelId, preset) {
+    const plot = this.plots.get(panelId);
+    if (!plot?.div) return;
+    // Plotly's own default is eye=(1.25,1.25,1.25), up=(0,0,1).
+    // phase2dt rotates the home eye around the Z (up) axis so time (plotly X) reads
+    // from lower-right toward upper-left, var x (plotly Y) toward lower-left, var y up.
+    const is2dt = plot.mode === 'phase2dt';
+    const cameras = {
+        home:  plot.homeCamera || (is2dt
+            ? { eye: { x: 1.25, y: -1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }
+            : { eye: { x: 1.25, y:  1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }),
+        top:   { eye: { x: 0, y: 0, z: 2 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 1, z: 0 } },
+        front: { eye: { x: 0,    y: -2,   z: 0    }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
+        yz:    { eye: { x: 2,    y: 0,    z: 0    }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } },
+    };
+    const cam = cameras[preset] || cameras.home;
+    const layoutUpdate = {
+        'scene.camera': { ...cam, projection: { type: plot.projection || 'orthographic' } },
+    };
+    // Note: don't re-enable autorange here — explicit ranges (set at layout-build time
+    // and including origin) are what lets the origin-anchored axis lines render at
+    // equal visual length. Re-enabling autorange would let the axis lines themselves
+    // expand the scene and break that property.
+    Plotly.relayout(plot.div, layoutUpdate).then(() => this._updateCameraOverlay(plot));
+};
+
+proto._toggleProjection = function(panelId, panelEl) {
+    const plot = this.plots.get(panelId);
+    if (!plot) return;
+    plot.projection = plot.projection === 'orthographic' ? 'perspective' : 'orthographic';
+    if (plot.div) {
+        Plotly.relayout(plot.div, { 'scene.camera.projection.type': plot.projection })
+            .then(() => this._updateCameraOverlay(plot));
+    }
+    const projBtn = panelEl.querySelector('.proj-btn');
+    if (projBtn) {
+        const isOrtho = plot.projection === 'orthographic';
+        projBtn.classList.toggle('active', isOrtho);
+        projBtn.title = i18n.t(isOrtho ? 'projIsometric' : 'projPerspective');
+    }
+};
+
+/**
+ * Animate a 90° (or arbitrary angle) rotation of the 3D camera around an axis.
+ * axis: 'x', 'y', or 'z'
+ * angle: radians to rotate (e.g. Math.PI/2)
+ * duration: animation duration in ms
+ */
+proto._animateRotation = function(panelId, axis, angle, duration) {
+    const plot = this.plots.get(panelId);
+    if (!plot?.div) return;
+
+    // Read current camera
+    const cam = plot.div.layout?.scene?.camera || {};
+    const eye0 = { ...(cam.eye || { x: 1.25, y: 1.25, z: 1.25 }) };
+    const up0  = { ...(cam.up  || { x: 0, y: 0, z: 1 }) };
+    const center = cam.center || { x: 0, y: 0, z: 0 };
+
+    const rotateVec = (v, theta) => {
+        const c = Math.cos(theta), s = Math.sin(theta);
+        switch (axis) {
+            case 'x': return { x: v.x, y: v.y * c - v.z * s, z: v.y * s + v.z * c };
+            case 'y': return { x: v.x * c + v.z * s, y: v.y, z: -v.x * s + v.z * c };
+            case 'z': return { x: v.x * c - v.y * s, y: v.x * s + v.y * c, z: v.z };
+        }
+    };
+
+    // Relative eye vector (eye - center)
+    const rel0 = { x: eye0.x - center.x, y: eye0.y - center.y, z: eye0.z - center.z };
+
+    const startTime = performance.now();
+    const step = () => {
+        const elapsed = performance.now() - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        // Ease in-out
+        const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        const theta = angle * ease;
+
+        const rel = rotateVec(rel0, theta);
+        const up  = rotateVec(up0, theta);
+
+        Plotly.relayout(plot.div, {
+            'scene.camera.eye': { x: center.x + rel.x, y: center.y + rel.y, z: center.z + rel.z },
+            'scene.camera.up': up,
+        });
+
+        if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+};
+
+// ─── Mode buttons injected into panel toolbar ──────────────────
+
+proto._injectModeButtons = function(panelId, panelEl, currentMode) {
+    const toolbar = panelEl.querySelector('.layout-panel-toolbar');
+    if (!toolbar) return;
+
+    // Remove existing mode buttons if any (re-render case)
+    toolbar.querySelectorAll('.mode-btn-group, .view-btn-group').forEach(el => el.remove());
+    toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
+
+    const plot = this.plots.get(panelId);
+
+    // Mode toggle group
+    const modeGroup = document.createElement('div');
+    modeGroup.className = 'mode-btn-group';
+
+    const modes = [
+        { id: 'timeseries', label: '📈', titleKey: 'modeTimeseries' },
+        { id: 'phase2d',    label: '2D',  titleKey: 'modePhase2d'   },
+        { id: 'phase2dt',   label: '2D+t',titleKey: 'modePhase2dt'  },
+        { id: 'phase3d',    label: '3D',     titleKey: 'modePhase3d'   },
+        { id: 'state-anim', label: '▶x 2D',  titleKey: 'modeStateAnim2d', stateAnimDim: 2 },
+        { id: 'state-anim', label: '▶x 3D',  titleKey: 'modeStateAnim3d', stateAnimDim: 3 },
+    ];
+    modes.forEach(m => {
+        const btn = document.createElement('button');
+        const isActive = m.id === currentMode && (m.id !== 'state-anim' || (plot?.stateAnimDim || 2) === m.stateAnimDim);
+        btn.className = 'layout-toolbar-btn mode-btn' + (isActive ? ' active' : '');
+        btn.textContent = m.label;
+        btn.dataset.mode = m.id;
+        if (m.stateAnimDim) btn.dataset.stateAnimDim = String(m.stateAnimDim);
+        btn.title = i18n.t(m.titleKey);
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._setMode(panelId, m.id, m.stateAnimDim || null);
+        });
+        modeGroup.appendChild(btn);
+    });
+    toolbar.appendChild(modeGroup);
+
+    // 3D view buttons (visible only in 3D modes)
+    const viewGroup = document.createElement('div');
+    viewGroup.className = 'view-btn-group';
+    viewGroup.style.display = this._is3D(currentMode) ? '' : 'none';
+
+    const is2dt = currentMode === 'phase2dt';
+    const views = [
+        { preset: 'home',  label: '⌂',                titleKey: 'viewHome'  },
+        { preset: 'top',   label: is2dt ? 'x vs t' : 'XY', titleKey: is2dt ? 'view2dtXt' : 'viewTop'   },
+        { preset: 'front', label: is2dt ? 'y vs t' : 'XZ', titleKey: is2dt ? 'view2dtYt' : 'viewFront' },
+        { preset: 'yz',    label: is2dt ? 'y vs x' : 'YZ', titleKey: is2dt ? 'view2dtXY' : 'viewSide'  },
+    ];
+
+    views.forEach(v => {
+        const btn = document.createElement('button');
+        btn.className = 'layout-toolbar-btn view-btn' + (v.preset !== 'home' ? ' view-btn-3d-only' : '');
+        btn.textContent = v.label;
+        btn.title = i18n.t(v.titleKey);
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (v.preset === 'home') {
+                // Home performs a true autoscale in every mode.
+                const p = this.plots.get(panelId);
+                this._autoScalePlot(panelId, p);
+            } else {
+                this._setCamera(panelId, v.preset === 'yz' ? 'yz' : v.preset);
+            }
+        });
+        viewGroup.appendChild(btn);
+    });
+
+    // Projection toggle button (Iso / Persp)
+    const isOrtho = !plot || plot.projection === 'orthographic';
+    const projBtn = document.createElement('button');
+    projBtn.className = 'layout-toolbar-btn view-btn proj-btn view-btn-3d-only' + (isOrtho ? ' active' : '');
+    projBtn.textContent = 'Iso';
+    projBtn.title = i18n.t(isOrtho ? 'projIsometric' : 'projPerspective');
+    projBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._toggleProjection(panelId, panelEl);
+    });
+    viewGroup.appendChild(projBtn);
+
+    // Rotation buttons (90° animated rotation around each axis)
+    const rotAxes = [
+        { axis: 'z', label: '⟳Z', title: 'Rotate 90° around Z' },
+        { axis: 'x', label: '⟳X', title: 'Rotate 90° around X' },
+        { axis: 'y', label: '⟳Y', title: 'Rotate 90° around Y' },
+    ];
+    rotAxes.forEach(r => {
+        const btn = document.createElement('button');
+        btn.className = 'layout-toolbar-btn view-btn view-btn-3d-only rot-btn';
+        btn.textContent = r.label;
+        btn.title = r.title;
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._animateRotation(panelId, r.axis, Math.PI / 2, 400);
+        });
+        viewGroup.appendChild(btn);
+    });
+
+    toolbar.appendChild(viewGroup);
+
+    if (this._supportsEqualAspect2D(plot)) {
+        const equalAspectBtn = document.createElement('button');
+        equalAspectBtn.className = 'layout-toolbar-btn panel-action-btn equal-aspect-btn' + (plot?.equalAspect2D ? ' active' : '');
+        equalAspectBtn.textContent = '1:1';
+        equalAspectBtn.title = i18n.t('equalAspect2D');
+        equalAspectBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleEqualAspect2D(panelId);
+        });
+        toolbar.appendChild(equalAspectBtn);
+    }
+
+    // Compare (overlay traces from other files) — left of CSV
+    const compareBtn = document.createElement('button');
+    compareBtn.className = 'layout-toolbar-btn panel-action-btn compare-files-btn';
+    compareBtn.textContent = '⧉';
+    compareBtn.title = i18n.t('compareFiles');
+    const canCompare = this._hasContent(plot)
+        && plot.mode !== 'state-anim'
+        && this.files.size > 1;
+    compareBtn.disabled = !canCompare;
+    compareBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._compareAcrossFiles(panelId);
+    });
+    toolbar.appendChild(compareBtn);
+
+    const cursorBtn = document.createElement('button');
+    cursorBtn.className = 'layout-toolbar-btn panel-action-btn cursor-btn' + (plot?.cursors?.enabled ? ' active' : '');
+    cursorBtn.textContent = 'A|B';
+    cursorBtn.title = i18n.t('cursorsToggle');
+    cursorBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
+    cursorBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._toggleCursors(panelId);
+    });
+    toolbar.appendChild(cursorBtn);
+
+    // Quick numeric summary for reports and lab analysis
+    const statsBtn = document.createElement('button');
+    statsBtn.className = 'layout-toolbar-btn panel-action-btn panel-stats-btn';
+    statsBtn.textContent = 'Σ';
+    statsBtn.title = i18n.t('panelStats');
+    statsBtn.disabled = !this._hasContent(plot);
+    statsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._showPanelStats(panelId);
+    });
+    toolbar.appendChild(statsBtn);
+
+    // CSV export button - pushed to far right, 🗑️ follows immediately after
+    const csvBtn = document.createElement('button');
+    csvBtn.className = 'layout-toolbar-btn panel-action-btn csv-export-btn';
+    csvBtn.textContent = 'CSV';
+    csvBtn.title = i18n.t('exportCsv');
+    csvBtn.disabled = !this._hasContent(plot);
+    csvBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._exportCSV(panelId);
+    });
+    toolbar.appendChild(csvBtn);
+
+    // Clear button — immediately right of CSV
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'layout-toolbar-btn panel-action-btn trash-panel-btn';
+    clearBtn.textContent = '🗑️';
+    clearBtn.title = i18n.t('clearPlot');
+    clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._clearPanel(panelId);
+    });
+    toolbar.appendChild(clearBtn);
+};
+
+proto._updateModeButtons = function(panelEl, activeMode) {
+    const panelId = panelEl.dataset.id;
+    const plot = panelId ? this.plots.get(panelId) : null;
+    panelEl.querySelectorAll('.mode-btn').forEach(btn => {
+        const mode = btn.dataset.mode;
+        const dim = btn.dataset.stateAnimDim ? Number(btn.dataset.stateAnimDim) : null;
+        btn.classList.toggle('active', mode === activeMode && (!dim || dim === (plot?.stateAnimDim || 2)));
+    });
+};
+
+proto._toggle3DViewButtons = function(panelEl, show) {
+    const group = panelEl.querySelector('.view-btn-group');
+    if (group) group.style.display = show ? '' : 'none';
+};
+
+proto._supportsEqualAspect2D = function(plot) {
+    return !!plot && (plot.mode === 'phase2d' || (plot.mode === 'state-anim' && (plot.stateAnimDim || 2) === 2));
+};
+
+proto._toggleEqualAspect2D = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!this._supportsEqualAspect2D(plot)) return;
+    plot.equalAspect2D = !plot.equalAspect2D;
+    if (plot.div) {
+        const update = plot.equalAspect2D
+            ? { 'yaxis.scaleanchor': 'x', 'yaxis.scaleratio': 1 }
+            : { 'yaxis.scaleanchor': null, 'yaxis.scaleratio': null, 'xaxis.autorange': true, 'yaxis.autorange': true };
+        Plotly.relayout(plot.div, update);
+    }
+    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+    const btn = panelEl?.querySelector('.equal-aspect-btn');
+    if (btn) btn.classList.toggle('active', plot.equalAspect2D);
+};
+
+// ─── Placeholder text ──────────────────────────────────────────
+
+proto._updatePlaceholder = function(panelId, panelEl) {
+    const placeholder = panelEl.querySelector('.layout-panel-placeholder');
+    if (!placeholder) return;
+
+    const plot = this.plots.get(panelId);
+    // If plot has content, placeholder is hidden — nothing to update
+    if (plot && this._hasContent(plot)) return;
+
+    const mode = plot ? plot.mode : 'timeseries';
+    const pp   = plot ? plot.phasePending : { x: null, y: null, z: null };
+
+    let msg;
+    switch (mode) {
+        case 'state-anim': {
+            const sx = plot ? (plot.stateSlots?.x || []) : [];
+            const dim = plot ? (plot.stateAnimDim || 2) : 2;
+            msg = sx.length === 0 ? (dim === 3 ? i18n.t('dropState3dMulti') : i18n.t('dropState2dMulti'))
+                : sx.length === 1 ? i18n.t('dropStateX2Short')
+                : dim === 3 ?        i18n.t('dropStateX3')
+                :                    i18n.t('dropVariableHere');
+            break;
+        }
+        case 'phase2d':
+            msg = !pp.x ? i18n.t('dropPhase2dMulti') : i18n.t('dropY');
+            break;
+        case 'phase2dt':
+            msg = !pp.x ? i18n.t('dropPhase2dtMulti') : i18n.t('dropYAutoTime');
+            break;
+        case 'phase3d':
+            msg = !pp.x ? i18n.t('dropPhase3dMulti')
+                : !pp.y ? i18n.t('dropY')
+                :         i18n.t('dropZ');
+            break;
+        default: // timeseries
+            msg = i18n.t('dropTimeseriesMulti');
+    }
+    placeholder.innerHTML = `
+        <span>${msg}</span>
+        <small>${i18n.t('multiSelectHint')}</small>
+        <small>${i18n.t('legendHint')}</small>
+    `;
+};
+
+// ─── Helpers ───────────────────────────────────────────────────
+
+}

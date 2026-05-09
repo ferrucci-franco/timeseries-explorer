@@ -10,7 +10,9 @@
  * abscissa/time vector and every remaining column becomes a time-varying
  * variable, matching the object shape produced by MatParser.
  */
-class CsvParser {
+import MatParser from './mat-parser.js';
+
+export default class CsvParser {
     constructor(structureParser) {
         this.structureParser = structureParser || new MatParser();
         this._utf8Decoder = typeof TextDecoder !== 'undefined'

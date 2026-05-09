@@ -62,6 +62,13 @@
                 </button>
                 <div id="example-menu" class="example-menu" role="menu" hidden></div>
             </div>
+            <div class="example-menu-wrap">
+                <button id="extra-menu-btn" class="icon-btn extra-menu-btn" title="Extra" aria-haspopup="true" aria-expanded="false">
+                    <span class="icon">⋯</span>
+                    <span class="extra-menu-label" data-i18n="extraMenu">Extra</span>
+                </button>
+                <div id="extra-menu" class="example-menu extra-menu" role="menu" hidden></div>
+            </div>
             <button id="help-btn" class="icon-btn" title="Help">
                 <span class="icon">❓</span>
             </button>
@@ -267,13 +274,7 @@
         </div>
     </div>
 
-    <script src="plotly-2.27.0.min.js"></script>
-    <script src="mat-parser.js"></script>
-    <script src="csv-parser.js"></script>
-    <script src="i18n.js"></script>
-    <script src="modal.js"></script>
-    <script src="layout-manager.js"></script>
-    <script src="plot-manager.js"></script>
-    <script src="app.js"></script>
+    <script src="./vendor/plotly-2.27.0.min.js"></script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>
