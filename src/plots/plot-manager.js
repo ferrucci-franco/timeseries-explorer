@@ -1,5 +1,6 @@
 import i18n from '../i18n/index.js';
 import Modal from '../ui/modal.js';
+import Plotly from '../vendor/plotly.js';
 import { installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';

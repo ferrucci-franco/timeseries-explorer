@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "vite": "^5.4.19"
+  },
+  "dependencies": {
+    "plotly.js-dist-min": "^3.5.1"
   }
 }

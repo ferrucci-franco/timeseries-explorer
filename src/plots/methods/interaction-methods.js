@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import Plotly from '../../vendor/plotly.js';
 
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
