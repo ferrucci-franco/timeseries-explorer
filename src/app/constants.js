@@ -1,4 +1,5 @@
-const PUBLIC_BASE = globalThis.__OMV_PUBLIC_BASE__ || './public/';
+const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location?.protocol === 'file:';
+const PUBLIC_BASE = globalThis.__OMV_PUBLIC_BASE__ || (IS_FILE_PROTOCOL ? './public/' : './');
 
 const EXAMPLES = [
     {
@@ -39,6 +40,6 @@ const DERIVED_FUNCTION_ALIASES = new Map([
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv'];
 const RELOAD_AS_NEW_VERSION_STORAGE_KEY = 'omv_reload_as_new_version';
 const APP_VERSION = '0.1.0';
-const STANDALONE_MANIFEST_PATH = `${PUBLIC_BASE}downloads/standalone.json`;
+const STANDALONE_MANIFEST_PATH = './downloads/standalone.json';
 
 export { APP_VERSION, EXAMPLES, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, RESULT_FILE_EXTENSIONS, RELOAD_AS_NEW_VERSION_STORAGE_KEY, STANDALONE_MANIFEST_PATH };

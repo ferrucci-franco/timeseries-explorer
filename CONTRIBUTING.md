@@ -119,7 +119,7 @@ Before publishing:
 npm run build
 ```
 
-Then inspect the generated `dist/` output.
+This generates the portable download artifacts first and then the final published `dist/` output. Use `npm run build:web` only when you explicitly want a web-only build without refreshing the stand-alone package.
 
 ## Related docs
 

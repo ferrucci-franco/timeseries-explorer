@@ -6,7 +6,7 @@ echo.
 echo Building web distribution...
 echo.
 
-call npm run build
+call npm run build:web
 set "EXITCODE=%ERRORLEVEL%"
 
 echo.

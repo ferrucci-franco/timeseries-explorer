@@ -30,6 +30,21 @@ async function ensureDir(targetPath) {
   await fs.mkdir(targetPath, { recursive: true });
 }
 
+async function removeMatchingFiles(dirPath, matcher) {
+  let entries = [];
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile()) return;
+    if (!matcher(entry.name)) return;
+    await fs.rm(path.join(dirPath, entry.name), { force: true });
+  }));
+}
+
 async function copyFileInto(src, dest) {
   await ensureDir(path.dirname(dest));
   await fs.copyFile(src, dest);
@@ -90,6 +105,7 @@ async function createZip(packageDir, zipPath, folderName) {
 
 async function publishDownloadArtifacts(zipPath, zipFileName, version, commit) {
   await ensureDir(downloadsRoot);
+  await removeMatchingFiles(downloadsRoot, (name) => name.startsWith('openmodelica-viewer-v') && name.endsWith('.zip'));
   await fs.copyFile(zipPath, path.join(downloadsRoot, zipFileName));
   const manifest = {
     version,

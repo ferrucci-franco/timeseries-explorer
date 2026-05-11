@@ -57,4 +57,12 @@ Create a production bundle with:
 npm run build
 ```
 
-The output is generated in `dist/`.
+This command now generates the portable download artifacts first, then builds the published web app so `dist/` includes the stand-alone download package.
+
+If you only want the web bundle without regenerating the portable package:
+
+```powershell
+npm run build:web
+```
+
+The published output is generated in `dist/`.

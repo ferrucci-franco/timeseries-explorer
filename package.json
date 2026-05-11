@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build:web": "vite build",
+    "build": "npm run build:portable && npm run build:web",
     "preview": "vite preview",
     "build:portable": "node scripts/build-portable.mjs",
-    "build:all": "npm run build && npm run build:portable"
+    "build:all": "npm run build"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",
