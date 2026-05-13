@@ -504,26 +504,46 @@ proto._traceInterpolationMode = function(trace) {
 proto._findNextExtremum = function(times, values, fromX, type, direction = 'next') {
     const n = Math.min(times?.length || 0, values?.length || 0);
     if (n < 3) return NaN;
-    const matches = (i) => {
-        const v = values[i], vp = values[i - 1], vn = values[i + 1];
-        if (!Number.isFinite(v) || !Number.isFinite(vp) || !Number.isFinite(vn)) return false;
-        if (type === 'max') return v > vp && v > vn;
-        if (type === 'min') return v < vp && v < vn;
-        return false;
+    const plateauAt = (i) => {
+        const v = values[i];
+        if (!Number.isFinite(v)) return null;
+        let left = i;
+        let right = i;
+        while (left > 0 && values[left - 1] === v) left--;
+        while (right < n - 1 && values[right + 1] === v) right++;
+        if (left === 0 || right === n - 1) return null;
+        const before = values[left - 1];
+        const after = values[right + 1];
+        if (!Number.isFinite(before) || !Number.isFinite(after)) return null;
+        if (type === 'max' && v > before && v > after) return { left, right };
+        if (type === 'min' && v < before && v < after) return { left, right };
+        return null;
     };
     if (direction === 'prev') {
         let i = n - 2;
         while (i >= 1 && times[i] >= fromX) i--;
-        for (; i >= 1; i--) {
-            if (matches(i)) return times[i];
+        while (i >= 1) {
+            const plateau = plateauAt(i);
+            if (plateau) {
+                if (times[plateau.right] < fromX) return times[plateau.right];
+                i = plateau.left - 1;
+                continue;
+            }
+            i--;
         }
         return NaN;
     }
     let i = 0;
     while (i < n && times[i] <= fromX) i++;
     if (i < 1) i = 1;
-    for (; i < n - 1; i++) {
-        if (matches(i)) return times[i];
+    while (i < n - 1) {
+        const plateau = plateauAt(i);
+        if (plateau) {
+            if (times[plateau.left] > fromX) return times[plateau.left];
+            i = plateau.right + 1;
+            continue;
+        }
+        i++;
     }
     return NaN;
 };
@@ -723,10 +743,17 @@ proto._updateCursorBox = function(panelId, plot) {
     const dx = bX - aX;
     const dy = b.y - a.y;
     const slope = dx !== 0 ? dy / dx : NaN;
+    const inverseDx = dx !== 0 ? 1 / dx : NaN;
     const sameTrace = this._sameCursorTrace(traceA, traceB);
     const sameUnit  = a.yUnit === b.yUnit;
     const timeUnit  = a.timeUnit || b.timeUnit;
     const unit = (u) => u ? ` ${this._escapeHTML(u)}` : '';
+    const normalizedTimeUnit = String(timeUnit || '').trim().toLowerCase();
+    const inverseTimeUnit = !timeUnit
+        ? ''
+        : ['s', 'sec', 'secs', 'second', 'seconds'].includes(normalizedTimeUnit)
+            ? 'Hz'
+            : `1/${timeUnit}`;
     const colorA = traceA?.color || '#ff9800';
     const colorB = traceB?.color || '#2196f3';
     const visibleTraces = plot.traces
@@ -744,6 +771,12 @@ proto._updateCursorBox = function(panelId, plot) {
     const maxTitle  = this._escapeHTML(i18n.t('cursorNextMax'));
     const minTitle  = this._escapeHTML(i18n.t('cursorNextMin'));
     const zeroTitle = this._escapeHTML(i18n.t('cursorNextZero'));
+    const labelX = this._escapeHTML(i18n.t('cursorLabelX'));
+    const labelY = this._escapeHTML(i18n.t('cursorLabelY'));
+    const labelDx = this._escapeHTML(i18n.t('cursorLabelDeltaX'));
+    const labelDy = this._escapeHTML(i18n.t('cursorLabelDeltaY'));
+    const labelSlope = this._escapeHTML(i18n.t('cursorLabelSlope'));
+    const labelInvDx = this._escapeHTML(i18n.t('cursorLabelInverseDeltaX'));
     const buildExtremaBtns = (which, color) => `
         <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="max"  style="color:${color}" title="${maxTitle} (${which.toUpperCase()})"  aria-label="${maxTitle} (${which.toUpperCase()})">${maxIcon}</button>
         <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="min"  style="color:${color}" title="${minTitle} (${which.toUpperCase()})"  aria-label="${minTitle} (${which.toUpperCase()})">${minIcon}</button>
@@ -768,11 +801,12 @@ proto._updateCursorBox = function(panelId, plot) {
         </div>
         ${selectorsHTML}
         <div class="cursor-info-values">
-            <div><b style="color:${colorA}">A</b> x=${this._formatHTMLNumber(aX)}${unit(timeUnit)} y=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
-            <div><b style="color:${colorB}">B</b> x=${this._formatHTMLNumber(bX)}${unit(timeUnit)} y=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
-            <div>ΔX=${this._formatHTMLNumber(dx)}${unit(timeUnit)}</div>
-            <div>ΔY=${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
-            <div>ΔY/ΔX=${this._formatHTMLNumber(slope)}</div>
+            <div><b style="color:${colorA}">A</b> ${labelX}=${this._formatHTMLNumber(aX)}${unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
+            <div><b style="color:${colorB}">B</b> ${labelX}=${this._formatHTMLNumber(bX)}${unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
+            <div>${labelDx}=${this._formatHTMLNumber(dx)}${unit(timeUnit)}</div>
+            <div>${labelDy}=${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
+            <div>${labelSlope}=${this._formatHTMLNumber(slope)}</div>
+            <div>${labelInvDx}=${this._formatHTMLNumber(inverseDx)}${unit(inverseTimeUnit)}</div>
         </div>
     `;
     this._showCursorBox(panelEl, html, panelId, plot);

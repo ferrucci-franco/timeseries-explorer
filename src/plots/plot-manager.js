@@ -1416,9 +1416,14 @@ class PlotManager {
                 this._createChart(panelId, panelEl);
             }
         } else {
+            document.body.classList.remove('cursor-dragging', 'cursor-box-dragging');
+            if (plot.mode === 'timeseries') {
+                plot.cursors = this._defaultCursors();
+            }
             const ph = panelEl.querySelector('.layout-panel-placeholder');
             if (ph) { ph.style.display = ''; ph.classList.remove('drag-over'); }
             this._setPendingOverlay(panelId, panelEl, false);
+            this._hideCursorBox(panelEl);
             this._updatePlaceholder(panelId, panelEl);
             this._refreshActionBtns(panelId);
         }

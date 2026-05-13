@@ -337,25 +337,12 @@ proto._toggleDerivedForm = function(show) {
     const form = document.getElementById('derived-form');
     form.classList.toggle('collapsed', !show);
     if (show) {
-        this._scrollDerivedFormIntoView();
         document.getElementById('derived-name').focus();
     }
     else {
         this._setDerivedMessage('', '');
         this._hideDerivedSuggestions();
     }
-};
-
-proto._scrollDerivedFormIntoView = function() {
-    const section = document.querySelector('.derived-section');
-    const sidebar = document.getElementById('sidebar');
-    if (!section || !sidebar) return;
-    requestAnimationFrame(() => {
-        sidebar.scrollTo({
-            top: sidebar.scrollHeight,
-            behavior: 'smooth'
-        });
-    });
 };
 
 proto._setDerivedMessage = function(message, type) {
