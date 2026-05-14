@@ -771,6 +771,7 @@ proto._updateCursorBox = function(panelId, plot) {
     const maxTitle  = this._escapeHTML(i18n.t('cursorNextMax'));
     const minTitle  = this._escapeHTML(i18n.t('cursorNextMin'));
     const zeroTitle = this._escapeHTML(i18n.t('cursorNextZero'));
+    const shiftHint = this._escapeHTML(i18n.t('cursorShiftPreviousHint'));
     const labelX = this._escapeHTML(i18n.t('cursorLabelX'));
     const labelY = this._escapeHTML(i18n.t('cursorLabelY'));
     const labelDx = this._escapeHTML(i18n.t('cursorLabelDeltaX'));
@@ -778,9 +779,9 @@ proto._updateCursorBox = function(panelId, plot) {
     const labelSlope = this._escapeHTML(i18n.t('cursorLabelSlope'));
     const labelInvDx = this._escapeHTML(i18n.t('cursorLabelInverseDeltaX'));
     const buildExtremaBtns = (which, color) => `
-        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="max"  style="color:${color}" title="${maxTitle} (${which.toUpperCase()})"  aria-label="${maxTitle} (${which.toUpperCase()})">${maxIcon}</button>
-        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="min"  style="color:${color}" title="${minTitle} (${which.toUpperCase()})"  aria-label="${minTitle} (${which.toUpperCase()})">${minIcon}</button>
-        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="zero" style="color:${color}" title="${zeroTitle} (${which.toUpperCase()})" aria-label="${zeroTitle} (${which.toUpperCase()})">${zeroIcon}</button>
+        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="max"  style="color:${color}" title="${maxTitle} (${which.toUpperCase()}) | ${shiftHint}"  aria-label="${maxTitle} (${which.toUpperCase()}) | ${shiftHint}">${maxIcon}</button>
+        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="min"  style="color:${color}" title="${minTitle} (${which.toUpperCase()}) | ${shiftHint}"  aria-label="${minTitle} (${which.toUpperCase()}) | ${shiftHint}">${minIcon}</button>
+        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="zero" style="color:${color}" title="${zeroTitle} (${which.toUpperCase()}) | ${shiftHint}" aria-label="${zeroTitle} (${which.toUpperCase()}) | ${shiftHint}">${zeroIcon}</button>
     `;
     const selectorsHTML = `
         <label class="cursor-trace-select" data-cursor="a">
@@ -800,13 +801,14 @@ proto._updateCursorBox = function(panelId, plot) {
             <span class="cursor-info-title">${moveIcon}${this._escapeHTML(i18n.t('cursorsToggle'))}</span>
         </div>
         ${selectorsHTML}
+        <div class="cursor-info-hint">${shiftHint}</div>
         <div class="cursor-info-values">
             <div><b style="color:${colorA}">A</b> ${labelX}=${this._formatHTMLNumber(aX)}${unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
             <div><b style="color:${colorB}">B</b> ${labelX}=${this._formatHTMLNumber(bX)}${unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
-            <div>${labelDx}=${this._formatHTMLNumber(dx)}${unit(timeUnit)}</div>
-            <div>${labelDy}=${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
-            <div>${labelSlope}=${this._formatHTMLNumber(slope)}</div>
-            <div>${labelInvDx}=${this._formatHTMLNumber(inverseDx)}${unit(inverseTimeUnit)}</div>
+            <div><b>${labelDx}=</b>${this._formatHTMLNumber(dx)}${unit(timeUnit)}</div>
+            <div><b>${labelDy}=</b>${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
+            <div><b>${labelSlope}=</b>${this._formatHTMLNumber(slope)}</div>
+            <div><b>${labelInvDx}=</b>${this._formatHTMLNumber(inverseDx)}${unit(inverseTimeUnit)}</div>
         </div>
     `;
     this._showCursorBox(panelEl, html, panelId, plot);

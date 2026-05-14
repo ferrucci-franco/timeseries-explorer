@@ -76,6 +76,7 @@ class OpenModelicaViewer {
             btn.classList.toggle('active', btn.getAttribute('data-lang') === lang);
         });
         this._applyReloadModeUI();
+        if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();
         this._renderFilesList();
         if (this._currentTree) this._renderFilteredTree();
         this.layoutManager.render();

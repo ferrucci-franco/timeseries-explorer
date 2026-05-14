@@ -14,7 +14,6 @@
     <div class="top-bar">
         <div class="top-bar-left">
             <h1 data-i18n="appTitle">OpenModelica/Dymola & CSV Result Viewer</h1>
-            <span id="file-name" class="file-name"></span>
         </div>
         <div class="top-bar-right">
             <!-- Language Selector -->
@@ -182,10 +181,18 @@
                 <!-- Legend position -->
                 <div class="options-group">
                     <span class="options-group-label" data-i18n="legendPosition">Legend</span>
-                    <label class="radio-label">
-                        <input type="radio" name="legend-pos" value="overlay" checked>
-                        <span data-i18n="legendOverlay">Overlay (top-left)</span>
-                    </label>
+                    <div class="legend-overlay-row">
+                        <label class="radio-label legend-overlay-option">
+                            <input type="radio" name="legend-pos" value="overlay" checked>
+                            <span data-i18n="legendOverlay">Overlay</span>
+                        </label>
+                        <div id="legend-corner-picker" class="legend-corner-picker" role="group" aria-label="Legend overlay corner">
+                            <button type="button" class="legend-corner-btn active" data-corner="tl" title="Top-left corner" aria-label="Top-left corner"></button>
+                            <button type="button" class="legend-corner-btn" data-corner="tr" title="Top-right corner" aria-label="Top-right corner"></button>
+                            <button type="button" class="legend-corner-btn" data-corner="bl" title="Bottom-left corner" aria-label="Bottom-left corner"></button>
+                            <button type="button" class="legend-corner-btn" data-corner="br" title="Bottom-right corner" aria-label="Bottom-right corner"></button>
+                        </div>
+                    </div>
                     <label class="radio-label">
                         <input type="radio" name="legend-pos" value="above">
                         <span data-i18n="legendBelow">Above plot</span>

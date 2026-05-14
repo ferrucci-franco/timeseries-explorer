@@ -8,7 +8,6 @@ proto.loadFile = async function(file, options = {}) {
     if (!this._isSupportedResultFileName(file.name)) { alert(i18n.t('invalidFile')); return; }
 
     try {
-        document.getElementById('file-name').textContent = `Loading ${file.name}…`;
         const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
         const contentHash = await this._hashBuffer(buffer);
         const data   = await this._parseResultBuffer(file.name, buffer);
@@ -35,7 +34,6 @@ proto.loadFile = async function(file, options = {}) {
     } catch (err) {
         console.error('Error loading file:', err);
         alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
-        document.getElementById('file-name').textContent = '';
     }
 };
 
@@ -44,8 +42,6 @@ proto.reloadActiveFile = async function() {
     if (!id) return;
     const entry = this.files.get(id);
     if (!entry) return;
-
-    document.getElementById('file-name').textContent = `Loading ${this._fileDisplayName(entry)}…`;
 
     const buffer = await this._readLatestBuffer(entry);
     const contentHash = await this._hashBuffer(buffer);
@@ -68,14 +64,11 @@ proto.reloadActiveFileAsNewVersion = async function() {
     if (!source) return;
 
     const name = this._nextVersionName(source.name);
-    document.getElementById('file-name').textContent = `Loading ${name}${source.extension || '.mat'}…`;
-
     const buffer = await this._readLatestBuffer(source);
     const contentHash = await this._hashBuffer(buffer);
     const sourceHash = source.contentHash || (source.buffer ? await this._hashBuffer(source.buffer) : '');
     if (!source.contentHash && sourceHash) source.contentHash = sourceHash;
     if (sourceHash && contentHash === sourceHash) {
-        document.getElementById('file-name').textContent = this._fileDisplayName(source);
         await Modal.alert(i18n.t('reloadAsNewVersion'), i18n.t('reloadUnchangedNoVersion'), { icon: '🔄' });
         this._updateTopBar();
         return;
@@ -428,9 +421,7 @@ proto.setActiveFile = function(fileId) {
 };
 
 proto._updateTopBar = function() {
-    const id   = this.plotManager.activeFileId;
-    const entry = id ? this.files.get(id) : null;
-    document.getElementById('file-name').textContent = entry ? this._fileDisplayName(entry) : '';
+    // The active file is shown in the sidebar, so the top bar no longer mirrors it.
 };
 
 proto._updateActionButtons = function() {

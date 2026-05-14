@@ -122,8 +122,18 @@ proto.initEventListeners = function() {
     });
 
     document.querySelectorAll('input[name="legend-pos"]').forEach(radio => {
-        radio.addEventListener('change', (e) => this.plotManager.setLegendPosition(e.target.value));
+        radio.addEventListener('change', (e) => {
+            this.plotManager.setLegendPosition(e.target.value);
+            this._syncLegendCornerPicker();
+        });
     });
+    document.querySelectorAll('.legend-corner-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            this.plotManager.setLegendOverlayCorner(btn.getAttribute('data-corner'));
+            this._syncLegendCornerPicker();
+        });
+    });
+    this._syncLegendCornerPicker();
 
     document.getElementById('reset-layout').addEventListener('click', async () => {
         const ok = await Modal.confirm(i18n.t('resetLayoutWarning'), { icon: '⬜' });
@@ -153,6 +163,33 @@ proto.initEventListeners = function() {
     this._initExtraMenu();
 
     document.getElementById('help-btn').addEventListener('click', () => this.showHelp());
+};
+
+proto._syncLegendCornerPicker = function() {
+    const picker = document.getElementById('legend-corner-picker');
+    if (!picker) return;
+
+    const isOverlay = this.plotManager.legendPosition === 'overlay';
+    picker.classList.toggle('disabled', !isOverlay);
+    picker.setAttribute('aria-disabled', isOverlay ? 'false' : 'true');
+
+    const titleKeys = {
+        tl: 'legendCornerTopLeft',
+        tr: 'legendCornerTopRight',
+        bl: 'legendCornerBottomLeft',
+        br: 'legendCornerBottomRight',
+    };
+
+    picker.querySelectorAll('.legend-corner-btn').forEach(btn => {
+        const corner = btn.getAttribute('data-corner');
+        const label = i18n.t(titleKeys[corner] || 'legendCornerTopLeft');
+        const isActive = this.plotManager.legendOverlayCorner === corner;
+        btn.classList.toggle('active', isActive);
+        btn.disabled = !isOverlay;
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
 };
 
 proto._initOpenFileMenu = function() {
@@ -622,7 +659,6 @@ proto.loadExample = async function(exampleId = 'pendulum') {
 proto._setExampleLoading = function(loading, exampleName = '') {
     this._exampleLoading = loading;
     const btn = document.getElementById('load-example-btn');
-    const fileName = document.getElementById('file-name');
     const message = i18n.t('loadingExample').replace('{name}', exampleName);
 
     if (loading) {
@@ -631,7 +667,6 @@ proto._setExampleLoading = function(loading, exampleName = '') {
         if (btn) btn.disabled = true;
         this._setDropZoneStatus(true, message);
         this._showExampleLoadingOverlay(message, token);
-        if (fileName) fileName.textContent = message;
         return token;
     }
 
@@ -640,10 +675,6 @@ proto._setExampleLoading = function(loading, exampleName = '') {
     if (btn) btn.disabled = false;
     this._setDropZoneStatus(false);
     this._hideExampleLoadingOverlay();
-    if (fileName) {
-        if (this.activeFileId) this._updateTopBar();
-        else fileName.textContent = '';
-    }
     return null;
 };
 

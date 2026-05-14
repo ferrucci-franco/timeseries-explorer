@@ -27,6 +27,7 @@ class PlotManager {
         this.theme          = 'light';
         this.syncAxes       = true;
         this.legendPosition = 'overlay';
+        this.legendOverlayCorner = 'tl';
         this.timeseriesVisualMaxPoints = PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
         this.phaseVisualMaxPoints = null;
         this._syncing       = false;
@@ -229,6 +230,11 @@ class PlotManager {
     setTheme(theme)            { this.theme = theme;          this._relayoutAll(); }
     setSyncAxes(v)             { this.syncAxes = v; }
     setLegendPosition(pos)     { this.legendPosition = pos;   this._relayoutAll(); }
+    setLegendOverlayCorner(corner) {
+        if (!['tl', 'tr', 'bl', 'br'].includes(corner)) return;
+        this.legendOverlayCorner = corner;
+        if (this.legendPosition === 'overlay') this._relayoutAll();
+    }
     setTimeseriesDownsamplingLimit(limit) {
         this.timeseriesVisualMaxPoints = this._normalizeTimeseriesDownsamplingLimit(limit);
         this._refreshAllTimeseriesVisuals();
@@ -1600,7 +1606,13 @@ class PlotManager {
         switch (this.legendPosition) {
             case 'above':   return { ...base, orientation: 'h', x: 0.5, xanchor: 'center', y: 1.02, yanchor: 'bottom' };
             case 'right':   return { ...base, x: 1.02, y: 0.5, xanchor: 'left', yanchor: 'middle' };
-            default:        return { ...base, x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top' };
+            default:
+                switch (this.legendOverlayCorner) {
+                    case 'tr': return { ...base, x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top' };
+                    case 'bl': return { ...base, x: 0.01, y: 0.01, xanchor: 'left', yanchor: 'bottom' };
+                    case 'br': return { ...base, x: 0.99, y: 0.01, xanchor: 'right', yanchor: 'bottom' };
+                    default:   return { ...base, x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top' };
+                }
         }
     }
 

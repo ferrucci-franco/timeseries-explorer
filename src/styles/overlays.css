@@ -422,8 +422,4 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
     .top-bar-left h1 {
         font-size: 1rem;
     }
-
-    .file-name {
-        display: none;
-    }
 }

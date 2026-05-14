@@ -651,3 +651,47 @@
 .radio-label input[type="radio"] {
     cursor: pointer;
 }
+
+.legend-overlay-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.legend-overlay-option {
+    flex: 1;
+    min-width: 0;
+}
+
+.legend-corner-picker {
+    display: grid;
+    grid-template-columns: repeat(2, 12px);
+    gap: 3px;
+    padding: 3px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+}
+
+.legend-corner-picker.disabled {
+    opacity: 0.45;
+}
+
+.legend-corner-btn {
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    background: var(--bg-secondary);
+    cursor: pointer;
+}
+
+.legend-corner-btn:hover {
+    border-color: var(--primary-color);
+}
+
+.legend-corner-btn.active {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+}

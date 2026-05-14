@@ -729,6 +729,14 @@
     pointer-events: none;
 }
 
+.cursor-info-hint {
+    margin: -1px 0 6px;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
 .cursor-info-values {
     pointer-events: none;
 }

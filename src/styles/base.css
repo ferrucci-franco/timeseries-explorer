@@ -82,11 +82,6 @@ body {
     font-weight: 600;
 }
 
-.file-name {
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-}
-
 .top-bar-right {
     display: flex;
     align-items: center;
