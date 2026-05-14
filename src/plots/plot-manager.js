@@ -952,51 +952,16 @@ class PlotManager {
                 columns.push(Array.from(this._getTransformedVariableData(t.fileId, t.varName)));
             }
         } else if (plot.mode === 'phase2dt') {
-            const firstFid = plot.phaseTraces[0]?.fileId;
-            const timeVar  = this._getTimeVar(firstFid);
-            const times    = firstFid ? this._getTransformedTimeData(firstFid) : [];
-            const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
-            headers.push(`time [${timeUnit}]`);
-            columns.push(times);
             for (const pt of plot.phaseTraces) {
-                const d = this.files.get(pt.fileId)?.data;
-                if (!d) continue;
-                const xv = d.variables[pt.x], yv = d.variables[pt.y];
-                if (!xv || !yv) continue;
-                const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
-                const nx = this._traceName(pt.x, pt.fileId), ny = this._traceName(pt.y, pt.fileId);
-                headers.push(xu ? `${nx} [${xu}]` : nx);
-                headers.push(yu ? `${ny} [${yu}]` : ny);
-                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.x)));
-                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.y)));
+                this._appendPhaseCSVTrace(headers, columns, pt, ['x', 'y']);
             }
         } else if (plot.mode === 'phase2d') {
             for (const pt of plot.phaseTraces) {
-                const d = this.files.get(pt.fileId)?.data;
-                if (!d) continue;
-                const xv = d.variables[pt.x], yv = d.variables[pt.y];
-                if (!xv || !yv) continue;
-                const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
-                const nx = this._traceName(pt.x, pt.fileId), ny = this._traceName(pt.y, pt.fileId);
-                headers.push(xu ? `${nx} [${xu}]` : nx);
-                headers.push(yu ? `${ny} [${yu}]` : ny);
-                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.x)));
-                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.y)));
+                this._appendPhaseCSVTrace(headers, columns, pt, ['x', 'y']);
             }
         } else if (plot.mode === 'phase3d') {
             for (const pt of plot.phaseTraces) {
-                const d = this.files.get(pt.fileId)?.data;
-                if (!d) continue;
-                const xv = d.variables[pt.x], yv = d.variables[pt.y], zv = d.variables[pt.z];
-                if (!xv || !yv || !zv) continue;
-                const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description), zu = this._extractUnit(zv.description);
-                const nx = this._traceName(pt.x, pt.fileId), ny = this._traceName(pt.y, pt.fileId), nz = this._traceName(pt.z, pt.fileId);
-                headers.push(xu ? `${nx} [${xu}]` : nx);
-                headers.push(yu ? `${ny} [${yu}]` : ny);
-                headers.push(zu ? `${nz} [${zu}]` : nz);
-                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.x)));
-                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.y)));
-                columns.push(Array.from(this._getTransformedVariableData(pt.fileId, pt.z)));
+                this._appendPhaseCSVTrace(headers, columns, pt, ['x', 'y', 'z']);
             }
         } else if (plot.mode === 'state-anim') {
             const slots = plot.stateSlots;
@@ -1046,6 +1011,32 @@ class PlotManager {
         a.download = `${plot.mode}_export.csv`;
         a.click();
         URL.revokeObjectURL(url);
+    }
+
+    _appendPhaseCSVTrace(headers, columns, phaseTrace, axes) {
+        const d = this.files.get(phaseTrace.fileId)?.data;
+        if (!d) return;
+
+        const vars = axes.map(axis => d.variables[phaseTrace[axis]]);
+        if (vars.some(v => !v)) return;
+
+        const timeVar = this._getTimeVar(phaseTrace.fileId);
+        const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
+        const timeName = timeVar?.name || 'time';
+
+        headers.push(`${
+            timeUnit ? `${timeName} [${timeUnit}]` : timeName
+        }`);
+        columns.push(Array.from(this._getTransformedTimeData(phaseTrace.fileId)));
+
+        axes.forEach((axis, index) => {
+            const varName = phaseTrace[axis];
+            const variable = vars[index];
+            const unit = this._extractUnit(variable.description);
+            const name = this._traceName(varName, phaseTrace.fileId);
+            headers.push(unit ? `${name} [${unit}]` : name);
+            columns.push(Array.from(this._getTransformedVariableData(phaseTrace.fileId, varName)));
+        });
     }
 
     _compareAcrossFiles(panelId) {
