@@ -1,6 +1,11 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
-import { APP_VERSION, EXAMPLES, RELOAD_AS_NEW_VERSION_STORAGE_KEY, STANDALONE_MANIFEST_PATH } from '../constants.js';
+import {
+    APP_VERSION,
+    EXAMPLES,
+    RELOAD_AS_NEW_VERSION_STORAGE_KEY,
+    STANDALONE_MANIFEST_PATH,
+} from '../constants.js';
 
 export function installUiMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -112,6 +117,14 @@ proto.initEventListeners = function() {
         this.plotManager.setHoverProximity(e.target.checked);
     });
 
+    const scrollablePlotAreaToggle = document.getElementById('scrollable-plot-area');
+    if (scrollablePlotAreaToggle) {
+        scrollablePlotAreaToggle.checked = !!this.scrollablePlotArea;
+        scrollablePlotAreaToggle.addEventListener('change', (e) => {
+            this._setScrollablePlotArea(e.target.checked);
+        });
+    }
+
     document.getElementById('timeseries-downsampling').addEventListener('change', (e) => {
         const raw = e.target.value;
         this.plotManager.setTimeseriesDownsamplingLimit(raw === 'none' ? null : Number(raw));
@@ -163,6 +176,37 @@ proto.initEventListeners = function() {
     this._initExtraMenu();
 
     document.getElementById('help-btn').addEventListener('click', () => this.showHelp());
+};
+
+proto._setScrollablePlotArea = async function(enabled) {
+    const next = !!enabled;
+    if (
+        !next
+        && this.scrollablePlotArea
+        && this.layoutManager.wouldDisableScrollableCompressTooMuch()
+    ) {
+        const ok = await Modal.confirm(i18n.t('compressPlotLayoutWarning'), {
+            icon: '↕',
+            title: i18n.t('compressPlotLayoutTitle'),
+            cancelText: i18n.t('keepScroll'),
+            confirmText: i18n.t('compressPlots'),
+        });
+        if (!ok) {
+            this._syncScrollablePlotAreaUI();
+            return false;
+        }
+    }
+
+    this.scrollablePlotArea = next;
+    this.layoutManager.setScrollablePlotArea(next);
+    this._syncScrollablePlotAreaUI();
+    setTimeout(() => this.plotManager.resizeAll(), 80);
+    return true;
+};
+
+proto._syncScrollablePlotAreaUI = function() {
+    const toggle = document.getElementById('scrollable-plot-area');
+    if (toggle) toggle.checked = !!this.scrollablePlotArea;
 };
 
 proto._syncLegendCornerPicker = function() {

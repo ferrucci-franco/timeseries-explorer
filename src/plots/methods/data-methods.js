@@ -290,6 +290,8 @@ proto._buildTimeTrace = function(t, visibleRange = null) {
 
 proto._buildTimeLayout = function(plot) {
     const { bg, gridColor, fontColor, legendBg } = this._colors();
+    const margin = this._marginConfig();
+    margin.b += 6;
     const firstTrace = plot.traces[0];
     const timeVar  = firstTrace ? this._getTimeVar(firstTrace.fileId) : this._getTimeVar();
     const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
@@ -311,7 +313,7 @@ proto._buildTimeLayout = function(plot) {
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
                  title: (yTitle && !multiTrace) ? { text: yTitle, font: { size: 10 } } : { text: '' } },
         legend: this._legendConfig(legendBg, gridColor),
-        margin:    this._marginConfig(),
+        margin,
         autosize:  true,
         hovermode: this.hoverProximity ? 'closest' : 'x',
     };

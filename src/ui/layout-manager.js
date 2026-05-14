@@ -15,6 +15,10 @@ export default class LayoutManager {
         this.container = document.getElementById(containerId);
         this.root = this._makePanel();
         this._resizing = null;   // active resize state
+        this._scrollResizing = null;
+        this._scrollResizeRAF = null;
+        this.scrollablePlotArea = false;
+        this._pendingRevealPanelId = null;
 
         // Optional hooks set by PlotManager
         this.onPanelMount   = null;  // (panelId, panelEl) => void
@@ -28,9 +32,47 @@ export default class LayoutManager {
 
     /** Re-render the whole layout tree into the container. */
     render() {
+        const restoreScrollTop = this.scrollablePlotArea ? this.container.scrollTop : null;
+        const revealPanelId = this._pendingRevealPanelId;
+        this._pendingRevealPanelId = null;
         this.container.innerHTML = '';
         this._renderNode(this.root, this.container);
+        this._applyScrollableLayout();
+        if (restoreScrollTop != null) {
+            this.container.scrollTop = Math.min(restoreScrollTop, this.container.scrollHeight);
+            requestAnimationFrame(() => {
+                this.container.scrollTop = Math.min(restoreScrollTop, this.container.scrollHeight);
+                if (revealPanelId) this._revealPanel(revealPanelId);
+            });
+        } else if (revealPanelId) {
+            requestAnimationFrame(() => this._revealPanel(revealPanelId));
+        }
         this._save();
+    }
+
+    setScrollablePlotArea(enabled) {
+        const wasEnabled = this.scrollablePlotArea;
+        this.scrollablePlotArea = !!enabled;
+        if (this.scrollablePlotArea && !wasEnabled) {
+            this._captureCurrentPanelHeights(this.root);
+        }
+        this._applyScrollableLayout();
+        requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    }
+
+    wouldDisableScrollableCompressTooMuch() {
+        return this.getPanelCount() > 1
+            && this.getCompressedPanelHeightEstimate() < LayoutManager.MIN_COMPRESSED_PANEL_HEIGHT;
+    }
+
+    getPanelCount() {
+        return this._collectPanelIds(this.root).length;
+    }
+
+    getCompressedPanelHeightEstimate() {
+        const rect = this.container.getBoundingClientRect();
+        if (!rect.height) return Infinity;
+        return this._estimateSmallestPanelHeight(this.root, rect.height);
     }
 
     /** Split a panel by id.
@@ -53,6 +95,9 @@ export default class LayoutManager {
         };
 
         this._replaceNode(parent, side, newSplit);
+        if (this.scrollablePlotArea && direction === 'h' && !before) {
+            this._pendingRevealPanelId = newPanel.id;
+        }
         this.render();
     }
 
@@ -218,6 +263,171 @@ export default class LayoutManager {
         container.appendChild(el);
     }
 
+    _applyScrollableLayout() {
+        if (!this.container) return;
+        this.container.classList.toggle('plots-area-scrollable', this.scrollablePlotArea);
+        const rootEl = this.container.firstElementChild;
+        if (!rootEl) return;
+
+        if (!this.scrollablePlotArea) {
+            rootEl.style.height = '';
+            rootEl.style.minHeight = '';
+            this.container.scrollTop = 0;
+            rootEl.querySelector(':scope > .layout-scroll-resize-handle')?.remove();
+            this._applyFitLayoutNode(this.root);
+            return;
+        }
+
+        this._ensureScrollablePanelHeights(this.root);
+        const targetHeight = this._scrollableNodeHeight(this.root);
+        rootEl.style.height = `${targetHeight}px`;
+        rootEl.style.minHeight = `${targetHeight}px`;
+        this._applyScrollableNodeLayout(this.root);
+        this._ensureScrollResizeHandle(rootEl);
+    }
+
+    _minimumScrollableHeight(node) {
+        return this._scrollableNodeHeight(node);
+    }
+
+    _ensureScrollablePanelHeights(node) {
+        if (node.type === 'panel') {
+            if (!Number.isFinite(node.scrollHeight) || node.scrollHeight < LayoutManager.MIN_SCROLL_PANEL_HEIGHT) {
+                const currentHeight = this._currentPanelSlotHeight(node.id);
+                node.scrollHeight = Math.max(LayoutManager.MIN_SCROLL_PANEL_HEIGHT, currentHeight);
+            }
+            return;
+        }
+        this._ensureScrollablePanelHeights(node.children[0]);
+        this._ensureScrollablePanelHeights(node.children[1]);
+    }
+
+    _captureCurrentPanelHeights(node) {
+        if (node.type === 'panel') {
+            const currentHeight = this._currentPanelSlotHeight(node.id);
+            if (currentHeight > 0) {
+                node.scrollHeight = Math.max(LayoutManager.MIN_SCROLL_PANEL_HEIGHT, currentHeight);
+            }
+            return;
+        }
+        this._captureCurrentPanelHeights(node.children[0]);
+        this._captureCurrentPanelHeights(node.children[1]);
+    }
+
+    _currentPanelSlotHeight(panelId) {
+        const panelEl = this.container.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        if (!panelEl) return 0;
+        const slotEl = panelEl.parentElement?.classList.contains('layout-split-child')
+            ? panelEl.parentElement
+            : panelEl;
+        return slotEl.getBoundingClientRect().height || 0;
+    }
+
+    _scrollableNodeHeight(node) {
+        if (node.type === 'panel') return Math.max(LayoutManager.MIN_SCROLL_PANEL_HEIGHT, node.scrollHeight || 0);
+        if (node.direction === 'h') {
+            return this._scrollableNodeHeight(node.children[0])
+                + this._scrollableNodeHeight(node.children[1])
+                + LayoutManager.SPLIT_HANDLE_THICKNESS;
+        }
+        return Math.max(
+            this._scrollableNodeHeight(node.children[0]),
+            this._scrollableNodeHeight(node.children[1]),
+        );
+    }
+
+    _applyScrollableNodeLayout(node) {
+        if (node.type === 'panel') return;
+        const splitEl = this.container.querySelector(`.layout-split[data-id="${node.id}"]`);
+        const children = splitEl?.querySelectorAll(':scope > .layout-split-child');
+        if (children?.length === 2) {
+            if (node.direction === 'h') {
+                children[0].style.flex = `0 0 ${this._scrollableNodeHeight(node.children[0])}px`;
+                children[1].style.flex = `0 0 ${this._scrollableNodeHeight(node.children[1])}px`;
+            } else {
+                children[0].style.flex = String(node.ratio);
+                children[1].style.flex = String(1 - node.ratio);
+            }
+        }
+        this._applyScrollableNodeLayout(node.children[0]);
+        this._applyScrollableNodeLayout(node.children[1]);
+    }
+
+    _applyFitLayoutNode(node) {
+        if (node.type === 'panel') return;
+        const splitEl = this.container.querySelector(`.layout-split[data-id="${node.id}"]`);
+        const children = splitEl?.querySelectorAll(':scope > .layout-split-child');
+        if (children?.length === 2) {
+            children[0].style.flex = String(node.ratio);
+            children[1].style.flex = String(1 - node.ratio);
+        }
+        this._applyFitLayoutNode(node.children[0]);
+        this._applyFitLayoutNode(node.children[1]);
+    }
+
+    _setNodeHeightFromBottom(node, targetHeight) {
+        const currentHeight = this._scrollableNodeHeight(node);
+        this._adjustNodeBottomHeight(node, targetHeight - currentHeight);
+    }
+
+    _adjustNodeBottomHeight(node, delta) {
+        if (!delta) return;
+        if (node.type === 'panel') {
+            node.scrollHeight = Math.max(
+                LayoutManager.MIN_SCROLL_PANEL_HEIGHT,
+                (node.scrollHeight || LayoutManager.MIN_SCROLL_PANEL_HEIGHT) + delta,
+            );
+            return;
+        }
+
+        if (node.direction === 'h') {
+            this._adjustNodeBottomHeight(node.children[1], delta);
+            return;
+        }
+
+        const targetHeight = Math.max(LayoutManager.MIN_SCROLL_PANEL_HEIGHT, this._scrollableNodeHeight(node) + delta);
+        this._setNodeHeightFromBottom(node.children[0], targetHeight);
+        this._setNodeHeightFromBottom(node.children[1], targetHeight);
+    }
+
+    _estimateSmallestPanelHeight(node, availableHeight) {
+        if (node.type === 'panel') return availableHeight;
+        if (node.direction === 'h') {
+            const usable = Math.max(0, availableHeight - LayoutManager.SPLIT_HANDLE_THICKNESS);
+            return Math.min(
+                this._estimateSmallestPanelHeight(node.children[0], usable * node.ratio),
+                this._estimateSmallestPanelHeight(node.children[1], usable * (1 - node.ratio)),
+            );
+        }
+        return Math.min(
+            this._estimateSmallestPanelHeight(node.children[0], availableHeight),
+            this._estimateSmallestPanelHeight(node.children[1], availableHeight),
+        );
+    }
+
+    _ensureScrollResizeHandle(rootEl) {
+        let handle = rootEl.querySelector(':scope > .layout-scroll-resize-handle');
+        if (handle) return;
+        handle = document.createElement('div');
+        handle.className = 'layout-scroll-resize-handle';
+        handle.title = i18n.t('resizeScrollablePlotArea');
+        handle.addEventListener('mousedown', (e) => this._startScrollResize(e, rootEl));
+        rootEl.appendChild(handle);
+    }
+
+    _revealPanel(panelId) {
+        if (!this.scrollablePlotArea) return;
+        const panelEl = this.container.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        if (!panelEl) return;
+        const panelRect = panelEl.getBoundingClientRect();
+        const containerRect = this.container.getBoundingClientRect();
+        if (panelRect.bottom > containerRect.bottom) {
+            this.container.scrollTop += panelRect.bottom - containerRect.bottom + 8;
+        } else if (panelRect.top < containerRect.top) {
+            this.container.scrollTop -= containerRect.top - panelRect.top + 8;
+        }
+    }
+
     _makeToolbarBtn(label, title, onClick) {
         const btn = document.createElement('button');
         btn.className = 'layout-toolbar-btn';
@@ -275,13 +485,57 @@ export default class LayoutManager {
         e.preventDefault();
         const rect = splitEl.getBoundingClientRect();
         this._resizing = { splitNode, splitEl, rect };
+        if (this.scrollablePlotArea && splitNode.direction === 'h') {
+            this._ensureScrollablePanelHeights(this.root);
+            this._resizing.scrollMode = true;
+            this._resizing.startY = e.clientY;
+            this._resizing.targetNode = splitNode.children[0];
+            this._resizing.startHeight = this._scrollableNodeHeight(splitNode.children[0]);
+        }
         document.body.style.cursor = splitNode.direction === 'v' ? 'ew-resize' : 'ns-resize';
         splitEl.classList.add('resizing');
     }
 
+    _startScrollResize(e, rootEl) {
+        if (!this.scrollablePlotArea) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this._scrollResizing = {
+            rootEl,
+            startY: e.clientY,
+            lastY: e.clientY,
+            lastDeltaY: 0,
+            targetNode: this.root,
+            startHeight: this._scrollableNodeHeight(this.root),
+        };
+        rootEl.classList.add('scroll-resizing');
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        this._scrollResizeRAF = requestAnimationFrame(() => this._tickScrollResize());
+    }
+
     _onMouseMove(e) {
+        if (this._scrollResizing) {
+            const { startY, startHeight, targetNode } = this._scrollResizing;
+            this._scrollResizing.lastDeltaY = e.clientY - this._scrollResizing.lastY;
+            this._scrollResizing.lastY = e.clientY;
+            this._setNodeHeightFromBottom(targetNode, startHeight + e.clientY - startY);
+            this._applyScrollableLayout();
+            if (this._scrollResizing.lastDeltaY >= 0) {
+                this.container.scrollTop = this.container.scrollHeight;
+            }
+            return;
+        }
+
         if (!this._resizing) return;
         const { splitNode, splitEl, rect } = this._resizing;
+
+        if (this._resizing.scrollMode) {
+            const { startY, startHeight, targetNode } = this._resizing;
+            this._setNodeHeightFromBottom(targetNode, startHeight + e.clientY - startY);
+            this._applyScrollableLayout();
+            return;
+        }
 
         let ratio;
         if (splitNode.direction === 'v') {
@@ -301,12 +555,52 @@ export default class LayoutManager {
         }
     }
 
+    _tickScrollResize() {
+        if (!this._scrollResizing) {
+            this._scrollResizeRAF = null;
+            return;
+        }
+
+        const rect = this.container.getBoundingClientRect();
+        const edge = 10;
+        const isPushingDown = this._scrollResizing.lastDeltaY >= 0;
+        const isAtBottomEdge = this._scrollResizing.lastY >= rect.bottom - edge;
+        if (isPushingDown && isAtBottomEdge) {
+            const pressure = Math.min(1, Math.max(0, this._scrollResizing.lastY - (rect.bottom - edge)) / edge);
+            const targetNode = this._scrollResizing.targetNode;
+            const targetHeight = this._scrollableNodeHeight(targetNode) + 1 + pressure * 5;
+            this._setNodeHeightFromBottom(targetNode, targetHeight);
+            this._scrollResizing.startHeight = this._scrollableNodeHeight(targetNode);
+            this._scrollResizing.startY = this._scrollResizing.lastY;
+            this._applyScrollableLayout();
+            this.container.scrollTop = this.container.scrollHeight;
+        }
+
+        this._scrollResizeRAF = requestAnimationFrame(() => this._tickScrollResize());
+    }
+
     _onMouseUp() {
+        if (this._scrollResizing) {
+            const { rootEl } = this._scrollResizing;
+            rootEl.classList.remove('scroll-resizing');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            this._scrollResizing = null;
+            if (this._scrollResizeRAF) {
+                cancelAnimationFrame(this._scrollResizeRAF);
+                this._scrollResizeRAF = null;
+            }
+            this._save();
+            requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+            return;
+        }
+
         if (!this._resizing) return;
         const { splitEl } = this._resizing;
         splitEl.classList.remove('resizing');
         document.body.style.cursor = '';
         this._resizing = null;
+        this._applyScrollableLayout();
         this._save();   // persist ratio after drag
     }
 
@@ -367,4 +661,8 @@ export default class LayoutManager {
             }
         } catch (_) {}
     }
+
+    static MIN_SCROLL_PANEL_HEIGHT = 260;
+    static MIN_COMPRESSED_PANEL_HEIGHT = 180;
+    static SPLIT_HANDLE_THICKNESS = 4;
 }

@@ -109,6 +109,75 @@
     min-height: 0;
 }
 
+.plots-area.plots-area-scrollable {
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: auto;
+    scrollbar-color: color-mix(in srgb, var(--text-secondary) 45%, transparent) transparent;
+}
+
+.plots-area.plots-area-scrollable::-webkit-scrollbar {
+    width: 18px;
+}
+
+.plots-area.plots-area-scrollable::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.plots-area.plots-area-scrollable::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+}
+
+.plots-area.plots-area-scrollable:hover::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--primary-color) 58%, var(--text-secondary));
+    border: 3px solid transparent;
+    background-clip: content-box;
+}
+
+.plots-area.plots-area-scrollable > .layout-split,
+.plots-area.plots-area-scrollable > .layout-panel {
+    flex: 0 0 auto;
+    position: relative;
+    width: 100%;
+}
+
+.layout-scroll-resize-handle {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 10px;
+    z-index: 30;
+    cursor: ns-resize;
+    opacity: 0;
+    transition: opacity 0.15s, background-color 0.15s;
+}
+
+.layout-scroll-resize-handle::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 3px;
+    width: 58px;
+    height: 4px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-secondary) 35%, transparent);
+}
+
+.plots-area.plots-area-scrollable:hover .layout-scroll-resize-handle,
+.plots-area.plots-area-scrollable .scroll-resizing > .layout-scroll-resize-handle {
+    opacity: 1;
+}
+
+.layout-scroll-resize-handle:hover::before,
+.scroll-resizing > .layout-scroll-resize-handle::before {
+    background: var(--primary-color);
+}
+
 /* Split node */
 .layout-split {
     display: flex;

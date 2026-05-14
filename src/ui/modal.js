@@ -36,6 +36,12 @@ const Modal = {
             // Message
             const messageDiv = document.createElement('div');
             messageDiv.className = 'modal-message';
+            if (options.title) {
+                const titleDiv = document.createElement('div');
+                titleDiv.className = 'modal-title';
+                titleDiv.textContent = options.title;
+                content.appendChild(titleDiv);
+            }
             messageDiv.textContent = message;
             content.appendChild(messageDiv);
 
@@ -45,11 +51,11 @@ const Modal = {
 
             const cancelBtn = document.createElement('button');
             cancelBtn.className = 'modal-btn modal-btn-cancel';
-            cancelBtn.textContent = i18n.t('cancel');
+            cancelBtn.textContent = options.cancelText || i18n.t('cancel');
 
             const confirmBtn = document.createElement('button');
             confirmBtn.className = 'modal-btn modal-btn-confirm';
-            confirmBtn.textContent = i18n.t('confirm');
+            confirmBtn.textContent = options.confirmText || i18n.t('confirm');
 
             buttons.appendChild(cancelBtn);
             buttons.appendChild(confirmBtn);

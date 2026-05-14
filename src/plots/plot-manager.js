@@ -208,7 +208,7 @@ class PlotManager {
 
     hasAnyTraces() {
         for (const [, plot] of this.plots) {
-            if (plot.traces.length > 0 || plot.phaseTraces.length > 0) return true;
+            if (this._hasContent(plot)) return true;
         }
         return false;
     }

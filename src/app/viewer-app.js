@@ -31,9 +31,11 @@ class OpenModelicaViewer {
         this._exampleLoadToken = null;
         this._exampleLoadingEscHandler = null;
         this.reloadAsNewVersionMode = OpenModelicaViewer.getStoredReloadAsNewVersionMode();
+        this.scrollablePlotArea = false;
 
         this.layoutManager = new LayoutManager('plots-area');
         this.plotManager   = new PlotManager(this.parser);
+        this.layoutManager.setScrollablePlotArea(this.scrollablePlotArea);
 
         this.layoutManager.onPanelMount   = (id, el) => this.plotManager.onPanelMount(id, el);
         this.layoutManager.onPanelUnmount = (id)     => this.plotManager.onPanelUnmount(id);
