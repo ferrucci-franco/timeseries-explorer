@@ -3,7 +3,6 @@ import Modal from '../../ui/modal.js';
 import {
     APP_VERSION,
     EXAMPLES,
-    RELOAD_AS_NEW_VERSION_STORAGE_KEY,
     STANDALONE_MANIFEST_PATH,
 } from '../constants.js';
 
@@ -125,6 +124,15 @@ proto.initEventListeners = function() {
         });
     }
 
+    const mouseWheelZoomToggle = document.getElementById('mouse-wheel-zoom');
+    if (mouseWheelZoomToggle) {
+        mouseWheelZoomToggle.checked = !!this.mouseWheelZoom;
+        mouseWheelZoomToggle.addEventListener('change', (e) => {
+            this.mouseWheelZoom = e.target.checked;
+            this.plotManager.setMouseWheelZoom(this.mouseWheelZoom);
+        });
+    }
+
     document.getElementById('timeseries-downsampling').addEventListener('change', (e) => {
         const raw = e.target.value;
         this.plotManager.setTimeseriesDownsamplingLimit(raw === 'none' ? null : Number(raw));
@@ -154,7 +162,10 @@ proto.initEventListeners = function() {
     });
 
     document.getElementById('auto-zoom').addEventListener('click',   () => this.plotManager.autoZoomAll());
-    document.getElementById('clear-plots').addEventListener('click', () => this.plotManager.clearAll());
+    document.getElementById('clear-plots').addEventListener('click', async () => {
+        const ok = await Modal.confirm(i18n.t('clearPlotsWarning'), { icon: '🗑️' });
+        if (ok) this.plotManager.clearAll();
+    });
 
     document.getElementById('reload-file').addEventListener('click', () => {
         const action = this.reloadAsNewVersionMode ? this.reloadActiveFileAsNewVersion() : this.reloadActiveFile();
@@ -277,8 +288,8 @@ proto._renderOpenFileMenu = function() {
     tempItem.textContent = i18n.t('openOpenModelicaTemp');
     tempItem.addEventListener('click', () => {
         this._closeOpenFileMenu?.();
-        this._copyOpenModelicaTempPathAndOpenPicker().catch(err => {
-            console.error('Open OpenModelica temp failed:', err);
+        this._copyOpenModelicaTempPathToClipboard().catch(err => {
+            console.error('Copy OpenModelica temp path failed:', err);
             alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
         });
     });
@@ -287,9 +298,6 @@ proto._renderOpenFileMenu = function() {
 
 proto._setReloadAsNewVersionMode = function(enabled) {
     this.reloadAsNewVersionMode = !!enabled;
-    try {
-        localStorage.setItem(RELOAD_AS_NEW_VERSION_STORAGE_KEY, this.reloadAsNewVersionMode ? '1' : '0');
-    } catch (_) {}
     this._applyReloadModeUI();
 };
 
@@ -311,38 +319,30 @@ proto._applyReloadModeUI = function() {
     }
 };
 
-proto._copyOpenModelicaTempPathAndOpenPicker = async function() {
+proto._copyOpenModelicaTempPathToClipboard = async function() {
     const candidates = this._getOpenModelicaTempCandidates();
-    if (!candidates.length) {
-        const fallbackPaths = this._getOpenModelicaTempFallbackPaths();
-        const path = this._getLikelyOpenModelicaTempPath(fallbackPaths);
-        const copied = await this._copyTextToClipboard(path);
-        const messageKey = copied ? 'openModelicaTempFallbackPathCopied' : 'openModelicaTempFallbackPathCopyFailed';
+    const usedFallback = candidates.length === 0;
+    const fallbackPaths = this._getOpenModelicaTempFallbackPaths();
+    const path = usedFallback
+        ? this._getLikelyOpenModelicaTempPath(fallbackPaths)
+        : candidates[0];
+    const copied = await this._copyTextToClipboard(path);
 
-        await Modal.alert(
-            i18n.t('openOpenModelicaTemp'),
-            i18n.t(messageKey)
-                .replaceAll('{path}', path)
-                .replaceAll('{windowsPath}', fallbackPaths.windows)
-                .replaceAll('{linuxPath}', fallbackPaths.linux),
-            {
-                icon: '📋',
-                className: 'modal-dialog-temp-path',
-            },
-        );
-        await this._openResultFilesFromUser();
-        return;
+    let messageKey = 'openModelicaTempPathCopyFailed';
+    if (copied) {
+        messageKey = usedFallback
+            ? 'openModelicaTempPathCopiedUsernameUnknown'
+            : 'openModelicaTempPathCopied';
     }
 
-    const path = candidates[0];
-    const copied = await this._copyTextToClipboard(path);
-    const messageKey = copied ? 'openModelicaTempPathCopied' : 'openModelicaTempPathCopyFailed';
-    await Modal.alert(i18n.t('openOpenModelicaTemp'), i18n.t(messageKey).replace('{path}', path), {
+    const titleKey = copied
+        ? 'openModelicaTempPathCopiedTitle'
+        : 'openModelicaTempPathCopyFailedTitle';
+
+    await Modal.alert(i18n.t(titleKey), i18n.t(messageKey).replaceAll('{path}', path), {
         icon: '📋',
         className: 'modal-dialog-temp-path',
     });
-
-    await this._openResultFilesFromUser();
 };
 
 proto._copyTextToClipboard = async function(text) {
@@ -391,8 +391,8 @@ proto._getOpenModelicaTempCandidates = function() {
 
 proto._getOpenModelicaTempFallbackPaths = function() {
     return {
-        windows: 'C:\\Users\\<username>\\AppData\\Local\\Temp\\OpenModelica\\OMEdit',
-        linux: '/tmp/OpenModelica<username>/OMEdit',
+        windows: 'C:\\Users\\USERNAME\\AppData\\Local\\Temp\\OpenModelica\\OMEdit',
+        linux: '/tmp/OpenModelicaUSERNAME/OMEdit',
     };
 };
 

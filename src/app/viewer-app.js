@@ -4,7 +4,6 @@ import i18n from '../i18n/index.js';
 import Modal from '../ui/modal.js';
 import LayoutManager from '../ui/layout-manager.js';
 import PlotManager from '../plots/plot-manager.js';
-import { RELOAD_AS_NEW_VERSION_STORAGE_KEY } from './constants.js';
 import { installFileMethods } from './methods/file-methods.js';
 import { installUiMethods } from './methods/ui-methods.js';
 import { installDerivedMethods } from './methods/derived-methods.js';
@@ -30,8 +29,9 @@ class OpenModelicaViewer {
         this._exampleLoading = false;
         this._exampleLoadToken = null;
         this._exampleLoadingEscHandler = null;
-        this.reloadAsNewVersionMode = OpenModelicaViewer.getStoredReloadAsNewVersionMode();
+        this.reloadAsNewVersionMode = false;
         this.scrollablePlotArea = false;
+        this.mouseWheelZoom = true;
 
         this.layoutManager = new LayoutManager('plots-area');
         this.plotManager   = new PlotManager(this.parser);
@@ -61,14 +61,6 @@ class OpenModelicaViewer {
     static getStartupTheme() {
         const hour = new Date().getHours();
         return hour >= 7 && hour < 18 ? 'light' : 'dark';
-    }
-
-    static getStoredReloadAsNewVersionMode() {
-        try {
-            return localStorage.getItem(RELOAD_AS_NEW_VERSION_STORAGE_KEY) === '1';
-        } catch (_) {
-            return false;
-        }
     }
 
     setLanguage(lang) {

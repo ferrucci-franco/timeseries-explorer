@@ -146,7 +146,7 @@ proto._createStateAnimChart = function(panelId, panelEl) {
 
     // Build initial Plotly chart
     const { traces, layout } = this._buildPlotData(plot);
-    const config = { responsive: true, displayModeBar: false, scrollZoom: true };
+    const config = this._getPlotlyConfig({ displayModeBar: false });
     Plotly.newPlot(div, traces, layout, config).then(() => {
         const restoreAndDecorate = () => {
             if (restoreView) return this._restorePlotView(plot, restoreView);

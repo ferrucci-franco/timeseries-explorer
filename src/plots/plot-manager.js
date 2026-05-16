@@ -35,6 +35,7 @@ class PlotManager {
         this._pendingAxisSync = null;
         this.syncHover      = false;
         this.hoverProximity = true;
+        this.mouseWheelZoom = true;
         this._hovering      = false;
 
         this.onPanelMount   = (id, el) => this._mountPanel(id, el);
@@ -251,6 +252,22 @@ class PlotManager {
     setHoverProximity(v) {
         this.hoverProximity = v;
         this._relayoutAll();
+    }
+    setMouseWheelZoom(v) {
+        const next = !!v;
+        if (this.mouseWheelZoom === next) return;
+        this.mouseWheelZoom = next;
+        for (const [id] of this.plots) this._rebuildPanel(id, { preserveView: true });
+    }
+
+    _getPlotlyConfig(overrides = {}) {
+        return {
+            responsive: true,
+            displayModeBar: true,
+            displaylogo: false,
+            scrollZoom: this.mouseWheelZoom,
+            ...overrides,
+        };
     }
 
     resizeAll() {
@@ -642,7 +659,7 @@ class PlotManager {
         plot.div = div;
 
         const { traces, layout } = this._buildPlotData(plot);
-        const config = { responsive: true, displayModeBar: true, displaylogo: false, scrollZoom: true };
+        const config = this._getPlotlyConfig();
 
         Plotly.newPlot(div, traces, layout, config).then(() => {
             this._refreshActionBtns(panelId);

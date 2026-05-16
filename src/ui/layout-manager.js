@@ -24,7 +24,6 @@ export default class LayoutManager {
         this.onPanelMount   = null;  // (panelId, panelEl) => void
         this.onPanelUnmount = null;  // (panelId) => void
 
-        this._load();
         this._bindGlobalEvents();
     }
 
@@ -47,7 +46,6 @@ export default class LayoutManager {
         } else if (revealPanelId) {
             requestAnimationFrame(() => this._revealPanel(revealPanelId));
         }
-        this._save();
     }
 
     setScrollablePlotArea(enabled) {
@@ -590,7 +588,6 @@ export default class LayoutManager {
                 cancelAnimationFrame(this._scrollResizeRAF);
                 this._scrollResizeRAF = null;
             }
-            this._save();
             requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
             return;
         }
@@ -601,7 +598,6 @@ export default class LayoutManager {
         document.body.style.cursor = '';
         this._resizing = null;
         this._applyScrollableLayout();
-        this._save();   // persist ratio after drag
     }
 
     _bindGlobalEvents() {
@@ -643,23 +639,6 @@ export default class LayoutManager {
 
     _uid() {
         return 'p_' + Math.random().toString(36).slice(2, 9);
-    }
-
-    // ─── Persistence ───────────────────────────────────────────────
-
-    _save() {
-        try {
-            localStorage.setItem('om-layout', JSON.stringify(this.root));
-        } catch (_) {}
-    }
-
-    _load() {
-        try {
-            const saved = localStorage.getItem('om-layout');
-            if (saved) {
-                this.root = JSON.parse(saved);
-            }
-        } catch (_) {}
     }
 
     static MIN_SCROLL_PANEL_HEIGHT = 260;
