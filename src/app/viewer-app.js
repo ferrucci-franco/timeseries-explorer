@@ -8,6 +8,7 @@ import { installFileMethods } from './methods/file-methods.js';
 import { installUiMethods } from './methods/ui-methods.js';
 import { installDerivedMethods } from './methods/derived-methods.js';
 import { installTreeMethods } from './methods/tree-methods.js';
+import { installSessionMethods } from './methods/session-methods.js';
 
 class OpenModelicaViewer {
     constructor() {
@@ -105,5 +106,6 @@ installFileMethods(OpenModelicaViewer);
 installUiMethods(OpenModelicaViewer);
 installDerivedMethods(OpenModelicaViewer);
 installTreeMethods(OpenModelicaViewer);
+installSessionMethods(OpenModelicaViewer);
 
 export default OpenModelicaViewer;

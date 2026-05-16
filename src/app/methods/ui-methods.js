@@ -257,6 +257,7 @@ proto._initOpenFileMenu = function() {
         btn.setAttribute('aria-expanded', 'false');
     };
     const open = () => {
+        this._closePeerMenus('open-file');
         this._renderOpenFileMenu();
         menu.hidden = false;
         btn.setAttribute('aria-expanded', 'true');
@@ -294,6 +295,12 @@ proto._renderOpenFileMenu = function() {
         });
     });
     menu.appendChild(tempItem);
+};
+
+proto._closePeerMenus = function(except = '') {
+    if (except !== 'open-file') this._closeOpenFileMenu?.();
+    if (except !== 'example') this._closeExampleMenu?.();
+    if (except !== 'extra') this._closeExtraMenu?.();
 };
 
 proto._setReloadAsNewVersionMode = function(enabled) {
@@ -450,6 +457,7 @@ proto._initExampleMenu = function() {
         btn.setAttribute('aria-expanded', 'false');
     };
     const open = () => {
+        this._closePeerMenus('example');
         this._renderExampleMenu();
         menu.hidden = false;
         btn.setAttribute('aria-expanded', 'true');
@@ -517,6 +525,7 @@ proto._initExtraMenu = function() {
         btn.setAttribute('aria-expanded', 'false');
     };
     const open = () => {
+        this._closePeerMenus('extra');
         this._renderExtraMenu();
         menu.hidden = false;
         btn.setAttribute('aria-expanded', 'true');
@@ -547,6 +556,7 @@ proto._renderExtraMenu = function() {
         item.className = 'example-menu-item extra-menu-item';
         item.type = 'button';
         item.setAttribute('role', 'menuitem');
+        if (options.titleKey) item.title = i18n.t(options.titleKey);
 
         const iconSpan = document.createElement('span');
         iconSpan.className = 'extra-menu-icon';
@@ -576,6 +586,28 @@ proto._renderExtraMenu = function() {
         Modal.alert(i18n.t('extraFeedback'), i18n.t('extraFeedbackSoonBody'), { icon: '💬' });
     }, { badgeKey: 'exampleComingSoon' });
 
+    const saveViewItem = makeAction('💾', 'extraSaveViewJson', () => {
+        this.saveViewSession().catch(err => {
+            console.error('Save view failed:', err);
+            Modal.alert(i18n.t('sessionLoadFailedTitle'), err?.message || String(err), { icon: '💾' });
+        });
+    }, { titleKey: 'extraSaveViewJsonTooltip' });
+
+    const saveProjectItem = makeAction('📦', 'extraSaveProjectZip', () => {
+        this.saveProjectSession().catch(err => {
+            console.error('Save project failed:', err);
+            Modal.alert(i18n.t('sessionLoadFailedTitle'), err?.message || String(err), { icon: '📦' });
+        });
+    }, { titleKey: 'extraSaveProjectZipTooltip' });
+
+    const loadSessionItem = makeAction('📂', 'extraLoadSessionProject', () => {
+        this.openSessionOrProjectFromUser().catch(err => {
+            if (err?.name === 'AbortError') return;
+            console.error('Load session failed:', err);
+            Modal.alert(i18n.t('sessionLoadFailedTitle'), err?.message || String(err), { icon: '📂' });
+        });
+    }, { titleKey: 'extraLoadSessionProjectTooltip' });
+
     const standaloneItem = makeAction('📦', 'extraStandalone', () => {
         this._downloadStandalonePackage();
     });
@@ -597,7 +629,7 @@ proto._renderExtraMenu = function() {
 
     versionRow.append(versionIcon, versionLabel, versionValue);
 
-    menu.append(feedbackItem, standaloneItem, versionRow);
+    menu.append(saveViewItem, saveProjectItem, loadSessionItem, feedbackItem, standaloneItem, versionRow);
 };
 
 proto._downloadStandalonePackage = async function() {
@@ -830,7 +862,7 @@ proto._loadScriptOnce = function(src) {
 };
 
 proto.showHelp = function() {
-    const sections = ['1','2','5','3','10','4','6','7','8','9'];
+    const sections = ['1','2','5','3','10','4','11','6','7','8','9'];
 
     const backdrop = document.createElement('div');
     backdrop.className = 'help-backdrop';

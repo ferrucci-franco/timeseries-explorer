@@ -403,8 +403,10 @@ body {
 }
 
 .extra-menu-icon {
-    width: 1.25rem;
+    width: 1.5rem;
+    min-width: 1.5rem;
     text-align: center;
+    font-size: 1rem;
     opacity: 0.9;
 }
 

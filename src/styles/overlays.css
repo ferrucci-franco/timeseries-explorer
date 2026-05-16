@@ -71,6 +71,35 @@
     word-break: normal;
 }
 
+.modal-dialog-session-missing {
+    width: fit-content;
+    min-width: min(520px, calc(100vw - 32px));
+    max-width: min(820px, calc(100vw - 32px));
+}
+
+.modal-dialog-session-missing .modal-message {
+    text-align: center;
+}
+
+.session-missing-intro {
+    max-width: 680px;
+    margin: 0 auto 0.75rem;
+}
+
+.session-missing-files {
+    display: inline-block;
+    max-width: 100%;
+    margin: 0;
+    padding-left: 1.25rem;
+    text-align: left;
+}
+
+.session-missing-files li {
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: normal;
+}
+
 .modal-dialog-stats {
     width: min(1120px, 94vw);
     max-width: none;
