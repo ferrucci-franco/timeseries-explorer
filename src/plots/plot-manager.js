@@ -472,7 +472,7 @@ class PlotManager {
                     x: names[i],
                     y: names[i + 1],
                     z: groupSize === 3 ? names[i + 2] : null,
-                    color: this._nextColor(plot.phaseTraces.length),
+                    color: this._nextTraceColor(plot.phaseTraces),
                     fileId: this.activeFileId,
                 });
                 added += 1;
@@ -593,7 +593,7 @@ class PlotManager {
 
     _addTimeseries(panelId, varName, panelEl, plot) {
         if (plot.traces.find(t => t.varName === varName && t.fileId === this.activeFileId)) return; // deduplicate
-        plot.traces.push({ varName, color: this._nextColor(plot.traces.length), fileId: this.activeFileId });
+        plot.traces.push({ varName, color: this._nextTraceColor(plot.traces), fileId: this.activeFileId });
 
         if (!plot.div) {
             this._createChart(panelId, panelEl);
@@ -628,7 +628,7 @@ class PlotManager {
 
         if (ready) {
             // Commit pending → completed trace
-            const color = this._nextColor(plot.phaseTraces.length);
+            const color = this._nextTraceColor(plot.phaseTraces);
             plot.phaseTraces.push({ x: pp.x, y: pp.y, z: pp.z || null, color, fileId: pp.fileId });
             plot.phasePending = { x: null, y: null, z: null, fileId: null };
 
@@ -1112,7 +1112,7 @@ class PlotManager {
                 for (const t of originals) {
                     plot.traces.push({
                         varName: t.varName,
-                        color:   this._nextColor(plot.traces.length),
+                        color:   this._nextTraceColor(plot.traces),
                         fileId:  fid,
                         visible: t.visible ?? true,
                     });
@@ -1130,7 +1130,7 @@ class PlotManager {
                 for (const pt of originals) {
                     plot.phaseTraces.push({
                         x: pt.x, y: pt.y, z: pt.z || null,
-                        color:   this._nextColor(plot.phaseTraces.length),
+                        color:   this._nextTraceColor(plot.phaseTraces),
                         fileId:  fid,
                         visible: pt.visible ?? true,
                     });
@@ -1647,6 +1647,19 @@ class PlotManager {
     static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 4000;
 
     _nextColor(idx) { return PlotManager.COLORS[idx % PlotManager.COLORS.length]; }
+    _nextTraceColor(traceStates) {
+        const used = new Set((traceStates || []).map(t => t?.color).filter(Boolean));
+        const paletteColor = PlotManager.COLORS.find(color => !used.has(color));
+        if (paletteColor) return paletteColor;
+
+        const start = traceStates?.length || 0;
+        for (let i = 0; i < 360; i++) {
+            const hue = Math.round((start + i) * 137.508) % 360;
+            const color = `hsl(${hue}, 70%, 45%)`;
+            if (!used.has(color)) return color;
+        }
+        return this._nextColor(used.size);
+    }
 }
 
 installPlotDataMethods(PlotManager);
