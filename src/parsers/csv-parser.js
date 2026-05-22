@@ -6,17 +6,22 @@
  *   0,1.2,3.4
  *   0.1,1.3,3.5
  *
- * The first non-empty row is the header. The first column is treated as the
- * abscissa/time vector and every remaining column becomes a time-varying
- * variable, matching the object shape produced by MatParser.
+ * The first non-empty row is the header. The parser detects a time vector from
+ * common time headers, including split Date + Time columns. If no explicit time
+ * columns are found, it generates a zero-based index abscissa. Headerless
+ * numeric files are also supported; column names are generated automatically.
  */
 import MatParser from './mat-parser.js';
+import { detectCsvTimeAxis, parseCsvNumber } from './csv-time-detection.js';
 
 export default class CsvParser {
     constructor(structureParser) {
         this.structureParser = structureParser || new MatParser();
         this._utf8Decoder = typeof TextDecoder !== 'undefined'
-            ? new TextDecoder('utf-8', { fatal: false })
+            ? new TextDecoder('utf-8', { fatal: true })
+            : null;
+        this._latin1Decoder = typeof TextDecoder !== 'undefined'
+            ? new TextDecoder('windows-1252')
             : null;
     }
 
@@ -27,33 +32,67 @@ export default class CsvParser {
             .map(row => row.map(cell => cell.trim()))
             .filter(row => row.some(cell => cell !== ''));
 
-        if (rows.length < 2) {
-            throw new Error('CSV must contain a header row and at least one data row.');
+        if (rows.length < 1) {
+            throw new Error('CSV must contain at least one data row.');
         }
 
-        const rawHeaders = rows[0];
+        const table = this._detectTableRows(rows, delimiter);
+        const hasHeader = table.hasHeader;
+        const headerRow = rows[table.headerIndex] || [];
+        const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
         if (rawHeaders.length < 2) {
-            throw new Error('CSV must contain a time column and at least one variable column.');
+            throw new Error('CSV must contain at least two columns.');
         }
 
+        const dataRows = rows.slice(table.dataStartIndex).filter(row => row.length === rawHeaders.length);
+        if (dataRows.length < 1) {
+            throw new Error('CSV must contain at least one data row.');
+        }
         const headers = this._makeUniqueHeaders(rawHeaders);
-        const columns = headers.map(() => []);
+        const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
+        if (!timeSource.ok) throw new Error(timeSource.reason);
+        const variableHeaders = headers
+            .map((header, index) => ({ header, index }))
+            .filter(({ index }) => !timeSource.sourceIndexes.includes(index));
+        const timeValues = [];
+        const variableColumns = variableHeaders.map(() => ({
+            numericValues: [],
+            stringValues: [],
+            nonEmptyCount: 0,
+            finiteCount: 0
+        }));
+        let timeKind = timeSource.kind;
+        let timeOriginMs = null;
 
-        for (let r = 1; r < rows.length; r++) {
-            const row = rows[r];
+        for (let r = 0; r < dataRows.length; r++) {
+            const row = dataRows[r];
             if (!row.some(cell => cell !== '')) continue;
 
-            for (let c = 0; c < headers.length; c++) {
-                const value = this._parseNumber(row[c] ?? '', delimiter);
-                if (c === 0 && !Number.isFinite(value)) {
-                    throw new Error(`Invalid time value at CSV data row ${r}: "${row[c] ?? ''}"`);
-                }
-                columns[c].push(value);
+            const timeValue = timeSource.parse(row, timeValues.length);
+            if (!Number.isFinite(timeValue)) {
+                throw new Error(`Invalid time value at CSV data row ${r + 1}.`);
+            }
+            timeValues.push(timeValue);
+            if (timeKind === 'datetime' && timeOriginMs === null) timeOriginMs = timeValue;
+
+            for (let c = 0; c < variableHeaders.length; c++) {
+                const sourceIndex = variableHeaders[c].index;
+                const rawValue = String(row[sourceIndex] ?? '').trim();
+                const numericValue = parseCsvNumber(rawValue, delimiter);
+                const column = variableColumns[c];
+                column.numericValues.push(numericValue);
+                column.stringValues.push(rawValue);
+                if (rawValue !== '') column.nonEmptyCount++;
+                if (Number.isFinite(numericValue)) column.finiteCount++;
             }
         }
 
-        if (!columns[0].length) {
-            throw new Error('CSV does not contain numeric time values.');
+        if (!timeValues.length) {
+            throw new Error('CSV does not contain time values.');
+        }
+        if (timeKind !== 'index') {
+            this._sortTimeSeriesByTime(timeValues, variableColumns);
+            if (timeKind === 'datetime') timeOriginMs = timeValues[0];
         }
 
         const result = {
@@ -63,35 +102,74 @@ export default class CsvParser {
             tree: {}
         };
 
-        for (let c = 0; c < headers.length; c++) {
-            const header = headers[c];
-            const values = columns[c];
-            const kind = c === 0 ? 'abscissa' : 'variable';
-            const variable = {
-                name: header.name,
+        const timeVariable = {
+            name: timeSource.name,
+            data: timeValues,
+            description: timeSource.description,
+            kind: 'abscissa',
+            dataType: this.structureParser._detectDataType(timeValues, 'abscissa'),
+            isConstant: this.structureParser._isConstantValues(timeValues),
+            interpolation: 'linear',
+            negate: false,
+            source: 'csv'
+        };
+        if (timeKind === 'datetime') {
+            timeVariable.timeKind = 'datetime';
+            timeVariable.timeDisplayMode = 'calendar';
+            timeVariable.timeOriginMs = timeOriginMs;
+            timeVariable.description = timeSource.description || '[datetime]';
+        } else if (timeKind === 'index') {
+            timeVariable.timeKind = 'index';
+            timeVariable.timeStepMode = 'index';
+            timeVariable.description = timeSource.description || '[index]';
+        }
+        result.variables[timeVariable.name] = timeVariable;
+        const usedVariableNames = new Set([timeVariable.name]);
+
+        for (let c = 0; c < variableHeaders.length; c++) {
+            const header = variableHeaders[c].header;
+            const column = variableColumns[c];
+            const isStringColumn = column.nonEmptyCount > 0 && column.finiteCount === 0;
+            const values = isStringColumn ? column.stringValues : column.numericValues;
+            let name = header.name;
+            if (usedVariableNames.has(name)) {
+                const base = name;
+                let suffix = 2;
+                while (usedVariableNames.has(`${base}_${suffix}`)) suffix++;
+                name = `${base}_${suffix}`;
+            }
+            usedVariableNames.add(name);
+            result.variables[name] = {
+                name,
                 data: values,
                 description: header.description,
-                kind,
-                dataType: this.structureParser._detectDataType(values, kind),
+                kind: 'variable',
+                dataType: isStringColumn ? 'string' : this.structureParser._detectDataType(values, 'variable'),
                 isConstant: this.structureParser._isConstantValues(values),
                 interpolation: 'linear',
                 negate: false,
                 source: 'csv'
             };
-            result.variables[variable.name] = variable;
         }
 
-        const timeVar = result.variables[headers[0].name];
+        const timeVar = result.variables[timeVariable.name];
         result.metadata = {
             numVariables: Object.keys(result.variables).length,
             numParams: 0,
-            numTimevarying: Math.max(0, headers.length - 1),
+            numTimevarying: variableHeaders.length,
             numTimesteps: timeVar.data.length,
             timeStart: timeVar.data[0],
             timeEnd: timeVar.data[timeVar.data.length - 1],
             csv: true,
             delimiter,
-            timeName: timeVar.name
+            hasHeader,
+            skippedRows: table.headerIndex,
+            skippedRowsAfterHeader: Math.max(0, table.dataStartIndex - table.headerIndex - (hasHeader ? 1 : 0)),
+            timeName: timeVar.name,
+            timeKind,
+            timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
+            timeOriginMs,
+            timeSourceColumns: timeSource.sourceIndexes.map(index => rawHeaders[index] || `column_${index + 1}`)
         };
 
         result.tree = this.structureParser._buildTree(result.variables);
@@ -100,7 +178,15 @@ export default class CsvParser {
 
     _decodeText(buffer) {
         if (typeof buffer === 'string') return buffer.replace(/^\uFEFF/, '');
-        if (this._utf8Decoder) return this._utf8Decoder.decode(buffer).replace(/^\uFEFF/, '');
+        if (this._utf8Decoder) {
+            try {
+                return this._utf8Decoder.decode(buffer).replace(/^\uFEFF/, '');
+            } catch (_) {
+                if (this._latin1Decoder) {
+                    return this._latin1Decoder.decode(buffer).replace(/^\uFEFF/, '');
+                }
+            }
+        }
 
         let text = '';
         const bytes = new Uint8Array(buffer);
@@ -109,19 +195,22 @@ export default class CsvParser {
     }
 
     _detectDelimiter(text) {
-        const candidates = [',', ';', '\t'];
+        const candidates = [',', ';', '\t', 'whitespace'];
         let best = { delimiter: ',', score: -Infinity };
 
         for (const delimiter of candidates) {
             const rows = this._parseRows(text, delimiter)
                 .filter(row => row.some(cell => cell.trim() !== ''))
-                .slice(0, 8);
+                .slice(0, 500);
             if (!rows.length) continue;
 
-            const headerWidth = rows[0].length;
-            const widths = rows.map(row => row.length);
-            const consistentRows = widths.filter(w => w === headerWidth).length;
-            const score = headerWidth * 100 + consistentRows * 10 - Math.max(...widths.map(w => Math.abs(w - headerWidth)));
+            const table = this._detectTableRows(rows, delimiter);
+            const headerWidth = rows[table.headerIndex]?.length || 0;
+            const dataRows = rows
+                .slice(table.dataStartIndex, Math.min(rows.length, table.dataStartIndex + 50))
+                .filter(row => row.length === headerWidth && this._isDataLikeRow(row, delimiter));
+            if (rows.length > table.dataStartIndex && dataRows.length === 0) continue;
+            const score = table.score + headerWidth * 25 + dataRows.length * 12 - table.headerIndex * 0.25;
             if (headerWidth > 1 && score > best.score) best = { delimiter, score };
         }
 
@@ -129,6 +218,14 @@ export default class CsvParser {
     }
 
     _parseRows(text, delimiter) {
+        if (delimiter === 'whitespace') {
+            return String(text)
+                .split(/\r?\n|\r/)
+                .map(line => line.trim())
+                .filter(line => line !== '')
+                .map(line => line.split(/\s+/));
+        }
+
         const rows = [];
         let row = [];
         let cell = '';
@@ -168,6 +265,148 @@ export default class CsvParser {
         row.push(cell);
         rows.push(row);
         return rows;
+    }
+
+    _sortTimeSeriesByTime(timeValues, variableColumns) {
+        if (!Array.isArray(timeValues) || timeValues.length < 2) return;
+        let sorted = true;
+        for (let i = 1; i < timeValues.length; i++) {
+            if (timeValues[i] < timeValues[i - 1]) {
+                sorted = false;
+                break;
+            }
+        }
+        if (sorted) return;
+
+        const order = timeValues
+            .map((time, index) => ({ time, index }))
+            .sort((a, b) => (a.time - b.time) || (a.index - b.index))
+            .map(entry => entry.index);
+        const sortedTimes = order.map(index => timeValues[index]);
+        timeValues.splice(0, timeValues.length, ...sortedTimes);
+        for (const column of variableColumns) {
+            column.numericValues = order.map(index => column.numericValues[index]);
+            column.stringValues = order.map(index => column.stringValues[index]);
+        }
+    }
+
+    _looksLikeHeaderRow(row, followingRows = [], delimiter = ',') {
+        const cells = (row || []).map(cell => String(cell ?? '').trim()).filter(Boolean);
+        if (!cells.length) return true;
+        if (this._isDataLikeRow(row, delimiter)
+            && followingRows.some(following => this._isDataLikeRow(following, delimiter))) {
+            return false;
+        }
+        const numericCount = cells.filter(cell => Number.isFinite(parseCsvNumber(cell, delimiter))).length;
+        if (numericCount === cells.length) return false;
+
+        const sampledRows = followingRows.slice(0, 5);
+        const followingNumeric = sampledRows.filter(r => {
+            const values = (r || []).map(cell => String(cell ?? '').trim()).filter(Boolean);
+            return values.length && values.filter(cell => Number.isFinite(parseCsvNumber(cell, delimiter))).length === values.length;
+        }).length;
+
+        return !(numericCount >= Math.max(2, Math.ceil(cells.length * 0.8)) && followingNumeric >= Math.max(1, sampledRows.length - 1));
+    }
+
+    _detectTableRows(rows, delimiter = ',') {
+        const limit = Math.min(rows.length, 250);
+        let best = null;
+
+        for (let headerIndex = 0; headerIndex < limit; headerIndex++) {
+            const header = rows[headerIndex] || [];
+            const width = header.length;
+            if (width < 2) continue;
+
+            let dataStartIndex = -1;
+            let dataCount = 0;
+            let skippedAfterHeader = 0;
+            const lookaheadEnd = Math.min(rows.length, headerIndex + 30);
+
+            if (this._isDataLikeRow(header, delimiter)) {
+                dataStartIndex = headerIndex;
+                dataCount = 1;
+            }
+
+            for (let i = headerIndex + 1; i < lookaheadEnd; i++) {
+                const row = rows[i] || [];
+                if (row.length !== width) {
+                    if (dataCount === 0) skippedAfterHeader++;
+                    continue;
+                }
+                if (this._isDataLikeRow(row, delimiter)) {
+                    if (dataStartIndex < 0) dataStartIndex = i;
+                    dataCount++;
+                    continue;
+                }
+                if (dataCount === 0) {
+                    skippedAfterHeader++;
+                    continue;
+                }
+                break;
+            }
+
+            if (dataStartIndex < 0 || dataCount < 2) continue;
+            const following = rows.slice(dataStartIndex, Math.min(rows.length, dataStartIndex + 6));
+            let effectiveHeaderIndex = headerIndex;
+            let effectiveHeader = header;
+            let effectiveSkippedAfterHeader = skippedAfterHeader;
+            if (dataStartIndex !== headerIndex
+                && headerIndex > 0
+                && rows[headerIndex - 1]?.length === width
+                && this._isUnitLikeRow(header, delimiter)
+                && this._looksLikeHeaderRow(rows[headerIndex - 1], following, delimiter)) {
+                effectiveHeaderIndex = headerIndex - 1;
+                effectiveHeader = rows[effectiveHeaderIndex];
+                effectiveSkippedAfterHeader += 1;
+            }
+            const hasHeader = dataStartIndex === effectiveHeaderIndex
+                ? false
+                : this._looksLikeHeaderRow(effectiveHeader, following, delimiter);
+            const score =
+                dataCount * 20 +
+                width * 4 +
+                (hasHeader ? 25 : 0) -
+                effectiveHeaderIndex * 0.5 -
+                effectiveSkippedAfterHeader * 2;
+
+            if (!best || score > best.score) {
+                best = { headerIndex: effectiveHeaderIndex, dataStartIndex, hasHeader, score };
+            }
+        }
+
+        if (best) return best;
+        const hasHeader = this._looksLikeHeaderRow(rows[0], rows.slice(1), delimiter);
+        return { headerIndex: 0, dataStartIndex: hasHeader ? 1 : 0, hasHeader, score: 0 };
+    }
+
+    _isDataLikeRow(row, delimiter = ',') {
+        const cells = row || [];
+        const nonEmpty = cells.filter(cell => String(cell ?? '').trim() !== '');
+        if (nonEmpty.length < 2) return false;
+        const numericCount = nonEmpty.filter(cell => Number.isFinite(parseCsvNumber(cell, delimiter))).length;
+        const dateTimeCount = nonEmpty.filter(cell => this._looksLikeDateTimeCell(cell)).length;
+        const dataCount = numericCount + dateTimeCount;
+        return dataCount >= Math.max(2, Math.ceil(nonEmpty.length * 0.5));
+    }
+
+    _looksLikeDateTimeCell(value) {
+        const text = String(value ?? '').trim();
+        return /^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(text)
+            || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(text)
+            || /^\d{1,2}[-/]\d{1,2}[ T]+\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text);
+    }
+
+    _isUnitLikeRow(row, delimiter = ',') {
+        const cells = (row || []).map(cell => String(cell ?? '').trim()).filter(Boolean);
+        if (cells.length < 2) return false;
+        const numericCount = cells.filter(cell => Number.isFinite(parseCsvNumber(cell, delimiter))).length;
+        if (numericCount > 0) return false;
+        const unitish = cells.filter(cell =>
+            /^(?:no\.?|time|ms|s|sec|min|h|hr|degc|degf|k|v|a|w|kw|pa|bar|m\/s|%|ao\d+|a\d+)$/i.test(cell)
+            || /^[a-zA-Z%°µ\/\-\d]+$/.test(cell)
+        ).length;
+        return unitish / cells.length >= 0.7;
     }
 
     _makeUniqueHeaders(rawHeaders) {
@@ -213,23 +452,4 @@ export default class CsvParser {
         return cleaned || fallback;
     }
 
-    _parseNumber(rawValue, delimiter) {
-        const raw = String(rawValue || '').trim();
-        if (!raw) return NaN;
-
-        const normalized = raw
-            .replace(/\s+/g, '')
-            .replace(/[dD]([+-]?\d+)$/, 'e$1');
-
-        if (/^[+-]?inf(?:inity)?$/i.test(normalized)) {
-            return normalized.startsWith('-') ? -Infinity : Infinity;
-        }
-        if (/^nan$/i.test(normalized)) return NaN;
-
-        const decimalNormalized = delimiter !== ',' && normalized.includes(',') && !normalized.includes('.')
-            ? normalized.replace(',', '.')
-            : normalized;
-
-        return Number(decimalNormalized);
-    }
 }

@@ -4,6 +4,11 @@ export function installTreeMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.renderVariablesTree = function(tree) {
     this._currentTree = tree;
+    if (!tree) {
+        const container = document.getElementById('variables-tree');
+        if (container) container.innerHTML = '';
+        return;
+    }
     this._renderFilteredTree();
 };
 
@@ -40,7 +45,10 @@ proto._syncVariableSelectionUI = function() {
 proto._selectedVariableNamesForDrag = function(varName) {
     if (!this.selectedVariables.has(varName)) return [varName];
     const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
-    return [...this.selectedVariables].filter(name => data?.variables?.[name]);
+    return [...this.selectedVariables].filter(name => {
+        const variable = data?.variables?.[name];
+        return variable && variable.dataType !== 'string';
+    });
 };
 
 proto._renderDerivedTreeSection = function(parentElement, filter, autoExpand) {
@@ -187,7 +195,8 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         const itemDiv = document.createElement('div');
         itemDiv.className = 'tree-item' + (variable.derived ? ' tree-item-derived' : '');
         itemDiv.classList.toggle('selected', this.selectedVariables.has(variable.name));
-        itemDiv.setAttribute('draggable', 'true');
+        const canPlot = variable.dataType !== 'string';
+        itemDiv.setAttribute('draggable', canPlot ? 'true' : 'false');
         itemDiv.setAttribute('data-var-name', variable.name);
 
         const spacer = document.createElement('span');
@@ -239,7 +248,15 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             }
         });
         itemDiv.addEventListener('dragstart', (e) => {
+            if (!canPlot) {
+                e.preventDefault();
+                return;
+            }
             const varNames = this._selectedVariableNamesForDrag(variable.name);
+            if (!varNames.length) {
+                e.preventDefault();
+                return;
+            }
             e.dataTransfer.setData('application/x-openmodelica-variables', JSON.stringify({
                 type: 'variables',
                 names: varNames,

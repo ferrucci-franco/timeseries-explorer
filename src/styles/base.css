@@ -374,6 +374,105 @@ body {
     white-space: nowrap;
 }
 
+.example-menu-item-row {
+    justify-content: space-between;
+    gap: 0.65rem;
+}
+
+.example-menu-item-row.disabled {
+    opacity: 0.6;
+}
+
+.example-load-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+    flex: 1;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+    text-align: left;
+}
+
+.example-load-btn::before {
+    content: '▶';
+    font-size: 0.78rem;
+    opacity: 0.75;
+}
+
+.example-load-btn:disabled {
+    cursor: not-allowed;
+}
+
+.example-menu-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-shrink: 0;
+}
+
+.example-action-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+    border-radius: 0.45rem;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+    transition: background-color 0.18s, border-color 0.18s, color 0.18s, box-shadow 0.18s;
+}
+
+.example-action-btn:hover {
+    background: var(--hover-bg);
+}
+
+.example-action-btn svg {
+    width: 1rem;
+    height: 1rem;
+    display: block;
+    fill: currentColor;
+}
+
+.example-action-btn.action-feedback {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 24%, transparent);
+}
+
+.transient-status {
+    position: fixed;
+    top: 74px;
+    right: 18px;
+    z-index: 2400;
+    padding: 0.55rem 0.8rem;
+    border-radius: 0.6rem;
+    background: color-mix(in srgb, var(--bg-primary) 90%, var(--primary-color));
+    color: var(--text-primary);
+    border: 1px solid color-mix(in srgb, var(--primary-color) 35%, var(--border-color));
+    box-shadow: 0 10px 24px rgba(0,0,0,0.16);
+    font-size: 0.84rem;
+    font-weight: 600;
+    opacity: 0;
+    transform: translateY(-6px);
+    pointer-events: none;
+    transition: opacity 0.18s, transform 0.18s;
+}
+
+.transient-status.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
 .example-menu-item:hover:not(:disabled) {
     background-color: var(--hover-bg);
 }
@@ -408,6 +507,15 @@ body {
     text-align: center;
     font-size: 1rem;
     opacity: 0.9;
+}
+
+.extra-menu-icon img {
+    width: 1.2rem;
+    height: 1.2rem;
+    display: block;
+    margin: 0 auto;
+    object-fit: contain;
+    border-radius: 0.2rem;
 }
 
 .extra-menu-static {

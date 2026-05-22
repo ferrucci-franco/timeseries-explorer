@@ -4,6 +4,49 @@ import Plotly from '../../vendor/plotly.js';
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
     const PlotManager = TargetClass;
+const escapeHtml = (text) => String(text)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+
+const formatPlaceholderHint = (key) => {
+    switch (i18n.currentLang) {
+        case 'fr':
+            if (key === 'multiSelectHint') {
+                return '<strong>Ctrl/Cmd-clic</strong> pour <strong>sélectionner plusieurs variables</strong> avant de les faire glisser.';
+            }
+            if (key === 'legendHint') {
+                return 'Cliquez sur les <strong>éléments de légende</strong> pour <strong>afficher</strong> ou <strong>masquer</strong> les traces. <strong>Maj+clic</strong> pour <strong>supprimer la trace</strong>.';
+            }
+            break;
+        case 'es':
+            if (key === 'multiSelectHint') {
+                return '<strong>Ctrl/Cmd-clic</strong> para <strong>seleccionar varias variables</strong> antes de arrastrarlas.';
+            }
+            if (key === 'legendHint') {
+                return 'Haz clic en la <strong>leyenda</strong> para <strong>mostrar</strong> u <strong>ocultar</strong> trazas. <strong>Mayús+clic</strong> para <strong>eliminar la traza</strong>.';
+            }
+            break;
+        case 'it':
+            if (key === 'multiSelectHint') {
+                return '<strong>Ctrl/Cmd-clic</strong> per <strong>selezionare più variabili</strong> prima di trascinarle.';
+            }
+            if (key === 'legendHint') {
+                return 'Clicca sulla <strong>legenda</strong> per <strong>mostrare</strong> o <strong>nascondere</strong> le tracce. <strong>Maiusc+clic</strong> per <strong>rimuovere la traccia</strong>.';
+            }
+            break;
+        default:
+            if (key === 'multiSelectHint') {
+                return '<strong>Ctrl/Cmd-click</strong> to <strong>multi-select variables</strong> before dragging.';
+            }
+            if (key === 'legendHint') {
+                return 'Click <strong>legend items</strong> to <strong>show</strong> or <strong>hide</strong> traces. <strong>Shift+Click</strong> to <strong>remove trace</strong>.';
+            }
+            break;
+    }
+    return escapeHtml(i18n.t(key));
+};
+
 proto._onRelayout = function(sourcePanelId, eventData) {
     const update = this._xAxisUpdateFromRelayout(eventData);
     if (!update) return;
@@ -58,7 +101,30 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     plot.traces.forEach((t, idx) => {
         const built = this._buildTimeTrace(t, range);
         if (!built) return;
-        Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
+        const update = { x: [built.x], y: [built.y] };
+        if (built.customdata) update.customdata = [built.customdata];
+        Plotly.restyle(plot.div, update, [idx]);
+    });
+    this._refreshElapsedDateTimeAxisTicks(plot, range);
+};
+
+proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
+    if (!plot?.div || plot.mode !== 'timeseries') return;
+    const fid = this._primaryTimeFileId(plot);
+    const timeVar = this._getTimeVar(fid);
+    if (this._timeDisplayModeForVar(fid, timeVar) !== 'elapsedDateTime' && !this._isGeneratedDurationTime(fid, timeVar)) return;
+    const values = Array.isArray(range) && range.length >= 2
+        ? range.map(value => {
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? numeric : NaN;
+        })
+        : plot.traces.map(t => this._getTransformedTimeData(t.fileId));
+    const config = this._elapsedDateTimeAxisConfig(values);
+    if (!config.tickvals || !config.ticktext) return;
+    Plotly.relayout(plot.div, {
+        'xaxis.tickmode': config.tickmode,
+        'xaxis.tickvals': config.tickvals,
+        'xaxis.ticktext': config.ticktext,
     });
 };
 
@@ -80,8 +146,13 @@ proto._refreshAllPhaseVisuals = function() {
 
 proto._syncXAxisUpdate = function(sourcePanelId, update) {
     const targets = [];
+    const sourcePlot = this.plots.get(sourcePanelId);
+    const sourceFid = this._primaryTimeFileId(sourcePlot);
     for (const [id, plot] of this.plots) {
-        if (id !== sourcePanelId && plot.div && plot.mode === 'timeseries') targets.push({ id, plot, div: plot.div });
+        if (id === sourcePanelId || !plot.div || plot.mode !== 'timeseries') continue;
+        const targetFid = this._primaryTimeFileId(plot);
+        if (this._timeDisplayMode(sourceFid) !== this._timeDisplayMode(targetFid)) continue;
+        targets.push({ id, plot, div: plot.div });
     }
     if (targets.length === 0) return;
 
@@ -107,28 +178,40 @@ proto._onHover = function(sourcePanelId, eventData) {
     if (!this.syncHover || this._hovering) return;
     const pt = eventData.points?.[0];
     if (pt == null) return;
-    const xVal = pt.x;   // hovered time value
+    const traceName = pt.data?.name || pt.fullData?.name;
+    if (traceName === '__hover__' || traceName === '__origin__') return;
+    if (this._hoverClearTimer) {
+        clearTimeout(this._hoverClearTimer);
+        this._hoverClearTimer = null;
+    }
+    const sourceXVal = this._coerceAxisValue(pt.x);   // hovered time value
+    if (!Number.isFinite(sourceXVal)) return;
 
     this._hovering = true;
     try {
-        // Time unit from source panel's first trace
         const srcPlot    = this.plots.get(sourcePanelId);
         const srcFid     = srcPlot?.traces?.[0]?.fileId ?? this.activeFileId;
-        const srcTimeVar = this._getTimeVar(srcFid);
-        const timeUnit   = srcTimeVar ? this._extractUnit(srcTimeVar.description) : 's';
+        const formatHoverTime = (fileId, x) => this._formatTimeValue(fileId || srcFid, x);
 
         for (const [, plot] of this.plots) {
             if (!plot.div || !plot.div.isConnected) continue;
             const panelEl = plot.div.closest('.layout-panel');
+            const targetFid = this._primaryTimeFileId(plot);
+            const xVal = this._mapTimeValueBetweenFiles(srcFid, targetFid, sourceXVal);
+            if (!Number.isFinite(xVal)) continue;
+            const plotXVal = this._plotlyTimeValue(targetFid, xVal, this._getTimeVar(targetFid));
+            const targetTimeUnit = this._timeUnitLabel(targetFid);
+            const targetTimeSuffix = (targetTimeUnit === 'datetime' || targetTimeUnit === 'duration') ? '' : ' ' + this._escapeHTML(targetTimeUnit);
 
             if (plot.mode === 'timeseries') {
-                Plotly.relayout(plot.div, {
+                const layoutUpdate = {
                     shapes: this._panelGuideShapes(plot, [{
                         type: 'line', xref: 'x', yref: 'paper',
-                        x0: xVal, x1: xVal, y0: 0, y1: 1,
+                        x0: plotXVal, x1: plotXVal, y0: 0, y1: 1,
                         line: { color: 'rgba(120,120,120,0.6)', width: 1, dash: 'dot' },
                     }]),
-                });
+                    ...this._xAxisRangeLock(plot),
+                };
                 if (plot.markerTraceIdx != null) {
                     const xs = [], ys = [];
                     plot.traces.forEach(t => {
@@ -136,20 +219,25 @@ proto._onHover = function(sourcePanelId, eventData) {
                         const d       = this.files.get(t.fileId)?.data;
                         const v       = d?.variables[t.varName];
                         const tdata   = this._getTransformedTimeData(t.fileId);
-                        const tidx    = this._findTimeIdx(tdata, xVal);
+                        const traceXVal = this._mapTimeValueBetweenFiles(srcFid, t.fileId, sourceXVal);
+                        const tidx    = this._findTimeIdx(tdata, traceXVal);
                         const ydata   = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
-                        if (!hidden && v && v.kind !== 'parameter' && ydata.length) { xs.push(xVal); ys.push(ydata[tidx]); }
+                        const matchedX = tdata[tidx];
+                        if (!hidden && v && v.kind !== 'parameter' && ydata.length) { xs.push(this._plotlyTimeValue(t.fileId, matchedX, this._getTimeVar(t.fileId))); ys.push(ydata[tidx]); }
                         else { xs.push(null); ys.push(null); }
                     });
-                    Plotly.restyle(plot.div, { x: [xs], y: [ys], visible: true }, [plot.markerTraceIdx]);
+                    Plotly.update(plot.div, { x: [xs], y: [ys], visible: true }, layoutUpdate, [plot.markerTraceIdx]);
+                } else {
+                    Plotly.relayout(plot.div, layoutUpdate);
                 }
-                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                const lines = [`<b>t = ${this._escapeHTML(formatHoverTime(targetFid, xVal))}${targetTimeSuffix}</b>`];
                 plot.traces.forEach(t => {
                     if (t.visible === 'legendonly' || t.visible === false) return;
                     const d    = this.files.get(t.fileId)?.data;
                     const v    = d?.variables[t.varName];
                     const tdata = this._getTransformedTimeData(t.fileId);
-                    const tidx = this._findTimeIdx(tdata, xVal);
+                    const traceXVal = this._mapTimeValueBetweenFiles(srcFid, t.fileId, sourceXVal);
+                    const tidx = this._findTimeIdx(tdata, traceXVal);
                     const ydata = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
                     if (v && v.kind !== 'parameter' && ydata.length) {
                         const unit  = this._extractUnit(v.description);
@@ -176,7 +264,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                         Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], visible: true }, [midx]);
                     });
                 }
-                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                const lines = [`<b>t = ${this._escapeHTML(formatHoverTime(targetFid, xVal))}${targetTimeSuffix}</b>`];
                 plot.phaseTraces.forEach(pt2 => {
                     if (pt2.visible === 'legendonly' || pt2.visible === false) return;
                     const d = this.files.get(pt2.fileId)?.data;
@@ -208,10 +296,10 @@ proto._onHover = function(sourcePanelId, eventData) {
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
                         const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
                         const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
-                        Plotly.restyle(plot.div, { x: [[xVal]], y: [[xdata[tidx]]], z: [[ydata[tidx]]], visible: true }, [midx]);
+                        Plotly.restyle(plot.div, { x: [[this._plotlyTimeValue(pt2.fileId, xVal, this._getTimeVar(pt2.fileId))]], y: [[xdata[tidx]]], z: [[ydata[tidx]]], visible: true }, [midx]);
                     });
                 }
-                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                const lines = [`<b>t = ${this._escapeHTML(formatHoverTime(targetFid, xVal))}${targetTimeSuffix}</b>`];
                 plot.phaseTraces.forEach(pt2 => {
                     if (pt2.visible === 'legendonly' || pt2.visible === false) return;
                     const d = this.files.get(pt2.fileId)?.data;
@@ -247,7 +335,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                         Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], z: [[zdata[tidx]]], visible: true }, [midx]);
                     });
                 }
-                const lines = [`<b>t = ${this._formatHTMLNumber(xVal)} ${this._escapeHTML(timeUnit)}</b>`];
+                const lines = [`<b>t = ${this._escapeHTML(formatHoverTime(targetFid, xVal))}${targetTimeSuffix}</b>`];
                 plot.phaseTraces.forEach(pt2 => {
                     if (pt2.visible === 'legendonly' || pt2.visible === false) return;
                     const d = this.files.get(pt2.fileId)?.data;
@@ -285,7 +373,11 @@ proto._onHover = function(sourcePanelId, eventData) {
 
 proto._onUnhover = function(sourcePanelId) {
     if (!this.syncHover) return;
-    this._clearHoverMarkers();
+    if (this._hoverClearTimer) clearTimeout(this._hoverClearTimer);
+    this._hoverClearTimer = setTimeout(() => {
+        this._hoverClearTimer = null;
+        this._clearHoverMarkers();
+    }, 80);
 };
 
 proto._clearHoverMarkers = function() {
@@ -294,7 +386,7 @@ proto._clearHoverMarkers = function() {
         const panelEl = plot.div.closest('.layout-panel');
         this._hideInfoBox(panelEl);
         if (plot.mode === 'timeseries') {
-            Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot) });
+            Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot), ...this._xAxisRangeLock(plot) });
         }
         if (plot.markerTraceIdx != null) {
             const idxList = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx : [plot.markerTraceIdx];
@@ -375,14 +467,39 @@ proto._cursorViewBounds = function(plot, trace) {
     const traceBounds = this._cursorTraceBounds(trace);
     if (!traceBounds) return null;
     const range = plot.div?._fullLayout?.xaxis?.range;
-    const viewStart = Number.isFinite(range?.[0]) ? range[0] : traceBounds.start;
-    const viewEnd = Number.isFinite(range?.[1]) ? range[1] : traceBounds.end;
+    const range0 = this._coerceAxisValue(range?.[0]);
+    const range1 = this._coerceAxisValue(range?.[1]);
+    const viewStart = Number.isFinite(range0) ? range0 : traceBounds.start;
+    const viewEnd = Number.isFinite(range1) ? range1 : traceBounds.end;
     const overlapStart = Math.max(traceBounds.start, Math.min(viewStart, viewEnd));
     const overlapEnd = Math.min(traceBounds.end, Math.max(viewStart, viewEnd));
     if (Number.isFinite(overlapStart) && Number.isFinite(overlapEnd) && overlapStart <= overlapEnd) {
         return { start: overlapStart, end: overlapEnd };
     }
     return traceBounds;
+};
+
+proto._coerceAxisValue = function(value) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+    const text = String(value).trim();
+    const floatingIso = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?)?$/);
+    if (floatingIso) {
+        const [, year, month, day, hour = '0', minute = '0', second = '0', fraction = '0'] = floatingIso;
+        const msPart = Number(String(fraction).padEnd(3, '0').slice(0, 3));
+        return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second), msPart);
+    }
+    const ms = Date.parse(text);
+    return Number.isFinite(ms) ? ms : NaN;
+};
+
+proto._xAxisRangeLock = function(plot) {
+    const range = plot?.div?._fullLayout?.xaxis?.range || plot?.div?.layout?.xaxis?.range;
+    if (!Array.isArray(range) || range.length < 2) return {};
+    return {
+        'xaxis.autorange': false,
+        'xaxis.range': [range[0], range[1]],
+    };
 };
 
 proto._clampCursorX = function(plot, which, x) {
@@ -447,9 +564,11 @@ proto._cursorShapes = function(plot) {
     const colorA = traceA?.color || '#ff9800';
     const colorB = traceB?.color || '#2196f3';
     const sameTrace = this._sameCursorTrace(traceA, traceB);
+    const visualXA = this._cursorPlotlyX(traceA, c.a);
+    const visualXB = this._cursorPlotlyX(traceB, c.b);
     const shapes = [
-        this._cursorShape(c.a, colorA, 'solid'),
-        this._cursorShape(c.b, colorB, sameTrace ? 'dash' : 'solid'),
+        this._cursorShape(visualXA, colorA, 'solid'),
+        this._cursorShape(visualXB, colorB, sameTrace ? 'dash' : 'solid'),
     ];
     const dotPairs = [
         { trace: traceA, x: c.a, color: colorA },
@@ -462,9 +581,14 @@ proto._cursorShapes = function(plot) {
         const mode   = this._traceInterpolationMode(trace);
         const y = this._interpolateAt(times, values, x, mode);
         if (!Number.isFinite(y)) continue;
-        shapes.push(this._cursorDotShape(x, y, color));
+        shapes.push(this._cursorDotShape(this._cursorPlotlyX(trace, x), y, color));
     }
     return shapes;
+};
+
+proto._cursorPlotlyX = function(trace, x) {
+    if (!trace) return x;
+    return this._plotlyTimeValue(trace.fileId, x, this._getTimeVar(trace.fileId));
 };
 
 proto._cursorShape = function(x, color, dash = 'solid') {
@@ -580,6 +704,35 @@ proto._findNextZeroCrossing = function(times, values, fromX, mode, direction = '
     return NaN;
 };
 
+proto._findNextSampleValue = function(times, fromX, direction = 'next') {
+    const n = times?.length || 0;
+    if (n < 1 || !Number.isFinite(fromX)) return NaN;
+    if (direction === 'prev') {
+        let lo = 0;
+        let hi = n;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (times[mid] < fromX) lo = mid + 1;
+            else hi = mid;
+        }
+        for (let i = lo - 1; i >= 0; i--) {
+            if (Number.isFinite(times[i]) && times[i] < fromX) return times[i];
+        }
+        return NaN;
+    }
+    let lo = 0;
+    let hi = n;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (times[mid] <= fromX) lo = mid + 1;
+        else hi = mid;
+    }
+    for (let i = lo; i < n; i++) {
+        if (Number.isFinite(times[i]) && times[i] > fromX) return times[i];
+    }
+    return NaN;
+};
+
 proto._jumpCursorTo = function(panelId, which, target, direction = 'next') {
     const plot = this.plots.get(panelId);
     if (!plot?.cursors?.enabled) return;
@@ -592,6 +745,8 @@ proto._jumpCursorTo = function(panelId, which, target, direction = 'next') {
     let nextX = NaN;
     if (target === 'max' || target === 'min') {
         nextX = this._findNextExtremum(times, values, cursorX, target, direction);
+    } else if (target === 'sample') {
+        nextX = this._findNextSampleValue(times, cursorX, direction);
     } else if (target === 'zero') {
         nextX = this._findNextZeroCrossing(times, values, cursorX, this._traceInterpolationMode(trace), direction);
     }
@@ -607,7 +762,7 @@ proto._panelGuideShapes = function(plot, extra = []) {
 proto._syncCursorDisplay = function(panelId, plot) {
     if (!plot?.div || plot.mode !== 'timeseries') return;
     if (plot.cursors?.enabled) this._ensureCursorPositions(plot);
-    Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot) });
+    Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot), ...this._xAxisRangeLock(plot) });
     this._updateCursorBox(panelId, plot);
 };
 
@@ -628,7 +783,9 @@ proto._installCursorHandlers = function(panelId, plot) {
         const x = this._eventToXValue(plot.div, event);
         if (!Number.isFinite(x)) return null;
         const range = xa.range;
-        const span = Math.abs(range[1] - range[0]) || 1;
+        const r0 = this._coerceAxisValue(range?.[0]);
+        const r1 = this._coerceAxisValue(range?.[1]);
+        const span = Math.abs(r1 - r0) || 1;
         const xLen = Math.abs(xa._length) || 1;
         const tolerance = (5 / xLen) * span;
         const da = Math.abs(x - plot.cursors.a);
@@ -683,9 +840,11 @@ proto._eventToXValue = function(div, event) {
     if (!xa?.range) return NaN;
     const rect = div.getBoundingClientRect();
     const pixel = event.clientX - rect.left - (xa._offset || 0);
-    if (typeof xa.p2c === 'function') return xa.p2c(pixel);
+    if (typeof xa.p2c === 'function') return this._coerceAxisValue(xa.p2c(pixel));
     const frac = pixel / (xa._length || rect.width || 1);
-    return xa.range[0] + frac * (xa.range[1] - xa.range[0]);
+    const r0 = this._coerceAxisValue(xa.range[0]);
+    const r1 = this._coerceAxisValue(xa.range[1]);
+    return r0 + frac * (r1 - r0);
 };
 
 proto._interpolateAt = function(times, values, x, mode = 'linear') {
@@ -733,7 +892,8 @@ proto._updateCursorBox = function(panelId, plot) {
         const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
         return {
             y,
-            timeUnit: timeVar ? this._extractUnit(timeVar.description) : 's',
+            fileId: trace.fileId,
+            timeUnit: this._timeUnitLabel(trace.fileId),
             yUnit:    variable ? this._extractUnit(variable.description) : '',
             name:     this._traceName(trace.varName, trace.fileId),
         };
@@ -741,15 +901,20 @@ proto._updateCursorBox = function(panelId, plot) {
     const a = measure(traceA, aX);
     const b = measure(traceB, bX);
     const dx = bX - aX;
+    const isDateTimeCursor = a.timeUnit === 'datetime' || b.timeUnit === 'datetime';
+    const isDurationCursor = a.timeUnit === 'duration' || b.timeUnit === 'duration';
+    const dxForRate = isDateTimeCursor ? dx / 1000 : dx;
     const dy = b.y - a.y;
-    const slope = dx !== 0 ? dy / dx : NaN;
-    const inverseDx = dx !== 0 ? 1 / dx : NaN;
+    const slope = dxForRate !== 0 ? dy / dxForRate : NaN;
+    const inverseDx = dxForRate !== 0 ? 1 / dxForRate : NaN;
     const sameTrace = this._sameCursorTrace(traceA, traceB);
     const sameUnit  = a.yUnit === b.yUnit;
     const timeUnit  = a.timeUnit || b.timeUnit;
     const unit = (u) => u ? ` ${this._escapeHTML(u)}` : '';
     const normalizedTimeUnit = String(timeUnit || '').trim().toLowerCase();
-    const inverseTimeUnit = !timeUnit
+    const inverseTimeUnit = isDateTimeCursor || isDurationCursor
+        ? 'Hz'
+        : !timeUnit
         ? ''
         : ['s', 'sec', 'secs', 'second', 'seconds'].includes(normalizedTimeUnit)
             ? 'Hz'
@@ -768,9 +933,11 @@ proto._updateCursorBox = function(panelId, plot) {
     const maxIcon  = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M1 11 Q 8 0 15 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
     const minIcon  = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M1 1 Q 8 12 15 1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
     const zeroIcon = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M1 6 H 15" stroke="currentColor" stroke-width="0.8" opacity="0.55" fill="none"/><path d="M2.5 1.5 Q 6 6 8 6 Q 10 6 13.5 10.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/><circle cx="8" cy="6" r="1.4" fill="currentColor"/></svg>`;
+    const sampleIcon = `<svg viewBox="0 0 16 12" width="12" height="10" aria-hidden="true" focusable="false"><path d="M2 6 H10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M8 3 L11 6 L8 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="13" cy="6" r="1.6" fill="currentColor"/></svg>`;
     const maxTitle  = this._escapeHTML(i18n.t('cursorNextMax'));
     const minTitle  = this._escapeHTML(i18n.t('cursorNextMin'));
     const zeroTitle = this._escapeHTML(i18n.t('cursorNextZero'));
+    const sampleTitle = this._escapeHTML(i18n.t('cursorNextValue'));
     const shiftHint = this._escapeHTML(i18n.t('cursorShiftPreviousHint'));
     const labelX = this._escapeHTML(i18n.t('cursorLabelX'));
     const labelY = this._escapeHTML(i18n.t('cursorLabelY'));
@@ -782,6 +949,7 @@ proto._updateCursorBox = function(panelId, plot) {
         <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="max"  style="color:${color}" title="${maxTitle} (${which.toUpperCase()}) | ${shiftHint}"  aria-label="${maxTitle} (${which.toUpperCase()}) | ${shiftHint}">${maxIcon}</button>
         <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="min"  style="color:${color}" title="${minTitle} (${which.toUpperCase()}) | ${shiftHint}"  aria-label="${minTitle} (${which.toUpperCase()}) | ${shiftHint}">${minIcon}</button>
         <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="zero" style="color:${color}" title="${zeroTitle} (${which.toUpperCase()}) | ${shiftHint}" aria-label="${zeroTitle} (${which.toUpperCase()}) | ${shiftHint}">${zeroIcon}</button>
+        <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="sample" style="color:${color}" title="${sampleTitle} (${which.toUpperCase()}) | ${shiftHint}" aria-label="${sampleTitle} (${which.toUpperCase()}) | ${shiftHint}">${sampleIcon}</button>
     `;
     const selectorsHTML = `
         <label class="cursor-trace-select" data-cursor="a">
@@ -803,9 +971,9 @@ proto._updateCursorBox = function(panelId, plot) {
         ${selectorsHTML}
         <div class="cursor-info-hint">${shiftHint}</div>
         <div class="cursor-info-values">
-            <div><b style="color:${colorA}">A</b> ${labelX}=${this._formatHTMLNumber(aX)}${unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
-            <div><b style="color:${colorB}">B</b> ${labelX}=${this._formatHTMLNumber(bX)}${unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
-            <div><b>${labelDx}=</b>${this._formatHTMLNumber(dx)}${unit(timeUnit)}</div>
+            <div><b style="color:${colorA}">A</b> ${labelX}=${this._escapeHTML(this._formatTimeValue(a.fileId, aX))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
+            <div><b style="color:${colorB}">B</b> ${labelX}=${this._escapeHTML(this._formatTimeValue(b.fileId, bX))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
+            <div><b>${labelDx}=</b>${this._escapeHTML(isDateTimeCursor ? this._formatDuration(dx, 'datetime') : (isDurationCursor ? this._formatDuration(dx, 's') : this._formatHTMLNumber(dx)))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)}</div>
             <div><b>${labelDy}=</b>${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
             <div><b>${labelSlope}=</b>${this._formatHTMLNumber(slope)}</div>
             <div><b>${labelInvDx}=</b>${this._formatHTMLNumber(inverseDx)}${unit(inverseTimeUnit)}</div>
@@ -841,7 +1009,7 @@ proto._showCursorBox = function(panelEl, html, panelId = null, plot = null) {
         box.querySelectorAll('.cursor-extremum-btn').forEach(btn => {
             const which  = btn.getAttribute('data-cursor');
             const target = btn.getAttribute('data-target');
-            if ((which !== 'a' && which !== 'b') || !['max', 'min', 'zero'].includes(target)) return;
+            if ((which !== 'a' && which !== 'b') || !['max', 'min', 'zero', 'sample'].includes(target)) return;
             btn.addEventListener('mousedown', (e) => { e.stopPropagation(); });
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -944,6 +1112,11 @@ proto._initMarkerTrace = function(plot) {
             plot.markerTraceIdx = traces.map((_, i) => n - traces.length + i);
         });
     }
+};
+
+proto._syncTimeseriesMarkerColors = function(plot) {
+    if (!plot?.div || plot.mode !== 'timeseries' || !Number.isInteger(plot.markerTraceIdx)) return;
+    Plotly.restyle(plot.div, { 'marker.color': [plot.traces.map(t => t.color)] }, [plot.markerTraceIdx]);
 };
 
 proto._addOneMarkerTrace = function(plot, pt) {
@@ -1333,8 +1506,8 @@ proto._updatePlaceholder = function(panelId, panelEl) {
     }
     placeholder.innerHTML = `
         <span>${msg}</span>
-        <small>${i18n.t('multiSelectHint')}</small>
-        <small>${i18n.t('legendHint')}</small>
+        <small class="layout-panel-placeholder-hint">${formatPlaceholderHint('multiSelectHint')}</small>
+        <small class="layout-panel-placeholder-hint">${formatPlaceholderHint('legendHint')}</small>
     `;
 };
 

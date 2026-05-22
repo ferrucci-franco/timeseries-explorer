@@ -1,12 +1,9 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
-import { RESULT_FILE_EXTENSIONS } from '../constants.js';
 
 export function installFileMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.loadFile = async function(file, options = {}) {
-    if (!this._isSupportedResultFileName(file.name)) { alert(i18n.t('invalidFile')); return; }
-
     try {
         const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
         const contentHash = await this._hashBuffer(buffer);
@@ -30,7 +27,7 @@ proto.loadFile = async function(file, options = {}) {
         this.renderVariablesTree(data.tree);
         this._updateActionButtons();
 
-        console.log('Loaded:', file.name, '— variables:', Object.keys(data.variables).length);
+        console.log('Loaded:', file.name, '- variables:', Object.keys(data.variables).length);
     } catch (err) {
         console.error('Error loading file:', err);
         alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
@@ -104,7 +101,6 @@ proto._readLatestBuffer = async function(entry) {
         try {
             const file = await entry.fileHandle.getFile();
             const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
-            if (!this._isSupportedResultFileName(file.name)) throw new Error(i18n.t('invalidFile'));
             entry.file = file;
             entry.extension = this._fileExtension(file.name);
             return buffer;
@@ -120,7 +116,6 @@ proto._readLatestBuffer = async function(entry) {
             err.name = 'AbortError';
             throw err;
         }
-        if (!this._isSupportedResultFileName(file.name)) throw new Error(i18n.t('invalidFile'));
 
         entry.file = file;
         entry.fileHandle = null;
@@ -183,7 +178,6 @@ proto._promptForReloadReselect = function(entry) {
 
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = RESULT_FILE_EXTENSIONS.join(',');
         input.style.display = 'none';
         document.body.appendChild(input);
 
@@ -251,19 +245,12 @@ proto._canUseFileSystemPicker = function() {
 proto._pickResultFilesWithHandles = async function(options = {}) {
     const handles = await window.showOpenFilePicker({
         multiple: options.multiple !== false,
-        types: [{
-            description: 'MAT and CSV result files',
-            accept: {
-                'application/octet-stream': ['.mat'],
-                'text/csv': ['.csv'],
-            },
-        }],
     });
 
     const picked = [];
     for (const fileHandle of handles) {
         const file = await fileHandle.getFile();
-        if (this._isSupportedResultFileName(file.name)) picked.push({ file, fileHandle });
+        picked.push({ file, fileHandle });
     }
     return picked;
 };
@@ -299,7 +286,7 @@ proto._getDroppedResultFiles = async function(dataTransfer) {
                 const fileHandle = await item.getAsFileSystemHandle();
                 if (fileHandle?.kind !== 'file') continue;
                 const file = await fileHandle.getFile();
-                if (this._isSupportedResultFileName(file.name)) picked.push({ file, fileHandle });
+                picked.push({ file, fileHandle });
             } catch (err) {
                 console.warn('Could not read dropped file handle.', err);
             }
@@ -309,12 +296,7 @@ proto._getDroppedResultFiles = async function(dataTransfer) {
     }
 
     return Array.from(dataTransfer?.files || [])
-        .filter(file => this._isSupportedResultFileName(file.name))
         .map(file => ({ file, fileHandle: null }));
-};
-
-proto._isSupportedResultFileName = function(filename) {
-    return RESULT_FILE_EXTENSIONS.includes(this._fileExtension(filename));
 };
 
 proto._fileExtension = function(filename) {
@@ -327,14 +309,43 @@ proto._fileBaseName = function(filename) {
 };
 
 proto._fileDisplayName = function(entry) {
-    return `${entry?.name || ''}${entry?.extension || '.mat'}`;
+    return `${entry?.name || ''}${entry?.extension ?? '.mat'}`;
 };
 
 proto._parseResultBuffer = async function(filename, buffer) {
     const extension = this._fileExtension(filename);
     if (extension === '.csv') return this.csvParser.parse(buffer);
     if (extension === '.mat') return this.parser.parse(buffer);
+    if (this._looksLikeTextBuffer(buffer)) return this.csvParser.parse(buffer);
     throw new Error(i18n.t('invalidFile'));
+};
+
+proto._looksLikeTextBuffer = function(buffer) {
+    if (typeof buffer === 'string') return true;
+    const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
+    if (!bytes.length) return true;
+
+    const sampleLength = Math.min(bytes.length, 8192);
+    let suspiciousControls = 0;
+    for (let i = 0; i < sampleLength; i++) {
+        const b = bytes[i];
+        if (b === 0) return false;
+        const isCommonWhitespace = b === 9 || b === 10 || b === 12 || b === 13;
+        if (b < 32 && !isCommonWhitespace) suspiciousControls++;
+    }
+
+    if (suspiciousControls / sampleLength > 0.01) return false;
+
+    if (typeof TextDecoder !== 'undefined') {
+        try {
+            new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, sampleLength));
+            return true;
+        } catch (_) {
+            return suspiciousControls === 0;
+        }
+    }
+
+    return true;
 };
 
 proto._nextVersionName = function(name) {
@@ -385,7 +396,7 @@ proto.removeFile = async function(fileId) {
     if (!this.files.has(fileId)) return;
 
     if (this.plotManager.hasTracesForFile(fileId)) {
-        const ok = await Modal.confirm(i18n.t('closeFileWarning'), { icon: '📂' });
+        const ok = await Modal.confirm(i18n.t('closeFileWarning'), { icon: '⚠️' });
         if (!ok) return;
     }
 
@@ -399,9 +410,10 @@ proto.removeFile = async function(fileId) {
     const newActiveId = this.plotManager.activeFileId;
     if (newActiveId) {
         const d = this.plotManager.files.get(newActiveId)?.data;
-        if (d) this.renderVariablesTree(d.tree);
+        if (d?.tree) this.renderVariablesTree(d.tree);
+        else this.renderVariablesTree(null);
     } else {
-        document.getElementById('variables-tree').innerHTML = '';
+        this.renderVariablesTree(null);
         document.getElementById('drop-zone').classList.add('active');
     }
 
@@ -459,6 +471,7 @@ proto._renderFilesList = function() {
         transformBtn.className = 'file-entry-transform';
         transformBtn.textContent = '⛭';
         transformBtn.title = i18n.t('fileTransformTitle');
+        transformBtn.setAttribute('aria-label', i18n.t('fileTransformTitle'));
         transformBtn.setAttribute('aria-expanded', String(this._expandedFileTransforms.has(fileId)));
         transformBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -467,7 +480,7 @@ proto._renderFilesList = function() {
 
         const closeBtn = document.createElement('button');
         closeBtn.className = 'file-entry-close';
-        closeBtn.textContent = '✕';
+        closeBtn.textContent = 'x';
         closeBtn.title = i18n.t('closeFile');
         closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.removeFile(fileId); });
 
@@ -483,7 +496,7 @@ proto._renderFilesList = function() {
 };
 
 proto._defaultFileTransform = function() {
-    return { timeShift: 0, gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
+    return { timeDisplayMode: null, calendarTimeFormat: null, timeShift: 0, timeStepMode: null, customTimeStep: '', gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
 };
 
 proto._normalizeFileTransform = function(transform = null) {
@@ -492,26 +505,36 @@ proto._normalizeFileTransform = function(transform = null) {
         const n = Number(value);
         return Number.isFinite(n) ? n : 0;
     };
-    const finiteOrNull = (value) => {
+    const valueOrNull = (value) => {
         if (value === '' || value === null || value === undefined) return null;
-        const n = Number(value);
-        return Number.isFinite(n) ? n : null;
+        return value;
     };
+    const mode = (() => {
+        if (t.timeDisplayMode === 'calendar') return 'calendar';
+        if (t.timeDisplayMode === 'elapsedDateTime' || t.timeDisplayMode === 'elapsedDatetime') return 'elapsedDateTime';
+        if (t.timeDisplayMode === 'elapsedSeconds' || t.timeDisplayMode === 'elapsed') return 'elapsedSeconds';
+        if (t.timeDisplayMode === 'index') return 'index';
+        return null;
+    })();
     return {
-        timeShift: finiteOrZero(t.timeShift),
+        timeDisplayMode: mode,
+        calendarTimeFormat: t.calendarTimeFormat === 'ampm' ? 'ampm' : null,
+        timeShift: t.timeShift === '' || t.timeShift === null || t.timeShift === undefined ? 0 : t.timeShift,
+        timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
+        customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
         })(),
         yOffset: finiteOrZero(t.yOffset),
-        cropStart: finiteOrNull(t.cropStart),
-        cropEnd: finiteOrNull(t.cropEnd),
+        cropStart: valueOrNull(t.cropStart),
+        cropEnd: valueOrNull(t.cropEnd),
     };
 };
 
 proto._isFileTransformActive = function(transform) {
     const t = this._normalizeFileTransform(transform);
-    return t.timeShift !== 0 || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
 };
 
 proto._toggleFileTransformPanel = function(fileId) {
@@ -522,6 +545,14 @@ proto._toggleFileTransformPanel = function(fileId) {
 
 proto._renderFileTransformPanel = function(fileId, entryData) {
     const transform = this._normalizeFileTransform(entryData.transform);
+    const timeVar = this.plotManager?._getTimeVar?.(fileId);
+    const isDateTime = timeVar?.timeKind === 'datetime';
+    const isIndexTime = timeVar?.timeKind === 'index';
+    const timeDisplayMode = isDateTime
+        ? (transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar')
+        : 'numeric';
+    const isIndexAxis = isIndexTime || timeDisplayMode === 'index';
+    const calendarTimeFormat = transform.calendarTimeFormat || timeVar?.calendarTimeFormat || '24h';
     const panel = document.createElement('div');
     panel.className = 'file-transform-panel';
     panel.addEventListener('click', e => e.stopPropagation());
@@ -529,42 +560,377 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     const makeInput = (key, label, value, placeholder = '0', options = {}) => {
         const wrap = document.createElement('label');
         wrap.className = 'file-transform-field';
+        if (options.className) wrap.classList.add(options.className);
+        if (options.title) wrap.title = options.title;
 
         const span = document.createElement('span');
         span.textContent = label;
+        if (options.title) span.title = options.title;
 
         const input = document.createElement('input');
-        input.type = 'number';
-        input.step = options.step || 'any';
-        input.inputMode = 'decimal';
-        input.placeholder = placeholder;
-        input.value = value === null || value === undefined ? '' : String(value);
-        input.addEventListener('change', () => this._updateFileTransform(fileId, { [key]: input.value }));
+        input.type = options.type || 'number';
+        if (options.step) input.step = options.step;
+        if (options.lang) input.lang = options.lang;
+        if (input.type === 'number') {
+            input.step = options.step || 'any';
+            input.inputMode = 'decimal';
+        }
+        input.placeholder = options.placeholder || placeholder;
+        if (options.title) input.title = options.title;
+        input.value = options.format ? options.format(value) : (value === null || value === undefined ? '' : String(value));
+        const commitValue = () => {
+            if (options.onCommit) options.onCommit(input.value, input);
+            else this._updateFileTransform(fileId, { [key]: input.value });
+        };
+        if (options.updateOnChange !== false) input.addEventListener('change', commitValue);
+        if (options.onInput) input.addEventListener('input', () => options.onInput(input));
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') input.blur();
+            if (e.key === 'Enter') {
+                if (options.updateOnChange === false) commitValue();
+                else input.blur();
+            }
         });
 
         wrap.append(span, input);
+        wrap.input = input;
         return wrap;
+    };
+
+    if (isDateTime) {
+        const timeTitle = document.createElement('div');
+        timeTitle.className = 'file-transform-title';
+        timeTitle.textContent = 'Time axis';
+
+        const modeWrap = document.createElement('label');
+        modeWrap.className = 'file-transform-field file-transform-field-wide';
+        const modeLabel = document.createElement('span');
+        modeLabel.textContent = 'Mode';
+        const modeSelect = document.createElement('select');
+        const selectedCalendarMode = timeDisplayMode === 'calendar'
+            ? (calendarTimeFormat === 'ampm' ? 'calendar-ampm' : 'calendar-24h')
+            : timeDisplayMode;
+        modeSelect.innerHTML = `
+            <option value="calendar-24h"${selectedCalendarMode === 'calendar-24h' ? ' selected' : ''}>Calendar (24h format)</option>
+            <option value="calendar-ampm"${selectedCalendarMode === 'calendar-ampm' ? ' selected' : ''}>Calendar (AM/PM format)</option>
+            <option value="elapsedDateTime"${timeDisplayMode === 'elapsedDateTime' ? ' selected' : ''}>Elapsed (hh:mm:ss)</option>
+            <option value="elapsedSeconds"${timeDisplayMode === 'elapsedSeconds' ? ' selected' : ''}>Elapsed (seconds)</option>
+            <option value="index"${timeDisplayMode === 'index' ? ' selected' : ''}>Index</option>
+        `;
+        const updateTimeMode = () => {
+            const selected = modeSelect.value;
+            const nextIsCalendar = selected === 'calendar-24h' || selected === 'calendar-ampm';
+            const nextIsIndex = selected === 'index';
+            const patch = {
+                timeDisplayMode: nextIsCalendar ? 'calendar' : selected,
+                calendarTimeFormat: nextIsCalendar && selected === 'calendar-ampm' ? 'ampm' : null,
+            };
+            if (!nextIsIndex) {
+                patch.timeStepMode = null;
+                patch.customTimeStep = '';
+            }
+            if (!(timeDisplayMode === 'calendar' && nextIsCalendar)) {
+                patch.cropStart = null;
+                patch.cropEnd = null;
+                patch.timeShift = 0;
+            }
+            this._updateFileTransform(fileId, patch, { rerender: true });
+        };
+        modeSelect.addEventListener('change', updateTimeMode);
+        modeWrap.append(modeLabel, modeSelect);
+        panel.append(timeTitle, modeWrap);
+
+        if (timeDisplayMode === 'index') {
+            const indexHint = document.createElement('div');
+            indexHint.className = 'file-transform-hint';
+            indexHint.textContent = i18n.t('indexIgnoreDetectedHint');
+            panel.appendChild(indexHint);
+        }
+    }
+
+    if (isIndexAxis) {
+        const timeTitle = document.createElement('div');
+        timeTitle.className = 'file-transform-title';
+        timeTitle.textContent = i18n.t('indexTimeTitle');
+
+        const stepWrap = document.createElement('label');
+        stepWrap.className = 'file-transform-field';
+        const stepLabel = document.createElement('span');
+        stepLabel.textContent = i18n.t('indexTimeStepLabel');
+        const stepSelect = document.createElement('select');
+        const stepMode = transform.timeStepMode || timeVar.timeStepMode || 'index';
+        stepSelect.innerHTML = `
+            <option value="index"${stepMode === 'index' ? ' selected' : ''}>${i18n.t('indexTimeStepIndex')}</option>
+            <option value="seconds"${stepMode === 'seconds' ? ' selected' : ''}>${i18n.t('indexTimeStepSeconds')}</option>
+            <option value="10minutes"${stepMode === '10minutes' ? ' selected' : ''}>${i18n.t('indexTimeStep10Minutes')}</option>
+            <option value="1hour"${stepMode === '1hour' ? ' selected' : ''}>${i18n.t('indexTimeStep1Hour')}</option>
+            <option value="custom"${stepMode === 'custom' ? ' selected' : ''}>${i18n.t('indexTimeStepCustom')}</option>
+        `;
+        stepSelect.addEventListener('change', () => this._updateFileTransform(fileId, {
+            timeStepMode: stepSelect.value,
+        }, { rerender: true }));
+        stepWrap.append(stepLabel, stepSelect);
+        panel.append(timeTitle, stepWrap);
+
+        if (stepMode === 'custom') {
+            panel.append(makeInput(
+                'customTimeStep',
+                i18n.t('indexCustomStepLabel'),
+                transform.customTimeStep,
+                '15 min',
+                { type: 'text', title: i18n.t('indexCustomStepTooltip') },
+            ));
+        }
+    }
+
+    const pad2 = n => String(n).padStart(2, '0');
+    const dateInputValue = (value) => {
+        if (value === null || value === undefined || value === '') return '';
+        const ms = Number.isFinite(Number(value)) ? Number(value) : Date.parse(String(value));
+        if (!Number.isFinite(ms)) return '';
+        const d = new Date(ms);
+        const date = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+        return `${date}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    };
+    const normalizeCalendarCropValue = (value) => {
+        const text = String(value || '').trim();
+        if (!text) return { ok: true, value: null };
+        const match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+        if (!match) return { ok: false };
+
+        const year = Number(match[1]);
+        const month = Number(match[2]);
+        const day = Number(match[3]);
+        let hour = Number(match[4]);
+        const minute = Number(match[5]);
+        const second = Number(match[6] || 0);
+        if (month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute > 59 || second > 59) {
+            return { ok: false };
+        }
+        const d = new Date(year, month - 1, day, hour, minute, second);
+        if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day
+            || d.getHours() !== hour || d.getMinutes() !== minute || d.getSeconds() !== second) {
+            return { ok: false };
+        }
+        return {
+            ok: true,
+            value: `${year}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}:${pad2(second)}`,
+        };
+    };
+    const parseDurationMsStrict = (value) => {
+        if (value === '' || value === null || value === undefined) return 0;
+        if (typeof value === 'number') return Number.isFinite(value) ? value : NaN;
+        const raw = String(value).trim();
+        if (!raw) return 0;
+        const numeric = Number(raw);
+        if (Number.isFinite(numeric)) return numeric;
+        const clockMatch = raw.match(/^([+-])?\s*(?:(\d+(?:\.\d+)?)\s*d(?:ays?)?\s*)?(\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/i);
+        if (clockMatch) {
+            const sign = clockMatch[1] === '-' ? -1 : 1;
+            const days = Number(clockMatch[2] || 0);
+            const hours = Number(clockMatch[3]);
+            const minutes = Number(clockMatch[4]);
+            const seconds = Number(clockMatch[5] || 0);
+            return [days, hours, minutes, seconds].every(Number.isFinite)
+                ? sign * (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000
+                : NaN;
+        }
+        const match = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|day|days|w|week|weeks)?$/i);
+        if (!match) return NaN;
+        const amount = Number(match[1]);
+        if (!Number.isFinite(amount)) return NaN;
+        const unit = (match[2] || 'ms').toLowerCase();
+        if (unit.startsWith('w')) return amount * 7 * 24 * 60 * 60 * 1000;
+        if (unit.startsWith('d')) return amount * 24 * 60 * 60 * 1000;
+        if (unit.startsWith('h')) return amount * 60 * 60 * 1000;
+        if (unit === 'm' || unit.startsWith('min')) return amount * 60 * 1000;
+        if (unit.startsWith('s')) return amount * 1000;
+        return amount;
+    };
+    const stepModeForAxis = isIndexAxis ? (transform.timeStepMode || timeVar.timeStepMode || 'index') : null;
+    const isGeneratedDurationAxis = isIndexAxis && stepModeForAxis !== 'index';
+    const usesDurationCrop = timeDisplayMode === 'elapsedDateTime' || timeDisplayMode === 'elapsedSeconds' || isGeneratedDurationAxis;
+    const usesIndexCrop = isIndexAxis && stepModeForAxis === 'index';
+    const cropTooltip = (() => {
+        if (isDateTime && timeDisplayMode === 'calendar') return i18n.t('calendarCropTooltip');
+        if (usesIndexCrop) return i18n.t('indexCropTooltip');
+        if (usesDurationCrop) return timeDisplayMode === 'elapsedSeconds' ? i18n.t('secondsCropTooltip') : i18n.t('durationCropTooltip');
+        return i18n.t('numericCropTooltip');
+    })();
+    const cropPlaceholders = (() => {
+        if (usesIndexCrop) return { start: i18n.t('cropStartIndexPlaceholder'), end: i18n.t('cropEndIndexPlaceholder') };
+        if (usesDurationCrop) return { start: i18n.t('cropStartDurationPlaceholder'), end: i18n.t('cropEndDurationPlaceholder') };
+        return { start: i18n.t('cropStartNumericPlaceholder'), end: i18n.t('cropEndNumericPlaceholder') };
+    })();
+    let cropStartField = null;
+    let cropEndField = null;
+    let timeShiftField = null;
+    let yOffsetField = null;
+    let applyErrorLabel = null;
+    const setApplyError = (message = '') => {
+        if (applyErrorLabel) applyErrorLabel.textContent = message;
+    };
+    const setFieldInvalid = (field, invalid) => {
+        field?.input?.classList.toggle('invalid', Boolean(invalid));
+    };
+    const validateCropField = (field) => {
+        const input = field?.input;
+        if (!input) return { ok: true, value: null };
+        let parsed;
+        if (isDateTime && timeDisplayMode === 'calendar') {
+            const nativeInvalid = input.validity?.badInput || input.validity?.rangeOverflow || input.validity?.rangeUnderflow;
+            parsed = nativeInvalid ? { ok: false } : normalizeCalendarCropValue(input.value);
+            if (!parsed.ok) input.value = '';
+        } else if (usesDurationCrop) {
+            if (input.value === '' || input.value === null || input.value === undefined) parsed = { ok: true, value: null };
+            else parsed = Number.isFinite(parseDurationMsStrict(input.value)) ? { ok: true, value: input.value } : { ok: false };
+        } else {
+            if (input.value === '' || input.value === null || input.value === undefined) parsed = { ok: true, value: null };
+            else parsed = Number.isFinite(Number(input.value)) ? { ok: true, value: input.value } : { ok: false };
+        }
+        setFieldInvalid(field, !parsed.ok);
+        return parsed;
+    };
+    const clearApplyErrorOnInput = (input) => {
+        input.classList.remove('invalid');
+        if (applyErrorLabel
+            && !cropStartField?.input?.classList.contains('invalid')
+            && !cropEndField?.input?.classList.contains('invalid')
+            && !timeShiftField?.input?.classList.contains('invalid')
+            && !yOffsetField?.input?.classList.contains('invalid')) {
+            setApplyError('');
+        }
+    };
+    const validateTimeShiftField = () => {
+        if (!timeShiftField?.input) return { ok: true, value: 0 };
+        const durationShift = (isDateTime && (timeDisplayMode === 'calendar' || timeDisplayMode === 'elapsedDateTime' || timeDisplayMode === 'elapsedSeconds')) || isGeneratedDurationAxis;
+        const raw = timeShiftField.input.value;
+        let parsed;
+        if (raw === '' || raw === null || raw === undefined) parsed = { ok: true, value: 0 };
+        else if (durationShift) parsed = Number.isFinite(parseDurationMsStrict(raw)) ? { ok: true, value: raw } : { ok: false };
+        else parsed = Number.isFinite(Number(raw)) ? { ok: true, value: raw } : { ok: false };
+        setFieldInvalid(timeShiftField, !parsed.ok);
+        return parsed;
+    };
+    const validateYOffsetField = () => {
+        const raw = yOffsetField?.input?.value;
+        const parsed = (raw === '' || raw === null || raw === undefined)
+            ? { ok: true, value: 0 }
+            : (Number.isFinite(Number(raw)) ? { ok: true, value: raw } : { ok: false });
+        setFieldInvalid(yOffsetField, !parsed.ok);
+        return parsed;
+    };
+    const applyCropAndOffset = () => {
+        const start = validateCropField(cropStartField);
+        const end = validateCropField(cropEndField);
+        const timeShift = validateTimeShiftField();
+        const yOffset = validateYOffsetField();
+        if (!start.ok || !end.ok || !timeShift.ok || !yOffset.ok) {
+            setApplyError(i18n.t('invalidCropOffsetValue'));
+            return;
+        }
+        setApplyError('');
+        this._updateFileTransform(fileId, {
+            cropStart: start.value,
+            cropEnd: end.value,
+            timeShift: timeShift.value,
+            yOffset: yOffset.value,
+        });
+    };
+    const isCalendarCrop = isDateTime && timeDisplayMode === 'calendar';
+    const cropInputOptions = isCalendarCrop
+        ? {
+            type: 'datetime-local',
+            step: '1',
+            placeholder: '2022-08-01T13:30:00',
+            format: dateInputValue,
+            className: 'file-transform-field-wide',
+            title: cropTooltip,
+            updateOnChange: false,
+            onInput: clearApplyErrorOnInput,
+            onCommit: applyCropAndOffset,
+        }
+        : {
+            type: 'text',
+            title: cropTooltip,
+            updateOnChange: false,
+            onInput: clearApplyErrorOnInput,
+            onCommit: applyCropAndOffset,
+        };
+    const durationShift = (isDateTime && (timeDisplayMode === 'calendar' || timeDisplayMode === 'elapsedDateTime' || timeDisplayMode === 'elapsedSeconds')) || isGeneratedDurationAxis;
+    const shiftInputOptions = durationShift
+        ? {
+            type: 'text',
+            title: timeDisplayMode === 'calendar' ? i18n.t('calendarOffsetTooltip') : i18n.t('durationOffsetTooltip'),
+            placeholder: '0 h',
+            updateOnChange: false,
+            onInput: clearApplyErrorOnInput,
+            onCommit: applyCropAndOffset,
+            format: value => {
+                if (value === null || value === undefined || value === '') return '';
+                if (Number(value) === 0) return '0 h';
+                return String(value);
+            },
+        }
+        : {
+            type: 'text',
+            title: i18n.t('numericOffsetTooltip'),
+            updateOnChange: false,
+            onInput: clearApplyErrorOnInput,
+            onCommit: applyCropAndOffset,
+        };
+    const yOffsetInputOptions = {
+        type: 'text',
+        title: i18n.t('yOffsetTooltip'),
+        updateOnChange: false,
+        onInput: clearApplyErrorOnInput,
+        onCommit: applyCropAndOffset,
     };
 
     const cropTitle = document.createElement('div');
     cropTitle.className = 'file-transform-title';
     cropTitle.textContent = i18n.t('fileCropTitle');
+    const cropHint = document.createElement('div');
+    cropHint.className = 'file-transform-hint';
+    cropHint.textContent = i18n.t('cropUnitsHint');
+    panel.append(cropTitle, cropHint);
+    cropStartField = makeInput('cropStart', i18n.t('cropStartLabel'), transform.cropStart, cropPlaceholders.start, cropInputOptions);
+    cropEndField = makeInput('cropEnd', i18n.t('cropEndLabel'), transform.cropEnd, cropPlaceholders.end, cropInputOptions);
     panel.append(
-        cropTitle,
-        makeInput('cropStart', i18n.t('cropStartLabel'), transform.cropStart, 'auto'),
-        makeInput('cropEnd', i18n.t('cropEndLabel'), transform.cropEnd, 'auto'),
+        cropStartField,
+        cropEndField,
     );
-
     const offsetTitle = document.createElement('div');
     offsetTitle.className = 'file-transform-title';
     offsetTitle.textContent = i18n.t('fileOffsetTitle');
+    timeShiftField = makeInput('timeShift', '\u0394t', transform.timeShift, durationShift ? '0 h' : '0', shiftInputOptions);
+    yOffsetField = makeInput('yOffset', '\u0394y', transform.yOffset, '0', yOffsetInputOptions);
     panel.append(
         offsetTitle,
-        makeInput('timeShift', 'Δt', transform.timeShift),
-        makeInput('yOffset', 'Δy', transform.yOffset),
+        timeShiftField,
+        yOffsetField,
     );
+
+    const applyActions = document.createElement('div');
+    applyActions.className = 'file-transform-actions file-transform-crop-actions';
+    applyErrorLabel = document.createElement('span');
+    applyErrorLabel.className = 'file-transform-error';
+    const applyBtn = document.createElement('button');
+    applyBtn.type = 'button';
+    applyBtn.textContent = i18n.t('applyCropOffset');
+    applyBtn.addEventListener('click', applyCropAndOffset);
+    const resetCropBtn = document.createElement('button');
+    resetCropBtn.type = 'button';
+    resetCropBtn.textContent = i18n.t('resetCropOffset');
+    resetCropBtn.addEventListener('click', () => {
+        cropStartField.input.value = '';
+        cropEndField.input.value = '';
+        setFieldInvalid(cropStartField, false);
+        setFieldInvalid(cropEndField, false);
+        setApplyError('');
+        this._updateFileTransform(fileId, { cropStart: null, cropEnd: null });
+    });
+    applyActions.append(applyErrorLabel, applyBtn, resetCropBtn);
+    panel.appendChild(applyActions);
 
     const gainTitle = document.createElement('div');
     gainTitle.className = 'file-transform-title';
@@ -601,7 +967,5 @@ proto._updateFileTransform = function(fileId, patch, options = {}) {
         }
     }
 };
-
-// ─── Event listeners ───────────────────────────────────────────
 
 }

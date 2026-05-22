@@ -9,26 +9,36 @@ proto._normalizeFileTransform = function(transform = null) {
         const n = Number(value);
         return Number.isFinite(n) ? n : 0;
     };
-    const finiteOrNull = (value) => {
+    const valueOrNull = (value) => {
         if (value === '' || value === null || value === undefined) return null;
-        const n = Number(value);
-        return Number.isFinite(n) ? n : null;
+        return value;
     };
+    const mode = (() => {
+        if (t.timeDisplayMode === 'calendar') return 'calendar';
+        if (t.timeDisplayMode === 'elapsedDateTime' || t.timeDisplayMode === 'elapsedDatetime') return 'elapsedDateTime';
+        if (t.timeDisplayMode === 'elapsedSeconds' || t.timeDisplayMode === 'elapsed') return 'elapsedSeconds';
+        if (t.timeDisplayMode === 'index') return 'index';
+        return null;
+    })();
     return {
-        timeShift: finiteOrZero(t.timeShift),
+        timeDisplayMode: mode,
+        calendarTimeFormat: t.calendarTimeFormat === 'ampm' ? 'ampm' : null,
+        timeShift: t.timeShift === '' || t.timeShift === null || t.timeShift === undefined ? 0 : t.timeShift,
+        timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
+        customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
         })(),
         yOffset: finiteOrZero(t.yOffset),
-        cropStart: finiteOrNull(t.cropStart),
-        cropEnd: finiteOrNull(t.cropEnd),
+        cropStart: valueOrNull(t.cropStart),
+        cropEnd: valueOrNull(t.cropEnd),
     };
 };
 
 proto._isFileTransformActive = function(transform) {
     const t = this._normalizeFileTransform(transform);
-    return t.timeShift !== 0 || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
 };
 
 proto._fileTransform = function(fileId) {
@@ -42,6 +52,381 @@ proto._transformCache = function(fileId) {
     return entry._transformCache;
 };
 
+proto._timeKind = function(fileId) {
+    return this._getTimeVar(fileId)?.timeKind === 'datetime' ? 'datetime' : 'numeric';
+};
+
+proto._isGeneratedIndexTime = function(fileId, timeVar = null) {
+    return this._fileTransform(fileId).timeDisplayMode === 'index'
+        || (timeVar || this._getTimeVar(fileId))?.timeKind === 'index';
+};
+
+proto._isGeneratedDurationTime = function(fileId, timeVar = null) {
+    return this._isGeneratedIndexTime(fileId, timeVar) && this._indexTimeStepMode(fileId) !== 'index';
+};
+
+proto._indexTimeStepMode = function(fileId) {
+    const transform = this._fileTransform(fileId);
+    const timeVar = this._getTimeVar(fileId);
+    if (transform.timeDisplayMode !== 'index' && timeVar?.timeKind !== 'index') return null;
+    return transform.timeStepMode || timeVar.timeStepMode || 'index';
+};
+
+proto._indexTimeStepSeconds = function(fileId) {
+    const mode = this._indexTimeStepMode(fileId);
+    if (mode === 'seconds') return 1;
+    if (mode === '10minutes') return 600;
+    if (mode === '1hour') return 3600;
+    if (mode === 'custom') {
+        const seconds = this._parseDurationMs(this._fileTransform(fileId).customTimeStep) / 1000;
+        return Number.isFinite(seconds) && seconds > 0 ? seconds : 1;
+    }
+    return 1;
+};
+
+proto._indexTimeStepLabel = function(fileId) {
+    const mode = this._indexTimeStepMode(fileId);
+    if (mode === 'index') return 'index';
+    if (mode === 'seconds') return '1 s';
+    if (mode === '10minutes') return '10 min';
+    if (mode === '1hour') return '1 h';
+    if (mode === 'custom') {
+        const raw = String(this._fileTransform(fileId).customTimeStep || '').trim();
+        return raw || 'custom';
+    }
+    return '1 s';
+};
+
+proto._timeDisplayMode = function(fileId) {
+    const transform = this._fileTransform(fileId);
+    const timeVar = this._getTimeVar(fileId);
+    if (transform.timeDisplayMode === 'index') return 'index';
+    if (timeVar?.timeKind !== 'datetime') return 'numeric';
+    return transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
+};
+
+proto._timeDisplayModeForVar = function(fileId, timeVar = null) {
+    const transform = this._fileTransform(fileId);
+    if (transform.timeDisplayMode === 'index') return 'index';
+    if (timeVar?.timeKind !== 'datetime') return 'numeric';
+    return transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
+};
+
+proto._calendarTimeFormat = function(fileId, timeVar = null) {
+    const transform = this._fileTransform(fileId);
+    return transform.calendarTimeFormat || timeVar?.calendarTimeFormat || '24h';
+};
+
+proto._calendarTickFormat = function(fileId, timeVar = null) {
+    return this._calendarTimeFormat(fileId, timeVar) === 'ampm'
+        ? '%Y-%m-%d %I:%M:%S %p'
+        : '%Y-%m-%d %H:%M:%S';
+};
+
+proto._calendarAxisConfig = function(fileId, timeVar = null) {
+    return {
+        type: 'date',
+        hoverformat: this._calendarTickFormat(fileId, timeVar),
+    };
+};
+
+proto._isCalendarTime = function(fileId) {
+    return this._timeDisplayMode(fileId) === 'calendar';
+};
+
+proto._isCalendarTimeForVar = function(fileId, timeVar = null) {
+    return this._timeDisplayModeForVar(fileId, timeVar) === 'calendar';
+};
+
+proto._timeOriginMs = function(fileId) {
+    const timeVar = this._getTimeVar(fileId);
+    const origin = Number(timeVar?.timeOriginMs);
+    return Number.isFinite(origin) ? origin : Number(timeVar?.data?.[0]) || 0;
+};
+
+proto._timeDisplayValue = function(fileId, rawTime) {
+    if (this._isElapsedTime(fileId)) {
+        return (rawTime - this._timeOriginMs(fileId)) / 1000;
+    }
+    return rawTime;
+};
+
+proto._timeDisplayValueForVar = function(fileId, rawTime, timeVar = null) {
+    if (this._isGeneratedIndexTime(fileId, timeVar)) {
+        const mode = this._indexTimeStepMode(fileId);
+        return mode === 'index' ? rawTime : rawTime * this._indexTimeStepSeconds(fileId);
+    }
+    if (this._isElapsedTimeForVar(fileId, timeVar)) {
+        const origin = Number(timeVar?.timeOriginMs);
+        const fallbackOrigin = Number(timeVar?.data?.[0]);
+        const originMs = Number.isFinite(origin) ? origin : (Number.isFinite(fallbackOrigin) ? fallbackOrigin : this._timeOriginMs(fileId));
+        return (rawTime - originMs) / 1000;
+    }
+    return rawTime;
+};
+
+proto._isElapsedTime = function(fileId) {
+    const mode = this._timeDisplayMode(fileId);
+    return mode === 'elapsedDateTime' || mode === 'elapsedSeconds';
+};
+
+proto._isElapsedTimeForVar = function(fileId, timeVar = null) {
+    const mode = this._timeDisplayModeForVar(fileId, timeVar);
+    return mode === 'elapsedDateTime' || mode === 'elapsedSeconds';
+};
+
+proto._plotlyTimeValue = function(fileId, value, timeVar = null) {
+    if (this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return value;
+    if (!Number.isFinite(value)) return value;
+    return new Date(value).toISOString();
+};
+
+proto._plotlyTimeArray = function(fileId, values, timeVar = null) {
+    if (this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return values;
+    return values.map(value => this._plotlyTimeValue(fileId, value, timeVar));
+};
+
+proto._elapsedDateTimeAxisConfig = function(rangeOrValues) {
+    const values = Array.isArray(rangeOrValues?.[0]) ? rangeOrValues.flat() : (rangeOrValues || []);
+    const finite = values.map(Number).filter(Number.isFinite);
+    if (!finite.length) return {};
+    let min = Math.min(...finite);
+    let max = Math.max(...finite);
+    if (min > max) [min, max] = [max, min];
+    if (min === max) {
+        min -= 1;
+        max += 1;
+    }
+    const tickvals = this._durationTickValues(min, max);
+    return {
+        type: 'linear',
+        tickmode: 'array',
+        tickvals,
+        ticktext: tickvals.map(value => this._formatElapsedDateTime(value)),
+    };
+};
+
+proto._durationTickValues = function(min, max, maxTicks = 7) {
+    const span = Math.max(Math.abs(max - min), 1e-9);
+    const steps = [
+        0.001, 0.002, 0.005, 0.01, 0.02, 0.05,
+        0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30,
+        60, 120, 300, 600, 900, 1800,
+        3600, 7200, 10800, 21600, 43200,
+        86400, 172800, 604800, 1209600, 2592000, 7776000, 31536000,
+    ];
+    const step = steps.find(candidate => span / candidate <= maxTicks) || steps[steps.length - 1];
+    const ticks = [];
+    let value = Math.ceil(min / step) * step;
+    const epsilon = step * 1e-9;
+    while (value <= max + epsilon && ticks.length < 20) {
+        ticks.push(Number(value.toPrecision(12)));
+        value += step;
+    }
+    if (!ticks.length) ticks.push(min, max);
+    return ticks;
+};
+
+proto._formatElapsedDateTime = function(value) {
+    if (!Number.isFinite(value)) return this._formatHTMLNumber(value);
+    const sign = value < 0 ? '-' : '';
+    let seconds = Math.abs(value);
+    const days = Math.floor(seconds / 86400);
+    seconds -= days * 86400;
+    const hours = Math.floor(seconds / 3600);
+    seconds -= hours * 3600;
+    const minutes = Math.floor(seconds / 60);
+    seconds -= minutes * 60;
+    const wholeSeconds = Math.floor(seconds);
+    const fractional = seconds - wholeSeconds;
+    const pad = n => String(n).padStart(2, '0');
+    const secText = fractional > 1e-6
+        ? `${pad(wholeSeconds)}.${String(Number(fractional.toFixed(3))).slice(2)}`
+        : pad(wholeSeconds);
+    const timeText = `${pad(hours)}:${pad(minutes)}:${secText}`;
+    return `${sign}${days ? `${days} d ` : ''}${timeText}`;
+};
+
+proto._parseTimeBoundary = function(fileId, value) {
+    if (value === '' || value === null || value === undefined) return null;
+    if (this._isCalendarTime(fileId)) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) return numeric;
+        const ms = Date.parse(String(value));
+        return Number.isFinite(ms) ? ms : null;
+    }
+    if (this._timeDisplayMode(fileId) === 'elapsedDateTime' || this._timeDisplayMode(fileId) === 'elapsedSeconds') {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) return numeric;
+        const ms = this._parseDurationMs(value);
+        return Number.isFinite(ms) ? ms / 1000 : null;
+    }
+    if (this._isGeneratedDurationTime(fileId)) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) return numeric;
+        const ms = this._parseDurationMs(value);
+        return Number.isFinite(ms) ? ms / 1000 : null;
+    }
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+};
+
+proto._parseDurationMs = function(value) {
+    if (value === '' || value === null || value === undefined) return 0;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const raw = String(value).trim();
+    if (!raw) return 0;
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) return numeric;
+    const clockMatch = raw.match(/^([+-])?\s*(?:(\d+(?:\.\d+)?)\s*d(?:ays?)?\s*)?(\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/i);
+    if (clockMatch) {
+        const sign = clockMatch[1] === '-' ? -1 : 1;
+        const days = Number(clockMatch[2] || 0);
+        const hours = Number(clockMatch[3]);
+        const minutes = Number(clockMatch[4]);
+        const seconds = Number(clockMatch[5] || 0);
+        if ([days, hours, minutes, seconds].every(Number.isFinite)) {
+            return sign * (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+        }
+    }
+    const match = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|day|days|w|week|weeks)?$/i);
+    if (!match) return 0;
+    const amount = Number(match[1]);
+    if (!Number.isFinite(amount)) return 0;
+    const unit = (match[2] || 'ms').toLowerCase();
+    if (unit.startsWith('w')) return amount * 7 * 24 * 60 * 60 * 1000;
+    if (unit.startsWith('d')) return amount * 24 * 60 * 60 * 1000;
+    if (unit.startsWith('h')) return amount * 60 * 60 * 1000;
+    if (unit === 'm' || unit.startsWith('min')) return amount * 60 * 1000;
+    if (unit.startsWith('s')) return amount * 1000;
+    return amount;
+};
+
+proto._parseTimeShift = function(fileId, value) {
+    if (this._isCalendarTime(fileId)) return this._parseDurationMs(value);
+    if (this._timeDisplayMode(fileId) === 'elapsedDateTime' || this._timeDisplayMode(fileId) === 'elapsedSeconds' || this._isGeneratedDurationTime(fileId)) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) return numeric;
+        return this._parseDurationMs(value) / 1000;
+    }
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+};
+
+proto._timeAxisTitle = function(fileId, fallback = 'Time') {
+    const timeVar = this._getTimeVar(fileId);
+    return this._timeAxisTitleForVar(fileId, timeVar, fallback);
+};
+
+proto._timeAxisTitleForVar = function(fileId, timeVar = null, fallback = 'Time') {
+    const name = timeVar?.name || fallback;
+    if (this._isGeneratedIndexTime(fileId, timeVar)) {
+        const mode = this._indexTimeStepMode(fileId);
+        return mode === 'index' ? 'index' : `duration [hh:mm:ss, step ${this._indexTimeStepLabel(fileId)}]`;
+    }
+    const mode = this._timeDisplayModeForVar(fileId, timeVar);
+    if (mode === 'calendar') return `${name} [datetime, ${this._calendarTimeFormat(fileId, timeVar) === 'ampm' ? 'AM/PM' : '24h'}]`;
+    if (mode === 'elapsedDateTime' && timeVar?.timeKind === 'datetime') {
+        return `${name} elapsed [d hh:mm:ss]`;
+    }
+    if (mode === 'elapsedSeconds' && timeVar?.timeKind === 'datetime') {
+        return `${name} elapsed [s]`;
+    }
+    const unit = mode === 'elapsedSeconds' ? 's' : (timeVar ? this._extractUnit(timeVar.description) : 's');
+    return unit ? `${name} [${unit}]` : name;
+};
+
+proto._timeUnitLabel = function(fileId) {
+    if (this._isGeneratedIndexTime(fileId)) return this._indexTimeStepMode(fileId) === 'index' ? 'index' : 'duration';
+    if (this._isCalendarTime(fileId)) return 'datetime';
+    if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return 'duration';
+    if (this._timeDisplayMode(fileId) === 'elapsedSeconds') return 's';
+    const timeVar = this._getTimeVar(fileId);
+    return timeVar ? this._extractUnit(timeVar.description) : 's';
+};
+
+proto._formatTimeValue = function(fileId, value) {
+    if (!Number.isFinite(value)) return this._formatHTMLNumber(value);
+    if (this._isGeneratedDurationTime(fileId)) return this._formatElapsedDateTime(value);
+    if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return this._formatElapsedDateTime(value);
+    if (!this._isCalendarTime(fileId)) return this._formatHTMLNumber(value);
+    const d = new Date(value);
+    if (!Number.isFinite(d.getTime())) return this._formatHTMLNumber(value);
+    const pad2 = n => String(n).padStart(2, '0');
+    const year = d.getUTCFullYear();
+    const month = pad2(d.getUTCMonth() + 1);
+    const day = pad2(d.getUTCDate());
+    const minute = pad2(d.getUTCMinutes());
+    const second = pad2(d.getUTCSeconds());
+    if (this._calendarTimeFormat(fileId) === 'ampm') {
+        const h24 = d.getUTCHours();
+        const suffix = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 || 12;
+        return `${year}-${month}-${day} ${pad2(h12)}:${minute}:${second} ${suffix} UTC`;
+    }
+    return `${year}-${month}-${day} ${pad2(d.getUTCHours())}:${minute}:${second} UTC`;
+};
+
+proto._formatTimeForExport = function(fileId, value) {
+    if (!Number.isFinite(value)) return value;
+    if (this._isGeneratedDurationTime(fileId)) return this._formatElapsedDateTime(value);
+    if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return this._formatElapsedDateTime(value);
+    if (!this._isCalendarTime(fileId)) return value;
+    return new Date(value).toISOString();
+};
+
+proto._formatDuration = function(value, unit = 's') {
+    if (!Number.isFinite(value)) return this._formatHTMLNumber(value);
+    let seconds = value;
+    const normalized = String(unit || '').trim().toLowerCase();
+    if (normalized === 'datetime' || normalized === 'ms' || normalized.startsWith('millisecond')) seconds = value / 1000;
+    const sign = seconds < 0 ? '-' : '';
+    seconds = Math.abs(seconds);
+    const days = Math.floor(seconds / 86400);
+    seconds -= days * 86400;
+    const hours = Math.floor(seconds / 3600);
+    seconds -= hours * 3600;
+    const minutes = Math.floor(seconds / 60);
+    seconds -= minutes * 60;
+    const parts = [];
+    if (days) parts.push(`${days} d`);
+    if (hours) parts.push(`${hours} h`);
+    if (minutes) parts.push(`${minutes} min`);
+    if (seconds || !parts.length) parts.push(`${Number(seconds.toFixed(6))} s`);
+    return sign + parts.join(' ');
+};
+
+proto._primaryTimeFileId = function(plot) {
+    if (!plot) return this.activeFileId;
+    if (plot.mode === 'timeseries') return plot.traces?.[0]?.fileId || this.activeFileId;
+    if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
+        return plot.phaseTraces?.[0]?.fileId || this.activeFileId;
+    }
+    if (plot.mode === 'state-anim') return plot.stateSlots?.fileId || this.activeFileId;
+    return this.activeFileId;
+};
+
+proto._mapTimeValueBetweenFiles = function(sourceFileId, targetFileId, xValue) {
+    if (!Number.isFinite(xValue)) return NaN;
+    if (!sourceFileId || !targetFileId || sourceFileId === targetFileId) return xValue;
+
+    const sourceMode = this._timeDisplayMode(sourceFileId);
+    const targetMode = this._timeDisplayMode(targetFileId);
+    if (sourceMode === targetMode) return xValue;
+    if ((sourceMode === 'elapsedDateTime' || sourceMode === 'elapsedSeconds')
+        && (targetMode === 'elapsedDateTime' || targetMode === 'elapsedSeconds')) return xValue;
+
+    const sourceKind = this._timeKind(sourceFileId);
+    const targetKind = this._timeKind(targetFileId);
+    if (sourceKind !== 'datetime' || targetKind !== 'datetime') return NaN;
+
+    const sourceOrigin = this._timeOriginMs(sourceFileId);
+    const targetOrigin = this._timeOriginMs(targetFileId);
+    if (sourceMode === 'calendar' && (targetMode === 'elapsedDateTime' || targetMode === 'elapsedSeconds')) return (xValue - targetOrigin) / 1000;
+    if ((sourceMode === 'elapsedDateTime' || sourceMode === 'elapsedSeconds') && targetMode === 'calendar') return sourceOrigin + xValue * 1000;
+    return NaN;
+};
+
 proto._getTransformIndexData = function(fileId) {
     const cache = this._transformCache(fileId);
     if (cache?.indexData) return cache.indexData;
@@ -49,28 +434,36 @@ proto._getTransformIndexData = function(fileId) {
     const timeVar = this._getTimeVar(fileId);
     const rawTimes = timeVar?.data || [];
     const transform = this._fileTransform(fileId);
-    const cropped = transform.cropStart !== null || transform.cropEnd !== null;
+    const generatedIndex = this._isGeneratedIndexTime(fileId, timeVar);
+    const generatedFromDetectedTime = generatedIndex && transform.timeDisplayMode === 'index';
+    const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
+    const cropEnd = this._parseTimeBoundary(fileId, transform.cropEnd);
+    const timeShift = this._parseTimeShift(fileId, transform.timeShift);
+    const cropped = cropStart !== null || cropEnd !== null;
 
     let result;
     if (!rawTimes.length) {
         result = { indexes: null, times: [] };
-    } else if (transform.timeShift === 0 && !cropped) {
+    } else if (timeShift === 0 && !cropped && !this._isElapsedTimeForVar(fileId, timeVar) && !generatedIndex) {
         result = { indexes: null, times: rawTimes };
     } else {
-        let lo = transform.cropStart ?? -Infinity;
-        let hi = transform.cropEnd ?? Infinity;
+        let lo = cropStart ?? -Infinity;
+        let hi = cropEnd ?? Infinity;
         if (lo > hi) [lo, hi] = [hi, lo];
 
         const indexes = [];
         const times = [];
         for (let i = 0; i < rawTimes.length; i++) {
             const rawTime = rawTimes[i];
-            if (!cropped || (rawTime >= lo && rawTime <= hi)) {
+            const displayTime = generatedFromDetectedTime
+                ? (this._indexTimeStepMode(fileId) === 'index' ? i : i * this._indexTimeStepSeconds(fileId))
+                : this._timeDisplayValueForVar(fileId, rawTime, timeVar);
+            if (!cropped || (displayTime >= lo && displayTime <= hi)) {
                 indexes.push(i);
-                times.push(rawTime + transform.timeShift);
+                times.push(displayTime + timeShift);
             }
         }
-        result = { indexes: cropped ? indexes : null, times };
+        result = { indexes: (cropped || this._isElapsedTimeForVar(fileId, timeVar) || generatedIndex) ? indexes : null, times };
     }
 
     if (cache) cache.indexData = result;
@@ -208,7 +601,21 @@ proto._buildTimeseriesVisualData = function(timeData, values, visibleRange = nul
         return isStep ? { x: timeData, y: values } : this._downsampleTimeseries(timeData, values, target);
     }
 
-    let [minX, maxX] = visibleRange;
+    let [minX, maxX] = visibleRange.map(value => {
+        if (typeof this._coerceAxisValue === 'function') return this._coerceAxisValue(value);
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) return numeric;
+        const text = String(value).trim();
+        const floatingIso = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?)?$/);
+        if (floatingIso) {
+            const [, year, month, day, hour = '0', minute = '0', second = '0', fraction = '0'] = floatingIso;
+            const msPart = Number(String(fraction).padEnd(3, '0').slice(0, 3));
+            return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second), msPart);
+        }
+        const ms = Date.parse(text);
+        return Number.isFinite(ms) ? ms : NaN;
+    });
+    if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return this._downsampleTimeseries(timeData, values, target);
     if (minX > maxX) [minX, maxX] = [maxX, minX];
     let start = this._lowerBound(timeData, minX);
     let end = this._upperBound(timeData, maxX);
@@ -254,37 +661,56 @@ proto._buildTimeTrace = function(t, visibleRange = null) {
     const timeVar  = this._getTimeVar(t.fileId);
     const timeData = this._getTransformedTimeData(t.fileId);
     const values   = this._getTransformedVariableData(t.fileId, t.varName);
-    const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
+    const timeMode = this._timeDisplayModeForVar(t.fileId, timeVar);
+    const generatedIndexAxis = this._isGeneratedIndexTime(t.fileId, timeVar);
+    const durationAxis = timeMode === 'elapsedDateTime' || this._isGeneratedDurationTime(t.fileId, timeVar);
+    const timeUnit = generatedIndexAxis
+        ? (durationAxis ? 'duration' : 'index')
+        : (timeMode === 'calendar'
+            ? 'datetime'
+            : (durationAxis ? 'duration' : (timeMode === 'elapsedSeconds' ? 's' : (timeVar ? this._extractUnit(timeVar.description) : 's'))));
     const unit     = this._extractUnit(variable.description);
     const name     = this._traceName(t.varName, t.fileId);
     const hoverName = this._escapeHTML(name);
     const hoverTimeUnit = this._escapeHTML(timeUnit);
     const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
+    const calendarTickFormat = this._calendarTickFormat(t.fileId, timeVar);
+    const hoverX = timeMode === 'calendar'
+        ? `<b>Time</b> = %{x|${calendarTickFormat}}<br>`
+        : (durationAxis
+            ? `<b>Elapsed</b> = %{customdata}<br>`
+            : `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br>`);
 
     if (variable.kind === 'parameter') {
         const tStart = timeData.length ? timeData[0] : 0;
         const tEnd   = timeData.length ? timeData[timeData.length - 1] : 1;
         const yValue = values.length ? values[0] : variable.data[0];
         return {
-            x: [tStart, tEnd], y: [yValue, yValue],
+            x: this._plotlyTimeArray(t.fileId, [tStart, tEnd], timeVar), y: [yValue, yValue],
             name, type: 'scatter', mode: 'lines',
             visible: t.visible ?? true,
             line: { color: t.color, width: 1.5, dash: 'dash' },
-            hovertemplate: `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br><b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}<extra></extra>`,
+            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}<extra></extra>`,
+            ...(durationAxis ? { customdata: [tStart, tEnd].map(value => this._formatElapsedDateTime(value)) } : {}),
         };
     }
     const isStep = variable.dataType === 'boolean';
     const useGL = !isStep && values.length >= PlotManager.GL_POINT_THRESHOLD;
     const visual = this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep);
+    const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
+    const customdata = durationAxis
+        ? visual.x.map(value => this._formatElapsedDateTime(value))
+        : undefined;
     const line = useGL
         ? { color: t.color, width: 1.5 }
         : { color: t.color, width: 1.5, shape: isStep ? 'hv' : 'linear' };
     return {
-        x: visual.x, y: visual.y,
+        x: plotX, y: visual.y,
         name, type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
         visible: t.visible ?? true,
         line,
-        hovertemplate: `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br><b>${hoverName}</b>${unitStr} = %{y:.4g}<extra></extra>`,
+        ...(customdata ? { customdata } : {}),
+        hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}<extra></extra>`,
     };
 };
 
@@ -293,8 +719,27 @@ proto._buildTimeLayout = function(plot) {
     const margin = this._marginConfig();
     margin.b += 6;
     const firstTrace = plot.traces[0];
-    const timeVar  = firstTrace ? this._getTimeVar(firstTrace.fileId) : this._getTimeVar();
-    const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
+    const firstFileId = firstTrace?.fileId || this.activeFileId;
+    const firstTimeVar = firstFileId ? this._getTimeVar(firstFileId) : this._getTimeVar();
+    const firstTimeMode = this._timeDisplayModeForVar(firstFileId, firstTimeVar);
+    const timeTitle = this._timeAxisTitleForVar(firstFileId, firstTimeVar);
+    const xAxisMode = firstTimeMode === 'calendar'
+        ? this._calendarAxisConfig(firstFileId, firstTimeVar)
+        : (firstTimeMode === 'elapsedDateTime' || this._isGeneratedDurationTime(firstFileId, firstTimeVar)
+            ? this._elapsedDateTimeAxisConfig(plot.traces.map(t => this._getTransformedTimeData(t.fileId)))
+            : { type: 'linear' });
+    const xExtent = this._finiteExtent(plot.traces
+        .filter(t => this._isVisible(t))
+        .map(t => this._getTransformedTimeData(t.fileId)));
+    const xRange = xExtent ? this._exactRange(xExtent.min, xExtent.max) : null;
+    const xRangeConfig = xRange
+        ? {
+            range: firstTimeMode === 'calendar'
+                ? this._plotlyTimeArray(firstFileId, xRange, firstTimeVar)
+                : xRange,
+            autorange: false,
+        }
+        : {};
     const multiTrace = plot.traces.length > 1;
     let yTitle = '';
     if (!multiTrace && firstTrace) {
@@ -309,7 +754,9 @@ proto._buildTimeLayout = function(plot) {
         font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
         showlegend: true,
         xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
-                 title: { text: `Time [${timeUnit}]`, font: { size: 10 } } },
+                 ...xAxisMode,
+                 ...xRangeConfig,
+                 title: { text: timeTitle, font: { size: 10 } } },
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
                  title: (yTitle && !multiTrace) ? { text: yTitle, font: { size: 10 } } : { text: '' } },
         legend: this._legendConfig(legendBg, gridColor),
@@ -361,14 +808,29 @@ proto._buildPhase2DLayout = function(plot) {
     const multiTrace = plot.phaseTraces.length > 1;
     const xu = this._varUnit(first.x, first.fileId);
     const yu = this._varUnit(first.y, first.fileId);
+    const xArrays = [];
+    const yArrays = [];
+    for (const pt of plot.phaseTraces) {
+        if (!this._isVisible(pt)) continue;
+        const d = this.files.get(pt.fileId)?.data;
+        if (!d?.variables?.[pt.x] || !d?.variables?.[pt.y]) continue;
+        xArrays.push(this._getTransformedVariableData(pt.fileId, pt.x));
+        yArrays.push(this._getTransformedVariableData(pt.fileId, pt.y));
+    }
+    const xExtent = this._finiteExtent(xArrays);
+    const yExtent = this._finiteExtent(yArrays);
+    const xRangeConfig = xExtent ? { range: this._padRange(xExtent.min, xExtent.max), autorange: false } : {};
+    const yRangeConfig = yExtent ? { range: this._padRange(yExtent.min, yExtent.max), autorange: false } : {};
     return {
         paper_bgcolor: bg, plot_bgcolor: bg,
         font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
         showlegend: true,
         legend: this._legendConfig(legendBg, gridColor),
         xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
+                 ...xRangeConfig,
                  title: { text: multiTrace ? 'x' : (xu ? `${first.x} [${xu}]` : (first.x || 'X')), font: { size: 10 } } },
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
+                 ...yRangeConfig,
                  title: { text: multiTrace ? 'y' : (yu ? `${first.y} [${yu}]` : (first.y || 'Y')), font: { size: 10 } },
                  ...(plot.equalAspect2D ? { scaleanchor: 'x', scaleratio: 1 } : {}) },
         margin: { l: 60, r: 15, t: 10, b: 50 },
@@ -390,7 +852,7 @@ proto._buildPhase2DtTraces = function(plot) {
             this._getTransformedVariableData(pt.fileId, pt.y),
         ]);
         return {
-            x: timeVisual,
+            x: this._plotlyTimeArray(pt.fileId, timeVisual, timeVar),
             y: xVisual,
             z: yVisual,
             name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
@@ -428,8 +890,9 @@ proto._buildPhase3DTraces = function(plot) {
 proto._buildPhase3DLayout = function(plot, isTimez) {
     const { bg, gridColor, fontColor, legendBg } = this._colors();
     const first = plot.phaseTraces[0] || {};
-    const timeVar  = this._getTimeVar(first.fileId);
-    const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
+    const firstTimeVar = this._getTimeVar(first.fileId);
+    const firstTimeMode = this._timeDisplayModeForVar(first.fileId, firstTimeVar);
+    const timeTitle = this._timeAxisTitleForVar(first.fileId, firstTimeVar);
 
     // phase2dt: plotly X=time,  Y=var x, Z=var y
     // phase3d:  plotly X=var x, Y=var y, Z=var z
@@ -437,7 +900,7 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
     if (isTimez) {
         const yu = this._varUnit(first.x, first.fileId);
         const zu = this._varUnit(first.y, first.fileId);
-        xLabel = `Time [${timeUnit}]`;
+        xLabel = timeTitle;
         yLabel = yu ? `${first.x} [${yu}]` : (first.x || 'x');
         zLabel = zu ? `${first.y} [${zu}]` : (first.y || 'y');
     } else {
@@ -468,7 +931,17 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
             zArrays.push(d.variables[pt.z] ? this._getTransformedVariableData(pt.fileId, pt.z) : []);
         }
     }
-    const xRange = this._rangeIncluding0(xArrays);
+    const calendarTimeAxis = isTimez && firstTimeMode === 'calendar';
+    const elapsedDateTimeAxis = isTimez && (firstTimeMode === 'elapsedDateTime' || this._isGeneratedDurationTime(first.fileId, firstTimeVar));
+    const xExtent = calendarTimeAxis ? this._finiteExtent(xArrays) : null;
+    let xRange = xExtent ? this._exactRange(xExtent.min, xExtent.max) : this._rangeIncluding0(xArrays);
+    if (calendarTimeAxis && Array.isArray(xRange)) {
+        const timeVar = this._getTimeVar(first.fileId);
+        xRange = this._plotlyTimeArray(first.fileId, xRange, timeVar);
+    }
+    const timeAxisConfig = calendarTimeAxis
+        ? this._calendarAxisConfig(first.fileId, firstTimeVar)
+        : (elapsedDateTimeAxis ? this._elapsedDateTimeAxisConfig(xArrays) : {});
     const yRange = this._rangeIncluding0(yArrays);
     const zRange = this._rangeIncluding0(zArrays);
     const axisStyle = { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor,
@@ -485,6 +958,7 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
         legend: this._legendConfig(legendBg, gridColor),
         scene: {
             xaxis: { ...axisStyle, range: xRange,
+                     ...timeAxisConfig,
                      title: { text: (multiTrace && !isTimez) ? 'x' : xLabel, font: xTitleFont },
                      showspikes: true, spikecolor: '#e74c3c', spikethickness: 3, spikesides: false },
             yaxis: { ...axisStyle, range: yRange,

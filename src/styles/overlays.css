@@ -46,6 +46,14 @@
     margin-bottom: 1rem;
 }
 
+.modal-icon img {
+    display: block;
+    width: 3rem;
+    height: 3rem;
+    margin: 0 auto;
+    object-fit: contain;
+}
+
 .modal-title {
     font-size: 1.15rem;
     font-weight: 600;
@@ -69,6 +77,44 @@
     white-space: pre-line;
     overflow-wrap: normal;
     word-break: normal;
+    text-align: left;
+}
+
+.modal-dialog-temp-path .modal-content {
+    text-align: left;
+}
+
+.modal-dialog-temp-path .modal-icon,
+.modal-dialog-temp-path .modal-title {
+    text-align: left;
+}
+
+.modal-dialog-temp-path .modal-openmodelica-icon {
+    margin: 0;
+}
+
+.modal-dialog-temp-path .modal-message p {
+    margin: 0 0 0.9rem;
+}
+
+.modal-dialog-temp-path .modal-message p:last-child {
+    margin-bottom: 0;
+}
+
+.modal-dialog-temp-path .modal-inline-code {
+    display: inline-block;
+    max-width: 100%;
+    padding: 0.35rem 0.5rem;
+    margin: 0.15rem 0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.93rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 .modal-dialog-session-missing {

@@ -106,7 +106,7 @@ const Modal = {
      * Show an informational/error dialog with a single close button.
      * @param {string} title - Short heading
      * @param {string} body  - Body message (plain text or HTML if options.html)
-     * @param {Object} [options] - { icon, html }
+     * @param {Object} [options] - { icon, iconHtml, html }
      */
     alert(title, body, options = {}) {
         return new Promise((resolve) => {
@@ -125,7 +125,8 @@ const Modal = {
 
             const icon = document.createElement('div');
             icon.className = 'modal-icon';
-            icon.textContent = options.icon || '⚠️';
+            if (options.iconHtml) icon.innerHTML = options.iconHtml;
+            else icon.textContent = options.icon || '⚠️';
             content.appendChild(icon);
 
             if (title) {

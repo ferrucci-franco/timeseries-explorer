@@ -25,15 +25,9 @@
             </div>
 
             <!-- Action Buttons -->
-            <div class="open-file-split">
-                <button id="load-new-file" class="icon-btn open-file-main" title="Load new file">
-                    <span class="icon">📂</span>
-                </button>
-                <button id="open-file-menu-btn" class="icon-btn open-file-menu-btn" title="More open options" aria-haspopup="true" aria-expanded="false">
-                    <span class="icon">▾</span>
-                </button>
-                <div id="open-file-menu" class="example-menu open-file-menu" role="menu" hidden></div>
-            </div>
+            <button id="load-new-file" class="icon-btn" title="Load new file">
+                <span class="icon">📂</span>
+            </button>
             <div class="open-file-split reload-file-split">
                 <button id="reload-file" class="icon-btn open-file-main" title="Reload file" disabled>
                     <span class="icon">🔄</span>
@@ -57,7 +51,7 @@
             </button>
             <div class="example-menu-wrap">
                 <button id="load-example-btn" class="icon-btn" title="Load example" aria-haspopup="true" aria-expanded="false">
-                    <span class="icon">🎓</span>
+                    <span class="icon">🧪</span>
                 </button>
                 <div id="example-menu" class="example-menu" role="menu" hidden></div>
             </div>
@@ -274,11 +268,11 @@
             <div id="drop-zone" class="drop-zone active">
                 <div class="drop-zone-content">
                     <span class="icon">📁</span>
-                    <h2 data-i18n="dragFile">Drag & drop a .mat or .csv file here</h2>
+                    <h2 data-i18n="dragFile">Drag & drop a result or text file here</h2>
                     <p data-i18n="or">or</p>
                     <button id="file-select-btn" class="primary-btn" data-i18n="selectFile">Select File</button>
                     <div id="drop-zone-status" class="drop-zone-status">Loading application...</div>
-                    <input type="file" id="file-input" accept=".mat,.csv" multiple style="display: none;">
+                    <input type="file" id="file-input" multiple style="display: none;">
                 </div>
             </div>
 

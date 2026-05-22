@@ -7,6 +7,8 @@ const EXAMPLES = [
         nameKey: 'examplePendulum',
         baseName: 'ExampleSimplePendulum',
         script: `${PUBLIC_BASE}examples/example-data.js`,
+        modelicaPath: `${PUBLIC_BASE}examples/ExampleSimplePendulum.mo`,
+        modelicaFileName: 'ExampleSimplePendulum.mo',
         getDataB64: () => (typeof EXAMPLE_DATA_B64 !== 'undefined' ? EXAMPLE_DATA_B64 : null),
         applyLayout: (pm, fileId, panels) => pm.setExampleLayout(fileId, panels),
     },
@@ -15,6 +17,8 @@ const EXAMPLES = [
         nameKey: 'exampleLorenz',
         baseName: 'LorenzSystem_res',
         script: `${PUBLIC_BASE}examples/lorenz-data.js`,
+        modelicaPath: `${PUBLIC_BASE}examples/LorenzSystem.mo`,
+        modelicaFileName: 'LorenzSystem.mo',
         grid: { rows: 1, cols: 1 },
         getDataB64: () => (typeof LORENZ_DATA_B64 !== 'undefined' ? LORENZ_DATA_B64 : null),
         applyLayout: (pm, fileId, panels) => pm.setLorenzExampleLayout(fileId, panels),
@@ -40,5 +44,7 @@ const DERIVED_FUNCTION_ALIASES = new Map([
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv'];
 const APP_VERSION = '0.1.0';
 const STANDALONE_MANIFEST_PATH = './downloads/standalone.json';
+const DYMOLA_LOGO_ICON_PATH = `${PUBLIC_BASE}images/dymola-logo.jpg`;
+const OPENMODELICA_MODELING_ICON_PATH = `${PUBLIC_BASE}images/openmodelica-modeling.png`;
 
-export { APP_VERSION, EXAMPLES, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, RESULT_FILE_EXTENSIONS, STANDALONE_MANIFEST_PATH };
+export { APP_VERSION, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, OPENMODELICA_MODELING_ICON_PATH, RESULT_FILE_EXTENSIONS, STANDALONE_MANIFEST_PATH };

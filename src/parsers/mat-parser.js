@@ -526,9 +526,9 @@ export default class MatParser {
     /**
      * Detect data type from values
      * @private
-     * @param {Array} values - Array of numerical values
+     * @param {Array} values - Array of values
      * @param {string} kind - Variable kind (abscissa, parameter, variable)
-     * @returns {string} - Data type: 'boolean' or 'real'
+     * @returns {string} - Data type: 'boolean', 'real', or 'string'
      */
     _detectDataType(values, _kind) {
         if (!values || values.length === 0) {
@@ -538,14 +538,22 @@ export default class MatParser {
         let allBooleanValues = true;
         let hasZero = false;
         let hasOne = false;
+        let hasFinite = false;
+        let hasString = false;
 
         for (let i = 0; i < values.length; i++) {
             const v = values[i];
+
+            if (typeof v === 'string' && v.trim() !== '') {
+                hasString = true;
+                continue;
+            }
 
             // Skip non-finite values
             if (!Number.isFinite(v)) {
                 continue;
             }
+            hasFinite = true;
 
             // Check if boolean (only 0 or 1)
             if (v !== 0 && v !== 1) {
@@ -558,6 +566,7 @@ export default class MatParser {
             }
         }
 
+        if (!hasFinite && hasString) return 'string';
         // Only boolean if it has BOTH 0 and 1 values (not just constant 0 or constant 1)
         if (allBooleanValues && hasZero && hasOne) return 'boolean';
         return 'real';
@@ -594,6 +603,8 @@ export default class MatParser {
 
         // For regular variables, use type-specific icons
         switch (variable.dataType) {
+            case 'string':
+                return '🔤';  // Text/string
             case 'boolean':
                 return '🔘';  // Boolean
             case 'real':

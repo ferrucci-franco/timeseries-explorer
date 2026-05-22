@@ -12,7 +12,7 @@ proto.createDerivedVariable = function() {
     const formula = formulaInput.value.trim();
 
     try {
-        if (!data) throw new Error('Load a .mat or .csv file first.');
+        if (!data) throw new Error('Load a result or text file first.');
         if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) throw new Error('Use a simple name, for example slip or motor.slip.');
         if (!formula) throw new Error('Enter a formula.');
         const existing = data.variables[name];

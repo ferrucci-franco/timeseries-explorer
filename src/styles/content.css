@@ -325,7 +325,7 @@
 }
 
 .file-entry.transformed:not(.active) {
-    border-color: var(--primary-color);
+    border-color: #d32f2f;
 }
 
 .file-entry-name {
@@ -353,15 +353,15 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 1.45rem;
+    min-width: 1.6rem;
     height: 1.45rem;
-    padding: 0;
+    padding: 0 0.2rem;
     border: 1px solid transparent;
     border-radius: 0.4rem;
     background: color-mix(in srgb, var(--bg-secondary) 78%, var(--border-color));
     color: var(--text-primary);
     font-size: 0.95rem;
-    font-weight: 700;
+    font-weight: 600;
     line-height: 1;
     opacity: 1;
     transition: background-color 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
@@ -429,7 +429,20 @@
     color: var(--text-secondary);
 }
 
-.file-transform-field input {
+.file-transform-field-wide {
+    grid-column: 1 / -1;
+}
+
+.file-transform-hint {
+    grid-column: 1 / -1;
+    margin-top: -3px;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    line-height: 1.25;
+}
+
+.file-transform-field input,
+.file-transform-field select {
     width: 100%;
     min-width: 0;
     padding: 4px 5px;
@@ -440,10 +453,24 @@
     font-size: 0.72rem;
 }
 
+.file-transform-field input.invalid {
+    border-color: #d32f2f;
+}
+
 .file-transform-actions {
     grid-column: 1 / -1;
     display: flex;
+    align-items: center;
     justify-content: flex-end;
+    gap: 6px;
+}
+
+.file-transform-error {
+    min-width: 0;
+    margin-right: auto;
+    color: #d32f2f;
+    font-size: 0.68rem;
+    line-height: 1.2;
 }
 
 .file-transform-actions button {
@@ -628,6 +655,16 @@
     font-size: 0.72rem;
     line-height: 1.35;
     opacity: 0.82;
+}
+
+.layout-panel-placeholder-hint {
+    color: color-mix(in srgb, var(--primary-color) 48%, var(--text-secondary));
+    opacity: 1;
+}
+
+.layout-panel-placeholder-hint strong {
+    color: color-mix(in srgb, var(--primary-color) 78%, var(--text-primary));
+    font-weight: 800;
 }
 
 .layout-panel-placeholder.drag-over {

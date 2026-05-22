@@ -2,7 +2,9 @@ import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import {
     APP_VERSION,
+    DYMOLA_LOGO_ICON_PATH,
     EXAMPLES,
+    OPENMODELICA_MODELING_ICON_PATH,
     STANDALONE_MANIFEST_PATH,
 } from '../constants.js';
 
@@ -33,7 +35,6 @@ proto.initEventListeners = function() {
             alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
         });
     });
-    this._initOpenFileMenu();
 
     document.getElementById('toggle-sort').addEventListener('click', (e) => {
         this.sortAlphabetical = !this.sortAlphabetical;
@@ -247,56 +248,6 @@ proto._syncLegendCornerPicker = function() {
     });
 };
 
-proto._initOpenFileMenu = function() {
-    const btn  = document.getElementById('open-file-menu-btn');
-    const menu = document.getElementById('open-file-menu');
-    if (!btn || !menu) return;
-
-    const close = () => {
-        menu.hidden = true;
-        btn.setAttribute('aria-expanded', 'false');
-    };
-    const open = () => {
-        this._closePeerMenus('open-file');
-        this._renderOpenFileMenu();
-        menu.hidden = false;
-        btn.setAttribute('aria-expanded', 'true');
-    };
-
-    btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        menu.hidden ? open() : close();
-    });
-
-    document.addEventListener('click', (e) => {
-        if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) close();
-    });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && !menu.hidden) close();
-    });
-
-    this._closeOpenFileMenu = close;
-};
-
-proto._renderOpenFileMenu = function() {
-    const menu = document.getElementById('open-file-menu');
-    menu.innerHTML = '';
-
-    const tempItem = document.createElement('button');
-    tempItem.className = 'example-menu-item';
-    tempItem.type = 'button';
-    tempItem.setAttribute('role', 'menuitem');
-    tempItem.textContent = i18n.t('openOpenModelicaTemp');
-    tempItem.addEventListener('click', () => {
-        this._closeOpenFileMenu?.();
-        this._copyOpenModelicaTempPathToClipboard().catch(err => {
-            console.error('Copy OpenModelica temp path failed:', err);
-            alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
-        });
-    });
-    menu.appendChild(tempItem);
-};
-
 proto._closePeerMenus = function(except = '') {
     if (except !== 'open-file') this._closeOpenFileMenu?.();
     if (except !== 'example') this._closeExampleMenu?.();
@@ -346,10 +297,61 @@ proto._copyOpenModelicaTempPathToClipboard = async function() {
         ? 'openModelicaTempPathCopiedTitle'
         : 'openModelicaTempPathCopyFailedTitle';
 
-    await Modal.alert(i18n.t(titleKey), i18n.t(messageKey).replaceAll('{path}', path), {
-        icon: '📋',
+    await Modal.alert(i18n.t(titleKey), this._formatTempPathModalBody(i18n.t(messageKey), path), {
+        iconHtml: `<img src="${OPENMODELICA_MODELING_ICON_PATH}" alt="" class="modal-openmodelica-icon">`,
         className: 'modal-dialog-temp-path',
+        html: true,
     });
+};
+
+proto._copyDymolaDirectoryPathToClipboard = async function() {
+    const candidates = this._getDymolaDirectoryCandidates();
+    const usedFallback = candidates.length === 0;
+    const fallbackPaths = this._getDymolaDirectoryFallbackPaths();
+    const path = usedFallback ? fallbackPaths.windows : candidates[0];
+    const copied = await this._copyTextToClipboard(path);
+
+    let messageKey = 'dymolaDirectoryPathCopyFailed';
+    if (copied) {
+        messageKey = usedFallback
+            ? 'dymolaDirectoryPathCopiedUsernameUnknown'
+            : 'dymolaDirectoryPathCopied';
+    }
+
+    const titleKey = copied
+        ? 'dymolaDirectoryPathCopiedTitle'
+        : 'dymolaDirectoryPathCopyFailedTitle';
+
+    await Modal.alert(i18n.t(titleKey), this._formatTempPathModalBody(i18n.t(messageKey), path), {
+        iconHtml: `<img src="${DYMOLA_LOGO_ICON_PATH}" alt="" class="modal-openmodelica-icon">`,
+        className: 'modal-dialog-temp-path',
+        html: true,
+    });
+};
+
+proto._formatTempPathModalBody = function(template, path) {
+    const escapeHtml = (text) => String(text)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+
+    const codeHtml = `<code class="modal-inline-code">${escapeHtml(path)}</code>`;
+    let html = escapeHtml(String(template || '')).replaceAll('{path}', codeHtml);
+
+    const firefoxPatterns = [
+        'use Firefox.',
+        'utilisez Firefox.',
+        'usa Firefox.',
+        'usa Firefox.',
+    ];
+    for (const pattern of firefoxPatterns) {
+        html = html.replace(pattern, `<strong>${pattern}</strong>`);
+    }
+
+    return html
+        .split(/\n\n+/)
+        .map(paragraph => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`)
+        .join('');
 };
 
 proto._copyTextToClipboard = async function(text) {
@@ -400,6 +402,20 @@ proto._getOpenModelicaTempFallbackPaths = function() {
     return {
         windows: 'C:\\Users\\USERNAME\\AppData\\Local\\Temp\\OpenModelica\\OMEdit',
         linux: '/tmp/OpenModelicaUSERNAME/OMEdit',
+    };
+};
+
+proto._getDymolaDirectoryCandidates = function() {
+    const userHome = this._inferWindowsUserHomeFromLocation();
+    if (userHome) {
+        return [`${userHome}\\Documents\\Dymola\\`];
+    }
+    return [];
+};
+
+proto._getDymolaDirectoryFallbackPaths = function() {
+    return {
+        windows: 'C:\\Users\\USERNAME\\Documents\\Dymola\\',
     };
 };
 
@@ -482,27 +498,80 @@ proto._renderExampleMenu = function() {
     const menu = document.getElementById('example-menu');
     menu.innerHTML = '';
     for (const ex of EXAMPLES) {
-        const item = document.createElement('button');
-        item.className = 'example-menu-item';
-        item.type = 'button';
-        item.setAttribute('role', 'menuitem');
-
         const available = ex.getDataB64() != null || !!ex.script;
-        item.disabled = !available;
+        const item = document.createElement('div');
+        item.className = `example-menu-item example-menu-item-row${available ? '' : ' disabled'}`;
+        item.setAttribute('role', 'group');
+
+        const loadBtn = document.createElement('button');
+        loadBtn.className = 'example-load-btn';
+        loadBtn.type = 'button';
+        loadBtn.disabled = !available;
+        loadBtn.title = i18n.t('exampleLoadAction');
 
         const name = document.createElement('span');
         name.className = 'example-name';
         name.textContent = i18n.t(ex.nameKey);
-        item.appendChild(name);
+        loadBtn.appendChild(name);
+        item.appendChild(loadBtn);
+
+        const actions = document.createElement('div');
+        actions.className = 'example-menu-actions';
+        item.appendChild(actions);
+
+        const makeActionBtn = (content, titleKey, handler, options = {}) => {
+            const btn = document.createElement('button');
+            btn.className = 'example-action-btn';
+            btn.type = 'button';
+            if (options.html) btn.innerHTML = content;
+            else btn.textContent = content;
+            btn.title = i18n.t(titleKey);
+            btn.setAttribute('aria-label', i18n.t(titleKey));
+            if (options.className) btn.classList.add(options.className);
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    await handler(btn);
+                } catch (err) {
+                    console.error(`Example model action failed (${titleKey}):`, err);
+                    if (titleKey === 'exampleCopyModel') {
+                        Modal.alert(
+                            i18n.t('exampleModelCopyFailedTitle'),
+                            i18n.t('exampleModelCopyFailedBody'),
+                            { icon: '📋' },
+                        );
+                    } else {
+                        alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+                    }
+                }
+            });
+            return btn;
+        };
+
+        if (ex.modelicaPath) {
+            actions.appendChild(makeActionBtn(
+                '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v8.59l2.3-2.29a1 1 0 1 1 1.4 1.41l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.41L11 12.59V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/></svg>',
+                'exampleDownloadModel',
+                async (btn) => {
+                    await this._flashExampleAction(btn, i18n.t('exampleModelDownloadStarted'));
+                    await this._downloadExampleModel(ex);
+                },
+                { html: true, className: 'example-action-download' },
+            ));
+            actions.appendChild(makeActionBtn('⧉', 'exampleCopyModel', async (btn) => {
+                await this._copyExampleModelToClipboard(ex);
+                await this._flashExampleAction(btn, i18n.t('exampleModelCopied'));
+            }));
+        }
 
         if (!available) {
             const badge = document.createElement('span');
             badge.className = 'example-badge';
             badge.textContent = i18n.t('exampleComingSoon');
-            item.appendChild(badge);
+            actions.appendChild(badge);
         }
 
-        item.addEventListener('click', () => {
+        loadBtn.addEventListener('click', () => {
             this._closeExampleMenu();
             if (!available) return;
             this.loadExample(ex.id).catch(err => {
@@ -513,6 +582,61 @@ proto._renderExampleMenu = function() {
         });
         menu.appendChild(item);
     }
+};
+
+proto._getExampleModelicaText = async function(example) {
+    if (!example?.modelicaPath) throw new Error('Missing example Modelica path');
+    const response = await fetch(example.modelicaPath, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Cannot load example model: ${response.status}`);
+    return response.text();
+};
+
+proto._downloadExampleModel = async function(example) {
+    const source = await this._getExampleModelicaText(example);
+    const blob = new Blob([source], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = example.modelicaFileName || `${example.baseName || example.id}.mo`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
+proto._copyExampleModelToClipboard = async function(example) {
+    const source = await this._getExampleModelicaText(example);
+    const copied = await this._copyTextToClipboard(source);
+    if (!copied) throw new Error('Clipboard write failed');
+};
+
+proto._flashExampleAction = async function(button, message = '') {
+    if (button) {
+        button.classList.remove('action-feedback');
+        void button.offsetWidth;
+        button.classList.add('action-feedback');
+    }
+    if (message) this._showTransientStatus(message);
+    await new Promise(resolve => setTimeout(resolve, 220));
+    setTimeout(() => button?.classList.remove('action-feedback'), 520);
+};
+
+proto._showTransientStatus = function(message) {
+    if (!message) return;
+    let toast = document.getElementById('transient-status');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'transient-status';
+        toast.className = 'transient-status';
+        document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.classList.remove('show');
+    if (this._transientStatusTimer) clearTimeout(this._transientStatusTimer);
+    requestAnimationFrame(() => toast.classList.add('show'));
+    this._transientStatusTimer = setTimeout(() => {
+        toast.classList.remove('show');
+    }, 1600);
 };
 
 proto._initExtraMenu = function() {
@@ -560,7 +684,8 @@ proto._renderExtraMenu = function() {
 
         const iconSpan = document.createElement('span');
         iconSpan.className = 'extra-menu-icon';
-        iconSpan.textContent = icon;
+        if (options.iconHtml) iconSpan.innerHTML = icon;
+        else iconSpan.textContent = icon;
 
         const name = document.createElement('span');
         name.className = 'example-name';
@@ -612,6 +737,30 @@ proto._renderExtraMenu = function() {
         this._downloadStandalonePackage();
     });
 
+    const openTempItem = makeAction(
+        `<img src="${OPENMODELICA_MODELING_ICON_PATH}" alt="">`,
+        'openOpenModelicaTemp',
+        () => {
+            this._copyOpenModelicaTempPathToClipboard().catch(err => {
+                console.error('Copy OpenModelica temp path failed:', err);
+                alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+            });
+        },
+        { iconHtml: true },
+    );
+
+    const dymolaDirItem = makeAction(
+        `<img src="${DYMOLA_LOGO_ICON_PATH}" alt="">`,
+        'openDymolaDirectory',
+        () => {
+            this._copyDymolaDirectoryPathToClipboard().catch(err => {
+                console.error('Copy Dymola directory path failed:', err);
+                alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+            });
+        },
+        { iconHtml: true },
+    );
+
     const versionRow = document.createElement('div');
     versionRow.className = 'example-menu-item extra-menu-static';
 
@@ -629,7 +778,7 @@ proto._renderExtraMenu = function() {
 
     versionRow.append(versionIcon, versionLabel, versionValue);
 
-    menu.append(saveViewItem, saveProjectItem, loadSessionItem, feedbackItem, standaloneItem, versionRow);
+    menu.append(saveViewItem, saveProjectItem, loadSessionItem, openTempItem, dymolaDirItem, standaloneItem, feedbackItem, versionRow);
 };
 
 proto._downloadStandalonePackage = async function() {

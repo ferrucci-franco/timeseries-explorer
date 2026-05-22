@@ -533,8 +533,11 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
         const scrubber = panelEl.querySelector('.sa-scrubber');
         if (scrubber) scrubber.value = frame;
         const timeLabel = panelEl.querySelector('.sa-time-label');
-        const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
-        if (timeLabel) timeLabel.textContent = `t = ${timeData[frame].toPrecision(4)} ${timeUnit}`;
+        const timeUnit = this._timeUnitLabel(slots.fileId);
+        if (timeLabel) {
+            const tText = this._formatTimeValue(slots.fileId, timeData[frame]);
+            timeLabel.textContent = timeUnit === 'datetime' ? `t = ${tText}` : `t = ${Number(timeData[frame]).toPrecision(4)} ${timeUnit}`;
+        }
     }
 };
 

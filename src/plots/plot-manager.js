@@ -115,13 +115,29 @@ class PlotManager {
     setFileTransform(fileId, transform) {
         const entry = this.files.get(fileId);
         if (!entry) return;
+        const previousTransform = this._normalizeFileTransform(entry.transform);
+        const previousTimeMode = this._timeDisplayMode(fileId);
+        const pendingViews = new Map();
+        for (const [panelId, plot] of this.plots) {
+            const uses = plot.traces.some(t => t.fileId === fileId) ||
+                         plot.phaseTraces.some(t => t.fileId === fileId) ||
+                         plot.stateSlots?.fileId === fileId;
+            if (uses) pendingViews.set(panelId, this._capturePlotView(plot));
+        }
         entry.transform = this._normalizeFileTransform(transform);
+        const nextTransform = entry.transform;
+        const nextTimeMode = this._timeDisplayMode(fileId);
         entry._transformCache = null;
         for (const [panelId, plot] of this.plots) {
             const uses = plot.traces.some(t => t.fileId === fileId) ||
                          plot.phaseTraces.some(t => t.fileId === fileId) ||
                          plot.stateSlots?.fileId === fileId;
-            if (uses) this._rebuildPanel(panelId, { preserveView: true });
+            if (!uses) continue;
+            const restoreView = pendingViews.get(panelId);
+            if (restoreView?.mode === '2d' && plot.mode === 'timeseries' && this._primaryTimeFileId(plot) === fileId) {
+                restoreView.xRange = this._mapTimeRangeBetweenModes(fileId, restoreView.xRange, previousTimeMode, nextTimeMode, previousTransform, nextTransform);
+            }
+            this._rebuildPanel(panelId, { restoreView });
         }
     }
 
@@ -250,8 +266,15 @@ class PlotManager {
         if (!v) this._clearHoverMarkers();
     }
     setHoverProximity(v) {
-        this.hoverProximity = v;
-        this._relayoutAll();
+        const next = !!v;
+        if (this.hoverProximity === next) return;
+        this.hoverProximity = next;
+        const hovermode = next ? 'closest' : 'x';
+        for (const [, plot] of this.plots) {
+            if (plot?.div && plot.mode === 'timeseries') {
+                Plotly.relayout(plot.div, { hovermode });
+            }
+        }
     }
     setMouseWheelZoom(v) {
         const next = !!v;
@@ -454,7 +477,7 @@ class PlotManager {
         const plot = this.plots.get(panelId);
         const names = varNames.filter(varName => {
             const variable = this.data?.variables?.[varName];
-            return variable && variable.kind !== 'abscissa';
+            return variable && variable.kind !== 'abscissa' && variable.dataType !== 'string';
         });
         if (!names.length) return;
 
@@ -465,6 +488,7 @@ class PlotManager {
 
         if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
             const groupSize = plot.mode === 'phase3d' ? 3 : 2;
+            if (!this._canAddTraceWithFileTime(plot, this.activeFileId)) return;
             plot.phasePending = { x: null, y: null, z: null, fileId: null };
             let added = 0;
             for (let i = 0; i + groupSize - 1 < names.length; i += groupSize) {
@@ -564,7 +588,7 @@ class PlotManager {
     addTrace(panelId, varName, panelEl) {
         if (!this.data) return;
         const variable = this.data.variables[varName];
-        if (!variable || variable.kind === 'abscissa') return;
+        if (!variable || variable.kind === 'abscissa' || variable.dataType === 'string') return;
 
         if (!this.plots.has(panelId)) {
             this.plots.set(panelId, this._makeState());
@@ -586,20 +610,33 @@ class PlotManager {
         const idx = plot.traces.findIndex(t => t.varName === varName);
         if (idx === -1) return;
         plot.traces.splice(idx, 1);
-        Plotly.deleteTraces(plot.div, idx);
-        if (plot.traces.length === 0) this._clearPanel(panelId);
-        else this._syncCursorDisplay(panelId, plot);
+        const markerWasAfterTrace = Number.isInteger(plot.markerTraceIdx) && idx < plot.markerTraceIdx;
+        Plotly.deleteTraces(plot.div, idx).then(() => {
+            if (markerWasAfterTrace) plot.markerTraceIdx -= 1;
+            this._syncTimeseriesMarkerColors(plot);
+            if (plot.traces.length === 0) this._clearPanel(panelId);
+            else this._syncCursorDisplay(panelId, plot);
+        });
     }
 
     _addTimeseries(panelId, varName, panelEl, plot) {
         if (plot.traces.find(t => t.varName === varName && t.fileId === this.activeFileId)) return; // deduplicate
+        if (!this._canAddTraceWithFileTime(plot, this.activeFileId)) return;
         plot.traces.push({ varName, color: this._nextTraceColor(plot.traces), fileId: this.activeFileId });
 
         if (!plot.div) {
             this._createChart(panelId, panelEl);
         } else {
             const t = plot.traces[plot.traces.length - 1];
-            Plotly.addTraces(plot.div, this._buildTimeTrace(t)).then(() => this._installLegendHoverHint(plot.div));
+            const insertIndex = Number.isInteger(plot.markerTraceIdx) ? plot.markerTraceIdx : undefined;
+            const addTracePromise = insertIndex === undefined
+                ? Plotly.addTraces(plot.div, this._buildTimeTrace(t))
+                : Plotly.addTraces(plot.div, this._buildTimeTrace(t), insertIndex);
+            addTracePromise.then(() => {
+                if (insertIndex !== undefined) plot.markerTraceIdx += 1;
+                this._syncTimeseriesMarkerColors(plot);
+                this._installLegendHoverHint(plot.div);
+            });
             // Update Y axis title: clear when 2+ traces (X/time label always stays)
             const layout = this._buildTimeLayout(plot);
             Plotly.relayout(plot.div, { 'yaxis.title': layout.yaxis.title });
@@ -628,6 +665,11 @@ class PlotManager {
 
         if (ready) {
             // Commit pending → completed trace
+            if (!this._canAddTraceWithFileTime(plot, pp.fileId)) {
+                plot.phasePending = { x: null, y: null, z: null, fileId: null };
+                this._setPendingOverlay(panelId, panelEl, false);
+                return;
+            }
             const color = this._nextTraceColor(plot.phaseTraces);
             plot.phaseTraces.push({ x: pp.x, y: pp.y, z: pp.z || null, color, fileId: pp.fileId });
             plot.phasePending = { x: null, y: null, z: null, fileId: null };
@@ -683,6 +725,12 @@ class PlotManager {
                 div.on('plotly_relayout', (ed) => this._onRelayout(panelId, ed));
                 div.on('plotly_hover',    (ed) => this._onHover(panelId, ed));
                 div.on('plotly_unhover',  ()   => this._onUnhover(panelId));
+            } else if (plot.mode === 'phase2d') {
+                div.on('plotly_relayout', (ed) => {
+                    if (ed?.['xaxis.autorange'] === true || ed?.['yaxis.autorange'] === true) {
+                        this._autoScalePlot(panelId, plot);
+                    }
+                });
             }
             // Pan gestures for 2D plots:
             //   Middle-click: toggle Plotly's native pan dragmode (works with button 1).
@@ -962,9 +1010,9 @@ class PlotManager {
             const firstFid = plot.traces[0]?.fileId;
             const timeVar  = this._getTimeVar(firstFid);
             const times    = firstFid ? this._getTransformedTimeData(firstFid) : [];
-            const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
-            headers.push(`time [${timeUnit}]`);
-            columns.push(times);
+            const timeUnit = firstFid ? this._timeUnitLabel(firstFid) : (timeVar ? this._extractUnit(timeVar.description) : 's');
+            headers.push(this._isCalendarTime(firstFid) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
+            columns.push(times.map(value => this._formatTimeForExport(firstFid, value)));
             for (const t of plot.traces) {
                 const d = this.files.get(t.fileId)?.data;
                 const v = d?.variables[t.varName];
@@ -992,9 +1040,9 @@ class PlotManager {
             if (d) {
                 const timeVar  = this._getTimeVar(slots.fileId);
                 if (timeVar) {
-                    const timeUnit = this._extractUnit(timeVar.description) || 's';
-                    headers.push(`time [${timeUnit}]`);
-                    columns.push(Array.from(this._getTransformedTimeData(slots.fileId)));
+                    const timeUnit = this._timeUnitLabel(slots.fileId) || 's';
+                    headers.push(this._isCalendarTime(slots.fileId) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
+                    columns.push(this._getTransformedTimeData(slots.fileId).map(value => this._formatTimeForExport(slots.fileId, value)));
                 }
                 const dim = Math.min(slots.x.length, slots.x.length >= 3 ? 3 : 2);
                 // State variables first
@@ -1044,13 +1092,13 @@ class PlotManager {
         if (vars.some(v => !v)) return;
 
         const timeVar = this._getTimeVar(phaseTrace.fileId);
-        const timeUnit = timeVar ? this._extractUnit(timeVar.description) : 's';
+        const timeUnit = this._timeUnitLabel(phaseTrace.fileId);
         const timeName = timeVar?.name || 'time';
 
-        headers.push(`${
-            timeUnit ? `${timeName} [${timeUnit}]` : timeName
-        }`);
-        columns.push(Array.from(this._getTransformedTimeData(phaseTrace.fileId)));
+        headers.push(this._isCalendarTime(phaseTrace.fileId)
+            ? `${timeName} [datetime UTC]`
+            : (timeUnit ? `${timeName} [${timeUnit}]` : timeName));
+        columns.push(this._getTransformedTimeData(phaseTrace.fileId).map(value => this._formatTimeForExport(phaseTrace.fileId, value)));
 
         axes.forEach((axis, index) => {
             const varName = phaseTrace[axis];
@@ -1080,6 +1128,14 @@ class PlotManager {
         }
 
         const otherFiles = [...this.files.entries()].filter(([fid]) => !existingFileIds.has(fid));
+        const incompatibleFile = otherFiles.find(([fid]) => !this._canAddTraceWithFileTime(plot, fid, { silent: true }));
+        if (incompatibleFile) {
+            Modal.alert(
+                'Incompatible time axes',
+                'This overlay would mix calendar, elapsed, or numeric time axes. Use matching time-axis modes first; a future compare option will let you choose timestamp vs elapsed matching.'
+            );
+            return;
+        }
         if (otherFiles.length === 0) {
             Modal.alert(i18n.t('compareFilesErrorTitle'), i18n.t('compareFilesNoOthers'));
             return;
@@ -1293,6 +1349,23 @@ class PlotManager {
         return !!traceState && traceState.visible !== false && traceState.visible !== 'legendonly';
     }
 
+    _canAddTraceWithFileTime(plot, fileId, options = {}) {
+        if (!plot || !fileId) return true;
+        if (plot.mode === 'state-anim') return true;
+        const primaryFileId = this._primaryTimeFileId(plot);
+        if (!primaryFileId || primaryFileId === fileId) return true;
+        const sameKind = this._timeKind(primaryFileId) === this._timeKind(fileId);
+        const sameMode = this._timeDisplayMode(primaryFileId) === this._timeDisplayMode(fileId);
+        if (sameKind && sameMode) return true;
+        if (!options.silent) {
+            Modal.alert(
+                'Incompatible time axes',
+                'This panel already uses a different time-axis mode. Switch files to the same Calendar/Elapsed mode before mixing traces.'
+            );
+        }
+        return false;
+    }
+
     _padRange(min, max, pad = 0.05) {
         if (!Number.isFinite(min) || !Number.isFinite(max)) return [-1, 1];
         if (min === max) {
@@ -1301,6 +1374,12 @@ class PlotManager {
         }
         const span = max - min;
         return [min - span * pad, max + span * pad];
+    }
+
+    _exactRange(min, max) {
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return [-1, 1];
+        if (min === max) return this._padRange(min, max);
+        return [min, max];
     }
 
     _finiteExtent(arrays) {
@@ -1339,7 +1418,14 @@ class PlotManager {
             const xExtent = this._finiteExtent(xArrays);
             const yExtent = this._finiteExtent(yArrays);
             const update = {};
-            if (xExtent) update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+            if (xExtent) {
+                const primaryFileId = visibleTraces[0]?.fileId;
+                const timeVar = this._getTimeVar(primaryFileId);
+                const isCalendarAxis = this._timeDisplayModeForVar(primaryFileId, timeVar) === 'calendar';
+                const xRange = this._exactRange(xExtent.min, xExtent.max);
+                update['xaxis.range'] = isCalendarAxis ? this._plotlyTimeArray(primaryFileId, xRange, timeVar) : xRange;
+                update['xaxis.autorange'] = false;
+            }
             else update['xaxis.autorange'] = true;
             if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
             else update['yaxis.autorange'] = true;
@@ -1364,9 +1450,15 @@ class PlotManager {
             const xExtent = this._finiteExtent(xArrays);
             const yExtent = this._finiteExtent(yArrays);
             const update = {};
-            if (xExtent) update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+            if (xExtent) {
+                update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+                update['xaxis.autorange'] = false;
+            }
             else update['xaxis.autorange'] = true;
-            if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+            if (yExtent) {
+                update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+                update['yaxis.autorange'] = false;
+            }
             else update['yaxis.autorange'] = true;
             return Plotly.relayout(plot.div, update);
         }
@@ -1419,7 +1511,7 @@ class PlotManager {
         if (!plot) return;
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         if (!panelEl) return;
-        const restoreView = options.preserveView ? this._capturePlotView(plot) : null;
+        const restoreView = options.restoreView || (options.preserveView ? this._capturePlotView(plot) : null);
         this._destroyChart(panelId);
         if (restoreView) plot._pendingViewRestore = restoreView;
         plot.markerTraceIdx = null;
@@ -1530,17 +1622,56 @@ class PlotManager {
         };
     }
 
+    _timeShiftForMode(transform, mode) {
+        const value = transform?.timeShift;
+        if (value === '' || value === null || value === undefined) return 0;
+        if (mode === 'calendar') return this._parseDurationMs(value);
+        if (mode === 'elapsedDateTime') {
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? numeric : this._parseDurationMs(value) / 1000;
+        }
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric : 0;
+    }
+
+    _mapTimeRangeBetweenModes(fileId, range, fromMode, toMode, fromTransform = null, toTransform = null) {
+        if (!Array.isArray(range) || range.length < 2 || fromMode === toMode) return range;
+        if (fromMode === 'index' || toMode === 'index') return null;
+        const origin = this._timeOriginMs(fileId);
+        const fromShift = this._timeShiftForMode(fromTransform, fromMode);
+        const toShift = this._timeShiftForMode(toTransform, toMode);
+        const toAbsoluteMs = (value) => {
+            if (fromMode === 'calendar') return this._coerceAxisValue(value) - fromShift;
+            if (fromMode === 'elapsedDateTime' || fromMode === 'elapsedSeconds') {
+                const numeric = Number(value);
+                return Number.isFinite(numeric) ? origin + (numeric - fromShift) * 1000 : NaN;
+            }
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? numeric : NaN;
+        };
+        const fromAbsoluteMs = (value) => {
+            if (!Number.isFinite(value)) return value;
+            if (toMode === 'calendar') return new Date(value + toShift).toISOString();
+            if (toMode === 'elapsedDateTime' || toMode === 'elapsedSeconds') return (value - origin) / 1000 + toShift;
+            return value;
+        };
+        const mapped = range.map(value => fromAbsoluteMs(toAbsoluteMs(value)));
+        return mapped.every(value => value !== null && value !== undefined && (typeof value === 'string' || Number.isFinite(value)))
+            ? mapped
+            : range;
+    }
+
     _restorePlotView(plot, view) {
         if (!plot?.div || !view) return Promise.resolve();
         const update = {};
         if (view.mode === '3d') {
-            if (view.xRange) update['scene.xaxis.range'] = view.xRange;
-            if (view.yRange) update['scene.yaxis.range'] = view.yRange;
-            if (view.zRange) update['scene.zaxis.range'] = view.zRange;
+            if (view.xRange) { update['scene.xaxis.range'] = view.xRange; update['scene.xaxis.autorange'] = false; }
+            if (view.yRange) { update['scene.yaxis.range'] = view.yRange; update['scene.yaxis.autorange'] = false; }
+            if (view.zRange) { update['scene.zaxis.range'] = view.zRange; update['scene.zaxis.autorange'] = false; }
             if (view.camera) update['scene.camera'] = view.camera;
         } else {
-            if (view.xRange) update['xaxis.range'] = view.xRange;
-            if (view.yRange) update['yaxis.range'] = view.yRange;
+            if (view.xRange) { update['xaxis.range'] = view.xRange; update['xaxis.autorange'] = false; }
+            if (view.yRange) { update['yaxis.range'] = view.yRange; update['yaxis.autorange'] = false; }
         }
         if (!Object.keys(update).length) return Promise.resolve();
         return Plotly.relayout(plot.div, update).then(() => this._updateCameraOverlay(plot));
@@ -1571,6 +1702,13 @@ class PlotManager {
 
     _findTimeIdx(times, xVal) {
         if (!times || !times.length) return 0;
+        const numericX = Number(xVal);
+        if (!Number.isFinite(numericX)) {
+            const parsed = Date.parse(String(xVal));
+            if (Number.isFinite(parsed)) xVal = parsed;
+        } else {
+            xVal = numericX;
+        }
         if (times.length === 1 || xVal <= times[0]) return 0;
         const last = times.length - 1;
         if (xVal >= times[last]) return last;
