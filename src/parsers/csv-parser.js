@@ -81,9 +81,12 @@ export default class CsvParser {
                 const numericValue = parseCsvNumber(rawValue, delimiter);
                 const column = variableColumns[c];
                 column.numericValues.push(numericValue);
-                column.stringValues.push(rawValue);
+                if (column.stringValues) column.stringValues.push(rawValue);
                 if (rawValue !== '') column.nonEmptyCount++;
-                if (Number.isFinite(numericValue)) column.finiteCount++;
+                if (Number.isFinite(numericValue)) {
+                    column.finiteCount++;
+                    column.stringValues = null;
+                }
             }
         }
 
@@ -197,9 +200,10 @@ export default class CsvParser {
     _detectDelimiter(text) {
         const candidates = [',', ';', '\t', 'whitespace'];
         let best = { delimiter: ',', score: -Infinity };
+        const sampleText = String(text).slice(0, 262144);
 
         for (const delimiter of candidates) {
-            const rows = this._parseRows(text, delimiter)
+            const rows = this._parseRows(sampleText, delimiter)
                 .filter(row => row.some(cell => cell.trim() !== ''))
                 .slice(0, 500);
             if (!rows.length) continue;
@@ -283,10 +287,14 @@ export default class CsvParser {
             .sort((a, b) => (a.time - b.time) || (a.index - b.index))
             .map(entry => entry.index);
         const sortedTimes = order.map(index => timeValues[index]);
-        timeValues.splice(0, timeValues.length, ...sortedTimes);
+        for (let i = 0; i < sortedTimes.length; i++) {
+            timeValues[i] = sortedTimes[i];
+        }
         for (const column of variableColumns) {
             column.numericValues = order.map(index => column.numericValues[index]);
-            column.stringValues = order.map(index => column.stringValues[index]);
+            if (column.stringValues) {
+                column.stringValues = order.map(index => column.stringValues[index]);
+            }
         }
     }
 

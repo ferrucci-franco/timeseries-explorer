@@ -72,6 +72,7 @@ class OpenModelicaViewer {
         });
         this._applyReloadModeUI();
         if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();
+        if (typeof this._syncHoverCornerPicker === 'function') this._syncHoverCornerPicker();
         this._renderFilesList();
         if (this._currentTree) this._renderFilteredTree();
         this.layoutManager.render();

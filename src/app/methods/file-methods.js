@@ -18,20 +18,129 @@ proto.loadFile = async function(file, options = {}) {
         // PlotManager takes ownership of the data
         this.plotManager.addFile(fileId, baseName, data, transform);
 
-        // Hide drop zone after first file
-        document.getElementById('drop-zone').classList.remove('active');
+        if (!options.deferUi) {
+            // Hide drop zone after first file
+            document.getElementById('drop-zone').classList.remove('active');
 
-        this._updateTopBar();
-        this._renderFilesList();
-        this._clearVariableSelection();
-        this.renderVariablesTree(data.tree);
-        this._updateActionButtons();
+            this._updateTopBar();
+            this._renderFilesList();
+            this._clearVariableSelection();
+            this.renderVariablesTree(data.tree);
+            this._updateActionButtons();
+        }
 
         console.log('Loaded:', file.name, '- variables:', Object.keys(data.variables).length);
+        return { fileId, data };
     } catch (err) {
         console.error('Error loading file:', err);
         alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+        return null;
     }
+};
+
+proto.loadFiles = async function(items = []) {
+    const entries = Array.from(items || []);
+    if (!entries.length) return [];
+
+    const loaded = [];
+    this._showFileLoadingOverlay(entries.length);
+    await this._yieldToBrowser();
+    try {
+        for (let index = 0; index < entries.length; index++) {
+            const item = entries[index];
+            const file = item?.file || item;
+            if (!file) continue;
+            this._updateFileLoadingOverlay(index + 1, entries.length, file.name || '', file.size);
+            const fileHandle = item?.fileHandle || null;
+            const result = await this.loadFile(file, { fileHandle, deferUi: true });
+            if (result) loaded.push(result);
+            await this._yieldToBrowser();
+        }
+
+        if (loaded.length) {
+            document.getElementById('drop-zone').classList.remove('active');
+            this._updateTopBar();
+            this._renderFilesList();
+            this._clearVariableSelection();
+            const activeData = this.plotManager.files.get(this.plotManager.activeFileId)?.data;
+            this.renderVariablesTree(activeData?.tree || null);
+            this._updateActionButtons();
+        }
+    } finally {
+        this._hideFileLoadingOverlay();
+    }
+
+    return loaded;
+};
+
+proto._yieldToBrowser = function() {
+    return new Promise(resolve => setTimeout(resolve, 0));
+};
+
+proto._showFileLoadingOverlay = function(total = 1) {
+    document.getElementById('file-loading-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'file-loading-overlay';
+    overlay.className = 'example-loading-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-live', 'assertive');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'example-loading-dialog';
+    const spinner = document.createElement('div');
+    spinner.className = 'example-loading-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    const title = document.createElement('div');
+    title.className = 'example-loading-title';
+    title.id = 'file-loading-title';
+    const hint = document.createElement('div');
+    hint.className = 'example-loading-hint';
+    hint.id = 'file-loading-hint';
+
+    dialog.append(spinner, title, hint);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    this._updateFileLoadingOverlay(0, total, '');
+    requestAnimationFrame(() => overlay.classList.add('show'));
+};
+
+proto._updateFileLoadingOverlay = function(current, total, filename = '', size = null) {
+    const title = document.getElementById('file-loading-title');
+    const hint = document.getElementById('file-loading-hint');
+    if (title) {
+        title.textContent = i18n.t('loadingFiles')
+            .replace('{current}', String(Math.min(current, total)))
+            .replace('{total}', String(total));
+    }
+    if (hint) {
+        const sizeLabel = this._formatFileSize(size);
+        const fileLabel = sizeLabel ? `${filename} (${sizeLabel})` : filename;
+        hint.textContent = filename
+            ? i18n.t('loadingFilesCurrent').replace('{file}', fileLabel)
+            : i18n.t('loadingFilesPreparing');
+    }
+};
+
+proto._formatFileSize = function(size) {
+    const bytes = Number(size);
+    if (!Number.isFinite(bytes) || bytes < 0) return '';
+    const units = ['B', 'kB', 'MB', 'GB', 'TB'];
+    let value = bytes;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex++;
+    }
+    const decimals = unitIndex === 0 ? 0 : (value >= 100 ? 0 : value >= 10 ? 1 : 2);
+    return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+};
+
+proto._hideFileLoadingOverlay = function() {
+    const overlay = document.getElementById('file-loading-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('show');
+    setTimeout(() => overlay.remove(), 220);
 };
 
 proto.reloadActiveFile = async function() {
@@ -259,9 +368,7 @@ proto._openResultFilesFromUser = async function() {
     if (this._canUseFileSystemPicker()) {
         try {
             const picked = await this._pickResultFilesWithHandles({ multiple: true });
-            for (const { file, fileHandle } of picked) {
-                await this.loadFile(file, { fileHandle });
-            }
+            await this.loadFiles(picked);
             return;
         } catch (err) {
             if (err?.name === 'AbortError') return;
@@ -314,10 +421,78 @@ proto._fileDisplayName = function(entry) {
 
 proto._parseResultBuffer = async function(filename, buffer) {
     const extension = this._fileExtension(filename);
-    if (extension === '.csv') return this.csvParser.parse(buffer);
+    if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer);
     if (extension === '.mat') return this.parser.parse(buffer);
-    if (this._looksLikeTextBuffer(buffer)) return this.csvParser.parse(buffer);
+    if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer);
     throw new Error(i18n.t('invalidFile'));
+};
+
+proto._parseCsvResultBuffer = async function(filename, buffer) {
+    if (!this._canUseParserWorker()) return this.csvParser.parse(buffer);
+    try {
+        return await this._parseCsvInWorker(filename, buffer);
+    } catch (err) {
+        if (err?.workerUnavailable) return this.csvParser.parse(buffer);
+        throw err;
+    }
+};
+
+proto._canUseParserWorker = function() {
+    return typeof window !== 'undefined'
+        && typeof Worker !== 'undefined'
+        && window.location?.protocol !== 'file:';
+};
+
+proto._getParserWorker = function() {
+    if (this._parserWorker) return this._parserWorker;
+    if (!this._parserWorkerPending) this._parserWorkerPending = new Map();
+    try {
+        this._parserWorker = new Worker(new URL('../../workers/result-parser-worker.js', import.meta.url), { type: 'module' });
+    } catch (err) {
+        const unavailable = new Error(err?.message || 'Parser worker unavailable');
+        unavailable.workerUnavailable = true;
+        throw unavailable;
+    }
+
+    this._parserWorker.addEventListener('message', (event) => {
+        const { id, ok, data, error } = event.data || {};
+        const pending = this._parserWorkerPending?.get(id);
+        if (!pending) return;
+        this._parserWorkerPending.delete(id);
+        if (ok) {
+            pending.resolve(data);
+            return;
+        }
+        const err = new Error(error?.message || 'CSV parse failed');
+        err.name = error?.name || 'Error';
+        err.stack = error?.stack || err.stack;
+        pending.reject(err);
+    });
+
+    this._parserWorker.addEventListener('error', (event) => {
+        const err = new Error(event?.message || 'Parser worker failed');
+        for (const [, pending] of this._parserWorkerPending || []) pending.reject(err);
+        this._parserWorkerPending?.clear();
+        this._parserWorker?.terminate();
+        this._parserWorker = null;
+    });
+
+    return this._parserWorker;
+};
+
+proto._parseCsvInWorker = function(filename, buffer) {
+    const worker = this._getParserWorker();
+    const id = `parse-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const workerBuffer = buffer.slice(0);
+    return new Promise((resolve, reject) => {
+        this._parserWorkerPending.set(id, { resolve, reject });
+        try {
+            worker.postMessage({ id, filename, buffer: workerBuffer }, [workerBuffer]);
+        } catch (err) {
+            this._parserWorkerPending.delete(id);
+            reject(err);
+        }
+    });
 };
 
 proto._looksLikeTextBuffer = function(buffer) {
@@ -449,6 +624,8 @@ proto._updateActionButtons = function() {
 
 proto._renderFilesList = function() {
     const list = document.getElementById('files-list');
+    const count = document.getElementById('files-count');
+    if (count) count.textContent = `(${this.files.size})`;
     list.innerHTML = '';
     for (const [fileId, entryData] of this.files) {
         const { name } = entryData;

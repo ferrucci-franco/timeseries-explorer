@@ -82,7 +82,7 @@
 
             <!-- Files Panel -->
             <div class="sidebar-section" id="files-section">
-                <h3 data-i18n="files">Files</h3>
+                <h3><span data-i18n="files">Files</span> <span id="files-count" class="section-count">(0)</span></h3>
                 <div id="files-list" class="files-list"></div>
             </div>
 
@@ -168,10 +168,18 @@
                     <input type="checkbox" id="hover-proximity" checked>
                     <span data-i18n="hoverProximity">Hover by proximity</span>
                 </label>
-                <label class="checkbox-label">
-                    <input type="checkbox" id="sync-hover">
-                    <span data-i18n="syncHover">Synchronized hover</span>
-                </label>
+                <div class="legend-overlay-row">
+                    <label class="checkbox-label legend-overlay-option">
+                        <input type="checkbox" id="sync-hover">
+                        <span data-i18n="syncHover">Synchronized hover</span>
+                    </label>
+                    <div id="sync-hover-corner-picker" class="legend-corner-picker hover-corner-picker" role="group" aria-label="Synchronized hover info corner">
+                        <button type="button" class="legend-corner-btn hover-corner-btn" data-corner="tl" title="Top-left corner" aria-label="Top-left corner"></button>
+                        <button type="button" class="legend-corner-btn hover-corner-btn" data-corner="tr" title="Top-right corner" aria-label="Top-right corner"></button>
+                        <button type="button" class="legend-corner-btn hover-corner-btn active" data-corner="bl" title="Bottom-left corner" aria-label="Bottom-left corner"></button>
+                        <button type="button" class="legend-corner-btn hover-corner-btn" data-corner="br" title="Bottom-right corner" aria-label="Bottom-right corner"></button>
+                    </div>
+                </div>
                 <label class="checkbox-label" title="Allow the plot area to scroll vertically so stacked panels can keep a comfortable height." data-i18n-title="scrollablePlotAreaTooltip">
                     <input type="checkbox" id="scrollable-plot-area" aria-label="Scrollable plot area" data-i18n-aria-label="scrollablePlotArea">
                     <span data-i18n="scrollablePlotArea">Scrollable plot area</span>
@@ -202,6 +210,10 @@
                     <label class="radio-label">
                         <input type="radio" name="legend-pos" value="right">
                         <span data-i18n="legendRight">Right of plot</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="legend-pos" value="hidden">
+                        <span data-i18n="legendHidden">Hide legend</span>
                     </label>
                 </div>
                 <div class="options-group">

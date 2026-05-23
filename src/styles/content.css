@@ -736,8 +736,6 @@
 /* Synchronized hover info box */
 .hover-info-box {
     position: absolute;
-    bottom: 28px;
-    left: 10px;
     background-color: var(--bg-primary);
     border: 1px solid var(--border-color);
     border-radius: 6px;
@@ -750,6 +748,34 @@
     display: none;
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     max-width: 260px;
+}
+
+.hover-info-box.hover-corner-tl {
+    top: 42px;
+    left: 10px;
+    right: auto;
+    bottom: auto;
+}
+
+.hover-info-box.hover-corner-tr {
+    top: 42px;
+    right: 10px;
+    bottom: auto;
+    left: auto;
+}
+
+.hover-info-box.hover-corner-bl {
+    bottom: 28px;
+    left: 10px;
+    top: auto;
+    right: auto;
+}
+
+.hover-info-box.hover-corner-br {
+    right: 10px;
+    bottom: 28px;
+    top: auto;
+    left: auto;
 }
 
 .cursor-info-box {
@@ -868,8 +894,59 @@ body.cursor-box-dragging {
     flex: 1;
     min-height: 0;
     min-width: 0;
+    position: relative;
 }
 
 .plotly-container .plotly {
     height: 100% !important;
+}
+
+.cursor-plot-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    pointer-events: none;
+    display: none;
+}
+
+.hover-plot-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    pointer-events: none;
+    display: none;
+}
+
+.hover-overlay-line {
+    position: absolute;
+    width: 0;
+    border-left: 1px dotted rgba(120,120,120,0.75);
+    transform: translateX(-0.5px);
+}
+
+.hover-overlay-dot {
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    border: 1.5px solid #fff;
+    border-radius: 999px;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.28);
+}
+
+.cursor-overlay-line {
+    position: absolute;
+    width: 0;
+    border-left: 2px solid;
+    transform: translateX(-1px);
+}
+
+.cursor-overlay-dot {
+    position: absolute;
+    width: 11px;
+    height: 11px;
+    border: 2px solid;
+    border-radius: 999px;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 2px var(--bg-primary), 0 1px 4px rgba(0,0,0,0.25);
 }

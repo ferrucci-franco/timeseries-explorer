@@ -29,11 +29,12 @@ class PlotManager {
         this.legendPosition = 'overlay';
         this.legendOverlayCorner = 'tl';
         this.timeseriesVisualMaxPoints = PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
-        this.phaseVisualMaxPoints = null;
+        this.phaseVisualMaxPoints = PlotManager.DEFAULT_VISUAL_MAX_POINTS_PHASE;
         this._syncing       = false;
         this._syncSourcePanelId = null;
         this._pendingAxisSync = null;
         this.syncHover      = false;
+        this.hoverInfoCorner = 'bl';
         this.hoverProximity = true;
         this.mouseWheelZoom = true;
         this._hovering      = false;
@@ -246,11 +247,14 @@ class PlotManager {
 
     setTheme(theme)            { this.theme = theme;          this._relayoutAll(); }
     setSyncAxes(v)             { this.syncAxes = v; }
-    setLegendPosition(pos)     { this.legendPosition = pos;   this._relayoutAll(); }
+    setLegendPosition(pos) {
+        this.legendPosition = ['overlay', 'above', 'right', 'hidden'].includes(pos) ? pos : 'overlay';
+        this._relayoutLegendAll();
+    }
     setLegendOverlayCorner(corner) {
         if (!['tl', 'tr', 'bl', 'br'].includes(corner)) return;
         this.legendOverlayCorner = corner;
-        if (this.legendPosition === 'overlay') this._relayoutAll();
+        if (this.legendPosition === 'overlay') this._relayoutLegendAll();
     }
     setTimeseriesDownsamplingLimit(limit) {
         this.timeseriesVisualMaxPoints = this._normalizeTimeseriesDownsamplingLimit(limit);
@@ -263,7 +267,16 @@ class PlotManager {
     setSyncHover(v) {
         this.syncHover = v;
         document.body.classList.toggle('sync-hover-active', v);
-        if (!v) this._clearHoverMarkers();
+        if (!v) this._clearHoverMarkers({ deferPlotly: true });
+    }
+    setHoverInfoCorner(corner) {
+        if (!['tl', 'tr', 'bl', 'br'].includes(corner)) return;
+        this.hoverInfoCorner = corner;
+        for (const [, plot] of this.plots) {
+            const panelEl = plot?.div?.closest('.layout-panel');
+            const box = panelEl?.querySelector('.hover-info-box');
+            if (box) this._applyHoverInfoBoxPosition(box);
+        }
     }
     setHoverProximity(v) {
         const next = !!v;
@@ -280,7 +293,9 @@ class PlotManager {
         const next = !!v;
         if (this.mouseWheelZoom === next) return;
         this.mouseWheelZoom = next;
-        for (const [id] of this.plots) this._rebuildPanel(id, { preserveView: true });
+        for (const [, plot] of this.plots) {
+            this._applyMouseWheelZoomConfig(plot?.div, next);
+        }
     }
 
     _getPlotlyConfig(overrides = {}) {
@@ -293,9 +308,45 @@ class PlotManager {
         };
     }
 
+    _applyMouseWheelZoomConfig(div, enabled = this.mouseWheelZoom) {
+        if (!div?._context) return;
+        const value = enabled ? 1 : 0;
+        div._context.scrollZoom = !!enabled;
+        div._context._scrollZoom = {
+            ...(div._context._scrollZoom || {}),
+            cartesian: value,
+            gl3d: value,
+            geo: value,
+            mapbox: value,
+            map: value,
+        };
+        if (div._fullLayout) {
+            div._fullLayout._enablescrollzoom = !!enabled;
+            for (const key of Object.keys(div._fullLayout)) {
+                const scene = div._fullLayout[key];
+                if (key.startsWith('scene') && scene?._scene?.camera) {
+                    scene._scene.camera.enableWheel = !!enabled;
+                }
+            }
+        }
+    }
+
     resizeAll() {
         for (const [, plot] of this.plots) {
-            if (plot.div) Plotly.Plots.resize(plot.div);
+            if (!plot.div) continue;
+            Promise.resolve(Plotly.Plots.resize(plot.div)).then(() => {
+                this._refreshPanelDomOverlays(plot);
+            });
+        }
+    }
+
+    _refreshPanelDomOverlays(plot) {
+        if (!plot?.div || !plot.div.isConnected) return;
+        if (plot.mode === 'timeseries' && plot.cursors?.enabled && typeof this._renderCursorOverlay === 'function') {
+            this._renderCursorOverlay(plot);
+        }
+        if (this.syncHover && typeof this._hideHoverOverlay === 'function') {
+            this._hideHoverOverlay(plot);
         }
     }
 
@@ -754,15 +805,22 @@ class PlotManager {
                     e.stopPropagation();
                     const startX = e.clientX, startY = e.clientY;
                     const x0 = xa.range.slice(), y0 = ya.range.slice();
+                    const xNumeric0 = x0.map(value => this._coerceAxisValue(value));
+                    const yNumeric0 = y0.map(value => Number(value));
+                    if (!xNumeric0.every(Number.isFinite) || !yNumeric0.every(Number.isFinite)) return;
                     const xLen = xa._length, yLen = ya._length;
+                    const isDateXAxis = xa.type === 'date';
+                    const formatXRange = (range) => isDateXAxis
+                        ? range.map(value => new Date(value).toISOString())
+                        : range;
                     const onMove = (mv) => {
-                        const xSpan = x0[1] - x0[0];
-                        const ySpan = y0[1] - y0[0];
+                        const xSpan = xNumeric0[1] - xNumeric0[0];
+                        const ySpan = yNumeric0[1] - yNumeric0[0];
                         const dx = -((mv.clientX - startX) / xLen) * xSpan;
                         const dy =  ((mv.clientY - startY) / yLen) * ySpan;
                         Plotly.relayout(div, {
-                            'xaxis.range': [x0[0] + dx, x0[1] + dx],
-                            'yaxis.range': [y0[0] + dy, y0[1] + dy],
+                            'xaxis.range': formatXRange([xNumeric0[0] + dx, xNumeric0[1] + dx]),
+                            'yaxis.range': [yNumeric0[0] + dy, yNumeric0[1] + dy],
                         });
                     };
                     const onUp = () => {
@@ -832,7 +890,10 @@ class PlotManager {
                     });
                 }, 50);
             });
-            div.on('plotly_afterplot', () => this._installLegendHoverHint(div));
+            div.on('plotly_afterplot', () => {
+                this._installLegendHoverHint(div);
+                this._refreshPanelDomOverlays(plot);
+            });
             this._installLegendHoverHint(div);
             // Pre-allocate marker trace for hover sync on all modes
             this._initMarkerTrace(plot);
@@ -842,7 +903,11 @@ class PlotManager {
             let timer;
             const ro = new ResizeObserver(() => {
                 clearTimeout(timer);
-                timer = setTimeout(() => Plotly.Plots.resize(div), 50);
+                timer = setTimeout(() => {
+                    Promise.resolve(Plotly.Plots.resize(div)).then(() => {
+                        requestAnimationFrame(() => this._refreshPanelDomOverlays(plot));
+                    });
+                }, 50);
             });
             ro.observe(panelEl);
             plot.resizeObserver = ro;
@@ -1141,20 +1206,11 @@ class PlotManager {
             return;
         }
 
-        // Validate every other file has all required variables; abort on first missing
-        for (const [, entry] of otherFiles) {
-            for (const v of vars) {
-                if (!entry.data.variables[v]) {
-                    const body = i18n.t('compareFilesErrorBody')
-                        .replace('{file}', this._escapeHTML(entry.name))
-                        .replace('{var}', this._escapeHTML(v));
-                    Modal.alert(i18n.t('compareFilesErrorTitle'), body, { html: true });
-                    return;
-                }
-            }
-        }
+        const foundByVar = new Map([...vars].map(v => [v, []]));
+        const missingByFile = [];
+        let addedCount = 0;
 
-        // Clone traces with the new fileId for each other file. Dedupe originals first so
+        // Clone traces with the new fileId where the variables exist. Dedupe originals first so
         // that running overlay a second time (after loading more files) doesn't multiply
         // copies by the number of files already overlaid.
         if (plot.mode === 'timeseries') {
@@ -1164,15 +1220,23 @@ class PlotManager {
                 seen.add(t.varName);
                 return true;
             });
-            for (const [fid] of otherFiles) {
+            for (const [fid, entry] of otherFiles) {
+                const missing = [];
                 for (const t of originals) {
+                    if (!entry.data.variables[t.varName]) {
+                        missing.push(t.varName);
+                        continue;
+                    }
                     plot.traces.push({
                         varName: t.varName,
                         color:   this._nextTraceColor(plot.traces),
                         fileId:  fid,
                         visible: t.visible ?? true,
                     });
+                    foundByVar.get(t.varName)?.push(entry.name);
+                    addedCount++;
                 }
+                if (missing.length) missingByFile.push({ file: entry.name, vars: missing });
             }
         } else {
             const seen = new Set();
@@ -1182,19 +1246,60 @@ class PlotManager {
                 seen.add(key);
                 return true;
             });
-            for (const [fid] of otherFiles) {
+            for (const [fid, entry] of otherFiles) {
+                const missing = new Set();
                 for (const pt of originals) {
+                    const needed = [pt.x, pt.y, pt.z].filter(Boolean);
+                    const missingForTrace = needed.filter(v => !entry.data.variables[v]);
+                    if (missingForTrace.length) {
+                        missingForTrace.forEach(v => missing.add(v));
+                        continue;
+                    }
                     plot.phaseTraces.push({
                         x: pt.x, y: pt.y, z: pt.z || null,
                         color:   this._nextTraceColor(plot.phaseTraces),
                         fileId:  fid,
                         visible: pt.visible ?? true,
                     });
+                    needed.forEach(v => foundByVar.get(v)?.push(entry.name));
+                    addedCount++;
                 }
+                if (missing.size) missingByFile.push({ file: entry.name, vars: [...missing] });
             }
         }
 
+        if (!addedCount) {
+            const body = i18n.t('compareFilesNoMatches')
+                .replace('{vars}', this._escapeHTML([...vars].join(', ')));
+            Modal.alert(i18n.t('compareFilesErrorTitle'), body, { html: true });
+            return;
+        }
+
         this._rebuildPanel(panelId);
+        this._showCompareSummary(foundByVar, missingByFile);
+    }
+
+    _showCompareSummary(foundByVar, missingByFile = []) {
+        const foundRows = [...foundByVar.entries()]
+            .filter(([, files]) => files.length)
+            .map(([varName, files]) => {
+                const uniqueFiles = [...new Set(files)];
+                return `<li><b>${this._escapeHTML(varName)}</b>: ${uniqueFiles.map(f => this._escapeHTML(f)).join(', ')}</li>`;
+            })
+            .join('');
+        const skippedRows = missingByFile.length
+            ? `<p>${this._escapeHTML(i18n.t('compareFilesSkippedIntro'))}</p><ul>${
+                missingByFile.map(({ file, vars }) =>
+                    `<li>${this._escapeHTML(file)}: ${vars.map(v => this._escapeHTML(v)).join(', ')}</li>`
+                ).join('')
+            }</ul>`
+            : '';
+        const body = `
+            <p>${this._escapeHTML(i18n.t('compareFilesSummaryIntro'))}</p>
+            <ul>${foundRows}</ul>
+            ${skippedRows}
+        `;
+        Modal.alert(i18n.t('compareFilesSummaryTitle'), body, { html: true });
     }
 
     _showPanelStats(panelId) {
@@ -1342,7 +1447,7 @@ class PlotManager {
     _normalizePhaseDownsamplingLimit(limit) {
         if (limit == null || limit === false) return null;
         const n = Number(limit);
-        return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+        return Number.isFinite(n) && n > 0 ? Math.round(n) : PlotManager.DEFAULT_VISUAL_MAX_POINTS_PHASE;
     }
 
     _isVisible(traceState) {
@@ -1532,6 +1637,24 @@ class PlotManager {
             this._hideCursorBox(panelEl);
             this._updatePlaceholder(panelId, panelEl);
             this._refreshActionBtns(panelId);
+        }
+    }
+
+    _relayoutLegendAll() {
+        const { gridColor, legendBg } = this._colors();
+        const legend = this._legendConfig(legendBg, gridColor);
+        for (const [, plot] of this.plots) {
+            if (!plot.div) continue;
+            const update = {
+                legend,
+                showlegend: this.legendPosition !== 'hidden',
+            };
+            if (plot.mode === 'timeseries') {
+                update.margin = this._marginConfig();
+                update.margin.b += 6;
+            }
+            else if (plot.mode === 'phase2d') update.margin = { l: 60, r: 15, t: this.legendPosition === 'above' ? 50 : 10, b: 50 };
+            Plotly.relayout(plot.div, update);
         }
     }
 
@@ -1761,6 +1884,7 @@ class PlotManager {
         switch (this.legendPosition) {
             case 'above':   return { ...base, orientation: 'h', x: 0.5, xanchor: 'center', y: 1.02, yanchor: 'bottom' };
             case 'right':   return { ...base, x: 1.02, y: 0.5, xanchor: 'left', yanchor: 'middle' };
+            case 'hidden':  return { ...base, visible: false };
             default:
                 switch (this.legendOverlayCorner) {
                     case 'tr': return { ...base, x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top' };
@@ -1783,6 +1907,7 @@ class PlotManager {
     ];
     static GL_POINT_THRESHOLD = 50000;
     static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 4000;
+    static DEFAULT_VISUAL_MAX_POINTS_PHASE = 4000;
 
     _nextColor(idx) { return PlotManager.COLORS[idx % PlotManager.COLORS.length]; }
     _nextTraceColor(traceStates) {

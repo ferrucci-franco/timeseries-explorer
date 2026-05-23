@@ -102,7 +102,7 @@ proto.initEventListeners = function() {
     document.getElementById('file-input').addEventListener('change', async (e) => {
         const files = Array.from(e.target.files || []);
         e.target.value = '';
-        for (const f of files) await this.loadFile(f);
+        await this.loadFiles(files);
     });
 
     document.getElementById('link-time-axes').addEventListener('change', (e) => {
@@ -111,6 +111,7 @@ proto.initEventListeners = function() {
 
     document.getElementById('sync-hover').addEventListener('change', (e) => {
         this.plotManager.setSyncHover(e.target.checked);
+        this._syncHoverCornerPicker();
     });
 
     document.getElementById('hover-proximity').addEventListener('change', (e) => {
@@ -151,11 +152,19 @@ proto.initEventListeners = function() {
     });
     document.querySelectorAll('.legend-corner-btn').forEach(btn => {
         btn.addEventListener('click', () => {
+            if (btn.classList.contains('hover-corner-btn')) return;
             this.plotManager.setLegendOverlayCorner(btn.getAttribute('data-corner'));
             this._syncLegendCornerPicker();
         });
     });
     this._syncLegendCornerPicker();
+    document.querySelectorAll('.hover-corner-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            this.plotManager.setHoverInfoCorner(btn.getAttribute('data-corner'));
+            this._syncHoverCornerPicker();
+        });
+    });
+    this._syncHoverCornerPicker();
 
     document.getElementById('reset-layout').addEventListener('click', async () => {
         const ok = await Modal.confirm(i18n.t('resetLayoutWarning'), { icon: '⬜' });
@@ -242,6 +251,28 @@ proto._syncLegendCornerPicker = function() {
         const isActive = this.plotManager.legendOverlayCorner === corner;
         btn.classList.toggle('active', isActive);
         btn.disabled = !isOverlay;
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+};
+
+proto._syncHoverCornerPicker = function() {
+    const picker = document.getElementById('sync-hover-corner-picker');
+    if (!picker) return;
+
+    const titleKeys = {
+        tl: 'legendCornerTopLeft',
+        tr: 'legendCornerTopRight',
+        bl: 'legendCornerBottomLeft',
+        br: 'legendCornerBottomRight',
+    };
+
+    picker.querySelectorAll('.hover-corner-btn').forEach(btn => {
+        const corner = btn.getAttribute('data-corner');
+        const label = i18n.t(titleKeys[corner] || 'legendCornerBottomLeft');
+        const isActive = this.plotManager.hoverInfoCorner === corner;
+        btn.classList.toggle('active', isActive);
         btn.title = label;
         btn.setAttribute('aria-label', label);
         btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
@@ -1072,9 +1103,7 @@ proto.initDragAndDrop = function() {
         dropZone.classList.remove('dragging');
         const files = await this._getDroppedResultFiles(e.dataTransfer);
         if (!files.length) { alert(i18n.t('invalidFile')); return; }
-        for (const { file, fileHandle } of files) {
-            await this.loadFile(file, { fileHandle });
-        }
+        await this.loadFiles(files);
     });
 };
 

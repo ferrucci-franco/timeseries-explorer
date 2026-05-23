@@ -87,6 +87,11 @@
     letter-spacing: 0.5px;
 }
 
+.section-count {
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
 .tree-controls {
     display: flex;
     gap: 0.25rem;

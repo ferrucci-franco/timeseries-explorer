@@ -141,6 +141,7 @@ proto._captureSessionSettings = function() {
         reloadAsNewVersionMode: !!this.reloadAsNewVersionMode,
         syncAxes: !!this.plotManager.syncAxes,
         syncHover: !!this.plotManager.syncHover,
+        hoverInfoCorner: this.plotManager.hoverInfoCorner,
         hoverProximity: !!this.plotManager.hoverProximity,
         legendPosition: this.plotManager.legendPosition,
         legendOverlayCorner: this.plotManager.legendOverlayCorner,
@@ -350,6 +351,7 @@ proto._applySessionSettings = function(settings) {
     this.reloadAsNewVersionMode = !!settings.reloadAsNewVersionMode;
     this.plotManager.setSyncAxes(settings.syncAxes !== false);
     this.plotManager.setSyncHover(!!settings.syncHover);
+    this.plotManager.setHoverInfoCorner(settings.hoverInfoCorner || 'bl');
     this.plotManager.setHoverProximity(settings.hoverProximity !== false);
     this.plotManager.setLegendPosition(settings.legendPosition || 'overlay');
     this.plotManager.setLegendOverlayCorner(settings.legendOverlayCorner || 'tl');
@@ -359,6 +361,7 @@ proto._applySessionSettings = function(settings) {
     this.scrollablePlotArea = !!settings.scrollablePlotArea;
     this.layoutManager.setScrollablePlotArea(this.scrollablePlotArea);
     this._syncScrollablePlotAreaUI();
+    this._syncHoverCornerPicker?.();
 };
 
 proto._applySessionFileMetadata = function(session, fileMap) {

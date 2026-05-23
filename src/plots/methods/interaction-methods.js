@@ -60,6 +60,7 @@ proto._onRelayout = function(sourcePanelId, eventData) {
             const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
             this._refreshTimeseriesVisuals(sourcePanelId, plot, visibleRange);
         }
+        if (plot?.cursors?.enabled) this._renderCursorOverlay(plot);
     }
 
     if (!this.syncAxes) return;
@@ -204,33 +205,8 @@ proto._onHover = function(sourcePanelId, eventData) {
             const targetTimeSuffix = (targetTimeUnit === 'datetime' || targetTimeUnit === 'duration') ? '' : ' ' + this._escapeHTML(targetTimeUnit);
 
             if (plot.mode === 'timeseries') {
-                const layoutUpdate = {
-                    shapes: this._panelGuideShapes(plot, [{
-                        type: 'line', xref: 'x', yref: 'paper',
-                        x0: plotXVal, x1: plotXVal, y0: 0, y1: 1,
-                        line: { color: 'rgba(120,120,120,0.6)', width: 1, dash: 'dot' },
-                    }]),
-                    ...this._xAxisRangeLock(plot),
-                };
-                if (plot.markerTraceIdx != null) {
-                    const xs = [], ys = [];
-                    plot.traces.forEach(t => {
-                        const hidden  = t.visible === 'legendonly' || t.visible === false;
-                        const d       = this.files.get(t.fileId)?.data;
-                        const v       = d?.variables[t.varName];
-                        const tdata   = this._getTransformedTimeData(t.fileId);
-                        const traceXVal = this._mapTimeValueBetweenFiles(srcFid, t.fileId, sourceXVal);
-                        const tidx    = this._findTimeIdx(tdata, traceXVal);
-                        const ydata   = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
-                        const matchedX = tdata[tidx];
-                        if (!hidden && v && v.kind !== 'parameter' && ydata.length) { xs.push(this._plotlyTimeValue(t.fileId, matchedX, this._getTimeVar(t.fileId))); ys.push(ydata[tidx]); }
-                        else { xs.push(null); ys.push(null); }
-                    });
-                    Plotly.update(plot.div, { x: [xs], y: [ys], visible: true }, layoutUpdate, [plot.markerTraceIdx]);
-                } else {
-                    Plotly.relayout(plot.div, layoutUpdate);
-                }
                 const lines = [`<b>t = ${this._escapeHTML(formatHoverTime(targetFid, xVal))}${targetTimeSuffix}</b>`];
+                const markers = [];
                 plot.traces.forEach(t => {
                     if (t.visible === 'legendonly' || t.visible === false) return;
                     const d    = this.files.get(t.fileId)?.data;
@@ -242,9 +218,18 @@ proto._onHover = function(sourcePanelId, eventData) {
                     if (v && v.kind !== 'parameter' && ydata.length) {
                         const unit  = this._extractUnit(v.description);
                         const label = this._traceName(t.varName, t.fileId);
+                        const matchedX = tdata[tidx];
+                        if (Number.isFinite(matchedX) && Number.isFinite(ydata[tidx])) {
+                            markers.push({
+                                x: this._plotlyTimeValue(t.fileId, matchedX, this._getTimeVar(t.fileId)),
+                                y: ydata[tidx],
+                                color: t.color,
+                            });
+                        }
                         lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatHTMLNumber(ydata[tidx])}${unit ? ' ' + this._escapeHTML(unit) : ''}`);
                     }
                 });
+                this._renderHoverOverlay(plot, plotXVal, markers);
                 this._showInfoBox(panelEl, lines.join('<br>'));
 
             } else if (plot.mode === 'phase2d') {
@@ -380,24 +365,95 @@ proto._onUnhover = function(sourcePanelId) {
     }, 80);
 };
 
-proto._clearHoverMarkers = function() {
+proto._hoverOverlayGeometry = function(plot, x, y = null) {
+    if (!plot?.div) return null;
+    const xValue = this._coerceAxisValue(x);
+    if (!Number.isFinite(xValue)) return null;
+    const fl = plot.div._fullLayout;
+    const xa = fl?.xaxis;
+    const ya = fl?.yaxis;
+    if (!xa?.range || !ya?.range || !xa._length || !ya._length) return null;
+
+    const x0 = this._coerceAxisValue(xa.range[0]);
+    const x1 = this._coerceAxisValue(xa.range[1]);
+    const rx = x1 - x0;
+    if (!Number.isFinite(x0) || !Number.isFinite(x1) || rx === 0) return null;
+
+    const left = (xa._offset || 0) + ((xValue - x0) / rx) * xa._length;
+    const leftAxis = xa._offset || 0;
+    const rightAxis = leftAxis + xa._length;
+    const topAxis = ya._offset || 0;
+    const bottomAxis = topAxis + ya._length;
+    const y0 = Number(ya.range[0]);
+    const y1 = Number(ya.range[1]);
+    const ry = y1 - y0;
+    const top = Number.isFinite(y) && Number.isFinite(y0) && Number.isFinite(y1) && ry !== 0
+        ? topAxis + (1 - ((y - y0) / ry)) * ya._length
+        : NaN;
+
+    return { left, leftAxis, rightAxis, top, topAxis, bottomAxis };
+};
+
+proto._renderHoverOverlay = function(plot, x, markers = []) {
+    if (!plot?.div) return;
+    let overlay = plot.div.querySelector('.hover-plot-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'hover-plot-overlay';
+        plot.div.appendChild(overlay);
+    }
+
+    const line = this._hoverOverlayGeometry(plot, x);
+    if (!line || line.left < line.leftAxis || line.left > line.rightAxis) {
+        overlay.style.display = 'none';
+        overlay.innerHTML = '';
+        return;
+    }
+
+    const parts = [
+        `<div class="hover-overlay-line" style="left:${line.left}px;top:${line.topAxis}px;height:${Math.max(0, line.bottomAxis - line.topAxis)}px"></div>`,
+    ];
+    for (const marker of markers) {
+        const g = this._hoverOverlayGeometry(plot, marker.x, marker.y);
+        if (!g || g.left < g.leftAxis || g.left > g.rightAxis || !Number.isFinite(g.top) || g.top < g.topAxis || g.top > g.bottomAxis) continue;
+        const color = this._escapeHTML(marker.color || '#888888');
+        parts.push(`<div class="hover-overlay-dot" style="left:${g.left}px;top:${g.top}px;background:${color}"></div>`);
+    }
+    overlay.innerHTML = parts.join('');
+    overlay.style.display = 'block';
+};
+
+proto._hideHoverOverlay = function(plot) {
+    const overlay = plot?.div?.querySelector('.hover-plot-overlay');
+    if (overlay) {
+        overlay.style.display = 'none';
+        overlay.innerHTML = '';
+    }
+};
+
+proto._clearHoverMarkers = function(options = {}) {
+    const plotlyClears = [];
     for (const [, plot] of this.plots) {
         if (!plot.div) continue;
         const panelEl = plot.div.closest('.layout-panel');
         this._hideInfoBox(panelEl);
         if (plot.mode === 'timeseries') {
-            Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot), ...this._xAxisRangeLock(plot) });
+            this._hideHoverOverlay(plot);
         }
         if (plot.markerTraceIdx != null) {
+            if (plot.mode === 'timeseries') continue;
             const idxList = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx : [plot.markerTraceIdx];
             idxList.forEach(i => {
                 const is3d = plot.mode === 'phase2dt' || plot.mode === 'phase3d';
                 const upd = is3d ? { x: [[null]], y: [[null]], z: [[null]], visible: false }
                                 : { x: [[null]], y: [[null]], visible: false };
-                Plotly.restyle(plot.div, upd, [i]);
+                plotlyClears.push(() => Plotly.restyle(plot.div, upd, [i]));
             });
         }
     }
+    const runPlotlyClears = () => plotlyClears.forEach(fn => fn());
+    if (options.deferPlotly && plotlyClears.length) requestAnimationFrame(runPlotlyClears);
+    else runPlotlyClears();
 };
 
 proto._showInfoBox = function(panelEl, html) {
@@ -409,6 +465,7 @@ proto._showInfoBox = function(panelEl, html) {
         panelEl.appendChild(box);
     }
     box.innerHTML = html;
+    this._applyHoverInfoBoxPosition(box);
     box.style.display = 'block';
 };
 
@@ -416,6 +473,12 @@ proto._hideInfoBox = function(panelEl) {
     if (!panelEl) return;
     const box = panelEl.querySelector('.hover-info-box');
     if (box) box.style.display = 'none';
+};
+
+proto._applyHoverInfoBoxPosition = function(box) {
+    const corner = ['tl', 'tr', 'bl', 'br'].includes(this.hoverInfoCorner) ? this.hoverInfoCorner : 'bl';
+    box.classList.remove('hover-corner-tl', 'hover-corner-tr', 'hover-corner-bl', 'hover-corner-br');
+    box.classList.add(`hover-corner-${corner}`);
 };
 
 // ─── Measurement cursors (time-series panels) ─────────────────
@@ -438,8 +501,9 @@ proto._toggleCursors = function(panelId) {
         document.body.classList.remove('cursor-dragging', 'cursor-box-dragging');
         plot.div.style.cursor = '';
         plot.div.closest('.layout-panel')?.classList.remove('cursor-near');
+        this._hideCursorOverlay(plot);
         this._hideCursorBox(plot.div.closest('.layout-panel'));
-        this._rebuildPanel(panelId, { preserveView: true });
+        this._refreshActionBtns(panelId);
     }
 };
 
@@ -756,14 +820,90 @@ proto._jumpCursorTo = function(panelId, which, target, direction = 'next') {
 };
 
 proto._panelGuideShapes = function(plot, extra = []) {
-    return [...this._cursorShapes(plot), ...extra];
+    return extra;
 };
 
 proto._syncCursorDisplay = function(panelId, plot) {
     if (!plot?.div || plot.mode !== 'timeseries') return;
     if (plot.cursors?.enabled) this._ensureCursorPositions(plot);
-    Plotly.relayout(plot.div, { shapes: this._panelGuideShapes(plot), ...this._xAxisRangeLock(plot) });
+    if (plot.cursors?.enabled) this._renderCursorOverlay(plot);
+    else this._hideCursorOverlay(plot);
     this._updateCursorBox(panelId, plot);
+};
+
+proto._cursorOverlayGeometry = function(plot, trace, x) {
+    if (!plot?.div || !trace || !Number.isFinite(x)) return null;
+    const fl = plot.div._fullLayout;
+    const xa = fl?.xaxis;
+    const ya = fl?.yaxis;
+    if (!xa?.range || !ya?.range || !xa._length || !ya._length) return null;
+
+    const x0 = this._coerceAxisValue(xa.range[0]);
+    const x1 = this._coerceAxisValue(xa.range[1]);
+    const rx = x1 - x0;
+    if (!Number.isFinite(x0) || !Number.isFinite(x1) || rx === 0) return null;
+
+    const times = this._getTransformedTimeData(trace.fileId);
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+    const y = this._interpolateAt(times, values, x, this._traceInterpolationMode(trace));
+    const y0 = Number(ya.range[0]);
+    const y1 = Number(ya.range[1]);
+    const ry = y1 - y0;
+
+    const left = (xa._offset || 0) + ((x - x0) / rx) * xa._length;
+    const leftAxis = xa._offset || 0;
+    const rightAxis = leftAxis + xa._length;
+    const topAxis = ya._offset || 0;
+    const bottomAxis = topAxis + ya._length;
+    const top = Number.isFinite(y) && Number.isFinite(y0) && Number.isFinite(y1) && ry !== 0
+        ? topAxis + (1 - ((y - y0) / ry)) * ya._length
+        : NaN;
+
+    return { left, leftAxis, rightAxis, top, topAxis, bottomAxis, y };
+};
+
+proto._renderCursorOverlay = function(plot) {
+    if (!plot?.div || !plot.cursors?.enabled) return;
+    let overlay = plot.div.querySelector('.cursor-plot-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'cursor-plot-overlay';
+        plot.div.appendChild(overlay);
+    }
+
+    const traceA = this._resolveCursorTrace(plot, 'a');
+    const traceB = this._resolveCursorTrace(plot, 'b');
+    const items = [
+        { key: 'a', trace: traceA, x: plot.cursors.a, color: traceA?.color || '#ff9800', dash: false },
+        { key: 'b', trace: traceB, x: plot.cursors.b, color: traceB?.color || '#2196f3', dash: this._sameCursorTrace(traceA, traceB) },
+    ];
+    const parts = [];
+    for (const item of items) {
+        const g = this._cursorOverlayGeometry(plot, item.trace, item.x);
+        if (!g) continue;
+        if (g.left < g.leftAxis || g.left > g.rightAxis) continue;
+        const lineStyle = [
+            `left:${g.left}px`,
+            `top:${g.topAxis}px`,
+            `height:${Math.max(0, g.bottomAxis - g.topAxis)}px`,
+            `border-left-color:${item.color}`,
+            item.dash ? 'border-left-style:dashed' : '',
+        ].filter(Boolean).join(';');
+        parts.push(`<div class="cursor-overlay-line cursor-overlay-line-${item.key}" style="${lineStyle}"></div>`);
+        if (Number.isFinite(g.top) && g.top >= g.topAxis && g.top <= g.bottomAxis) {
+            parts.push(`<div class="cursor-overlay-dot cursor-overlay-dot-${item.key}" style="left:${g.left}px;top:${g.top}px;background:${item.color};border-color:${item.color}"></div>`);
+        }
+    }
+    overlay.innerHTML = parts.join('');
+    overlay.style.display = parts.length ? 'block' : 'none';
+};
+
+proto._hideCursorOverlay = function(plot) {
+    const overlay = plot?.div?.querySelector('.cursor-plot-overlay');
+    if (overlay) {
+        overlay.style.display = 'none';
+        overlay.innerHTML = '';
+    }
 };
 
 proto._installCursorHandlers = function(panelId, plot) {
@@ -923,10 +1063,24 @@ proto._updateCursorBox = function(panelId, plot) {
     const colorB = traceB?.color || '#2196f3';
     const visibleTraces = plot.traces
         .filter(t => t.visible !== false && t.visible !== 'legendonly');
+    const traceKey = (trace) => trace ? `${trace.fileId}\u0000${trace.varName}` : '';
+    const optionsKey = visibleTraces
+        .map(t => `${t.fileId}\u0000${t.varName}\u0000${t.color || ''}`)
+        .join('\u0001');
+    const boxSignature = [
+        i18n.currentLang,
+        optionsKey,
+        traceKey(traceA),
+        traceKey(traceB),
+        colorA,
+        colorB,
+        sameTrace ? 'same' : 'different',
+    ].join('\u0002');
     const buildOptions = (selectedTrace) => visibleTraces
         .map((t, index) => {
             const selected = selectedTrace && t.fileId === selectedTrace.fileId && t.varName === selectedTrace.varName ? ' selected' : '';
-            return `<option value="${index}"${selected}>${this._escapeHTML(this._traceName(t.varName, t.fileId))}</option>`;
+            const color = this._escapeHTML(t.color || '#333333');
+            return `<option value="${index}"${selected} style="color:${color}">${this._escapeHTML(this._traceName(t.varName, t.fileId))}</option>`;
         })
         .join('');
     const traceLabel = this._escapeHTML(i18n.t('cursorTraceLabel'));
@@ -964,6 +1118,22 @@ proto._updateCursorBox = function(panelId, plot) {
         </label>
     `;
     const moveIcon = `<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>`;
+    const valuesHTML = `
+            <div><b style="color:${colorA}">A</b> ${labelX}=${this._escapeHTML(this._formatTimeValue(a.fileId, aX))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
+            <div><b style="color:${colorB}">B</b> ${labelX}=${this._escapeHTML(this._formatTimeValue(b.fileId, bX))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
+            <div><b>${labelDx}=</b>${this._escapeHTML(isDateTimeCursor ? this._formatDuration(dx, 'datetime') : (isDurationCursor ? this._formatDuration(dx, 's') : this._formatHTMLNumber(dx)))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)}</div>
+            <div><b>${labelDy}=</b>${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
+            <div><b>${labelSlope}=</b>${this._formatHTMLNumber(slope)}</div>
+            <div><b>${labelInvDx}=</b>${this._formatHTMLNumber(inverseDx)}${unit(inverseTimeUnit)}</div>
+    `;
+    const existingBox = panelEl.querySelector('.cursor-info-box');
+    if (existingBox?.dataset.cursorSignature === boxSignature) {
+        const valuesEl = existingBox.querySelector('.cursor-info-values');
+        if (valuesEl) valuesEl.innerHTML = valuesHTML;
+        this._applyCursorBoxPosition(panelEl, existingBox, plot);
+        existingBox.style.display = 'block';
+        return;
+    }
     const html = `
         <div class="cursor-info-header">
             <span class="cursor-info-title">${moveIcon}${this._escapeHTML(i18n.t('cursorsToggle'))}</span>
@@ -971,15 +1141,11 @@ proto._updateCursorBox = function(panelId, plot) {
         ${selectorsHTML}
         <div class="cursor-info-hint">${shiftHint}</div>
         <div class="cursor-info-values">
-            <div><b style="color:${colorA}">A</b> ${labelX}=${this._escapeHTML(this._formatTimeValue(a.fileId, aX))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
-            <div><b style="color:${colorB}">B</b> ${labelX}=${this._escapeHTML(this._formatTimeValue(b.fileId, bX))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
-            <div><b>${labelDx}=</b>${this._escapeHTML(isDateTimeCursor ? this._formatDuration(dx, 'datetime') : (isDurationCursor ? this._formatDuration(dx, 's') : this._formatHTMLNumber(dx)))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)}</div>
-            <div><b>${labelDy}=</b>${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
-            <div><b>${labelSlope}=</b>${this._formatHTMLNumber(slope)}</div>
-            <div><b>${labelInvDx}=</b>${this._formatHTMLNumber(inverseDx)}${unit(inverseTimeUnit)}</div>
+            ${valuesHTML}
         </div>
     `;
-    this._showCursorBox(panelEl, html, panelId, plot);
+    const box = this._showCursorBox(panelEl, html, panelId, plot);
+    if (box) box.dataset.cursorSignature = boxSignature;
 };
 
 proto._showCursorBox = function(panelEl, html, panelId = null, plot = null) {
@@ -995,6 +1161,11 @@ proto._showCursorBox = function(panelEl, html, panelId = null, plot = null) {
             const which = label.getAttribute('data-cursor');
             const select = label.querySelector('select');
             if (!select || (which !== 'a' && which !== 'b')) return;
+            const syncSelectColor = () => {
+                const option = select.options[select.selectedIndex];
+                select.style.color = option?.style?.color || '';
+            };
+            syncSelectColor();
             select.addEventListener('change', (event) => {
                 const visibleTraces = plot.traces
                     .filter(t => t.visible !== false && t.visible !== 'legendonly');
@@ -1003,6 +1174,7 @@ proto._showCursorBox = function(panelEl, html, panelId = null, plot = null) {
                 const key = which === 'b' ? 'traceB' : 'traceA';
                 plot.cursors[key] = { fileId: selectedTrace.fileId, varName: selectedTrace.varName };
                 plot.cursors[which] = this._clampCursorX(plot, which, plot.cursors[which]);
+                syncSelectColor();
                 this._syncCursorDisplay(panelId, plot);
             });
         });
@@ -1022,6 +1194,7 @@ proto._showCursorBox = function(panelEl, html, panelId = null, plot = null) {
     if (panelId && plot) this._ensureCursorBoxDrag(panelId, plot);
     this._applyCursorBoxPosition(panelEl, box, plot);
     box.style.display = 'block';
+    return box;
 };
 
 proto._applyCursorBoxPosition = function(panelEl, box, plot) {
@@ -1081,14 +1254,7 @@ proto._initMarkerTrace = function(plot) {
     if (!plot.div) return;
 
     if (plot.mode === 'timeseries') {
-        const markerTrace = {
-            x: [null], y: [null], type: 'scatter', mode: 'markers',
-            marker: { size: 9, color: plot.traces.map(t => t.color), line: { color: '#fff', width: 1.5 } },
-            showlegend: false, hoverinfo: 'skip', visible: false, name: '__hover__',
-        };
-        Plotly.addTraces(plot.div, markerTrace).then(() => {
-            plot.markerTraceIdx = plot.div.data.length - 1;
-        });
+        plot.markerTraceIdx = null;
     } else if (plot.mode === 'phase2d') {
         const traces = plot.phaseTraces.map(pt => ({
             x: [null], y: [null], type: 'scatter', mode: 'markers',
