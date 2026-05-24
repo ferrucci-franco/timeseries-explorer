@@ -129,7 +129,8 @@ export default class DuckDbSource {
         const schema = this._arrowRowsToObjects(schemaResult);
 
         const countResult = await this._conn.query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName}`);
-        const totalRows = Number(countResult.getChild(0).get(0));
+        const countCol = countResult.getChildAt(0) || countResult.getChild('n');
+        const totalRows = Number(countCol?.get(0) ?? 0);
 
         const columnNames = schema.map(s => s.column_name);
         const columnTypes = schema.map(s => String(s.column_type || '').toUpperCase());
@@ -260,7 +261,7 @@ export default class DuckDbSource {
     }
 
     _extractColumnAsFloat64(table, idx, type) {
-        const child = table.getChild(idx);
+        const child = table.getChildAt(idx);
         if (!child) return new Float64Array(0);
         // TIMESTAMP / DATE / TIME columns: convert to Unix milliseconds.
         if (/TIMESTAMP|DATE|TIME/.test(type)) {
@@ -298,7 +299,7 @@ export default class DuckDbSource {
     }
 
     _extractColumnAsStrings(table, idx) {
-        const child = table.getChild(idx);
+        const child = table.getChildAt(idx);
         if (!child) return [];
         const arr = new Array(child.length);
         for (let i = 0; i < child.length; i++) {

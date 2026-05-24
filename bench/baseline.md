@@ -130,7 +130,50 @@ through Phase 1.
 
 ## Browser bench results
 
-_(empty — paste JSON from `bench/benchmark.html` here)_
+Captured 2026-05-24 on Firefox 151 (Windows 11, 14 CPU threads). Memory
+columns are null because `performance.memory` is Chrome-only. One run per
+backend, single file (`bench/data/synth-100mb.csv` · 1.5M rows · 9 vars).
+
+| Metric | Legacy | DuckDB-WASM | Delta | Target | Min |
+|---|---:|---:|---|---:|---:|
+| Parse 100 MB | 11 094 ms | **4 335 ms** | **−61% / 2.56× faster** | <500 ms | <2 s |
+| Render initial 1D | 498 ms | 798 ms | +60% (1 run, variance) | <300 ms | <1 s |
+| Zoom worst | 168 ms | 188 ms | ≈ | 16 ms (60 fps) | 33 ms (30 fps) |
+| Zoom best | 81 ms | 116 ms | ≈ | 16 ms | 33 ms |
+| Heatmap 500×500 | 151 ms | 195 ms | ≈ | <500 ms ✅ | <2 s ✅ |
+| Heatmap 1000×1000 | 468 ms | 558 ms | ≈ | <500 ms | <2 s ✅ |
+| Heatmap 2000×2000 | 1 683 ms | 1 996 ms | ≈ | <500 ms | <2 s ✅ |
+
+### Reading
+
+- Parse is the meaningful win. DuckDB-WASM also unblocks the **1 GB scenario
+  that legacy could not parse at all** (`Cannot create a string longer than
+  0x1fffffe8 characters`).
+- Render appears slower under DuckDB in a single run; needs 3–5 runs to
+  confirm vs noise (Plotly first-paint variance is high).
+- Zoom is unchanged by Phase 1.A — expected. The current zoom handler still
+  decimates a JS-side array via `_buildTimeseriesVisualData`. **Phase 1.B
+  rewires zoom to query DuckDB by visible range**, which is what makes
+  60 fps zoom achievable for 5M+ underlying points.
+- Heatmap is independent of the parser backend — unchanged.
+- Parse target (<500 ms / <2 s) still missed at 4 335 ms. Achievable
+  optimizations not yet applied:
+  - Drop `DESCRIBE` + `COUNT(*)` queries (use `arrowTable.schema` /
+    `arrowTable.numRows` from a single `SELECT *`).
+  - Use `LIMIT 0` schema peek to avoid `CREATE TABLE` materialization.
+  - Conditional `ORDER BY` (skip if pre-sorted).
+
+### What unblocks Phase 1.B
+
+The drop-in `parseCsvFile()` returns the legacy structure with
+`Float64Array` columns, so the rest of the app keeps working. Phase 1.B
+will add:
+
+- `getColumnRange(handle, col, t0, t1, maxPoints)` → DuckDB query with
+  `time_bucket()` / `USING SAMPLE` so the result is bounded by viewport.
+- Hook into `_onRelayout` → cancellable last-query-wins via `AbortController`.
+- Keep the parsed-once full structure as fallback for already-loaded files
+  small enough to keep in RAM.
 
 ## Reformulated Phase 2 plan
 
