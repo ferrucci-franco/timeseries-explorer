@@ -113,7 +113,20 @@ export default class DuckDbSource {
      * Returns null if DuckDB cannot read the file; the caller should fall back.
      */
     async parseCsvFile(file, displayName = file.name, opts = {}) {
-        const { lazy = false, overviewPoints = 10000 } = opts;
+        return this._parseFile(file, displayName, { ...opts, format: 'csv' });
+    }
+
+    /**
+     * Parse a Parquet File. Always uses VIEW + lazy queries — Parquet's
+     * columnar layout + projection/predicate pushdown makes every step
+     * cheaper than the CSV path. Use this for GB-scale workflows.
+     */
+    async parseParquetFile(file, displayName = file.name, opts = {}) {
+        return this._parseFile(file, displayName, { ...opts, format: 'parquet' });
+    }
+
+    async _parseFile(file, displayName, opts) {
+        const { lazy = false, overviewPoints = 10000, format = 'csv' } = opts;
         await this.init();
         const id = ++this._nextTableId;
         const handle = `omv_${id}_${displayName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
@@ -121,27 +134,30 @@ export default class DuckDbSource {
         await this.registerFile(handle, file);
         let result = null;
         try {
-            result = await this._loadCsvIntoLegacy(handle, tableName, { lazy, overviewPoints });
+            result = await this._loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format });
         } catch (err) {
             try { await this._conn.query(`DROP TABLE IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
+            try { await this._conn.query(`DROP VIEW IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
             await this.unregisterFile(handle);
             throw err;
         }
         if (!lazy) {
             try { await this._conn.query(`DROP TABLE IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
+            try { await this._conn.query(`DROP VIEW IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
             await this.unregisterFile(handle);
         }
         return result;
     }
 
     /**
-     * Release a lazy file: drop its DuckDB table and unregister the file
-     * handle. Safe to call on eager-mode data (no-op) and idempotent.
+     * Release a lazy file: drop its DuckDB table/view and unregister the
+     * file handle. Safe to call on eager-mode data (no-op) and idempotent.
      */
     async release(legacyData) {
         const meta = legacyData?._duckdb;
         if (!meta) return;
         try { await this._conn.query(`DROP TABLE IF EXISTS ${meta.tableName}`); } catch (_) { /* ignore */ }
+        try { await this._conn.query(`DROP VIEW IF EXISTS ${meta.tableName}`); } catch (_) { /* ignore */ }
         await this.unregisterFile(meta.handle);
         delete legacyData._duckdb;
     }
@@ -203,24 +219,35 @@ export default class DuckDbSource {
         return 'NULL';
     }
 
-    async _loadCsvIntoLegacy(handle, tableName, { lazy, overviewPoints }) {
+    async _loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format }) {
         const escapedHandle = handle.replace(/'/g, "''");
-        const readExpr = `read_csv_auto('${escapedHandle}', sample_size=20000)`;
+        const readExpr = format === 'parquet'
+            ? `read_parquet('${escapedHandle}')`
+            : `read_csv_auto('${escapedHandle}', sample_size=20000)`;
         let viewMode = false;
 
-        try {
-            await this._conn.query(`CREATE TABLE ${tableName} AS SELECT * FROM ${readExpr}`);
-        } catch (err) {
-            const msg = String(err?.message || err);
-            const isOom = /malloc|out of memory|memory|allocation/i.test(msg);
-            if (!lazy || !isOom) {
-                throw new Error(`DuckDB read_csv_auto failed: ${msg}`);
-            }
-            // Lazy + OOM (large file): fall back to a VIEW so we never
-            // materialize the full dataset. Each query re-reads from the CSV
-            // (with projection / predicate pushdown).
+        // Parquet: always use VIEW. Its columnar layout + projection/predicate
+        // pushdown make every later query cheap, and CREATE TABLE would
+        // re-materialize the rows into DuckDB's in-memory row store (losing
+        // the layout advantage and risking OOM for big files).
+        if (format === 'parquet' && lazy) {
             await this._conn.query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${readExpr}`);
             viewMode = true;
+        } else {
+            try {
+                await this._conn.query(`CREATE TABLE ${tableName} AS SELECT * FROM ${readExpr}`);
+            } catch (err) {
+                const msg = String(err?.message || err);
+                const isOom = /malloc|out of memory|memory|allocation/i.test(msg);
+                if (!lazy || !isOom) {
+                    throw new Error(`DuckDB read failed: ${msg}`);
+                }
+                // Lazy + OOM (large file): fall back to a VIEW so we never
+                // materialize the full dataset. Each query re-reads from the
+                // file (with projection / predicate pushdown).
+                await this._conn.query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${readExpr}`);
+                viewMode = true;
+            }
         }
 
         const schemaResult = await this._conn.query(`DESCRIBE ${tableName}`);

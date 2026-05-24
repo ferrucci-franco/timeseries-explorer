@@ -422,6 +422,7 @@ proto._fileDisplayName = function(entry) {
 
 proto._parseResultBuffer = async function(filename, buffer, file = null) {
     const extension = this._fileExtension(filename);
+    if (extension === '.parquet') return this._parseParquetResult(filename, file);
     if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file);
     if (extension === '.mat') return this.parser.parse(buffer);
     if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file);
@@ -431,8 +432,29 @@ proto._parseResultBuffer = async function(filename, buffer, file = null) {
 // Files bigger than this threshold (bytes) trigger DuckDB lazy mode: the
 // in-memory copy holds a downsampled overview, and zoom queries hit DuckDB.
 const DUCKDB_LAZY_THRESHOLD_BYTES = 50 * 1024 * 1024;
+// CSV files larger than this should ideally be pre-converted to Parquet
+// (`node bench/csv-to-parquet.mjs file.csv`) — the WASM heap ceiling makes
+// the raw CSV path risky above this size.
+const PARQUET_HINT_THRESHOLD_BYTES = 500 * 1024 * 1024;
+
+proto._parseParquetResult = async function(filename, file) {
+    if (!file) throw new Error(`Parquet files must be loaded via a File handle (got buffer-only for ${filename}).`);
+    if (!this._canUseDuckDb()) throw new Error(`Parquet support requires DuckDB-WASM (current page does not allow Workers).`);
+    const source = this._getDuckDbSource();
+    const data = await source.parseParquetFile(file, filename, { lazy: true });
+    data.filename = filename;
+    return data;
+};
 
 proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
+    // Hint the user toward Parquet for very large CSVs. Non-blocking — the
+    // parse still proceeds; this only logs once and could be wired to a
+    // toast/notification in a follow-up.
+    if (file && (file.size ?? 0) >= PARQUET_HINT_THRESHOLD_BYTES) {
+        const mb = ((file.size ?? 0) / (1024 * 1024)).toFixed(0);
+        console.warn(`[duckdb] "${filename}" is ${mb} MB — consider converting to Parquet for faster loads:`
+            + `\n  node bench/csv-to-parquet.mjs "${filename}"\n  Then load the resulting .parquet directly.`);
+    }
     // Try DuckDB-WASM first when available — it bypasses the ~512 MB string
     // ceiling of the legacy parser and returns typed-array columns.
     if (file && this._canUseDuckDb()) {
