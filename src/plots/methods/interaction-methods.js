@@ -179,6 +179,18 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     const settled = Promise.all(traceJobs);
     // Expose the in-flight promise so benchmarks (or tests) can await it.
     this._lastLazyRefresh = settled;
+    // Re-render the measurement cursor (A|B) overlay + info box once the
+    // lazy queries have actually replaced the trace data. _onRelayout drew
+    // the cursor synchronously above with stale rendered points, so without
+    // this re-draw the round dot ends up floating off the curve at deep
+    // zoom — the data under it changed while the cursor was already painted.
+    settled.then(() => {
+        if (this._zoomTokens.get(panelId) !== token) return;
+        if (!plot?.div) return;
+        if (plot?.cursors?.enabled) {
+            try { this._syncCursorDisplay(panelId, plot); } catch (_) { /* ignore */ }
+        }
+    }).catch(() => { /* per-trace errors already handled */ });
     return settled;
 };
 
