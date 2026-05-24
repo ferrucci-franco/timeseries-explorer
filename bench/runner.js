@@ -3,6 +3,7 @@
 
 import CsvParser from '../src/parsers/csv-parser.js';
 import MatParser from '../src/parsers/mat-parser.js';
+import DuckDbSource from '../src/data/duckdb-source.js';
 import PlotManager from '../src/plots/plot-manager.js';
 import Plotly from '../src/vendor/plotly.js';
 
@@ -64,18 +65,31 @@ function makePanelDom(panelId, host) {
     return content;
 }
 
-async function benchParseCsv(file, parser) {
+async function benchParseLegacy(file, parser) {
     const buffer = await readAsArrayBuffer(file);
     const t0 = now();
     const data = await parser.parse(buffer);
     const t1 = now();
-    const numVars = Object.keys(data.variables).length;
-    const numRows = data.metadata?.numTimesteps || 0;
     return {
         sizeMB: Number(fmtMB(buffer.byteLength)),
-        rows: numRows,
-        variables: numVars,
+        rows: data.metadata?.numTimesteps || 0,
+        variables: Object.keys(data.variables).length,
         parseMs: t1 - t0,
+        backend: 'legacy',
+        data,
+    };
+}
+
+async function benchParseDuckDb(file, duckdbSource) {
+    const t0 = now();
+    const data = await duckdbSource.parseCsvFile(file, file.name);
+    const t1 = now();
+    return {
+        sizeMB: Number(fmtMB(file.size)),
+        rows: data.metadata?.numTimesteps || 0,
+        variables: Object.keys(data.variables).length,
+        parseMs: t1 - t0,
+        backend: 'duckdb',
         data,
     };
 }
@@ -159,12 +173,21 @@ async function benchHeatmap(div, size) {
     return { size, ms: t1 - t0 };
 }
 
-async function runAll({ files, panelHost, heatmapDiv, log }) {
-    const parser = new CsvParser(new MatParser());
+async function runAll({ files, panelHost, heatmapDiv, log, backend = 'legacy' }) {
+    const legacyParser = new CsvParser(new MatParser());
+    const duckdbSource = backend === 'duckdb' ? new DuckDbSource(new MatParser()) : null;
+    if (duckdbSource) {
+        logLine(log, 'initializing DuckDB-WASM…');
+        const tInit0 = now();
+        await duckdbSource.init();
+        const tInit1 = now();
+        logLine(log, `  DuckDB ready in ${fmtMs(tInit1 - tInit0)} ms`);
+    }
     const plotManager = new PlotManager(new MatParser());
 
     const results = {
         startedAt: new Date().toISOString(),
+        backend,
         userAgent: navigator.userAgent,
         deviceMemoryGB: navigator.deviceMemory ?? null,
         cpuThreads: navigator.hardwareConcurrency ?? null,
@@ -180,15 +203,22 @@ async function runAll({ files, panelHost, heatmapDiv, log }) {
             steps: {},
             mem: {},
         };
-        logLine(log, `--- ${file.name} (${fmtMB(file.size)} MB) ---`);
+        logLine(log, `--- ${file.name} (${fmtMB(file.size)} MB) — backend=${backend} ---`);
         fileResult.mem.beforeParse = memSnapshot();
 
         let parseRes = null;
         try {
-            parseRes = await benchParseCsv(file, parser);
-            fileResult.steps.parse = { ms: parseRes.parseMs, rows: parseRes.rows, vars: parseRes.variables };
+            parseRes = backend === 'duckdb'
+                ? await benchParseDuckDb(file, duckdbSource)
+                : await benchParseLegacy(file, legacyParser);
+            fileResult.steps.parse = {
+                ms: parseRes.parseMs,
+                rows: parseRes.rows,
+                vars: parseRes.variables,
+                backend: parseRes.backend,
+            };
             fileResult.mem.afterParse = memSnapshot();
-            logLine(log, `  parse: ${fmtMs(parseRes.parseMs)} ms · ${parseRes.rows} rows · ${parseRes.variables} vars`);
+            logLine(log, `  parse: ${fmtMs(parseRes.parseMs)} ms · ${parseRes.rows} rows · ${parseRes.variables} vars · backend=${parseRes.backend}`);
         } catch (err) {
             fileResult.steps.parseError = String(err?.message || err);
             logLine(log, `  PARSE FAILED: ${err?.message || err}`);
@@ -247,6 +277,9 @@ async function runAll({ files, panelHost, heatmapDiv, log }) {
 
     results.memAfter = memSnapshot();
     results.finishedAt = new Date().toISOString();
+    if (duckdbSource) {
+        try { await duckdbSource.shutdown(); } catch (_) { /* ignore */ }
+    }
     return results;
 }
 

@@ -50,6 +50,11 @@ node bench/generate-synthetic-csv.mjs --rows 15000000 --out bench/data/synth-1gb
 
     <div class="controls">
         <input type="file" id="file-input" multiple accept=".csv,.txt">
+        <label for="backend-select" style="margin-left:1rem;">Backend:</label>
+        <select id="backend-select">
+            <option value="legacy">legacy (CsvParser)</option>
+            <option value="duckdb" selected>duckdb (DuckDB-WASM)</option>
+        </select>
         <button id="run-btn">Run benchmarks</button>
         <button id="copy-json-btn" disabled>Copy JSON</button>
         <span id="status" class="hint"></span>
@@ -78,6 +83,7 @@ node bench/generate-synthetic-csv.mjs --rows 15000000 --out bench/data/synth-1gb
         const jsonOut = document.getElementById('result-json');
         const status = document.getElementById('status');
 
+        const backendSelect = document.getElementById('backend-select');
         runBtn.addEventListener('click', async () => {
             const files = [...(fileInput.files || [])];
             if (!files.length) { status.textContent = 'Select at least one CSV.'; return; }
@@ -87,7 +93,8 @@ node bench/generate-synthetic-csv.mjs --rows 15000000 --out bench/data/synth-1gb
             runBtn.disabled = true;
             status.textContent = 'Running…';
             try {
-                const result = await runAll({ files, panelHost, heatmapDiv, log });
+                const backend = backendSelect.value;
+                const result = await runAll({ files, panelHost, heatmapDiv, log, backend });
                 const json = JSON.stringify(result, null, 2);
                 jsonOut.value = json;
                 copyBtn.disabled = false;

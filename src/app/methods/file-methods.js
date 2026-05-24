@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import DuckDbSource from '../../data/duckdb-source.js';
 
 export function installFileMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -7,7 +8,7 @@ proto.loadFile = async function(file, options = {}) {
     try {
         const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
         const contentHash = await this._hashBuffer(buffer);
-        const data   = await this._parseResultBuffer(file.name, buffer);
+        const data   = await this._parseResultBuffer(file.name, buffer, file);
 
         const fileId   = `f${this._nextFileId++}`;
         const extension = this._fileExtension(file.name);
@@ -152,7 +153,7 @@ proto.reloadActiveFile = async function() {
     const buffer = await this._readLatestBuffer(entry);
     const contentHash = await this._hashBuffer(buffer);
 
-    const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer);
+    const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, entry.file);
     this._reapplyDerivedVariables(id, data);
 
     entry.buffer = buffer;
@@ -180,7 +181,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
         return;
     }
 
-    const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer);
+    const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, source.file);
 
     const fileId = `f${this._nextFileId++}`;
     this._copyDerivedDefinitions(sourceId, fileId);
@@ -419,15 +420,28 @@ proto._fileDisplayName = function(entry) {
     return `${entry?.name || ''}${entry?.extension ?? '.mat'}`;
 };
 
-proto._parseResultBuffer = async function(filename, buffer) {
+proto._parseResultBuffer = async function(filename, buffer, file = null) {
     const extension = this._fileExtension(filename);
-    if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer);
+    if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file);
     if (extension === '.mat') return this.parser.parse(buffer);
-    if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer);
+    if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file);
     throw new Error(i18n.t('invalidFile'));
 };
 
-proto._parseCsvResultBuffer = async function(filename, buffer) {
+proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
+    // Try DuckDB-WASM first when available — it bypasses the ~512 MB string
+    // ceiling of the legacy parser and returns typed-array columns.
+    if (file && this._canUseDuckDb()) {
+        try {
+            const source = this._getDuckDbSource();
+            const data = await source.parseCsvFile(file, filename);
+            data.filename = filename;
+            return data;
+        } catch (err) {
+            console.warn('[duckdb] falling back to legacy CSV parser:', err?.message || err);
+            // fall through to legacy path
+        }
+    }
     if (!this._canUseParserWorker()) return this.csvParser.parse(buffer);
     try {
         return await this._parseCsvInWorker(filename, buffer);
@@ -441,6 +455,26 @@ proto._canUseParserWorker = function() {
     return typeof window !== 'undefined'
         && typeof Worker !== 'undefined'
         && window.location?.protocol !== 'file:';
+};
+
+proto._canUseDuckDb = function() {
+    if (this._duckdbDisabled) return false;
+    if (typeof window === 'undefined') return false;
+    if (typeof Worker === 'undefined') return false;
+    if (typeof WebAssembly === 'undefined') return false;
+    // Workers under file:// fail on most browsers; reuse the same guard.
+    if (window.location?.protocol === 'file:') return false;
+    try {
+        if (window.localStorage?.getItem('omv_disable_duckdb') === '1') return false;
+    } catch (_) { /* ignore */ }
+    return true;
+};
+
+proto._getDuckDbSource = function() {
+    if (!this._duckdbSource) {
+        this._duckdbSource = new DuckDbSource(this.parser);
+    }
+    return this._duckdbSource;
 };
 
 proto._getParserWorker = function() {

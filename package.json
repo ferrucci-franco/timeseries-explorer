@@ -17,6 +17,7 @@
     "vite": "^5.4.19"
   },
   "dependencies": {
+    "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",
     "fflate": "^0.8.3",
     "plotly.js-dist-min": "^3.5.1"
   }
