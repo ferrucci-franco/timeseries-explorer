@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OpenModelica Viewer — Performance Benchmark</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 1.5rem; color: #222; }
+        h1 { margin-top: 0; }
+        .controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin-bottom: 1rem; }
+        button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; }
+        button:disabled { opacity: .5; cursor: progress; }
+        #log {
+            font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+            background: #111; color: #d6d6d6; padding: .75rem;
+            white-space: pre-wrap; max-height: 280px; overflow: auto;
+            border-radius: 4px; margin-bottom: 1rem;
+        }
+        textarea { width: 100%; min-height: 220px; font-family: ui-monospace, monospace; font-size: 12px; }
+        details { background: #f3f3f3; padding: .5rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
+        .hint { color: #555; font-size: .9rem; }
+        #panel-host { display: block; }
+        #heatmap-host { width: 700px; height: 500px; border: 1px solid #aaa; margin-top: .5rem; }
+    </style>
+</head>
+<body>
+    <h1>OpenModelica Viewer — Performance Benchmark</h1>
+    <p class="hint">
+        Imports <code>CsvParser</code> and <code>PlotManager</code> from <code>src/</code> directly,
+        so timings reflect the production code path. Run from <code>npm run dev</code>
+        (Vite serves ESM correctly). <strong>Do not open this via <code>file://</code></strong> — the
+        ES module imports will 404.
+    </p>
+
+    <details>
+        <summary>How to use</summary>
+        <ol>
+            <li>Pre-generate synthetic CSVs (optional but recommended):
+                <pre>node bench/generate-synthetic-csv.mjs --rows 1500000 --out bench/data/synth-100mb.csv
+node bench/generate-synthetic-csv.mjs --rows 15000000 --out bench/data/synth-1gb.csv</pre>
+            </li>
+            <li>Open this page via <code>npm run dev</code> (default <code>http://127.0.0.1:8000/bench/benchmark.html</code>).</li>
+            <li>Select one or more CSV files. The runner parses each, renders a 1D plot, exercises zoom levels, and finishes with synthetic heatmaps.</li>
+            <li>Copy the JSON result block at the end into <code>bench/baseline.md</code> (or <code>bench/final.md</code>).</li>
+        </ol>
+        <p class="hint">
+            For the heap-memory column to populate, run Chrome with
+            <code>--enable-precise-memory-info</code> (other browsers will show null).
+        </p>
+    </details>
+
+    <div class="controls">
+        <input type="file" id="file-input" multiple accept=".csv,.txt">
+        <button id="run-btn">Run benchmarks</button>
+        <button id="copy-json-btn" disabled>Copy JSON</button>
+        <span id="status" class="hint"></span>
+    </div>
+
+    <div id="log"></div>
+
+    <h2>Plot panel (last run)</h2>
+    <div id="panel-host"></div>
+
+    <h2>Heatmap probe</h2>
+    <div id="heatmap-host"></div>
+
+    <h2>Result JSON</h2>
+    <textarea id="result-json" placeholder="(no run yet)"></textarea>
+
+    <script type="module">
+        import { runAll } from './runner.js';
+
+        const fileInput = document.getElementById('file-input');
+        const runBtn = document.getElementById('run-btn');
+        const copyBtn = document.getElementById('copy-json-btn');
+        const log = document.getElementById('log');
+        const panelHost = document.getElementById('panel-host');
+        const heatmapDiv = document.getElementById('heatmap-host');
+        const jsonOut = document.getElementById('result-json');
+        const status = document.getElementById('status');
+
+        runBtn.addEventListener('click', async () => {
+            const files = [...(fileInput.files || [])];
+            if (!files.length) { status.textContent = 'Select at least one CSV.'; return; }
+            log.textContent = '';
+            jsonOut.value = '';
+            copyBtn.disabled = true;
+            runBtn.disabled = true;
+            status.textContent = 'Running…';
+            try {
+                const result = await runAll({ files, panelHost, heatmapDiv, log });
+                const json = JSON.stringify(result, null, 2);
+                jsonOut.value = json;
+                copyBtn.disabled = false;
+                status.textContent = `Done — ${result.files.length} file(s).`;
+                console.log('BENCH RESULT', result);
+            } catch (err) {
+                console.error(err);
+                status.textContent = 'Error: ' + (err?.message || err);
+            } finally {
+                runBtn.disabled = false;
+            }
+        });
+
+        copyBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(jsonOut.value);
+                status.textContent = 'JSON copied to clipboard.';
+            } catch (err) {
+                status.textContent = 'Clipboard copy failed: ' + (err?.message || err);
+            }
+        });
+    </script>
+</body>
+</html>

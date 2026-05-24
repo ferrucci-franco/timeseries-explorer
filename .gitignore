@@ -31,6 +31,12 @@
 !/docs/**
 !/scripts/
 !/scripts/**
+!/bench/
+!/bench/**
+
+# Perf benchmark synthetic data (large, regenerable).
+/bench/data/
+/bench/**/*.csv
 
 # Generated download artifacts stay local.
 /public/downloads/*.zip

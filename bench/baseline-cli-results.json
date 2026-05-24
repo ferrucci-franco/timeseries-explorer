@@ -1,0 +1,121 @@
+{
+  "startedAt": "2026-05-23T22:53:52.301Z",
+  "node": "v24.14.1",
+  "platform": "win32",
+  "runsPerFile": 3,
+  "files": [
+    {
+      "file": "synth-100mb.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\bench\\data\\synth-100mb.csv",
+      "sizeMB": 103.58,
+      "runs": 3,
+      "parseMs": {
+        "best": 7610.24,
+        "median": 8681.73,
+        "worst": 19309.21,
+        "mean": 11867.06
+      },
+      "throughputMBs": 13.6,
+      "rows": 1500000,
+      "variables": 9,
+      "delimiter": ",",
+      "memBefore": {
+        "rssMB": 265.3,
+        "heapUsedMB": 4.4,
+        "heapTotalMB": 7.3,
+        "externalMB": 209.1
+      },
+      "memAfter": {
+        "rssMB": 1863.2,
+        "heapUsedMB": 1360.8,
+        "heapTotalMB": 1474.3,
+        "externalMB": 312.5
+      }
+    },
+    {
+      "file": "sol_total_corrected.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\sol_total_corrected.csv",
+      "sizeMB": 48.11,
+      "runs": 3,
+      "parseMs": {
+        "best": 5282.98,
+        "median": 6545.42,
+        "worst": 6674.74,
+        "mean": 6167.72
+      },
+      "throughputMBs": 9.1,
+      "rows": 1607040,
+      "variables": 2,
+      "delimiter": ",",
+      "memBefore": {
+        "rssMB": 1959.6,
+        "heapUsedMB": 1360.8,
+        "heapTotalMB": 1474.3,
+        "externalMB": 408.8
+      },
+      "memAfter": {
+        "rssMB": 2690.4,
+        "heapUsedMB": 2269.8,
+        "heapTotalMB": 2340.6,
+        "externalMB": 194.2
+      }
+    },
+    {
+      "file": "REC_05042024_0958.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\REC_05042024_0958.csv",
+      "sizeMB": 18.29,
+      "runs": 3,
+      "parseMs": {
+        "best": 2519,
+        "median": 2587.48,
+        "worst": 2793.34,
+        "mean": 2633.27
+      },
+      "throughputMBs": 7.3,
+      "rows": 31106,
+      "variables": 90,
+      "delimiter": "\t",
+      "memBefore": {
+        "rssMB": 2183.6,
+        "heapUsedMB": 4,
+        "heapTotalMB": 143.1,
+        "externalMB": 134.6
+      },
+      "memAfter": {
+        "rssMB": 2276.5,
+        "heapUsedMB": 219.4,
+        "heapTotalMB": 339.5,
+        "externalMB": 56.7
+      }
+    },
+    {
+      "file": "Musee-Meteo-Reduit.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\Musee-Meteo-Reduit.csv",
+      "sizeMB": 10.52,
+      "runs": 3,
+      "parseMs": {
+        "best": 932.12,
+        "median": 1153.85,
+        "worst": 1242.39,
+        "mean": 1109.45
+      },
+      "throughputMBs": 11.3,
+      "rows": 212448,
+      "variables": 9,
+      "delimiter": "whitespace",
+      "memBefore": {
+        "rssMB": 2297.5,
+        "heapUsedMB": 219.4,
+        "heapTotalMB": 339.5,
+        "externalMB": 77.7
+      },
+      "memAfter": {
+        "rssMB": 2335,
+        "heapUsedMB": 375.5,
+        "heapTotalMB": 450.3,
+        "externalMB": 43.9
+      }
+    }
+  ],
+  "finishedAt": "2026-05-23T22:54:57.897Z"
+}

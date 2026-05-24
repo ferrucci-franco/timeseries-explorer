@@ -1,0 +1,183 @@
+{
+  "startedAt": "2026-05-23T22:56:09.797Z",
+  "node": "v24.14.1",
+  "platform": "win32",
+  "runsPerFile": 2,
+  "files": [
+    {
+      "file": "12_eu_semicolon_decimalcomma.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\12_eu_semicolon_decimalcomma.csv",
+      "sizeMB": 0,
+      "runs": 2,
+      "parseMs": {
+        "best": 18.54,
+        "median": 24.74,
+        "worst": 24.74,
+        "mean": 21.64
+      },
+      "throughputMBs": 0.2,
+      "rows": 96,
+      "variables": 4,
+      "delimiter": ";",
+      "memBefore": {
+        "rssMB": 57.4,
+        "heapUsedMB": 5.2,
+        "heapTotalMB": 6.3,
+        "externalMB": 1.9
+      },
+      "memAfter": {
+        "rssMB": 63.2,
+        "heapUsedMB": 7.2,
+        "heapTotalMB": 10.1,
+        "externalMB": 1.8
+      }
+    },
+    {
+      "file": "13_tab_separated.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\13_tab_separated.csv",
+      "sizeMB": 0.01,
+      "runs": 2,
+      "parseMs": {
+        "best": 22.38,
+        "median": 25.54,
+        "worst": 25.54,
+        "mean": 23.96
+      },
+      "throughputMBs": 0.6,
+      "rows": 500,
+      "variables": 3,
+      "delimiter": "\t",
+      "memBefore": {
+        "rssMB": 63,
+        "heapUsedMB": 7.2,
+        "heapTotalMB": 10.1,
+        "externalMB": 1.8
+      },
+      "memAfter": {
+        "rssMB": 63,
+        "heapUsedMB": 7.8,
+        "heapTotalMB": 10.8,
+        "externalMB": 1.8
+      }
+    },
+    {
+      "file": "14_pvgis_style_with_comments.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\14_pvgis_style_with_comments.csv",
+      "sizeMB": 0,
+      "runs": 2,
+      "parseMs": {
+        "best": 6.77,
+        "median": 6.91,
+        "worst": 6.91,
+        "mean": 6.84
+      },
+      "throughputMBs": 0.4,
+      "rows": 72,
+      "variables": 6,
+      "delimiter": ",",
+      "memBefore": {
+        "rssMB": 63.2,
+        "heapUsedMB": 7.8,
+        "heapTotalMB": 10.8,
+        "externalMB": 1.8
+      },
+      "memAfter": {
+        "rssMB": 67.4,
+        "heapUsedMB": 6.6,
+        "heapTotalMB": 15.1,
+        "externalMB": 1.8
+      }
+    },
+    {
+      "file": "15_unix_timestamp_seconds.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\15_unix_timestamp_seconds.csv",
+      "sizeMB": 0.02,
+      "runs": 2,
+      "parseMs": {
+        "best": 16.67,
+        "median": 17.29,
+        "worst": 17.29,
+        "mean": 16.98
+      },
+      "throughputMBs": 1.1,
+      "rows": 720,
+      "variables": 3,
+      "delimiter": ",",
+      "memBefore": {
+        "rssMB": 67.4,
+        "heapUsedMB": 6.7,
+        "heapTotalMB": 15.1,
+        "externalMB": 1.9
+      },
+      "memAfter": {
+        "rssMB": 67.9,
+        "heapUsedMB": 8.9,
+        "heapTotalMB": 15.6,
+        "externalMB": 1.9
+      }
+    },
+    {
+      "file": "16_modelica_combitimetable_format.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\16_modelica_combitimetable_format.csv",
+      "sizeMB": 0.01,
+      "runs": 2,
+      "parseMs": {
+        "best": 10.52,
+        "median": 11.1,
+        "worst": 11.1,
+        "mean": 10.81
+      },
+      "throughputMBs": 0.5,
+      "rows": 200,
+      "variables": 4,
+      "delimiter": "whitespace",
+      "memBefore": {
+        "rssMB": 67.9,
+        "heapUsedMB": 9,
+        "heapTotalMB": 15.6,
+        "externalMB": 1.9
+      },
+      "memAfter": {
+        "rssMB": 68.1,
+        "heapUsedMB": 8.5,
+        "heapTotalMB": 15.8,
+        "externalMB": 1.9
+      }
+    },
+    {
+      "file": "11_seattle_weather_USdate_24k.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\11_seattle_weather_USdate_24k.csv",
+      "sizeMB": 0.44,
+      "runs": 2,
+      "parseMs": {
+        "best": 75.81,
+        "median": 86.39,
+        "worst": 86.39,
+        "mean": 81.1
+      },
+      "throughputMBs": 5.7,
+      "rows": 24381,
+      "variables": 4,
+      "delimiter": ",",
+      "memBefore": {
+        "rssMB": 69,
+        "heapUsedMB": 8.5,
+        "heapTotalMB": 15.8,
+        "externalMB": 2.8
+      },
+      "memAfter": {
+        "rssMB": 155.2,
+        "heapUsedMB": 65.7,
+        "heapTotalMB": 98.9,
+        "externalMB": 2.7
+      }
+    },
+    {
+      "file": "09_tesla_stock_dirty.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\09_tesla_stock_dirty.csv",
+      "sizeMB": 0.05,
+      "error": "Invalid time value at CSV data row 1."
+    }
+  ],
+  "finishedAt": "2026-05-23T22:56:10.166Z"
+}

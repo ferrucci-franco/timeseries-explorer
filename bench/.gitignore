@@ -1,0 +1,3 @@
+# Synthetic CSVs are large and reproducible — keep the generator, not the output.
+data/
+*.csv
