@@ -139,6 +139,26 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             if (built) Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
             return Promise.resolve();
         }
+
+        // Density heuristic: if the in-memory overview already has enough
+        // resolution in the visible range, skip the DuckDB round-trip. The
+        // overview holds `overviewPoints` samples spread uniformly across
+        // [timeStart, timeEnd]; for a viewport covering `coverage` of that
+        // span, it carries ~ overviewPoints*coverage samples — already
+        // greater than the target visual budget when zoomed out far.
+        const tStart = Number(data?.metadata?.timeStart);
+        const tEnd = Number(data?.metadata?.timeEnd);
+        if (Number.isFinite(tStart) && Number.isFinite(tEnd) && tEnd > tStart) {
+            const coverage = (Math.min(t1, tEnd) - Math.max(t0, tStart)) / (tEnd - tStart);
+            const overviewPts = lazyMeta.overviewPoints || 10000;
+            if (coverage >= (target / overviewPts)) {
+                // Overview is enough — use the sync path (slice + downsample in JS).
+                const built = this._buildTimeTrace(t, range);
+                if (built) Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
+                return Promise.resolve();
+            }
+        }
+
         const source = lazyMeta.source;
         if (!source?.getColumnRange) return Promise.resolve();
         return source.getColumnRange(data, t.varName, t0, t1, target)

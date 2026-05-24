@@ -150,8 +150,9 @@ export default class DuckDbSource {
      * Fetch a viewport-bounded slice of one variable.
      *
      * Returns `{x: Float64Array, y: Float64Array}` with at most `maxPoints`
-     * samples between `[t0, t1]`. Uses server-side stride sampling so the
-     * data transferred over the wire is O(maxPoints), not O(rowsInRange).
+     * samples between `[t0, t1]`. Uses server-side time-bucket aggregation
+     * (`GROUP BY bucket`) so the data transferred over the wire is
+     * O(maxPoints) regardless of how many rows the visible range contains.
      */
     async getColumnRange(legacyData, varName, t0, t1, maxPoints = 4000) {
         const meta = legacyData?._duckdb;
@@ -163,27 +164,30 @@ export default class DuckDbSource {
         const escTime = timeCol.replace(/"/g, '""');
         const escCol = sourceCol.replace(/"/g, '""');
         const tableName = meta.tableName;
+        const lit = (v) => this._numericLiteral(v);
 
-        // CTE chain: filter range → row-number → stride-sample. Returning
-        // at most ~maxPoints + 2 rows (first, last, and stride-picked).
+        // GROUP BY time-bucket gives O(maxPoints) output regardless of how
+        // many input rows match — far cheaper than `COUNT(*) OVER ()` +
+        // `ROW_NUMBER() OVER (ORDER BY t)` for wide ranges where the input
+        // set is large.
+        const span = t1 - t0;
+        if (!Number.isFinite(span) || span <= 0) {
+            return { x: new Float64Array(0), y: new Float64Array(0) };
+        }
         const sql = `
-            WITH ranged AS (
-                SELECT "${escTime}"::DOUBLE AS t, "${escCol}"::DOUBLE AS v
+            SELECT MIN(t) AS t, AVG(v) AS v FROM (
+                SELECT "${escTime}"::DOUBLE AS t,
+                       "${escCol}"::DOUBLE AS v,
+                       CAST(LEAST(${maxPoints - 1},
+                                  GREATEST(0,
+                                           FLOOR(("${escTime}"::DOUBLE - ${lit(t0)})
+                                                 * ${maxPoints} / ${lit(span)})))
+                            AS BIGINT) AS bucket
                 FROM ${tableName}
-                WHERE "${escTime}" BETWEEN ${this._numericLiteral(t0)} AND ${this._numericLiteral(t1)}
-            ),
-            counted AS (
-                SELECT t, v,
-                       ROW_NUMBER() OVER (ORDER BY t) AS rn,
-                       COUNT(*) OVER () AS total
-                FROM ranged
+                WHERE "${escTime}" BETWEEN ${lit(t0)} AND ${lit(t1)}
             )
-            SELECT t, v FROM counted
-            WHERE total <= ${maxPoints}
-               OR rn = 1
-               OR rn = total
-               OR (rn - 1) % GREATEST(1, CAST(total::DOUBLE / ${maxPoints} AS BIGINT)) = 0
-            ORDER BY t;
+            GROUP BY bucket
+            ORDER BY bucket;
         `;
         const result = await this._conn.query(sql);
         return {
