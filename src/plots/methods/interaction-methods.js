@@ -713,14 +713,47 @@ proto._cursorShapes = function(plot) {
     ];
     for (const { trace, x, color } of dotPairs) {
         if (!trace) continue;
-        const times  = this._getTransformedTimeData(trace.fileId);
-        const values = this._getTransformedVariableData(trace.fileId, trace.varName);
-        const mode   = this._traceInterpolationMode(trace);
-        const y = this._interpolateAt(times, values, x, mode);
+        const series = this._traceInterpolationSeries(plot, trace);
+        if (!series) continue;
+        const mode = this._traceInterpolationMode(trace);
+        const y = this._interpolateAt(series.times, series.values, x, mode);
         if (!Number.isFinite(y)) continue;
         shapes.push(this._cursorDotShape(this._cursorPlotlyX(trace, x), y, color));
     }
     return shapes;
+};
+
+/**
+ * Pick the (times, values) arrays the cursor should interpolate over.
+ *
+ * For DuckDB-lazy-backed files the variable's source `.data` is only a
+ * coarse overview (≈ 10 k pts), but Plotly is rendering whatever the most
+ * recent lazy refresh streamed in (≈ 4 k pts inside the current viewport).
+ * Reading from the overview gives a marker that no longer follows the
+ * curve when the user zooms in. So we prefer the rendered trace data
+ * (`plot.div.data[i]`) when lazy mode is active.
+ *
+ * For eager files the source `.data` already has full resolution and the
+ * existing min-max-bucket visual downsampler preserves spikes, so we keep
+ * the original behavior — interpolating over the source is more accurate
+ * between visible samples.
+ */
+proto._traceInterpolationSeries = function(plot, trace) {
+    if (!trace) return null;
+    const lazy = !!this.files.get(trace.fileId)?.data?._duckdb;
+    if (lazy && plot?.div?.data) {
+        const idx = plot.traces.indexOf(trace);
+        const rendered = idx >= 0 ? plot.div.data[idx] : null;
+        const rx = rendered?.x;
+        const ry = rendered?.y;
+        if (rx && ry && rx.length === ry.length && rx.length > 0) {
+            return { times: rx, values: ry };
+        }
+    }
+    const times = this._getTransformedTimeData(trace.fileId);
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+    if (!times?.length || !values?.length) return null;
+    return { times, values };
 };
 
 proto._cursorPlotlyX = function(trace, x) {
@@ -916,9 +949,10 @@ proto._cursorOverlayGeometry = function(plot, trace, x) {
     const rx = x1 - x0;
     if (!Number.isFinite(x0) || !Number.isFinite(x1) || rx === 0) return null;
 
-    const times = this._getTransformedTimeData(trace.fileId);
-    const values = this._getTransformedVariableData(trace.fileId, trace.varName);
-    const y = this._interpolateAt(times, values, x, this._traceInterpolationMode(trace));
+    const series = this._traceInterpolationSeries(plot, trace);
+    const y = series
+        ? this._interpolateAt(series.times, series.values, x, this._traceInterpolationMode(trace))
+        : NaN;
     const y0 = Number(ya.range[0]);
     const y1 = Number(ya.range[1]);
     const ry = y1 - y0;
@@ -1097,10 +1131,11 @@ proto._updateCursorBox = function(panelId, plot) {
     const bX = plot.cursors.b;
     const measure = (trace, x) => {
         if (!trace) return { y: NaN, timeUnit: 's', yUnit: '', name: '' };
-        const times    = this._getTransformedTimeData(trace.fileId);
-        const values   = this._getTransformedVariableData(trace.fileId, trace.varName);
+        const series   = this._traceInterpolationSeries(plot, trace);
         const mode     = this._traceInterpolationMode(trace);
-        const y        = this._interpolateAt(times, values, x, mode);
+        const y        = series
+            ? this._interpolateAt(series.times, series.values, x, mode)
+            : NaN;
         const timeVar  = this._getTimeVar(trace.fileId);
         const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
         return {
