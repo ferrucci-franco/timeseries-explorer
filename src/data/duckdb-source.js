@@ -63,6 +63,14 @@ export default class DuckDbSource {
         await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
         this._db = db;
         this._conn = await db.connect();
+        // Tune for the WASM context: less parallelism means smaller per-thread
+        // chunk buffers, and allowing out-of-order operators frees DuckDB from
+        // retaining whole pipelines in memory. Crucial for files near the
+        // ~3 GB wasm heap ceiling.
+        try {
+            await this._conn.query(`PRAGMA threads=2`);
+            await this._conn.query(`PRAGMA preserve_insertion_order=false`);
+        } catch (_) { /* tuning is best-effort */ }
     }
 
     async registerFile(name, file) {
