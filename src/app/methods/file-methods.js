@@ -428,13 +428,18 @@ proto._parseResultBuffer = async function(filename, buffer, file = null) {
     throw new Error(i18n.t('invalidFile'));
 };
 
+// Files bigger than this threshold (bytes) trigger DuckDB lazy mode: the
+// in-memory copy holds a downsampled overview, and zoom queries hit DuckDB.
+const DUCKDB_LAZY_THRESHOLD_BYTES = 50 * 1024 * 1024;
+
 proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
     // Try DuckDB-WASM first when available — it bypasses the ~512 MB string
     // ceiling of the legacy parser and returns typed-array columns.
     if (file && this._canUseDuckDb()) {
         try {
             const source = this._getDuckDbSource();
-            const data = await source.parseCsvFile(file, filename);
+            const lazy = (file.size ?? 0) >= DUCKDB_LAZY_THRESHOLD_BYTES;
+            const data = await source.parseCsvFile(file, filename, { lazy });
             data.filename = filename;
             return data;
         } catch (err) {
@@ -607,6 +612,14 @@ proto.removeFile = async function(fileId) {
     if (this.plotManager.hasTracesForFile(fileId)) {
         const ok = await Modal.confirm(i18n.t('closeFileWarning'), { icon: '⚠️' });
         if (!ok) return;
+    }
+
+    // Drop the DuckDB temp table + file handle for this file's lazy data,
+    // if any. Safe no-op on eager / non-DuckDB data.
+    const pmEntry = this.plotManager.files.get(fileId);
+    const lazyData = pmEntry?.data;
+    if (lazyData?._duckdb?.source) {
+        try { await lazyData._duckdb.source.release(lazyData); } catch (_) { /* ignore */ }
     }
 
     this.plotManager.removeFile(fileId);

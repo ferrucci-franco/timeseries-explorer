@@ -91,52 +91,131 @@ export default class DuckDbSource {
         return this._conn.query(sql);
     }
 
-    async getColumnRange(/* tableName, col, t0, t1, maxPoints */) {
-        throw new Error('getColumnRange will be implemented in Phase 1.B');
-    }
-
     /**
      * Parse a CSV File into the legacy {variables, metadata, tree} shape.
+     *
+     * Modes:
+     *   - eager (default): pull all data into Float64Array columns; drop the
+     *     DuckDB table and unregister the file when done. No lazy queries.
+     *   - lazy: keep the DuckDB temp table + registered file alive. Materialize
+     *     only a downsampled overview (`overviewPoints` per column) into the
+     *     legacy structure for initial render. Attach `data._duckdb` so the
+     *     viewport handler can ask for high-resolution range slices later.
+     *
      * Returns null if DuckDB cannot read the file; the caller should fall back.
      */
-    async parseCsvFile(file, displayName = file.name) {
+    async parseCsvFile(file, displayName = file.name, opts = {}) {
+        const { lazy = false, overviewPoints = 10000 } = opts;
         await this.init();
-        const handle = `bench_${++this._nextTableId}_${displayName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-        const tableName = `t_${this._nextTableId}`;
+        const id = ++this._nextTableId;
+        const handle = `omv_${id}_${displayName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const tableName = `omv_t_${id}`;
         await this.registerFile(handle, file);
+        let result = null;
         try {
-            return await this._loadCsvIntoLegacy(handle, tableName, file);
-        } finally {
+            result = await this._loadCsvIntoLegacy(handle, tableName, { lazy, overviewPoints });
+        } catch (err) {
+            try { await this._conn.query(`DROP TABLE IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
+            await this.unregisterFile(handle);
+            throw err;
+        }
+        if (!lazy) {
             try { await this._conn.query(`DROP TABLE IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
             await this.unregisterFile(handle);
         }
+        return result;
     }
 
-    async _loadCsvIntoLegacy(handle, tableName, file) {
-        // Let DuckDB auto-detect delimiter, quote, decimal, header, types.
-        // `all_varchar=false` keeps numeric columns typed (so toArray() returns Float64Array).
-        // `union_by_name=false` keeps original column order.
+    /**
+     * Release a lazy file: drop its DuckDB table and unregister the file
+     * handle. Safe to call on eager-mode data (no-op) and idempotent.
+     */
+    async release(legacyData) {
+        const meta = legacyData?._duckdb;
+        if (!meta) return;
+        try { await this._conn.query(`DROP TABLE IF EXISTS ${meta.tableName}`); } catch (_) { /* ignore */ }
+        await this.unregisterFile(meta.handle);
+        delete legacyData._duckdb;
+    }
+
+    /**
+     * Fetch a viewport-bounded slice of one variable.
+     *
+     * Returns `{x: Float64Array, y: Float64Array}` with at most `maxPoints`
+     * samples between `[t0, t1]`. Uses server-side stride sampling so the
+     * data transferred over the wire is O(maxPoints), not O(rowsInRange).
+     */
+    async getColumnRange(legacyData, varName, t0, t1, maxPoints = 4000) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getColumnRange: data is not DuckDB-backed (eager mode)');
+        const variable = legacyData.variables?.[varName];
+        if (!variable) throw new Error(`getColumnRange: unknown variable "${varName}"`);
+        const sourceCol = variable._duckdbCol || varName;
+        const timeCol = meta.timeColumn;
+        const escTime = timeCol.replace(/"/g, '""');
+        const escCol = sourceCol.replace(/"/g, '""');
+        const tableName = meta.tableName;
+
+        // CTE chain: filter range → row-number → stride-sample. Returning
+        // at most ~maxPoints + 2 rows (first, last, and stride-picked).
+        const sql = `
+            WITH ranged AS (
+                SELECT "${escTime}"::DOUBLE AS t, "${escCol}"::DOUBLE AS v
+                FROM ${tableName}
+                WHERE "${escTime}" BETWEEN ${this._numericLiteral(t0)} AND ${this._numericLiteral(t1)}
+            ),
+            counted AS (
+                SELECT t, v,
+                       ROW_NUMBER() OVER (ORDER BY t) AS rn,
+                       COUNT(*) OVER () AS total
+                FROM ranged
+            )
+            SELECT t, v FROM counted
+            WHERE total <= ${maxPoints}
+               OR rn = 1
+               OR rn = total
+               OR (rn - 1) % GREATEST(1, CAST(total::DOUBLE / ${maxPoints} AS BIGINT)) = 0
+            ORDER BY t;
+        `;
+        const result = await this._conn.query(sql);
+        return {
+            x: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
+            y: this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
+        };
+    }
+
+    _numericLiteral(value) {
+        if (Number.isFinite(value)) return String(value);
+        // For datetime (Unix ms) inputs, also numeric. Bail to a safe sentinel
+        // that the BETWEEN clause will exclude.
+        return 'NULL';
+    }
+
+    async _loadCsvIntoLegacy(handle, tableName, { lazy, overviewPoints }) {
         const escapedHandle = handle.replace(/'/g, "''");
-        const createSql = `CREATE TABLE ${tableName} AS SELECT * FROM read_csv_auto('${escapedHandle}', sample_size=20000)`;
+        const readExpr = `read_csv_auto('${escapedHandle}', sample_size=20000)`;
+        let viewMode = false;
+
         try {
-            await this._conn.query(createSql);
+            await this._conn.query(`CREATE TABLE ${tableName} AS SELECT * FROM ${readExpr}`);
         } catch (err) {
-            // Surface the underlying DuckDB error so the caller can decide.
-            throw new Error(`DuckDB read_csv_auto failed: ${err?.message || err}`);
+            const msg = String(err?.message || err);
+            const isOom = /malloc|out of memory|memory|allocation/i.test(msg);
+            if (!lazy || !isOom) {
+                throw new Error(`DuckDB read_csv_auto failed: ${msg}`);
+            }
+            // Lazy + OOM (large file): fall back to a VIEW so we never
+            // materialize the full dataset. Each query re-reads from the CSV
+            // (with projection / predicate pushdown).
+            await this._conn.query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${readExpr}`);
+            viewMode = true;
         }
 
         const schemaResult = await this._conn.query(`DESCRIBE ${tableName}`);
         const schema = this._arrowRowsToObjects(schemaResult);
-
-        const countResult = await this._conn.query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName}`);
-        const countCol = countResult.getChildAt(0) || countResult.getChild('n');
-        const totalRows = Number(countCol?.get(0) ?? 0);
-
         const columnNames = schema.map(s => s.column_name);
         const columnTypes = schema.map(s => String(s.column_type || '').toUpperCase());
 
-        // Pick a time column. Heuristic: first header that matches TIME_HEADER_RE,
-        // else first column if it is numeric / timestamp.
         let timeColIndex = columnNames.findIndex(name => TIME_HEADER_RE.test(String(name).trim()));
         if (timeColIndex < 0) {
             const firstType = columnTypes[0] || '';
@@ -148,10 +227,77 @@ export default class DuckDbSource {
             throw new Error('DuckDB: no suitable time column detected; falling back.');
         }
 
-        const orderClause = `ORDER BY "${columnNames[timeColIndex].replace(/"/g, '""')}" ASC NULLS LAST`;
-        const dataResult = await this._conn.query(`SELECT * FROM ${tableName} ${orderClause}`);
+        const timeName = columnNames[timeColIndex];
+        const escTime = timeName.replace(/"/g, '""');
 
-        return this._buildLegacyFromArrow(dataResult, columnNames, columnTypes, timeColIndex, totalRows);
+        let totalRows;
+        let dataSql;
+        if (!viewMode) {
+            const countResult = await this._conn.query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName}`);
+            const countCol = countResult.getChildAt(0) || countResult.getChild('n');
+            totalRows = Number(countCol?.get(0) ?? 0);
+            dataSql = (!lazy || totalRows <= overviewPoints)
+                ? `SELECT * FROM ${tableName} ORDER BY "${escTime}" ASC NULLS LAST`
+                : this._overviewSql(tableName, escTime, totalRows, overviewPoints);
+        } else {
+            // VIEW mode: skip COUNT (would re-scan the whole CSV) and use
+            // streaming reservoir sampling for the initial overview.
+            totalRows = null;
+            dataSql = `
+                SELECT * FROM (
+                    SELECT * FROM ${tableName} USING SAMPLE ${overviewPoints} ROWS (RESERVOIR, 42)
+                ) ORDER BY "${escTime}" ASC NULLS LAST
+            `;
+        }
+        const dataResult = await this._conn.query(dataSql);
+
+        const legacy = this._buildLegacyFromArrow(dataResult, columnNames, columnTypes, timeColIndex, totalRows);
+
+        if (viewMode) {
+            // In view mode the overview is a small reservoir sample, so its
+            // first/last values are not the file's true time range. Issue an
+            // aggregate query — DuckDB can compute MIN/MAX without sorting.
+            try {
+                const aggResult = await this._conn.query(
+                    `SELECT MIN("${escTime}")::DOUBLE AS tmin, MAX("${escTime}")::DOUBLE AS tmax FROM ${tableName}`
+                );
+                const tmin = aggResult.getChild('tmin')?.get(0);
+                const tmax = aggResult.getChild('tmax')?.get(0);
+                if (Number.isFinite(Number(tmin))) legacy.metadata.timeStart = Number(tmin);
+                if (Number.isFinite(Number(tmax))) legacy.metadata.timeEnd = Number(tmax);
+            } catch (_) { /* metadata best-effort */ }
+            legacy.metadata.numTimesteps = null;
+        }
+
+        if (lazy) {
+            legacy._duckdb = {
+                source: this,
+                handle,
+                tableName,
+                timeColumn: timeName,
+                totalRows,
+                overviewPoints: totalRows
+                    ? Math.min(overviewPoints, totalRows)
+                    : overviewPoints,
+                viewMode,
+            };
+        }
+        return legacy;
+    }
+
+    _overviewSql(tableName, escTime, totalRows, overviewPoints) {
+        const stride = Math.max(1, Math.ceil(totalRows / overviewPoints));
+        // Keep first + last + every Nth row by time order. Numbered separately
+        // so the result is still ordered by time.
+        return `
+            WITH numbered AS (
+                SELECT *, ROW_NUMBER() OVER (ORDER BY "${escTime}") AS __rn
+                FROM ${tableName}
+            )
+            SELECT * EXCLUDE (__rn) FROM numbered
+            WHERE __rn = 1 OR __rn = ${totalRows} OR (__rn - 1) % ${stride} = 0
+            ORDER BY __rn;
+        `;
     }
 
     _arrowRowsToObjects(table) {
@@ -197,6 +343,7 @@ export default class DuckDbSource {
             interpolation: 'linear',
             negate: false,
             source: 'csv',
+            _duckdbCol: timeName,
         };
         if (timeKind === 'datetime') {
             timeVar.timeKind = 'datetime';
@@ -228,6 +375,7 @@ export default class DuckDbSource {
                 interpolation: 'linear',
                 negate: false,
                 source: 'csv',
+                _duckdbCol: columnNames[i],
             };
             numTimevarying++;
         }

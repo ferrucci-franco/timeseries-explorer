@@ -99,6 +99,17 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
         || plot.div._fullLayout?.xaxis?.range
         || plot.div.layout?.xaxis?.range
         || null;
+
+    // Detect whether any trace's file is DuckDB-backed (lazy mode). If so,
+    // route through the async path so high-resolution viewport data is
+    // fetched on demand from the underlying file rather than from the
+    // in-memory overview.
+    const hasLazy = plot.traces.some(t => this.files.get(t.fileId)?.data?._duckdb);
+    if (hasLazy && range) {
+        this._refreshTimeseriesVisualsLazy(panelId, plot, range);
+        return;
+    }
+
     plot.traces.forEach((t, idx) => {
         const built = this._buildTimeTrace(t, range);
         if (!built) return;
@@ -107,6 +118,48 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
         Plotly.restyle(plot.div, update, [idx]);
     });
     this._refreshElapsedDateTimeAxisTicks(plot, range);
+};
+
+proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
+    if (!this._zoomTokens) this._zoomTokens = new Map();
+    const token = (this._zoomTokens.get(panelId) || 0) + 1;
+    this._zoomTokens.set(panelId, token);
+
+    const target = this.timeseriesVisualMaxPoints || 4000;
+    const [t0, t1] = range.map(v => Number(v));
+    if (!Number.isFinite(t0) || !Number.isFinite(t1)) return Promise.resolve();
+
+    const traceJobs = plot.traces.map((t, idx) => {
+        const fileEntry = this.files.get(t.fileId);
+        const data = fileEntry?.data;
+        const lazyMeta = data?._duckdb;
+        if (!lazyMeta) {
+            // Mixed lazy/eager: fall back to the sync path for this trace.
+            const built = this._buildTimeTrace(t, range);
+            if (built) Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
+            return Promise.resolve();
+        }
+        const source = lazyMeta.source;
+        if (!source?.getColumnRange) return Promise.resolve();
+        return source.getColumnRange(data, t.varName, t0, t1, target)
+            .then(({ x, y }) => {
+                // Drop the result if a newer zoom superseded this one.
+                if (this._zoomTokens.get(panelId) !== token) return;
+                if (!plot?.div || !plot.traces[idx]) return;
+                Plotly.restyle(plot.div, { x: [x], y: [y] }, [idx]);
+            })
+            .catch(err => {
+                if (this._zoomTokens.get(panelId) !== token) return;
+                console.warn('[duckdb] viewport query failed; using overview slice:', err?.message || err);
+                const built = this._buildTimeTrace(t, range);
+                if (built) Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
+            });
+    });
+    this._refreshElapsedDateTimeAxisTicks(plot, range);
+    const settled = Promise.all(traceJobs);
+    // Expose the in-flight promise so benchmarks (or tests) can await it.
+    this._lastLazyRefresh = settled;
+    return settled;
 };
 
 proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {

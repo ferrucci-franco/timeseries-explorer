@@ -80,16 +80,21 @@ async function benchParseLegacy(file, parser) {
     };
 }
 
+// Mirrors the threshold in file-methods.js so the bench matches the real
+// app code path. Files above this size are parsed in lazy mode.
+const LAZY_THRESHOLD_BYTES = 50 * 1024 * 1024;
+
 async function benchParseDuckDb(file, duckdbSource) {
+    const lazy = (file.size ?? 0) >= LAZY_THRESHOLD_BYTES;
     const t0 = now();
-    const data = await duckdbSource.parseCsvFile(file, file.name);
+    const data = await duckdbSource.parseCsvFile(file, file.name, { lazy });
     const t1 = now();
     return {
         sizeMB: Number(fmtMB(file.size)),
         rows: data.metadata?.numTimesteps || 0,
         variables: Object.keys(data.variables).length,
         parseMs: t1 - t0,
-        backend: 'duckdb',
+        backend: lazy ? 'duckdb-lazy' : 'duckdb-eager',
         data,
     };
 }
@@ -151,6 +156,10 @@ async function benchZoom(plotManager, panelId) {
         // So call the path explicitly to measure realistic downsampling cost.
         await Plotly.relayout(plot.div, { 'xaxis.range': [lo, hi] });
         plotManager._onRelayout(panelId, { 'xaxis.range[0]': lo, 'xaxis.range[1]': hi });
+        // Wait for any async DuckDB lazy refresh to finish before measuring.
+        if (plotManager._lastLazyRefresh) {
+            try { await plotManager._lastLazyRefresh; } catch (_) { /* ignore */ }
+        }
         await new Promise(res => requestAnimationFrame(res));
         await new Promise(res => requestAnimationFrame(res));
         const t1 = now();
