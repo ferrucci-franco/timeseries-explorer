@@ -110,13 +110,30 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
         return;
     }
 
+    // Batched restyle: collect every trace's new x/y/customdata into one
+    // Plotly.restyle call instead of N serial calls. With "overlay traces
+    // from all loaded files" the same panel can easily host 20–30 traces,
+    // and per-trace restyles each run their own Plotly update cycle —
+    // measurably slow at that count.
+    const xs = [];
+    const ys = [];
+    const cds = [];
+    const indices = [];
+    let anyCustomdata = false;
     plot.traces.forEach((t, idx) => {
         const built = this._buildTimeTrace(t, range);
         if (!built) return;
-        const update = { x: [built.x], y: [built.y] };
-        if (built.customdata) update.customdata = [built.customdata];
-        Plotly.restyle(plot.div, update, [idx]);
+        xs.push(built.x);
+        ys.push(built.y);
+        cds.push(built.customdata ?? null);
+        if (built.customdata) anyCustomdata = true;
+        indices.push(idx);
     });
+    if (indices.length) {
+        const update = { x: xs, y: ys };
+        if (anyCustomdata) update.customdata = cds;
+        Plotly.restyle(plot.div, update, indices);
+    }
     this._refreshElapsedDateTimeAxisTicks(plot, range);
 };
 
