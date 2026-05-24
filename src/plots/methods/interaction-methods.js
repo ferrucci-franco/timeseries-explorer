@@ -915,15 +915,44 @@ proto._findNextSampleValue = function(times, fromX, direction = 'next') {
     return NaN;
 };
 
-proto._jumpCursorTo = function(panelId, which, target, direction = 'next') {
+proto._jumpCursorTo = async function(panelId, which, target, direction = 'next') {
     const plot = this.plots.get(panelId);
     if (!plot?.cursors?.enabled) return;
     const trace = this._resolveCursorTrace(plot, which);
     if (!trace) return;
     const cursorX = plot.cursors[which];
     if (!Number.isFinite(cursorX)) return;
-    const times  = this._getTransformedTimeData(trace.fileId);
-    const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+
+    let times = null;
+    let values = null;
+
+    // Lazy-backed file: the overview in `variable.data` is too sparse for
+    // these jumps ("next sample" would skip ~150 real samples). Pull a
+    // window of *raw* source data from DuckDB instead and run the existing
+    // JS detectors on it.
+    const fileData = this.files.get(trace.fileId)?.data;
+    const lazyMeta = fileData?._duckdb;
+    const transformActive = typeof this._isFileTransformActive === 'function'
+        && this._isFileTransformActive(this._fileTransform(trace.fileId));
+    if (lazyMeta?.source?.fetchSourceWindow && !transformActive) {
+        try {
+            const chunk = await lazyMeta.source.fetchSourceWindow(
+                fileData, trace.varName, cursorX, direction, 50000, 32,
+            );
+            if (chunk?.times?.length) {
+                times = chunk.times;
+                values = chunk.values;
+            }
+        } catch (err) {
+            console.warn('[duckdb] cursor jump query failed; falling back to overview:', err?.message || err);
+        }
+    }
+
+    if (!times) {
+        times = this._getTransformedTimeData(trace.fileId);
+        values = this._getTransformedVariableData(trace.fileId, trace.varName);
+    }
+
     let nextX = NaN;
     if (target === 'max' || target === 'min') {
         nextX = this._findNextExtremum(times, values, cursorX, target, direction);

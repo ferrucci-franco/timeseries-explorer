@@ -181,6 +181,13 @@ export default class DuckDbSource {
         const escCol = sourceCol.replace(/"/g, '""');
         const tableName = meta.tableName;
         const lit = (v) => this._numericLiteral(v);
+        // Express the time column in the same units the rest of the app uses
+        // (Unix milliseconds for datetime, raw numeric otherwise) so the JS
+        // side never has to translate between encodings.
+        const timeKind = legacyData?.metadata?.timeKind;
+        const tExpr = timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`;
 
         // GROUP BY time-bucket gives O(maxPoints) output regardless of how
         // many input rows match — far cheaper than `COUNT(*) OVER ()` +
@@ -192,15 +199,15 @@ export default class DuckDbSource {
         }
         const sql = `
             SELECT MIN(t) AS t, AVG(v) AS v FROM (
-                SELECT "${escTime}"::DOUBLE AS t,
+                SELECT ${tExpr} AS t,
                        "${escCol}"::DOUBLE AS v,
                        CAST(LEAST(${maxPoints - 1},
                                   GREATEST(0,
-                                           FLOOR(("${escTime}"::DOUBLE - ${lit(t0)})
+                                           FLOOR((${tExpr} - ${lit(t0)})
                                                  * ${maxPoints} / ${lit(span)})))
                             AS BIGINT) AS bucket
                 FROM ${tableName}
-                WHERE "${escTime}" BETWEEN ${lit(t0)} AND ${lit(t1)}
+                WHERE ${tExpr} BETWEEN ${lit(t0)} AND ${lit(t1)}
             )
             GROUP BY bucket
             ORDER BY bucket;
@@ -209,6 +216,91 @@ export default class DuckDbSource {
         return {
             x: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
             y: this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
+        };
+    }
+
+    /**
+     * Pull a window of raw source samples (no bucket aggregation, no
+     * decimation) around a reference time, for operations that need exact
+     * data points: cursor "next sample", "next extremum", "next zero
+     * crossing", etc.
+     *
+     * Returns `{times: Float64Array, values: Float64Array}` already sorted
+     * ascending by time. Up to `maxRows` samples, biased toward `direction`:
+     *
+     *  - `direction: 'next'` → `contextRows` samples ≤ fromX plus the next
+     *    `maxRows - contextRows` samples > fromX.
+     *  - `direction: 'prev'` → `contextRows` samples ≥ fromX plus the
+     *    previous `maxRows - contextRows` samples < fromX.
+     *
+     * The context tail ensures the JS algorithms (which need a left/right
+     * neighbour to confirm a local extremum) have something to look at.
+     */
+    async fetchSourceWindow(legacyData, varName, fromX, direction = 'next', maxRows = 50000, contextRows = 32) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('fetchSourceWindow: data is not DuckDB-backed (eager mode)');
+        const variable = legacyData.variables?.[varName];
+        if (!variable) throw new Error(`fetchSourceWindow: unknown variable "${varName}"`);
+        const sourceCol = variable._duckdbCol || varName;
+        const timeCol = meta.timeColumn;
+        const escTime = timeCol.replace(/"/g, '""');
+        const escCol = sourceCol.replace(/"/g, '""');
+        const tableName = meta.tableName;
+        const lit = (v) => this._numericLiteral(v);
+        const timeKind = legacyData?.metadata?.timeKind;
+        const tExpr = timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`;
+
+        if (!Number.isFinite(fromX)) {
+            return { times: new Float64Array(0), values: new Float64Array(0) };
+        }
+
+        const dataRows = Math.max(1, maxRows - contextRows);
+        const orderByT = `"${escTime}"`;
+
+        const sql = direction === 'prev'
+            ? `
+                SELECT * FROM (
+                    SELECT ${tExpr} AS t, "${escCol}"::DOUBLE AS v
+                    FROM ${tableName}
+                    WHERE ${tExpr} < ${lit(fromX)}
+                    ORDER BY ${orderByT} DESC
+                    LIMIT ${dataRows}
+                )
+                UNION ALL
+                SELECT * FROM (
+                    SELECT ${tExpr} AS t, "${escCol}"::DOUBLE AS v
+                    FROM ${tableName}
+                    WHERE ${tExpr} >= ${lit(fromX)}
+                    ORDER BY ${orderByT} ASC
+                    LIMIT ${contextRows}
+                )
+                ORDER BY t ASC;
+            `
+            : `
+                SELECT * FROM (
+                    SELECT ${tExpr} AS t, "${escCol}"::DOUBLE AS v
+                    FROM ${tableName}
+                    WHERE ${tExpr} <= ${lit(fromX)}
+                    ORDER BY ${orderByT} DESC
+                    LIMIT ${contextRows}
+                )
+                UNION ALL
+                SELECT * FROM (
+                    SELECT ${tExpr} AS t, "${escCol}"::DOUBLE AS v
+                    FROM ${tableName}
+                    WHERE ${tExpr} > ${lit(fromX)}
+                    ORDER BY ${orderByT} ASC
+                    LIMIT ${dataRows}
+                )
+                ORDER BY t ASC;
+            `;
+
+        const result = await this._conn.query(sql);
+        return {
+            times: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
+            values: this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
         };
     }
 
