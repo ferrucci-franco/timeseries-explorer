@@ -20,6 +20,7 @@ import mvpWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
+import { parseCsvNumber } from '../parsers/csv-time-detection.js';
 
 const BUNDLES = {
     mvp: { mainModule: mvpWasmUrl, mainWorker: mvpWorkerUrl },
@@ -316,8 +317,8 @@ export default class DuckDbSource {
             : this._csvReadExpr(escapedHandle, csvProfile);
         let viewMode = false;
 
-        if (format === 'csv' && csvProfile?.skippedRowsAfterHeader > 0) {
-            throw new Error('DuckDB CSV path does not yet support skipped unit/comment rows after the header.');
+        if (format === 'csv' && csvProfile?.delimiter === 'whitespace') {
+            throw new Error('DuckDB CSV path does not yet support variable-width whitespace delimiters.');
         }
 
         // Lazy mode: use VIEW from the start. CREATE TABLE materializes the
@@ -419,15 +420,69 @@ export default class DuckDbSource {
     }
 
     _csvReadExpr(escapedHandle, csvProfile = null) {
-        const options = [`sample_size=20000`];
-        if (csvProfile) {
-            if (csvProfile.delimiter && csvProfile.delimiter !== 'whitespace') {
-                options.push(`delim='${this._escapeSqlString(csvProfile.delimiter)}'`);
-            }
-            options.push(`header=${csvProfile.hasHeader ? 'true' : 'false'}`);
-            if ((csvProfile.headerIndex || 0) > 0) options.push(`skip=${Number(csvProfile.headerIndex) || 0}`);
+        if (!csvProfile) return `read_csv_auto('${escapedHandle}', sample_size=20000)`;
+
+        const specs = this._csvColumnSpecs(csvProfile);
+        const options = [
+            `auto_detect=false`,
+            `header=false`,
+            `skip=${Math.max(0, Number(csvProfile.dataStartIndex) || 0)}`,
+            `columns=${this._duckDbColumnsStruct(specs)}`,
+        ];
+        if (csvProfile.delimiter && csvProfile.delimiter !== 'whitespace') {
+            options.push(`delim='${this._escapeSqlString(csvProfile.delimiter)}'`);
         }
-        return `read_csv_auto('${escapedHandle}', ${options.join(', ')})`;
+        if (this._csvUsesDecimalComma(csvProfile)) options.push(`decimal_separator=','`);
+        return `read_csv('${escapedHandle}', ${options.join(', ')})`;
+    }
+
+    _csvColumnSpecs(csvProfile) {
+        const rawHeaders = csvProfile?.rawHeaders || [];
+        const headers = csvProfile?.headers || [];
+        const sampleRows = csvProfile?.sampleRows || [];
+        const timeSource = csvProfile?.timeSource || {};
+        const timeIndexes = new Set(timeSource.sourceIndexes || []);
+        return rawHeaders.map((raw, index) => {
+            const header = headers[index] || {};
+            const name = header.name || String(raw || `column_${index + 1}`);
+            const forceVarchar = timeIndexes.has(index)
+                && timeSource.kind === 'datetime'
+                && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
+            return {
+                name,
+                type: forceVarchar ? 'VARCHAR' : this._inferDuckDbCsvType(sampleRows, index, csvProfile.delimiter),
+            };
+        });
+    }
+
+    _inferDuckDbCsvType(sampleRows, index, delimiter) {
+        let nonEmpty = 0;
+        let numeric = 0;
+        for (const row of sampleRows || []) {
+            const raw = String(row?.[index] ?? '').trim();
+            if (!raw) continue;
+            nonEmpty++;
+            if (Number.isFinite(parseCsvNumber(raw, delimiter))) numeric++;
+        }
+        return nonEmpty > 0 && numeric === nonEmpty ? 'DOUBLE' : 'VARCHAR';
+    }
+
+    _duckDbColumnsStruct(specs) {
+        const fields = specs.map(({ name, type }) =>
+            `'${this._escapeSqlString(name)}': '${this._escapeSqlString(type || 'VARCHAR')}'`
+        );
+        return `{${fields.join(', ')}}`;
+    }
+
+    _csvUsesDecimalComma(csvProfile) {
+        if (!csvProfile || csvProfile.delimiter === ',') return false;
+        for (const row of csvProfile.sampleRows || []) {
+            for (const cell of row || []) {
+                const raw = String(cell ?? '').trim();
+                if (/^[+-]?\d+,\d+(?:[eEdD][+-]?\d+)?$/.test(raw)) return true;
+            }
+        }
+        return false;
     }
 
     _timeInfoFromDuckDbSchema(columnNames, columnTypes) {
