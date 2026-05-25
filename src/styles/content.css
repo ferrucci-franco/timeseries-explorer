@@ -917,6 +917,40 @@ body.cursor-box-dragging {
     display: none;
 }
 
+.lazy-detail-indicator {
+    position: absolute;
+    right: 12px;
+    top: 42px;
+    z-index: 8;
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.lazy-detail-indicator.active {
+    display: flex;
+}
+
+.lazy-detail-spinner {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent-color);
+    animation: lazy-detail-spin 0.8s linear infinite;
+}
+
+@keyframes lazy-detail-spin {
+    to { transform: rotate(360deg); }
+}
+
 .hover-overlay-line {
     position: absolute;
     width: 0;

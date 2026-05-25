@@ -142,10 +142,12 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     const token = (this._zoomTokens.get(panelId) || 0) + 1;
     this._zoomTokens.set(panelId, token);
 
-    const target = this.timeseriesVisualMaxPoints || 4000;
+    const targetInfo = this._lazyTimeseriesTarget();
+    const target = targetInfo.limit;
     const [t0, t1] = range.map(v => this._coerceAxisValue(v));
     if (!Number.isFinite(t0) || !Number.isFinite(t1)) return Promise.resolve();
 
+    let lazyQueryCount = 0;
     const traceJobs = plot.traces.map((t, idx) => {
         const fileEntry = this.files.get(t.fileId);
         const data = fileEntry?.data;
@@ -178,6 +180,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
 
         const source = lazyMeta.source;
         if (!source?.getColumnRange) return Promise.resolve();
+        lazyQueryCount++;
         return source.getColumnRange(data, t.varName, t0, t1, target)
             .then(({ x, y }) => {
                 // Drop the result if a newer zoom superseded this one.
@@ -192,6 +195,8 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
                 if (built) Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
             });
     });
+    if (lazyQueryCount > 0) this._setLazyDetailLoading(plot, true, targetInfo);
+    else this._setLazyDetailLoading(plot, false);
     this._refreshElapsedDateTimeAxisTicks(plot, range);
     const settled = Promise.all(traceJobs);
     // Expose the in-flight promise so benchmarks (or tests) can await it.
@@ -207,8 +212,45 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         if (plot?.cursors?.enabled) {
             try { this._syncCursorDisplay(panelId, plot); } catch (_) { /* ignore */ }
         }
+        this._setLazyDetailLoading(plot, false);
     }).catch(() => { /* per-trace errors already handled */ });
     return settled;
+};
+
+proto._lazyTimeseriesTarget = function() {
+    const configured = this.timeseriesVisualMaxPoints;
+    if (Number.isFinite(configured) && configured > 0) {
+        return { limit: Math.round(configured), capped: false };
+    }
+    // "No downsampling" is unsafe for lazy files: it could request millions
+    // of points from DuckDB and hand them to Plotly. Keep a bounded detail
+    // query and make the cap visible through the loading indicator tooltip.
+    return { limit: 4000, capped: true };
+};
+
+proto._setLazyDetailLoading = function(plot, loading, targetInfo = null) {
+    const panelEl = plot?.div?.closest('.layout-panel');
+    if (!panelEl) return;
+    let indicator = panelEl.querySelector('.lazy-detail-indicator');
+    if (loading && !indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'lazy-detail-indicator';
+        indicator.setAttribute('aria-live', 'polite');
+        indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span>';
+        panelEl.appendChild(indicator);
+    }
+    if (!indicator) return;
+    if (loading) {
+        const capped = targetInfo?.capped;
+        const limit = targetInfo?.limit || 4000;
+        indicator.title = capped
+            ? `Loading detailed data (${limit} point cap for lazy files)`
+            : `Loading detailed data (${limit} points)`;
+        indicator.setAttribute('aria-label', indicator.title);
+        indicator.classList.add('active');
+    } else {
+        indicator.classList.remove('active');
+    }
 };
 
 proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
