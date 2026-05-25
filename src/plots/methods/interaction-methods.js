@@ -155,8 +155,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         if (!lazyMeta) {
             // Mixed lazy/eager: fall back to the sync path for this trace.
             const built = this._buildTimeTrace(t, range);
-            if (built) Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
-            return Promise.resolve();
+            return Promise.resolve(built ? { idx, x: built.x, y: built.y } : null);
         }
 
         // Density heuristic: if the in-memory overview already has enough
@@ -173,8 +172,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             if (coverage >= (target / overviewPts)) {
                 // Overview is enough — use the sync path (slice + downsample in JS).
                 const built = this._buildTimeTrace(t, range);
-                if (built) Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
-                return Promise.resolve();
+                return Promise.resolve(built ? { idx, x: built.x, y: built.y } : null);
             }
         }
 
@@ -184,21 +182,25 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         return source.getColumnRange(data, t.varName, t0, t1, target)
             .then(({ x, y }) => {
                 // Drop the result if a newer zoom superseded this one.
-                if (this._zoomTokens.get(panelId) !== token) return;
-                if (!plot?.div || !plot.traces[idx]) return;
-                Plotly.restyle(plot.div, { x: [x], y: [y] }, [idx]);
+                if (this._zoomTokens.get(panelId) !== token) return null;
+                if (!plot?.div || !plot.traces[idx]) return null;
+                return { idx, x, y };
             })
             .catch(err => {
-                if (this._zoomTokens.get(panelId) !== token) return;
+                if (this._zoomTokens.get(panelId) !== token) return null;
                 console.warn('[duckdb] viewport query failed; using overview slice:', err?.message || err);
                 const built = this._buildTimeTrace(t, range);
-                if (built) Plotly.restyle(plot.div, { x: [built.x], y: [built.y] }, [idx]);
+                return built ? { idx, x: built.x, y: built.y } : null;
             });
     });
     if (lazyQueryCount > 0) this._setLazyDetailLoading(plot, true, targetInfo);
     else this._setLazyDetailLoading(plot, false);
     this._refreshElapsedDateTimeAxisTicks(plot, range);
-    const settled = Promise.all(traceJobs);
+    const settled = Promise.all(traceJobs).then(results => {
+        if (this._zoomTokens.get(panelId) !== token) return results;
+        this._applyBatchedTimeseriesRestyle(plot, results);
+        return results;
+    });
     // Expose the in-flight promise so benchmarks (or tests) can await it.
     this._lastLazyRefresh = settled;
     // Re-render the measurement cursor (A|B) overlay + info box once the
@@ -215,6 +217,18 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         this._setLazyDetailLoading(plot, false);
     }).catch(() => { /* per-trace errors already handled */ });
     return settled;
+};
+
+proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
+    if (!plot?.div) return;
+    const valid = results
+        .filter(result => result && Number.isInteger(result.idx) && plot.traces[result.idx])
+        .sort((a, b) => a.idx - b.idx);
+    if (!valid.length) return;
+    Plotly.restyle(plot.div, {
+        x: valid.map(result => result.x),
+        y: valid.map(result => result.y),
+    }, valid.map(result => result.idx));
 };
 
 proto._lazyTimeseriesTarget = function() {
@@ -236,7 +250,7 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null) {
         indicator = document.createElement('div');
         indicator.className = 'lazy-detail-indicator';
         indicator.setAttribute('aria-live', 'polite');
-        indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span>';
+        indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text">Loading detail</span>';
         panelEl.appendChild(indicator);
     }
     if (!indicator) return;

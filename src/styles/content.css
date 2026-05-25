@@ -919,19 +919,26 @@ body.cursor-box-dragging {
 
 .lazy-detail-indicator {
     position: absolute;
-    right: 12px;
-    top: 42px;
+    left: 50%;
+    top: 46px;
+    transform: translateX(-50%);
     z-index: 8;
-    width: 24px;
-    height: 24px;
+    min-width: 128px;
+    min-height: 34px;
+    padding: 0 12px;
     border-radius: 999px;
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
-    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    color: var(--text-primary);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.22);
     display: none;
     align-items: center;
     justify-content: center;
+    gap: 8px;
     pointer-events: none;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
 }
 
 .lazy-detail-indicator.active {
@@ -939,12 +946,17 @@ body.cursor-box-dragging {
 }
 
 .lazy-detail-spinner {
-    width: 12px;
-    height: 12px;
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
     border-radius: 999px;
     border: 2px solid var(--border-color);
     border-top-color: var(--accent-color);
     animation: lazy-detail-spin 0.8s linear infinite;
+}
+
+.lazy-detail-text {
+    white-space: nowrap;
 }
 
 @keyframes lazy-detail-spin {
