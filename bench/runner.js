@@ -66,6 +66,9 @@ function makePanelDom(panelId, host) {
 }
 
 async function benchParseLegacy(file, parser) {
+    if (file.name.toLowerCase().endsWith('.parquet')) {
+        throw new Error('Parquet benchmark requires the duckdb backend.');
+    }
     const buffer = await readAsArrayBuffer(file);
     const t0 = now();
     const data = await parser.parse(buffer);
@@ -85,18 +88,27 @@ async function benchParseLegacy(file, parser) {
 const LAZY_THRESHOLD_BYTES = 50 * 1024 * 1024;
 
 async function benchParseDuckDb(file, duckdbSource) {
+    const extension = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] || '';
     const lazy = (file.size ?? 0) >= LAZY_THRESHOLD_BYTES;
-    const sampleBuffer = await file.slice(0, 1024 * 1024).arrayBuffer();
-    const csvProfile = new CsvParser(new MatParser()).inspectSample(sampleBuffer, { maxRows: 700 });
     const t0 = now();
-    const data = await duckdbSource.parseCsvFile(file, file.name, { lazy, csvProfile });
+    const data = extension === '.parquet'
+        ? await duckdbSource.parseParquetFile(file, file.name, { lazy: true })
+        : await duckdbSource.parseCsvFile(file, file.name, {
+            lazy,
+            csvProfile: new CsvParser(new MatParser()).inspectSample(
+                await file.slice(0, 1024 * 1024).arrayBuffer(),
+                { maxRows: 700 },
+            ),
+        });
     const t1 = now();
     return {
         sizeMB: Number(fmtMB(file.size)),
         rows: data.metadata?.numTimesteps || 0,
         variables: Object.keys(data.variables).length,
         parseMs: t1 - t0,
-        backend: lazy ? 'duckdb-lazy' : 'duckdb-eager',
+        backend: extension === '.parquet'
+            ? 'duckdb-parquet-lazy'
+            : (lazy ? 'duckdb-lazy' : 'duckdb-eager'),
         data,
     };
 }

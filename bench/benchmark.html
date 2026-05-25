@@ -39,7 +39,7 @@
 node bench/generate-synthetic-csv.mjs --rows 15000000 --out bench/data/synth-1gb.csv</pre>
             </li>
             <li>Open this page via <code>npm run dev</code> (default <code>http://127.0.0.1:8000/bench/benchmark.html</code>).</li>
-            <li>Select one or more CSV files. The runner parses each, renders a 1D plot, exercises zoom levels, and finishes with synthetic heatmaps.</li>
+            <li>Select one or more CSV or Parquet files. The runner parses each, renders a 1D plot, exercises zoom levels, and finishes with synthetic heatmaps.</li>
             <li>Copy the JSON result block at the end into <code>bench/baseline.md</code> (or <code>bench/final.md</code>).</li>
         </ol>
         <p class="hint">
@@ -49,7 +49,7 @@ node bench/generate-synthetic-csv.mjs --rows 15000000 --out bench/data/synth-1gb
     </details>
 
     <div class="controls">
-        <input type="file" id="file-input" multiple accept=".csv,.txt">
+        <input type="file" id="file-input" multiple accept=".csv,.txt,.parquet">
         <label for="backend-select" style="margin-left:1rem;">Backend:</label>
         <select id="backend-select">
             <option value="legacy">legacy (CsvParser)</option>
@@ -86,7 +86,7 @@ node bench/generate-synthetic-csv.mjs --rows 15000000 --out bench/data/synth-1gb
         const backendSelect = document.getElementById('backend-select');
         runBtn.addEventListener('click', async () => {
             const files = [...(fileInput.files || [])];
-            if (!files.length) { status.textContent = 'Select at least one CSV.'; return; }
+            if (!files.length) { status.textContent = 'Select at least one CSV or Parquet file.'; return; }
             log.textContent = '';
             jsonOut.value = '';
             copyBtn.disabled = true;
