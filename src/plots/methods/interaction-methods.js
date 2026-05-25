@@ -247,8 +247,30 @@ proto._lazyCacheResult = function(trace, idx, t0, t1, target) {
     const minX = Math.min(t0, t1);
     const maxX = Math.max(t0, t1);
     if (minX < cache.start || maxX > cache.end) return null;
+    if (!this._lazyCacheHasViewportDetail(cache, minX, maxX, target)) return null;
     const visual = this._visualFromSeriesRange(cache.x, cache.y, minX, maxX, target);
     return visual ? { idx, x: visual.x, y: visual.y } : null;
+};
+
+proto._lazyCacheHasViewportDetail = function(cache, minX, maxX, target) {
+    const n = Math.min(cache.x?.length || 0, cache.y?.length || 0);
+    if (n <= 0) return false;
+    const start = this._lowerBound(cache.x, minX);
+    const end = this._upperBound(cache.x, maxX);
+    const pointsInView = Math.max(0, end - start);
+    const finiteTarget = Number.isFinite(target) && target > 0 ? target : 4000;
+    const required = Math.max(32, Math.min(finiteTarget * 0.6, 1200));
+    if (pointsInView >= required) return true;
+
+    // If the cache is already roughly the same width as the viewport, another
+    // query cannot materially increase horizontal resolution without changing
+    // the configured point budget. Reuse it to avoid query loops on sparse data.
+    const cacheSpan = cache.end - cache.start;
+    const viewSpan = maxX - minX;
+    return Number.isFinite(cacheSpan)
+        && Number.isFinite(viewSpan)
+        && viewSpan > 0
+        && cacheSpan <= viewSpan * 1.25;
 };
 
 proto._visualFromSeriesRange = function(xValues, yValues, minX, maxX, target) {
