@@ -170,14 +170,29 @@ export default class DuckDbSource {
      * O(maxPoints) regardless of how many rows the visible range contains.
      */
     async getColumnRange(legacyData, varName, t0, t1, maxPoints = 4000) {
+        const result = await this.getColumnsRange(legacyData, [varName], t0, t1, maxPoints);
+        return {
+            x: result.x,
+            y: result.yByVar.get(varName) || new Float64Array(0),
+        };
+    }
+
+    /**
+     * Fetch viewport-bounded slices for multiple variables from the same file
+     * in one DuckDB scan. This is critical for overlaid traces: four traces
+     * should not trigger four independent Parquet/CSV range scans.
+     */
+    async getColumnsRange(legacyData, varNames, t0, t1, maxPoints = 4000) {
         const meta = legacyData?._duckdb;
-        if (!meta) throw new Error('getColumnRange: data is not DuckDB-backed (eager mode)');
-        const variable = legacyData.variables?.[varName];
-        if (!variable) throw new Error(`getColumnRange: unknown variable "${varName}"`);
-        const sourceCol = variable._duckdbCol || varName;
+        if (!meta) throw new Error('getColumnsRange: data is not DuckDB-backed (eager mode)');
+        const requested = [...new Set(varNames || [])]
+            .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
+            .filter(item => item.variable);
+        if (!requested.length) {
+            return { x: new Float64Array(0), yByVar: new Map() };
+        }
         const timeCol = meta.timeColumn;
         const escTime = timeCol.replace(/"/g, '""');
-        const escCol = sourceCol.replace(/"/g, '""');
         const tableName = meta.tableName;
         const lit = (v) => this._numericLiteral(v);
         // Express the time column in the same units the rest of the app uses
@@ -194,18 +209,24 @@ export default class DuckDbSource {
         // set is large.
         const span = t1 - t0;
         if (!Number.isFinite(span) || span <= 0) {
-            return { x: new Float64Array(0), y: new Float64Array(0) };
+            return { x: new Float64Array(0), yByVar: new Map(requested.map(({ varName }) => [varName, new Float64Array(0)])) };
         }
+        const valueSelect = requested
+            .map(({ variable }, index) => `${this._quoteIdent(variable._duckdbCol || variable.name)} AS v${index}`)
+            .join(',\n                       ');
+        const aggregateSelect = requested
+            .map((_, index) => `AVG(v${index}) AS v${index}`)
+            .join(',\n                   ');
         const sql = `
             WITH visible AS (
                 SELECT ${tExpr} AS t,
-                       "${escCol}" AS v
+                       ${valueSelect}
                 FROM ${tableName}
                 WHERE ${tExpr} BETWEEN ${lit(t0)} AND ${lit(t1)}
             ),
             bucketed AS (
                 SELECT t,
-                       v,
+                       ${requested.map((_, index) => `v${index}`).join(', ')},
                        CAST(LEAST(${maxPoints - 1},
                                   GREATEST(0,
                                            FLOOR((t - ${lit(t0)})
@@ -213,15 +234,20 @@ export default class DuckDbSource {
                             AS BIGINT) AS bucket
                 FROM visible
             )
-            SELECT MIN(t) AS t, AVG(v) AS v
+            SELECT MIN(t) AS t,
+                   ${aggregateSelect}
             FROM bucketed
             GROUP BY bucket
             ORDER BY bucket;
         `;
         const result = await this._conn.query(sql);
+        const yByVar = new Map();
+        requested.forEach(({ varName }, index) => {
+            yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
+        });
         return {
             x: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
-            y: this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
+            yByVar,
         };
     }
 

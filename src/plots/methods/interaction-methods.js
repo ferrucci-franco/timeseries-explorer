@@ -149,14 +149,17 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
 
     let lazyQueryCount = 0;
     const previewResults = [];
-    const traceJobs = plot.traces.map((t, idx) => {
+    const traceJobs = [];
+    const queryGroups = new Map();
+    plot.traces.forEach((t, idx) => {
         const fileEntry = this.files.get(t.fileId);
         const data = fileEntry?.data;
         const lazyMeta = data?._duckdb;
         if (!lazyMeta) {
             // Mixed lazy/eager: fall back to the sync path for this trace.
             const built = this._buildTimeTrace(t, range);
-            return Promise.resolve(built ? { idx, x: built.x, y: built.y } : null);
+            traceJobs.push(Promise.resolve(built ? { idx, x: built.x, y: built.y } : null));
+            return;
         }
 
         // Density heuristic: if the in-memory overview already has enough
@@ -173,42 +176,45 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             if (coverage >= (target / overviewPts)) {
                 // Overview is enough — use the sync path (slice + downsample in JS).
                 const built = this._buildTimeTrace(t, range);
-                return Promise.resolve(built ? { idx, x: built.x, y: built.y } : null);
+                traceJobs.push(Promise.resolve(built ? { idx, x: built.x, y: built.y } : null));
+                return;
             }
         }
 
         const cached = this._lazyCacheResult(t, idx, t0, t1, target);
-        if (cached) return Promise.resolve(cached);
+        if (cached) {
+            traceJobs.push(Promise.resolve(cached));
+            return;
+        }
 
         const source = lazyMeta.source;
-        if (!source?.getColumnRange) return Promise.resolve();
+        if (!source?.getColumnRange) {
+            traceJobs.push(Promise.resolve(null));
+            return;
+        }
         lazyQueryCount++;
         const queryRange = this._lazyExpandedRange(data, t0, t1);
         const queryTarget = this._lazyExpandedTarget(target, queryRange, t0, t1);
         const preview = this._renderedTracePreview(plot, idx, t0, t1, target);
         if (preview) previewResults.push({ idx, x: preview.x, y: preview.y });
-        return source.getColumnRange(data, t.varName, queryRange[0], queryRange[1], queryTarget)
-            .then(({ x, y }) => {
-                // Drop the result if a newer zoom superseded this one.
-                if (this._zoomTokens.get(panelId) !== token) return null;
-                if (!plot?.div || !plot.traces[idx]) return null;
-                t._lazyDetailCache = {
-                    fileId: t.fileId,
-                    varName: t.varName,
-                    start: queryRange[0],
-                    end: queryRange[1],
-                    target: queryTarget,
-                    x,
-                    y,
-                };
-                return this._lazyCacheResult(t, idx, t0, t1, target) || { idx, x, y };
-            })
-            .catch(err => {
-                if (this._zoomTokens.get(panelId) !== token) return null;
-                console.warn('[duckdb] viewport query failed; keeping current lazy view:', err?.message || err);
-                return this._renderedTracePreview(plot, idx, t0, t1, target);
-            });
+
+        const groupKey = [
+            t.fileId,
+            queryRange[0],
+            queryRange[1],
+            queryTarget,
+        ].join('\u0001');
+        let group = queryGroups.get(groupKey);
+        if (!group) {
+            group = { source, data, queryRange, queryTarget, items: [] };
+            queryGroups.set(groupKey, group);
+        }
+        group.items.push({ trace: t, idx });
     });
+
+    for (const group of queryGroups.values()) {
+        traceJobs.push(this._runLazyDetailGroup(panelId, token, plot, group, t0, t1, target));
+    }
     if (previewResults.length && this._zoomTokens.get(panelId) === token) {
         this._applyBatchedTimeseriesRestyle(plot, previewResults);
     }
@@ -217,8 +223,9 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     this._refreshElapsedDateTimeAxisTicks(plot, range);
     const settled = Promise.all(traceJobs).then(results => {
         if (this._zoomTokens.get(panelId) !== token) return results;
-        this._applyBatchedTimeseriesRestyle(plot, results);
-        return results;
+        const flat = results.flatMap(result => Array.isArray(result) ? result : (result ? [result] : []));
+        this._applyBatchedTimeseriesRestyle(plot, flat);
+        return flat;
     });
     // Expose the in-flight promise so benchmarks (or tests) can await it.
     this._lastLazyRefresh = settled;
@@ -236,6 +243,42 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         this._setLazyDetailLoading(plot, false);
     }).catch(() => { /* per-trace errors already handled */ });
     return settled;
+};
+
+proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target) {
+    const varNames = group.items.map(item => item.trace.varName);
+    const fetch = group.source?.getColumnsRange
+        ? group.source.getColumnsRange(group.data, varNames, group.queryRange[0], group.queryRange[1], group.queryTarget)
+        : Promise.all(varNames.map(varName =>
+            group.source.getColumnRange(group.data, varName, group.queryRange[0], group.queryRange[1], group.queryTarget)
+        )).then(series => ({
+            x: series[0]?.x || new Float64Array(0),
+            yByVar: new Map(series.map((entry, index) => [varNames[index], entry?.y || new Float64Array(0)])),
+        }));
+
+    return fetch.then(({ x, yByVar }) => {
+        if (this._zoomTokens.get(panelId) !== token) return [];
+        if (!plot?.div) return [];
+        return group.items.map(({ trace, idx }) => {
+            if (!plot.traces[idx]) return null;
+            const y = yByVar?.get(trace.varName);
+            if (!y) return null;
+            trace._lazyDetailCache = {
+                fileId: trace.fileId,
+                varName: trace.varName,
+                start: group.queryRange[0],
+                end: group.queryRange[1],
+                target: group.queryTarget,
+                x,
+                y,
+            };
+            return this._lazyCacheResult(trace, idx, t0, t1, target) || { idx, x, y };
+        });
+    }).catch(err => {
+        if (this._zoomTokens.get(panelId) !== token) return [];
+        console.warn('[duckdb] grouped viewport query failed; keeping current lazy view:', err?.message || err);
+        return group.items.map(({ idx }) => this._renderedTracePreview(plot, idx, t0, t1, target));
+    });
 };
 
 proto._renderedTracePreview = function(plot, idx, t0, t1, target) {
