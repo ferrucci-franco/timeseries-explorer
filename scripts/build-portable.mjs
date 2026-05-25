@@ -55,6 +55,32 @@ async function copyDirInto(src, dest) {
   await fs.cp(src, dest, { recursive: true });
 }
 
+function portableDuckDbStubPlugin() {
+  return {
+    name: 'portable-duckdb-stub',
+    setup(buildApi) {
+      buildApi.onResolve({ filter: /src[\\/]data[\\/]duckdb-source\.js$/ }, () => ({
+        path: 'duckdb-source-stub',
+        namespace: 'portable-stubs',
+      }));
+      buildApi.onResolve({ filter: /\.\.[\\/]data[\\/]duckdb-source\.js$/ }, () => ({
+        path: 'duckdb-source-stub',
+        namespace: 'portable-stubs',
+      }));
+      buildApi.onLoad({ filter: /^duckdb-source-stub$/, namespace: 'portable-stubs' }, () => ({
+        contents: `
+          export default class DuckDbSource {
+            constructor() {
+              throw new Error('DuckDB is not available in the portable file:// build.');
+            }
+          }
+        `,
+        loader: 'js',
+      }));
+    },
+  };
+}
+
 async function buildPortableBundle(packageDir) {
   await build({
     entryPoints: [path.join(projectRoot, 'app.js')],
@@ -63,6 +89,10 @@ async function buildPortableBundle(packageDir) {
     format: 'iife',
     platform: 'browser',
     target: ['es2019'],
+    define: {
+      'globalThis.__OMV_PORTABLE__': 'true',
+    },
+    plugins: [portableDuckDbStubPlugin()],
     sourcemap: false,
     minify: false,
   });

@@ -1,17 +1,29 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
-import DuckDbSource from '../../data/duckdb-source.js';
+
+let duckDbSourceClassPromise = null;
+
+async function loadDuckDbSourceClass() {
+    if (globalThis.__OMV_PORTABLE__ === true) return null;
+    if (!duckDbSourceClassPromise) {
+        duckDbSourceClassPromise = import('../../data/duckdb-source.js').then(module => module.default);
+    }
+    return duckDbSourceClassPromise;
+}
 
 export function installFileMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.loadFile = async function(file, options = {}) {
     try {
-        const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
-        const contentHash = await this._hashBuffer(buffer);
+        const extension = this._fileExtension(file.name);
+        const streamable = this._canParseFromFile(file, extension);
+        const buffer = streamable ? null : await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+        const contentHash = buffer
+            ? await this._hashBuffer(buffer)
+            : this._fileFingerprint(file);
         const data   = await this._parseResultBuffer(file.name, buffer, file);
 
         const fileId   = `f${this._nextFileId++}`;
-        const extension = this._fileExtension(file.name);
         const baseName = this._fileBaseName(file.name);
         const transform = this._defaultFileTransform();
         this.files.set(fileId, { file, fileHandle: options.fileHandle || null, buffer, contentHash, name: baseName, extension, transform });
@@ -150,10 +162,12 @@ proto.reloadActiveFile = async function() {
     const entry = this.files.get(id);
     if (!entry) return;
 
-    const buffer = await this._readLatestBuffer(entry);
-    const contentHash = await this._hashBuffer(buffer);
+    const streamable = this._canParseFromFile(entry.file, entry.extension);
+    const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
+    const buffer = streamable ? null : await this._readLatestBuffer(entry);
+    const contentHash = streamable ? this._fileFingerprint(latestFile || entry.file) : await this._hashBuffer(buffer);
 
-    const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, entry.file);
+    const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, latestFile || entry.file);
     this._reapplyDerivedVariables(id, data);
 
     entry.buffer = buffer;
@@ -171,8 +185,10 @@ proto.reloadActiveFileAsNewVersion = async function() {
     if (!source) return;
 
     const name = this._nextVersionName(source.name);
-    const buffer = await this._readLatestBuffer(source);
-    const contentHash = await this._hashBuffer(buffer);
+    const streamable = this._canParseFromFile(source.file, source.extension);
+    const latestFile = streamable ? await this._readLatestFileForStreamableReload(source) : null;
+    const buffer = streamable ? null : await this._readLatestBuffer(source);
+    const contentHash = streamable ? this._fileFingerprint(latestFile || source.file) : await this._hashBuffer(buffer);
     const sourceHash = source.contentHash || (source.buffer ? await this._hashBuffer(source.buffer) : '');
     if (!source.contentHash && sourceHash) source.contentHash = sourceHash;
     if (sourceHash && contentHash === sourceHash) {
@@ -187,7 +203,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
     this._copyDerivedDefinitions(sourceId, fileId);
     this._reapplyDerivedVariables(fileId, data);
     this.files.set(fileId, {
-        file: source.file,
+        file: latestFile || source.file,
         fileHandle: source.fileHandle || null,
         buffer,
         contentHash,
@@ -204,6 +220,35 @@ proto.reloadActiveFileAsNewVersion = async function() {
     this._clearVariableSelection();
     this.renderVariablesTree(data.tree);
     this._updateActionButtons();
+};
+
+proto._readLatestFileForStreamableReload = async function(entry) {
+    if (entry.fileHandle?.getFile) {
+        try {
+            const file = await entry.fileHandle.getFile();
+            entry.file = file;
+            entry.extension = this._fileExtension(file.name);
+            return file;
+        } catch (err) {
+            console.warn('Could not read latest file handle; falling back to stored file snapshot.', err);
+        }
+    }
+
+    if (this._shouldReselectFileForReload(entry)) {
+        const file = await this._promptForReloadReselect(entry);
+        if (!file) {
+            const err = new Error('File selection cancelled');
+            err.name = 'AbortError';
+            throw err;
+        }
+        entry.file = file;
+        entry.fileHandle = null;
+        entry.extension = this._fileExtension(file.name);
+        return file;
+    }
+
+    if (!entry.file) throw new Error('No file available');
+    return entry.file;
 };
 
 proto._readLatestBuffer = async function(entry) {
@@ -437,10 +482,38 @@ const DUCKDB_LAZY_THRESHOLD_BYTES = 50 * 1024 * 1024;
 // the raw CSV path risky above this size.
 const PARQUET_HINT_THRESHOLD_BYTES = 500 * 1024 * 1024;
 
+proto._canParseFromFile = function(file, extension = this._fileExtension(file?.name || '')) {
+    return !!file
+        && (extension === '.csv' || extension === '.parquet')
+        && this._canUseDuckDb();
+};
+
+proto._fileFingerprint = function(file) {
+    if (!file) return '';
+    return [
+        'file',
+        file.name || '',
+        file.size ?? '',
+        file.lastModified ?? '',
+        file.type || '',
+    ].join(':');
+};
+
+proto._readFileSampleBuffer = async function(file, bytes = 1024 * 1024) {
+    if (!file) return null;
+    const blob = typeof file.slice === 'function' ? file.slice(0, bytes) : file;
+    return blob.arrayBuffer ? blob.arrayBuffer() : this._readAsArrayBuffer(blob);
+};
+
+proto._inspectCsvSample = async function(file, buffer = null) {
+    const sampleBuffer = buffer || await this._readFileSampleBuffer(file);
+    return this.csvParser.inspectSample(sampleBuffer, { maxRows: 700 });
+};
+
 proto._parseParquetResult = async function(filename, file) {
     if (!file) throw new Error(`Parquet files must be loaded via a File handle (got buffer-only for ${filename}).`);
     if (!this._canUseDuckDb()) throw new Error(`Parquet support requires DuckDB-WASM (current page does not allow Workers).`);
-    const source = this._getDuckDbSource();
+    const source = await this._getDuckDbSource();
     const data = await source.parseParquetFile(file, filename, { lazy: true });
     data.filename = filename;
     return data;
@@ -459,15 +532,19 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
     // ceiling of the legacy parser and returns typed-array columns.
     if (file && this._canUseDuckDb()) {
         try {
-            const source = this._getDuckDbSource();
+            const source = await this._getDuckDbSource();
             const lazy = (file.size ?? 0) >= DUCKDB_LAZY_THRESHOLD_BYTES;
-            const data = await source.parseCsvFile(file, filename, { lazy });
+            const csvProfile = await this._inspectCsvSample(file, buffer);
+            const data = await source.parseCsvFile(file, filename, { lazy, csvProfile });
             data.filename = filename;
             return data;
         } catch (err) {
             console.warn('[duckdb] falling back to legacy CSV parser:', err?.message || err);
             // fall through to legacy path
         }
+    }
+    if (!buffer && file) {
+        buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
     }
     if (!this._canUseParserWorker()) return this.csvParser.parse(buffer);
     try {
@@ -485,6 +562,7 @@ proto._canUseParserWorker = function() {
 };
 
 proto._canUseDuckDb = function() {
+    if (globalThis.__OMV_PORTABLE__ === true) return false;
     if (this._duckdbDisabled) return false;
     if (typeof window === 'undefined') return false;
     if (typeof Worker === 'undefined') return false;
@@ -497,8 +575,10 @@ proto._canUseDuckDb = function() {
     return true;
 };
 
-proto._getDuckDbSource = function() {
+proto._getDuckDbSource = async function() {
     if (!this._duckdbSource) {
+        const DuckDbSource = await loadDuckDbSourceClass();
+        if (!DuckDbSource) throw new Error('DuckDB source unavailable in this build.');
         this._duckdbSource = new DuckDbSource(this.parser);
     }
     return this._duckdbSource;

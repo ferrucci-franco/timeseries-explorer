@@ -179,6 +179,68 @@ export default class CsvParser {
         return result;
     }
 
+    inspectSample(buffer, options = {}) {
+        const text = this._decodeText(buffer);
+        const delimiter = options.delimiter || this._detectDelimiter(text);
+        const maxRows = Math.max(20, Number(options.maxRows) || 700);
+        const rows = this._parseRows(text, delimiter)
+            .map(row => row.map(cell => cell.trim()))
+            .filter(row => row.some(cell => cell !== ''))
+            .slice(0, maxRows);
+
+        if (rows.length < 1) {
+            throw new Error('CSV sample must contain at least one data row.');
+        }
+
+        const table = this._detectTableRows(rows, delimiter);
+        const hasHeader = table.hasHeader;
+        const headerRow = rows[table.headerIndex] || [];
+        const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
+        if (rawHeaders.length < 2) {
+            throw new Error('CSV sample must contain at least two columns.');
+        }
+
+        const dataRows = rows
+            .slice(table.dataStartIndex)
+            .filter(row => row.length === rawHeaders.length);
+        if (dataRows.length < 1) {
+            throw new Error('CSV sample must contain at least one data row.');
+        }
+
+        const headers = this._makeUniqueHeaders(rawHeaders);
+        const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
+        if (!timeSource.ok) throw new Error(timeSource.reason);
+
+        return {
+            delimiter,
+            hasHeader,
+            headerIndex: table.headerIndex,
+            dataStartIndex: table.dataStartIndex,
+            skippedRows: table.headerIndex,
+            skippedRowsAfterHeader: Math.max(0, table.dataStartIndex - table.headerIndex - (hasHeader ? 1 : 0)),
+            rawHeaders,
+            headers,
+            timeSource: this._serializeTimeSource(timeSource),
+            sampleRows: dataRows.slice(0, Math.min(dataRows.length, 100)),
+        };
+    }
+
+    _serializeTimeSource(timeSource) {
+        return {
+            ok: !!timeSource.ok,
+            kind: timeSource.kind,
+            mode: timeSource.mode,
+            strategy: timeSource.strategy || null,
+            sourceIndexes: Array.isArray(timeSource.sourceIndexes) ? timeSource.sourceIndexes.slice() : [],
+            sourceHeaders: Array.isArray(timeSource.sourceHeaders) ? timeSource.sourceHeaders.slice() : [],
+            name: timeSource.name,
+            description: timeSource.description,
+            confidence: timeSource.confidence,
+            format: { ...(timeSource.format || {}) },
+            warnings: Array.isArray(timeSource.warnings) ? timeSource.warnings.slice() : [],
+        };
+    }
+
     _decodeText(buffer) {
         if (typeof buffer === 'string') return buffer.replace(/^\uFEFF/, '');
         if (this._utf8Decoder) {

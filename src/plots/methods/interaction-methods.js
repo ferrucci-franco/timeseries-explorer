@@ -143,7 +143,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     this._zoomTokens.set(panelId, token);
 
     const target = this.timeseriesVisualMaxPoints || 4000;
-    const [t0, t1] = range.map(v => Number(v));
+    const [t0, t1] = range.map(v => this._coerceAxisValue(v));
     if (!Number.isFinite(t0) || !Number.isFinite(t1)) return Promise.resolve();
 
     const traceJobs = plot.traces.map((t, idx) => {

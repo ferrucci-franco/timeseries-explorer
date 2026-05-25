@@ -26,10 +26,8 @@ const BUNDLES = {
     eh:  { mainModule: ehWasmUrl,  mainWorker: ehWorkerUrl  },
 };
 
-// Header keywords used to pick a time column when DuckDB types alone are
-// ambiguous. Mirrors a tiny subset of csv-time-detection's vocabulary so we
-// stay aligned with the rest of the app.
 const TIME_HEADER_RE = /^(time|temps|t|datetime|timestamp|horodatage|date|fecha|hora|heure)$/i;
+const MS_PER_DAY = 86400000;
 
 export default class DuckDbSource {
     constructor(structureParser = null) {
@@ -126,7 +124,7 @@ export default class DuckDbSource {
     }
 
     async _parseFile(file, displayName, opts) {
-        const { lazy = false, overviewPoints = 10000, format = 'csv' } = opts;
+        const { lazy = false, overviewPoints = 10000, format = 'csv', csvProfile = null } = opts;
         await this.init();
         const id = ++this._nextTableId;
         const handle = `omv_${id}_${displayName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
@@ -134,7 +132,7 @@ export default class DuckDbSource {
         await this.registerFile(handle, file);
         let result = null;
         try {
-            result = await this._loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format });
+            result = await this._loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format, csvProfile });
         } catch (err) {
             try { await this._conn.query(`DROP TABLE IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
             try { await this._conn.query(`DROP VIEW IF EXISTS ${tableName}`); } catch (_) { /* ignore */ }
@@ -185,9 +183,9 @@ export default class DuckDbSource {
         // (Unix milliseconds for datetime, raw numeric otherwise) so the JS
         // side never has to translate between encodings.
         const timeKind = legacyData?.metadata?.timeKind;
-        const tExpr = timeKind === 'datetime'
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
             ? `epoch_ms("${escTime}")::DOUBLE`
-            : `"${escTime}"::DOUBLE`;
+            : `"${escTime}"::DOUBLE`);
 
         // GROUP BY time-bucket gives O(maxPoints) output regardless of how
         // many input rows match — far cheaper than `COUNT(*) OVER ()` +
@@ -248,16 +246,16 @@ export default class DuckDbSource {
         const tableName = meta.tableName;
         const lit = (v) => this._numericLiteral(v);
         const timeKind = legacyData?.metadata?.timeKind;
-        const tExpr = timeKind === 'datetime'
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
             ? `epoch_ms("${escTime}")::DOUBLE`
-            : `"${escTime}"::DOUBLE`;
+            : `"${escTime}"::DOUBLE`);
 
         if (!Number.isFinite(fromX)) {
             return { times: new Float64Array(0), values: new Float64Array(0) };
         }
 
         const dataRows = Math.max(1, maxRows - contextRows);
-        const orderByT = `"${escTime}"`;
+        const orderByT = tExpr;
 
         const sql = direction === 'prev'
             ? `
@@ -311,12 +309,16 @@ export default class DuckDbSource {
         return 'NULL';
     }
 
-    async _loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format }) {
+    async _loadIntoLegacy(handle, tableName, { lazy, overviewPoints, format, csvProfile = null }) {
         const escapedHandle = handle.replace(/'/g, "''");
         const readExpr = format === 'parquet'
             ? `read_parquet('${escapedHandle}')`
-            : `read_csv_auto('${escapedHandle}', sample_size=20000)`;
+            : this._csvReadExpr(escapedHandle, csvProfile);
         let viewMode = false;
+
+        if (format === 'csv' && csvProfile?.skippedRowsAfterHeader > 0) {
+            throw new Error('DuckDB CSV path does not yet support skipped unit/comment rows after the header.');
+        }
 
         // Parquet: always use VIEW. Its columnar layout + projection/predicate
         // pushdown make every later query cheap, and CREATE TABLE would
@@ -347,19 +349,15 @@ export default class DuckDbSource {
         const columnNames = schema.map(s => s.column_name);
         const columnTypes = schema.map(s => String(s.column_type || '').toUpperCase());
 
-        let timeColIndex = columnNames.findIndex(name => TIME_HEADER_RE.test(String(name).trim()));
-        if (timeColIndex < 0) {
-            const firstType = columnTypes[0] || '';
-            if (/INT|BIGINT|DOUBLE|REAL|FLOAT|DECIMAL|NUMERIC|TIMESTAMP|DATE|TIME/.test(firstType)) {
-                timeColIndex = 0;
-            }
-        }
-        if (timeColIndex < 0) {
+        const timeInfo = this._timeInfoFromProfile(columnNames, columnTypes, csvProfile)
+            || this._timeInfoFromDuckDbSchema(columnNames, columnTypes);
+        if (!timeInfo) {
             throw new Error('DuckDB: no suitable time column detected; falling back.');
         }
 
-        const timeName = columnNames[timeColIndex];
-        const escTime = timeName.replace(/"/g, '""');
+        const projection = this._projectionSql(columnNames, timeInfo);
+        const timeAlias = '__omv_time';
+        const escTimeAlias = timeAlias.replace(/"/g, '""');
 
         let totalRows;
         let dataSql;
@@ -368,21 +366,25 @@ export default class DuckDbSource {
             const countCol = countResult.getChildAt(0) || countResult.getChild('n');
             totalRows = Number(countCol?.get(0) ?? 0);
             dataSql = (!lazy || totalRows <= overviewPoints)
-                ? `SELECT * FROM ${tableName} ORDER BY "${escTime}" ASC NULLS LAST`
-                : this._overviewSql(tableName, escTime, totalRows, overviewPoints);
+                ? `SELECT ${projection} FROM ${tableName} ORDER BY "${escTimeAlias}" ASC NULLS LAST`
+                : this._overviewSql(tableName, projection, escTimeAlias, totalRows, overviewPoints);
         } else {
             // VIEW mode: skip COUNT (would re-scan the whole CSV) and use
             // streaming reservoir sampling for the initial overview.
             totalRows = null;
             dataSql = `
                 SELECT * FROM (
-                    SELECT * FROM ${tableName} USING SAMPLE ${overviewPoints} ROWS (RESERVOIR, 42)
-                ) ORDER BY "${escTime}" ASC NULLS LAST
+                    SELECT ${projection} FROM ${tableName} USING SAMPLE ${overviewPoints} ROWS (RESERVOIR, 42)
+                ) ORDER BY "${escTimeAlias}" ASC NULLS LAST
             `;
         }
         const dataResult = await this._conn.query(dataSql);
+        const projectedNames = dataResult.schema.fields.map(f => f.name);
+        const projectedTypes = dataResult.schema.fields.map((f, i) =>
+            i === 0 ? 'DOUBLE' : String(f.type || '').toUpperCase()
+        );
 
-        const legacy = this._buildLegacyFromArrow(dataResult, columnNames, columnTypes, timeColIndex, totalRows);
+        const legacy = this._buildLegacyFromArrow(dataResult, projectedNames, projectedTypes, 0, totalRows, timeInfo);
 
         if (viewMode) {
             // In view mode the overview is a small reservoir sample, so its
@@ -390,7 +392,7 @@ export default class DuckDbSource {
             // aggregate query — DuckDB can compute MIN/MAX without sorting.
             try {
                 const aggResult = await this._conn.query(
-                    `SELECT MIN("${escTime}")::DOUBLE AS tmin, MAX("${escTime}")::DOUBLE AS tmax FROM ${tableName}`
+                    `SELECT MIN(${timeInfo.sql})::DOUBLE AS tmin, MAX(${timeInfo.sql})::DOUBLE AS tmax FROM ${tableName}`
                 );
                 const tmin = aggResult.getChild('tmin')?.get(0);
                 const tmax = aggResult.getChild('tmax')?.get(0);
@@ -405,7 +407,8 @@ export default class DuckDbSource {
                 source: this,
                 handle,
                 tableName,
-                timeColumn: timeName,
+                timeColumn: timeInfo.sourceNames[0] || timeInfo.name,
+                timeExprSql: timeInfo.sql,
                 totalRows,
                 overviewPoints: totalRows
                     ? Math.min(overviewPoints, totalRows)
@@ -416,14 +419,163 @@ export default class DuckDbSource {
         return legacy;
     }
 
-    _overviewSql(tableName, escTime, totalRows, overviewPoints) {
+    _csvReadExpr(escapedHandle, csvProfile = null) {
+        const options = [`sample_size=20000`];
+        if (csvProfile) {
+            if (csvProfile.delimiter && csvProfile.delimiter !== 'whitespace') {
+                options.push(`delim='${this._escapeSqlString(csvProfile.delimiter)}'`);
+            }
+            options.push(`header=${csvProfile.hasHeader ? 'true' : 'false'}`);
+            if ((csvProfile.headerIndex || 0) > 0) options.push(`skip=${Number(csvProfile.headerIndex) || 0}`);
+        }
+        return `read_csv_auto('${escapedHandle}', ${options.join(', ')})`;
+    }
+
+    _timeInfoFromDuckDbSchema(columnNames, columnTypes) {
+        let timeColIndex = columnNames.findIndex(name => TIME_HEADER_RE.test(String(name).trim()));
+        if (timeColIndex < 0) {
+            const firstType = columnTypes[0] || '';
+            if (/INT|BIGINT|DOUBLE|REAL|FLOAT|DECIMAL|NUMERIC|TIMESTAMP|DATE|TIME/.test(firstType)) {
+                timeColIndex = 0;
+            }
+        }
+        if (timeColIndex < 0) return null;
+        const name = columnNames[timeColIndex];
+        const type = columnTypes[timeColIndex] || '';
+        const esc = this._quoteIdent(name);
+        const timeKind = /TIMESTAMP|DATE|TIME/.test(type) ? 'datetime' : 'numeric';
+        return {
+            name,
+            description: timeKind === 'datetime' ? '[datetime]' : '',
+            timeKind,
+            sourceNames: [name],
+            sql: timeKind === 'datetime' ? `epoch_ms(${esc})::DOUBLE` : `${esc}::DOUBLE`,
+        };
+    }
+
+    _timeInfoFromProfile(columnNames, columnTypes, csvProfile) {
+        const timeSource = csvProfile?.timeSource;
+        if (!timeSource?.ok) return null;
+        if (timeSource.kind === 'index' || timeSource.strategy === 'generated-index') return null;
+
+        const sourceNames = (timeSource.sourceIndexes || [])
+            .map(index => columnNames[index])
+            .filter(name => name != null);
+        if (!sourceNames.length) return null;
+
+        const name = timeSource.name || sourceNames.join(' ');
+        const description = timeSource.description || (timeSource.kind === 'datetime' ? '[datetime]' : '');
+        const firstName = sourceNames[0];
+        const firstType = columnTypes[timeSource.sourceIndexes?.[0] ?? 0] || '';
+        const first = this._quoteIdent(firstName);
+        let sql = null;
+
+        if (timeSource.kind === 'numeric') {
+            sql = `${first}::DOUBLE`;
+        } else if (timeSource.kind === 'datetime') {
+            sql = this._datetimeSqlFromProfile(timeSource, sourceNames, firstType);
+        }
+
+        if (!sql) return null;
+        return {
+            name,
+            description,
+            timeKind: timeSource.kind,
+            sourceNames,
+            sql,
+        };
+    }
+
+    _datetimeSqlFromProfile(timeSource, sourceNames, firstType) {
+        const first = this._quoteIdent(sourceNames[0]);
+        if (/TIMESTAMP|DATE|TIME/.test(firstType || '')) return `epoch_ms(${first})::DOUBLE`;
+
+        const strategy = timeSource.strategy;
+        if (strategy === 'excel-serial') return `((${first}::DOUBLE - 25569) * ${MS_PER_DAY})`;
+        if (strategy === 'matlab-datenum') return `((${first}::DOUBLE - 719529) * ${MS_PER_DAY})`;
+        if (strategy === 'decimal-year' || strategy === 'month-name-date' || strategy === 'yearless-date-time') return null;
+
+        if (strategy === 'iso-datetime') {
+            return `epoch_ms(CAST(${first} AS TIMESTAMP))::DOUBLE`;
+        }
+
+        const order = timeSource.format?.dateOrder || 'YMD';
+        if (strategy === 'slash-date' || strategy === 'dash-date') {
+            const formats = this._dateTimeFormats(order, strategy === 'dash-date' ? '-' : '/');
+            return this._tryStrptimeSql(`CAST(${first} AS VARCHAR)`, formats);
+        }
+
+        if (timeSource.mode === 'split' && sourceNames.length >= 2) {
+            const dateCol = this._quoteIdent(sourceNames[0]);
+            const timeCol = this._quoteIdent(sourceNames[1]);
+            const sep = timeSource.format?.dashSeparator ? '-' : '/';
+            const formats = this._dateTimeFormats(order, sep);
+            const expr = `CAST(${dateCol} AS VARCHAR) || ' ' || CAST(${timeCol} AS VARCHAR)`;
+            return this._tryStrptimeSql(expr, formats);
+        }
+
+        return null;
+    }
+
+    _dateTimeFormats(order, sep) {
+        const date = order === 'DMY'
+            ? `%d${sep}%m${sep}%Y`
+            : order === 'MDY'
+              ? `%m${sep}%d${sep}%Y`
+              : `%Y${sep}%m${sep}%d`;
+        const shortYear = order === 'DMY'
+            ? `%d${sep}%m${sep}%y`
+            : order === 'MDY'
+              ? `%m${sep}%d${sep}%y`
+              : `%y${sep}%m${sep}%d`;
+        return [
+            `${date} %H:%M:%S.%f`,
+            `${date} %H:%M:%S`,
+            `${date} %H:%M`,
+            date,
+            `${shortYear} %H:%M:%S.%f`,
+            `${shortYear} %H:%M:%S`,
+            `${shortYear} %H:%M`,
+            shortYear,
+        ];
+    }
+
+    _tryStrptimeSql(expr, formats) {
+        const list = formats.map(format => `'${this._escapeSqlString(format)}'`).join(', ');
+        return `epoch_ms(try_strptime(${expr}, [${list}]))::DOUBLE`;
+    }
+
+    _projectionSql(columnNames, timeInfo) {
+        const exclude = new Set(timeInfo.sourceNames || []);
+        const columns = columnNames
+            .filter(name => !exclude.has(name))
+            .map(name => this._quoteIdent(name));
+        return [
+            `${timeInfo.sql} AS "__omv_time"`,
+            ...columns,
+        ].join(', ');
+    }
+
+    _quoteIdent(name) {
+        return `"${String(name ?? '').replace(/"/g, '""')}"`;
+    }
+
+    _escapeSqlString(value) {
+        return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "''");
+    }
+
+    _overviewSql(tableName, projection, escTime, totalRows, overviewPoints) {
         const stride = Math.max(1, Math.ceil(totalRows / overviewPoints));
         // Keep first + last + every Nth row by time order. Numbered separately
         // so the result is still ordered by time.
         return `
-            WITH numbered AS (
-                SELECT *, ROW_NUMBER() OVER (ORDER BY "${escTime}") AS __rn
+            WITH projected AS (
+                SELECT ${projection}
                 FROM ${tableName}
+            ),
+            numbered AS (
+                SELECT *, ROW_NUMBER() OVER (ORDER BY "${escTime}") AS __rn
+                FROM projected
             )
             SELECT * EXCLUDE (__rn) FROM numbered
             WHERE __rn = 1 OR __rn = ${totalRows} OR (__rn - 1) % ${stride} = 0
@@ -445,7 +597,7 @@ export default class DuckDbSource {
         return rows;
     }
 
-    _buildLegacyFromArrow(table, columnNames, columnTypes, timeColIndex, totalRows) {
+    _buildLegacyFromArrow(table, columnNames, columnTypes, timeColIndex, totalRows, timeInfo = null) {
         const result = {
             filename: '',
             metadata: {},
@@ -453,10 +605,10 @@ export default class DuckDbSource {
             tree: {},
         };
 
-        const timeName = columnNames[timeColIndex];
+        const timeName = timeInfo?.name || columnNames[timeColIndex];
         const timeType = columnTypes[timeColIndex];
         const timeData = this._extractColumnAsFloat64(table, timeColIndex, timeType);
-        const timeKind = /TIMESTAMP|DATE|TIME/.test(timeType) ? 'datetime' : 'numeric';
+        const timeKind = timeInfo?.timeKind || (/TIMESTAMP|DATE|TIME/.test(timeType) ? 'datetime' : 'numeric');
 
         const usedNames = new Set();
         const sanitize = (raw) => {
@@ -467,14 +619,14 @@ export default class DuckDbSource {
         const timeVar = {
             name: this._uniqueName(sanitize(timeName), usedNames),
             data: timeData,
-            description: timeKind === 'datetime' ? '[datetime]' : '',
+            description: timeInfo?.description || (timeKind === 'datetime' ? '[datetime]' : ''),
             kind: 'abscissa',
             dataType: 'real',
             isConstant: false,
             interpolation: 'linear',
             negate: false,
             source: 'csv',
-            _duckdbCol: timeName,
+            _duckdbCol: timeInfo?.sourceNames?.[0] || columnNames[timeColIndex],
         };
         if (timeKind === 'datetime') {
             timeVar.timeKind = 'datetime';
@@ -527,7 +679,7 @@ export default class DuckDbSource {
             timeKind,
             timeDisplayMode: timeKind === 'datetime' ? 'calendar' : 'numeric',
             timeOriginMs: timeVar.timeOriginMs ?? null,
-            timeSourceColumns: [timeName],
+            timeSourceColumns: timeInfo?.sourceNames?.length ? timeInfo.sourceNames : [timeName],
             backend: 'duckdb',
         };
 
