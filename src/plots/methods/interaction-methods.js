@@ -185,7 +185,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         lazyQueryCount++;
         const queryRange = this._lazyExpandedRange(data, t0, t1);
         const queryTarget = this._lazyExpandedTarget(target, queryRange, t0, t1);
-        const preview = this._buildTimeTrace(t, range);
+        const preview = this._renderedTracePreview(plot, idx, t0, t1, target);
         if (preview) previewResults.push({ idx, x: preview.x, y: preview.y });
         return source.getColumnRange(data, t.varName, queryRange[0], queryRange[1], queryTarget)
             .then(({ x, y }) => {
@@ -205,9 +205,8 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             })
             .catch(err => {
                 if (this._zoomTokens.get(panelId) !== token) return null;
-                console.warn('[duckdb] viewport query failed; using overview slice:', err?.message || err);
-                const built = this._buildTimeTrace(t, range);
-                return built ? { idx, x: built.x, y: built.y } : null;
+                console.warn('[duckdb] viewport query failed; keeping current lazy view:', err?.message || err);
+                return this._renderedTracePreview(plot, idx, t0, t1, target);
             });
     });
     if (previewResults.length && this._zoomTokens.get(panelId) === token) {
@@ -237,6 +236,30 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         this._setLazyDetailLoading(plot, false);
     }).catch(() => { /* per-trace errors already handled */ });
     return settled;
+};
+
+proto._renderedTracePreview = function(plot, idx, t0, t1, target) {
+    const rendered = plot?.div?.data?.[idx];
+    const xValues = rendered?.x;
+    const yValues = rendered?.y;
+    const n = Math.min(xValues?.length || 0, yValues?.length || 0);
+    if (n <= 1) return null;
+    const minX = Math.min(t0, t1);
+    const maxX = Math.max(t0, t1);
+    const xs = [];
+    const ys = [];
+    for (let i = 0; i < n; i++) {
+        const x = this._coerceAxisValue(xValues[i]);
+        if (!Number.isFinite(x)) continue;
+        if (x < minX || x > maxX) continue;
+        xs.push(xValues[i]);
+        ys.push(yValues[i]);
+    }
+    if (xs.length < 2) return null;
+    if (!Number.isFinite(target) || target <= 0 || xs.length <= target) {
+        return { x: xs, y: ys };
+    }
+    return this._downsampleTimeseries(xs, ys, target);
 };
 
 proto._lazyCacheResult = function(trace, idx, t0, t1, target) {
