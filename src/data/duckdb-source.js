@@ -320,11 +320,10 @@ export default class DuckDbSource {
             throw new Error('DuckDB CSV path does not yet support skipped unit/comment rows after the header.');
         }
 
-        // Parquet: always use VIEW. Its columnar layout + projection/predicate
-        // pushdown make every later query cheap, and CREATE TABLE would
-        // re-materialize the rows into DuckDB's in-memory row store (losing
-        // the layout advantage and risking OOM for big files).
-        if (format === 'parquet' && lazy) {
+        // Lazy mode: use VIEW from the start. CREATE TABLE materializes the
+        // full CSV/Parquet into DuckDB's WASM heap first, which is exactly
+        // what large-file mode is trying to avoid.
+        if (lazy) {
             await this._conn.query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${readExpr}`);
             viewMode = true;
         } else {

@@ -481,6 +481,9 @@ const DUCKDB_LAZY_THRESHOLD_BYTES = 50 * 1024 * 1024;
 // (`node bench/csv-to-parquet.mjs file.csv`) — the WASM heap ceiling makes
 // the raw CSV path risky above this size.
 const PARQUET_HINT_THRESHOLD_BYTES = 500 * 1024 * 1024;
+// Above this size the legacy JS parser is unsafe: it decodes the whole file
+// into one string and can OOM the browser tab before throwing cleanly.
+const LEGACY_CSV_FALLBACK_MAX_BYTES = 450 * 1024 * 1024;
 
 proto._canParseFromFile = function(file, extension = this._fileExtension(file?.name || '')) {
     return !!file
@@ -520,11 +523,14 @@ proto._parseParquetResult = async function(filename, file) {
 };
 
 proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
+    const fileSize = file?.size ?? (buffer?.byteLength || 0);
+    const legacyFallbackUnsafe = fileSize >= LEGACY_CSV_FALLBACK_MAX_BYTES;
+
     // Hint the user toward Parquet for very large CSVs. Non-blocking — the
     // parse still proceeds; this only logs once and could be wired to a
     // toast/notification in a follow-up.
-    if (file && (file.size ?? 0) >= PARQUET_HINT_THRESHOLD_BYTES) {
-        const mb = ((file.size ?? 0) / (1024 * 1024)).toFixed(0);
+    if (file && fileSize >= PARQUET_HINT_THRESHOLD_BYTES) {
+        const mb = (fileSize / (1024 * 1024)).toFixed(0);
         console.warn(`[duckdb] "${filename}" is ${mb} MB — consider converting to Parquet for faster loads:`
             + `\n  node bench/csv-to-parquet.mjs "${filename}"\n  Then load the resulting .parquet directly.`);
     }
@@ -539,9 +545,15 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
             data.filename = filename;
             return data;
         } catch (err) {
+            if (legacyFallbackUnsafe) {
+                throw this._largeCsvDuckDbError(filename, fileSize, err);
+            }
             console.warn('[duckdb] falling back to legacy CSV parser:', err?.message || err);
             // fall through to legacy path
         }
+    }
+    if (legacyFallbackUnsafe) {
+        throw this._largeCsvDuckDbError(filename, fileSize, null);
     }
     if (!buffer && file) {
         buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
@@ -553,6 +565,15 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
         if (err?.workerUnavailable) return this.csvParser.parse(buffer);
         throw err;
     }
+};
+
+proto._largeCsvDuckDbError = function(filename, size, cause = null) {
+    const mb = Number.isFinite(size) ? (size / (1024 * 1024)).toFixed(0) : '?';
+    const detail = cause?.message ? ` DuckDB reported: ${cause.message}` : '';
+    return new Error(
+        `Large CSV "${filename}" (${mb} MB) cannot be opened with the legacy parser without risking browser out-of-memory.${detail}`
+        + ` Convert it once with: node bench/csv-to-parquet.mjs "${filename}", then load the .parquet file.`
+    );
 };
 
 proto._canUseParserWorker = function() {

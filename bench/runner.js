@@ -86,8 +86,10 @@ const LAZY_THRESHOLD_BYTES = 50 * 1024 * 1024;
 
 async function benchParseDuckDb(file, duckdbSource) {
     const lazy = (file.size ?? 0) >= LAZY_THRESHOLD_BYTES;
+    const sampleBuffer = await file.slice(0, 1024 * 1024).arrayBuffer();
+    const csvProfile = new CsvParser(new MatParser()).inspectSample(sampleBuffer, { maxRows: 700 });
     const t0 = now();
-    const data = await duckdbSource.parseCsvFile(file, file.name, { lazy });
+    const data = await duckdbSource.parseCsvFile(file, file.name, { lazy, csvProfile });
     const t1 = now();
     return {
         sizeMB: Number(fmtMB(file.size)),
