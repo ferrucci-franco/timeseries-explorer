@@ -197,17 +197,24 @@ export default class DuckDbSource {
             return { x: new Float64Array(0), y: new Float64Array(0) };
         }
         const sql = `
-            SELECT MIN(t) AS t, AVG(v) AS v FROM (
+            WITH visible AS (
                 SELECT ${tExpr} AS t,
-                       "${escCol}"::DOUBLE AS v,
-                       CAST(LEAST(${maxPoints - 1},
-                                  GREATEST(0,
-                                           FLOOR((${tExpr} - ${lit(t0)})
-                                                 * ${maxPoints} / ${lit(span)})))
-                            AS BIGINT) AS bucket
+                       "${escCol}" AS v
                 FROM ${tableName}
                 WHERE ${tExpr} BETWEEN ${lit(t0)} AND ${lit(t1)}
+            ),
+            bucketed AS (
+                SELECT t,
+                       v,
+                       CAST(LEAST(${maxPoints - 1},
+                                  GREATEST(0,
+                                           FLOOR((t - ${lit(t0)})
+                                                 * ${maxPoints} / ${lit(span)})))
+                            AS BIGINT) AS bucket
+                FROM visible
             )
+            SELECT MIN(t) AS t, AVG(v) AS v
+            FROM bucketed
             GROUP BY bucket
             ORDER BY bucket;
         `;
@@ -503,7 +510,7 @@ export default class DuckDbSource {
             description: timeKind === 'datetime' ? '[datetime]' : '',
             timeKind,
             sourceNames: [name],
-            sql: timeKind === 'datetime' ? `epoch_ms(${esc})::DOUBLE` : `${esc}::DOUBLE`,
+            sql: timeKind === 'datetime' ? `epoch_ms(${esc})::DOUBLE` : esc,
         };
     }
 
@@ -525,7 +532,7 @@ export default class DuckDbSource {
         let sql = null;
 
         if (timeSource.kind === 'numeric') {
-            sql = `${first}::DOUBLE`;
+            sql = first;
         } else if (timeSource.kind === 'datetime') {
             sql = this._datetimeSqlFromProfile(timeSource, sourceNames, firstType);
         }

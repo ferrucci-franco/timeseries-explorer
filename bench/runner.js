@@ -103,7 +103,9 @@ async function benchParseDuckDb(file, duckdbSource) {
     const t1 = now();
     return {
         sizeMB: Number(fmtMB(file.size)),
-        rows: data.metadata?.numTimesteps || 0,
+        rows: data.metadata?.numTimesteps ?? data._duckdb?.totalRows ?? 0,
+        overviewRows: data.variables?.[data.metadata?.timeName]?.data?.length || 0,
+        totalRowsKnown: data._duckdb?.totalRows != null,
         variables: Object.keys(data.variables).length,
         parseMs: t1 - t0,
         backend: extension === '.parquet'
