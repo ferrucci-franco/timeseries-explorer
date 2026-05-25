@@ -16,6 +16,7 @@
  */
 
 import * as duckdb from '@duckdb/duckdb-wasm';
+import * as arrow from 'apache-arrow';
 import mvpWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
@@ -39,6 +40,7 @@ export default class DuckDbSource {
         this._registered = new Set();
         this._nextTableId = 0;
         this._rangeCache = new Map();
+        this._activeInteractiveQuery = null;
     }
 
     static isAvailable() {
@@ -245,7 +247,7 @@ export default class DuckDbSource {
                 ORDER BY t
                 LIMIT ${rawLimit};
             `;
-            const result = await this._conn.query(sql);
+            const result = await this._interactiveQuery(sql);
             const yByVar = new Map();
             requested.forEach(({ varName }, index) => {
                 yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
@@ -281,7 +283,7 @@ export default class DuckDbSource {
             GROUP BY bucket
             ORDER BY bucket;
         `;
-        const result = await this._conn.query(sql);
+        const result = await this._interactiveQuery(sql);
         const yByVar = new Map();
         requested.forEach(({ varName }, index) => {
             yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
@@ -408,11 +410,47 @@ export default class DuckDbSource {
                 ORDER BY t ASC;
             `;
 
-        const result = await this._conn.query(sql);
+        const result = await this._interactiveQuery(sql);
         return {
             times: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
             values: this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
         };
+    }
+
+    async cancelActiveQuery() {
+        const active = this._activeInteractiveQuery;
+        if (active) active.cancelled = true;
+        const tasks = [];
+        if (active?.reader?.cancel) {
+            tasks.push(Promise.resolve().then(() => active.reader.cancel()).catch(() => null));
+        }
+        if (this._conn?.cancelSent) {
+            tasks.push(Promise.resolve().then(() => this._conn.cancelSent()).catch(() => null));
+        }
+        if (!tasks.length) return false;
+        await Promise.allSettled(tasks);
+        return true;
+    }
+
+    async _interactiveQuery(sql) {
+        await this.init();
+        const active = { cancelled: false, reader: null };
+        this._activeInteractiveQuery = active;
+        try {
+            const reader = await this._conn.send(sql);
+            active.reader = reader;
+            const batches = await reader.readAll();
+            if (active.cancelled) {
+                const err = new Error('DuckDB query cancelled');
+                err.name = 'AbortError';
+                throw err;
+            }
+            return new arrow.Table(batches);
+        } finally {
+            if (this._activeInteractiveQuery === active) {
+                this._activeInteractiveQuery = null;
+            }
+        }
     }
 
     _numericLiteral(value) {

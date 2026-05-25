@@ -146,6 +146,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     const token = (this._zoomTokens.get(panelId) || 0) + 1;
     this._zoomTokens.set(panelId, token);
     this._cancelPendingLazyDetail(panelId);
+    this._cancelActiveLazySources(panelId);
 
     const targetInfo = this._lazyTimeseriesTarget();
     const target = targetInfo.limit;
@@ -232,9 +233,15 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     }
 
     const queryGroupsList = [...queryGroups.values()];
-    const settled = this._scheduleLazyDetail(panelId, () => Promise.all(queryGroupsList.map(group =>
-        this._runLazyDetailGroup(panelId, token, plot, group, t0, t1, target)
-    ))).then(results => {
+    this._rememberActiveLazySources(panelId, queryGroupsList.map(group => group.source));
+    const settled = this._scheduleLazyDetail(panelId, async () => {
+        const results = [];
+        for (const group of queryGroupsList) {
+            if (this._zoomTokens.get(panelId) !== token) break;
+            results.push(await this._runLazyDetailGroup(panelId, token, plot, group, t0, t1, target));
+        }
+        return results;
+    }).then(results => {
         if (this._zoomTokens.get(panelId) !== token) return results;
         const flat = results.flatMap(result => Array.isArray(result) ? result : (result ? [result] : []));
         this._applyBatchedTimeseriesRestyle(plot, flat);
@@ -255,6 +262,11 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         }
         this._setLazyDetailLoading(plot, false);
     }).catch(() => { /* per-trace errors already handled */ });
+    settled.finally(() => {
+        if (this._zoomTokens.get(panelId) === token) {
+            this._clearActiveLazySources(panelId);
+        }
+    });
     return settled;
 };
 
@@ -282,6 +294,27 @@ proto._cancelPendingLazyDetail = function(panelId) {
     clearTimeout(scheduled.timer);
     this._lazyDetailTimers.delete(panelId);
     scheduled.resolve([]);
+};
+
+proto._rememberActiveLazySources = function(panelId, sources = []) {
+    if (!this._lazyActiveSources) this._lazyActiveSources = new Map();
+    const active = new Set(sources.filter(Boolean));
+    if (active.size) this._lazyActiveSources.set(panelId, active);
+};
+
+proto._clearActiveLazySources = function(panelId) {
+    this._lazyActiveSources?.delete(panelId);
+};
+
+proto._cancelActiveLazySources = function(panelId) {
+    const active = this._lazyActiveSources?.get(panelId);
+    if (!active?.size) return;
+    this._lazyActiveSources.delete(panelId);
+    for (const source of active) {
+        if (typeof source?.cancelActiveQuery === 'function') {
+            Promise.resolve(source.cancelActiveQuery()).catch(() => null);
+        }
+    }
 };
 
 proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target) {
@@ -1186,6 +1219,64 @@ proto._findNextSampleValue = function(times, fromX, direction = 'next') {
     return NaN;
 };
 
+proto._findCursorTargetInSeries = function(trace, target, times, values, fromX, direction = 'next') {
+    if (target === 'max' || target === 'min') {
+        return this._findNextExtremum(times, values, fromX, target, direction);
+    }
+    if (target === 'sample') {
+        return this._findNextSampleValue(times, fromX, direction);
+    }
+    if (target === 'zero') {
+        return this._findNextZeroCrossing(times, values, fromX, this._traceInterpolationMode(trace), direction);
+    }
+    return NaN;
+};
+
+proto._findLazyCursorTarget = async function(fileData, trace, cursorX, target, direction = 'next') {
+    const source = fileData?._duckdb?.source;
+    if (!source?.fetchSourceWindow) return NaN;
+
+    if (typeof source.cancelActiveQuery === 'function') {
+        try { await source.cancelActiveQuery(); } catch (_) { /* ignore */ }
+    }
+
+    const isSample = target === 'sample';
+    const maxRows = isSample ? 2048 : 200000;
+    const contextRows = isSample ? 8 : 64;
+    const maxAttempts = isSample ? 1 : 8;
+    let probe = cursorX;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const chunk = await source.fetchSourceWindow(
+            fileData, trace.varName, probe, direction, maxRows, contextRows,
+        );
+        const times = chunk?.times;
+        const values = chunk?.values;
+        if (!times?.length) break;
+
+        const found = this._findCursorTargetInSeries(trace, target, times, values, probe, direction);
+        if (Number.isFinite(found) && (direction === 'prev' ? found < cursorX : found > cursorX)) {
+            return found;
+        }
+
+        let nextProbe = NaN;
+        if (direction === 'prev') {
+            for (let i = 0; i < times.length; i++) {
+                if (Number.isFinite(times[i])) { nextProbe = times[i]; break; }
+            }
+            if (!Number.isFinite(nextProbe) || nextProbe >= probe) break;
+        } else {
+            for (let i = times.length - 1; i >= 0; i--) {
+                if (Number.isFinite(times[i])) { nextProbe = times[i]; break; }
+            }
+            if (!Number.isFinite(nextProbe) || nextProbe <= probe) break;
+        }
+        probe = nextProbe;
+    }
+
+    return NaN;
+};
+
 proto._jumpCursorTo = async function(panelId, which, target, direction = 'next') {
     const plot = this.plots.get(panelId);
     if (!plot?.cursors?.enabled) return;
@@ -1207,12 +1298,11 @@ proto._jumpCursorTo = async function(panelId, which, target, direction = 'next')
         && this._isFileTransformActive(this._fileTransform(trace.fileId));
     if (lazyMeta?.source?.fetchSourceWindow && !transformActive) {
         try {
-            const chunk = await lazyMeta.source.fetchSourceWindow(
-                fileData, trace.varName, cursorX, direction, 50000, 32,
-            );
-            if (chunk?.times?.length) {
-                times = chunk.times;
-                values = chunk.values;
+            const lazyNextX = await this._findLazyCursorTarget(fileData, trace, cursorX, target, direction);
+            if (Number.isFinite(lazyNextX)) {
+                plot.cursors[which] = lazyNextX;
+                this._syncCursorDisplay(panelId, plot);
+                return;
             }
         } catch (err) {
             console.warn('[duckdb] cursor jump query failed; falling back to overview:', err?.message || err);
@@ -1225,13 +1315,7 @@ proto._jumpCursorTo = async function(panelId, which, target, direction = 'next')
     }
 
     let nextX = NaN;
-    if (target === 'max' || target === 'min') {
-        nextX = this._findNextExtremum(times, values, cursorX, target, direction);
-    } else if (target === 'sample') {
-        nextX = this._findNextSampleValue(times, cursorX, direction);
-    } else if (target === 'zero') {
-        nextX = this._findNextZeroCrossing(times, values, cursorX, this._traceInterpolationMode(trace), direction);
-    }
+    nextX = this._findCursorTargetInSeries(trace, target, times, values, cursorX, direction);
     if (!Number.isFinite(nextX)) return;
     plot.cursors[which] = nextX;
     this._syncCursorDisplay(panelId, plot);
