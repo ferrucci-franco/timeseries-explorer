@@ -1179,36 +1179,29 @@ class PlotManager {
         const plot = this.plots.get(panelId);
         if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim') return;
 
-        // Collect variables used and which files already contribute traces
+        // Collect variables used. Overlay must be decided per trace signature,
+        // not per file: a file can already contribute var_1 and still be
+        // missing the newly added var_2.
         const vars = new Set();
-        const existingFileIds = new Set();
+        const existingTimeseries = new Set();
+        const existingPhase = new Set();
         if (plot.mode === 'timeseries') {
-            for (const t of plot.traces) { vars.add(t.varName); existingFileIds.add(t.fileId); }
+            for (const t of plot.traces) {
+                vars.add(t.varName);
+                existingTimeseries.add(`${t.fileId}\u0000${t.varName}`);
+            }
         } else {
             for (const pt of plot.phaseTraces) {
                 vars.add(pt.x); vars.add(pt.y);
                 if (pt.z) vars.add(pt.z);
-                existingFileIds.add(pt.fileId);
+                existingPhase.add(`${pt.fileId}\u0000${pt.x}\u0000${pt.y}\u0000${pt.z || ''}`);
             }
-        }
-
-        const otherFiles = [...this.files.entries()].filter(([fid]) => !existingFileIds.has(fid));
-        const incompatibleFile = otherFiles.find(([fid]) => !this._canAddTraceWithFileTime(plot, fid, { silent: true }));
-        if (incompatibleFile) {
-            Modal.alert(
-                'Incompatible time axes',
-                'This overlay would mix calendar, elapsed, or numeric time axes. Use matching time-axis modes first; a future compare option will let you choose timestamp vs elapsed matching.'
-            );
-            return;
-        }
-        if (otherFiles.length === 0) {
-            Modal.alert(i18n.t('compareFilesErrorTitle'), i18n.t('compareFilesNoOthers'));
-            return;
         }
 
         const foundByVar = new Map([...vars].map(v => [v, []]));
         const missingByFile = [];
         let addedCount = 0;
+        let candidateCount = 0;
 
         // Clone traces with the new fileId where the variables exist. Dedupe originals first so
         // that running overlay a second time (after loading more files) doesn't multiply
@@ -1220,9 +1213,19 @@ class PlotManager {
                 seen.add(t.varName);
                 return true;
             });
-            for (const [fid, entry] of otherFiles) {
+            for (const [fid, entry] of this.files.entries()) {
+                const candidates = originals.filter(t => !existingTimeseries.has(`${fid}\u0000${t.varName}`));
+                if (!candidates.length) continue;
+                candidateCount++;
+                if (!this._canAddTraceWithFileTime(plot, fid, { silent: true })) {
+                    Modal.alert(
+                        'Incompatible time axes',
+                        'This overlay would mix calendar, elapsed, or numeric time axes. Use matching time-axis modes first; a future compare option will let you choose timestamp vs elapsed matching.'
+                    );
+                    return;
+                }
                 const missing = [];
-                for (const t of originals) {
+                for (const t of candidates) {
                     if (!entry.data.variables[t.varName]) {
                         missing.push(t.varName);
                         continue;
@@ -1246,9 +1249,21 @@ class PlotManager {
                 seen.add(key);
                 return true;
             });
-            for (const [fid, entry] of otherFiles) {
+            for (const [fid, entry] of this.files.entries()) {
+                const candidates = originals.filter(pt =>
+                    !existingPhase.has(`${fid}\u0000${pt.x}\u0000${pt.y}\u0000${pt.z || ''}`)
+                );
+                if (!candidates.length) continue;
+                candidateCount++;
+                if (!this._canAddTraceWithFileTime(plot, fid, { silent: true })) {
+                    Modal.alert(
+                        'Incompatible time axes',
+                        'This overlay would mix calendar, elapsed, or numeric time axes. Use matching time-axis modes first; a future compare option will let you choose timestamp vs elapsed matching.'
+                    );
+                    return;
+                }
                 const missing = new Set();
-                for (const pt of originals) {
+                for (const pt of candidates) {
                     const needed = [pt.x, pt.y, pt.z].filter(Boolean);
                     const missingForTrace = needed.filter(v => !entry.data.variables[v]);
                     if (missingForTrace.length) {
@@ -1266,6 +1281,11 @@ class PlotManager {
                 }
                 if (missing.size) missingByFile.push({ file: entry.name, vars: [...missing] });
             }
+        }
+
+        if (candidateCount === 0) {
+            Modal.alert(i18n.t('compareFilesErrorTitle'), i18n.t('compareFilesNoOthers'));
+            return;
         }
 
         if (!addedCount) {
