@@ -148,6 +148,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     if (!Number.isFinite(t0) || !Number.isFinite(t1)) return Promise.resolve();
 
     let lazyQueryCount = 0;
+    const previewResults = [];
     const traceJobs = plot.traces.map((t, idx) => {
         const fileEntry = this.files.get(t.fileId);
         const data = fileEntry?.data;
@@ -176,15 +177,31 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             }
         }
 
+        const cached = this._lazyCacheResult(t, idx, t0, t1, target);
+        if (cached) return Promise.resolve(cached);
+
         const source = lazyMeta.source;
         if (!source?.getColumnRange) return Promise.resolve();
         lazyQueryCount++;
-        return source.getColumnRange(data, t.varName, t0, t1, target)
+        const queryRange = this._lazyExpandedRange(data, t0, t1);
+        const queryTarget = this._lazyExpandedTarget(target, queryRange, t0, t1);
+        const preview = this._buildTimeTrace(t, range);
+        if (preview) previewResults.push({ idx, x: preview.x, y: preview.y });
+        return source.getColumnRange(data, t.varName, queryRange[0], queryRange[1], queryTarget)
             .then(({ x, y }) => {
                 // Drop the result if a newer zoom superseded this one.
                 if (this._zoomTokens.get(panelId) !== token) return null;
                 if (!plot?.div || !plot.traces[idx]) return null;
-                return { idx, x, y };
+                t._lazyDetailCache = {
+                    fileId: t.fileId,
+                    varName: t.varName,
+                    start: queryRange[0],
+                    end: queryRange[1],
+                    target: queryTarget,
+                    x,
+                    y,
+                };
+                return this._lazyCacheResult(t, idx, t0, t1, target) || { idx, x, y };
             })
             .catch(err => {
                 if (this._zoomTokens.get(panelId) !== token) return null;
@@ -193,6 +210,9 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
                 return built ? { idx, x: built.x, y: built.y } : null;
             });
     });
+    if (previewResults.length && this._zoomTokens.get(panelId) === token) {
+        this._applyBatchedTimeseriesRestyle(plot, previewResults);
+    }
     if (lazyQueryCount > 0) this._setLazyDetailLoading(plot, true, targetInfo);
     else this._setLazyDetailLoading(plot, false);
     this._refreshElapsedDateTimeAxisTicks(plot, range);
@@ -217,6 +237,57 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         this._setLazyDetailLoading(plot, false);
     }).catch(() => { /* per-trace errors already handled */ });
     return settled;
+};
+
+proto._lazyCacheResult = function(trace, idx, t0, t1, target) {
+    const cache = trace?._lazyDetailCache;
+    if (!cache || cache.fileId !== trace.fileId || cache.varName !== trace.varName) return null;
+    if (!cache.x?.length || !cache.y?.length) return null;
+    if (Number.isFinite(cache.target) && cache.target < target) return null;
+    const minX = Math.min(t0, t1);
+    const maxX = Math.max(t0, t1);
+    if (minX < cache.start || maxX > cache.end) return null;
+    const visual = this._visualFromSeriesRange(cache.x, cache.y, minX, maxX, target);
+    return visual ? { idx, x: visual.x, y: visual.y } : null;
+};
+
+proto._visualFromSeriesRange = function(xValues, yValues, minX, maxX, target) {
+    const n = Math.min(xValues?.length || 0, yValues?.length || 0);
+    if (n <= 0) return null;
+    let start = this._lowerBound(xValues, minX);
+    let end = this._upperBound(xValues, maxX);
+    start = Math.max(0, start - 1);
+    end = Math.min(n, end + 1);
+    if (end - start <= 0) return { x: new Float64Array(0), y: new Float64Array(0) };
+    const sliceX = xValues.slice(start, end);
+    const sliceY = yValues.slice(start, end);
+    if (!Number.isFinite(target) || target <= 0 || sliceX.length <= target) {
+        return { x: sliceX, y: sliceY };
+    }
+    return this._downsampleTimeseries(sliceX, sliceY, target);
+};
+
+proto._lazyExpandedRange = function(data, t0, t1) {
+    const minX = Math.min(t0, t1);
+    const maxX = Math.max(t0, t1);
+    const span = maxX - minX;
+    if (!Number.isFinite(span) || span <= 0) return [minX, maxX];
+    let start = minX - span;
+    let end = maxX + span;
+    const dataStart = Number(data?.metadata?.timeStart);
+    const dataEnd = Number(data?.metadata?.timeEnd);
+    if (Number.isFinite(dataStart)) start = Math.max(start, dataStart);
+    if (Number.isFinite(dataEnd)) end = Math.min(end, dataEnd);
+    return start < end ? [start, end] : [minX, maxX];
+};
+
+proto._lazyExpandedTarget = function(target, queryRange, t0, t1) {
+    const viewportSpan = Math.abs(t1 - t0);
+    const querySpan = Math.abs((queryRange?.[1] ?? t1) - (queryRange?.[0] ?? t0));
+    const factor = viewportSpan > 0 && Number.isFinite(querySpan)
+        ? Math.max(1, Math.min(4, querySpan / viewportSpan))
+        : 1;
+    return Math.min(16000, Math.max(target, Math.ceil(target * factor)));
 };
 
 proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
