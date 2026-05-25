@@ -103,7 +103,7 @@ async function benchParseDuckDb(file, duckdbSource) {
     const t1 = now();
     return {
         sizeMB: Number(fmtMB(file.size)),
-        rows: data.metadata?.numTimesteps ?? data._duckdb?.totalRows ?? 0,
+        rows: data.metadata?.numTimesteps ?? data._duckdb?.totalRows ?? null,
         overviewRows: data.variables?.[data.metadata?.timeName]?.data?.length || 0,
         totalRowsKnown: data._duckdb?.totalRows != null,
         variables: Object.keys(data.variables).length,
@@ -239,11 +239,16 @@ async function runAll({ files, panelHost, heatmapDiv, log, backend = 'legacy' })
             fileResult.steps.parse = {
                 ms: parseRes.parseMs,
                 rows: parseRes.rows,
+                overviewRows: parseRes.overviewRows,
+                totalRowsKnown: parseRes.totalRowsKnown,
                 vars: parseRes.variables,
                 backend: parseRes.backend,
             };
             fileResult.mem.afterParse = memSnapshot();
-            logLine(log, `  parse: ${fmtMs(parseRes.parseMs)} ms · ${parseRes.rows} rows · ${parseRes.variables} vars · backend=${parseRes.backend}`);
+            const rowLabel = parseRes.totalRowsKnown
+                ? `${parseRes.rows} rows`
+                : `${parseRes.overviewRows} overview rows`;
+            logLine(log, `  parse: ${fmtMs(parseRes.parseMs)} ms · ${rowLabel} · ${parseRes.variables} vars · backend=${parseRes.backend}`);
         } catch (err) {
             fileResult.steps.parseError = String(err?.message || err);
             logLine(log, `  PARSE FAILED: ${err?.message || err}`);
