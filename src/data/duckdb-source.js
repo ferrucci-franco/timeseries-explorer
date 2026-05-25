@@ -38,6 +38,7 @@ export default class DuckDbSource {
         this._initPromise = null;
         this._registered = new Set();
         this._nextTableId = 0;
+        this._rangeCache = new Map();
     }
 
     static isAvailable() {
@@ -158,6 +159,7 @@ export default class DuckDbSource {
         try { await this._conn.query(`DROP TABLE IF EXISTS ${meta.tableName}`); } catch (_) { /* ignore */ }
         try { await this._conn.query(`DROP VIEW IF EXISTS ${meta.tableName}`); } catch (_) { /* ignore */ }
         await this.unregisterFile(meta.handle);
+        this._clearRangeCacheForTable(meta.tableName);
         delete legacyData._duckdb;
     }
 
@@ -187,10 +189,28 @@ export default class DuckDbSource {
         if (!meta) throw new Error('getColumnsRange: data is not DuckDB-backed (eager mode)');
         const requested = [...new Set(varNames || [])]
             .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
-            .filter(item => item.variable);
+            .filter(item => item.variable)
+            .sort((a, b) => String(a.varName).localeCompare(String(b.varName)));
         if (!requested.length) {
             return { x: new Float64Array(0), yByVar: new Map() };
         }
+        const cacheKey = this._rangeCacheKey(meta, requested, t0, t1, maxPoints);
+        const cached = cacheKey ? this._rangeCache.get(cacheKey) : null;
+        if (cached) return cached;
+
+        const promise = this._queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints);
+        if (cacheKey) this._rememberRangeCache(cacheKey, promise);
+        try {
+            const result = await promise;
+            if (cacheKey) this._rangeCache.set(cacheKey, result);
+            return result;
+        } catch (err) {
+            if (cacheKey) this._rangeCache.delete(cacheKey);
+            throw err;
+        }
+    }
+
+    async _queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints = 4000) {
         const timeCol = meta.timeColumn;
         const escTime = timeCol.replace(/"/g, '""');
         const tableName = meta.tableName;
@@ -211,9 +231,30 @@ export default class DuckDbSource {
         if (!Number.isFinite(span) || span <= 0) {
             return { x: new Float64Array(0), yByVar: new Map(requested.map(({ varName }) => [varName, new Float64Array(0)])) };
         }
+        const estimatedRows = this._estimateRowsInRange(legacyData, meta, t0, t1);
+        const rawLimit = Math.ceil(maxPoints * 1.2);
         const valueSelect = requested
             .map(({ variable }, index) => `${this._quoteIdent(variable._duckdbCol || variable.name)} AS v${index}`)
             .join(',\n                       ');
+        if (Number.isFinite(estimatedRows) && estimatedRows > 0 && estimatedRows <= rawLimit) {
+            const sql = `
+                SELECT ${tExpr} AS t,
+                       ${valueSelect}
+                FROM ${tableName}
+                WHERE ${tExpr} BETWEEN ${lit(t0)} AND ${lit(t1)}
+                ORDER BY t
+                LIMIT ${rawLimit};
+            `;
+            const result = await this._conn.query(sql);
+            const yByVar = new Map();
+            requested.forEach(({ varName }, index) => {
+                yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
+            });
+            return {
+                x: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
+                yByVar,
+            };
+        }
         const aggregateSelect = requested
             .map((_, index) => `AVG(v${index}) AS v${index}`)
             .join(',\n                   ');
@@ -249,6 +290,44 @@ export default class DuckDbSource {
             x: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
             yByVar,
         };
+    }
+
+    _estimateRowsInRange(legacyData, meta, t0, t1) {
+        const totalRows = Number(meta?.totalRows);
+        const dataStart = Number(legacyData?.metadata?.timeStart);
+        const dataEnd = Number(legacyData?.metadata?.timeEnd);
+        const span = Math.abs(t1 - t0);
+        const fullSpan = dataEnd - dataStart;
+        if (!Number.isFinite(totalRows) || totalRows <= 0) return NaN;
+        if (!Number.isFinite(span) || span <= 0) return NaN;
+        if (!Number.isFinite(fullSpan) || fullSpan <= 0) return NaN;
+        return totalRows * Math.min(1, span / fullSpan);
+    }
+
+    _rangeCacheKey(meta, requested, t0, t1, maxPoints) {
+        const tableName = meta?.tableName;
+        if (!tableName) return null;
+        const vars = requested.map(({ varName }) => varName).join('\u001f');
+        return [tableName, vars, this._roundedRangeKey(t0), this._roundedRangeKey(t1), Math.round(maxPoints)].join('\u001e');
+    }
+
+    _roundedRangeKey(value) {
+        return Number.isFinite(value) ? Number(value).toPrecision(15) : String(value);
+    }
+
+    _rememberRangeCache(key, value) {
+        this._rangeCache.set(key, value);
+        while (this._rangeCache.size > 24) {
+            const first = this._rangeCache.keys().next().value;
+            this._rangeCache.delete(first);
+        }
+    }
+
+    _clearRangeCacheForTable(tableName) {
+        if (!tableName || !this._rangeCache?.size) return;
+        for (const key of [...this._rangeCache.keys()]) {
+            if (String(key).startsWith(`${tableName}\u001e`)) this._rangeCache.delete(key);
+        }
     }
 
     /**
@@ -402,9 +481,11 @@ export default class DuckDbSource {
                 ? `SELECT ${projection} FROM ${tableName} ORDER BY "${escTimeAlias}" ASC NULLS LAST`
                 : this._overviewSql(tableName, projection, escTimeAlias, totalRows, overviewPoints);
         } else {
+            if (format === 'parquet') {
+                totalRows = await this._parquetRowCountFromMetadata(escapedHandle);
+            }
             // VIEW mode: skip COUNT (would re-scan the whole CSV) and use
             // streaming reservoir sampling for the initial overview.
-            totalRows = null;
             dataSql = `
                 SELECT * FROM (
                     SELECT ${projection} FROM ${tableName} USING SAMPLE ${overviewPoints} ROWS (RESERVOIR, 42)
@@ -516,6 +597,23 @@ export default class DuckDbSource {
             }
         }
         return false;
+    }
+
+    async _parquetRowCountFromMetadata(escapedHandle) {
+        try {
+            const result = await this._conn.query(`
+                SELECT SUM(row_group_num_rows)::BIGINT AS n
+                FROM (
+                    SELECT DISTINCT row_group_id, row_group_num_rows
+                    FROM parquet_metadata('${escapedHandle}')
+                )
+            `);
+            const value = result.getChild('n')?.get(0);
+            const count = Number(value);
+            return Number.isFinite(count) && count > 0 ? count : null;
+        } catch (_) {
+            return null;
+        }
     }
 
     _timeInfoFromDuckDbSchema(columnNames, columnTypes) {

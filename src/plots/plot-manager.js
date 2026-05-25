@@ -1906,7 +1906,7 @@ class PlotManager {
         '#9C27B0', '#00BCD4', '#F44336', '#8BC34A',
     ];
     static GL_POINT_THRESHOLD = 50000;
-    static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 4000;
+    static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 2000;
     static DEFAULT_VISUAL_MAX_POINTS_PHASE = 4000;
 
     _nextColor(idx) { return PlotManager.COLORS[idx % PlotManager.COLORS.length]; }

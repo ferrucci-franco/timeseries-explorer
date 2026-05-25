@@ -51,6 +51,10 @@ proto._onRelayout = function(sourcePanelId, eventData) {
     const update = this._xAxisUpdateFromRelayout(eventData);
     if (!update) return;
 
+    if (this._syncing && sourcePanelId !== this._syncSourcePanelId) {
+        return;
+    }
+
     const plot = this.plots.get(sourcePanelId);
     if (plot?.mode === 'timeseries') {
         const autorangeRequested = update['xaxis.autorange'] === true || eventData?.['yaxis.autorange'] === true;
@@ -141,6 +145,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     if (!this._zoomTokens) this._zoomTokens = new Map();
     const token = (this._zoomTokens.get(panelId) || 0) + 1;
     this._zoomTokens.set(panelId, token);
+    this._cancelPendingLazyDetail(panelId);
 
     const targetInfo = this._lazyTimeseriesTarget();
     const target = targetInfo.limit;
@@ -149,7 +154,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
 
     let lazyQueryCount = 0;
     const previewResults = [];
-    const traceJobs = [];
+    const immediateResults = [];
     const queryGroups = new Map();
     plot.traces.forEach((t, idx) => {
         const fileEntry = this.files.get(t.fileId);
@@ -158,7 +163,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         if (!lazyMeta) {
             // Mixed lazy/eager: fall back to the sync path for this trace.
             const built = this._buildTimeTrace(t, range);
-            traceJobs.push(Promise.resolve(built ? { idx, x: built.x, y: built.y } : null));
+            if (built) immediateResults.push({ idx, x: built.x, y: built.y });
             return;
         }
 
@@ -176,20 +181,19 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             if (coverage >= (target / overviewPts)) {
                 // Overview is enough — use the sync path (slice + downsample in JS).
                 const built = this._buildTimeTrace(t, range);
-                traceJobs.push(Promise.resolve(built ? { idx, x: built.x, y: built.y } : null));
+                if (built) immediateResults.push({ idx, x: built.x, y: built.y });
                 return;
             }
         }
 
         const cached = this._lazyCacheResult(t, idx, t0, t1, target);
         if (cached) {
-            traceJobs.push(Promise.resolve(cached));
+            immediateResults.push(cached);
             return;
         }
 
         const source = lazyMeta.source;
         if (!source?.getColumnRange) {
-            traceJobs.push(Promise.resolve(null));
             return;
         }
         lazyQueryCount++;
@@ -212,16 +216,25 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         group.items.push({ trace: t, idx });
     });
 
-    for (const group of queryGroups.values()) {
-        traceJobs.push(this._runLazyDetailGroup(panelId, token, plot, group, t0, t1, target));
-    }
     if (previewResults.length && this._zoomTokens.get(panelId) === token) {
         this._applyBatchedTimeseriesRestyle(plot, previewResults);
+    }
+    if (immediateResults.length && this._zoomTokens.get(panelId) === token) {
+        this._applyBatchedTimeseriesRestyle(plot, immediateResults);
     }
     if (lazyQueryCount > 0) this._setLazyDetailLoading(plot, true, targetInfo);
     else this._setLazyDetailLoading(plot, false);
     this._refreshElapsedDateTimeAxisTicks(plot, range);
-    const settled = Promise.all(traceJobs).then(results => {
+    if (lazyQueryCount === 0) {
+        const settledNoQuery = Promise.resolve(immediateResults);
+        this._lastLazyRefresh = settledNoQuery;
+        return settledNoQuery;
+    }
+
+    const queryGroupsList = [...queryGroups.values()];
+    const settled = this._scheduleLazyDetail(panelId, () => Promise.all(queryGroupsList.map(group =>
+        this._runLazyDetailGroup(panelId, token, plot, group, t0, t1, target)
+    ))).then(results => {
         if (this._zoomTokens.get(panelId) !== token) return results;
         const flat = results.flatMap(result => Array.isArray(result) ? result : (result ? [result] : []));
         this._applyBatchedTimeseriesRestyle(plot, flat);
@@ -243,6 +256,32 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         this._setLazyDetailLoading(plot, false);
     }).catch(() => { /* per-trace errors already handled */ });
     return settled;
+};
+
+proto._scheduleLazyDetail = function(panelId, run) {
+    if (!this._lazyDetailTimers) this._lazyDetailTimers = new Map();
+    const delayMs = 90;
+    const scheduled = {};
+    const promise = new Promise((resolve, reject) => {
+        scheduled.resolve = resolve;
+        scheduled.reject = reject;
+        scheduled.timer = setTimeout(() => {
+            this._lazyDetailTimers.delete(panelId);
+            Promise.resolve()
+                .then(run)
+                .then(resolve, reject);
+        }, delayMs);
+    });
+    this._lazyDetailTimers.set(panelId, scheduled);
+    return promise;
+};
+
+proto._cancelPendingLazyDetail = function(panelId) {
+    const scheduled = this._lazyDetailTimers?.get(panelId);
+    if (!scheduled) return;
+    clearTimeout(scheduled.timer);
+    this._lazyDetailTimers.delete(panelId);
+    scheduled.resolve([]);
 };
 
 proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target) {
@@ -375,7 +414,7 @@ proto._lazyExpandedTarget = function(target, queryRange, t0, t1) {
     const factor = viewportSpan > 0 && Number.isFinite(querySpan)
         ? Math.max(1, Math.min(4, querySpan / viewportSpan))
         : 1;
-    return Math.min(16000, Math.max(target, Math.ceil(target * factor)));
+    return Math.min(6000, Math.max(target, Math.ceil(target * factor)));
 };
 
 proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
@@ -398,7 +437,7 @@ proto._lazyTimeseriesTarget = function() {
     // "No downsampling" is unsafe for lazy files: it could request millions
     // of points from DuckDB and hand them to Plotly. Keep a bounded detail
     // query and make the cap visible through the loading indicator tooltip.
-    return { limit: 4000, capped: true };
+    return { limit: 2000, capped: true };
 };
 
 proto._setLazyDetailLoading = function(plot, loading, targetInfo = null) {
@@ -415,7 +454,7 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null) {
     if (!indicator) return;
     if (loading) {
         const capped = targetInfo?.capped;
-        const limit = targetInfo?.limit || 4000;
+        const limit = targetInfo?.limit || 2000;
         indicator.title = capped
             ? `Loading detailed data (${limit} point cap for lazy files)`
             : `Loading detailed data (${limit} points)`;
