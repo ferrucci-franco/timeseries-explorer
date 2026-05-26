@@ -798,7 +798,7 @@ export default class DuckDbSource {
     }
 
     _monthNameDateSql(expr) {
-        return this._tryStrptimeSql(`CAST(${expr} AS VARCHAR)`, [
+        return this._tryStrptimeSql(this._normalizedMonthNameSql(expr), [
             '%d-%b-%Y %H:%M:%S.%f',
             '%d-%b-%Y %H:%M:%S',
             '%d-%b-%Y %H:%M',
@@ -816,6 +816,28 @@ export default class DuckDbSource {
             '%B %d %Y %H:%M',
             '%B %d %Y',
         ]);
+    }
+
+    _normalizedMonthNameSql(expr) {
+        let sql = `lower(regexp_replace(CAST(${expr} AS VARCHAR), '\\.', '', 'g'))`;
+        const replacements = [
+            ['january', 'jan'], ['janvier', 'jan'], ['enero', 'jan'],
+            ['february', 'feb'], ['février', 'feb'], ['fevrier', 'feb'], ['févr', 'feb'], ['fevr', 'feb'], ['febrero', 'feb'],
+            ['march', 'mar'], ['mars', 'mar'], ['marzo', 'mar'],
+            ['april', 'apr'], ['avril', 'apr'], ['abril', 'apr'],
+            ['mayo', 'may'], ['mai', 'may'],
+            ['june', 'jun'], ['juin', 'jun'], ['junio', 'jun'],
+            ['july', 'jul'], ['juillet', 'jul'], ['juil', 'jul'], ['julio', 'jul'],
+            ['august', 'aug'], ['août', 'aug'], ['aout', 'aug'], ['agosto', 'aug'],
+            ['september', 'sep'], ['septembre', 'sep'], ['septiembre', 'sep'], ['sept', 'sep'],
+            ['october', 'oct'], ['octobre', 'oct'], ['octubre', 'oct'],
+            ['november', 'nov'], ['novembre', 'nov'], ['noviembre', 'nov'],
+            ['december', 'dec'], ['décembre', 'dec'], ['decembre', 'dec'], ['diciembre', 'dec'],
+        ];
+        for (const [from, to] of replacements) {
+            sql = `replace(${sql}, '${this._escapeSqlString(from)}', '${to}')`;
+        }
+        return sql;
     }
 
     _tryStrptimeSql(expr, formats) {
