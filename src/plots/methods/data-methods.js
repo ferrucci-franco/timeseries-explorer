@@ -183,7 +183,7 @@ proto._plotlyTimeValue = function(fileId, value, timeVar = null) {
 
 proto._plotlyTimeArray = function(fileId, values, timeVar = null) {
     if (this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return values;
-    return values.map(value => this._plotlyTimeValue(fileId, value, timeVar));
+    return Array.from(values || [], value => this._plotlyTimeValue(fileId, value, timeVar));
 };
 
 proto._elapsedDateTimeAxisConfig = function(rangeOrValues) {
@@ -699,7 +699,7 @@ proto._buildTimeTrace = function(t, visibleRange = null) {
     const visual = this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep);
     const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
     const customdata = durationAxis
-        ? visual.x.map(value => this._formatElapsedDateTime(value))
+        ? Array.from(visual.x || [], value => this._formatElapsedDateTime(value))
         : undefined;
     const line = useGL
         ? { color: t.color, width: 1.5 }
