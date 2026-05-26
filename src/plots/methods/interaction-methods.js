@@ -478,8 +478,19 @@ proto._lazyExpandedRange = function(data, t0, t1) {
     const maxX = Math.max(t0, t1);
     const span = maxX - minX;
     if (!Number.isFinite(span) || span <= 0) return [minX, maxX];
+    const tileWidth = span;
     let start = minX - span;
     let end = maxX + span;
+    if (Number.isFinite(tileWidth) && tileWidth > 0) {
+        const startTile = Math.floor(minX / tileWidth) - 1;
+        const endTile = Math.ceil(maxX / tileWidth) + 1;
+        const tiledStart = startTile * tileWidth;
+        const tiledEnd = endTile * tileWidth;
+        if (Number.isFinite(tiledStart) && Number.isFinite(tiledEnd) && tiledStart < tiledEnd) {
+            start = tiledStart;
+            end = tiledEnd;
+        }
+    }
     const dataStart = Number(data?.metadata?.timeStart);
     const dataEnd = Number(data?.metadata?.timeEnd);
     if (Number.isFinite(dataStart)) start = Math.max(start, dataStart);
