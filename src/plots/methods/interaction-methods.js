@@ -50,12 +50,17 @@ const formatPlaceholderHint = (key) => {
 proto._onRelayout = function(sourcePanelId, eventData) {
     const update = this._xAxisUpdateFromRelayout(eventData);
     if (!update) return;
+    const plot = this.plots.get(sourcePanelId);
 
     if (this._syncing && sourcePanelId !== this._syncSourcePanelId) {
         return;
     }
 
-    const plot = this.plots.get(sourcePanelId);
+    if (plot?._relayoutLiveOnly) {
+        this._onRelayouting(sourcePanelId, eventData);
+        return;
+    }
+
     if (plot?.mode === 'timeseries') {
         const autorangeRequested = update['xaxis.autorange'] === true || eventData?.['yaxis.autorange'] === true;
         if (autorangeRequested) {
@@ -77,6 +82,17 @@ proto._onRelayout = function(sourcePanelId, eventData) {
     }
 
     this._syncXAxisUpdate(sourcePanelId, update);
+};
+
+proto._onRelayouting = function(sourcePanelId, eventData) {
+    const plot = this.plots.get(sourcePanelId);
+    if (!plot?.div || plot.mode !== 'timeseries' || !plot.cursors?.enabled) return;
+    const update = this._xAxisUpdateFromRelayout(eventData);
+    const range = Array.isArray(update?.['xaxis.range'])
+        ? update['xaxis.range']
+        : plot.div._fullLayout?.xaxis?.range;
+    if (!Array.isArray(range) || range.length < 2) return;
+    this._renderCursorOverlay(plot, { range, lightweight: true });
 };
 
 proto._xAxisUpdateFromRelayout = function(eventData) {
@@ -1506,22 +1522,28 @@ proto._syncCursorDisplay = function(panelId, plot) {
     this._updateCursorBox(panelId, plot);
 };
 
-proto._cursorOverlayGeometry = function(plot, trace, x) {
+proto._cursorOverlayGeometry = function(plot, trace, x, options = {}) {
     if (!plot?.div || !trace || !Number.isFinite(x)) return null;
     const fl = plot.div._fullLayout;
     const xa = fl?.xaxis;
     const ya = fl?.yaxis;
     if (!xa?.range || !ya?.range || !xa._length || !ya._length) return null;
 
-    const x0 = this._coerceAxisValue(xa.range[0]);
-    const x1 = this._coerceAxisValue(xa.range[1]);
+    const range = Array.isArray(options.range) && options.range.length >= 2
+        ? options.range
+        : xa.range;
+    const x0 = this._coerceAxisValue(range[0]);
+    const x1 = this._coerceAxisValue(range[1]);
     const rx = x1 - x0;
     if (!Number.isFinite(x0) || !Number.isFinite(x1) || rx === 0) return null;
 
-    const series = this._traceInterpolationSeries(plot, trace);
-    const y = series
-        ? this._interpolateAt(series.times, series.values, x, this._traceInterpolationMode(trace))
-        : NaN;
+    let y = NaN;
+    if (!options.lightweight) {
+        const series = this._traceInterpolationSeries(plot, trace);
+        y = series
+            ? this._interpolateAt(series.times, series.values, x, this._traceInterpolationMode(trace))
+            : NaN;
+    }
     const y0 = Number(ya.range[0]);
     const y1 = Number(ya.range[1]);
     const ry = y1 - y0;
@@ -1538,7 +1560,7 @@ proto._cursorOverlayGeometry = function(plot, trace, x) {
     return { left, leftAxis, rightAxis, top, topAxis, bottomAxis, y };
 };
 
-proto._renderCursorOverlay = function(plot) {
+proto._renderCursorOverlay = function(plot, options = {}) {
     if (!plot?.div || !plot.cursors?.enabled) return;
     let overlay = plot.div.querySelector('.cursor-plot-overlay');
     if (!overlay) {
@@ -1555,7 +1577,7 @@ proto._renderCursorOverlay = function(plot) {
     ];
     const parts = [];
     for (const item of items) {
-        const g = this._cursorOverlayGeometry(plot, item.trace, item.x);
+        const g = this._cursorOverlayGeometry(plot, item.trace, item.x, options);
         if (!g) continue;
         if (g.left < g.leftAxis || g.left > g.rightAxis) continue;
         const lineStyle = [
@@ -1566,7 +1588,7 @@ proto._renderCursorOverlay = function(plot) {
             item.dash ? 'border-left-style:dashed' : '',
         ].filter(Boolean).join(';');
         parts.push(`<div class="cursor-overlay-line cursor-overlay-line-${item.key}" style="${lineStyle}"></div>`);
-        if (Number.isFinite(g.top) && g.top >= g.topAxis && g.top <= g.bottomAxis) {
+        if (!options.lightweight && Number.isFinite(g.top) && g.top >= g.topAxis && g.top <= g.bottomAxis) {
             parts.push(`<div class="cursor-overlay-dot cursor-overlay-dot-${item.key}" style="left:${g.left}px;top:${g.top}px;background:${item.color};border-color:${item.color}"></div>`);
         }
     }

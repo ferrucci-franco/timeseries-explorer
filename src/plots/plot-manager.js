@@ -773,6 +773,7 @@ class PlotManager {
             });
             // Axis sync, hover sync, and scroll-wheel pan (timeseries only)
             if (plot.mode === 'timeseries') {
+                div.on('plotly_relayouting', (ed) => this._onRelayouting(panelId, ed));
                 div.on('plotly_relayout', (ed) => this._onRelayout(panelId, ed));
                 div.on('plotly_hover',    (ed) => this._onHover(panelId, ed));
                 div.on('plotly_unhover',  ()   => this._onUnhover(panelId));
@@ -810,6 +811,7 @@ class PlotManager {
                     if (!xNumeric0.every(Number.isFinite) || !yNumeric0.every(Number.isFinite)) return;
                     const xLen = xa._length, yLen = ya._length;
                     const isDateXAxis = xa.type === 'date';
+                    let latestXRange = x0;
                     const formatXRange = (range) => isDateXAxis
                         ? range.map(value => new Date(value).toISOString())
                         : range;
@@ -818,14 +820,20 @@ class PlotManager {
                         const ySpan = yNumeric0[1] - yNumeric0[0];
                         const dx = -((mv.clientX - startX) / xLen) * xSpan;
                         const dy =  ((mv.clientY - startY) / yLen) * ySpan;
+                        latestXRange = formatXRange([xNumeric0[0] + dx, xNumeric0[1] + dx]);
+                        plot._relayoutLiveOnly = true;
                         Plotly.relayout(div, {
-                            'xaxis.range': formatXRange([xNumeric0[0] + dx, xNumeric0[1] + dx]),
+                            'xaxis.range': latestXRange,
                             'yaxis.range': [yNumeric0[0] + dy, yNumeric0[1] + dy],
+                        }).finally(() => {
+                            if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: latestXRange, lightweight: true });
                         });
                     };
                     const onUp = () => {
                         document.removeEventListener('mousemove', onMove);
                         document.removeEventListener('mouseup', onUp);
+                        plot._relayoutLiveOnly = false;
+                        this._onRelayout(panelId, { 'xaxis.range': latestXRange });
                     };
                     document.addEventListener('mousemove', onMove);
                     document.addEventListener('mouseup', onUp);
