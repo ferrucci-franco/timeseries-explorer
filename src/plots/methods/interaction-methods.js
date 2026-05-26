@@ -382,7 +382,7 @@ proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target
                 x,
                 y,
             };
-            return this._lazyCacheResult(trace, idx, t0, t1, target) || { idx, x, y };
+            return this._lazyCacheResult(trace, idx, t0, t1, target) || { idx, trace, x, y };
         });
         mapped._omvPerf = {
             ...(_perf || {}),
@@ -433,7 +433,7 @@ proto._lazyCacheResult = function(trace, idx, t0, t1, target) {
     if (minX < cache.start || maxX > cache.end) return null;
     if (!this._lazyCacheHasViewportDetail(cache, minX, maxX, target)) return null;
     const visual = this._visualFromSeriesRange(cache.x, cache.y, minX, maxX, target);
-    return visual ? { idx, x: visual.x, y: visual.y } : null;
+    return visual ? { idx, trace, x: visual.x, y: visual.y } : null;
 };
 
 proto._lazyCacheHasViewportDetail = function(cache, minX, maxX, target) {
@@ -513,10 +513,36 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
         .filter(result => result && Number.isInteger(result.idx) && plot.traces[result.idx])
         .sort((a, b) => a.idx - b.idx);
     if (!valid.length) return Promise.resolve();
-    return Plotly.restyle(plot.div, {
-        x: valid.map(result => result.x),
-        y: valid.map(result => result.y),
-    }, valid.map(result => result.idx));
+    const xs = [];
+    const ys = [];
+    const cds = [];
+    let anyCustomdata = false;
+    for (const result of valid) {
+        const trace = result.trace || plot.traces[result.idx];
+        const prepared = this._prepareLazyTimeseriesRestyle(trace, result.x, result.y);
+        xs.push(prepared.x);
+        ys.push(prepared.y);
+        cds.push(prepared.customdata ?? null);
+        if (prepared.customdata) anyCustomdata = true;
+    }
+    const update = { x: xs, y: ys };
+    if (anyCustomdata) update.customdata = cds;
+    return Plotly.restyle(plot.div, update, valid.map(result => result.idx));
+};
+
+proto._prepareLazyTimeseriesRestyle = function(trace, x, y) {
+    const fileId = trace?.fileId;
+    const timeVar = this._getTimeVar(fileId);
+    const plotX = this._plotlyTimeArray(fileId, x, timeVar);
+    const durationAxis = this._timeDisplayModeForVar(fileId, timeVar) === 'elapsedDateTime'
+        || this._isGeneratedDurationTime(fileId, timeVar);
+    return {
+        x: plotX,
+        y,
+        customdata: durationAxis
+            ? Array.from(x || [], value => this._formatElapsedDateTime(value))
+            : undefined,
+    };
 };
 
 proto._beginLazyPerf = function(panelId, plot, base = {}) {
