@@ -88,12 +88,9 @@ proto._onRelayouting = function(sourcePanelId, eventData) {
     const plot = this.plots.get(sourcePanelId);
     if (!plot?.div || plot.mode !== 'timeseries' || !plot.cursors?.enabled) return;
     if (plot._cursorBoxZoomActive) {
-        this._hideCursorOverlay(plot);
         return;
     }
     if (!plot._relayoutLiveOnly && this._relayoutEventTouchesYAxis(eventData)) {
-        this._hideCursorOverlay(plot);
-        plot._cursorOverlaySuppressedDuringBoxZoom = true;
         return;
     }
     const update = this._xAxisUpdateFromRelayout(eventData);
@@ -1580,7 +1577,6 @@ proto._cursorOverlayGeometry = function(plot, trace, x, options = {}) {
 proto._renderCursorOverlay = function(plot, options = {}) {
     if (!plot?.div || !plot.cursors?.enabled) return;
     if (plot._cursorBoxZoomActive && !options.force) {
-        this._hideCursorOverlay(plot);
         return;
     }
     let overlay = plot.div.querySelector('.cursor-plot-overlay');
@@ -1628,7 +1624,6 @@ proto._hideCursorOverlay = function(plot) {
 proto._beginCursorBoxZoomSuppress = function(panelId, plot) {
     if (!plot?.div || plot._cursorBoxZoomActive) return;
     plot._cursorBoxZoomActive = true;
-    this._hideCursorOverlay(plot);
     const release = () => {
         document.removeEventListener('mouseup', release, true);
         document.removeEventListener('keydown', cancel, true);
