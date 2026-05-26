@@ -1203,13 +1203,31 @@ proto._traceInterpolationSeries = function(plot, trace) {
         const rx = rendered?.x;
         const ry = rendered?.y;
         if (rx && ry && rx.length === ry.length && rx.length > 0) {
-            return { times: rx, values: ry };
+            const times = this._cursorNumericTimes(rx);
+            if (times?.length === ry.length) return { times, values: ry };
         }
     }
     const times = this._getTransformedTimeData(trace.fileId);
     const values = this._getTransformedVariableData(trace.fileId, trace.varName);
     if (!times?.length || !values?.length) return null;
     return { times, values };
+};
+
+proto._cursorNumericTimes = function(values) {
+    if (!values?.length) return values;
+    let allNumeric = true;
+    for (let i = 0; i < values.length; i++) {
+        if (!Number.isFinite(Number(values[i]))) {
+            allNumeric = false;
+            break;
+        }
+    }
+    if (allNumeric) return values;
+    const out = new Float64Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+        out[i] = this._coerceAxisValue(values[i]);
+    }
+    return out;
 };
 
 proto._cursorPlotlyX = function(trace, x) {

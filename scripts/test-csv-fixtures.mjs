@@ -16,6 +16,7 @@ function fixtureFiles() {
     if (existsSync(csvDir)) {
         for (const name of readdirSync(csvDir)) {
             if (name.startsWith('.')) continue;
+            if (name.toLowerCase().endsWith('.parquet')) continue;
             const path = join(csvDir, name);
             if (statSync(path).isFile()) files.push(path);
         }
