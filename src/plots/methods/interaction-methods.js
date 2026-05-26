@@ -1455,17 +1455,6 @@ proto._jumpCursorTo = async function(panelId, which, target, direction = 'next')
     const transformActive = typeof this._isFileTransformActive === 'function'
         && this._isFileTransformActive(this._fileTransform(trace.fileId));
     if (lazyMeta?.source?.fetchSourceWindow && !transformActive) {
-        try {
-            const lazyNextX = await this._findLazyCursorTarget(fileData, trace, cursorX, target, direction);
-            if (Number.isFinite(lazyNextX)) {
-                plot.cursors[which] = lazyNextX;
-                this._syncCursorDisplay(panelId, plot);
-                return;
-            }
-        } catch (err) {
-            console.warn('[duckdb] cursor jump query failed; falling back to overview:', err?.message || err);
-        }
-
         const rendered = this._traceInterpolationSeries(plot, trace);
         const renderedNextX = this._findCursorTargetInSeries(
             trace,
@@ -1479,6 +1468,17 @@ proto._jumpCursorTo = async function(panelId, which, target, direction = 'next')
             plot.cursors[which] = renderedNextX;
             this._syncCursorDisplay(panelId, plot);
             return;
+        }
+
+        try {
+            const lazyNextX = await this._findLazyCursorTarget(fileData, trace, cursorX, target, direction);
+            if (Number.isFinite(lazyNextX)) {
+                plot.cursors[which] = lazyNextX;
+                this._syncCursorDisplay(panelId, plot);
+                return;
+            }
+        } catch (err) {
+            console.warn('[duckdb] cursor jump query failed; falling back to overview:', err?.message || err);
         }
     }
 
