@@ -87,12 +87,25 @@ proto._onRelayout = function(sourcePanelId, eventData) {
 proto._onRelayouting = function(sourcePanelId, eventData) {
     const plot = this.plots.get(sourcePanelId);
     if (!plot?.div || plot.mode !== 'timeseries' || !plot.cursors?.enabled) return;
+    if (!plot._relayoutLiveOnly && this._relayoutEventTouchesYAxis(eventData)) {
+        this._hideCursorOverlay(plot);
+        plot._cursorOverlaySuppressedDuringBoxZoom = true;
+        return;
+    }
     const update = this._xAxisUpdateFromRelayout(eventData);
     const range = Array.isArray(update?.['xaxis.range'])
         ? update['xaxis.range']
         : plot.div._fullLayout?.xaxis?.range;
     if (!Array.isArray(range) || range.length < 2) return;
     this._renderCursorOverlay(plot, { range, lightweight: true });
+};
+
+proto._relayoutEventTouchesYAxis = function(eventData) {
+    if (!eventData) return false;
+    return eventData['yaxis.range'] !== undefined
+        || eventData['yaxis.range[0]'] !== undefined
+        || eventData['yaxis.range[1]'] !== undefined
+        || eventData['yaxis.autorange'] !== undefined;
 };
 
 proto._xAxisUpdateFromRelayout = function(eventData) {
