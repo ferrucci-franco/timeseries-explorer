@@ -1465,6 +1465,21 @@ proto._jumpCursorTo = async function(panelId, which, target, direction = 'next')
         } catch (err) {
             console.warn('[duckdb] cursor jump query failed; falling back to overview:', err?.message || err);
         }
+
+        const rendered = this._traceInterpolationSeries(plot, trace);
+        const renderedNextX = this._findCursorTargetInSeries(
+            trace,
+            target,
+            rendered?.times,
+            rendered?.values,
+            cursorX,
+            direction,
+        );
+        if (Number.isFinite(renderedNextX)) {
+            plot.cursors[which] = renderedNextX;
+            this._syncCursorDisplay(panelId, plot);
+            return;
+        }
     }
 
     if (!times) {
