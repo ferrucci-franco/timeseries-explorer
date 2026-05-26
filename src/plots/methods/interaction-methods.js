@@ -384,6 +384,18 @@ proto._cancelActiveLazySources = function(panelId) {
     }
 };
 
+proto._cleanupLazyDetailForPanel = function(panelId, plot = this.plots?.get(panelId)) {
+    this._cancelPendingLazyDetail(panelId);
+    this._cancelActiveLazySources(panelId);
+    if (this._zoomTokens) {
+        this._zoomTokens.set(panelId, (this._zoomTokens.get(panelId) || 0) + 1);
+    }
+    if (plot) this._setLazyDetailLoading(plot, false);
+    const panelEl = plot?.div?.closest?.('.layout-panel')
+        || (typeof document !== 'undefined' ? document.querySelector(`.layout-panel[data-id="${panelId}"]`) : null);
+    panelEl?.querySelectorAll('.lazy-detail-indicator').forEach(indicator => indicator.remove());
+};
+
 proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target) {
     const varNames = group.items.map(item => item.trace.varName);
     const startedAt = this._perfNow();
@@ -665,6 +677,7 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null) {
         indicator.classList.add('active');
     } else {
         indicator.classList.remove('active');
+        indicator.remove();
     }
 };
 

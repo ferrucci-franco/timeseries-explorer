@@ -980,6 +980,9 @@ class PlotManager {
     _destroyChart(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        if (typeof this._cleanupLazyDetailForPanel === 'function') {
+            this._cleanupLazyDetailForPanel(panelId, plot);
+        }
         this._stopAnim(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
         // Reset dynamic trace indices
@@ -1005,6 +1008,9 @@ class PlotManager {
 
     _clearPanel(panelId) {
         const existing = this.plots.get(panelId);
+        if (typeof this._cleanupLazyDetailForPanel === 'function') {
+            this._cleanupLazyDetailForPanel(panelId, existing);
+        }
         if (existing) this._stopAnim(existing);
         this._destroyChart(panelId);
 
