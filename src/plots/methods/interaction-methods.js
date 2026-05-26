@@ -87,6 +87,10 @@ proto._onRelayout = function(sourcePanelId, eventData) {
 proto._onRelayouting = function(sourcePanelId, eventData) {
     const plot = this.plots.get(sourcePanelId);
     if (!plot?.div || plot.mode !== 'timeseries' || !plot.cursors?.enabled) return;
+    if (plot._cursorBoxZoomActive) {
+        this._hideCursorOverlay(plot);
+        return;
+    }
     if (!plot._relayoutLiveOnly && this._relayoutEventTouchesYAxis(eventData)) {
         this._hideCursorOverlay(plot);
         plot._cursorOverlaySuppressedDuringBoxZoom = true;
@@ -1575,6 +1579,10 @@ proto._cursorOverlayGeometry = function(plot, trace, x, options = {}) {
 
 proto._renderCursorOverlay = function(plot, options = {}) {
     if (!plot?.div || !plot.cursors?.enabled) return;
+    if (plot._cursorBoxZoomActive && !options.force) {
+        this._hideCursorOverlay(plot);
+        return;
+    }
     let overlay = plot.div.querySelector('.cursor-plot-overlay');
     if (!overlay) {
         overlay = document.createElement('div');
@@ -1617,6 +1625,26 @@ proto._hideCursorOverlay = function(plot) {
     }
 };
 
+proto._beginCursorBoxZoomSuppress = function(panelId, plot) {
+    if (!plot?.div || plot._cursorBoxZoomActive) return;
+    plot._cursorBoxZoomActive = true;
+    this._hideCursorOverlay(plot);
+    const release = () => {
+        document.removeEventListener('mouseup', release, true);
+        document.removeEventListener('keydown', cancel, true);
+        window.setTimeout(() => {
+            plot._cursorBoxZoomActive = false;
+            if (plot?.cursors?.enabled) this._syncCursorDisplay(panelId, plot);
+        }, 0);
+    };
+    const cancel = (event) => {
+        if (event.key !== 'Escape') return;
+        release();
+    };
+    document.addEventListener('mouseup', release, true);
+    document.addEventListener('keydown', cancel, true);
+};
+
 proto._installCursorHandlers = function(panelId, plot) {
     if (!plot?.div || plot._cursorHandlersDiv === plot.div) return;
     if (plot._cursorDocListeners) {
@@ -1649,7 +1677,12 @@ proto._installCursorHandlers = function(panelId, plot) {
     plot.div.addEventListener('mousedown', (event) => {
         if (event.button !== 0) return;
         const hit = cursorNearPointer(event);
-        if (!hit) return;
+        if (!hit) {
+            if (plot.cursors?.enabled && plot.div?._fullLayout?.dragmode !== 'pan') {
+                this._beginCursorBoxZoomSuppress(panelId, plot);
+            }
+            return;
+        }
         dragging = hit;
         event.preventDefault();
         event.stopPropagation();
