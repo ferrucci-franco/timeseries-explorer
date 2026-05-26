@@ -1640,6 +1640,21 @@ proto._beginCursorBoxZoomSuppress = function(panelId, plot) {
     document.addEventListener('keydown', cancel, true);
 };
 
+proto._eventInsidePlotArea = function(div, event) {
+    const fl = div?._fullLayout;
+    const xa = fl?.xaxis;
+    const ya = fl?.yaxis;
+    if (!xa || !ya || !xa._length || !ya._length) return false;
+    const rect = div.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const left = xa._offset || 0;
+    const right = left + xa._length;
+    const top = ya._offset || 0;
+    const bottom = top + ya._length;
+    return x >= left && x <= right && y >= top && y <= bottom;
+};
+
 proto._installCursorHandlers = function(panelId, plot) {
     if (!plot?.div || plot._cursorHandlersDiv === plot.div) return;
     if (plot._cursorDocListeners) {
@@ -1673,7 +1688,9 @@ proto._installCursorHandlers = function(panelId, plot) {
         if (event.button !== 0) return;
         const hit = cursorNearPointer(event);
         if (!hit) {
-            if (plot.cursors?.enabled && plot.div?._fullLayout?.dragmode !== 'pan') {
+            if (plot.cursors?.enabled
+                && plot.div?._fullLayout?.dragmode !== 'pan'
+                && this._eventInsidePlotArea(plot.div, event)) {
                 this._beginCursorBoxZoomSuppress(panelId, plot);
             }
             return;
