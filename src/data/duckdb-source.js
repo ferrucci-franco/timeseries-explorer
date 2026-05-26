@@ -508,16 +508,17 @@ export default class DuckDbSource {
         const projection = this._projectionSql(columnNames, timeInfo);
         const timeAlias = '__omv_time';
         const escTimeAlias = timeAlias.replace(/"/g, '""');
+        const validTimeWhere = `${timeInfo.sql} IS NOT NULL`;
 
         let totalRows;
         let dataSql;
         if (!viewMode) {
-            const countResult = await this._conn.query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName}`);
+            const countResult = await this._conn.query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName} WHERE ${validTimeWhere}`);
             const countCol = countResult.getChildAt(0) || countResult.getChild('n');
             totalRows = Number(countCol?.get(0) ?? 0);
             dataSql = (!lazy || totalRows <= overviewPoints)
-                ? `SELECT ${projection} FROM ${tableName} ORDER BY "${escTimeAlias}" ASC NULLS LAST`
-                : this._overviewSql(tableName, projection, escTimeAlias, totalRows, overviewPoints);
+                ? `SELECT ${projection} FROM ${tableName} WHERE ${validTimeWhere} ORDER BY "${escTimeAlias}" ASC NULLS LAST`
+                : this._overviewSql(tableName, projection, escTimeAlias, totalRows, overviewPoints, validTimeWhere);
         } else {
             if (format === 'parquet') {
                 totalRows = await this._parquetRowCountFromMetadata(escapedHandle);
@@ -525,9 +526,15 @@ export default class DuckDbSource {
             // VIEW mode: skip COUNT (would re-scan the whole CSV) and use
             // streaming reservoir sampling for the initial overview.
             dataSql = `
-                SELECT * FROM (
-                    SELECT ${projection} FROM ${tableName} USING SAMPLE ${overviewPoints} ROWS (RESERVOIR, 42)
-                ) ORDER BY "${escTimeAlias}" ASC NULLS LAST
+                WITH projected AS (
+                    SELECT ${projection}
+                    FROM ${tableName}
+                    WHERE ${validTimeWhere}
+                ),
+                sampled AS (
+                    SELECT * FROM projected USING SAMPLE ${overviewPoints} ROWS (RESERVOIR, 42)
+                )
+                SELECT * FROM sampled ORDER BY "${escTimeAlias}" ASC NULLS LAST
             `;
         }
         const dataResult = await this._conn.query(dataSql);
@@ -544,7 +551,7 @@ export default class DuckDbSource {
             // aggregate query — DuckDB can compute MIN/MAX without sorting.
             try {
                 const aggResult = await this._conn.query(
-                    `SELECT MIN(${timeInfo.sql})::DOUBLE AS tmin, MAX(${timeInfo.sql})::DOUBLE AS tmax FROM ${tableName}`
+                    `SELECT MIN(${timeInfo.sql})::DOUBLE AS tmin, MAX(${timeInfo.sql})::DOUBLE AS tmax FROM ${tableName} WHERE ${validTimeWhere}`
                 );
                 const tmin = aggResult.getChild('tmin')?.get(0);
                 const tmax = aggResult.getChild('tmax')?.get(0);
@@ -580,6 +587,7 @@ export default class DuckDbSource {
             `header=false`,
             `skip=${Math.max(0, Number(csvProfile.dataStartIndex) || 0)}`,
             `columns=${this._duckDbColumnsStruct(specs)}`,
+            `ignore_errors=true`,
         ];
         if (csvProfile.delimiter && csvProfile.delimiter !== 'whitespace') {
             options.push(`delim='${this._escapeSqlString(csvProfile.delimiter)}'`);
@@ -616,7 +624,7 @@ export default class DuckDbSource {
             nonEmpty++;
             if (Number.isFinite(parseCsvNumber(raw, delimiter))) numeric++;
         }
-        return nonEmpty > 0 && numeric === nonEmpty ? 'DOUBLE' : 'VARCHAR';
+        return nonEmpty > 0 && (numeric / nonEmpty) >= 0.95 ? 'DOUBLE' : 'VARCHAR';
     }
 
     _duckDbColumnsStruct(specs) {
@@ -716,7 +724,9 @@ export default class DuckDbSource {
         const strategy = timeSource.strategy;
         if (strategy === 'excel-serial') return `((${first}::DOUBLE - 25569) * ${MS_PER_DAY})`;
         if (strategy === 'matlab-datenum') return `((${first}::DOUBLE - 719529) * ${MS_PER_DAY})`;
-        if (strategy === 'decimal-year' || strategy === 'month-name-date' || strategy === 'yearless-date-time') return null;
+        if (strategy === 'decimal-year') return this._decimalYearSql(first);
+        if (strategy === 'yearless-date-time') return this._yearlessDateTimeSql(first, timeSource.format);
+        if (strategy === 'month-name-date') return this._monthNameDateSql(first);
 
         if (strategy === 'iso-datetime') {
             return `epoch_ms(CAST(${first} AS TIMESTAMP))::DOUBLE`;
@@ -763,6 +773,51 @@ export default class DuckDbSource {
         ];
     }
 
+    _decimalYearSql(expr) {
+        const value = `${expr}::DOUBLE`;
+        const year = `FLOOR(${value})`;
+        const leap = `((${year} % 4 = 0 AND ${year} % 100 <> 0) OR ${year} % 400 = 0)`;
+        return `(
+            epoch_ms(CAST(CAST(CAST(${year} AS BIGINT) AS VARCHAR) || '-01-01' AS TIMESTAMP))::DOUBLE
+            + (${value} - ${year}) * CASE WHEN ${leap} THEN 366 ELSE 365 END * ${MS_PER_DAY}
+        )`;
+    }
+
+    _yearlessDateTimeSql(expr, format = {}) {
+        const order = format?.dateOrder || 'MDY';
+        const sep = format?.dashSeparator ? '-' : '/';
+        const date = order === 'DMY'
+            ? `%Y${sep}%d${sep}%m`
+            : `%Y${sep}%m${sep}%d`;
+        const formats = [
+            `${date} %H:%M:%S.%f`,
+            `${date} %H:%M:%S`,
+            `${date} %H:%M`,
+        ];
+        return this._tryStrptimeSql(`'2001${sep}' || CAST(${expr} AS VARCHAR)`, formats);
+    }
+
+    _monthNameDateSql(expr) {
+        return this._tryStrptimeSql(`CAST(${expr} AS VARCHAR)`, [
+            '%d-%b-%Y %H:%M:%S.%f',
+            '%d-%b-%Y %H:%M:%S',
+            '%d-%b-%Y %H:%M',
+            '%d-%b-%Y',
+            '%d %b %Y %H:%M:%S.%f',
+            '%d %b %Y %H:%M:%S',
+            '%d %b %Y %H:%M',
+            '%d %b %Y',
+            '%b %d %Y %H:%M:%S.%f',
+            '%b %d %Y %H:%M:%S',
+            '%b %d %Y %H:%M',
+            '%b %d %Y',
+            '%B %d %Y %H:%M:%S.%f',
+            '%B %d %Y %H:%M:%S',
+            '%B %d %Y %H:%M',
+            '%B %d %Y',
+        ]);
+    }
+
     _tryStrptimeSql(expr, formats) {
         const list = formats.map(format => `'${this._escapeSqlString(format)}'`).join(', ');
         return `epoch_ms(try_strptime(${expr}, [${list}]))::DOUBLE`;
@@ -787,7 +842,7 @@ export default class DuckDbSource {
         return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "''");
     }
 
-    _overviewSql(tableName, projection, escTime, totalRows, overviewPoints) {
+    _overviewSql(tableName, projection, escTime, totalRows, overviewPoints, whereSql = null) {
         const stride = Math.max(1, Math.ceil(totalRows / overviewPoints));
         // Keep first + last + every Nth row by time order. Numbered separately
         // so the result is still ordered by time.
@@ -795,6 +850,7 @@ export default class DuckDbSource {
             WITH projected AS (
                 SELECT ${projection}
                 FROM ${tableName}
+                ${whereSql ? `WHERE ${whereSql}` : ''}
             ),
             numbered AS (
                 SELECT *, ROW_NUMBER() OVER (ORDER BY "${escTime}") AS __rn

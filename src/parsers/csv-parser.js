@@ -63,6 +63,7 @@ export default class CsvParser {
         }));
         let timeKind = timeSource.kind;
         let timeOriginMs = null;
+        let invalidTimeRows = 0;
 
         for (let r = 0; r < dataRows.length; r++) {
             const row = dataRows[r];
@@ -70,7 +71,8 @@ export default class CsvParser {
 
             const timeValue = timeSource.parse(row, timeValues.length);
             if (!Number.isFinite(timeValue)) {
-                throw new Error(`Invalid time value at CSV data row ${r + 1}.`);
+                invalidTimeRows++;
+                continue;
             }
             timeValues.push(timeValue);
             if (timeKind === 'datetime' && timeOriginMs === null) timeOriginMs = timeValue;
@@ -168,6 +170,7 @@ export default class CsvParser {
             hasHeader,
             skippedRows: table.headerIndex,
             skippedRowsAfterHeader: Math.max(0, table.dataStartIndex - table.headerIndex - (hasHeader ? 1 : 0)),
+            skippedInvalidTimeRows: invalidTimeRows,
             timeName: timeVar.name,
             timeKind,
             timeDisplayMode: timeVar.timeDisplayMode || 'numeric',

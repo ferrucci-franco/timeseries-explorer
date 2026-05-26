@@ -9,7 +9,8 @@
     "build": "npm run build:portable && npm run build:web",
     "preview": "vite preview",
     "build:portable": "node scripts/build-portable.mjs",
-    "build:all": "npm run build"
+    "build:all": "npm run build",
+    "test:csv": "node scripts/test-csv-fixtures.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",
