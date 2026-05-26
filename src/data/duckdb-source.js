@@ -198,7 +198,10 @@ export default class DuckDbSource {
         }
         const cacheKey = this._rangeCacheKey(meta, requested, t0, t1, maxPoints);
         const cached = cacheKey ? this._rangeCache.get(cacheKey) : null;
-        if (cached) return cached;
+        if (cached) {
+            if (cached instanceof Promise) return cached;
+            return { ...cached, _perf: { ...(cached._perf || {}), cacheHit: true } };
+        }
 
         const promise = this._queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints);
         if (cacheKey) this._rememberRangeCache(cacheKey, promise);
@@ -213,6 +216,7 @@ export default class DuckDbSource {
     }
 
     async _queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints = 4000) {
+        const queryStartedAt = this._now();
         const timeCol = meta.timeColumn;
         const escTime = timeCol.replace(/"/g, '""');
         const tableName = meta.tableName;
@@ -248,13 +252,27 @@ export default class DuckDbSource {
                 LIMIT ${rawLimit};
             `;
             const result = await this._interactiveQuery(sql);
+            const extractStartedAt = this._now();
             const yByVar = new Map();
             requested.forEach(({ varName }, index) => {
                 yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
             });
+            const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
             return {
-                x: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
+                x,
                 yByVar,
+                _perf: this._rangePerf({
+                    mode: 'raw',
+                    startedAt: queryStartedAt,
+                    extractStartedAt,
+                    result,
+                    rows: x.length,
+                    requested,
+                    t0,
+                    t1,
+                    maxPoints,
+                    estimatedRows,
+                }),
             };
         }
         const aggregateSelect = requested
@@ -284,13 +302,46 @@ export default class DuckDbSource {
             ORDER BY bucket;
         `;
         const result = await this._interactiveQuery(sql);
+        const extractStartedAt = this._now();
         const yByVar = new Map();
         requested.forEach(({ varName }, index) => {
             yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
         });
+        const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
         return {
-            x: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
+            x,
             yByVar,
+            _perf: this._rangePerf({
+                mode: 'aggregate',
+                startedAt: queryStartedAt,
+                extractStartedAt,
+                result,
+                rows: x.length,
+                requested,
+                t0,
+                t1,
+                maxPoints,
+                estimatedRows,
+            }),
+        };
+    }
+
+    _rangePerf({ mode, startedAt, extractStartedAt, result, rows, requested, t0, t1, maxPoints, estimatedRows }) {
+        const finishedAt = this._now();
+        const queryPerf = result?._omvPerf || {};
+        return {
+            mode,
+            vars: requested.length,
+            rows,
+            target: maxPoints,
+            span: t1 - t0,
+            estimatedRows: Number.isFinite(estimatedRows) ? Math.round(estimatedRows) : null,
+            queryMs: this._roundMs(queryPerf.totalMs ?? (extractStartedAt - startedAt)),
+            sendMs: this._roundMs(queryPerf.sendMs),
+            readMs: this._roundMs(queryPerf.readMs),
+            extractMs: this._roundMs(finishedAt - extractStartedAt),
+            totalMs: this._roundMs(finishedAt - startedAt),
+            cacheHit: false,
         };
     }
 
@@ -436,21 +487,38 @@ export default class DuckDbSource {
         await this.init();
         const active = { cancelled: false, reader: null };
         this._activeInteractiveQuery = active;
+        const t0 = this._now();
         try {
             const reader = await this._conn.send(sql);
+            const t1 = this._now();
             active.reader = reader;
             const batches = await reader.readAll();
+            const t2 = this._now();
             if (active.cancelled) {
                 const err = new Error('DuckDB query cancelled');
                 err.name = 'AbortError';
                 throw err;
             }
-            return new arrow.Table(batches);
+            const table = new arrow.Table(batches);
+            table._omvPerf = {
+                sendMs: this._roundMs(t1 - t0),
+                readMs: this._roundMs(t2 - t1),
+                totalMs: this._roundMs(t2 - t0),
+            };
+            return table;
         } finally {
             if (this._activeInteractiveQuery === active) {
                 this._activeInteractiveQuery = null;
             }
         }
+    }
+
+    _now() {
+        return globalThis.performance?.now?.() ?? Date.now();
+    }
+
+    _roundMs(value) {
+        return Number.isFinite(value) ? Math.round(value * 10) / 10 : null;
     }
 
     _numericLiteral(value) {

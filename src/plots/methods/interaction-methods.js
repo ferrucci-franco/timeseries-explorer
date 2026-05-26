@@ -152,6 +152,12 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     const target = targetInfo.limit;
     const [t0, t1] = range.map(v => this._coerceAxisValue(v));
     if (!Number.isFinite(t0) || !Number.isFinite(t1)) return Promise.resolve();
+    const perf = this._beginLazyPerf(panelId, plot, {
+        token,
+        range: [t0, t1],
+        target,
+        capped: !!targetInfo.capped,
+    });
 
     let lazyQueryCount = 0;
     const previewResults = [];
@@ -165,8 +171,10 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             // Mixed lazy/eager: fall back to the sync path for this trace.
             const built = this._buildTimeTrace(t, range);
             if (built) immediateResults.push({ idx, x: built.x, y: built.y });
+            if (perf) perf.eagerTraces++;
             return;
         }
+        if (perf) perf.lazyTraces++;
 
         // Density heuristic: if the in-memory overview already has enough
         // resolution in the visible range, skip the DuckDB round-trip. The
@@ -183,6 +191,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
                 // Overview is enough — use the sync path (slice + downsample in JS).
                 const built = this._buildTimeTrace(t, range);
                 if (built) immediateResults.push({ idx, x: built.x, y: built.y });
+                if (perf) perf.overviewTraces++;
                 return;
             }
         }
@@ -190,6 +199,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         const cached = this._lazyCacheResult(t, idx, t0, t1, target);
         if (cached) {
             immediateResults.push(cached);
+            if (perf) perf.traceCacheHits++;
             return;
         }
 
@@ -202,6 +212,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         const queryTarget = this._lazyExpandedTarget(target, queryRange, t0, t1);
         const preview = this._renderedTracePreview(plot, idx, t0, t1, target);
         if (preview) previewResults.push({ idx, x: preview.x, y: preview.y });
+        if (perf && preview) perf.previewTraces++;
 
         const groupKey = [
             t.fileId,
@@ -229,23 +240,49 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     if (lazyQueryCount === 0) {
         const settledNoQuery = Promise.resolve(immediateResults);
         this._lastLazyRefresh = settledNoQuery;
+        this._finishLazyPerf(perf, { status: 'cache-or-overview', results: immediateResults });
         return settledNoQuery;
     }
 
     const queryGroupsList = [...queryGroups.values()];
+    if (perf) {
+        perf.queryGroups = queryGroupsList.length;
+        perf.queries = lazyQueryCount;
+        perf.setupMs = this._roundPerfMs(this._perfNow() - perf.startedAt);
+    }
     this._rememberActiveLazySources(panelId, queryGroupsList.map(group => group.source));
     const settled = this._scheduleLazyDetail(panelId, async () => {
+        if (perf) perf.debounceMs = this._roundPerfMs(this._perfNow() - perf.startedAt - (perf.setupMs || 0));
         const results = [];
         for (const group of queryGroupsList) {
             if (this._zoomTokens.get(panelId) !== token) break;
             results.push(await this._runLazyDetailGroup(panelId, token, plot, group, t0, t1, target));
         }
         return results;
-    }).then(results => {
-        if (this._zoomTokens.get(panelId) !== token) return results;
-        const flat = results.flatMap(result => Array.isArray(result) ? result : (result ? [result] : []));
-        this._applyBatchedTimeseriesRestyle(plot, flat);
+    }).then(async results => {
+        if (this._zoomTokens.get(panelId) !== token) {
+            this._finishLazyPerf(perf, { status: 'stale', results: results.flat?.() || [] });
+            return results;
+        }
+        const flat = [];
+        for (const result of results) {
+            if (Array.isArray(result)) {
+                if (perf && result._omvPerf) perf.groupPerf.push(result._omvPerf);
+                flat.push(...result);
+            } else if (result) {
+                flat.push(result);
+            }
+        }
+        const restyleStartedAt = this._perfNow();
+        await this._applyBatchedTimeseriesRestyle(plot, flat);
+        if (perf) {
+            perf.restyleMs = this._roundPerfMs(this._perfNow() - restyleStartedAt);
+            this._finishLazyPerf(perf, { status: 'loaded', results: flat });
+        }
         return flat;
+    }).catch(err => {
+        this._finishLazyPerf(perf, { status: err?.name === 'AbortError' ? 'cancelled' : 'error', error: err });
+        throw err;
     });
     // Expose the in-flight promise so benchmarks (or tests) can await it.
     this._lastLazyRefresh = settled;
@@ -319,6 +356,7 @@ proto._cancelActiveLazySources = function(panelId) {
 
 proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target) {
     const varNames = group.items.map(item => item.trace.varName);
+    const startedAt = this._perfNow();
     const fetch = group.source?.getColumnsRange
         ? group.source.getColumnsRange(group.data, varNames, group.queryRange[0], group.queryRange[1], group.queryTarget)
         : Promise.all(varNames.map(varName =>
@@ -328,10 +366,10 @@ proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target
             yByVar: new Map(series.map((entry, index) => [varNames[index], entry?.y || new Float64Array(0)])),
         }));
 
-    return fetch.then(({ x, yByVar }) => {
+    return fetch.then(({ x, yByVar, _perf }) => {
         if (this._zoomTokens.get(panelId) !== token) return [];
         if (!plot?.div) return [];
-        return group.items.map(({ trace, idx }) => {
+        const mapped = group.items.map(({ trace, idx }) => {
             if (!plot.traces[idx]) return null;
             const y = yByVar?.get(trace.varName);
             if (!y) return null;
@@ -346,6 +384,14 @@ proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target
             };
             return this._lazyCacheResult(trace, idx, t0, t1, target) || { idx, x, y };
         });
+        mapped._omvPerf = {
+            ...(_perf || {}),
+            elapsedMs: this._roundPerfMs(this._perfNow() - startedAt),
+            traces: group.items.length,
+            outputRows: x?.length || 0,
+            queryTarget: group.queryTarget,
+        };
+        return mapped;
     }).catch(err => {
         if (this._zoomTokens.get(panelId) !== token) return [];
         console.warn('[duckdb] grouped viewport query failed; keeping current lazy view:', err?.message || err);
@@ -451,15 +497,72 @@ proto._lazyExpandedTarget = function(target, queryRange, t0, t1) {
 };
 
 proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
-    if (!plot?.div) return;
+    if (!plot?.div) return Promise.resolve();
     const valid = results
         .filter(result => result && Number.isInteger(result.idx) && plot.traces[result.idx])
         .sort((a, b) => a.idx - b.idx);
-    if (!valid.length) return;
-    Plotly.restyle(plot.div, {
+    if (!valid.length) return Promise.resolve();
+    return Plotly.restyle(plot.div, {
         x: valid.map(result => result.x),
         y: valid.map(result => result.y),
     }, valid.map(result => result.idx));
+};
+
+proto._beginLazyPerf = function(panelId, plot, base = {}) {
+    if (!this._lazyPerfEnabled()) return null;
+    return {
+        ...base,
+        panelId,
+        traces: plot?.traces?.length || 0,
+        lazyTraces: 0,
+        eagerTraces: 0,
+        overviewTraces: 0,
+        traceCacheHits: 0,
+        previewTraces: 0,
+        queryGroups: 0,
+        queries: 0,
+        groupPerf: [],
+        startedAt: this._perfNow(),
+    };
+};
+
+proto._finishLazyPerf = function(perf, { status, results = [], error = null } = {}) {
+    if (!perf) return;
+    if (perf.finished) return;
+    perf.finished = true;
+    const finished = {
+        ...perf,
+        status,
+        resultTraces: results.filter(Boolean).length,
+        outputPoints: results.reduce((sum, result) => sum + (result?.x?.length || 0), 0),
+        totalMs: this._roundPerfMs(this._perfNow() - perf.startedAt),
+    };
+    if (error) finished.error = error?.message || String(error);
+    delete finished.startedAt;
+    this._lastLazyPerf = finished;
+    if (perf.panelId && this.plots?.has(perf.panelId)) {
+        this.plots.get(perf.panelId)._lastLazyPerf = finished;
+    }
+    console.debug('[omv-perf] lazy detail', finished);
+    if (finished.groupPerf?.length && console.table) {
+        console.table(finished.groupPerf);
+    }
+};
+
+proto._lazyPerfEnabled = function() {
+    try {
+        return globalThis.localStorage?.getItem('omv_perf_debug') === '1';
+    } catch (_) {
+        return false;
+    }
+};
+
+proto._perfNow = function() {
+    return globalThis.performance?.now?.() ?? Date.now();
+};
+
+proto._roundPerfMs = function(value) {
+    return Number.isFinite(value) ? Math.round(value * 10) / 10 : null;
 };
 
 proto._lazyTimeseriesTarget = function() {
