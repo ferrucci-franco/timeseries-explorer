@@ -1490,7 +1490,7 @@ class PlotManager {
 
     _canAddTraceWithFileTime(plot, fileId, options = {}) {
         if (!plot || !fileId) return true;
-        if (plot.mode === 'state-anim') return true;
+        if (!this._plotModeRequiresCompatibleTime(plot.mode)) return true;
         const primaryFileId = this._primaryTimeFileId(plot);
         if (!primaryFileId || primaryFileId === fileId) return true;
         const sameKind = this._timeKind(primaryFileId) === this._timeKind(fileId);
@@ -1503,6 +1503,10 @@ class PlotManager {
             );
         }
         return false;
+    }
+
+    _plotModeRequiresCompatibleTime(mode) {
+        return mode === 'timeseries' || mode === 'phase2dt';
     }
 
     _padRange(min, max, pad = 0.05) {

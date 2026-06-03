@@ -813,9 +813,11 @@ proto._onHover = function(sourcePanelId, eventData) {
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                         if (!xv || !yv) return;
                         const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                        const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
+                        if (!Number.isFinite(traceXVal)) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                        const tidx = this._findTimeIdx(tdata, traceXVal);
                         const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
                         const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
                         Plotly.restyle(plot.div, { x: [[xdata[tidx]]], y: [[ydata[tidx]]], visible: true }, [midx]);
@@ -829,7 +831,9 @@ proto._onHover = function(sourcePanelId, eventData) {
                     const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                     if (xv && yv) {
                         const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
+                        if (!Number.isFinite(traceXVal)) return;
+                        const tidx = this._findTimeIdx(tdata, traceXVal);
                         const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
                         const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
                         const xu = this._extractUnit(xv.description), yu = this._extractUnit(yv.description);
@@ -848,12 +852,14 @@ proto._onHover = function(sourcePanelId, eventData) {
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                         if (!xv || !yv) return;
                         const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                        const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
+                        if (!Number.isFinite(traceXVal)) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                        const tidx = this._findTimeIdx(tdata, traceXVal);
                         const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
                         const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
-                        Plotly.restyle(plot.div, { x: [[this._plotlyTimeValue(pt2.fileId, xVal, this._getTimeVar(pt2.fileId))]], y: [[xdata[tidx]]], z: [[ydata[tidx]]], visible: true }, [midx]);
+                        Plotly.restyle(plot.div, { x: [[this._plotlyTimeValue(pt2.fileId, traceXVal, this._getTimeVar(pt2.fileId))]], y: [[xdata[tidx]]], z: [[ydata[tidx]]], visible: true }, [midx]);
                     });
                 }
                 const lines = [`<b>t = ${this._escapeHTML(formatHoverTime(targetFid, xVal))}${targetTimeSuffix}</b>`];
@@ -864,7 +870,9 @@ proto._onHover = function(sourcePanelId, eventData) {
                     const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                     if (xv && yv) {
                         const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
+                        if (!Number.isFinite(traceXVal)) return;
+                        const tidx = this._findTimeIdx(tdata, traceXVal);
                         const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
                         const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
                         const xu = this._extractUnit(xv.description), zu = this._extractUnit(yv.description);
@@ -883,9 +891,11 @@ proto._onHover = function(sourcePanelId, eventData) {
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
                         if (!xv || !yv || !zv) return;
                         const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                        const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
+                        if (!Number.isFinite(traceXVal)) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
+                        const tidx = this._findTimeIdx(tdata, traceXVal);
                         const xdata = this._getTransformedVariableData(pt2.fileId, pt2.x);
                         const ydata = this._getTransformedVariableData(pt2.fileId, pt2.y);
                         const zdata = this._getTransformedVariableData(pt2.fileId, pt2.z);
@@ -900,7 +910,9 @@ proto._onHover = function(sourcePanelId, eventData) {
                     const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
                     if (xv && yv && zv) {
                         const tdata = this._getTransformedTimeData(pt2.fileId);
-                        const tidx = this._findTimeIdx(tdata, xVal);
+                        const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
+                        if (!Number.isFinite(traceXVal)) return;
+                        const tidx = this._findTimeIdx(tdata, traceXVal);
                         [xv, yv, zv].forEach((v, vi) => {
                             const name = [pt2.x, pt2.y, pt2.z][vi];
                             const dataName = [pt2.x, pt2.y, pt2.z][vi];
