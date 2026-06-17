@@ -22,7 +22,7 @@ const i18n = {
      * Get a translation key
      */
     t(key) {
-        return this.translations[this.currentLang][key] || key;
+        return this.translations[this.currentLang][key] || this.translations.en?.[key] || key;
     },
 
     /**

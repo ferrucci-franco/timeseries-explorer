@@ -99,9 +99,10 @@ class PlotManager {
         }
     }
 
-    updateFileData(fileId, newData) {
+    updateFileData(fileId, newData, options = {}) {
         const entry = this.files.get(fileId);
         if (!entry) return;
+        const previousData = entry.data;
         entry.data = newData;
         entry._transformCache = null;
         // Rebuild every panel that has at least one trace from this file
@@ -109,7 +110,12 @@ class PlotManager {
             const uses = plot.traces.some(t => t.fileId === fileId) ||
                          plot.phaseTraces.some(t => t.fileId === fileId) ||
                          plot.stateSlots?.fileId === fileId;
-            if (uses) this._rebuildPanel(panelId, { preserveView: true });
+            if (!uses) continue;
+            const captured = this._capturePlotView(plot);
+            const restoreView = options.liveAppend
+                ? this._liveAppendRestoreView(plot, fileId, captured, previousData, newData)
+                : captured;
+            this._rebuildPanel(panelId, { restoreView });
         }
     }
 
@@ -423,6 +429,7 @@ class PlotManager {
         plot.stateSlots   = { x: [], dx: [], fileId: null };
         plot.equalAspect2D = false;
         plot.cursors = this._defaultCursors();
+        plot.liveView = this._defaultLiveViewPolicy(mode);
         plot.animFrame    = 0;
 
         // Update UI — re-inject all buttons so view labels reflect the new mode
@@ -1722,7 +1729,130 @@ class PlotManager {
             animSpeed:    1,
             animRAF:      null,
             autoPlayOnRender: false,
+            liveView: this._defaultLiveViewPolicy('timeseries'),
         };
+    }
+
+    _defaultLiveViewPolicy(mode = 'timeseries') {
+        if (mode === 'timeseries') {
+            return { xMode: 'pin-start', windowSeconds: 60, yMode: 'expand' };
+        }
+        return { viewMode: 'keep' };
+    }
+
+    _normalizeLiveViewPolicy(plot) {
+        if (!plot) return this._defaultLiveViewPolicy();
+        const current = plot.liveView || {};
+        if (plot.mode === 'timeseries') {
+            const xMode = ['autoscale', 'sliding', 'pin-start', 'keep'].includes(current.xMode)
+                ? current.xMode
+                : 'pin-start';
+            const yMode = ['autoscale', 'expand', 'keep'].includes(current.yMode)
+                ? current.yMode
+                : 'expand';
+            const windowSeconds = Number.isFinite(Number(current.windowSeconds)) && Number(current.windowSeconds) > 0
+                ? Number(current.windowSeconds)
+                : 60;
+            return { xMode, yMode, windowSeconds };
+        }
+        return {
+            viewMode: current.viewMode === 'autoscale' ? 'autoscale' : 'keep',
+        };
+    }
+
+    setLiveViewPolicy(panelId, patch = {}) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        plot.liveView = { ...this._normalizeLiveViewPolicy(plot), ...patch };
+        this._refreshActionBtns(panelId);
+    }
+
+    useCurrentZoomForLiveWindow(panelId) {
+        const plot = this.plots.get(panelId);
+        const view = this._capturePlotView(plot);
+        if (!plot || plot.mode !== 'timeseries' || !view?.xRange) return;
+        const start = this._coerceAxisValue(view.xRange[0]);
+        const end = this._coerceAxisValue(view.xRange[1]);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+        const axis = plot.div?._fullLayout?.xaxis;
+        const divisor = axis?.type === 'date' ? 1000 : 1;
+        plot.liveView = {
+            ...this._normalizeLiveViewPolicy(plot),
+            xMode: 'sliding',
+            windowSeconds: Math.max((end - start) / divisor, 1e-9),
+        };
+        this._refreshActionBtns(panelId);
+    }
+
+    _liveAppendRestoreView(plot, fileId, captured, previousData, newData) {
+        if (!plot || !captured) return null;
+        const policy = this._normalizeLiveViewPolicy(plot);
+        if (plot.mode === 'timeseries') {
+            return this._timeseriesLiveAppendView(plot, fileId, captured, policy);
+        }
+        if (plot.mode === 'phase2d') {
+            return policy.viewMode === 'autoscale' ? null : captured;
+        }
+        return captured;
+    }
+
+    _timeseriesLiveAppendView(plot, fileId, captured, policy) {
+        const visibleTraces = plot.traces.filter(t => this._isVisible(t));
+        if (!visibleTraces.length) return captured;
+
+        const xArrays = [];
+        const yArrays = [];
+        for (const trace of visibleTraces) {
+            const data = this.files.get(trace.fileId)?.data;
+            const variable = data?.variables?.[trace.varName];
+            if (!variable || variable.kind === 'parameter') continue;
+            xArrays.push(this._getTransformedTimeData(trace.fileId));
+            yArrays.push(this._getTransformedVariableData(trace.fileId, trace.varName));
+        }
+
+        const xExtent = this._finiteExtent(xArrays);
+        const yExtent = this._finiteExtent(yArrays);
+        const nextView = { ...captured };
+        const primaryFileId = visibleTraces[0]?.fileId || fileId;
+        const timeVar = this._getTimeVar(primaryFileId);
+        const isCalendarAxis = this._timeDisplayModeForVar(primaryFileId, timeVar) === 'calendar';
+        const formatX = range => isCalendarAxis ? this._plotlyTimeArray(primaryFileId, range, timeVar) : range;
+
+        if (policy.xMode === 'autoscale') {
+            nextView.xRange = null;
+        } else if (xExtent) {
+            const end = xExtent.max;
+            if (policy.xMode === 'sliding') {
+                const seconds = Number(policy.windowSeconds) || 60;
+                const width = isCalendarAxis ? seconds * 1000 : seconds;
+                nextView.xRange = formatX([end - width, end]);
+            } else if (policy.xMode === 'pin-start') {
+                const capturedStart = this._coerceAxisValue(captured.xRange?.[0]);
+                const start = Number.isFinite(capturedStart) ? capturedStart : xExtent.min;
+                nextView.xRange = formatX([start, end]);
+            } else {
+                nextView.xRange = captured.xRange;
+            }
+        }
+
+        if (policy.yMode === 'autoscale') {
+            nextView.yRange = null;
+        } else if (policy.yMode === 'expand' && yExtent) {
+            const oldRange = captured.yRange?.map(Number);
+            if (oldRange?.every(Number.isFinite)) {
+                const min = Math.min(oldRange[0], yExtent.min);
+                const max = Math.max(oldRange[1], yExtent.max);
+                nextView.yRange = min === oldRange[0] && max === oldRange[1]
+                    ? captured.yRange
+                    : this._padRange(min, max);
+            } else {
+                nextView.yRange = this._padRange(yExtent.min, yExtent.max);
+            }
+        } else {
+            nextView.yRange = captured.yRange;
+        }
+
+        return nextView;
     }
 
     _getTimeVar(fileId = this.activeFileId) {

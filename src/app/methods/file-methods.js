@@ -835,6 +835,7 @@ proto._renderFilesList = function() {
         entry.appendChild(transformBtn);
         entry.appendChild(closeBtn);
         item.appendChild(entry);
+        item.appendChild(this._renderLiveUpdatePanel(fileId, entryData));
         if (this._expandedFileTransforms.has(fileId)) {
             item.appendChild(this._renderFileTransformPanel(fileId, entryData));
         }

@@ -164,6 +164,7 @@ proto._capturePlotSessions = function() {
             stateConfig: this._cloneSerializable(plot.stateConfig),
             projection: plot.projection || 'orthographic',
             equalAspect2D: !!plot.equalAspect2D,
+            liveView: this._cloneSerializable(plot.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode)),
             cursors: this._cloneSerializable(plot.cursors || this.plotManager._defaultCursors()),
             showCameraOverlay: !!plot.showCameraOverlay,
             homeCamera: this._cloneSerializable(plot.homeCamera),
@@ -420,6 +421,7 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.stateConfig = { ...plot.stateConfig, ...(saved.stateConfig || {}) };
         plot.projection = saved.projection || 'orthographic';
         plot.equalAspect2D = !!saved.equalAspect2D;
+        plot.liveView = this._cloneSerializable(saved.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode));
         plot.cursors = this._cloneSerializable(saved.cursors || this.plotManager._defaultCursors());
         plot.showCameraOverlay = !!saved.showCameraOverlay;
         plot.homeCamera = this._cloneSerializable(saved.homeCamera);
