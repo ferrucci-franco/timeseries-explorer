@@ -6,6 +6,53 @@ const LOCAL_API_BASE = '/__omv_local__';
 export function installLiveUpdateMethods(TargetClass) {
     const proto = TargetClass.prototype;
 
+proto._initLiveUpdateControls = function() {
+    const toggle = document.getElementById('live-update-file');
+    const menuBtn = document.getElementById('live-update-menu-btn');
+    const menu = document.getElementById('live-update-menu');
+    if (!toggle || !menuBtn || !menu) return;
+
+    toggle.addEventListener('click', () => {
+        const fileId = this.activeFileId;
+        if (!fileId) return;
+        this.toggleLiveUpdate(fileId);
+    });
+
+    const close = () => {
+        menu.hidden = true;
+        menuBtn.setAttribute('aria-expanded', 'false');
+    };
+    const open = () => {
+        this._renderLiveUpdateTopBarMenu(menu);
+        menu.hidden = false;
+        menuBtn.setAttribute('aria-expanded', 'true');
+    };
+
+    menuBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        menu.hidden ? open() : close();
+    });
+    menu.addEventListener('click', event => event.stopPropagation());
+    document.addEventListener('click', event => {
+        if (!menu.hidden && !menu.contains(event.target) && event.target !== menuBtn && !menuBtn.contains(event.target)) close();
+    });
+
+    this._updateLiveUpdateTopBar();
+};
+
+proto._updateLiveUpdateTopBar = function() {
+    const toggle = document.getElementById('live-update-file');
+    const menuBtn = document.getElementById('live-update-menu-btn');
+    if (!toggle || !menuBtn) return;
+    const entry = this.activeFileId ? this.files.get(this.activeFileId) : null;
+    const state = this.activeFileId ? this._ensureLiveUpdateState(this.activeFileId) : null;
+    const hasCandidate = !!entry && this._isLiveUpdateCandidate(entry);
+    toggle.disabled = !hasCandidate;
+    menuBtn.disabled = !entry;
+    toggle.classList.toggle('active', !!state?.enabled);
+    toggle.title = state?.message || (entry ? this._liveUpdateSupportMessage(entry) : i18n.t('liveUpdateTitle'));
+};
+
 proto._ensureLiveUpdateState = function(fileId) {
     const entry = this.files.get(fileId);
     if (!entry) return null;
@@ -61,6 +108,10 @@ proto._startLiveUpdate = async function(fileId) {
     }
 
     if (!this._liveUpdateHasReadableSource(entry)) {
+        if (!await this._canUseLocalLiveApi()) {
+            await Modal.alert(i18n.t('liveUpdateTitle'), i18n.t('liveUpdateNeedsLauncher'), { icon: 'LIVE' });
+            return;
+        }
         const path = await this._promptLiveUpdatePath(entry, state.localPath || '');
         if (!path) return;
         state.localPath = path;
@@ -72,6 +123,7 @@ proto._startLiveUpdate = async function(fileId) {
     state.lastRows = this._liveUpdateRowCount(fileId);
     state.lastFingerprint = this._fileFingerprint(entry.file);
     this._renderFilesList();
+    this._updateLiveUpdateTopBar();
     await this._pollLiveUpdate(fileId);
 };
 
@@ -85,6 +137,7 @@ proto._stopLiveUpdate = function(fileId, status = 'idle', message = '') {
     state.status = status;
     state.message = message;
     this._renderFilesList();
+    this._updateLiveUpdateTopBar();
 };
 
 proto._scheduleLiveUpdate = function(fileId) {
@@ -149,6 +202,7 @@ proto._pollLiveUpdate = async function(fileId) {
         state.enabled = false;
     } finally {
         this._renderFilesList();
+        this._updateLiveUpdateTopBar();
         this._scheduleLiveUpdate(fileId);
     }
 };
@@ -166,10 +220,24 @@ proto._readLiveUpdateFile = async function(entry) {
         const detail = await response.text().catch(() => '');
         throw new Error(detail || i18n.t('liveUpdateLocalServerUnavailable'));
     }
+    if (!response.headers.get('x-omv-last-modified')) {
+        throw new Error(i18n.t('liveUpdateLocalServerUnavailable'));
+    }
     const blob = await response.blob();
     const name = path.split(/[\\/]/).filter(Boolean).pop() || this._fileDisplayName(entry);
     const lastModified = Number(response.headers.get('x-omv-last-modified')) || Date.now();
     return new File([blob], name, { lastModified, type: response.headers.get('content-type') || 'text/csv' });
+};
+
+proto._canUseLocalLiveApi = async function() {
+    try {
+        const response = await fetch(`${LOCAL_API_BASE}/status`, { cache: 'no-store' });
+        if (!response.ok) return false;
+        const status = await response.json();
+        return status?.ok === true && status?.app === 'openmodelica-viewer';
+    } catch {
+        return false;
+    }
 };
 
 proto._validateLiveUpdateData = function(previousData, nextData) {
@@ -265,46 +333,120 @@ proto._promptLiveUpdatePath = function(entry, initialValue = '') {
     });
 };
 
-proto._renderLiveUpdatePanel = function(fileId, entryData) {
-    const state = this._ensureLiveUpdateState(fileId);
-    const panel = document.createElement('div');
-    panel.className = 'live-update-panel';
-    panel.addEventListener('click', event => event.stopPropagation());
+proto._renderLiveUpdateTopBarMenu = function(menu) {
+    menu.innerHTML = '';
+    const fileId = this.activeFileId;
+    const entry = fileId ? this.files.get(fileId) : null;
+    const state = fileId ? this._ensureLiveUpdateState(fileId) : null;
 
-    const row = document.createElement('div');
-    row.className = 'live-update-row';
+    const addStatic = (label, className = '') => {
+        const row = document.createElement('div');
+        row.className = `example-menu-item-row live-update-menu-row ${className}`.trim();
+        const text = document.createElement('span');
+        text.className = 'example-name';
+        text.textContent = label;
+        row.appendChild(text);
+        menu.appendChild(row);
+        return row;
+    };
+    const addHeading = label => {
+        const row = addStatic(label, 'live-update-menu-heading');
+        return row;
+    };
+    const addAction = (label, active, handler) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'example-menu-item live-update-menu-action' + (active ? ' active' : '');
+        const name = document.createElement('span');
+        name.className = 'example-name';
+        name.textContent = label;
+        item.appendChild(name);
+        item.addEventListener('click', () => {
+            handler();
+            this._renderLiveUpdateTopBarMenu(menu);
+            this._updateLiveUpdateTopBar();
+        });
+        menu.appendChild(item);
+    };
 
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = `live-update-toggle ${state.enabled ? 'active' : ''}`;
-    toggle.textContent = state.enabled ? i18n.t('liveUpdateStop') : i18n.t('liveUpdateStart');
-    toggle.disabled = !this._isLiveUpdateCandidate(entryData);
-    toggle.addEventListener('click', () => this.toggleLiveUpdate(fileId));
+    addHeading(i18n.t('liveUpdateTitle'));
+    if (!entry) {
+        addStatic(i18n.t('liveUpdateNoActiveFile'), 'disabled');
+    } else {
+        addStatic(this._fileDisplayName(entry));
+        const canLive = this._isLiveUpdateCandidate(entry);
+        addAction(state?.enabled ? i18n.t('liveUpdateStop') : i18n.t('liveUpdateStart'), !!state?.enabled, () => this.toggleLiveUpdate(fileId));
+        if (!canLive) {
+            addStatic(i18n.t('liveUpdateCsvOnlyShort'), 'disabled');
+        }
 
-    const label = document.createElement('label');
-    label.className = 'live-update-interval';
-    const labelText = document.createElement('span');
-    labelText.textContent = i18n.t('liveUpdateEvery');
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.min = '0.5';
-    input.step = '0.5';
-    input.value = String(state.intervalSec || 2);
-    input.addEventListener('change', () => {
-        state.intervalSec = Math.max(0.5, Number(input.value) || 2);
-        input.value = String(state.intervalSec);
-        this._scheduleLiveUpdate(fileId);
+        const intervalRow = addStatic(i18n.t('liveUpdateEvery'), 'live-update-menu-interval');
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0.5';
+        input.step = '0.5';
+        input.value = String(state?.intervalSec || 2);
+        input.disabled = !canLive;
+        input.addEventListener('change', () => {
+            state.intervalSec = Math.max(0.5, Number(input.value) || 2);
+            input.value = String(state.intervalSec);
+            this._scheduleLiveUpdate(fileId);
+        });
+        intervalRow.appendChild(input);
+
+        const source = state?.message || this._liveUpdateSupportMessage(entry);
+        addStatic(source, `live-update-menu-status ${state?.status || 'idle'}`);
+    }
+
+    const tsPolicy = this.plotManager._normalizeLiveViewPolicy({
+        mode: 'timeseries',
+        liveView: this.plotManager.liveViewDefaults?.timeseries,
     });
-    label.append(labelText, input);
+    addHeading(i18n.t('liveViewX'));
+    addAction(i18n.t('liveViewAutoscale'), tsPolicy.xMode === 'autoscale', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'autoscale' }));
+    addAction(i18n.t('liveViewPinStart'), tsPolicy.xMode === 'pin-start', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'pin-start' }));
+    addAction(`${i18n.t('liveViewSliding')} - ${i18n.t('liveViewCurrentZoom')}`, false, () => this._setGlobalLiveWindowFromCurrentZoom());
+    [
+        [10, i18n.t('liveView10s')],
+        [30, i18n.t('liveView30s')],
+        [60, i18n.t('liveView1m')],
+        [600, i18n.t('liveView10m')],
+    ].forEach(([seconds, label]) => {
+        addAction(`${i18n.t('liveViewSliding')} - ${label}`,
+            tsPolicy.xMode === 'sliding' && Number(tsPolicy.windowSeconds) === seconds,
+            () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'sliding', windowSeconds: seconds }));
+    });
 
-    row.append(toggle, label);
+    addHeading(i18n.t('liveViewY'));
+    addAction(i18n.t('liveViewExpandY'), tsPolicy.yMode === 'expand', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'expand' }));
+    addAction(i18n.t('liveViewAutoscale'), tsPolicy.yMode === 'autoscale', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'autoscale' }));
+    addAction(i18n.t('liveViewKeep'), tsPolicy.yMode === 'keep', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'keep' }));
 
-    const status = document.createElement('div');
-    status.className = `live-update-status ${state.status || 'idle'}`;
-    status.textContent = state.message || this._liveUpdateSupportMessage(entryData);
+    const phasePolicy = this.plotManager._normalizeLiveViewPolicy({
+        mode: 'phase2d',
+        liveView: this.plotManager.liveViewDefaults?.phase,
+    });
+    addHeading(i18n.t('liveViewView'));
+    addAction(i18n.t('liveViewKeep'), phasePolicy.viewMode !== 'autoscale', () => this.plotManager.setGlobalLiveViewPolicy('phase', { viewMode: 'keep' }));
+    addAction(i18n.t('liveViewAutoscale'), phasePolicy.viewMode === 'autoscale', () => this.plotManager.setGlobalLiveViewPolicy('phase', { viewMode: 'autoscale' }));
+};
 
-    panel.append(row, status);
-    return panel;
+proto._setGlobalLiveWindowFromCurrentZoom = function() {
+    for (const [panelId, plot] of this.plotManager.plots) {
+        if (plot.mode !== 'timeseries') continue;
+        const view = this.plotManager._capturePlotView(plot);
+        if (!view?.xRange) continue;
+        const start = this.plotManager._coerceAxisValue(view.xRange[0]);
+        const end = this.plotManager._coerceAxisValue(view.xRange[1]);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+        const axis = plot.div?._fullLayout?.xaxis;
+        const seconds = (end - start) / (axis?.type === 'date' ? 1000 : 1);
+        if (Number.isFinite(seconds) && seconds > 0) {
+            this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'sliding', windowSeconds: seconds });
+            return true;
+        }
+    }
+    return false;
 };
 
 proto._liveUpdateSupportMessage = function(entry) {

@@ -192,6 +192,7 @@ proto.initEventListeners = function() {
         reloadModeToggle.addEventListener('change', (e) => this._setReloadAsNewVersionMode(e.target.checked));
     }
     this._applyReloadModeUI();
+    this._initLiveUpdateControls?.();
 
     this._initExampleMenu();
     this._initExtraMenu();

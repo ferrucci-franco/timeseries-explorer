@@ -2319,8 +2319,6 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     }
 
     // Compare (overlay traces from other files) — left of CSV
-    this._appendLiveViewButton(panelId, toolbar, plot);
-
     const compareBtn = document.createElement('button');
     compareBtn.className = 'layout-toolbar-btn panel-action-btn compare-files-btn';
     compareBtn.textContent = '⧉';
@@ -2380,97 +2378,6 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         this._clearPanel(panelId);
     });
     toolbar.appendChild(clearBtn);
-};
-
-proto._appendLiveViewButton = function(panelId, toolbar, plot) {
-    if (!plot || plot.mode === 'state-anim') return;
-
-    const wrap = document.createElement('div');
-    wrap.className = 'live-view-menu-wrap panel-action-btn';
-
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'layout-toolbar-btn live-view-btn';
-    btn.textContent = 'LIVE';
-    btn.title = i18n.t('liveView');
-    btn.disabled = !this._hasContent(plot);
-
-    const menu = document.createElement('div');
-    menu.className = 'live-view-menu';
-    menu.hidden = true;
-
-    const close = () => {
-        menu.hidden = true;
-        btn.setAttribute('aria-expanded', 'false');
-    };
-    const open = () => {
-        this._renderLiveViewMenu(panelId, plot, menu);
-        menu.hidden = false;
-        btn.setAttribute('aria-expanded', 'true');
-    };
-
-    btn.addEventListener('click', event => {
-        event.stopPropagation();
-        menu.hidden ? open() : close();
-    });
-    menu.addEventListener('click', event => event.stopPropagation());
-    document.addEventListener('click', event => {
-        if (!menu.hidden && !wrap.contains(event.target)) close();
-    });
-
-    wrap.append(btn, menu);
-    toolbar.appendChild(wrap);
-};
-
-proto._renderLiveViewMenu = function(panelId, plot, menu) {
-    menu.innerHTML = '';
-    const policy = this._normalizeLiveViewPolicy(plot);
-
-    const addHeading = text => {
-        const heading = document.createElement('div');
-        heading.className = 'live-view-heading';
-        heading.textContent = text;
-        menu.appendChild(heading);
-    };
-
-    const addOption = (label, active, onClick) => {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'live-view-option' + (active ? ' active' : '');
-        item.textContent = label;
-        item.addEventListener('click', () => {
-            onClick();
-            this._renderLiveViewMenu(panelId, plot, menu);
-        });
-        menu.appendChild(item);
-    };
-
-    if (plot.mode === 'timeseries') {
-        addHeading(i18n.t('liveViewX'));
-        addOption(i18n.t('liveViewAutoscale'), policy.xMode === 'autoscale', () => this.setLiveViewPolicy(panelId, { xMode: 'autoscale' }));
-        addOption(i18n.t('liveViewPinStart'), policy.xMode === 'pin-start', () => this.setLiveViewPolicy(panelId, { xMode: 'pin-start' }));
-        addOption(`${i18n.t('liveViewSliding')} - ${i18n.t('liveViewCurrentZoom')}`, policy.xMode === 'sliding', () => this.useCurrentZoomForLiveWindow(panelId));
-        [
-            [10, i18n.t('liveView10s')],
-            [30, i18n.t('liveView30s')],
-            [60, i18n.t('liveView1m')],
-            [600, i18n.t('liveView10m')],
-        ].forEach(([seconds, label]) => {
-            addOption(`${i18n.t('liveViewSliding')} - ${label}`,
-                policy.xMode === 'sliding' && Number(policy.windowSeconds) === seconds,
-                () => this.setLiveViewPolicy(panelId, { xMode: 'sliding', windowSeconds: seconds }));
-        });
-
-        addHeading(i18n.t('liveViewY'));
-        addOption(i18n.t('liveViewExpandY'), policy.yMode === 'expand', () => this.setLiveViewPolicy(panelId, { yMode: 'expand' }));
-        addOption(i18n.t('liveViewAutoscale'), policy.yMode === 'autoscale', () => this.setLiveViewPolicy(panelId, { yMode: 'autoscale' }));
-        addOption(i18n.t('liveViewKeep'), policy.yMode === 'keep', () => this.setLiveViewPolicy(panelId, { yMode: 'keep' }));
-        return;
-    }
-
-    addHeading(i18n.t('liveViewView'));
-    addOption(i18n.t('liveViewKeep'), policy.viewMode !== 'autoscale', () => this.setLiveViewPolicy(panelId, { viewMode: 'keep' }));
-    addOption(i18n.t('liveViewAutoscale'), policy.viewMode === 'autoscale', () => this.setLiveViewPolicy(panelId, { viewMode: 'autoscale' }));
 };
 
 proto._updateModeButtons = function(panelEl, activeMode) {

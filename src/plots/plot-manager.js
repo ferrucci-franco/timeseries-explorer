@@ -37,6 +37,10 @@ class PlotManager {
         this.hoverInfoCorner = 'bl';
         this.hoverProximity = true;
         this.mouseWheelZoom = true;
+        this.liveViewDefaults = {
+            timeseries: { xMode: 'pin-start', windowSeconds: 60, yMode: 'expand' },
+            phase: { viewMode: 'keep' },
+        };
         this._hovering      = false;
 
         this.onPanelMount   = (id, el) => this._mountPanel(id, el);
@@ -1735,9 +1739,9 @@ class PlotManager {
 
     _defaultLiveViewPolicy(mode = 'timeseries') {
         if (mode === 'timeseries') {
-            return { xMode: 'pin-start', windowSeconds: 60, yMode: 'expand' };
+            return { ...this.liveViewDefaults.timeseries };
         }
-        return { viewMode: 'keep' };
+        return { ...this.liveViewDefaults.phase };
     }
 
     _normalizeLiveViewPolicy(plot) {
@@ -1765,6 +1769,20 @@ class PlotManager {
         if (!plot) return;
         plot.liveView = { ...this._normalizeLiveViewPolicy(plot), ...patch };
         this._refreshActionBtns(panelId);
+    }
+
+    setGlobalLiveViewPolicy(mode, patch = {}) {
+        const key = mode === 'timeseries' ? 'timeseries' : 'phase';
+        const base = key === 'timeseries'
+            ? this._normalizeLiveViewPolicy({ mode: 'timeseries', liveView: this.liveViewDefaults.timeseries })
+            : this._normalizeLiveViewPolicy({ mode: 'phase2d', liveView: this.liveViewDefaults.phase });
+        this.liveViewDefaults[key] = { ...base, ...patch };
+        for (const [, plot] of this.plots) {
+            if (key === 'timeseries' && plot.mode !== 'timeseries') continue;
+            if (key === 'phase' && plot.mode === 'timeseries') continue;
+            if (plot.mode === 'state-anim') continue;
+            plot.liveView = { ...this._normalizeLiveViewPolicy(plot), ...patch };
+        }
     }
 
     useCurrentZoomForLiveWindow(panelId) {

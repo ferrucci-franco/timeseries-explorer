@@ -773,6 +773,7 @@ proto.setActiveFile = function(fileId) {
     this._clearVariableSelection();
     const d = this.plotManager.files.get(fileId)?.data;
     if (d) this.renderVariablesTree(d.tree);
+    this._updateActionButtons();
     this._updateTopBar();
     this._renderFilesList();
 };
@@ -786,6 +787,7 @@ proto._updateActionButtons = function() {
     document.getElementById('reload-file').disabled  = !hasFiles;
     document.getElementById('auto-zoom').disabled    = !hasFiles;
     document.getElementById('clear-plots').disabled  = !hasFiles;
+    this._updateLiveUpdateTopBar?.();
     const reloadModeToggle = document.getElementById('reload-as-version-toggle');
     const reloadModeSwitch = document.getElementById('reload-as-version-switch');
     if (reloadModeToggle) reloadModeToggle.disabled = !hasFiles;
@@ -835,7 +837,6 @@ proto._renderFilesList = function() {
         entry.appendChild(transformBtn);
         entry.appendChild(closeBtn);
         item.appendChild(entry);
-        item.appendChild(this._renderLiveUpdatePanel(fileId, entryData));
         if (this._expandedFileTransforms.has(fileId)) {
             item.appendChild(this._renderFileTransformPanel(fileId, entryData));
         }

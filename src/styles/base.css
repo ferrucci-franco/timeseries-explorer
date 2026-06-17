@@ -336,6 +336,85 @@ body {
     pointer-events: none;
 }
 
+.live-update-topbar-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.live-update-file-btn .icon {
+    font-size: 0.64rem;
+    font-weight: 800;
+    letter-spacing: 0;
+}
+
+.live-update-file-btn.active {
+    border-color: #2e7d32;
+    background-color: color-mix(in srgb, #2e7d32 18%, var(--bg-primary));
+    color: #1b5e20;
+}
+
+.theme-dark .live-update-file-btn.active {
+    color: #9ad89d;
+}
+
+.live-update-menu-btn {
+    width: 1.8rem;
+    min-width: 1.8rem;
+    padding-inline: 0;
+}
+
+.live-update-topbar-menu {
+    min-width: 260px;
+    max-width: min(340px, 90vw);
+}
+
+.live-update-menu-heading {
+    min-height: auto;
+    padding-block: 0.35rem 0.15rem;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.live-update-menu-action.active {
+    background-color: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
+    color: var(--primary-color);
+    font-weight: 700;
+}
+
+.live-update-menu-interval {
+    gap: 0.5rem;
+}
+
+.live-update-menu-interval input {
+    width: 4rem;
+    padding: 0.2rem 0.3rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.live-update-menu-status {
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    white-space: normal;
+}
+
+.live-update-menu-status.ok {
+    color: #2e7d32;
+}
+
+.theme-dark .live-update-menu-status.ok {
+    color: #9ad89d;
+}
+
+.live-update-menu-status.error {
+    color: var(--danger-color);
+}
+
 /* Example dropdown menu */
 .example-menu-wrap {
     position: relative;
