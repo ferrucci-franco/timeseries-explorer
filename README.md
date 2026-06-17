@@ -66,3 +66,12 @@ npm run build:web
 ```
 
 The published output is generated in `dist/`.
+
+## Portable/offline build
+
+The portable package supports two offline modes:
+
+- Basic mode: open `index.html` directly after extracting the zip.
+- Local live mode: run the platform start script (`start-windows.bat`, `start-linux.sh`, or `start-macos.command`) to serve the same app at `http://127.0.0.1`.
+
+The local live mode bundles the Node runtime from the platform that built the zip, starts a localhost-only server, opens the browser, and enables live update by local file path without requiring users to install Python, Node, npm, or internet access.

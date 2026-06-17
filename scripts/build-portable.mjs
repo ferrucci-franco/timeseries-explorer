@@ -107,6 +107,42 @@ async function buildPortableHtml(packageDir) {
   await fs.writeFile(path.join(packageDir, 'index.html'), portableHtml, 'utf8');
 }
 
+async function copyPortableLauncher(packageDir) {
+  const serverDir = path.join(packageDir, 'server');
+  const runtimeDir = path.join(packageDir, 'runtime');
+  await ensureDir(serverDir);
+  await ensureDir(runtimeDir);
+  await copyFileInto(path.join(projectRoot, 'scripts', 'portable-server.mjs'), path.join(serverDir, 'portable-server.mjs'));
+
+  const runtimeName = process.platform === 'win32' ? 'node.exe' : 'node';
+  await copyFileInto(process.execPath, path.join(runtimeDir, runtimeName));
+
+  const windowsStart = [
+    '@echo off',
+    'setlocal',
+    'cd /d "%~dp0"',
+    'runtime\\node.exe server\\portable-server.mjs',
+    'pause',
+    '',
+  ].join('\r\n');
+  const unixStart = [
+    '#!/bin/sh',
+    'DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
+    'cd "$DIR" || exit 1',
+    'chmod +x ./runtime/node 2>/dev/null || true',
+    './runtime/node ./server/portable-server.mjs',
+    '',
+  ].join('\n');
+
+  await fs.writeFile(path.join(packageDir, 'start-windows.bat'), windowsStart, 'utf8');
+  await fs.writeFile(path.join(packageDir, 'start-linux.sh'), unixStart, 'utf8');
+  await fs.writeFile(path.join(packageDir, 'start-macos.command'), unixStart, 'utf8');
+  if (process.platform !== 'win32') {
+    await fs.chmod(path.join(packageDir, 'start-linux.sh'), 0o755);
+    await fs.chmod(path.join(packageDir, 'start-macos.command'), 0o755);
+  }
+}
+
 async function writeOfflineReadme(packageDir, folderName) {
   const text = [
     `OpenModelica Viewer portable package`,
@@ -117,11 +153,17 @@ async function writeOfflineReadme(packageDir, folderName) {
     ``,
     `Use:`,
     `1. Extract the zip.`,
-    `2. Open index.html with a double click.`,
-    `3. No internet connection is required after extraction.`,
+    `2. Basic offline mode: open index.html with a double click.`,
+    `3. Live offline mode: run the start script for your platform to open http://localhost in your browser:`,
+    `   - Windows: start-windows.bat`,
+    `   - Linux: start-linux.sh`,
+    `   - macOS: start-macos.command`,
+    `4. No internet connection is required after extraction.`,
     ``,
     `Notes:`,
     `- This package is intended for direct file:// opening.`,
+    `- The localhost launcher uses the bundled Node runtime from the platform that built this zip; publish one zip per OS for best results.`,
+    `- The local server binds to 127.0.0.1 and exposes only this app plus a file-read endpoint used for live update paths selected by the user.`,
     `- Example data is included under public/examples/.`,
   ].join('\n');
   await fs.writeFile(path.join(packageDir, 'README-offline.txt'), text, 'utf8');
@@ -162,6 +204,7 @@ async function main() {
   await copyFileInto(path.join(projectRoot, 'styles.css'), path.join(packageDir, 'styles.css'));
   await copyDirInto(path.join(projectRoot, 'src', 'styles'), path.join(packageDir, 'src', 'styles'));
   await copyDirInto(path.join(projectRoot, 'public', 'examples'), path.join(packageDir, 'public', 'examples'));
+  await copyPortableLauncher(packageDir);
   await writeOfflineReadme(packageDir, folderName);
   await createZip(packageDir, zipPath, folderName);
   await publishDownloadArtifacts(zipPath, zipFileName, pkg.version, commit);
