@@ -398,7 +398,12 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         return item;
     };
 
-    const addDiscreteSlider = (section, options, selectedIndex, disabled, handler, customConfig = null) => {
+    const formatOneDecimal = value => {
+        const rounded = Math.max(0.1, Math.round((Number(value) || 0) * 10) / 10);
+        return rounded.toFixed(1);
+    };
+
+    const addDiscreteSlider = (section, options, selectedIndex, disabled, handler) => {
         const sliderWrap = document.createElement('div');
         sliderWrap.className = 'live-update-slider-control';
         const selected = document.createElement('div');
@@ -431,40 +436,6 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         slider.addEventListener('change', () => apply(Number(slider.value)));
         sliderWrap.append(selected, slider);
 
-        if (customConfig) {
-            const customRow = document.createElement('div');
-            customRow.className = 'live-update-custom-row';
-            const customInput = document.createElement('input');
-            customInput.type = 'number';
-            customInput.min = String(customConfig.min || 0.5);
-            customInput.step = String(customConfig.step || 0.5);
-            customInput.value = String(customConfig.value);
-            customInput.disabled = !!disabled;
-            const customUnit = document.createElement('span');
-            customUnit.className = 'live-update-custom-unit';
-            customUnit.textContent = customConfig.unit;
-            customInput.addEventListener('focus', () => {
-                const customIndex = options.findIndex(option => option.custom);
-                if (customIndex >= 0) {
-                    slider.value = String(customIndex);
-                    apply(customIndex);
-                }
-            });
-            customInput.addEventListener('change', () => {
-                const value = Math.max(Number(customInput.min) || 0.5, Number(customInput.value) || Number(customConfig.value) || 1);
-                customInput.value = String(value);
-                customConfig.onChange(value);
-                const customIndex = options.findIndex(option => option.custom);
-                if (customIndex >= 0) {
-                    slider.value = String(customIndex);
-                    updateDisplay(customIndex);
-                }
-                this._updateLiveUpdateTopBar();
-            });
-            customRow.append(customInput, customUnit);
-            sliderWrap.appendChild(customRow);
-        }
-
         updateDisplay(selectedIndex);
         section.appendChild(sliderWrap);
         return sliderWrap;
@@ -481,13 +452,37 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         input.addEventListener('change', () => {
             if (!input.checked) return;
             handler();
+            this._renderLiveUpdateTopBarMenu(menu);
             this._updateLiveUpdateTopBar();
         });
         const text = document.createElement('span');
         text.textContent = label;
         row.append(input, text);
         section.appendChild(row);
-        return row;
+        return { row, input };
+    };
+
+    const addSecondsInput = (section, value, disabled, handler) => {
+        const row = document.createElement('div');
+        row.className = 'live-update-custom-row standalone';
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0.1';
+        input.step = '0.1';
+        input.value = formatOneDecimal(value);
+        input.disabled = !!disabled;
+        const unit = document.createElement('span');
+        unit.className = 'live-update-custom-unit';
+        unit.textContent = i18n.t('liveUpdateCustomSeconds');
+        input.addEventListener('change', () => {
+            const formatted = formatOneDecimal(input.value);
+            input.value = formatted;
+            handler(Number(formatted));
+            this._updateLiveUpdateTopBar();
+        });
+        row.append(input, unit);
+        section.appendChild(row);
+        return input;
     };
 
     const liveSection = addSection(i18n.t('liveUpdateControlsHeading'), i18n.t('liveUpdateControlsDescription'));
@@ -511,10 +506,29 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         const currentInterval = Number(state?.intervalSec || 2);
         const presetSeconds = intervalPresets.map(([seconds]) => seconds);
         const intervalOptions = intervalPresets.map(([seconds, label]) => ({ label, seconds }));
+        const intervalPresetMode = state.intervalMode !== 'custom';
+        addRadio(intervalSection, 'live-update-interval-mode', 'Preset', intervalPresetMode, !canLive, () => {
+            state.intervalMode = 'preset';
+            if (!presetSeconds.includes(Number(state.intervalSec))) state.intervalSec = 2;
+            this._scheduleLiveUpdate(fileId);
+        });
         const intervalIndex = Math.max(0, presetSeconds.indexOf(currentInterval));
-        addDiscreteSlider(intervalSection, intervalOptions, intervalIndex, !canLive, option => {
+        addDiscreteSlider(intervalSection, intervalOptions, intervalIndex, !canLive || !intervalPresetMode, option => {
             state.intervalMode = 'preset';
             state.intervalSec = option.seconds;
+            this._scheduleLiveUpdate(fileId);
+        });
+        addRadio(intervalSection, 'live-update-interval-mode', i18n.t('liveUpdateIntervalCustom'), !intervalPresetMode, !canLive, () => {
+            const value = Number(formatOneDecimal(state.customIntervalSec || currentInterval || 5));
+            state.intervalMode = 'custom';
+            state.customIntervalSec = value;
+            state.intervalSec = value;
+            this._scheduleLiveUpdate(fileId);
+        });
+        addSecondsInput(intervalSection, state.customIntervalSec || currentInterval || 5, !canLive || intervalPresetMode, value => {
+            state.intervalMode = 'custom';
+            state.customIntervalSec = value;
+            state.intervalSec = value;
             this._scheduleLiveUpdate(fileId);
         });
 
@@ -528,49 +542,59 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
     });
     const xSection = addSection(i18n.t('liveViewTimeseriesXHeading'), i18n.t('liveViewTimeseriesXDescription'));
     const rawTsPolicy = this.plotManager.liveViewDefaults?.timeseries || {};
-    const xCustomSeconds = Math.max(0.5, Number(rawTsPolicy.customWindowSeconds) || Number(tsPolicy.windowSeconds) || 60);
-    const xOptions = [
-        { label: i18n.t('liveViewAutoscaleX'), patch: { xMode: 'autoscale', xWindowMode: 'preset' } },
-        { label: i18n.t('liveViewPinStartExpandEnd'), patch: { xMode: 'pin-start', xWindowMode: 'preset' } },
-        { label: `${i18n.t('liveViewSliding')} - ${i18n.t('liveViewCurrentZoom')}`, currentZoom: true },
-        ...intervalPresets.map(([seconds, label]) => ({
-            label: `${i18n.t('liveViewSliding')} - ${label}`,
-            seconds,
-            patch: { xMode: 'sliding', windowSeconds: seconds, xWindowMode: 'preset' },
-        })),
-        {
-            label: `${i18n.t('liveViewSliding')} - ${i18n.t('liveUpdateIntervalCustom')}`,
-            custom: true,
-            patch: { xMode: 'sliding', windowSeconds: xCustomSeconds, customWindowSeconds: xCustomSeconds, xWindowMode: 'custom' },
-        },
+    const xCustomSeconds = Number(formatOneDecimal(rawTsPolicy.customWindowSeconds || 600));
+    const xWindowPresetMode = rawTsPolicy.xWindowMode !== 'custom';
+    const xSliding = tsPolicy.xMode === 'sliding';
+    const xWindowPresets = [
+        [2, i18n.t('liveView2s')],
+        [10, i18n.t('liveView10s')],
+        [30, i18n.t('liveView30s')],
+        [60, i18n.t('liveView1m')],
+        [600, i18n.t('liveView10m')],
     ];
-    const xPresetIndex = xOptions.findIndex(option => {
-        if (option.custom) return rawTsPolicy.xWindowMode === 'custom' && tsPolicy.xMode === 'sliding';
-        if (option.currentZoom) return rawTsPolicy.xWindowMode === 'current-zoom' && tsPolicy.xMode === 'sliding';
-        if (option.seconds) return tsPolicy.xMode === 'sliding' && rawTsPolicy.xWindowMode !== 'custom' && Number(tsPolicy.windowSeconds) === option.seconds;
-        return option.patch?.xMode === tsPolicy.xMode;
+    const xWindowPresetSeconds = xWindowPresets.map(([seconds]) => seconds);
+    const xWindowOptions = xWindowPresets.map(([seconds, label]) => ({ label, seconds }));
+    const selectSliding = patch => {
+        this.plotManager.setGlobalLiveViewPolicy('timeseries', {
+            xMode: 'sliding',
+            xWindowMode: 'preset',
+            windowSeconds: 600,
+            ...patch,
+        });
+    };
+    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewAutoscaleX'), tsPolicy.xMode === 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'autoscale' }));
+    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewPinStartExpandEnd'), tsPolicy.xMode === 'pin-start', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'pin-start' }));
+    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewSliding'), xSliding, false, () => {
+        const nextPreset = xSliding && xWindowPresetSeconds.includes(Number(tsPolicy.windowSeconds))
+            ? Number(tsPolicy.windowSeconds)
+            : 600;
+        selectSliding(rawTsPolicy.xWindowMode === 'custom'
+            ? { xWindowMode: 'custom', windowSeconds: xCustomSeconds, customWindowSeconds: xCustomSeconds }
+            : { windowSeconds: nextPreset });
     });
-    addDiscreteSlider(xSection, xOptions, Math.max(0, xPresetIndex), false, option => {
-        if (option.currentZoom) {
-            this._setGlobalLiveWindowFromCurrentZoom();
-            this.plotManager.setGlobalLiveViewPolicy('timeseries', { xWindowMode: 'current-zoom' });
-            return;
-        }
-        this.plotManager.setGlobalLiveViewPolicy('timeseries', option.patch);
-    }, {
-        value: xCustomSeconds,
-        unit: i18n.t('liveUpdateCustomSeconds'),
-        min: 0.5,
-        step: 0.5,
-        onChange: value => {
+
+    if (xSliding) {
+        const nested = document.createElement('div');
+        nested.className = 'live-update-nested-options';
+        xSection.appendChild(nested);
+        addRadio(nested, 'live-view-timeseries-x-window', 'Preset', xWindowPresetMode, false, () => {
+            selectSliding({ xWindowMode: 'preset', windowSeconds: xWindowPresetSeconds.includes(Number(tsPolicy.windowSeconds)) ? Number(tsPolicy.windowSeconds) : 600 });
+        });
+        addDiscreteSlider(nested, xWindowOptions, Math.max(0, xWindowPresetSeconds.indexOf(Number(tsPolicy.windowSeconds))), !xWindowPresetMode, option => {
+            selectSliding({ xWindowMode: 'preset', windowSeconds: option.seconds });
+        });
+        addRadio(nested, 'live-view-timeseries-x-window', i18n.t('liveUpdateIntervalCustom'), !xWindowPresetMode, false, () => {
+            selectSliding({ xWindowMode: 'custom', windowSeconds: xCustomSeconds, customWindowSeconds: xCustomSeconds });
+        });
+        addSecondsInput(nested, xCustomSeconds, xWindowPresetMode, value => {
             this.plotManager.setGlobalLiveViewPolicy('timeseries', {
                 xMode: 'sliding',
                 xWindowMode: 'custom',
                 customWindowSeconds: value,
                 windowSeconds: value,
             });
-        },
-    });
+        });
+    }
 
     const ySection = addSection(i18n.t('liveViewTimeseriesYHeading'), i18n.t('liveViewTimeseriesYDescription'));
     const yOptions = [

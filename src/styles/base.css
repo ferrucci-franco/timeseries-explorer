@@ -511,8 +511,22 @@ body {
     gap: 0.4rem;
 }
 
+.live-update-custom-row.standalone {
+    display: flex;
+    padding-left: 1.55rem;
+}
+
 .live-update-slider-control.custom-selected .live-update-custom-row {
     display: flex;
+}
+
+.live-update-nested-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+    margin-left: 1.55rem;
+    padding-left: 0.65rem;
+    border-left: 2px solid color-mix(in srgb, var(--primary-color) 35%, transparent);
 }
 
 .live-update-custom-row input[type="number"],
