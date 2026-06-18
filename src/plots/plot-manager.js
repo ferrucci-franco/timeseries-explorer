@@ -1776,12 +1776,12 @@ class PlotManager {
         const base = key === 'timeseries'
             ? this._normalizeLiveViewPolicy({ mode: 'timeseries', liveView: this.liveViewDefaults.timeseries })
             : this._normalizeLiveViewPolicy({ mode: 'phase2d', liveView: this.liveViewDefaults.phase });
-        this.liveViewDefaults[key] = { ...base, ...patch };
+        this.liveViewDefaults[key] = { ...(this.liveViewDefaults[key] || {}), ...base, ...patch };
         for (const [, plot] of this.plots) {
             if (key === 'timeseries' && plot.mode !== 'timeseries') continue;
             if (key === 'phase' && plot.mode === 'timeseries') continue;
             if (plot.mode === 'state-anim') continue;
-            plot.liveView = { ...this._normalizeLiveViewPolicy(plot), ...patch };
+            plot.liveView = { ...(plot.liveView || {}), ...this._normalizeLiveViewPolicy(plot), ...patch };
         }
     }
 

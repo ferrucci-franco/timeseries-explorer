@@ -550,10 +550,6 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
     });
     const xSection = addSection(i18n.t('liveViewTimeseriesXHeading'), i18n.t('liveViewTimeseriesXDescription'));
     const rawTsPolicy = this.plotManager.liveViewDefaults?.timeseries || {};
-    const xCustomSeconds = Number(formatOneDecimal(rawTsPolicy.customWindowSeconds || 600));
-    const xWindowPresetMode = rawTsPolicy.xWindowMode !== 'custom';
-    const xSliding = tsPolicy.xMode === 'sliding';
-    const xWindowBaseSeconds = xSliding ? Number(tsPolicy.windowSeconds) : 600;
     const xWindowPresets = [
         [2, i18n.t('liveView2s')],
         [10, i18n.t('liveView10s')],
@@ -563,13 +559,25 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
     ];
     const xWindowPresetSeconds = xWindowPresets.map(([seconds]) => seconds);
     const xWindowOptions = xWindowPresets.map(([seconds, label]) => ({ label, seconds }));
+    const xCustomSeconds = Number(formatOneDecimal(rawTsPolicy.customWindowSeconds || 600));
+    const xWindowPresetMode = rawTsPolicy.xWindowMode !== 'custom';
+    const xSliding = tsPolicy.xMode === 'sliding';
+    const storedPresetWindow = Number(rawTsPolicy.presetWindowSeconds);
+    const xWindowBaseSeconds = xWindowPresetSeconds.includes(storedPresetWindow)
+        ? storedPresetWindow
+        : (xSliding && xWindowPresetMode && xWindowPresetSeconds.includes(Number(tsPolicy.windowSeconds)) ? Number(tsPolicy.windowSeconds) : 600);
     const selectSliding = patch => {
         this.plotManager.setGlobalLiveViewPolicy('timeseries', {
             xMode: 'sliding',
             xWindowMode: 'preset',
             windowSeconds: 600,
+            presetWindowSeconds: xWindowBaseSeconds,
             ...patch,
         });
+    };
+    const currentXWindowPreset = () => {
+        const latestPreset = Number(this.plotManager.liveViewDefaults?.timeseries?.presetWindowSeconds);
+        return xWindowPresetSeconds.includes(latestPreset) ? latestPreset : xWindowBaseSeconds;
     };
     addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewAutoscaleX'), tsPolicy.xMode === 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'autoscale' }));
     addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewPinStartExpandEnd'), tsPolicy.xMode === 'pin-start', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'pin-start' }));
@@ -577,23 +585,23 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
     addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewSliding'), xSliding, false, () => {
         const nextPreset = xSliding && xWindowPresetSeconds.includes(Number(tsPolicy.windowSeconds))
             ? Number(tsPolicy.windowSeconds)
-            : 600;
+            : xWindowBaseSeconds;
         selectSliding(rawTsPolicy.xWindowMode === 'custom'
-            ? { xWindowMode: 'custom', windowSeconds: xCustomSeconds, customWindowSeconds: xCustomSeconds }
-            : { windowSeconds: nextPreset });
+            ? { xWindowMode: 'custom', windowSeconds: xCustomSeconds, customWindowSeconds: xCustomSeconds, presetWindowSeconds: xWindowBaseSeconds }
+            : { windowSeconds: nextPreset, presetWindowSeconds: nextPreset });
     });
 
     const nested = document.createElement('div');
     nested.className = 'live-update-nested-options';
     xSection.appendChild(nested);
     addRadio(nested, 'live-view-timeseries-x-window', 'Preset', xWindowPresetMode, !xSliding, () => {
-        selectSliding({ xWindowMode: 'preset', windowSeconds: xWindowPresetSeconds.includes(xWindowBaseSeconds) ? xWindowBaseSeconds : 600 });
+        selectSliding({ xWindowMode: 'preset', windowSeconds: xWindowBaseSeconds, presetWindowSeconds: xWindowBaseSeconds });
     });
     addDiscreteSlider(nested, xWindowOptions, Math.max(0, xWindowPresetSeconds.indexOf(xWindowBaseSeconds)), !xSliding || !xWindowPresetMode, option => {
-        selectSliding({ xWindowMode: 'preset', windowSeconds: option.seconds });
+        selectSliding({ xWindowMode: 'preset', windowSeconds: option.seconds, presetWindowSeconds: option.seconds });
     });
     addRadio(nested, 'live-view-timeseries-x-window', i18n.t('liveUpdateIntervalCustom'), !xWindowPresetMode, !xSliding, () => {
-        selectSliding({ xWindowMode: 'custom', windowSeconds: xCustomSeconds, customWindowSeconds: xCustomSeconds });
+        selectSliding({ xWindowMode: 'custom', windowSeconds: xCustomSeconds, customWindowSeconds: xCustomSeconds, presetWindowSeconds: currentXWindowPreset() });
     });
     addSecondsInput(nested, xCustomSeconds, !xSliding || xWindowPresetMode, value => {
         this.plotManager.setGlobalLiveViewPolicy('timeseries', {
@@ -601,6 +609,7 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
             xWindowMode: 'custom',
             customWindowSeconds: value,
             windowSeconds: value,
+            presetWindowSeconds: currentXWindowPreset(),
         });
     });
 
