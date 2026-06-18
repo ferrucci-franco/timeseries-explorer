@@ -525,8 +525,7 @@ body {
     flex-direction: column;
     gap: 0.32rem;
     margin-left: 1.55rem;
-    padding-left: 0.65rem;
-    border-left: 2px solid color-mix(in srgb, var(--primary-color) 35%, transparent);
+    padding-left: 0.35rem;
 }
 
 .live-update-custom-row input[type="number"],
