@@ -59,6 +59,7 @@ body {
    Top Bar
    ============================================ */
 .top-bar {
+    --top-bar-control-height: 42px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -121,6 +122,8 @@ body {
 
 /* Icon Buttons */
 .icon-btn {
+    height: var(--top-bar-control-height);
+    min-height: var(--top-bar-control-height);
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--border-color);
     background-color: var(--bg-primary);
@@ -219,6 +222,8 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    height: var(--top-bar-control-height);
+    min-height: var(--top-bar-control-height);
     width: 24px;
     min-width: 24px;
     margin-left: 0;
@@ -344,8 +349,8 @@ body {
 
 .live-update-file-btn,
 .live-update-menu-btn {
-    min-height: 2.5rem;
-    height: 2.5rem;
+    min-height: var(--top-bar-control-height);
+    height: var(--top-bar-control-height);
 }
 
 .live-update-file-btn .icon {
