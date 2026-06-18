@@ -377,8 +377,14 @@ body {
 }
 
 .example-menu.live-update-topbar-menu {
-    min-width: 360px;
-    max-width: min(430px, 92vw);
+    width: min(720px, calc(100vw - 1rem));
+    min-width: min(360px, calc(100vw - 1rem));
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100vh - 76px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.45rem;
     padding: 0.6rem;
 }
@@ -391,6 +397,10 @@ body {
     border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
     border-radius: 6px;
     background-color: color-mix(in srgb, var(--bg-secondary) 54%, var(--bg-primary));
+}
+
+.live-update-menu-section:first-child {
+    grid-column: 1 / -1;
 }
 
 .live-update-menu-heading {
@@ -482,6 +492,12 @@ body {
 
 .live-update-radio-row-custom {
     grid-template-columns: 1rem minmax(4rem, 1fr) 4.5rem auto;
+}
+
+@media (max-width: 720px) {
+    .example-menu.live-update-topbar-menu {
+        grid-template-columns: 1fr;
+    }
 }
 
 .live-update-menu-action.active {

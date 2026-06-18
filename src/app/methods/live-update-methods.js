@@ -63,10 +63,16 @@ proto._ensureLiveUpdateState = function(fileId) {
             status: 'idle',
             message: '',
             timer: null,
+            intervalMode: 'preset',
+            customIntervalSec: 5,
             lastFingerprint: '',
             lastRows: this._liveUpdateRowCount(fileId),
             localPath: '',
         };
+    }
+    if (!entry.liveUpdate.intervalMode) entry.liveUpdate.intervalMode = 'preset';
+    if (!Number.isFinite(Number(entry.liveUpdate.customIntervalSec)) || Number(entry.liveUpdate.customIntervalSec) <= 0) {
+        entry.liveUpdate.customIntervalSec = 5;
     }
     return entry.liveUpdate;
 };
@@ -433,16 +439,23 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         const intervalSection = addSection(i18n.t('liveUpdateIntervalHeading'), i18n.t('liveUpdateIntervalDescription'));
         const currentInterval = Number(state?.intervalSec || 2);
         const presetSeconds = intervalPresets.map(([seconds]) => seconds);
-        const isPreset = presetSeconds.includes(currentInterval);
+        const isPreset = state.intervalMode !== 'custom' && presetSeconds.includes(currentInterval);
+        const customInterval = state.intervalMode === 'custom'
+            ? currentInterval
+            : Math.max(0.5, Number(state.customIntervalSec) || 5);
         for (const [seconds, label] of intervalPresets) {
             addRadio(intervalSection, 'live-update-interval', label, currentInterval === seconds, !canLive, () => {
+                state.intervalMode = 'preset';
                 state.intervalSec = seconds;
                 this._scheduleLiveUpdate(fileId);
             });
         }
 
         const customRow = addRadio(intervalSection, 'live-update-interval', i18n.t('liveUpdateIntervalCustom'), !isPreset, !canLive, () => {
-            state.intervalSec = Math.max(0.5, Number(customInput.value) || 2);
+            const value = Math.max(0.5, Number(customInput.value) || 5);
+            state.intervalMode = 'custom';
+            state.customIntervalSec = value;
+            state.intervalSec = value;
             this._scheduleLiveUpdate(fileId);
         });
         customRow.classList.add('live-update-radio-row-custom');
@@ -450,7 +463,7 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         customInput.type = 'number';
         customInput.min = '0.5';
         customInput.step = '0.5';
-        customInput.value = String(isPreset ? 2 : currentInterval);
+        customInput.value = String(customInterval);
         customInput.disabled = !canLive;
         const customUnit = document.createElement('span');
         customUnit.className = 'live-update-custom-unit';
@@ -460,12 +473,19 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
             const radio = customRow.querySelector('input[type="radio"]');
             if (radio && !radio.checked) {
                 radio.checked = true;
-                state.intervalSec = Math.max(0.5, Number(customInput.value) || 2);
+                const value = Math.max(0.5, Number(customInput.value) || 5);
+                state.intervalMode = 'custom';
+                state.customIntervalSec = value;
+                state.intervalSec = value;
                 this._scheduleLiveUpdate(fileId);
             }
         });
         customInput.addEventListener('change', () => {
-            const value = Math.max(0.5, Number(customInput.value) || 2);
+            const radio = customRow.querySelector('input[type="radio"]');
+            if (radio) radio.checked = true;
+            const value = Math.max(0.5, Number(customInput.value) || 5);
+            state.intervalMode = 'custom';
+            state.customIntervalSec = value;
             state.intervalSec = value;
             customInput.value = String(value);
             this._scheduleLiveUpdate(fileId);
