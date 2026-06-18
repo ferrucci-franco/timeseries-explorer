@@ -342,10 +342,17 @@ body {
     gap: 2px;
 }
 
+.live-update-file-btn,
+.live-update-menu-btn {
+    min-height: 2.5rem;
+    height: 2.5rem;
+}
+
 .live-update-file-btn .icon {
     font-size: 0.64rem;
     font-weight: 800;
     letter-spacing: 0;
+    line-height: 1;
 }
 
 .live-update-file-btn.active {
