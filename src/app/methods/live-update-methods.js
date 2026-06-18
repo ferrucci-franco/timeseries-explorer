@@ -398,25 +398,92 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         return item;
     };
 
-    const addRadio = (section, groupName, label, checked, disabled, handler) => {
-        const row = document.createElement('label');
-        row.className = 'live-update-radio-row';
-        const input = document.createElement('input');
-        input.type = 'radio';
-        input.name = groupName;
-        input.checked = !!checked;
-        input.disabled = !!disabled;
-        input.addEventListener('change', () => {
-            if (!input.checked) return;
-            handler();
-            this._renderLiveUpdateTopBarMenu(menu);
-            this._updateLiveUpdateTopBar();
+    const addDiscreteSlider = (section, options, selectedIndex, disabled, handler, customConfig = null) => {
+        const sliderWrap = document.createElement('div');
+        sliderWrap.className = 'live-update-slider-control';
+        const selected = document.createElement('div');
+        selected.className = 'live-update-slider-selected';
+        const selectedText = document.createElement('span');
+        selected.appendChild(selectedText);
+
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = '0';
+        slider.max = String(Math.max(options.length - 1, 0));
+        slider.step = '1';
+        slider.value = String(selectedIndex);
+        slider.disabled = !!disabled;
+
+        const ticks = document.createElement('div');
+        ticks.className = 'live-update-slider-ticks';
+        const tickButtons = options.map((option, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = option.label;
+            button.disabled = !!disabled;
+            button.addEventListener('click', () => {
+                slider.value = String(index);
+                apply(index);
+            });
+            ticks.appendChild(button);
+            return button;
         });
-        const text = document.createElement('span');
-        text.textContent = label;
-        row.append(input, text);
-        section.appendChild(row);
-        return row;
+
+        const updateDisplay = index => {
+            const option = options[index] || options[0];
+            selectedText.textContent = option?.label || '';
+            tickButtons.forEach((button, buttonIndex) => button.classList.toggle('active', buttonIndex === index));
+            sliderWrap.classList.toggle('custom-selected', !!option?.custom);
+        };
+
+        const apply = index => {
+            const option = options[index] || options[0];
+            updateDisplay(index);
+            handler(option, index);
+            this._updateLiveUpdateTopBar();
+        };
+
+        slider.addEventListener('input', () => updateDisplay(Number(slider.value)));
+        slider.addEventListener('change', () => apply(Number(slider.value)));
+        sliderWrap.append(selected, slider, ticks);
+
+        if (customConfig) {
+            const customRow = document.createElement('div');
+            customRow.className = 'live-update-custom-row';
+            const customInput = document.createElement('input');
+            customInput.type = 'number';
+            customInput.min = String(customConfig.min || 0.5);
+            customInput.step = String(customConfig.step || 0.5);
+            customInput.value = String(customConfig.value);
+            customInput.disabled = !!disabled;
+            const customUnit = document.createElement('span');
+            customUnit.className = 'live-update-custom-unit';
+            customUnit.textContent = customConfig.unit;
+            customInput.addEventListener('focus', () => {
+                const customIndex = options.findIndex(option => option.custom);
+                if (customIndex >= 0) {
+                    slider.value = String(customIndex);
+                    apply(customIndex);
+                }
+            });
+            customInput.addEventListener('change', () => {
+                const value = Math.max(Number(customInput.min) || 0.5, Number(customInput.value) || Number(customConfig.value) || 1);
+                customInput.value = String(value);
+                customConfig.onChange(value);
+                const customIndex = options.findIndex(option => option.custom);
+                if (customIndex >= 0) {
+                    slider.value = String(customIndex);
+                    updateDisplay(customIndex);
+                }
+                this._updateLiveUpdateTopBar();
+            });
+            customRow.append(customInput, customUnit);
+            sliderWrap.appendChild(customRow);
+        }
+
+        updateDisplay(selectedIndex);
+        section.appendChild(sliderWrap);
+        return sliderWrap;
     };
 
     const liveSection = addSection(i18n.t('liveUpdateControlsHeading'), i18n.t('liveUpdateControlsDescription'));
@@ -439,55 +506,11 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         const intervalSection = addSection(i18n.t('liveUpdateIntervalHeading'), i18n.t('liveUpdateIntervalDescription'));
         const currentInterval = Number(state?.intervalSec || 2);
         const presetSeconds = intervalPresets.map(([seconds]) => seconds);
-        const isPreset = state.intervalMode !== 'custom' && presetSeconds.includes(currentInterval);
-        const customInterval = state.intervalMode === 'custom'
-            ? currentInterval
-            : Math.max(0.5, Number(state.customIntervalSec) || 5);
-        for (const [seconds, label] of intervalPresets) {
-            addRadio(intervalSection, 'live-update-interval', label, currentInterval === seconds, !canLive, () => {
-                state.intervalMode = 'preset';
-                state.intervalSec = seconds;
-                this._scheduleLiveUpdate(fileId);
-            });
-        }
-
-        const customRow = addRadio(intervalSection, 'live-update-interval', i18n.t('liveUpdateIntervalCustom'), !isPreset, !canLive, () => {
-            const value = Math.max(0.5, Number(customInput.value) || 5);
-            state.intervalMode = 'custom';
-            state.customIntervalSec = value;
-            state.intervalSec = value;
-            this._scheduleLiveUpdate(fileId);
-        });
-        customRow.classList.add('live-update-radio-row-custom');
-        const customInput = document.createElement('input');
-        customInput.type = 'number';
-        customInput.min = '0.5';
-        customInput.step = '0.5';
-        customInput.value = String(customInterval);
-        customInput.disabled = !canLive;
-        const customUnit = document.createElement('span');
-        customUnit.className = 'live-update-custom-unit';
-        customUnit.textContent = i18n.t('liveUpdateCustomSeconds');
-        customRow.append(customInput, customUnit);
-        customInput.addEventListener('focus', () => {
-            const radio = customRow.querySelector('input[type="radio"]');
-            if (radio && !radio.checked) {
-                radio.checked = true;
-                const value = Math.max(0.5, Number(customInput.value) || 5);
-                state.intervalMode = 'custom';
-                state.customIntervalSec = value;
-                state.intervalSec = value;
-                this._scheduleLiveUpdate(fileId);
-            }
-        });
-        customInput.addEventListener('change', () => {
-            const radio = customRow.querySelector('input[type="radio"]');
-            if (radio) radio.checked = true;
-            const value = Math.max(0.5, Number(customInput.value) || 5);
-            state.intervalMode = 'custom';
-            state.customIntervalSec = value;
-            state.intervalSec = value;
-            customInput.value = String(value);
+        const intervalOptions = intervalPresets.map(([seconds, label]) => ({ label, seconds }));
+        const intervalIndex = Math.max(0, presetSeconds.indexOf(currentInterval));
+        addDiscreteSlider(intervalSection, intervalOptions, intervalIndex, !canLive, option => {
+            state.intervalMode = 'preset';
+            state.intervalSec = option.seconds;
             this._scheduleLiveUpdate(fileId);
         });
 
@@ -500,34 +523,69 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         liveView: this.plotManager.liveViewDefaults?.timeseries,
     });
     const xSection = addSection(i18n.t('liveViewTimeseriesXHeading'), i18n.t('liveViewTimeseriesXDescription'));
-    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewAutoscaleX'), tsPolicy.xMode === 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'autoscale' }));
-    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewPinStartExpandEnd'), tsPolicy.xMode === 'pin-start', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'pin-start' }));
-    addRadio(xSection, 'live-view-timeseries-x', `${i18n.t('liveViewSliding')} - ${i18n.t('liveViewCurrentZoom')}`, false, false, () => this._setGlobalLiveWindowFromCurrentZoom());
-    [
-        [2, i18n.t('liveView2s')],
-        [10, i18n.t('liveView10s')],
-        [30, i18n.t('liveView30s')],
-        [60, i18n.t('liveView1m')],
-        [600, i18n.t('liveView10m')],
-    ].forEach(([seconds, label]) => {
-        addRadio(xSection, 'live-view-timeseries-x', `${i18n.t('liveViewSliding')} - ${label}`,
-            tsPolicy.xMode === 'sliding' && Number(tsPolicy.windowSeconds) === seconds,
-            false,
-            () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'sliding', windowSeconds: seconds }));
+    const rawTsPolicy = this.plotManager.liveViewDefaults?.timeseries || {};
+    const xCustomSeconds = Math.max(0.5, Number(rawTsPolicy.customWindowSeconds) || Number(tsPolicy.windowSeconds) || 60);
+    const xOptions = [
+        { label: i18n.t('liveViewAutoscaleX'), patch: { xMode: 'autoscale', xWindowMode: 'preset' } },
+        { label: i18n.t('liveViewPinStartExpandEnd'), patch: { xMode: 'pin-start', xWindowMode: 'preset' } },
+        { label: `${i18n.t('liveViewSliding')} - ${i18n.t('liveViewCurrentZoom')}`, currentZoom: true },
+        ...intervalPresets.map(([seconds, label]) => ({
+            label: `${i18n.t('liveViewSliding')} - ${label}`,
+            seconds,
+            patch: { xMode: 'sliding', windowSeconds: seconds, xWindowMode: 'preset' },
+        })),
+        {
+            label: `${i18n.t('liveViewSliding')} - ${i18n.t('liveUpdateIntervalCustom')}`,
+            custom: true,
+            patch: { xMode: 'sliding', windowSeconds: xCustomSeconds, customWindowSeconds: xCustomSeconds, xWindowMode: 'custom' },
+        },
+    ];
+    const xPresetIndex = xOptions.findIndex(option => {
+        if (option.custom) return rawTsPolicy.xWindowMode === 'custom' && tsPolicy.xMode === 'sliding';
+        if (option.currentZoom) return rawTsPolicy.xWindowMode === 'current-zoom' && tsPolicy.xMode === 'sliding';
+        if (option.seconds) return tsPolicy.xMode === 'sliding' && rawTsPolicy.xWindowMode !== 'custom' && Number(tsPolicy.windowSeconds) === option.seconds;
+        return option.patch?.xMode === tsPolicy.xMode;
+    });
+    addDiscreteSlider(xSection, xOptions, Math.max(0, xPresetIndex), false, option => {
+        if (option.currentZoom) {
+            this._setGlobalLiveWindowFromCurrentZoom();
+            this.plotManager.setGlobalLiveViewPolicy('timeseries', { xWindowMode: 'current-zoom' });
+            return;
+        }
+        this.plotManager.setGlobalLiveViewPolicy('timeseries', option.patch);
+    }, {
+        value: xCustomSeconds,
+        unit: i18n.t('liveUpdateCustomSeconds'),
+        min: 0.5,
+        step: 0.5,
+        onChange: value => {
+            this.plotManager.setGlobalLiveViewPolicy('timeseries', {
+                xMode: 'sliding',
+                xWindowMode: 'custom',
+                customWindowSeconds: value,
+                windowSeconds: value,
+            });
+        },
     });
 
     const ySection = addSection(i18n.t('liveViewTimeseriesYHeading'), i18n.t('liveViewTimeseriesYDescription'));
-    addRadio(ySection, 'live-view-timeseries-y', i18n.t('liveViewExpandY'), tsPolicy.yMode === 'expand', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'expand' }));
-    addRadio(ySection, 'live-view-timeseries-y', i18n.t('liveViewAutoscaleY'), tsPolicy.yMode === 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'autoscale' }));
-    addRadio(ySection, 'live-view-timeseries-y', i18n.t('liveViewKeepY'), tsPolicy.yMode === 'keep', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'keep' }));
+    const yOptions = [
+        { label: i18n.t('liveViewExpandY'), patch: { yMode: 'expand' } },
+        { label: i18n.t('liveViewAutoscaleY'), patch: { yMode: 'autoscale' } },
+        { label: i18n.t('liveViewKeepY'), patch: { yMode: 'keep' } },
+    ];
+    addDiscreteSlider(ySection, yOptions, Math.max(0, yOptions.findIndex(option => option.patch.yMode === tsPolicy.yMode)), false, option => this.plotManager.setGlobalLiveViewPolicy('timeseries', option.patch));
 
     const phasePolicy = this.plotManager._normalizeLiveViewPolicy({
         mode: 'phase2d',
         liveView: this.plotManager.liveViewDefaults?.phase,
     });
     const phaseSection = addSection(i18n.t('liveViewPhaseHeading'), i18n.t('liveViewPhaseDescription'));
-    addRadio(phaseSection, 'live-view-phase', i18n.t('liveViewKeepPhase'), phasePolicy.viewMode !== 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('phase', { viewMode: 'keep' }));
-    addRadio(phaseSection, 'live-view-phase', i18n.t('liveViewAutoscalePhase'), phasePolicy.viewMode === 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('phase', { viewMode: 'autoscale' }));
+    const phaseOptions = [
+        { label: i18n.t('liveViewKeepPhase'), patch: { viewMode: 'keep' } },
+        { label: i18n.t('liveViewAutoscalePhase'), patch: { viewMode: 'autoscale' } },
+    ];
+    addDiscreteSlider(phaseSection, phaseOptions, phasePolicy.viewMode === 'autoscale' ? 1 : 0, false, option => this.plotManager.setGlobalLiveViewPolicy('phase', option.patch));
 };
 
 proto._setGlobalLiveWindowFromCurrentZoom = function() {

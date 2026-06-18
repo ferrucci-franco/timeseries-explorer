@@ -467,33 +467,6 @@ body {
     cursor: not-allowed;
 }
 
-.live-update-radio-row {
-    display: grid;
-    grid-template-columns: 1rem minmax(0, 1fr);
-    align-items: center;
-    gap: 0.55rem;
-    min-height: 1.6rem;
-    color: var(--text-primary);
-    font-size: 0.82rem;
-    cursor: pointer;
-}
-
-.live-update-radio-row input[type="radio"] {
-    width: 0.95rem;
-    height: 0.95rem;
-    margin: 0;
-    accent-color: var(--primary-color);
-}
-
-.live-update-radio-row:has(input:disabled) {
-    opacity: 0.55;
-    cursor: not-allowed;
-}
-
-.live-update-radio-row-custom {
-    grid-template-columns: 1rem minmax(4rem, 1fr) 4.5rem auto;
-}
-
 @media (max-width: 720px) {
     .example-menu.live-update-topbar-menu {
         grid-template-columns: 1fr;
@@ -510,7 +483,69 @@ body {
     gap: 0.5rem;
 }
 
-.live-update-radio-row-custom input[type="number"],
+.live-update-slider-control {
+    display: flex;
+    flex-direction: column;
+    gap: 0.42rem;
+}
+
+.live-update-slider-selected {
+    min-height: 1.45rem;
+    color: var(--primary-color);
+    font-size: 0.86rem;
+    font-weight: 800;
+}
+
+.live-update-slider-control input[type="range"] {
+    width: 100%;
+    accent-color: var(--primary-color);
+}
+
+.live-update-slider-control input[type="range"]:disabled {
+    opacity: 0.45;
+}
+
+.live-update-slider-ticks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.28rem;
+}
+
+.live-update-slider-ticks button {
+    min-height: 1.45rem;
+    padding: 0.12rem 0.38rem;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    line-height: 1.1;
+    cursor: pointer;
+}
+
+.live-update-slider-ticks button.active {
+    border-color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 16%, var(--bg-primary));
+    color: var(--primary-color);
+    font-weight: 800;
+}
+
+.live-update-slider-ticks button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.live-update-custom-row {
+    display: none;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.live-update-slider-control.custom-selected .live-update-custom-row {
+    display: flex;
+}
+
+.live-update-custom-row input[type="number"],
 .live-update-menu-interval input {
     width: 4rem;
     padding: 0.2rem 0.3rem;
@@ -520,13 +555,13 @@ body {
     color: var(--text-primary);
 }
 
-.live-update-radio-row-custom input[type="number"]::-webkit-outer-spin-button,
-.live-update-radio-row-custom input[type="number"]::-webkit-inner-spin-button {
+.live-update-custom-row input[type="number"]::-webkit-outer-spin-button,
+.live-update-custom-row input[type="number"]::-webkit-inner-spin-button {
     appearance: none;
     margin: 0;
 }
 
-.live-update-radio-row-custom input[type="number"] {
+.live-update-custom-row input[type="number"] {
     appearance: textfield;
 }
 
