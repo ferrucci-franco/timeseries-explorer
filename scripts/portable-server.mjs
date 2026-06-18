@@ -159,7 +159,7 @@ function listenOnAvailablePort(port) {
 }
 
 const { port } = await listenOnAvailablePort(preferredPort);
-const url = `http://${host}:${port}/`;
+const url = `http://localhost:${port}/index.html`;
 console.log(`OpenModelica Viewer local server`);
 console.log(`Serving ${packageRoot}`);
 console.log(`Open ${url}`);

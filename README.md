@@ -16,6 +16,8 @@ Then open the URL shown in the terminal, usually:
 http://localhost:8000/index.html
 ```
 
+This is also the recommended local workflow for Live Update. When Node is available, `serve.bat` starts the OpenModelica Viewer local server, which serves the app and exposes the localhost-only file API used to follow growing CSV files by path in browsers such as Firefox.
+
 Or use Vite:
 
 ```powershell
