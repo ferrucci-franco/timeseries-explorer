@@ -339,96 +339,175 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
     const entry = fileId ? this.files.get(fileId) : null;
     const state = fileId ? this._ensureLiveUpdateState(fileId) : null;
 
-    const addStatic = (label, className = '') => {
+    const intervalPresets = [
+        [2, i18n.t('liveView2s')],
+        [10, i18n.t('liveView10s')],
+        [30, i18n.t('liveView30s')],
+        [60, i18n.t('liveView1m')],
+        [600, i18n.t('liveView10m')],
+    ];
+
+    const addSection = (title, description = '') => {
+        const section = document.createElement('div');
+        section.className = 'live-update-menu-section';
+        const heading = document.createElement('div');
+        heading.className = 'live-update-menu-heading';
+        heading.textContent = title;
+        section.appendChild(heading);
+        if (description) {
+            const help = document.createElement('div');
+            help.className = 'live-update-menu-description';
+            help.textContent = description;
+            section.appendChild(help);
+        }
+        menu.appendChild(section);
+        return section;
+    };
+
+    const addStatic = (section, label, className = '') => {
         const row = document.createElement('div');
         row.className = `example-menu-item-row live-update-menu-row ${className}`.trim();
         const text = document.createElement('span');
         text.className = 'example-name';
         text.textContent = label;
         row.appendChild(text);
-        menu.appendChild(row);
+        section.appendChild(row);
         return row;
     };
-    const addHeading = label => {
-        const row = addStatic(label, 'live-update-menu-heading');
-        return row;
-    };
-    const addAction = (label, active, handler) => {
+
+    const addCommand = (parent, label, disabled, handler, className = '') => {
         const item = document.createElement('button');
         item.type = 'button';
-        item.className = 'example-menu-item live-update-menu-action' + (active ? ' active' : '');
+        item.className = `live-update-command ${className}`.trim();
+        item.disabled = !!disabled;
         const name = document.createElement('span');
-        name.className = 'example-name';
         name.textContent = label;
         item.appendChild(name);
-        item.addEventListener('click', () => {
+        item.addEventListener('click', async () => {
+            await handler();
+            this._renderLiveUpdateTopBarMenu(menu);
+            this._updateLiveUpdateTopBar();
+        });
+        parent.appendChild(item);
+        return item;
+    };
+
+    const addRadio = (section, groupName, label, checked, disabled, handler) => {
+        const row = document.createElement('label');
+        row.className = 'live-update-radio-row';
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = groupName;
+        input.checked = !!checked;
+        input.disabled = !!disabled;
+        input.addEventListener('change', () => {
+            if (!input.checked) return;
             handler();
             this._renderLiveUpdateTopBarMenu(menu);
             this._updateLiveUpdateTopBar();
         });
-        menu.appendChild(item);
+        const text = document.createElement('span');
+        text.textContent = label;
+        row.append(input, text);
+        section.appendChild(row);
+        return row;
     };
 
-    addHeading(i18n.t('liveUpdateTitle'));
+    const liveSection = addSection(i18n.t('liveUpdateControlsHeading'), i18n.t('liveUpdateControlsDescription'));
     if (!entry) {
-        addStatic(i18n.t('liveUpdateNoActiveFile'), 'disabled');
+        addStatic(liveSection, i18n.t('liveUpdateNoActiveFile'), 'disabled');
     } else {
-        addStatic(this._fileDisplayName(entry));
         const canLive = this._isLiveUpdateCandidate(entry);
-        addAction(state?.enabled ? i18n.t('liveUpdateStop') : i18n.t('liveUpdateStart'), !!state?.enabled, () => this.toggleLiveUpdate(fileId));
+        addStatic(liveSection, this._fileDisplayName(entry), 'live-update-menu-file');
+
+        const commands = document.createElement('div');
+        commands.className = 'live-update-command-row';
+        liveSection.appendChild(commands);
+        addCommand(commands, i18n.t('liveUpdateStart'), !canLive || !!state?.enabled, () => this._startLiveUpdate(fileId), 'start');
+        addCommand(commands, i18n.t('liveUpdateStop'), !state?.enabled, () => this._stopLiveUpdate(fileId, 'idle', i18n.t('liveUpdatePaused')), 'stop');
+
         if (!canLive) {
-            addStatic(i18n.t('liveUpdateCsvOnlyShort'), 'disabled');
+            addStatic(liveSection, i18n.t('liveUpdateCsvOnlyShort'), 'disabled');
         }
 
-        const intervalRow = addStatic(i18n.t('liveUpdateEvery'), 'live-update-menu-interval');
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.min = '0.5';
-        input.step = '0.5';
-        input.value = String(state?.intervalSec || 2);
-        input.disabled = !canLive;
-        input.addEventListener('change', () => {
-            state.intervalSec = Math.max(0.5, Number(input.value) || 2);
-            input.value = String(state.intervalSec);
+        const intervalSection = addSection(i18n.t('liveUpdateIntervalHeading'), i18n.t('liveUpdateIntervalDescription'));
+        const currentInterval = Number(state?.intervalSec || 2);
+        const presetSeconds = intervalPresets.map(([seconds]) => seconds);
+        const isPreset = presetSeconds.includes(currentInterval);
+        for (const [seconds, label] of intervalPresets) {
+            addRadio(intervalSection, 'live-update-interval', label, currentInterval === seconds, !canLive, () => {
+                state.intervalSec = seconds;
+                this._scheduleLiveUpdate(fileId);
+            });
+        }
+
+        const customRow = addRadio(intervalSection, 'live-update-interval', i18n.t('liveUpdateIntervalCustom'), !isPreset, !canLive, () => {
+            state.intervalSec = Math.max(0.5, Number(customInput.value) || 2);
             this._scheduleLiveUpdate(fileId);
         });
-        intervalRow.appendChild(input);
+        customRow.classList.add('live-update-radio-row-custom');
+        const customInput = document.createElement('input');
+        customInput.type = 'number';
+        customInput.min = '0.5';
+        customInput.step = '0.5';
+        customInput.value = String(isPreset ? 2 : currentInterval);
+        customInput.disabled = !canLive;
+        const customUnit = document.createElement('span');
+        customUnit.className = 'live-update-custom-unit';
+        customUnit.textContent = i18n.t('liveUpdateCustomSeconds');
+        customRow.append(customInput, customUnit);
+        customInput.addEventListener('focus', () => {
+            const radio = customRow.querySelector('input[type="radio"]');
+            if (radio && !radio.checked) {
+                radio.checked = true;
+                state.intervalSec = Math.max(0.5, Number(customInput.value) || 2);
+                this._scheduleLiveUpdate(fileId);
+            }
+        });
+        customInput.addEventListener('change', () => {
+            const value = Math.max(0.5, Number(customInput.value) || 2);
+            state.intervalSec = value;
+            customInput.value = String(value);
+            this._scheduleLiveUpdate(fileId);
+        });
 
         const source = state?.message || this._liveUpdateSupportMessage(entry);
-        addStatic(source, `live-update-menu-status ${state?.status || 'idle'}`);
+        addStatic(liveSection, source, `live-update-menu-status ${state?.status || 'idle'}`);
     }
 
     const tsPolicy = this.plotManager._normalizeLiveViewPolicy({
         mode: 'timeseries',
         liveView: this.plotManager.liveViewDefaults?.timeseries,
     });
-    addHeading(i18n.t('liveViewX'));
-    addAction(i18n.t('liveViewAutoscale'), tsPolicy.xMode === 'autoscale', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'autoscale' }));
-    addAction(i18n.t('liveViewPinStart'), tsPolicy.xMode === 'pin-start', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'pin-start' }));
-    addAction(`${i18n.t('liveViewSliding')} - ${i18n.t('liveViewCurrentZoom')}`, false, () => this._setGlobalLiveWindowFromCurrentZoom());
+    const xSection = addSection(i18n.t('liveViewTimeseriesXHeading'), i18n.t('liveViewTimeseriesXDescription'));
+    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewAutoscaleX'), tsPolicy.xMode === 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'autoscale' }));
+    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewPinStartExpandEnd'), tsPolicy.xMode === 'pin-start', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'pin-start' }));
+    addRadio(xSection, 'live-view-timeseries-x', `${i18n.t('liveViewSliding')} - ${i18n.t('liveViewCurrentZoom')}`, false, false, () => this._setGlobalLiveWindowFromCurrentZoom());
     [
+        [2, i18n.t('liveView2s')],
         [10, i18n.t('liveView10s')],
         [30, i18n.t('liveView30s')],
         [60, i18n.t('liveView1m')],
         [600, i18n.t('liveView10m')],
     ].forEach(([seconds, label]) => {
-        addAction(`${i18n.t('liveViewSliding')} - ${label}`,
+        addRadio(xSection, 'live-view-timeseries-x', `${i18n.t('liveViewSliding')} - ${label}`,
             tsPolicy.xMode === 'sliding' && Number(tsPolicy.windowSeconds) === seconds,
+            false,
             () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'sliding', windowSeconds: seconds }));
     });
 
-    addHeading(i18n.t('liveViewY'));
-    addAction(i18n.t('liveViewExpandY'), tsPolicy.yMode === 'expand', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'expand' }));
-    addAction(i18n.t('liveViewAutoscale'), tsPolicy.yMode === 'autoscale', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'autoscale' }));
-    addAction(i18n.t('liveViewKeep'), tsPolicy.yMode === 'keep', () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'keep' }));
+    const ySection = addSection(i18n.t('liveViewTimeseriesYHeading'), i18n.t('liveViewTimeseriesYDescription'));
+    addRadio(ySection, 'live-view-timeseries-y', i18n.t('liveViewExpandY'), tsPolicy.yMode === 'expand', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'expand' }));
+    addRadio(ySection, 'live-view-timeseries-y', i18n.t('liveViewAutoscaleY'), tsPolicy.yMode === 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'autoscale' }));
+    addRadio(ySection, 'live-view-timeseries-y', i18n.t('liveViewKeepY'), tsPolicy.yMode === 'keep', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { yMode: 'keep' }));
 
     const phasePolicy = this.plotManager._normalizeLiveViewPolicy({
         mode: 'phase2d',
         liveView: this.plotManager.liveViewDefaults?.phase,
     });
-    addHeading(i18n.t('liveViewView'));
-    addAction(i18n.t('liveViewKeep'), phasePolicy.viewMode !== 'autoscale', () => this.plotManager.setGlobalLiveViewPolicy('phase', { viewMode: 'keep' }));
-    addAction(i18n.t('liveViewAutoscale'), phasePolicy.viewMode === 'autoscale', () => this.plotManager.setGlobalLiveViewPolicy('phase', { viewMode: 'autoscale' }));
+    const phaseSection = addSection(i18n.t('liveViewPhaseHeading'), i18n.t('liveViewPhaseDescription'));
+    addRadio(phaseSection, 'live-view-phase', i18n.t('liveViewKeepPhase'), phasePolicy.viewMode !== 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('phase', { viewMode: 'keep' }));
+    addRadio(phaseSection, 'live-view-phase', i18n.t('liveViewAutoscalePhase'), phasePolicy.viewMode === 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('phase', { viewMode: 'autoscale' }));
 };
 
 proto._setGlobalLiveWindowFromCurrentZoom = function() {
