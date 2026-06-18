@@ -1,3 +1,3 @@
-import Plotly from 'plotly.js-dist-min';
+import '../../node_modules/plotly.js-dist-min/plotly.min.js';
 
-export default Plotly;
+export default globalThis.Plotly;

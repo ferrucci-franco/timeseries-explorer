@@ -116,7 +116,7 @@ async function handleStatic(req, res, url) {
     res.writeHead(200, {
         'content-type': mimeTypes.get(ext) || 'application/octet-stream',
         'content-length': stat.size,
-        'cache-control': ext === '.html' ? 'no-store' : 'public, max-age=3600',
+        'cache-control': 'no-store',
         'x-content-type-options': 'nosniff',
     });
     createReadStream(targetPath).pipe(res);

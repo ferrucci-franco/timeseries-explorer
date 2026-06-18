@@ -1,4 +1,4 @@
-import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { strFromU8, strToU8, unzipSync, zipSync } from '../../../node_modules/fflate/esm/browser.js';
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import { APP_VERSION, RESULT_FILE_EXTENSIONS } from '../constants.js';
