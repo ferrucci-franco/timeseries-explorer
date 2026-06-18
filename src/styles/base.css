@@ -486,13 +486,13 @@ body {
 .live-update-slider-control {
     display: flex;
     flex-direction: column;
-    gap: 0.42rem;
+    gap: 0.24rem;
 }
 
 .live-update-slider-selected {
-    min-height: 1.45rem;
+    min-height: 1.2rem;
     color: var(--primary-color);
-    font-size: 0.86rem;
+    font-size: 0.82rem;
     font-weight: 800;
 }
 
@@ -503,36 +503,6 @@ body {
 
 .live-update-slider-control input[type="range"]:disabled {
     opacity: 0.45;
-}
-
-.live-update-slider-ticks {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.28rem;
-}
-
-.live-update-slider-ticks button {
-    min-height: 1.45rem;
-    padding: 0.12rem 0.38rem;
-    border: 1px solid var(--border-color);
-    border-radius: 999px;
-    background: var(--bg-primary);
-    color: var(--text-secondary);
-    font-size: 0.72rem;
-    line-height: 1.1;
-    cursor: pointer;
-}
-
-.live-update-slider-ticks button.active {
-    border-color: var(--primary-color);
-    background: color-mix(in srgb, var(--primary-color) 16%, var(--bg-primary));
-    color: var(--primary-color);
-    font-weight: 800;
-}
-
-.live-update-slider-ticks button:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
 }
 
 .live-update-custom-row {
@@ -568,6 +538,29 @@ body {
 .live-update-custom-unit {
     color: var(--text-secondary);
     font-size: 0.78rem;
+}
+
+.live-update-radio-row {
+    display: grid;
+    grid-template-columns: 1rem minmax(0, 1fr);
+    align-items: center;
+    gap: 0.55rem;
+    min-height: 1.45rem;
+    color: var(--text-primary);
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+.live-update-radio-row input[type="radio"] {
+    width: 0.95rem;
+    height: 0.95rem;
+    margin: 0;
+    accent-color: var(--primary-color);
+}
+
+.live-update-radio-row:has(input:disabled) {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .live-update-menu-status {

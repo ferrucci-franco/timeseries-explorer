@@ -414,25 +414,9 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         slider.value = String(selectedIndex);
         slider.disabled = !!disabled;
 
-        const ticks = document.createElement('div');
-        ticks.className = 'live-update-slider-ticks';
-        const tickButtons = options.map((option, index) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = option.label;
-            button.disabled = !!disabled;
-            button.addEventListener('click', () => {
-                slider.value = String(index);
-                apply(index);
-            });
-            ticks.appendChild(button);
-            return button;
-        });
-
         const updateDisplay = index => {
             const option = options[index] || options[0];
             selectedText.textContent = option?.label || '';
-            tickButtons.forEach((button, buttonIndex) => button.classList.toggle('active', buttonIndex === index));
             sliderWrap.classList.toggle('custom-selected', !!option?.custom);
         };
 
@@ -445,7 +429,7 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
 
         slider.addEventListener('input', () => updateDisplay(Number(slider.value)));
         slider.addEventListener('change', () => apply(Number(slider.value)));
-        sliderWrap.append(selected, slider, ticks);
+        sliderWrap.append(selected, slider);
 
         if (customConfig) {
             const customRow = document.createElement('div');
@@ -484,6 +468,26 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         updateDisplay(selectedIndex);
         section.appendChild(sliderWrap);
         return sliderWrap;
+    };
+
+    const addRadio = (section, groupName, label, checked, disabled, handler) => {
+        const row = document.createElement('label');
+        row.className = 'live-update-radio-row';
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = groupName;
+        input.checked = !!checked;
+        input.disabled = !!disabled;
+        input.addEventListener('change', () => {
+            if (!input.checked) return;
+            handler();
+            this._updateLiveUpdateTopBar();
+        });
+        const text = document.createElement('span');
+        text.textContent = label;
+        row.append(input, text);
+        section.appendChild(row);
+        return row;
     };
 
     const liveSection = addSection(i18n.t('liveUpdateControlsHeading'), i18n.t('liveUpdateControlsDescription'));
@@ -574,7 +578,9 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         { label: i18n.t('liveViewAutoscaleY'), patch: { yMode: 'autoscale' } },
         { label: i18n.t('liveViewKeepY'), patch: { yMode: 'keep' } },
     ];
-    addDiscreteSlider(ySection, yOptions, Math.max(0, yOptions.findIndex(option => option.patch.yMode === tsPolicy.yMode)), false, option => this.plotManager.setGlobalLiveViewPolicy('timeseries', option.patch));
+    yOptions.forEach(option => {
+        addRadio(ySection, 'live-view-timeseries-y', option.label, option.patch.yMode === tsPolicy.yMode, false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', option.patch));
+    });
 
     const phasePolicy = this.plotManager._normalizeLiveViewPolicy({
         mode: 'phase2d',
@@ -585,7 +591,9 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         { label: i18n.t('liveViewKeepPhase'), patch: { viewMode: 'keep' } },
         { label: i18n.t('liveViewAutoscalePhase'), patch: { viewMode: 'autoscale' } },
     ];
-    addDiscreteSlider(phaseSection, phaseOptions, phasePolicy.viewMode === 'autoscale' ? 1 : 0, false, option => this.plotManager.setGlobalLiveViewPolicy('phase', option.patch));
+    phaseOptions.forEach(option => {
+        addRadio(phaseSection, 'live-view-phase', option.label, option.patch.viewMode === phasePolicy.viewMode, false, () => this.plotManager.setGlobalLiveViewPolicy('phase', option.patch));
+    });
 };
 
 proto._setGlobalLiveWindowFromCurrentZoom = function() {
