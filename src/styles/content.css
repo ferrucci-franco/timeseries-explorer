@@ -343,7 +343,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: #16a34a;
+    color: #166534;
     cursor: help;
 }
 
@@ -356,6 +356,10 @@
 
 .theme-dark .file-entry-live-indicator {
     color: #4ade80;
+}
+
+.file-entry.active .file-entry-live-indicator {
+    color: #dcfce7;
 }
 
 .file-entry-transform,
