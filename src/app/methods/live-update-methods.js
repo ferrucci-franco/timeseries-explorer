@@ -71,7 +71,7 @@ proto._ensureLiveUpdateState = function(fileId) {
             customIntervalSec: 5,
             lastFingerprint: '',
             lastRows: this._liveUpdateRowCount(fileId),
-            localPath: '',
+            localPath: entry.localPath || '',
         };
     }
     if (!entry.liveUpdate.intervalMode) entry.liveUpdate.intervalMode = 'preset';
@@ -348,7 +348,7 @@ proto._requestLiveUpdatePath = async function(entry, initialValue = '') {
     if (this.capabilities?.isDesktop && typeof desktopPicker === 'function') {
         try {
             return await desktopPicker({
-                defaultPath: initialValue || entry?.liveUpdate?.localPath || '',
+                defaultPath: initialValue || entry?.liveUpdate?.localPath || entry?.localPath || '',
                 title: i18n.t('liveUpdatePathTitle'),
             }) || '';
         } catch (err) {

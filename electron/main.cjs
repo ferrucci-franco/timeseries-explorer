@@ -184,17 +184,26 @@ async function createWindow(url) {
   await win.loadURL(url);
 }
 
-ipcMain.handle('omv:select-file-path', async (_event, options = {}) => {
+async function selectResultFilePaths(options = {}, multiple = false) {
   const result = await dialog.showOpenDialog({
-    title: typeof options.title === 'string' ? options.title : 'Select live update file',
+    title: typeof options.title === 'string' ? options.title : 'Select result file',
     defaultPath: typeof options.defaultPath === 'string' && options.defaultPath ? options.defaultPath : undefined,
-    properties: ['openFile'],
+    properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
     filters: [
       { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet'] },
       { name: 'All files', extensions: ['*'] },
     ],
   });
-  return result.canceled ? null : result.filePaths[0];
+  if (result.canceled) return multiple ? [] : null;
+  return multiple ? result.filePaths : result.filePaths[0];
+}
+
+ipcMain.handle('omv:select-file-path', async (_event, options = {}) => {
+  return selectResultFilePaths(options, false);
+});
+
+ipcMain.handle('omv:select-file-paths', async (_event, options = {}) => {
+  return selectResultFilePaths(options, true);
 });
 
 app.whenReady().then(async () => {

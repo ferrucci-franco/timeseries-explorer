@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 
+const LOCAL_API_BASE = '/__omv_local__';
 let duckDbSourceClassPromise = null;
 
 async function loadDuckDbSourceClass() {
@@ -58,7 +59,7 @@ proto.loadFile = async function(file, options = {}) {
         const fileId   = `f${this._nextFileId++}`;
         const baseName = this._fileBaseName(currentFile.name);
         const transform = this._defaultFileTransform();
-        this.files.set(fileId, { file: currentFile, fileHandle: options.fileHandle || null, buffer, contentHash, name: baseName, extension, transform });
+        this.files.set(fileId, { file: currentFile, fileHandle: options.fileHandle || null, localPath: options.localPath || '', buffer, contentHash, name: baseName, extension, transform });
 
         // PlotManager takes ownership of the data
         this.plotManager.addFile(fileId, baseName, data, transform);
@@ -95,9 +96,10 @@ proto.loadFiles = async function(items = []) {
             const item = entries[index];
             const fileHandle = item?.fileHandle || null;
             const file = item?.file || (fileHandle ? null : item);
+            const localPath = item?.localPath || '';
             if (!file && !fileHandle) continue;
             this._updateFileLoadingOverlay(index + 1, entries.length, file?.name || fileHandle?.name || '', file?.size);
-            const result = await this.loadFile(file, { fileHandle, deferUi: true });
+            const result = await this.loadFile(file, { fileHandle, localPath, deferUi: true });
             if (result) loaded.push(result);
             await this._yieldToBrowser();
         }
@@ -237,6 +239,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
     this.files.set(fileId, {
         file: latestFile || source.file,
         fileHandle: source.fileHandle || null,
+        localPath: source.localPath || '',
         buffer,
         contentHash,
         name,
@@ -255,6 +258,13 @@ proto.reloadActiveFileAsNewVersion = async function() {
 };
 
 proto._readLatestFileForStreamableReload = async function(entry) {
+    if (entry.localPath) {
+        const file = await this._readLocalResultPath(entry.localPath);
+        entry.file = file;
+        entry.extension = this._fileExtension(file.name);
+        return file;
+    }
+
     if (entry.fileHandle?.getFile) {
         try {
             const file = await entry.fileHandle.getFile();
@@ -284,6 +294,14 @@ proto._readLatestFileForStreamableReload = async function(entry) {
 };
 
 proto._readLatestBuffer = async function(entry) {
+    if (entry.localPath) {
+        const file = await this._readLocalResultPath(entry.localPath);
+        const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+        entry.file = file;
+        entry.extension = this._fileExtension(file.name);
+        return buffer;
+    }
+
     if (entry.fileHandle?.getFile) {
         try {
             const file = await entry.fileHandle.getFile();
@@ -455,7 +473,35 @@ proto._getFileHandleSnapshot = async function(fileHandle) {
     }
 };
 
+proto._readLocalResultPath = async function(filePath) {
+    const response = await fetch(`${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`, { cache: 'no-store' });
+    if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(detail || i18n.t('errorLoading'));
+    }
+    const blob = await response.blob();
+    const name = String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'results.csv';
+    const lastModified = Number(response.headers.get('x-omv-last-modified')) || Date.now();
+    return new File([blob], name, { lastModified, type: response.headers.get('content-type') || 'application/octet-stream' });
+};
 proto._openResultFilesFromUser = async function() {
+    const desktopPicker = globalThis.omvDesktop?.selectFilePaths;
+    if (this.capabilities?.isDesktop && typeof desktopPicker === 'function') {
+        try {
+            const paths = await desktopPicker({ title: 'Select result files' });
+            if (!paths?.length) return;
+            const picked = [];
+            for (const localPath of paths) {
+                const file = await this._readLocalResultPath(localPath);
+                picked.push({ file, fileHandle: null, localPath });
+            }
+            await this.loadFiles(picked);
+            return;
+        } catch (err) {
+            console.warn('Desktop file picker failed; using browser file picker fallback.', err);
+        }
+    }
+
     if (this._canUseFileSystemPicker()) {
         try {
             const picked = await this._pickResultFilesWithHandles({ multiple: true });
