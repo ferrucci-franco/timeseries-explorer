@@ -336,6 +336,28 @@
     min-width: 0;
 }
 
+.file-entry-live-indicator {
+    width: 1.25rem;
+    height: 1.25rem;
+    flex: 0 0 1.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #16a34a;
+    cursor: help;
+}
+
+.file-entry-live-indicator svg {
+    width: 0.95rem;
+    height: 0.95rem;
+    display: block;
+    fill: currentColor;
+}
+
+.theme-dark .file-entry-live-indicator {
+    color: #4ade80;
+}
+
 .file-entry-transform,
 .file-entry-close {
     flex-shrink: 0;

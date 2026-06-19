@@ -827,6 +827,13 @@ proto._renderFilesList = function() {
             this._toggleFileTransformPanel(fileId);
         });
 
+        const liveIndicator = document.createElement('span');
+        liveIndicator.className = 'file-entry-live-indicator';
+        liveIndicator.title = 'This file is being polled in real time';
+        liveIndicator.setAttribute('role', 'img');
+        liveIndicator.setAttribute('aria-label', 'This file is being polled in real time');
+        liveIndicator.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h8V3l-3.35 3.35Z"/></svg>';
+
         const closeBtn = document.createElement('button');
         closeBtn.className = 'file-entry-close';
         closeBtn.textContent = 'x';
@@ -834,6 +841,7 @@ proto._renderFilesList = function() {
         closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.removeFile(fileId); });
 
         entry.appendChild(nameSpan);
+        if (entryData.liveUpdate?.enabled) entry.appendChild(liveIndicator);
         entry.appendChild(transformBtn);
         entry.appendChild(closeBtn);
         item.appendChild(entry);
