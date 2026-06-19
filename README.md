@@ -76,7 +76,7 @@ The generated files are written to `desktop-dist/`:
 - Parsers normalize input files into a common in-memory structure.
 - App methods are split by responsibility to reduce context size when editing.
 
-More detail: [docs/architecture.md](/c:/Users/ferrucci/OneDrive/UPF/courses/GitHub_Electronics/openmodelica-viewer/docs/architecture.md)
+More detail: [docs/architecture.md](docs/architecture.md)
 
 ## Production build
 

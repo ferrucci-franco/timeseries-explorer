@@ -179,7 +179,8 @@ async function publishDownloadArtifacts(zipPath, zipFileName, version, commit) {
   await ensureDir(downloadsRoot);
   await removeMatchingFiles(downloadsRoot, (name) => (
     name.startsWith('openmodelica-viewer-v') ||
-    name.startsWith('time-series-explorer-v')
+    name.startsWith('time-series-explorer-v') ||
+    name.startsWith('timeseries-explorer-v')
   ) && name.endsWith('.zip'));
   await fs.copyFile(zipPath, path.join(downloadsRoot, zipFileName));
   const manifest = {
@@ -193,7 +194,7 @@ async function publishDownloadArtifacts(zipPath, zipFileName, version, commit) {
 
 async function main() {
   const commit = getCommitShort();
-  const folderName = `time-series-explorer-v${pkg.version}-${commit}`;
+  const folderName = `timeseries-explorer-v${pkg.version}-${commit}`;
   const packageDir = path.join(outputRoot, folderName);
   const zipFileName = `${folderName}.zip`;
   const zipPath = path.join(outputRoot, zipFileName);

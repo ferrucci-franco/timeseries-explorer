@@ -1,4 +1,4 @@
-{
+﻿{
   "startedAt": "2026-05-23T22:56:09.797Z",
   "node": "v24.14.1",
   "platform": "win32",
@@ -6,7 +6,7 @@
   "files": [
     {
       "file": "12_eu_semicolon_decimalcomma.csv",
-      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\12_eu_semicolon_decimalcomma.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\timeseries-explorer\\test-files\\csv\\12_eu_semicolon_decimalcomma.csv",
       "sizeMB": 0,
       "runs": 2,
       "parseMs": {
@@ -34,7 +34,7 @@
     },
     {
       "file": "13_tab_separated.csv",
-      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\13_tab_separated.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\timeseries-explorer\\test-files\\csv\\13_tab_separated.csv",
       "sizeMB": 0.01,
       "runs": 2,
       "parseMs": {
@@ -62,7 +62,7 @@
     },
     {
       "file": "14_pvgis_style_with_comments.csv",
-      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\14_pvgis_style_with_comments.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\timeseries-explorer\\test-files\\csv\\14_pvgis_style_with_comments.csv",
       "sizeMB": 0,
       "runs": 2,
       "parseMs": {
@@ -90,7 +90,7 @@
     },
     {
       "file": "15_unix_timestamp_seconds.csv",
-      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\15_unix_timestamp_seconds.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\timeseries-explorer\\test-files\\csv\\15_unix_timestamp_seconds.csv",
       "sizeMB": 0.02,
       "runs": 2,
       "parseMs": {
@@ -118,7 +118,7 @@
     },
     {
       "file": "16_modelica_combitimetable_format.csv",
-      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\16_modelica_combitimetable_format.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\timeseries-explorer\\test-files\\csv\\16_modelica_combitimetable_format.csv",
       "sizeMB": 0.01,
       "runs": 2,
       "parseMs": {
@@ -146,7 +146,7 @@
     },
     {
       "file": "11_seattle_weather_USdate_24k.csv",
-      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\11_seattle_weather_USdate_24k.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\timeseries-explorer\\test-files\\csv\\11_seattle_weather_USdate_24k.csv",
       "sizeMB": 0.44,
       "runs": 2,
       "parseMs": {
@@ -174,7 +174,7 @@
     },
     {
       "file": "09_tesla_stock_dirty.csv",
-      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\test-files\\csv\\09_tesla_stock_dirty.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\timeseries-explorer\\test-files\\csv\\09_tesla_stock_dirty.csv",
       "sizeMB": 0.05,
       "error": "Invalid time value at CSV data row 1."
     }

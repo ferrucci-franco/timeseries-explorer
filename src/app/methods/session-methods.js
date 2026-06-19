@@ -480,7 +480,7 @@ proto._downloadBlob = function(blob, filename) {
 proto._defaultSessionFileName = function(kind, extension) {
     const base = this.activeFileId
         ? this._fileBaseName(this._fileDisplayName(this.files.get(this.activeFileId)))
-        : 'openmodelica-viewer';
+        : 'timeseries-explorer';
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
     return `${this._safeFileName(base)}-${kind}-${stamp}.${extension}`;
 };

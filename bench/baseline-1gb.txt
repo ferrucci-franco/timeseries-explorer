@@ -1,4 +1,4 @@
-
+﻿
 --- bench/data/synth-1gb.csv ---
   ERROR: Cannot create a string longer than 0x1fffffe8 characters
 {
@@ -9,7 +9,7 @@
   "files": [
     {
       "file": "synth-1gb.csv",
-      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\openmodelica-viewer\\bench\\data\\synth-1gb.csv",
+      "path": "C:\\Users\\ferru\\OneDrive\\UPF\\courses\\GitHub_Electronics\\timeseries-explorer\\bench\\data\\synth-1gb.csv",
       "sizeMB": 1047.71,
       "error": "Cannot create a string longer than 0x1fffffe8 characters"
     }

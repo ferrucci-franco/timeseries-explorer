@@ -1,5 +1,5 @@
 {
-  "name": "openmodelica-viewer",
+  "name": "timeseries-explorer",
   "private": true,
   "version": "0.1.0",
   "description": "Desktop and web time-series explorer for OpenModelica, Dymola, CSV, and Parquet result files.",
@@ -33,7 +33,7 @@
     "plotly.js-dist-min": "^3.5.1"
   },
   "build": {
-    "appId": "io.github.ferrucci-franco.openmodelica-viewer",
+    "appId": "io.github.ferrucci-franco.timeseries-explorer",
     "productName": "Time Series Explorer",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "directories": {

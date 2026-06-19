@@ -297,7 +297,7 @@ proto._canUseLocalLiveApi = async function() {
         const response = await fetch(`${LOCAL_API_BASE}/status`, { cache: 'no-store' });
         if (!response.ok) return false;
         const status = await response.json();
-        return status?.ok === true && status?.app === 'openmodelica-viewer';
+        return status?.ok === true && (status.app === 'timeseries-explorer' || status.app === 'openmodelica-viewer');
     } catch {
         return false;
     }
