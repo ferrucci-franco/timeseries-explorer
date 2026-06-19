@@ -168,16 +168,35 @@ proto._pollLiveUpdate = async function(fileId) {
         state.message = i18n.t('liveUpdatePolling');
         this._renderFilesList();
 
-        const latestFile = await this._readLiveUpdateFile(entry);
-        const fingerprint = this._fileFingerprint(latestFile);
-        if (fingerprint && fingerprint === state.lastFingerprint) {
-            state.status = 'ok';
-            state.message = i18n.t('liveUpdateNoChanges');
-            return;
-        }
-
         const previousData = this.plotManager.files.get(fileId)?.data;
-        const nextData = await this._parseResultBuffer(this._fileDisplayName(entry), null, latestFile);
+
+        // The writer appends to the file continuously. getFile() only snapshots
+        // the file's size/mtime; the bytes are read later during parsing. If an
+        // append lands in between, the snapshot is stale and the read throws
+        // NotReadableError. Re-read a few times so a concurrent write just
+        // retries instead of stopping live update.
+        let latestFile;
+        let fingerprint;
+        let nextData;
+        for (let attempt = 0; ; attempt++) {
+            try {
+                latestFile = await this._readLiveUpdateFile(entry);
+                fingerprint = this._fileFingerprint(latestFile);
+                if (fingerprint && fingerprint === state.lastFingerprint) {
+                    state.status = 'ok';
+                    state.message = i18n.t('liveUpdateNoChanges');
+                    return;
+                }
+                nextData = await this._parseResultBuffer(this._fileDisplayName(entry), null, latestFile);
+                break;
+            } catch (err) {
+                if (this._isTransientReadError(err) && attempt < 4) {
+                    await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+                    continue;
+                }
+                throw err;
+            }
+        }
         const outcome = this._validateLiveUpdateData(previousData, nextData);
         if (outcome.action === 'unchanged') {
             state.status = 'ok';
@@ -217,6 +236,17 @@ proto._pollLiveUpdate = async function(fileId) {
     }
 };
 
+proto._isTransientReadError = function(err) {
+    // Thrown by the File System Access API when the on-disk file changed between
+    // the getFile() snapshot and reading its bytes (a concurrent append), or was
+    // momentarily locked by the writer. Both clear up on the next read.
+    const name = err?.name || '';
+    const message = err?.message || '';
+    return name === 'NotReadableError'
+        || name === 'NotFoundError'
+        || (name === 'TypeError' && /fetch|network|load failed|terminated/i.test(message));
+};
+
 proto._readLiveUpdateFile = async function(entry) {
     if (entry.fileHandle?.getFile) {
         return entry.fileHandle.getFile();
@@ -228,7 +258,10 @@ proto._readLiveUpdateFile = async function(entry) {
     const response = await fetch(url, { cache: 'no-store' });
     if (!response.ok) {
         const detail = await response.text().catch(() => '');
-        throw new Error(detail || i18n.t('liveUpdateLocalServerUnavailable'));
+        const err = new Error(detail || i18n.t('liveUpdateLocalServerUnavailable'));
+        if (response.status === 404) err.name = 'NotFoundError';
+        if (response.status === 409) err.name = 'NotReadableError';
+        throw err;
     }
     if (!response.headers.get('x-omv-last-modified')) {
         throw new Error(i18n.t('liveUpdateLocalServerUnavailable'));

@@ -65,15 +65,32 @@ async function handleApi(req, res, url) {
         }
 
         const ext = path.extname(filePath).toLowerCase();
-        res.writeHead(200, {
+        const headers = {
             'content-type': mimeTypes.get(ext) || 'application/octet-stream',
             'content-length': stat.size,
             'last-modified': stat.mtime.toUTCString(),
             'x-omv-last-modified': String(stat.mtimeMs),
             'cache-control': 'no-store',
             'x-content-type-options': 'nosniff',
+        };
+        if (stat.size === 0) {
+            res.writeHead(200, headers);
+            res.end();
+            return;
+        }
+        const stream = createReadStream(filePath, { start: 0, end: stat.size - 1 });
+        stream.once('open', () => {
+            res.writeHead(200, headers);
+            stream.pipe(res);
         });
-        createReadStream(filePath).pipe(res);
+        stream.once('error', err => {
+            if (res.headersSent) {
+                res.destroy(err);
+                return;
+            }
+            const code = err?.code === 'ENOENT' ? 404 : 409;
+            sendText(res, code, code === 409 ? 'File temporarily unavailable' : 'File not found');
+        });
         return;
     }
 
