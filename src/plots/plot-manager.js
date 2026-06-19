@@ -1818,18 +1818,21 @@ class PlotManager {
         const visibleTraces = plot.traces.filter(t => this._isVisible(t));
         if (!visibleTraces.length) return captured;
 
+        const traceSeries = [];
         const xArrays = [];
         const yArrays = [];
         for (const trace of visibleTraces) {
             const data = this.files.get(trace.fileId)?.data;
             const variable = data?.variables?.[trace.varName];
             if (!variable || variable.kind === 'parameter') continue;
-            xArrays.push(this._getTransformedTimeData(trace.fileId));
-            yArrays.push(this._getTransformedVariableData(trace.fileId, trace.varName));
+            const x = this._getTransformedTimeData(trace.fileId);
+            const y = this._getTransformedVariableData(trace.fileId, trace.varName);
+            traceSeries.push({ x, y });
+            xArrays.push(x);
+            yArrays.push(y);
         }
 
         const xExtent = this._finiteExtent(xArrays);
-        const yExtent = this._finiteExtent(yArrays);
         const nextView = { ...captured };
         const primaryFileId = visibleTraces[0]?.fileId || fileId;
         const timeVar = this._getTimeVar(primaryFileId);
@@ -1855,14 +1858,22 @@ class PlotManager {
 
         if (policy.yMode === 'autoscale') {
             nextView.yRange = null;
-        } else if (policy.yMode === 'expand' && yExtent) {
+        } else if (policy.yMode === 'expand') {
+            const yExtent = nextView.xRange
+                ? this._finiteYExtentInXRange(traceSeries, nextView.xRange)
+                : this._finiteExtent(yArrays);
             const oldRange = captured.yRange?.map(Number);
-            if (oldRange?.every(Number.isFinite)) {
-                const min = Math.min(oldRange[0], yExtent.min);
-                const max = Math.max(oldRange[1], yExtent.max);
-                nextView.yRange = min === oldRange[0] && max === oldRange[1]
+            if (!yExtent) {
+                nextView.yRange = captured.yRange;
+            } else if (oldRange?.every(Number.isFinite)) {
+                const oldMin = Math.min(oldRange[0], oldRange[1]);
+                const oldMax = Math.max(oldRange[0], oldRange[1]);
+                const min = Math.min(oldMin, yExtent.min);
+                const max = Math.max(oldMax, yExtent.max);
+                const expanded = min === oldMin && max === oldMax
                     ? captured.yRange
-                    : this._padRange(min, max);
+                    : (oldRange[0] <= oldRange[1] ? [min, max] : [max, min]);
+                nextView.yRange = min === max ? this._padRange(min, max) : expanded;
             } else {
                 nextView.yRange = this._padRange(yExtent.min, yExtent.max);
             }
@@ -1871,6 +1882,30 @@ class PlotManager {
         }
 
         return nextView;
+    }
+
+    _finiteYExtentInXRange(series, xRange) {
+        const a = this._coerceAxisValue(xRange?.[0]);
+        const b = this._coerceAxisValue(xRange?.[1]);
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+        const minX = Math.min(a, b);
+        const maxX = Math.max(a, b);
+        let min = Infinity;
+        let max = -Infinity;
+        for (const item of series || []) {
+            const x = item?.x || [];
+            const y = item?.y || [];
+            const count = Math.min(x.length, y.length);
+            for (let i = 0; i < count; i++) {
+                const xv = this._coerceAxisValue(x[i]);
+                if (!Number.isFinite(xv) || xv < minX || xv > maxX) continue;
+                const yv = Number(y[i]);
+                if (!Number.isFinite(yv)) continue;
+                if (yv < min) min = yv;
+                if (yv > max) max = yv;
+            }
+        }
+        return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
     }
 
     _getTimeVar(fileId = this.activeFileId) {
