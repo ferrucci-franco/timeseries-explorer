@@ -117,8 +117,15 @@ proto._startLiveUpdate = async function(fileId) {
         return;
     }
 
+    const canUseLocalApi = await this._canUseLocalLiveApi();
+    if (canUseLocalApi && !state.localPath) {
+        const path = await this._promptLiveUpdatePath(entry, state.localPath || '');
+        if (!path) return;
+        state.localPath = path;
+    }
+
     if (!this._liveUpdateHasReadableSource(entry)) {
-        if (!await this._canUseLocalLiveApi()) {
+        if (!canUseLocalApi) {
             await Modal.alert(i18n.t('liveUpdateTitle'), i18n.t('liveUpdateNeedsLauncher'), { icon: 'LIVE' });
             return;
         }
@@ -248,12 +255,17 @@ proto._isTransientReadError = function(err) {
 };
 
 proto._readLiveUpdateFile = async function(entry) {
+    const path = entry.liveUpdate?.localPath;
+    if (path) {
+        return this._readLiveUpdateLocalPath(entry, path);
+    }
     if (entry.fileHandle?.getFile) {
         return entry.fileHandle.getFile();
     }
-    const path = entry.liveUpdate?.localPath;
-    if (!path) throw new Error(i18n.t('liveUpdateNoSource'));
+    throw new Error(i18n.t('liveUpdateNoSource'));
+};
 
+proto._readLiveUpdateLocalPath = async function(entry, path) {
     const url = `${LOCAL_API_BASE}/file?path=${encodeURIComponent(path)}`;
     const response = await fetch(url, { cache: 'no-store' });
     if (!response.ok) {
