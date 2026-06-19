@@ -345,6 +345,7 @@
     justify-content: center;
     color: #166534;
     cursor: help;
+    border-radius: 999px;
 }
 
 .file-entry-live-indicator svg {
@@ -359,7 +360,9 @@
 }
 
 .file-entry.active .file-entry-live-indicator {
-    color: #dcfce7;
+    background: #bbf7d0;
+    color: #166534;
+    box-shadow: 0 0 0 1px rgba(22, 101, 52, 0.35);
 }
 
 .file-entry-transform,
