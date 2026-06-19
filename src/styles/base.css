@@ -353,21 +353,70 @@ body {
     height: var(--top-bar-control-height);
 }
 
-.live-update-file-btn .icon {
-    font-size: 0.64rem;
-    font-weight: 800;
-    letter-spacing: 0;
-    line-height: 1;
+.live-update-file-btn {
+    min-width: 2.65rem;
+    padding-inline: 0.48rem;
 }
 
-.live-update-file-btn.active {
-    border-color: #2e7d32;
-    background-color: color-mix(in srgb, #2e7d32 18%, var(--bg-primary));
-    color: #1b5e20;
+.live-update-file-btn .icon {
+    width: 1.35rem;
+    height: 1.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.live-update-svg {
+    width: 1.35rem;
+    height: 1.35rem;
+    display: block;
+}
+
+.live-update-refresh {
+    fill: currentColor;
+}
+
+.live-update-clock-face {
+    fill: var(--bg-primary);
+    stroke: #00c853;
+    stroke-width: 1.7;
+}
+
+.live-update-clock-hand {
+    fill: none;
+    stroke: #00a843;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+#live-update-file.live-update-file-btn.active {
+    border-color: #00c853;
+    background-color: color-mix(in srgb, #00c853 20%, var(--bg-primary));
+    color: #008c3a;
+    box-shadow: 0 0 0 2px color-mix(in srgb, #00c853 26%, transparent);
+}
+
+#live-update-file.live-update-file-btn.active .live-update-clock-face {
+    fill: #00e676;
+    stroke: #008c3a;
+}
+
+#live-update-file.live-update-file-btn.active .live-update-clock-hand {
+    stroke: #064e3b;
 }
 
 .theme-dark .live-update-file-btn.active {
-    color: #9ad89d;
+    color: #69f0ae;
+}
+
+.theme-dark .live-update-clock-face {
+    fill: var(--bg-secondary);
+}
+
+.theme-dark #live-update-file.live-update-file-btn.active .live-update-clock-face {
+    fill: #00c853;
+    stroke: #b9f6ca;
 }
 
 .live-update-menu-btn {

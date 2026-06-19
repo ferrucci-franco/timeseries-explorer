@@ -39,7 +39,13 @@
             </div>
             <div class="example-menu-wrap live-update-topbar-wrap">
                 <button id="live-update-file" class="icon-btn live-update-file-btn" title="Live update" disabled>
-                    <span class="icon">LIVE</span>
+                    <span class="icon live-update-icon" aria-hidden="true">
+                        <svg class="live-update-svg" viewBox="0 0 24 24" focusable="false">
+                            <path class="live-update-refresh" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h8V3l-3.35 3.35Z"/>
+                            <circle class="live-update-clock-face" cx="17" cy="17" r="4.6"/>
+                            <path class="live-update-clock-hand" d="M17 14.6v2.6l1.8 1.1"/>
+                        </svg>
+                    </span>
                 </button>
                 <button id="live-update-menu-btn" class="icon-btn live-update-menu-btn" title="Live update options" aria-haspopup="true" aria-expanded="false" disabled>
                     <span class="icon">▾</span>
