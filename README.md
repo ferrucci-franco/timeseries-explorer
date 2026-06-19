@@ -38,6 +38,7 @@ npm run desktop
 ```
 
 It builds the web app into `dist/`, starts an Electron-local localhost server, and opens the app as Full Desktop.
+On Windows, you can also double-click `start-full-desktop.bat`. The first run installs missing npm dependencies if needed.
 
 ## Project map
 
