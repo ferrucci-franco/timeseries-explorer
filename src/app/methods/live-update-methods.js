@@ -127,7 +127,7 @@ proto._startLiveUpdate = async function(fileId) {
 
     const canUseLocalApi = await this._canUseLocalLiveApi();
     if (canUseLocalApi && !state.localPath) {
-        const path = await this._promptLiveUpdatePath(entry, state.localPath || '');
+        const path = await this._requestLiveUpdatePath(entry, state.localPath || '');
         if (!path) return;
         state.localPath = path;
     }
@@ -137,7 +137,7 @@ proto._startLiveUpdate = async function(fileId) {
             await Modal.alert(i18n.t('liveUpdateTitle'), i18n.t('liveUpdateNeedsLauncher'), { icon: 'LIVE' });
             return;
         }
-        const path = await this._promptLiveUpdatePath(entry, state.localPath || '');
+        const path = await this._requestLiveUpdatePath(entry, state.localPath || '');
         if (!path) return;
         state.localPath = path;
     }
@@ -341,6 +341,21 @@ proto._validateLiveUpdateData = function(previousData, nextData) {
         nextRows: nextTime.length,
         addedRows: nextTime.length - previousTime.length,
     };
+};
+
+proto._requestLiveUpdatePath = async function(entry, initialValue = '') {
+    const desktopPicker = globalThis.omvDesktop?.selectFilePath;
+    if (this.capabilities?.isDesktop && typeof desktopPicker === 'function') {
+        try {
+            return await desktopPicker({
+                defaultPath: initialValue || entry?.liveUpdate?.localPath || '',
+                title: i18n.t('liveUpdatePathTitle'),
+            }) || '';
+        } catch (err) {
+            console.warn('Desktop file picker failed, falling back to path prompt:', err);
+        }
+    }
+    return this._promptLiveUpdatePath(entry, initialValue);
 };
 
 proto._promptLiveUpdatePath = function(entry, initialValue = '') {

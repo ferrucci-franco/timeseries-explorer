@@ -184,8 +184,10 @@ async function createWindow(url) {
   await win.loadURL(url);
 }
 
-ipcMain.handle('omv:select-file-path', async () => {
+ipcMain.handle('omv:select-file-path', async (_event, options = {}) => {
   const result = await dialog.showOpenDialog({
+    title: typeof options.title === 'string' ? options.title : 'Select live update file',
+    defaultPath: typeof options.defaultPath === 'string' && options.defaultPath ? options.defaultPath : undefined,
     properties: ['openFile'],
     filters: [
       { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet'] },
