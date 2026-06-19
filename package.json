@@ -2,7 +2,7 @@
   "name": "openmodelica-viewer",
   "private": true,
   "version": "0.1.0",
-  "description": "Desktop and web viewer for OpenModelica, Dymola, CSV, and Parquet result files.",
+  "description": "Desktop and web time-series explorer for OpenModelica, Dymola, CSV, and Parquet result files.",
   "author": "Franco Ferrucci",
   "type": "module",
   "main": "electron/main.cjs",
@@ -34,7 +34,7 @@
   },
   "build": {
     "appId": "io.github.ferrucci-franco.openmodelica-viewer",
-    "productName": "OpenModelica Viewer",
+    "productName": "Time Series Explorer",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "desktop-dist"

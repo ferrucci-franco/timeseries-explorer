@@ -145,7 +145,7 @@ async function copyPortableLauncher(packageDir) {
 
 async function writeOfflineReadme(packageDir, folderName) {
   const text = [
-    `OpenModelica Viewer portable package`,
+    `Time Series Explorer portable package`,
     ``,
     `Folder: ${folderName}`,
     `Version: ${pkg.version}`,
@@ -177,7 +177,10 @@ async function createZip(packageDir, zipPath, folderName) {
 
 async function publishDownloadArtifacts(zipPath, zipFileName, version, commit) {
   await ensureDir(downloadsRoot);
-  await removeMatchingFiles(downloadsRoot, (name) => name.startsWith('openmodelica-viewer-v') && name.endsWith('.zip'));
+  await removeMatchingFiles(downloadsRoot, (name) => (
+    name.startsWith('openmodelica-viewer-v') ||
+    name.startsWith('time-series-explorer-v')
+  ) && name.endsWith('.zip'));
   await fs.copyFile(zipPath, path.join(downloadsRoot, zipFileName));
   const manifest = {
     version,
@@ -190,7 +193,7 @@ async function publishDownloadArtifacts(zipPath, zipFileName, version, commit) {
 
 async function main() {
   const commit = getCommitShort();
-  const folderName = `openmodelica-viewer-v${pkg.version}-${commit}`;
+  const folderName = `time-series-explorer-v${pkg.version}-${commit}`;
   const packageDir = path.join(outputRoot, folderName);
   const zipFileName = `${folderName}.zip`;
   const zipPath = path.join(outputRoot, zipFileName);

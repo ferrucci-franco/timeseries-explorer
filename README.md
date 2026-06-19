@@ -1,4 +1,4 @@
-# OpenModelica Viewer
+# Time Series Explorer
 
 Frontend web app for visualizing OpenModelica, Dymola, and CSV result files.
 
@@ -22,7 +22,7 @@ Then open the URL shown in the terminal, usually:
 http://localhost:8000/index.html
 ```
 
-This is also the recommended local workflow for Live Update. When Node is available, `serve.bat` starts the OpenModelica Viewer local server, which serves the app and exposes the localhost-only file API used to follow growing CSV files by path in browsers such as Firefox.
+This is also the recommended local workflow for Live Update. When Node is available, `serve.bat` starts the Time Series Explorer local server, which serves the app and exposes the localhost-only file API used to follow growing CSV files by path in browsers such as Firefox.
 
 For normal web development without the local file API, use Vite:
 
@@ -48,8 +48,8 @@ npm run desktop:dist
 
 The generated files are written to `desktop-dist/`:
 
-- `OpenModelica Viewer-<version>-setup-x64.exe`: Windows installer.
-- `OpenModelica Viewer-<version>-portable-x64.exe`: portable executable.
+- `Time Series Explorer-<version>-setup-x64.exe`: Windows installer.
+- `Time Series Explorer-<version>-portable-x64.exe`: portable executable.
 
 ## Project map
 

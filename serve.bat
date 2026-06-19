@@ -69,7 +69,7 @@ exit /b 1
 
 :run_local_live
 echo.
-echo Iniciando OpenModelica Viewer Light Local en:
+echo Iniciando Time Series Explorer Light Local en:
 echo   %SERVER_URL%
 echo.
 echo Este modo incluye la API localhost para Live Update por path.
@@ -84,7 +84,7 @@ exit /b 0
 
 :run_vite
 echo.
-echo Iniciando OpenModelica Viewer Light Web con Vite en:
+echo Iniciando Time Series Explorer Light Web con Vite en:
 echo   %SERVER_URL%
 echo.
 echo Aviso: este modo no incluye la API local para Live Update por path.
@@ -99,7 +99,7 @@ exit /b 0
 
 :run_python
 echo.
-echo Iniciando OpenModelica Viewer Light Web con Python en:
+echo Iniciando Time Series Explorer Light Web con Python en:
 echo   %SERVER_URL%
 echo.
 echo Aviso: este modo no incluye la API local para Live Update por path.

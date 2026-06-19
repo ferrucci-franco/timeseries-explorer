@@ -1,7 +1,7 @@
 const translations = {
         en: {
             // App title
-            appTitle: 'OpenModelica/Dymola & CSV Result Viewer',
+            appTitle: 'Time Series Explorer',
 
             // Top bar
             variables: 'Variables',
@@ -142,7 +142,7 @@ const translations = {
             liveUpdateCsvOnlyShort: 'CSV/text files only',
             liveUpdateHandleReady: 'Ready: browser file handle available',
             liveUpdateNeedsPath: 'No live file handle. Start to enter a local path when using serve.bat or the offline localhost launcher.',
-            liveUpdateNeedsLauncher: 'This page is not running through the OpenModelica Viewer local server. In Firefox/Safari, live update by path works from serve.bat or the offline localhost launcher. From a regular static server, use manual reload.',
+            liveUpdateNeedsLauncher: 'This page is not running through the Time Series Explorer local server. In Firefox/Safari, live update by path works from serve.bat or the offline localhost launcher. From a regular static server, use manual reload.',
             liveUpdateNoSource: 'No live-readable source is available for this file.',
             liveUpdateNoActiveFile: 'No active file',
             liveUpdateInvalidData: 'The updated file could not be parsed as compatible time-series data.',
@@ -319,7 +319,7 @@ const translations = {
             sessionNoFilesTitle: 'No files loaded',
             sessionNoFilesBody: 'Load at least one result or text file before saving a view or project.',
             sessionLoadFailedTitle: 'Could not load session',
-            sessionInvalidFile: 'This is not a valid OpenModelica Viewer session file.',
+            sessionInvalidFile: 'This is not a valid Time Series Explorer session file.',
             sessionUnsupportedFile: 'Select a .json view or a .zip project file.',
             sessionZipMissing: 'The project zip does not contain session.json.',
             sessionMissingProjectData: 'The project zip is missing data for {file}.',
@@ -372,7 +372,7 @@ const translations = {
             saDZoomLabel: 'Zoom',
 
             // Help
-            helpTitle: 'Help — OpenModelica/Dymola & CSV Result Viewer',
+            helpTitle: 'Help - Time Series Explorer',
             helpClose: 'Close',
             helpSec1Title: 'Purpose',
             helpSec1Body: 'This application opens simulation result files in <b>.mat</b> format produced by <b>OpenModelica</b> and <b>Dymola</b>, and also plain <b>.csv</b> files from any source (spreadsheet, lab equipment, custom scripts, etc.) with a header row followed by numeric values. In CSV files, the first column is treated as time. Headers can include units in square or round brackets (for example <code>voltage [V]</code>, <code>temperature (C)</code>); they are detected automatically.<br>Load a file by dragging it into the drop zone, or by clicking the <b>📂</b> button in the top bar. Reload the active file at any time with <b>🔄</b>.',
@@ -399,7 +399,7 @@ const translations = {
         },
         fr: {
             // App title
-            appTitle: 'Visualiseur de résultats OpenModelica/Dymola & CSV',
+            appTitle: 'Time Series Explorer',
 
             // Top bar
             variables: 'Variables',
@@ -659,7 +659,7 @@ const translations = {
             sessionNoFilesTitle: 'Aucun fichier charge',
             sessionNoFilesBody: 'Chargez au moins un fichier de résultats ou texte avant d enregistrer une vue ou un projet.',
             sessionLoadFailedTitle: 'Impossible de charger la session',
-            sessionInvalidFile: 'Ce fichier n est pas une session OpenModelica Viewer valide.',
+            sessionInvalidFile: 'Ce fichier n est pas une session Time Series Explorer valide.',
             sessionUnsupportedFile: 'Selectionnez une vue .json ou un projet .zip.',
             sessionZipMissing: 'Le zip du projet ne contient pas session.json.',
             sessionMissingProjectData: 'Le zip du projet ne contient pas les donnees de {file}.',
@@ -711,7 +711,7 @@ const translations = {
             saDZoomLabel: 'Zoom',
 
             // Help
-            helpTitle: 'Aide — Visualiseur de résultats OpenModelica/Dymola & CSV',
+            helpTitle: 'Aide - Time Series Explorer',
             helpClose: 'Fermer',
             helpSec1Title: 'But',
             helpSec1Body: 'Cette application ouvre des fichiers de résultats de simulation au format <b>.mat</b> produits par <b>OpenModelica</b> et <b>Dymola</b>, ainsi que des fichiers <b>.csv</b> provenant de n’importe quelle source (tableur, instrument de laboratoire, script personnalisé, etc.) avec une ligne d’en-tête suivie de valeurs numériques. Dans les CSV, la première colonne est interprétée comme le temps. Les en-têtes peuvent inclure des unités entre crochets ou parenthèses (par exemple <code>tension [V]</code>, <code>température (C)</code>) ; elles sont détectées automatiquement.<br>Chargez un fichier en le faisant glisser dans la zone de dépôt, ou en cliquant sur le bouton <b>📂</b> de la barre supérieure. Rechargez le fichier actif à tout moment avec <b>🔄</b>.',
@@ -737,7 +737,7 @@ const translations = {
             helpSec11Body: 'Utilisez <b>Extra → Enregistrer la vue (.json)</b> pour enregistrer la configuration visuelle sans les donnees : ouvrez d abord des fichiers de resultats compatibles, puis chargez la vue pour restaurer la disposition, les traces, les transformations, les zooms, les cameras et les variables derivees. Utilisez <b>Extra → Enregistrer le projet complet (.zip)</b> pour enregistrer la configuration avec les fichiers charges. Ensuite, <b>Extra → Charger vue/projet (.json/.zip)</b> ouvre les deux formats : les vues JSON s appliquent aux fichiers compatibles deja ouverts, tandis que les projets ZIP restaurent automatiquement les fichiers et la vue.'
         },
         es: {
-            appTitle: 'Visor de resultados OpenModelica/Dymola y CSV',
+            appTitle: 'Time Series Explorer',
             variables: 'Variables',
             filterVariables: 'Filtrar variables…',
             layout: 'Configuración de diseño',
@@ -976,7 +976,7 @@ const translations = {
             sessionNoFilesTitle: 'No hay archivos cargados',
             sessionNoFilesBody: 'Carga al menos un archivo de resultados o texto antes de guardar una vista o proyecto.',
             sessionLoadFailedTitle: 'No se pudo cargar la sesion',
-            sessionInvalidFile: 'Este no es un archivo de sesion valido de OpenModelica Viewer.',
+            sessionInvalidFile: 'Este no es un archivo de sesion valido de Time Series Explorer.',
             sessionUnsupportedFile: 'Selecciona una vista .json o un proyecto .zip.',
             sessionZipMissing: 'El zip del proyecto no contiene session.json.',
             sessionMissingProjectData: 'Al zip del proyecto le faltan los datos de {file}.',
@@ -1019,7 +1019,7 @@ const translations = {
             saTraceLabel: 'Traza',
             saNormLabel: 'Norma',
             saDZoomLabel: 'Zoom',
-            helpTitle: 'Ayuda — Visor de resultados OpenModelica/Dymola y CSV',
+            helpTitle: 'Ayuda - Time Series Explorer',
             helpClose: 'Cerrar',
             helpSec1Title: 'Propósito',
             helpSec1Body: 'Esta aplicación abre archivos de resultados de simulación en formato <b>.mat</b> producidos por <b>OpenModelica</b> y <b>Dymola</b>, y también archivos <b>.csv</b> de cualquier origen (hoja de cálculo, instrumento de laboratorio, script personalizado, etc.) con una fila de cabecera seguida de valores numéricos. En los archivos CSV, la primera columna se trata como tiempo. Las cabeceras pueden incluir unidades entre corchetes o paréntesis (por ejemplo <code>tensión [V]</code>, <code>temperatura (C)</code>); se detectan automáticamente.<br>Carga un archivo arrastrándolo a la zona de suelta, o haciendo clic en el botón <b>📂</b> de la barra superior. Recarga el archivo activo en cualquier momento con <b>🔄</b>.',
@@ -1045,7 +1045,7 @@ const translations = {
             helpSec11Body: 'Usa <b>Extra → Guardar vista (.json)</b> para guardar la configuracion visual sin datos: abre primero archivos de resultados compatibles y luego carga la vista para restaurar layout, trazas, transforms, zooms, camaras y variables derivadas. Usa <b>Extra → Guardar proyecto completo (.zip)</b> para guardar la configuracion junto con los archivos de datos cargados. Luego, <b>Extra → Cargar vista/proyecto (.json/.zip)</b> abre cualquiera de los dos formatos: las vistas JSON se aplican sobre archivos compatibles ya abiertos, mientras que los proyectos ZIP restauran automaticamente los archivos y la vista.'
         },
         it: {
-            appTitle: 'Visualizzatore risultati OpenModelica/Dymola & CSV',
+            appTitle: 'Time Series Explorer',
             variables: 'Variabili',
             filterVariables: 'Filtra variabili…',
             layout: 'Configurazione layout',
@@ -1284,7 +1284,7 @@ const translations = {
             sessionNoFilesTitle: 'Nessun file caricato',
             sessionNoFilesBody: 'Carica almeno un file risultati o testo prima di salvare una vista o un progetto.',
             sessionLoadFailedTitle: 'Impossibile caricare la sessione',
-            sessionInvalidFile: 'Questo non e un file sessione valido di OpenModelica Viewer.',
+            sessionInvalidFile: 'Questo non e un file sessione valido di Time Series Explorer.',
             sessionUnsupportedFile: 'Seleziona una vista .json o un progetto .zip.',
             sessionZipMissing: 'Lo zip del progetto non contiene session.json.',
             sessionMissingProjectData: 'Nello zip del progetto mancano i dati di {file}.',
@@ -1327,7 +1327,7 @@ const translations = {
             saTraceLabel: 'Traccia',
             saNormLabel: 'Norma',
             saDZoomLabel: 'Zoom',
-            helpTitle: 'Guida — Visualizzatore risultati OpenModelica/Dymola & CSV',
+            helpTitle: 'Guida - Time Series Explorer',
             helpClose: 'Chiudi',
             helpSec1Title: 'Scopo',
             helpSec1Body: 'Questa applicazione apre file di risultati di simulazione in formato <b>.mat</b> prodotti da <b>OpenModelica</b> e <b>Dymola</b>, e anche file <b>.csv</b> di qualsiasi origine (fogli di calcolo, strumenti di laboratorio, script personalizzati, …) con una riga di intestazione seguita da valori numerici. Nei CSV, la prima colonna viene trattata come tempo. Le intestazioni possono includere unità tra parentesi quadre o tonde (ad esempio <code>tensione [V]</code>, <code>temperatura (C)</code>); vengono riconosciute automaticamente.<br>Caricare un file trascinandolo nella zona di rilascio, oppure facendo clic sul pulsante <b>📂</b> nella barra superiore. Ricaricare il file attivo in qualsiasi momento con <b>🔄</b>.',

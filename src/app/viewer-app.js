@@ -153,7 +153,7 @@ class OpenModelicaViewer {
         const features = FULL_VERSION_FEATURES.map(feature => `<li>${this._escapeHtml(feature)}</li>`).join('');
         return `
             <div class="light-notice-kicker">${mode}</div>
-            <h3>OpenModelica Viewer Light</h3>
+            <h3>Time Series Explorer Light</h3>
             ${localLine}
             <p>For the Full version, download the offline desktop app. It is planned for:</p>
             <ul>${features}</ul>

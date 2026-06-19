@@ -15,7 +15,7 @@ if errorlevel 1 (
 
 if not exist "node_modules\electron\dist\electron.exe" (
     echo.
-    echo Preparando dependencias de OpenModelica Viewer Full Desktop...
+    echo Preparando dependencias de Time Series Explorer Full Desktop...
     echo Esto puede tardar la primera vez.
     echo.
     call npm.cmd install
@@ -29,7 +29,7 @@ if not exist "node_modules\electron\dist\electron.exe" (
 )
 
 echo.
-echo Iniciando OpenModelica Viewer Full Desktop...
+echo Iniciando Time Series Explorer Full Desktop...
 echo.
 call npm.cmd run desktop
 if errorlevel 1 (

@@ -177,7 +177,7 @@ function listenOnAvailablePort(port) {
 
 const { port } = await listenOnAvailablePort(preferredPort);
 const url = `http://localhost:${port}/index.html`;
-console.log(`OpenModelica Viewer local server`);
+console.log(`Time Series Explorer local server`);
 console.log(`Serving ${packageRoot}`);
 console.log(`Open ${url}`);
 openBrowser(url);
