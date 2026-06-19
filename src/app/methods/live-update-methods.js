@@ -44,13 +44,16 @@ proto._updateLiveUpdateTopBar = function() {
     const toggle = document.getElementById('live-update-file');
     const menuBtn = document.getElementById('live-update-menu-btn');
     if (!toggle || !menuBtn) return;
+    const canUseLive = !!this.capabilities?.canUseLiveUpdate;
     const entry = this.activeFileId ? this.files.get(this.activeFileId) : null;
     const state = this.activeFileId ? this._ensureLiveUpdateState(this.activeFileId) : null;
-    const hasCandidate = !!entry && this._isLiveUpdateCandidate(entry);
+    const hasCandidate = canUseLive && !!entry && this._isLiveUpdateCandidate(entry);
     toggle.disabled = !hasCandidate;
-    menuBtn.disabled = !entry;
+    menuBtn.disabled = !canUseLive || !entry;
     toggle.classList.toggle('active', !!state?.enabled);
-    toggle.title = state?.message || (entry ? this._liveUpdateSupportMessage(entry) : i18n.t('liveUpdateTitle'));
+    toggle.title = canUseLive
+        ? (state?.message || (entry ? this._liveUpdateSupportMessage(entry) : i18n.t('liveUpdateTitle')))
+        : 'Live Update is available in Light Local or Full Desktop.';
 };
 
 proto._ensureLiveUpdateState = function(fileId) {
@@ -111,6 +114,11 @@ proto._startLiveUpdate = async function(fileId) {
     const entry = this.files.get(fileId);
     const state = this._ensureLiveUpdateState(fileId);
     if (!entry || !state) return;
+
+    if (!this.capabilities?.canUseLiveUpdate) {
+        await Modal.alert(i18n.t('liveUpdateTitle'), 'Live Update is available when the app is launched with serve.bat or in the Full Desktop version.', { icon: 'LIVE' });
+        return;
+    }
 
     if (!this._isLiveUpdateCandidate(entry)) {
         await Modal.alert(i18n.t('liveUpdateTitle'), i18n.t('liveUpdateCsvOnly'), { icon: 'LIVE' });

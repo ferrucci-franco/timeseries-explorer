@@ -2,9 +2,15 @@
 
 Frontend web app for visualizing OpenModelica, Dymola, and CSV result files.
 
-## Run locally
+## Versions and local runs
 
-Use the local server helper:
+The app is split by runtime capability, not by duplicated source branches:
+
+- **Light Web**: the GitHub Pages/static version. It runs in the browser sandbox and keeps the core viewer features.
+- **Light Local**: the same web app launched with `serve.bat`; it adds the localhost file API used by Live Update.
+- **Full Desktop**: the Electron wrapper. It reuses the same app code and is the base for native local-file features.
+
+Use the local server helper for Light Local:
 
 ```powershell
 .\serve.bat
@@ -18,17 +24,26 @@ http://localhost:8000/index.html
 
 This is also the recommended local workflow for Live Update. When Node is available, `serve.bat` starts the OpenModelica Viewer local server, which serves the app and exposes the localhost-only file API used to follow growing CSV files by path in browsers such as Firefox.
 
-Or use Vite:
+For normal web development without the local file API, use Vite:
 
 ```powershell
 npm install
 npm run dev
 ```
 
+To run the current Full Desktop wrapper:
+
+```powershell
+npm run desktop
+```
+
+It builds the web app into `dist/`, starts an Electron-local localhost server, and opens the app as Full Desktop.
+
 ## Project map
 
 - `index.html`: static shell for the app
 - `app.js`: browser entrypoint
+- `electron`: Electron wrapper for the Full Desktop runtime
 - `serve.bat`: local HTTP server launcher for development/use
 - `package.json`: npm scripts and frontend tooling
 - `vite.config.js`: dev/build server configuration
@@ -67,7 +82,7 @@ If you only want the web bundle without regenerating the portable package:
 npm run build:web
 ```
 
-The published output is generated in `dist/`.
+The published Light Web output is generated in `dist/`. This is the output intended for GitHub Pages.
 
 ## Portable/offline build
 

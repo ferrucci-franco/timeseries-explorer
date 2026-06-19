@@ -1,0 +1,80 @@
+const LOCAL_API_BASE = '/__omv_local__';
+
+export const FULL_VERSION_FEATURES = [
+    'Live Update from a selected local path without browser-specific file handles.',
+    'Reliable polling of files that are being written by simulators or measurement tools.',
+    'Native disk access for very large result files.',
+    'Chunked reads for multi-GB CSV/MAT/Parquet workflows.',
+    'Optional export to Parquet for faster reloads.',
+    'The same plotting, time parsing, derived variables, sessions, and UI tools as the Light version.',
+];
+
+function isDesktopRuntime() {
+    return !!globalThis.omvDesktop;
+}
+
+function isLocalhost() {
+    const host = globalThis.location?.hostname || '';
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+function isStaticPublishedPage() {
+    const host = globalThis.location?.hostname || '';
+    return host.endsWith('.github.io') || host.includes('github.io');
+}
+
+async function hasLocalApi() {
+    if (typeof fetch !== 'function') return false;
+    try {
+        const response = await fetch(`${LOCAL_API_BASE}/status`, { cache: 'no-store' });
+        if (!response.ok) return false;
+        const status = await response.json().catch(() => null);
+        return !!status?.ok;
+    } catch {
+        return false;
+    }
+}
+
+export function initialCapabilities() {
+    const desktop = isDesktopRuntime();
+    const fileProtocol = globalThis.location?.protocol === 'file:';
+    const published = isStaticPublishedPage();
+
+    return {
+        runtime: desktop ? 'full-desktop' : 'light-web',
+        label: desktop ? 'Full Desktop' : 'Light Web',
+        isDesktop: desktop,
+        isLocalServer: false,
+        isPublishedLight: published,
+        isLocalhost: isLocalhost(),
+        fileProtocol,
+        canUseStaticFiles: true,
+        canUseDuckDbWasm: !fileProtocol && typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined',
+        canUseLiveUpdate: desktop,
+        canUseLocalPath: desktop,
+        canUseHugeFiles: desktop,
+        canExportParquet: desktop,
+        showLightNotice: !desktop,
+    };
+}
+
+export async function resolveCapabilities(previous = initialCapabilities()) {
+    const localServer = await hasLocalApi();
+    const desktop = previous.isDesktop || isDesktopRuntime();
+    const runtime = desktop ? 'full-desktop' : (localServer ? 'light-local' : 'light-web');
+
+    return {
+        ...previous,
+        runtime,
+        label: desktop ? 'Full Desktop' : (localServer ? 'Light Local' : 'Light Web'),
+        isDesktop: desktop,
+        isLocalServer: localServer,
+        isPublishedLight: isStaticPublishedPage(),
+        isLocalhost: isLocalhost(),
+        canUseLiveUpdate: desktop || localServer,
+        canUseLocalPath: desktop || localServer,
+        canUseHugeFiles: desktop,
+        canExportParquet: desktop,
+        showLightNotice: !desktop,
+    };
+}

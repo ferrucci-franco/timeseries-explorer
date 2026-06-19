@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "serve:local": "node scripts/portable-server.mjs",
+    "desktop": "npm run build:web && node scripts/start-electron.mjs",
     "build:web": "vite build",
     "build": "npm run build:portable && npm run build:web",
     "preview": "vite preview",
@@ -15,6 +17,7 @@
   "devDependencies": {
     "adm-zip": "^0.5.16",
     "duckdb": "^1.4.4",
+    "electron": "^42.4.1",
     "esbuild": "^0.25.5",
     "vite": "^5.4.19"
   },

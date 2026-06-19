@@ -69,8 +69,10 @@ exit /b 1
 
 :run_local_live
 echo.
-echo Iniciando servidor local con Live Update en:
+echo Iniciando OpenModelica Viewer Light Local en:
 echo   %SERVER_URL%
+echo.
+echo Este modo incluye la API localhost para Live Update por path.
 echo.
 echo Para detenerlo, cierra esta ventana o presiona Ctrl+C.
 echo.
@@ -82,7 +84,7 @@ exit /b 0
 
 :run_vite
 echo.
-echo Iniciando servidor local con Vite en:
+echo Iniciando OpenModelica Viewer Light Web con Vite en:
 echo   %SERVER_URL%
 echo.
 echo Aviso: este modo no incluye la API local para Live Update por path.
@@ -97,7 +99,7 @@ exit /b 0
 
 :run_python
 echo.
-echo Iniciando servidor local con Python en:
+echo Iniciando OpenModelica Viewer Light Web con Python en:
 echo   %SERVER_URL%
 echo.
 echo Aviso: este modo no incluye la API local para Live Update por path.

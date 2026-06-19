@@ -10,6 +10,7 @@ import { installDerivedMethods } from './methods/derived-methods.js';
 import { installTreeMethods } from './methods/tree-methods.js';
 import { installSessionMethods } from './methods/session-methods.js';
 import { installLiveUpdateMethods } from './methods/live-update-methods.js';
+import { FULL_VERSION_FEATURES, initialCapabilities, resolveCapabilities } from './capabilities.js';
 
 class OpenModelicaViewer {
     constructor() {
@@ -34,6 +35,7 @@ class OpenModelicaViewer {
         this.reloadAsNewVersionMode = false;
         this.scrollablePlotArea = false;
         this.mouseWheelZoom = true;
+        this.capabilities = initialCapabilities();
 
         this.layoutManager = new LayoutManager('plots-area');
         this.plotManager   = new PlotManager(this.parser);
@@ -52,6 +54,8 @@ class OpenModelicaViewer {
         this.layoutManager.render();
         this._updateActionButtons();
         this._applyReloadModeUI();
+        this._applyCapabilitiesToUi();
+        this._refreshCapabilities();
     }
 
     // ─── File management ───────────────────────────────────────────
@@ -101,6 +105,68 @@ class OpenModelicaViewer {
             r.onerror = () => reject(new Error(`Cannot read file: ${file.name}`));
             r.readAsArrayBuffer(file);
         });
+    }
+
+    async _refreshCapabilities() {
+        this.capabilities = await resolveCapabilities(this.capabilities);
+        this._applyCapabilitiesToUi();
+        this._updateActionButtons?.();
+        this._updateLiveUpdateTopBar?.();
+    }
+
+    _applyCapabilitiesToUi() {
+        const caps = this.capabilities || initialCapabilities();
+        document.body.dataset.omvRuntime = caps.runtime;
+
+        const badge = document.getElementById('runtime-badge');
+        if (badge) {
+            badge.textContent = caps.label;
+            badge.title = this._capabilitiesSummary(caps);
+        }
+
+        const liveWrap = document.querySelector('.live-update-topbar-wrap');
+        if (liveWrap) {
+            liveWrap.hidden = !caps.canUseLiveUpdate;
+            liveWrap.title = caps.canUseLiveUpdate
+                ? ''
+                : 'Live Update is available in the local server or Full Desktop version.';
+        }
+
+        const notice = document.getElementById('light-version-notice');
+        if (notice) {
+            notice.hidden = !caps.showLightNotice;
+            notice.innerHTML = this._lightNoticeHtml(caps);
+        }
+    }
+
+    _capabilitiesSummary(caps) {
+        if (caps.isDesktop) return 'Full Desktop: native local capabilities enabled.';
+        if (caps.isLocalServer) return 'Light Local: static app plus localhost file API.';
+        return 'Light Web: browser-only version for GitHub Pages/static hosting.';
+    }
+
+    _lightNoticeHtml(caps) {
+        const mode = caps.isLocalServer ? 'Light Local' : 'Light Web';
+        const localLine = caps.isLocalServer
+            ? '<p>This local server mode can use Live Update by local path, but it is still the Light web app.</p>'
+            : '<p>This published web version runs inside the browser sandbox. It keeps the core viewer features, but it does not promise browser-dependent local-file automation.</p>';
+        const features = FULL_VERSION_FEATURES.map(feature => `<li>${this._escapeHtml(feature)}</li>`).join('');
+        return `
+            <div class="light-notice-kicker">${mode}</div>
+            <h3>OpenModelica Viewer Light</h3>
+            ${localLine}
+            <p>For the Full version, download the offline desktop app. It is planned for:</p>
+            <ul>${features}</ul>
+        `;
+    }
+
+    _escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 }
 

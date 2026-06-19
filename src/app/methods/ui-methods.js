@@ -810,7 +810,12 @@ proto._renderExtraMenu = function() {
 
     versionRow.append(versionIcon, versionLabel, versionValue);
 
-    menu.append(saveViewItem, saveProjectItem, loadSessionItem, openTempItem, dymolaDirItem, standaloneItem, feedbackItem, versionRow);
+    const items = [saveViewItem, saveProjectItem, loadSessionItem];
+    if (this.capabilities?.canUseLocalPath) {
+        items.push(openTempItem, dymolaDirItem);
+    }
+    items.push(standaloneItem, feedbackItem, versionRow);
+    menu.append(...items);
 };
 
 proto._downloadStandalonePackage = async function() {
