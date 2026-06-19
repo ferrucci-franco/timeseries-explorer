@@ -43,6 +43,11 @@ MAX_WAIT_SECONDS = 5.0
 # Overwrite OUTPUT_FILE at startup.
 RESET_OUTPUT = True
 
+# Pause after writing the initial rows so the viewer can open the file before
+# live appending starts. Useful for browsers that reject files changing during
+# the first read.
+WAIT_FOR_ENTER_BEFORE_APPEND = True
+
 # Repeat from the beginning after the last row.
 LOOP = False
 
@@ -179,6 +184,8 @@ def run_once(prefix: list[str], rows: list[DataRow], output_path: Path) -> None:
     initial_lines = prefix + [row.text for row in rows[:count]]
     write_lines(output_path, initial_lines, "w" if RESET_OUTPUT else "a")
     print(f"Initial load: {count} row(s) written to {output_path}")
+    if WAIT_FOR_ENTER_BEFORE_APPEND and count < len(rows):
+        input("Open this file in OpenModelica Viewer, then press Enter to start appending...")
 
     previous_time = rows[count - 1].timestamp if count else rows[0].timestamp
     for row in rows[count:]:

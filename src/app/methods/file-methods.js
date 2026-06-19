@@ -34,9 +34,10 @@ proto.loadFile = async function(file, options = {}) {
         let data;
         for (let attempt = 0; ; attempt++) {
             try {
-                if (attempt > 0 && options.fileHandle?.getFile) {
+                if ((!currentFile || attempt > 0) && options.fileHandle?.getFile) {
                     currentFile = await options.fileHandle.getFile();
                 }
+                if (!currentFile) throw new Error(i18n.t('invalidFile'));
                 extension = this._fileExtension(currentFile.name);
                 const streamable = this._canParseFromFile(currentFile, extension);
                 buffer = streamable ? null : await (currentFile.arrayBuffer ? currentFile.arrayBuffer() : this._readAsArrayBuffer(currentFile));
@@ -92,10 +93,10 @@ proto.loadFiles = async function(items = []) {
     try {
         for (let index = 0; index < entries.length; index++) {
             const item = entries[index];
-            const file = item?.file || item;
-            if (!file) continue;
-            this._updateFileLoadingOverlay(index + 1, entries.length, file.name || '', file.size);
             const fileHandle = item?.fileHandle || null;
+            const file = item?.file || (fileHandle ? null : item);
+            if (!file && !fileHandle) continue;
+            this._updateFileLoadingOverlay(index + 1, entries.length, file?.name || fileHandle?.name || '', file?.size);
             const result = await this.loadFile(file, { fileHandle, deferUi: true });
             if (result) loaded.push(result);
             await this._yieldToBrowser();
@@ -435,8 +436,7 @@ proto._pickResultFilesWithHandles = async function(options = {}) {
 
     const picked = [];
     for (const fileHandle of handles) {
-        const file = await this._getFileHandleSnapshot(fileHandle);
-        picked.push({ file, fileHandle });
+        picked.push({ file: null, fileHandle });
     }
     return picked;
 };
