@@ -2,11 +2,16 @@
   "name": "openmodelica-viewer",
   "private": true,
   "version": "0.1.0",
+  "description": "Desktop and web viewer for OpenModelica, Dymola, CSV, and Parquet result files.",
+  "author": "Franco Ferrucci",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "serve:local": "node scripts/portable-server.mjs",
     "desktop": "npm run build:web && node scripts/start-electron.mjs",
+    "desktop:pack": "npm run build:web && electron-builder --dir",
+    "desktop:dist": "npm run build:web && electron-builder --win nsis portable",
     "build:web": "vite build",
     "build": "npm run build:portable && npm run build:web",
     "preview": "vite preview",
@@ -18,6 +23,7 @@
     "adm-zip": "^0.5.16",
     "duckdb": "^1.4.4",
     "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.25.5",
     "vite": "^5.4.19"
   },
@@ -25,5 +31,36 @@
     "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",
     "fflate": "^0.8.3",
     "plotly.js-dist-min": "^3.5.1"
+  },
+  "build": {
+    "appId": "io.github.ferrucci-franco.openmodelica-viewer",
+    "productName": "OpenModelica Viewer",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "desktop-dist"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "artifactName": "${productName}-${version}-setup-${arch}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
+    }
   }
 }

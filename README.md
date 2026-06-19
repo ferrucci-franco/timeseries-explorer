@@ -40,6 +40,17 @@ npm run desktop
 It builds the web app into `dist/`, starts an Electron-local localhost server, and opens the app as Full Desktop.
 On Windows, you can also double-click `start-full-desktop.bat`. The first run installs missing npm dependencies if needed.
 
+To build Windows desktop artifacts:
+
+```powershell
+npm run desktop:dist
+```
+
+The generated files are written to `desktop-dist/`:
+
+- `OpenModelica Viewer-<version>-setup-x64.exe`: Windows installer.
+- `OpenModelica Viewer-<version>-portable-x64.exe`: portable executable.
+
 ## Project map
 
 - `index.html`: static shell for the app

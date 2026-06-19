@@ -5,6 +5,7 @@
 /node_modules/
 /dist/
 /portable-dist/
+/desktop-dist/
 
 # Keep local/archive material out of sync.
 /old/
