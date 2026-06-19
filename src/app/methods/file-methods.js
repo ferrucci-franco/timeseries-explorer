@@ -11,22 +11,53 @@ async function loadDuckDbSourceClass() {
     return duckDbSourceClassPromise;
 }
 
+function isTransientFileReadError(err) {
+    const name = err?.name || '';
+    const message = err?.message || '';
+    return name === 'NotReadableError'
+        || name === 'NotFoundError'
+        || (name === 'TypeError' && /fetch|network|load failed|terminated/i.test(message));
+}
+
+function waitForFileRetry(attempt) {
+    return new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+}
+
 export function installFileMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.loadFile = async function(file, options = {}) {
     try {
-        const extension = this._fileExtension(file.name);
-        const streamable = this._canParseFromFile(file, extension);
-        const buffer = streamable ? null : await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
-        const contentHash = buffer
-            ? await this._hashBuffer(buffer)
-            : this._fileFingerprint(file);
-        const data   = await this._parseResultBuffer(file.name, buffer, file);
+        let currentFile = file;
+        let extension;
+        let buffer;
+        let contentHash;
+        let data;
+        for (let attempt = 0; ; attempt++) {
+            try {
+                if (attempt > 0 && options.fileHandle?.getFile) {
+                    currentFile = await options.fileHandle.getFile();
+                }
+                extension = this._fileExtension(currentFile.name);
+                const streamable = this._canParseFromFile(currentFile, extension);
+                buffer = streamable ? null : await (currentFile.arrayBuffer ? currentFile.arrayBuffer() : this._readAsArrayBuffer(currentFile));
+                contentHash = buffer
+                    ? await this._hashBuffer(buffer)
+                    : this._fileFingerprint(currentFile);
+                data = await this._parseResultBuffer(currentFile.name, buffer, currentFile);
+                break;
+            } catch (err) {
+                if (isTransientFileReadError(err) && attempt < 4) {
+                    await waitForFileRetry(attempt);
+                    continue;
+                }
+                throw err;
+            }
+        }
 
         const fileId   = `f${this._nextFileId++}`;
-        const baseName = this._fileBaseName(file.name);
+        const baseName = this._fileBaseName(currentFile.name);
         const transform = this._defaultFileTransform();
-        this.files.set(fileId, { file, fileHandle: options.fileHandle || null, buffer, contentHash, name: baseName, extension, transform });
+        this.files.set(fileId, { file: currentFile, fileHandle: options.fileHandle || null, buffer, contentHash, name: baseName, extension, transform });
 
         // PlotManager takes ownership of the data
         this.plotManager.addFile(fileId, baseName, data, transform);
@@ -42,7 +73,7 @@ proto.loadFile = async function(file, options = {}) {
             this._updateActionButtons();
         }
 
-        console.log('Loaded:', file.name, '- variables:', Object.keys(data.variables).length);
+        console.log('Loaded:', currentFile.name, '- variables:', Object.keys(data.variables).length);
         return { fileId, data };
     } catch (err) {
         console.error('Error loading file:', err);
@@ -404,10 +435,24 @@ proto._pickResultFilesWithHandles = async function(options = {}) {
 
     const picked = [];
     for (const fileHandle of handles) {
-        const file = await fileHandle.getFile();
+        const file = await this._getFileHandleSnapshot(fileHandle);
         picked.push({ file, fileHandle });
     }
     return picked;
+};
+
+proto._getFileHandleSnapshot = async function(fileHandle) {
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await fileHandle.getFile();
+        } catch (err) {
+            if (isTransientFileReadError(err) && attempt < 4) {
+                await waitForFileRetry(attempt);
+                continue;
+            }
+            throw err;
+        }
+    }
 };
 
 proto._openResultFilesFromUser = async function() {
@@ -438,7 +483,7 @@ proto._getDroppedResultFiles = async function(dataTransfer) {
             try {
                 const fileHandle = await item.getAsFileSystemHandle();
                 if (fileHandle?.kind !== 'file') continue;
-                const file = await fileHandle.getFile();
+                const file = await this._getFileHandleSnapshot(fileHandle);
                 picked.push({ file, fileHandle });
             } catch (err) {
                 console.warn('Could not read dropped file handle.', err);
