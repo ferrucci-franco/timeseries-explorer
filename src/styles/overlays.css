@@ -497,4 +497,12 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
     .top-bar-left h1 {
         font-size: 1rem;
     }
+
+    .app-brand {
+        max-width: 10rem;
+    }
+
+    .app-subtitle {
+        font-size: 0.66rem;
+    }
 }

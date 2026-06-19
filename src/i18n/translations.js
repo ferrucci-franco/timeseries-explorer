@@ -2,6 +2,7 @@ const translations = {
         en: {
             // App title
             appTitle: 'Time Series Explorer',
+            appSubtitle: 'CSV, Parquet, OpenModelica/Dymola viewer',
 
             // Top bar
             variables: 'Variables',
@@ -400,6 +401,7 @@ const translations = {
         fr: {
             // App title
             appTitle: 'Time Series Explorer',
+            appSubtitle: 'Visualiseur CSV, Parquet et OpenModelica/Dymola',
 
             // Top bar
             variables: 'Variables',
@@ -738,6 +740,7 @@ const translations = {
         },
         es: {
             appTitle: 'Time Series Explorer',
+            appSubtitle: 'Visor de CSV, Parquet y OpenModelica/Dymola',
             variables: 'Variables',
             filterVariables: 'Filtrar variables…',
             layout: 'Configuración de diseño',
@@ -1046,6 +1049,7 @@ const translations = {
         },
         it: {
             appTitle: 'Time Series Explorer',
+            appSubtitle: 'Visualizzatore CSV, Parquet e OpenModelica/Dymola',
             variables: 'Variabili',
             filterVariables: 'Filtra variabili…',
             layout: 'Configurazione layout',

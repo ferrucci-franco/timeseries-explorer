@@ -74,13 +74,36 @@ body {
 
 .top-bar-left {
     display: flex;
-    align-items: baseline;
-    gap: 1rem;
+    align-items: center;
+    gap: 0.8rem;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.app-brand {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    max-width: clamp(13rem, 28vw, 26rem);
 }
 
 .top-bar-left h1 {
     font-size: 1.25rem;
     font-weight: 600;
+    line-height: 1.1;
+    white-space: nowrap;
+}
+
+.app-subtitle {
+    margin-top: 0.12rem;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 500;
+    line-height: 1.15;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .runtime-badge {
@@ -111,6 +134,7 @@ body[data-omv-runtime="light-local"] .runtime-badge {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    flex: 0 0 auto;
 }
 
 /* Language Selector */
