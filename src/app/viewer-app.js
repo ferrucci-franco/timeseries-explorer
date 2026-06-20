@@ -76,6 +76,7 @@ class OpenModelicaViewer {
             btn.classList.toggle('active', btn.getAttribute('data-lang') === lang);
         });
         this._applyReloadModeUI();
+        this._applyCapabilitiesToUi();
         if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();
         if (typeof this._syncHoverCornerPicker === 'function') this._syncHoverCornerPicker();
         this._renderFilesList();
@@ -134,8 +135,8 @@ class OpenModelicaViewer {
 
         const notice = document.getElementById('light-version-notice');
         if (notice) {
-            notice.hidden = !caps.showLightNotice;
-            notice.innerHTML = this._lightNoticeHtml(caps);
+            notice.hidden = !caps.showRuntimeNotice;
+            notice.innerHTML = this._runtimeNoticeHtml(caps);
         }
     }
 
@@ -145,20 +146,21 @@ class OpenModelicaViewer {
         return 'Light Web: browser-only version for GitHub Pages/static hosting.';
     }
 
-    _lightNoticeHtml(caps) {
-        const mode = i18n.t(caps.isLocalServer ? 'runtimeNoticeLocalKicker' : 'runtimeNoticeWebKicker');
-        const title = i18n.t(caps.isLocalServer ? 'runtimeNoticeLocalTitle' : 'runtimeNoticeWebTitle');
-        const body = i18n.t(caps.isLocalServer ? 'runtimeNoticeLocalBody' : 'runtimeNoticeWebBody');
+    _runtimeNoticeHtml(caps) {
+        const noticeMode = caps.isDesktop ? 'Desktop' : (caps.isLocalServer ? 'Local' : 'Web');
+        const mode = i18n.t(`runtimeNotice${noticeMode}Kicker`);
+        const title = i18n.t(`runtimeNotice${noticeMode}Title`);
+        const body = i18n.t(`runtimeNotice${noticeMode}Body`);
         const privacy = i18n.t('runtimeNoticePrivacy');
-        const desktop = i18n.t('runtimeNoticeDesktop');
-        const featureList = i18n.t('runtimeNoticeDesktopFeatures');
+        const desktop = caps.isDesktop ? '' : i18n.t('runtimeNoticeDesktopDownload');
+        const featureList = i18n.t(`runtimeNotice${noticeMode}Features`);
         const features = (Array.isArray(featureList) ? featureList : []).map(feature => `<li>${this._escapeHtml(feature)}</li>`).join('');
         return `
             <div class="light-notice-kicker">${mode}</div>
             <h3>${title}</h3>
             <p>${this._escapeHtml(body)}</p>
             <p class="light-notice-privacy">${this._escapeHtml(privacy)}</p>
-            <p>${this._escapeHtml(desktop)}</p>
+            ${desktop ? `<p>${this._escapeHtml(desktop)}</p>` : ''}
             <ul>${features}</ul>
         `;
     }

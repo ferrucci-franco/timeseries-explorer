@@ -34,7 +34,8 @@
 .drop-zone-content {
     text-align: center;
     padding: 2rem;
-    max-width: min(760px, calc(100vw - 3rem));
+    width: min(1040px, calc(100vw - 3rem));
+    max-width: 1040px;
 }
 
 .drop-zone-content .icon {
@@ -111,6 +112,7 @@
     color: var(--text-primary);
     text-align: left;
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+    box-sizing: border-box;
 }
 
 .light-version-notice[hidden] {
@@ -160,6 +162,11 @@
 }
 
 @media (max-width: 760px) {
+    .drop-zone-content {
+        width: min(100%, calc(100vw - 1rem));
+        padding: 1rem;
+    }
+
     .light-version-notice {
         width: min(100%, calc(100vw - 2rem));
         max-height: min(48vh, 420px);

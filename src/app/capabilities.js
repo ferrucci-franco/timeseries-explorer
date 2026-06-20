@@ -45,7 +45,7 @@ export function initialCapabilities() {
         canUseLocalPath: desktop,
         canUseHugeFiles: desktop,
         canExportParquet: desktop,
-        showLightNotice: !desktop,
+        showRuntimeNotice: true,
     };
 }
 
@@ -66,6 +66,6 @@ export async function resolveCapabilities(previous = initialCapabilities()) {
         canUseLocalPath: desktop || localServer,
         canUseHugeFiles: desktop,
         canExportParquet: desktop,
-        showLightNotice: !desktop,
+        showRuntimeNotice: true,
     };
 }
