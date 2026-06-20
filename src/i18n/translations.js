@@ -14,16 +14,8 @@ const translations = {
             runtimeNoticeDesktopBody: 'This version runs as an app on your computer. It is the best choice for files that change while another program is writing them, very large files, and offline work.',
             runtimeNoticePrivacy: 'Your data is not sent over the web: time-series files are processed in your browser or on your computer.',
             runtimeNoticeDesktopDownload: 'For live-updating files, very large files, and better access to files on your computer, use the Desktop version. You can download it from the Extra... button.',
-            runtimeNoticeWebFeatures: [
-                'Open files that you select manually',
-                'Use the same plots, sessions, derived variables, and time parsing tools',
-                'Download the Desktop version from Extra... when you need more local file access',
-            ],
-            runtimeNoticeLocalFeatures: [
-                'Use Live Update from a local file path',
-                'Open files from your computer through the local server',
-                'Download the Desktop version from Extra... for very large files and offline use',
-            ],
+            runtimeNoticeWebFeatures: [],
+            runtimeNoticeLocalFeatures: [],
             runtimeNoticeDesktopFeatures: [
                 'Follow files while they are being written',
                 'Open very large CSV, MAT, and Parquet files more reliably',
@@ -440,16 +432,8 @@ const translations = {
             runtimeNoticeDesktopBody: 'Cette version fonctionne comme une application sur votre ordinateur. C est le meilleur choix pour les fichiers modifies par un autre programme, les tres gros fichiers et le travail hors ligne.',
             runtimeNoticePrivacy: 'Vos donnees ne sont pas transmises sur le web : les fichiers de series temporelles sont traites dans le navigateur ou sur votre ordinateur.',
             runtimeNoticeDesktopDownload: 'Pour les fichiers mis a jour en direct, les tres gros fichiers et un meilleur acces aux fichiers de votre ordinateur, utilisez la version bureau. Vous pouvez la telecharger depuis le bouton Extra....',
-            runtimeNoticeWebFeatures: [
-                'Ouvrir les fichiers que vous selectionnez manuellement',
-                'Utiliser les memes graphiques, sessions, variables derivees et outils de temps',
-                'Telecharger la version bureau depuis Extra... si vous avez besoin d un meilleur acces aux fichiers locaux',
-            ],
-            runtimeNoticeLocalFeatures: [
-                'Utiliser Live Update depuis un chemin de fichier local',
-                'Ouvrir des fichiers de votre ordinateur via le serveur local',
-                'Telecharger la version bureau depuis Extra... pour les tres gros fichiers et le travail hors ligne',
-            ],
+            runtimeNoticeWebFeatures: [],
+            runtimeNoticeLocalFeatures: [],
             runtimeNoticeDesktopFeatures: [
                 'Suivre les fichiers pendant leur ecriture',
                 'Ouvrir plus fiablement de tres gros fichiers CSV, MAT et Parquet',
@@ -806,16 +790,8 @@ const translations = {
             runtimeNoticeDesktopBody: 'Esta version funciona como una app en tu computadora. Es la mejor opcion para archivos que cambian mientras otro programa los escribe, archivos muy grandes y trabajo sin conexion.',
             runtimeNoticePrivacy: 'Tus datos no se transmiten por la web: los archivos de series temporales se procesan en tu navegador o en tu computadora.',
             runtimeNoticeDesktopDownload: 'Para archivos que se actualizan en vivo, archivos muy grandes y mejor acceso a archivos de tu computadora, usa la version de escritorio. Puedes descargarla desde el boton Extra....',
-            runtimeNoticeWebFeatures: [
-                'Abrir archivos que selecciones manualmente',
-                'Usar los mismos graficos, sesiones, variables derivadas y herramientas de tiempo',
-                'Descargar la version de escritorio desde Extra... cuando necesites mejor acceso a archivos locales',
-            ],
-            runtimeNoticeLocalFeatures: [
-                'Usar Live Update desde una ruta de archivo local',
-                'Abrir archivos de tu computadora mediante el servidor local',
-                'Descargar la version de escritorio desde Extra... para archivos muy grandes y trabajo sin conexion',
-            ],
+            runtimeNoticeWebFeatures: [],
+            runtimeNoticeLocalFeatures: [],
             runtimeNoticeDesktopFeatures: [
                 'Seguir archivos mientras se estan escribiendo',
                 'Abrir archivos CSV, MAT y Parquet muy grandes con mas fiabilidad',
@@ -1142,16 +1118,8 @@ const translations = {
             runtimeNoticeDesktopBody: 'Questa versione funziona come app sul computer. E la scelta migliore per file modificati da un altro programma, file molto grandi e lavoro offline.',
             runtimeNoticePrivacy: 'I tuoi dati non vengono trasmessi via web: i file di serie temporali vengono elaborati nel browser o sul tuo computer.',
             runtimeNoticeDesktopDownload: 'Per file aggiornati in tempo reale, file molto grandi e un accesso migliore ai file del computer, usa la versione desktop. Puoi scaricarla dal pulsante Extra....',
-            runtimeNoticeWebFeatures: [
-                'Aprire i file selezionati manualmente',
-                'Usare gli stessi grafici, sessioni, variabili derivate e strumenti per il tempo',
-                'Scaricare la versione desktop da Extra... quando serve un migliore accesso ai file locali',
-            ],
-            runtimeNoticeLocalFeatures: [
-                'Usare Live Update da un percorso di file locale',
-                'Aprire file del computer tramite il server locale',
-                'Scaricare la versione desktop da Extra... per file molto grandi e lavoro offline',
-            ],
+            runtimeNoticeWebFeatures: [],
+            runtimeNoticeLocalFeatures: [],
             runtimeNoticeDesktopFeatures: [
                 'Seguire i file mentre vengono scritti',
                 'Aprire file CSV, MAT e Parquet molto grandi con maggiore affidabilita',
