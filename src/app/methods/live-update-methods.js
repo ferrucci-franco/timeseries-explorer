@@ -499,7 +499,7 @@ proto._validateLiveUpdateData = function(previousData, nextData) {
         return { action: 'error', message: i18n.t('liveUpdateFileShrank') };
     }
     if (nextTime.length === previousTime.length) {
-        return { action: 'unchanged' };
+        return { action: 'error', message: i18n.t('liveUpdateNotAppendOnly') };
     }
 
     const previousNames = Object.values(previousData.variables || {})

@@ -212,7 +212,7 @@ Live append / auto-refresh for Full Desktop only:
    d) DONE 2026-06-20: Live Update state now tracks last file size, mtime, row count, parsed offset, last complete line, and trailing partial line placeholder.
    e) DONE 2026-06-20: Desktop Live Update now stats the file and reads only the appended byte slice first. If the slice has no complete line yet, it waits without re-reading the whole file; if complete rows exist, the current data update still falls through to the full reparse path until incremental merge is implemented.
    f) DONE 2026-06-20: while incremental merge is not ready, Live Update keeps using the Full Desktop full re-read path after detecting complete appended rows, and now pauses if the first appended timestamp overlaps existing data to avoid duplicate points.
-   g) If the file shrinks/truncates, pause Live Update and show a clear warning.
+   g) DONE 2026-06-20: Live Update pauses with a clear warning if the file shrinks, or if the file changes without increasing row count, which indicates a likely restart/rewrite rather than append-only growth.
    h) If delimiter, column count, headers, or schema change, pause Live Update and show a clear warning.
    i) Define duplicate timestamp policy before final implementation.
 4) Plot/view behavior still needed:
