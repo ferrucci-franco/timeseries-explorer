@@ -10,7 +10,7 @@ import { installDerivedMethods } from './methods/derived-methods.js';
 import { installTreeMethods } from './methods/tree-methods.js';
 import { installSessionMethods } from './methods/session-methods.js';
 import { installLiveUpdateMethods } from './methods/live-update-methods.js';
-import { FULL_VERSION_FEATURES, initialCapabilities, resolveCapabilities } from './capabilities.js';
+import { initialCapabilities, resolveCapabilities } from './capabilities.js';
 
 class OpenModelicaViewer {
     constructor() {
@@ -146,16 +146,19 @@ class OpenModelicaViewer {
     }
 
     _lightNoticeHtml(caps) {
-        const mode = caps.isLocalServer ? 'Light Local' : 'Light Web';
-        const localLine = caps.isLocalServer
-            ? '<p>This local server mode can use Live Update by local path, but it is still the Light web app.</p>'
-            : '<p>This published web version runs inside the browser sandbox. It keeps the core viewer features, but it does not promise browser-dependent local-file automation.</p>';
-        const features = FULL_VERSION_FEATURES.map(feature => `<li>${this._escapeHtml(feature)}</li>`).join('');
+        const mode = i18n.t(caps.isLocalServer ? 'runtimeNoticeLocalKicker' : 'runtimeNoticeWebKicker');
+        const title = i18n.t(caps.isLocalServer ? 'runtimeNoticeLocalTitle' : 'runtimeNoticeWebTitle');
+        const body = i18n.t(caps.isLocalServer ? 'runtimeNoticeLocalBody' : 'runtimeNoticeWebBody');
+        const privacy = i18n.t('runtimeNoticePrivacy');
+        const desktop = i18n.t('runtimeNoticeDesktop');
+        const featureList = i18n.t('runtimeNoticeDesktopFeatures');
+        const features = (Array.isArray(featureList) ? featureList : []).map(feature => `<li>${this._escapeHtml(feature)}</li>`).join('');
         return `
             <div class="light-notice-kicker">${mode}</div>
-            <h3>Time Series Explorer Light</h3>
-            ${localLine}
-            <p>For the Full version, download the offline desktop app. It is planned for:</p>
+            <h3>${title}</h3>
+            <p>${this._escapeHtml(body)}</p>
+            <p class="light-notice-privacy">${this._escapeHtml(privacy)}</p>
+            <p>${this._escapeHtml(desktop)}</p>
             <ul>${features}</ul>
         `;
     }

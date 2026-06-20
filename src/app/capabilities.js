@@ -1,14 +1,5 @@
 const LOCAL_API_BASE = '/__omv_local__';
 
-export const FULL_VERSION_FEATURES = [
-    'Live Update from a selected local path without browser-specific file handles.',
-    'Reliable polling of files that are being written by simulators or measurement tools.',
-    'Native disk access for very large result files.',
-    'Chunked reads for multi-GB CSV/MAT/Parquet workflows.',
-    'Optional export to Parquet for faster reloads.',
-    'The same plotting, time parsing, derived variables, sessions, and UI tools as the Light version.',
-];
-
 function isDesktopRuntime() {
     return !!globalThis.omvDesktop;
 }

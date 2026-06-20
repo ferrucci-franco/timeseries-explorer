@@ -3,6 +3,20 @@ const translations = {
             // App title
             appTitle: 'Time Series Explorer',
             appSubtitle: 'CSV, Parquet, OpenModelica/Dymola viewer',
+            runtimeNoticeWebKicker: 'Web version',
+            runtimeNoticeWebTitle: 'Web version',
+            runtimeNoticeWebBody: 'This version works directly in your browser. You can open and plot files that you select manually.',
+            runtimeNoticeLocalKicker: 'Local version',
+            runtimeNoticeLocalTitle: 'Local version',
+            runtimeNoticeLocalBody: 'This version runs from your computer through a local server. It can use some local features, such as Live Update, without installing the desktop app.',
+            runtimeNoticePrivacy: 'Your data is not sent over the web: time-series files are processed in your browser or on your computer.',
+            runtimeNoticeDesktop: 'For live-updating files, very large files, and better access to files on your computer, use the Desktop version. You can download it from the Extra... button.',
+            runtimeNoticeDesktopFeatures: [
+                'Follow files while they are being written',
+                'Open very large CSV, MAT, and Parquet files more reliably',
+                'Work offline',
+                'Keep the same plots, sessions, derived variables, and time parsing tools',
+            ],
 
             // Top bar
             variables: 'Variables',
@@ -402,6 +416,20 @@ const translations = {
             // App title
             appTitle: 'Time Series Explorer',
             appSubtitle: 'Visualiseur CSV, Parquet et OpenModelica/Dymola',
+            runtimeNoticeWebKicker: 'Version web',
+            runtimeNoticeWebTitle: 'Version web',
+            runtimeNoticeWebBody: 'Cette version fonctionne directement dans le navigateur. Vous pouvez ouvrir et tracer les fichiers que vous selectionnez manuellement.',
+            runtimeNoticeLocalKicker: 'Version locale',
+            runtimeNoticeLocalTitle: 'Version locale',
+            runtimeNoticeLocalBody: 'Cette version est lancee depuis votre ordinateur avec un serveur local. Elle permet d utiliser certaines fonctions locales, comme Live Update, sans installer l application bureau.',
+            runtimeNoticePrivacy: 'Vos donnees ne sont pas transmises sur le web : les fichiers de series temporelles sont traites dans le navigateur ou sur votre ordinateur.',
+            runtimeNoticeDesktop: 'Pour les fichiers mis a jour en direct, les tres gros fichiers et un meilleur acces aux fichiers de votre ordinateur, utilisez la version bureau. Vous pouvez la telecharger depuis le bouton Extra....',
+            runtimeNoticeDesktopFeatures: [
+                'Suivre les fichiers pendant leur ecriture',
+                'Ouvrir plus fiablement de tres gros fichiers CSV, MAT et Parquet',
+                'Travailler hors ligne',
+                'Garder les memes graphiques, sessions, variables derivees et outils de temps',
+            ],
 
             // Top bar
             variables: 'Variables',
@@ -741,6 +769,20 @@ const translations = {
         es: {
             appTitle: 'Time Series Explorer',
             appSubtitle: 'Visor de CSV, Parquet y OpenModelica/Dymola',
+            runtimeNoticeWebKicker: 'Version web',
+            runtimeNoticeWebTitle: 'Version web',
+            runtimeNoticeWebBody: 'Esta version funciona directamente en el navegador. Puedes abrir y graficar archivos que selecciones manualmente.',
+            runtimeNoticeLocalKicker: 'Version local',
+            runtimeNoticeLocalTitle: 'Version local',
+            runtimeNoticeLocalBody: 'Esta version se ejecuta desde tu computadora mediante un servidor local. Permite usar algunas funciones locales, como Live Update, sin instalar la app de escritorio.',
+            runtimeNoticePrivacy: 'Tus datos no se transmiten por la web: los archivos de series temporales se procesan en tu navegador o en tu computadora.',
+            runtimeNoticeDesktop: 'Para archivos que se actualizan en vivo, archivos muy grandes y mejor acceso a archivos de tu computadora, usa la version de escritorio. Puedes descargarla desde el boton Extra....',
+            runtimeNoticeDesktopFeatures: [
+                'Seguir archivos mientras se estan escribiendo',
+                'Abrir archivos CSV, MAT y Parquet muy grandes con mas fiabilidad',
+                'Trabajar sin conexion',
+                'Mantener los mismos graficos, sesiones, variables derivadas y herramientas de tiempo',
+            ],
             variables: 'Variables',
             filterVariables: 'Filtrar variables…',
             layout: 'Configuración de diseño',
@@ -1050,6 +1092,20 @@ const translations = {
         it: {
             appTitle: 'Time Series Explorer',
             appSubtitle: 'Visualizzatore CSV, Parquet e OpenModelica/Dymola',
+            runtimeNoticeWebKicker: 'Versione web',
+            runtimeNoticeWebTitle: 'Versione web',
+            runtimeNoticeWebBody: 'Questa versione funziona direttamente nel browser. Puoi aprire e tracciare i file selezionati manualmente.',
+            runtimeNoticeLocalKicker: 'Versione locale',
+            runtimeNoticeLocalTitle: 'Versione locale',
+            runtimeNoticeLocalBody: 'Questa versione viene avviata dal computer tramite un server locale. Permette di usare alcune funzioni locali, come Live Update, senza installare l app desktop.',
+            runtimeNoticePrivacy: 'I tuoi dati non vengono trasmessi via web: i file di serie temporali vengono elaborati nel browser o sul tuo computer.',
+            runtimeNoticeDesktop: 'Per file aggiornati in tempo reale, file molto grandi e un accesso migliore ai file del computer, usa la versione desktop. Puoi scaricarla dal pulsante Extra....',
+            runtimeNoticeDesktopFeatures: [
+                'Seguire i file mentre vengono scritti',
+                'Aprire file CSV, MAT e Parquet molto grandi con maggiore affidabilita',
+                'Lavorare offline',
+                'Mantenere gli stessi grafici, sessioni, variabili derivate e strumenti per il tempo',
+            ],
             variables: 'Variabili',
             filterVariables: 'Filtra variabili…',
             layout: 'Configurazione layout',
