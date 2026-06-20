@@ -419,6 +419,7 @@ class PlotManager {
         if (!plot) return;
         const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
         if (plot.mode === mode && plot.stateAnimDim === nextDim) return;
+        this._dismissModeChangeWarning?.(panelId);
 
         // Stop animation if running
         this._stopAnim(plot);
@@ -1019,6 +1020,7 @@ class PlotManager {
 
     _clearPanel(panelId) {
         const existing = this.plots.get(panelId);
+        this._dismissModeChangeWarning?.(panelId);
         if (typeof this._cleanupLazyDetailForPanel === 'function') {
             this._cleanupLazyDetailForPanel(panelId, existing);
         }

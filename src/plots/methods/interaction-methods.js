@@ -2237,7 +2237,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         btn.title = i18n.t(m.titleKey);
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            this._setMode(panelId, m.id, m.stateAnimDim || null);
+            this._requestModeChange(panelId, m.id, m.stateAnimDim || null);
         });
         modeGroup.appendChild(btn);
     });
@@ -2378,6 +2378,83 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         this._clearPanel(panelId);
     });
     toolbar.appendChild(clearBtn);
+};
+
+proto._requestModeChange = function(panelId, mode, stateAnimDim = null) {
+    const plot = this.plots.get(panelId);
+    if (!plot) return;
+    const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
+    if (plot.mode === mode && plot.stateAnimDim === nextDim) {
+        this._dismissModeChangeWarning(panelId);
+        return;
+    }
+    if (!this._hasContent(plot)) {
+        this._setMode(panelId, mode, stateAnimDim);
+        return;
+    }
+    this._showModeChangeWarning(panelId, mode, stateAnimDim);
+};
+
+proto._showModeChangeWarning = function(panelId, mode, stateAnimDim = null) {
+    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+    if (!panelEl) return;
+
+    panelEl.querySelector('.mode-change-warning-overlay')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'mode-change-warning-overlay';
+    overlay.addEventListener('click', e => e.stopPropagation());
+    overlay.addEventListener('pointerdown', e => e.stopPropagation());
+    overlay.addEventListener('pointermove', e => e.stopPropagation());
+    overlay.addEventListener('wheel', e => {
+        e.preventDefault();
+        e.stopPropagation();
+    }, { passive: false });
+
+    const warning = document.createElement('div');
+    warning.className = 'mode-change-warning';
+    warning.setAttribute('role', 'status');
+    warning.addEventListener('click', e => e.stopPropagation());
+
+    const text = document.createElement('div');
+    text.className = 'mode-change-warning-text';
+    text.dataset.i18n = 'modeChangeClearsTracesWarning';
+    text.textContent = i18n.t('modeChangeClearsTracesWarning');
+    warning.appendChild(text);
+
+    const actions = document.createElement('div');
+    actions.className = 'mode-change-warning-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'mode-change-warning-btn';
+    cancelBtn.dataset.i18n = 'cancel';
+    cancelBtn.textContent = i18n.t('cancel');
+    cancelBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._dismissModeChangeWarning(panelId);
+    });
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'mode-change-warning-btn confirm';
+    confirmBtn.dataset.i18n = 'modeChangeConfirm';
+    confirmBtn.textContent = i18n.t('modeChangeConfirm');
+    confirmBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._dismissModeChangeWarning(panelId);
+        this._setMode(panelId, mode, stateAnimDim);
+    });
+
+    actions.append(cancelBtn, confirmBtn);
+    warning.appendChild(actions);
+    overlay.appendChild(warning);
+    panelEl.appendChild(overlay);
+};
+
+proto._dismissModeChangeWarning = function(panelId) {
+    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+    panelEl?.querySelector('.mode-change-warning-overlay')?.remove();
 };
 
 proto._updateModeButtons = function(panelEl, activeMode) {

@@ -816,6 +816,67 @@
     padding: 2px 5px;
 }
 
+.mode-change-warning-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 45;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 42px 10px 10px;
+    background-color: rgba(0, 0, 0, 0.04);
+    pointer-events: auto;
+}
+
+.mode-change-warning {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: min(680px, 100%);
+    padding: 9px 10px;
+    background-color: color-mix(in srgb, #f59e0b 18%, var(--bg-primary));
+    border: 1px solid color-mix(in srgb, #f59e0b 52%, var(--border-color));
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 0.82rem;
+    line-height: 1.35;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+}
+
+.mode-change-warning-text {
+    min-width: 0;
+}
+
+.mode-change-warning-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.mode-change-warning-btn {
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.mode-change-warning-btn:hover {
+    border-color: color-mix(in srgb, var(--primary-color) 70%, var(--border-color));
+}
+
+.mode-change-warning-btn.confirm {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
 /* Drop overlay — shown on top of an existing plot during drag */
 .drop-overlay {
     position: absolute;
