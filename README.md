@@ -86,12 +86,12 @@ Create a production bundle with:
 npm run build
 ```
 
-This command now generates the portable download artifacts first, then builds the published web app so `dist/` includes the stand-alone download package.
+This command builds the published web app only. The GitHub Pages version should not generate or publish the old portable-web download as the main offline app.
 
-If you only want the web bundle without regenerating the portable package:
+If you explicitly need the old portable-web package for development or archival testing:
 
 ```powershell
-npm run build:web
+npm run build:portable
 ```
 
 The published Light Web output is generated in `dist/`. This is the output intended for GitHub Pages.

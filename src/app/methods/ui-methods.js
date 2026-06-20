@@ -2,10 +2,10 @@ import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import {
     APP_VERSION,
+    DESKTOP_MANIFEST_PATH,
     DYMOLA_LOGO_ICON_PATH,
     EXAMPLES,
     OPENMODELICA_MODELING_ICON_PATH,
-    STANDALONE_MANIFEST_PATH,
 } from '../constants.js';
 
 export function installUiMethods(TargetClass) {
@@ -780,8 +780,8 @@ proto._renderExtraMenu = function() {
         });
     }, { titleKey: 'extraLoadSessionProjectTooltip' });
 
-    const standaloneItem = makeAction('📦', 'extraStandalone', () => {
-        this._downloadStandalonePackage();
+    const desktopDownloadItem = makeAction('📦', 'extraStandalone', () => {
+        this._downloadDesktopPackage();
     });
 
     const openTempItem = makeAction(
@@ -829,20 +829,21 @@ proto._renderExtraMenu = function() {
     if (this.capabilities?.canUseLocalPath) {
         items.push(openTempItem, dymolaDirItem);
     }
-    items.push(standaloneItem, feedbackItem, versionRow);
+    items.push(desktopDownloadItem, feedbackItem, versionRow);
     menu.append(...items);
 };
 
-proto._downloadStandalonePackage = async function() {
+proto._downloadDesktopPackage = async function() {
     try {
-        const response = await fetch(STANDALONE_MANIFEST_PATH, { cache: 'no-store' });
+        const response = await fetch(DESKTOP_MANIFEST_PATH, { cache: 'no-store' });
         if (!response.ok) throw new Error(`Missing manifest: ${response.status}`);
 
         const manifest = await response.json();
-        if (!manifest?.zipUrl) throw new Error('Missing zipUrl in manifest');
+        const url = manifest?.downloadUrl || manifest?.url || manifest?.zipUrl;
+        if (!url) throw new Error('Missing desktop download URL in manifest');
 
         const link = document.createElement('a');
-        link.href = manifest.zipUrl;
+        link.href = url;
         link.download = manifest.fileName || '';
         document.body.appendChild(link);
         link.click();

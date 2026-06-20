@@ -200,11 +200,11 @@ Live append / auto-refresh for Full Desktop only:
    f) The Python live-append simulator exists under `test-files/live_update`.
    g) The Live Update menu has Start/Stop controls, interval presets/custom value, and view policy controls.
 2) Immediate cleanup still needed:
-   a) Re-test Web Light from GitHub Pages and Web Preview from `serve.bat` to confirm no Live Update entry point remains visible or usable.
-   b) Re-test Full Desktop to confirm Live Update controls still appear and remain enabled.
-   c) Remove or rewrite any remaining text that suggests Live Update works from the browser or local-light server.
-   d) Translate all new Live Update disabled/unavailable messages in English, French, Spanish, and Italian.
-   e) Decide whether the existing portable-web/local-light download should be hidden immediately or only after the Desktop download artifacts exist.
+   a) DONE 2026-06-20: added `npm run test:capabilities` to verify Web Light and Web Preview do not enable Live Update or local-path polling.
+   b) DONE 2026-06-20: added `npm run test:capabilities` to verify Full Desktop keeps Live Update, local paths, and huge-file capability enabled.
+   c) DONE 2026-06-20: removed or neutralized remaining local-light/browser wording from runtime notices, styles, and the portable server status.
+   d) DONE 2026-06-20: translated the Live Update and Live View control/status messages in English, French, Spanish, and Italian.
+   e) DONE 2026-06-20: the public Extra menu now targets a Desktop download manifest, and `npm run build` no longer regenerates the old portable-web download for GitHub Pages.
 3) Full Desktop implementation gaps:
    a) Make Live Update use Desktop/native file access instead of browser File objects or copied paths when possible.
    b) Ensure the app never locks the file in a way that blocks the simulator, OpenModelica, LabVIEW, or any external writer.

@@ -125,11 +125,6 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     background: color-mix(in srgb, var(--success-color) 14%, var(--bg-primary));
 }
 
-body[data-omv-runtime="light-local"] .runtime-badge {
-    border-color: color-mix(in srgb, var(--warning-color) 55%, var(--border-color));
-    background: color-mix(in srgb, var(--warning-color) 14%, var(--bg-primary));
-}
-
 .top-bar-right {
     display: flex;
     align-items: center;

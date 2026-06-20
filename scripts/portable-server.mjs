@@ -49,7 +49,7 @@ async function handleApi(req, res, url) {
     }
 
     if (url.pathname === '/__omv_local__/status') {
-        sendText(res, 200, JSON.stringify({ ok: true, app: 'timeseries-explorer', runtime: 'light-local' }), 'application/json; charset=utf-8');
+        sendText(res, 200, JSON.stringify({ ok: true, app: 'timeseries-explorer', runtime: 'web-preview' }), 'application/json; charset=utf-8');
         return;
     }
 
