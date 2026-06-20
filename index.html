@@ -107,7 +107,10 @@
 
             <!-- Variables Panel -->
             <div class="sidebar-section">
-                <input id="variable-filter" class="variable-filter" type="text" placeholder="Filter variables…" data-i18n="filterVariables">
+                <div class="variable-filter-wrap">
+                    <input id="variable-filter" class="variable-filter" type="text" placeholder="Filter variables…" data-i18n="filterVariables">
+                    <button id="clear-variable-filter" class="variable-filter-clear" type="button" data-i18n-title="clearVariableFilter" data-i18n-aria-label="clearVariableFilter">×</button>
+                </div>
                 <div class="section-header">
                     <h3 data-i18n="variables">Variables</h3>
                     <div class="tree-controls">

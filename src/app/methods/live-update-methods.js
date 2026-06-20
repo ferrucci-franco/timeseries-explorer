@@ -53,7 +53,7 @@ proto._updateLiveUpdateTopBar = function() {
     toggle.classList.toggle('active', !!state?.enabled);
     toggle.title = canUseLive
         ? (state?.message || (entry ? this._liveUpdateSupportMessage(entry) : i18n.t('liveUpdateTitle')))
-        : 'Live Update is available in Light Local or Full Desktop.';
+        : i18n.t('liveUpdateDesktopOnly');
 };
 
 proto._ensureLiveUpdateState = function(fileId) {
@@ -116,7 +116,7 @@ proto._startLiveUpdate = async function(fileId) {
     if (!entry || !state) return;
 
     if (!this.capabilities?.canUseLiveUpdate) {
-        await Modal.alert(i18n.t('liveUpdateTitle'), 'Live Update is available when the app is launched with serve.bat or in the Full Desktop version.', { icon: 'LIVE' });
+        await Modal.alert(i18n.t('liveUpdateTitle'), i18n.t('liveUpdateDesktopOnly'), { icon: 'LIVE' });
         return;
     }
 

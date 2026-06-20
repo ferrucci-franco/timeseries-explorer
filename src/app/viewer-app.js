@@ -130,7 +130,7 @@ class OpenModelicaViewer {
             liveWrap.hidden = !caps.canUseLiveUpdate;
             liveWrap.title = caps.canUseLiveUpdate
                 ? ''
-                : 'Live Update is available in the local server or Full Desktop version.';
+                : i18n.t('liveUpdateDesktopOnly');
         }
 
         const notice = document.getElementById('light-version-notice');
@@ -142,12 +142,11 @@ class OpenModelicaViewer {
 
     _capabilitiesSummary(caps) {
         if (caps.isDesktop) return 'Full Desktop: native local capabilities enabled.';
-        if (caps.isLocalServer) return 'Light Local: static app plus localhost file API.';
         return 'Light Web: browser-only version for GitHub Pages/static hosting.';
     }
 
     _runtimeNoticeHtml(caps) {
-        const noticeMode = caps.isDesktop ? 'Desktop' : (caps.isLocalServer ? 'Local' : 'Web');
+        const noticeMode = caps.isDesktop ? 'Desktop' : 'Web';
         const mode = i18n.t(`runtimeNotice${noticeMode}Kicker`);
         const title = i18n.t(`runtimeNotice${noticeMode}Title`);
         const body = i18n.t(`runtimeNotice${noticeMode}Body`);

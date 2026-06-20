@@ -129,6 +129,11 @@
 }
 
 /* Variable filter input */
+.variable-filter-wrap {
+    position: relative;
+    margin-bottom: 0.6rem;
+}
+
 .variable-filter {
     width: 100%;
     padding: 0.4rem 0.6rem;
@@ -142,6 +147,11 @@
     box-sizing: border-box;
 }
 
+.variable-filter-wrap .variable-filter {
+    padding-right: 2rem;
+    margin-bottom: 0;
+}
+
 .variable-filter:focus {
     outline: none;
     border-color: var(--primary-color);
@@ -150,6 +160,36 @@
 .variable-filter::placeholder {
     color: var(--text-secondary);
     opacity: 0.7;
+}
+
+.variable-filter-clear {
+    position: absolute;
+    right: 5px;
+    top: 50%;
+    width: 24px;
+    height: 24px;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 4px;
+    background-color: transparent;
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.variable-filter-clear:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.variable-filter-clear:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
+.variable-filter-clear[hidden] {
+    display: none;
 }
 
 /* Parameter sub-section label in sorted view */

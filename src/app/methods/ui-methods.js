@@ -43,10 +43,25 @@ proto.initEventListeners = function() {
     });
     document.getElementById('toggle-sort').classList.toggle('active', this.sortAlphabetical);
 
-    document.getElementById('variable-filter').addEventListener('input', (e) => {
+    const variableFilter = document.getElementById('variable-filter');
+    const clearVariableFilter = document.getElementById('clear-variable-filter');
+    const updateVariableFilterClear = () => {
+        clearVariableFilter.hidden = variableFilter.value.length === 0;
+    };
+    variableFilter.addEventListener('input', (e) => {
         this._filterText = e.target.value.trim().toLowerCase();
+        updateVariableFilterClear();
         if (this._currentTree) this._renderFilteredTree();
     });
+    clearVariableFilter.addEventListener('click', () => {
+        if (!variableFilter.value) return;
+        variableFilter.value = '';
+        this._filterText = '';
+        updateVariableFilterClear();
+        if (this._currentTree) this._renderFilteredTree();
+        variableFilter.focus();
+    });
+    updateVariableFilterClear();
 
     document.getElementById('expand-all').addEventListener('click',   () => this.expandAllTree());
     document.getElementById('collapse-all').addEventListener('click', () => this.collapseAllTree());

@@ -24,6 +24,8 @@
 !/package-lock.json
 !/README.md
 !/CONTRIBUTING.md
+!/.codex/
+!/.codex/TODO.txt
 !/src/
 !/src/**
 !/public/

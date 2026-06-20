@@ -25,13 +25,7 @@ set "SERVER_URL=http://localhost:%PORT%/index.html"
 
 where node >nul 2>nul
 if %ERRORLEVEL%==0 (
-    if exist "scripts\portable-server.mjs" (
-        goto :run_local_live
-    )
-)
-
-if exist "node_modules\vite" (
-    goto :run_vite
+    set "HAS_NODE=1"
 )
 
 where npm >nul 2>nul
@@ -39,6 +33,10 @@ if %ERRORLEVEL%==0 (
     if exist "package.json" (
         goto :run_vite
     )
+)
+
+if exist "node_modules\vite" (
+    goto :run_vite
 )
 
 where python >nul 2>nul
@@ -51,6 +49,12 @@ where py >nul 2>nul
 if %ERRORLEVEL%==0 (
     set "PY_CMD=py -3"
     goto :run_python
+)
+
+if "%HAS_NODE%"=="1" (
+    if exist "scripts\portable-server.mjs" (
+        goto :run_node_static
+    )
 )
 
 echo.
@@ -67,16 +71,17 @@ echo.
 pause
 exit /b 1
 
-:run_local_live
+:run_node_static
 echo.
-echo Iniciando Time Series Explorer Light Local en:
+echo Iniciando Time Series Explorer Web Preview en:
 echo   %SERVER_URL%
 echo.
-echo Este modo incluye la API localhost para Live Update por path.
+echo Este modo reproduce la version web: no incluye API local ni Live Update.
 echo.
 echo Para detenerlo, cierra esta ventana o presiona Ctrl+C.
 echo.
 set "OMV_PORT=%PORT%"
+set "OMV_WEB_PREVIEW=1"
 call node scripts\portable-server.mjs
 
 endlocal
@@ -87,7 +92,7 @@ echo.
 echo Iniciando Time Series Explorer Light Web con Vite en:
 echo   %SERVER_URL%
 echo.
-echo Aviso: este modo no incluye la API local para Live Update por path.
+echo Este modo reproduce la version web: no incluye API local ni Live Update.
 echo.
 echo Para detenerlo, cierra esta ventana o presiona Ctrl+C.
 echo.
@@ -102,7 +107,7 @@ echo.
 echo Iniciando Time Series Explorer Light Web con Python en:
 echo   %SERVER_URL%
 echo.
-echo Aviso: este modo no incluye la API local para Live Update por path.
+echo Este modo reproduce la version web: no incluye API local ni Live Update.
 echo.
 echo Para detenerlo, cierra esta ventana o presiona Ctrl+C.
 echo.

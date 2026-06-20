@@ -10,6 +10,8 @@ const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, '..');
 const host = '127.0.0.1';
 const preferredPort = Number(process.env.OMV_PORT || 8765);
+const webPreviewOnly = process.env.OMV_WEB_PREVIEW === '1';
+const noOpen = process.env.OMV_NO_OPEN === '1';
 
 const mimeTypes = new Map([
     ['.html', 'text/html; charset=utf-8'],
@@ -41,6 +43,11 @@ function localPathFromUrl(url) {
 }
 
 async function handleApi(req, res, url) {
+    if (webPreviewOnly) {
+        sendText(res, 404, 'Local API is disabled in web preview mode');
+        return;
+    }
+
     if (url.pathname === '/__omv_local__/status') {
         sendText(res, 200, JSON.stringify({ ok: true, app: 'timeseries-explorer', runtime: 'light-local' }), 'application/json; charset=utf-8');
         return;
@@ -179,5 +186,10 @@ const { port } = await listenOnAvailablePort(preferredPort);
 const url = `http://localhost:${port}/index.html`;
 console.log(`Time Series Explorer local server`);
 console.log(`Serving ${packageRoot}`);
+if (webPreviewOnly) {
+    console.log(`Web preview mode: local API disabled`);
+}
 console.log(`Open ${url}`);
-openBrowser(url);
+if (!noOpen) {
+    openBrowser(url);
+}

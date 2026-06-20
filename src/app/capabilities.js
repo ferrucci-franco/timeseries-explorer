@@ -52,18 +52,18 @@ export function initialCapabilities() {
 export async function resolveCapabilities(previous = initialCapabilities()) {
     const localServer = await hasLocalApi();
     const desktop = previous.isDesktop || isDesktopRuntime();
-    const runtime = desktop ? 'full-desktop' : (localServer ? 'light-local' : 'light-web');
+    const runtime = desktop ? 'full-desktop' : 'light-web';
 
     return {
         ...previous,
         runtime,
-        label: desktop ? 'Full Desktop' : (localServer ? 'Light Local' : 'Light Web'),
+        label: desktop ? 'Full Desktop' : 'Light Web',
         isDesktop: desktop,
         isLocalServer: localServer,
         isPublishedLight: isStaticPublishedPage(),
         isLocalhost: isLocalhost(),
-        canUseLiveUpdate: desktop || localServer,
-        canUseLocalPath: desktop || localServer,
+        canUseLiveUpdate: desktop,
+        canUseLocalPath: desktop,
         canUseHugeFiles: desktop,
         canExportParquet: desktop,
         showRuntimeNotice: true,

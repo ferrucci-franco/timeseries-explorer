@@ -1,0 +1,250 @@
+Measurement cursors:
+1) The cursor should stop at end time of the corresponing signal. Currently, it keeps advancing with the y-value equal to the y(t_end). Besides, if the signal has been cropped, the cursor should stop at the last value showed on the scrren.
+
+2) When the signal has some noise, the detection of relative max and min fails.
+
+
+"Align this file" buttom:
+1) Whe should add a gain option (defaut to 1)
+
+
+Time series view:
+1) Add log10 view
+
+
+Distribution / downloads:
+1) Public download should be the Full Desktop app only, not two visible user-facing variants.
+2) Remove or hide the current portable-web/local-light download from the main Extra menu once the Full Desktop download is available.
+3) Keep the local-light/serve.bat workflow as a development or advanced fallback tool, not as the primary offline product.
+4) For the first public Full Desktop download, prefer a portable desktop build as the main option because it avoids installation and is easier while the app is changing often.
+5) Consider installers later, or as secondary per-OS downloads, once the app is stable enough and signing/notarization decisions are clearer.
+6) The user-facing mental model should be: Web version for quick browser use; Desktop app for offline use, Live Update, large files, and better local file access.
+7) Replace the current Extra menu item "Download the app to use it without internet" because it currently downloads the portable-web/local-light zip, not the Full Desktop app.
+8) Decide the final user-facing label only after the Full Desktop artifacts exist. Preferred wording: "Download Desktop app" / "Bajar app de escritorio".
+9) Build and publish per-OS Full Desktop artifacts:
+   a) Windows portable desktop executable first.
+   b) Windows installer later or as secondary.
+   c) macOS app/dmg or zip later, with clear warning about unsigned/not-notarized builds if applicable.
+   d) Linux AppImage or portable build later.
+10) The public web page and Web Light runtime notice should point users to the Desktop app for offline use, Live Update, very large files, and better local file access.
+
+
+Web Light finalization / cleanup:
+1) Audit the current Web Light feature set and write down exactly what is supported from GitHub Pages:
+   a) Manual file open via browser picker / drag-and-drop.
+   b) CSV parsing with smart time detection.
+   c) MAT parsing for files that fit browser memory.
+   d) Parquet and lazy DuckDB-WASM where browser workers and memory allow it.
+   e) Plot types, sessions, derived variables, cursor tools, file transforms, and visual options that do not require native disk access.
+2) Audit what is NOT guaranteed in Web Light and make the UI honest:
+   a) No reliable local-path polling.
+   b) No browser-independent Live Update from arbitrary disk paths.
+   c) No guaranteed multi-GB CSV/MAT support.
+   d) No native CSV-to-Parquet conversion.
+   e) No promise that browser-specific file handles survive reloads or work identically across Chrome/Firefox/Safari.
+3) Remove or disable UI controls in Web Light that imply unavailable desktop behavior:
+   a) Hide local-path Live Update entry points unless the runtime really supports them.
+   b) Do not show path prompts from GitHub Pages.
+   c) Do not show contradictory states where a global control looks enabled while the plot/file control is disabled.
+   d) Rename or remove the current portable-web download from Extra once Desktop Full exists.
+4) Finish Web Light messaging:
+   a) Keep the initial Web version notice short, non-technical, and translated in all four languages.
+   b) Clearly state that time-series data is processed locally and is not transmitted through the web.
+   c) Point to Desktop app for live files, very large files, offline use, and better access to local files.
+5) Ensure Web Light large-file behavior is explicit:
+   a) Keep DuckDB-WASM lazy mode for medium/large CSV and Parquet when available.
+   b) If a file exceeds safe browser limits, show a user-facing message, not only a console warning.
+   c) The message should recommend Desktop app and/or Parquet conversion, not ask users to run developer scripts.
+6) Confirm Web Light build/deploy path:
+   a) `npm run build:web` must produce the GitHub Pages version.
+   b) The GitHub Pages workflow must not publish Desktop-only assets as the primary app.
+   c) Test the deployed URL after push with cache-busting.
+7) Add a small manual QA checklist for Web Light:
+   a) Open a small CSV.
+   b) Open a MAT example.
+   c) Open a Parquet example if available.
+   d) Verify language switching updates notices and tooltips.
+   e) Verify unavailable Desktop-only actions are hidden or clearly disabled.
+8) Do not leave Web Light as a half-implemented copy of Desktop. It should be a finished, honest browser version with fewer promises.
+
+
+Full Desktop large-file support:
+0) Product goal:
+   a) Full Desktop must be the runtime that can seriously handle very large local files.
+   b) Do not rely on DuckDB-WASM as the main solution for multi-GB files in Full Desktop.
+   c) Do not send whole multi-GB files from Electron main to the renderer as Blob/File/ArrayBuffer.
+   d) Use native disk access and native DuckDB in Electron/Node for CSV/Parquet.
+   e) Treat MAT multi-GB support as a separate later phase unless a partial MAT reader is designed.
+1) Current blocker to remove:
+   a) `src/app/methods/file-methods.js::_readLocalResultPath` currently does `fetch(...).blob()` and wraps the result in `new File(...)`.
+   b) This defeats streaming for multi-GB files and must not be used for the Full Desktop large-file path.
+   c) Keep it only for small files or replace Desktop file loading with dataset descriptors.
+2) Define a runtime data-source abstraction used by PlotManager:
+   a) Keep the current in-memory legacy data object for small files.
+   b) Keep DuckDB-WASM lazy data as the Web Light source.
+   c) Add a new Desktop native data source for Full Desktop.
+   d) The UI/PlotManager should ask the data source for overview/range data instead of assuming every variable has full `.data` arrays.
+3) Create an Electron native data engine:
+   a) Add an Electron main-process module such as `electron/data-engine.cjs`.
+   b) Use the existing `duckdb` Node package, not DuckDB-WASM.
+   c) Manage one DuckDB database/connection per app session or a small connection pool.
+   d) Store open datasets in a Map keyed by `datasetId`.
+   e) Expose IPC methods through preload with contextIsolation on.
+4) Add IPC API in Electron:
+   a) `omv:dataset-open` with `{ path, preferredFormat? }`.
+   b) `omv:dataset-close` with `{ datasetId }`.
+   c) `omv:dataset-get-overview` with `{ datasetId, variables?, maxPoints }`.
+   d) `omv:dataset-get-range` with `{ datasetId, variables, t0, t1, maxPoints }`.
+   e) `omv:dataset-get-source-window` with `{ datasetId, variable, fromX, direction, maxRows, contextRows }` for cursors/min/max/zero-crossing.
+   f) `omv:dataset-cancel-query` with `{ datasetId }`.
+   g) `omv:dataset-convert-to-parquet` with `{ path, outputPath?, compression?, overwrite? }`.
+5) Dataset open behavior:
+   a) Detect extension: `.parquet`, `.csv`, `.txt`, `.mat`.
+   b) For Parquet, create a DuckDB view over `read_parquet(path)`.
+   c) For CSV/TXT, inspect a sample using the existing CSV profile logic or a shared helper.
+   d) Use that profile to build `read_csv(...)` options rather than blindly relying on `read_csv_auto`.
+   e) Detect the time column using the same semantics as the Web parser.
+   f) Return a descriptor, not file contents:
+      - `datasetId`
+      - `path`
+      - `displayName`
+      - `format`
+      - `columns`
+      - `variables`
+      - `timeColumn`
+      - `timeKind`
+      - `timeStart`
+      - `timeEnd`
+      - `rowCount` if known
+      - `warnings`
+6) Overview generation:
+   a) For Parquet, use DuckDB queries with projection and time ordering.
+   b) For CSV, avoid materializing the whole CSV in JS.
+   c) Produce at most a fixed number of points per selected/visible variable for initial rendering.
+   d) The overview must be enough to populate the variable tree, metadata, and first plot without huge memory growth.
+7) Range queries for plotting:
+   a) Implement the same bucketed query idea used by `DuckDbSource.getColumnsRange`.
+   b) Input: variables + time range + maxPoints.
+   c) Output: typed arrays or transferable arrays small enough for Plotly.
+   d) Group multiple variables from the same file into one query.
+   e) Cancel stale queries when the user keeps zooming/panning.
+   f) Cache a small number of recent range queries per dataset.
+8) Cursor/source-window queries:
+   a) Implement exact raw-window queries around a time point, similar to current WASM `fetchSourceWindow`.
+   b) Use it for measurement cursors, next sample, local maxima/minima, and zero crossing.
+   c) Keep the result bounded, e.g. 50k rows, not an entire file.
+9) CSV-to-Parquet conversion inside Full Desktop:
+   a) Move the useful logic from `bench/csv-to-parquet.mjs` into a reusable Electron/Node module.
+   b) Add a UI flow when opening a large CSV:
+      - "This CSV is very large. Convert to Parquet for faster loading?"
+      - Buttons: "Convert and open", "Open directly", "Cancel".
+   c) Let the user choose output path or default to same folder.
+   d) Show progress/status if DuckDB exposes progress; otherwise show an indeterminate progress with file names.
+   e) Open the resulting Parquet automatically after conversion.
+   f) Never require the user to run a terminal command for ordinary use.
+10) Threshold policy:
+   a) Small CSV/MAT can keep using current in-memory parser.
+   b) Medium CSV/Parquet can use existing DuckDB-WASM in Web Light.
+   c) Full Desktop should use native data engine for CSV/Parquet above a conservative threshold, e.g. 50 MB or when selected through Desktop picker.
+   d) For CSV above a larger threshold, e.g. 500 MB, recommend/propose Parquet conversion.
+   e) For MAT above a safe threshold, show a clear message until partial MAT support exists.
+11) MAT large-file phase, later:
+   a) Audit OpenModelica/Dymola MAT file structure used by typical result files.
+   b) Determine whether variables can be read independently without loading the whole file.
+   c) If yes, design a partial MAT reader with variable/time indexing.
+   d) If no, be honest in UI: MAT large-file support is limited compared with CSV/Parquet.
+12) Renderer integration:
+   a) Update `loadFile/loadFiles` so Desktop path selection can return dataset descriptors instead of File objects.
+   b) Add PlotManager support for Desktop-backed lazy datasets.
+   c) Reuse the existing lazy refresh path where possible; do not duplicate all plotting logic.
+   d) Make file close release native datasets through IPC.
+   e) Make session save/restore store enough dataset metadata/path to restore Desktop-backed datasets when possible.
+13) UI states and errors:
+   a) Add a clear "Opening large file..." progress overlay.
+   b) Show whether a file is Desktop-backed / Web-backed only if useful; avoid technical wording for normal users.
+   c) If a query fails, keep the previous plot visible and show a local warning.
+   d) If conversion fails, show the DuckDB error in a user-readable way.
+   e) Avoid console-only warnings for user-facing decisions.
+14) Performance acceptance tests:
+   a) Open a 1 GB Parquet file without renderer memory exploding.
+   b) Open a 5 GB Parquet file without loading it into renderer memory.
+   c) Zoom into a small time window and verify the query returns bounded points.
+   d) Pan repeatedly and verify stale queries are cancelled.
+   e) Open a large CSV and convert it to Parquet from the UI.
+   f) Verify memory stays bounded after closing a large dataset.
+15) Test fixtures and tooling:
+   a) Add scripts to generate synthetic CSV/Parquet files of configurable size.
+   b) Add small CI-safe fixtures for schema/time detection.
+   c) Add manual benchmark instructions for 1 GB+ files, since CI should not store giant data.
+   d) Log query timings in debug mode only.
+16) Documentation:
+   a) Rewrite `docs/large-files.md` after the Desktop data engine exists.
+   b) Explain Web Light limits separately from Full Desktop capabilities.
+   c) Remove references that ask ordinary users to run `node bench/csv-to-parquet.mjs` as the main workflow once UI conversion exists.
+   d) Keep developer/benchmark docs separate from user-facing docs.
+
+
+Live append / auto-refresh for Full Desktop only:
+0) Current product decision:
+   a) Live Update is a Full Desktop feature only.
+   b) Web Light and Web Preview must not offer Live Update, path polling, Firefox path prompts, or browser-dependent file-handle workflows.
+   c) `serve.bat` remains useful for local development/testing of the web app, but it is not the Live Update runtime. It must behave as a Web Preview for the GitHub Pages version.
+   d) The UI must not show contradictory states such as a global Live control appearing available while the actual file/plot live controls are disabled.
+   e) The public message should be simple: Web version for quick browser use; Desktop app for Live Update, large files, offline use, and better local file access.
+1) Already implemented or mostly implemented:
+   a) Full Desktop can expose Live Update controls through the runtime capabilities system.
+   b) Web Light / Web Preview capabilities now disable Live Update and local-path polling.
+   c) Runtime messages now point users to the Desktop app for Live Update and better local file access.
+   d) The live indicator icon exists in the Files panel for files currently being polled.
+   e) Polling has retry logic for transient read errors such as `NotReadableError` / `NotFoundError`.
+   f) The Python live-append simulator exists under `test-files/live_update`.
+   g) The Live Update menu has Start/Stop controls, interval presets/custom value, and view policy controls.
+2) Immediate cleanup still needed:
+   a) Re-test Web Light from GitHub Pages and Web Preview from `serve.bat` to confirm no Live Update entry point remains visible or usable.
+   b) Re-test Full Desktop to confirm Live Update controls still appear and remain enabled.
+   c) Remove or rewrite any remaining text that suggests Live Update works from the browser or local-light server.
+   d) Translate all new Live Update disabled/unavailable messages in English, French, Spanish, and Italian.
+   e) Decide whether the existing portable-web/local-light download should be hidden immediately or only after the Desktop download artifacts exist.
+3) Full Desktop implementation gaps:
+   a) Make Live Update use Desktop/native file access instead of browser File objects or copied paths when possible.
+   b) Ensure the app never locks the file in a way that blocks the simulator, OpenModelica, LabVIEW, or any external writer.
+   c) First target CSV/text time-series files. MAT live append can stay unsupported until there is a safe partial-read strategy.
+   d) Track last known file size, row count, last parsed offset, and last complete line.
+   e) If the file grows, read only appended bytes when possible.
+   f) If partial append is not ready, fall back to full re-read only in Full Desktop and only with duplicate-row protection.
+   g) If the file shrinks/truncates, pause Live Update and show a clear warning.
+   h) If delimiter, column count, headers, or schema change, pause Live Update and show a clear warning.
+   i) Define duplicate timestamp policy before final implementation.
+4) Plot/view behavior still needed:
+   a) Preserve current plots, selected variables, cursor positions, zoom ranges, derived variables, data-tool variables, and file transforms after appending rows.
+   b) Time-series X axis policies:
+      - Keep current start value and expand X end to include new data. This should be the default.
+      - Autoscale X.
+      - Sliding time window with presets: 10 s, 30 s, 1 min, 10 min.
+      - Sliding time window custom value in seconds with one decimal digit.
+      - Consider "use current zoom window" later only if the UX is clear.
+   c) Time-series Y axis policy:
+      - Expand only if needed, preserving current Y limits while all new values remain visible.
+      - Add tests for this because it previously behaved like unnecessary Y autoscale.
+   d) XY/phase plots:
+      - Autoscale.
+      - Do not autoscale.
+   e) Re-check whether Live View policy is per plot, global default, or both. Do not change this again without agreement.
+5) Tests/fixtures needed:
+   a) Appending normal rows.
+   b) Partial final line while the external writer is still writing.
+   c) Duplicate timestamps.
+   d) Equal timestamp with changed values.
+   e) Schema/header changes.
+   f) File truncation/restart.
+   g) Transient read errors while the writer is active.
+   h) Y expand-if-needed without unnecessary autoscale.
+   i) Preservation of zoom, selections, derived variables, transforms, and cursors after append.
+   j) Web Light and Web Preview must not expose Live Update.
+
+
+Session save/restore follow-ups:
+1) Add an integration-style browser test for JSON view restore over already-open compatible files.
+2) Add an integration-style browser test for ZIP project save/load round-trip.
+3) Consider a visual warning when JSON restore matches by variables/name but the file hash differs.
+

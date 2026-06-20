@@ -121,6 +121,7 @@ async function copyPortableLauncher(packageDir) {
     '@echo off',
     'setlocal',
     'cd /d "%~dp0"',
+    'set "OMV_WEB_PREVIEW=1"',
     'runtime\\node.exe server\\portable-server.mjs',
     'pause',
     '',
@@ -130,6 +131,8 @@ async function copyPortableLauncher(packageDir) {
     'DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
     'cd "$DIR" || exit 1',
     'chmod +x ./runtime/node 2>/dev/null || true',
+    'OMV_WEB_PREVIEW=1',
+    'export OMV_WEB_PREVIEW',
     './runtime/node ./server/portable-server.mjs',
     '',
   ].join('\n');
@@ -154,7 +157,7 @@ async function writeOfflineReadme(packageDir, folderName) {
     `Use:`,
     `1. Extract the zip.`,
     `2. Basic offline mode: open index.html with a double click.`,
-    `3. Live offline mode: run the start script for your platform to open http://localhost in your browser:`,
+    `3. Local browser mode: run the start script for your platform to open http://localhost in your browser:`,
     `   - Windows: start-windows.bat`,
     `   - Linux: start-linux.sh`,
     `   - macOS: start-macos.command`,
@@ -163,7 +166,7 @@ async function writeOfflineReadme(packageDir, folderName) {
     `Notes:`,
     `- This package is intended for direct file:// opening.`,
     `- The localhost launcher uses the bundled Node runtime from the platform that built this zip; publish one zip per OS for best results.`,
-    `- The local server binds to 127.0.0.1 and exposes only this app plus a file-read endpoint used for live update paths selected by the user.`,
+    `- The local server binds to 127.0.0.1 and exposes only this app. Live Update belongs to the Full Desktop app.`,
     `- Example data is included under public/examples/.`,
   ].join('\n');
   await fs.writeFile(path.join(packageDir, 'README-offline.txt'), text, 'utf8');

@@ -7,10 +7,10 @@ Frontend web app for visualizing OpenModelica, Dymola, and CSV result files.
 The app is split by runtime capability, not by duplicated source branches:
 
 - **Light Web**: the GitHub Pages/static version. It runs in the browser sandbox and keeps the core viewer features.
-- **Light Local**: the same web app launched with `serve.bat`; it adds the localhost file API used by Live Update.
-- **Full Desktop**: the Electron wrapper. It reuses the same app code and is the base for native local-file features.
+- **Web Preview**: the same web app launched with `serve.bat`; useful for checking the GitHub Pages behavior before pushing.
+- **Full Desktop**: the Electron wrapper. It reuses the same app code and is the base for Live Update, native local-file features, and very large files.
 
-Use the local server helper for Light Local:
+Use the local server helper for Web Preview:
 
 ```powershell
 .\serve.bat
@@ -22,7 +22,7 @@ Then open the URL shown in the terminal, usually:
 http://localhost:8000/index.html
 ```
 
-This is also the recommended local workflow for Live Update. When Node is available, `serve.bat` starts the Time Series Explorer local server, which serves the app and exposes the localhost-only file API used to follow growing CSV files by path in browsers such as Firefox.
+Live Update is a Full Desktop feature. The local server helper is kept for development and local testing of the web app, and should match the GitHub Pages feature set.
 
 For normal web development without the local file API, use Vite:
 
@@ -56,7 +56,7 @@ The generated files are written to `desktop-dist/`:
 - `index.html`: static shell for the app
 - `app.js`: browser entrypoint
 - `electron`: Electron wrapper for the Full Desktop runtime
-- `serve.bat`: local HTTP server launcher for development/use
+- `serve.bat`: local HTTP server launcher for development/testing
 - `package.json`: npm scripts and frontend tooling
 - `vite.config.js`: dev/build server configuration
 - `public`: files copied as-is into the final build
@@ -98,9 +98,9 @@ The published Light Web output is generated in `dist/`. This is the output inten
 
 ## Portable/offline build
 
-The portable package supports two offline modes:
+The portable web package supports two offline modes:
 
 - Basic mode: open `index.html` directly after extracting the zip.
-- Local live mode: run the platform start script (`start-windows.bat`, `start-linux.sh`, or `start-macos.command`) to serve the same app at `http://127.0.0.1`.
+- Local browser mode: run the platform start script (`start-windows.bat`, `start-linux.sh`, or `start-macos.command`) to serve the same app at `http://127.0.0.1`.
 
-The local live mode bundles the Node runtime from the platform that built the zip, starts a localhost-only server, opens the browser, and enables live update by local file path without requiring users to install Python, Node, npm, or internet access.
+The local browser mode bundles the Node runtime from the platform that built the zip, starts a localhost-only server, and opens the browser without requiring users to install Python, Node, npm, or internet access. Live Update belongs to the Full Desktop app.
