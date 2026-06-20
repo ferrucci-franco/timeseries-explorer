@@ -208,8 +208,8 @@ Live append / auto-refresh for Full Desktop only:
 3) Full Desktop implementation gaps:
    a) DONE 2026-06-20: Live Update and Desktop path loading now prefer Electron IPC native reads (`omvDesktop.readFile`) instead of the browser/local HTTP file endpoint. This is still full-file read, not incremental chunked read.
    b) DONE 2026-06-20: Desktop native polling now uses short read-only `fs.readFile` calls through IPC, keeps no watcher/stream open, and normalizes transient `EBUSY`/`EPERM`/`EACCES` read failures so Live Update retries instead of stopping.
-   c) First target CSV/text time-series files. MAT live append can stay unsupported until there is a safe partial-read strategy.
-   d) Track last known file size, row count, last parsed offset, and last complete line.
+   c) DONE 2026-06-20: Live Update remains limited to CSV/text candidates; MAT live append is not offered.
+   d) DONE 2026-06-20: Live Update state now tracks last file size, mtime, row count, parsed offset, last complete line, and trailing partial line placeholder.
    e) If the file grows, read only appended bytes when possible.
    f) If partial append is not ready, fall back to full re-read only in Full Desktop and only with duplicate-row protection.
    g) If the file shrinks/truncates, pause Live Update and show a clear warning.

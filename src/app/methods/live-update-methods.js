@@ -71,6 +71,11 @@ proto._ensureLiveUpdateState = function(fileId) {
             customIntervalSec: 5,
             lastFingerprint: '',
             lastRows: this._liveUpdateRowCount(fileId),
+            lastSize: Number(entry.file?.size) || 0,
+            lastModified: Number(entry.file?.lastModified) || 0,
+            lastParsedOffset: Number(entry.file?.size) || 0,
+            lastCompleteLine: '',
+            trailingPartialLine: '',
             localPath: entry.localPath || '',
         };
     }
@@ -148,6 +153,7 @@ proto._startLiveUpdate = async function(fileId) {
     state.message = i18n.t('liveUpdatePolling');
     state.lastRows = this._liveUpdateRowCount(fileId);
     state.lastFingerprint = this._fileFingerprint(entry.file);
+    await this._refreshLiveUpdateReadCursor(entry, state, entry.file);
     this._renderFilesList();
     this._updateLiveUpdateTopBar();
     await this._pollLiveUpdate(fileId);
@@ -229,6 +235,7 @@ proto._pollLiveUpdate = async function(fileId) {
         entry.contentHash = fingerprint;
         state.lastFingerprint = fingerprint;
         state.lastRows = outcome.nextRows;
+        await this._refreshLiveUpdateReadCursor(entry, state, latestFile);
 
         this._reapplyDerivedVariables(fileId, nextData);
         this._reapplyDataToolVariables?.(fileId, nextData);
@@ -265,6 +272,51 @@ proto._isTransientReadError = function(err) {
         || code === 'EPERM'
         || code === 'EACCES'
         || (name === 'TypeError' && /fetch|network|load failed|terminated/i.test(message));
+};
+
+proto._refreshLiveUpdateReadCursor = async function(entry, state, file) {
+    if (!state || !file) return;
+    state.lastSize = Number(file.size) || 0;
+    state.lastModified = Number(file.lastModified) || 0;
+    state.lastParsedOffset = state.lastSize;
+    state.trailingPartialLine = '';
+    state.lastCompleteLine = await this._readLiveUpdateLastCompleteLine(file);
+    if (entry?.liveUpdate && entry.liveUpdate !== state) {
+        entry.liveUpdate.lastSize = state.lastSize;
+        entry.liveUpdate.lastModified = state.lastModified;
+        entry.liveUpdate.lastParsedOffset = state.lastParsedOffset;
+        entry.liveUpdate.trailingPartialLine = state.trailingPartialLine;
+        entry.liveUpdate.lastCompleteLine = state.lastCompleteLine;
+    }
+};
+
+proto._readLiveUpdateLastCompleteLine = async function(file) {
+    const size = Number(file?.size) || 0;
+    if (!file || !size || typeof file.slice !== 'function') return '';
+    const start = Math.max(0, size - 64 * 1024);
+    try {
+        const tailBlob = file.slice(start, size);
+        const text = typeof tailBlob.text === 'function'
+            ? await tailBlob.text()
+            : await this._decodeLiveUpdateText(await (tailBlob.arrayBuffer ? tailBlob.arrayBuffer() : this._readAsArrayBuffer(tailBlob)));
+        const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const lines = normalized.split('\n').map(line => line.trim()).filter(Boolean);
+        return lines.length ? lines[lines.length - 1] : '';
+    } catch {
+        return '';
+    }
+};
+
+proto._decodeLiveUpdateText = function(buffer) {
+    const bytes = buffer instanceof ArrayBuffer ? buffer : buffer?.buffer;
+    if (!bytes) return '';
+    if (typeof TextDecoder !== 'undefined') {
+        try { return new TextDecoder('utf-8', { fatal: false }).decode(bytes); } catch (_) {}
+    }
+    let text = '';
+    const view = new Uint8Array(bytes);
+    for (let i = 0; i < view.length; i++) text += String.fromCharCode(view[i]);
+    return text;
 };
 
 proto._readLiveUpdateFile = async function(entry) {
