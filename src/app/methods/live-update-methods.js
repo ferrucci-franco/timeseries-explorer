@@ -191,6 +191,9 @@ proto._pollLiveUpdate = async function(fileId) {
         this._renderFilesList();
 
         const previousData = this.plotManager.files.get(fileId)?.data;
+        if (this._shouldUseLiveUpdateFullReread(entry) && !this.capabilities?.isDesktop) {
+            throw new Error(i18n.t('liveUpdateDesktopOnly'));
+        }
 
         // The writer appends to the file continuously. getFile() only snapshots
         // the file's size/mtime; the bytes are read later during parsing. If an
@@ -515,6 +518,10 @@ proto._validateLiveUpdateData = function(previousData, nextData) {
     if (Number.isFinite(oldLast) && Number.isFinite(newLast) && newLast < oldLast) {
         return { action: 'error', message: i18n.t('liveUpdateTimeWentBack') };
     }
+    const firstAppended = Number(nextTime[previousTime.length]);
+    if (Number.isFinite(oldLast) && Number.isFinite(firstAppended) && firstAppended <= oldLast) {
+        return { action: 'error', message: i18n.t('liveUpdateDuplicateTime') };
+    }
 
     return {
         action: 'append',
@@ -522,6 +529,10 @@ proto._validateLiveUpdateData = function(previousData, nextData) {
         nextRows: nextTime.length,
         addedRows: nextTime.length - previousTime.length,
     };
+};
+
+proto._shouldUseLiveUpdateFullReread = function(entry) {
+    return !!entry?.liveUpdate?.localPath || !!entry?.fileHandle?.getFile;
 };
 
 proto._requestLiveUpdatePath = async function(entry, initialValue = '') {
