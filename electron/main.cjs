@@ -25,6 +25,22 @@ const mimeTypes = new Map([
   ['.ico', 'image/x-icon'],
 ]);
 
+function mimeTypeForPath(filePath) {
+  return mimeTypes.get(path.extname(filePath).toLowerCase()) || 'application/octet-stream';
+}
+
+function desktopReadErrorPayload(err) {
+  const code = err?.code || '';
+  const notFound = code === 'ENOENT' || code === 'ENOTDIR';
+  const transient = code === 'EBUSY' || code === 'EPERM' || code === 'EACCES';
+  return {
+    ok: false,
+    name: notFound ? 'NotFoundError' : transient ? 'NotReadableError' : 'Error',
+    code,
+    message: err?.message || 'The file could not be read',
+  };
+}
+
 function sendText(res, status, text, type = 'text/plain; charset=utf-8') {
   res.writeHead(status, {
     'content-type': type,
@@ -204,6 +220,41 @@ ipcMain.handle('omv:select-file-path', async (_event, options = {}) => {
 
 ipcMain.handle('omv:select-file-paths', async (_event, options = {}) => {
   return selectResultFilePaths(options, true);
+});
+
+ipcMain.handle('omv:read-file', async (_event, options = {}) => {
+  try {
+    const rawPath = typeof options.path === 'string' ? options.path : '';
+    if (!rawPath.trim()) {
+      const err = new Error('Missing path');
+      err.code = 'EINVAL';
+      throw err;
+    }
+
+    const filePath = path.resolve(rawPath);
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile()) {
+      const err = new Error('Path is not a file');
+      err.code = 'EINVAL';
+      throw err;
+    }
+
+    // Each poll opens a read-only handle and closes it immediately; no watcher or
+    // long-lived stream is kept against files that simulators are writing.
+    const buffer = await fsp.readFile(filePath);
+    const bytes = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    return {
+      ok: true,
+      name: path.basename(filePath),
+      path: filePath,
+      size: stat.size,
+      lastModified: stat.mtimeMs,
+      type: mimeTypeForPath(filePath),
+      bytes,
+    };
+  } catch (err) {
+    return desktopReadErrorPayload(err);
+  }
 });
 
 app.whenReady().then(async () => {

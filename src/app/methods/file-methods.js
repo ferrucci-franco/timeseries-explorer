@@ -474,6 +474,31 @@ proto._getFileHandleSnapshot = async function(fileHandle) {
 };
 
 proto._readLocalResultPath = async function(filePath) {
+    const desktopReader = globalThis.omvDesktop?.readFile;
+    if (this.capabilities?.isDesktop && typeof desktopReader === 'function') {
+        try {
+            const result = await desktopReader({ path: filePath });
+            if (result?.ok === false) {
+                const err = new Error(result.message || i18n.t('errorLoading'));
+                err.name = result.name || 'Error';
+                err.code = result.code || '';
+                throw err;
+            }
+            const bytes = result?.bytes;
+            if (!bytes) throw new Error(i18n.t('errorLoading'));
+            const name = result.name || String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'results.csv';
+            return new File([bytes], name, {
+                lastModified: Number(result.lastModified) || Date.now(),
+                type: result.type || 'application/octet-stream',
+            });
+        } catch (err) {
+            const wrapped = new Error(err?.message || i18n.t('errorLoading'));
+            wrapped.name = err?.name === 'Error' ? 'NotReadableError' : (err?.name || 'NotReadableError');
+            wrapped.code = err?.code || '';
+            throw wrapped;
+        }
+    }
+
     const response = await fetch(`${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`, { cache: 'no-store' });
     if (!response.ok) {
         const detail = await response.text().catch(() => '');

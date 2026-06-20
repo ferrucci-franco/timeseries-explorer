@@ -206,8 +206,8 @@ Live append / auto-refresh for Full Desktop only:
    d) DONE 2026-06-20: translated the Live Update and Live View control/status messages in English, French, Spanish, and Italian.
    e) DONE 2026-06-20: the public Extra menu now targets a Desktop download manifest, and `npm run build` no longer regenerates the old portable-web download for GitHub Pages.
 3) Full Desktop implementation gaps:
-   a) Make Live Update use Desktop/native file access instead of browser File objects or copied paths when possible.
-   b) Ensure the app never locks the file in a way that blocks the simulator, OpenModelica, LabVIEW, or any external writer.
+   a) DONE 2026-06-20: Live Update and Desktop path loading now prefer Electron IPC native reads (`omvDesktop.readFile`) instead of the browser/local HTTP file endpoint. This is still full-file read, not incremental chunked read.
+   b) DONE 2026-06-20: Desktop native polling now uses short read-only `fs.readFile` calls through IPC, keeps no watcher/stream open, and normalizes transient `EBUSY`/`EPERM`/`EACCES` read failures so Live Update retries instead of stopping.
    c) First target CSV/text time-series files. MAT live append can stay unsupported until there is a safe partial-read strategy.
    d) Track last known file size, row count, last parsed offset, and last complete line.
    e) If the file grows, read only appended bytes when possible.

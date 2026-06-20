@@ -125,8 +125,9 @@ proto._startLiveUpdate = async function(fileId) {
         return;
     }
 
-    const canUseLocalApi = await this._canUseLocalLiveApi();
-    if (canUseLocalApi && !state.localPath) {
+    const canUseDesktopRead = this._canUseDesktopFileRead();
+    const canUseLocalApi = canUseDesktopRead || await this._canUseLocalLiveApi();
+    if (canUseDesktopRead && !state.localPath) {
         const path = await this._requestLiveUpdatePath(entry, state.localPath || '');
         if (!path) return;
         state.localPath = path;
@@ -256,9 +257,13 @@ proto._isTransientReadError = function(err) {
     // the getFile() snapshot and reading its bytes (a concurrent append), or was
     // momentarily locked by the writer. Both clear up on the next read.
     const name = err?.name || '';
+    const code = err?.code || '';
     const message = err?.message || '';
     return name === 'NotReadableError'
         || name === 'NotFoundError'
+        || code === 'EBUSY'
+        || code === 'EPERM'
+        || code === 'EACCES'
         || (name === 'TypeError' && /fetch|network|load failed|terminated/i.test(message));
 };
 
@@ -274,6 +279,10 @@ proto._readLiveUpdateFile = async function(entry) {
 };
 
 proto._readLiveUpdateLocalPath = async function(entry, path) {
+    if (this._canUseDesktopFileRead()) {
+        return this._readLocalResultPath(path);
+    }
+
     const url = `${LOCAL_API_BASE}/file?path=${encodeURIComponent(path)}`;
     const response = await fetch(url, { cache: 'no-store' });
     if (!response.ok) {
@@ -290,6 +299,10 @@ proto._readLiveUpdateLocalPath = async function(entry, path) {
     const name = path.split(/[\\/]/).filter(Boolean).pop() || this._fileDisplayName(entry);
     const lastModified = Number(response.headers.get('x-omv-last-modified')) || Date.now();
     return new File([blob], name, { lastModified, type: response.headers.get('content-type') || 'text/csv' });
+};
+
+proto._canUseDesktopFileRead = function() {
+    return !!this.capabilities?.isDesktop && typeof globalThis.omvDesktop?.readFile === 'function';
 };
 
 proto._canUseLocalLiveApi = async function() {
@@ -352,9 +365,11 @@ proto._requestLiveUpdatePath = async function(entry, initialValue = '') {
                 title: i18n.t('liveUpdatePathTitle'),
             }) || '';
         } catch (err) {
-            console.warn('Desktop file picker failed, falling back to path prompt:', err);
+            console.warn('Desktop file picker failed:', err);
+            return '';
         }
     }
+    if (this.capabilities?.isDesktop) return '';
     return this._promptLiveUpdatePath(entry, initialValue);
 };
 
