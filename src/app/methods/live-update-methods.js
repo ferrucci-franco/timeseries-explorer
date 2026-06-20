@@ -502,15 +502,9 @@ proto._validateLiveUpdateData = function(previousData, nextData) {
         return { action: 'error', message: i18n.t('liveUpdateNotAppendOnly') };
     }
 
-    const previousNames = Object.values(previousData.variables || {})
-        .filter(variable => variable.source !== 'derived' && variable.source !== 'data-tool')
-        .map(variable => variable.name)
-        .sort();
-    const nextNames = Object.values(nextData.variables || {})
-        .map(variable => variable.name)
-        .sort();
-    if (previousNames.join('\n') !== nextNames.join('\n')) {
-        return { action: 'error', message: i18n.t('liveUpdateSchemaChanged') };
+    const schemaMessage = this._liveUpdateSchemaCompatibilityMessage(previousData, nextData);
+    if (schemaMessage) {
+        return { action: 'error', message: schemaMessage };
     }
 
     const oldLast = Number(previousTime[previousTime.length - 1]);
@@ -529,6 +523,42 @@ proto._validateLiveUpdateData = function(previousData, nextData) {
         nextRows: nextTime.length,
         addedRows: nextTime.length - previousTime.length,
     };
+};
+
+proto._liveUpdateSchemaCompatibilityMessage = function(previousData, nextData) {
+    const previousMetadata = previousData?.metadata || {};
+    const nextMetadata = nextData?.metadata || {};
+    if ((previousMetadata.delimiter || '') !== (nextMetadata.delimiter || '')) {
+        return i18n.t('liveUpdateDelimiterChanged');
+    }
+    if (previousMetadata.hasHeader !== nextMetadata.hasHeader) {
+        return i18n.t('liveUpdateHeaderChanged');
+    }
+    if ((previousMetadata.timeName || '') !== (nextMetadata.timeName || '')
+        || (previousMetadata.timeKind || '') !== (nextMetadata.timeKind || '')
+        || this._liveUpdateListKey(previousMetadata.timeSourceColumns) !== this._liveUpdateListKey(nextMetadata.timeSourceColumns)) {
+        return i18n.t('liveUpdateHeaderChanged');
+    }
+
+    const previousColumns = this._liveUpdateSourceVariableNames(previousData);
+    const nextColumns = this._liveUpdateSourceVariableNames(nextData);
+    if (previousColumns.length !== nextColumns.length) {
+        return i18n.t('liveUpdateColumnCountChanged');
+    }
+    if (previousColumns.join('\n') !== nextColumns.join('\n')) {
+        return i18n.t('liveUpdateHeaderChanged');
+    }
+    return '';
+};
+
+proto._liveUpdateSourceVariableNames = function(data) {
+    return Object.values(data?.variables || {})
+        .filter(variable => variable.source !== 'derived' && variable.source !== 'data-tool')
+        .map(variable => variable.name);
+};
+
+proto._liveUpdateListKey = function(value) {
+    return Array.isArray(value) ? value.join('\n') : '';
 };
 
 proto._shouldUseLiveUpdateFullReread = function(entry) {
