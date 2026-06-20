@@ -200,8 +200,23 @@ proto._pollLiveUpdate = async function(fileId) {
         let latestFile;
         let fingerprint;
         let nextData;
+        let appendProbe = null;
         for (let attempt = 0; ; attempt++) {
             try {
+                appendProbe = await this._readLiveUpdateAppendProbe(entry, state);
+                if (appendProbe?.action === 'unchanged') {
+                    state.status = 'ok';
+                    state.message = i18n.t('liveUpdateNoChanges');
+                    return;
+                }
+                if (appendProbe?.action === 'partial') {
+                    state.status = 'ok';
+                    state.message = i18n.t('liveUpdateNoNewRows');
+                    return;
+                }
+                if (appendProbe?.action === 'shrink') {
+                    throw new Error(i18n.t('liveUpdateFileShrank'));
+                }
                 latestFile = await this._readLiveUpdateFile(entry);
                 fingerprint = this._fileFingerprint(latestFile);
                 if (fingerprint && fingerprint === state.lastFingerprint) {
@@ -236,6 +251,7 @@ proto._pollLiveUpdate = async function(fileId) {
         state.lastFingerprint = fingerprint;
         state.lastRows = outcome.nextRows;
         await this._refreshLiveUpdateReadCursor(entry, state, latestFile);
+        this._applyLiveUpdateAppendProbeCursor(state, appendProbe);
 
         this._reapplyDerivedVariables(fileId, nextData);
         this._reapplyDataToolVariables?.(fileId, nextData);
@@ -319,6 +335,100 @@ proto._decodeLiveUpdateText = function(buffer) {
     return text;
 };
 
+proto._readLiveUpdateAppendProbe = async function(entry, state) {
+    const path = entry?.liveUpdate?.localPath;
+    if (!path || !state || !this._canUseDesktopFileSlice()) return null;
+
+    const stat = await this._readDesktopFileStat(path);
+    const start = Math.max(0, Number(state.lastParsedOffset) || 0);
+    if (stat.size < start) return { action: 'shrink', stat };
+    if (stat.size === start) {
+        state.lastSize = stat.size;
+        state.lastModified = stat.lastModified;
+        return { action: 'unchanged', stat };
+    }
+
+    const slice = await this._readDesktopFileSlice(path, start, stat.size);
+    const bytes = new Uint8Array(slice.bytes || new ArrayBuffer(0));
+    const newlineIndex = this._lastLiveUpdateNewlineIndex(bytes);
+    if (newlineIndex < 0) {
+        state.lastSize = stat.size;
+        state.lastModified = stat.lastModified;
+        state.trailingPartialLine = this._decodeLiveUpdateText(bytes.buffer).trim();
+        return { action: 'partial', stat, bytesRead: bytes.byteLength };
+    }
+
+    const completeEnd = newlineIndex + 1;
+    const completeText = this._decodeLiveUpdateText(bytes.slice(0, completeEnd).buffer);
+    const partialBytes = bytes.slice(completeEnd);
+    const completeLines = completeText
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean);
+
+    if (!completeLines.length) {
+        state.lastSize = stat.size;
+        state.lastModified = stat.lastModified;
+        state.trailingPartialLine = this._decodeLiveUpdateText(partialBytes.buffer).trim();
+        return { action: 'partial', stat, bytesRead: bytes.byteLength };
+    }
+
+    return {
+        action: 'complete',
+        stat,
+        bytesRead: bytes.byteLength,
+        completeLines,
+        nextParsedOffset: start + completeEnd,
+        trailingPartialLine: this._decodeLiveUpdateText(partialBytes.buffer).trim(),
+    };
+};
+
+proto._applyLiveUpdateAppendProbeCursor = function(state, appendProbe) {
+    if (!state || appendProbe?.action !== 'complete') return;
+    if (Number.isFinite(Number(appendProbe.nextParsedOffset))) {
+        state.lastParsedOffset = Number(appendProbe.nextParsedOffset);
+    }
+    state.trailingPartialLine = appendProbe.trailingPartialLine || '';
+    if (appendProbe.completeLines?.length) {
+        state.lastCompleteLine = appendProbe.completeLines[appendProbe.completeLines.length - 1];
+    }
+};
+
+proto._lastLiveUpdateNewlineIndex = function(bytes) {
+    for (let i = bytes.length - 1; i >= 0; i--) {
+        if (bytes[i] === 10 || bytes[i] === 13) return i;
+    }
+    return -1;
+};
+
+proto._readDesktopFileStat = async function(path) {
+    const reader = globalThis.omvDesktop?.statFile;
+    if (typeof reader !== 'function') throw new Error(i18n.t('liveUpdateNoSource'));
+    const result = await reader({ path });
+    if (result?.ok === false) {
+        const err = new Error(result.message || i18n.t('liveUpdateLocalServerUnavailable'));
+        err.name = result.name || 'NotReadableError';
+        err.code = result.code || '';
+        throw err;
+    }
+    return result;
+};
+
+proto._readDesktopFileSlice = async function(path, start, end) {
+    const reader = globalThis.omvDesktop?.readFileSlice;
+    if (typeof reader !== 'function') throw new Error(i18n.t('liveUpdateNoSource'));
+    const result = await reader({ path, start, end });
+    if (result?.ok === false) {
+        const err = new Error(result.message || i18n.t('liveUpdateLocalServerUnavailable'));
+        err.name = result.name || 'NotReadableError';
+        err.code = result.code || '';
+        throw err;
+    }
+    return result;
+};
+
 proto._readLiveUpdateFile = async function(entry) {
     const path = entry.liveUpdate?.localPath;
     if (path) {
@@ -355,6 +465,12 @@ proto._readLiveUpdateLocalPath = async function(entry, path) {
 
 proto._canUseDesktopFileRead = function() {
     return !!this.capabilities?.isDesktop && typeof globalThis.omvDesktop?.readFile === 'function';
+};
+
+proto._canUseDesktopFileSlice = function() {
+    return !!this.capabilities?.isDesktop
+        && typeof globalThis.omvDesktop?.statFile === 'function'
+        && typeof globalThis.omvDesktop?.readFileSlice === 'function';
 };
 
 proto._canUseLocalLiveApi = async function() {

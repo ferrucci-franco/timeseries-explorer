@@ -210,7 +210,7 @@ Live append / auto-refresh for Full Desktop only:
    b) DONE 2026-06-20: Desktop native polling now uses short read-only `fs.readFile` calls through IPC, keeps no watcher/stream open, and normalizes transient `EBUSY`/`EPERM`/`EACCES` read failures so Live Update retries instead of stopping.
    c) DONE 2026-06-20: Live Update remains limited to CSV/text candidates; MAT live append is not offered.
    d) DONE 2026-06-20: Live Update state now tracks last file size, mtime, row count, parsed offset, last complete line, and trailing partial line placeholder.
-   e) If the file grows, read only appended bytes when possible.
+   e) DONE 2026-06-20: Desktop Live Update now stats the file and reads only the appended byte slice first. If the slice has no complete line yet, it waits without re-reading the whole file; if complete rows exist, the current data update still falls through to the full reparse path until incremental merge is implemented.
    f) If partial append is not ready, fall back to full re-read only in Full Desktop and only with duplicate-row protection.
    g) If the file shrinks/truncates, pause Live Update and show a clear warning.
    h) If delimiter, column count, headers, or schema change, pause Live Update and show a clear warning.

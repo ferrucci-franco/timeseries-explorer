@@ -29,6 +29,16 @@ function mimeTypeForPath(filePath) {
   return mimeTypes.get(path.extname(filePath).toLowerCase()) || 'application/octet-stream';
 }
 
+function fileInfoPayload(filePath, stat) {
+  return {
+    name: path.basename(filePath),
+    path: filePath,
+    size: stat.size,
+    lastModified: stat.mtimeMs,
+    type: mimeTypeForPath(filePath),
+  };
+}
+
 function desktopReadErrorPayload(err) {
   const code = err?.code || '';
   const notFound = code === 'ENOENT' || code === 'ENOTDIR';
@@ -245,15 +255,73 @@ ipcMain.handle('omv:read-file', async (_event, options = {}) => {
     const bytes = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     return {
       ok: true,
-      name: path.basename(filePath),
-      path: filePath,
-      size: stat.size,
-      lastModified: stat.mtimeMs,
-      type: mimeTypeForPath(filePath),
+      ...fileInfoPayload(filePath, stat),
       bytes,
     };
   } catch (err) {
     return desktopReadErrorPayload(err);
+  }
+});
+
+ipcMain.handle('omv:stat-file', async (_event, options = {}) => {
+  try {
+    const rawPath = typeof options.path === 'string' ? options.path : '';
+    if (!rawPath.trim()) {
+      const err = new Error('Missing path');
+      err.code = 'EINVAL';
+      throw err;
+    }
+    const filePath = path.resolve(rawPath);
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile()) {
+      const err = new Error('Path is not a file');
+      err.code = 'EINVAL';
+      throw err;
+    }
+    return { ok: true, ...fileInfoPayload(filePath, stat) };
+  } catch (err) {
+    return desktopReadErrorPayload(err);
+  }
+});
+
+ipcMain.handle('omv:read-file-slice', async (_event, options = {}) => {
+  let handle = null;
+  try {
+    const rawPath = typeof options.path === 'string' ? options.path : '';
+    if (!rawPath.trim()) {
+      const err = new Error('Missing path');
+      err.code = 'EINVAL';
+      throw err;
+    }
+    const filePath = path.resolve(rawPath);
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile()) {
+      const err = new Error('Path is not a file');
+      err.code = 'EINVAL';
+      throw err;
+    }
+
+    const start = Math.max(0, Math.floor(Number(options.start) || 0));
+    const end = Math.min(stat.size, Math.max(start, Math.floor(Number(options.end ?? stat.size))));
+    const length = Math.max(0, end - start);
+    const buffer = Buffer.allocUnsafe(length);
+
+    handle = await fsp.open(filePath, 'r');
+    const read = length ? await handle.read(buffer, 0, length, start) : { bytesRead: 0 };
+    const bytes = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + read.bytesRead);
+    return {
+      ok: true,
+      ...fileInfoPayload(filePath, stat),
+      start,
+      end: start + read.bytesRead,
+      bytes,
+    };
+  } catch (err) {
+    return desktopReadErrorPayload(err);
+  } finally {
+    if (handle) {
+      try { await handle.close(); } catch (_) {}
+    }
   }
 });
 
