@@ -217,7 +217,7 @@ Live append / auto-refresh for Full Desktop only:
    i) DONE 2026-06-21: duplicate timestamp policy is strict append-only time. New rows must be strictly increasing relative to the previous last row and within the appended block; equal or decreasing timestamps pause Live Update with a warning.
 4) Plot/view behavior still needed:
    a) DONE 2026-06-21: after appending rows, existing plots are rebuilt instead of cleared; zoom ranges are captured/restored through Live View policy; derived variables, data-tool variables, file transforms, and cursor state are preserved.
-   b) Still needed: preserve the active variable-tree selection after append. The current code explicitly clears the variable selection for the active file before re-rendering the tree.
+   b) DONE 2026-06-21: preserve the active variable-tree selection after append, keeping selected variables that still exist and dropping only selections that disappeared.
    c) DONE 2026-06-21: Time-series X axis policies exist and are applied: keep current start and expand X end (`pin-start`, default), autoscale X, manual/keep current view, sliding time window with presets 2 s, 10 s, 30 s, 1 min, 10 min, and custom seconds with one decimal digit.
    d) DONE 2026-06-21: Time-series Y axis policies exist and are applied: expand only if needed, autoscale Y, or keep current Y range.
    e) Still needed: add tests for Y expand-if-needed because it previously behaved like unnecessary Y autoscale.

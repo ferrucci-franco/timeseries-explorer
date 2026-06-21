@@ -27,6 +27,19 @@ proto._clearVariableSelection = function() {
     this._syncVariableSelectionUI();
 };
 
+proto._retainVariableSelectionForData = function(data) {
+    if (!this.selectedVariables || this.selectedVariables.size === 0) return;
+    const variables = data?.variables || {};
+    let changed = false;
+    for (const name of [...this.selectedVariables]) {
+        if (!variables[name]) {
+            this.selectedVariables.delete(name);
+            changed = true;
+        }
+    }
+    if (changed) this._syncVariableSelectionUI();
+};
+
 proto._toggleVariableSelection = function(varName) {
     if (this.selectedVariables.has(varName)) {
         this.selectedVariables.delete(varName);

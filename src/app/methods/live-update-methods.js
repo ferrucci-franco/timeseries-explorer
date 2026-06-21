@@ -261,7 +261,7 @@ proto._pollLiveUpdate = async function(fileId) {
         this.plotManager.updateFileData(fileId, nextData, { liveAppend: true });
 
         if (fileId === this.activeFileId) {
-            this._clearVariableSelection();
+            this._retainVariableSelectionForData(nextData);
             this.renderVariablesTree(nextData.tree);
         }
         state.status = 'ok';
