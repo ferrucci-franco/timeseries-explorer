@@ -507,14 +507,9 @@ proto._validateLiveUpdateData = function(previousData, nextData) {
         return { action: 'error', message: schemaMessage };
     }
 
-    const oldLast = Number(previousTime[previousTime.length - 1]);
-    const newLast = Number(nextTime[nextTime.length - 1]);
-    if (Number.isFinite(oldLast) && Number.isFinite(newLast) && newLast < oldLast) {
-        return { action: 'error', message: i18n.t('liveUpdateTimeWentBack') };
-    }
-    const firstAppended = Number(nextTime[previousTime.length]);
-    if (Number.isFinite(oldLast) && Number.isFinite(firstAppended) && firstAppended <= oldLast) {
-        return { action: 'error', message: i18n.t('liveUpdateDuplicateTime') };
+    const timeOrderMessage = this._liveUpdateTimeOrderMessage(previousTime, nextTime);
+    if (timeOrderMessage) {
+        return { action: 'error', message: timeOrderMessage };
     }
 
     return {
@@ -523,6 +518,23 @@ proto._validateLiveUpdateData = function(previousData, nextData) {
         nextRows: nextTime.length,
         addedRows: nextTime.length - previousTime.length,
     };
+};
+
+proto._liveUpdateTimeOrderMessage = function(previousTime, nextTime) {
+    let previousValue = Number(previousTime[previousTime.length - 1]);
+    for (let index = previousTime.length; index < nextTime.length; index += 1) {
+        const value = Number(nextTime[index]);
+        if (Number.isFinite(previousValue) && Number.isFinite(value)) {
+            if (value < previousValue) {
+                return i18n.t('liveUpdateTimeWentBack');
+            }
+            if (value === previousValue) {
+                return i18n.t('liveUpdateDuplicateTime');
+            }
+        }
+        previousValue = value;
+    }
+    return '';
 };
 
 proto._liveUpdateSchemaCompatibilityMessage = function(previousData, nextData) {

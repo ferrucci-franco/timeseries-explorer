@@ -214,7 +214,7 @@ Live append / auto-refresh for Full Desktop only:
    f) DONE 2026-06-20: while incremental merge is not ready, Live Update keeps using the Full Desktop full re-read path after detecting complete appended rows, and now pauses if the first appended timestamp overlaps existing data to avoid duplicate points.
    g) DONE 2026-06-20: Live Update pauses with a clear warning if the file shrinks, or if the file changes without increasing row count, which indicates a likely restart/rewrite rather than append-only growth.
    h) DONE 2026-06-20: if delimiter, column count, header/time column, or ordered source columns change, Live Update pauses and shows a specific warning instead of continuing with mismatched data.
-   i) Define duplicate timestamp policy before final implementation.
+   i) DONE 2026-06-21: duplicate timestamp policy is strict append-only time. New rows must be strictly increasing relative to the previous last row and within the appended block; equal or decreasing timestamps pause Live Update with a warning.
 4) Plot/view behavior still needed:
    a) Preserve current plots, selected variables, cursor positions, zoom ranges, derived variables, data-tool variables, and file transforms after appending rows.
    b) Time-series X axis policies:
