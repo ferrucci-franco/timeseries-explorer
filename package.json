@@ -18,7 +18,8 @@
     "build:portable": "node scripts/build-portable.mjs",
     "build:all": "npm run build:portable && npm run build:web",
     "test:csv": "node scripts/test-csv-fixtures.mjs",
-    "test:capabilities": "node scripts/test-runtime-capabilities.mjs"
+    "test:capabilities": "node scripts/test-runtime-capabilities.mjs",
+    "test:live-update": "node scripts/test-live-update-logic.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",

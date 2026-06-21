@@ -1,9 +1,12 @@
 """
-Simulate a growing CSV/text result file for OpenModelica Viewer Live Update.
+Simulate a growing CSV/text result file for Time Series Explorer Live Update.
 
 Open this file in Spyder, edit the USER CONFIG section, and run it.
 The script copies an initial part of SOURCE_FILE into OUTPUT_FILE, then appends
 one data row at a time according to the timestamp column.
+
+This is an interactive/manual simulator. Deterministic test fixtures live in
+create_live_update_cases.py and automated logic checks in scripts/test-live-update-logic.mjs.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from pathlib import Path
 # Source file with the complete data.
 SOURCE_FILE = r"C:\path\to\complete_result.csv"
 
-# File watched by OpenModelica Viewer Live Update.
+# File watched by Time Series Explorer Live Update.
 OUTPUT_FILE = r"C:\path\to\live_result.csv"
 
 # Time column: use an integer index, or a column name when the file has header.
@@ -185,7 +188,7 @@ def run_once(prefix: list[str], rows: list[DataRow], output_path: Path) -> None:
     write_lines(output_path, initial_lines, "w" if RESET_OUTPUT else "a")
     print(f"Initial load: {count} row(s) written to {output_path}")
     if WAIT_FOR_ENTER_BEFORE_APPEND and count < len(rows):
-        input("Open this file in OpenModelica Viewer, then press Enter to start appending...")
+        input("Open this file in Time Series Explorer, then press Enter to start appending...")
 
     previous_time = rows[count - 1].timestamp if count else rows[0].timestamp
     for row in rows[count:]:

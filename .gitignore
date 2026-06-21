@@ -38,7 +38,7 @@
 !/electron/**
 !/test-files/
 !/test-files/live_update/
-!/test-files/live_update/simulate_live_append.py
+!/test-files/live_update/*.py
 !/bench/
 !/bench/**
 

@@ -224,16 +224,17 @@ Live append / auto-refresh for Full Desktop only:
    f) DONE 2026-06-21: XY/phase plot policies exist and are applied: autoscale or keep current view.
    g) DONE 2026-06-21: the current Live View menu edits global defaults and applies them to existing matching plots; there is also a per-plot API, but no per-plot UI. Keep this as the current product decision unless we explicitly redesign it.
 5) Tests/fixtures needed:
-   a) Appending normal rows.
-   b) Partial final line while the external writer is still writing.
-   c) Duplicate timestamps.
-   d) Equal timestamp with changed values.
-   e) Schema/header changes.
-   f) File truncation/restart.
-   g) Transient read errors while the writer is active.
+   a) DONE 2026-06-21: `npm run test:live-update` covers normal append validation.
+   b) DONE 2026-06-21: `npm run test:live-update` covers partial final line append probing.
+   c) DONE 2026-06-21: `npm run test:live-update` covers duplicate timestamps at the append boundary and inside the appended block.
+   d) DONE 2026-06-21: `npm run test:live-update` covers equal timestamp with changed values as a duplicate-time pause.
+   e) DONE 2026-06-21: `npm run test:live-update` covers delimiter, header/time-column, and column-count changes.
+   f) DONE 2026-06-21: `npm run test:live-update` covers file shrink/truncation detection.
+   g) DONE 2026-06-21: `npm run test:live-update` covers transient read-error classification.
    h) Y expand-if-needed without unnecessary autoscale.
-   i) Preservation of zoom, selections, derived variables, transforms, and cursors after append.
+   i) DONE 2026-06-21: `npm run test:live-update` covers variable-tree selection retention; still add UI/integration coverage later for zoom, derived variables, transforms, and cursors.
    j) DONE 2026-06-20: `npm run test:capabilities` verifies Web Light and Web Preview do not expose Live Update or local-path polling.
+   k) DONE 2026-06-21: `test-files/live_update/create_live_update_cases.py` creates deterministic manual fixture files for normal append, partial line, duplicate/equal timestamp, schema/header change, truncation/restart, and generated-index CSV scenarios.
 
 
 Session save/restore follow-ups:
