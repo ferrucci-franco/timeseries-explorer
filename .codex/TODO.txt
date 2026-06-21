@@ -186,19 +186,19 @@ Full Desktop large-file support:
 
 Live append / auto-refresh for Full Desktop only:
 0) Current product decision:
-   a) Live Update is a Full Desktop feature only.
-   b) Web Light and Web Preview must not offer Live Update, path polling, Firefox path prompts, or browser-dependent file-handle workflows.
-   c) `serve.bat` remains useful for local development/testing of the web app, but it is not the Live Update runtime. It must behave as a Web Preview for the GitHub Pages version.
-   d) The UI must not show contradictory states such as a global Live control appearing available while the actual file/plot live controls are disabled.
-   e) The public message should be simple: Web version for quick browser use; Desktop app for Live Update, large files, offline use, and better local file access.
+   a) DONE 2026-06-21: Live Update is a Full Desktop feature only.
+   b) DONE 2026-06-21: Web Light and Web Preview must not offer Live Update, path polling, Firefox path prompts, or browser-dependent file-handle workflows.
+   c) DONE 2026-06-21: `serve.bat` remains useful for local development/testing of the web app, but it is not the Live Update runtime. It behaves as a Web Preview for the GitHub Pages version.
+   d) DONE 2026-06-21: runtime capabilities prevent contradictory global/file Live Update states between Web Light/Web Preview and Full Desktop.
+   e) DONE 2026-06-21: the public message is simple: Web version for quick browser use; Desktop app for Live Update, large files, offline use, and better local file access.
 1) Already implemented or mostly implemented:
-   a) Full Desktop can expose Live Update controls through the runtime capabilities system.
-   b) Web Light / Web Preview capabilities now disable Live Update and local-path polling.
-   c) Runtime messages now point users to the Desktop app for Live Update and better local file access.
-   d) The live indicator icon exists in the Files panel for files currently being polled.
-   e) Polling has retry logic for transient read errors such as `NotReadableError` / `NotFoundError`.
-   f) The Python live-append simulator exists under `test-files/live_update`.
-   g) The Live Update menu has Start/Stop controls, interval presets/custom value, and view policy controls.
+   a) DONE 2026-06-21: Full Desktop exposes Live Update controls through the runtime capabilities system.
+   b) DONE 2026-06-21: Web Light / Web Preview capabilities disable Live Update and local-path polling.
+   c) DONE 2026-06-21: runtime messages point users to the Desktop app for Live Update and better local file access.
+   d) DONE 2026-06-21: the live indicator icon exists in the Files panel for files currently being polled.
+   e) DONE 2026-06-21: polling has retry logic for transient read errors such as `NotReadableError` / `NotFoundError`.
+   f) DONE 2026-06-21: the Python live-append simulator exists under `test-files/live_update`.
+   g) DONE 2026-06-21: the Live Update menu has Start/Stop controls, interval presets/custom value, and view policy controls.
 2) Immediate cleanup still needed:
    a) DONE 2026-06-20: added `npm run test:capabilities` to verify Web Light and Web Preview do not enable Live Update or local-path polling.
    b) DONE 2026-06-20: added `npm run test:capabilities` to verify Full Desktop keeps Live Update, local paths, and huge-file capability enabled.
@@ -216,20 +216,13 @@ Live append / auto-refresh for Full Desktop only:
    h) DONE 2026-06-20: if delimiter, column count, header/time column, or ordered source columns change, Live Update pauses and shows a specific warning instead of continuing with mismatched data.
    i) DONE 2026-06-21: duplicate timestamp policy is strict append-only time. New rows must be strictly increasing relative to the previous last row and within the appended block; equal or decreasing timestamps pause Live Update with a warning.
 4) Plot/view behavior still needed:
-   a) Preserve current plots, selected variables, cursor positions, zoom ranges, derived variables, data-tool variables, and file transforms after appending rows.
-   b) Time-series X axis policies:
-      - Keep current start value and expand X end to include new data. This should be the default.
-      - Autoscale X.
-      - Sliding time window with presets: 10 s, 30 s, 1 min, 10 min.
-      - Sliding time window custom value in seconds with one decimal digit.
-      - Consider "use current zoom window" later only if the UX is clear.
-   c) Time-series Y axis policy:
-      - Expand only if needed, preserving current Y limits while all new values remain visible.
-      - Add tests for this because it previously behaved like unnecessary Y autoscale.
-   d) XY/phase plots:
-      - Autoscale.
-      - Do not autoscale.
-   e) Re-check whether Live View policy is per plot, global default, or both. Do not change this again without agreement.
+   a) DONE 2026-06-21: after appending rows, existing plots are rebuilt instead of cleared; zoom ranges are captured/restored through Live View policy; derived variables, data-tool variables, file transforms, and cursor state are preserved.
+   b) Still needed: preserve the active variable-tree selection after append. The current code explicitly clears the variable selection for the active file before re-rendering the tree.
+   c) DONE 2026-06-21: Time-series X axis policies exist and are applied: keep current start and expand X end (`pin-start`, default), autoscale X, manual/keep current view, sliding time window with presets 2 s, 10 s, 30 s, 1 min, 10 min, and custom seconds with one decimal digit.
+   d) DONE 2026-06-21: Time-series Y axis policies exist and are applied: expand only if needed, autoscale Y, or keep current Y range.
+   e) Still needed: add tests for Y expand-if-needed because it previously behaved like unnecessary Y autoscale.
+   f) DONE 2026-06-21: XY/phase plot policies exist and are applied: autoscale or keep current view.
+   g) DONE 2026-06-21: the current Live View menu edits global defaults and applies them to existing matching plots; there is also a per-plot API, but no per-plot UI. Keep this as the current product decision unless we explicitly redesign it.
 5) Tests/fixtures needed:
    a) Appending normal rows.
    b) Partial final line while the external writer is still writing.
@@ -240,7 +233,7 @@ Live append / auto-refresh for Full Desktop only:
    g) Transient read errors while the writer is active.
    h) Y expand-if-needed without unnecessary autoscale.
    i) Preservation of zoom, selections, derived variables, transforms, and cursors after append.
-   j) Web Light and Web Preview must not expose Live Update.
+   j) DONE 2026-06-20: `npm run test:capabilities` verifies Web Light and Web Preview do not expose Live Update or local-path polling.
 
 
 Session save/restore follow-ups:
