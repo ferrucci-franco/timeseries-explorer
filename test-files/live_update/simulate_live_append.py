@@ -18,15 +18,18 @@ from datetime import datetime
 from pathlib import Path
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
 # =========================
 # USER CONFIG
 # =========================
 
 # Source file with the complete data.
-SOURCE_FILE = r"C:\path\to\complete_result.csv"
+SOURCE_FILE = r"./test_file_live_update.csv"
 
 # File watched by Time Series Explorer Live Update.
-OUTPUT_FILE = r"C:\path\to\live_result.csv"
+OUTPUT_FILE = r"C:\temp\live_result.csv"
 
 # Time column: use an integer index, or a column name when the file has header.
 TIME_COLUMN = 0
@@ -36,9 +39,20 @@ TIME_COLUMN = 0
 INITIAL_END_TIME = None
 INITIAL_ROWS = 10
 
-# Playback speed. 1.0 means real timestamp spacing, 10.0 means 10x faster.
+# Append timing:
+# - "fixed": append exactly one row every APPEND_INTERVAL_SECONDS.
+# - "timestamp": use timestamp spacing from the file, scaled by TIME_ACCELERATION.
+#
+# Use "fixed" for Live Update testing. It avoids dumping the whole file at once
+# when timestamps are repeated, very close together, or not real seconds.
+APPEND_TIMING_MODE = "fixed"
+APPEND_INTERVAL_SECONDS = 1.0
+
+# Used only when APPEND_TIMING_MODE = "timestamp".
+# 1.0 means real timestamp spacing, 10.0 means 10x faster.
 TIME_ACCELERATION = 1.0
 
+# Used only when APPEND_TIMING_MODE = "timestamp".
 # Optional cap so large gaps do not make the script sleep too long.
 # Set to None to use the exact timestamp spacing.
 MAX_WAIT_SECONDS = 5.0
@@ -173,7 +187,22 @@ def write_lines(path: Path, lines: list[str], mode: str) -> None:
         handle.flush()
 
 
+def resolve_source_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return (SCRIPT_DIR / path).resolve()
+
+
 def sleep_for_timestamp_delta(previous: float, current: float) -> None:
+    if APPEND_TIMING_MODE == "fixed":
+        wait_seconds = max(0.0, float(APPEND_INTERVAL_SECONDS))
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        return
+    if APPEND_TIMING_MODE != "timestamp":
+        raise ValueError('APPEND_TIMING_MODE must be "fixed" or "timestamp"')
+
     acceleration = max(float(TIME_ACCELERATION), 0.000001)
     wait_seconds = max(0.0, (current - previous) / acceleration)
     if MAX_WAIT_SECONDS is not None:
@@ -187,19 +216,27 @@ def run_once(prefix: list[str], rows: list[DataRow], output_path: Path) -> None:
     initial_lines = prefix + [row.text for row in rows[:count]]
     write_lines(output_path, initial_lines, "w" if RESET_OUTPUT else "a")
     print(f"Initial load: {count} row(s) written to {output_path}")
+    if count >= len(rows):
+        print("No rows left to append. Lower INITIAL_ROWS or INITIAL_END_TIME.")
+        return
     if WAIT_FOR_ENTER_BEFORE_APPEND and count < len(rows):
         input("Open this file in Time Series Explorer, then press Enter to start appending...")
 
+    print(
+        f"Appending {len(rows) - count} row(s) using {APPEND_TIMING_MODE} timing"
+        + (f" every {APPEND_INTERVAL_SECONDS:g} s." if APPEND_TIMING_MODE == "fixed" else ".")
+    )
     previous_time = rows[count - 1].timestamp if count else rows[0].timestamp
-    for row in rows[count:]:
+    total_to_append = len(rows) - count
+    for appended_count, row in enumerate(rows[count:], start=1):
         sleep_for_timestamp_delta(previous_time, row.timestamp)
         write_lines(output_path, [row.text], "a")
         previous_time = row.timestamp
-        print(f"Appended source line {row.line_index + 1} at t={row.timestamp:g}")
+        print(f"Appended {appended_count}/{total_to_append}: source line {row.line_index + 1} at t={row.timestamp:g}")
 
 
 def main() -> None:
-    source_path = Path(SOURCE_FILE).expanduser()
+    source_path = resolve_source_path(SOURCE_FILE)
     output_path = Path(OUTPUT_FILE).expanduser()
     if not source_path.is_file():
         raise FileNotFoundError(f"SOURCE_FILE does not exist: {source_path}")
