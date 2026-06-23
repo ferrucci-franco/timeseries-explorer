@@ -1785,6 +1785,42 @@ class PlotManager {
             if (plot.mode === 'state-anim') continue;
             plot.liveView = { ...(plot.liveView || {}), ...this._normalizeLiveViewPolicy(plot), ...patch };
         }
+        this._applyLiveViewPolicyToCurrentPlots(key);
+    }
+
+    _applyLiveViewPolicyToCurrentPlots(key) {
+        for (const [panelId, plot] of this.plots) {
+            if (!plot?.div) continue;
+            if (key === 'timeseries') {
+                if (plot.mode !== 'timeseries') continue;
+                const captured = this._capturePlotView(plot);
+                if (!captured) continue;
+                const view = this._timeseriesLiveAppendView(plot, this._primaryTimeFileId(plot) || this.activeFileId, captured, this._normalizeLiveViewPolicy(plot));
+                this._applyLiveViewRelayout(plot, view);
+            } else {
+                if (plot.mode === 'timeseries' || plot.mode === 'state-anim') continue;
+                const policy = this._normalizeLiveViewPolicy(plot);
+                if (policy.viewMode === 'autoscale') this._autoScalePlot(panelId, plot);
+            }
+        }
+    }
+
+    _applyLiveViewRelayout(plot, view) {
+        if (!plot?.div || !view || view.mode !== '2d') return Promise.resolve();
+        const update = {};
+        if (view.xRange) {
+            update['xaxis.range'] = view.xRange;
+            update['xaxis.autorange'] = false;
+        } else {
+            update['xaxis.autorange'] = true;
+        }
+        if (view.yRange) {
+            update['yaxis.range'] = view.yRange;
+            update['yaxis.autorange'] = false;
+        } else {
+            update['yaxis.autorange'] = true;
+        }
+        return Plotly.relayout(plot.div, update).then(() => this._refreshPanelDomOverlays(plot));
     }
 
     useCurrentZoomForLiveWindow(panelId) {
