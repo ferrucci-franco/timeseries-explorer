@@ -12,6 +12,7 @@
     "desktop": "npm run build:web && node scripts/start-electron.mjs",
     "desktop:pack": "npm run build:web && electron-builder --dir",
     "desktop:dist": "npm run build:web && electron-builder --win nsis portable",
+    "desktop:icon": "node scripts/render-desktop-icon.mjs",
     "build:web": "vite build",
     "build": "npm run build:web",
     "preview": "vite preview",
@@ -27,6 +28,7 @@
     "electron": "^42.4.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.5",
+    "sharp": "^0.35.2",
     "vite": "^5.4.19"
   },
   "dependencies": {
@@ -38,16 +40,19 @@
     "appId": "io.github.ferrucci-franco.timeseries-explorer",
     "productName": "Time Series Explorer",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "icon": "build/icons/timeseries-explorer-icon.png",
     "directories": {
       "output": "desktop-dist"
     },
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "build/icons/**/*",
       "package.json"
     ],
     "asar": true,
     "win": {
+      "icon": "build/icons/timeseries-explorer-icon.ico",
       "target": [
         "nsis",
         "portable"

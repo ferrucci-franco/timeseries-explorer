@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const projectRoot = path.resolve(__dirname, '..');
 const staticRoot = path.join(projectRoot, 'dist');
+const desktopIconPath = path.join(projectRoot, 'build', 'icons', 'timeseries-explorer-icon.png');
 const host = '127.0.0.1';
 const preferredPort = Number(process.env.OMV_DESKTOP_PORT || 8876);
 
@@ -199,6 +200,7 @@ async function createWindow(url) {
     height: 860,
     minWidth: 980,
     minHeight: 680,
+    icon: fs.existsSync(desktopIconPath) ? desktopIconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

@@ -1773,7 +1773,7 @@ class PlotManager {
         this._refreshActionBtns(panelId);
     }
 
-    setGlobalLiveViewPolicy(mode, patch = {}) {
+    setGlobalLiveViewPolicy(mode, patch = {}, options = {}) {
         const key = mode === 'timeseries' ? 'timeseries' : 'phase';
         const base = key === 'timeseries'
             ? this._normalizeLiveViewPolicy({ mode: 'timeseries', liveView: this.liveViewDefaults.timeseries })
@@ -1785,7 +1785,7 @@ class PlotManager {
             if (plot.mode === 'state-anim') continue;
             plot.liveView = { ...(plot.liveView || {}), ...this._normalizeLiveViewPolicy(plot), ...patch };
         }
-        this._applyLiveViewPolicyToCurrentPlots(key);
+        if (options.applyNow) this._applyLiveViewPolicyToCurrentPlots(key);
     }
 
     _applyLiveViewPolicyToCurrentPlots(key) {

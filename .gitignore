@@ -36,6 +36,9 @@
 !/scripts/**
 !/electron/
 !/electron/**
+!/build/
+!/build/icons/
+!/build/icons/**
 !/test-files/
 !/test-files/live_update/
 !/test-files/live_update/*.py

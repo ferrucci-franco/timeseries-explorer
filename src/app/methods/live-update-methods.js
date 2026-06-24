@@ -156,6 +156,7 @@ proto._startLiveUpdate = async function(fileId) {
     await this._refreshLiveUpdateReadCursor(entry, state, entry.file);
     this._renderFilesList();
     this._updateLiveUpdateTopBar();
+    this.plotManager.setGlobalLiveViewPolicy('timeseries', {}, { applyNow: true });
     await this._pollLiveUpdate(fileId);
 };
 
@@ -852,6 +853,9 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         mode: 'timeseries',
         liveView: this.plotManager.liveViewDefaults?.timeseries,
     });
+    const liveViewApplyOptions = { applyNow: !!state?.enabled };
+    const setTimeseriesLiveViewPolicy = patch => this.plotManager.setGlobalLiveViewPolicy('timeseries', patch, liveViewApplyOptions);
+    const setPhaseLiveViewPolicy = patch => this.plotManager.setGlobalLiveViewPolicy('phase', patch, liveViewApplyOptions);
     const xSection = addSection(i18n.t('liveViewTimeseriesXHeading'), i18n.t('liveViewTimeseriesXDescription'));
     const rawTsPolicy = this.plotManager.liveViewDefaults?.timeseries || {};
     const xWindowPresets = [
@@ -871,7 +875,7 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         ? storedPresetWindow
         : (xSliding && xWindowPresetMode && xWindowPresetSeconds.includes(Number(tsPolicy.windowSeconds)) ? Number(tsPolicy.windowSeconds) : 600);
     const selectSliding = patch => {
-        this.plotManager.setGlobalLiveViewPolicy('timeseries', {
+        setTimeseriesLiveViewPolicy({
             xMode: 'sliding',
             xWindowMode: 'preset',
             windowSeconds: 600,
@@ -883,9 +887,9 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         const latestPreset = Number(this.plotManager.liveViewDefaults?.timeseries?.presetWindowSeconds);
         return xWindowPresetSeconds.includes(latestPreset) ? latestPreset : xWindowBaseSeconds;
     };
-    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewAutoscaleX'), tsPolicy.xMode === 'autoscale', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'autoscale' }));
-    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewPinStartExpandEnd'), tsPolicy.xMode === 'pin-start', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'pin-start' }));
-    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewManual'), tsPolicy.xMode === 'keep', false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'keep' }));
+    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewAutoscaleX'), tsPolicy.xMode === 'autoscale', false, () => setTimeseriesLiveViewPolicy({ xMode: 'autoscale' }));
+    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewPinStartExpandEnd'), tsPolicy.xMode === 'pin-start', false, () => setTimeseriesLiveViewPolicy({ xMode: 'pin-start' }));
+    addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewManual'), tsPolicy.xMode === 'keep', false, () => setTimeseriesLiveViewPolicy({ xMode: 'keep' }));
     addRadio(xSection, 'live-view-timeseries-x', i18n.t('liveViewSliding'), xSliding, false, () => {
         const nextPreset = xSliding && xWindowPresetSeconds.includes(Number(tsPolicy.windowSeconds))
             ? Number(tsPolicy.windowSeconds)
@@ -908,7 +912,7 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         selectSliding({ xWindowMode: 'custom', windowSeconds: xCustomSeconds, customWindowSeconds: xCustomSeconds, presetWindowSeconds: currentXWindowPreset() });
     });
     addSecondsInput(nested, xCustomSeconds, !xSliding || xWindowPresetMode, value => {
-        this.plotManager.setGlobalLiveViewPolicy('timeseries', {
+        setTimeseriesLiveViewPolicy({
             xMode: 'sliding',
             xWindowMode: 'custom',
             customWindowSeconds: value,
@@ -924,7 +928,7 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         { label: i18n.t('liveViewKeepY'), patch: { yMode: 'keep' } },
     ];
     yOptions.forEach(option => {
-        addRadio(ySection, 'live-view-timeseries-y', option.label, option.patch.yMode === tsPolicy.yMode, false, () => this.plotManager.setGlobalLiveViewPolicy('timeseries', option.patch));
+        addRadio(ySection, 'live-view-timeseries-y', option.label, option.patch.yMode === tsPolicy.yMode, false, () => setTimeseriesLiveViewPolicy(option.patch));
     });
 
     const phasePolicy = this.plotManager._normalizeLiveViewPolicy({
@@ -937,7 +941,7 @@ proto._renderLiveUpdateTopBarMenu = function(menu) {
         { label: i18n.t('liveViewAutoscalePhase'), patch: { viewMode: 'autoscale' } },
     ];
     phaseOptions.forEach(option => {
-        addRadio(phaseSection, 'live-view-phase', option.label, option.patch.viewMode === phasePolicy.viewMode, false, () => this.plotManager.setGlobalLiveViewPolicy('phase', option.patch));
+        addRadio(phaseSection, 'live-view-phase', option.label, option.patch.viewMode === phasePolicy.viewMode, false, () => setPhaseLiveViewPolicy(option.patch));
     });
 };
 
@@ -952,7 +956,8 @@ proto._setGlobalLiveWindowFromCurrentZoom = function() {
         const axis = plot.div?._fullLayout?.xaxis;
         const seconds = (end - start) / (axis?.type === 'date' ? 1000 : 1);
         if (Number.isFinite(seconds) && seconds > 0) {
-            this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'sliding', windowSeconds: seconds });
+            const state = this.activeFileId ? this.files.get(this.activeFileId)?.liveUpdate : null;
+            this.plotManager.setGlobalLiveViewPolicy('timeseries', { xMode: 'sliding', windowSeconds: seconds }, { applyNow: !!state?.enabled });
             return true;
         }
     }
