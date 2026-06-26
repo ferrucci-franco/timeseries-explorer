@@ -2,12 +2,15 @@ import assert from 'node:assert/strict';
 
 import { installLiveUpdateMethods } from '../src/app/methods/live-update-methods.js';
 import { installTreeMethods } from '../src/app/methods/tree-methods.js';
+import CsvParser from '../src/parsers/csv-parser.js';
+import { duckDbAppendGrowthLimitError } from '../src/data/duckdb-live-limits.js';
 import i18n from '../src/i18n/index.js';
 
 class Harness {
     constructor() {
         this.capabilities = { isDesktop: true };
         this.selectedVariables = new Set();
+        this.csvParser = new CsvParser();
     }
 }
 
@@ -193,6 +196,54 @@ const harness = new Harness();
         const probe = await harness._readLiveUpdateAppendProbe({ liveUpdate: { localPath: 'live.csv' } }, state);
         assert.equal(probe.action, 'shrink');
     });
+}
+
+{
+    const parser = new CsvParser();
+    const profile = parser.inspectSample(textBytes('time,temperature,pressure\n0,20,1\n1,21,2\n'));
+    const data = makeData({ time: [0, 1], values: { temperature: [20, 21], pressure: [1, 2] } });
+    data.metadata.csvProfile = profile;
+    const parsed = parser.parseRowsWithProfile('2,22,3\n3,23,4\n', profile, { startRowIndex: 2 });
+    harness._appendLiveUpdateColumns(data, parsed);
+    harness._updateLiveUpdateMetadata(data, parsed.timeValues);
+    assert.deepEqual(data.variables.time.data, [0, 1, 2, 3]);
+    assert.deepEqual(data.variables.temperature.data, [20, 21, 22, 23]);
+    assert.equal(data.metadata.numTimesteps, 4);
+    assert.equal(data.metadata.timeEnd, 3);
+}
+
+{
+    const parser = new CsvParser();
+    const profile = parser.inspectSample(textBytes('time,temperature\n0,20\n1,21\n'));
+    assert.throws(
+        () => parser.parseRowsWithProfile('2,22,extra\n', profile, { startRowIndex: 2 }),
+        /expected 2/,
+    );
+    assert.throws(
+        () => parser.parseRowsWithProfile('time,temperature\n', profile, { startRowIndex: 2 }),
+        /header row/i,
+    );
+}
+
+{
+    assert.equal(harness._liveUpdateDeltaTimeOrderMessage(1, [2, 3]), '');
+    assert.equal(harness._liveUpdateDeltaTimeOrderMessage(1, [1]), i18n.t('liveUpdateDuplicateTime'));
+    assert.equal(harness._liveUpdateDeltaTimeOrderMessage(2, [1]), i18n.t('liveUpdateTimeWentBack'));
+}
+
+{
+    assert.equal(duckDbAppendGrowthLimitError({ appendRows: 10, appendBytes: 1024 }, { maxRows: 20, maxBytes: 2048 }), null);
+    const rowLimit = duckDbAppendGrowthLimitError({ appendRows: 21, appendBytes: 1024 }, { maxRows: 20, maxBytes: 2048 });
+    assert.equal(rowLimit.code, 'LIVE_UPDATE_APPEND_LIMIT');
+    assert.equal(rowLimit.limitKind, 'rows');
+    assert.match(rowLimit.message, /exceeded the session limit/);
+    const byteLimit = duckDbAppendGrowthLimitError({ appendRows: 10, appendBytes: 4096 }, { maxRows: 20, maxBytes: 2048 });
+    assert.equal(byteLimit.code, 'LIVE_UPDATE_APPEND_LIMIT');
+    assert.equal(byteLimit.limitKind, 'bytes');
+    const previousLang = i18n.currentLang;
+    i18n.currentLang = 'es';
+    assert.match(harness._liveUpdateErrorMessage(rowLimit), /Live Update se pauso/);
+    i18n.currentLang = previousLang;
 }
 
 {

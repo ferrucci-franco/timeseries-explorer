@@ -12,7 +12,7 @@
  * numeric files are also supported; column names are generated automatically.
  */
 import MatParser from './mat-parser.js';
-import { detectCsvTimeAxis, parseCsvNumber } from './csv-time-detection.js';
+import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
 
 export default class CsvParser {
     constructor(structureParser) {
@@ -226,6 +226,57 @@ export default class CsvParser {
             timeSource: this._serializeTimeSource(timeSource),
             sampleRows: dataRows.slice(0, Math.min(dataRows.length, 100)),
         };
+    }
+
+    parseRowsWithProfile(text, profile, options = {}) {
+        const delimiter = profile?.delimiter || ',';
+        const rawHeaders = profile?.rawHeaders || [];
+        const headers = profile?.headers || this._makeUniqueHeaders(rawHeaders);
+        const timeSource = profile?.timeSource || {};
+        const expectedColumns = rawHeaders.length;
+        const startRowIndex = Math.max(0, Number(options.startRowIndex) || 0);
+        const rows = this._parseRows(text, delimiter)
+            .map(row => row.map(cell => cell.trim()))
+            .filter(row => row.some(cell => cell !== ''));
+
+        const timeIndexes = new Set(timeSource.sourceIndexes || []);
+        const variableHeaders = headers
+            .map((header, index) => ({ header, index }))
+            .filter(({ index }) => !timeIndexes.has(index));
+        const timeValues = [];
+        const variables = new Map(variableHeaders.map(({ header }) => [header.name, []]));
+        const rawRows = [];
+
+        for (let r = 0; r < rows.length; r++) {
+            const row = rows[r];
+            if (expectedColumns && row.length !== expectedColumns) {
+                const err = new Error(`CSV row has ${row.length} columns; expected ${expectedColumns}.`);
+                err.code = 'LIVE_UPDATE_COLUMN_COUNT';
+                throw err;
+            }
+            if (profile?.hasHeader && rawHeaders.length && row.join('\u0001') === rawHeaders.join('\u0001')) {
+                const err = new Error('CSV header row appeared again in appended data.');
+                err.code = 'LIVE_UPDATE_HEADER_REPEATED';
+                throw err;
+            }
+
+            const timeValue = parseCsvTimeValue(timeSource, row, startRowIndex + timeValues.length, delimiter);
+            if (!Number.isFinite(timeValue)) {
+                const err = new Error('CSV appended row has an invalid time value.');
+                err.code = 'LIVE_UPDATE_INVALID_TIME';
+                throw err;
+            }
+            timeValues.push(timeValue);
+            rawRows.push(row);
+
+            for (const { header, index } of variableHeaders) {
+                const rawValue = String(row[index] ?? '').trim();
+                const numericValue = parseCsvNumber(rawValue, delimiter);
+                variables.get(header.name).push(Number.isFinite(numericValue) ? numericValue : rawValue);
+            }
+        }
+
+        return { rows: rawRows, timeValues, variables };
     }
 
     _serializeTimeSource(timeSource) {

@@ -641,6 +641,17 @@ proto._parseParquetResult = async function(filename, file) {
 proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
     const fileSize = file?.size ?? (buffer?.byteLength || 0);
     const legacyFallbackUnsafe = fileSize >= LEGACY_CSV_FALLBACK_MAX_BYTES;
+    let csvProfile = null;
+    const attachCsvProfile = data => {
+        if (data?.metadata && csvProfile) data.metadata.csvProfile = csvProfile;
+        return data;
+    };
+
+    try {
+        if (file || buffer) csvProfile = await this._inspectCsvSample(file, buffer);
+    } catch (err) {
+        console.warn('[csv] could not inspect sample for live-update profile:', err?.message || err);
+    }
 
     // Hint the user toward Parquet for very large CSVs. Non-blocking — the
     // parse still proceeds; this only logs once and could be wired to a
@@ -656,10 +667,9 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
         try {
             const source = await this._getDuckDbSource();
             const lazy = (file.size ?? 0) >= DUCKDB_LAZY_THRESHOLD_BYTES;
-            const csvProfile = await this._inspectCsvSample(file, buffer);
             const data = await source.parseCsvFile(file, filename, { lazy, csvProfile });
             data.filename = filename;
-            return data;
+            return attachCsvProfile(data);
         } catch (err) {
             if (legacyFallbackUnsafe) {
                 throw this._largeCsvDuckDbError(filename, fileSize, err);
@@ -673,12 +683,15 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
     }
     if (!buffer && file) {
         buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+        if (!csvProfile) {
+            try { csvProfile = await this._inspectCsvSample(file, buffer); } catch (_) {}
+        }
     }
-    if (!this._canUseParserWorker()) return this.csvParser.parse(buffer);
+    if (!this._canUseParserWorker()) return attachCsvProfile(await this.csvParser.parse(buffer));
     try {
-        return await this._parseCsvInWorker(filename, buffer);
+        return attachCsvProfile(await this._parseCsvInWorker(filename, buffer));
     } catch (err) {
-        if (err?.workerUnavailable) return this.csvParser.parse(buffer);
+        if (err?.workerUnavailable) return attachCsvProfile(await this.csvParser.parse(buffer));
         throw err;
     }
 };

@@ -280,6 +280,33 @@ export function detectCsvTimeAxis(rawHeaders, dataRows, options = {}) {
     return buildResult(unique[0], headers, delimiter, warnings);
 }
 
+export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ',') {
+    if (!timeSource?.ok) return NaN;
+    const indexes = Array.isArray(timeSource.sourceIndexes) ? timeSource.sourceIndexes : [];
+    const strategy = timeSource.strategy || timeSource.mode;
+    const idx = indexes[0] ?? 0;
+
+    if (timeSource.kind === 'index' || strategy === 'generated-index') return rowIndex;
+    if (timeSource.kind === 'numeric') return parseCsvNumber(row?.[idx], delimiter);
+    if (strategy === 'iso-datetime') return parseIsoMs(row?.[idx]);
+    if (strategy === 'slash-date' || strategy === 'dash-date') {
+        const order = timeSource.format?.dateOrder || 'YMD';
+        const sep = strategy === 'dash-date' ? '-' : '/';
+        return parseFlexibleDateMs(row?.[idx], order, sep);
+    }
+    if (strategy === 'yearless-date-time') {
+        return parseYearlessDateTimeMs(row?.[idx], timeSource.format?.dateOrder || 'MDY');
+    }
+    if (strategy === 'month-name-date') return parseMonthNameDateMs(row?.[idx]);
+    if (strategy === 'decimal-year') return decimalYearToMs(parseCsvNumber(row?.[idx], delimiter));
+    if (strategy === 'matlab-datenum') return matlabDatenumToMs(parseCsvNumber(row?.[idx], delimiter));
+    if (strategy === 'excel-serial') return excelSerialToMs(parseCsvNumber(row?.[idx], delimiter));
+    if (timeSource.mode === 'split' && indexes.length >= 2) {
+        return combineDateAndTimeMs(row?.[indexes[0]], row?.[indexes[1]], timeSource.format?.dateOrder || 'YMD');
+    }
+    return NaN;
+}
+
 function buildIndexResult(warnings) {
     return {
         ok: true,

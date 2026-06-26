@@ -2,6 +2,10 @@ import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
+const LIVE_UPDATE_DUCKDB_APPEND_LIMITS = {
+    maxRows: 1_000_000,
+    maxBytes: 256 * 1024 * 1024,
+};
 
 export function installLiveUpdateMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -77,6 +81,7 @@ proto._ensureLiveUpdateState = function(fileId) {
             lastCompleteLine: '',
             trailingPartialLine: '',
             localPath: entry.localPath || '',
+            csvProfile: null,
         };
     }
     if (!entry.liveUpdate.intervalMode) entry.liveUpdate.intervalMode = 'preset';
@@ -153,6 +158,11 @@ proto._startLiveUpdate = async function(fileId) {
     state.message = i18n.t('liveUpdatePolling');
     state.lastRows = this._liveUpdateRowCount(fileId);
     state.lastFingerprint = this._fileFingerprint(entry.file);
+    state.csvProfile = this._liveUpdateCsvProfile(entry, this.plotManager.files.get(fileId)?.data);
+    if (!state.csvProfile) {
+        await Modal.alert(i18n.t('liveUpdateTitle'), i18n.t('liveUpdateInvalidData'), { icon: 'LIVE' });
+        return;
+    }
     await this._refreshLiveUpdateReadCursor(entry, state, entry.file);
     this._renderFilesList();
     this._updateLiveUpdateTopBar();
@@ -196,15 +206,11 @@ proto._pollLiveUpdate = async function(fileId) {
             throw new Error(i18n.t('liveUpdateDesktopOnly'));
         }
 
-        // The writer appends to the file continuously. getFile() only snapshots
-        // the file's size/mtime; the bytes are read later during parsing. If an
-        // append lands in between, the snapshot is stale and the read throws
-        // NotReadableError. Re-read a few times so a concurrent write just
-        // retries instead of stopping live update.
-        let latestFile;
-        let fingerprint;
-        let nextData;
+        // The writer may append while we are reading the tail. Retry transient
+        // file locks, but never fall back to re-reading and re-parsing the full
+        // file during Live Update.
         let appendProbe = null;
+        let addedRows = 0;
         for (let attempt = 0; ; attempt++) {
             try {
                 appendProbe = await this._readLiveUpdateAppendProbe(entry, state);
@@ -221,14 +227,12 @@ proto._pollLiveUpdate = async function(fileId) {
                 if (appendProbe?.action === 'shrink') {
                     throw new Error(i18n.t('liveUpdateFileShrank'));
                 }
-                latestFile = await this._readLiveUpdateFile(entry);
-                fingerprint = this._fileFingerprint(latestFile);
-                if (fingerprint && fingerprint === state.lastFingerprint) {
+                if (!appendProbe?.completeLines?.length) {
                     state.status = 'ok';
-                    state.message = i18n.t('liveUpdateNoChanges');
+                    state.message = i18n.t('liveUpdateNoNewRows');
                     return;
                 }
-                nextData = await this._parseResultBuffer(this._fileDisplayName(entry), null, latestFile);
+                addedRows = await this._applyLiveUpdateAppendProbe(fileId, appendProbe);
                 break;
             } catch (err) {
                 if (this._isTransientReadError(err) && attempt < 4) {
@@ -238,23 +242,10 @@ proto._pollLiveUpdate = async function(fileId) {
                 throw err;
             }
         }
-        const outcome = this._validateLiveUpdateData(previousData, nextData);
-        if (outcome.action === 'unchanged') {
-            state.status = 'ok';
-            state.message = i18n.t('liveUpdateNoNewRows');
-            state.lastFingerprint = fingerprint;
-            return;
-        }
-        if (outcome.action !== 'append') {
-            throw new Error(outcome.message || i18n.t('liveUpdateSchemaChanged'));
-        }
-
-        entry.file = latestFile;
-        entry.extension = this._fileExtension(latestFile.name || this._fileDisplayName(entry));
-        entry.contentHash = fingerprint;
-        state.lastFingerprint = fingerprint;
-        state.lastRows = outcome.nextRows;
-        await this._refreshLiveUpdateReadCursor(entry, state, latestFile);
+        const nextData = this.plotManager.files.get(fileId)?.data || previousData;
+        state.lastRows = this._liveUpdateRowCount(fileId);
+        state.lastSize = appendProbe?.stat?.size ?? state.lastSize;
+        state.lastModified = appendProbe?.stat?.lastModified ?? state.lastModified;
         this._applyLiveUpdateAppendProbeCursor(state, appendProbe);
 
         this._reapplyDerivedVariables(fileId, nextData);
@@ -266,17 +257,45 @@ proto._pollLiveUpdate = async function(fileId) {
             this.renderVariablesTree(nextData.tree);
         }
         state.status = 'ok';
-        state.message = i18n.t('liveUpdateRowsAdded').replace('{count}', String(outcome.addedRows));
+        state.message = i18n.t('liveUpdateRowsAdded').replace('{count}', String(addedRows));
     } catch (err) {
         console.error('Live update failed:', err);
         state.status = 'error';
-        state.message = err?.message || String(err);
+        state.message = this._liveUpdateErrorMessage(err);
         state.enabled = false;
     } finally {
         this._renderFilesList();
         this._updateLiveUpdateTopBar();
         this._scheduleLiveUpdate(fileId);
     }
+};
+
+proto._liveUpdateErrorMessage = function(err) {
+    if (err?.code === 'LIVE_UPDATE_APPEND_LIMIT') {
+        if (err.limitKind === 'rows') {
+            return i18n.t('liveUpdateAppendRowsLimit')
+                .replace('{count}', this._formatLiveUpdateInteger(err.appendRows))
+                .replace('{limit}', this._formatLiveUpdateInteger(err.maxRows));
+        }
+        if (err.limitKind === 'bytes') {
+            return i18n.t('liveUpdateAppendBytesLimit')
+                .replace('{count}', this._formatLiveUpdateMegabytes(err.appendBytes))
+                .replace('{limit}', this._formatLiveUpdateMegabytes(err.maxBytes));
+        }
+    }
+    return err?.message || String(err);
+};
+
+proto._formatLiveUpdateInteger = function(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.round(n).toLocaleString() : String(value ?? '');
+};
+
+proto._formatLiveUpdateMegabytes = function(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return String(value ?? '');
+    const mb = n / (1024 * 1024);
+    return mb.toFixed(mb >= 100 ? 0 : 1);
 };
 
 proto._isTransientReadError = function(err) {
@@ -398,6 +417,151 @@ proto._applyLiveUpdateAppendProbeCursor = function(state, appendProbe) {
     if (appendProbe.completeLines?.length) {
         state.lastCompleteLine = appendProbe.completeLines[appendProbe.completeLines.length - 1];
     }
+};
+
+proto._applyLiveUpdateAppendProbe = async function(fileId, appendProbe) {
+    const entry = this.files.get(fileId);
+    const state = entry?.liveUpdate;
+    const data = this.plotManager.files.get(fileId)?.data;
+    const profile = this._liveUpdateCsvProfile(entry, data);
+    if (!entry || !state || !data || !profile) throw new Error(i18n.t('liveUpdateInvalidData'));
+
+    const deltaText = `${appendProbe.completeLines.join('\n')}\n`;
+    const timeName = data.metadata?.timeName;
+    const previousTime = timeName ? data.variables?.[timeName]?.data : null;
+    const lastTime = previousTime?.length ? Number(previousTime[previousTime.length - 1]) : NaN;
+
+    if (data._duckdb?.source?.appendCsvDelta) {
+        const result = await data._duckdb.source.appendCsvDelta(data, profile, deltaText, {
+            expectedRows: appendProbe.completeLines.length,
+            lastTime,
+            limits: LIVE_UPDATE_DUCKDB_APPEND_LIMITS,
+        });
+        this._appendLiveUpdateColumns(data, result.columns);
+        this._limitLiveUpdateOverview(data);
+        this._updateLiveUpdateMetadata(data, result.columns?.timeValues);
+        return result.rows;
+    }
+
+    const parsed = this.csvParser.parseRowsWithProfile(deltaText, profile, {
+        startRowIndex: previousTime?.length || 0,
+    });
+    const timeOrderMessage = this._liveUpdateDeltaTimeOrderMessage(lastTime, parsed.timeValues);
+    if (timeOrderMessage) throw new Error(timeOrderMessage);
+    this._appendLiveUpdateColumns(data, parsed);
+    this._updateLiveUpdateMetadata(data, parsed.timeValues);
+    return parsed.timeValues.length;
+};
+
+proto._liveUpdateCsvProfile = function(entry, data) {
+    const stateProfile = entry?.liveUpdate?.csvProfile;
+    const dataProfile = data?.metadata?.csvProfile;
+    const profile = stateProfile || dataProfile || null;
+    if (profile && entry?.liveUpdate && !entry.liveUpdate.csvProfile) {
+        entry.liveUpdate.csvProfile = profile;
+    }
+    return profile;
+};
+
+proto._liveUpdateDeltaTimeOrderMessage = function(lastTime, newTimes) {
+    let previousValue = Number(lastTime);
+    for (const raw of newTimes || []) {
+        const value = Number(raw);
+        if (Number.isFinite(previousValue) && Number.isFinite(value)) {
+            if (value < previousValue) return i18n.t('liveUpdateTimeWentBack');
+            if (value === previousValue) return i18n.t('liveUpdateDuplicateTime');
+        }
+        previousValue = value;
+    }
+    return '';
+};
+
+proto._appendLiveUpdateColumns = function(data, parsed) {
+    const timeName = data?.metadata?.timeName;
+    const timeVar = timeName ? data.variables?.[timeName] : null;
+    if (!timeVar || !parsed?.timeValues?.length) throw new Error(i18n.t('liveUpdateInvalidData'));
+    this._appendLiveUpdateValues(timeVar, parsed.timeValues);
+
+    for (const [name, values] of parsed.variables || []) {
+        const variable = data.variables?.[name];
+        if (!variable || variable.source === 'derived' || variable.source === 'data-tool') continue;
+        this._appendLiveUpdateValues(variable, values);
+    }
+};
+
+proto._appendLiveUpdateValues = function(variable, values) {
+    if (!variable || !values?.length) return;
+    const existing = variable.data || [];
+    const oldLength = existing.length || 0;
+    const addLength = values.length;
+    const nextLength = oldLength + addLength;
+    const stringLike = variable.dataType === 'string' || Array.isArray(existing);
+    if (stringLike) {
+        const next = Array.isArray(existing) ? existing : Array.from(existing || []);
+        for (const value of values) next.push(value);
+        variable.data = next;
+        return;
+    }
+
+    const Typed = existing?.constructor && existing.buffer instanceof ArrayBuffer
+        ? existing.constructor
+        : Float64Array;
+    let buffer = variable._liveBuffer;
+    let capacity = Number(variable._liveCapacity) || 0;
+    if (!(buffer instanceof Typed) || capacity < nextLength) {
+        capacity = Math.max(nextLength, Math.ceil(Math.max(oldLength, 16) * 1.6));
+        const nextBuffer = new Typed(capacity);
+        if (oldLength) nextBuffer.set(existing.subarray ? existing.subarray(0, oldLength) : Array.from(existing), 0);
+        buffer = nextBuffer;
+    }
+    buffer.set(values, oldLength);
+    variable._liveBuffer = buffer;
+    variable._liveCapacity = capacity;
+    variable.data = buffer.subarray(0, nextLength);
+};
+
+proto._updateLiveUpdateMetadata = function(data, newTimes) {
+    const timeName = data?.metadata?.timeName;
+    const time = timeName ? data.variables?.[timeName]?.data : null;
+    if (!time?.length) return;
+    data.metadata.numTimesteps = time.length;
+    data.metadata.timeStart = time[0];
+    data.metadata.timeEnd = time[time.length - 1];
+    if (data._duckdb && Number.isFinite(Number(data._duckdb.totalRows))) {
+        data.metadata.numTimesteps = data._duckdb.totalRows;
+    }
+};
+
+proto._limitLiveUpdateOverview = function(data) {
+    const meta = data?._duckdb;
+    if (!meta) return;
+    const timeName = data.metadata?.timeName;
+    const timeVar = timeName ? data.variables?.[timeName] : null;
+    const length = timeVar?.data?.length || 0;
+    const target = Math.max(1000, Number(meta.overviewPoints) || 10000);
+    if (length <= target * 1.5) {
+        meta.overviewPoints = Math.max(Number(meta.overviewPoints) || 0, length);
+        return;
+    }
+    const indexes = [];
+    const stride = Math.max(1, Math.ceil(length / target));
+    for (let i = 0; i < length; i += stride) indexes.push(i);
+    if (indexes[indexes.length - 1] !== length - 1) indexes.push(length - 1);
+    for (const variable of Object.values(data.variables || {})) {
+        if (!variable?.data || variable.source === 'derived' || variable.source === 'data-tool') continue;
+        variable.data = this._takeLiveUpdateIndexes(variable.data, indexes);
+        variable._liveBuffer = null;
+        variable._liveCapacity = 0;
+    }
+    meta.overviewPoints = indexes.length;
+};
+
+proto._takeLiveUpdateIndexes = function(values, indexes) {
+    if (Array.isArray(values)) return indexes.map(index => values[index]);
+    const Typed = values.constructor || Float64Array;
+    const next = new Typed(indexes.length);
+    for (let i = 0; i < indexes.length; i++) next[i] = values[indexes[i]];
+    return next;
 };
 
 proto._lastLiveUpdateNewlineIndex = function(bytes) {
