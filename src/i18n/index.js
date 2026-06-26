@@ -70,9 +70,9 @@ const i18n = {
             'collapse-all':       'collapseAll',
             'reset-layout':       'resetLayout',
             'load-example-btn':   'loadExample',
+            'extra-menu-btn':     'extraMenu',
             'toggle-cursors':     'toggleCursors',
             'mode-fft':           'modeFFT',
-            'help-btn':           'help',
         };
 
         for (const [id, key] of Object.entries(tooltips)) {

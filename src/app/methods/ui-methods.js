@@ -211,8 +211,6 @@ proto.initEventListeners = function() {
 
     this._initExampleMenu();
     this._initExtraMenu();
-
-    document.getElementById('help-btn').addEventListener('click', () => this.showHelp());
 };
 
 proto._setScrollablePlotArea = async function(enabled) {
@@ -780,6 +778,10 @@ proto._renderExtraMenu = function() {
         });
     }, { titleKey: 'extraLoadSessionProjectTooltip' });
 
+    const helpItem = makeAction('?', 'help', () => {
+        this.showHelp();
+    });
+
     const desktopDownloadItem = makeAction('📦', 'extraStandalone', () => {
         this._downloadDesktopPackage();
     });
@@ -829,7 +831,7 @@ proto._renderExtraMenu = function() {
     if (this.capabilities?.canUseLocalPath) {
         items.push(openTempItem, dymolaDirItem);
     }
-    items.push(desktopDownloadItem, feedbackItem, versionRow);
+    items.push(desktopDownloadItem, feedbackItem, versionRow, helpItem);
     menu.append(...items);
 };
 

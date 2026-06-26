@@ -74,21 +74,20 @@
                 </button>
                 <div id="example-menu" class="example-menu" role="menu" hidden></div>
             </div>
-            <div class="example-menu-wrap">
-                <button id="extra-menu-btn" class="icon-btn extra-menu-btn" title="Extra" aria-haspopup="true" aria-expanded="false">
-                    <span class="icon">⋯</span>
-                    <span class="extra-menu-label" data-i18n="extraMenu">Extra</span>
-                </button>
-                <div id="extra-menu" class="example-menu extra-menu" role="menu" hidden></div>
-            </div>
-            <button id="help-btn" class="icon-btn" title="Help">
-                <span class="icon">❓</span>
-            </button>
-
             <!-- Theme Toggle -->
             <button id="theme-toggle" class="icon-btn" title="Toggle theme">
                 <span class="icon">🌙</span>
             </button>
+            <div class="example-menu-wrap">
+                <button id="extra-menu-btn" class="icon-btn extra-menu-btn" title="Menu" aria-label="Menu" data-i18n-title="extraMenu" data-i18n-aria-label="extraMenu" aria-haspopup="true" aria-expanded="false">
+                    <span class="icon menu-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" focusable="false">
+                            <path d="M4 6h16M4 12h16M4 18h16"/>
+                        </svg>
+                    </span>
+                </button>
+                <div id="extra-menu" class="example-menu extra-menu" role="menu" hidden></div>
+            </div>
         </div>
     </div>
 

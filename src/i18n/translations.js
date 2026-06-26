@@ -10,7 +10,7 @@ const translations = {
             runtimeNoticeDesktopTitle: 'Desktop version',
             runtimeNoticeDesktopBody: 'This version runs as an app on your computer, with better local file access for live-updating files, very large files, offline work, and Parquet export when available.',
             runtimeNoticePrivacy: 'Your data is not sent over the web: time-series files are processed in your browser or on your computer.',
-            runtimeNoticeDesktopDownload: 'For live-updating files, very large files, and better access to files on your computer, use the Desktop version. You can download it from the Extra... button.',
+            runtimeNoticeDesktopDownload: 'For live-updating files, very large files, and better access to files on your computer, use the Desktop version. You can download it from the Menu button.',
             runtimeNoticeWebFeatures: [],
             runtimeNoticeDesktopFeatures: [],
 
@@ -116,7 +116,7 @@ const translations = {
             exampleModelDownloadStarted: 'Download ready',
             exampleModelCopyFailedTitle: 'Could not copy the example model',
             exampleModelCopyFailedBody: 'The Modelica source could not be copied to the clipboard.',
-            extraMenu: 'Extra',
+            extraMenu: 'Menu',
             help: 'Help',
             toggleCursors: 'Toggle cursors',
             modeFFT: 'FFT mode',
@@ -417,7 +417,7 @@ const translations = {
             helpSec10Title: 'Per-file alignment',
             helpSec10Body: 'Use the <b>⛭</b> button next to a file to open <b>Align this file</b>. It lets you adjust <b>Crop</b> (time-window start/end), <b>Offset</b> (<b>Δt</b> and <b>Δy</b>), and a <b>Global gain</b> only for that file. The button turns red when that file uses non-default alignment settings.',
             helpSec11Title: 'Save/Restore session',
-            helpSec11Body: 'Use <b>Extra → Save view (.json)</b> to save the visual setup without data: open compatible result files first, then load the view to restore layout, traces, transforms, zooms, cameras, and derived variables. Use <b>Extra → Save complete project (.zip)</b> to save the setup together with the loaded data files. Later, <b>Extra → Load view/project (.json/.zip)</b> opens either format: JSON views are applied to already-open compatible files, while ZIP projects restore the files and view automatically.'
+            helpSec11Body: 'Use <b>Menu → Save view (.json)</b> to save the visual setup without data: open compatible result files first, then load the view to restore layout, traces, transforms, zooms, cameras, and derived variables. Use <b>Menu → Save complete project (.zip)</b> to save the setup together with the loaded data files. Later, <b>Menu → Load view/project (.json/.zip)</b> opens either format: JSON views are applied to already-open compatible files, while ZIP projects restore the files and view automatically.'
         },
         fr: {
             // App title
@@ -430,7 +430,7 @@ const translations = {
             runtimeNoticeDesktopTitle: 'Version bureau',
             runtimeNoticeDesktopBody: 'Cette version fonctionne comme une application sur votre ordinateur, avec un meilleur acces aux fichiers locaux pour les fichiers mis a jour en direct, les tres gros fichiers, le travail hors ligne et l export Parquet lorsque disponible.',
             runtimeNoticePrivacy: 'Vos donnees ne sont pas transmises sur le web : les fichiers de series temporelles sont traites dans le navigateur ou sur votre ordinateur.',
-            runtimeNoticeDesktopDownload: 'Pour les fichiers mis a jour en direct, les tres gros fichiers et un meilleur acces aux fichiers de votre ordinateur, utilisez la version bureau. Vous pouvez la telecharger depuis le bouton Extra....',
+            runtimeNoticeDesktopDownload: 'Pour les fichiers mis a jour en direct, les tres gros fichiers et un meilleur acces aux fichiers de votre ordinateur, utilisez la version bureau. Vous pouvez la telecharger depuis le bouton Menu.',
             runtimeNoticeWebFeatures: [],
             runtimeNoticeDesktopFeatures: [],
 
@@ -604,7 +604,7 @@ const translations = {
             exampleModelDownloadStarted: 'Téléchargement prêt',
             exampleModelCopyFailedTitle: 'Impossible de copier le modèle d’exemple',
             exampleModelCopyFailedBody: 'La source Modelica n’a pas pu être copiée dans le presse-papiers.',
-            extraMenu: 'Extra',
+            extraMenu: 'Menu',
             help: 'Aide',
             toggleCursors: 'Afficher/masquer les curseurs',
             modeFFT: 'Mode FFT',
@@ -838,7 +838,7 @@ const translations = {
             helpSec10Title: 'Alignement par fichier',
             helpSec10Body: 'Utilisez le bouton <b>⛭</b> à côté d’un fichier pour ouvrir <b>Aligner ce fichier</b>. Il permet d’ajuster le <b>Recadrage</b> (début/fin de fenêtre temporelle), le <b>Décalage</b> (<b>Δt</b> et <b>Δy</b>) et le <b>Gain global</b> uniquement pour ce fichier. Le bouton devient rouge lorsque ce fichier utilise des paramètres d’alignement différents des valeurs par défaut.',
             helpSec11Title: 'Enregistrer/restaurer la session',
-            helpSec11Body: 'Utilisez <b>Extra → Enregistrer la vue (.json)</b> pour enregistrer la configuration visuelle sans les donnees : ouvrez d abord des fichiers de resultats compatibles, puis chargez la vue pour restaurer la disposition, les traces, les transformations, les zooms, les cameras et les variables derivees. Utilisez <b>Extra → Enregistrer le projet complet (.zip)</b> pour enregistrer la configuration avec les fichiers charges. Ensuite, <b>Extra → Charger vue/projet (.json/.zip)</b> ouvre les deux formats : les vues JSON s appliquent aux fichiers compatibles deja ouverts, tandis que les projets ZIP restaurent automatiquement les fichiers et la vue.'
+            helpSec11Body: 'Utilisez <b>Menu → Enregistrer la vue (.json)</b> pour enregistrer la configuration visuelle sans les donnees : ouvrez d abord des fichiers de resultats compatibles, puis chargez la vue pour restaurer la disposition, les traces, les transformations, les zooms, les cameras et les variables derivees. Utilisez <b>Menu → Enregistrer le projet complet (.zip)</b> pour enregistrer la configuration avec les fichiers charges. Ensuite, <b>Menu → Charger vue/projet (.json/.zip)</b> ouvre les deux formats : les vues JSON s appliquent aux fichiers compatibles deja ouverts, tandis que les projets ZIP restaurent automatiquement les fichiers et la vue.'
         },
         es: {
             appTitle: 'Time Series Explorer',
@@ -850,7 +850,7 @@ const translations = {
             runtimeNoticeDesktopTitle: 'Version de escritorio',
             runtimeNoticeDesktopBody: 'Esta version funciona como una app en tu computadora, con mejor acceso a archivos locales para archivos que se actualizan en vivo, archivos muy grandes, trabajo sin conexion y exportacion a Parquet cuando este disponible.',
             runtimeNoticePrivacy: 'Tus datos no se transmiten por la web: los archivos de series temporales se procesan en tu navegador o en tu computadora.',
-            runtimeNoticeDesktopDownload: 'Para archivos que se actualizan en vivo, archivos muy grandes y mejor acceso a archivos de tu computadora, usa la version de escritorio. Puedes descargarla desde el boton Extra....',
+            runtimeNoticeDesktopDownload: 'Para archivos que se actualizan en vivo, archivos muy grandes y mejor acceso a archivos de tu computadora, usa la version de escritorio. Puedes descargarla desde el boton Menú.',
             runtimeNoticeWebFeatures: [],
             runtimeNoticeDesktopFeatures: [],
             variables: 'Variables',
@@ -1014,7 +1014,7 @@ const translations = {
             exampleModelDownloadStarted: 'Descarga lista',
             exampleModelCopyFailedTitle: 'No se pudo copiar el modelo de ejemplo',
             exampleModelCopyFailedBody: 'No se pudo copiar el código fuente Modelica al portapapeles.',
-            extraMenu: 'Extra',
+            extraMenu: 'Menú',
             help: 'Ayuda',
             toggleCursors: 'Mostrar u ocultar cursores',
             modeFFT: 'Modo FFT',
@@ -1228,7 +1228,7 @@ const translations = {
             helpSec10Title: 'Alineación por archivo',
             helpSec10Body: 'Usa el botón <b>⛭</b> junto a un archivo para abrir <b>Alinear este archivo</b>. Permite ajustar <b>Recorte</b> (inicio/fin de ventana temporal), <b>Desplazamiento</b> (<b>Δt</b> y <b>Δy</b>) y una <b>Ganancia global</b> solo para ese archivo. El botón se vuelve rojo cuando ese archivo usa ajustes distintos a los predeterminados.',
             helpSec11Title: 'Guardar/restaurar sesion',
-            helpSec11Body: 'Usa <b>Extra → Guardar vista (.json)</b> para guardar la configuracion visual sin datos: abre primero archivos de resultados compatibles y luego carga la vista para restaurar layout, trazas, transforms, zooms, camaras y variables derivadas. Usa <b>Extra → Guardar proyecto completo (.zip)</b> para guardar la configuracion junto con los archivos de datos cargados. Luego, <b>Extra → Cargar vista/proyecto (.json/.zip)</b> abre cualquiera de los dos formatos: las vistas JSON se aplican sobre archivos compatibles ya abiertos, mientras que los proyectos ZIP restauran automaticamente los archivos y la vista.'
+            helpSec11Body: 'Usa <b>Menu → Guardar vista (.json)</b> para guardar la configuracion visual sin datos: abre primero archivos de resultados compatibles y luego carga la vista para restaurar layout, trazas, transforms, zooms, camaras y variables derivadas. Usa <b>Menu → Guardar proyecto completo (.zip)</b> para guardar la configuracion junto con los archivos de datos cargados. Luego, <b>Menu → Cargar vista/proyecto (.json/.zip)</b> abre cualquiera de los dos formatos: las vistas JSON se aplican sobre archivos compatibles ya abiertos, mientras que los proyectos ZIP restauran automaticamente los archivos y la vista.'
         },
         it: {
             appTitle: 'Time Series Explorer',
@@ -1240,7 +1240,7 @@ const translations = {
             runtimeNoticeDesktopTitle: 'Versione desktop',
             runtimeNoticeDesktopBody: 'Questa versione funziona come app sul computer, con un accesso migliore ai file locali per file aggiornati in tempo reale, file molto grandi, lavoro offline ed esportazione Parquet quando disponibile.',
             runtimeNoticePrivacy: 'I tuoi dati non vengono trasmessi via web: i file di serie temporali vengono elaborati nel browser o sul tuo computer.',
-            runtimeNoticeDesktopDownload: 'Per file aggiornati in tempo reale, file molto grandi e un accesso migliore ai file del computer, usa la versione desktop. Puoi scaricarla dal pulsante Extra....',
+            runtimeNoticeDesktopDownload: 'Per file aggiornati in tempo reale, file molto grandi e un accesso migliore ai file del computer, usa la versione desktop. Puoi scaricarla dal pulsante Menù.',
             runtimeNoticeWebFeatures: [],
             runtimeNoticeDesktopFeatures: [],
             variables: 'Variabili',
@@ -1404,7 +1404,7 @@ const translations = {
             exampleModelDownloadStarted: 'Download pronto',
             exampleModelCopyFailedTitle: 'Impossibile copiare il modello di esempio',
             exampleModelCopyFailedBody: 'Il sorgente Modelica non ha potuto essere copiato negli appunti.',
-            extraMenu: 'Extra',
+            extraMenu: 'Menù',
             help: 'Aiuto',
             toggleCursors: 'Mostra o nascondi cursori',
             modeFFT: 'Modalità FFT',
@@ -1618,7 +1618,7 @@ const translations = {
             helpSec10Title: 'Allineamento globale',
             helpSec10Body: 'Usare il pulsante <b>⛭</b> accanto a un file per aprire <b>Allinea questo file</b>. Permette di regolare il <b>Ritaglio</b> (finestra temporale inizio/fine), lo <b>Scostamento</b> (<b>Δt</b> e <b>Δy</b>) e il <b>Guadagno globale</b> solo per quel file. Il pulsante diventa rosso quando quel file usa impostazioni di allineamento diverse da quelle predefinite.',
             helpSec11Title: 'Salvare/ripristinare sessione',
-            helpSec11Body: 'Usare <b>Extra → Salva vista (.json)</b> per salvare la configurazione visiva senza dati: aprire prima file di risultati compatibili, poi caricare la vista per ripristinare layout, tracce, trasformazioni, zoom, camere e variabili derivate. Usare <b>Extra → Salva progetto completo (.zip)</b> per salvare la configurazione insieme ai file di dati caricati. Poi <b>Extra → Carica vista/progetto (.json/.zip)</b> apre entrambi i formati: le viste JSON si applicano ai file compatibili gia aperti, mentre i progetti ZIP ripristinano automaticamente file e vista.'
+            helpSec11Body: 'Usare <b>Menu → Salva vista (.json)</b> per salvare la configurazione visiva senza dati: aprire prima file di risultati compatibili, poi caricare la vista per ripristinare layout, tracce, trasformazioni, zoom, camere e variabili derivate. Usare <b>Menu → Salva progetto completo (.zip)</b> per salvare la configurazione insieme ai file di dati caricati. Poi <b>Menu → Carica vista/progetto (.json/.zip)</b> apre entrambi i formati: le viste JSON si applicano ai file compatibili gia aperti, mentre i progetti ZIP ripristinano automaticamente file e vista.'
         }
 };
 
