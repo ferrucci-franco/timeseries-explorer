@@ -8,9 +8,11 @@
  * column data is exposed as `Float64Array` (via Apache Arrow) — a significant
  * memory and speed win over JS Array boxing.
  *
- * Files are registered with `BROWSER_FILEREADER` protocol so the underlying
- * `File` object is read lazily by DuckDB (no full-buffer string materialization,
- * which is what gives the legacy parser its ~512 MB hard ceiling).
+ * Browser files are registered with `BROWSER_FILEREADER` protocol so the
+ * underlying `File` object is read lazily by DuckDB. Desktop CSV/Parquet files
+ * can also arrive as local HTTP descriptors and are registered with DuckDB's
+ * HTTP protocol, letting DuckDB request byte ranges from the Electron server
+ * instead of materializing the whole file in renderer memory.
  *
  * Falls back to `CsvParser` for files DuckDB cannot detect.
  */
@@ -22,6 +24,7 @@ import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 import { parseCsvNumber } from '../parsers/csv-time-detection.js';
+import { registerDuckDbFile } from './duckdb-file-registration.js';
 import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
 
 const BUNDLES = {
@@ -64,6 +67,15 @@ export default class DuckDbSource {
         const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
         const db = new duckdb.AsyncDuckDB(logger, worker);
         await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+        await db.open({
+            filesystem: {
+                // Desktop local files are registered over HTTP Range. Avoid HEAD/full-read fallbacks:
+                // they can trip DuckDB-WASM/XHR limits and accidentally fetch multi-GB files.
+                reliableHeadRequests: false,
+                allowFullHTTPReads: false,
+                forceFullHTTPReads: false,
+            },
+        });
         this._db = db;
         this._conn = await db.connect();
         // Tune for the WASM context: less parallelism means smaller per-thread
@@ -82,12 +94,7 @@ export default class DuckDbSource {
             try { await this._db.dropFile(name); } catch (_) { /* ignore */ }
             this._registered.delete(name);
         }
-        await this._db.registerFileHandle(
-            name,
-            file,
-            duckdb.DuckDBDataProtocol.BROWSER_FILEREADER,
-            true,
-        );
+        await registerDuckDbFile(this._db, duckdb, name, file);
         this._registered.add(name);
     }
 

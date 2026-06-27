@@ -20,11 +20,13 @@
     "build:all": "npm run build:portable && npm run build:web",
     "test:csv": "node scripts/test-csv-fixtures.mjs",
     "test:capabilities": "node scripts/test-runtime-capabilities.mjs",
-    "test:live-update": "node scripts/test-live-update-logic.mjs"
+    "test:live-update": "node scripts/test-live-update-logic.mjs",
+    "test:local-file-http": "node scripts/test-local-file-http.mjs",
+    "test:desktop-streamable": "node scripts/test-desktop-streamable-file.mjs",
+    "test:csv-to-parquet": "node scripts/test-csv-to-parquet-core.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",
-    "duckdb": "^1.4.4",
     "electron": "^42.4.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.5",
@@ -32,7 +34,8 @@
     "vite": "^5.4.19"
   },
   "dependencies": {
-    "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",
+    "@duckdb/duckdb-wasm": "1.32.0",
+    "duckdb": "1.4.4",
     "fflate": "^0.8.3",
     "plotly.js-dist-min": "^3.5.1"
   },
@@ -47,10 +50,17 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "src/data/csv-to-parquet-core.js",
+      "src/parsers/**/*",
       "build/icons/**/*",
       "package.json"
     ],
     "asar": true,
+    "asarUnpack": [
+      "src/data/csv-to-parquet-core.js",
+      "src/parsers/**/*",
+      "**/*.node"
+    ],
     "win": {
       "icon": "build/icons/timeseries-explorer-icon.ico",
       "target": [
@@ -68,6 +78,7 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
-    }
+    },
+    "npmRebuild": false
   }
 }

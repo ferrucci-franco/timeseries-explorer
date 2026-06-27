@@ -831,6 +831,126 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     transform: translateY(0);
 }
 
+.dismissible-notice {
+    position: fixed;
+    top: 74px;
+    right: 18px;
+    z-index: 2450;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    width: min(520px, calc(100vw - 36px));
+    padding: 0.85rem 0.9rem;
+    border: 1px solid color-mix(in srgb, var(--primary-color) 35%, var(--border-color));
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    box-shadow: 0 12px 26px rgba(0,0,0,0.18);
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity 0.18s, transform 0.18s;
+}
+
+.dismissible-notice.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.dismissible-notice-content {
+    min-width: 0;
+    flex: 1;
+}
+
+.dismissible-notice-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}
+
+.dismissible-notice-body {
+    font-size: 0.82rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    margin-bottom: 0.45rem;
+}
+
+.dismissible-notice-code {
+    display: block;
+    max-width: 100%;
+    padding: 0.42rem 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.dismissible-notice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.65rem;
+}
+
+.dismissible-notice-action {
+    min-height: 2.15rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.82rem;
+    font-weight: 650;
+    cursor: pointer;
+}
+
+.dismissible-notice-action.primary {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+    color: #fff;
+}
+
+.dismissible-notice-action:disabled {
+    cursor: progress;
+    opacity: 0.7;
+}
+
+.dismissible-notice-status {
+    margin-top: 0.45rem;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+.dismissible-notice-status.error {
+    color: var(--danger-color);
+}
+
+.dismissible-notice-status.success {
+    color: var(--success-color);
+}
+
+.dismissible-notice-close {
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 1.15rem;
+    line-height: 1;
+}
+
+.dismissible-notice-close:hover {
+    background: var(--hover-bg);
+}
+
 .example-menu-item:hover:not(:disabled) {
     background-color: var(--hover-bg);
 }

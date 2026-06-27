@@ -1,43 +1,27 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const crypto = require('node:crypto');
 const http = require('node:http');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const {
+  fileInfoPayload,
+  mimeTypes,
+  mimeTypeForPath,
+  streamLocalFile,
+} = require('./local-file-http.cjs');
 
 const projectRoot = path.resolve(__dirname, '..');
 const staticRoot = path.join(projectRoot, 'dist');
 const desktopIconPath = path.join(projectRoot, 'build', 'icons', 'timeseries-explorer-icon.png');
 const host = '127.0.0.1';
 const preferredPort = Number(process.env.OMV_DESKTOP_PORT || 8876);
+let csvToParquetCorePromise = null;
+let mainWindow = null;
 
-const mimeTypes = new Map([
-  ['.html', 'text/html; charset=utf-8'],
-  ['.js', 'text/javascript; charset=utf-8'],
-  ['.css', 'text/css; charset=utf-8'],
-  ['.json', 'application/json; charset=utf-8'],
-  ['.csv', 'text/csv; charset=utf-8'],
-  ['.txt', 'text/plain; charset=utf-8'],
-  ['.mat', 'application/octet-stream'],
-  ['.wasm', 'application/wasm'],
-  ['.png', 'image/png'],
-  ['.jpg', 'image/jpeg'],
-  ['.jpeg', 'image/jpeg'],
-  ['.svg', 'image/svg+xml'],
-  ['.ico', 'image/x-icon'],
-]);
-
-function mimeTypeForPath(filePath) {
-  return mimeTypes.get(path.extname(filePath).toLowerCase()) || 'application/octet-stream';
-}
-
-function fileInfoPayload(filePath, stat) {
-  return {
-    name: path.basename(filePath),
-    path: filePath,
-    size: stat.size,
-    lastModified: stat.mtimeMs,
-    type: mimeTypeForPath(filePath),
-  };
+if (process.env.OMV_REMOTE_DEBUGGING_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', String(process.env.OMV_REMOTE_DEBUGGING_PORT));
 }
 
 function desktopReadErrorPayload(err) {
@@ -67,6 +51,57 @@ function localPathFromUrl(url) {
   return path.resolve(raw);
 }
 
+function csvFingerprint(filePath, stat) {
+  return crypto
+    .createHash('sha256')
+    .update(path.resolve(filePath))
+    .update('\0')
+    .update(String(stat.size))
+    .update('\0')
+    .update(String(stat.mtimeMs))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+function parquetCacheName(filePath, fingerprint) {
+  const base = path.basename(filePath, path.extname(filePath));
+  return `${base}.omv-${fingerprint}.parquet`;
+}
+
+async function canWriteDirectory(dir) {
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    const probe = path.join(dir, `.omv-write-test-${process.pid}-${Date.now()}`);
+    await fsp.writeFile(probe, '');
+    await fsp.unlink(probe);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function chooseParquetOutputPath(inputPath, stat, requestedPath = '') {
+  if (requestedPath && String(requestedPath).trim()) return path.resolve(requestedPath);
+  const fingerprint = csvFingerprint(inputPath, stat);
+  const name = parquetCacheName(inputPath, fingerprint);
+  const adjacent = path.resolve(path.dirname(inputPath), name);
+  if (await canWriteDirectory(path.dirname(inputPath))) return adjacent;
+  const cacheDir = path.join(app.getPath('userData'), 'parquet-cache');
+  await fsp.mkdir(cacheDir, { recursive: true });
+  return path.join(cacheDir, name);
+}
+
+async function loadCsvToParquetCore() {
+  if (!csvToParquetCorePromise) {
+    const packedPath = path.join(projectRoot, 'src', 'data', 'csv-to-parquet-core.js');
+    const modulePath = app.isPackaged
+      ? packedPath.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`)
+      : packedPath;
+    csvToParquetCorePromise = import(pathToFileURL(modulePath).href);
+  }
+  return csvToParquetCorePromise;
+}
+
 async function handleApi(req, res, url) {
   if (url.pathname === '/__omv_local__/status') {
     sendText(res, 200, JSON.stringify({ ok: true, app: 'openmodelica-viewer', desktop: true }), 'application/json; charset=utf-8');
@@ -93,35 +128,7 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const ext = path.extname(filePath).toLowerCase();
-    const headers = {
-      'content-type': mimeTypes.get(ext) || 'application/octet-stream',
-      'content-length': stat.size,
-      'last-modified': stat.mtime.toUTCString(),
-      'x-omv-last-modified': String(stat.mtimeMs),
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-    };
-
-    if (stat.size === 0) {
-      res.writeHead(200, headers);
-      res.end();
-      return;
-    }
-
-    const stream = fs.createReadStream(filePath, { start: 0, end: stat.size - 1 });
-    stream.once('open', () => {
-      res.writeHead(200, headers);
-      stream.pipe(res);
-    });
-    stream.once('error', err => {
-      if (res.headersSent) {
-        res.destroy(err);
-        return;
-      }
-      const code = err?.code === 'ENOENT' ? 404 : 409;
-      sendText(res, code, code === 409 ? 'File temporarily unavailable' : 'File not found');
-    });
+    streamLocalFile(req, res, filePath, stat);
     return;
   }
 
@@ -209,7 +216,13 @@ async function createWindow(url) {
     },
   });
 
+  mainWindow = win;
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+  });
+
   await win.loadURL(url);
+  return win;
 }
 
 async function selectResultFilePaths(options = {}, multiple = false) {
@@ -327,10 +340,82 @@ ipcMain.handle('omv:read-file-slice', async (_event, options = {}) => {
   }
 });
 
+ipcMain.handle('omv:convert-to-parquet', async (_event, options = {}) => {
+  try {
+    const rawPath = typeof options.path === 'string' ? options.path : '';
+    if (!rawPath.trim()) {
+      const err = new Error('Missing path');
+      err.code = 'EINVAL';
+      throw err;
+    }
+
+    const filePath = path.resolve(rawPath);
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile()) {
+      const err = new Error('Path is not a file');
+      err.code = 'EINVAL';
+      throw err;
+    }
+
+    const outputPath = await chooseParquetOutputPath(filePath, stat, options.outputPath);
+    const fingerprint = csvFingerprint(filePath, stat);
+    const overwrite = options.overwrite === true;
+    let outputStat = null;
+    try { outputStat = await fsp.stat(outputPath); } catch (_) { outputStat = null; }
+    if (!overwrite && outputStat?.isFile() && outputStat.mtimeMs >= stat.mtimeMs) {
+      return {
+        ok: true,
+        cached: true,
+        fingerprint,
+        inputPath: filePath,
+        outputPath,
+        inputBytes: stat.size,
+        outputBytes: outputStat.size,
+        elapsedMs: 0,
+      };
+    }
+
+    await fsp.mkdir(path.dirname(outputPath), { recursive: true });
+    const { convertCsvToParquet } = await loadCsvToParquetCore();
+    const result = await convertCsvToParquet({
+      inputPath: filePath,
+      outputPath,
+      csvProfile: options.csvProfile || null,
+      compression: options.compression || 'zstd',
+      overwrite: true,
+    });
+
+    return {
+      ok: true,
+      cached: false,
+      fingerprint,
+      ...result,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      name: err?.name || 'Error',
+      code: err?.code || '',
+      message: err?.message || 'CSV-to-Parquet conversion failed',
+    };
+  }
+});
+
 app.whenReady().then(async () => {
   await fsp.access(path.join(staticRoot, 'index.html'));
   const { port } = await listenOnAvailablePort(preferredPort);
   await createWindow(`http://localhost:${port}/index.html`);
+}).catch(err => {
+  console.error('[desktop] startup failed', {
+    projectRoot,
+    staticRoot,
+    message: err?.message || String(err),
+    stack: err?.stack || '',
+  });
+  try {
+    dialog.showErrorBox('Time Series Explorer startup failed', err?.message || String(err));
+  } catch (_) {}
+  app.quit();
 });
 
 app.on('window-all-closed', () => {

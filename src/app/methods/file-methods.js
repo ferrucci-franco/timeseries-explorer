@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
+const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
 let duckDbSourceClassPromise = null;
 
 async function loadDuckDbSourceClass() {
@@ -22,6 +23,13 @@ function isTransientFileReadError(err) {
 
 function waitForFileRetry(attempt) {
     return new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+}
+
+function cloneCsvProfileForIpc(csvProfile) {
+    if (!csvProfile) return null;
+    return JSON.parse(JSON.stringify(csvProfile, (_key, value) =>
+        typeof value === 'function' ? undefined : value
+    ));
 }
 
 export function installFileMethods(TargetClass) {
@@ -473,7 +481,100 @@ proto._getFileHandleSnapshot = async function(fileHandle) {
     }
 };
 
+function normalizeBlobSliceRange(size, start = 0, end = size) {
+    const total = Math.max(0, Math.floor(Number(size) || 0));
+    const normalizeIndex = (value, fallback) => {
+        if (value === undefined || value === null) return fallback;
+        let index = Math.trunc(Number(value));
+        if (!Number.isFinite(index)) index = 0;
+        if (index < 0) index = Math.max(total + index, 0);
+        return Math.min(Math.max(index, 0), total);
+    };
+    const normalizedStart = normalizeIndex(start, 0);
+    const normalizedEnd = Math.max(normalizedStart, normalizeIndex(end, total));
+    return { start: normalizedStart, end: normalizedEnd, size: normalizedEnd - normalizedStart };
+}
+
+proto._isDesktopStreamablePath = function(filePath) {
+    const extension = this._fileExtension(filePath);
+    return extension === '.csv' || extension === '.parquet';
+};
+
+proto._createDesktopLocalHttpFile = function(filePath, info) {
+    const name = info?.name || String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'results.csv';
+    const size = Math.max(0, Number(info?.size) || 0);
+    const lastModified = Number(info?.lastModified) || Date.now();
+    const type = info?.type || 'application/octet-stream';
+    const origin = globalThis.location?.origin || '';
+    const base = origin || '';
+    const localUrl = `${base}${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`;
+
+    const readRange = async (start, end) => {
+        const range = normalizeBlobSliceRange(size, start, end);
+        if (range.size <= 0) return new ArrayBuffer(0);
+        const response = await fetch(localUrl, {
+            cache: 'no-store',
+            headers: {
+                Range: `bytes=${range.start}-${range.end - 1}`,
+            },
+        });
+        if (!response.ok) {
+            const detail = await response.text().catch(() => '');
+            throw new Error(detail || i18n.t('errorLoading'));
+        }
+        if (response.status !== 206 && range.size !== size) {
+            throw new Error('Local file server did not honor the requested byte range.');
+        }
+        return response.arrayBuffer();
+    };
+
+    // Blob-like on purpose, but intentionally minimal: current consumers need
+    // metadata plus slice().arrayBuffer()/text(), not a real Blob instance.
+    return {
+        name,
+        size,
+        lastModified,
+        type,
+        localPath: filePath,
+        localUrl,
+        __omvLocalHttpFile: true,
+        slice(start = 0, end = size, sliceType = '') {
+            const range = normalizeBlobSliceRange(size, start, end);
+            return {
+                size: range.size,
+                type: sliceType || type,
+                arrayBuffer: () => readRange(range.start, range.end),
+                text: async () => new TextDecoder('utf-8').decode(await readRange(range.start, range.end)),
+            };
+        },
+        arrayBuffer: () => readRange(0, size),
+    };
+};
+
 proto._readLocalResultPath = async function(filePath) {
+    const desktopStat = globalThis.omvDesktop?.statFile;
+    if (
+        this.capabilities?.isDesktop
+        && this._isDesktopStreamablePath(filePath)
+        && typeof desktopStat === 'function'
+    ) {
+        try {
+            const result = await desktopStat({ path: filePath });
+            if (result?.ok === false) {
+                const err = new Error(result.message || i18n.t('errorLoading'));
+                err.name = result.name || 'Error';
+                err.code = result.code || '';
+                throw err;
+            }
+            return this._createDesktopLocalHttpFile(filePath, result);
+        } catch (err) {
+            const wrapped = new Error(err?.message || i18n.t('errorLoading'));
+            wrapped.name = err?.name === 'Error' ? 'NotReadableError' : (err?.name || 'NotReadableError');
+            wrapped.code = err?.code || '';
+            throw wrapped;
+        }
+    }
+
     const desktopReader = globalThis.omvDesktop?.readFile;
     if (this.capabilities?.isDesktop && typeof desktopReader === 'function') {
         try {
@@ -629,6 +730,138 @@ proto._inspectCsvSample = async function(file, buffer = null) {
     return this.csvParser.inspectSample(sampleBuffer, { maxRows: 700 });
 };
 
+proto._quoteCommandPath = function(path) {
+    return `"${String(path || '').replace(/"/g, '\\"')}"`;
+};
+
+proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvProfile = null) {
+    const key = this._fileFingerprint(file) || `${filename}:${fileSize}`;
+    this._largeCsvParquetHintsShown ||= new Set();
+    if (this._largeCsvParquetHintsShown.has(key)) return;
+    this._largeCsvParquetHintsShown.add(key);
+
+    const canConvertInApp = typeof globalThis.omvDesktop?.convertToParquet === 'function'
+        && file?.localPath
+        && this.capabilities?.isDesktop;
+    const commandPath = file?.localPath || filename;
+    const command = `node bench/csv-to-parquet.mjs ${this._quoteCommandPath(commandPath)}`;
+    const mb = Number.isFinite(fileSize) ? (fileSize / (1024 * 1024)).toFixed(0) : '?';
+    const strong = Number(fileSize) >= PARQUET_STRONG_HINT_BYTES;
+    console.warn(`[duckdb] "${filename}" is ${mb} MB — consider converting to Parquet for faster loads:`
+        + `\n  ${command}\n  Then load the resulting .parquet directly.`);
+
+    if (typeof document === 'undefined') return;
+    document.getElementById('large-csv-parquet-hint')?.remove();
+
+    const notice = document.createElement('div');
+    notice.id = 'large-csv-parquet-hint';
+    notice.className = 'dismissible-notice large-csv-parquet-hint';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+
+    const content = document.createElement('div');
+    content.className = 'dismissible-notice-content';
+
+    const title = document.createElement('div');
+    title.className = 'dismissible-notice-title';
+    title.textContent = i18n.t(strong ? 'largeCsvParquetHintTitleStrong' : 'largeCsvParquetHintTitle');
+
+    const body = document.createElement('div');
+    body.className = 'dismissible-notice-body';
+    body.textContent = i18n.t(strong ? 'largeCsvParquetHintBodyStrong' : 'largeCsvParquetHintBody')
+        .replace('{file}', filename)
+        .replace('{size}', `${mb} MB`);
+
+    const code = document.createElement('code');
+    code.className = 'dismissible-notice-code';
+    code.textContent = command;
+
+    content.append(title, body, code);
+
+    if (canConvertInApp) {
+        const actions = document.createElement('div');
+        actions.className = 'dismissible-notice-actions';
+
+        const convert = document.createElement('button');
+        convert.type = 'button';
+        convert.className = 'dismissible-notice-action primary';
+        convert.textContent = i18n.t('convertToParquetAndLoad');
+
+        const status = document.createElement('div');
+        status.className = 'dismissible-notice-status';
+        status.hidden = true;
+
+        convert.addEventListener('click', () => {
+            this._convertLargeCsvNoticeToParquet({
+                filename,
+                file,
+                csvProfile,
+                button: convert,
+                status,
+                notice,
+            }).catch(err => {
+                status.hidden = false;
+                status.classList.add('error');
+                status.textContent = err?.message || i18n.t('parquetConversionFailed');
+                convert.disabled = false;
+                convert.textContent = i18n.t('retry');
+            });
+        });
+
+        actions.append(convert);
+        content.append(actions, status);
+    }
+
+    const close = document.createElement('button');
+    close.className = 'dismissible-notice-close';
+    close.type = 'button';
+    close.title = i18n.t('dismiss');
+    close.setAttribute('aria-label', i18n.t('dismiss'));
+    close.textContent = '×';
+    close.addEventListener('click', () => notice.remove());
+
+    notice.append(content, close);
+    document.body.appendChild(notice);
+    requestAnimationFrame(() => notice.classList.add('show'));
+};
+
+proto._convertLargeCsvNoticeToParquet = async function({ filename, file, csvProfile, button, status, notice }) {
+    if (!file?.localPath) throw new Error(i18n.t('parquetConversionDesktopOnly'));
+    const converter = globalThis.omvDesktop?.convertToParquet;
+    if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
+
+    button.disabled = true;
+    button.textContent = i18n.t('convertingToParquet');
+    status.hidden = false;
+    status.classList.remove('error', 'success');
+    const started = Date.now();
+    const tick = () => {
+        const seconds = Math.max(1, Math.round((Date.now() - started) / 1000));
+        status.textContent = i18n.t('parquetConversionInProgress').replace('{seconds}', String(seconds));
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    try {
+        const result = await converter({
+            path: file.localPath,
+            csvProfile: cloneCsvProfileForIpc(csvProfile),
+            compression: 'zstd',
+        });
+        if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
+        if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
+
+        status.classList.add('success');
+        status.textContent = result.cached
+            ? i18n.t('parquetConversionUsingCache')
+            : i18n.t('parquetConversionComplete');
+        const parquetFile = await this._readLocalResultPath(result.outputPath);
+        await this.loadFile(parquetFile, { localPath: result.outputPath });
+        notice?.remove();
+    } finally {
+        clearInterval(timer);
+    }
+};
+
 proto._parseParquetResult = async function(filename, file) {
     if (!file) throw new Error(`Parquet files must be loaded via a File handle (got buffer-only for ${filename}).`);
     if (!this._canUseDuckDb()) throw new Error(`Parquet support requires DuckDB-WASM (current page does not allow Workers).`);
@@ -654,12 +887,9 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
     }
 
     // Hint the user toward Parquet for very large CSVs. Non-blocking — the
-    // parse still proceeds; this only logs once and could be wired to a
-    // toast/notification in a follow-up.
+    // parse still proceeds.
     if (file && fileSize >= PARQUET_HINT_THRESHOLD_BYTES) {
-        const mb = (fileSize / (1024 * 1024)).toFixed(0);
-        console.warn(`[duckdb] "${filename}" is ${mb} MB — consider converting to Parquet for faster loads:`
-            + `\n  node bench/csv-to-parquet.mjs "${filename}"\n  Then load the resulting .parquet directly.`);
+        this._showLargeCsvParquetHint(filename, fileSize, file, csvProfile);
     }
     // Try DuckDB-WASM first when available — it bypasses the ~512 MB string
     // ceiling of the legacy parser and returns typed-array columns.

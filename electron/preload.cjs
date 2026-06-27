@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('omvDesktop', {
   readFile: options => ipcRenderer.invoke('omv:read-file', options || {}),
   statFile: options => ipcRenderer.invoke('omv:stat-file', options || {}),
   readFileSlice: options => ipcRenderer.invoke('omv:read-file-slice', options || {}),
+  convertToParquet: options => ipcRenderer.invoke('omv:convert-to-parquet', options || {}),
 });
