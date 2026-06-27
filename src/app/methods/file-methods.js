@@ -35,6 +35,7 @@ function cloneCsvProfileForIpc(csvProfile) {
 export function installFileMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.loadFile = async function(file, options = {}) {
+    let hideParquetOverlayAfterLoad = false;
     try {
         let currentFile = file;
         let extension;
@@ -51,6 +52,7 @@ proto.loadFile = async function(file, options = {}) {
                 const preflight = await this._maybeConvertLargeCsvBeforeLoad(currentFile, { ...options, extension });
                 if (preflight?.cancelled) return null;
                 if (preflight?.file) {
+                    hideParquetOverlayAfterLoad = preflight.keepOverlayUntilLoaded === true;
                     currentFile = preflight.file;
                     options = {
                         ...options,
@@ -104,10 +106,16 @@ proto.loadFile = async function(file, options = {}) {
             this.renderVariablesTree(data.tree);
             this._updateActionButtons();
         }
+        if (hideParquetOverlayAfterLoad && !options.deferUi) {
+            this._hideFileLoadingOverlay();
+        }
 
         console.log('Loaded:', currentFile.name, '- variables:', Object.keys(data.variables).length);
         return { fileId, data };
     } catch (err) {
+        if (hideParquetOverlayAfterLoad && !options.deferUi) {
+            this._hideFileLoadingOverlay();
+        }
         console.error('Error loading file:', err);
         alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
         return null;
@@ -836,11 +844,13 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
         csvProfile,
         outputPath,
         temporary,
+        keepOverlayUntilLoaded: true,
     });
     return {
         file: parquetFile,
         localPath: parquetFile.localPath,
         temporaryParquetPath: temporary ? parquetFile.localPath : '',
+        keepOverlayUntilLoaded: true,
     };
 };
 
@@ -881,6 +891,11 @@ proto._updateParquetConversionOverlay = function(startedAt) {
     hint.textContent = i18n.t('parquetConversionInProgress').replace('{seconds}', String(seconds));
 };
 
+proto._setParquetConversionOverlayLoading = function() {
+    const hint = document.getElementById('file-loading-hint');
+    if (hint) hint.textContent = i18n.t('parquetConversionComplete');
+};
+
 proto._convertCsvFileToParquetFile = async function(file, options = {}) {
     if (!file?.localPath) throw new Error(i18n.t('parquetConversionDesktopOnly'));
     const converter = globalThis.omvDesktop?.convertToParquet;
@@ -889,7 +904,8 @@ proto._convertCsvFileToParquetFile = async function(file, options = {}) {
     const started = Date.now();
     this._showParquetConversionOverlay(file.name);
     this._updateParquetConversionOverlay(started);
-    const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+    let timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+    let handedOffToLoad = false;
     try {
         const result = await converter({
             path: file.localPath,
@@ -900,10 +916,17 @@ proto._convertCsvFileToParquetFile = async function(file, options = {}) {
         });
         if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
         if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
-        return this._readLocalResultPath(result.outputPath);
-    } finally {
         clearInterval(timer);
-        this._hideFileLoadingOverlay();
+        timer = null;
+        this._setParquetConversionOverlayLoading();
+        const parquetFile = await this._readLocalResultPath(result.outputPath);
+        handedOffToLoad = true;
+        return parquetFile;
+    } finally {
+        if (timer) clearInterval(timer);
+        if (!options.keepOverlayUntilLoaded || !handedOffToLoad) {
+            this._hideFileLoadingOverlay();
+        }
     }
 };
 
