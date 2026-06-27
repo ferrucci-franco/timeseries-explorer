@@ -337,6 +337,136 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     return settled;
 };
 
+proto._refreshPhaseVisualsLazy = function(panelId, plot = this.plots.get(panelId)) {
+    if (!plot?.div || !['phase2d', 'phase2dt', 'phase3d'].includes(plot.mode)) return Promise.resolve([]);
+    const lazyItems = [];
+    const targetInfo = this._phaseTargetInfo();
+    plot.phaseTraces.forEach((pt, idx) => {
+        const data = this.files.get(pt.fileId)?.data;
+        const source = data?._duckdb?.source;
+        if (!source?.getPhaseTrajectory) return;
+        if (this._phaseCachedTrajectory(plot, pt, targetInfo)) return;
+        lazyItems.push({ pt, idx, data, source });
+    });
+    if (!lazyItems.length) {
+        this._setLazyDetailLoading(plot, false);
+        return Promise.resolve([]);
+    }
+
+    if (!this._phaseLazyTokens) this._phaseLazyTokens = new Map();
+    const token = (this._phaseLazyTokens.get(panelId) || 0) + 1;
+    this._phaseLazyTokens.set(panelId, token);
+    this._cancelPendingLazyDetail(panelId);
+    this._cancelActiveLazySources(panelId);
+    this._setLazyDetailLoading(plot, true, targetInfo, 'phase');
+    this._rememberActiveLazySources(panelId, lazyItems.map(item => item.source));
+
+    const settled = this._scheduleLazyDetail(panelId, async () => {
+        const results = [];
+        for (const item of lazyItems) {
+            if (this._phaseLazyTokens.get(panelId) !== token) break;
+            results.push(await this._runLazyPhaseItem(panelId, token, plot, item, targetInfo));
+        }
+        return results.filter(Boolean);
+    }).then(async results => {
+        if (this._phaseLazyTokens.get(panelId) !== token) return results;
+        await this._applyBatchedPhaseRestyle(plot, results);
+        await this._relayoutPhaseLazyExtents(plot);
+        this._setLazyDetailLoading(plot, false);
+        return results;
+    }).catch(err => {
+        if (this._phaseLazyTokens.get(panelId) === token) {
+            console.warn('[duckdb] lazy phase query failed; keeping current phase view:', err?.message || err);
+            this._setLazyDetailLoading(plot, false);
+        }
+        return [];
+    }).finally(() => {
+        if (this._phaseLazyTokens.get(panelId) === token) {
+            this._clearActiveLazySources(panelId);
+        }
+    });
+    this._lastLazyPhaseRefresh = settled;
+    return settled;
+};
+
+proto._runLazyPhaseItem = async function(panelId, token, plot, item, targetInfo) {
+    const { pt, idx, data, source } = item;
+    const varNames = this._phaseTraceVariables(plot, pt);
+    const key = this._phaseTraceCacheKey(plot, pt, targetInfo);
+    const result = await source.getPhaseTrajectory(data, varNames, {
+        maxPoints: targetInfo.limit,
+        sourceTimeRange: this._phaseSourceTimeRange(pt.fileId),
+    });
+    if (this._phaseLazyTokens.get(panelId) !== token) return null;
+    const transformed = this._transformFetchedPhaseTrajectory(
+        pt.fileId,
+        result.time,
+        result.rowIndex,
+        result.yByVar,
+        varNames
+    );
+    const visual = {
+        time: transformed.time,
+        x: transformed.valuesByVar.get(pt.x) || new Float64Array(0),
+        y: transformed.valuesByVar.get(pt.y) || new Float64Array(0),
+        z: plot.mode === 'phase3d' ? (transformed.valuesByVar.get(pt.z) || new Float64Array(0)) : undefined,
+        _perf: result._perf || null,
+    };
+    pt._lazyPhaseCache = { key, visual };
+    return { idx, pt, visual };
+};
+
+proto._applyBatchedPhaseRestyle = function(plot, results = []) {
+    if (!plot?.div) return Promise.resolve();
+    const valid = results
+        .filter(result => result && Number.isInteger(result.idx) && plot.phaseTraces[result.idx])
+        .sort((a, b) => a.idx - b.idx);
+    if (!valid.length) return Promise.resolve();
+
+    const xs = [];
+    const ys = [];
+    const zs = [];
+    const indices = [];
+    for (const result of valid) {
+        const { pt, visual } = result;
+        if (plot.mode === 'phase2dt') {
+            const timeVar = this._getTimeVar(pt.fileId);
+            xs.push(this._plotlyTimeArray(pt.fileId, visual.time, timeVar));
+            ys.push(visual.x);
+            zs.push(visual.y);
+        } else if (plot.mode === 'phase3d') {
+            xs.push(visual.x);
+            ys.push(visual.y);
+            zs.push(visual.z);
+        } else {
+            xs.push(visual.x);
+            ys.push(visual.y);
+        }
+        indices.push(result.idx);
+    }
+    const update = { x: xs, y: ys };
+    if (plot.mode === 'phase2dt' || plot.mode === 'phase3d') update.z = zs;
+    return Plotly.restyle(plot.div, update, indices);
+};
+
+proto._relayoutPhaseLazyExtents = function(plot) {
+    if (!plot?.div || !['phase2d', 'phase2dt', 'phase3d'].includes(plot.mode)) return Promise.resolve();
+    const update = {};
+    if (plot.mode === 'phase2d') {
+        const layout = this._buildPhase2DLayout(plot);
+        if (layout.xaxis?.range) update['xaxis.range'] = layout.xaxis.range;
+        if (layout.yaxis?.range) update['yaxis.range'] = layout.yaxis.range;
+    } else {
+        const layout = this._buildPhase3DLayout(plot, plot.mode === 'phase2dt');
+        update['scene.xaxis.range'] = layout.scene.xaxis.range;
+        update['scene.yaxis.range'] = layout.scene.yaxis.range;
+        update['scene.zaxis.range'] = layout.scene.zaxis.range;
+        const cam = plot.div._fullLayout?.scene?.camera;
+        if (cam) update['scene.camera'] = cam;
+    }
+    return Object.keys(update).length ? Plotly.relayout(plot.div, update) : Promise.resolve();
+};
+
 proto._scheduleLazyDetail = function(panelId, run) {
     if (!this._lazyDetailTimers) this._lazyDetailTimers = new Map();
     const delayMs = 90;
@@ -389,6 +519,9 @@ proto._cleanupLazyDetailForPanel = function(panelId, plot = this.plots?.get(pane
     this._cancelActiveLazySources(panelId);
     if (this._zoomTokens) {
         this._zoomTokens.set(panelId, (this._zoomTokens.get(panelId) || 0) + 1);
+    }
+    if (this._phaseLazyTokens) {
+        this._phaseLazyTokens.set(panelId, (this._phaseLazyTokens.get(panelId) || 0) + 1);
     }
     if (plot) this._setLazyDetailLoading(plot, false);
     const panelEl = plot?.div?.closest?.('.layout-panel')
@@ -655,6 +788,17 @@ proto._maxTimeseriesDownsamplingMenuLimit = function() {
     return Number.isFinite(max) ? Math.round(max) : PlotManager.MAX_MENU_VISUAL_POINTS;
 };
 
+proto._maxPhaseDownsamplingMenuLimit = function() {
+    const select = typeof document !== 'undefined'
+        ? document.getElementById('phase-downsampling')
+        : null;
+    const values = select
+        ? [...select.options].map(option => Number(option.value)).filter(value => Number.isFinite(value) && value > 0)
+        : [];
+    const max = values.length ? Math.max(...values) : NaN;
+    return Number.isFinite(max) ? Math.round(max) : PlotManager.MAX_MENU_VISUAL_POINTS;
+};
+
 proto._lazyTimeseriesTarget = function() {
     const configured = this.timeseriesVisualMaxPoints;
     if (Number.isFinite(configured) && configured > 0) {
@@ -666,7 +810,7 @@ proto._lazyTimeseriesTarget = function() {
     return { limit: this._maxTimeseriesDownsamplingMenuLimit(), capped: true };
 };
 
-proto._setLazyDetailLoading = function(plot, loading, targetInfo = null) {
+proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 'timeseries') {
     const panelEl = plot?.div?.closest('.layout-panel');
     if (!panelEl) return;
     let indicator = panelEl.querySelector('.lazy-detail-indicator');
@@ -681,9 +825,13 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null) {
     if (loading) {
         const capped = targetInfo?.capped;
         const limit = targetInfo?.limit || 2000;
-        const key = capped ? 'lazyDetailLoadingCapped' : 'lazyDetailLoading';
+        const key = kind === 'phase'
+            ? (capped ? 'lazyPhaseLoadingCapped' : 'lazyPhaseLoading')
+            : (capped ? 'lazyDetailLoadingCapped' : 'lazyDetailLoading');
         indicator.title = i18n.t(key).replace('{limit}', String(limit));
         indicator.setAttribute('aria-label', indicator.title);
+        const text = indicator.querySelector('.lazy-detail-text');
+        if (text) text.textContent = kind === 'phase' ? 'Loading phase' : 'Loading detail';
         indicator.classList.add('active');
     } else {
         indicator.classList.remove('active');

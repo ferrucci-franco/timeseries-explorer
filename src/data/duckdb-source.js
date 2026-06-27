@@ -34,6 +34,10 @@ const BUNDLES = {
 
 const TIME_HEADER_RE = /^(time|temps|t|datetime|timestamp|horodatage|date|fecha|hora|heure)$/i;
 const MS_PER_DAY = 86400000;
+const DUCKDB_DEFAULT_THREADS = 2;
+const DUCKDB_DEFAULT_PRESERVE_INSERTION_ORDER = false;
+const DUCKDB_PHASE_THREADS = 1;
+const DUCKDB_PHASE_PRESERVE_INSERTION_ORDER = true;
 
 export default class DuckDbSource {
     constructor(structureParser = null) {
@@ -44,7 +48,9 @@ export default class DuckDbSource {
         this._registered = new Set();
         this._nextTableId = 0;
         this._rangeCache = new Map();
+        this._phaseCache = new Map();
         this._activeInteractiveQuery = null;
+        this._connectionQueue = Promise.resolve();
     }
 
     static isAvailable() {
@@ -83,8 +89,8 @@ export default class DuckDbSource {
         // retaining whole pipelines in memory. Crucial for files near the
         // ~3 GB wasm heap ceiling.
         try {
-            await this._conn.query(`PRAGMA threads=2`);
-            await this._conn.query(`PRAGMA preserve_insertion_order=false`);
+            await this._conn.query(`PRAGMA threads=${DUCKDB_DEFAULT_THREADS}`);
+            await this._conn.query(`PRAGMA preserve_insertion_order=${DUCKDB_DEFAULT_PRESERVE_INSERTION_ORDER}`);
         } catch (_) { /* tuning is best-effort */ }
     }
 
@@ -106,7 +112,7 @@ export default class DuckDbSource {
 
     async query(sql) {
         await this.init();
-        return this._conn.query(sql);
+        return this._withConnectionLock(() => this._conn.query(sql));
     }
 
     /**
@@ -465,6 +471,21 @@ export default class DuckDbSource {
         return [tableName, vars, this._roundedRangeKey(t0), this._roundedRangeKey(t1), Math.round(maxPoints)].join('\u001e');
     }
 
+    _phaseCacheKey(meta, requested, sourceRange, maxPoints) {
+        const tableName = meta?.tableName;
+        if (!tableName) return null;
+        const vars = requested.map(({ varName }) => varName).join('\u001f');
+        const rangeKey = Array.isArray(sourceRange) && sourceRange.length >= 2
+            ? `${this._roundedRangeKey(Number(sourceRange[0]))}\u001f${this._roundedRangeKey(Number(sourceRange[1]))}`
+            : 'full';
+        const version = [
+            Number(meta.appendRows) || 0,
+            Number(meta.appendBytes) || 0,
+            Number(meta.totalRows) || '',
+        ].join('\u001f');
+        return [tableName, 'phase', vars, rangeKey, Math.round(maxPoints), version].join('\u001e');
+    }
+
     _roundedRangeKey(value) {
         return Number.isFinite(value) ? Number(value).toPrecision(15) : String(value);
     }
@@ -477,10 +498,25 @@ export default class DuckDbSource {
         }
     }
 
+    _rememberPhaseCache(key, value) {
+        this._phaseCache.set(key, value);
+        while (this._phaseCache.size > 12) {
+            const first = this._phaseCache.keys().next().value;
+            this._phaseCache.delete(first);
+        }
+    }
+
     _clearRangeCacheForTable(tableName) {
-        if (!tableName || !this._rangeCache?.size) return;
-        for (const key of [...this._rangeCache.keys()]) {
-            if (String(key).startsWith(`${tableName}\u001e`)) this._rangeCache.delete(key);
+        if (!tableName) return;
+        if (this._rangeCache?.size) {
+            for (const key of [...this._rangeCache.keys()]) {
+                if (String(key).startsWith(`${tableName}\u001e`)) this._rangeCache.delete(key);
+            }
+        }
+        if (this._phaseCache?.size) {
+            for (const key of [...this._phaseCache.keys()]) {
+                if (String(key).startsWith(`${tableName}\u001e`)) this._phaseCache.delete(key);
+            }
         }
     }
 
@@ -584,7 +620,24 @@ export default class DuckDbSource {
         return true;
     }
 
+    async _withConnectionLock(run) {
+        const previous = this._connectionQueue || Promise.resolve();
+        let release;
+        const current = new Promise(resolve => { release = resolve; });
+        this._connectionQueue = previous.catch(() => null).then(() => current);
+        await previous.catch(() => null);
+        try {
+            return await run();
+        } finally {
+            release();
+        }
+    }
+
     async _interactiveQuery(sql) {
+        return this._withConnectionLock(() => this._interactiveQueryUnlocked(sql));
+    }
+
+    async _interactiveQueryUnlocked(sql) {
         await this.init();
         const active = { cancelled: false, reader: null };
         this._activeInteractiveQuery = active;
@@ -755,6 +808,217 @@ export default class DuckDbSource {
             };
         }
         return legacy;
+    }
+
+    /**
+     * Fetch full-trajectory phase data from a lazy DuckDB-backed file.
+     *
+     * This deliberately does not reuse getColumnsRange(): phase plots need
+     * aligned real rows, not time-bucket averages. The default path strides in
+     * physical file order after a monotonicity guard, avoiding a full ORDER BY
+     * sort that can OOM on multi-GB CSV in DuckDB-WASM.
+     */
+    async getPhaseTrajectory(legacyData, varNames, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getPhaseTrajectory: data is not DuckDB-backed (eager mode)');
+        const requested = [...new Set(varNames || [])]
+            .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
+            .filter(item => item.variable);
+        if (!requested.length) {
+            return {
+                rowIndex: new Float64Array(0),
+                time: new Float64Array(0),
+                yByVar: new Map(),
+                rowCount: 0,
+                stride: 1,
+                monotonic: true,
+            };
+        }
+
+        const maxPoints = Math.max(2, Math.round(Number(options.maxPoints) || 10000));
+        let sourceRange = Array.isArray(options.sourceTimeRange) ? options.sourceTimeRange : null;
+        if (!sourceRange && Array.isArray(options.sourceRange)) {
+            console.warn('[duckdb] getPhaseTrajectory option "sourceRange" is deprecated; use "sourceTimeRange".');
+            sourceRange = options.sourceRange;
+        }
+        const cacheKey = this._phaseCacheKey(meta, requested, sourceRange, maxPoints);
+        const cached = cacheKey ? this._phaseCache.get(cacheKey) : null;
+        if (cached) {
+            if (cached instanceof Promise) return cached;
+            return { ...cached, _perf: { ...(cached._perf || {}), cacheHit: true } };
+        }
+
+        const promise = this._queryPhaseTrajectory(legacyData, meta, requested, sourceRange, maxPoints);
+        if (cacheKey) this._rememberPhaseCache(cacheKey, promise);
+        try {
+            const result = await promise;
+            if (cacheKey) this._phaseCache.set(cacheKey, result);
+            return result;
+        } catch (err) {
+            if (cacheKey) this._phaseCache.delete(cacheKey);
+            throw err;
+        }
+    }
+
+    async _queryPhaseTrajectory(legacyData, meta, requested, sourceRange, maxPoints) {
+        const queryStartedAt = this._now();
+        const timeCol = meta.timeColumn;
+        const escTime = timeCol.replace(/"/g, '""');
+        const timeKind = legacyData?.metadata?.timeKind;
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`);
+        const tableName = meta.tableName;
+        const where = this._phaseWhereSql(tExpr, sourceRange);
+
+        return this._withConnectionLock(async () => {
+            await this._enterPhasePhysicalOrderMode();
+            try {
+            const statsSql = `
+                WITH sequenced AS (
+                    SELECT ${tExpr} AS t,
+                           LAG(${tExpr}) OVER () AS previous_t
+                    FROM ${tableName}
+                    WHERE ${where}
+                )
+                SELECT COUNT(*)::BIGINT AS n,
+                       SUM(CASE WHEN previous_t IS NOT NULL AND t < previous_t THEN 1 ELSE 0 END)::BIGINT AS violations
+                FROM sequenced;
+            `;
+            const statsResult = await this._interactiveQueryUnlocked(statsSql);
+            const rowCount = Number(statsResult.getChild('n')?.get(0) ?? 0);
+            const violations = Number(statsResult.getChild('violations')?.get(0) ?? 0);
+            if (!Number.isFinite(rowCount) || rowCount <= 0) {
+                return {
+                    rowIndex: new Float64Array(0),
+                    time: new Float64Array(0),
+                    yByVar: new Map(requested.map(({ varName }) => [varName, new Float64Array(0)])),
+                    rowCount: 0,
+                    stride: 1,
+                    monotonic: true,
+                    _perf: this._phasePerf({
+                        mode: 'empty',
+                        startedAt: queryStartedAt,
+                        extractStartedAt: this._now(),
+                        result: statsResult,
+                        rows: 0,
+                        requested,
+                        maxPoints,
+                        rowCount: 0,
+                        stride: 1,
+                        violations: 0,
+                    }),
+                };
+            }
+            if (violations > 0) {
+                throw new Error('Phase trajectory requires the file to be sorted by time. This lazy CSV/Parquet is not monotonic in physical row order; convert/sort to Parquet before opening a phase plot.');
+            }
+
+            const last = rowCount - 1;
+            const stride = rowCount <= maxPoints
+                ? 1
+                : Math.max(1, Math.ceil(last / Math.max(1, maxPoints - 1)));
+            const valueSelect = requested
+                .map(({ variable }, index) => `${this._quoteIdent(variable._duckdbCol || variable.name)}::DOUBLE AS v${index}`)
+                .join(',\n                       ');
+            const valueNames = requested.map((_, index) => `v${index}`).join(', ');
+            const sql = `
+                WITH numbered AS (
+                    SELECT (ROW_NUMBER() OVER () - 1)::BIGINT AS rn,
+                           ${tExpr}::DOUBLE AS t,
+                           ${valueSelect}
+                    FROM ${tableName}
+                    WHERE ${where}
+                )
+                SELECT rn::DOUBLE AS __rn,
+                       t,
+                       ${valueNames}
+                FROM numbered
+                WHERE rn = 0
+                   OR rn = ${Math.round(last)}
+                   OR rn % ${Math.round(stride)} = 0
+                ORDER BY rn;
+            `;
+            const result = await this._interactiveQueryUnlocked(sql);
+            const extractStartedAt = this._now();
+            const yByVar = new Map();
+            requested.forEach(({ varName }, index) => {
+                yByVar.set(varName, this._extractColumnAsFloat64(result, index + 2, 'DOUBLE'));
+            });
+            const rowIndex = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+            const time = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
+            return {
+                rowIndex,
+                time,
+                yByVar,
+                rowCount,
+                stride,
+                monotonic: true,
+                _perf: this._phasePerf({
+                    mode: 'physical-stride',
+                    startedAt: queryStartedAt,
+                    extractStartedAt,
+                    result,
+                    rows: time.length,
+                    requested,
+                    maxPoints,
+                    rowCount,
+                    stride,
+                    violations,
+                }),
+            };
+            } finally {
+                await this._leavePhasePhysicalOrderMode();
+            }
+        });
+    }
+
+    async _enterPhasePhysicalOrderMode() {
+        try {
+            // Single-threaded physical-order mode is slower, but it keeps
+            // ROW_NUMBER() OVER () tied to scan order for phase trajectories.
+            await this._conn.query(`PRAGMA threads=${DUCKDB_PHASE_THREADS}`);
+            await this._conn.query(`PRAGMA preserve_insertion_order=${DUCKDB_PHASE_PRESERVE_INSERTION_ORDER}`);
+        } catch (_) { /* best-effort: phase still has the monotonicity guard */ }
+    }
+
+    async _leavePhasePhysicalOrderMode() {
+        try {
+            await this._conn.query(`PRAGMA preserve_insertion_order=${DUCKDB_DEFAULT_PRESERVE_INSERTION_ORDER}`);
+            await this._conn.query(`PRAGMA threads=${DUCKDB_DEFAULT_THREADS}`);
+        } catch (_) { /* restore is best-effort */ }
+    }
+
+    _phaseWhereSql(tExpr, sourceRange) {
+        const clauses = [`${tExpr} IS NOT NULL`];
+        if (Array.isArray(sourceRange) && sourceRange.length >= 2) {
+            let [lo, hi] = sourceRange.map(Number);
+            if (Number.isFinite(lo) && Number.isFinite(hi)) {
+                if (lo > hi) [lo, hi] = [hi, lo];
+                clauses.push(`${tExpr} BETWEEN ${this._numericLiteral(lo)} AND ${this._numericLiteral(hi)}`);
+            }
+        }
+        return clauses.join(' AND ');
+    }
+
+    _phasePerf({ mode, startedAt, extractStartedAt, result, rows, requested, maxPoints, rowCount, stride, violations }) {
+        const finishedAt = this._now();
+        const queryPerf = result?._omvPerf || {};
+        return {
+            mode,
+            vars: requested.length,
+            rows,
+            target: maxPoints,
+            rowCount,
+            stride,
+            monotonicViolations: violations,
+            queryMs: this._roundMs(queryPerf.totalMs ?? (extractStartedAt - startedAt)),
+            sendMs: this._roundMs(queryPerf.sendMs),
+            readMs: this._roundMs(queryPerf.readMs),
+            extractMs: this._roundMs(finishedAt - extractStartedAt),
+            totalMs: this._roundMs(finishedAt - startedAt),
+            cacheHit: false,
+        };
     }
 
     async _ensureAppendTable(meta, csvProfile) {

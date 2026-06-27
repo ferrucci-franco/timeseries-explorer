@@ -640,6 +640,163 @@ proto._buildPhaseVisualSeries = function(seriesList) {
     return seriesList.map(series => this._pickIndexed(series, indexes));
 };
 
+proto._isLazyPhaseFile = function(fileId) {
+    return !!this.files.get(fileId)?.data?._duckdb;
+};
+
+proto._phaseTraceVariables = function(plot, pt) {
+    if (!pt) return [];
+    if (plot?.mode === 'phase3d') return [pt.x, pt.y, pt.z].filter(Boolean);
+    return [pt.x, pt.y].filter(Boolean);
+};
+
+proto._phaseTargetInfo = function() {
+    const configured = this.phaseVisualMaxPoints;
+    if (Number.isFinite(configured) && configured > 0) {
+        return { limit: Math.max(2, Math.round(configured)), capped: false };
+    }
+    const max = typeof this._maxPhaseDownsamplingMenuLimit === 'function'
+        ? this._maxPhaseDownsamplingMenuLimit()
+        : PlotManager.MAX_MENU_VISUAL_POINTS;
+    return { limit: Math.max(2, max), capped: true };
+};
+
+proto._phaseTraceCacheKey = function(plot, pt, targetInfo = this._phaseTargetInfo()) {
+    const fileId = pt?.fileId;
+    const entry = this.files.get(fileId);
+    const meta = entry?.data?._duckdb;
+    const vars = this._phaseTraceVariables(plot, pt).join('\u001f');
+    const transform = this._normalizeFileTransform(entry?.transform);
+    const version = [
+        Number(meta?.appendRows) || 0,
+        Number(meta?.appendBytes) || 0,
+        Number(meta?.totalRows) || '',
+    ].join('\u001f');
+    return [
+        plot?.mode || '',
+        fileId || '',
+        vars,
+        targetInfo.limit,
+        targetInfo.capped ? 'capped' : 'exact',
+        JSON.stringify(transform),
+        version,
+    ].join('\u001e');
+};
+
+proto._phaseCachedTrajectory = function(plot, pt, targetInfo = this._phaseTargetInfo()) {
+    if (!this._isLazyPhaseFile(pt?.fileId)) return null;
+    const key = this._phaseTraceCacheKey(plot, pt, targetInfo);
+    const cached = pt?._lazyPhaseCache;
+    return cached?.key === key ? cached : null;
+};
+
+proto._phaseVisualDataForTrace = function(plot, pt, targetInfo = this._phaseTargetInfo()) {
+    const d = this.files.get(pt.fileId)?.data;
+    if (!d) return null;
+    const vars = this._phaseTraceVariables(plot, pt);
+    if (!vars.every(name => d.variables?.[name])) return null;
+
+    if (this._isLazyPhaseFile(pt.fileId)) {
+        const cached = this._phaseCachedTrajectory(plot, pt, targetInfo);
+        if (!cached) {
+            const empty = new Float64Array(0);
+            return plot.mode === 'phase3d'
+                ? { time: empty, x: empty, y: empty, z: empty, lazyPending: true }
+                : { time: empty, x: empty, y: empty, lazyPending: true };
+        }
+        return cached.visual;
+    }
+
+    if (plot.mode === 'phase2dt') {
+        const timeVar = this._getTimeVar(pt.fileId);
+        const [time, x, y] = this._buildPhaseVisualSeries([
+            timeVar ? this._getTransformedTimeData(pt.fileId) : [],
+            this._getTransformedVariableData(pt.fileId, pt.x),
+            this._getTransformedVariableData(pt.fileId, pt.y),
+        ]);
+        return { time, x, y };
+    }
+    if (plot.mode === 'phase3d') {
+        const [x, y, z] = this._buildPhaseVisualSeries([
+            this._getTransformedVariableData(pt.fileId, pt.x),
+            this._getTransformedVariableData(pt.fileId, pt.y),
+            this._getTransformedVariableData(pt.fileId, pt.z),
+        ]);
+        return { x, y, z };
+    }
+    const [x, y] = this._buildPhaseVisualSeries([
+        this._getTransformedVariableData(pt.fileId, pt.x),
+        this._getTransformedVariableData(pt.fileId, pt.y),
+    ]);
+    return { x, y };
+};
+
+proto._phaseSourceTimeRange = function(fileId) {
+    const entry = this.files.get(fileId);
+    if (!entry?.data?._duckdb) return null;
+    const transform = this._fileTransform(fileId);
+    if (transform.cropStart === null && transform.cropEnd === null) return null;
+    const timeVar = this._getTimeVar(fileId);
+    if (!timeVar) return null;
+    if (this._isGeneratedIndexTime(fileId, timeVar)) return null;
+    let lo = this._parseTimeBoundary(fileId, transform.cropStart);
+    let hi = this._parseTimeBoundary(fileId, transform.cropEnd);
+    if (lo === null && hi === null) return null;
+    const dataStart = Number(entry.data.metadata?.timeStart);
+    const dataEnd = Number(entry.data.metadata?.timeEnd);
+    if (lo === null) lo = Number.isFinite(dataStart) ? dataStart : -Infinity;
+    if (hi === null) hi = Number.isFinite(dataEnd) ? dataEnd : Infinity;
+    if (this._isElapsedTimeForVar(fileId, timeVar)) {
+        const origin = Number(timeVar.timeOriginMs);
+        const fallbackOrigin = Number(timeVar.data?.[0]);
+        const originMs = Number.isFinite(origin) ? origin : (Number.isFinite(fallbackOrigin) ? fallbackOrigin : this._timeOriginMs(fileId));
+        lo = Number.isFinite(lo) ? originMs + lo * 1000 : lo;
+        hi = Number.isFinite(hi) ? originMs + hi * 1000 : hi;
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+    if (lo > hi) [lo, hi] = [hi, lo];
+    return [lo, hi];
+};
+
+proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, rawByVar, varNames) {
+    const timeVar = this._getTimeVar(fileId);
+    const transform = this._fileTransform(fileId);
+    const generatedIndex = this._isGeneratedIndexTime(fileId, timeVar);
+    const generatedFromDetectedTime = generatedIndex && transform.timeDisplayMode === 'index';
+    const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
+    const cropEnd = this._parseTimeBoundary(fileId, transform.cropEnd);
+    const timeShift = this._parseTimeShift(fileId, transform.timeShift);
+    const cropped = cropStart !== null || cropEnd !== null;
+    let lo = cropStart ?? -Infinity;
+    let hi = cropEnd ?? Infinity;
+    if (lo > hi) [lo, hi] = [hi, lo];
+
+    const gain = transform.gain;
+    const yOffset = transform.yOffset;
+    const outTime = [];
+    const outByVar = new Map(varNames.map(name => [name, []]));
+    const n = rawTime?.length || 0;
+    for (let i = 0; i < n; i++) {
+        const rn = Number(rowIndex?.[i]);
+        const raw = Number(rawTime[i]);
+        const displayTime = generatedFromDetectedTime
+            ? (this._indexTimeStepMode(fileId) === 'index' ? rn : rn * this._indexTimeStepSeconds(fileId))
+            : this._timeDisplayValueForVar(fileId, raw, timeVar);
+        if (!Number.isFinite(displayTime)) continue;
+        if (cropped && (displayTime < lo || displayTime > hi)) continue;
+        outTime.push(displayTime + timeShift);
+        for (const name of varNames) {
+            const values = rawByVar?.get(name);
+            const value = values ? Number(values[i]) : NaN;
+            outByVar.get(name).push(Number.isFinite(value) ? value * gain + yOffset : value);
+        }
+    }
+    return {
+        time: Float64Array.from(outTime),
+        valuesByVar: new Map([...outByVar].map(([name, values]) => [name, Float64Array.from(values)])),
+    };
+};
+
 // ─── Trace / layout builders ───────────────────────────────────
 
 proto._buildPlotData = function(plot) {
@@ -769,16 +926,12 @@ proto._buildTimeLayout = function(plot) {
 // ── Phase 2D ──
 proto._buildPhase2DTraces = function(plot) {
     const traces = plot.phaseTraces.map(pt => {
-        const d = this.files.get(pt.fileId)?.data;
-        if (!d) return null;
-        const xVar = d.variables[pt.x], yVar = d.variables[pt.y];
-        if (!xVar || !yVar) return null;
-        const xData = this._getTransformedVariableData(pt.fileId, pt.x);
-        const yData = this._getTransformedVariableData(pt.fileId, pt.y);
-        const [xVisual, yVisual] = this._buildPhaseVisualSeries([xData, yData]);
-        const useGL = xData.length >= PlotManager.GL_POINT_THRESHOLD || yData.length >= PlotManager.GL_POINT_THRESHOLD;
+        const visual = this._phaseVisualDataForTrace(plot, pt);
+        if (!visual) return null;
+        const useGL = (visual.x?.length || 0) >= PlotManager.GL_POINT_THRESHOLD
+            || (visual.y?.length || 0) >= PlotManager.GL_POINT_THRESHOLD;
         return {
-            x: xVisual, y: yVisual,
+            x: visual.x, y: visual.y,
             name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
             type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
             visible: pt.visible ?? true,
@@ -812,10 +965,10 @@ proto._buildPhase2DLayout = function(plot) {
     const yArrays = [];
     for (const pt of plot.phaseTraces) {
         if (!this._isVisible(pt)) continue;
-        const d = this.files.get(pt.fileId)?.data;
-        if (!d?.variables?.[pt.x] || !d?.variables?.[pt.y]) continue;
-        xArrays.push(this._getTransformedVariableData(pt.fileId, pt.x));
-        yArrays.push(this._getTransformedVariableData(pt.fileId, pt.y));
+        const visual = this._phaseVisualDataForTrace(plot, pt);
+        if (!visual) continue;
+        xArrays.push(visual.x);
+        yArrays.push(visual.y);
     }
     const xExtent = this._finiteExtent(xArrays);
     const yExtent = this._finiteExtent(yArrays);
@@ -842,19 +995,14 @@ proto._buildPhase2DLayout = function(plot) {
 proto._buildPhase2DtTraces = function(plot) {
     return plot.phaseTraces.map(pt => {
         const d = this.files.get(pt.fileId)?.data;
-        if (!d) return null;
-        const xVar = d.variables[pt.x], yVar = d.variables[pt.y];
         const timeVar = this._getTimeVar(pt.fileId);
-        if (!xVar || !yVar) return null;
-        const [timeVisual, xVisual, yVisual] = this._buildPhaseVisualSeries([
-            timeVar ? this._getTransformedTimeData(pt.fileId) : [],
-            this._getTransformedVariableData(pt.fileId, pt.x),
-            this._getTransformedVariableData(pt.fileId, pt.y),
-        ]);
+        if (!d) return null;
+        const visual = this._phaseVisualDataForTrace(plot, pt);
+        if (!visual) return null;
         return {
-            x: this._plotlyTimeArray(pt.fileId, timeVisual, timeVar),
-            y: xVisual,
-            z: yVisual,
+            x: this._plotlyTimeArray(pt.fileId, visual.time, timeVar),
+            y: visual.x,
+            z: visual.y,
             name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
             type: 'scatter3d', mode: 'lines',
             visible: pt.visible ?? true,
@@ -866,19 +1014,12 @@ proto._buildPhase2DtTraces = function(plot) {
 // ── Phase 3D ──
 proto._buildPhase3DTraces = function(plot) {
     return plot.phaseTraces.map(pt => {
-        const d = this.files.get(pt.fileId)?.data;
-        if (!d) return null;
-        const xVar = d.variables[pt.x], yVar = d.variables[pt.y], zVar = d.variables[pt.z];
-        if (!xVar || !yVar || !zVar) return null;
-        const [xVisual, yVisual, zVisual] = this._buildPhaseVisualSeries([
-            this._getTransformedVariableData(pt.fileId, pt.x),
-            this._getTransformedVariableData(pt.fileId, pt.y),
-            this._getTransformedVariableData(pt.fileId, pt.z),
-        ]);
+        const visual = this._phaseVisualDataForTrace(plot, pt);
+        if (!visual) return null;
         return {
-            x: xVisual,
-            y: yVisual,
-            z: zVisual,
+            x: visual.x,
+            y: visual.y,
+            z: visual.z,
             name: this._traceName(`${pt.x} / ${pt.y} / ${pt.z}`, pt.fileId),
             type: 'scatter3d', mode: 'lines',
             visible: pt.visible ?? true,
@@ -920,15 +1061,16 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
         if (!this._isVisible(pt)) continue;
         const d = this.files.get(pt.fileId)?.data;
         if (!d) continue;
+        const visual = this._phaseVisualDataForTrace(plot, pt);
+        if (!visual) continue;
         if (isTimez) {
-            const tv = this._getTimeVar(pt.fileId);
-            xArrays.push(tv ? this._getTransformedTimeData(pt.fileId) : []);
-            yArrays.push(d.variables[pt.x] ? this._getTransformedVariableData(pt.fileId, pt.x) : []);
-            zArrays.push(d.variables[pt.y] ? this._getTransformedVariableData(pt.fileId, pt.y) : []);
+            xArrays.push(visual.time || []);
+            yArrays.push(visual.x || []);
+            zArrays.push(visual.y || []);
         } else {
-            xArrays.push(d.variables[pt.x] ? this._getTransformedVariableData(pt.fileId, pt.x) : []);
-            yArrays.push(d.variables[pt.y] ? this._getTransformedVariableData(pt.fileId, pt.y) : []);
-            zArrays.push(d.variables[pt.z] ? this._getTransformedVariableData(pt.fileId, pt.z) : []);
+            xArrays.push(visual.x || []);
+            yArrays.push(visual.y || []);
+            zArrays.push(visual.z || []);
         }
     }
     const calendarTimeAxis = isTimez && firstTimeMode === 'calendar';
