@@ -51,6 +51,18 @@ The generated files are written to `desktop-dist/`:
 - `Time Series Explorer-<version>-setup-x64.exe`: Windows installer.
 - `Time Series Explorer-<version>-portable-x64.exe`: portable executable.
 
+If the repository lives in a synced folder such as OneDrive and Windows locks
+`desktop-dist/`, set `OMV_DIST_OUTPUT` to a non-synced directory before running
+the same packaging scripts:
+
+```powershell
+$env:OMV_DIST_OUTPUT = 'C:\temp\tse-pack-output'
+npm run desktop:pack
+```
+
+When `OMV_DIST_OUTPUT` is unset, packaging keeps the default `desktop-dist/`
+output path.
+
 ## Project map
 
 - `index.html`: static shell for the app

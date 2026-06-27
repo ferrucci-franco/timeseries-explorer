@@ -20,6 +20,7 @@ const preferredPort = Number(process.env.OMV_DESKTOP_PORT || 8876);
 let csvToParquetCorePromise = null;
 let mainWindow = null;
 const temporaryParquetPaths = new Set();
+let temporaryParquetSessionDir = null;
 
 if (process.env.OMV_REMOTE_DEBUGGING_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', String(process.env.OMV_REMOTE_DEBUGGING_PORT));
@@ -73,6 +74,14 @@ function temporaryParquetRoot() {
   return path.join(app.getPath('userData'), 'temporary-parquet');
 }
 
+function temporaryParquetSessionRoot() {
+  if (!temporaryParquetSessionDir) {
+    const token = crypto.randomBytes(4).toString('hex');
+    temporaryParquetSessionDir = path.join(temporaryParquetRoot(), `${process.pid}-${token}`);
+  }
+  return temporaryParquetSessionDir;
+}
+
 function temporaryParquetName(filePath) {
   const base = path.basename(filePath, path.extname(filePath)).replace(/[^a-zA-Z0-9._-]/g, '_') || 'results';
   const token = crypto.randomBytes(8).toString('hex');
@@ -99,7 +108,7 @@ async function canWriteDirectory(dir) {
 async function chooseParquetOutputPath(inputPath, stat, requestedPath = '', options = {}) {
   if (requestedPath && String(requestedPath).trim()) return path.resolve(requestedPath);
   if (options.temporary) {
-    const dir = temporaryParquetRoot();
+    const dir = temporaryParquetSessionRoot();
     await fsp.mkdir(dir, { recursive: true });
     return path.join(dir, temporaryParquetName(inputPath));
   }
@@ -113,21 +122,41 @@ async function chooseParquetOutputPath(inputPath, stat, requestedPath = '', opti
 }
 
 async function sweepTemporaryParquetOrphans() {
-  const dir = temporaryParquetRoot();
+  const root = temporaryParquetRoot();
+  const ownDir = temporaryParquetSessionRoot();
   try {
-    await fsp.rm(dir, { recursive: true, force: true });
+    await fsp.mkdir(root, { recursive: true });
+    const entries = await fsp.readdir(root, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const candidate = path.join(root, entry.name);
+      if (path.resolve(candidate) === path.resolve(ownDir)) continue;
+
+      const match = /^(\d+)-[a-f0-9]+$/i.exec(entry.name);
+      if (!match) continue;
+      const pid = Number(match[1]);
+      let alive = true;
+      try {
+        process.kill(pid, 0);
+      } catch (err) {
+        alive = err?.code === 'EPERM';
+      }
+      if (!alive) {
+        try { await fsp.rm(candidate, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
   } catch (_) {
     // Best effort: stale temp Parquets should never block app startup.
   }
-  await fsp.mkdir(dir, { recursive: true });
+  await fsp.mkdir(ownDir, { recursive: true });
 }
 
 async function deleteTemporaryParquetPath(filePath) {
   if (!filePath || typeof filePath !== 'string') return { ok: false, message: 'Missing path' };
   const resolved = path.resolve(filePath);
-  const root = temporaryParquetRoot();
-  if (!isInsideDirectory(resolved, root)) {
-    return { ok: false, message: 'Refusing to delete a file outside the app temporary Parquet directory' };
+  const sessionRoot = temporaryParquetSessionRoot();
+  if (!isInsideDirectory(resolved, sessionRoot)) {
+    return { ok: false, message: 'Refusing to delete a file outside this app instance temporary Parquet directory' };
   }
   temporaryParquetPaths.delete(resolved);
   try {
@@ -143,6 +172,8 @@ function cleanupTrackedTemporaryParquets() {
     try { fs.rmSync(filePath, { force: true }); } catch (_) {}
     temporaryParquetPaths.delete(filePath);
   }
+  const sessionRoot = temporaryParquetSessionRoot();
+  try { fs.rmSync(sessionRoot, { recursive: true, force: true }); } catch (_) {}
 }
 
 async function loadCsvToParquetCore() {
@@ -492,7 +523,7 @@ app.whenReady().then(async () => {
   await sweepTemporaryParquetOrphans();
   await fsp.access(path.join(staticRoot, 'index.html'));
   const { port } = await listenOnAvailablePort(preferredPort);
-  await createWindow(`http://localhost:${port}/index.html`);
+  await createWindow(`http://${host}:${port}/index.html`);
 }).catch(err => {
   console.error('[desktop] startup failed', {
     projectRoot,
@@ -513,6 +544,6 @@ app.on('window-all-closed', () => {
 app.on('activate', async () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     const { port } = await listenOnAvailablePort(preferredPort);
-    await createWindow(`http://localhost:${port}/index.html`);
+    await createWindow(`http://${host}:${port}/index.html`);
   }
 });
