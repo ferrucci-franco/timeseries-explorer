@@ -197,7 +197,6 @@ export default class DuckDbSource {
         if (!meta) throw new Error('appendCsvDelta: data is not DuckDB-backed');
         if (!csvProfile) throw new Error('appendCsvDelta: missing CSV profile');
         await this.init();
-        await this._ensureAppendTable(meta, csvProfile);
 
         const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
         const deltaHandle = `${meta.baseTableName || meta.tableName}_delta_${id}.csv`;
@@ -211,65 +210,68 @@ export default class DuckDbSource {
         const validWhere = `${meta.timeExprSql} IS NOT NULL`;
         const expectedRows = Number(options.expectedRows);
 
-        await this.registerFile(deltaHandle, deltaFile);
-        meta.deltaHandles = [...(meta.deltaHandles || []), deltaHandle];
-        try {
-            await this._conn.query(`CREATE OR REPLACE TEMP VIEW ${deltaView} AS SELECT * FROM ${readExpr}`);
-            const countResult = await this._conn.query(`
-                SELECT
-                    COUNT(*)::BIGINT AS n,
-                    COUNT(DISTINCT ${meta.timeExprSql})::BIGINT AS distinct_n,
-                    MIN(${meta.timeExprSql})::DOUBLE AS tmin,
-                    MAX(${meta.timeExprSql})::DOUBLE AS tmax
-                FROM ${deltaView}
-                WHERE ${validWhere}
-            `);
-            const rows = Number(countResult.getChild('n')?.get(0) ?? 0);
-            const distinctRows = Number(countResult.getChild('distinct_n')?.get(0) ?? 0);
-            const minTime = Number(countResult.getChild('tmin')?.get(0));
-            const maxTime = Number(countResult.getChild('tmax')?.get(0));
-            if (Number.isFinite(expectedRows) && rows !== expectedRows) {
-                throw new Error(`DuckDB accepted ${rows} appended rows; expected ${expectedRows}.`);
-            }
-            if (rows <= 0) {
-                throw new Error('DuckDB did not find valid time values in appended rows.');
-            }
-            if (distinctRows !== rows) {
-                throw new Error('Appended rows contain duplicate time values.');
-            }
-            if (Number.isFinite(Number(options.lastTime)) && Number.isFinite(minTime) && minTime <= Number(options.lastTime)) {
-                throw new Error('Appended time values must be strictly greater than the previous file time.');
-            }
-            const limitError = duckDbAppendGrowthLimitError({
-                appendRows: (Number(meta.appendRows) || 0) + rows,
-                appendBytes: (Number(meta.appendBytes) || 0) + deltaText.length,
-            }, options.limits);
-            if (limitError) throw limitError;
+        return this._withConnectionLock(async () => {
+            await this._ensureAppendTable(meta, csvProfile);
+            await this.registerFile(deltaHandle, deltaFile);
+            meta.deltaHandles = [...(meta.deltaHandles || []), deltaHandle];
+            try {
+                await this._conn.query(`CREATE OR REPLACE TEMP VIEW ${deltaView} AS SELECT * FROM ${readExpr}`);
+                const countResult = await this._conn.query(`
+                    SELECT
+                        COUNT(*)::BIGINT AS n,
+                        COUNT(DISTINCT ${meta.timeExprSql})::BIGINT AS distinct_n,
+                        MIN(${meta.timeExprSql})::DOUBLE AS tmin,
+                        MAX(${meta.timeExprSql})::DOUBLE AS tmax
+                    FROM ${deltaView}
+                    WHERE ${validWhere}
+                `);
+                const rows = Number(countResult.getChild('n')?.get(0) ?? 0);
+                const distinctRows = Number(countResult.getChild('distinct_n')?.get(0) ?? 0);
+                const minTime = Number(countResult.getChild('tmin')?.get(0));
+                const maxTime = Number(countResult.getChild('tmax')?.get(0));
+                if (Number.isFinite(expectedRows) && rows !== expectedRows) {
+                    throw new Error(`DuckDB accepted ${rows} appended rows; expected ${expectedRows}.`);
+                }
+                if (rows <= 0) {
+                    throw new Error('DuckDB did not find valid time values in appended rows.');
+                }
+                if (distinctRows !== rows) {
+                    throw new Error('Appended rows contain duplicate time values.');
+                }
+                if (Number.isFinite(Number(options.lastTime)) && Number.isFinite(minTime) && minTime <= Number(options.lastTime)) {
+                    throw new Error('Appended time values must be strictly greater than the previous file time.');
+                }
+                const limitError = duckDbAppendGrowthLimitError({
+                    appendRows: (Number(meta.appendRows) || 0) + rows,
+                    appendBytes: (Number(meta.appendBytes) || 0) + deltaText.length,
+                }, options.limits);
+                if (limitError) throw limitError;
 
-            const projected = await this._conn.query(`
-                SELECT ${meta.projectionSql}
-                FROM ${deltaView}
-                WHERE ${validWhere}
-                ORDER BY "__omv_time" ASC NULLS LAST
-            `);
-            await this._conn.query(`INSERT INTO ${meta.appendTableName} SELECT * FROM ${deltaView} WHERE ${validWhere}`);
+                const projected = await this._conn.query(`
+                    SELECT ${meta.projectionSql}
+                    FROM ${deltaView}
+                    WHERE ${validWhere}
+                    ORDER BY "__omv_time" ASC NULLS LAST
+                `);
+                await this._conn.query(`INSERT INTO ${meta.appendTableName} SELECT * FROM ${deltaView} WHERE ${validWhere}`);
 
-            meta.appendRows = (Number(meta.appendRows) || 0) + rows;
-            meta.appendBytes = (Number(meta.appendBytes) || 0) + deltaText.length;
-            if (Number.isFinite(Number(meta.totalRows))) meta.totalRows = Number(meta.totalRows) + rows;
-            meta.overviewPoints = Math.max(Number(meta.overviewPoints) || 0, legacyData?.variables?.[legacyData?.metadata?.timeName]?.data?.length || 0);
-            this._clearRangeCacheForTable(meta.tableName);
-            return {
-                rows,
-                timeStart: minTime,
-                timeEnd: maxTime,
-                columns: this._projectedDeltaColumns(legacyData, projected),
-            };
-        } finally {
-            try { await this._conn.query(`DROP VIEW IF EXISTS ${deltaView}`); } catch (_) { /* ignore */ }
-            await this.unregisterFile(deltaHandle);
-            meta.deltaHandles = (meta.deltaHandles || []).filter(handle => handle !== deltaHandle);
-        }
+                meta.appendRows = (Number(meta.appendRows) || 0) + rows;
+                meta.appendBytes = (Number(meta.appendBytes) || 0) + deltaText.length;
+                if (Number.isFinite(Number(meta.totalRows))) meta.totalRows = Number(meta.totalRows) + rows;
+                meta.overviewPoints = Math.max(Number(meta.overviewPoints) || 0, legacyData?.variables?.[legacyData?.metadata?.timeName]?.data?.length || 0);
+                this._clearRangeCacheForTable(meta.tableName);
+                return {
+                    rows,
+                    timeStart: minTime,
+                    timeEnd: maxTime,
+                    columns: this._projectedDeltaColumns(legacyData, projected),
+                };
+            } finally {
+                try { await this._conn.query(`DROP VIEW IF EXISTS ${deltaView}`); } catch (_) { /* ignore */ }
+                await this.unregisterFile(deltaHandle);
+                meta.deltaHandles = (meta.deltaHandles || []).filter(handle => handle !== deltaHandle);
+            }
+        });
     }
 
     /**

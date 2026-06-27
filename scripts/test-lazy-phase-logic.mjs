@@ -122,5 +122,16 @@ assert.match(source, /async _withConnectionLock\(run\)/, 'DuckDBSource must expo
 assert.match(source, /options\.sourceTimeRange/, 'phase trajectory should document/use sourceTimeRange as the official crop key');
 assert.match(source, /options\.sourceRange/, 'phase trajectory should accept sourceRange as a maintenance-safe alias');
 assert.match(source, /sourceRange" is deprecated; use "sourceTimeRange"/, 'sourceRange alias should warn instead of being silently ignored');
+const appendStart = source.indexOf('async appendCsvDelta');
+const appendMethod = source.slice(appendStart, source.indexOf('\n    /**\n     * Fetch a viewport-bounded slice', appendStart));
+assert.match(appendMethod, /return this\._withConnectionLock\(async \(\) =>/, 'live append DuckDB sequence must be serialized on the shared connection');
+assert.ok(
+    appendMethod.indexOf('await this._ensureAppendTable') > appendMethod.indexOf('return this._withConnectionLock'),
+    'append table setup must happen inside the append connection lock'
+);
+assert.ok(
+    appendMethod.indexOf('DROP VIEW IF EXISTS') > appendMethod.indexOf('return this._withConnectionLock'),
+    'append cleanup must happen inside the append connection lock'
+);
 
 console.log('Lazy phase logic checks passed.');
