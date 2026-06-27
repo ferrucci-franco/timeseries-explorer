@@ -37,7 +37,7 @@ TIME_COLUMN = 0
 # Initial load. If INITIAL_END_TIME is not None, all rows with timestamp <= this
 # value are written before live appending starts. Otherwise INITIAL_ROWS is used.
 INITIAL_END_TIME = None
-INITIAL_ROWS = 10
+INITIAL_ROWS = 1000
 
 # Append timing:
 # - "fixed": append exactly one row every APPEND_INTERVAL_SECONDS.

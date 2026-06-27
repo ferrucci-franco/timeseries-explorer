@@ -777,6 +777,9 @@ class PlotManager {
                 : (this._is3D(plot.mode) ? this._setCamera(panelId, 'home') : Promise.resolve());
             Promise.resolve(viewPromise).then(() => {
                 if (plot.mode === 'timeseries') this._refreshTimeseriesVisuals(panelId, plot);
+                else if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
+                    this._refreshPhaseVisualsLazy?.(panelId, plot);
+                }
                 finish3DSetup();
             });
             div.on('plotly_doubleclick', () => {
@@ -946,6 +949,7 @@ class PlotManager {
             const panelEl = plot.div.closest('.layout-panel');
             this._addOneMarkerTrace(plot, plot.phaseTraces[plot.phaseTraces.length - 1]);
             this._installLegendHoverHint(plot.div);
+            this._refreshPhaseVisualsLazy?.(panelId, plot);
         });
         // Update legend and axis titles (no scene keys → no camera reset for 3D)
         const { bg, gridColor, legendBg } = this._colors();
@@ -1597,10 +1601,10 @@ class PlotManager {
             const xArrays = [];
             const yArrays = [];
             for (const pt of visibleTraces) {
-                const d = this.files.get(pt.fileId)?.data;
-                if (!d?.variables?.[pt.x] || !d?.variables?.[pt.y]) continue;
-                xArrays.push(this._getTransformedVariableData(pt.fileId, pt.x));
-                yArrays.push(this._getTransformedVariableData(pt.fileId, pt.y));
+                const visual = this._phaseVisualDataForTrace(plot, pt);
+                if (!visual) continue;
+                xArrays.push(visual.x);
+                yArrays.push(visual.y);
             }
 
             const xExtent = this._finiteExtent(xArrays);
