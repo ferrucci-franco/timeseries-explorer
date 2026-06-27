@@ -19,6 +19,7 @@ const host = '127.0.0.1';
 const preferredPort = Number(process.env.OMV_DESKTOP_PORT || 8876);
 let csvToParquetCorePromise = null;
 let mainWindow = null;
+const temporaryParquetPaths = new Set();
 
 if (process.env.OMV_REMOTE_DEBUGGING_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', String(process.env.OMV_REMOTE_DEBUGGING_PORT));
@@ -68,6 +69,21 @@ function parquetCacheName(filePath, fingerprint) {
   return `${base}.omv-${fingerprint}.parquet`;
 }
 
+function temporaryParquetRoot() {
+  return path.join(app.getPath('userData'), 'temporary-parquet');
+}
+
+function temporaryParquetName(filePath) {
+  const base = path.basename(filePath, path.extname(filePath)).replace(/[^a-zA-Z0-9._-]/g, '_') || 'results';
+  const token = crypto.randomBytes(8).toString('hex');
+  return `${base}.tmp-${process.pid}-${Date.now()}-${token}.parquet`;
+}
+
+function isInsideDirectory(candidate, parent) {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
 async function canWriteDirectory(dir) {
   try {
     await fsp.mkdir(dir, { recursive: true });
@@ -80,15 +96,53 @@ async function canWriteDirectory(dir) {
   }
 }
 
-async function chooseParquetOutputPath(inputPath, stat, requestedPath = '') {
+async function chooseParquetOutputPath(inputPath, stat, requestedPath = '', options = {}) {
   if (requestedPath && String(requestedPath).trim()) return path.resolve(requestedPath);
+  if (options.temporary) {
+    const dir = temporaryParquetRoot();
+    await fsp.mkdir(dir, { recursive: true });
+    return path.join(dir, temporaryParquetName(inputPath));
+  }
   const fingerprint = csvFingerprint(inputPath, stat);
   const name = parquetCacheName(inputPath, fingerprint);
   const adjacent = path.resolve(path.dirname(inputPath), name);
   if (await canWriteDirectory(path.dirname(inputPath))) return adjacent;
-  const cacheDir = path.join(app.getPath('userData'), 'parquet-cache');
-  await fsp.mkdir(cacheDir, { recursive: true });
-  return path.join(cacheDir, name);
+  const fallbackDir = path.join(app.getPath('userData'), 'parquet-output');
+  await fsp.mkdir(fallbackDir, { recursive: true });
+  return path.join(fallbackDir, name);
+}
+
+async function sweepTemporaryParquetOrphans() {
+  const dir = temporaryParquetRoot();
+  try {
+    await fsp.rm(dir, { recursive: true, force: true });
+  } catch (_) {
+    // Best effort: stale temp Parquets should never block app startup.
+  }
+  await fsp.mkdir(dir, { recursive: true });
+}
+
+async function deleteTemporaryParquetPath(filePath) {
+  if (!filePath || typeof filePath !== 'string') return { ok: false, message: 'Missing path' };
+  const resolved = path.resolve(filePath);
+  const root = temporaryParquetRoot();
+  if (!isInsideDirectory(resolved, root)) {
+    return { ok: false, message: 'Refusing to delete a file outside the app temporary Parquet directory' };
+  }
+  temporaryParquetPaths.delete(resolved);
+  try {
+    await fsp.rm(resolved, { force: true });
+    return { ok: true, path: resolved };
+  } catch (err) {
+    return { ok: false, path: resolved, message: err?.message || String(err) };
+  }
+}
+
+function cleanupTrackedTemporaryParquets() {
+  for (const filePath of [...temporaryParquetPaths]) {
+    try { fs.rmSync(filePath, { force: true }); } catch (_) {}
+    temporaryParquetPaths.delete(filePath);
+  }
 }
 
 async function loadCsvToParquetCore() {
@@ -239,12 +293,37 @@ async function selectResultFilePaths(options = {}, multiple = false) {
   return multiple ? result.filePaths : result.filePaths[0];
 }
 
+async function selectParquetOutputPath(options = {}) {
+  const defaultPath = typeof options.defaultPath === 'string' && options.defaultPath
+    ? options.defaultPath
+    : undefined;
+  const result = await dialog.showSaveDialog({
+    title: typeof options.title === 'string' ? options.title : 'Save Parquet file',
+    defaultPath,
+    filters: [
+      { name: 'Parquet files', extensions: ['parquet'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePath) return null;
+  return result.filePath;
+}
+
 ipcMain.handle('omv:select-file-path', async (_event, options = {}) => {
   return selectResultFilePaths(options, false);
 });
 
 ipcMain.handle('omv:select-file-paths', async (_event, options = {}) => {
   return selectResultFilePaths(options, true);
+});
+
+ipcMain.handle('omv:select-parquet-output-path', async (_event, options = {}) => {
+  return selectParquetOutputPath(options);
+});
+
+ipcMain.handle('omv:delete-temporary-parquet', async (_event, options = {}) => {
+  const rawPath = typeof options.path === 'string' ? options.path : '';
+  return deleteTemporaryParquetPath(rawPath);
 });
 
 ipcMain.handle('omv:read-file', async (_event, options = {}) => {
@@ -357,15 +436,18 @@ ipcMain.handle('omv:convert-to-parquet', async (_event, options = {}) => {
       throw err;
     }
 
-    const outputPath = await chooseParquetOutputPath(filePath, stat, options.outputPath);
+    const temporary = options.temporary === true;
+    const outputPath = await chooseParquetOutputPath(filePath, stat, options.outputPath, { temporary });
     const fingerprint = csvFingerprint(filePath, stat);
     const overwrite = options.overwrite === true;
     let outputStat = null;
     try { outputStat = await fsp.stat(outputPath); } catch (_) { outputStat = null; }
     if (!overwrite && outputStat?.isFile() && outputStat.mtimeMs >= stat.mtimeMs) {
+      if (temporary) temporaryParquetPaths.add(outputPath);
       return {
         ok: true,
         cached: true,
+        temporary,
         fingerprint,
         inputPath: filePath,
         outputPath,
@@ -385,9 +467,11 @@ ipcMain.handle('omv:convert-to-parquet', async (_event, options = {}) => {
       overwrite: true,
     });
 
+    if (temporary) temporaryParquetPaths.add(result.outputPath);
     return {
       ok: true,
       cached: false,
+      temporary,
       fingerprint,
       ...result,
     };
@@ -401,7 +485,11 @@ ipcMain.handle('omv:convert-to-parquet', async (_event, options = {}) => {
   }
 });
 
+app.on('before-quit', cleanupTrackedTemporaryParquets);
+app.on('will-quit', cleanupTrackedTemporaryParquets);
+
 app.whenReady().then(async () => {
+  await sweepTemporaryParquetOrphans();
   await fsp.access(path.join(staticRoot, 'index.html'));
   const { port } = await listenOnAvailablePort(preferredPort);
   await createWindow(`http://localhost:${port}/index.html`);

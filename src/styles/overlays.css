@@ -9,7 +9,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 3000;
+    z-index: 3400;
     opacity: 0;
     transition: opacity 0.25s ease;
 }
@@ -29,6 +29,16 @@
     transform: translateY(-12px);
     transition: transform 0.25s ease, opacity 0.25s ease;
     opacity: 0;
+}
+
+.modal-dialog-choice {
+    width: min(620px, calc(100vw - 32px));
+    max-width: none;
+}
+
+.modal-dialog-choice .modal-message {
+    text-align: left;
+    color: var(--text-secondary);
 }
 
 .modal-overlay.show .modal-dialog {
@@ -191,6 +201,10 @@
     justify-content: center;
 }
 
+.modal-buttons-choice {
+    flex-wrap: wrap;
+}
+
 .modal-btn {
     padding: 0.75rem 1.5rem;
     border: none;
@@ -199,6 +213,10 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
+}
+
+.modal-buttons-choice .modal-btn {
+    flex: 1 1 11rem;
 }
 
 .modal-btn-cancel {
@@ -220,6 +238,17 @@
     background-color: var(--primary-hover);
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
+}
+
+.modal-btn-secondary-confirm {
+    background-color: color-mix(in srgb, var(--primary-color) 16%, var(--bg-secondary));
+    color: var(--text-primary);
+    border: 1px solid color-mix(in srgb, var(--primary-color) 45%, var(--border-color));
+}
+
+.modal-btn-secondary-confirm:hover {
+    background-color: color-mix(in srgb, var(--primary-color) 24%, var(--bg-secondary));
+    transform: translateY(-1px);
 }
 
 .modal-btn-confirm:active,

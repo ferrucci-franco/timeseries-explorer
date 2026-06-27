@@ -48,6 +48,18 @@ proto.loadFile = async function(file, options = {}) {
                 }
                 if (!currentFile) throw new Error(i18n.t('invalidFile'));
                 extension = this._fileExtension(currentFile.name);
+                const preflight = await this._maybeConvertLargeCsvBeforeLoad(currentFile, { ...options, extension });
+                if (preflight?.cancelled) return null;
+                if (preflight?.file) {
+                    currentFile = preflight.file;
+                    options = {
+                        ...options,
+                        localPath: preflight.localPath || options.localPath,
+                        skipLargeCsvPreflight: true,
+                        temporaryParquetPath: preflight.temporaryParquetPath || options.temporaryParquetPath || '',
+                    };
+                    extension = this._fileExtension(currentFile.name);
+                }
                 const streamable = this._canParseFromFile(currentFile, extension);
                 buffer = streamable ? null : await (currentFile.arrayBuffer ? currentFile.arrayBuffer() : this._readAsArrayBuffer(currentFile));
                 contentHash = buffer
@@ -67,7 +79,17 @@ proto.loadFile = async function(file, options = {}) {
         const fileId   = `f${this._nextFileId++}`;
         const baseName = this._fileBaseName(currentFile.name);
         const transform = this._defaultFileTransform();
-        this.files.set(fileId, { file: currentFile, fileHandle: options.fileHandle || null, localPath: options.localPath || '', buffer, contentHash, name: baseName, extension, transform });
+        this.files.set(fileId, {
+            file: currentFile,
+            fileHandle: options.fileHandle || null,
+            localPath: options.localPath || '',
+            temporaryParquetPath: options.temporaryParquetPath || '',
+            buffer,
+            contentHash,
+            name: baseName,
+            extension,
+            transform,
+        });
 
         // PlotManager takes ownership of the data
         this.plotManager.addFile(fileId, baseName, data, transform);
@@ -730,12 +752,168 @@ proto._inspectCsvSample = async function(file, buffer = null) {
     return this.csvParser.inspectSample(sampleBuffer, { maxRows: 700 });
 };
 
+proto._largeCsvDecisionKey = function(file, filename = '') {
+    return this._fileFingerprint(file) || `${filename || file?.name || 'csv'}:${file?.size || 0}`;
+};
+
+proto._shouldOfferLargeCsvPreflight = function(file, options = {}) {
+    if (options.skipLargeCsvPreflight) return false;
+    const extension = options.extension || this._fileExtension(file?.name || '');
+    if (extension !== '.csv') return false;
+    if (!this.capabilities?.isDesktop) return false;
+    if (!file?.localPath) return false;
+    if (Number(file.size || 0) < PARQUET_HINT_THRESHOLD_BYTES) return false;
+    if (typeof globalThis.omvDesktop?.convertToParquet !== 'function') return false;
+    const key = this._largeCsvDecisionKey(file);
+    return !this._largeCsvRawApproved?.has(key);
+};
+
+proto._defaultParquetOutputPath = function(file) {
+    const source = file?.localPath || file?.name || 'results.csv';
+    return String(source).replace(/\.[^.\\/]+$/i, '') + '.parquet';
+};
+
+proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
+    if (!this._shouldOfferLargeCsvPreflight(file, options)) return null;
+
+    let csvProfile = null;
+    try {
+        csvProfile = await this._inspectCsvSample(file);
+    } catch (err) {
+        console.warn('[csv] could not inspect sample before Parquet preflight:', err?.message || err);
+    }
+
+    const mb = (Number(file.size || 0) / (1024 * 1024)).toFixed(0);
+    const choice = await Modal.choice(
+        i18n.t('largeCsvPreflightBody')
+            .replace('{file}', file.name || 'results.csv')
+            .replace('{size}', `${mb} MB`),
+        {
+            title: i18n.t('largeCsvPreflightTitle'),
+            icon: 'CSV',
+            className: 'modal-dialog-large-csv',
+            choices: [
+                {
+                    value: 'save',
+                    text: i18n.t('largeCsvPreflightSave'),
+                    className: 'modal-btn-confirm',
+                    autoFocus: true,
+                },
+                {
+                    value: 'temporary',
+                    text: i18n.t('largeCsvPreflightTemporary'),
+                    className: 'modal-btn-confirm modal-btn-secondary-confirm',
+                },
+                {
+                    value: 'raw',
+                    text: i18n.t('largeCsvPreflightRaw'),
+                    className: 'modal-btn-cancel',
+                },
+            ],
+        }
+    );
+
+    if (!choice) return { cancelled: true };
+    if (choice === 'raw') {
+        this._largeCsvRawApproved ||= new Set();
+        this._largeCsvRawApproved.add(this._largeCsvDecisionKey(file));
+        return null;
+    }
+
+    let outputPath = '';
+    const temporary = choice === 'temporary';
+    if (!temporary) {
+        const picker = globalThis.omvDesktop?.selectParquetOutputPath;
+        if (typeof picker !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
+        outputPath = await picker({
+            title: i18n.t('largeCsvPreflightSaveDialogTitle'),
+            defaultPath: this._defaultParquetOutputPath(file),
+        });
+        if (!outputPath) return { cancelled: true };
+    }
+
+    const parquetFile = await this._convertCsvFileToParquetFile(file, {
+        csvProfile,
+        outputPath,
+        temporary,
+    });
+    return {
+        file: parquetFile,
+        localPath: parquetFile.localPath,
+        temporaryParquetPath: temporary ? parquetFile.localPath : '',
+    };
+};
+
+proto._showParquetConversionOverlay = function(filename) {
+    document.getElementById('file-loading-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'file-loading-overlay';
+    overlay.className = 'example-loading-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'example-loading-dialog';
+
+    const spinner = document.createElement('div');
+    spinner.className = 'example-loading-spinner';
+
+    const title = document.createElement('div');
+    title.id = 'file-loading-title';
+    title.className = 'example-loading-title';
+    title.textContent = i18n.t('convertingToParquet');
+
+    const hint = document.createElement('div');
+    hint.id = 'file-loading-hint';
+    hint.className = 'example-loading-hint';
+    hint.dataset.filename = filename || '';
+
+    dialog.append(spinner, title, hint);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('show'));
+};
+
+proto._updateParquetConversionOverlay = function(startedAt) {
+    const hint = document.getElementById('file-loading-hint');
+    if (!hint) return;
+    const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    hint.textContent = i18n.t('parquetConversionInProgress').replace('{seconds}', String(seconds));
+};
+
+proto._convertCsvFileToParquetFile = async function(file, options = {}) {
+    if (!file?.localPath) throw new Error(i18n.t('parquetConversionDesktopOnly'));
+    const converter = globalThis.omvDesktop?.convertToParquet;
+    if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
+
+    const started = Date.now();
+    this._showParquetConversionOverlay(file.name);
+    this._updateParquetConversionOverlay(started);
+    const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+    try {
+        const result = await converter({
+            path: file.localPath,
+            outputPath: options.outputPath || '',
+            temporary: options.temporary === true,
+            csvProfile: cloneCsvProfileForIpc(options.csvProfile),
+            compression: 'zstd',
+        });
+        if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
+        if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
+        return this._readLocalResultPath(result.outputPath);
+    } finally {
+        clearInterval(timer);
+        this._hideFileLoadingOverlay();
+    }
+};
+
 proto._quoteCommandPath = function(path) {
     return `"${String(path || '').replace(/"/g, '\\"')}"`;
 };
 
 proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvProfile = null) {
-    const key = this._fileFingerprint(file) || `${filename}:${fileSize}`;
+    const key = this._largeCsvDecisionKey(file, filename);
+    if (this._largeCsvRawApproved?.has(key)) return;
     this._largeCsvParquetHintsShown ||= new Set();
     if (this._largeCsvParquetHintsShown.has(key)) return;
     this._largeCsvParquetHintsShown.add(key);
@@ -852,7 +1030,7 @@ proto._convertLargeCsvNoticeToParquet = async function({ filename, file, csvProf
 
         status.classList.add('success');
         status.textContent = result.cached
-            ? i18n.t('parquetConversionUsingCache')
+            ? i18n.t('parquetConversionUsingExisting')
             : i18n.t('parquetConversionComplete');
         const parquetFile = await this._readLocalResultPath(result.outputPath);
         await this.loadFile(parquetFile, { localPath: result.outputPath });
@@ -1090,6 +1268,7 @@ proto._copyDerivedDefinitions = function(sourceId, targetId) {
 
 proto.removeFile = async function(fileId) {
     if (!this.files.has(fileId)) return;
+    const fileEntry = this.files.get(fileId);
 
     if (this.plotManager.hasTracesForFile(fileId)) {
         const ok = await Modal.confirm(i18n.t('closeFileWarning'), { icon: '⚠️' });
@@ -1102,6 +1281,14 @@ proto.removeFile = async function(fileId) {
     const lazyData = pmEntry?.data;
     if (lazyData?._duckdb?.source) {
         try { await lazyData._duckdb.source.release(lazyData); } catch (_) { /* ignore */ }
+    }
+    if (fileEntry?.temporaryParquetPath && typeof globalThis.omvDesktop?.deleteTemporaryParquet === 'function') {
+        try {
+            const result = await globalThis.omvDesktop.deleteTemporaryParquet({ path: fileEntry.temporaryParquetPath });
+            if (result?.ok === false) console.warn('[parquet] could not delete temporary file:', result.message || result);
+        } catch (err) {
+            console.warn('[parquet] could not delete temporary file:', err?.message || err);
+        }
     }
 
     this.plotManager.removeFile(fileId);

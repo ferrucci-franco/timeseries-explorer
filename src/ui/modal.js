@@ -103,6 +103,88 @@ const Modal = {
     },
 
     /**
+     * Show a dialog with multiple explicit choices.
+     * @param {string} message - The message to display
+     * @param {Object} options - { title, icon, choices: [{ value, text, className, autoFocus }] }
+     * @returns {Promise<string|null>} - Resolves to the selected value, or null when dismissed
+     */
+    choice(message, options = {}) {
+        return new Promise((resolve) => {
+            const previousActive = document.activeElement;
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+
+            const modal = document.createElement('div');
+            modal.className = 'modal-dialog modal-dialog-choice';
+            if (options.className) {
+                modal.classList.add(...String(options.className).split(/\s+/).filter(Boolean));
+            }
+
+            const content = document.createElement('div');
+            content.className = 'modal-content';
+
+            const icon = document.createElement('div');
+            icon.className = 'modal-icon';
+            icon.textContent = options.icon || '!';
+            content.appendChild(icon);
+
+            if (options.title) {
+                const titleDiv = document.createElement('div');
+                titleDiv.className = 'modal-title';
+                titleDiv.textContent = options.title;
+                content.appendChild(titleDiv);
+            }
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'modal-message';
+            messageDiv.textContent = message;
+            content.appendChild(messageDiv);
+
+            const buttons = document.createElement('div');
+            buttons.className = 'modal-buttons modal-buttons-choice';
+
+            let settled = false;
+            const finish = (result) => {
+                if (settled) return;
+                settled = true;
+                document.removeEventListener('keydown', escHandler);
+                this.close(overlay, previousActive);
+                resolve(result);
+            };
+
+            let focusTarget = null;
+            const choices = Array.isArray(options.choices) ? options.choices : [];
+            choices.forEach((choice, index) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = `modal-btn ${choice.className || 'modal-btn-cancel'}`;
+                btn.textContent = choice.text || String(choice.value ?? '');
+                btn.addEventListener('click', () => finish(choice.value ?? null));
+                buttons.appendChild(btn);
+                if (choice.autoFocus || (!focusTarget && index === 0)) focusTarget = btn;
+            });
+
+            content.appendChild(buttons);
+            modal.appendChild(content);
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            setTimeout(() => focusTarget?.focus?.(), 100);
+
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) finish(null);
+            });
+
+            const escHandler = (e) => {
+                if (e.key === 'Escape') finish(null);
+            };
+            document.addEventListener('keydown', escHandler);
+
+            requestAnimationFrame(() => overlay.classList.add('show'));
+        });
+    },
+
+    /**
      * Show an informational/error dialog with a single close button.
      * @param {string} title - Short heading
      * @param {string} body  - Body message (plain text or HTML if options.html)
