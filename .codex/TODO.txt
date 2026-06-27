@@ -69,6 +69,47 @@ Web Light finalization / cleanup:
 
 
 Full Desktop large-file support:
+Immediate incremental patch before the larger native data-engine redesign:
+0) Scope and constraints:
+   a) Implement a targeted fix for desktop CSV/Parquet opening without changing the app architecture or PlotManager contracts.
+   b) Keep Web Light behavior unchanged: browser `File` / File System Access handles continue using DuckDB-WASM `BROWSER_FILEREADER`.
+   c) Keep portable-web/local-light build behavior unchanged; DuckDB may still be disabled there.
+   d) Keep `omv:read-file` and full-buffer `File` creation for `.mat`, small non-streamable files, and fallback paths.
+   e) Do not implement the larger native Electron DuckDB data engine in this patch.
+1) Stop full-memory desktop CSV/Parquet initial loads:
+   a) Add HTTP `HEAD` support to `/__omv_local__/file`.
+   b) `HEAD` must return `Accept-Ranges: bytes`, exact `Content-Length`, `Cache-Control: no-store`, `Last-Modified`, `X-OMV-Last-Modified`, and the proper content type.
+   c) Add `Range: bytes=start-end` support to `/__omv_local__/file`.
+   d) A valid range must return `206 Partial Content` with `Content-Range: bytes start-end/size`, `Accept-Ranges: bytes`, range `Content-Length`, and `Cache-Control: no-store`.
+   e) Blob slice semantics are exclusive-end: `slice(start, end)` maps to HTTP `Range: bytes=start-(end - 1)`, and Node `createReadStream({ start, end: end - 1 })` because Node stream `end` is inclusive.
+   f) Direct invalid/unsatisfiable HTTP ranges must return `416` with `Content-Range: bytes */size`.
+   g) The full `GET 200` path remains available as fallback and for non-DuckDB consumers.
+2) Desktop streamable descriptor:
+   a) `_readLocalResultPath` should return a lightweight File-like descriptor for desktop `.csv` and `.parquet` paths instead of using `omvDesktop.readFile`.
+   b) Build the descriptor URL from `window.location.origin`, never hardcode `127.0.0.1`, because Electron loads the renderer from `http://localhost:{port}`.
+   c) Descriptor fields must include `name`, `size`, `lastModified`, `type`, `localPath`, `localUrl`, and a marker such as `__omvLocalHttpFile`.
+   d) Descriptor `slice(start, end).arrayBuffer()` is load-bearing and must fetch only the requested byte range.
+   e) Descriptor empty slices should behave like Blob and return an empty ArrayBuffer without issuing an invalid HTTP range.
+   f) Existing CSV sample inspection and Live Update tail reads must keep working through descriptor `slice()`.
+3) DuckDB-WASM registration:
+   a) In `DuckDbSource.registerFile`, detect the desktop HTTP descriptor and call `registerFileURL(name, localUrl, DuckDBDataProtocol.HTTP, true)`.
+   b) Web/browser `File` objects keep using `registerFileHandle(..., BROWSER_FILEREADER, true)`.
+   c) Lazy metadata shape `{variables, metadata, tree}` and `_duckdb` fields remain compatible.
+4) Visible large-CSV Parquet hint:
+   a) Replace the console-only Parquet hint for CSV files above 500 MB with a visible, non-blocking, dismissible notice.
+   b) Include the command `node bench/csv-to-parquet.mjs "file.csv"` in the notice.
+   c) Do not block parsing and do not add automatic conversion/cache in this patch.
+   d) Avoid repeated notices for the same file fingerprint during a session.
+5) Explicitly defer the CSV view-mode double-scan change:
+   a) Do not replace the current scalar `MIN/MAX` aggregate with `MIN/MAX OVER ()`; window aggregates may materialize/buffer the whole CSV in DuckDB-WASM.
+   b) Keep the existing separate scalar aggregate pass for now because it is streaming and O(1) memory.
+   c) Revisit only in a later phase after `EXPLAIN ANALYZE` proves a one-pass query does not materialize GB-scale data.
+6) Tests/checks for this patch:
+   a) Add a CI-safe test for range parsing and HTTP headers: `HEAD` includes `Accept-Ranges: bytes` and `Content-Length`; ranged `GET` returns correct `206`, `Content-Range`, length, body, and `Cache-Control: no-store`; invalid range returns `416`.
+   b) Add a test for the desktop descriptor: `slice(start, end).arrayBuffer()` returns exactly the requested bytes, handles empty slices, and maps exclusive-end correctly.
+   c) Add a test/mocked assertion that DuckDB registration uses HTTP for the desktop descriptor and `BROWSER_FILEREADER` for normal web `File` objects.
+   d) Add/extend Live Update coverage so a File-like desktop descriptor supports append/tail reads through `slice().arrayBuffer()`.
+   e) Run `npm.cmd run test:live-update`, `npm.cmd run test:csv`, `npm.cmd run test:capabilities`, and `npm.cmd run build`.
 0) Product goal:
    a) Full Desktop must be the runtime that can seriously handle very large local files.
    b) Do not rely on DuckDB-WASM as the main solution for multi-GB files in Full Desktop.
@@ -258,4 +299,20 @@ Session save/restore follow-ups:
 1) Add an integration-style browser test for JSON view restore over already-open compatible files.
 2) Add an integration-style browser test for ZIP project save/load round-trip.
 3) Consider a visual warning when JSON restore matches by variables/name but the file hash differs.
+
+
+Large CSV to Parquet in Full Desktop:
+1) DONE 2026-06-27: Converted the passive large-CSV Parquet notice into an actionable Full Desktop flow.
+2) DONE 2026-06-27: The notice remains non-blocking and dismissible, but Desktop CSV files now show a primary "Convert to Parquet and load" action when native conversion is available.
+3) DONE 2026-06-27: The renderer passes the inspected CSV profile through IPC so native DuckDB uses the same delimiter/header/time-column interpretation as the load path.
+4) DONE 2026-06-27: Electron main exposes `omv:convert-to-parquet`, computes a path/size/mtime fingerprint, writes a cached `.omv-<fingerprint>.parquet` next to the CSV when possible, and falls back to the app userData cache if the source directory is not writable.
+5) DONE 2026-06-27: `bench/csv-to-parquet.mjs` now delegates to the shared Node-only conversion core in `src/data/csv-to-parquet-core.js`.
+6) DONE 2026-06-27: Packaged-build risk was handled by unpacking `src/data/csv-to-parquet-core.js` and `src/parsers/**/*`, keeping DuckDB JS dependencies in `app.asar`, and unpacking the native `duckdb.node` binary through `**/*.node`.
+7) DONE 2026-06-27: `csv-to-parquet-core.js` uses `createRequire()` so the unpacked core resolves `duckdb` from the packed `app.asar` in Electron, avoiding ESM import resolution failures from inside asar/unpacked paths.
+8) DONE 2026-06-27: `electron-builder` is configured with `npmRebuild: false`; this uses DuckDB's prebuilt N-API binary and avoids requiring Python/Visual Studio Build Tools during packaging.
+9) DONE 2026-06-27: Packaged `electron-builder --dir` smoke passed from `C:\temp\tse-pack-script\win-unpacked`: native DuckDB converted a dirty CSV, the second conversion hit cache, and the generated Parquet loaded in the app.
+10) DONE 2026-06-27: `npm run desktop:dist -- --config.directories.output=C:\temp\tse-dist` completed with `npmRebuild:false`, generating both NSIS and portable artifacts.
+11) DONE 2026-06-27: Installed the generated NSIS artifact silently to `C:\temp\tse-installed`, ran the same CSV-to-Parquet/cache/load smoke against the installed app, then uninstalled it successfully.
+12) Note: the portable single-file wrapper was generated, but CDP automation did not attach to that self-extracting wrapper in this session. The shared `win-unpacked` payload and the NSIS-installed app were both validated.
+13) Follow-up: add a larger manual conversion smoke with a multi-GB CSV before calling the native conversion path production-proven for very large files.
 
