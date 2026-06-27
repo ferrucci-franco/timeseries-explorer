@@ -2167,6 +2167,7 @@ class PlotManager {
     static GL_POINT_THRESHOLD = 50000;
     static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 2000;
     static DEFAULT_VISUAL_MAX_POINTS_PHASE = 4000;
+    static MAX_MENU_VISUAL_POINTS = 10000;
 
     _nextColor(idx) { return PlotManager.COLORS[idx % PlotManager.COLORS.length]; }
     _nextTraceColor(traceStates) {

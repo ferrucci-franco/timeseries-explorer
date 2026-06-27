@@ -644,15 +644,26 @@ proto._roundPerfMs = function(value) {
     return Number.isFinite(value) ? Math.round(value * 10) / 10 : null;
 };
 
+proto._maxTimeseriesDownsamplingMenuLimit = function() {
+    const select = typeof document !== 'undefined'
+        ? document.getElementById('timeseries-downsampling')
+        : null;
+    const values = select
+        ? [...select.options].map(option => Number(option.value)).filter(value => Number.isFinite(value) && value > 0)
+        : [];
+    const max = values.length ? Math.max(...values) : NaN;
+    return Number.isFinite(max) ? Math.round(max) : PlotManager.MAX_MENU_VISUAL_POINTS;
+};
+
 proto._lazyTimeseriesTarget = function() {
     const configured = this.timeseriesVisualMaxPoints;
     if (Number.isFinite(configured) && configured > 0) {
         return { limit: Math.round(configured), capped: false };
     }
     // "No downsampling" is unsafe for lazy files: it could request millions
-    // of points from DuckDB and hand them to Plotly. Keep a bounded detail
-    // query and make the cap visible through the loading indicator tooltip.
-    return { limit: 2000, capped: true };
+    // of points from DuckDB and hand them to Plotly. Use the highest numeric
+    // menu budget so "none" remains monotonic with explicit options.
+    return { limit: this._maxTimeseriesDownsamplingMenuLimit(), capped: true };
 };
 
 proto._setLazyDetailLoading = function(plot, loading, targetInfo = null) {
@@ -670,9 +681,8 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null) {
     if (loading) {
         const capped = targetInfo?.capped;
         const limit = targetInfo?.limit || 2000;
-        indicator.title = capped
-            ? `Loading detailed data (${limit} point cap for lazy files)`
-            : `Loading detailed data (${limit} points)`;
+        const key = capped ? 'lazyDetailLoadingCapped' : 'lazyDetailLoading';
+        indicator.title = i18n.t(key).replace('{limit}', String(limit));
         indicator.setAttribute('aria-label', indicator.title);
         indicator.classList.add('active');
     } else {
