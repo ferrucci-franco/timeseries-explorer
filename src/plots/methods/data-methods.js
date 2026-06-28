@@ -26,6 +26,7 @@ proto._normalizeFileTransform = function(transform = null) {
         timeShift: t.timeShift === '' || t.timeShift === null || t.timeShift === undefined ? 0 : t.timeShift,
         timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
+        timeStepOriginMode: ['elapsed', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
@@ -38,7 +39,7 @@ proto._normalizeFileTransform = function(transform = null) {
 
 proto._isFileTransformActive = function(transform) {
     const t = this._normalizeFileTransform(transform);
-    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
 };
 
 proto._fileTransform = function(fileId) {
@@ -57,18 +58,55 @@ proto._timeKind = function(fileId) {
 };
 
 proto._isGeneratedIndexTime = function(fileId, timeVar = null) {
-    return this._fileTransform(fileId).timeDisplayMode === 'index'
-        || (timeVar || this._getTimeVar(fileId))?.timeKind === 'index';
+    const t = timeVar || this._getTimeVar(fileId);
+    const transformMode = this._fileTransform(fileId).timeDisplayMode;
+    if (transformMode === 'index') return true;
+    if (t?.timeKind === 'datetime' && transformMode) return false;
+    return t?.timeKind === 'index'
+        || (t?.timeKind === 'datetime' && t?.timeDisplayMode === 'index');
 };
 
 proto._isGeneratedDurationTime = function(fileId, timeVar = null) {
     return this._isGeneratedIndexTime(fileId, timeVar) && this._indexTimeStepMode(fileId) !== 'index';
 };
 
+proto._isGeneratedFromDetectedTime = function(fileId, timeVar = null) {
+    const t = timeVar || this._getTimeVar(fileId);
+    const transform = this._fileTransform(fileId);
+    return this._isGeneratedIndexTime(fileId, t)
+        && t?.timeKind === 'datetime'
+        && (transform.timeDisplayMode === 'index'
+            || (!transform.timeDisplayMode && t?.timeDisplayMode === 'index'));
+};
+
+proto._isGeneratedCalendarTime = function(fileId, timeVar = null) {
+    const t = timeVar || this._getTimeVar(fileId);
+    const stepSeconds = this._indexTimeStepSeconds(fileId);
+    return this._isGeneratedDurationTime(fileId, t)
+        && t?.timeKind === 'datetime'
+        && Number.isFinite(stepSeconds)
+        && stepSeconds > 0
+        && this._fileTransform(fileId).timeStepOriginMode === 'calendar';
+};
+
+proto._isHighResolutionGeneratedCalendarTime = function(fileId, timeVar = null) {
+    return this._isGeneratedCalendarTime(fileId, timeVar)
+        && this._indexTimeStepSeconds(fileId) < 0.001;
+};
+
 proto._indexTimeStepMode = function(fileId) {
     const transform = this._fileTransform(fileId);
     const timeVar = this._getTimeVar(fileId);
-    if (transform.timeDisplayMode !== 'index' && timeVar?.timeKind !== 'index') return null;
+    if (timeVar?.timeKind === 'datetime'
+        && transform.timeDisplayMode
+        && transform.timeDisplayMode !== 'index') {
+        return null;
+    }
+    if (transform.timeDisplayMode !== 'index'
+        && timeVar?.timeKind !== 'index'
+        && !(timeVar?.timeKind === 'datetime' && timeVar?.timeDisplayMode === 'index')) {
+        return null;
+    }
     return transform.timeStepMode || timeVar.timeStepMode || 'index';
 };
 
@@ -100,15 +138,15 @@ proto._indexTimeStepLabel = function(fileId) {
 proto._timeDisplayMode = function(fileId) {
     const transform = this._fileTransform(fileId);
     const timeVar = this._getTimeVar(fileId);
-    if (transform.timeDisplayMode === 'index') return 'index';
+    if (this._isGeneratedIndexTime(fileId, timeVar)) return this._isGeneratedCalendarTime(fileId, timeVar) ? 'calendar' : 'index';
     if (timeVar?.timeKind !== 'datetime') return 'numeric';
     return transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
 };
 
 proto._timeDisplayModeForVar = function(fileId, timeVar = null) {
-    const transform = this._fileTransform(fileId);
-    if (transform.timeDisplayMode === 'index') return 'index';
+    if (this._isGeneratedIndexTime(fileId, timeVar)) return this._isGeneratedCalendarTime(fileId, timeVar) ? 'calendar' : 'index';
     if (timeVar?.timeKind !== 'datetime') return 'numeric';
+    const transform = this._fileTransform(fileId);
     return transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
 };
 
@@ -123,7 +161,10 @@ proto._calendarTickFormat = function(fileId, timeVar = null) {
         : '%Y-%m-%d %H:%M:%S';
 };
 
-proto._calendarAxisConfig = function(fileId, timeVar = null) {
+proto._calendarAxisConfig = function(fileId, timeVar = null, rangeOrValues = null) {
+    if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) {
+        return this._highResolutionCalendarAxisConfig(fileId, timeVar, rangeOrValues);
+    }
     return {
         type: 'date',
         hoverformat: this._calendarTickFormat(fileId, timeVar),
@@ -138,10 +179,24 @@ proto._isCalendarTimeForVar = function(fileId, timeVar = null) {
     return this._timeDisplayModeForVar(fileId, timeVar) === 'calendar';
 };
 
+proto._timeOriginMsForVar = function(fileId, timeVar = null) {
+    const entry = this.files.get(fileId);
+    const t = timeVar || this._getTimeVar(fileId);
+    const candidates = [
+        t?.timeOriginMs,
+        entry?.data?.metadata?.timeOriginMs,
+        entry?.data?.metadata?.timeStart,
+        t?.data?.[0],
+    ];
+    for (const candidate of candidates) {
+        const value = Number(candidate);
+        if (Number.isFinite(value)) return value;
+    }
+    return 0;
+};
+
 proto._timeOriginMs = function(fileId) {
-    const timeVar = this._getTimeVar(fileId);
-    const origin = Number(timeVar?.timeOriginMs);
-    return Number.isFinite(origin) ? origin : Number(timeVar?.data?.[0]) || 0;
+    return this._timeOriginMsForVar(fileId);
 };
 
 proto._timeDisplayValue = function(fileId, rawTime) {
@@ -153,16 +208,114 @@ proto._timeDisplayValue = function(fileId, rawTime) {
 
 proto._timeDisplayValueForVar = function(fileId, rawTime, timeVar = null) {
     if (this._isGeneratedIndexTime(fileId, timeVar)) {
-        const mode = this._indexTimeStepMode(fileId);
-        return mode === 'index' ? rawTime : rawTime * this._indexTimeStepSeconds(fileId);
+        return this._generatedIndexDisplayTime(fileId, rawTime, timeVar);
     }
     if (this._isElapsedTimeForVar(fileId, timeVar)) {
-        const origin = Number(timeVar?.timeOriginMs);
-        const fallbackOrigin = Number(timeVar?.data?.[0]);
-        const originMs = Number.isFinite(origin) ? origin : (Number.isFinite(fallbackOrigin) ? fallbackOrigin : this._timeOriginMs(fileId));
+        const originMs = this._timeOriginMsForVar(fileId, timeVar);
         return (rawTime - originMs) / 1000;
     }
     return rawTime;
+};
+
+proto._generatedIndexDisplayTime = function(fileId, rowIndex, timeVar = null) {
+    const row = Number(rowIndex);
+    if (!Number.isFinite(row)) return NaN;
+    const mode = this._indexTimeStepMode(fileId);
+    if (mode !== 'index' && this._isGeneratedCalendarTime(fileId, timeVar)) {
+        if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) {
+            return row * this._indexTimeStepSeconds(fileId);
+        }
+        const originMs = this._timeOriginMsForVar(fileId, timeVar);
+        return originMs + row * this._indexTimeStepSeconds(fileId) * 1000;
+    }
+    return mode === 'index' ? row : row * this._indexTimeStepSeconds(fileId);
+};
+
+proto._approxRowIndexFromSourceTime = function(fileId, rawTime, fallbackIndex = null) {
+    const fallback = Number(fallbackIndex);
+    const raw = Number(rawTime);
+    const entry = this.files.get(fileId);
+    const totalRows = Number(entry?.data?._duckdb?.totalRows);
+    const start = Number(entry?.data?.metadata?.timeStart);
+    const end = Number(entry?.data?.metadata?.timeEnd);
+    if (Number.isFinite(raw)
+        && Number.isFinite(totalRows)
+        && totalRows > 1
+        && Number.isFinite(start)
+        && Number.isFinite(end)
+        && end > start) {
+        const ratio = (raw - start) / (end - start);
+        return Math.max(0, Math.min(totalRows - 1, ratio * (totalRows - 1)));
+    }
+    if (Number.isFinite(fallback)) return fallback;
+    return raw;
+};
+
+proto._displayTimeForFetchedSourceTime = function(fileId, rawTime, fallbackIndex = null, timeVar = null) {
+    const t = timeVar || this._getTimeVar(fileId);
+    const transform = this._fileTransform(fileId);
+    let displayTime;
+    if (this._isGeneratedIndexTime(fileId, t)) {
+        const rowIndex = t?.timeKind === 'datetime'
+            ? this._approxRowIndexFromSourceTime(fileId, rawTime, fallbackIndex)
+            : rawTime;
+        displayTime = this._generatedIndexDisplayTime(fileId, rowIndex, t);
+    } else {
+        displayTime = this._timeDisplayValueForVar(fileId, rawTime, t);
+    }
+    const shift = this._parseTimeShift(fileId, transform.timeShift);
+    return Number.isFinite(displayTime) ? displayTime + shift : displayTime;
+};
+
+proto._sourceRangeForDisplayRange = function(fileId, displayRange, timeVar = null) {
+    const t = timeVar || this._getTimeVar(fileId);
+    const entry = this.files.get(fileId);
+    const rawValues = (displayRange || []).map(value => Number(value));
+    if (rawValues.length < 2 || !rawValues.every(Number.isFinite)) return null;
+
+    const transform = this._fileTransform(fileId);
+    const shift = this._parseTimeShift(fileId, transform.timeShift);
+    const values = rawValues.map(value => value - shift);
+
+    if (this._isGeneratedIndexTime(fileId, t)) {
+        const dataStart = Number(entry?.data?.metadata?.timeStart);
+        const dataEnd = Number(entry?.data?.metadata?.timeEnd);
+        const totalRows = Number(entry?.data?._duckdb?.totalRows);
+        if (Number.isFinite(dataStart)
+            && Number.isFinite(dataEnd)
+            && dataEnd > dataStart
+            && Number.isFinite(totalRows)
+            && totalRows > 1) {
+            const stepSeconds = this._indexTimeStepSeconds(fileId);
+            const mode = this._indexTimeStepMode(fileId);
+            const displayToRow = value => {
+                if (mode === 'index') return value;
+                if (this._isGeneratedCalendarTime(fileId, t) && !this._isHighResolutionGeneratedCalendarTime(fileId, t)) {
+                    const originMs = this._timeOriginMsForVar(fileId, t);
+                    return (value - originMs) / (stepSeconds * 1000);
+                }
+                return value / stepSeconds;
+            };
+            const rowValues = values.map(displayToRow);
+            if (rowValues.every(Number.isFinite)) {
+                const sourceValues = rowValues.map(row => {
+                    const clamped = Math.max(0, Math.min(totalRows - 1, row));
+                    return dataStart + (clamped / (totalRows - 1)) * (dataEnd - dataStart);
+                });
+                return sourceValues;
+            }
+        }
+        if (Number.isFinite(dataStart) && Number.isFinite(dataEnd) && dataEnd >= dataStart) {
+            return [dataStart, dataEnd];
+        }
+        return values;
+    }
+
+    if (this._isElapsedTimeForVar(fileId, t)) {
+        const originMs = this._timeOriginMsForVar(fileId, t);
+        return values.map(value => originMs + value * 1000);
+    }
+    return values;
 };
 
 proto._isElapsedTime = function(fileId) {
@@ -178,6 +331,7 @@ proto._isElapsedTimeForVar = function(fileId, timeVar = null) {
 proto._plotlyTimeValue = function(fileId, value, timeVar = null) {
     if (this._timeDisplayModeForVar(fileId, timeVar) !== 'calendar') return value;
     if (!Number.isFinite(value)) return value;
+    if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) return value;
     return new Date(value).toISOString();
 };
 
@@ -186,7 +340,7 @@ proto._plotlyTimeArray = function(fileId, values, timeVar = null) {
     return Array.from(values || [], value => this._plotlyTimeValue(fileId, value, timeVar));
 };
 
-proto._elapsedDateTimeAxisConfig = function(rangeOrValues) {
+proto._elapsedDateTimeAxisConfig = function(rangeOrValues, fileId = null) {
     const values = Array.isArray(rangeOrValues?.[0]) ? rangeOrValues.flat() : (rangeOrValues || []);
     const finite = values.map(Number).filter(Number.isFinite);
     if (!finite.length) return {};
@@ -202,13 +356,38 @@ proto._elapsedDateTimeAxisConfig = function(rangeOrValues) {
         type: 'linear',
         tickmode: 'array',
         tickvals,
-        ticktext: tickvals.map(value => this._formatElapsedDateTime(value)),
+        ticktext: tickvals.map(value => this._formatElapsedDateTime(value, this._durationFractionDigits(fileId))),
+    };
+};
+
+proto._highResolutionCalendarAxisConfig = function(fileId, timeVar = null, rangeOrValues = null) {
+    const values = Array.isArray(rangeOrValues?.[0]) ? rangeOrValues.flat() : (rangeOrValues || []);
+    const finite = values.map(Number).filter(Number.isFinite);
+    if (!finite.length) return { type: 'linear' };
+    let min = Math.min(...finite);
+    let max = Math.max(...finite);
+    if (min > max) [min, max] = [max, min];
+    if (min === max) {
+        min -= 1;
+        max += 1;
+    }
+    const spanSeconds = Math.max(max - min, 1e-9);
+    const relativeTicks = this._durationTickValues(0, spanSeconds);
+    const tickvals = relativeTicks.map(value => min + value);
+    return {
+        type: 'linear',
+        tickmode: 'array',
+        tickvals,
+        ticktext: tickvals.map(value => this._formatGeneratedCalendarDateTime(fileId, value, timeVar)),
     };
 };
 
 proto._durationTickValues = function(min, max, maxTicks = 7) {
     const span = Math.max(Math.abs(max - min), 1e-9);
     const steps = [
+        1e-9, 2e-9, 5e-9, 1e-8, 2e-8, 5e-8,
+        1e-7, 2e-7, 5e-7, 1e-6, 2e-6, 5e-6,
+        1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4,
         0.001, 0.002, 0.005, 0.01, 0.02, 0.05,
         0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30,
         60, 120, 300, 600, 900, 1800,
@@ -227,10 +406,21 @@ proto._durationTickValues = function(min, max, maxTicks = 7) {
     return ticks;
 };
 
-proto._formatElapsedDateTime = function(value) {
+proto._durationFractionDigits = function(fileId = null) {
+    if (!fileId || !this._isGeneratedDurationTime(fileId)) return 3;
+    const stepSeconds = this._indexTimeStepSeconds(fileId);
+    if (!Number.isFinite(stepSeconds) || stepSeconds <= 0) return 3;
+    if (stepSeconds < 1e-6) return 9;
+    if (stepSeconds < 1e-3) return 6;
+    return 3;
+};
+
+proto._formatElapsedDateTime = function(value, fractionDigits = 3) {
     if (!Number.isFinite(value)) return this._formatHTMLNumber(value);
     const sign = value < 0 ? '-' : '';
-    let seconds = Math.abs(value);
+    const digits = Math.max(0, Math.min(9, Number.isFinite(Number(fractionDigits)) ? Math.trunc(Number(fractionDigits)) : 3));
+    const scale = 10 ** digits;
+    let seconds = Math.round(Math.abs(value) * scale) / scale;
     const days = Math.floor(seconds / 86400);
     seconds -= days * 86400;
     const hours = Math.floor(seconds / 3600);
@@ -238,10 +428,10 @@ proto._formatElapsedDateTime = function(value) {
     const minutes = Math.floor(seconds / 60);
     seconds -= minutes * 60;
     const wholeSeconds = Math.floor(seconds);
-    const fractional = seconds - wholeSeconds;
+    let fractionInt = Math.round((seconds - wholeSeconds) * scale);
     const pad = n => String(n).padStart(2, '0');
-    const secText = fractional > 1e-6
-        ? `${pad(wholeSeconds)}.${String(Number(fractional.toFixed(3))).slice(2)}`
+    const secText = digits > 0 && fractionInt > 0
+        ? `${pad(wholeSeconds)}.${String(fractionInt).padStart(digits, '0')}`
         : pad(wholeSeconds);
     const timeText = `${pad(hours)}:${pad(minutes)}:${secText}`;
     return `${sign}${days ? `${days} d ` : ''}${timeText}`;
@@ -253,6 +443,9 @@ proto._parseTimeBoundary = function(fileId, value) {
         const numeric = Number(value);
         if (Number.isFinite(numeric)) return numeric;
         const ms = Date.parse(String(value));
+        if (this._isHighResolutionGeneratedCalendarTime(fileId)) {
+            return Number.isFinite(ms) ? (ms - this._timeOriginMsForVar(fileId)) / 1000 : null;
+        }
         return Number.isFinite(ms) ? ms : null;
     }
     if (this._timeDisplayMode(fileId) === 'elapsedDateTime' || this._timeDisplayMode(fileId) === 'elapsedSeconds') {
@@ -289,11 +482,15 @@ proto._parseDurationMs = function(value) {
             return sign * (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
         }
     }
-    const match = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|day|days|w|week|weeks)?$/i);
+    const match = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(ps|picoseconds?|ns|nanoseconds?|us|microseconds?|ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|day|days|y|yr|yrs|year|years|w|week|weeks)?$/i);
     if (!match) return 0;
     const amount = Number(match[1]);
     if (!Number.isFinite(amount)) return 0;
     const unit = (match[2] || 'ms').toLowerCase();
+    if (unit.startsWith('p')) return amount / 1e9;
+    if (unit.startsWith('n')) return amount / 1e6;
+    if (unit === 'us' || unit.startsWith('micro')) return amount / 1000;
+    if (unit.startsWith('y')) return amount * 365.25 * 24 * 60 * 60 * 1000;
     if (unit.startsWith('w')) return amount * 7 * 24 * 60 * 60 * 1000;
     if (unit.startsWith('d')) return amount * 24 * 60 * 60 * 1000;
     if (unit.startsWith('h')) return amount * 60 * 60 * 1000;
@@ -303,6 +500,7 @@ proto._parseDurationMs = function(value) {
 };
 
 proto._parseTimeShift = function(fileId, value) {
+    if (this._isHighResolutionGeneratedCalendarTime(fileId)) return this._parseDurationMs(value) / 1000;
     if (this._isCalendarTime(fileId)) return this._parseDurationMs(value);
     if (this._timeDisplayMode(fileId) === 'elapsedDateTime' || this._timeDisplayMode(fileId) === 'elapsedSeconds' || this._isGeneratedDurationTime(fileId)) {
         const numeric = Number(value);
@@ -322,6 +520,9 @@ proto._timeAxisTitleForVar = function(fileId, timeVar = null, fallback = 'Time')
     const name = timeVar?.name || fallback;
     if (this._isGeneratedIndexTime(fileId, timeVar)) {
         const mode = this._indexTimeStepMode(fileId);
+        if (mode !== 'index' && this._isGeneratedCalendarTime(fileId, timeVar)) {
+            return `datetime [step ${this._indexTimeStepLabel(fileId)}]`;
+        }
         return mode === 'index' ? 'index' : `duration [hh:mm:ss, step ${this._indexTimeStepLabel(fileId)}]`;
     }
     const mode = this._timeDisplayModeForVar(fileId, timeVar);
@@ -337,6 +538,7 @@ proto._timeAxisTitleForVar = function(fileId, timeVar = null, fallback = 'Time')
 };
 
 proto._timeUnitLabel = function(fileId) {
+    if (this._isGeneratedCalendarTime(fileId)) return 'datetime';
     if (this._isGeneratedIndexTime(fileId)) return this._indexTimeStepMode(fileId) === 'index' ? 'index' : 'duration';
     if (this._isCalendarTime(fileId)) return 'datetime';
     if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return 'duration';
@@ -345,9 +547,82 @@ proto._timeUnitLabel = function(fileId) {
     return timeVar ? this._extractUnit(timeVar.description) : 's';
 };
 
+proto._calendarFractionDigits = function(fileId) {
+    if (!this._isHighResolutionGeneratedCalendarTime(fileId)) return 3;
+    const stepSeconds = this._indexTimeStepSeconds(fileId);
+    if (stepSeconds < 1e-6) return 9;
+    if (stepSeconds < 1e-3) return 6;
+    return 3;
+};
+
+proto._formatCalendarDateTime = function(fileId, value, timeVar = null) {
+    if (!Number.isFinite(value)) return this._formatHTMLNumber(value);
+    const digits = this._calendarFractionDigits(fileId);
+    let secondMs = Math.floor(value / 1000) * 1000;
+    let fraction = (value - secondMs) / 1000;
+    const scale = 10 ** digits;
+    let fractionInt = Math.round(fraction * scale);
+    if (fractionInt >= scale) {
+        secondMs += 1000;
+        fractionInt = 0;
+    }
+    const d = new Date(secondMs);
+    if (!Number.isFinite(d.getTime())) return this._formatHTMLNumber(value);
+    const pad2 = n => String(n).padStart(2, '0');
+    const year = d.getUTCFullYear();
+    const month = pad2(d.getUTCMonth() + 1);
+    const day = pad2(d.getUTCDate());
+    const minute = pad2(d.getUTCMinutes());
+    const second = pad2(d.getUTCSeconds());
+    const fractionText = digits > 0 ? `.${String(fractionInt).padStart(digits, '0')}` : '';
+    if (this._calendarTimeFormat(fileId, timeVar) === 'ampm') {
+        const h24 = d.getUTCHours();
+        const suffix = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 || 12;
+        return `${year}-${month}-${day} ${pad2(h12)}:${minute}:${second}${fractionText} ${suffix} UTC`;
+    }
+    return `${year}-${month}-${day} ${pad2(d.getUTCHours())}:${minute}:${second}${fractionText} UTC`;
+};
+
+proto._formatGeneratedCalendarDateTime = function(fileId, value, timeVar = null) {
+    if (!this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) {
+        return this._formatCalendarDateTime(fileId, value, timeVar);
+    }
+    if (!Number.isFinite(value)) return this._formatHTMLNumber(value);
+    const originMs = this._timeOriginMsForVar(fileId, timeVar);
+    const baseSecondMs = Math.floor(originMs / 1000) * 1000;
+    let offsetSeconds = ((originMs - baseSecondMs) / 1000) + value;
+    let wholeOffsetSeconds = Math.floor(offsetSeconds);
+    let fractional = offsetSeconds - wholeOffsetSeconds;
+    const digits = this._calendarFractionDigits(fileId);
+    const scale = 10 ** digits;
+    let fractionInt = Math.round(fractional * scale);
+    if (fractionInt >= scale) {
+        wholeOffsetSeconds += 1;
+        fractionInt = 0;
+    }
+    const d = new Date(baseSecondMs + wholeOffsetSeconds * 1000);
+    if (!Number.isFinite(d.getTime())) return this._formatHTMLNumber(value);
+    const pad2 = n => String(n).padStart(2, '0');
+    const year = d.getUTCFullYear();
+    const month = pad2(d.getUTCMonth() + 1);
+    const day = pad2(d.getUTCDate());
+    const minute = pad2(d.getUTCMinutes());
+    const second = pad2(d.getUTCSeconds());
+    const fractionText = digits > 0 ? `.${String(fractionInt).padStart(digits, '0')}` : '';
+    if (this._calendarTimeFormat(fileId, timeVar) === 'ampm') {
+        const h24 = d.getUTCHours();
+        const suffix = h24 >= 12 ? 'PM' : 'AM';
+        const h12 = h24 % 12 || 12;
+        return `${year}-${month}-${day} ${pad2(h12)}:${minute}:${second}${fractionText} ${suffix} UTC`;
+    }
+    return `${year}-${month}-${day} ${pad2(d.getUTCHours())}:${minute}:${second}${fractionText} UTC`;
+};
+
 proto._formatTimeValue = function(fileId, value) {
     if (!Number.isFinite(value)) return this._formatHTMLNumber(value);
-    if (this._isGeneratedDurationTime(fileId)) return this._formatElapsedDateTime(value);
+    if (this._isGeneratedCalendarTime(fileId)) return this._formatGeneratedCalendarDateTime(fileId, value);
+    if (this._isGeneratedDurationTime(fileId)) return this._formatElapsedDateTime(value, this._durationFractionDigits(fileId));
     if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return this._formatElapsedDateTime(value);
     if (!this._isCalendarTime(fileId)) return this._formatHTMLNumber(value);
     const d = new Date(value);
@@ -369,7 +644,8 @@ proto._formatTimeValue = function(fileId, value) {
 
 proto._formatTimeForExport = function(fileId, value) {
     if (!Number.isFinite(value)) return value;
-    if (this._isGeneratedDurationTime(fileId)) return this._formatElapsedDateTime(value);
+    if (this._isGeneratedCalendarTime(fileId)) return this._formatGeneratedCalendarDateTime(fileId, value);
+    if (this._isGeneratedDurationTime(fileId)) return this._formatElapsedDateTime(value, this._durationFractionDigits(fileId));
     if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return this._formatElapsedDateTime(value);
     if (!this._isCalendarTime(fileId)) return value;
     return new Date(value).toISOString();
@@ -435,7 +711,7 @@ proto._getTransformIndexData = function(fileId) {
     const rawTimes = timeVar?.data || [];
     const transform = this._fileTransform(fileId);
     const generatedIndex = this._isGeneratedIndexTime(fileId, timeVar);
-    const generatedFromDetectedTime = generatedIndex && transform.timeDisplayMode === 'index';
+    const generatedFromDetectedTime = this._isGeneratedFromDetectedTime(fileId, timeVar);
     const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
     const cropEnd = this._parseTimeBoundary(fileId, transform.cropEnd);
     const timeShift = this._parseTimeShift(fileId, transform.timeShift);
@@ -453,10 +729,22 @@ proto._getTransformIndexData = function(fileId) {
 
         const indexes = [];
         const times = [];
+        const generatedCalendar = generatedFromDetectedTime && this._isGeneratedCalendarTime(fileId, timeVar);
+        const highResolutionCalendar = generatedCalendar && this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
+        const generatedCalendarOrigin = generatedCalendar ? this._timeOriginMsForVar(fileId, timeVar) : 0;
         for (let i = 0; i < rawTimes.length; i++) {
             const rawTime = rawTimes[i];
+            const generatedRow = generatedFromDetectedTime && timeVar?.timeKind === 'datetime'
+                ? this._approxRowIndexFromSourceTime(fileId, rawTime, i)
+                : i;
             const displayTime = generatedFromDetectedTime
-                ? (this._indexTimeStepMode(fileId) === 'index' ? i : i * this._indexTimeStepSeconds(fileId))
+                ? (this._indexTimeStepMode(fileId) === 'index'
+                    ? generatedRow
+                    : generatedCalendar
+                        ? (highResolutionCalendar
+                            ? generatedRow * this._indexTimeStepSeconds(fileId)
+                            : generatedCalendarOrigin + generatedRow * this._indexTimeStepSeconds(fileId) * 1000)
+                        : generatedRow * this._indexTimeStepSeconds(fileId))
                 : this._timeDisplayValueForVar(fileId, rawTime, timeVar);
             if (!cropped || (displayTime >= lo && displayTime <= hi)) {
                 indexes.push(i);
@@ -747,9 +1035,7 @@ proto._phaseSourceTimeRange = function(fileId) {
     if (lo === null) lo = Number.isFinite(dataStart) ? dataStart : -Infinity;
     if (hi === null) hi = Number.isFinite(dataEnd) ? dataEnd : Infinity;
     if (this._isElapsedTimeForVar(fileId, timeVar)) {
-        const origin = Number(timeVar.timeOriginMs);
-        const fallbackOrigin = Number(timeVar.data?.[0]);
-        const originMs = Number.isFinite(origin) ? origin : (Number.isFinite(fallbackOrigin) ? fallbackOrigin : this._timeOriginMs(fileId));
+        const originMs = this._timeOriginMsForVar(fileId, timeVar);
         lo = Number.isFinite(lo) ? originMs + lo * 1000 : lo;
         hi = Number.isFinite(hi) ? originMs + hi * 1000 : hi;
     }
@@ -762,7 +1048,7 @@ proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, raw
     const timeVar = this._getTimeVar(fileId);
     const transform = this._fileTransform(fileId);
     const generatedIndex = this._isGeneratedIndexTime(fileId, timeVar);
-    const generatedFromDetectedTime = generatedIndex && transform.timeDisplayMode === 'index';
+    const generatedFromDetectedTime = this._isGeneratedFromDetectedTime(fileId, timeVar);
     const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
     const cropEnd = this._parseTimeBoundary(fileId, transform.cropEnd);
     const timeShift = this._parseTimeShift(fileId, transform.timeShift);
@@ -776,11 +1062,20 @@ proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, raw
     const outTime = [];
     const outByVar = new Map(varNames.map(name => [name, []]));
     const n = rawTime?.length || 0;
+    const generatedCalendar = generatedFromDetectedTime && this._isGeneratedCalendarTime(fileId, timeVar);
+    const highResolutionCalendar = generatedCalendar && this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
+    const generatedCalendarOrigin = generatedCalendar ? this._timeOriginMsForVar(fileId, timeVar) : 0;
     for (let i = 0; i < n; i++) {
         const rn = Number(rowIndex?.[i]);
         const raw = Number(rawTime[i]);
         const displayTime = generatedFromDetectedTime
-            ? (this._indexTimeStepMode(fileId) === 'index' ? rn : rn * this._indexTimeStepSeconds(fileId))
+            ? (this._indexTimeStepMode(fileId) === 'index'
+                ? rn
+                : generatedCalendar
+                    ? (highResolutionCalendar
+                        ? rn * this._indexTimeStepSeconds(fileId)
+                        : generatedCalendarOrigin + rn * this._indexTimeStepSeconds(fileId) * 1000)
+                    : rn * this._indexTimeStepSeconds(fileId))
             : this._timeDisplayValueForVar(fileId, raw, timeVar);
         if (!Number.isFinite(displayTime)) continue;
         if (cropped && (displayTime < lo || displayTime > hi)) continue;
@@ -820,9 +1115,12 @@ proto._buildTimeTrace = function(t, visibleRange = null) {
     const values   = this._getTransformedVariableData(t.fileId, t.varName);
     const timeMode = this._timeDisplayModeForVar(t.fileId, timeVar);
     const generatedIndexAxis = this._isGeneratedIndexTime(t.fileId, timeVar);
-    const durationAxis = timeMode === 'elapsedDateTime' || this._isGeneratedDurationTime(t.fileId, timeVar);
+    const generatedCalendarAxis = this._isGeneratedCalendarTime(t.fileId, timeVar);
+    const highResolutionCalendarAxis = this._isHighResolutionGeneratedCalendarTime(t.fileId, timeVar);
+    const durationAxis = timeMode === 'elapsedDateTime'
+        || (this._isGeneratedDurationTime(t.fileId, timeVar) && !generatedCalendarAxis);
     const timeUnit = generatedIndexAxis
-        ? (durationAxis ? 'duration' : 'index')
+        ? (generatedCalendarAxis ? 'datetime' : (durationAxis ? 'duration' : 'index'))
         : (timeMode === 'calendar'
             ? 'datetime'
             : (durationAxis ? 'duration' : (timeMode === 'elapsedSeconds' ? 's' : (timeVar ? this._extractUnit(timeVar.description) : 's'))));
@@ -832,7 +1130,10 @@ proto._buildTimeTrace = function(t, visibleRange = null) {
     const hoverTimeUnit = this._escapeHTML(timeUnit);
     const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
     const calendarTickFormat = this._calendarTickFormat(t.fileId, timeVar);
-    const hoverX = timeMode === 'calendar'
+    const durationFractionDigits = this._durationFractionDigits(t.fileId);
+    const hoverX = highResolutionCalendarAxis
+        ? `<b>Time</b> = %{customdata}<br>`
+        : timeMode === 'calendar'
         ? `<b>Time</b> = %{x|${calendarTickFormat}}<br>`
         : (durationAxis
             ? `<b>Elapsed</b> = %{customdata}<br>`
@@ -848,15 +1149,21 @@ proto._buildTimeTrace = function(t, visibleRange = null) {
             visible: t.visible ?? true,
             line: { color: t.color, width: 1.5, dash: 'dash' },
             hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}<extra></extra>`,
-            ...(durationAxis ? { customdata: [tStart, tEnd].map(value => this._formatElapsedDateTime(value)) } : {}),
+            ...(highResolutionCalendarAxis
+                ? { customdata: [tStart, tEnd].map(value => this._formatGeneratedCalendarDateTime(t.fileId, value, timeVar)) }
+                : durationAxis
+                    ? { customdata: [tStart, tEnd].map(value => this._formatElapsedDateTime(value, durationFractionDigits)) }
+                    : {}),
         };
     }
     const isStep = variable.dataType === 'boolean';
     const useGL = !isStep && values.length >= PlotManager.GL_POINT_THRESHOLD;
     const visual = this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep);
     const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
-    const customdata = durationAxis
-        ? Array.from(visual.x || [], value => this._formatElapsedDateTime(value))
+    const customdata = highResolutionCalendarAxis
+        ? Array.from(visual.x || [], value => this._formatGeneratedCalendarDateTime(t.fileId, value, timeVar))
+        : durationAxis
+        ? Array.from(visual.x || [], value => this._formatElapsedDateTime(value, durationFractionDigits))
         : undefined;
     const line = useGL
         ? { color: t.color, width: 1.5 }
@@ -879,11 +1186,13 @@ proto._buildTimeLayout = function(plot) {
     const firstFileId = firstTrace?.fileId || this.activeFileId;
     const firstTimeVar = firstFileId ? this._getTimeVar(firstFileId) : this._getTimeVar();
     const firstTimeMode = this._timeDisplayModeForVar(firstFileId, firstTimeVar);
+    const generatedCalendarAxis = this._isGeneratedCalendarTime(firstFileId, firstTimeVar);
+    const generatedElapsedDurationAxis = this._isGeneratedDurationTime(firstFileId, firstTimeVar) && !generatedCalendarAxis;
     const timeTitle = this._timeAxisTitleForVar(firstFileId, firstTimeVar);
-    const xAxisMode = firstTimeMode === 'calendar'
-        ? this._calendarAxisConfig(firstFileId, firstTimeVar)
-        : (firstTimeMode === 'elapsedDateTime' || this._isGeneratedDurationTime(firstFileId, firstTimeVar)
-            ? this._elapsedDateTimeAxisConfig(plot.traces.map(t => this._getTransformedTimeData(t.fileId)))
+    const xAxisMode = firstTimeMode === 'calendar' || generatedCalendarAxis
+        ? this._calendarAxisConfig(firstFileId, firstTimeVar, plot.traces.map(t => this._getTransformedTimeData(t.fileId)))
+        : (firstTimeMode === 'elapsedDateTime' || generatedElapsedDurationAxis
+            ? this._elapsedDateTimeAxisConfig(plot.traces.map(t => this._getTransformedTimeData(t.fileId)), firstFileId)
             : { type: 'linear' });
     const xExtent = this._finiteExtent(plot.traces
         .filter(t => this._isVisible(t))
@@ -891,7 +1200,7 @@ proto._buildTimeLayout = function(plot) {
     const xRange = xExtent ? this._exactRange(xExtent.min, xExtent.max) : null;
     const xRangeConfig = xRange
         ? {
-            range: firstTimeMode === 'calendar'
+            range: firstTimeMode === 'calendar' || generatedCalendarAxis
                 ? this._plotlyTimeArray(firstFileId, xRange, firstTimeVar)
                 : xRange,
             autorange: false,
@@ -1073,8 +1382,10 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
             zArrays.push(visual.z || []);
         }
     }
-    const calendarTimeAxis = isTimez && firstTimeMode === 'calendar';
-    const elapsedDateTimeAxis = isTimez && (firstTimeMode === 'elapsedDateTime' || this._isGeneratedDurationTime(first.fileId, firstTimeVar));
+    const generatedCalendarAxis = this._isGeneratedCalendarTime(first.fileId, firstTimeVar);
+    const calendarTimeAxis = isTimez && (firstTimeMode === 'calendar' || generatedCalendarAxis);
+    const elapsedDateTimeAxis = isTimez && (firstTimeMode === 'elapsedDateTime'
+        || (this._isGeneratedDurationTime(first.fileId, firstTimeVar) && !generatedCalendarAxis));
     const xExtent = calendarTimeAxis ? this._finiteExtent(xArrays) : null;
     let xRange = xExtent ? this._exactRange(xExtent.min, xExtent.max) : this._rangeIncluding0(xArrays);
     if (calendarTimeAxis && Array.isArray(xRange)) {
@@ -1082,8 +1393,8 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
         xRange = this._plotlyTimeArray(first.fileId, xRange, timeVar);
     }
     const timeAxisConfig = calendarTimeAxis
-        ? this._calendarAxisConfig(first.fileId, firstTimeVar)
-        : (elapsedDateTimeAxis ? this._elapsedDateTimeAxisConfig(xArrays) : {});
+        ? this._calendarAxisConfig(first.fileId, firstTimeVar, xArrays)
+        : (elapsedDateTimeAxis ? this._elapsedDateTimeAxisConfig(xArrays, first.fileId) : {});
     const yRange = this._rangeIncluding0(yArrays);
     const zRange = this._rangeIncluding0(zArrays);
     const axisStyle = { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor,

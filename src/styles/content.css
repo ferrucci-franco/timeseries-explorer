@@ -561,6 +561,14 @@
     line-height: 1.25;
 }
 
+.datetime-axis-warning-hint {
+    padding: 6px 7px;
+    border: 1px solid rgba(220, 76, 76, 0.45);
+    border-radius: 4px;
+    background: rgba(220, 76, 76, 0.10);
+    color: #ff9b9b;
+}
+
 .file-transform-field input,
 .file-transform-field select {
     width: 100%;

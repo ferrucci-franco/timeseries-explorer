@@ -109,6 +109,9 @@ proto.loadFile = async function(file, options = {}) {
         if (hideParquetOverlayAfterLoad && !options.deferUi) {
             this._hideFileLoadingOverlay();
         }
+        if (!options.deferUi) {
+            await this._showDatetimeAxisWarningIfNeeded(fileId, data);
+        }
 
         console.log('Loaded:', currentFile.name, '- variables:', Object.keys(data.variables).length);
         return { fileId, data };
@@ -155,7 +158,64 @@ proto.loadFiles = async function(items = []) {
         this._hideFileLoadingOverlay();
     }
 
+    for (const result of loaded) {
+        await this._showDatetimeAxisWarningIfNeeded(result.fileId, result.data);
+    }
+
     return loaded;
+};
+
+proto._hasRepeatedDatetimeWarning = function(data) {
+    const metadata = data?.metadata || {};
+    if (metadata.datetimeAxisStalled) return true;
+    const metadataStart = Number(metadata.timeStart);
+    const metadataEnd = Number(metadata.timeEnd);
+    if (metadata.timeKind === 'datetime'
+        && Number(metadata.numTimesteps) >= 3
+        && Number.isFinite(metadataStart)
+        && metadataStart === metadataEnd) {
+        return true;
+    }
+    const timeName = metadata.timeName;
+    const timeVar = timeName ? data?.variables?.[timeName] : null;
+    if (timeVar?.timeKind !== 'datetime') return false;
+    const values = timeVar.data;
+    if (!values || values.length < 3) return false;
+    let previous = NaN;
+    let runLength = 0;
+    const limit = Math.min(values.length, 1000);
+    for (let i = 0; i < limit; i++) {
+        const value = Number(values[i]);
+        if (!Number.isFinite(value)) {
+            previous = NaN;
+            runLength = 0;
+            continue;
+        }
+        runLength = value === previous ? runLength + 1 : 1;
+        previous = value;
+        if (runLength >= 3) return true;
+    }
+    return false;
+};
+
+proto._showDatetimeAxisWarningIfNeeded = async function(fileId, data) {
+    if (!this._hasRepeatedDatetimeWarning(data)) return;
+    if (!this._datetimeAxisWarningShownFileIds) this._datetimeAxisWarningShownFileIds = new Set();
+    if (this._datetimeAxisWarningShownFileIds.has(fileId)) return;
+    this._datetimeAxisWarningShownFileIds.add(fileId);
+    const entry = this.files.get(fileId);
+    const fileName = entry?.name || data?.filename || 'file';
+    const body = i18n.t('datetimeAxisRepeatedDialogBody').replace('{file}', fileName);
+    const warningIcon = `
+        <svg class="datetime-warning-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+            <path class="datetime-warning-icon-fill" d="M29.18 8.72c1.25-2.15 4.39-2.15 5.64 0l25.8 44.55c1.25 2.16-.32 4.86-2.82 4.86H6.2c-2.5 0-4.07-2.7-2.82-4.86L29.18 8.72Z"/>
+            <path class="datetime-warning-icon-mark" d="M32 22.5v16.25"/>
+            <circle class="datetime-warning-icon-mark-fill" cx="32" cy="46" r="2.75"/>
+        </svg>`;
+    await Modal.alert(i18n.t('datetimeAxisRepeatedDialogTitle'), body, {
+        iconHtml: warningIcon,
+        className: 'modal-dialog-datetime-warning',
+    });
 };
 
 proto._yieldToBrowser = function() {
@@ -1094,7 +1154,8 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
     }
     // Try DuckDB-WASM first when available — it bypasses the ~512 MB string
     // ceiling of the legacy parser and returns typed-array columns.
-    if (file && this._canUseDuckDb()) {
+    const duckDbCsvCompatible = !csvProfile?.encoding || csvProfile.encoding === 'utf-8';
+    if (file && this._canUseDuckDb() && duckDbCsvCompatible) {
         try {
             const source = await this._getDuckDbSource();
             const lazy = (file.size ?? 0) >= DUCKDB_LAZY_THRESHOLD_BYTES;
@@ -1108,6 +1169,8 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
             console.warn('[duckdb] falling back to legacy CSV parser:', err?.message || err);
             // fall through to legacy path
         }
+    } else if (file && this._canUseDuckDb() && !duckDbCsvCompatible) {
+        console.warn(`[duckdb] skipping CSV path for ${filename}: ${csvProfile.encoding} text is handled by the legacy parser.`);
     }
     if (legacyFallbackUnsafe) {
         throw this._largeCsvDuckDbError(filename, fileSize, null);
@@ -1422,7 +1485,7 @@ proto._renderFilesList = function() {
 };
 
 proto._defaultFileTransform = function() {
-    return { timeDisplayMode: null, calendarTimeFormat: null, timeShift: 0, timeStepMode: null, customTimeStep: '', gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
+    return { timeDisplayMode: null, calendarTimeFormat: null, timeShift: 0, timeStepMode: null, customTimeStep: '', timeStepOriginMode: null, gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
 };
 
 proto._normalizeFileTransform = function(transform = null) {
@@ -1448,6 +1511,7 @@ proto._normalizeFileTransform = function(transform = null) {
         timeShift: t.timeShift === '' || t.timeShift === null || t.timeShift === undefined ? 0 : t.timeShift,
         timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
+        timeStepOriginMode: ['elapsed', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
@@ -1460,7 +1524,7 @@ proto._normalizeFileTransform = function(transform = null) {
 
 proto._isFileTransformActive = function(transform) {
     const t = this._normalizeFileTransform(transform);
-    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
 };
 
 proto._toggleFileTransformPanel = function(fileId) {
@@ -1478,6 +1542,11 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         ? (transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar')
         : 'numeric';
     const isIndexAxis = isIndexTime || timeDisplayMode === 'index';
+    const indexStepMode = isIndexAxis ? (transform.timeStepMode || timeVar.timeStepMode || 'index') : null;
+    let isGeneratedCalendarAxis = isDateTime
+        && timeDisplayMode === 'index'
+        && indexStepMode !== 'index'
+        && transform.timeStepOriginMode === 'calendar';
     const calendarTimeFormat = transform.calendarTimeFormat || timeVar?.calendarTimeFormat || '24h';
     const panel = document.createElement('div');
     panel.className = 'file-transform-panel';
@@ -1522,6 +1591,76 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         return wrap;
     };
 
+    const stepUnits = ['ps', 'ns', 'us', 'ms', 's', 'min', 'h', 'day', 'year'];
+    const isTimeVarAxisStalled = () => {
+        if (!isDateTime) return false;
+        const data = timeVar?.data;
+        if (!data || data.length < 3) return false;
+        let previous = NaN;
+        let runLength = 0;
+        const limit = Math.min(data.length, 1000);
+        for (let i = 0; i < limit; i++) {
+            const value = Number(data[i]);
+            if (!Number.isFinite(value)) {
+                previous = NaN;
+                runLength = 0;
+                continue;
+            }
+            runLength = value === previous ? runLength + 1 : 1;
+            previous = value;
+            if (runLength >= 3) return true;
+        }
+        return false;
+    };
+    const metadata = entryData.data?.metadata || {};
+    const metadataStart = Number(metadata.timeStart);
+    const metadataEnd = Number(metadata.timeEnd);
+    const metadataStalled = metadata.timeKind === 'datetime'
+        && Number(metadata.numTimesteps) >= 3
+        && Number.isFinite(metadataStart)
+        && metadataStart === metadataEnd;
+    const datetimeAxisStalled = Boolean(metadata.datetimeAxisStalled) || metadataStalled || isTimeVarAxisStalled();
+
+    const makeCustomStepField = () => {
+        const raw = String(transform.customTimeStep || '').trim();
+        const match = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(ps|ns|us|ms|s|min|h|day|year)?$/i);
+        const wrap = document.createElement('label');
+        wrap.className = 'file-transform-field';
+        wrap.title = i18n.t('indexCustomStepTooltip');
+
+        const span = document.createElement('span');
+        span.textContent = i18n.t('indexCustomStepLabel');
+        span.title = i18n.t('indexCustomStepTooltip');
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = 'any';
+        input.inputMode = 'decimal';
+        input.placeholder = '10';
+        input.value = match ? match[1] : '';
+
+        const select = document.createElement('select');
+        const selectedUnit = match && stepUnits.includes(match[2]?.toLowerCase()) ? match[2].toLowerCase() : (match ? 'ms' : 's');
+        select.innerHTML = stepUnits
+            .map(unit => `<option value="${unit}"${unit === selectedUnit ? ' selected' : ''}>${unit}</option>`)
+            .join('');
+
+        const commit = () => {
+            const value = String(input.value || '').trim();
+            const customTimeStep = value ? `${value} ${select.value}` : '';
+            this._updateFileTransform(fileId, { customTimeStep });
+        };
+        input.addEventListener('change', commit);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') input.blur();
+        });
+        select.addEventListener('change', commit);
+
+        wrap.append(span, input, select);
+        wrap.input = input;
+        return wrap;
+    };
+
     if (isDateTime) {
         const timeTitle = document.createElement('div');
         timeTitle.className = 'file-transform-title';
@@ -1553,6 +1692,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             if (!nextIsIndex) {
                 patch.timeStepMode = null;
                 patch.customTimeStep = '';
+                patch.timeStepOriginMode = null;
             }
             if (!(timeDisplayMode === 'calendar' && nextIsCalendar)) {
                 patch.cropStart = null;
@@ -1564,6 +1704,13 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         modeSelect.addEventListener('change', updateTimeMode);
         modeWrap.append(modeLabel, modeSelect);
         panel.append(timeTitle, modeWrap);
+
+        if (datetimeAxisStalled) {
+            const stalledHint = document.createElement('div');
+            stalledHint.className = 'file-transform-hint datetime-axis-warning-hint';
+            stalledHint.textContent = i18n.t('datetimeAxisStalledHint');
+            panel.appendChild(stalledHint);
+        }
 
         if (timeDisplayMode === 'index') {
             const indexHint = document.createElement('div');
@@ -1591,20 +1738,41 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             <option value="1hour"${stepMode === '1hour' ? ' selected' : ''}>${i18n.t('indexTimeStep1Hour')}</option>
             <option value="custom"${stepMode === 'custom' ? ' selected' : ''}>${i18n.t('indexTimeStepCustom')}</option>
         `;
-        stepSelect.addEventListener('change', () => this._updateFileTransform(fileId, {
-            timeStepMode: stepSelect.value,
-        }, { rerender: true }));
+        stepSelect.addEventListener('change', () => {
+            const nextStepMode = stepSelect.value;
+            this._updateFileTransform(fileId, {
+                timeStepMode: nextStepMode,
+                timeStepOriginMode: nextStepMode === 'index' ? null : transform.timeStepOriginMode,
+            }, { rerender: true });
+        });
         stepWrap.append(stepLabel, stepSelect);
         panel.append(timeTitle, stepWrap);
 
         if (stepMode === 'custom') {
-            panel.append(makeInput(
-                'customTimeStep',
-                i18n.t('indexCustomStepLabel'),
-                transform.customTimeStep,
-                '15 min',
-                { type: 'text', title: i18n.t('indexCustomStepTooltip') },
-            ));
+            panel.append(makeCustomStepField());
+        }
+
+        if (isDateTime && stepMode !== 'index') {
+            const originWrap = document.createElement('label');
+            originWrap.className = 'file-transform-field file-transform-field-wide';
+            const originLabel = document.createElement('span');
+            originLabel.textContent = i18n.t('indexTimeOriginLabel');
+            const originSelect = document.createElement('select');
+            const originMode = transform.timeStepOriginMode === 'calendar' ? 'calendar' : 'elapsed';
+            originSelect.innerHTML = `
+                <option value="elapsed"${originMode === 'elapsed' ? ' selected' : ''}>${i18n.t('indexTimeOriginElapsed')}</option>
+                <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>${i18n.t('indexTimeOriginCalendar')}</option>
+            `;
+            originSelect.addEventListener('change', () => {
+                this._updateFileTransform(fileId, {
+                    timeStepOriginMode: originSelect.value,
+                    cropStart: null,
+                    cropEnd: null,
+                    timeShift: 0,
+                }, { rerender: true });
+            });
+            originWrap.append(originLabel, originSelect);
+            panel.append(originWrap);
         }
     }
 
@@ -1660,11 +1828,15 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                 ? sign * (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000
                 : NaN;
         }
-        const match = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|day|days|w|week|weeks)?$/i);
+        const match = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(ps|picoseconds?|ns|nanoseconds?|us|microseconds?|ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|day|days|y|yr|yrs|year|years|w|week|weeks)?$/i);
         if (!match) return NaN;
         const amount = Number(match[1]);
         if (!Number.isFinite(amount)) return NaN;
         const unit = (match[2] || 'ms').toLowerCase();
+        if (unit.startsWith('p')) return amount / 1e9;
+        if (unit.startsWith('n')) return amount / 1e6;
+        if (unit === 'us' || unit.startsWith('micro')) return amount / 1000;
+        if (unit.startsWith('y')) return amount * 365.25 * 24 * 60 * 60 * 1000;
         if (unit.startsWith('w')) return amount * 7 * 24 * 60 * 60 * 1000;
         if (unit.startsWith('d')) return amount * 24 * 60 * 60 * 1000;
         if (unit.startsWith('h')) return amount * 60 * 60 * 1000;
@@ -1672,12 +1844,12 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         if (unit.startsWith('s')) return amount * 1000;
         return amount;
     };
-    const stepModeForAxis = isIndexAxis ? (transform.timeStepMode || timeVar.timeStepMode || 'index') : null;
+    const stepModeForAxis = indexStepMode;
     const isGeneratedDurationAxis = isIndexAxis && stepModeForAxis !== 'index';
     const usesDurationCrop = timeDisplayMode === 'elapsedDateTime' || timeDisplayMode === 'elapsedSeconds' || isGeneratedDurationAxis;
     const usesIndexCrop = isIndexAxis && stepModeForAxis === 'index';
     const cropTooltip = (() => {
-        if (isDateTime && timeDisplayMode === 'calendar') return i18n.t('calendarCropTooltip');
+        if ((isDateTime && timeDisplayMode === 'calendar') || isGeneratedCalendarAxis) return i18n.t('calendarCropTooltip');
         if (usesIndexCrop) return i18n.t('indexCropTooltip');
         if (usesDurationCrop) return timeDisplayMode === 'elapsedSeconds' ? i18n.t('secondsCropTooltip') : i18n.t('durationCropTooltip');
         return i18n.t('numericCropTooltip');
@@ -1702,7 +1874,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         const input = field?.input;
         if (!input) return { ok: true, value: null };
         let parsed;
-        if (isDateTime && timeDisplayMode === 'calendar') {
+        if ((isDateTime && timeDisplayMode === 'calendar') || isGeneratedCalendarAxis) {
             const nativeInvalid = input.validity?.badInput || input.validity?.rangeOverflow || input.validity?.rangeUnderflow;
             parsed = nativeInvalid ? { ok: false } : normalizeCalendarCropValue(input.value);
             if (!parsed.ok) input.value = '';
@@ -1762,7 +1934,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             yOffset: yOffset.value,
         });
     };
-    const isCalendarCrop = isDateTime && timeDisplayMode === 'calendar';
+    const isCalendarCrop = (isDateTime && timeDisplayMode === 'calendar') || isGeneratedCalendarAxis;
     const cropInputOptions = isCalendarCrop
         ? {
             type: 'datetime-local',
@@ -1786,7 +1958,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     const shiftInputOptions = durationShift
         ? {
             type: 'text',
-            title: timeDisplayMode === 'calendar' ? i18n.t('calendarOffsetTooltip') : i18n.t('durationOffsetTooltip'),
+            title: (timeDisplayMode === 'calendar' || isGeneratedCalendarAxis) ? i18n.t('calendarOffsetTooltip') : i18n.t('durationOffsetTooltip'),
             placeholder: '0 h',
             updateOnChange: false,
             onInput: clearApplyErrorOnInput,

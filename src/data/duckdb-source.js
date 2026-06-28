@@ -740,6 +740,9 @@ export default class DuckDbSource {
             const countResult = await this._conn.query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName} WHERE ${validTimeWhere}`);
             const countCol = countResult.getChildAt(0) || countResult.getChild('n');
             totalRows = Number(countCol?.get(0) ?? 0);
+            if (format === 'csv' && totalRows <= 0) {
+                throw new Error('DuckDB CSV profile produced no valid time rows; falling back.');
+            }
             dataSql = (!lazy || totalRows <= overviewPoints)
                 ? `SELECT ${projection} FROM ${tableName} WHERE ${validTimeWhere} ORDER BY "${escTimeAlias}" ASC NULLS LAST`
                 : this._overviewSql(tableName, projection, escTimeAlias, totalRows, overviewPoints, validTimeWhere);
@@ -1404,6 +1407,7 @@ export default class DuckDbSource {
         const timeType = columnTypes[timeColIndex];
         const timeData = this._extractColumnAsFloat64(table, timeColIndex, timeType);
         const timeKind = timeInfo?.timeKind || (/TIMESTAMP|DATE|TIME/.test(timeType) ? 'datetime' : 'numeric');
+        const datetimeAxisStalled = timeKind === 'datetime' && this._isStalledTimeAxis(timeData);
 
         const usedNames = new Set();
         const sanitize = (raw) => {
@@ -1425,7 +1429,7 @@ export default class DuckDbSource {
         };
         if (timeKind === 'datetime') {
             timeVar.timeKind = 'datetime';
-            timeVar.timeDisplayMode = 'calendar';
+            timeVar.timeDisplayMode = datetimeAxisStalled ? 'index' : 'calendar';
             timeVar.timeOriginMs = timeData.length ? timeData[0] : null;
         }
         result.variables[timeVar.name] = timeVar;
@@ -1472,9 +1476,10 @@ export default class DuckDbSource {
             skippedRowsAfterHeader: 0,
             timeName: timeVar.name,
             timeKind,
-            timeDisplayMode: timeKind === 'datetime' ? 'calendar' : 'numeric',
+            timeDisplayMode: timeKind === 'datetime' ? (datetimeAxisStalled ? 'index' : 'calendar') : 'numeric',
             timeOriginMs: timeVar.timeOriginMs ?? null,
             timeSourceColumns: timeInfo?.sourceNames?.length ? timeInfo.sourceNames : [timeName],
+            datetimeAxisStalled,
             backend: 'duckdb',
         };
 
@@ -1499,22 +1504,26 @@ export default class DuckDbSource {
             }
             return arr;
         }
-        // Try the typed-array fast path. Arrow exposes toArray() for primitive cols.
-        try {
-            const raw = child.toArray();
-            if (raw instanceof Float64Array) return raw;
-            if (raw instanceof Float32Array
-                || raw instanceof Int32Array || raw instanceof Uint32Array
-                || raw instanceof Int16Array || raw instanceof Uint16Array
-                || raw instanceof Int8Array  || raw instanceof Uint8Array) {
-                return Float64Array.from(raw);
-            }
-            if (Array.isArray(raw)) {
-                const arr = new Float64Array(raw.length);
-                for (let i = 0; i < raw.length; i++) arr[i] = Number(raw[i]);
-                return arr;
-            }
-        } catch (_) { /* fall through */ }
+        // Try the typed-array fast path only when Arrow reports no nulls.
+        // toArray() drops the validity bitmap for primitive columns, which
+        // turns NULL into 0 and creates fake spikes/drops in line plots.
+        if (!(Number(child.nullCount) > 0)) {
+            try {
+                const raw = child.toArray();
+                if (raw instanceof Float64Array) return raw;
+                if (raw instanceof Float32Array
+                    || raw instanceof Int32Array || raw instanceof Uint32Array
+                    || raw instanceof Int16Array || raw instanceof Uint16Array
+                    || raw instanceof Int8Array  || raw instanceof Uint8Array) {
+                    return Float64Array.from(raw);
+                }
+                if (Array.isArray(raw)) {
+                    const arr = new Float64Array(raw.length);
+                    for (let i = 0; i < raw.length; i++) arr[i] = raw[i] == null ? NaN : Number(raw[i]);
+                    return arr;
+                }
+            } catch (_) { /* fall through */ }
+        }
         // Fallback: iterate.
         const arr = new Float64Array(child.length);
         for (let i = 0; i < child.length; i++) {
@@ -1542,6 +1551,25 @@ export default class DuckDbSource {
             if (data[i] !== first) return false;
         }
         return true;
+    }
+
+    _isStalledTimeAxis(data) {
+        if (!data || data.length < 3) return false;
+        let previous = NaN;
+        let runLength = 0;
+        const limit = Math.min(data.length, 1000);
+        for (let i = 0; i < limit; i++) {
+            const value = Number(data[i]);
+            if (!Number.isFinite(value)) {
+                previous = NaN;
+                runLength = 0;
+                continue;
+            }
+            runLength = value === previous ? runLength + 1 : 1;
+            previous = value;
+            if (runLength >= 3) return true;
+        }
+        return false;
     }
 
     _uniqueName(base, used) {

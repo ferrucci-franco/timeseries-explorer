@@ -200,11 +200,20 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         if (!lazyMeta) {
             // Mixed lazy/eager: fall back to the sync path for this trace.
             const built = this._buildTimeTrace(t, range);
-            if (built) immediateResults.push({ idx, x: built.x, y: built.y });
+            if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
             if (perf) perf.eagerTraces++;
             return;
         }
         if (perf) perf.lazyTraces++;
+        const timeVar = this._getTimeVar(t.fileId);
+        const sourceViewportRange = this._sourceRangeForDisplayRange(t.fileId, [t0, t1], timeVar);
+        if (!sourceViewportRange || !sourceViewportRange.every(Number.isFinite)) {
+            const built = this._buildTimeTrace(t, range);
+            if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
+            if (perf) perf.overviewTraces++;
+            return;
+        }
+        const [sourceT0, sourceT1] = sourceViewportRange;
 
         // Density heuristic: if the in-memory overview already has enough
         // resolution in the visible range, skip the DuckDB round-trip. The
@@ -215,18 +224,24 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         const tStart = Number(data?.metadata?.timeStart);
         const tEnd = Number(data?.metadata?.timeEnd);
         if (Number.isFinite(tStart) && Number.isFinite(tEnd) && tEnd > tStart) {
-            const coverage = (Math.min(t1, tEnd) - Math.max(t0, tStart)) / (tEnd - tStart);
-            const overviewPts = lazyMeta.overviewPoints || 10000;
-            if (coverage >= (target / overviewPts)) {
+            const minSource = Math.min(sourceT0, sourceT1);
+            const maxSource = Math.max(sourceT0, sourceT1);
+            const overlap = Math.max(0, Math.min(maxSource, tEnd) - Math.max(minSource, tStart));
+            const coverage = overlap / (tEnd - tStart);
+            const overviewPts = Number(data?.variables?.[data?.metadata?.timeName]?.data?.length)
+                || lazyMeta.overviewPoints
+                || 10000;
+            const overviewPtsInView = overviewPts * coverage;
+            if (overviewPtsInView >= target * 1.25) {
                 // Overview is enough — use the sync path (slice + downsample in JS).
                 const built = this._buildTimeTrace(t, range);
-                if (built) immediateResults.push({ idx, x: built.x, y: built.y });
+                if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
                 if (perf) perf.overviewTraces++;
                 return;
             }
         }
 
-        const cached = this._lazyCacheResult(t, idx, t0, t1, target);
+        const cached = this._lazyCacheResult(t, idx, sourceT0, sourceT1, target);
         if (cached) {
             immediateResults.push(cached);
             if (perf) perf.traceCacheHits++;
@@ -238,10 +253,10 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             return;
         }
         lazyQueryCount++;
-        const queryRange = this._lazyExpandedRange(data, t0, t1);
-        const queryTarget = this._lazyExpandedTarget(target, queryRange, t0, t1);
+        const queryRange = this._lazyExpandedRange(data, sourceT0, sourceT1);
+        const queryTarget = this._lazyExpandedTarget(target, queryRange, sourceT0, sourceT1);
         const preview = this._renderedTracePreview(plot, idx, t0, t1, target);
-        if (preview) previewResults.push({ idx, x: preview.x, y: preview.y });
+        if (preview) previewResults.push({ idx, x: preview.x, y: preview.y, prepared: true });
         if (perf && preview) perf.previewTraces++;
 
         const groupKey = [
@@ -252,7 +267,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         ].join('\u0001');
         let group = queryGroups.get(groupKey);
         if (!group) {
-            group = { source, data, queryRange, queryTarget, items: [] };
+            group = { source, data, queryRange, queryTarget, sourceViewportRange, displayViewportRange: [t0, t1], items: [] };
             queryGroups.set(groupKey, group);
         }
         group.items.push({ trace: t, idx });
@@ -286,7 +301,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         const results = [];
         for (const group of queryGroupsList) {
             if (this._zoomTokens.get(panelId) !== token) break;
-            results.push(await this._runLazyDetailGroup(panelId, token, plot, group, t0, t1, target));
+            results.push(await this._runLazyDetailGroup(panelId, token, plot, group, target));
         }
         return results;
     }).then(async results => {
@@ -529,7 +544,7 @@ proto._cleanupLazyDetailForPanel = function(panelId, plot = this.plots?.get(pane
     panelEl?.querySelectorAll('.lazy-detail-indicator').forEach(indicator => indicator.remove());
 };
 
-proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target) {
+proto._runLazyDetailGroup = function(panelId, token, plot, group, target) {
     const varNames = group.items.map(item => item.trace.varName);
     const startedAt = this._perfNow();
     const fetch = group.source?.getColumnsRange
@@ -557,7 +572,8 @@ proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target
                 x,
                 y,
             };
-            return this._lazyCacheResult(trace, idx, t0, t1, target) || { idx, trace, x, y };
+            const [sourceT0, sourceT1] = group.sourceViewportRange || group.queryRange;
+            return this._lazyCacheResult(trace, idx, sourceT0, sourceT1, target) || { idx, trace, x, y };
         });
         mapped._omvPerf = {
             ...(_perf || {}),
@@ -570,7 +586,11 @@ proto._runLazyDetailGroup = function(panelId, token, plot, group, t0, t1, target
     }).catch(err => {
         if (this._zoomTokens.get(panelId) !== token) return [];
         console.warn('[duckdb] grouped viewport query failed; keeping current lazy view:', err?.message || err);
-        return group.items.map(({ idx }) => this._renderedTracePreview(plot, idx, t0, t1, target));
+        const [displayT0, displayT1] = group.displayViewportRange || group.sourceViewportRange || group.queryRange;
+        return group.items.map(({ idx }) => {
+            const preview = this._renderedTracePreview(plot, idx, displayT0, displayT1, target);
+            return preview ? { ...preview, idx, prepared: true } : null;
+        });
     });
 };
 
@@ -679,7 +699,9 @@ proto._lazyExpandedTarget = function(target, queryRange, t0, t1) {
     const factor = viewportSpan > 0 && Number.isFinite(querySpan)
         ? Math.max(1, Math.min(4, querySpan / viewportSpan))
         : 1;
-    return Math.min(6000, Math.max(target, Math.ceil(target * factor)));
+    const expanded = Math.max(target, Math.ceil(target * factor));
+    const cap = Math.max(6000, target * 4);
+    return Math.min(cap, expanded);
 };
 
 proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
@@ -694,7 +716,9 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     let anyCustomdata = false;
     for (const result of valid) {
         const trace = result.trace || plot.traces[result.idx];
-        const prepared = this._prepareLazyTimeseriesRestyle(trace, result.x, result.y);
+        const prepared = result.prepared
+            ? { x: result.x, y: result.y, customdata: result.customdata }
+            : this._prepareLazyTimeseriesRestyle(trace, result.x, result.y);
         xs.push(prepared.x);
         ys.push(prepared.y);
         cds.push(prepared.customdata ?? null);
@@ -708,14 +732,20 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
 proto._prepareLazyTimeseriesRestyle = function(trace, x, y) {
     const fileId = trace?.fileId;
     const timeVar = this._getTimeVar(fileId);
-    const plotX = this._plotlyTimeArray(fileId, x, timeVar);
+    const visualX = Array.from(x || [], (value, index) =>
+        this._displayTimeForFetchedSourceTime(fileId, value, index, timeVar)
+    );
+    const plotX = this._plotlyTimeArray(fileId, visualX, timeVar);
+    const generatedCalendarAxis = this._isGeneratedCalendarTime(fileId, timeVar);
     const durationAxis = this._timeDisplayModeForVar(fileId, timeVar) === 'elapsedDateTime'
-        || this._isGeneratedDurationTime(fileId, timeVar);
+        || (this._isGeneratedDurationTime(fileId, timeVar) && !generatedCalendarAxis);
     return {
         x: plotX,
         y,
-        customdata: durationAxis
-            ? Array.from(x || [], value => this._formatElapsedDateTime(value))
+        customdata: generatedCalendarAxis
+            ? visualX.map(value => this._formatGeneratedCalendarDateTime(fileId, value, timeVar))
+            : durationAxis
+            ? visualX.map(value => this._formatElapsedDateTime(value, this._durationFractionDigits(fileId)))
             : undefined,
     };
 };
@@ -843,6 +873,23 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
     if (!plot?.div || plot.mode !== 'timeseries') return;
     const fid = this._primaryTimeFileId(plot);
     const timeVar = this._getTimeVar(fid);
+    const generatedCalendarAxis = this._isGeneratedCalendarTime(fid, timeVar);
+    if (generatedCalendarAxis) {
+        const values = Array.isArray(range) && range.length >= 2
+            ? range.map(value => {
+                const numeric = Number(value);
+                return Number.isFinite(numeric) ? numeric : NaN;
+            })
+            : plot.traces.map(t => this._getTransformedTimeData(t.fileId));
+        const config = this._calendarAxisConfig(fid, timeVar, values);
+        if (!config.tickvals || !config.ticktext) return;
+        Plotly.relayout(plot.div, {
+            'xaxis.tickmode': config.tickmode,
+            'xaxis.tickvals': config.tickvals,
+            'xaxis.ticktext': config.ticktext,
+        });
+        return;
+    }
     if (this._timeDisplayModeForVar(fid, timeVar) !== 'elapsedDateTime' && !this._isGeneratedDurationTime(fid, timeVar)) return;
     const values = Array.isArray(range) && range.length >= 2
         ? range.map(value => {
@@ -850,7 +897,7 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
             return Number.isFinite(numeric) ? numeric : NaN;
         })
         : plot.traces.map(t => this._getTransformedTimeData(t.fileId));
-    const config = this._elapsedDateTimeAxisConfig(values);
+    const config = this._elapsedDateTimeAxisConfig(values, fid);
     if (!config.tickvals || !config.ticktext) return;
     Plotly.relayout(plot.div, {
         'xaxis.tickmode': config.tickmode,

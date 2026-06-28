@@ -99,6 +99,7 @@ export default class CsvParser {
             this._sortTimeSeriesByTime(timeValues, variableColumns);
             if (timeKind === 'datetime') timeOriginMs = timeValues[0];
         }
+        const datetimeAxisStalled = timeKind === 'datetime' && this._isStalledTimeAxis(timeValues);
 
         const result = {
             filename: '',
@@ -120,7 +121,7 @@ export default class CsvParser {
         };
         if (timeKind === 'datetime') {
             timeVariable.timeKind = 'datetime';
-            timeVariable.timeDisplayMode = 'calendar';
+            timeVariable.timeDisplayMode = datetimeAxisStalled ? 'index' : 'calendar';
             timeVariable.timeOriginMs = timeOriginMs;
             timeVariable.description = timeSource.description || '[datetime]';
         } else if (timeKind === 'index') {
@@ -175,7 +176,8 @@ export default class CsvParser {
             timeKind,
             timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
             timeOriginMs,
-            timeSourceColumns: timeSource.sourceIndexes.map(index => rawHeaders[index] || `column_${index + 1}`)
+            timeSourceColumns: timeSource.sourceIndexes.map(index => rawHeaders[index] || `column_${index + 1}`),
+            datetimeAxisStalled
         };
 
         result.tree = this.structureParser._buildTree(result.variables);
@@ -183,7 +185,8 @@ export default class CsvParser {
     }
 
     inspectSample(buffer, options = {}) {
-        const text = this._decodeText(buffer);
+        const decoded = this._decodeTextWithEncoding(buffer);
+        const text = decoded.text;
         const delimiter = options.delimiter || this._detectDelimiter(text);
         const maxRows = Math.max(20, Number(options.maxRows) || 700);
         const rows = this._parseRows(text, delimiter)
@@ -216,6 +219,7 @@ export default class CsvParser {
 
         return {
             delimiter,
+            encoding: decoded.encoding,
             hasHeader,
             headerIndex: table.headerIndex,
             dataStartIndex: table.dataStartIndex,
@@ -296,13 +300,17 @@ export default class CsvParser {
     }
 
     _decodeText(buffer) {
-        if (typeof buffer === 'string') return buffer.replace(/^\uFEFF/, '');
+        return this._decodeTextWithEncoding(buffer).text;
+    }
+
+    _decodeTextWithEncoding(buffer) {
+        if (typeof buffer === 'string') return { text: buffer.replace(/^\uFEFF/, ''), encoding: 'utf-8' };
         if (this._utf8Decoder) {
             try {
-                return this._utf8Decoder.decode(buffer).replace(/^\uFEFF/, '');
+                return { text: this._utf8Decoder.decode(buffer).replace(/^\uFEFF/, ''), encoding: 'utf-8' };
             } catch (_) {
                 if (this._latin1Decoder) {
-                    return this._latin1Decoder.decode(buffer).replace(/^\uFEFF/, '');
+                    return { text: this._latin1Decoder.decode(buffer).replace(/^\uFEFF/, ''), encoding: 'windows-1252' };
                 }
             }
         }
@@ -310,7 +318,7 @@ export default class CsvParser {
         let text = '';
         const bytes = new Uint8Array(buffer);
         for (const b of bytes) text += String.fromCharCode(b);
-        return text.replace(/^\uFEFF/, '');
+        return { text: text.replace(/^\uFEFF/, ''), encoding: 'latin1' };
     }
 
     _detectDelimiter(text) {
@@ -412,6 +420,26 @@ export default class CsvParser {
                 column.stringValues = order.map(index => column.stringValues[index]);
             }
         }
+    }
+
+    _isStalledTimeAxis(timeValues) {
+        if (!Array.isArray(timeValues) && !ArrayBuffer.isView(timeValues)) return false;
+        if (timeValues.length < 3) return false;
+        let previous = NaN;
+        let runLength = 0;
+        const limit = Math.min(timeValues.length, 1000);
+        for (let i = 0; i < limit; i++) {
+            const value = Number(timeValues[i]);
+            if (!Number.isFinite(value)) {
+                previous = NaN;
+                runLength = 0;
+                continue;
+            }
+            runLength = value === previous ? runLength + 1 : 1;
+            previous = value;
+            if (runLength >= 3) return true;
+        }
+        return false;
     }
 
     _looksLikeHeaderRow(row, followingRows = [], delimiter = ',') {

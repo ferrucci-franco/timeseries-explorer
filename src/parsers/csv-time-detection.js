@@ -440,9 +440,9 @@ function profileColumnContent(sample, colIdx, delimiter) {
         monthNameDate: 0,      // 01-Aug-2022, 01 aout 2022, Aug 01 2022
         monthNameDmy: 0,
         monthNameMdy: 0,
-        yearlessCounts: { firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
-        slashCounts: { firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
-        dashCounts:  { firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
+        yearlessCounts: { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
+        slashCounts: { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
+        dashCounts:  { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
         hasTimePart: 0,
         excelSerialCandidate: 0,
         monotonicInc: 0,
@@ -478,7 +478,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
             profile.yearlessDateTime++;
             if (ym[2] === '/') profile.yearlessSlash++;
             else profile.yearlessDash++;
-            tallyDateAmbiguity(profile.yearlessCounts, +ym[1], +ym[3]);
+            tallyDateAmbiguity(profile.yearlessCounts, +ym[1], +ym[3], ym[1]);
             profile.hasTimePart++;
             continue;
         }
@@ -502,7 +502,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         );
         if (sm) {
             profile.slashDate++;
-            tallyDateAmbiguity(profile.slashCounts, +sm[1], +sm[2]);
+            tallyDateAmbiguity(profile.slashCounts, +sm[1], +sm[2], sm[1]);
             if (sm[4] != null) profile.hasTimePart++;
             continue;
         }
@@ -512,7 +512,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         );
         if (dm) {
             profile.dashDate++;
-            tallyDateAmbiguity(profile.dashCounts, +dm[1], +dm[2]);
+            tallyDateAmbiguity(profile.dashCounts, +dm[1], +dm[2], dm[1]);
             if (dm[4] != null) profile.hasTimePart++;
             continue;
         }
@@ -529,9 +529,10 @@ function profileColumnContent(sample, colIdx, delimiter) {
     return profile;
 }
 
-function tallyDateAmbiguity(c, a, b) {
+function tallyDateAmbiguity(c, a, b, firstPart = '') {
     c.total++;
-    if (a > 12 && a <= 31) c.firstGt12++;
+    if (String(firstPart).length === 4) c.ymd++;
+    else if (a > 12 && a <= 31) c.firstGt12++;
     else if (b > 12 && b <= 31) c.secondGt12++;
     else c.ambig++;
 }
@@ -762,6 +763,7 @@ function evaluateSplitColumns(dateCol, timeCol, preferred) {
 }
 
 function resolveDmyOrMdy(counts, preferred) {
+    if (counts.ymd > 0) return { order: 'YMD', ambiguous: false };
     if (counts.firstGt12 > 0 && counts.secondGt12 === 0) return { order: 'DMY', ambiguous: false };
     if (counts.secondGt12 > 0 && counts.firstGt12 === 0) return { order: 'MDY', ambiguous: false };
     if (counts.firstGt12 > 0 && counts.secondGt12 > 0) {
