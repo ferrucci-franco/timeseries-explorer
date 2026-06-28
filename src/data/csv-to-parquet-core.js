@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import CsvParser from '../parsers/csv-parser.js';
 import MatParser from '../parsers/mat-parser.js';
-import { parseCsvNumber } from '../parsers/csv-time-detection.js';
+import { customDatetimePatternToDuckDbFormat, parseCsvNumber } from '../parsers/csv-time-detection.js';
 
 const require = createRequire(import.meta.url);
 const duckDbModulePath = (() => {
@@ -69,19 +69,19 @@ export function csvColumnSpecs(profile) {
             && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
         return {
             name,
-            type: forceVarchar ? 'VARCHAR' : inferDuckDbCsvType(sampleRows, index, profile.delimiter),
+            type: forceVarchar ? 'VARCHAR' : inferDuckDbCsvType(sampleRows, index, profile.delimiter, profile.decimalSeparator),
         };
     });
 }
 
-export function inferDuckDbCsvType(sampleRows, index, delimiter) {
+export function inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto') {
     let nonEmpty = 0;
     let numeric = 0;
     for (const row of sampleRows || []) {
         const raw = String(row?.[index] ?? '').trim();
         if (!raw) continue;
         nonEmpty++;
-        if (Number.isFinite(parseCsvNumber(raw, delimiter))) numeric++;
+        if (Number.isFinite(parseCsvNumber(raw, delimiter, decimalSeparator))) numeric++;
     }
     return nonEmpty > 0 && (numeric / nonEmpty) >= 0.95 ? 'DOUBLE' : 'VARCHAR';
 }
@@ -94,6 +94,8 @@ export function duckDbColumnsStruct(specs) {
 }
 
 export function csvUsesDecimalComma(profile) {
+    if (profile?.decimalSeparator === ',') return true;
+    if (profile?.decimalSeparator === '.') return false;
     if (!profile || profile.delimiter === ',') return false;
     for (const row of profile.sampleRows || []) {
         for (const cell of row || []) {
@@ -149,6 +151,10 @@ export function datetimeSqlFromProfile(timeSource, sourceNames) {
     if (strategy === 'yearless-date-time') return yearlessDateTimeSql(first, timeSource.format);
     if (strategy === 'month-name-date') return monthNameDateSql(first);
     if (strategy === 'iso-datetime') return `epoch_ms(CAST(${first} AS TIMESTAMP))::DOUBLE`;
+    if (strategy === 'custom-format') {
+        const format = customDatetimePatternToDuckDbFormat(timeSource.format?.pattern || '');
+        return format ? tryStrptimeSql(`CAST(${first} AS VARCHAR)`, [format]) : null;
+    }
 
     const order = timeSource.format?.dateOrder || 'YMD';
     if (strategy === 'slash-date' || strategy === 'dash-date') {
@@ -169,13 +175,42 @@ export function datetimeSqlFromProfile(timeSource, sourceNames) {
             : tryStrptimeSql(expr, formats);
     }
 
+    if (timeSource.mode === 'parts' || strategy === 'parts') {
+        return partsDateTimeSql(timeSource, sourceNames);
+    }
+
     return null;
+}
+
+function partsDateTimeSql(timeSource, sourceNames) {
+    const sourceIndexes = timeSource.sourceIndexes || [];
+    const parts = timeSource.format?.parts || {};
+    const partExpr = (name, fallback = '0') => {
+        const profileIndex = parts[name];
+        const sourceOffset = sourceIndexes.indexOf(profileIndex);
+        if (sourceOffset < 0 || !sourceNames[sourceOffset]) return fallback;
+        return `CAST(${quoteIdent(sourceNames[sourceOffset])} AS DOUBLE)`;
+    };
+    const year = partExpr('year', 'NULL');
+    const month = partExpr('month', 'NULL');
+    const day = partExpr('day', 'NULL');
+    const hour = partExpr('hour', '0');
+    const minute = partExpr('minute', '0');
+    const second = partExpr('second', '0');
+    const secondInt = `FLOOR(${second})`;
+    const microsecond = `ROUND((${second} - FLOOR(${second})) * 1000000)`;
+    const expr = `make_timestamp(CAST(${year} AS BIGINT), CAST(${month} AS BIGINT), CAST(${day} AS BIGINT), CAST(${hour} AS BIGINT), CAST(${minute} AS BIGINT), CAST(${secondInt} AS BIGINT)) + CAST(${microsecond} AS BIGINT) * INTERVAL 1 MICROSECOND`;
+    return `epoch_ms(${expr})::DOUBLE`;
 }
 
 export function projectionSql(profile, timeInfo) {
     if (!timeInfo?.sql) throw new Error('No suitable time column detected by the CSV pre-scan.');
     const specs = csvColumnSpecs(profile);
     const exclude = new Set(timeInfo.sourceNames || []);
+    for (const index of profile?.ignoredColumns || []) {
+        const name = specs[Number(index)]?.name;
+        if (name) exclude.add(name);
+    }
     const columns = specs
         .filter(({ name }) => !exclude.has(name))
         .map(({ name }) => quoteIdent(name));

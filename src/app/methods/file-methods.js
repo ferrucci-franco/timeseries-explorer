@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import CsvParsingPreviewDialog from '../../ui/csv-parsing-preview-dialog.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -51,6 +52,13 @@ proto.loadFile = async function(file, options = {}) {
                 extension = this._fileExtension(currentFile.name);
                 const preflight = await this._maybeConvertLargeCsvBeforeLoad(currentFile, { ...options, extension });
                 if (preflight?.cancelled) return null;
+                if (preflight?.csvProfile) {
+                    options = {
+                        ...options,
+                        csvProfile: preflight.csvProfile,
+                        skipLargeCsvPreflight: true,
+                    };
+                }
                 if (preflight?.file) {
                     hideParquetOverlayAfterLoad = preflight.keepOverlayUntilLoaded === true;
                     currentFile = preflight.file;
@@ -67,7 +75,9 @@ proto.loadFile = async function(file, options = {}) {
                 contentHash = buffer
                     ? await this._hashBuffer(buffer)
                     : this._fileFingerprint(currentFile);
-                data = await this._parseResultBuffer(currentFile.name, buffer, currentFile);
+                data = await this._parseResultBuffer(currentFile.name, buffer, currentFile, {
+                    csvProfile: options.csvProfile || null,
+                });
                 break;
             } catch (err) {
                 if (isTransientFileReadError(err) && attempt < 4) {
@@ -299,7 +309,10 @@ proto.reloadActiveFile = async function() {
     const buffer = streamable ? null : await this._readLatestBuffer(entry);
     const contentHash = streamable ? this._fileFingerprint(latestFile || entry.file) : await this._hashBuffer(buffer);
 
-    const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, latestFile || entry.file);
+    const currentProfile = this.plotManager.files.get(id)?.data?.metadata?.csvProfile || null;
+    const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, latestFile || entry.file, {
+        csvProfile: currentProfile?.profileSource === 'user' ? currentProfile : null,
+    });
     this._reapplyDerivedVariables(id, data);
 
     entry.buffer = buffer;
@@ -329,7 +342,10 @@ proto.reloadActiveFileAsNewVersion = async function() {
         return;
     }
 
-    const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, source.file);
+    const currentProfile = this.plotManager.files.get(sourceId)?.data?.metadata?.csvProfile || null;
+    const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, source.file, {
+        csvProfile: currentProfile?.profileSource === 'user' ? currentProfile : null,
+    });
 
     const fileId = `f${this._nextFileId++}`;
     this._copyDerivedDefinitions(sourceId, fileId);
@@ -772,12 +788,12 @@ proto._fileDisplayName = function(entry) {
     return `${entry?.name || ''}${entry?.extension ?? '.mat'}`;
 };
 
-proto._parseResultBuffer = async function(filename, buffer, file = null) {
+proto._parseResultBuffer = async function(filename, buffer, file = null, options = {}) {
     const extension = this._fileExtension(filename);
     if (extension === '.parquet') return this._parseParquetResult(filename, file);
-    if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file);
+    if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file, options);
     if (extension === '.mat') return this.parser.parse(buffer);
-    if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file);
+    if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file, options);
     throw new Error(i18n.t('invalidFile'));
 };
 
@@ -791,6 +807,7 @@ const PARQUET_HINT_THRESHOLD_BYTES = 500 * 1024 * 1024;
 // Above this size the legacy JS parser is unsafe: it decodes the whole file
 // into one string and can OOM the browser tab before throwing cleanly.
 const LEGACY_CSV_FALLBACK_MAX_BYTES = 450 * 1024 * 1024;
+const CSV_PREVIEW_SEGMENT_BYTES = 2 * 1024 * 1024;
 
 proto._canParseFromFile = function(file, extension = this._fileExtension(file?.name || '')) {
     return !!file
@@ -813,6 +830,45 @@ proto._readFileSampleBuffer = async function(file, bytes = 1024 * 1024) {
     if (!file) return null;
     const blob = typeof file.slice === 'function' ? file.slice(0, bytes) : file;
     return blob.arrayBuffer ? blob.arrayBuffer() : this._readAsArrayBuffer(blob);
+};
+
+proto._readCsvPreviewSegment = async function(file, region = 'start', bytes = CSV_PREVIEW_SEGMENT_BYTES) {
+    if (!file) return null;
+    const requestedBytes = Math.max(64 * 1024, Number(bytes) || CSV_PREVIEW_SEGMENT_BYTES);
+    const totalSize = Math.max(0, Number(file.size || 0));
+    const cappedBytes = totalSize > 0 ? Math.min(requestedBytes, totalSize) : requestedBytes;
+    let offset = 0;
+    if (region === 'middle' && totalSize > cappedBytes) {
+        offset = Math.max(0, Math.floor((totalSize - cappedBytes) / 2));
+    } else if (region === 'end' && totalSize > cappedBytes) {
+        offset = Math.max(0, totalSize - cappedBytes);
+    }
+    const end = totalSize > 0 ? Math.min(totalSize, offset + cappedBytes) : undefined;
+    const blob = typeof file.slice === 'function' ? file.slice(offset, end) : file;
+    const buffer = blob.arrayBuffer ? await blob.arrayBuffer() : await this._readAsArrayBuffer(blob);
+    return {
+        id: region,
+        buffer,
+        offset,
+        bytes: requestedBytes,
+        totalSize,
+        truncated: totalSize > 0 && buffer.byteLength < totalSize,
+    };
+};
+
+proto._readCsvPreviewSegments = async function(file, options = {}) {
+    const bytes = Number(options.bytes) || CSV_PREVIEW_SEGMENT_BYTES;
+    if (!file) return [];
+    const totalSize = Math.max(0, Number(file.size || 0));
+    const regions = totalSize > bytes * 2
+        ? ['start', 'middle', 'end']
+        : ['start'];
+    const segments = [];
+    for (const region of regions) {
+        const segment = await this._readCsvPreviewSegment(file, region, bytes);
+        if (segment?.buffer) segments.push(segment);
+    }
+    return segments;
 };
 
 proto._inspectCsvSample = async function(file, buffer = null) {
@@ -852,7 +908,7 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
     }
 
     const mb = (Number(file.size || 0) / (1024 * 1024)).toFixed(0);
-    const choice = await Modal.choice(
+    let choice = await Modal.choice(
         i18n.t('largeCsvPreflightBody')
             .replace('{file}', file.name || 'results.csv')
             .replace('{size}', `${mb} MB`),
@@ -862,10 +918,15 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
             className: 'modal-dialog-large-csv',
             choices: [
                 {
-                    value: 'save',
-                    text: i18n.t('largeCsvPreflightSave'),
+                    value: 'review',
+                    text: i18n.t('csvPreviewReviewStructure'),
                     className: 'modal-btn-confirm',
                     autoFocus: true,
+                },
+                {
+                    value: 'save',
+                    text: i18n.t('largeCsvPreflightSave'),
+                    className: 'modal-btn-confirm modal-btn-secondary-confirm',
                 },
                 {
                     value: 'temporary',
@@ -882,10 +943,45 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
     );
 
     if (!choice) return { cancelled: true };
+    if (choice === 'review') {
+        const reviewedProfile = await this._openCsvParsingPreviewForFileObject(file, {
+            csvProfile,
+            title: file.name || 'results.csv',
+        });
+        if (!reviewedProfile) return { cancelled: true };
+        csvProfile = reviewedProfile;
+        choice = await Modal.choice(
+            i18n.t('csvPreviewReviewedPreflightBody'),
+            {
+                title: i18n.t('largeCsvPreflightTitle'),
+                icon: 'CSV',
+                className: 'modal-dialog-large-csv',
+                choices: [
+                    {
+                        value: 'save',
+                        text: i18n.t('largeCsvPreflightSave'),
+                        className: 'modal-btn-confirm',
+                        autoFocus: true,
+                    },
+                    {
+                        value: 'temporary',
+                        text: i18n.t('largeCsvPreflightTemporary'),
+                        className: 'modal-btn-confirm modal-btn-secondary-confirm',
+                    },
+                    {
+                        value: 'raw',
+                        text: i18n.t('largeCsvPreflightRaw'),
+                        className: 'modal-btn-cancel',
+                    },
+                ],
+            }
+        );
+        if (!choice) return { cancelled: true };
+    }
     if (choice === 'raw') {
         this._largeCsvRawApproved ||= new Set();
         this._largeCsvRawApproved.add(this._largeCsvDecisionKey(file));
-        return null;
+        return csvProfile?.profileSource === 'user' ? { csvProfile } : null;
     }
 
     let outputPath = '';
@@ -1132,19 +1228,21 @@ proto._parseParquetResult = async function(filename, file) {
     return data;
 };
 
-proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
+proto._parseCsvResultBuffer = async function(filename, buffer, file = null, options = {}) {
     const fileSize = file?.size ?? (buffer?.byteLength || 0);
     const legacyFallbackUnsafe = fileSize >= LEGACY_CSV_FALLBACK_MAX_BYTES;
-    let csvProfile = null;
+    let csvProfile = options.csvProfile ? cloneCsvProfileForIpc(options.csvProfile) : null;
     const attachCsvProfile = data => {
         if (data?.metadata && csvProfile) data.metadata.csvProfile = csvProfile;
         return data;
     };
 
-    try {
-        if (file || buffer) csvProfile = await this._inspectCsvSample(file, buffer);
-    } catch (err) {
-        console.warn('[csv] could not inspect sample for live-update profile:', err?.message || err);
+    if (!csvProfile) {
+        try {
+            if (file || buffer) csvProfile = await this._inspectCsvSample(file, buffer);
+        } catch (err) {
+            console.warn('[csv] could not inspect sample for live-update profile:', err?.message || err);
+        }
     }
 
     // Hint the user toward Parquet for very large CSVs. Non-blocking — the
@@ -1181,11 +1279,19 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null) {
             try { csvProfile = await this._inspectCsvSample(file, buffer); } catch (_) {}
         }
     }
-    if (!this._canUseParserWorker()) return attachCsvProfile(await this.csvParser.parse(buffer));
+    if (!this._canUseParserWorker()) {
+        return attachCsvProfile(csvProfile?.profileSource === 'user'
+            ? await this.csvParser.parseWithProfile(buffer, csvProfile)
+            : await this.csvParser.parse(buffer));
+    }
     try {
-        return attachCsvProfile(await this._parseCsvInWorker(filename, buffer));
+        return attachCsvProfile(await this._parseCsvInWorker(filename, buffer, csvProfile?.profileSource === 'user' ? csvProfile : null));
     } catch (err) {
-        if (err?.workerUnavailable) return attachCsvProfile(await this.csvParser.parse(buffer));
+        if (err?.workerUnavailable) {
+            return attachCsvProfile(csvProfile?.profileSource === 'user'
+                ? await this.csvParser.parseWithProfile(buffer, csvProfile)
+                : await this.csvParser.parse(buffer));
+        }
         throw err;
     }
 };
@@ -1265,14 +1371,14 @@ proto._getParserWorker = function() {
     return this._parserWorker;
 };
 
-proto._parseCsvInWorker = function(filename, buffer) {
+proto._parseCsvInWorker = function(filename, buffer, csvProfile = null) {
     const worker = this._getParserWorker();
     const id = `parse-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const workerBuffer = buffer.slice(0);
     return new Promise((resolve, reject) => {
         this._parserWorkerPending.set(id, { resolve, reject });
         try {
-            worker.postMessage({ id, filename, buffer: workerBuffer }, [workerBuffer]);
+            worker.postMessage({ id, filename, buffer: workerBuffer, csvProfile: cloneCsvProfileForIpc(csvProfile) }, [workerBuffer]);
         } catch (err) {
             this._parserWorkerPending.delete(id);
             reject(err);
@@ -1459,6 +1565,17 @@ proto._renderFilesList = function() {
             this._toggleFileTransformPanel(fileId);
         });
 
+        const csvParsingBtn = document.createElement('button');
+        csvParsingBtn.className = 'file-entry-csv-parsing';
+        csvParsingBtn.textContent = '▦';
+        csvParsingBtn.title = i18n.t('csvPreviewAction');
+        csvParsingBtn.setAttribute('aria-label', i18n.t('csvPreviewAction'));
+        csvParsingBtn.hidden = !this._isCsvTextEntry(entryData, fileId);
+        csvParsingBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.adjustCsvParsing(fileId);
+        });
+
         const liveIndicator = document.createElement('span');
         liveIndicator.className = 'file-entry-live-indicator';
         liveIndicator.title = 'This file is being polled in real time';
@@ -1474,6 +1591,7 @@ proto._renderFilesList = function() {
 
         entry.appendChild(nameSpan);
         if (entryData.liveUpdate?.enabled) entry.appendChild(liveIndicator);
+        entry.appendChild(csvParsingBtn);
         entry.appendChild(transformBtn);
         entry.appendChild(closeBtn);
         item.appendChild(entry);
@@ -1486,6 +1604,73 @@ proto._renderFilesList = function() {
 
 proto._defaultFileTransform = function() {
     return { timeDisplayMode: null, calendarTimeFormat: null, timeShift: 0, timeStepMode: null, customTimeStep: '', timeStepOriginMode: null, gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
+};
+
+proto._openCsvParsingPreviewForFileObject = async function(file, options = {}) {
+    const sampleSegments = options.sampleBuffer
+        ? [{ id: 'start', buffer: options.sampleBuffer, offset: 0, bytes: options.sampleBuffer.byteLength || 0, totalSize: options.sampleBuffer.byteLength || 0 }]
+        : await this._readCsvPreviewSegments(file, { bytes: CSV_PREVIEW_SEGMENT_BYTES });
+    const sampleBuffer = sampleSegments[0]?.buffer;
+    if (!sampleBuffer) throw new Error('No CSV sample available.');
+    return CsvParsingPreviewDialog.open({
+        parser: this.csvParser,
+        sampleBuffer,
+        sampleSegments,
+        loadPreviewSegment: file
+            ? (region, bytes) => this._readCsvPreviewSegment(file, region, bytes)
+            : null,
+        csvProfile: options.csvProfile || null,
+        title: options.title || file?.name || '',
+    });
+};
+
+proto._isCsvTextEntry = function(entry, fileId = null) {
+    const extension = entry?.extension || this._fileExtension(entry?.file?.name || '');
+    return extension === '.csv'
+        || extension === '.txt'
+        || (fileId && this.plotManager.files.get(fileId)?.data?.metadata?.csv === true);
+};
+
+proto.adjustCsvParsing = async function(fileId) {
+    const entry = this.files.get(fileId);
+    if (!entry || !this._isCsvTextEntry(entry, fileId)) return;
+    const displayName = this._fileDisplayName(entry);
+    const plotEntry = this.plotManager.files.get(fileId);
+    const currentProfile = plotEntry?.data?.metadata?.csvProfile || null;
+
+    try {
+        const reviewedProfile = await this._openCsvParsingPreviewForFileObject(entry.file, {
+            csvProfile: currentProfile,
+            sampleBuffer: entry.file ? null : entry.buffer,
+            title: displayName,
+        });
+        if (!reviewedProfile) return;
+
+        this._showFileLoadingOverlay(1);
+        this._updateFileLoadingProgress(1, 1, displayName);
+        const streamable = this._canParseFromFile(entry.file, entry.extension);
+        const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
+        const buffer = streamable ? null : await this._readLatestBuffer(entry);
+        const contentHash = buffer
+            ? await this._hashBuffer(buffer)
+            : this._fileFingerprint(latestFile || entry.file);
+        const data = await this._parseCsvResultBuffer(displayName, buffer, latestFile || entry.file, { csvProfile: reviewedProfile });
+        this._reapplyDerivedVariables(fileId, data);
+        entry.buffer = buffer;
+        entry.contentHash = contentHash;
+        this.plotManager.updateFileData(fileId, data);
+        this.plotManager.setActiveFile(fileId);
+        this._clearVariableSelection();
+        this.renderVariablesTree(data.tree);
+        this._renderFilesList();
+        this._updateActionButtons();
+        await this._showDatetimeAxisWarningIfNeeded(fileId, data);
+    } catch (err) {
+        console.error('Error adjusting CSV parsing:', err);
+        await Modal.alert(i18n.t('csvPreviewTitle'), err?.message || String(err), { icon: 'CSV' });
+    } finally {
+        this._hideFileLoadingOverlay();
+    }
 };
 
 proto._normalizeFileTransform = function(transform = null) {
@@ -1551,6 +1736,15 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     const panel = document.createElement('div');
     panel.className = 'file-transform-panel';
     panel.addEventListener('click', e => e.stopPropagation());
+
+    if (this._isCsvTextEntry(entryData, fileId)) {
+        const csvAction = document.createElement('button');
+        csvAction.type = 'button';
+        csvAction.className = 'file-transform-wide-action';
+        csvAction.textContent = i18n.t('csvPreviewAction');
+        csvAction.addEventListener('click', () => this.adjustCsvParsing(fileId));
+        panel.appendChild(csvAction);
+    }
 
     const makeInput = (key, label, value, placeholder = '0', options = {}) => {
         const wrap = document.createElement('label');

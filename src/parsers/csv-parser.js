@@ -25,8 +25,8 @@ export default class CsvParser {
             : null;
     }
 
-    async parse(buffer) {
-        const text = this._decodeText(buffer);
+    async parse(buffer, options = {}) {
+        const text = this._decodeText(buffer, options.encoding || 'auto');
         const delimiter = this._detectDelimiter(text);
         const rows = this._parseRows(text, delimiter)
             .map(row => row.map(cell => cell.trim()))
@@ -185,7 +185,7 @@ export default class CsvParser {
     }
 
     inspectSample(buffer, options = {}) {
-        const decoded = this._decodeTextWithEncoding(buffer);
+        const decoded = this._decodeTextWithEncoding(buffer, options.encoding || 'auto');
         const text = decoded.text;
         const delimiter = options.delimiter || this._detectDelimiter(text);
         const maxRows = Math.max(20, Number(options.maxRows) || 700);
@@ -232,8 +232,247 @@ export default class CsvParser {
         };
     }
 
+    inspectPreview(buffer, options = {}) {
+        const decoded = this._decodeTextWithEncoding(buffer, options.encoding || 'auto');
+        const text = decoded.text;
+        const maxRows = Math.max(1, Number(options.maxRows) || 50);
+        const delimiter = options.delimiter || this._detectDelimiter(text);
+        const warnings = [];
+        const rows = this._parseRows(text, delimiter)
+            .slice(0, maxRows)
+            .map(row => row.map(cell => String(cell ?? '').trim()));
+        const nonEmptyRows = rows.filter(row => row.some(cell => cell !== ''));
+
+        let profile = null;
+        try {
+            profile = this.inspectSample(buffer, { maxRows: Math.max(50, maxRows), delimiter, encoding: options.encoding || 'auto' });
+        } catch (err) {
+            warnings.push(err?.message || String(err));
+            const headerIndex = nonEmptyRows.findIndex(row => row.length >= 2);
+            const sourceRow = nonEmptyRows[headerIndex >= 0 ? headerIndex : 0] || [];
+            const rawHeaders = sourceRow.length >= 2
+                ? sourceRow
+                : ['column_1', 'column_2'];
+            profile = {
+                delimiter,
+                encoding: decoded.encoding,
+                hasHeader: headerIndex >= 0 && this._looksLikeHeaderRow(sourceRow, nonEmptyRows.slice(headerIndex + 1), delimiter),
+                headerIndex: Math.max(0, headerIndex),
+                dataStartIndex: Math.max(0, headerIndex + 1),
+                skippedRows: Math.max(0, headerIndex),
+                skippedRowsAfterHeader: 0,
+                rawHeaders,
+                headers: this._makeUniqueHeaders(rawHeaders),
+                timeSource: {
+                    ok: true,
+                    kind: 'index',
+                    mode: 'generated-index',
+                    strategy: 'generated-index',
+                    sourceIndexes: [],
+                    sourceHeaders: [],
+                    name: 'index',
+                    description: '[index]',
+                    confidence: 1,
+                    format: { generated: true },
+                    warnings: [],
+                },
+                sampleRows: nonEmptyRows.slice(Math.max(0, headerIndex + 1), Math.max(0, headerIndex + 101)),
+            };
+        }
+
+        return {
+            delimiter,
+            encoding: decoded.encoding,
+            rows,
+            profile,
+            warnings,
+        };
+    }
+
+    async parseWithProfile(buffer, profile) {
+        if (!profile) return this.parse(buffer);
+        const text = this._decodeText(buffer, profile.encoding || 'auto');
+        const delimiter = profile.delimiter || ',';
+        const decimalSeparator = profile.decimalSeparator || 'auto';
+        const rows = this._parseRows(text, delimiter)
+            .map(row => row.map(cell => cell.trim()))
+            .filter(row => row.some(cell => cell !== ''));
+
+        if (rows.length < 1) {
+            throw new Error('CSV must contain at least one data row.');
+        }
+
+        const hasHeader = profile.hasHeader !== false;
+        const headerIndex = Math.max(0, Number(profile.headerIndex) || 0);
+        const dataStartIndex = Math.max(0, Number(profile.dataStartIndex) || (hasHeader ? headerIndex + 1 : headerIndex));
+        const headerRow = hasHeader ? (rows[headerIndex] || []) : (rows[dataStartIndex] || []);
+        const rawHeaders = Array.isArray(profile.rawHeaders) && profile.rawHeaders.length
+            ? profile.rawHeaders.map(header => String(header ?? '').trim())
+            : (hasHeader
+                ? headerRow
+                : headerRow.map((_, index) => `column_${index + 1}`));
+        if (rawHeaders.length < 2) {
+            throw new Error('CSV must contain at least two columns.');
+        }
+
+        const headers = this._normalizeProfileHeaders(profile.headers, rawHeaders, profile);
+        const expectedColumns = rawHeaders.length;
+        const candidateRows = rows.slice(dataStartIndex);
+        const dataRows = candidateRows.filter(row => row.length === expectedColumns);
+        const discardedColumnCountRows = candidateRows.length - dataRows.length;
+        if (dataRows.length < 1) {
+            throw new Error('CSV must contain at least one data row.');
+        }
+
+        const timeSource = profile.timeSource || {
+            ok: true,
+            kind: 'index',
+            mode: 'generated-index',
+            strategy: 'generated-index',
+            sourceIndexes: [],
+            name: 'index',
+            description: '[index]',
+        };
+        const timeIndexes = new Set(Array.isArray(timeSource.sourceIndexes) ? timeSource.sourceIndexes : []);
+        const ignoredIndexes = new Set(Array.isArray(profile.ignoredColumns) ? profile.ignoredColumns : []);
+        const variableHeaders = headers
+            .map((header, index) => ({ header, index }))
+            .filter(({ index }) => !timeIndexes.has(index) && !ignoredIndexes.has(index));
+        const timeValues = [];
+        const variableColumns = variableHeaders.map(() => ({
+            numericValues: [],
+            stringValues: [],
+            nonEmptyCount: 0,
+            finiteCount: 0
+        }));
+        let timeKind = timeSource.kind || 'index';
+        let timeOriginMs = null;
+        let invalidTimeRows = 0;
+
+        for (let r = 0; r < dataRows.length; r++) {
+            const row = dataRows[r];
+            if (!row.some(cell => cell !== '')) continue;
+
+            const timeValue = parseCsvTimeValue(timeSource, row, timeValues.length, delimiter, { decimalSeparator });
+            if (!Number.isFinite(timeValue)) {
+                invalidTimeRows++;
+                continue;
+            }
+            timeValues.push(timeValue);
+            if (timeKind === 'datetime' && timeOriginMs === null) timeOriginMs = timeValue;
+
+            for (let c = 0; c < variableHeaders.length; c++) {
+                const sourceIndex = variableHeaders[c].index;
+                const rawValue = String(row[sourceIndex] ?? '').trim();
+                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator);
+                const column = variableColumns[c];
+                column.numericValues.push(numericValue);
+                if (column.stringValues) column.stringValues.push(rawValue);
+                if (rawValue !== '') column.nonEmptyCount++;
+                if (Number.isFinite(numericValue)) {
+                    column.finiteCount++;
+                    column.stringValues = null;
+                }
+            }
+        }
+
+        if (!timeValues.length) {
+            throw new Error('CSV does not contain time values.');
+        }
+        if (timeKind !== 'index') {
+            this._sortTimeSeriesByTime(timeValues, variableColumns);
+            if (timeKind === 'datetime') timeOriginMs = timeValues[0];
+        }
+        const datetimeAxisStalled = timeKind === 'datetime' && this._isStalledTimeAxis(timeValues);
+
+        const result = {
+            filename: '',
+            metadata: {},
+            variables: {},
+            tree: {}
+        };
+
+        const timeVariable = {
+            name: timeSource.name || 'time',
+            data: timeValues,
+            description: timeSource.description || (timeKind === 'index' ? '[index]' : ''),
+            kind: 'abscissa',
+            dataType: this.structureParser._detectDataType(timeValues, 'abscissa'),
+            isConstant: this.structureParser._isConstantValues(timeValues),
+            interpolation: 'linear',
+            negate: false,
+            source: 'csv'
+        };
+        if (timeKind === 'datetime') {
+            timeVariable.timeKind = 'datetime';
+            timeVariable.timeDisplayMode = datetimeAxisStalled ? 'index' : 'calendar';
+            timeVariable.timeOriginMs = timeOriginMs;
+            timeVariable.description = timeSource.description || '[datetime]';
+        } else if (timeKind === 'index') {
+            timeVariable.timeKind = 'index';
+            timeVariable.timeStepMode = 'index';
+            timeVariable.description = timeSource.description || '[index]';
+        }
+        result.variables[timeVariable.name] = timeVariable;
+        const usedVariableNames = new Set([timeVariable.name]);
+
+        for (let c = 0; c < variableHeaders.length; c++) {
+            const header = variableHeaders[c].header;
+            const column = variableColumns[c];
+            const isStringColumn = column.nonEmptyCount > 0 && column.finiteCount === 0;
+            const values = isStringColumn ? column.stringValues : column.numericValues;
+            let name = header.name;
+            if (usedVariableNames.has(name)) {
+                const base = name;
+                let suffix = 2;
+                while (usedVariableNames.has(`${base}_${suffix}`)) suffix++;
+                name = `${base}_${suffix}`;
+            }
+            usedVariableNames.add(name);
+            result.variables[name] = {
+                name,
+                data: values,
+                description: header.description,
+                kind: 'variable',
+                dataType: isStringColumn ? 'string' : this.structureParser._detectDataType(values, 'variable'),
+                isConstant: this.structureParser._isConstantValues(values),
+                interpolation: 'linear',
+                negate: false,
+                source: 'csv'
+            };
+        }
+
+        const timeVar = result.variables[timeVariable.name];
+        result.metadata = {
+            numVariables: Object.keys(result.variables).length,
+            numParams: 0,
+            numTimevarying: variableHeaders.length,
+            numTimesteps: timeVar.data.length,
+            timeStart: timeVar.data[0],
+            timeEnd: timeVar.data[timeVar.data.length - 1],
+            csv: true,
+            delimiter,
+            hasHeader,
+            skippedRows: headerIndex,
+            skippedRowsAfterHeader: Math.max(0, dataStartIndex - headerIndex - (hasHeader ? 1 : 0)),
+            skippedInvalidTimeRows: invalidTimeRows,
+            skippedColumnCountRows: discardedColumnCountRows,
+            timeName: timeVar.name,
+            timeKind,
+            timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
+            timeOriginMs,
+            timeSourceColumns: (timeSource.sourceIndexes || []).map(index => rawHeaders[index] || `column_${index + 1}`),
+            datetimeAxisStalled,
+            csvProfile: { ...profile, delimiter, decimalSeparator, hasHeader, headerIndex, dataStartIndex, rawHeaders, headers },
+        };
+
+        result.tree = this.structureParser._buildTree(result.variables);
+        return result;
+    }
+
     parseRowsWithProfile(text, profile, options = {}) {
         const delimiter = profile?.delimiter || ',';
+        const decimalSeparator = profile?.decimalSeparator || 'auto';
         const rawHeaders = profile?.rawHeaders || [];
         const headers = profile?.headers || this._makeUniqueHeaders(rawHeaders);
         const timeSource = profile?.timeSource || {};
@@ -244,9 +483,10 @@ export default class CsvParser {
             .filter(row => row.some(cell => cell !== ''));
 
         const timeIndexes = new Set(timeSource.sourceIndexes || []);
+        const ignoredIndexes = new Set(Array.isArray(profile?.ignoredColumns) ? profile.ignoredColumns : []);
         const variableHeaders = headers
             .map((header, index) => ({ header, index }))
-            .filter(({ index }) => !timeIndexes.has(index));
+            .filter(({ index }) => !timeIndexes.has(index) && !ignoredIndexes.has(index));
         const timeValues = [];
         const variables = new Map(variableHeaders.map(({ header }) => [header.name, []]));
         const rawRows = [];
@@ -264,7 +504,7 @@ export default class CsvParser {
                 throw err;
             }
 
-            const timeValue = parseCsvTimeValue(timeSource, row, startRowIndex + timeValues.length, delimiter);
+            const timeValue = parseCsvTimeValue(timeSource, row, startRowIndex + timeValues.length, delimiter, { decimalSeparator });
             if (!Number.isFinite(timeValue)) {
                 const err = new Error('CSV appended row has an invalid time value.');
                 err.code = 'LIVE_UPDATE_INVALID_TIME';
@@ -275,7 +515,7 @@ export default class CsvParser {
 
             for (const { header, index } of variableHeaders) {
                 const rawValue = String(row[index] ?? '').trim();
-                const numericValue = parseCsvNumber(rawValue, delimiter);
+                const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator);
                 variables.get(header.name).push(Number.isFinite(numericValue) ? numericValue : rawValue);
             }
         }
@@ -299,12 +539,23 @@ export default class CsvParser {
         };
     }
 
-    _decodeText(buffer) {
-        return this._decodeTextWithEncoding(buffer).text;
+    _decodeText(buffer, encoding = 'auto') {
+        return this._decodeTextWithEncoding(buffer, encoding).text;
     }
 
-    _decodeTextWithEncoding(buffer) {
-        if (typeof buffer === 'string') return { text: buffer.replace(/^\uFEFF/, ''), encoding: 'utf-8' };
+    _decodeTextWithEncoding(buffer, encoding = 'auto') {
+        const requested = String(encoding || 'auto').toLowerCase();
+        if (typeof buffer === 'string') return { text: buffer.replace(/^\uFEFF/, ''), encoding: requested === 'auto' ? 'utf-8' : requested };
+        if (requested !== 'auto') {
+            const label = requested === 'latin1' ? 'windows-1252' : requested;
+            if (typeof TextDecoder !== 'undefined') {
+                try {
+                    return { text: new TextDecoder(label, { fatal: false }).decode(buffer).replace(/^\uFEFF/, ''), encoding: requested };
+                } catch (_) {
+                    // Fall through to auto detection / byte-wise fallback.
+                }
+            }
+        }
         if (this._utf8Decoder) {
             try {
                 return { text: this._utf8Decoder.decode(buffer).replace(/^\uFEFF/, ''), encoding: 'utf-8' };
@@ -573,6 +824,65 @@ export default class CsvParser {
                 description: parsed.description
             };
         });
+    }
+
+    _normalizeProfileHeaders(headers, rawHeaders, profile = null) {
+        const fallback = profile?.unitsMode === 'inline'
+            ? this._makeUniqueInlineHeaders(rawHeaders, profile.inlineUnitFormat || 'auto')
+            : this._makeUniqueHeaders(rawHeaders);
+        if (!Array.isArray(headers) || !headers.length) return fallback;
+        return rawHeaders.map((raw, index) => {
+            const header = headers[index];
+            if (header && typeof header === 'object') {
+                return {
+                    name: String(header.name || fallback[index]?.name || `column_${index + 1}`),
+                    description: String(header.description || ''),
+                };
+            }
+            if (typeof header === 'string' && header.trim()) {
+                return { name: header.trim(), description: fallback[index]?.description || '' };
+            }
+            return fallback[index] || this._parseHeader(raw, index);
+        });
+    }
+
+    _makeUniqueInlineHeaders(rawHeaders, format = 'auto') {
+        const seen = new Map();
+        return rawHeaders.map((raw, index) => {
+            const parsed = this._parseInlineUnitHeader(raw, index, format);
+            const base = parsed.name;
+            const count = (seen.get(base) || 0) + 1;
+            seen.set(base, count);
+            return {
+                name: count === 1 ? base : `${base}_${count}`,
+                description: parsed.description
+            };
+        });
+    }
+
+    _parseInlineUnitHeader(rawHeader, index, format = 'auto') {
+        const fallback = index === 0 ? 'time' : `column_${index + 1}`;
+        const raw = String(rawHeader || '').trim();
+        if (!raw) return { name: fallback, description: '' };
+
+        const patterns = [
+            { key: 'paren', re: /^(.*?)\s*\(([^)]+)\)\s*$/ },
+            { key: 'bracket', re: /^(.*?)\s*\[([^\]]+)\]\s*$/ },
+            { key: 'brace', re: /^(.*?)\s*\{([^}]+)\}\s*$/ },
+            { key: 'angle', re: /^(.*?)\s*<([^>]+)>\s*$/ },
+            { key: 'slash', re: /^(.*?)\s+\/\s+(.+?)\s*$/ },
+        ];
+        const candidates = format === 'auto'
+            ? patterns
+            : patterns.filter(pattern => pattern.key === format);
+        for (const pattern of candidates) {
+            const match = raw.match(pattern.re);
+            if (!match) continue;
+            const name = this._sanitizeHeaderName(match[1], fallback);
+            const unit = String(match[2] || '').trim();
+            if (unit) return { name, description: `[${unit}]` };
+        }
+        return { name: this._sanitizeHeaderName(raw, fallback), description: '' };
     }
 
     _parseHeader(rawHeader, index) {

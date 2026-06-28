@@ -9,7 +9,7 @@
  *
  * Public API:
  *   detectCsvTimeAxis(rawHeaders, dataRows, { delimiter, preferredDateOrder })
- *   parseCsvNumber(rawValue, delimiter = ',')
+ *   parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'auto')
  *   parseCsvText(text, { delimiter })
  *
  * Dependency-free, deterministic, browser-compatible (ES module).
@@ -79,7 +79,7 @@ const MONTH_LOOKUP = {
 // parseCsvNumber - exported public helper
 // ---------------------------------------------------------------------------
 
-export function parseCsvNumber(rawValue, delimiter = ',') {
+export function parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'auto') {
     const raw = String(rawValue ?? '').trim();
     if (!raw) return NaN;
 
@@ -93,10 +93,16 @@ export function parseCsvNumber(rawValue, delimiter = ',') {
     }
     if (/^nan$/i.test(normalized)) return NaN;
 
-    // Decimal comma is only allowed when the cell delimiter is not comma.
-    const decimalNormalized = (delimiter !== ',' && normalized.includes(',') && !normalized.includes('.'))
-        ? normalized.replace(',', '.')
-        : normalized;
+    const decimalMode = decimalSeparator === ',' || decimalSeparator === '.' ? decimalSeparator : 'auto';
+    let decimalNormalized = normalized;
+    if (decimalMode === ',') {
+        decimalNormalized = normalized.replace(',', '.');
+    } else if (decimalMode === 'auto'
+        && delimiter !== ','
+        && normalized.includes(',')
+        && !normalized.includes('.')) {
+        decimalNormalized = normalized.replace(',', '.');
+    }
 
     return Number(decimalNormalized);
 }
@@ -280,14 +286,16 @@ export function detectCsvTimeAxis(rawHeaders, dataRows, options = {}) {
     return buildResult(unique[0], headers, delimiter, warnings);
 }
 
-export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ',') {
+export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ',', options = {}) {
     if (!timeSource?.ok) return NaN;
+    const decimalSeparator = options.decimalSeparator || timeSource.decimalSeparator || 'auto';
     const indexes = Array.isArray(timeSource.sourceIndexes) ? timeSource.sourceIndexes : [];
     const strategy = timeSource.strategy || timeSource.mode;
     const idx = indexes[0] ?? 0;
 
     if (timeSource.kind === 'index' || strategy === 'generated-index') return rowIndex;
-    if (timeSource.kind === 'numeric') return parseCsvNumber(row?.[idx], delimiter);
+    if (timeSource.kind === 'numeric') return parseCsvNumber(row?.[idx], delimiter, decimalSeparator);
+    if (strategy === 'custom-format') return parseCustomFormatMs(row?.[idx], timeSource.format?.pattern || '');
     if (strategy === 'iso-datetime') return parseIsoMs(row?.[idx]);
     if (strategy === 'slash-date' || strategy === 'dash-date') {
         const order = timeSource.format?.dateOrder || 'YMD';
@@ -298,13 +306,48 @@ export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ','
         return parseYearlessDateTimeMs(row?.[idx], timeSource.format?.dateOrder || 'MDY');
     }
     if (strategy === 'month-name-date') return parseMonthNameDateMs(row?.[idx]);
-    if (strategy === 'decimal-year') return decimalYearToMs(parseCsvNumber(row?.[idx], delimiter));
-    if (strategy === 'matlab-datenum') return matlabDatenumToMs(parseCsvNumber(row?.[idx], delimiter));
-    if (strategy === 'excel-serial') return excelSerialToMs(parseCsvNumber(row?.[idx], delimiter));
+    if (strategy === 'decimal-year') return decimalYearToMs(parseCsvNumber(row?.[idx], delimiter, decimalSeparator));
+    if (strategy === 'matlab-datenum') return matlabDatenumToMs(parseCsvNumber(row?.[idx], delimiter, decimalSeparator));
+    if (strategy === 'excel-serial') return excelSerialToMs(parseCsvNumber(row?.[idx], delimiter, decimalSeparator));
     if (timeSource.mode === 'split' && indexes.length >= 2) {
         return combineDateAndTimeMs(row?.[indexes[0]], row?.[indexes[1]], timeSource.format?.dateOrder || 'YMD');
     }
+    if (timeSource.mode === 'parts' || strategy === 'parts') {
+        return parsePartsDateTimeMs(timeSource, row, delimiter, decimalSeparator);
+    }
     return NaN;
+}
+
+export function customDatetimePatternToDuckDbFormat(pattern) {
+    const source = String(pattern || '');
+    if (!source.trim()) return null;
+    const tokens = [
+        ['yyyy', '%Y'],
+        ['yy', '%y'],
+        ['MM', '%m'],
+        ['M', '%m'],
+        ['dd', '%d'],
+        ['d', '%d'],
+        ['HH', '%H'],
+        ['H', '%H'],
+        ['mm', '%M'],
+        ['m', '%M'],
+        ['ss', '%S'],
+        ['s', '%S'],
+        ['SSS', '%f'],
+    ];
+    let out = '';
+    for (let i = 0; i < source.length;) {
+        const token = tokens.find(([key]) => source.startsWith(key, i));
+        if (token) {
+            out += token[1];
+            i += token[0].length;
+            continue;
+        }
+        out += source[i];
+        i++;
+    }
+    return out;
 }
 
 function buildIndexResult(warnings) {
@@ -1046,6 +1089,80 @@ function combineDateAndTimeMs(dateCell, timeCell, order) {
     if (y < 100) y += (y >= 70 ? 1900 : 2000);
     if (!isValidDate(y, mo, d)) return NaN;
 
+    return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms);
+}
+
+function parseCustomFormatMs(cell, pattern) {
+    if (cell == null || cell === '' || !pattern) return NaN;
+    const tokens = [
+        ['yyyy', '(?<year>\\d{4})'],
+        ['yy', '(?<year2>\\d{2})'],
+        ['MM', '(?<month>\\d{2})'],
+        ['M', '(?<month>\\d{1,2})'],
+        ['dd', '(?<day>\\d{2})'],
+        ['d', '(?<day>\\d{1,2})'],
+        ['HH', '(?<hour>\\d{2})'],
+        ['H', '(?<hour>\\d{1,2})'],
+        ['mm', '(?<minute>\\d{2})'],
+        ['m', '(?<minute>\\d{1,2})'],
+        ['ss', '(?<second>\\d{2})'],
+        ['s', '(?<second>\\d{1,2})'],
+        ['SSS', '(?<ms>\\d{1,3})'],
+    ];
+    const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let regex = '';
+    for (let i = 0; i < pattern.length;) {
+        const token = tokens.find(([key]) => pattern.startsWith(key, i));
+        if (token) {
+            regex += token[1];
+            i += token[0].length;
+            continue;
+        }
+        regex += escapeRegex(pattern[i]);
+        i++;
+    }
+    const match = String(cell).trim().match(new RegExp(`^${regex}$`));
+    if (!match?.groups) return NaN;
+    let y = match.groups.year != null
+        ? Number(match.groups.year)
+        : match.groups.year2 != null ? Number(match.groups.year2) : NaN;
+    if (y < 100) y += (y >= 70 ? 1900 : 2000);
+    const mo = Number(match.groups.month);
+    const d = Number(match.groups.day);
+    const H = match.groups.hour != null ? Number(match.groups.hour) : 0;
+    const Mi = match.groups.minute != null ? Number(match.groups.minute) : 0;
+    const Se = match.groups.second != null ? Number(match.groups.second) : 0;
+    const Ms = match.groups.ms != null ? Number(String(match.groups.ms).padEnd(3, '0').slice(0, 3)) : 0;
+    if (![y, mo, d, H, Mi, Se, Ms].every(Number.isFinite)) return NaN;
+    if (!isValidDate(y, mo, d)) return NaN;
+    if (H < 0 || H > 24 || Mi < 0 || Mi > 59 || Se < 0 || Se > 59 || Ms < 0 || Ms > 999) return NaN;
+    if (H === 24 && (Mi !== 0 || Se !== 0 || Ms !== 0)) return NaN;
+    return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms);
+}
+
+function parsePartsDateTimeMs(timeSource, row, delimiter = ',', decimalSeparator = 'auto') {
+    const parts = timeSource?.format?.parts || {};
+    const readPart = (name, fallback = 0) => {
+        const index = parts[name];
+        if (index === null || index === undefined || index === '') return fallback;
+        const value = parseCsvNumber(row?.[index], delimiter, decimalSeparator);
+        return Number.isFinite(value) ? value : NaN;
+    };
+
+    let y = readPart('year', NaN);
+    const mo = readPart('month', NaN);
+    const d = readPart('day', NaN);
+    const H = readPart('hour', 0);
+    const Mi = readPart('minute', 0);
+    const secondValue = readPart('second', 0);
+    if (y < 100) y += (y >= 70 ? 1900 : 2000);
+    const Se = Math.trunc(secondValue);
+    const Ms = Math.round((secondValue - Se) * 1000);
+
+    if (![y, mo, d, H, Mi, secondValue].every(Number.isFinite)) return NaN;
+    if (!isValidDate(y, mo, d)) return NaN;
+    if (H < 0 || H > 24 || Mi < 0 || Mi > 59 || Se < 0 || Se > 59 || Ms < 0 || Ms > 999) return NaN;
+    if (H === 24 && (Mi !== 0 || Se !== 0 || Ms !== 0)) return NaN;
     return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms);
 }
 

@@ -23,7 +23,7 @@ import mvpWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
-import { parseCsvNumber } from '../parsers/csv-time-detection.js';
+import { customDatetimePatternToDuckDbFormat, parseCsvNumber } from '../parsers/csv-time-detection.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
 import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
 
@@ -729,7 +729,7 @@ export default class DuckDbSource {
             throw new Error('DuckDB: no suitable time column detected; falling back.');
         }
 
-        const projection = this._projectionSql(columnNames, timeInfo);
+        const projection = this._projectionSql(columnNames, timeInfo, csvProfile);
         const timeAlias = '__omv_time';
         const escTimeAlias = timeAlias.replace(/"/g, '""');
         const validTimeWhere = `${timeInfo.sql} IS NOT NULL`;
@@ -1107,19 +1107,19 @@ export default class DuckDbSource {
                 && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
             return {
                 name,
-                type: forceVarchar ? 'VARCHAR' : this._inferDuckDbCsvType(sampleRows, index, csvProfile.delimiter),
+                type: forceVarchar ? 'VARCHAR' : this._inferDuckDbCsvType(sampleRows, index, csvProfile.delimiter, csvProfile.decimalSeparator),
             };
         });
     }
 
-    _inferDuckDbCsvType(sampleRows, index, delimiter) {
+    _inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto') {
         let nonEmpty = 0;
         let numeric = 0;
         for (const row of sampleRows || []) {
             const raw = String(row?.[index] ?? '').trim();
             if (!raw) continue;
             nonEmpty++;
-            if (Number.isFinite(parseCsvNumber(raw, delimiter))) numeric++;
+            if (Number.isFinite(parseCsvNumber(raw, delimiter, decimalSeparator))) numeric++;
         }
         return nonEmpty > 0 && (numeric / nonEmpty) >= 0.95 ? 'DOUBLE' : 'VARCHAR';
     }
@@ -1132,6 +1132,8 @@ export default class DuckDbSource {
     }
 
     _csvUsesDecimalComma(csvProfile) {
+        if (csvProfile?.decimalSeparator === ',') return true;
+        if (csvProfile?.decimalSeparator === '.') return false;
         if (!csvProfile || csvProfile.delimiter === ',') return false;
         for (const row of csvProfile.sampleRows || []) {
             for (const cell of row || []) {
@@ -1229,6 +1231,13 @@ export default class DuckDbSource {
             return `epoch_ms(CAST(${first} AS TIMESTAMP))::DOUBLE`;
         }
 
+        if (strategy === 'custom-format') {
+            const format = customDatetimePatternToDuckDbFormat(timeSource.format?.pattern || '');
+            return format
+                ? this._tryStrptimeSql(`CAST(${first} AS VARCHAR)`, [format])
+                : null;
+        }
+
         const order = timeSource.format?.dateOrder || 'YMD';
         if (strategy === 'slash-date' || strategy === 'dash-date') {
             const formats = this._dateTimeFormats(order, strategy === 'dash-date' ? '-' : '/');
@@ -1244,7 +1253,32 @@ export default class DuckDbSource {
             return this._tryStrptimeSql(expr, formats);
         }
 
+        if (timeSource.mode === 'parts' || strategy === 'parts') {
+            return this._partsDateTimeSql(timeSource, sourceNames);
+        }
+
         return null;
+    }
+
+    _partsDateTimeSql(timeSource, sourceNames) {
+        const sourceIndexes = timeSource.sourceIndexes || [];
+        const parts = timeSource.format?.parts || {};
+        const partExpr = (name, fallback = '0') => {
+            const profileIndex = parts[name];
+            const sourceOffset = sourceIndexes.indexOf(profileIndex);
+            if (sourceOffset < 0 || !sourceNames[sourceOffset]) return fallback;
+            return `CAST(${this._quoteIdent(sourceNames[sourceOffset])} AS DOUBLE)`;
+        };
+        const year = partExpr('year', 'NULL');
+        const month = partExpr('month', 'NULL');
+        const day = partExpr('day', 'NULL');
+        const hour = partExpr('hour', '0');
+        const minute = partExpr('minute', '0');
+        const second = partExpr('second', '0');
+        const secondInt = `FLOOR(${second})`;
+        const microsecond = `ROUND((${second} - FLOOR(${second})) * 1000000)`;
+        const expr = `make_timestamp(CAST(${year} AS BIGINT), CAST(${month} AS BIGINT), CAST(${day} AS BIGINT), CAST(${hour} AS BIGINT), CAST(${minute} AS BIGINT), CAST(${secondInt} AS BIGINT)) + CAST(${microsecond} AS BIGINT) * INTERVAL 1 MICROSECOND`;
+        return `epoch_ms(${expr})::DOUBLE`;
     }
 
     _dateTimeFormats(order, sep) {
@@ -1342,8 +1376,12 @@ export default class DuckDbSource {
         return `epoch_ms(try_strptime(${expr}, [${list}]))::DOUBLE`;
     }
 
-    _projectionSql(columnNames, timeInfo) {
+    _projectionSql(columnNames, timeInfo, csvProfile = null) {
         const exclude = new Set(timeInfo.sourceNames || []);
+        for (const index of csvProfile?.ignoredColumns || []) {
+            const name = columnNames[Number(index)];
+            if (name != null) exclude.add(name);
+        }
         const columns = columnNames
             .filter(name => !exclude.has(name))
             .map(name => this._quoteIdent(name));

@@ -100,6 +100,9 @@ proto._createSessionSnapshot = function(options = {}) {
             ? `data/${this._uniqueArchiveName(displayName, usedArchiveNames)}`
             : null;
         const data = this.plotManager.files.get(fileId)?.data;
+        const csvProfile = data?.metadata?.csvProfile?.profileSource === 'user'
+            ? this._cloneSerializable(data.metadata.csvProfile)
+            : null;
         const derived = [...(this.derivedByFile.get(fileId) || new Map()).values()]
             .map(item => ({ name: item.name, formula: item.formula }));
 
@@ -110,6 +113,7 @@ proto._createSessionSnapshot = function(options = {}) {
             displayName,
             contentHash: entry.contentHash || '',
             transform: this._normalizeFileTransform(entry.transform),
+            csvProfile,
             variableNames: data ? Object.keys(data.variables || {}) : [],
             derived,
             archivePath,
@@ -231,7 +235,7 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     }
 
     this._applySessionSettings(session.settings || {});
-    this._applySessionFileMetadata(session, fileMap);
+    await this._applySessionFileMetadata(session, fileMap);
     this._applySessionDerivedVariables(session, fileMap);
     this._applySessionLayout(session.layout);
     await this._applySessionPlots(session.plots || [], fileMap);
@@ -365,13 +369,47 @@ proto._applySessionSettings = function(settings) {
     this._syncHoverCornerPicker?.();
 };
 
-proto._applySessionFileMetadata = function(session, fileMap) {
+proto._applySessionFileMetadata = async function(session, fileMap) {
+    const skippedProfiles = [];
     for (const meta of session.files || []) {
         const fileId = fileMap.get(meta.id);
         const entry = fileId ? this.files.get(fileId) : null;
         if (!entry) continue;
         entry.transform = this._normalizeFileTransform(meta.transform);
         this.plotManager.setFileTransform(fileId, entry.transform);
+        if (meta.csvProfile?.profileSource !== 'user') continue;
+
+        const currentHash = entry.contentHash || '';
+        if (meta.contentHash && currentHash && meta.contentHash !== currentHash) {
+            skippedProfiles.push(meta.displayName || `${meta.name || 'results'}${meta.extension || ''}`);
+            continue;
+        }
+
+        try {
+            const displayName = this._fileDisplayName(entry);
+            const streamable = this._canParseFromFile?.(entry.file, entry.extension);
+            const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
+            const buffer = streamable ? null : await this._readLatestBuffer(entry);
+            const contentHash = buffer
+                ? await this._hashBuffer(buffer)
+                : this._fileFingerprint(latestFile || entry.file);
+            const data = await this._parseCsvResultBuffer(displayName, buffer, latestFile || entry.file, {
+                csvProfile: meta.csvProfile,
+            });
+            entry.buffer = buffer;
+            entry.contentHash = contentHash;
+            this.plotManager.updateFileData(fileId, data);
+        } catch (err) {
+            console.warn('[session] could not restore CSV parsing profile:', err?.message || err);
+            skippedProfiles.push(meta.displayName || `${meta.name || 'results'}${meta.extension || ''}`);
+        }
+    }
+    if (skippedProfiles.length) {
+        await Modal.alert(
+            i18n.t('csvProfileRestoreSkippedTitle'),
+            i18n.t('csvProfileRestoreSkippedBody').replace('{files}', skippedProfiles.join(', ')),
+            { icon: 'CSV' },
+        );
     }
 };
 
