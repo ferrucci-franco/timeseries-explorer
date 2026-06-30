@@ -1,13 +1,26 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import duckdbPkg from 'duckdb';
 import CsvParser from '../src/parsers/csv-parser.js';
 import { parseCsvTimeValue } from '../src/parsers/csv-time-detection.js';
 import CsvParsingPreviewDialog from '../src/ui/csv-parsing-preview-dialog.js';
 import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
-import { csvColumnSpecs } from '../src/data/csv-to-parquet-core.js';
+import {
+    closeDuckDbConnection,
+    closeDuckDbDatabase,
+    csvReadExpr,
+    csvColumnSpecs,
+    projectionSql,
+    rowFilterSql,
+    runDuckDb,
+    sqlPath,
+    timeInfoFromProfile,
+} from '../src/data/csv-to-parquet-core.js';
 
 const parser = new CsvParser();
+const { Database } = duckdbPkg;
 
 function arrayBufferFromNodeBuffer(buffer) {
     return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
@@ -270,9 +283,81 @@ async function testCsvNumericColumnsTolerateInvalidCells() {
     assert(valueSpec?.type === 'DOUBLE', 'DuckDB type inference should keep mostly numeric columns as DOUBLE');
     assert(valueSpec?.readType === 'VARCHAR', 'DuckDB should read tolerant numeric columns as text before try_cast');
 
+    const dir = mkdtempSync(join(tmpdir(), 'omv-csv-duckdb-profile-'));
+    const csvPath = join(dir, 'numeric-invalid.csv');
+    try {
+        writeFileSync(csvPath, csv);
+        const db = new Database(':memory:');
+        const conn = db.connect();
+        try {
+            const timeInfo = timeInfoFromProfile(dialog.resultProfile);
+            const filterWhere = rowFilterSql(dialog.resultProfile);
+            const readExpr = csvReadExpr(sqlPath(csvPath), dialog.resultProfile);
+            const projection = projectionSql(dialog.resultProfile, timeInfo);
+            const rows = await runDuckDb(conn, `
+                WITH raw AS (
+                    SELECT * FROM ${readExpr}
+                    ${filterWhere ? `WHERE ${filterWhere}` : ''}
+                ),
+                projected AS (
+                    SELECT ${projection}
+                    FROM raw
+                )
+                SELECT
+                    COUNT(*) AS n,
+                    typeof(value) AS value_type,
+                    SUM(CASE WHEN value IS NULL THEN 1 ELSE 0 END) AS nulls,
+                    SUM(value) AS value_sum
+                FROM projected
+                WHERE "__omv_time" IS NOT NULL
+                GROUP BY typeof(value)
+            `);
+            assert(Number(rows[0]?.n) === 3, 'DuckDB profile path should preserve all valid-time rows');
+            assert(String(rows[0]?.value_type).toUpperCase() === 'DOUBLE', 'DuckDB profile path should project value as DOUBLE');
+            assert(Number(rows[0]?.nulls) === 1, 'DuckDB profile path should project non-numeric numeric cells as NULL/NaN');
+            assert(Number(rows[0]?.value_sum) === 22, 'DuckDB profile path should preserve numeric values around NULL/NaN');
+        } finally {
+            await closeDuckDbConnection(conn);
+            await closeDuckDbDatabase(db);
+        }
+    } finally {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        try {
+            rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+        } catch (err) {
+            console.warn(`warning: could not remove temporary DuckDB test directory ${dir}: ${err?.message || err}`);
+        }
+    }
+
     dialog.state.rowFilter = { enabled: true, columnIndex: 1, operator: 'is_numeric', value: '' };
     dialog._rebuildProfile();
     assert(dialog.validation.totalDataRows === 2, 'Row filter is numeric should keep only numeric value rows');
+}
+
+async function testCsvMixedMinorityNumericColumnsStayString() {
+    const csv = [
+        'date,value',
+        '2024-01-01,10',
+        '2024-01-02,foo',
+        '2024-01-03,bar',
+        '2024-01-04,12',
+        '2024-01-05,baz',
+    ].join('\n');
+    const buffer = arrayBufferFromNodeBuffer(Buffer.from(csv));
+    const autoData = await parser.parse(buffer);
+    assert(autoData.variables.value?.dataType === 'string', 'JS auto parse should keep 40% numeric columns as string');
+
+    const profile = parser.inspectSample(buffer, { maxRows: 20 });
+    const profiledData = await parser.parseWithProfile(buffer, profile);
+    assert(profiledData.variables.value?.dataType === 'string', 'JS profile parse should keep 40% numeric columns as string');
+    assert(!profiledData.metadata.csvProfile.numericColumnIndexes.includes(1), 'JS profile should record value as non-numeric');
+
+    const specs = csvColumnSpecs(profiledData.metadata.csvProfile);
+    const valueSpec = specs.find(spec => spec.name === 'value');
+    assert(valueSpec?.type === 'VARCHAR', 'DuckDB/Parquet profile should keep 40% numeric columns as VARCHAR');
+
+    const append = parser.parseRowsWithProfile('2024-01-06,13\n', profiledData.metadata.csvProfile, { startRowIndex: 5 });
+    assert(append.variables.get('value')?.[0] === '13', 'Live append should preserve string columns even when appended value looks numeric');
 }
 
 function testCsvPreviewHeaderlessProfileStaysHeaderless() {
@@ -430,6 +515,7 @@ testCsvPreviewHiddenRowsDoNotChangeProfile();
 testCsvPreviewHidePreambleKeepsHeader();
 await testCsvPreviewDirtyPreambleCustomDatePattern();
 await testCsvNumericColumnsTolerateInvalidCells();
+await testCsvMixedMinorityNumericColumnsStayString();
 testCsvPreviewHeaderlessProfileStaysHeaderless();
 await testUsMdySlashDatetimeWithAmPm();
 testCsvPreviewCustomExcelMatlabAliases();

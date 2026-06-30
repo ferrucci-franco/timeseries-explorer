@@ -14,6 +14,13 @@
 import MatParser from './mat-parser.js';
 import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
 
+const NUMERIC_COLUMN_MIN_RATIO = 0.5;
+
+function isMostlyNumericColumn(column) {
+    if (!column || column.nonEmptyCount <= 0) return true;
+    return (column.finiteCount / column.nonEmptyCount) > NUMERIC_COLUMN_MIN_RATIO;
+}
+
 export function normalizeCsvRowFilter(filter) {
     if (!filter || filter.enabled !== true) return null;
     const columnIndex = Number(filter.columnIndex);
@@ -107,11 +114,10 @@ export default class CsvParser {
                 const numericValue = parseCsvNumber(rawValue, delimiter);
                 const column = variableColumns[c];
                 column.numericValues.push(numericValue);
-                if (column.stringValues) column.stringValues.push(rawValue);
+                column.stringValues.push(rawValue);
                 if (rawValue !== '') column.nonEmptyCount++;
                 if (Number.isFinite(numericValue)) {
                     column.finiteCount++;
-                    column.stringValues = null;
                 }
             }
         }
@@ -156,11 +162,13 @@ export default class CsvParser {
         }
         result.variables[timeVariable.name] = timeVariable;
         const usedVariableNames = new Set([timeVariable.name]);
+        const numericColumnIndexes = [];
 
         for (let c = 0; c < variableHeaders.length; c++) {
             const header = variableHeaders[c].header;
             const column = variableColumns[c];
-            const isStringColumn = column.nonEmptyCount > 0 && column.finiteCount === 0;
+            const isStringColumn = !isMostlyNumericColumn(column);
+            if (!isStringColumn) numericColumnIndexes.push(variableHeaders[c].index);
             const values = isStringColumn ? column.stringValues : column.numericValues;
             let name = header.name;
             if (usedVariableNames.has(name)) {
@@ -202,7 +210,8 @@ export default class CsvParser {
             timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
             timeOriginMs,
             timeSourceColumns: timeSource.sourceIndexes.map(index => rawHeaders[index] || `column_${index + 1}`),
-            datetimeAxisStalled
+            datetimeAxisStalled,
+            numericColumnIndexes,
         };
 
         result.tree = this.structureParser._buildTree(result.variables);
@@ -395,11 +404,10 @@ export default class CsvParser {
                 const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator);
                 const column = variableColumns[c];
                 column.numericValues.push(numericValue);
-                if (column.stringValues) column.stringValues.push(rawValue);
+                column.stringValues.push(rawValue);
                 if (rawValue !== '') column.nonEmptyCount++;
                 if (Number.isFinite(numericValue)) {
                     column.finiteCount++;
-                    column.stringValues = null;
                 }
             }
         }
@@ -444,11 +452,13 @@ export default class CsvParser {
         }
         result.variables[timeVariable.name] = timeVariable;
         const usedVariableNames = new Set([timeVariable.name]);
+        const numericColumnIndexes = [];
 
         for (let c = 0; c < variableHeaders.length; c++) {
             const header = variableHeaders[c].header;
             const column = variableColumns[c];
-            const isStringColumn = column.nonEmptyCount > 0 && column.finiteCount === 0;
+            const isStringColumn = !isMostlyNumericColumn(column);
+            if (!isStringColumn) numericColumnIndexes.push(variableHeaders[c].index);
             const values = isStringColumn ? column.stringValues : column.numericValues;
             let name = header.name;
             if (usedVariableNames.has(name)) {
@@ -493,7 +503,8 @@ export default class CsvParser {
             timeOriginMs,
             timeSourceColumns: (timeSource.sourceIndexes || []).map(index => rawHeaders[index] || `column_${index + 1}`),
             datetimeAxisStalled,
-            csvProfile: { ...profile, delimiter, decimalSeparator, hasHeader, headerIndex, dataStartIndex, rawHeaders, headers, rowFilter },
+            numericColumnIndexes,
+            csvProfile: { ...profile, delimiter, decimalSeparator, hasHeader, headerIndex, dataStartIndex, rawHeaders, headers, rowFilter, numericColumnIndexes },
         };
 
         result.tree = this.structureParser._buildTree(result.variables);
@@ -515,6 +526,7 @@ export default class CsvParser {
         const timeIndexes = new Set(timeSource.sourceIndexes || []);
         const ignoredIndexes = new Set(Array.isArray(profile?.ignoredColumns) ? profile.ignoredColumns : []);
         const rowFilter = normalizeCsvRowFilter(profile?.rowFilter);
+        const numericIndexes = this._numericColumnIndexSet(profile, { delimiter, decimalSeparator, expectedColumns, timeSource });
         const variableHeaders = headers
             .map((header, index) => ({ header, index }))
             .filter(({ index }) => !timeIndexes.has(index) && !ignoredIndexes.has(index));
@@ -548,11 +560,45 @@ export default class CsvParser {
             for (const { header, index } of variableHeaders) {
                 const rawValue = String(row[index] ?? '').trim();
                 const numericValue = parseCsvNumber(rawValue, delimiter, decimalSeparator);
-                variables.get(header.name).push(Number.isFinite(numericValue) ? numericValue : rawValue);
+                variables.get(header.name).push(numericIndexes.has(index) ? numericValue : rawValue);
             }
         }
 
         return { rows: rawRows, timeValues, variables };
+    }
+
+    _numericColumnIndexSet(profile = {}, options = {}) {
+        if (Array.isArray(profile?.numericColumnIndexes)) {
+            return new Set(profile.numericColumnIndexes
+                .map(index => Number(index))
+                .filter(index => Number.isInteger(index) && index >= 0));
+        }
+
+        const sampleRows = Array.isArray(profile?.sampleRows) ? profile.sampleRows : [];
+        const expectedColumns = Math.max(0, Number(options.expectedColumns) || profile?.rawHeaders?.length || 0);
+        if (!sampleRows.length || !expectedColumns) return new Set();
+
+        const delimiter = options.delimiter || profile?.delimiter || ',';
+        const decimalSeparator = options.decimalSeparator || profile?.decimalSeparator || 'auto';
+        const timeSource = options.timeSource || profile?.timeSource || {};
+        const rows = !timeSource?.ok || timeSource.strategy === 'generated-index'
+            ? sampleRows
+            : sampleRows.filter((row, index) =>
+                Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator }))
+            );
+        const numericIndexes = new Set();
+        for (let columnIndex = 0; columnIndex < expectedColumns; columnIndex++) {
+            let nonEmptyCount = 0;
+            let finiteCount = 0;
+            for (const row of rows) {
+                const rawValue = String(row?.[columnIndex] ?? '').trim();
+                if (!rawValue) continue;
+                nonEmptyCount++;
+                if (Number.isFinite(parseCsvNumber(rawValue, delimiter, decimalSeparator))) finiteCount++;
+            }
+            if (isMostlyNumericColumn({ nonEmptyCount, finiteCount })) numericIndexes.add(columnIndex);
+        }
+        return numericIndexes;
     }
 
     _serializeTimeSource(timeSource) {

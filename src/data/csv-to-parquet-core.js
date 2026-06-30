@@ -61,6 +61,9 @@ export function csvColumnSpecs(profile) {
     const sampleRows = profile?.sampleRows || [];
     const timeSource = profile?.timeSource || {};
     const timeIndexes = new Set(timeSource.sourceIndexes || []);
+    const numericIndexes = Array.isArray(profile?.numericColumnIndexes)
+        ? new Set(profile.numericColumnIndexes.map(index => Number(index)).filter(index => Number.isInteger(index) && index >= 0))
+        : null;
     return rawHeaders.map((raw, index) => {
         const header = headers[index] || {};
         const name = header.name || String(raw || `column_${index + 1}`);
@@ -69,6 +72,8 @@ export function csvColumnSpecs(profile) {
             && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
         const inferred = forceVarchar
             ? { type: 'VARCHAR', readType: 'VARCHAR' }
+            : numericIndexes
+                ? (numericIndexes.has(index) ? { type: 'DOUBLE', readType: 'VARCHAR' } : { type: 'VARCHAR', readType: 'VARCHAR' })
             : inferDuckDbCsvType(sampleRowsWithValidTime(sampleRows, profile), index, profile.delimiter, profile.decimalSeparator);
         return {
             name,

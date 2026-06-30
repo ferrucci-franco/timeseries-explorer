@@ -1311,6 +1311,9 @@ export default class DuckDbSource {
         const sampleRows = csvProfile?.sampleRows || [];
         const timeSource = csvProfile?.timeSource || {};
         const timeIndexes = new Set(timeSource.sourceIndexes || []);
+        const numericIndexes = Array.isArray(csvProfile?.numericColumnIndexes)
+            ? new Set(csvProfile.numericColumnIndexes.map(index => Number(index)).filter(index => Number.isInteger(index) && index >= 0))
+            : null;
         return rawHeaders.map((raw, index) => {
             const header = headers[index] || {};
             const name = header.name || String(raw || `column_${index + 1}`);
@@ -1319,6 +1322,8 @@ export default class DuckDbSource {
                 && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
             const inferred = forceVarchar
                 ? { type: 'VARCHAR', readType: 'VARCHAR' }
+                : numericIndexes
+                    ? (numericIndexes.has(index) ? { type: 'DOUBLE', readType: 'VARCHAR' } : { type: 'VARCHAR', readType: 'VARCHAR' })
                 : this._inferDuckDbCsvType(
                     this._sampleRowsWithValidTime(sampleRows, csvProfile),
                     index,
