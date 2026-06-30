@@ -14,6 +14,30 @@
 import MatParser from './mat-parser.js';
 import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
 
+export function normalizeCsvRowFilter(filter) {
+    if (!filter || filter.enabled !== true) return null;
+    const columnIndex = Number(filter.columnIndex);
+    if (!Number.isInteger(columnIndex) || columnIndex < 0) return null;
+    const operator = ['!=', 'is_numeric'].includes(filter.operator) ? filter.operator : '==';
+    return {
+        enabled: true,
+        columnIndex,
+        operator,
+        value: String(filter.value ?? '').trim(),
+    };
+}
+
+export function csvRowMatchesFilter(row, filter, options = {}) {
+    const normalized = normalizeCsvRowFilter(filter);
+    if (!normalized) return true;
+    const raw = String(row?.[normalized.columnIndex] ?? '').trim();
+    if (normalized.operator === 'is_numeric') {
+        return Number.isFinite(parseCsvNumber(raw, options.delimiter || ',', options.decimalSeparator || 'auto'));
+    }
+    const matches = raw === normalized.value;
+    return normalized.operator === '!=' ? !matches : matches;
+}
+
 export default class CsvParser {
     constructor(structureParser) {
         this.structureParser = structureParser || new MatParser();
@@ -29,10 +53,9 @@ export default class CsvParser {
         const text = this._decodeText(buffer, options.encoding || 'auto');
         const delimiter = this._detectDelimiter(text);
         const rows = this._parseRows(text, delimiter)
-            .map(row => row.map(cell => cell.trim()))
-            .filter(row => row.some(cell => cell !== ''));
+            .map(row => row.map(cell => cell.trim()));
 
-        if (rows.length < 1) {
+        if (!rows.some(row => row.some(cell => cell !== ''))) {
             throw new Error('CSV must contain at least one data row.');
         }
 
@@ -44,7 +67,8 @@ export default class CsvParser {
             throw new Error('CSV must contain at least two columns.');
         }
 
-        const dataRows = rows.slice(table.dataStartIndex).filter(row => row.length === rawHeaders.length);
+        const dataRows = rows.slice(table.dataStartIndex)
+            .filter(row => row.some(cell => cell !== '') && row.length === rawHeaders.length);
         if (dataRows.length < 1) {
             throw new Error('CSV must contain at least one data row.');
         }
@@ -113,6 +137,7 @@ export default class CsvParser {
             data: timeValues,
             description: timeSource.description,
             kind: 'abscissa',
+            timeSourceStrategy: timeSource.strategy || null,
             dataType: this.structureParser._detectDataType(timeValues, 'abscissa'),
             isConstant: this.structureParser._isConstantValues(timeValues),
             interpolation: 'linear',
@@ -189,12 +214,11 @@ export default class CsvParser {
         const text = decoded.text;
         const delimiter = options.delimiter || this._detectDelimiter(text);
         const maxRows = Math.max(20, Number(options.maxRows) || 700);
-        const rows = this._parseRows(text, delimiter)
+        const rows = this._parseRows(text, delimiter, { maxRows: maxRows * 4 })
             .map(row => row.map(cell => cell.trim()))
-            .filter(row => row.some(cell => cell !== ''))
             .slice(0, maxRows);
 
-        if (rows.length < 1) {
+        if (!rows.some(row => row.some(cell => cell !== ''))) {
             throw new Error('CSV sample must contain at least one data row.');
         }
 
@@ -208,7 +232,7 @@ export default class CsvParser {
 
         const dataRows = rows
             .slice(table.dataStartIndex)
-            .filter(row => row.length === rawHeaders.length);
+            .filter(row => row.some(cell => cell !== '') && row.length === rawHeaders.length);
         if (dataRows.length < 1) {
             throw new Error('CSV sample must contain at least one data row.');
         }
@@ -238,10 +262,12 @@ export default class CsvParser {
         const maxRows = Math.max(1, Number(options.maxRows) || 50);
         const delimiter = options.delimiter || this._detectDelimiter(text);
         const warnings = [];
-        const rows = this._parseRows(text, delimiter)
-            .slice(0, maxRows)
+        const allRows = this._parseRows(text, delimiter, { maxRows: Math.max(maxRows, Math.min(120, maxRows + 20)) })
             .map(row => row.map(cell => String(cell ?? '').trim()));
-        const nonEmptyRows = rows.filter(row => row.some(cell => cell !== ''));
+        const profileRows = this._parseRows(text, delimiter, { maxRows: Math.max(120, maxRows * 4) })
+            .map(row => row.map(cell => String(cell ?? '').trim()));
+        const nonEmptyRows = profileRows.filter(row => row.some(cell => cell !== ''));
+        const rows = allRows.slice(0, maxRows);
 
         let profile = null;
         try {
@@ -295,10 +321,9 @@ export default class CsvParser {
         const delimiter = profile.delimiter || ',';
         const decimalSeparator = profile.decimalSeparator || 'auto';
         const rows = this._parseRows(text, delimiter)
-            .map(row => row.map(cell => cell.trim()))
-            .filter(row => row.some(cell => cell !== ''));
+            .map(row => row.map(cell => cell.trim()));
 
-        if (rows.length < 1) {
+        if (!rows.some(row => row.some(cell => cell !== ''))) {
             throw new Error('CSV must contain at least one data row.');
         }
 
@@ -318,10 +343,13 @@ export default class CsvParser {
         const headers = this._normalizeProfileHeaders(profile.headers, rawHeaders, profile);
         const expectedColumns = rawHeaders.length;
         const candidateRows = rows.slice(dataStartIndex);
-        const dataRows = candidateRows.filter(row => row.length === expectedColumns);
-        const discardedColumnCountRows = candidateRows.length - dataRows.length;
+        const widthRows = candidateRows.filter(row => row.length === expectedColumns);
+        const discardedColumnCountRows = candidateRows.length - widthRows.length;
+        const rowFilter = normalizeCsvRowFilter(profile.rowFilter);
+        const dataRows = widthRows.filter(row => csvRowMatchesFilter(row, rowFilter, { delimiter, decimalSeparator }));
+        const filteredRowCount = widthRows.length - dataRows.length;
         if (dataRows.length < 1) {
-            throw new Error('CSV must contain at least one data row.');
+            throw new Error(rowFilter ? 'CSV row filter excludes all data rows.' : 'CSV must contain at least one data row.');
         }
 
         const timeSource = profile.timeSource || {
@@ -397,6 +425,7 @@ export default class CsvParser {
             data: timeValues,
             description: timeSource.description || (timeKind === 'index' ? '[index]' : ''),
             kind: 'abscissa',
+            timeSourceStrategy: timeSource.strategy || null,
             dataType: this.structureParser._detectDataType(timeValues, 'abscissa'),
             isConstant: this.structureParser._isConstantValues(timeValues),
             interpolation: 'linear',
@@ -457,13 +486,14 @@ export default class CsvParser {
             skippedRowsAfterHeader: Math.max(0, dataStartIndex - headerIndex - (hasHeader ? 1 : 0)),
             skippedInvalidTimeRows: invalidTimeRows,
             skippedColumnCountRows: discardedColumnCountRows,
+            skippedFilteredRows: filteredRowCount,
             timeName: timeVar.name,
             timeKind,
             timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
             timeOriginMs,
             timeSourceColumns: (timeSource.sourceIndexes || []).map(index => rawHeaders[index] || `column_${index + 1}`),
             datetimeAxisStalled,
-            csvProfile: { ...profile, delimiter, decimalSeparator, hasHeader, headerIndex, dataStartIndex, rawHeaders, headers },
+            csvProfile: { ...profile, delimiter, decimalSeparator, hasHeader, headerIndex, dataStartIndex, rawHeaders, headers, rowFilter },
         };
 
         result.tree = this.structureParser._buildTree(result.variables);
@@ -484,6 +514,7 @@ export default class CsvParser {
 
         const timeIndexes = new Set(timeSource.sourceIndexes || []);
         const ignoredIndexes = new Set(Array.isArray(profile?.ignoredColumns) ? profile.ignoredColumns : []);
+        const rowFilter = normalizeCsvRowFilter(profile?.rowFilter);
         const variableHeaders = headers
             .map((header, index) => ({ header, index }))
             .filter(({ index }) => !timeIndexes.has(index) && !ignoredIndexes.has(index));
@@ -503,6 +534,7 @@ export default class CsvParser {
                 err.code = 'LIVE_UPDATE_HEADER_REPEATED';
                 throw err;
             }
+            if (!csvRowMatchesFilter(row, rowFilter, { delimiter, decimalSeparator })) continue;
 
             const timeValue = parseCsvTimeValue(timeSource, row, startRowIndex + timeValues.length, delimiter, { decimalSeparator });
             if (!Number.isFinite(timeValue)) {
@@ -578,7 +610,7 @@ export default class CsvParser {
         const sampleText = String(text).slice(0, 262144);
 
         for (const delimiter of candidates) {
-            const rows = this._parseRows(sampleText, delimiter)
+            const rows = this._parseRows(sampleText, delimiter, { maxRows: 700 })
                 .filter(row => row.some(cell => cell.trim() !== ''))
                 .slice(0, 500);
             if (!rows.length) continue;
@@ -596,13 +628,17 @@ export default class CsvParser {
         return best.delimiter;
     }
 
-    _parseRows(text, delimiter) {
+    _parseRows(text, delimiter, options = {}) {
+        const maxRows = Math.max(0, Number(options.maxRows) || 0);
         if (delimiter === 'whitespace') {
-            return String(text)
-                .split(/\r?\n|\r/)
-                .map(line => line.trim())
-                .filter(line => line !== '')
-                .map(line => line.split(/\s+/));
+            const rows = [];
+            for (const line of String(text).split(/\r?\n|\r/)) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                rows.push(trimmed.split(/\s+/));
+                if (maxRows && rows.length >= maxRows) break;
+            }
+            return rows;
         }
 
         const rows = [];
@@ -632,6 +668,7 @@ export default class CsvParser {
             if (!inQuotes && (ch === '\n' || ch === '\r')) {
                 row.push(cell);
                 rows.push(row);
+                if (maxRows && rows.length >= maxRows) return rows;
                 row = [];
                 cell = '';
                 if (ch === '\r' && text[i + 1] === '\n') i++;
@@ -779,8 +816,25 @@ export default class CsvParser {
         }
 
         if (best) return best;
-        const hasHeader = this._looksLikeHeaderRow(rows[0], rows.slice(1), delimiter);
-        return { headerIndex: 0, dataStartIndex: hasHeader ? 1 : 0, hasHeader, score: 0 };
+        const fallbackHeaderIndex = rows.findIndex(row =>
+            (row || []).length >= 2 && row.some(cell => String(cell ?? '').trim() !== '')
+        );
+        const headerIndex = fallbackHeaderIndex >= 0 ? fallbackHeaderIndex : 0;
+        const header = rows[headerIndex] || [];
+        const width = header.length || 0;
+        const followingRows = rows.slice(headerIndex + 1);
+        const hasHeader = this._looksLikeHeaderRow(header, followingRows, delimiter);
+        const nextDataIndex = rows.findIndex((row, index) =>
+            index > headerIndex
+            && row.length === width
+            && row.some(cell => String(cell ?? '').trim() !== '')
+        );
+        return {
+            headerIndex,
+            dataStartIndex: hasHeader ? (nextDataIndex >= 0 ? nextDataIndex : headerIndex + 1) : headerIndex,
+            hasHeader,
+            score: 0,
+        };
     }
 
     _isDataLikeRow(row, delimiter = ',') {

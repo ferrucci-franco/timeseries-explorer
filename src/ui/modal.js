@@ -123,10 +123,12 @@ const Modal = {
             const content = document.createElement('div');
             content.className = 'modal-content';
 
-            const icon = document.createElement('div');
-            icon.className = 'modal-icon';
-            icon.textContent = options.icon || '!';
-            content.appendChild(icon);
+            if (options.icon !== false && options.hideIcon !== true) {
+                const icon = document.createElement('div');
+                icon.className = 'modal-icon';
+                icon.textContent = options.icon || '!';
+                content.appendChild(icon);
+            }
 
             if (options.title) {
                 const titleDiv = document.createElement('div');
@@ -205,11 +207,13 @@ const Modal = {
             const content = document.createElement('div');
             content.className = 'modal-content';
 
-            const icon = document.createElement('div');
-            icon.className = 'modal-icon';
-            if (options.iconHtml) icon.innerHTML = options.iconHtml;
-            else icon.textContent = options.icon || '⚠️';
-            content.appendChild(icon);
+            if (options.icon !== false && options.hideIcon !== true) {
+                const icon = document.createElement('div');
+                icon.className = 'modal-icon';
+                if (options.iconHtml) icon.innerHTML = options.iconHtml;
+                else icon.textContent = options.icon || '⚠️';
+                content.appendChild(icon);
+            }
 
             if (title) {
                 const titleDiv = document.createElement('div');

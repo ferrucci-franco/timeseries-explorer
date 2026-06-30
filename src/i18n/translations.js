@@ -80,13 +80,24 @@ const translations = {
             csvPreviewSampleMiddle: 'Middle',
             csvPreviewSampleEnd: 'End',
             csvPreviewLinesShown: 'Lines shown',
-            csvPreviewLoadMore: 'Load more preview lines',
+            csvPreviewLinesCustom: 'Custom',
+            csvPreviewCustomLinesOk: 'OK',
+            csvPreviewCustomLinesTooltip: 'Enter a custom number of preview lines, up to {max}.',
             csvPreviewDelimiter: 'Delimiter',
             csvPreviewDecimalSeparator: 'Decimal separator',
+            csvPreviewDecimalCommaUnavailable: ', comma (unavailable with comma delimiter)',
+            csvPreviewDecimalCommaUnavailableTooltip: 'The decimal separator cannot also be comma when columns are separated by comma. Use Auto or dot, or change the delimiter first.',
             csvPreviewEncoding: 'Encoding',
             csvPreviewConfidence: 'Confidence',
             csvPreviewTableStructure: 'Table structure',
             csvPreviewNoHeader: 'No header row',
+            csvPreviewNoHeaderLockedTooltip: 'This file does not contain a detected header row; column names are generated automatically.',
+            csvPreviewHideEmptyLines: 'Hide empty lines',
+            csvPreviewHideEmptyLinesTooltip: 'Hide blank source rows in this preview only.',
+            csvPreviewHidePreambleRows: 'Hide preamble rows',
+            csvPreviewHidePreambleRowsTooltip: 'Hide initial source rows before the first data row in this preview only.',
+            csvPreviewHideInvalidLines: 'Hide invalid lines',
+            csvPreviewHideInvalidLinesTooltip: 'Hide data rows that fail the row filter, column count, or time parsing. When visible, invalid lines are shown in red.',
             csvPreviewHeaderRow: 'Header row',
             csvPreviewUnitsSource: 'Units source',
             csvPreviewUnitsNone: 'None',
@@ -95,15 +106,51 @@ const translations = {
             csvPreviewUnitsRowLabel: 'Units row',
             csvPreviewInlineUnitFormat: 'Inline format',
             csvPreviewFirstDataRow: 'First data row',
+            csvPreviewRowFilter: 'Row filter',
+            csvPreviewRowFilterEnable: 'Filter rows by column value',
+            csvPreviewRowFilterTooltip: 'Show extra controls to keep rows by text comparison or by numeric cells in the selected column.',
+            csvPreviewRowFilterColumn: 'Column',
+            csvPreviewRowFilterOperator: 'Operator',
+            csvPreviewRowFilterValue: 'Value',
+            csvPreviewRowFilterIsNumeric: 'is numeric',
+            csvPreviewFilteredRows: '{filtered}/{total} data rows are excluded by the row filter.',
+            csvPreviewInvalidNumericCell: 'non-numeric value in a numeric column; imported as NaN',
             csvPreviewTimeAxis: 'Time axis',
             csvPreviewMode: 'Mode',
-            csvPreviewTimeSingle: 'Single column',
-            csvPreviewTimeSplit: 'Date + Time',
-            csvPreviewTimeParts: 'Multiple columns',
-            csvPreviewTimeIndex: 'Row index',
+            csvPreviewTimeSingle: 'Single time column',
+            csvPreviewTimeSplit: 'Separate date and time columns',
+            csvPreviewTimeParts: 'Date/time parts in columns',
+            csvPreviewTimeIndexColumn: 'Existing index column',
+            csvPreviewTimeIndex: 'Generated row index',
+            csvPreviewModeHelpTitle: 'CSV time-axis modes',
+            csvPreviewModeHelpTooltip: 'Explain CSV time-axis modes',
+            csvPreviewModeHelpBody: `<div class="csv-pattern-help">
+                <p>Choose how the CSV should build the X axis used by plots. This does not rename the raw columns by itself; it only decides where time comes from.</p>
+                <div class="csv-pattern-help-table-wrap"><table class="csv-pattern-help-table">
+                    <thead><tr><th>Mode</th><th>Use it when</th><th>What happens</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>Single time column</b></td><td>One CSV column already contains the full time value: text datetime, elapsed numeric time, Excel serial date, MATLAB datenum, decimal year, or partial date such as <code>YYYY-MM</code>.</td><td>Select that column. The selected column becomes the X axis and is not imported again as a normal variable.</td></tr>
+                        <tr><td><b>Separate date and time columns</b></td><td>The date and clock time are split, for example <code>2024/01/31</code> in one column and <code>13:45:00</code> in another.</td><td>Select both columns. They are combined into one datetime axis.</td></tr>
+                        <tr><td><b>Date/time parts in columns</b></td><td>Year, month, day, hour, minute, or second are stored in separate columns. Partial calendars are allowed.</td><td>Assign the available parts. Missing year defaults to <code>2001</code>, missing month/day to <code>01</code>, and missing time to <code>00:00:00</code>. A year-only column becomes <code>YYYY-01-01 00:00:00</code>.</td></tr>
+                        <tr><td><b>Existing index column</b></td><td>A CSV column already contains a numeric step, sample, or index such as <code>0, 1, 2...</code> or <code>1, 2, 3...</code>.</td><td>Select that column. Repeated values are allowed for jumps/events, values must not decrease, and the column is not imported again as a normal variable.</td></tr>
+                        <tr><td><b>Generated row index</b></td><td>The file has no useful time column, or you want each data row to be placed at <code>0, 1, 2...</code>.</td><td>A new internal index is generated. Existing columns named index/date remain ordinary variables unless you disable them.</td></tr>
+                    </tbody>
+                </table></div>
+            </div>`,
             csvPreviewColumn: 'Column',
             csvPreviewTimeFormat: 'Format',
+            csvPreviewAutoTimeFormatHelp: 'Auto detects text dates, numeric elapsed time, Excel serial dates, MATLAB datenum, decimal years, and partial dates such as YYYY-MM.',
+            csvPreviewAutoDetectedFormat: 'Detected: {format}',
+            csvPreviewAutoDetectedDatePattern: 'Detected: date pattern {pattern}',
+            csvPreviewAutoDetectedNumeric: 'numeric elapsed time',
+            csvPreviewAutoDetectedExcelSerial: 'Excel serial date',
+            csvPreviewAutoDetectedMatlabDatenum: 'MATLAB datenum',
+            csvPreviewAutoDetectedDecimalYear: 'decimal year',
+            csvPreviewAutoDetectedYearMonth: 'partial date YYYY-MM; day = 01',
+            csvPreviewAutoDetectedMonthName: 'month-name date',
+            csvPreviewAutoDetectedYearless: 'date/time without year; year = 2001',
             csvPreviewPattern: 'Pattern',
+            csvPreviewIndexColumn: 'Index column',
             csvPreviewDateColumn: 'Date column',
             csvPreviewTimeColumn: 'Time column',
             csvPreviewYearColumn: 'Year',
@@ -112,9 +159,72 @@ const translations = {
             csvPreviewHourColumn: 'Hour',
             csvPreviewMinuteColumn: 'Minute',
             csvPreviewSecondColumn: 'Second',
+            csvPreviewPatternHelpTitle: 'Datetime pattern reference',
+            csvPreviewPatternHelpTooltip: 'Open datetime pattern reference',
+            csvPreviewPatternHelpBody: `<div class="csv-pattern-help">
+                <p>Use this reference to understand detected date/time patterns and to write a pattern when <b>Format</b> is set to <b>Custom</b>. The pattern describes exactly how one date/time cell is written. Tokens are <b>case-sensitive</b>: <code>MM</code> means month, while <code>mm</code> means minutes.</p>
+                <div class="csv-pattern-help-table-wrap"><table class="csv-pattern-help-table">
+                    <thead><tr><th>Token</th><th>Meaning</th><th>Accepted values</th><th>Example</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>yyyy</code></td><td>Year with 4 digits.</td><td><code>0000</code> to <code>9999</code>.</td><td><code>2018</code></td></tr>
+                        <tr><td><code>yy</code></td><td>Year with 2 digits. Values <code>70</code>-<code>99</code> become 1970-1999; <code>00</code>-<code>69</code> become 2000-2069.</td><td><code>00</code> to <code>99</code>.</td><td><code>18</code></td></tr>
+                        <tr><td><code>MM</code></td><td>Month number with exactly 2 digits.</td><td><code>01</code> to <code>12</code>.</td><td><code>03</code></td></tr>
+                        <tr><td><code>M</code></td><td>Month number with 1 or 2 digits.</td><td><code>1</code> to <code>12</code>.</td><td><code>3</code></td></tr>
+                        <tr><td><code>MMM</code>, <code>MMMM</code></td><td>Month name or abbreviation.</td><td>English, Spanish, French, Italian, Portuguese, and common German forms. Case, accents, and final periods are normalized.</td><td><code>Jan</code>, <code>January</code>, <code>Ene</code>, <code>Enero</code></td></tr>
+                        <tr><td><code>dd</code></td><td>Day of month with exactly 2 digits.</td><td><code>01</code> to <code>31</code>, checked against the month/year.</td><td><code>09</code></td></tr>
+                        <tr><td><code>d</code></td><td>Day of month with 1 or 2 digits.</td><td><code>1</code> to <code>31</code>, checked against the month/year.</td><td><code>9</code></td></tr>
+                        <tr><td><code>HH</code></td><td>Hour in 24-hour time, exactly 2 digits.</td><td><code>00</code> to <code>24</code>. <code>24</code> is only valid with zero minutes/seconds.</td><td><code>07</code>, <code>23</code></td></tr>
+                        <tr><td><code>H</code></td><td>Hour in 24-hour time, 1 or 2 digits.</td><td><code>0</code> to <code>24</code>.</td><td><code>7</code>, <code>23</code></td></tr>
+                        <tr><td><code>hh</code>, <code>h</code></td><td>Hour in 12-hour time. Must be used with <code>AM/PM</code>.</td><td><code>01</code> to <code>12</code>, or <code>1</code> to <code>12</code>.</td><td><code>01</code>, <code>7</code></td></tr>
+                        <tr><td><code>mm</code></td><td>Minutes, exactly 2 digits. Lowercase matters.</td><td><code>00</code> to <code>59</code>.</td><td><code>05</code></td></tr>
+                        <tr><td><code>m</code></td><td>Minutes, 1 or 2 digits. Lowercase matters.</td><td><code>0</code> to <code>59</code>.</td><td><code>5</code></td></tr>
+                        <tr><td><code>ss</code></td><td>Seconds, exactly 2 digits.</td><td><code>00</code> to <code>59</code>.</td><td><code>08</code></td></tr>
+                        <tr><td><code>s</code></td><td>Seconds, 1 or 2 digits.</td><td><code>0</code> to <code>59</code>.</td><td><code>8</code></td></tr>
+                        <tr><td><code>SSS</code></td><td>Milliseconds. One to three digits are accepted and padded to milliseconds.</td><td><code>0</code> to <code>999</code>.</td><td><code>125</code></td></tr>
+                        <tr><td><code>AM/PM</code></td><td>12-hour clock marker.</td><td><code>AM</code> or <code>PM</code>, case-insensitive.</td><td><code>PM</code></td></tr>
+                        <tr><td><code>Excel</code></td><td>Excel serial date number.</td><td>Numeric cells such as <code>45292.5</code>.</td><td><code>Excel</code></td></tr>
+                        <tr><td><code>Matlab</code></td><td>MATLAB datenum value.</td><td>Numeric cells such as <code>739252.5</code>.</td><td><code>Matlab</code></td></tr>
+                        <tr><td>Literal text</td><td>Any character that is not a token must appear exactly in the cell.</td><td>Common literals: <code>/</code>, <code>-</code>, space, <code>T</code>, <code>:</code>, <code>.</code>.</td><td><code>yyyy/MM/dd HH:mm:ss</code></td></tr>
+                    </tbody>
+                </table></div>
+                <p><b>Examples</b></p>
+                <ul>
+                    <li><code>yyyy/MM/dd HH:mm:ss</code> parses <code>2018/03/09 07:05:08</code>.</li>
+                    <li><code>dd-MM-yyyy HH:mm</code> parses <code>09-03-2018 07:05</code>.</li>
+                    <li><code>dd-MMM-yyyy HH:mm:ss</code> parses <code>09-Ene-2018 07:05:08</code> and <code>09-Jan-2018 07:05:08</code>.</li>
+                    <li><code>MM/dd/yyyy hh:mm AM/PM</code> parses <code>01/31/2024 01:45 PM</code>; <code>MM/dd/yyyy hh:mm:ss AM/PM</code> parses <code>01/31/2024 01:45:30 PM</code>.</li>
+                    <li><code>dd MMMM yyyy</code> parses <code>09 enero 2018</code>, <code>09 janvier 2018</code>, <code>09 gennaio 2018</code>, and <code>09 janeiro 2018</code>.</li>
+                    <li><code>MMMM dd yyyy</code> parses <code>January 09 2018</code>, <code>March 09 2018</code>, and <code>Marzo 09 2018</code>.</li>
+                    <li><code>Excel</code> parses Excel serial dates; <code>Matlab</code> parses MATLAB datenum values.</li>
+                    <li><code>yyyy-MM-dd'T'HH:mm:ss.SSS</code> parses <code>2018-03-09T07:05:08.125</code>. The quoted <code>T</code> here is just a literal character in the cell.</li>
+                </ul>
+                <p><b>Important details</b></p>
+                <ul>
+                    <li>The whole cell must match the pattern; extra spaces or missing separators make the row invalid.</li>
+                    <li>Use <code>MM</code> or <code>M</code> for month, and <code>mm</code> or <code>m</code> for minutes.</li>
+                    <li>Use <code>MMM</code> or <code>MMMM</code> for month names such as <code>Mar</code>, <code>March</code>, <code>Ene</code>, <code>Enero</code>, <code>Janv.</code>, or <code>Gennaio</code>.</li>
+                    <li>Timezone names/offsets are not supported by custom patterns.</li>
+                </ul>
+            </div>`,
             csvPreviewNone: 'None',
             csvPreviewDateOrder: 'Date order',
+            csvPreviewDateOrderHelpTitle: 'Date order',
+            csvPreviewDateOrderHelpTooltip: 'Explain date order',
+            csvPreviewDateOrderYmdHelp: 'Year-month-day, for example 2024/01/31.',
+            csvPreviewDateOrderDmyHelp: 'Day-month-year, for example 31/01/2024.',
+            csvPreviewDateOrderMdyHelp: 'Month-day-year, for example 01/31/2024.',
             csvPreviewColumns: 'Columns',
+            csvPreviewColumnTools: 'Show column options',
+            csvPreviewColumnToolsTooltip: 'Show extra controls to skip imported columns or rename detected columns.',
+            csvPreviewColumnsHelp: 'Checked columns are parsed/imported. Uncheck a column to skip it; edit the text box to rename it.',
+            csvPreviewColumnsReset: 'Reset',
+            csvPreviewColumnsResetTooltip: 'Restore detected column names and select all columns for parsing/import.',
+            csvPreviewUseColumn: 'Parse/import this column',
+            csvPreviewFileRowNumber: 'File row number',
+            csvPreviewDateTimeParsed: 'Date & time parsed',
+            csvPreviewDetectedUnits: 'Units',
+            csvPreviewNewNames: 'New names',
+            csvPreviewResizeSide: 'Drag to resize parsing options',
             csvPreviewTimeColumnProtected: 'Time-axis columns cannot be ignored.',
             csvPreviewValidRows: '{valid}/{total} visible data rows produce valid time values.',
             csvPreviewCannotApply: 'Cannot apply parsing yet.',
@@ -124,6 +234,8 @@ const translations = {
             csvProfileRestoreSkippedBody: 'A saved CSV parsing profile was not applied because the file no longer matched or could not be reparsed: {files}',
             csvPreviewResetAuto: 'Reset auto',
             csvPreviewRedetect: 'Re-detect',
+            csvPreviewResetAutoTooltip: 'Discard all manual CSV parsing edits and restore automatic detection.',
+            csvPreviewRedetectTooltip: 'Run automatic detection again, while keeping column renames and parse/import checkboxes.',
             csvPreviewRowClickHint: 'Click to assign this row',
             loadingFiles: 'Loading files ({current}/{total})',
             loadingFilesPreparing: 'Preparing files...',
@@ -713,13 +825,24 @@ const translations = {
             csvPreviewSampleMiddle: 'Milieu',
             csvPreviewSampleEnd: 'Fin',
             csvPreviewLinesShown: 'Lignes affichees',
-            csvPreviewLoadMore: 'Charger plus de lignes',
+            csvPreviewLinesCustom: 'Personnalise',
+            csvPreviewCustomLinesOk: 'OK',
+            csvPreviewCustomLinesTooltip: 'Entrez un nombre personnalise de lignes de preview, jusqu a {max}.',
             csvPreviewDelimiter: 'Delimiteur',
             csvPreviewDecimalSeparator: 'Separateur decimal',
+            csvPreviewDecimalCommaUnavailable: ', virgule (indisponible avec delimiteur virgule)',
+            csvPreviewDecimalCommaUnavailableTooltip: 'Le separateur decimal ne peut pas aussi etre la virgule quand les colonnes sont separees par une virgule. Utilisez Auto ou point, ou changez d abord le delimiteur.',
             csvPreviewEncoding: 'Encodage',
             csvPreviewConfidence: 'Confiance',
             csvPreviewTableStructure: 'Structure de table',
             csvPreviewNoHeader: 'Pas de ligne de titres',
+            csvPreviewNoHeaderLockedTooltip: 'Ce fichier ne contient pas de ligne de titres detectee; les noms de colonnes sont generes automatiquement.',
+            csvPreviewHideEmptyLines: 'Masquer lignes vides',
+            csvPreviewHideEmptyLinesTooltip: 'Masquer les lignes source vides dans ce preview seulement.',
+            csvPreviewHidePreambleRows: 'Masquer lignes de preambule',
+            csvPreviewHidePreambleRowsTooltip: 'Masquer les lignes source initiales avant la premiere ligne de donnees dans ce preview seulement.',
+            csvPreviewHideInvalidLines: 'Masquer lignes invalides',
+            csvPreviewHideInvalidLinesTooltip: 'Masquer les lignes de donnees qui echouent au filtre, au nombre de colonnes ou au parsing du temps. Si elles restent visibles, les lignes invalides sont rouges.',
             csvPreviewHeaderRow: 'Titres',
             csvPreviewUnitsSource: 'Source unites',
             csvPreviewUnitsNone: 'Aucune',
@@ -728,15 +851,51 @@ const translations = {
             csvPreviewUnitsRowLabel: 'Ligne unites',
             csvPreviewInlineUnitFormat: 'Format inline',
             csvPreviewFirstDataRow: 'Premiere donnee',
+            csvPreviewRowFilter: 'Filtre de lignes',
+            csvPreviewRowFilterEnable: 'Filtrer les lignes par valeur de colonne',
+            csvPreviewRowFilterTooltip: 'Afficher des controles supplementaires pour garder les lignes par comparaison texte ou par cellules numeriques dans la colonne choisie.',
+            csvPreviewRowFilterColumn: 'Colonne',
+            csvPreviewRowFilterOperator: 'Operateur',
+            csvPreviewRowFilterValue: 'Valeur',
+            csvPreviewRowFilterIsNumeric: 'est numerique',
+            csvPreviewFilteredRows: '{filtered}/{total} lignes de donnees sont exclues par le filtre.',
+            csvPreviewInvalidNumericCell: 'valeur non numerique dans une colonne numerique; importee comme NaN',
             csvPreviewTimeAxis: 'Axe temps',
             csvPreviewMode: 'Mode',
-            csvPreviewTimeSingle: 'Colonne unique',
-            csvPreviewTimeSplit: 'Date + heure',
-            csvPreviewTimeParts: 'Colonnes multiples',
-            csvPreviewTimeIndex: 'Index de ligne',
+            csvPreviewTimeSingle: 'Colonne temps unique',
+            csvPreviewTimeSplit: 'Colonnes date et heure separees',
+            csvPreviewTimeParts: 'Parties date/heure en colonnes',
+            csvPreviewTimeIndexColumn: 'Colonne index existante',
+            csvPreviewTimeIndex: 'Index de ligne genere',
+            csvPreviewModeHelpTitle: 'Modes d axe temps CSV',
+            csvPreviewModeHelpTooltip: 'Expliquer les modes d axe temps CSV',
+            csvPreviewModeHelpBody: `<div class="csv-pattern-help">
+                <p>Choisissez comment le CSV construit l axe X utilise par les graphiques. Cela ne renomme pas les colonnes brutes; cela decide seulement d ou vient le temps.</p>
+                <div class="csv-pattern-help-table-wrap"><table class="csv-pattern-help-table">
+                    <thead><tr><th>Mode</th><th>Quand l utiliser</th><th>Effet</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>Colonne temps unique</b></td><td>Une colonne contient deja toute la valeur de temps : date/heure texte, temps numerique ecoule, date serie Excel, MATLAB datenum, annee decimale ou date partielle comme <code>YYYY-MM</code>.</td><td>Selectionnez cette colonne. Elle devient l axe X et n est pas importee a nouveau comme variable normale.</td></tr>
+                        <tr><td><b>Colonnes date et heure separees</b></td><td>La date et l heure sont separees, par exemple <code>2024/01/31</code> dans une colonne et <code>13:45:00</code> dans une autre.</td><td>Selectionnez les deux colonnes. Elles sont combinees en un seul axe date/heure.</td></tr>
+                        <tr><td><b>Parties date/heure en colonnes</b></td><td>Annee, mois, jour, heure, minute ou seconde sont stockes dans des colonnes separees. Les calendriers partiels sont acceptes.</td><td>Assignez les parties disponibles. L annee manquante vaut <code>2001</code>, le mois/jour manquant vaut <code>01</code>, et l heure manquante vaut <code>00:00:00</code>. Une colonne annee seule devient <code>YYYY-01-01 00:00:00</code>.</td></tr>
+                        <tr><td><b>Colonne index existante</b></td><td>Une colonne CSV contient deja un pas, echantillon ou index numerique comme <code>0, 1, 2...</code> ou <code>1, 2, 3...</code>.</td><td>Selectionnez cette colonne. Les valeurs repetees sont acceptees pour les sauts/evenements, les valeurs ne doivent pas diminuer, et la colonne n est pas importee a nouveau comme variable normale.</td></tr>
+                        <tr><td><b>Index de ligne genere</b></td><td>Le fichier n a pas de colonne temps utile, ou vous voulez placer chaque ligne de donnees en <code>0, 1, 2...</code>.</td><td>Un nouvel index interne est genere. Les colonnes existantes appelees index/date restent des variables ordinaires sauf si vous les desactivez.</td></tr>
+                    </tbody>
+                </table></div>
+            </div>`,
             csvPreviewColumn: 'Colonne',
             csvPreviewTimeFormat: 'Format',
+            csvPreviewAutoTimeFormatHelp: 'Auto detecte les dates texte, le temps numerique ecoule, les dates serie Excel, MATLAB datenum, les annees decimales et les dates partielles comme YYYY-MM.',
+            csvPreviewAutoDetectedFormat: 'Detecte : {format}',
+            csvPreviewAutoDetectedDatePattern: 'Detecte : patron de date {pattern}',
+            csvPreviewAutoDetectedNumeric: 'temps numerique ecoule',
+            csvPreviewAutoDetectedExcelSerial: 'date serie Excel',
+            csvPreviewAutoDetectedMatlabDatenum: 'MATLAB datenum',
+            csvPreviewAutoDetectedDecimalYear: 'annee decimale',
+            csvPreviewAutoDetectedYearMonth: 'date partielle YYYY-MM; jour = 01',
+            csvPreviewAutoDetectedMonthName: 'date avec nom de mois',
+            csvPreviewAutoDetectedYearless: 'date/heure sans annee; annee = 2001',
             csvPreviewPattern: 'Patron',
+            csvPreviewIndexColumn: 'Colonne index',
             csvPreviewDateColumn: 'Colonne date',
             csvPreviewTimeColumn: 'Colonne heure',
             csvPreviewYearColumn: 'Annee',
@@ -745,9 +904,72 @@ const translations = {
             csvPreviewHourColumn: 'Heure',
             csvPreviewMinuteColumn: 'Minute',
             csvPreviewSecondColumn: 'Seconde',
+            csvPreviewPatternHelpTitle: 'Reference des patrons date/heure',
+            csvPreviewPatternHelpTooltip: 'Ouvrir la reference des patrons date/heure',
+            csvPreviewPatternHelpBody: `<div class="csv-pattern-help">
+                <p>Utilisez cette reference pour comprendre les patrons date/heure detectes et pour ecrire un patron quand <b>Format</b> vaut <b>Custom</b>. Le patron decrit exactement comment une cellule date/heure est ecrite. Les tokens sont <b>sensibles a la casse</b> : <code>MM</code> signifie mois, tandis que <code>mm</code> signifie minutes.</p>
+                <div class="csv-pattern-help-table-wrap"><table class="csv-pattern-help-table">
+                    <thead><tr><th>Token</th><th>Signification</th><th>Valeurs acceptees</th><th>Exemple</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>yyyy</code></td><td>Annee sur 4 chiffres.</td><td><code>0000</code> a <code>9999</code>.</td><td><code>2018</code></td></tr>
+                        <tr><td><code>yy</code></td><td>Annee sur 2 chiffres. <code>70</code>-<code>99</code> devient 1970-1999; <code>00</code>-<code>69</code> devient 2000-2069.</td><td><code>00</code> a <code>99</code>.</td><td><code>18</code></td></tr>
+                        <tr><td><code>MM</code></td><td>Mois sur exactement 2 chiffres.</td><td><code>01</code> a <code>12</code>.</td><td><code>03</code></td></tr>
+                        <tr><td><code>M</code></td><td>Mois sur 1 ou 2 chiffres.</td><td><code>1</code> a <code>12</code>.</td><td><code>3</code></td></tr>
+                        <tr><td><code>MMM</code>, <code>MMMM</code></td><td>Nom ou abreviation du mois.</td><td>Anglais, espagnol, francais, italien, portugais et formes allemandes courantes. Casse, accents et points finaux sont normalises.</td><td><code>Jan</code>, <code>January</code>, <code>Ene</code>, <code>Enero</code></td></tr>
+                        <tr><td><code>dd</code></td><td>Jour du mois sur exactement 2 chiffres.</td><td><code>01</code> a <code>31</code>, verifie avec le mois et l annee.</td><td><code>09</code></td></tr>
+                        <tr><td><code>d</code></td><td>Jour du mois sur 1 ou 2 chiffres.</td><td><code>1</code> a <code>31</code>, verifie avec le mois et l annee.</td><td><code>9</code></td></tr>
+                        <tr><td><code>HH</code></td><td>Heure en format 24 h, exactement 2 chiffres.</td><td><code>00</code> a <code>24</code>. <code>24</code> est valide seulement avec minutes/secondes a zero.</td><td><code>07</code>, <code>23</code></td></tr>
+                        <tr><td><code>H</code></td><td>Heure en format 24 h, 1 ou 2 chiffres.</td><td><code>0</code> a <code>24</code>.</td><td><code>7</code>, <code>23</code></td></tr>
+                        <tr><td><code>hh</code>, <code>h</code></td><td>Heure en format 12 h. Doit etre utilise avec <code>AM/PM</code>.</td><td><code>01</code> a <code>12</code>, ou <code>1</code> a <code>12</code>.</td><td><code>01</code>, <code>7</code></td></tr>
+                        <tr><td><code>mm</code></td><td>Minutes sur exactement 2 chiffres. La minuscule est importante.</td><td><code>00</code> a <code>59</code>.</td><td><code>05</code></td></tr>
+                        <tr><td><code>m</code></td><td>Minutes sur 1 ou 2 chiffres. La minuscule est importante.</td><td><code>0</code> a <code>59</code>.</td><td><code>5</code></td></tr>
+                        <tr><td><code>ss</code></td><td>Secondes sur exactement 2 chiffres.</td><td><code>00</code> a <code>59</code>.</td><td><code>08</code></td></tr>
+                        <tr><td><code>s</code></td><td>Secondes sur 1 ou 2 chiffres.</td><td><code>0</code> a <code>59</code>.</td><td><code>8</code></td></tr>
+                        <tr><td><code>SSS</code></td><td>Millisecondes. Un a trois chiffres sont acceptes et completes en millisecondes.</td><td><code>0</code> a <code>999</code>.</td><td><code>125</code></td></tr>
+                        <tr><td><code>AM/PM</code></td><td>Marqueur d horloge 12 h.</td><td><code>AM</code> ou <code>PM</code>, sans tenir compte de la casse.</td><td><code>PM</code></td></tr>
+                        <tr><td><code>Excel</code></td><td>Date serie Excel.</td><td>Cellules numeriques comme <code>45292.5</code>.</td><td><code>Excel</code></td></tr>
+                        <tr><td><code>Matlab</code></td><td>Valeur MATLAB datenum.</td><td>Cellules numeriques comme <code>739252.5</code>.</td><td><code>Matlab</code></td></tr>
+                        <tr><td>Texte litteral</td><td>Tout caractere qui n est pas un token doit apparaitre exactement dans la cellule.</td><td>Litteraux courants : <code>/</code>, <code>-</code>, espace, <code>T</code>, <code>:</code>, <code>.</code>.</td><td><code>yyyy/MM/dd HH:mm:ss</code></td></tr>
+                    </tbody>
+                </table></div>
+                <p><b>Exemples</b></p>
+                <ul>
+                    <li><code>yyyy/MM/dd HH:mm:ss</code> parse <code>2018/03/09 07:05:08</code>.</li>
+                    <li><code>dd-MM-yyyy HH:mm</code> parse <code>09-03-2018 07:05</code>.</li>
+                    <li><code>dd-MMM-yyyy HH:mm:ss</code> parse <code>09-Ene-2018 07:05:08</code> et <code>09-Jan-2018 07:05:08</code>.</li>
+                    <li><code>MM/dd/yyyy hh:mm AM/PM</code> parse <code>01/31/2024 01:45 PM</code>; <code>MM/dd/yyyy hh:mm:ss AM/PM</code> parse <code>01/31/2024 01:45:30 PM</code>.</li>
+                    <li><code>dd MMMM yyyy</code> parse <code>09 enero 2018</code>, <code>09 janvier 2018</code>, <code>09 gennaio 2018</code> et <code>09 janeiro 2018</code>.</li>
+                    <li><code>MMMM dd yyyy</code> parse <code>January 09 2018</code>, <code>March 09 2018</code> et <code>Marzo 09 2018</code>.</li>
+                    <li><code>Excel</code> parse les dates serie Excel; <code>Matlab</code> parse les valeurs MATLAB datenum.</li>
+                    <li><code>yyyy-MM-dd'T'HH:mm:ss.SSS</code> parse <code>2018-03-09T07:05:08.125</code>. Le <code>T</code> est simplement un caractere litteral.</li>
+                </ul>
+                <p><b>Details importants</b></p>
+                <ul>
+                    <li>Toute la cellule doit correspondre au patron; espaces supplementaires ou separateurs manquants rendent la ligne invalide.</li>
+                    <li>Utilisez <code>MM</code> ou <code>M</code> pour le mois, et <code>mm</code> ou <code>m</code> pour les minutes.</li>
+                    <li>Utilisez <code>MMM</code> ou <code>MMMM</code> pour les noms de mois comme <code>Mar</code>, <code>March</code>, <code>Ene</code>, <code>Enero</code>, <code>Janv.</code> ou <code>Gennaio</code>.</li>
+                    <li>Les noms/offsets de fuseau horaire ne sont pas pris en charge par les patrons custom.</li>
+                </ul>
+            </div>`,
             csvPreviewNone: 'Aucun',
             csvPreviewDateOrder: 'Ordre date',
+            csvPreviewDateOrderHelpTitle: 'Ordre date',
+            csvPreviewDateOrderHelpTooltip: 'Expliquer l ordre de date',
+            csvPreviewDateOrderYmdHelp: 'Annee-mois-jour, par exemple 2024/01/31.',
+            csvPreviewDateOrderDmyHelp: 'Jour-mois-annee, par exemple 31/01/2024.',
+            csvPreviewDateOrderMdyHelp: 'Mois-jour-annee, par exemple 01/31/2024.',
             csvPreviewColumns: 'Colonnes',
+            csvPreviewColumnTools: 'Afficher options colonnes',
+            csvPreviewColumnToolsTooltip: 'Afficher des controles supplementaires pour ignorer des colonnes importees ou renommer les colonnes detectees.',
+            csvPreviewColumnsHelp: 'Les colonnes cochees sont parsees/importees. Decochez une colonne pour l ignorer; modifiez le texte pour la renommer.',
+            csvPreviewColumnsReset: 'Reinitialiser',
+            csvPreviewColumnsResetTooltip: 'Restaurer les noms detectes et selectionner toutes les colonnes pour le parsing/import.',
+            csvPreviewUseColumn: 'Parser/importer cette colonne',
+            csvPreviewFileRowNumber: 'Numero de ligne fichier',
+            csvPreviewDateTimeParsed: 'Date et heure parsees',
+            csvPreviewDetectedUnits: 'Unites',
+            csvPreviewNewNames: 'Nouveaux noms',
+            csvPreviewResizeSide: 'Faire glisser pour redimensionner les options de parsing',
             csvPreviewTimeColumnProtected: 'Les colonnes de temps ne peuvent pas etre ignorees.',
             csvPreviewValidRows: '{valid}/{total} lignes visibles produisent un temps valide.',
             csvPreviewCannotApply: 'Impossible encore d appliquer.',
@@ -757,6 +979,8 @@ const translations = {
             csvProfileRestoreSkippedBody: 'Un profil de parsing CSV sauvegarde n a pas ete applique car le fichier ne correspond plus ou n a pas pu etre relu : {files}',
             csvPreviewResetAuto: 'Auto',
             csvPreviewRedetect: 'Re-detecter',
+            csvPreviewResetAutoTooltip: 'Annuler toutes les modifications manuelles du parsing CSV et revenir a la detection automatique.',
+            csvPreviewRedetectTooltip: 'Relancer la detection automatique en conservant les renommages et les cases parse/import.',
             csvPreviewRowClickHint: 'Cliquer pour assigner cette ligne',
             largeCsvPreflightSave: 'Convertir et enregistrer',
             largeCsvPreflightTemporary: 'Convertir temporairement',
@@ -1208,13 +1432,24 @@ const translations = {
             csvPreviewSampleMiddle: 'Medio',
             csvPreviewSampleEnd: 'Final',
             csvPreviewLinesShown: 'Lineas mostradas',
-            csvPreviewLoadMore: 'Cargar mas lineas',
+            csvPreviewLinesCustom: 'Personalizado',
+            csvPreviewCustomLinesOk: 'OK',
+            csvPreviewCustomLinesTooltip: 'Ingresa un numero personalizado de lineas de preview, hasta {max}.',
             csvPreviewDelimiter: 'Delimitador',
             csvPreviewDecimalSeparator: 'Separador decimal',
+            csvPreviewDecimalCommaUnavailable: ', coma (no disponible con delimitador coma)',
+            csvPreviewDecimalCommaUnavailableTooltip: 'El separador decimal no puede ser tambien coma cuando las columnas se separan con coma. Usa Auto o punto, o cambia primero el delimitador.',
             csvPreviewEncoding: 'Encoding',
             csvPreviewConfidence: 'Confianza',
             csvPreviewTableStructure: 'Estructura de tabla',
             csvPreviewNoHeader: 'Sin fila de titulos',
+            csvPreviewNoHeaderLockedTooltip: 'Este archivo no contiene una fila de titulos detectada; los nombres de columnas se generan automaticamente.',
+            csvPreviewHideEmptyLines: 'Ocultar lineas vacias',
+            csvPreviewHideEmptyLinesTooltip: 'Oculta filas fuente vacias solo en este preview.',
+            csvPreviewHidePreambleRows: 'Ocultar filas de preambulo',
+            csvPreviewHidePreambleRowsTooltip: 'Oculta en este preview las filas iniciales del archivo que estan antes de la primera fila de datos.',
+            csvPreviewHideInvalidLines: 'Ocultar lineas invalidas',
+            csvPreviewHideInvalidLinesTooltip: 'Oculta filas de datos que fallan el filtro, el numero de columnas o el parsing temporal. Si quedan visibles, las lineas invalidas aparecen en rojo.',
             csvPreviewHeaderRow: 'Fila de titulos',
             csvPreviewUnitsSource: 'Fuente de unidades',
             csvPreviewUnitsNone: 'Ninguna',
@@ -1223,26 +1458,125 @@ const translations = {
             csvPreviewUnitsRowLabel: 'Fila de unidades',
             csvPreviewInlineUnitFormat: 'Formato inline',
             csvPreviewFirstDataRow: 'Primera fila de datos',
+            csvPreviewRowFilter: 'Filtro de filas',
+            csvPreviewRowFilterEnable: 'Filtrar filas por valor de columna',
+            csvPreviewRowFilterTooltip: 'Mostrar controles suplementarios para conservar filas por comparacion de texto o por celdas numericas en la columna elegida.',
+            csvPreviewRowFilterColumn: 'Columna',
+            csvPreviewRowFilterOperator: 'Operador',
+            csvPreviewRowFilterValue: 'Valor',
+            csvPreviewRowFilterIsNumeric: 'es numerico',
+            csvPreviewFilteredRows: '{filtered}/{total} filas de datos son excluidas por el filtro.',
+            csvPreviewInvalidNumericCell: 'valor no numerico en una columna numerica; se importa como NaN',
             csvPreviewTimeAxis: 'Eje temporal',
             csvPreviewMode: 'Modo',
-            csvPreviewTimeSingle: 'Columna unica',
-            csvPreviewTimeSplit: 'Fecha + hora',
-            csvPreviewTimeParts: 'Multiples columnas',
-            csvPreviewTimeIndex: 'Indice de fila',
+            csvPreviewTimeSingle: 'Una columna de tiempo',
+            csvPreviewTimeSplit: 'Fecha y hora en columnas separadas',
+            csvPreviewTimeParts: 'Partes de fecha/hora en columnas',
+            csvPreviewTimeIndexColumn: 'Columna indice existente',
+            csvPreviewTimeIndex: 'Indice de fila generado',
+            csvPreviewModeHelpTitle: 'Modos de eje temporal CSV',
+            csvPreviewModeHelpTooltip: 'Explicar los modos de eje temporal CSV',
+            csvPreviewModeHelpBody: `<div class="csv-pattern-help">
+                <p>Elige como debe construir el CSV el eje X usado por los graficos. Esto no renombra las columnas crudas; solo decide de donde sale el tiempo.</p>
+                <div class="csv-pattern-help-table-wrap"><table class="csv-pattern-help-table">
+                    <thead><tr><th>Modo</th><th>Cuando usarlo</th><th>Que sucede</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>Una columna de tiempo</b></td><td>Una columna del CSV ya contiene el tiempo completo: fecha/hora como texto, tiempo numerico transcurrido, fecha serial de Excel, MATLAB datenum, año decimal o fecha parcial como <code>YYYY-MM</code>.</td><td>Selecciona esa columna. Esa columna pasa a ser el eje X y no se importa de nuevo como variable normal.</td></tr>
+                        <tr><td><b>Fecha y hora en columnas separadas</b></td><td>La fecha y la hora de reloj estan separadas, por ejemplo <code>2024/01/31</code> en una columna y <code>13:45:00</code> en otra.</td><td>Selecciona ambas columnas. Se combinan en un unico eje de fecha/hora.</td></tr>
+                        <tr><td><b>Partes de fecha/hora en columnas</b></td><td>Año, mes, dia, hora, minuto o segundo estan guardados en columnas separadas. Se aceptan calendarios parciales.</td><td>Asigna las partes disponibles. Si falta el año se usa <code>2001</code>, si falta mes/dia se usa <code>01</code>, y si falta la hora se usa <code>00:00:00</code>. Una columna solo con años se convierte en <code>YYYY-01-01 00:00:00</code>.</td></tr>
+                        <tr><td><b>Columna indice existente</b></td><td>Una columna del CSV ya contiene un paso, muestra o indice numerico como <code>0, 1, 2...</code> o <code>1, 2, 3...</code>.</td><td>Selecciona esa columna. Se aceptan valores repetidos para saltos/eventos, los valores no pueden decrecer, y la columna no se importa de nuevo como variable normal.</td></tr>
+                        <tr><td><b>Indice de fila generado</b></td><td>El archivo no tiene una columna de tiempo util, o quieres ubicar cada fila de datos en <code>0, 1, 2...</code>.</td><td>Se genera un nuevo indice interno. Las columnas existentes llamadas index/date siguen siendo variables normales salvo que las deshabilites.</td></tr>
+                    </tbody>
+                </table></div>
+            </div>`,
             csvPreviewColumn: 'Columna',
             csvPreviewTimeFormat: 'Formato',
+            csvPreviewAutoTimeFormatHelp: 'Auto detecta fechas de texto, tiempo numerico transcurrido, fechas seriales de Excel, MATLAB datenum, años decimales y fechas parciales como YYYY-MM.',
+            csvPreviewAutoDetectedFormat: 'Detectado: {format}',
+            csvPreviewAutoDetectedDatePattern: 'Detectado: patron de fecha {pattern}',
+            csvPreviewAutoDetectedNumeric: 'tiempo numerico transcurrido',
+            csvPreviewAutoDetectedExcelSerial: 'fecha serial de Excel',
+            csvPreviewAutoDetectedMatlabDatenum: 'MATLAB datenum',
+            csvPreviewAutoDetectedDecimalYear: 'año decimal',
+            csvPreviewAutoDetectedYearMonth: 'fecha parcial YYYY-MM; dia = 01',
+            csvPreviewAutoDetectedMonthName: 'fecha con nombre de mes',
+            csvPreviewAutoDetectedYearless: 'fecha/hora sin año; año = 2001',
             csvPreviewPattern: 'Patron',
+            csvPreviewIndexColumn: 'Columna indice',
             csvPreviewDateColumn: 'Columna fecha',
             csvPreviewTimeColumn: 'Columna hora',
-            csvPreviewYearColumn: 'Ano',
+            csvPreviewYearColumn: 'Año',
             csvPreviewMonthColumn: 'Mes',
             csvPreviewDayColumn: 'Dia',
             csvPreviewHourColumn: 'Hora',
             csvPreviewMinuteColumn: 'Minuto',
             csvPreviewSecondColumn: 'Segundo',
+            csvPreviewPatternHelpTitle: 'Referencia de patrones de fecha y hora',
+            csvPreviewPatternHelpTooltip: 'Abrir referencia de patron de fecha y hora',
+            csvPreviewPatternHelpBody: `<div class="csv-pattern-help">
+                <p>Usa esta referencia para comprender los patrones de fecha/hora detectados y para escribir un patron cuando <b>Formato</b> esta en <b>Custom</b>. El patron describe exactamente como esta escrita una celda de fecha/hora. Los tokens distinguen <b>mayusculas y minusculas</b>: <code>MM</code> significa mes, mientras que <code>mm</code> significa minutos.</p>
+                <div class="csv-pattern-help-table-wrap"><table class="csv-pattern-help-table">
+                    <thead><tr><th>Token</th><th>Significado</th><th>Valores aceptados</th><th>Ejemplo</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>yyyy</code></td><td>Año con 4 cifras.</td><td><code>0000</code> a <code>9999</code>.</td><td><code>2018</code></td></tr>
+                        <tr><td><code>yy</code></td><td>Año con 2 cifras. <code>70</code>-<code>99</code> se interpreta como 1970-1999; <code>00</code>-<code>69</code> como 2000-2069.</td><td><code>00</code> a <code>99</code>.</td><td><code>18</code></td></tr>
+                        <tr><td><code>MM</code></td><td>Numero de mes con exactamente 2 cifras.</td><td><code>01</code> a <code>12</code>.</td><td><code>03</code></td></tr>
+                        <tr><td><code>M</code></td><td>Numero de mes con 1 o 2 cifras.</td><td><code>1</code> a <code>12</code>.</td><td><code>3</code></td></tr>
+                        <tr><td><code>MMM</code>, <code>MMMM</code></td><td>Nombre o abreviatura del mes.</td><td>Ingles, español, frances, italiano, portugues y formas alemanas comunes. Se normalizan mayusculas, acentos y puntos finales.</td><td><code>Jan</code>, <code>January</code>, <code>Ene</code>, <code>Enero</code></td></tr>
+                        <tr><td><code>dd</code></td><td>Dia del mes con exactamente 2 cifras.</td><td><code>01</code> a <code>31</code>, validado contra mes y año.</td><td><code>09</code></td></tr>
+                        <tr><td><code>d</code></td><td>Dia del mes con 1 o 2 cifras.</td><td><code>1</code> a <code>31</code>, validado contra mes y año.</td><td><code>9</code></td></tr>
+                        <tr><td><code>HH</code></td><td>Hora en formato 24 h, exactamente 2 cifras.</td><td><code>00</code> a <code>24</code>. <code>24</code> solo es valido con minutos/segundos en cero.</td><td><code>07</code>, <code>23</code></td></tr>
+                        <tr><td><code>H</code></td><td>Hora en formato 24 h, 1 o 2 cifras.</td><td><code>0</code> a <code>24</code>.</td><td><code>7</code>, <code>23</code></td></tr>
+                        <tr><td><code>hh</code>, <code>h</code></td><td>Hora en formato 12 h. Debe usarse con <code>AM/PM</code>.</td><td><code>01</code> a <code>12</code>, o <code>1</code> a <code>12</code>.</td><td><code>01</code>, <code>7</code></td></tr>
+                        <tr><td><code>mm</code></td><td>Minutos, exactamente 2 cifras. La minuscula importa.</td><td><code>00</code> a <code>59</code>.</td><td><code>05</code></td></tr>
+                        <tr><td><code>m</code></td><td>Minutos, 1 o 2 cifras. La minuscula importa.</td><td><code>0</code> a <code>59</code>.</td><td><code>5</code></td></tr>
+                        <tr><td><code>ss</code></td><td>Segundos, exactamente 2 cifras.</td><td><code>00</code> a <code>59</code>.</td><td><code>08</code></td></tr>
+                        <tr><td><code>s</code></td><td>Segundos, 1 o 2 cifras.</td><td><code>0</code> a <code>59</code>.</td><td><code>8</code></td></tr>
+                        <tr><td><code>SSS</code></td><td>Milisegundos. Se aceptan de una a tres cifras y se completan como milisegundos.</td><td><code>0</code> a <code>999</code>.</td><td><code>125</code></td></tr>
+                        <tr><td><code>AM/PM</code></td><td>Marcador de reloj de 12 h.</td><td><code>AM</code> o <code>PM</code>, sin distinguir mayusculas.</td><td><code>PM</code></td></tr>
+                        <tr><td><code>Excel</code></td><td>Fecha serial de Excel.</td><td>Celdas numericas como <code>45292.5</code>.</td><td><code>Excel</code></td></tr>
+                        <tr><td><code>Matlab</code></td><td>Valor MATLAB datenum.</td><td>Celdas numericas como <code>739252.5</code>.</td><td><code>Matlab</code></td></tr>
+                        <tr><td>Texto literal</td><td>Cualquier caracter que no sea un token debe aparecer exactamente igual en la celda.</td><td>Literales comunes: <code>/</code>, <code>-</code>, espacio, <code>T</code>, <code>:</code>, <code>.</code>.</td><td><code>yyyy/MM/dd HH:mm:ss</code></td></tr>
+                    </tbody>
+                </table></div>
+                <p><b>Ejemplos</b></p>
+                <ul>
+                    <li><code>yyyy/MM/dd HH:mm:ss</code> parsea <code>2018/03/09 07:05:08</code>.</li>
+                    <li><code>dd-MM-yyyy HH:mm</code> parsea <code>09-03-2018 07:05</code>.</li>
+                    <li><code>dd-MMM-yyyy HH:mm:ss</code> parsea <code>09-Ene-2018 07:05:08</code> y <code>09-Jan-2018 07:05:08</code>.</li>
+                    <li><code>MM/dd/yyyy hh:mm AM/PM</code> parsea <code>01/31/2024 01:45 PM</code>; <code>MM/dd/yyyy hh:mm:ss AM/PM</code> parsea <code>01/31/2024 01:45:30 PM</code>.</li>
+                    <li><code>dd MMMM yyyy</code> parsea <code>09 enero 2018</code>, <code>09 janvier 2018</code>, <code>09 gennaio 2018</code> y <code>09 janeiro 2018</code>.</li>
+                    <li><code>MMMM dd yyyy</code> parsea <code>January 09 2018</code>, <code>March 09 2018</code> y <code>Marzo 09 2018</code>.</li>
+                    <li><code>Excel</code> parsea fechas seriales de Excel; <code>Matlab</code> parsea valores MATLAB datenum.</li>
+                    <li><code>yyyy-MM-dd'T'HH:mm:ss.SSS</code> parsea <code>2018-03-09T07:05:08.125</code>. La <code>T</code> es simplemente un caracter literal.</li>
+                </ul>
+                <p><b>Detalles importantes</b></p>
+                <ul>
+                    <li>Toda la celda debe coincidir con el patron; espacios extra o separadores faltantes invalidan la fila.</li>
+                    <li>Usa <code>MM</code> o <code>M</code> para mes, y <code>mm</code> o <code>m</code> para minutos.</li>
+                    <li>Usa <code>MMM</code> o <code>MMMM</code> para nombres de mes como <code>Mar</code>, <code>March</code>, <code>Ene</code>, <code>Enero</code>, <code>Janv.</code> o <code>Gennaio</code>.</li>
+                    <li>Los nombres/offsets de zonas horarias no estan soportados por los patrones custom.</li>
+                </ul>
+            </div>`,
             csvPreviewNone: 'Ninguna',
             csvPreviewDateOrder: 'Orden de fecha',
+            csvPreviewDateOrderHelpTitle: 'Orden de fecha',
+            csvPreviewDateOrderHelpTooltip: 'Explicar el orden de fecha',
+            csvPreviewDateOrderYmdHelp: 'Año-mes-dia, por ejemplo 2024/01/31.',
+            csvPreviewDateOrderDmyHelp: 'Dia-mes-año, por ejemplo 31/01/2024.',
+            csvPreviewDateOrderMdyHelp: 'Mes-dia-año, por ejemplo 01/31/2024.',
             csvPreviewColumns: 'Columnas',
+            csvPreviewColumnTools: 'Mostrar opciones de columnas',
+            csvPreviewColumnToolsTooltip: 'Mostrar controles suplementarios para omitir columnas importadas o renombrar columnas detectadas.',
+            csvPreviewColumnsHelp: 'Las columnas marcadas se parsean/importan. Desmarca una columna para omitirla; edita el texto para renombrarla.',
+            csvPreviewColumnsReset: 'Restablecer',
+            csvPreviewColumnsResetTooltip: 'Restaurar los nombres detectados y seleccionar todas las columnas para parsear/importar.',
+            csvPreviewUseColumn: 'Parsear/importar esta columna',
+            csvPreviewFileRowNumber: 'Numero de fila del archivo',
+            csvPreviewDateTimeParsed: 'Fecha y hora parseada',
+            csvPreviewDetectedUnits: 'Unidades',
+            csvPreviewNewNames: 'Nuevos nombres',
+            csvPreviewResizeSide: 'Arrastrar para cambiar el ancho de opciones de parsing',
             csvPreviewTimeColumnProtected: 'Las columnas del eje temporal no se pueden ignorar.',
             csvPreviewValidRows: '{valid}/{total} filas visibles producen tiempo valido.',
             csvPreviewCannotApply: 'Aun no se puede aplicar.',
@@ -1252,6 +1586,8 @@ const translations = {
             csvProfileRestoreSkippedBody: 'No se aplico un perfil de parsing CSV guardado porque el archivo ya no coincide o no pudo reparsearse: {files}',
             csvPreviewResetAuto: 'Auto',
             csvPreviewRedetect: 'Redetectar',
+            csvPreviewResetAutoTooltip: 'Descarta todos los cambios manuales del parsing CSV y vuelve a la deteccion automatica.',
+            csvPreviewRedetectTooltip: 'Ejecuta la deteccion automatica de nuevo, conservando renombres y checkboxes parsear/importar.',
             csvPreviewRowClickHint: 'Click para asignar esta fila',
             largeCsvPreflightSave: 'Convertir y guardar',
             largeCsvPreflightTemporary: 'Convertir temporal',
@@ -1683,13 +2019,24 @@ const translations = {
             csvPreviewSampleMiddle: 'Centro',
             csvPreviewSampleEnd: 'Fine',
             csvPreviewLinesShown: 'Righe mostrate',
-            csvPreviewLoadMore: 'Carica piu righe',
+            csvPreviewLinesCustom: 'Personalizzato',
+            csvPreviewCustomLinesOk: 'OK',
+            csvPreviewCustomLinesTooltip: 'Inserisci un numero personalizzato di righe di preview, fino a {max}.',
             csvPreviewDelimiter: 'Delimitatore',
             csvPreviewDecimalSeparator: 'Separatore decimale',
+            csvPreviewDecimalCommaUnavailable: ', virgola (non disponibile con delimitatore virgola)',
+            csvPreviewDecimalCommaUnavailableTooltip: 'Il separatore decimale non puo essere anche virgola quando le colonne sono separate da virgola. Usa Auto o punto, oppure cambia prima il delimitatore.',
             csvPreviewEncoding: 'Codifica',
             csvPreviewConfidence: 'Confidenza',
             csvPreviewTableStructure: 'Struttura tabella',
             csvPreviewNoHeader: 'Nessuna riga titoli',
+            csvPreviewNoHeaderLockedTooltip: 'Questo file non contiene una riga titoli rilevata; i nomi delle colonne sono generati automaticamente.',
+            csvPreviewHideEmptyLines: 'Nascondi righe vuote',
+            csvPreviewHideEmptyLinesTooltip: 'Nasconde le righe sorgente vuote solo in questo preview.',
+            csvPreviewHidePreambleRows: 'Nascondi righe preambolo',
+            csvPreviewHidePreambleRowsTooltip: 'Nasconde nel preview le righe iniziali del file prima della prima riga dati.',
+            csvPreviewHideInvalidLines: 'Nascondi righe non valide',
+            csvPreviewHideInvalidLinesTooltip: 'Nasconde righe dati che falliscono filtro, numero di colonne o parsing temporale. Se restano visibili, le righe non valide appaiono in rosso.',
             csvPreviewHeaderRow: 'Riga titoli',
             csvPreviewUnitsSource: 'Fonte unita',
             csvPreviewUnitsNone: 'Nessuna',
@@ -1698,15 +2045,51 @@ const translations = {
             csvPreviewUnitsRowLabel: 'Riga unita',
             csvPreviewInlineUnitFormat: 'Formato inline',
             csvPreviewFirstDataRow: 'Prima riga dati',
+            csvPreviewRowFilter: 'Filtro righe',
+            csvPreviewRowFilterEnable: 'Filtra righe per valore colonna',
+            csvPreviewRowFilterTooltip: 'Mostra controlli supplementari per tenere righe per confronto testo o per celle numeriche nella colonna scelta.',
+            csvPreviewRowFilterColumn: 'Colonna',
+            csvPreviewRowFilterOperator: 'Operatore',
+            csvPreviewRowFilterValue: 'Valore',
+            csvPreviewRowFilterIsNumeric: 'e numerico',
+            csvPreviewFilteredRows: '{filtered}/{total} righe dati sono escluse dal filtro.',
+            csvPreviewInvalidNumericCell: 'valore non numerico in una colonna numerica; importato come NaN',
             csvPreviewTimeAxis: 'Asse tempo',
             csvPreviewMode: 'Modo',
-            csvPreviewTimeSingle: 'Colonna singola',
-            csvPreviewTimeSplit: 'Data + ora',
-            csvPreviewTimeParts: 'Colonne multiple',
-            csvPreviewTimeIndex: 'Indice riga',
+            csvPreviewTimeSingle: 'Colonna tempo singola',
+            csvPreviewTimeSplit: 'Data e ora in colonne separate',
+            csvPreviewTimeParts: 'Parti data/ora in colonne',
+            csvPreviewTimeIndexColumn: 'Colonna indice esistente',
+            csvPreviewTimeIndex: 'Indice riga generato',
+            csvPreviewModeHelpTitle: 'Modi asse tempo CSV',
+            csvPreviewModeHelpTooltip: 'Spiega i modi dell asse tempo CSV',
+            csvPreviewModeHelpBody: `<div class="csv-pattern-help">
+                <p>Scegli come il CSV deve costruire l asse X usato dai grafici. Questo non rinomina le colonne grezze; decide solo da dove arriva il tempo.</p>
+                <div class="csv-pattern-help-table-wrap"><table class="csv-pattern-help-table">
+                    <thead><tr><th>Modo</th><th>Quando usarlo</th><th>Cosa succede</th></tr></thead>
+                    <tbody>
+                        <tr><td><b>Colonna tempo singola</b></td><td>Una colonna CSV contiene gia tutto il valore temporale: data/ora testuale, tempo numerico trascorso, data seriale Excel, MATLAB datenum, anno decimale o data parziale come <code>YYYY-MM</code>.</td><td>Seleziona quella colonna. Diventa l asse X e non viene importata di nuovo come variabile normale.</td></tr>
+                        <tr><td><b>Data e ora in colonne separate</b></td><td>Data e ora sono separate, per esempio <code>2024/01/31</code> in una colonna e <code>13:45:00</code> in un altra.</td><td>Seleziona entrambe le colonne. Vengono combinate in un unico asse data/ora.</td></tr>
+                        <tr><td><b>Parti data/ora in colonne</b></td><td>Anno, mese, giorno, ora, minuto o secondo sono salvati in colonne separate. I calendari parziali sono accettati.</td><td>Assegna le parti disponibili. L anno mancante diventa <code>2001</code>, mese/giorno mancanti diventano <code>01</code>, e l ora mancante diventa <code>00:00:00</code>. Una colonna con solo anni diventa <code>YYYY-01-01 00:00:00</code>.</td></tr>
+                        <tr><td><b>Colonna indice esistente</b></td><td>Una colonna CSV contiene gia un passo, campione o indice numerico come <code>0, 1, 2...</code> o <code>1, 2, 3...</code>.</td><td>Seleziona quella colonna. I valori ripetuti sono accettati per salti/eventi, i valori non devono diminuire, e la colonna non viene importata di nuovo come variabile normale.</td></tr>
+                        <tr><td><b>Indice riga generato</b></td><td>Il file non ha una colonna tempo utile, oppure vuoi posizionare ogni riga dati in <code>0, 1, 2...</code>.</td><td>Viene generato un nuovo indice interno. Le colonne esistenti chiamate index/date restano variabili normali a meno che tu le disabiliti.</td></tr>
+                    </tbody>
+                </table></div>
+            </div>`,
             csvPreviewColumn: 'Colonna',
             csvPreviewTimeFormat: 'Formato',
+            csvPreviewAutoTimeFormatHelp: 'Auto rileva date testuali, tempo numerico trascorso, date seriali Excel, MATLAB datenum, anni decimali e date parziali come YYYY-MM.',
+            csvPreviewAutoDetectedFormat: 'Rilevato: {format}',
+            csvPreviewAutoDetectedDatePattern: 'Rilevato: pattern data {pattern}',
+            csvPreviewAutoDetectedNumeric: 'tempo numerico trascorso',
+            csvPreviewAutoDetectedExcelSerial: 'data seriale Excel',
+            csvPreviewAutoDetectedMatlabDatenum: 'MATLAB datenum',
+            csvPreviewAutoDetectedDecimalYear: 'anno decimale',
+            csvPreviewAutoDetectedYearMonth: 'data parziale YYYY-MM; giorno = 01',
+            csvPreviewAutoDetectedMonthName: 'data con nome mese',
+            csvPreviewAutoDetectedYearless: 'data/ora senza anno; anno = 2001',
             csvPreviewPattern: 'Pattern',
+            csvPreviewIndexColumn: 'Colonna indice',
             csvPreviewDateColumn: 'Colonna data',
             csvPreviewTimeColumn: 'Colonna ora',
             csvPreviewYearColumn: 'Anno',
@@ -1715,9 +2098,72 @@ const translations = {
             csvPreviewHourColumn: 'Ora',
             csvPreviewMinuteColumn: 'Minuto',
             csvPreviewSecondColumn: 'Secondo',
+            csvPreviewPatternHelpTitle: 'Riferimento pattern data e ora',
+            csvPreviewPatternHelpTooltip: 'Apri il riferimento dei pattern data e ora',
+            csvPreviewPatternHelpBody: `<div class="csv-pattern-help">
+                <p>Usa questo riferimento per capire i pattern data/ora rilevati e per scrivere un pattern quando <b>Formato</b> e <b>Custom</b>. Il pattern descrive esattamente come e scritta una cella data/ora. I token sono <b>sensibili a maiuscole/minuscole</b>: <code>MM</code> significa mese, mentre <code>mm</code> significa minuti.</p>
+                <div class="csv-pattern-help-table-wrap"><table class="csv-pattern-help-table">
+                    <thead><tr><th>Token</th><th>Significato</th><th>Valori accettati</th><th>Esempio</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>yyyy</code></td><td>Anno con 4 cifre.</td><td><code>0000</code> a <code>9999</code>.</td><td><code>2018</code></td></tr>
+                        <tr><td><code>yy</code></td><td>Anno con 2 cifre. <code>70</code>-<code>99</code> diventa 1970-1999; <code>00</code>-<code>69</code> diventa 2000-2069.</td><td><code>00</code> a <code>99</code>.</td><td><code>18</code></td></tr>
+                        <tr><td><code>MM</code></td><td>Numero del mese con esattamente 2 cifre.</td><td><code>01</code> a <code>12</code>.</td><td><code>03</code></td></tr>
+                        <tr><td><code>M</code></td><td>Numero del mese con 1 o 2 cifre.</td><td><code>1</code> a <code>12</code>.</td><td><code>3</code></td></tr>
+                        <tr><td><code>MMM</code>, <code>MMMM</code></td><td>Nome o abbreviazione del mese.</td><td>Inglese, spagnolo, francese, italiano, portoghese e forme tedesche comuni. Maiuscole, accenti e punti finali vengono normalizzati.</td><td><code>Jan</code>, <code>January</code>, <code>Ene</code>, <code>Enero</code></td></tr>
+                        <tr><td><code>dd</code></td><td>Giorno del mese con esattamente 2 cifre.</td><td><code>01</code> a <code>31</code>, validato con mese e anno.</td><td><code>09</code></td></tr>
+                        <tr><td><code>d</code></td><td>Giorno del mese con 1 o 2 cifre.</td><td><code>1</code> a <code>31</code>, validato con mese e anno.</td><td><code>9</code></td></tr>
+                        <tr><td><code>HH</code></td><td>Ora in formato 24 h, esattamente 2 cifre.</td><td><code>00</code> a <code>24</code>. <code>24</code> e valido solo con minuti/secondi a zero.</td><td><code>07</code>, <code>23</code></td></tr>
+                        <tr><td><code>H</code></td><td>Ora in formato 24 h, 1 o 2 cifre.</td><td><code>0</code> a <code>24</code>.</td><td><code>7</code>, <code>23</code></td></tr>
+                        <tr><td><code>hh</code>, <code>h</code></td><td>Ora in formato 12 h. Deve essere usata con <code>AM/PM</code>.</td><td><code>01</code> a <code>12</code>, o <code>1</code> a <code>12</code>.</td><td><code>01</code>, <code>7</code></td></tr>
+                        <tr><td><code>mm</code></td><td>Minuti, esattamente 2 cifre. La minuscola e importante.</td><td><code>00</code> a <code>59</code>.</td><td><code>05</code></td></tr>
+                        <tr><td><code>m</code></td><td>Minuti, 1 o 2 cifre. La minuscola e importante.</td><td><code>0</code> a <code>59</code>.</td><td><code>5</code></td></tr>
+                        <tr><td><code>ss</code></td><td>Secondi, esattamente 2 cifre.</td><td><code>00</code> a <code>59</code>.</td><td><code>08</code></td></tr>
+                        <tr><td><code>s</code></td><td>Secondi, 1 o 2 cifre.</td><td><code>0</code> a <code>59</code>.</td><td><code>8</code></td></tr>
+                        <tr><td><code>SSS</code></td><td>Millisecondi. Sono accettate da una a tre cifre e vengono completate come millisecondi.</td><td><code>0</code> a <code>999</code>.</td><td><code>125</code></td></tr>
+                        <tr><td><code>AM/PM</code></td><td>Marcatore di orologio a 12 h.</td><td><code>AM</code> o <code>PM</code>, senza distinzione maiuscole.</td><td><code>PM</code></td></tr>
+                        <tr><td><code>Excel</code></td><td>Data seriale Excel.</td><td>Celle numeriche come <code>45292.5</code>.</td><td><code>Excel</code></td></tr>
+                        <tr><td><code>Matlab</code></td><td>Valore MATLAB datenum.</td><td>Celle numeriche come <code>739252.5</code>.</td><td><code>Matlab</code></td></tr>
+                        <tr><td>Testo letterale</td><td>Qualsiasi carattere che non sia un token deve apparire esattamente nella cella.</td><td>Letterali comuni: <code>/</code>, <code>-</code>, spazio, <code>T</code>, <code>:</code>, <code>.</code>.</td><td><code>yyyy/MM/dd HH:mm:ss</code></td></tr>
+                    </tbody>
+                </table></div>
+                <p><b>Esempi</b></p>
+                <ul>
+                    <li><code>yyyy/MM/dd HH:mm:ss</code> legge <code>2018/03/09 07:05:08</code>.</li>
+                    <li><code>dd-MM-yyyy HH:mm</code> legge <code>09-03-2018 07:05</code>.</li>
+                    <li><code>dd-MMM-yyyy HH:mm:ss</code> legge <code>09-Ene-2018 07:05:08</code> e <code>09-Jan-2018 07:05:08</code>.</li>
+                    <li><code>MM/dd/yyyy hh:mm AM/PM</code> legge <code>01/31/2024 01:45 PM</code>; <code>MM/dd/yyyy hh:mm:ss AM/PM</code> legge <code>01/31/2024 01:45:30 PM</code>.</li>
+                    <li><code>dd MMMM yyyy</code> legge <code>09 enero 2018</code>, <code>09 janvier 2018</code>, <code>09 gennaio 2018</code> e <code>09 janeiro 2018</code>.</li>
+                    <li><code>MMMM dd yyyy</code> legge <code>January 09 2018</code>, <code>March 09 2018</code> e <code>Marzo 09 2018</code>.</li>
+                    <li><code>Excel</code> legge date seriali Excel; <code>Matlab</code> legge valori MATLAB datenum.</li>
+                    <li><code>yyyy-MM-dd'T'HH:mm:ss.SSS</code> legge <code>2018-03-09T07:05:08.125</code>. La <code>T</code> e semplicemente un carattere letterale.</li>
+                </ul>
+                <p><b>Dettagli importanti</b></p>
+                <ul>
+                    <li>L intera cella deve corrispondere al pattern; spazi extra o separatori mancanti rendono la riga non valida.</li>
+                    <li>Usa <code>MM</code> o <code>M</code> per il mese, e <code>mm</code> o <code>m</code> per i minuti.</li>
+                    <li>Usa <code>MMM</code> o <code>MMMM</code> per nomi di mese come <code>Mar</code>, <code>March</code>, <code>Ene</code>, <code>Enero</code>, <code>Janv.</code> o <code>Gennaio</code>.</li>
+                    <li>Nomi/offset di fuso orario non sono supportati dai pattern custom.</li>
+                </ul>
+            </div>`,
             csvPreviewNone: 'Nessuna',
             csvPreviewDateOrder: 'Ordine data',
+            csvPreviewDateOrderHelpTitle: 'Ordine data',
+            csvPreviewDateOrderHelpTooltip: 'Spiega l ordine della data',
+            csvPreviewDateOrderYmdHelp: 'Anno-mese-giorno, per esempio 2024/01/31.',
+            csvPreviewDateOrderDmyHelp: 'Giorno-mese-anno, per esempio 31/01/2024.',
+            csvPreviewDateOrderMdyHelp: 'Mese-giorno-anno, per esempio 01/31/2024.',
             csvPreviewColumns: 'Colonne',
+            csvPreviewColumnTools: 'Mostra opzioni colonne',
+            csvPreviewColumnToolsTooltip: 'Mostra controlli supplementari per saltare colonne importate o rinominare colonne rilevate.',
+            csvPreviewColumnsHelp: 'Le colonne selezionate vengono parse/importate. Deseleziona una colonna per saltarla; modifica il testo per rinominarla.',
+            csvPreviewColumnsReset: 'Ripristina',
+            csvPreviewColumnsResetTooltip: 'Ripristina i nomi rilevati e seleziona tutte le colonne per il parsing/import.',
+            csvPreviewUseColumn: 'Parsare/importare questa colonna',
+            csvPreviewFileRowNumber: 'Numero riga file',
+            csvPreviewDateTimeParsed: 'Data e ora parsate',
+            csvPreviewDetectedUnits: 'Unita',
+            csvPreviewNewNames: 'Nuovi nomi',
+            csvPreviewResizeSide: 'Trascina per ridimensionare le opzioni di parsing',
             csvPreviewTimeColumnProtected: 'Le colonne del tempo non possono essere ignorate.',
             csvPreviewValidRows: '{valid}/{total} righe visibili producono tempi validi.',
             csvPreviewCannotApply: 'Non si puo ancora applicare.',
@@ -1727,6 +2173,8 @@ const translations = {
             csvProfileRestoreSkippedBody: 'Un profilo di parsing CSV salvato non e stato applicato perche il file non corrisponde piu o non e stato possibile rileggerlo: {files}',
             csvPreviewResetAuto: 'Auto',
             csvPreviewRedetect: 'Rileva di nuovo',
+            csvPreviewResetAutoTooltip: 'Scarta tutte le modifiche manuali al parsing CSV e ripristina la rilevazione automatica.',
+            csvPreviewRedetectTooltip: 'Esegue di nuovo la rilevazione automatica conservando rinomine e checkbox parse/import.',
             csvPreviewRowClickHint: 'Clicca per assegnare questa riga',
             largeCsvPreflightSave: 'Converti e salva',
             largeCsvPreflightTemporary: 'Converti temporaneo',

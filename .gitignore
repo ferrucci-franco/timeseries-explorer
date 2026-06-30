@@ -40,6 +40,9 @@
 !/build/icons/
 !/build/icons/**
 !/test-files/
+!/test-files/csv/
+!/test-files/csv/date-parsing-options/
+!/test-files/csv/date-parsing-options/**
 !/test-files/live_update/
 !/test-files/live_update/*.py
 !/bench/

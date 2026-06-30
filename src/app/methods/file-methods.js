@@ -33,6 +33,14 @@ function cloneCsvProfileForIpc(csvProfile) {
     ));
 }
 
+function csvProfileWithoutRowFilter(csvProfile) {
+    const clone = cloneCsvProfileForIpc(csvProfile);
+    if (!clone) return null;
+    delete clone.rowFilter;
+    delete clone.previewFilteredRows;
+    return clone;
+}
+
 export function installFileMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.loadFile = async function(file, options = {}) {
@@ -336,15 +344,19 @@ proto.reloadActiveFileAsNewVersion = async function() {
     const contentHash = streamable ? this._fileFingerprint(latestFile || source.file) : await this._hashBuffer(buffer);
     const sourceHash = source.contentHash || (source.buffer ? await this._hashBuffer(source.buffer) : '');
     if (!source.contentHash && sourceHash) source.contentHash = sourceHash;
-    if (sourceHash && contentHash === sourceHash) {
+    const currentProfile = this.plotManager.files.get(sourceId)?.data?.metadata?.csvProfile || null;
+    const hasCsvRowFilter = currentProfile?.profileSource === 'user' && currentProfile?.rowFilter?.enabled;
+    if (sourceHash && contentHash === sourceHash && !hasCsvRowFilter) {
         await Modal.alert(i18n.t('reloadAsNewVersion'), i18n.t('reloadUnchangedNoVersion'), { icon: '🔄' });
         this._updateTopBar();
         return;
     }
 
-    const currentProfile = this.plotManager.files.get(sourceId)?.data?.metadata?.csvProfile || null;
-    const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, source.file, {
-        csvProfile: currentProfile?.profileSource === 'user' ? currentProfile : null,
+    const reloadProfile = currentProfile?.profileSource === 'user'
+        ? (hasCsvRowFilter ? csvProfileWithoutRowFilter(currentProfile) : currentProfile)
+        : null;
+    const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, latestFile || source.file, {
+        csvProfile: reloadProfile,
     });
 
     const fileId = `f${this._nextFileId++}`;
@@ -859,15 +871,9 @@ proto._readCsvPreviewSegment = async function(file, region = 'start', bytes = CS
 proto._readCsvPreviewSegments = async function(file, options = {}) {
     const bytes = Number(options.bytes) || CSV_PREVIEW_SEGMENT_BYTES;
     if (!file) return [];
-    const totalSize = Math.max(0, Number(file.size || 0));
-    const regions = totalSize > bytes * 2
-        ? ['start', 'middle', 'end']
-        : ['start'];
     const segments = [];
-    for (const region of regions) {
-        const segment = await this._readCsvPreviewSegment(file, region, bytes);
-        if (segment?.buffer) segments.push(segment);
-    }
+    const segment = await this._readCsvPreviewSegment(file, 'start', bytes);
+    if (segment?.buffer) segments.push(segment);
     return segments;
 };
 
@@ -1647,7 +1653,7 @@ proto.adjustCsvParsing = async function(fileId) {
         if (!reviewedProfile) return;
 
         this._showFileLoadingOverlay(1);
-        this._updateFileLoadingProgress(1, 1, displayName);
+        this._updateFileLoadingOverlay(1, 1, displayName, entry.file?.size);
         const streamable = this._canParseFromFile(entry.file, entry.extension);
         const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
         const buffer = streamable ? null : await this._readLatestBuffer(entry);
@@ -1656,6 +1662,7 @@ proto.adjustCsvParsing = async function(fileId) {
             : this._fileFingerprint(latestFile || entry.file);
         const data = await this._parseCsvResultBuffer(displayName, buffer, latestFile || entry.file, { csvProfile: reviewedProfile });
         this._reapplyDerivedVariables(fileId, data);
+        if (latestFile) entry.file = latestFile;
         entry.buffer = buffer;
         entry.contentHash = contentHash;
         this.plotManager.updateFileData(fileId, data);
@@ -1736,15 +1743,6 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     const panel = document.createElement('div');
     panel.className = 'file-transform-panel';
     panel.addEventListener('click', e => e.stopPropagation());
-
-    if (this._isCsvTextEntry(entryData, fileId)) {
-        const csvAction = document.createElement('button');
-        csvAction.type = 'button';
-        csvAction.className = 'file-transform-wide-action';
-        csvAction.textContent = i18n.t('csvPreviewAction');
-        csvAction.addEventListener('click', () => this.adjustCsvParsing(fileId));
-        panel.appendChild(csvAction);
-    }
 
     const makeInput = (key, label, value, placeholder = '0', options = {}) => {
         const wrap = document.createElement('label');

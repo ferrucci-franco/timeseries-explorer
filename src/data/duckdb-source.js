@@ -23,7 +23,7 @@ import mvpWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
-import { customDatetimePatternToDuckDbFormat, parseCsvNumber } from '../parsers/csv-time-detection.js';
+import { customDatetimePatternInfo, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
 import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
 
@@ -207,32 +207,48 @@ export default class DuckDbSource {
             : new Blob([deltaText], { type: 'text/csv' });
         const escapedHandle = deltaHandle.replace(/'/g, "''");
         const readExpr = this._csvReadExpr(escapedHandle, csvProfile, { skip: 0 });
-        const validWhere = `${meta.timeExprSql} IS NOT NULL`;
-        const expectedRows = Number(options.expectedRows);
+        const validWhere = this._andSql([
+            this._csvRowFilterSql(csvProfile),
+            meta.generatedTime ? 'TRUE' : `${meta.timeExprSql} IS NOT NULL`,
+        ]);
+        const expectedRows = options.expectedRows == null ? NaN : Number(options.expectedRows);
 
         return this._withConnectionLock(async () => {
             await this._ensureAppendTable(meta, csvProfile);
+            const generatedBaseRows = meta.generatedTime
+                ? await this._currentDuckDbRowCount(meta)
+                : 0;
             await this.registerFile(deltaHandle, deltaFile);
             meta.deltaHandles = [...(meta.deltaHandles || []), deltaHandle];
             try {
                 await this._conn.query(`CREATE OR REPLACE TEMP VIEW ${deltaView} AS SELECT * FROM ${readExpr}`);
-                const countResult = await this._conn.query(`
-                    SELECT
-                        COUNT(*)::BIGINT AS n,
-                        COUNT(DISTINCT ${meta.timeExprSql})::BIGINT AS distinct_n,
-                        MIN(${meta.timeExprSql})::DOUBLE AS tmin,
-                        MAX(${meta.timeExprSql})::DOUBLE AS tmax
-                    FROM ${deltaView}
-                    WHERE ${validWhere}
-                `);
+                const countResult = meta.generatedTime
+                    ? await this._conn.query(`SELECT COUNT(*)::BIGINT AS n FROM ${deltaView} WHERE ${validWhere}`)
+                    : await this._conn.query(`
+                        SELECT
+                            COUNT(*)::BIGINT AS n,
+                            COUNT(DISTINCT ${meta.timeExprSql})::BIGINT AS distinct_n,
+                            MIN(${meta.timeExprSql})::DOUBLE AS tmin,
+                            MAX(${meta.timeExprSql})::DOUBLE AS tmax
+                        FROM ${deltaView}
+                        WHERE ${validWhere}
+                    `);
                 const rows = Number(countResult.getChild('n')?.get(0) ?? 0);
-                const distinctRows = Number(countResult.getChild('distinct_n')?.get(0) ?? 0);
-                const minTime = Number(countResult.getChild('tmin')?.get(0));
-                const maxTime = Number(countResult.getChild('tmax')?.get(0));
+                const distinctRows = meta.generatedTime ? rows : Number(countResult.getChild('distinct_n')?.get(0) ?? 0);
+                const minTime = meta.generatedTime ? generatedBaseRows : Number(countResult.getChild('tmin')?.get(0));
+                const maxTime = meta.generatedTime ? generatedBaseRows + rows - 1 : Number(countResult.getChild('tmax')?.get(0));
                 if (Number.isFinite(expectedRows) && rows !== expectedRows) {
                     throw new Error(`DuckDB accepted ${rows} appended rows; expected ${expectedRows}.`);
                 }
                 if (rows <= 0) {
+                    if (csvProfile?.rowFilter?.enabled) {
+                        return {
+                            rows: 0,
+                            timeStart: null,
+                            timeEnd: null,
+                            columns: { timeValues: [], variables: new Map() },
+                        };
+                    }
                     throw new Error('DuckDB did not find valid time values in appended rows.');
                 }
                 if (distinctRows !== rows) {
@@ -247,8 +263,11 @@ export default class DuckDbSource {
                 }, options.limits);
                 if (limitError) throw limitError;
 
+                const projectionSql = meta.generatedTime
+                    ? this._generatedIndexProjectionSql(meta.rawColumnNames || [], generatedBaseRows, csvProfile)
+                    : meta.projectionSql;
                 const projected = await this._conn.query(`
-                    SELECT ${meta.projectionSql}
+                    SELECT ${projectionSql}
                     FROM ${deltaView}
                     WHERE ${validWhere}
                     ORDER BY "__omv_time" ASC NULLS LAST
@@ -257,7 +276,8 @@ export default class DuckDbSource {
 
                 meta.appendRows = (Number(meta.appendRows) || 0) + rows;
                 meta.appendBytes = (Number(meta.appendBytes) || 0) + deltaText.length;
-                if (Number.isFinite(Number(meta.totalRows))) meta.totalRows = Number(meta.totalRows) + rows;
+                if (meta.generatedTime) meta.totalRows = generatedBaseRows + rows;
+                else if (Number.isFinite(Number(meta.totalRows))) meta.totalRows = Number(meta.totalRows) + rows;
                 meta.overviewPoints = Math.max(Number(meta.overviewPoints) || 0, legacyData?.variables?.[legacyData?.metadata?.timeName]?.data?.length || 0);
                 this._clearRangeCacheForTable(meta.tableName);
                 return {
@@ -351,6 +371,101 @@ export default class DuckDbSource {
         const valueSelect = requested
             .map(({ variable }, index) => `${this._quoteIdent(variable._duckdbCol || variable.name)} AS v${index}`)
             .join(',\n                       ');
+        if (meta.generatedTime) {
+            const generatedValueSelect = requested
+                .map(({ variable }, index) => `${this._quoteIdent(variable._duckdbCol || variable.name)} AS v${index}`)
+                .join(',\n                           ');
+            const generatedValueNames = requested.map((_, index) => `v${index}`).join(', ');
+            if (Number.isFinite(estimatedRows) && estimatedRows > 0 && estimatedRows <= rawLimit) {
+                const sql = `
+                    WITH numbered AS (
+                        SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
+                               ${generatedValueSelect}
+                        FROM ${tableName}
+                    )
+                    SELECT t,
+                           ${generatedValueNames}
+                    FROM numbered
+                    WHERE t BETWEEN ${lit(t0)} AND ${lit(t1)}
+                    ORDER BY t
+                    LIMIT ${rawLimit};
+                `;
+                const result = await this._interactiveQuery(sql);
+                const extractStartedAt = this._now();
+                const yByVar = new Map();
+                requested.forEach(({ varName }, index) => {
+                    yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
+                });
+                const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+                return {
+                    x,
+                    yByVar,
+                    _perf: this._rangePerf({
+                        mode: 'raw-index',
+                        startedAt: queryStartedAt,
+                        extractStartedAt,
+                        result,
+                        rows: x.length,
+                        requested,
+                        t0,
+                        t1,
+                        maxPoints,
+                        estimatedRows,
+                    }),
+                };
+            }
+            const aggregateSelect = requested
+                .map((_, index) => `AVG(v${index}) AS v${index}`)
+                .join(',\n                       ');
+            const sql = `
+                WITH numbered AS (
+                    SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
+                           ${generatedValueSelect}
+                    FROM ${tableName}
+                ),
+                visible AS (
+                    SELECT t,
+                           ${generatedValueNames}
+                    FROM numbered
+                    WHERE t BETWEEN ${lit(t0)} AND ${lit(t1)}
+                ),
+                bucketed AS (
+                    SELECT t,
+                           ${generatedValueNames},
+                           CAST(LEAST(${maxPoints - 1},
+                                FLOOR((t - ${lit(t0)}) / NULLIF(${lit(t1)} - ${lit(t0)}, 0) * ${maxPoints})) AS BIGINT) AS bucket
+                    FROM visible
+                )
+                SELECT MIN(t) AS t,
+                       ${aggregateSelect}
+                FROM bucketed
+                GROUP BY bucket
+                ORDER BY t;
+            `;
+            const result = await this._interactiveQuery(sql);
+            const extractStartedAt = this._now();
+            const yByVar = new Map();
+            requested.forEach(({ varName }, index) => {
+                yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
+            });
+            const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+            return {
+                x,
+                yByVar,
+                _perf: this._rangePerf({
+                    mode: 'bucket-index',
+                    startedAt: queryStartedAt,
+                    extractStartedAt,
+                    result,
+                    rows: x.length,
+                    requested,
+                    t0,
+                    t1,
+                    maxPoints,
+                    estimatedRows,
+                }),
+            };
+        }
         if (Number.isFinite(estimatedRows) && estimatedRows > 0 && estimatedRows <= rawLimit) {
             const sql = `
                 SELECT ${tExpr} AS t,
@@ -562,6 +677,61 @@ export default class DuckDbSource {
         const dataRows = Math.max(1, maxRows - contextRows);
         const orderByT = tExpr;
 
+        if (meta.generatedTime) {
+            const sql = direction === 'prev'
+                ? `
+                    WITH numbered AS (
+                        SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
+                               "${escCol}"::DOUBLE AS v
+                        FROM ${tableName}
+                    )
+                    SELECT * FROM (
+                        SELECT t, v
+                        FROM numbered
+                        WHERE t < ${lit(fromX)}
+                        ORDER BY t DESC
+                        LIMIT ${dataRows}
+                    )
+                    UNION ALL
+                    SELECT * FROM (
+                        SELECT t, v
+                        FROM numbered
+                        WHERE t >= ${lit(fromX)}
+                        ORDER BY t ASC
+                        LIMIT ${contextRows}
+                    )
+                    ORDER BY t ASC;
+                `
+                : `
+                    WITH numbered AS (
+                        SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
+                               "${escCol}"::DOUBLE AS v
+                        FROM ${tableName}
+                    )
+                    SELECT * FROM (
+                        SELECT t, v
+                        FROM numbered
+                        WHERE t <= ${lit(fromX)}
+                        ORDER BY t DESC
+                        LIMIT ${contextRows}
+                    )
+                    UNION ALL
+                    SELECT * FROM (
+                        SELECT t, v
+                        FROM numbered
+                        WHERE t > ${lit(fromX)}
+                        ORDER BY t ASC
+                        LIMIT ${dataRows}
+                    )
+                    ORDER BY t ASC;
+                `;
+            const result = await this._interactiveQuery(sql);
+            return {
+                times: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
+                values: this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
+            };
+        }
+
         const sql = direction === 'prev'
             ? `
                 SELECT * FROM (
@@ -689,6 +859,10 @@ export default class DuckDbSource {
         const readExpr = format === 'parquet'
             ? `read_parquet('${escapedHandle}')`
             : this._csvReadExpr(escapedHandle, csvProfile);
+        const readWhere = format === 'csv' ? this._csvRowFilterSql(csvProfile) : '';
+        const sourceExpr = readWhere
+            ? `(SELECT * FROM ${readExpr} WHERE ${readWhere})`
+            : readExpr;
         let viewMode = false;
 
         if (format === 'csv' && csvProfile?.delimiter === 'whitespace') {
@@ -699,11 +873,11 @@ export default class DuckDbSource {
         // full CSV/Parquet into DuckDB's WASM heap first, which is exactly
         // what large-file mode is trying to avoid.
         if (lazy) {
-            await this._conn.query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${readExpr}`);
+            await this._conn.query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${sourceExpr}`);
             viewMode = true;
         } else {
             try {
-                await this._conn.query(`CREATE TABLE ${tableName} AS SELECT * FROM ${readExpr}`);
+                await this._conn.query(`CREATE TABLE ${tableName} AS SELECT * FROM ${sourceExpr}`);
             } catch (err) {
                 const msg = String(err?.message || err);
                 const isOom = /malloc|out of memory|memory|allocation/i.test(msg);
@@ -713,7 +887,7 @@ export default class DuckDbSource {
                 // Lazy + OOM (large file): fall back to a VIEW so we never
                 // materialize the full dataset. Each query re-reads from the
                 // file (with projection / predicate pushdown).
-                await this._conn.query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${readExpr}`);
+                await this._conn.query(`CREATE OR REPLACE VIEW ${tableName} AS SELECT * FROM ${sourceExpr}`);
                 viewMode = true;
             }
         }
@@ -732,7 +906,7 @@ export default class DuckDbSource {
         const projection = this._projectionSql(columnNames, timeInfo, csvProfile);
         const timeAlias = '__omv_time';
         const escTimeAlias = timeAlias.replace(/"/g, '""');
-        const validTimeWhere = `${timeInfo.sql} IS NOT NULL`;
+        const validTimeWhere = timeInfo.generated ? 'TRUE' : `${timeInfo.sql} IS NOT NULL`;
 
         let totalRows;
         let dataSql;
@@ -776,7 +950,7 @@ export default class DuckDbSource {
             // In view mode the overview is a small reservoir sample, so its
             // first/last values are not the file's true time range. Issue an
             // aggregate query — DuckDB can compute MIN/MAX without sorting.
-            try {
+            if (!timeInfo.generated) try {
                 const aggResult = await this._conn.query(
                     `SELECT MIN(${timeInfo.sql})::DOUBLE AS tmin, MAX(${timeInfo.sql})::DOUBLE AS tmax FROM ${tableName} WHERE ${validTimeWhere}`
                 );
@@ -798,6 +972,7 @@ export default class DuckDbSource {
                 appendTableName: null,
                 timeColumn: timeInfo.sourceNames[0] || timeInfo.name,
                 timeExprSql: timeInfo.sql,
+                generatedTime: !!timeInfo.generated,
                 projectionSql: projection,
                 rawColumnNames: columnNames.slice(),
                 rawColumnTypes: columnTypes.slice(),
@@ -1033,7 +1208,7 @@ export default class DuckDbSource {
         const combined = `${base}_live`;
         const specs = this._csvColumnSpecs(csvProfile);
         const columns = specs
-            .map(({ name, type }) => `${this._quoteIdent(name)} ${type || 'VARCHAR'}`)
+            .map(({ name, type, readType }) => `${this._quoteIdent(name)} ${readType || type || 'VARCHAR'}`)
             .join(', ');
         await this._conn.query(`CREATE TABLE IF NOT EXISTS ${append} (${columns})`);
         await this._conn.query(`
@@ -1047,6 +1222,24 @@ export default class DuckDbSource {
         meta.combinedViewName = combined;
         meta.tableName = combined;
         meta.csvProfile = meta.csvProfile || this._cloneCsvProfile(csvProfile);
+    }
+
+    async _currentDuckDbRowCount(meta) {
+        const cached = Number(meta?.totalRows);
+        if (Number.isFinite(cached) && cached >= 0) return Math.floor(cached);
+        const tableName = meta?.tableName;
+        if (!tableName) return 0;
+        const result = await this._conn.query(`SELECT COUNT(*)::BIGINT AS n FROM ${tableName}`);
+        const count = Number(result.getChild('n')?.get(0) ?? 0);
+        return Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
+    }
+
+    _generatedIndexProjectionSql(columnNames, offset = 0, csvProfile = null) {
+        const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+        return this._projectionSql(columnNames, {
+            sourceNames: [],
+            sql: `(${safeOffset} + ROW_NUMBER() OVER () - 1)::DOUBLE`,
+        }, csvProfile);
     }
 
     _cloneCsvProfile(csvProfile) {
@@ -1093,6 +1286,25 @@ export default class DuckDbSource {
         return `read_csv('${escapedHandle}', ${options.join(', ')})`;
     }
 
+    _csvRowFilterSql(csvProfile = null) {
+        const filter = csvProfile?.rowFilter;
+        if (!filter?.enabled) return '';
+        const columnIndex = Number(filter.columnIndex);
+        if (!Number.isInteger(columnIndex) || columnIndex < 0) return '';
+        const column = this._csvColumnSpecs(csvProfile)[columnIndex]?.name;
+        if (!column) return '';
+        if (filter.operator === 'is_numeric') return `${this._numericCastSql(this._quoteIdent(column), csvProfile)} IS NOT NULL`;
+        const operator = filter.operator === '!=' ? '<>' : '=';
+        return `trim(CAST(${this._quoteIdent(column)} AS VARCHAR)) ${operator} '${this._escapeSqlString(String(filter.value ?? '').trim())}'`;
+    }
+
+    _andSql(parts = []) {
+        return parts
+            .map(part => String(part || '').trim())
+            .filter(Boolean)
+            .join(' AND ') || 'TRUE';
+    }
+
     _csvColumnSpecs(csvProfile) {
         const rawHeaders = csvProfile?.rawHeaders || [];
         const headers = csvProfile?.headers || [];
@@ -1105,11 +1317,29 @@ export default class DuckDbSource {
             const forceVarchar = timeIndexes.has(index)
                 && timeSource.kind === 'datetime'
                 && !['excel-serial', 'matlab-datenum', 'decimal-year'].includes(timeSource.strategy);
+            const inferred = forceVarchar
+                ? { type: 'VARCHAR', readType: 'VARCHAR' }
+                : this._inferDuckDbCsvType(
+                    this._sampleRowsWithValidTime(sampleRows, csvProfile),
+                    index,
+                    csvProfile.delimiter,
+                    csvProfile.decimalSeparator,
+                );
             return {
                 name,
-                type: forceVarchar ? 'VARCHAR' : this._inferDuckDbCsvType(sampleRows, index, csvProfile.delimiter, csvProfile.decimalSeparator),
+                ...inferred,
             };
         });
+    }
+
+    _sampleRowsWithValidTime(sampleRows, csvProfile) {
+        const timeSource = csvProfile?.timeSource;
+        if (!timeSource?.ok || timeSource.strategy === 'generated-index') return sampleRows || [];
+        const delimiter = csvProfile?.delimiter || ',';
+        const decimalSeparator = csvProfile?.decimalSeparator || 'auto';
+        return (sampleRows || []).filter((row, index) =>
+            Number.isFinite(parseCsvTimeValue(timeSource, row, index, delimiter, { decimalSeparator }))
+        );
     }
 
     _inferDuckDbCsvType(sampleRows, index, delimiter, decimalSeparator = 'auto') {
@@ -1121,12 +1351,15 @@ export default class DuckDbSource {
             nonEmpty++;
             if (Number.isFinite(parseCsvNumber(raw, delimiter, decimalSeparator))) numeric++;
         }
-        return nonEmpty > 0 && (numeric / nonEmpty) >= 0.95 ? 'DOUBLE' : 'VARCHAR';
+        if (nonEmpty > 0 && (numeric / nonEmpty) > 0.5) {
+            return { type: 'DOUBLE', readType: 'VARCHAR' };
+        }
+        return { type: 'VARCHAR', readType: 'VARCHAR' };
     }
 
     _duckDbColumnsStruct(specs) {
-        const fields = specs.map(({ name, type }) =>
-            `'${this._escapeSqlString(name)}': '${this._escapeSqlString(type || 'VARCHAR')}'`
+        const fields = specs.map(({ name, type, readType }) =>
+            `'${this._escapeSqlString(name)}': '${this._escapeSqlString(readType || type || 'VARCHAR')}'`
         );
         return `{${fields.join(', ')}}`;
     }
@@ -1186,7 +1419,17 @@ export default class DuckDbSource {
     _timeInfoFromProfile(columnNames, columnTypes, csvProfile) {
         const timeSource = csvProfile?.timeSource;
         if (!timeSource?.ok) return null;
-        if (timeSource.kind === 'index' || timeSource.strategy === 'generated-index') return null;
+        if (timeSource.strategy === 'generated-index') {
+            return {
+                name: timeSource.name || 'index',
+                description: timeSource.description || '[index]',
+                timeKind: 'index',
+                strategy: timeSource.strategy || 'generated-index',
+                sourceNames: [],
+                sql: '(ROW_NUMBER() OVER () - 1)::DOUBLE',
+                generated: true,
+            };
+        }
 
         const sourceNames = (timeSource.sourceIndexes || [])
             .map(index => columnNames[index])
@@ -1200,42 +1443,44 @@ export default class DuckDbSource {
         const first = this._quoteIdent(firstName);
         let sql = null;
 
-        if (timeSource.kind === 'numeric') {
-            sql = first;
+        if (timeSource.strategy === 'index-column') {
+            sql = this._numericCastSql(first, csvProfile);
+        } else if (timeSource.kind === 'numeric') {
+            sql = this._numericCastSql(first, csvProfile);
         } else if (timeSource.kind === 'datetime') {
-            sql = this._datetimeSqlFromProfile(timeSource, sourceNames, firstType);
+            sql = this._datetimeSqlFromProfile(timeSource, sourceNames, firstType, csvProfile);
         }
 
         if (!sql) return null;
         return {
             name,
             description,
-            timeKind: timeSource.kind,
+            timeKind: timeSource.strategy === 'index-column' ? 'index' : timeSource.kind,
+            strategy: timeSource.strategy || timeSource.mode || null,
             sourceNames,
             sql,
         };
     }
 
-    _datetimeSqlFromProfile(timeSource, sourceNames, firstType) {
+    _datetimeSqlFromProfile(timeSource, sourceNames, firstType, csvProfile = null) {
         const first = this._quoteIdent(sourceNames[0]);
         if (/TIMESTAMP|DATE|TIME/.test(firstType || '')) return `epoch_ms(${first})::DOUBLE`;
 
         const strategy = timeSource.strategy;
-        if (strategy === 'excel-serial') return `((${first}::DOUBLE - 25569) * ${MS_PER_DAY})`;
-        if (strategy === 'matlab-datenum') return `((${first}::DOUBLE - 719529) * ${MS_PER_DAY})`;
-        if (strategy === 'decimal-year') return this._decimalYearSql(first);
+        const numericFirst = this._numericCastSql(first, csvProfile);
+        if (strategy === 'excel-serial') return `((${numericFirst} - 25569) * ${MS_PER_DAY})`;
+        if (strategy === 'matlab-datenum') return `((${numericFirst} - 719529) * ${MS_PER_DAY})`;
+        if (strategy === 'decimal-year') return this._decimalYearSql(numericFirst);
         if (strategy === 'yearless-date-time') return this._yearlessDateTimeSql(first, timeSource.format);
         if (strategy === 'month-name-date') return this._monthNameDateSql(first);
+        if (strategy === 'partial-year-month') return this._partialYearMonthSql(first);
 
         if (strategy === 'iso-datetime') {
             return `epoch_ms(CAST(${first} AS TIMESTAMP))::DOUBLE`;
         }
 
         if (strategy === 'custom-format') {
-            const format = customDatetimePatternToDuckDbFormat(timeSource.format?.pattern || '');
-            return format
-                ? this._tryStrptimeSql(`CAST(${first} AS VARCHAR)`, [format])
-                : null;
+            return this._customFormatSql(first, timeSource.format?.pattern || '');
         }
 
         const order = timeSource.format?.dateOrder || 'YMD';
@@ -1250,7 +1495,14 @@ export default class DuckDbSource {
             const sep = timeSource.format?.dashSeparator ? '-' : '/';
             const formats = this._dateTimeFormats(order, sep);
             const expr = `CAST(${dateCol} AS VARCHAR) || ' ' || CAST(${timeCol} AS VARCHAR)`;
-            return this._tryStrptimeSql(expr, formats);
+            const partialYearMonth = `CAST(${dateCol} AS VARCHAR) || '-01 ' || CAST(${timeCol} AS VARCHAR)`;
+            const partialMonthDay = `'2001-' || CAST(${dateCol} AS VARCHAR) || ' ' || CAST(${timeCol} AS VARCHAR)`;
+            const timestamps = [
+                this._tryStrptimeTimestampSql(expr, formats),
+                this._tryStrptimeTimestampSql(partialYearMonth, this._partialYearMonthDateTimeFormats()),
+                this._tryStrptimeTimestampSql(partialMonthDay, this._partialMonthDayDateTimeFormats(order)),
+            ];
+            return `epoch_ms(coalesce(${timestamps.join(', ')}))::DOUBLE`;
         }
 
         if (timeSource.mode === 'parts' || strategy === 'parts') {
@@ -1267,11 +1519,11 @@ export default class DuckDbSource {
             const profileIndex = parts[name];
             const sourceOffset = sourceIndexes.indexOf(profileIndex);
             if (sourceOffset < 0 || !sourceNames[sourceOffset]) return fallback;
-            return `CAST(${this._quoteIdent(sourceNames[sourceOffset])} AS DOUBLE)`;
+            return `try_cast(${this._quoteIdent(sourceNames[sourceOffset])} AS DOUBLE)`;
         };
-        const year = partExpr('year', 'NULL');
-        const month = partExpr('month', 'NULL');
-        const day = partExpr('day', 'NULL');
+        const year = partExpr('year', '2001');
+        const month = partExpr('month', '1');
+        const day = partExpr('day', '1');
         const hour = partExpr('hour', '0');
         const minute = partExpr('minute', '0');
         const second = partExpr('second', '0');
@@ -1301,6 +1553,30 @@ export default class DuckDbSource {
             `${shortYear} %H:%M:%S`,
             `${shortYear} %H:%M`,
             shortYear,
+        ];
+    }
+
+    _partialYearMonthDateTimeFormats() {
+        return [
+            '%Y-%m-%d %H:%M:%S.%f',
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%d %H:%M',
+            '%Y/%m-%d %H:%M:%S.%f',
+            '%Y/%m-%d %H:%M:%S',
+            '%Y/%m-%d %H:%M',
+        ];
+    }
+
+    _partialMonthDayDateTimeFormats(order) {
+        const dash = order === 'DMY' ? '%Y-%d-%m' : '%Y-%m-%d';
+        const slash = order === 'DMY' ? '%Y-%d/%m' : '%Y-%m/%d';
+        return [
+            `${dash} %H:%M:%S.%f`,
+            `${dash} %H:%M:%S`,
+            `${dash} %H:%M`,
+            `${slash} %H:%M:%S.%f`,
+            `${slash} %H:%M:%S`,
+            `${slash} %H:%M`,
         ];
     }
 
@@ -1349,6 +1625,20 @@ export default class DuckDbSource {
         ]);
     }
 
+    _partialYearMonthSql(expr) {
+        return this._tryStrptimeSql(`CAST(${expr} AS VARCHAR) || '-01'`, ['%Y-%m-%d', '%Y/%m-%d']);
+    }
+
+    _customFormatSql(expr, pattern) {
+        const info = customDatetimePatternInfo(pattern);
+        if (!info?.format) return null;
+        let valueExpr = `CAST(${expr} AS VARCHAR)`;
+        if (info.valuePrefix) valueExpr = `'${this._escapeSqlString(info.valuePrefix)}' || ${valueExpr}`;
+        if (info.valueSuffix) valueExpr = `${valueExpr} || '${this._escapeSqlString(info.valueSuffix)}'`;
+        if (info.hasMonthName) valueExpr = this._normalizedMonthNameSql(valueExpr);
+        return this._tryStrptimeSql(valueExpr, [info.format]);
+    }
+
     _normalizedMonthNameSql(expr) {
         let sql = `lower(regexp_replace(CAST(${expr} AS VARCHAR), '\\.', '', 'g'))`;
         const replacements = [
@@ -1365,6 +1655,20 @@ export default class DuckDbSource {
             ['november', 'nov'], ['novembre', 'nov'], ['noviembre', 'nov'],
             ['december', 'dec'], ['décembre', 'dec'], ['decembre', 'dec'], ['diciembre', 'dec'],
         ];
+        replacements.push(
+            ['gennaio', 'jan'], ['janeiro', 'jan'], ['ene', 'jan'], ['gen', 'jan'],
+            ['febbraio', 'feb'], ['fevereiro', 'feb'],
+            ['marco', 'mar'], ['marz', 'mar'],
+            ['aprile', 'apr'], ['abr', 'apr'],
+            ['maggio', 'may'], ['maio', 'may'], ['mag', 'may'],
+            ['giugno', 'jun'], ['junho', 'jun'], ['juni', 'jun'], ['giu', 'jun'],
+            ['luglio', 'jul'], ['julho', 'jul'], ['juli', 'jul'], ['lug', 'jul'],
+            ['ago', 'aug'],
+            ['settembre', 'sep'], ['setembro', 'sep'], ['set', 'sep'],
+            ['ottobre', 'oct'], ['outubro', 'oct'], ['oktober', 'oct'], ['ott', 'oct'], ['okt', 'oct'],
+            ['novembro', 'nov'],
+            ['dicembre', 'dec'], ['dezembro', 'dec'], ['dezember', 'dec'], ['dic', 'dec'], ['dez', 'dec'],
+        );
         for (const [from, to] of replacements) {
             sql = `replace(${sql}, '${this._escapeSqlString(from)}', '${to}')`;
         }
@@ -1372,11 +1676,16 @@ export default class DuckDbSource {
     }
 
     _tryStrptimeSql(expr, formats) {
+        return `epoch_ms(${this._tryStrptimeTimestampSql(expr, formats)})::DOUBLE`;
+    }
+
+    _tryStrptimeTimestampSql(expr, formats) {
         const list = formats.map(format => `'${this._escapeSqlString(format)}'`).join(', ');
-        return `epoch_ms(try_strptime(${expr}, [${list}]))::DOUBLE`;
+        return `try_strptime(${expr}, [${list}])`;
     }
 
     _projectionSql(columnNames, timeInfo, csvProfile = null) {
+        const specsByName = new Map((this._csvColumnSpecs(csvProfile) || []).map(spec => [spec.name, spec]));
         const exclude = new Set(timeInfo.sourceNames || []);
         for (const index of csvProfile?.ignoredColumns || []) {
             const name = columnNames[Number(index)];
@@ -1384,11 +1693,26 @@ export default class DuckDbSource {
         }
         const columns = columnNames
             .filter(name => !exclude.has(name))
-            .map(name => this._quoteIdent(name));
+            .map(name => this._projectionColumnSql(name, specsByName.get(name), csvProfile));
         return [
             `${timeInfo.sql} AS "__omv_time"`,
             ...columns,
         ].join(', ');
+    }
+
+    _projectionColumnSql(name, spec = null, csvProfile = null) {
+        const ident = this._quoteIdent(name);
+        if (spec?.type === 'DOUBLE' && spec?.readType === 'VARCHAR') {
+            return `${this._numericCastSql(ident, csvProfile)} AS ${ident}`;
+        }
+        return ident;
+    }
+
+    _numericCastSql(expr, csvProfile = null) {
+        const value = this._csvUsesDecimalComma(csvProfile)
+            ? `replace(CAST(${expr} AS VARCHAR), ',', '.')`
+            : expr;
+        return `try_cast(${value} AS DOUBLE)`;
     }
 
     _quoteIdent(name) {
@@ -1458,6 +1782,7 @@ export default class DuckDbSource {
             data: timeData,
             description: timeInfo?.description || (timeKind === 'datetime' ? '[datetime]' : ''),
             kind: 'abscissa',
+            timeSourceStrategy: timeInfo?.strategy || null,
             dataType: 'real',
             isConstant: false,
             interpolation: 'linear',
@@ -1469,6 +1794,10 @@ export default class DuckDbSource {
             timeVar.timeKind = 'datetime';
             timeVar.timeDisplayMode = datetimeAxisStalled ? 'index' : 'calendar';
             timeVar.timeOriginMs = timeData.length ? timeData[0] : null;
+        } else if (timeKind === 'index') {
+            timeVar.timeKind = 'index';
+            timeVar.timeDisplayMode = 'index';
+            timeVar.timeStepMode = 'index';
         }
         result.variables[timeVar.name] = timeVar;
         usedNames.add(timeVar.name);
@@ -1514,7 +1843,8 @@ export default class DuckDbSource {
             skippedRowsAfterHeader: 0,
             timeName: timeVar.name,
             timeKind,
-            timeDisplayMode: timeKind === 'datetime' ? (datetimeAxisStalled ? 'index' : 'calendar') : 'numeric',
+            timeDisplayMode: timeKind === 'datetime' ? (datetimeAxisStalled ? 'index' : 'calendar')
+                : timeKind === 'index' ? 'index' : 'numeric',
             timeOriginMs: timeVar.timeOriginMs ?? null,
             timeSourceColumns: timeInfo?.sourceNames?.length ? timeInfo.sourceNames : [timeName],
             datetimeAxisStalled,

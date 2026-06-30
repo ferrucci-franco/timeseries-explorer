@@ -433,10 +433,11 @@ proto._applyLiveUpdateAppendProbe = async function(fileId, appendProbe) {
 
     if (data._duckdb?.source?.appendCsvDelta) {
         const result = await data._duckdb.source.appendCsvDelta(data, profile, deltaText, {
-            expectedRows: appendProbe.completeLines.length,
+            expectedRows: profile?.rowFilter?.enabled ? null : appendProbe.completeLines.length,
             lastTime,
             limits: LIVE_UPDATE_DUCKDB_APPEND_LIMITS,
         });
+        if (!result.rows) return 0;
         this._appendLiveUpdateColumns(data, result.columns);
         this._limitLiveUpdateOverview(data);
         this._updateLiveUpdateMetadata(data, result.columns?.timeValues);
@@ -446,6 +447,7 @@ proto._applyLiveUpdateAppendProbe = async function(fileId, appendProbe) {
     const parsed = this.csvParser.parseRowsWithProfile(deltaText, profile, {
         startRowIndex: previousTime?.length || 0,
     });
+    if (!parsed.timeValues?.length) return 0;
     const timeOrderMessage = this._liveUpdateDeltaTimeOrderMessage(lastTime, parsed.timeValues);
     if (timeOrderMessage) throw new Error(timeOrderMessage);
     this._appendLiveUpdateColumns(data, parsed);

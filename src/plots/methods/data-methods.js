@@ -61,6 +61,8 @@ proto._isGeneratedIndexTime = function(fileId, timeVar = null) {
     const t = timeVar || this._getTimeVar(fileId);
     const transformMode = this._fileTransform(fileId).timeDisplayMode;
     if (transformMode === 'index') return true;
+    if (t?.timeSourceStrategy === 'index-column') return false;
+    if (t?.timeSourceStrategy === 'generated-index') return true;
     if (t?.timeKind === 'datetime' && transformMode) return false;
     return t?.timeKind === 'index'
         || (t?.timeKind === 'datetime' && t?.timeDisplayMode === 'index');
@@ -518,6 +520,7 @@ proto._timeAxisTitle = function(fileId, fallback = 'Time') {
 
 proto._timeAxisTitleForVar = function(fileId, timeVar = null, fallback = 'Time') {
     const name = timeVar?.name || fallback;
+    if (timeVar?.timeSourceStrategy === 'index-column') return name;
     if (this._isGeneratedIndexTime(fileId, timeVar)) {
         const mode = this._indexTimeStepMode(fileId);
         if (mode !== 'index' && this._isGeneratedCalendarTime(fileId, timeVar)) {

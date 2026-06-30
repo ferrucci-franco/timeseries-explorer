@@ -1,0 +1,10 @@
+# exported by lab logger
+# timezone: local
+
+date,value
+2024-01-01,10
+
+2024-01-02,11
+not useful,skip me
+2024-01-03,12
+

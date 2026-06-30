@@ -61,18 +61,18 @@ const MATLAB_DATENUM_MAX = 900000;
 const MIN_CONFIDENCE = 0.30;
 
 const MONTH_LOOKUP = {
-    jan: 1, january: 1, janv: 1, janvier: 1, enero: 1,
-    feb: 2, february: 2, fev: 2, fevr: 2, fevrier: 2, febrero: 2,
-    mar: 3, march: 3, mars: 3, marzo: 3,
-    apr: 4, april: 4, avr: 4, avril: 4, abril: 4,
-    may: 5, mai: 5, mayo: 5,
-    jun: 6, june: 6, juin: 6, junio: 6,
-    jul: 7, july: 7, juil: 7, juillet: 7, julio: 7,
-    aug: 8, august: 8, aou: 8, aout: 8, agosto: 8,
-    sep: 9, sept: 9, september: 9, septembre: 9, septiembre: 9,
-    oct: 10, october: 10, octobre: 10, octubre: 10,
-    nov: 11, november: 11, novembre: 11, noviembre: 11,
-    dec: 12, december: 12, decembre: 12, diciembre: 12,
+    jan: 1, january: 1, janv: 1, janvier: 1, ene: 1, enero: 1, gen: 1, gennaio: 1, janeiro: 1,
+    feb: 2, february: 2, fev: 2, fevr: 2, fevrier: 2, febrero: 2, febbraio: 2, fevereiro: 2,
+    mar: 3, march: 3, mars: 3, marzo: 3, marz: 3, marco: 3,
+    apr: 4, april: 4, avr: 4, avril: 4, abr: 4, abril: 4, aprile: 4,
+    may: 5, mai: 5, mayo: 5, mag: 5, maggio: 5, maio: 5,
+    jun: 6, june: 6, juin: 6, junio: 6, giu: 6, giugno: 6, junho: 6, juni: 6,
+    jul: 7, july: 7, juil: 7, juillet: 7, julio: 7, lug: 7, luglio: 7, julho: 7, juli: 7,
+    aug: 8, august: 8, aou: 8, aout: 8, ago: 8, agosto: 8,
+    sep: 9, sept: 9, september: 9, septembre: 9, set: 9, septiembre: 9, settembre: 9, setembro: 9,
+    oct: 10, october: 10, octobre: 10, octubre: 10, ott: 10, ottobre: 10, outubro: 10, okt: 10, oktober: 10,
+    nov: 11, november: 11, novembre: 11, noviembre: 11, novembro: 11,
+    dec: 12, december: 12, decembre: 12, dic: 12, diciembre: 12, dicembre: 12, dez: 12, dezembro: 12, dezember: 12,
 };
 
 // ---------------------------------------------------------------------------
@@ -293,10 +293,12 @@ export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ','
     const strategy = timeSource.strategy || timeSource.mode;
     const idx = indexes[0] ?? 0;
 
+    if (strategy === 'index-column') return parseCsvNumber(row?.[idx], delimiter, decimalSeparator);
     if (timeSource.kind === 'index' || strategy === 'generated-index') return rowIndex;
     if (timeSource.kind === 'numeric') return parseCsvNumber(row?.[idx], delimiter, decimalSeparator);
     if (strategy === 'custom-format') return parseCustomFormatMs(row?.[idx], timeSource.format?.pattern || '');
     if (strategy === 'iso-datetime') return parseIsoMs(row?.[idx]);
+    if (strategy === 'partial-year-month') return parsePartialYearMonthMs(row?.[idx]);
     if (strategy === 'slash-date' || strategy === 'dash-date') {
         const order = timeSource.format?.dateOrder || 'YMD';
         const sep = strategy === 'dash-date' ? '-' : '/';
@@ -319,35 +321,72 @@ export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ','
 }
 
 export function customDatetimePatternToDuckDbFormat(pattern) {
+    return customDatetimePatternInfo(pattern)?.format || null;
+}
+
+export function customDatetimePatternInfo(pattern) {
     const source = String(pattern || '');
     if (!source.trim()) return null;
     const tokens = [
-        ['yyyy', '%Y'],
-        ['yy', '%y'],
-        ['MM', '%m'],
-        ['M', '%m'],
-        ['dd', '%d'],
-        ['d', '%d'],
-        ['HH', '%H'],
-        ['H', '%H'],
-        ['mm', '%M'],
-        ['m', '%M'],
-        ['ss', '%S'],
-        ['s', '%S'],
-        ['SSS', '%f'],
+        ['yyyy', '%Y', 'year'],
+        ['yy', '%y', 'year'],
+        ['MMMM', '%b', 'monthName'],
+        ['MMM', '%b', 'monthName'],
+        ['MM', '%m', 'month'],
+        ['M', '%m', 'month'],
+        ['dd', '%d', 'day'],
+        ['d', '%d', 'day'],
+        ['HH', '%H', 'hour'],
+        ['H', '%H', 'hour'],
+        ['mm', '%M', 'minute'],
+        ['m', '%M', 'minute'],
+        ['ss', '%S', 'second'],
+        ['s', '%S', 'second'],
+        ['SSS', '%f', 'millisecond'],
     ];
+    const flags = {
+        hasYear: false,
+        hasMonth: false,
+        hasDay: false,
+        hasMonthName: false,
+    };
     let out = '';
     for (let i = 0; i < source.length;) {
         const token = tokens.find(([key]) => source.startsWith(key, i));
         if (token) {
             out += token[1];
+            if (token[2] === 'year') flags.hasYear = true;
+            if (token[2] === 'month' || token[2] === 'monthName') flags.hasMonth = true;
+            if (token[2] === 'monthName') flags.hasMonthName = true;
+            if (token[2] === 'day') flags.hasDay = true;
             i += token[0].length;
             continue;
         }
         out += source[i];
         i++;
     }
-    return out;
+    let prefix = '';
+    let suffix = '';
+    let formatPrefix = '';
+    let formatSuffix = '';
+    if (!flags.hasYear) {
+        prefix = '2001-';
+        formatPrefix = '%Y-';
+    }
+    if (!flags.hasMonth) {
+        suffix += '-01';
+        formatSuffix += '-%m';
+    }
+    if (!flags.hasDay) {
+        suffix += '-01';
+        formatSuffix += '-%d';
+    }
+    return {
+        format: `${formatPrefix}${out}${formatSuffix}`,
+        valuePrefix: prefix,
+        valueSuffix: suffix,
+        ...flags,
+    };
 }
 
 function buildIndexResult(warnings) {
@@ -475,6 +514,8 @@ function profileColumnContent(sample, colIdx, delimiter) {
         numericValues: [],
         timeOfDay: 0,
         iso: 0,                // 2022-08-01 [T 00:00:00...]
+        partialYearMonth: 0,   // 2022-08 or 2022/08, day 01 assumed
+        partialYearMonthDash: 0,
         slashDate: 0,          // a/b/c
         dashDate: 0,           // a-b-c (when leading part is 1-2 digits, so not ISO)
         yearlessDateTime: 0,   // MM/DD HH:mm:ss or DD/MM HH:mm:ss
@@ -487,6 +528,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
         slashCounts: { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
         dashCounts:  { ymd: 0, firstGt12: 0, secondGt12: 0, ambig: 0, total: 0 },
         hasTimePart: 0,
+        meridiemTimePart: 0,
         excelSerialCandidate: 0,
         monotonicInc: 0,
         sample: [],
@@ -514,8 +556,15 @@ function profileColumnContent(sample, colIdx, delimiter) {
 
         if (/^\d{1,2}:\d{2}(:\d{2})?(\.\d+)?$/.test(cell)) profile.timeOfDay++;
 
+        const pym = cell.match(/^(\d{4})([/-])(\d{1,2})$/);
+        if (pym) {
+            profile.partialYearMonth++;
+            if (pym[2] === '-') profile.partialYearMonthDash++;
+            continue;
+        }
+
         const ym = cell.match(
-            /^(\d{1,2})([/-])(\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/,
+            /^(\d{1,2})([/-])(\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:\s*[AP]M)?$/i,
         );
         if (ym) {
             profile.yearlessDateTime++;
@@ -523,6 +572,7 @@ function profileColumnContent(sample, colIdx, delimiter) {
             else profile.yearlessDash++;
             tallyDateAmbiguity(profile.yearlessCounts, +ym[1], +ym[3], ym[1]);
             profile.hasTimePart++;
+            if (/[AP]M\s*$/i.test(cell)) profile.meridiemTimePart++;
             continue;
         }
 
@@ -541,22 +591,24 @@ function profileColumnContent(sample, colIdx, delimiter) {
         }
 
         const sm = cell.match(
-            /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?$/,
+            /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i,
         );
         if (sm) {
             profile.slashDate++;
             tallyDateAmbiguity(profile.slashCounts, +sm[1], +sm[2], sm[1]);
             if (sm[4] != null) profile.hasTimePart++;
+            if (sm[4] != null && /[AP]M\s*$/i.test(cell)) profile.meridiemTimePart++;
             continue;
         }
 
         const dm = cell.match(
-            /^(\d{1,2})-(\d{1,2})-(\d{2,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?$/,
+            /^(\d{1,2})-(\d{1,2})-(\d{2,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:\s*[AP]M)?)?$/i,
         );
         if (dm) {
             profile.dashDate++;
             tallyDateAmbiguity(profile.dashCounts, +dm[1], +dm[2], dm[1]);
             if (dm[4] != null) profile.hasTimePart++;
+            if (dm[4] != null && /[AP]M\s*$/i.test(cell)) profile.meridiemTimePart++;
             continue;
         }
 
@@ -591,9 +643,10 @@ function evaluateSingleColumn(col, preferred) {
 
     const fNumeric = content.numeric / content.nonEmpty;
     const fIso     = content.iso     / content.nonEmpty;
+    const fPartialYearMonth = content.partialYearMonth / content.nonEmpty;
     const fSlash   = content.slashDate / content.nonEmpty;
     const fDash    = content.dashDate  / content.nonEmpty;
-        const fYearless = content.yearlessDateTime / content.nonEmpty;
+    const fYearless = content.yearlessDateTime / content.nonEmpty;
     const fMonthName = content.monthNameDate / content.nonEmpty;
     const fMono    = content.numericValues.length > 1
         ? content.monotonicInc / (content.numericValues.length - 1)
@@ -622,16 +675,38 @@ function evaluateSingleColumn(col, preferred) {
         });
     }
 
+    // ---- Datetime: year + month, day missing -----------------------------
+    if (fPartialYearMonth >= 0.8) {
+        out.push({
+            mode: 'single',
+            kind: 'datetime',
+            sourceIndexes: [col.index],
+            score: clamp01(0.5 * headerScore.score + 0.58),
+            format: {
+                dateOrder: 'YMD',
+                hasTime: false,
+                timezone: 'floating',
+                excelSerial: false,
+                partial: 'year-month',
+                assumedDay: 1,
+                dashSeparator: content.partialYearMonthDash >= content.partialYearMonth / 2,
+            },
+            descTag: 'partial-year-month',
+            col,
+        });
+    }
+
     // ---- Datetime: slash date --------------------------------------------
     if (fSlash >= 0.8) {
         const order = resolveDmyOrMdy(content.slashCounts, preferred);
         const hasTime = content.hasTimePart / content.slashDate >= 0.5;
+        const hasMeridiem = hasTime && content.meridiemTimePart / Math.max(1, content.hasTimePart) >= 0.5;
         out.push({
             mode: 'single',
             kind: 'datetime',
             sourceIndexes: [col.index],
             score: clamp01(0.5 * headerScore.score + 0.55 + 0.1 * (hasTime ? 1 : 0)),
-            format: { dateOrder: order.order, hasTime, timezone: 'floating', excelSerial: false, ambiguous: order.ambiguous },
+            format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, ambiguous: order.ambiguous },
             descTag: 'slash-date',
             col,
         });
@@ -641,12 +716,13 @@ function evaluateSingleColumn(col, preferred) {
     if (fDash >= 0.8 && fIso < 0.5) {
         const order = resolveDmyOrMdy(content.dashCounts, preferred);
         const hasTime = content.hasTimePart / content.dashDate >= 0.5;
+        const hasMeridiem = hasTime && content.meridiemTimePart / Math.max(1, content.hasTimePart) >= 0.5;
         out.push({
             mode: 'single',
             kind: 'datetime',
             sourceIndexes: [col.index],
             score: clamp01(0.5 * headerScore.score + 0.5 + 0.1 * (hasTime ? 1 : 0)),
-            format: { dateOrder: order.order, hasTime, timezone: 'floating', excelSerial: false, dashSeparator: true, ambiguous: order.ambiguous },
+            format: { dateOrder: order.order, hasTime, hasMeridiem, timezone: 'floating', excelSerial: false, dashSeparator: true, ambiguous: order.ambiguous },
             descTag: 'dash-date',
             col,
         });
@@ -666,6 +742,7 @@ function evaluateSingleColumn(col, preferred) {
                 timezone: 'floating',
                 excelSerial: false,
                 yearless: true,
+                hasMeridiem: content.meridiemTimePart / Math.max(1, content.hasTimePart) >= 0.5,
                 dashSeparator: content.yearlessDash > content.yearlessSlash,
                 ambiguous: order.ambiguous,
             },
@@ -925,6 +1002,12 @@ function buildResult(best, headers, delimiter, warnings) {
         const h = parseHeader(headers[idx]?.raw, idx);
         name = h.name;
         description = '[datetime]';
+    } else if (best.descTag === 'partial-year-month') {
+        const idx = best.sourceIndexes[0];
+        parse = (row) => parsePartialYearMonthMs(row?.[idx]);
+        const h = parseHeader(headers[idx]?.raw, idx);
+        name = h.name;
+        description = '[datetime, day 01 assumed]';
     } else if (best.descTag === 'slash-date' || best.descTag === 'dash-date') {
         const idx = best.sourceIndexes[0];
         const order = best.format.dateOrder;
@@ -1025,11 +1108,22 @@ function parseIsoMs(cell) {
     return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms);
 }
 
+function parsePartialYearMonthMs(cell) {
+    if (cell == null || cell === '') return NaN;
+    const m = String(cell).trim().match(/^(\d{4})([/-])(\d{1,2})$/);
+    if (!m) return NaN;
+    const y = +m[1];
+    const mo = +m[3];
+    const d = 1;
+    if (!isValidDate(y, mo, d)) return NaN;
+    return Date.UTC(y, mo - 1, d, 0, 0, 0, 0);
+}
+
 function parseFlexibleDateMs(cell, order, sep) {
     if (cell == null || cell === '') return NaN;
     const re = sep === '-'
-        ? /^(\d{1,4})-(\d{1,2})-(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?$/
-        : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?$/;
+        ? /^(\d{1,4})-(\d{1,2})-(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?)?$/i
+        : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?)?$/i;
     const m = String(cell).match(re);
     if (!m) return NaN;
 
@@ -1041,10 +1135,15 @@ function parseFlexibleDateMs(cell, order, sep) {
     if (y < 100) y += (y >= 70 ? 1900 : 2000);
     if (!isValidDate(y, mo, d)) return NaN;
 
-    const H  = m[4] != null ? +m[4] : 0;
+    let H = m[4] != null ? +m[4] : 0;
     const Mi = m[5] != null ? +m[5] : 0;
     const Se = m[6] != null ? +m[6] : 0;
     const Ms = m[7] != null ? Math.round(Number('0.' + m[7]) * 1000) : 0;
+    const ampm = m[8] ? String(m[8]).toUpperCase() : '';
+    if (ampm) {
+        if (H < 1 || H > 12) return NaN;
+        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+    }
 
     return Date.UTC(y, mo - 1, d, H, Mi, Se, Ms);
 }
@@ -1069,23 +1168,34 @@ function combineDateAndTimeMs(dateCell, timeCell, order) {
               : null;
     if (!sep) return NaN;
 
-    const t = timeStr.match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/);
-    const H  = t ? +t[1] : 0;
-    const Mi = t ? +t[2] : 0;
-    const Se = t && t[3] != null ? +t[3] : 0;
-    const Ms = t && t[4] != null ? Math.round(Number('0.' + t[4]) * 1000) : 0;
+    const time = timeStr.trim() ? parseTimeOfDay(timeStr) : { H: 0, Mi: 0, Se: 0, Ms: 0 };
+    if (!time) return NaN;
+    const { H, Mi, Se, Ms } = time;
 
     const re = sep === '-'
         ? /^(\d{1,4})-(\d{1,2})-(\d{1,4})$/
         : /^(\d{1,4})\/(\d{1,2})\/(\d{1,4})$/;
     const dm = dateStr.match(re);
-    if (!dm) return NaN;
-
-    const a = +dm[1], b = +dm[2], c = +dm[3];
     let y, mo, d;
-    if (order === 'YMD')      { y = a; mo = b; d = c; }
-    else if (order === 'DMY') { d = a; mo = b; y = c; }
-    else                      { mo = a; d = b; y = c; }
+    if (dm) {
+        const a = +dm[1], b = +dm[2], c = +dm[3];
+        if (order === 'YMD')      { y = a; mo = b; d = c; }
+        else if (order === 'DMY') { d = a; mo = b; y = c; }
+        else                      { mo = a; d = b; y = c; }
+    } else {
+        const pm = dateStr.match(sep === '-'
+            ? /^(\d{1,4})-(\d{1,4})$/
+            : /^(\d{1,4})\/(\d{1,4})$/);
+        if (!pm) return NaN;
+        const a = +pm[1], b = +pm[2];
+        if (String(pm[1]).length === 4 || order === 'YMD') {
+            y = a; mo = b; d = 1;
+        } else if (order === 'DMY') {
+            y = 2001; d = a; mo = b;
+        } else {
+            y = 2001; mo = a; d = b;
+        }
+    }
     if (y < 100) y += (y >= 70 ? 1900 : 2000);
     if (!isValidDate(y, mo, d)) return NaN;
 
@@ -1095,14 +1205,19 @@ function combineDateAndTimeMs(dateCell, timeCell, order) {
 function parseCustomFormatMs(cell, pattern) {
     if (cell == null || cell === '' || !pattern) return NaN;
     const tokens = [
+        ['AM/PM', '(?<ampm>AM|PM)'],
         ['yyyy', '(?<year>\\d{4})'],
         ['yy', '(?<year2>\\d{2})'],
+        ['MMMM', '(?<monthName>[\\p{L}.]{3,12})'],
+        ['MMM', '(?<monthName>[\\p{L}.]{3,12})'],
         ['MM', '(?<month>\\d{2})'],
         ['M', '(?<month>\\d{1,2})'],
         ['dd', '(?<day>\\d{2})'],
         ['d', '(?<day>\\d{1,2})'],
         ['HH', '(?<hour>\\d{2})'],
         ['H', '(?<hour>\\d{1,2})'],
+        ['hh', '(?<hour12>\\d{2})'],
+        ['h', '(?<hour12>\\d{1,2})'],
         ['mm', '(?<minute>\\d{2})'],
         ['m', '(?<minute>\\d{1,2})'],
         ['ss', '(?<second>\\d{2})'],
@@ -1121,15 +1236,24 @@ function parseCustomFormatMs(cell, pattern) {
         regex += escapeRegex(pattern[i]);
         i++;
     }
-    const match = String(cell).trim().match(new RegExp(`^${regex}$`));
+    const match = String(cell).trim().match(new RegExp(`^${regex}$`, 'iu'));
     if (!match?.groups) return NaN;
     let y = match.groups.year != null
         ? Number(match.groups.year)
-        : match.groups.year2 != null ? Number(match.groups.year2) : NaN;
+        : match.groups.year2 != null ? Number(match.groups.year2) : 2001;
     if (y < 100) y += (y >= 70 ? 1900 : 2000);
-    const mo = Number(match.groups.month);
-    const d = Number(match.groups.day);
-    const H = match.groups.hour != null ? Number(match.groups.hour) : 0;
+    const mo = match.groups.monthName != null
+        ? lookupMonthName(match.groups.monthName)
+        : match.groups.month != null ? Number(match.groups.month) : 1;
+    const d = match.groups.day != null ? Number(match.groups.day) : 1;
+    let H = match.groups.hour != null
+        ? Number(match.groups.hour)
+        : match.groups.hour12 != null ? Number(match.groups.hour12) : 0;
+    const ampm = match.groups.ampm ? String(match.groups.ampm).toUpperCase() : '';
+    if (match.groups.hour12 != null) {
+        if (H < 1 || H > 12 || !ampm) return NaN;
+        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+    }
     const Mi = match.groups.minute != null ? Number(match.groups.minute) : 0;
     const Se = match.groups.second != null ? Number(match.groups.second) : 0;
     const Ms = match.groups.ms != null ? Number(String(match.groups.ms).padEnd(3, '0').slice(0, 3)) : 0;
@@ -1142,6 +1266,9 @@ function parseCustomFormatMs(cell, pattern) {
 
 function parsePartsDateTimeMs(timeSource, row, delimiter = ',', decimalSeparator = 'auto') {
     const parts = timeSource?.format?.parts || {};
+    const hasPart = ['year', 'month', 'day', 'hour', 'minute', 'second']
+        .some(name => Number.isInteger(parts[name]) && parts[name] >= 0);
+    if (!hasPart) return NaN;
     const readPart = (name, fallback = 0) => {
         const index = parts[name];
         if (index === null || index === undefined || index === '') return fallback;
@@ -1149,9 +1276,9 @@ function parsePartsDateTimeMs(timeSource, row, delimiter = ',', decimalSeparator
         return Number.isFinite(value) ? value : NaN;
     };
 
-    let y = readPart('year', NaN);
-    const mo = readPart('month', NaN);
-    const d = readPart('day', NaN);
+    let y = readPart('year', 2001);
+    const mo = readPart('month', 1);
+    const d = readPart('day', 1);
     const H = readPart('hour', 0);
     const Mi = readPart('minute', 0);
     const secondValue = readPart('second', 0);
@@ -1169,7 +1296,7 @@ function parsePartsDateTimeMs(timeSource, row, delimiter = ',', decimalSeparator
 function parseYearlessDateTimeMs(cell, order) {
     if (cell == null || cell === '') return NaN;
     const m = String(cell).trim().match(
-        /^(\d{1,2})[/-](\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/,
+        /^(\d{1,2})[/-](\d{1,2})[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?$/i,
     );
     if (!m) return NaN;
 
@@ -1177,10 +1304,15 @@ function parseYearlessDateTimeMs(cell, order) {
     const b = +m[2];
     const mo = order === 'DMY' ? b : a;
     const d = order === 'DMY' ? a : b;
-    const H = +m[3];
+    let H = +m[3];
     const Mi = +m[4];
     const Se = m[5] != null ? +m[5] : 0;
     const Ms = m[6] != null ? Math.round(Number('0.' + m[6]) * 1000) : 0;
+    const ampm = m[7] ? String(m[7]).toUpperCase() : '';
+    if (ampm) {
+        if (H < 1 || H > 12) return NaN;
+        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+    }
     const baseYear = 2001;
     if (!isValidDate(baseYear, mo, d)) return NaN;
     if (H < 0 || H > 24 || Mi < 0 || Mi > 59 || Se < 0 || Se > 59 || Ms < 0 || Ms > 999) return NaN;
@@ -1202,10 +1334,16 @@ function parseMonthNameDateMs(cell) {
 }
 
 function parseTimeOfDay(cell) {
-    const t = String(cell ?? '').match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/);
+    const t = String(cell ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*([AP]M))?$/i);
     if (!t) return null;
+    let H = +t[1];
+    const ampm = t[5] ? String(t[5]).toUpperCase() : '';
+    if (ampm) {
+        if (H < 1 || H > 12) return null;
+        H = (H % 12) + (ampm === 'PM' ? 12 : 0);
+    }
     return {
-        H: +t[1],
+        H,
         Mi: +t[2],
         Se: t[3] != null ? +t[3] : 0,
         Ms: t[4] != null ? Math.round(Number('0.' + t[4]) * 1000) : 0,
