@@ -1,0 +1,21 @@
+date,sparse_value,label
+2024-01-01,N/A,alpha
+2024-01-02,12.5,beta
+2024-01-03,-,gamma
+2024-01-04,missing,delta
+2024-01-05,N/A,epsilon
+2024-01-06,8.0,zeta
+2024-01-07,text,eta
+2024-01-08,--,theta
+2024-01-09,N/A,iota
+2024-01-10,3.14,kappa
+2024-01-11,not measured,lambda
+2024-01-12,-,mu
+2024-01-13,N/A,nu
+2024-01-14,skip,xi
+2024-01-15,42,omicron
+2024-01-16,missing,pi
+2024-01-17,N/A,rho
+2024-01-18,text,sigma
+2024-01-19,--,tau
+2024-01-20,not available,upsilon

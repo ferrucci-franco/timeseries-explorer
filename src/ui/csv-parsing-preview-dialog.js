@@ -2045,8 +2045,9 @@ export default class CsvParsingPreviewDialog {
 
     _renderGrid() {
         const rowEntries = this._previewRowEntries();
+        const allEntries = this._allPreviewRowEntries();
         const isStartSample = this._isStartSample();
-        const maxColumns = Math.max(1, ...rowEntries.map(entry => entry.row.length));
+        const maxColumns = Math.max(1, ...(rowEntries.length ? rowEntries : allEntries).map(entry => entry.row.length));
         const table = document.createElement('table');
         table.className = 'csv-preview-grid';
         const thead = document.createElement('thead');
@@ -2071,7 +2072,11 @@ export default class CsvParsingPreviewDialog {
         const tbody = document.createElement('tbody');
         const timeIndexes = new Set(this.resultProfile?.timeSource?.sourceIndexes || []);
         const delimiter = this.resultProfile?.delimiter || ',';
+        const onlyPreambleMessage = this._onlyPreambleLoadedMessageInfo(allEntries, rowEntries);
         let renderedValidDataRows = 0;
+        if (!rowEntries.length) {
+            tbody.appendChild(this._buildGridMessageRow(this._hiddenRowsMessage(allEntries), maxColumns, 'is-hidden-message'));
+        }
         rowEntries.forEach((entry, r) => {
             const { row, logicalIndex, isEmpty, sourceIndex, isDataRow, rowPassesFilter, isInvalid, hasInvalidNumericCell } = entry;
             const tr = document.createElement('tr');
@@ -2126,6 +2131,9 @@ export default class CsvParsingPreviewDialog {
             }
             if (isDataRow && !isInvalid) renderedValidDataRows++;
             tbody.appendChild(tr);
+            if (onlyPreambleMessage && sourceIndex === onlyPreambleMessage.sourceIndex) {
+                tbody.appendChild(this._buildGridMessageRow(onlyPreambleMessage.message, maxColumns, 'is-load-more-message'));
+            }
             if (isStartSample && this.state.hasHeader && !isEmpty && logicalIndex === this.state.headerIndex) {
                 tbody.appendChild(this._buildDetectedUnitsRow(maxColumns));
                 if (this._hasRenamedColumns()) tbody.appendChild(this._buildNewNamesRow(maxColumns));
@@ -2133,6 +2141,40 @@ export default class CsvParsingPreviewDialog {
         });
         table.appendChild(tbody);
         this.gridWrap.replaceChildren(table);
+    }
+
+    _buildGridMessageRow(message, maxColumns, variant = '') {
+        const tr = document.createElement('tr');
+        tr.className = 'csv-preview-message-row';
+        if (variant) tr.classList.add(variant);
+        const td = document.createElement('td');
+        td.colSpan = maxColumns + 2;
+        td.textContent = message;
+        td.title = message;
+        tr.appendChild(td);
+        return tr;
+    }
+
+    _onlyPreambleLoadedMessageInfo(allEntries = [], rowEntries = []) {
+        if (this.state.hidePreambleRows) return null;
+        const visiblePreambleRows = rowEntries.filter(entry => entry.isPreamble);
+        if (!visiblePreambleRows.length) return null;
+        const hasLoadedNonPreambleContent = allEntries.some(entry => !entry.isEmpty && !entry.isPreamble);
+        if (hasLoadedNonPreambleContent) return null;
+        return {
+            sourceIndex: visiblePreambleRows[visiblePreambleRows.length - 1].sourceIndex,
+            message: i18n.t('csvPreviewOnlyPreambleLoaded'),
+        };
+    }
+
+    _hiddenRowsMessage(allEntries = []) {
+        const hasHiddenPreamble = this.state.hidePreambleRows && allEntries.some(entry => entry.isPreamble);
+        const hasHiddenInvalid = this.state.hideInvalidLines && allEntries.some(entry => entry.isInvalid);
+        const hasHiddenEmpty = this.state.hideEmptyLines && allEntries.some(entry => entry.isEmpty);
+        if (hasHiddenPreamble) return i18n.t('csvPreviewAllRowsHiddenByPreamble');
+        if (hasHiddenInvalid) return i18n.t('csvPreviewAllRowsHiddenByInvalid');
+        if (hasHiddenEmpty) return i18n.t('csvPreviewAllRowsHiddenByEmpty');
+        return i18n.t('csvPreviewNoPreviewRows');
     }
 
     _renderValidation() {

@@ -295,49 +295,6 @@
     margin: 0.25rem 0;
 }
 
-.modal-dialog-datetime-warning .modal-content {
-    border: 1px solid rgba(220, 76, 76, 0.45);
-    box-shadow: 0 20px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(220, 76, 76, 0.10);
-}
-
-.modal-dialog-datetime-warning .modal-icon {
-    width: 4.25rem;
-    height: 4.25rem;
-    margin: 0 auto 1.1rem;
-    display: grid;
-    place-items: center;
-    border-radius: 999px;
-    background: rgba(220, 76, 76, 0.12);
-}
-
-.modal-dialog-datetime-warning .modal-title {
-    color: #ffd0d0;
-}
-
-.datetime-warning-icon {
-    width: 3.1rem;
-    height: 3.1rem;
-    display: block;
-}
-
-.datetime-warning-icon-fill {
-    fill: rgba(255, 177, 77, 0.22);
-    stroke: #ffb14d;
-    stroke-width: 3;
-    stroke-linejoin: round;
-}
-
-.datetime-warning-icon-mark {
-    fill: none;
-    stroke: #ffd29a;
-    stroke-width: 5;
-    stroke-linecap: round;
-}
-
-.datetime-warning-icon-mark-fill {
-    fill: #ffd29a;
-}
-
 .modal-buttons {
     display: flex;
     gap: 0.75rem;
@@ -596,6 +553,27 @@
 
 .csv-preview-grid tr.is-empty-row td {
     background: color-mix(in srgb, var(--text-secondary) 5%, var(--bg-primary));
+}
+
+.csv-preview-grid tr.csv-preview-message-row td {
+    padding: 1.25rem;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+    text-align: center;
+    font-style: italic;
+    white-space: normal;
+}
+
+.csv-preview-grid tr.csv-preview-message-row.is-hidden-message td {
+    background: color-mix(in srgb, var(--warning-color) 18%, var(--bg-primary));
+    border-color: color-mix(in srgb, var(--warning-color) 45%, var(--border-color));
+}
+
+.csv-preview-grid tr.csv-preview-message-row.is-load-more-message td {
+    background: color-mix(in srgb, var(--primary-color) 16%, var(--bg-primary));
+    border-color: color-mix(in srgb, var(--primary-color) 42%, var(--border-color));
 }
 
 .csv-preview-grid tr.is-filtered-row td {

@@ -224,15 +224,8 @@ proto._showDatetimeAxisWarningIfNeeded = async function(fileId, data) {
     const entry = this.files.get(fileId);
     const fileName = entry?.name || data?.filename || 'file';
     const body = i18n.t('datetimeAxisRepeatedDialogBody').replace('{file}', fileName);
-    const warningIcon = `
-        <svg class="datetime-warning-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
-            <path class="datetime-warning-icon-fill" d="M29.18 8.72c1.25-2.15 4.39-2.15 5.64 0l25.8 44.55c1.25 2.16-.32 4.86-2.82 4.86H6.2c-2.5 0-4.07-2.7-2.82-4.86L29.18 8.72Z"/>
-            <path class="datetime-warning-icon-mark" d="M32 22.5v16.25"/>
-            <circle class="datetime-warning-icon-mark-fill" cx="32" cy="46" r="2.75"/>
-        </svg>`;
     await Modal.alert(i18n.t('datetimeAxisRepeatedDialogTitle'), body, {
-        iconHtml: warningIcon,
-        className: 'modal-dialog-datetime-warning',
+        icon: '⚠️',
     });
 };
 
