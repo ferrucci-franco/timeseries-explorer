@@ -464,10 +464,18 @@ export default class MatParser {
 
         if (variable.kind === 'parameter') {
             const val = variable.data && variable.data.length > 0 ? variable.data[0] : undefined;
-            if (val === undefined || val === null || isNaN(val)) {
+            if (val === undefined || val === null) {
                 return `= ?${unit}`;
             }
-            return `= ${this._formatNumber(val)}${unit}`;
+            if (typeof val === 'number' && !Number.isFinite(val)) {
+                return `= ?${unit}`;
+            }
+            const num = Number(val);
+            if (Number.isFinite(num)) {
+                return `= ${this._formatNumber(num)}${unit}`;
+            }
+            const text = String(val);
+            return text.trim() ? `= ${text}${unit}` : `= ?${unit}`;
         } else if (variable.kind === 'abscissa') {
             return `[${variable.data.length} pts]${unit}`;
         } else {

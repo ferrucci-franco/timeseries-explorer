@@ -5,6 +5,7 @@ import CsvParsingPreviewDialog from '../../ui/csv-parsing-preview-dialog.js';
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
 let duckDbSourceClassPromise = null;
+let pypsaNetcdfParserClassPromise = null;
 
 async function loadDuckDbSourceClass() {
     if (globalThis.__OMV_PORTABLE__ === true) return null;
@@ -31,6 +32,13 @@ function cloneCsvProfileForIpc(csvProfile) {
     return JSON.parse(JSON.stringify(csvProfile, (_key, value) =>
         typeof value === 'function' ? undefined : value
     ));
+}
+
+async function loadPypsaNetcdfParserClass() {
+    if (!pypsaNetcdfParserClassPromise) {
+        pypsaNetcdfParserClassPromise = import('../../parsers/pypsa-netcdf-parser.js').then(module => module.default);
+    }
+    return pypsaNetcdfParserClassPromise;
 }
 
 function csvProfileWithoutRowFilter(csvProfile) {
@@ -796,10 +804,17 @@ proto._fileDisplayName = function(entry) {
 proto._parseResultBuffer = async function(filename, buffer, file = null, options = {}) {
     const extension = this._fileExtension(filename);
     if (extension === '.parquet') return this._parseParquetResult(filename, file);
+    if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer);
     if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file, options);
     if (extension === '.mat') return this.parser.parse(buffer);
     if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file, options);
     throw new Error(i18n.t('invalidFile'));
+};
+
+proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer) {
+    const Parser = await loadPypsaNetcdfParserClass();
+    const parser = new Parser(this.parser);
+    return parser.parse(buffer, filename);
 };
 
 // Files bigger than this threshold (bytes) trigger DuckDB lazy mode: the
@@ -1553,6 +1568,14 @@ proto._renderFilesList = function() {
         nameSpan.title = this._fileDisplayName(entryData);
         nameSpan.addEventListener('click', () => this.setActiveFile(fileId));
 
+        const typeLabel = this._fileTypeLabel(entryData, fileId);
+        const typeBadge = document.createElement('span');
+        typeBadge.className = 'file-entry-type';
+        typeBadge.textContent = typeLabel;
+        typeBadge.title = typeLabel;
+        typeBadge.hidden = !typeLabel;
+        typeBadge.addEventListener('click', () => this.setActiveFile(fileId));
+
         const transformBtn = document.createElement('button');
         transformBtn.className = 'file-entry-transform';
         transformBtn.textContent = '⛭';
@@ -1589,6 +1612,7 @@ proto._renderFilesList = function() {
         closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.removeFile(fileId); });
 
         entry.appendChild(nameSpan);
+        entry.appendChild(typeBadge);
         if (entryData.liveUpdate?.enabled) entry.appendChild(liveIndicator);
         entry.appendChild(csvParsingBtn);
         entry.appendChild(transformBtn);
@@ -1599,6 +1623,14 @@ proto._renderFilesList = function() {
         }
         list.appendChild(item);
     }
+};
+
+proto._fileTypeLabel = function(_entry, fileId = null) {
+    const metadata = fileId ? this.plotManager.files.get(fileId)?.data?.metadata : null;
+    if (metadata?.format === 'pypsa-netcdf' || metadata?.source === 'pypsa') {
+        return i18n.t('fileTypePypsaNetcdf');
+    }
+    return '';
 };
 
 proto._defaultFileTransform = function() {

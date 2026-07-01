@@ -380,7 +380,11 @@ proto._getDerivedSuggestions = function(prefix) {
         .map(fn => ({ type: 'function', name: fn.name, kind: 'fn' }));
     const variableSuggestions = Object.entries(data.variables)
         .map(([name, variable]) => ({ name: variable.name || name, variable }))
-        .filter(({ name, variable }) => variable.kind !== 'abscissa' && name.toLowerCase().includes(needle))
+        .filter(({ name, variable }) => {
+            if (variable.plottable === false || variable.kind === 'abscissa') return false;
+            const displayName = variable.displayName || '';
+            return name.toLowerCase().includes(needle) || displayName.toLowerCase().includes(needle);
+        })
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
         .slice(0, Math.max(0, 8 - functionSuggestions.length))
         .map(({ name, variable }) => ({

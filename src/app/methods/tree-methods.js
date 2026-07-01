@@ -60,7 +60,7 @@ proto._selectedVariableNamesForDrag = function(varName) {
     const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
     return [...this.selectedVariables].filter(name => {
         const variable = data?.variables?.[name];
-        return variable && variable.dataType !== 'string';
+        return variable && variable.plottable !== false && variable.dataType !== 'string';
     });
 };
 
@@ -109,10 +109,24 @@ proto._renderDerivedTreeSection = function(parentElement, filter, autoExpand) {
  * Check if a tree node (or any descendant) contains a variable whose
  * full name matches the filter text (substring, case-insensitive).
  */
+proto._variableMatchesFilter = function(name, variable, filter) {
+    if (!filter) return true;
+    const haystack = [
+        name,
+        variable?.name,
+        variable?.displayName,
+        variable?.description,
+        variable?.pypsa?.component,
+        variable?.pypsa?.asset,
+        variable?.pypsa?.attribute,
+    ];
+    return haystack.some(value => String(value || '').toLowerCase().includes(filter));
+};
+
 proto._nodeMatchesFilter = function(node, filter) {
     if (!filter) return true;
-    for (const variable of Object.values(node._variables || {})) {
-        if (variable.name.toLowerCase().includes(filter)) return true;
+    for (const [name, variable] of Object.entries(node._variables || {})) {
+        if (this._variableMatchesFilter(name, variable, filter)) return true;
     }
     for (const child of Object.values(node._children || {})) {
         if (this._nodeMatchesFilter(child, filter)) return true;
@@ -133,7 +147,7 @@ proto._renderTreeNode = function(node, parentElement, level, filter, autoExpand)
     // Filter children and variables
     if (filter) {
         childrenEntries = childrenEntries.filter(([, child]) => this._nodeMatchesFilter(child, filter));
-        allVarEntries = allVarEntries.filter(([, v]) => v.name.toLowerCase().includes(filter));
+        allVarEntries = allVarEntries.filter(([name, v]) => this._variableMatchesFilter(name, v, filter));
     }
 
     let varEntries, paramEntries;
@@ -208,7 +222,8 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         const itemDiv = document.createElement('div');
         itemDiv.className = 'tree-item' + (variable.derived ? ' tree-item-derived' : '');
         itemDiv.classList.toggle('selected', this.selectedVariables.has(variable.name));
-        const canPlot = variable.dataType !== 'string';
+        const canPlot = variable.plottable !== false && variable.dataType !== 'string';
+        itemDiv.classList.toggle('tree-item-nonplottable', !canPlot);
         itemDiv.setAttribute('draggable', canPlot ? 'true' : 'false');
         itemDiv.setAttribute('data-var-name', variable.name);
 
@@ -253,6 +268,10 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 
         itemDiv.addEventListener('click', (e) => {
             if (e.target.closest('.tree-derived-remove')) return;
+            if (!canPlot) {
+                if (this.selectedVariables.size > 0) this._clearVariableSelection();
+                return;
+            }
             if (e.ctrlKey || e.metaKey) {
                 e.preventDefault();
                 this._toggleVariableSelection(variable.name);

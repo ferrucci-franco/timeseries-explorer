@@ -24,7 +24,10 @@
     "test:local-file-http": "node scripts/test-local-file-http.mjs",
     "test:desktop-streamable": "node scripts/test-desktop-streamable-file.mjs",
     "test:csv-to-parquet": "node scripts/test-csv-to-parquet-core.mjs",
-    "test:lazy-phase": "node scripts/test-lazy-phase-logic.mjs"
+    "test:lazy-phase": "node scripts/test-lazy-phase-logic.mjs",
+    "test:pypsa": "node scripts/test-pypsa-netcdf-parser.mjs",
+    "test:pypsa-session": "node scripts/test-pypsa-session.mjs",
+    "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",
@@ -38,6 +41,7 @@
     "@duckdb/duckdb-wasm": "1.32.0",
     "duckdb": "1.4.4",
     "fflate": "^0.8.3",
+    "h5wasm": "^0.10.3",
     "plotly.js-dist-min": "^3.5.1"
   },
   "build": {

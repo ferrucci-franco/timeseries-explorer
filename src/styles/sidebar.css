@@ -228,6 +228,15 @@
     background-color: var(--hover-bg);
 }
 
+.tree-item.tree-item-nonplottable {
+    cursor: default;
+}
+
+.tree-item.tree-item-nonplottable .tree-icon,
+.tree-item.tree-item-nonplottable .tree-info {
+    opacity: 0.78;
+}
+
 .tree-item.selected {
     background-color: rgba(33, 150, 243, 0.14);
     box-shadow: inset 3px 0 var(--primary-color);

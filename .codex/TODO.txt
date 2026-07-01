@@ -85,6 +85,7 @@ PyPSA netCDF support:
       - shape commonly maps to `[snapshot, component]`, but do not hardcode dimension order;
       - each emitted plottable variable must align 1:1 with the single `snapshots` abscissa: `length(series) === length(snapshots)`;
       - if additional dimensions exist, first pass should reject or explicitly flatten only a known-safe single slice; do not imply current PlotManager supports per-variable axes or arbitrary multidimensional variables.
+      - DONE 2026-07-01: The eager parser now accepts both `[snapshots, component]` and `[component, snapshots]` two-dimensional dynamic arrays, still rejecting additional dimensions.
    c) Static variable detection:
       - a data variable with a component dimension but no snapshot/time dimension is a static component attribute;
       - scalar/global attributes become file metadata;
@@ -99,6 +100,7 @@ PyPSA netCDF support:
       - by component type -> asset -> attribute;
       - by component type -> carrier -> asset -> attribute;
       - by component type -> bus/location -> asset -> attribute.
+   h) DONE 2026-07-01: PyPSA variable ids now escape component/asset/attribute path segments, so asset names with spaces, slashes, and dots remain session-safe. Tree labels and plot display labels preserve the original human-readable asset names.
 4) Time axis handling:
    a) Use PyPSA snapshots as the X axis for dynamic attributes.
    b) Create exactly one `kind: 'abscissa'` variable from `snapshots` for Phase 1, because the renderer currently expects one shared time variable per file.
@@ -137,6 +139,9 @@ PyPSA netCDF support:
    c) In the variable tree, show dynamic variables with normal draggable behavior. Show static attributes as parameter-style info only after the non-plottable behavior from item 5.c is in place; until then, keep them as asset metadata/descriptions.
    d) Search/filter should match component type, asset name, attribute name, carrier, bus, and description.
    e) A non-PyPSA netCDF file should fail gracefully with a message explaining that generic netCDF browsing is not yet supported.
+   f) DONE 2026-07-01: Added explicit `plottable: false` tree handling and PyPSA static-attribute tree entries. Static attributes now appear under each asset as parameter-style info, remain out of `data.variables`, are not draggable/plottable, and are searchable through names/descriptions/PyPSA metadata.
+   g) DONE 2026-07-01: Non-PyPSA HDF5/netCDF files now fail with a clear generic-netCDF-not-supported message before PyPSA snapshot parsing.
+   h) DONE 2026-07-01: PyPSA files now show a localized "PyPSA netCDF network" type badge in the file list.
 8) Fixtures / validation:
    a) Create small PyPSA-generated fixture files and commit them under `test-files/pypsa/` if licensing/size is acceptable.
    b) Fixtures should include:
@@ -150,6 +155,7 @@ PyPSA netCDF support:
    d) Fixtures must be generated with real PyPSA export, not hand-written netCDF3, otherwise tests can pass while real PyPSA files fail.
    e) If generating fixtures requires Python/PyPSA, keep the generator script in `test-files/pypsa/` but do not require Python for normal JS CI; commit tiny generated `.nc` fixtures.
    f) The repo `.gitignore` is whitelist-based. Add explicit whitelist entries for `test-files/pypsa/` and tiny `.nc` fixtures when they become part of tests.
+   g) DONE 2026-07-01: Whitelisted the small real fixture `test-files/pypsa/vetea_example_01.nc` so `npm run test:pypsa` exercises the parser with a committed netCDF4/HDF5 PyPSA export instead of relying on a local-only file.
 9) Tests:
    a) Parser smoke: open a tiny PyPSA netCDF, identify it as PyPSA, and produce `{variables, metadata, tree}`.
    b) Tree shape: verify component type -> asset -> dynamic attribute grouping.
@@ -158,6 +164,8 @@ PyPSA netCDF support:
    e) Robust names: verify asset names with spaces/dots/slashes do not break ids or tree rendering.
    f) Negative test: generic non-PyPSA netCDF returns a clear unsupported-format error.
    g) If lazy source is implemented: verify bounded range/overview queries and cursor source windows.
+   h) DONE 2026-07-01: `npm run test:pypsa` now verifies the committed real fixture, dynamic variables/tree shape, static metadata as non-plottable tree parameters, generic HDF5 rejection, and netCDF3/classic rejection.
+   i) DONE 2026-07-01: `npm run test:pypsa` also creates an in-memory HDF5 PyPSA-like edge fixture with slash/dot/space asset names and a component-first dynamic array to verify escaped ids, preserved tree labels, display labels, and dimension-order handling.
 10) Open questions before coding:
    a) Which HDF5/netCDF4 reader supports the PyPSA netCDF files we care about, especially compression, variable-length strings, coordinate/index arrays, and slicing?
    b) Can `h5wasm` be the single reader path for both Web Light and Full Desktop small/eager files?
@@ -172,7 +180,11 @@ PyPSA netCDF support:
       - decode `snapshots`;
       - decode component names/carriers/buses including strings;
       - read one dynamic variable using its own `<components>_t_<attribute>_i` index.
+   a2) DONE 2026-07-01: Initial Node-side `h5wasm` spike added as `npm run inspect:pypsa`. It opens the real HDF5/netCDF4 PyPSA fixture, decodes `snapshots`, component names, strings, 14 dynamic datasets, 48 static component datasets, and verifies dynamic series alignment with `snapshots` using each dataset's own `*_i` index.
    b) Then implement an eager small-file parser that returns the normal `{variables, metadata, tree}` shape.
+   b2) DONE 2026-07-01: Added an eager small-file PyPSA netCDF parser for `.nc` / `.netcdf`. It dynamically loads `h5wasm`, uses `snapshots_snapshot` as a datetime abscissa when available, emits dynamic datasets as plottable variables under component -> asset -> attribute tree nodes, maps each series through its own `*_i` index, keeps static attributes as description metadata, and leaves lazy/large-file support deferred.
+   c2) DONE 2026-07-01: The first UI hardening pass keeps the same dynamic `h5wasm` parser path for Web Light and Full Desktop small/eager files. Browser bundling succeeds with PyPSA isolated in its own lazy chunk; large/lazy PyPSA support remains explicitly deferred.
+   c3) DONE 2026-07-01: Full Desktop directory packaging was verified successfully when the output directory was placed outside OneDrive. The package contains the PyPSA dynamic chunk in `app.asar` and `src/parsers/pypsa-netcdf-parser.js` in `app.asar.unpacked`. Packaging to the default OneDrive-backed `desktop-dist` failed with `EPERM` during Electron's generated-folder rename, which is an output-directory lock/sync issue rather than a PyPSA packaging issue.
    c) Then decide whether the same HDF5 path works in Web Light.
    d) Defer lazy/large-file PyPSA support until the data-source abstraction exists or until an explicit non-DuckDB lazy contract is designed.
 12) Acceptance criteria for first implementation:
@@ -182,6 +194,9 @@ PyPSA netCDF support:
    d) Static network/component data is visible enough to understand what each series belongs to.
    e) Unsupported/generic netCDF files fail with a clear user-facing message.
    f) Web Light and Full Desktop behavior is explicit; large files do not crash the renderer silently.
+   g) DONE 2026-07-01: First small/eager implementation criteria are covered by parser tests, committed fixture, generic-netCDF negative tests, web build, and Desktop package validation outside OneDrive.
+   h) DONE 2026-07-01: Browser render verification completed with local Chrome/CDP at `http://127.0.0.1:5173/`: opened `test-files/pypsa/vetea_example_01.nc`, plotted `Generators / PV1 / p_max_pu`, confirmed Plotly rendered one trace with a date X axis, readable legend/title labels, and a component-grouped PyPSA sidebar.
+   i) DONE 2026-07-01: Session save/restore coverage added through `npm run test:pypsa-session`, including deterministic PyPSA ids remapped after reopening the same fixture under a different file id.
 
 
 Distribution / downloads:

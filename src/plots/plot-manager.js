@@ -540,7 +540,7 @@ class PlotManager {
         const plot = this.plots.get(panelId);
         const names = varNames.filter(varName => {
             const variable = this.data?.variables?.[varName];
-            return variable && variable.kind !== 'abscissa' && variable.dataType !== 'string';
+            return variable && variable.plottable !== false && variable.kind !== 'abscissa' && variable.dataType !== 'string';
         });
         if (!names.length) return;
 
@@ -651,7 +651,7 @@ class PlotManager {
     addTrace(panelId, varName, panelEl) {
         if (!this.data) return;
         const variable = this.data.variables[varName];
-        if (!variable || variable.kind === 'abscissa' || variable.dataType === 'string') return;
+        if (!variable || variable.plottable === false || variable.kind === 'abscissa' || variable.dataType === 'string') return;
 
         if (!this.plots.has(panelId)) {
             this.plots.set(panelId, this._makeState());
@@ -2072,18 +2072,12 @@ class PlotManager {
     }
 
     _traceName(label, fileId) {
+        const displayLabel = this._variableLabel(label, fileId) || label;
         if (this.files.size >= 2 && fileId) {
             const f = this.files.get(fileId);
-            if (f) return `${label} [${f.name}]`;
+            if (f) return `${displayLabel} [${f.name}]`;
         }
-        return label;
-    }
-
-    _phaseTraceName(plot, pt) {
-        const label = plot.mode === 'phase3d'
-            ? `${pt.x} / ${pt.y} / ${pt.z}`
-            : `${pt.x} vs ${pt.y}`;
-        return this._traceName(label, pt.fileId);
+        return displayLabel;
     }
 
     _findTimeIdx(times, xVal) {

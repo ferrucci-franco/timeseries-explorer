@@ -3,6 +3,25 @@
 export function installPlotDataMethods(TargetClass) {
     const proto = TargetClass.prototype;
     const PlotManager = TargetClass;
+
+    if (!proto._variableLabel) {
+        proto._variableLabel = function(varName, fileId = this.activeFileId) {
+            if (!varName) return '';
+            const d = fileId ? this.files.get(fileId)?.data : null;
+            const v = d?.variables?.[varName];
+            return v?.displayName || varName;
+        };
+    }
+
+    if (!proto._phaseTraceName) {
+        proto._phaseTraceName = function(plot, pt) {
+            const label = plot.mode === 'phase3d'
+                ? `${this._variableLabel(pt.x, pt.fileId)} / ${this._variableLabel(pt.y, pt.fileId)} / ${this._variableLabel(pt.z, pt.fileId)}`
+                : `${this._variableLabel(pt.x, pt.fileId)} vs ${this._variableLabel(pt.y, pt.fileId)}`;
+            return this._traceName(label, pt.fileId);
+        };
+    }
+
 proto._normalizeFileTransform = function(transform = null) {
     const t = transform || {};
     const finiteOrZero = (value) => {
@@ -1215,7 +1234,8 @@ proto._buildTimeLayout = function(plot) {
         const d = this.files.get(firstTrace.fileId)?.data;
         const v = d?.variables[firstTrace.varName];
         const unit = v ? this._extractUnit(v.description) : '';
-        yTitle = unit ? `${firstTrace.varName} [${unit}]` : firstTrace.varName;
+        const label = this._variableLabel(firstTrace.varName, firstTrace.fileId);
+        yTitle = unit ? `${label} [${unit}]` : label;
     }
 
     return {
@@ -1244,7 +1264,7 @@ proto._buildPhase2DTraces = function(plot) {
             || (visual.y?.length || 0) >= PlotManager.GL_POINT_THRESHOLD;
         return {
             x: visual.x, y: visual.y,
-            name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
+            name: this._phaseTraceName(plot, pt),
             type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
             visible: pt.visible ?? true,
             line: { color: pt.color, width: 1.5 },
@@ -1273,6 +1293,8 @@ proto._buildPhase2DLayout = function(plot) {
     const multiTrace = plot.phaseTraces.length > 1;
     const xu = this._varUnit(first.x, first.fileId);
     const yu = this._varUnit(first.y, first.fileId);
+    const xLabel = this._variableLabel(first.x, first.fileId);
+    const yLabel = this._variableLabel(first.y, first.fileId);
     const xArrays = [];
     const yArrays = [];
     for (const pt of plot.phaseTraces) {
@@ -1293,10 +1315,10 @@ proto._buildPhase2DLayout = function(plot) {
         legend: this._legendConfig(legendBg, gridColor),
         xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
                  ...xRangeConfig,
-                 title: { text: multiTrace ? 'x' : (xu ? `${first.x} [${xu}]` : (first.x || 'X')), font: { size: 10 } } },
+                 title: { text: multiTrace ? 'x' : (xu ? `${xLabel} [${xu}]` : (xLabel || 'X')), font: { size: 10 } } },
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
                  ...yRangeConfig,
-                 title: { text: multiTrace ? 'y' : (yu ? `${first.y} [${yu}]` : (first.y || 'Y')), font: { size: 10 } },
+                 title: { text: multiTrace ? 'y' : (yu ? `${yLabel} [${yu}]` : (yLabel || 'Y')), font: { size: 10 } },
                  ...(plot.equalAspect2D ? { scaleanchor: 'x', scaleratio: 1 } : {}) },
         margin: { l: 60, r: 15, t: 10, b: 50 },
         autosize: true, hovermode: 'closest',
@@ -1315,7 +1337,7 @@ proto._buildPhase2DtTraces = function(plot) {
             x: this._plotlyTimeArray(pt.fileId, visual.time, timeVar),
             y: visual.x,
             z: visual.y,
-            name: this._traceName(`${pt.x} vs ${pt.y}`, pt.fileId),
+            name: this._phaseTraceName(plot, pt),
             type: 'scatter3d', mode: 'lines',
             visible: pt.visible ?? true,
             line: { color: pt.color, width: 3 },
@@ -1332,7 +1354,7 @@ proto._buildPhase3DTraces = function(plot) {
             x: visual.x,
             y: visual.y,
             z: visual.z,
-            name: this._traceName(`${pt.x} / ${pt.y} / ${pt.z}`, pt.fileId),
+            name: this._phaseTraceName(plot, pt),
             type: 'scatter3d', mode: 'lines',
             visible: pt.visible ?? true,
             line: { color: pt.color, width: 3 },
@@ -1353,16 +1375,21 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
     if (isTimez) {
         const yu = this._varUnit(first.x, first.fileId);
         const zu = this._varUnit(first.y, first.fileId);
+        const yVarLabel = this._variableLabel(first.x, first.fileId);
+        const zVarLabel = this._variableLabel(first.y, first.fileId);
         xLabel = timeTitle;
-        yLabel = yu ? `${first.x} [${yu}]` : (first.x || 'x');
-        zLabel = zu ? `${first.y} [${zu}]` : (first.y || 'y');
+        yLabel = yu ? `${yVarLabel} [${yu}]` : (yVarLabel || 'x');
+        zLabel = zu ? `${zVarLabel} [${zu}]` : (zVarLabel || 'y');
     } else {
         const xu = this._varUnit(first.x, first.fileId);
         const yu = this._varUnit(first.y, first.fileId);
         const zu = this._varUnit(first.z, first.fileId);
-        xLabel = xu ? `${first.x} [${xu}]` : (first.x || 'X');
-        yLabel = yu ? `${first.y} [${yu}]` : (first.y || 'Y');
-        zLabel = zu ? `${first.z} [${zu}]` : (first.z || 'Z');
+        const xVarLabel = this._variableLabel(first.x, first.fileId);
+        const yVarLabel = this._variableLabel(first.y, first.fileId);
+        const zVarLabel = this._variableLabel(first.z, first.fileId);
+        xLabel = xu ? `${xVarLabel} [${xu}]` : (xVarLabel || 'X');
+        yLabel = yu ? `${yVarLabel} [${yu}]` : (yVarLabel || 'Y');
+        zLabel = zu ? `${zVarLabel} [${zu}]` : (zVarLabel || 'Z');
     }
 
     const multiTrace = plot.phaseTraces.length > 1;
