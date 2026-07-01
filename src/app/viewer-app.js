@@ -77,6 +77,7 @@ class OpenModelicaViewer {
         });
         this._applyReloadModeUI();
         this._applyCapabilitiesToUi();
+        this._updateLiveUpdateTopBar?.();
         if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();
         if (typeof this._syncHoverCornerPicker === 'function') this._syncHoverCornerPicker();
         this._renderFilesList();
@@ -127,7 +128,7 @@ class OpenModelicaViewer {
 
         const liveWrap = document.querySelector('.live-update-topbar-wrap');
         if (liveWrap) {
-            liveWrap.hidden = !caps.canUseLiveUpdate;
+            liveWrap.hidden = false;
             liveWrap.title = caps.canUseLiveUpdate
                 ? ''
                 : i18n.t('liveUpdateDesktopOnly');

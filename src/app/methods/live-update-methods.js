@@ -48,6 +48,7 @@ proto._updateLiveUpdateTopBar = function() {
     const toggle = document.getElementById('live-update-file');
     const menuBtn = document.getElementById('live-update-menu-btn');
     if (!toggle || !menuBtn) return;
+    const liveWrap = document.querySelector('.live-update-topbar-wrap');
     const canUseLive = !!this.capabilities?.canUseLiveUpdate;
     const entry = this.activeFileId ? this.files.get(this.activeFileId) : null;
     const state = this.activeFileId ? this._ensureLiveUpdateState(this.activeFileId) : null;
@@ -55,9 +56,15 @@ proto._updateLiveUpdateTopBar = function() {
     toggle.disabled = !hasCandidate;
     menuBtn.disabled = !canUseLive || !entry;
     toggle.classList.toggle('active', !!state?.enabled);
-    toggle.title = canUseLive
-        ? (state?.message || (entry ? this._liveUpdateSupportMessage(entry) : i18n.t('liveUpdateTitle')))
-        : i18n.t('liveUpdateDesktopOnly');
+    if (liveWrap) liveWrap.title = canUseLive ? '' : i18n.t('liveUpdateDesktopOnly');
+    if (!canUseLive) {
+        const unavailable = i18n.t('liveUpdateDesktopOnly');
+        toggle.title = unavailable;
+        menuBtn.title = unavailable;
+    } else {
+        toggle.title = state?.message || (entry ? this._liveUpdateSupportMessage(entry) : i18n.t('liveUpdateTitle'));
+        menuBtn.title = i18n.t('liveUpdateOptions');
+    }
 };
 
 proto._ensureLiveUpdateState = function(fileId) {

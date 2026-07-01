@@ -57,8 +57,6 @@ const i18n = {
             'clear-plots':        'clearPlots',
             'reload-file':        'reloadFile',
             'reload-file-menu-btn':'reloadFileOptions',
-            'live-update-file':    'liveUpdateTitle',
-            'live-update-menu-btn':'liveUpdateOptions',
             'load-new-file':      'loadNewFile',
             'open-file-menu-btn':  'openFileOptions',
             'theme-toggle':       'toggleTheme',
