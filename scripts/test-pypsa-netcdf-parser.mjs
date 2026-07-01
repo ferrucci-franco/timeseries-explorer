@@ -47,6 +47,19 @@ async function makeEdgeCasePypsaBuffer() {
             shape: [2, 3],
             dtype: '<d',
         });
+        file.get('generators_t_p').create_attribute('units', 'MW');
+        file.get('generators_t_p').create_attribute('long_name', 'Generator active power');
+        file.create_dataset({ name: 'generators_t_bad_i', data: ['solar/a.1', 'wind B'] });
+        file.create_dataset({
+            name: 'generators_t_bad',
+            data: [
+                1, 2, 3, 4,
+                5, 6, 7, 8,
+                9, 10, 11, 12,
+            ],
+            shape: [3, 2, 2],
+            dtype: '<d',
+        });
     } finally {
         file.close();
     }
@@ -116,9 +129,19 @@ assert.deepEqual(Array.from(encodedSolar.data), [10, 11, 12], 'component-first d
 assert.deepEqual(Array.from(encodedWind.data), [20, 21, 22], 'second component-first series should be read by its own index');
 assert.equal(encodedSolar.pypsa.asset, 'solar/a.1');
 assert.equal(encodedSolar.displayName, 'Generators / solar/a.1 / p');
+assert.equal(encodedSolar.units, 'MW');
+assert.equal(encodedSolar.pypsa.attrs.units, 'MW');
+assert.match(encodedSolar.description, /\[MW\]/);
+assert.match(encodedSolar.description, /Generator active power/);
 assert(edgeData.tree._children.Generators._children['solar/a.1']._variables.p);
 const edgeStatic = edgeData.tree._children.Generators._children['solar/a.1']._children['Static attributes']._variables.carrier;
 assert.equal(edgeStatic.data[0], 'PV/South');
 assert.equal(edgeStatic.name, 'pypsa:generators/solar%2Fa.1/@carrier');
+assert.equal(edgeData.metadata.skippedDynamicCount, 1);
+assert.equal(edgeData.metadata.skippedDynamic[0].name, 'generators_t_bad');
+const skippedNode = edgeData.tree._children['Unsupported time-series datasets'];
+assert(skippedNode, 'skipped dynamic datasets should be visible in the tree');
+assert.equal(skippedNode._variables.generators_t_bad.plottable, false);
+assert.match(skippedNode._variables.generators_t_bad.description, /Expected a two-dimensional dynamic array/);
 
 console.log(`PyPSA netCDF parser test passed: ${Object.keys(data.variables).length} variables`);

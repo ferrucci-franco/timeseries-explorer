@@ -4,6 +4,7 @@ import CsvParsingPreviewDialog from '../../ui/csv-parsing-preview-dialog.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
+const PYPSA_NETCDF_SMALL_FILE_LIMIT_BYTES = 100 * 1024 * 1024;
 let duckDbSourceClassPromise = null;
 let pypsaNetcdfParserClassPromise = null;
 
@@ -66,6 +67,7 @@ proto.loadFile = async function(file, options = {}) {
                 }
                 if (!currentFile) throw new Error(i18n.t('invalidFile'));
                 extension = this._fileExtension(currentFile.name);
+                this._preflightPypsaNetcdfFile(currentFile, extension);
                 const preflight = await this._maybeConvertLargeCsvBeforeLoad(currentFile, { ...options, extension });
                 if (preflight?.cancelled) return null;
                 if (preflight?.csvProfile) {
@@ -619,6 +621,20 @@ proto._isDesktopStreamablePath = function(filePath) {
     return extension === '.csv' || extension === '.parquet';
 };
 
+proto._isPypsaNetcdfExtension = function(extension) {
+    return extension === '.nc' || extension === '.netcdf';
+};
+
+proto._preflightPypsaNetcdfFile = function(file, extension = this._fileExtension(file?.name || '')) {
+    if (!this._isPypsaNetcdfExtension(extension)) return;
+    const size = Number(file?.size || 0);
+    if (!Number.isFinite(size) || size <= PYPSA_NETCDF_SMALL_FILE_LIMIT_BYTES) return;
+    throw new Error(i18n.t('pypsaNetcdfTooLarge')
+        .replace('{file}', file?.name || 'network.nc')
+        .replace('{size}', this._formatFileSize(size))
+        .replace('{limit}', this._formatFileSize(PYPSA_NETCDF_SMALL_FILE_LIMIT_BYTES)));
+};
+
 proto._createDesktopLocalHttpFile = function(filePath, info) {
     const name = info?.name || String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'results.csv';
     const size = Math.max(0, Number(info?.size) || 0);
@@ -697,6 +713,16 @@ proto._readLocalResultPath = async function(filePath) {
     const desktopReader = globalThis.omvDesktop?.readFile;
     if (this.capabilities?.isDesktop && typeof desktopReader === 'function') {
         try {
+            if (typeof desktopStat === 'function') {
+                const statResult = await desktopStat({ path: filePath });
+                if (statResult?.ok === false) {
+                    const err = new Error(statResult.message || i18n.t('errorLoading'));
+                    err.name = statResult.name || 'Error';
+                    err.code = statResult.code || '';
+                    throw err;
+                }
+                this._preflightPypsaNetcdfFile(statResult, this._fileExtension(filePath));
+            }
             const result = await desktopReader({ path: filePath });
             if (result?.ok === false) {
                 const err = new Error(result.message || i18n.t('errorLoading'));
@@ -1572,7 +1598,8 @@ proto._renderFilesList = function() {
         const typeBadge = document.createElement('span');
         typeBadge.className = 'file-entry-type';
         typeBadge.textContent = typeLabel;
-        typeBadge.title = typeLabel;
+        typeBadge.title = this._fileTypeTooltip(entryData, fileId, typeLabel);
+        typeBadge.classList.toggle('file-entry-type-warning', this._fileTypeHasWarnings(entryData, fileId));
         typeBadge.hidden = !typeLabel;
         typeBadge.addEventListener('click', () => this.setActiveFile(fileId));
 
@@ -1631,6 +1658,20 @@ proto._fileTypeLabel = function(_entry, fileId = null) {
         return i18n.t('fileTypePypsaNetcdf');
     }
     return '';
+};
+
+proto._fileTypeHasWarnings = function(_entry, fileId = null) {
+    const metadata = fileId ? this.plotManager.files.get(fileId)?.data?.metadata : null;
+    return Number(metadata?.skippedDynamicCount || metadata?.skippedDynamic?.length || 0) > 0;
+};
+
+proto._fileTypeTooltip = function(_entry, fileId = null, fallback = '') {
+    const metadata = fileId ? this.plotManager.files.get(fileId)?.data?.metadata : null;
+    const skipped = Number(metadata?.skippedDynamicCount || metadata?.skippedDynamic?.length || 0);
+    if ((metadata?.format === 'pypsa-netcdf' || metadata?.source === 'pypsa') && skipped > 0) {
+        return `${fallback}\n${i18n.t('fileTypePypsaSkippedDynamic').replace('{count}', String(skipped))}`;
+    }
+    return fallback;
 };
 
 proto._defaultFileTransform = function() {

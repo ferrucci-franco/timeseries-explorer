@@ -123,6 +123,7 @@ PyPSA netCDF support:
       - keep static attrs as asset metadata/descriptions rather than normal numeric variables.
    d) Static numeric attributes may be shown like Modelica parameters only after the no-plottable behavior is safe. They should display values next to assets but not break plotting by pairing component-index arrays with the snapshots abscissa.
    e) Text attributes should remain searchable metadata/descriptions, not plottable traces.
+   f) DONE 2026-07-02: Dynamic PyPSA datasets now read non-technical netCDF attrs such as `units`, `unit`, `long_name`, `description`, and `standard_name`. Units are stored on the variable and included in the bracketed description text so existing PlotManager/unit extraction displays them without a separate plotting contract.
 6) Lazy loading / performance:
    a) Phase 1 can be eager for small files only, but must have explicit size/memory limits and friendly errors.
    b) For serious PyPSA files, design a lazy source similar to DuckDbSource:
@@ -133,6 +134,7 @@ PyPSA netCDF support:
    c) Important architecture dependency: the app does not yet have a generic lazy data-source interface. Many renderer paths check `data._duckdb` directly. A PyPSA lazy source must either wait for the planned data-source abstraction from the Full Desktop large-file roadmap, or make an explicit compatibility decision rather than disguising itself accidentally as DuckDB metadata.
    d) If the selected netCDF/HDF5 reader cannot slice without loading the entire file, mark that path as small-file-only.
    e) Full Desktop should be the primary target for large PyPSA networks if Web Light cannot guarantee bounded memory.
+   f) DONE 2026-07-02: Added PyPSA netCDF size preflight before eager reads. Web/browser file opens reject oversized `.nc` / `.netcdf` files before `arrayBuffer()`, and Full Desktop local-path opens use `statFile` to reject oversized PyPSA netCDF before `readFile`.
 7) UI behavior:
    a) Add `.nc` / `.netcdf` to supported file detection only when the parser is ready.
    b) Show file type as "PyPSA netCDF network".
@@ -142,6 +144,7 @@ PyPSA netCDF support:
    f) DONE 2026-07-01: Added explicit `plottable: false` tree handling and PyPSA static-attribute tree entries. Static attributes now appear under each asset as parameter-style info, remain out of `data.variables`, are not draggable/plottable, and are searchable through names/descriptions/PyPSA metadata.
    g) DONE 2026-07-01: Non-PyPSA HDF5/netCDF files now fail with a clear generic-netCDF-not-supported message before PyPSA snapshot parsing.
    h) DONE 2026-07-01: PyPSA files now show a localized "PyPSA netCDF network" type badge in the file list.
+   i) DONE 2026-07-02: Unsupported/skipped dynamic datasets now appear in the variable tree under "Unsupported time-series datasets" as non-plottable metadata entries, and PyPSA file badges get a localized warning tooltip when any dynamic datasets were skipped.
 8) Fixtures / validation:
    a) Create small PyPSA-generated fixture files and commit them under `test-files/pypsa/` if licensing/size is acceptable.
    b) Fixtures should include:
@@ -166,6 +169,7 @@ PyPSA netCDF support:
    g) If lazy source is implemented: verify bounded range/overview queries and cursor source windows.
    h) DONE 2026-07-01: `npm run test:pypsa` now verifies the committed real fixture, dynamic variables/tree shape, static metadata as non-plottable tree parameters, generic HDF5 rejection, and netCDF3/classic rejection.
    i) DONE 2026-07-01: `npm run test:pypsa` also creates an in-memory HDF5 PyPSA-like edge fixture with slash/dot/space asset names and a component-first dynamic array to verify escaped ids, preserved tree labels, display labels, and dimension-order handling.
+   j) DONE 2026-07-02: Parser tests now cover dynamic dataset units/long_name attrs and skipped unsupported 3D dynamic arrays. Session tests now include save/restore of an escaped PyPSA id containing `%2F`.
 10) Open questions before coding:
    a) Which HDF5/netCDF4 reader supports the PyPSA netCDF files we care about, especially compression, variable-length strings, coordinate/index arrays, and slicing?
    b) Can `h5wasm` be the single reader path for both Web Light and Full Desktop small/eager files?
@@ -197,6 +201,7 @@ PyPSA netCDF support:
    g) DONE 2026-07-01: First small/eager implementation criteria are covered by parser tests, committed fixture, generic-netCDF negative tests, web build, and Desktop package validation outside OneDrive.
    h) DONE 2026-07-01: Browser render verification completed with local Chrome/CDP at `http://127.0.0.1:5173/`: opened `test-files/pypsa/vetea_example_01.nc`, plotted `Generators / PV1 / p_max_pu`, confirmed Plotly rendered one trace with a date X axis, readable legend/title labels, and a component-grouped PyPSA sidebar.
    i) DONE 2026-07-01: Session save/restore coverage added through `npm run test:pypsa-session`, including deterministic PyPSA ids remapped after reopening the same fixture under a different file id.
+   j) DONE 2026-07-02: Oversized PyPSA netCDF files now fail fast with a localized message explaining the small/eager limit and that large/lazy PyPSA loading is not available yet.
 
 
 Distribution / downloads:

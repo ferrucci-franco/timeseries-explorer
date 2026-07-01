@@ -442,6 +442,18 @@
     display: none;
 }
 
+.file-entry-type.file-entry-type-warning {
+    border-color: color-mix(in srgb, var(--warning-color) 48%, var(--border-color));
+    color: color-mix(in srgb, var(--warning-color) 82%, var(--text-primary));
+    background: color-mix(in srgb, var(--warning-color) 13%, var(--bg-primary));
+}
+
+.file-entry.active .file-entry-type.file-entry-type-warning {
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.68);
+    background: rgba(255, 255, 255, 0.22);
+}
+
 .file-entry-live-indicator {
     width: 1.25rem;
     height: 1.25rem;

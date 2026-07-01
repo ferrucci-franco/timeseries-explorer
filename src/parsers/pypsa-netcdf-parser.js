@@ -4,7 +4,16 @@ import MatParser from './mat-parser.js';
 const HDF5_MAGIC = '89 48 44 46 0D 0A 1A 0A';
 const SMALL_FILE_LIMIT_BYTES = 100 * 1024 * 1024;
 const STATIC_ATTRIBUTES_NODE = 'Static attributes';
+const UNSUPPORTED_DYNAMIC_NODE = 'Unsupported time-series datasets';
 const GENERIC_NETCDF_ERROR = 'Generic netCDF/HDF5 files are not supported yet. Please open a PyPSA-exported netCDF4/HDF5 network.';
+const NETCDF_TECHNICAL_ATTRS = new Set([
+    'DIMENSION_LIST',
+    'REFERENCE_LIST',
+    'CLASS',
+    'NAME',
+]);
+const UNIT_ATTR_KEYS = ['units', 'unit', 'display_unit', 'displayUnit'];
+const DESCRIPTION_ATTR_KEYS = ['description', 'long_name', 'standard_name', 'title'];
 const STATIC_DESCRIPTION_KEYS = [
     'carrier',
     'bus',
@@ -145,6 +154,8 @@ export default class PypsaNetcdfParser {
             const parts = this._dynamicParts(key);
             if (!dataset || !parts) continue;
 
+            const datasetAttrs = this._datasetUserAttrs(dataset);
+            const units = this._datasetUnits(datasetAttrs);
             const shape = dataset.shape || [];
             const ownIndex = this._readIndex(file, `${key}_i`);
             const axes = this._dynamicAxes(shape, snapshots.data.length, ownIndex.length);
@@ -174,7 +185,8 @@ export default class PypsaNetcdfParser {
                     name: variableName,
                     displayName: this._variableDisplayName(parts.component, assetName, parts.attribute),
                     data: values,
-                    description: this._dynamicDescription(parts.component, assetName, parts.attribute, metadataByAsset),
+                    description: this._dynamicDescription(parts.component, assetName, parts.attribute, metadataByAsset, datasetAttrs),
+                    units,
                     kind: 'variable',
                     dataType: this.structureParser._detectDataType(values, variableName),
                     isConstant: this.structureParser._isConstantValues(values),
@@ -187,6 +199,7 @@ export default class PypsaNetcdfParser {
                         attribute: parts.attribute,
                         dataset: key,
                         indexDataset: `${key}_i`,
+                        attrs: Object.keys(datasetAttrs).length ? datasetAttrs : undefined,
                     },
                 };
                 result.variables[variableName] = variable;
@@ -195,6 +208,8 @@ export default class PypsaNetcdfParser {
         }
 
         result.metadata.staticAttributeCount = this._addStaticMetadataTree(result.tree, file, components, metadataByAsset);
+        result.metadata.skippedDynamicCount = result.metadata.skippedDynamic.length;
+        this._addSkippedDynamicTree(result.tree, result.metadata.skippedDynamic);
 
         if (Object.keys(result.variables).length <= 1) {
             throw new Error('PyPSA netCDF file did not expose any plottable time-series variables.');
@@ -283,21 +298,84 @@ export default class PypsaNetcdfParser {
         return byAsset;
     }
 
+    _datasetUserAttrs(dataset) {
+        const attrs = {};
+        for (const [name, attr] of Object.entries(dataset?.attrs || {})) {
+            if (this._isTechnicalAttrName(name)) continue;
+            const value = this._normalizeAttributeValue(attr?.value);
+            if (value === undefined || value === null || value === '') continue;
+            attrs[name] = value;
+        }
+        return attrs;
+    }
+
+    _isTechnicalAttrName(name) {
+        const text = String(name || '');
+        return text.startsWith('_') || NETCDF_TECHNICAL_ATTRS.has(text);
+    }
+
+    _normalizeAttributeValue(value) {
+        if (value === undefined || value === null) return value;
+        if (typeof value === 'bigint') return normalizeScalar(value);
+        if (ArrayBuffer.isView(value)) {
+            const array = Array.from(value, item => this._normalizeAttributeValue(item));
+            if (!array.length) return undefined;
+            return array.length === 1 ? array[0] : array;
+        }
+        if (Array.isArray(value)) {
+            const array = value
+                .map(item => this._normalizeAttributeValue(item))
+                .filter(item => item !== undefined && item !== null);
+            if (!array.length) return undefined;
+            return array.length === 1 ? array[0] : array;
+        }
+        if (typeof value === 'object') return undefined;
+        return value;
+    }
+
+    _datasetUnits(attrs) {
+        return this._attrText(attrs, UNIT_ATTR_KEYS);
+    }
+
+    _datasetDescription(attrs) {
+        return this._attrText(attrs, DESCRIPTION_ATTR_KEYS);
+    }
+
+    _attrText(attrs, keys) {
+        const entries = Object.entries(attrs || {});
+        for (const wanted of keys) {
+            const found = entries.find(([name]) => name.toLowerCase() === wanted.toLowerCase());
+            if (!found) continue;
+            const value = found[1];
+            if (Array.isArray(value)) {
+                const text = value.map(item => String(item ?? '').trim()).filter(Boolean).join(', ');
+                if (text) return text;
+            } else {
+                const text = String(value ?? '').trim();
+                if (text) return text;
+            }
+        }
+        return '';
+    }
+
     _assetMetadata(byAsset, component, asset) {
         const key = `${component}\u0000${asset}`;
         if (!byAsset.has(key)) byAsset.set(key, {});
         return byAsset.get(key);
     }
 
-    _dynamicDescription(component, assetName, attribute, metadataByAsset) {
+    _dynamicDescription(component, assetName, attribute, metadataByAsset, datasetAttrs = {}) {
         const meta = this._assetMetadata(metadataByAsset, component, assetName);
         const details = [];
+        const units = this._datasetUnits(datasetAttrs);
+        const attrDescription = this._datasetDescription(datasetAttrs);
+        if (attrDescription) details.push(attrDescription);
         for (const key of STATIC_DESCRIPTION_KEYS) {
             const value = meta[key];
             if (value === undefined || value === null || value === '') continue;
             details.push(`${key}=${String(value)}`);
         }
-        const base = `PyPSA ${componentTitle(component)} "${assetName}" ${attribute}`;
+        const base = `PyPSA ${componentTitle(component)} "${assetName}" ${attribute}${units ? ` [${units}]` : ''}`;
         return details.length ? `${base} (${details.join(', ')})` : base;
     }
 
@@ -317,6 +395,44 @@ export default class PypsaNetcdfParser {
             }
         }
         return count;
+    }
+
+    _addSkippedDynamicTree(root, skippedDynamic) {
+        if (!skippedDynamic?.length) return;
+        root._children[UNSUPPORTED_DYNAMIC_NODE] = {
+            _type: 'metadata',
+            _name: UNSUPPORTED_DYNAMIC_NODE,
+            _fullName: UNSUPPORTED_DYNAMIC_NODE,
+            _children: {},
+            _variables: {},
+        };
+        const node = root._children[UNSUPPORTED_DYNAMIC_NODE];
+        for (const skipped of skippedDynamic) {
+            const label = String(skipped.name || 'dataset');
+            node._variables[label] = this._skippedDynamicVariable(skipped);
+        }
+    }
+
+    _skippedDynamicVariable(skipped) {
+        const shape = Array.isArray(skipped.shape) ? ` Shape: [${skipped.shape.join(', ')}].` : '';
+        const index = Number.isFinite(Number(skipped.indexLength)) ? ` Index length: ${skipped.indexLength}.` : '';
+        return {
+            name: `pypsa:@skipped/${idSegment(skipped.name || 'dataset')}`,
+            displayName: String(skipped.name || 'dataset'),
+            data: ['skipped'],
+            description: `Skipped PyPSA dynamic dataset "${skipped.name || 'dataset'}": ${skipped.reason || 'unsupported shape.'}${shape}${index}`,
+            kind: 'parameter',
+            dataType: 'string',
+            isConstant: true,
+            interpolation: 'constant',
+            negate: false,
+            source: 'pypsa-netcdf',
+            plottable: false,
+            pypsa: {
+                skipped: true,
+                dataset: skipped.name,
+            },
+        };
     }
 
     _staticAttributeVariable(component, asset, attribute, value) {

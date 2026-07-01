@@ -46,7 +46,7 @@
 !/test-files/live_update/
 !/test-files/live_update/*.py
 !/test-files/pypsa/
-!/test-files/pypsa/*.nc
+!/test-files/pypsa/vetea_example_01.nc
 !/bench/
 !/bench/**
 

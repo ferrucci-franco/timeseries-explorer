@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import h5wasm from 'h5wasm';
 import PypsaNetcdfParser from '../src/parsers/pypsa-netcdf-parser.js';
 import { installSessionMethods } from '../src/app/methods/session-methods.js';
 
@@ -64,7 +65,7 @@ class LayoutHarness {
 }
 
 class SessionHarness {
-    constructor(data, fileId) {
+    constructor(data, fileId, options = {}) {
         this.files = new Map();
         this.plotManager = new PlotHarness();
         this.layoutManager = new LayoutHarness();
@@ -78,6 +79,9 @@ class SessionHarness {
         this.reloadAsNewVersionMode = false;
         this.scrollablePlotArea = false;
         this.mouseWheelZoom = true;
+        this._harnessName = options.name || 'vetea_example_01';
+        this._harnessExtension = options.extension || '.nc';
+        this._harnessHash = options.contentHash || 'fixture-hash';
         this.activeFileId = fileId;
         this.addFile(fileId, data);
     }
@@ -85,13 +89,13 @@ class SessionHarness {
     addFile(fileId, data) {
         const transform = this._defaultFileTransform();
         this.files.set(fileId, {
-            name: 'vetea_example_01',
-            extension: '.nc',
-            contentHash: 'fixture-hash',
+            name: this._harnessName,
+            extension: this._harnessExtension,
+            contentHash: this._harnessHash,
             transform,
         });
         this.plotManager.files.set(fileId, {
-            name: 'vetea_example_01',
+            name: this._harnessName,
             data,
             transform,
         });
@@ -113,6 +117,29 @@ class SessionHarness {
 }
 
 installSessionMethods(SessionHarness);
+
+async function makeEscapedPypsaBuffer() {
+    const module = await h5wasm.ready;
+    const { FS } = module;
+    const path = `/session-escaped-pypsa-${Date.now()}.nc`;
+    const file = new h5wasm.File(path, 'w');
+    try {
+        file.create_dataset({ name: 'snapshots', data: [0, 1, 2], shape: [3], dtype: '<d' });
+        file.create_dataset({ name: 'generators_i', data: ['solar/a.1'] });
+        file.create_dataset({ name: 'generators_t_p_i', data: ['solar/a.1'] });
+        file.create_dataset({
+            name: 'generators_t_p',
+            data: [1, 2, 3],
+            shape: [3, 1],
+            dtype: '<d',
+        });
+    } finally {
+        file.close();
+    }
+    const bytes = FS.readFile(path);
+    FS.unlink(path);
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
 
 const bytes = readFileSync(fixture);
 const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
@@ -183,5 +210,39 @@ assert.equal(restoredPhase.phaseTraces.length, 1);
 assert.equal(restoredPhase.phaseTraces[0].fileId, 'f99');
 assert.equal(restoredPhase.phaseTraces[0].x, generatorId);
 assert.equal(restoredPhase.phaseTraces[0].y, loadId);
+
+const escapedData = await new PypsaNetcdfParser().parse(await makeEscapedPypsaBuffer(), 'escaped.nc');
+const escapedId = 'pypsa:generators/solar%2Fa.1/p';
+assert(escapedData.variables[escapedId], 'escaped generator id should exist before session capture');
+
+const escapedSource = new SessionHarness(escapedData, 'e1', { name: 'escaped_pypsa', contentHash: 'escaped-hash' });
+escapedSource.plotManager.plots.set('panel-a', {
+    mode: 'timeseries',
+    traces: [{ fileId: 'e1', varName: escapedId, color: '#2196F3' }],
+    phaseTraces: [],
+    phasePending: { x: null, y: null, z: null, fileId: null },
+    stateSlots: { x: [], dx: [], fileId: null },
+    stateConfig: {},
+});
+const escapedSnapshot = escapedSource._createSessionSnapshot({ includeData: false });
+assert(escapedSnapshot.files[0].variableNames.includes(escapedId));
+assert.equal(escapedSnapshot.plots[0].traces[0].varName, escapedId);
+
+const escapedRestored = new SessionHarness(escapedData, 'e2', { name: 'escaped_pypsa', contentHash: 'escaped-hash' });
+escapedRestored.plotManager.plots.set('panel-a', {
+    mode: 'timeseries',
+    traces: [],
+    phaseTraces: [],
+    phasePending: { x: null, y: null, z: null, fileId: null },
+    stateSlots: { x: [], dx: [], fileId: null },
+    stateConfig: {},
+});
+const escapedFileMap = escapedRestored._matchSessionFiles(escapedSnapshot);
+assert.equal(escapedFileMap.get('e1'), 'e2', 'session should match a reopened PyPSA file with escaped ids');
+await escapedRestored._applySessionPlots(escapedSnapshot.plots, escapedFileMap);
+const escapedRestoredTimeseries = escapedRestored.plotManager.plots.get('panel-a');
+assert.equal(escapedRestoredTimeseries.traces.length, 1);
+assert.equal(escapedRestoredTimeseries.traces[0].fileId, 'e2');
+assert.equal(escapedRestoredTimeseries.traces[0].varName, escapedId);
 
 console.log('PyPSA session save/restore checks passed.');

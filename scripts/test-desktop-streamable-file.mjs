@@ -102,6 +102,34 @@ try {
     assert.equal(await registerDuckDbFile(db, duckdbModule, 'web.csv', webFile), 'browser-filereader');
     assert.deepEqual(calls[1], ['handle', 'web.csv', webFile, 'BROWSER_FILEREADER', true]);
 
+    assert.throws(
+        () => harness._preflightPypsaNetcdfFile({
+            name: 'huge-network.nc',
+            size: 101 * 1024 * 1024,
+        }, '.nc'),
+        /PyPSA netCDF support currently opens small eager files only/
+    );
+
+    let readFileCalls = 0;
+    globalThis.omvDesktop = {
+        statFile: async () => ({
+            ok: true,
+            name: 'huge-network.nc',
+            size: 101 * 1024 * 1024,
+            lastModified: 5678,
+            type: 'application/x-netcdf',
+        }),
+        readFile: async () => {
+            readFileCalls += 1;
+            throw new Error('readFile should not be called for oversized PyPSA files');
+        },
+    };
+    await assert.rejects(
+        () => harness._readLocalResultPath('C:\\temp\\huge-network.nc'),
+        /PyPSA netCDF support currently opens small eager files only/
+    );
+    assert.equal(readFileCalls, 0, 'oversized PyPSA netCDF should be rejected before Desktop readFile');
+
     console.log('Desktop streamable file descriptor checks passed.');
 } finally {
     if (originalDesktop === undefined) delete globalThis.omvDesktop;
