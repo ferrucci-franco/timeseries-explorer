@@ -12,6 +12,178 @@ Time series view:
 1) Add log10 view
 
 
+PyPSA netCDF support:
+0) Research notes / scope:
+   a) Target PyPSA-exported `.nc` / `.netcdf` files first, not arbitrary climate/science netCDF files.
+   b) PyPSA documents netCDF as a preferred network exchange format: smaller/faster than CSV, cleaner than HDF5, and able to support lazy loading.
+   c) `pypsa.Network.export_to_netcdf()` exports the network and components through an `xarray.Dataset`. It includes static and time-series component attributes, but only attributes whose values differ from PyPSA defaults.
+   d) PyPSA's CSV/Excel convention is useful for understanding the logical model: static component data is one table per component type, while time-series data is one table per component/attribute pair such as `generators-p_max_pu` or `loads-p_set`.
+   e) PyPSA v1 components expose the same conceptual split as `c.static` and `c.dynamic`: static data is a DataFrame indexed by component names; dynamic data is a dict of time-varying DataFrames indexed by snapshots and component names.
+   f) Snapshot handling matters: PyPSA time series are indexed by `snapshots`; multi-period or stochastic networks may introduce additional dimensions or MultiIndex-like coordinates. Do not assume a single flat DateTimeIndex in all files.
+   g) Local real-file check, 2026-07-01: `test-files/pypsa/vetea_example_01.nc` is a PyPSA-exported file and starts with HDF5 magic bytes `89 48 44 46 0D 0A 1A 0A`, i.e. netCDF4-on-HDF5, not netCDF3 classic.
+   h) The current app architecture assumes one shared X axis per loaded file: `PlotManager._getTimeVar()` returns the single variable with `kind === 'abscissa'`. PyPSA `snapshots` maps cleanly to that one abscissa for ordinary networks, but multi-period/stochastic/multidimensional PyPSA exports are not a small UI-selector extension; they exceed the current data model unless flattened or explicitly constrained.
+   i) Source docs checked 2026-07-01:
+      - https://docs.pypsa.org/v1.0.4/user-guide/import-export/
+      - https://docs.pypsa.org/v1.0.2/user-guide/components/
+      - https://docs.pypsa.org/v1.0.1/api/networks/io/
+      - https://docs.xarray.dev/en/stable/user-guide/io.html
+1) Product goal:
+   a) Let users open PyPSA netCDF network files and explore both time series and network/component metadata in the same viewer.
+   b) Preserve the existing normalized `{variables, metadata, tree}` contract so PlotManager, variable search, sessions, transforms, cursors, and derived variables can keep working.
+   c) Build a hierarchical tree comparable to the Modelica tree, but driven by PyPSA structure rather than dotted Modelica names.
+   d) Initial tree proposal:
+      - PyPSA Network
+      - Buses
+        - <bus name>
+          - parameters/static attributes
+      - Generators
+        - <generator name>
+          - p
+          - p_max_pu
+          - status
+          - parameters/static attributes
+      - Loads
+        - <load name>
+          - p_set
+          - q_set
+          - parameters/static attributes
+      - Lines / Links / Transformers / Stores / Storage Units / Carriers / Global Constraints / Sub-Networks, etc.
+   e) Dynamic numeric attributes become plottable variables. Static scalar attributes become parameters/info entries by default; text/static network metadata should be visible in descriptions/tooltips but not treated as time series.
+   f) Network topology visualization is explicitly out of scope for the first pass. The first goal is loading, tree browsing, and plotting time-varying component attributes.
+2) Parser / data-source design:
+   a) Add a dedicated parser/data-source, e.g. `src/parsers/pypsa-netcdf-parser.js` or a lazy `src/data/pypsa-netcdf-source.js`, instead of overloading CsvParser or MatParser.
+   b) File detection:
+      - extensions `.nc` and `.netcdf`;
+      - sniff netCDF headers when possible;
+      - detect PyPSA-ness from dataset attributes, coordinate names, component dimensions, or known PyPSA variable naming patterns;
+      - if the file is valid netCDF but not recognizable as PyPSA, show a clear "generic netCDF is not supported yet" message.
+   c) Library spike needed before implementation:
+      - Treat HDF5/netCDF4 support as the primary path from day one. A real PyPSA `.nc` fixture is HDF5 even without relying on a hand-made compressed fixture.
+      - `netcdfjs` should not be the primary reader for PyPSA; it is only plausible as a fallback if runtime header sniffing finds netCDF3 classic magic bytes (`CDF\x01` / `CDF\x02`).
+      - Spike `h5wasm`, `@h5web/h5wasm`, or `@earthyscience/netcdf4-wasm` first. Verify HDF5/netCDF4, compression, variable-length strings, coordinate/index arrays, slicing support, browser memory behavior, and Electron packaging.
+      - `h5wasm` may run in both browser and Node/Electron. Evaluate one shared HDF5 reader path for Web Light and Full Desktop before committing to separate browser/native implementations.
+      - Native Node `netcdf4` bindings may be robust in Full Desktop but add packaging and platform-binary complexity similar to native DuckDB.
+   d) Prefer a two-tier approach:
+      - First spike: open the real PyPSA HDF5 `.nc`, list groups/datasets/dimensions/attrs, decode `snapshots`, decode component names, and read one dynamic series using its own index.
+      - Phase 1 implementation: eager small-file parser. This fits the real 836 KB fixture and avoids pretending the lazy architecture is already generic.
+      - Web Light: small PyPSA netCDF files only, read within browser memory if the selected JS/WASM reader supports the file.
+      - Full Desktop: robust path for larger/compressed PyPSA netCDF files, ideally with lazy reads/slices and bounded renderer memory.
+   e) Do not eagerly materialize all dynamic arrays for large networks. A PyPSA-Eur-style network can contain many component attributes over many snapshots.
+3) Mapping PyPSA netCDF to viewer variables:
+   a) Parse dataset coordinates/dimensions first:
+      - identify snapshot/time coordinate(s);
+      - identify component-index dimensions such as generators, loads, buses, lines, links, stores, storage_units, etc.;
+      - identify optional dimensions such as investment periods, scenarios, or extra stochastic axes.
+   a2) PyPSA/xarray naming patterns observed in a real exported file:
+      - Static component attributes usually appear as `<components>_<attribute>`, e.g. `generators_p_nom`, `generators_carrier`, `lines_bus0`, `loads_bus`, `buses_control`.
+      - Dynamic time-series attributes usually appear as `<components>_t_<attribute>`, e.g. `generators_t_p`, `generators_t_p_max_pu`, `loads_t_p`, `buses_t_p`, `buses_t_v_ang`, `buses_t_marginal_price`.
+      - Full component indexes appear as `<components>_i`, e.g. `generators_i`.
+      - Dynamic-attribute column indexes can appear as `<components>_t_<attribute>_i`, e.g. `generators_t_p_i` or `generators_t_p_max_pu_i`.
+      - A dynamic-attribute index may be a subset of the full component index because PyPSA exports only attributes/components differing from defaults. Never assume `generators_t_p` columns align with `generators_i`; map each dynamic array through its own `<components>_t_<attribute>_i` coordinate/index when present.
+   b) Dynamic variable detection:
+      - a data variable with a snapshot/time dimension plus a component dimension is a time-varying attribute;
+      - shape commonly maps to `[snapshot, component]`, but do not hardcode dimension order;
+      - each emitted plottable variable must align 1:1 with the single `snapshots` abscissa: `length(series) === length(snapshots)`;
+      - if additional dimensions exist, first pass should reject or explicitly flatten only a known-safe single slice; do not imply current PlotManager supports per-variable axes or arbitrary multidimensional variables.
+   c) Static variable detection:
+      - a data variable with a component dimension but no snapshot/time dimension is a static component attribute;
+      - scalar/global attributes become file metadata;
+      - absent attributes should be treated as "default/not exported", not as missing/corrupt data.
+   d) Canonical internal variable ids should avoid collisions and preserve names exactly, for example:
+      - `pypsa:Generator/<generator name>/p_max_pu`
+      - `pypsa:Load/<load name>/p_set`
+      - `pypsa:StorageUnit/<storage unit name>/state_of_charge`
+   e) Display labels can be friendlier than ids, but the stable id must remain session-safe even when component names contain spaces, slashes, dots, country codes, carrier names, or bus prefixes.
+   f) Do not split PyPSA asset names naively on `.` or spaces. Unlike Modelica, PyPSA component names are atomic labels. If grouping is useful, derive it from static metadata such as `carrier`, `bus`, `bus0`, `bus1`, `country`, or `location`, not from arbitrary string splitting.
+   g) Optional later grouping modes:
+      - by component type -> asset -> attribute;
+      - by component type -> carrier -> asset -> attribute;
+      - by component type -> bus/location -> asset -> attribute.
+4) Time axis handling:
+   a) Use PyPSA snapshots as the X axis for dynamic attributes.
+   b) Create exactly one `kind: 'abscissa'` variable from `snapshots` for Phase 1, because the renderer currently expects one shared time variable per file.
+   c) Support numeric, string, and CF/netCDF encoded datetime coordinates; convert to the same millisecond/date metadata model used by CSV datetime support where possible.
+   d) Validate every dynamic series against the snapshots axis before emitting it. If a dynamic array length does not match snapshots after dimension mapping, skip it with a warning rather than creating a broken plot variable.
+   e) MultiIndex-like snapshots, investment periods, scenarios, and stochastic dimensions should be documented as unsupported/deferred for the first implementation unless a specific flattening rule is designed. They currently do not fit the app's single-abscissa, one-dimensional-series contract.
+   f) Snapshot weightings are metadata, not the X axis, but they may be useful later for aggregate/energy calculations.
+5) Variable metadata:
+   a) Each dynamic variable should include:
+      - component type;
+      - component name;
+      - attribute name;
+      - source dimensions;
+      - unit if available from netCDF attrs or PyPSA component metadata;
+      - description from netCDF attrs/PyPSA attribute docs when available;
+      - static metadata summary for the asset, e.g. bus, carrier, p_nom, marginal_cost.
+   b) Static numeric attributes must not be emitted as time-aligned arrays unless they really have one value per snapshot. A PyPSA static attribute is scalar-per-asset, not a time series.
+   c) The current tree allows numeric non-string entries to be draggable, so first implementation must either:
+      - add/observe an explicit non-plottable flag in tree rendering and plot dispatch; or
+      - keep static attrs as asset metadata/descriptions rather than normal numeric variables.
+   d) Static numeric attributes may be shown like Modelica parameters only after the no-plottable behavior is safe. They should display values next to assets but not break plotting by pairing component-index arrays with the snapshots abscissa.
+   e) Text attributes should remain searchable metadata/descriptions, not plottable traces.
+6) Lazy loading / performance:
+   a) Phase 1 can be eager for small files only, but must have explicit size/memory limits and friendly errors.
+   b) For serious PyPSA files, design a lazy source similar to DuckDbSource:
+      - metadata scan builds tree without reading every time-series array;
+      - plotting a variable fetches only the needed attribute/component series;
+      - range/overview queries return bounded point counts;
+      - cursor source-window queries fetch bounded raw windows near a snapshot.
+   c) Important architecture dependency: the app does not yet have a generic lazy data-source interface. Many renderer paths check `data._duckdb` directly. A PyPSA lazy source must either wait for the planned data-source abstraction from the Full Desktop large-file roadmap, or make an explicit compatibility decision rather than disguising itself accidentally as DuckDB metadata.
+   d) If the selected netCDF/HDF5 reader cannot slice without loading the entire file, mark that path as small-file-only.
+   e) Full Desktop should be the primary target for large PyPSA networks if Web Light cannot guarantee bounded memory.
+7) UI behavior:
+   a) Add `.nc` / `.netcdf` to supported file detection only when the parser is ready.
+   b) Show file type as "PyPSA netCDF network".
+   c) In the variable tree, show dynamic variables with normal draggable behavior. Show static attributes as parameter-style info only after the non-plottable behavior from item 5.c is in place; until then, keep them as asset metadata/descriptions.
+   d) Search/filter should match component type, asset name, attribute name, carrier, bus, and description.
+   e) A non-PyPSA netCDF file should fail gracefully with a message explaining that generic netCDF browsing is not yet supported.
+8) Fixtures / validation:
+   a) Create small PyPSA-generated fixture files and commit them under `test-files/pypsa/` if licensing/size is acceptable.
+   b) Fixtures should include:
+      - buses, carriers, loads, generators, lines/links;
+      - static attributes and dynamic attributes (`loads_t.p_set`, `generators_t.p`, `generators_t.p_max_pu`, storage state/inflow where possible);
+      - component names with spaces, dots, slashes, country prefixes, and carrier-like substrings;
+      - missing/default attributes to confirm absent variables are handled correctly;
+      - compressed and uncompressed PyPSA-exported netCDF4/HDF5 files if the reader supports both;
+      - optional MultiIndex/investment-period fixture.
+   c) Keep a golden JSON file with expected normalized variables, metadata, and tree shape for parser tests.
+   d) Fixtures must be generated with real PyPSA export, not hand-written netCDF3, otherwise tests can pass while real PyPSA files fail.
+   e) If generating fixtures requires Python/PyPSA, keep the generator script in `test-files/pypsa/` but do not require Python for normal JS CI; commit tiny generated `.nc` fixtures.
+   f) The repo `.gitignore` is whitelist-based. Add explicit whitelist entries for `test-files/pypsa/` and tiny `.nc` fixtures when they become part of tests.
+9) Tests:
+   a) Parser smoke: open a tiny PyPSA netCDF, identify it as PyPSA, and produce `{variables, metadata, tree}`.
+   b) Tree shape: verify component type -> asset -> dynamic attribute grouping.
+   c) Time axis: verify snapshot decoding to numeric/date X data.
+   d) Static metadata: verify static attrs appear as parameters/descriptions and are searchable.
+   e) Robust names: verify asset names with spaces/dots/slashes do not break ids or tree rendering.
+   f) Negative test: generic non-PyPSA netCDF returns a clear unsupported-format error.
+   g) If lazy source is implemented: verify bounded range/overview queries and cursor source windows.
+10) Open questions before coding:
+   a) Which HDF5/netCDF4 reader supports the PyPSA netCDF files we care about, especially compression, variable-length strings, coordinate/index arrays, and slicing?
+   b) Can `h5wasm` be the single reader path for both Web Light and Full Desktop small/eager files?
+   c) How should the UI expose optional dimensions such as investment period or scenario?
+   d) Should static attributes be shown under each asset, under a separate "Parameters" child, or as an asset info panel?
+   e) Should we add aggregate convenience variables later, e.g. total load by bus/carrier or generation by carrier, or keep first pass limited to raw exported attributes?
+11) Recommended sequencing:
+   a) HDF5 reader spike first:
+      - install/evaluate h5wasm or equivalent;
+      - open `test-files/pypsa/vetea_example_01.nc`;
+      - list dimensions, variables, attrs, and coordinate/index arrays;
+      - decode `snapshots`;
+      - decode component names/carriers/buses including strings;
+      - read one dynamic variable using its own `<components>_t_<attribute>_i` index.
+   b) Then implement an eager small-file parser that returns the normal `{variables, metadata, tree}` shape.
+   c) Then decide whether the same HDF5 path works in Web Light.
+   d) Defer lazy/large-file PyPSA support until the data-source abstraction exists or until an explicit non-DuckDB lazy contract is designed.
+12) Acceptance criteria for first implementation:
+   a) User can open a small PyPSA `.nc` file.
+   b) The sidebar shows a useful tree, not a flat list of raw netCDF variables.
+   c) At least loads and generators dynamic attributes can be plotted against snapshots.
+   d) Static network/component data is visible enough to understand what each series belongs to.
+   e) Unsupported/generic netCDF files fail with a clear user-facing message.
+   f) Web Light and Full Desktop behavior is explicit; large files do not crash the renderer silently.
+
+
 Distribution / downloads:
 1) Public download should be the Full Desktop app only, not two visible user-facing variants.
 2) Remove or hide the current portable-web/local-light download from the main Extra menu once the Full Desktop download is available.

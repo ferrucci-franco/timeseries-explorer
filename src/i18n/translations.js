@@ -2,7 +2,7 @@ const translations = {
         en: {
             // App title
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'CSV, Parquet, OpenModelica/Dymola viewer',
+            appSubtitle: 'CSV, Parquet, OpenModelica/Dymola (.MAT) viewer',
             runtimeNoticeWebKicker: 'Web version',
             runtimeNoticeWebTitle: 'Web version',
             runtimeNoticeWebBody: 'This version works directly in your browser. You can open and plot files that you select manually.',
@@ -626,7 +626,7 @@ const translations = {
         fr: {
             // App title
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visualiseur CSV, Parquet et OpenModelica/Dymola',
+            appSubtitle: 'Visualiseur CSV, Parquet et OpenModelica/Dymola (.MAT)',
             runtimeNoticeWebKicker: 'Version web',
             runtimeNoticeWebTitle: 'Version web',
             runtimeNoticeWebBody: 'Cette version fonctionne directement dans le navigateur. Vous pouvez ouvrir et tracer les fichiers que vous selectionnez manuellement.',
@@ -1250,7 +1250,7 @@ const translations = {
         },
         es: {
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visor de CSV, Parquet y OpenModelica/Dymola',
+            appSubtitle: 'Visor de CSV, Parquet y OpenModelica/Dymola (.MAT)',
             runtimeNoticeWebKicker: 'Version web',
             runtimeNoticeWebTitle: 'Version web',
             runtimeNoticeWebBody: 'Esta version funciona directamente en el navegador. Puedes abrir y graficar archivos que selecciones manualmente.',
@@ -1844,7 +1844,7 @@ const translations = {
         },
         it: {
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visualizzatore CSV, Parquet e OpenModelica/Dymola',
+            appSubtitle: 'Visualizzatore CSV, Parquet e OpenModelica/Dymola (.MAT)',
             runtimeNoticeWebKicker: 'Versione web',
             runtimeNoticeWebTitle: 'Versione web',
             runtimeNoticeWebBody: 'Questa versione funziona direttamente nel browser. Puoi aprire e tracciare i file selezionati manualmente.',
