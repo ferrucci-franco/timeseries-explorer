@@ -1273,13 +1273,13 @@ proto._applyHoverInfoBoxPosition = function(box) {
 // ─── Measurement cursors (time-series panels) ─────────────────
 
 proto._defaultCursors = function() {
-    return { enabled: false, a: null, b: null, traceA: null, traceB: null };
+    return { enabled: false, a: null, b: null, traceA: null, traceB: null, showSecant: false };
 };
 
 proto._toggleCursors = function(panelId) {
     const plot = this.plots.get(panelId);
     if (!plot || plot.mode !== 'timeseries' || !plot.div) return;
-    if (!plot.cursors) plot.cursors = this._defaultCursors();
+    plot.cursors = { ...this._defaultCursors(), ...(plot.cursors || {}) };
     plot.cursors.enabled = !plot.cursors.enabled;
     if (plot.cursors.enabled) {
         this._initializeCursorPositionsInView(plot);
@@ -1804,6 +1804,76 @@ proto._cursorOverlayGeometry = function(plot, trace, x, options = {}) {
     return { left, leftAxis, rightAxis, top, topAxis, bottomAxis, y };
 };
 
+proto._cursorSecantClip = function(gA, gB) {
+    const x1 = Number(gA?.left);
+    const y1 = Number(gA?.top);
+    const x2 = Number(gB?.left);
+    const y2 = Number(gB?.top);
+    if (![x1, y1, x2, y2].every(Number.isFinite)) return null;
+
+    const left = Math.max(Number(gA.leftAxis), Number(gB.leftAxis));
+    const right = Math.min(Number(gA.rightAxis), Number(gB.rightAxis));
+    const top = Math.max(Number(gA.topAxis), Number(gB.topAxis));
+    const bottom = Math.min(Number(gA.bottomAxis), Number(gB.bottomAxis));
+    if (![left, right, top, bottom].every(Number.isFinite) || right <= left || bottom <= top) return null;
+
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return null;
+
+    const points = [];
+    const eps = 0.5;
+    const push = (x, y) => {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        if (x < left - eps || x > right + eps || y < top - eps || y > bottom + eps) return;
+        const clamped = {
+            x: Math.max(left, Math.min(right, x)),
+            y: Math.max(top, Math.min(bottom, y)),
+        };
+        if (!points.some(p => Math.abs(p.x - clamped.x) < eps && Math.abs(p.y - clamped.y) < eps)) {
+            points.push(clamped);
+        }
+    };
+
+    if (Math.abs(dx) < 1e-9) {
+        push(x1, top);
+        push(x1, bottom);
+    } else {
+        for (const x of [left, right]) {
+            const t = (x - x1) / dx;
+            push(x, y1 + t * dy);
+        }
+    }
+
+    if (Math.abs(dy) < 1e-9) {
+        push(left, y1);
+        push(right, y1);
+    } else {
+        for (const y of [top, bottom]) {
+            const t = (y - y1) / dy;
+            push(x1 + t * dx, y);
+        }
+    }
+
+    if (points.length < 2) return null;
+    let best = [points[0], points[1]];
+    let bestDist = -1;
+    for (let i = 0; i < points.length; i++) {
+        for (let j = i + 1; j < points.length; j++) {
+            const dist = (points[i].x - points[j].x) ** 2 + (points[i].y - points[j].y) ** 2;
+            if (dist > bestDist) {
+                bestDist = dist;
+                best = [points[i], points[j]];
+            }
+        }
+    }
+    return { x1: best[0].x, y1: best[0].y, x2: best[1].x, y2: best[1].y };
+};
+
+proto._svgNumber = function(value) {
+    return Number(value).toFixed(2).replace(/\.?0+$/, '');
+};
+
 proto._renderCursorOverlay = function(plot, options = {}) {
     if (!plot?.div || !plot.cursors?.enabled) return;
     if (plot._cursorBoxZoomActive && !options.force) {
@@ -1823,10 +1893,12 @@ proto._renderCursorOverlay = function(plot, options = {}) {
         { key: 'b', trace: traceB, x: plot.cursors.b, color: traceB?.color || '#2196f3', dash: this._sameCursorTrace(traceA, traceB) },
     ];
     const parts = [];
+    const geometries = {};
     for (const item of items) {
         const g = this._cursorOverlayGeometry(plot, item.trace, item.x, options);
         if (!g) continue;
         if (g.left < g.leftAxis || g.left > g.rightAxis) continue;
+        geometries[item.key] = g;
         const lineStyle = [
             `left:${g.left}px`,
             `top:${g.topAxis}px`,
@@ -1837,6 +1909,17 @@ proto._renderCursorOverlay = function(plot, options = {}) {
         parts.push(`<div class="cursor-overlay-line cursor-overlay-line-${item.key}" style="${lineStyle}"></div>`);
         if (!options.lightweight && Number.isFinite(g.top) && g.top >= g.topAxis && g.top <= g.bottomAxis) {
             parts.push(`<div class="cursor-overlay-dot cursor-overlay-dot-${item.key}" style="left:${g.left}px;top:${g.top}px;background:${item.color};border-color:${item.color}"></div>`);
+        }
+    }
+    if (!options.lightweight && plot.cursors.showSecant && geometries.a && geometries.b) {
+        const secant = this._cursorSecantClip(geometries.a, geometries.b);
+        if (secant) {
+            const color = this._escapeHTML(traceA?.color || traceB?.color || '#555555');
+            parts.unshift(
+                `<svg class="cursor-secant-svg" aria-hidden="true" focusable="false">`
+                + `<line class="cursor-secant-line" x1="${this._svgNumber(secant.x1)}" y1="${this._svgNumber(secant.y1)}" x2="${this._svgNumber(secant.x2)}" y2="${this._svgNumber(secant.y2)}" stroke="${color}"></line>`
+                + `</svg>`
+            );
         }
     }
     overlay.innerHTML = parts.join('');
@@ -1885,6 +1968,25 @@ proto._eventInsidePlotArea = function(div, event) {
     return x >= left && x <= right && y >= top && y <= bottom;
 };
 
+proto._cursorPairSlideDelta = function(plot, startA, startB, delta) {
+    if (!Number.isFinite(delta)) return 0;
+    let minDelta = -Infinity;
+    let maxDelta = Infinity;
+    for (const which of ['a', 'b']) {
+        const start = which === 'a' ? startA : startB;
+        if (!Number.isFinite(start)) continue;
+        const trace = this._resolveCursorTrace(plot, which);
+        const bounds = this._cursorTraceBounds(trace);
+        if (!bounds) continue;
+        minDelta = Math.max(minDelta, bounds.start - start);
+        maxDelta = Math.min(maxDelta, bounds.end - start);
+    }
+    if (minDelta > maxDelta) return 0;
+    if (Number.isFinite(minDelta)) delta = Math.max(delta, minDelta);
+    if (Number.isFinite(maxDelta)) delta = Math.min(delta, maxDelta);
+    return delta;
+};
+
 proto._installCursorHandlers = function(panelId, plot) {
     if (!plot?.div || plot._cursorHandlersDiv === plot.div) return;
     if (plot._cursorDocListeners) {
@@ -1925,7 +2027,10 @@ proto._installCursorHandlers = function(panelId, plot) {
             }
             return;
         }
-        dragging = hit;
+        const x = this._eventToXValue(plot.div, event);
+        dragging = event.ctrlKey && Number.isFinite(x)
+            ? { mode: 'pair', which: hit, startPointerX: x, startA: plot.cursors.a, startB: plot.cursors.b }
+            : { mode: 'single', which: hit };
         event.preventDefault();
         event.stopPropagation();
         document.body.classList.add('cursor-dragging');
@@ -1947,7 +2052,13 @@ proto._installCursorHandlers = function(panelId, plot) {
         if (!dragging || !plot.div) return;
         const x = this._eventToXValue(plot.div, event);
         if (!Number.isFinite(x)) return;
-        plot.cursors[dragging] = this._clampCursorX(plot, dragging, x);
+        if (dragging.mode === 'pair') {
+            const delta = this._cursorPairSlideDelta(plot, dragging.startA, dragging.startB, x - dragging.startPointerX);
+            plot.cursors.a = this._clampCursorX(plot, 'a', dragging.startA + delta);
+            plot.cursors.b = this._clampCursorX(plot, 'b', dragging.startB + delta);
+        } else {
+            plot.cursors[dragging.which] = this._clampCursorX(plot, dragging.which, x);
+        }
         this._syncCursorDisplay(panelId, plot);
     };
     const onDocUp = () => {
@@ -2062,6 +2173,7 @@ proto._updateCursorBox = function(panelId, plot) {
         colorA,
         colorB,
         sameTrace ? 'same' : 'different',
+        plot.cursors.showSecant ? 'secant' : 'no-secant',
     ].join('\u0002');
     const buildOptions = (selectedTrace) => visibleTraces
         .map((t, index) => {
@@ -2080,12 +2192,15 @@ proto._updateCursorBox = function(panelId, plot) {
     const zeroTitle = this._escapeHTML(i18n.t('cursorNextZero'));
     const sampleTitle = this._escapeHTML(i18n.t('cursorNextValue'));
     const shiftHint = this._escapeHTML(i18n.t('cursorShiftPreviousHint'));
+    const slideHint = this._escapeHTML(i18n.t('cursorSlideBothHint'));
     const labelX = this._escapeHTML(i18n.t('cursorLabelX'));
     const labelY = this._escapeHTML(i18n.t('cursorLabelY'));
     const labelDx = this._escapeHTML(i18n.t('cursorLabelDeltaX'));
     const labelDy = this._escapeHTML(i18n.t('cursorLabelDeltaY'));
     const labelSlope = this._escapeHTML(i18n.t('cursorLabelSlope'));
     const labelInvDx = this._escapeHTML(i18n.t('cursorLabelInverseDeltaX'));
+    const secantLabel = this._escapeHTML(i18n.t('cursorSecantLine'));
+    const secantChecked = plot.cursors.showSecant ? ' checked' : '';
     const buildExtremaBtns = (which, color) => `
         <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="max"  style="color:${color}" title="${maxTitle} (${which.toUpperCase()}) | ${shiftHint}"  aria-label="${maxTitle} (${which.toUpperCase()}) | ${shiftHint}">${maxIcon}</button>
         <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="min"  style="color:${color}" title="${minTitle} (${which.toUpperCase()}) | ${shiftHint}"  aria-label="${minTitle} (${which.toUpperCase()}) | ${shiftHint}">${minIcon}</button>
@@ -2102,6 +2217,12 @@ proto._updateCursorBox = function(panelId, plot) {
             <span><b style="color:${colorB}">B</b> ${traceLabel}</span>
             <select>${buildOptions(traceB)}</select>
             ${buildExtremaBtns('b', colorB)}
+        </label>
+    `;
+    const secantHTML = `
+        <label class="cursor-secant-toggle">
+            <input type="checkbox" class="cursor-secant-checkbox"${secantChecked}>
+            <span>${secantLabel}</span>
         </label>
     `;
     const moveIcon = `<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>`;
@@ -2126,7 +2247,11 @@ proto._updateCursorBox = function(panelId, plot) {
             <span class="cursor-info-title">${moveIcon}${this._escapeHTML(i18n.t('cursorsToggle'))}</span>
         </div>
         ${selectorsHTML}
-        <div class="cursor-info-hint">${shiftHint}</div>
+        ${secantHTML}
+        <div class="cursor-info-hint">
+            <div>${shiftHint}</div>
+            <div>${slideHint}</div>
+        </div>
         <div class="cursor-info-values">
             ${valuesHTML}
         </div>
@@ -2177,6 +2302,14 @@ proto._showCursorBox = function(panelEl, html, panelId = null, plot = null) {
                 this._jumpCursorTo(panelId, which, target, direction);
             });
         });
+        const secantCheckbox = box.querySelector('.cursor-secant-checkbox');
+        if (secantCheckbox) {
+            secantCheckbox.addEventListener('change', (e) => {
+                e.stopPropagation();
+                plot.cursors.showSecant = !!e.target.checked;
+                this._syncCursorDisplay(panelId, plot);
+            });
+        }
     }
     if (panelId && plot) this._ensureCursorBoxDrag(panelId, plot);
     this._applyCursorBoxPosition(panelEl, box, plot);
