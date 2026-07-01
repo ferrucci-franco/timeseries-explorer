@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { installFileMethods } from '../src/app/methods/file-methods.js';
 import { installLiveUpdateMethods } from '../src/app/methods/live-update-methods.js';
 import { registerDuckDbFile } from '../src/data/duckdb-file-registration.js';
+import {
+    PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES,
+    PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES,
+} from '../src/parsers/pypsa-netcdf-limits.js';
 
 class Harness {
     constructor() {
@@ -102,12 +106,31 @@ try {
     assert.equal(await registerDuckDbFile(db, duckdbModule, 'web.csv', webFile), 'browser-filereader');
     assert.deepEqual(calls[1], ['handle', 'web.csv', webFile, 'BROWSER_FILEREADER', true]);
 
+    assert.doesNotThrow(() => harness._preflightPypsaNetcdfFile({
+        name: 'desktop-medium-network.nc',
+        size: PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES - 1024,
+    }, '.nc'));
+
     assert.throws(
         () => harness._preflightPypsaNetcdfFile({
             name: 'huge-network.nc',
-            size: 101 * 1024 * 1024,
+            size: PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES + 1024,
         }, '.nc'),
-        /PyPSA netCDF support currently opens small eager files only/
+        /PyPSA netCDF support currently uses eager loading/
+    );
+
+    const webHarness = new Harness();
+    webHarness.capabilities = { isDesktop: false, canUseLiveUpdate: false };
+    assert.doesNotThrow(() => webHarness._preflightPypsaNetcdfFile({
+        name: 'web-medium-network.nc',
+        size: PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES,
+    }, '.nc'));
+    assert.throws(
+        () => webHarness._preflightPypsaNetcdfFile({
+            name: 'web-too-large-network.nc',
+            size: PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES + 1024,
+        }, '.nc'),
+        /PyPSA netCDF support currently uses eager loading/
     );
 
     let readFileCalls = 0;
@@ -115,7 +138,7 @@ try {
         statFile: async () => ({
             ok: true,
             name: 'huge-network.nc',
-            size: 101 * 1024 * 1024,
+            size: PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES + 1024,
             lastModified: 5678,
             type: 'application/x-netcdf',
         }),
@@ -126,7 +149,7 @@ try {
     };
     await assert.rejects(
         () => harness._readLocalResultPath('C:\\temp\\huge-network.nc'),
-        /PyPSA netCDF support currently opens small eager files only/
+        /PyPSA netCDF support currently uses eager loading/
     );
     assert.equal(readFileCalls, 0, 'oversized PyPSA netCDF should be rejected before Desktop readFile');
 

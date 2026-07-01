@@ -1,8 +1,8 @@
 import h5wasm from 'h5wasm';
 import MatParser from './mat-parser.js';
+import { PYPSA_NETCDF_DEFAULT_EAGER_LIMIT_BYTES } from './pypsa-netcdf-limits.js';
 
 const HDF5_MAGIC = '89 48 44 46 0D 0A 1A 0A';
-const SMALL_FILE_LIMIT_BYTES = 100 * 1024 * 1024;
 const STATIC_ATTRIBUTES_NODE = 'Static attributes';
 const UNSUPPORTED_DYNAMIC_NODE = 'Unsupported time-series datasets';
 const GENERIC_NETCDF_ERROR = 'Generic netCDF/HDF5 files are not supported yet. Please open a PyPSA-exported netCDF4/HDF5 network.';
@@ -89,9 +89,10 @@ export default class PypsaNetcdfParser {
         this._sequence = 0;
     }
 
-    async parse(buffer, filename = '') {
+    async parse(buffer, filename = '', options = {}) {
         if (!buffer || !buffer.byteLength) throw new Error('PyPSA netCDF file is empty.');
-        if (buffer.byteLength > SMALL_FILE_LIMIT_BYTES) {
+        const maxFileBytes = Number(options.maxFileBytes || PYPSA_NETCDF_DEFAULT_EAGER_LIMIT_BYTES);
+        if (Number.isFinite(maxFileBytes) && maxFileBytes > 0 && buffer.byteLength > maxFileBytes) {
             throw new Error('PyPSA netCDF support is currently limited to small files. Large PyPSA networks need the planned lazy data-source path.');
         }
         if (hdf5Magic(buffer) !== HDF5_MAGIC) {

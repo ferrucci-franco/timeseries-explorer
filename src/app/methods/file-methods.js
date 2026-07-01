@@ -1,10 +1,13 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import CsvParsingPreviewDialog from '../../ui/csv-parsing-preview-dialog.js';
+import {
+    PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES,
+    PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES,
+} from '../../parsers/pypsa-netcdf-limits.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
-const PYPSA_NETCDF_SMALL_FILE_LIMIT_BYTES = 100 * 1024 * 1024;
 let duckDbSourceClassPromise = null;
 let pypsaNetcdfParserClassPromise = null;
 
@@ -625,14 +628,21 @@ proto._isPypsaNetcdfExtension = function(extension) {
     return extension === '.nc' || extension === '.netcdf';
 };
 
+proto._pypsaNetcdfEagerLimitBytes = function() {
+    return this.capabilities?.isDesktop
+        ? PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES
+        : PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES;
+};
+
 proto._preflightPypsaNetcdfFile = function(file, extension = this._fileExtension(file?.name || '')) {
     if (!this._isPypsaNetcdfExtension(extension)) return;
     const size = Number(file?.size || 0);
-    if (!Number.isFinite(size) || size <= PYPSA_NETCDF_SMALL_FILE_LIMIT_BYTES) return;
+    const limit = this._pypsaNetcdfEagerLimitBytes();
+    if (!Number.isFinite(size) || size <= limit) return;
     throw new Error(i18n.t('pypsaNetcdfTooLarge')
         .replace('{file}', file?.name || 'network.nc')
         .replace('{size}', this._formatFileSize(size))
-        .replace('{limit}', this._formatFileSize(PYPSA_NETCDF_SMALL_FILE_LIMIT_BYTES)));
+        .replace('{limit}', this._formatFileSize(limit)));
 };
 
 proto._createDesktopLocalHttpFile = function(filePath, info) {
@@ -840,7 +850,7 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
 proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer) {
     const Parser = await loadPypsaNetcdfParserClass();
     const parser = new Parser(this.parser);
-    return parser.parse(buffer, filename);
+    return parser.parse(buffer, filename, { maxFileBytes: this._pypsaNetcdfEagerLimitBytes() });
 };
 
 // Files bigger than this threshold (bytes) trigger DuckDB lazy mode: the

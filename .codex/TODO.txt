@@ -135,6 +135,7 @@ PyPSA netCDF support:
    d) If the selected netCDF/HDF5 reader cannot slice without loading the entire file, mark that path as small-file-only.
    e) Full Desktop should be the primary target for large PyPSA networks if Web Light cannot guarantee bounded memory.
    f) DONE 2026-07-02: Added PyPSA netCDF size preflight before eager reads. Web/browser file opens reject oversized `.nc` / `.netcdf` files before `arrayBuffer()`, and Full Desktop local-path opens use `statFile` to reject oversized PyPSA netCDF before `readFile`.
+   g) DONE 2026-07-02: Raised eager PyPSA netCDF limits to separate runtime caps: 250 MB for Web Light and 1 GB for Full Desktop. These are guardrails, not a large-network architecture; Desktop can try larger eager files, but true PyPSA-Eur-scale support still needs selective/lazy reads.
 7) UI behavior:
    a) Add `.nc` / `.netcdf` to supported file detection only when the parser is ready.
    b) Show file type as "PyPSA netCDF network".
@@ -191,6 +192,16 @@ PyPSA netCDF support:
    c3) DONE 2026-07-01: Full Desktop directory packaging was verified successfully when the output directory was placed outside OneDrive. The package contains the PyPSA dynamic chunk in `app.asar` and `src/parsers/pypsa-netcdf-parser.js` in `app.asar.unpacked`. Packaging to the default OneDrive-backed `desktop-dist` failed with `EPERM` during Electron's generated-folder rename, which is an output-directory lock/sync issue rather than a PyPSA packaging issue.
    c) Then decide whether the same HDF5 path works in Web Light.
    d) Defer lazy/large-file PyPSA support until the data-source abstraction exists or until an explicit non-DuckDB lazy contract is designed.
+   e) NEXT: Desktop selective/lazy PyPSA loader for large networks:
+      - create a metadata-first `PypsaNetcdfSource` instead of extending the eager parser;
+      - scan HDF5/netCDF groups, dimensions, attrs, snapshots, component indexes, static attrs, and dynamic dataset shapes without materializing all dynamic arrays;
+      - build the same component -> asset -> attribute tree, but variables should carry lazy source descriptors instead of full `Float64Array` data;
+      - when the user plots a variable, load only that dataset/asset series through the dataset's own `*_i` index;
+      - cache recently loaded series and release them when traces/files are closed;
+      - provide bounded overview/range APIs for zoom, hover/cursors, and phase plots, similar in spirit to DuckDbSource but not coupled to `data._duckdb`;
+      - spike whether `h5wasm/node` must run in Electron main/utility process for local-path access, with renderer IPC requests for metadata and series slices;
+      - keep Web Light on the eager cap unless a browser-side random-access HDF5 path is proven safe;
+      - add tests with a synthetic large-shape fixture or mocked HDF5 source so CI does not need to commit huge `.nc` files.
 12) Acceptance criteria for first implementation:
    a) User can open a small PyPSA `.nc` file.
    b) The sidebar shows a useful tree, not a flat list of raw netCDF variables.
@@ -201,7 +212,7 @@ PyPSA netCDF support:
    g) DONE 2026-07-01: First small/eager implementation criteria are covered by parser tests, committed fixture, generic-netCDF negative tests, web build, and Desktop package validation outside OneDrive.
    h) DONE 2026-07-01: Browser render verification completed with local Chrome/CDP at `http://127.0.0.1:5173/`: opened `test-files/pypsa/vetea_example_01.nc`, plotted `Generators / PV1 / p_max_pu`, confirmed Plotly rendered one trace with a date X axis, readable legend/title labels, and a component-grouped PyPSA sidebar.
    i) DONE 2026-07-01: Session save/restore coverage added through `npm run test:pypsa-session`, including deterministic PyPSA ids remapped after reopening the same fixture under a different file id.
-   j) DONE 2026-07-02: Oversized PyPSA netCDF files now fail fast with a localized message explaining the small/eager limit and that large/lazy PyPSA loading is not available yet.
+   j) DONE 2026-07-02: Oversized PyPSA netCDF files now fail fast with a localized message explaining the eager runtime limit and that large/lazy PyPSA loading is not available yet.
 
 
 Distribution / downloads:
