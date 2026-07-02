@@ -433,6 +433,7 @@ class PlotManager {
         plot.phasePending = { x: null, y: null, z: null, fileId: null };
         plot.stateSlots   = { x: [], dx: [], fileId: null };
         plot.equalAspect2D = false;
+        plot.timeseriesStacked = false;
         plot.cursors = this._defaultCursors();
         plot.liveView = this._defaultLiveViewPolicy(mode);
         plot.animFrame    = 0;
@@ -692,9 +693,11 @@ class PlotManager {
         } else {
             const t = plot.traces[plot.traces.length - 1];
             const insertIndex = Number.isInteger(plot.markerTraceIdx) ? plot.markerTraceIdx : undefined;
+            const traceIndex = plot.traces.length - 1;
+            const builtTrace = this._buildTimeTrace(t, null, plot, traceIndex);
             const addTracePromise = insertIndex === undefined
-                ? Plotly.addTraces(plot.div, this._buildTimeTrace(t))
-                : Plotly.addTraces(plot.div, this._buildTimeTrace(t), insertIndex);
+                ? Plotly.addTraces(plot.div, builtTrace)
+                : Plotly.addTraces(plot.div, builtTrace, insertIndex);
             addTracePromise.then(() => {
                 if (insertIndex !== undefined) plot.markerTraceIdx += 1;
                 this._syncTimeseriesMarkerColors(plot);
@@ -1037,6 +1040,7 @@ class PlotManager {
             existing.phaseTraces   = [];
             existing.phasePending  = { x: null, y: null, z: null };
             existing.markerTraceIdx = null;
+            existing.timeseriesStacked = false;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
             existing.cursors = this._defaultCursors();
@@ -1062,6 +1066,9 @@ class PlotManager {
         if (!panelEl) return;
         const plot = this.plots.get(panelId);
         const has = this._hasContent(plot);
+        if (plot?.mode !== 'timeseries') {
+            panelEl.querySelector('.timeseries-tools-group')?.remove();
+        }
         const csvBtn = panelEl.querySelector('.csv-export-btn');
         if (csvBtn) csvBtn.disabled = !has;
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
@@ -1079,6 +1086,13 @@ class PlotManager {
             const enabled = has && plot?.mode === 'timeseries';
             cursorBtn.disabled = !enabled;
             cursorBtn.classList.toggle('active', !!plot?.cursors?.enabled);
+        }
+        const stackBtn = panelEl.querySelector('.timeseries-stack-btn');
+        if (stackBtn) {
+            const enabled = has && plot?.mode === 'timeseries';
+            stackBtn.disabled = !enabled;
+            stackBtn.classList.toggle('active', !!plot?.timeseriesStacked);
+            stackBtn.setAttribute('aria-pressed', plot?.timeseriesStacked ? 'true' : 'false');
         }
         // Show view-btn-group for 3D modes and state-anim (2D or 3D) with content
         const isAnim = plot?.mode === 'state-anim' && has;
@@ -1556,6 +1570,50 @@ class PlotManager {
         return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
     }
 
+    _timeseriesYExtentForSeries(plot, traceSeries, yArrays, xRange = null) {
+        if (plot?.timeseriesStacked) {
+            return this._finiteStackedYExtentInXRange(traceSeries, xRange);
+        }
+        return xRange
+            ? this._finiteYExtentInXRange(traceSeries, xRange)
+            : this._finiteExtent(yArrays);
+    }
+
+    _finiteStackedYExtentInXRange(series, xRange = null) {
+        const items = (series || []).filter(item => item?.x?.length && item?.y?.length);
+        if (!items.length) return null;
+        const hasRange = Array.isArray(xRange);
+        const a = hasRange ? this._coerceAxisValue(xRange[0]) : null;
+        const b = hasRange ? this._coerceAxisValue(xRange[1]) : null;
+        const minX = hasRange && Number.isFinite(a) && Number.isFinite(b) ? Math.min(a, b) : -Infinity;
+        const maxX = hasRange && Number.isFinite(a) && Number.isFinite(b) ? Math.max(a, b) : Infinity;
+        let min = 0;
+        let max = 0;
+        let found = false;
+        const count = Math.max(...items.map(item => Math.min(item.x.length, item.y.length)));
+        for (let i = 0; i < count; i++) {
+            let positive = 0;
+            let negative = 0;
+            let any = false;
+            for (const item of items) {
+                const n = Math.min(item.x.length, item.y.length);
+                if (i >= n) continue;
+                const xv = this._coerceAxisValue(item.x[i]);
+                if (!Number.isFinite(xv) || xv < minX || xv > maxX) continue;
+                const yv = Number(item.y[i]);
+                if (!Number.isFinite(yv)) continue;
+                if (yv >= 0) positive += yv;
+                else negative += yv;
+                any = true;
+            }
+            if (!any) continue;
+            found = true;
+            if (negative < min) min = negative;
+            if (positive > max) max = positive;
+        }
+        return found ? { min, max } : null;
+    }
+
     _autoScalePlot(panelId, plot = this.plots.get(panelId)) {
         if (!plot?.div) return Promise.resolve();
 
@@ -1567,16 +1625,20 @@ class PlotManager {
 
             const xArrays = [];
             const yArrays = [];
+            const traceSeries = [];
             for (const t of visibleTraces) {
                 const d = this.files.get(t.fileId)?.data;
                 const v = d?.variables?.[t.varName];
                 if (!d || !v || v.kind === 'parameter') continue;
-                xArrays.push(this._getTransformedTimeData(t.fileId));
-                yArrays.push(this._getTransformedVariableData(t.fileId, t.varName));
+                const x = this._getTransformedTimeData(t.fileId);
+                const y = this._getTransformedVariableData(t.fileId, t.varName);
+                traceSeries.push({ x, y });
+                xArrays.push(x);
+                yArrays.push(y);
             }
 
             const xExtent = this._finiteExtent(xArrays);
-            const yExtent = this._finiteExtent(yArrays);
+            const yExtent = this._timeseriesYExtentForSeries(plot, traceSeries, yArrays);
             const update = {};
             if (xExtent) {
                 const primaryFileId = visibleTraces[0]?.fileId;
@@ -1725,6 +1787,7 @@ class PlotManager {
             phasePending: { x: null, y: null, z: null, fileId: null },  // phase trace being built
             projection: 'orthographic',                    // 3D camera projection
             markerTraceIdx: null,                          // index of the hover-marker trace in plot.div.data
+            timeseriesStacked: false,
             equalAspect2D: false,
             resizeObserver: null,
             // state-anim mode
@@ -1902,8 +1965,8 @@ class PlotManager {
             nextView.yRange = null;
         } else if (policy.yMode === 'expand') {
             const yExtent = nextView.xRange
-                ? this._finiteYExtentInXRange(traceSeries, nextView.xRange)
-                : this._finiteExtent(yArrays);
+                ? this._timeseriesYExtentForSeries(plot, traceSeries, yArrays, nextView.xRange)
+                : this._timeseriesYExtentForSeries(plot, traceSeries, yArrays);
             const oldRange = captured.yRange?.map(Number);
             if (!yExtent) {
                 nextView.yRange = captured.yRange;
@@ -2075,7 +2138,7 @@ class PlotManager {
         const displayLabel = this._variableLabel(label, fileId) || label;
         if (this.files.size >= 2 && fileId) {
             const f = this.files.get(fileId);
-            if (f) return `${displayLabel} [${f.name}]`;
+            if (f) return `[${f.name}] ${displayLabel}`;
         }
         return displayLabel;
     }

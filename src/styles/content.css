@@ -879,6 +879,7 @@
 
 /* Mode and view button groups in panel toolbar */
 .mode-btn-group,
+.timeseries-tools-group,
 .view-btn-group {
     display: flex;
     flex: 0 0 auto;

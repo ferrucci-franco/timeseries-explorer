@@ -1122,12 +1122,20 @@ proto._buildPlotData = function(plot) {
         case 'phase2dt':   return { traces: this._buildPhase2DtTraces(plot), layout: this._buildPhase3DLayout(plot, true)  };
         case 'phase3d':    return { traces: this._buildPhase3DTraces(plot),  layout: this._buildPhase3DLayout(plot, false) };
         case 'state-anim': return { traces: this._buildStateAnimTraces(plot), layout: this._buildStateAnimLayout(plot) };
-        default:           return { traces: plot.traces.map(t => this._buildTimeTrace(t)).filter(Boolean), layout: this._buildTimeLayout(plot) };
+        default:           return { traces: plot.traces.map((t, idx) => this._buildTimeTrace(t, null, plot, idx)).filter(Boolean), layout: this._buildTimeLayout(plot) };
     }
 };
 
 // ── Timeseries ──
-proto._buildTimeTrace = function(t, visibleRange = null) {
+proto._timeseriesStackAttrs = function(plot, traceIndex = 0) {
+    if (!plot?.timeseriesStacked) return {};
+    return {
+        stackgroup: 'timeseries-stack',
+        fill: traceIndex === 0 ? 'tozeroy' : 'tonexty',
+    };
+};
+
+proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex = 0) {
     const fileData = this.files.get(t.fileId)?.data;
     if (!fileData) return null;
     const variable = fileData.variables[t.varName];
@@ -1153,6 +1161,7 @@ proto._buildTimeTrace = function(t, visibleRange = null) {
     const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
     const calendarTickFormat = this._calendarTickFormat(t.fileId, timeVar);
     const durationFractionDigits = this._durationFractionDigits(t.fileId);
+    const stackAttrs = this._timeseriesStackAttrs(plot, traceIndex);
     const hoverX = highResolutionCalendarAxis
         ? `<b>Time</b> = %{customdata}<br>`
         : timeMode === 'calendar'
@@ -1170,6 +1179,7 @@ proto._buildTimeTrace = function(t, visibleRange = null) {
             name, type: 'scatter', mode: 'lines',
             visible: t.visible ?? true,
             line: { color: t.color, width: 1.5, dash: 'dash' },
+            ...stackAttrs,
             hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}<extra></extra>`,
             ...(highResolutionCalendarAxis
                 ? { customdata: [tStart, tEnd].map(value => this._formatGeneratedCalendarDateTime(t.fileId, value, timeVar)) }
@@ -1192,9 +1202,10 @@ proto._buildTimeTrace = function(t, visibleRange = null) {
         : { color: t.color, width: 1.5, shape: isStep ? 'hv' : 'linear' };
     return {
         x: plotX, y: visual.y,
-        name, type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
+        name, type: plot?.timeseriesStacked ? 'scatter' : (useGL ? 'scattergl' : 'scatter'), mode: 'lines',
         visible: t.visible ?? true,
         line,
+        ...stackAttrs,
         ...(customdata ? { customdata } : {}),
         hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}<extra></extra>`,
     };

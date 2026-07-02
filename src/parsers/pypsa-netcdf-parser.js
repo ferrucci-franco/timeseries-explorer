@@ -73,6 +73,7 @@ function idSegment(value) {
 
 function parsePypsaDate(value) {
     const text = String(value ?? '').trim();
+    if (/^[+-]?\d+(?:\.\d+)?$/.test(text)) return NaN;
     let match = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/);
     if (match) {
         const [, y, mo, d, h, mi, s = '0', frac = ''] = match;
@@ -81,6 +82,27 @@ function parsePypsaDate(value) {
     }
     const parsed = Date.parse(text);
     return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function cfTimeUnitScaleMs(unit) {
+    const normalized = String(unit || '').trim().toLowerCase();
+    if (/^days?$/.test(normalized)) return 24 * 60 * 60 * 1000;
+    if (/^hours?$/.test(normalized) || /^hrs?$/.test(normalized)) return 60 * 60 * 1000;
+    if (/^minutes?$/.test(normalized) || /^mins?$/.test(normalized)) return 60 * 1000;
+    if (/^seconds?$/.test(normalized) || /^secs?$/.test(normalized) || /^s$/.test(normalized)) return 1000;
+    if (/^milliseconds?$/.test(normalized) || /^msecs?$/.test(normalized) || /^ms$/.test(normalized)) return 1;
+    if (/^microseconds?$/.test(normalized) || /^usecs?$/.test(normalized) || /^us$/.test(normalized)) return 0.001;
+    if (/^nanoseconds?$/.test(normalized) || /^nsecs?$/.test(normalized) || /^ns$/.test(normalized)) return 0.000001;
+    return null;
+}
+
+function parseCfTimeUnits(units) {
+    const match = String(units || '').trim().match(/^([A-Za-z]+)\s+since\s+(.+)$/i);
+    if (!match) return null;
+    const scaleMs = cfTimeUnitScaleMs(match[1]);
+    const originMs = parsePypsaDate(match[2]);
+    if (!Number.isFinite(scaleMs) || !Number.isFinite(originMs)) return null;
+    return { scaleMs, originMs, units: match[1], originText: match[2] };
 }
 
 export default class PypsaNetcdfParser {
@@ -244,6 +266,33 @@ export default class PypsaNetcdfParser {
                         indexDataset: 'snapshots',
                     },
                 };
+            }
+            const attrs = this._datasetUserAttrs(datetime);
+            const cfTime = parseCfTimeUnits(attrs.units);
+            if (cfTime) {
+                const cfValues = Float64Array.from(numberArray(datetime.value), value => cfTime.originMs + value * cfTime.scaleMs);
+                if (cfValues.length && Array.from(cfValues).every(Number.isFinite)) {
+                    return {
+                        name: 'snapshots',
+                        data: cfValues,
+                        description: `[PyPSA snapshots datetime; ${attrs.units}]`,
+                        kind: 'abscissa',
+                        timeSourceStrategy: 'pypsa-snapshots-cf',
+                        dataType: 'numeric',
+                        isConstant: this.structureParser._isConstantValues(cfValues),
+                        interpolation: 'linear',
+                        negate: false,
+                        source: 'pypsa-netcdf',
+                        timeKind: 'datetime',
+                        timeDisplayMode: 'calendar',
+                        timeOriginMs: cfValues[0],
+                        pypsa: {
+                            dataset: 'snapshots_snapshot',
+                            indexDataset: 'snapshots',
+                            attrs,
+                        },
+                    };
+                }
             }
         }
 

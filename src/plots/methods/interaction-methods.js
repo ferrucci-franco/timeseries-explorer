@@ -155,7 +155,7 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     const indices = [];
     let anyCustomdata = false;
     plot.traces.forEach((t, idx) => {
-        const built = this._buildTimeTrace(t, range);
+        const built = this._buildTimeTrace(t, range, plot, idx);
         if (!built) return;
         xs.push(built.x);
         ys.push(built.y);
@@ -199,7 +199,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         const lazyMeta = data?._duckdb;
         if (!lazyMeta) {
             // Mixed lazy/eager: fall back to the sync path for this trace.
-            const built = this._buildTimeTrace(t, range);
+            const built = this._buildTimeTrace(t, range, plot, idx);
             if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
             if (perf) perf.eagerTraces++;
             return;
@@ -208,7 +208,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         const timeVar = this._getTimeVar(t.fileId);
         const sourceViewportRange = this._sourceRangeForDisplayRange(t.fileId, [t0, t1], timeVar);
         if (!sourceViewportRange || !sourceViewportRange.every(Number.isFinite)) {
-            const built = this._buildTimeTrace(t, range);
+            const built = this._buildTimeTrace(t, range, plot, idx);
             if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
             if (perf) perf.overviewTraces++;
             return;
@@ -234,7 +234,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             const overviewPtsInView = overviewPts * coverage;
             if (overviewPtsInView >= target * 1.25) {
                 // Overview is enough — use the sync path (slice + downsample in JS).
-                const built = this._buildTimeTrace(t, range);
+                const built = this._buildTimeTrace(t, range, plot, idx);
                 if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
                 if (perf) perf.overviewTraces++;
                 return;
@@ -2548,7 +2548,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     if (!toolbar) return;
 
     // Remove existing mode buttons if any (re-render case)
-    toolbar.querySelectorAll('.mode-btn-group, .view-btn-group').forEach(el => el.remove());
+    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group').forEach(el => el.remove());
     toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
 
     const plot = this.plots.get(panelId);
@@ -2580,6 +2580,24 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         modeGroup.appendChild(btn);
     });
     toolbar.appendChild(modeGroup);
+
+    if (currentMode === 'timeseries') {
+        const timeseriesToolsGroup = document.createElement('div');
+        timeseriesToolsGroup.className = 'timeseries-tools-group';
+
+        const stackBtn = document.createElement('button');
+        stackBtn.className = 'layout-toolbar-btn panel-action-btn timeseries-stack-btn' + (plot?.timeseriesStacked ? ' active' : '');
+        stackBtn.textContent = i18n.t('timeseriesStackLabel');
+        stackBtn.title = i18n.t('timeseriesStackToggle');
+        stackBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
+        stackBtn.setAttribute('aria-pressed', plot?.timeseriesStacked ? 'true' : 'false');
+        stackBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleTimeseriesStack(panelId);
+        });
+        timeseriesToolsGroup.appendChild(stackBtn);
+        toolbar.appendChild(timeseriesToolsGroup);
+    }
 
     // 3D view buttons (visible only in 3D modes)
     const viewGroup = document.createElement('div');
@@ -2808,6 +2826,45 @@ proto._updateModeButtons = function(panelEl, activeMode) {
 proto._toggle3DViewButtons = function(panelEl, show) {
     const group = panelEl.querySelector('.view-btn-group');
     if (group) group.style.display = show ? '' : 'none';
+};
+
+proto._toggleTimeseriesStack = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'timeseries') return;
+    plot.timeseriesStacked = !plot.timeseriesStacked;
+    const capturedView = plot.div ? this._capturePlotView(plot) : null;
+    let restoreView = null;
+    if (capturedView?.mode === '2d') {
+        const traceSeries = [];
+        const yArrays = [];
+        for (const trace of plot.traces.filter(t => this._isVisible(t))) {
+            const data = this.files.get(trace.fileId)?.data;
+            const variable = data?.variables?.[trace.varName];
+            if (!variable || variable.kind === 'parameter') continue;
+            const x = this._getTransformedTimeData(trace.fileId);
+            const y = this._getTransformedVariableData(trace.fileId, trace.varName);
+            traceSeries.push({ x, y });
+            yArrays.push(y);
+        }
+        const yExtent = this._timeseriesYExtentForSeries(plot, traceSeries, yArrays, capturedView.xRange);
+        restoreView = {
+            ...capturedView,
+            yRange: yExtent ? this._padRange(yExtent.min, yExtent.max) : null,
+        };
+    }
+
+    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+    const btn = panelEl?.querySelector('.timeseries-stack-btn');
+    if (btn) {
+        btn.classList.toggle('active', !!plot.timeseriesStacked);
+        btn.setAttribute('aria-pressed', plot.timeseriesStacked ? 'true' : 'false');
+    }
+
+    if (plot.div) {
+        this._rebuildPanel(panelId, { restoreView: restoreView || capturedView });
+    } else {
+        this._refreshActionBtns(panelId);
+    }
 };
 
 proto._supportsEqualAspect2D = function(plot) {

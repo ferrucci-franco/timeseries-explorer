@@ -38,6 +38,9 @@ async function makeEdgeCasePypsaBuffer() {
     const file = new h5wasm.File(path, 'w');
     try {
         file.create_dataset({ name: 'snapshots', data: [0, 1, 2], shape: [3], dtype: '<d' });
+        file.create_dataset({ name: 'snapshots_snapshot', data: [0, 1, 2], shape: [3], dtype: '<d' });
+        file.get('snapshots_snapshot').create_attribute('units', 'hours since 2030-01-01 00:00:00');
+        file.get('snapshots_snapshot').create_attribute('calendar', 'proleptic_gregorian');
         file.create_dataset({ name: 'generators_i', data: ['solar/a.1', 'wind B'] });
         file.create_dataset({ name: 'generators_carrier', data: ['PV/South', 'Wind.Onshore'] });
         file.create_dataset({ name: 'generators_t_p_i', data: ['solar/a.1', 'wind B'] });
@@ -121,6 +124,10 @@ await assert.rejects(
 );
 
 const edgeData = await parser.parse(await makeEdgeCasePypsaBuffer(), 'edge.nc');
+assert.equal(edgeData.metadata.timeKind, 'datetime');
+assert.equal(edgeData.metadata.timeDisplayMode, 'calendar');
+assert.equal(new Date(edgeData.variables.snapshots.data[0]).toISOString(), '2030-01-01T00:00:00.000Z');
+assert.equal(new Date(edgeData.variables.snapshots.data[2]).toISOString(), '2030-01-01T02:00:00.000Z');
 const encodedSolar = edgeData.variables['pypsa:generators/solar%2Fa.1/p'];
 const encodedWind = edgeData.variables['pypsa:generators/wind%20B/p'];
 assert(encodedSolar, 'asset names containing slashes should use escaped stable ids');
