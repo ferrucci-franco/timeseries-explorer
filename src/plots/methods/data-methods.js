@@ -1131,8 +1131,136 @@ proto._timeseriesStackAttrs = function(plot, traceIndex = 0) {
     if (!plot?.timeseriesStacked) return {};
     return {
         stackgroup: 'timeseries-stack',
+        stackgaps: 'infer zero',
         fill: traceIndex === 0 ? 'tozeroy' : 'tonexty',
     };
+};
+
+proto._timeseriesTraceSupport = function(traceState) {
+    if (!traceState) return null;
+    const timeData = this._getTransformedTimeData(traceState.fileId);
+    const values = this._getTransformedVariableData(traceState.fileId, traceState.varName);
+    const n = Math.min(timeData?.length || 0, values?.length || 0);
+    if (!n) return null;
+
+    const hasFinitePoint = (index) =>
+        Number.isFinite(Number(timeData[index])) && Number.isFinite(Number(values[index]));
+    let first = -1;
+    let last = -1;
+    for (let i = 0; i < n; i++) {
+        if (hasFinitePoint(i)) {
+            first = i;
+            break;
+        }
+    }
+    for (let i = n - 1; i >= 0; i--) {
+        if (hasFinitePoint(i)) {
+            last = i;
+            break;
+        }
+    }
+    if (first < 0 || last < 0) return null;
+    return {
+        startX: Number(timeData[first]),
+        endX: Number(timeData[last]),
+        startY: Number(values[first]),
+        endY: Number(values[last]),
+    };
+};
+
+proto._timeseriesStackPaddingEpsilon = function(boundaries, visual) {
+    const values = [];
+    for (const value of boundaries || []) {
+        const n = Number(value);
+        if (Number.isFinite(n)) values.push(n);
+    }
+    for (const value of visual?.x || []) {
+        const n = Number(value);
+        if (Number.isFinite(n)) values.push(n);
+    }
+    if (!values.length) return 1e-9;
+    values.sort((a, b) => a - b);
+    let minGap = Infinity;
+    for (let i = 1; i < values.length; i++) {
+        const gap = values[i] - values[i - 1];
+        if (gap > 0 && gap < minGap) minGap = gap;
+    }
+    const span = values[values.length - 1] - values[0];
+    const scale = Number.isFinite(minGap) ? minGap : (span > 0 ? span : Math.max(1, Math.abs(values[0])));
+    const ulpGuard = Number.EPSILON * Math.max(1, Math.abs(values[0]), Math.abs(values[values.length - 1])) * 16;
+    return Math.max(scale * 1e-9, ulpGuard, 1e-12);
+};
+
+proto._timeseriesStackBoundaryTimes = function(plot) {
+    if (!plot?.timeseriesStacked) return [];
+    const boundaries = new Set();
+    for (const trace of plot.traces || []) {
+        if (!this._isVisible(trace)) continue;
+        const support = this._timeseriesTraceSupport(trace);
+        if (!support) continue;
+        boundaries.add(support.startX);
+        boundaries.add(support.endX);
+    }
+    return [...boundaries].filter(Number.isFinite).sort((a, b) => a - b);
+};
+
+proto._applyTimeseriesStackZeroPadding = function(plot, traceState, visual) {
+    if (!plot?.timeseriesStacked || !visual?.x?.length || !visual?.y?.length) return visual;
+    const support = this._timeseriesTraceSupport(traceState);
+    if (!support) return visual;
+    const boundaries = this._timeseriesStackBoundaryTimes(plot);
+    if (!boundaries.length) return visual;
+    const epsilon = this._timeseriesStackPaddingEpsilon(boundaries, visual);
+
+    const points = [];
+    const addPoint = (x, y, order = 1) => {
+        const xn = Number(x);
+        const yn = Number(y);
+        if (!Number.isFinite(xn) || !Number.isFinite(yn)) return;
+        points.push({ x: xn, y: yn, order });
+    };
+
+    for (let i = 0; i < Math.min(visual.x.length, visual.y.length); i++) {
+        addPoint(visual.x[i], visual.y[i], 1);
+    }
+
+    addPoint(support.startX, support.startY, 1);
+    addPoint(support.endX, support.endY, 1);
+
+    const previousBoundary = [...boundaries].reverse().find(x => x < support.startX);
+    const nextBoundary = boundaries.find(x => x > support.endX);
+    const supportSpan = support.endX - support.startX;
+    const boundedOffset = (neighborGap) => {
+        const limits = [epsilon];
+        if (Number.isFinite(neighborGap) && neighborGap > 0) limits.push(neighborGap / 4);
+        if (Number.isFinite(supportSpan) && supportSpan > 0) limits.push(supportSpan / 4);
+        return Math.max(0, Math.min(...limits.filter(value => Number.isFinite(value) && value > 0)));
+    };
+
+    if (Number.isFinite(previousBoundary)) {
+        const offset = boundedOffset(support.startX - previousBoundary);
+        addPoint(support.startX - offset, 0, 0);
+    }
+    if (Number.isFinite(nextBoundary)) {
+        const offset = boundedOffset(nextBoundary - support.endX);
+        addPoint(support.endX + offset, 0, 2);
+    }
+
+    for (const x of boundaries) {
+        if (x < support.startX || x > support.endX) addPoint(x, 0, 1);
+    }
+
+    points.sort((a, b) => (a.x - b.x) || (a.order - b.order));
+
+    const outX = [];
+    const outY = [];
+    for (const point of points) {
+        const last = outX.length - 1;
+        if (last >= 0 && outX[last] === point.x && outY[last] === point.y) continue;
+        outX.push(point.x);
+        outY.push(point.y);
+    }
+    return { x: outX, y: outY };
 };
 
 proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex = 0) {
@@ -1190,7 +1318,11 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     }
     const isStep = variable.dataType === 'boolean';
     const useGL = !isStep && values.length >= PlotManager.GL_POINT_THRESHOLD;
-    const visual = this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep);
+    const visual = this._applyTimeseriesStackZeroPadding(
+        plot,
+        t,
+        this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep)
+    );
     const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
     const customdata = highResolutionCalendarAxis
         ? Array.from(visual.x || [], value => this._formatGeneratedCalendarDateTime(t.fileId, value, timeVar))

@@ -718,7 +718,7 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
         const trace = result.trace || plot.traces[result.idx];
         const prepared = result.prepared
             ? { x: result.x, y: result.y, customdata: result.customdata }
-            : this._prepareLazyTimeseriesRestyle(trace, result.x, result.y);
+            : this._prepareLazyTimeseriesRestyle(trace, result.x, result.y, plot);
         xs.push(prepared.x);
         ys.push(prepared.y);
         cds.push(prepared.customdata ?? null);
@@ -729,19 +729,25 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     return Plotly.restyle(plot.div, update, valid.map(result => result.idx));
 };
 
-proto._prepareLazyTimeseriesRestyle = function(trace, x, y) {
+proto._prepareLazyTimeseriesRestyle = function(trace, x, y, plot = null) {
     const fileId = trace?.fileId;
     const timeVar = this._getTimeVar(fileId);
-    const visualX = Array.from(x || [], (value, index) =>
+    let visualX = Array.from(x || [], (value, index) =>
         this._displayTimeForFetchedSourceTime(fileId, value, index, timeVar)
     );
+    let visualY = y;
+    if (plot?.timeseriesStacked) {
+        const padded = this._applyTimeseriesStackZeroPadding(plot, trace, { x: visualX, y });
+        visualX = padded.x;
+        visualY = padded.y;
+    }
     const plotX = this._plotlyTimeArray(fileId, visualX, timeVar);
     const generatedCalendarAxis = this._isGeneratedCalendarTime(fileId, timeVar);
     const durationAxis = this._timeDisplayModeForVar(fileId, timeVar) === 'elapsedDateTime'
         || (this._isGeneratedDurationTime(fileId, timeVar) && !generatedCalendarAxis);
     return {
         x: plotX,
-        y,
+        y: visualY,
         customdata: generatedCalendarAxis
             ? visualX.map(value => this._formatGeneratedCalendarDateTime(fileId, value, timeVar))
             : durationAxis
