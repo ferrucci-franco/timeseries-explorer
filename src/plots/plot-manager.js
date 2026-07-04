@@ -726,7 +726,6 @@ class PlotManager {
                 if (insertIndex !== undefined) plot.markerTraceIdx += 1;
                 this._syncTimeseriesMarkerColors(plot);
                 this._installLegendHoverHint(plot.div);
-                this._refreshTimeseriesVisuals(panelId, plot, currentRange);
             });
             // Update Y axis title: clear when 2+ traces (X/time label always stays)
             const layout = this._buildTimeLayout(plot);
