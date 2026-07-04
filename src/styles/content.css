@@ -984,6 +984,22 @@
     padding: 1rem;
 }
 
+.drop-overlay > span {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    max-width: min(520px, calc(100% - 2rem));
+    padding: 9px 12px;
+    background-color: color-mix(in srgb, var(--primary-color) 13%, var(--bg-primary));
+    border: 1px solid color-mix(in srgb, var(--primary-color) 46%, var(--border-color));
+    border-radius: 6px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+    color: var(--text-primary);
+    line-height: 1.35;
+}
+
 .drop-overlay.active {
     opacity: 1;
 }
@@ -1011,8 +1027,18 @@
 }
 
 .drop-overlay.timeseries-y2-drop > span {
-    position: relative;
-    z-index: 1;
+    position: absolute;
+    top: 50%;
+    max-width: calc(50% - 2rem);
+    transform: translate(-50%, -50%);
+}
+
+.drop-overlay.timeseries-y2-drop.axis-left > span {
+    left: 25%;
+}
+
+.drop-overlay.timeseries-y2-drop.axis-right > span {
+    left: 75%;
 }
 
 /* Persistent hint while waiting for next variable drop */
