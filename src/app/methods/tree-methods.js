@@ -7,6 +7,7 @@ proto.renderVariablesTree = function(tree) {
     if (!tree) {
         const container = document.getElementById('variables-tree');
         if (container) container.innerHTML = '';
+        this._syncDataTools?.();
         return;
     }
     this._renderFilteredTree();
@@ -19,6 +20,7 @@ proto._renderFilteredTree = function() {
     const autoExpand = filter.length > 0;
     this._renderTreeNode(this._currentTree, container, 0, filter, autoExpand);
     this._renderDerivedTreeSection(container, filter, autoExpand);
+    this._syncDataTools?.();
 };
 
 proto._clearVariableSelection = function() {
@@ -221,6 +223,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 
         const itemDiv = document.createElement('div');
         itemDiv.className = 'tree-item' + (variable.derived ? ' tree-item-derived' : '');
+        itemDiv.classList.toggle('tree-item-modified', !!variable.dataToolModified);
         itemDiv.classList.toggle('selected', this.selectedVariables.has(variable.name));
         const canPlot = variable.plottable !== false && variable.dataType !== 'string';
         itemDiv.classList.toggle('tree-item-nonplottable', !canPlot);
@@ -236,7 +239,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 
         const label = document.createElement('span');
         label.className = 'tree-label';
-        label.textContent = name;
+        label.textContent = variable.dataToolModified ? `${name} ${i18n.t('outlierModifiedSuffix')}` : name;
         label.title = variable.description || name;
 
         const info = document.createElement('span');

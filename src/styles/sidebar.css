@@ -513,6 +513,142 @@
     gap: 0.4rem;
 }
 
+/* Data tools */
+.data-tools-section {
+    position: relative;
+}
+
+.data-tool-panel,
+.data-tool-form,
+.data-tool-output-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.data-tool-form.collapsed,
+.data-tool-output-wrap.collapsed,
+.outlier-method-controls.collapsed {
+    display: none;
+}
+
+.data-tool-select {
+    width: 100%;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    border-radius: 6px;
+    font-size: 0.82rem;
+    box-sizing: border-box;
+}
+
+.data-tool-select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.data-tool-select option.data-tool-modified {
+    color: #8b1e1e;
+    font-weight: 700;
+}
+
+.theme-dark .data-tool-select option.data-tool-modified {
+    color: #ff8a80;
+}
+
+.data-tool-actions {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.data-tool-actions button {
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.data-tool-actions button:disabled,
+.data-tool-select:disabled,
+.data-tools-section input:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.data-tool-message {
+    min-height: 2rem;
+}
+
+.data-tool-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+}
+
+.data-tool-help-toggle {
+    width: 1.45rem;
+    height: 1.45rem;
+    flex: 0 0 auto;
+}
+
+.data-tool-help-popover {
+    top: 6.6rem;
+}
+
+.outlier-method-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.data-tool-input-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(5.9rem, 1fr));
+    gap: 0.45rem;
+}
+
+.data-tool-input-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+    color: var(--text-secondary);
+    font-size: 0.73rem;
+    font-weight: 600;
+}
+
+.data-tool-input-grid .derived-input {
+    font-size: 0.78rem;
+}
+
+.data-tool-slider-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 2.6rem;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.data-tool-slider-row.single {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.data-tool-slider {
+    width: 100%;
+    accent-color: var(--primary-color);
+}
+
+.data-tool-slider-value {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.data-tool-radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
 .derived-create-btn,
 .derived-cancel-btn {
     padding: 0.38rem 0.6rem;
@@ -554,6 +690,17 @@
 .tree-item-derived .tree-label,
 .tree-item-derived .tree-icon {
     color: var(--derived-color);
+}
+
+.tree-item-modified .tree-label,
+.tree-item-modified .tree-icon {
+    color: #8b1e1e;
+    font-weight: 700;
+}
+
+.theme-dark .tree-item-modified .tree-label,
+.theme-dark .tree-item-modified .tree-icon {
+    color: #ff8a80;
 }
 
 .tree-derived-remove {

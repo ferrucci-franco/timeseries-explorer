@@ -82,6 +82,7 @@ proto.initEventListeners = function() {
     document.getElementById('derived-name').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') this.createDerivedVariable();
     });
+    this.initDataTools?.();
     document.addEventListener('click', (e) => {
         if (!e.target.closest('.derived-formula-wrap')) this._hideDerivedSuggestions();
         if (!e.target.closest('#derived-help-popover') && !e.target.closest('#derived-help-toggle')) {
@@ -89,6 +90,9 @@ proto.initEventListeners = function() {
         }
         if (!e.target.closest('#timeseries-downsampling-help-popover') && !e.target.closest('#timeseries-downsampling-help-toggle')) {
             this._toggleTimeseriesDownsamplingHelpPopover(false);
+        }
+        if (!e.target.closest('#outlier-help-popover') && !e.target.closest('#outlier-help-toggle')) {
+            this._toggleOutlierHelpPopover?.(false);
         }
     });
     document.addEventListener('keydown', (e) => {
@@ -100,6 +104,11 @@ proto.initEventListeners = function() {
         if (e.key === 'Escape' && !document.getElementById('timeseries-downsampling-help-popover')?.hidden) {
             e.preventDefault();
             this._toggleTimeseriesDownsamplingHelpPopover(false);
+            return;
+        }
+        if (e.key === 'Escape' && !document.getElementById('outlier-help-popover')?.hidden) {
+            e.preventDefault();
+            this._toggleOutlierHelpPopover?.(false);
             return;
         }
         if (e.key === 'Escape' && this.selectedVariables.size > 0) {
@@ -902,6 +911,7 @@ proto.loadExample = async function(exampleId = 'pendulum') {
             this.files.get(fileId).buffer = buffer;
             this.files.get(fileId).contentHash = contentHash;
             this._reapplyDerivedVariables(fileId, data);
+            this._reapplyDataToolVariables?.(fileId, data);
             this.plotManager.updateFileData(fileId, data);
         }
         this.plotManager.setActiveFile(fileId);

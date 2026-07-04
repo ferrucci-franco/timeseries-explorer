@@ -105,6 +105,9 @@ proto._createSessionSnapshot = function(options = {}) {
             : null;
         const derived = [...(this.derivedByFile.get(fileId) || new Map()).values()]
             .map(item => ({ name: item.name, formula: item.formula }));
+        const dataTools = typeof this._serializeDataToolDefinitions === 'function'
+            ? this._serializeDataToolDefinitions(fileId)
+            : [];
 
         files.push({
             id: fileId,
@@ -116,6 +119,7 @@ proto._createSessionSnapshot = function(options = {}) {
             csvProfile,
             variableNames: data ? Object.keys(data.variables || {}) : [],
             derived,
+            dataTools,
             archivePath,
         });
     }
@@ -237,6 +241,7 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     this._applySessionSettings(session.settings || {});
     await this._applySessionFileMetadata(session, fileMap);
     this._applySessionDerivedVariables(session, fileMap);
+    this._applySessionDataToolVariables(session, fileMap);
     this._applySessionLayout(session.layout);
     await this._applySessionPlots(session.plots || [], fileMap);
 
@@ -249,6 +254,7 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     this._updateActionButtons();
     const activeData = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
     if (activeData) this.renderVariablesTree(activeData.tree);
+    this._resetDataToolPicker?.();
     document.getElementById('drop-zone')?.classList.toggle('active', this.files.size === 0);
 
     await Modal.alert(
@@ -292,7 +298,11 @@ proto._scoreSessionFileMatch = function(session, meta, fileId, entry) {
         || (String(meta.name || '').toLowerCase() === String(entry.name || '').toLowerCase()
             && String(meta.extension || '').toLowerCase() === String(entry.extension || '').toLowerCase());
     const required = this._sessionRequiredVariables(meta.id, session);
-    const hasRequired = required.every(name => !!data.variables?.[name] || !!(meta.derived || []).some(d => d.name === name));
+    const hasRequired = required.every(name =>
+        !!data.variables?.[name]
+        || !!(meta.derived || []).some(d => d.name === name)
+        || !!(meta.dataTools || []).some(d => (d.targetMode || 'create') !== 'modify' && d.name === name)
+    );
 
     let score = 0;
     if (sameHash) score += 1000;
@@ -327,24 +337,34 @@ proto._missingSessionFiles = function(session, fileMap) {
 
 proto._sessionRequiredVariables = function(sessionFileId, session) {
     if (!session) return [];
-    const derivedNames = new Set((session.files || []).find(file => file.id === sessionFileId)?.derived?.map(d => d.name) || []);
+    const fileMeta = (session.files || []).find(file => file.id === sessionFileId);
+    const derivedNames = new Set(fileMeta?.derived?.map(d => d.name) || []);
+    const dataToolItems = fileMeta?.dataTools || [];
+    const dataToolNames = new Set(dataToolItems
+        .filter(item => (item.targetMode || 'create') !== 'modify')
+        .map(item => item.name)
+        .filter(Boolean));
+    const generatedNames = new Set([...derivedNames, ...dataToolNames]);
     const names = new Set();
     for (const plot of session.plots || []) {
         for (const trace of plot.traces || []) {
-            if (trace.fileId === sessionFileId && !derivedNames.has(trace.varName)) names.add(trace.varName);
+            if (trace.fileId === sessionFileId && !generatedNames.has(trace.varName)) names.add(trace.varName);
         }
         for (const trace of plot.phaseTraces || []) {
             if (trace.fileId !== sessionFileId) continue;
             [trace.x, trace.y, trace.z].filter(Boolean).forEach(name => {
-                if (!derivedNames.has(name)) names.add(name);
+                if (!generatedNames.has(name)) names.add(name);
             });
         }
         if (plot.stateSlots?.fileId === sessionFileId) {
             (plot.stateSlots.x || []).filter(Boolean).forEach(name => {
-                if (!derivedNames.has(name)) names.add(name);
+                if (!generatedNames.has(name)) names.add(name);
             });
         }
     }
+    dataToolItems.forEach(item => {
+        if (item?.sourceName && !generatedNames.has(item.sourceName)) names.add(item.sourceName);
+    });
     return [...names];
 };
 
@@ -431,6 +451,33 @@ proto._applySessionDerivedVariables = function(session, fileMap) {
     }
 };
 
+proto._applySessionDataToolVariables = function(session, fileMap) {
+    for (const meta of session.files || []) {
+        const fileId = fileMap.get(meta.id);
+        const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+        if (!fileId || !data) continue;
+        const definitions = new Map();
+        for (const item of meta.dataTools || []) {
+            definitions.set(item.name, {
+                name: item.name,
+                tool: item.tool,
+                targetMode: item.targetMode || 'create',
+                sourceName: item.sourceName,
+                method: item.method,
+                params: this._cloneSerializable(item.params || {}),
+                replacement: item.replacement || 'nan',
+                variable: null,
+            });
+        }
+        if (definitions.size) {
+            this.dataToolVariablesByFile.set(fileId, definitions);
+            this._reapplyDataToolVariables?.(fileId, data);
+        } else {
+            this.dataToolVariablesByFile.delete(fileId);
+        }
+    }
+};
+
 proto._applySessionLayout = function(layout) {
     if (!layout) return;
     if (this.layoutManager.onPanelUnmount) {
@@ -499,6 +546,7 @@ proto._resetWorkspaceForSession = function() {
     this.plotManager.plots.clear();
     this.plotManager.activeFileId = null;
     this.derivedByFile.clear();
+    this._clearDataToolDefinitions?.();
     this._expandedFileTransforms.clear();
     this._clearVariableSelection();
     this.layoutManager.reset();

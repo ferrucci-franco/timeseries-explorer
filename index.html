@@ -178,6 +178,102 @@
                 </div>
             </div>
 
+            <!-- Data Tools -->
+            <div class="sidebar-section data-tools-section">
+                <h3 data-i18n="dataTools">Data tools</h3>
+                <div class="data-tool-panel">
+                    <label class="options-subgroup-label" for="data-tool-select" data-i18n="dataToolSelect">Tool</label>
+                    <select id="data-tool-select" class="data-tool-select">
+                        <option value="" data-i18n="dataToolChoose">Choose a tool</option>
+                        <option value="removeOutliers" data-i18n="removeOutliers">Remove outliers</option>
+                    </select>
+
+                    <div id="remove-outliers-tool" class="data-tool-form collapsed">
+                        <label class="options-subgroup-label" for="outlier-variable" data-i18n="outlierVariable">Variable</label>
+                        <select id="outlier-variable" class="data-tool-select"></select>
+
+                        <div class="data-tool-radio-group" role="group" aria-label="Outlier target">
+                            <label class="radio-label">
+                                <input type="radio" name="outlier-target" value="modify" checked>
+                                <span data-i18n="outlierTargetModify">Modify selected variable</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="outlier-target" value="create">
+                                <span data-i18n="outlierTargetCreate">Create new variable</span>
+                            </label>
+                        </div>
+
+                        <div id="outlier-output-wrap" class="data-tool-output-wrap collapsed">
+                            <label class="options-subgroup-label" for="outlier-output-name" data-i18n="outlierOutputName">Output name</label>
+                            <input id="outlier-output-name" class="derived-input" type="text" autocomplete="off">
+                        </div>
+
+                        <div class="data-tool-label-row">
+                            <label class="options-subgroup-label" for="outlier-method" data-i18n="outlierDetectionMethod">Detection method</label>
+                            <button id="outlier-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Outlier detection help" data-i18n-title="outlierHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="outlier-help-popover">
+                                <span>?</span>
+                            </button>
+                        </div>
+                        <select id="outlier-method" class="data-tool-select">
+                            <option value="spike" selected data-i18n="outlierMethodSpike">Spike/dropout</option>
+                            <option value="bounds" data-i18n="outlierMethodBounds">Hard bounds</option>
+                        </select>
+
+                        <div id="outlier-help-popover" class="derived-help-popover data-tool-help-popover" role="dialog" aria-labelledby="outlier-help-title" hidden>
+                            <div class="derived-help-title" id="outlier-help-title" data-i18n="outlierHelpTitle">Outlier detection help</div>
+                            <div class="derived-help-row">
+                                <span class="derived-help-label" data-i18n="outlierHelpSpikeLabel">Spike/dropout</span>
+                                <span data-i18n="outlierHelpSpike">Uses a moving median and local MAD to catch short gross excursions that return to the neighborhood.</span>
+                            </div>
+                            <div class="derived-help-row">
+                                <span class="derived-help-label" data-i18n="outlierHelpBoundsLabel">Bounds</span>
+                                <span data-i18n="outlierHelpBounds">Flags finite values outside the physical minimum or maximum you enter.</span>
+                            </div>
+                        </div>
+
+                        <div class="outlier-method-controls" data-outlier-method="spike">
+                            <div class="data-tool-label-row">
+                                <label class="options-subgroup-label" for="outlier-spike-sensitivity" data-i18n="outlierSensitivity">Sensitivity</label>
+                                <span id="outlier-spike-sensitivity-value" class="data-tool-slider-value">6</span>
+                            </div>
+                            <div class="data-tool-slider-row single">
+                                <input id="outlier-spike-sensitivity" class="data-tool-slider" type="range" min="1" max="10" step="1" value="6">
+                            </div>
+                        </div>
+
+                        <div class="outlier-method-controls collapsed" data-outlier-method="bounds">
+                            <div class="data-tool-input-grid">
+                                <label>
+                                    <span data-i18n="outlierLowerBound">Minimum</span>
+                                    <input id="outlier-lower-bound" class="derived-input" type="number" step="any" placeholder="No minimum" data-i18n-placeholder="outlierNoMinimum">
+                                </label>
+                                <label>
+                                    <span data-i18n="outlierUpperBound">Maximum</span>
+                                    <input id="outlier-upper-bound" class="derived-input" type="number" step="any" placeholder="No maximum" data-i18n-placeholder="outlierNoMaximum">
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="data-tool-radio-group" role="group" aria-label="Outlier replacement">
+                            <label class="radio-label">
+                                <input type="radio" name="outlier-replacement" value="nan" checked>
+                                <span data-i18n="outlierReplaceNaN">Replace with NaN</span>
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="outlier-replacement" value="interpolate">
+                                <span data-i18n="outlierReplaceInterpolate">Interpolate</span>
+                            </label>
+                        </div>
+
+                        <div class="data-tool-actions">
+                            <button id="outlier-reset" class="derived-cancel-btn" type="button" data-i18n="outlierReset" disabled>Reset</button>
+                        </div>
+
+                    </div>
+                    <div id="outlier-message" class="derived-message data-tool-message"></div>
+                </div>
+            </div>
+
             <!-- Options -->
             <div class="sidebar-section">
                 <h3 data-i18n="options">Options</h3>

@@ -328,6 +328,7 @@ proto.reloadActiveFile = async function() {
         csvProfile: currentProfile?.profileSource === 'user' ? currentProfile : null,
     });
     this._reapplyDerivedVariables(id, data);
+    this._reapplyDataToolVariables?.(id, data);
 
     entry.buffer = buffer;
     entry.contentHash = contentHash;
@@ -368,6 +369,8 @@ proto.reloadActiveFileAsNewVersion = async function() {
     const fileId = `f${this._nextFileId++}`;
     this._copyDerivedDefinitions(sourceId, fileId);
     this._reapplyDerivedVariables(fileId, data);
+    this._copyDataToolDefinitions?.(sourceId, fileId);
+    this._reapplyDataToolVariables?.(fileId, data);
     this.files.set(fileId, {
         file: latestFile || source.file,
         fileHandle: source.fileHandle || null,
@@ -1536,6 +1539,7 @@ proto.removeFile = async function(fileId) {
     this.plotManager.removeFile(fileId);
     this.files.delete(fileId);
     this.derivedByFile.delete(fileId);
+    this._clearDataToolDefinitions?.(fileId);
     this._expandedFileTransforms.delete(fileId);
     this._clearVariableSelection();
 
@@ -1738,6 +1742,7 @@ proto.adjustCsvParsing = async function(fileId) {
             : this._fileFingerprint(latestFile || entry.file);
         const data = await this._parseCsvResultBuffer(displayName, buffer, latestFile || entry.file, { csvProfile: reviewedProfile });
         this._reapplyDerivedVariables(fileId, data);
+        this._reapplyDataToolVariables?.(fileId, data);
         if (latestFile) entry.file = latestFile;
         entry.buffer = buffer;
         entry.contentHash = contentHash;

@@ -7,6 +7,7 @@ import PlotManager from '../plots/plot-manager.js';
 import { installFileMethods } from './methods/file-methods.js';
 import { installUiMethods } from './methods/ui-methods.js';
 import { installDerivedMethods } from './methods/derived-methods.js';
+import { installDataToolsMethods } from './methods/data-tools-methods.js';
 import { installTreeMethods } from './methods/tree-methods.js';
 import { installSessionMethods } from './methods/session-methods.js';
 import { installLiveUpdateMethods } from './methods/live-update-methods.js';
@@ -26,6 +27,7 @@ class OpenModelicaViewer {
         this._filterText      = '';
         this._loadedScripts   = new Set();
         this.derivedByFile    = new Map();
+        this.dataToolVariablesByFile = new Map();
         this._suggestionIndex = 0;
         this.selectedVariables = new Set();
         this._expandedFileTransforms = new Set();
@@ -80,6 +82,7 @@ class OpenModelicaViewer {
         this._updateLiveUpdateTopBar?.();
         if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();
         if (typeof this._syncHoverCornerPicker === 'function') this._syncHoverCornerPicker();
+        if (typeof this._syncDataTools === 'function') this._syncDataTools();
         this._renderFilesList();
         if (this._currentTree) this._renderFilteredTree();
         this.layoutManager.render();
@@ -178,6 +181,7 @@ class OpenModelicaViewer {
 installFileMethods(OpenModelicaViewer);
 installUiMethods(OpenModelicaViewer);
 installDerivedMethods(OpenModelicaViewer);
+installDataToolsMethods(OpenModelicaViewer);
 installTreeMethods(OpenModelicaViewer);
 installSessionMethods(OpenModelicaViewer);
 installLiveUpdateMethods(OpenModelicaViewer);

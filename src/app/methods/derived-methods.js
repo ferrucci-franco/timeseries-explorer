@@ -314,6 +314,9 @@ proto._removeDerivedVariable = function(name) {
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
     if (!fileId || !data) return;
     this.derivedByFile.get(fileId)?.delete(name);
+    const dataToolDefinitions = this.dataToolVariablesByFile?.get(fileId);
+    dataToolDefinitions?.delete(name);
+    if (dataToolDefinitions && !dataToolDefinitions.size) this.dataToolVariablesByFile.delete(fileId);
     delete data.variables[name];
     for (const [panelId, plot] of this.plotManager.plots) {
         const beforeTs = plot.traces.length;

@@ -46,6 +46,10 @@ const i18n = {
             el.title = this.t(el.getAttribute('data-i18n-title'));
         });
 
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+            el.placeholder = this.t(el.getAttribute('data-i18n-placeholder'));
+        });
+
         document.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
             el.setAttribute('aria-label', this.t(el.getAttribute('data-i18n-aria-label')));
         });
@@ -64,6 +68,7 @@ const i18n = {
             'toggle-descriptions':'toggleDescriptions',
             'derived-help-toggle':'derivedFormulaHelp',
             'timeseries-downsampling-help-toggle':'timeseriesDownsamplingHelpTitle',
+            'outlier-help-toggle':'outlierHelpTitle',
             'expand-all':         'expandAll',
             'collapse-all':       'collapseAll',
             'reset-layout':       'resetLayout',
