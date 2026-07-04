@@ -316,7 +316,7 @@ async function selectResultFilePaths(options = {}, multiple = false) {
     defaultPath: typeof options.defaultPath === 'string' && options.defaultPath ? options.defaultPath : undefined,
     properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
     filters: [
-      { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet'] },
+      { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', 'nc', 'netcdf', 'pkl', 'pickle'] },
       { name: 'All files', extensions: ['*'] },
     ],
   });

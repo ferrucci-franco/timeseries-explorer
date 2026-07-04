@@ -5,11 +5,16 @@ import {
     PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES,
     PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES,
 } from '../../parsers/pypsa-netcdf-limits.js';
+import {
+    PICKLE_DESKTOP_EAGER_LIMIT_BYTES,
+    PICKLE_WEB_EAGER_LIMIT_BYTES,
+} from '../../parsers/pickle-limits.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
 let duckDbSourceClassPromise = null;
 let pypsaNetcdfParserClassPromise = null;
+let pickleParserClassPromise = null;
 
 async function loadDuckDbSourceClass() {
     if (globalThis.__OMV_PORTABLE__ === true) return null;
@@ -45,6 +50,13 @@ async function loadPypsaNetcdfParserClass() {
     return pypsaNetcdfParserClassPromise;
 }
 
+async function loadPickleParserClass() {
+    if (!pickleParserClassPromise) {
+        pickleParserClassPromise = import('../../parsers/pickle-parser.js').then(module => module.default);
+    }
+    return pickleParserClassPromise;
+}
+
 function csvProfileWithoutRowFilter(csvProfile) {
     const clone = cloneCsvProfileForIpc(csvProfile);
     if (!clone) return null;
@@ -71,6 +83,7 @@ proto.loadFile = async function(file, options = {}) {
                 if (!currentFile) throw new Error(i18n.t('invalidFile'));
                 extension = this._fileExtension(currentFile.name);
                 this._preflightPypsaNetcdfFile(currentFile, extension);
+                this._preflightPickleFile(currentFile, extension);
                 const preflight = await this._maybeConvertLargeCsvBeforeLoad(currentFile, { ...options, extension });
                 if (preflight?.cancelled) return null;
                 if (preflight?.csvProfile) {
@@ -431,6 +444,8 @@ proto._readLatestFileForStreamableReload = async function(entry) {
 proto._readLatestBuffer = async function(entry) {
     if (entry.localPath) {
         const file = await this._readLocalResultPath(entry.localPath);
+        this._preflightPypsaNetcdfFile(file, this._fileExtension(file.name));
+        this._preflightPickleFile(file, this._fileExtension(file.name));
         const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
         entry.file = file;
         entry.extension = this._fileExtension(file.name);
@@ -438,14 +453,23 @@ proto._readLatestBuffer = async function(entry) {
     }
 
     if (entry.fileHandle?.getFile) {
+        let file = null;
         try {
-            const file = await entry.fileHandle.getFile();
-            const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
-            entry.file = file;
-            entry.extension = this._fileExtension(file.name);
-            return buffer;
+            file = await entry.fileHandle.getFile();
         } catch (err) {
             console.warn('Could not read latest file handle; falling back to stored file snapshot.', err);
+        }
+        if (file) {
+            this._preflightPypsaNetcdfFile(file, this._fileExtension(file.name));
+            this._preflightPickleFile(file, this._fileExtension(file.name));
+            try {
+                const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+                entry.file = file;
+                entry.extension = this._fileExtension(file.name);
+                return buffer;
+            } catch (err) {
+                console.warn('Could not read latest file handle; falling back to stored file snapshot.', err);
+            }
         }
     }
 
@@ -460,6 +484,8 @@ proto._readLatestBuffer = async function(entry) {
         entry.file = file;
         entry.fileHandle = null;
         entry.extension = this._fileExtension(file.name);
+        this._preflightPypsaNetcdfFile(file, entry.extension);
+        this._preflightPickleFile(file, entry.extension);
         return file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file);
     }
 
@@ -467,7 +493,11 @@ proto._readLatestBuffer = async function(entry) {
     // be a snapshot, so the FileSystemFileHandle path above is preferred.
     let buffer;
     if (entry.file?.arrayBuffer) {
-        try { buffer = await entry.file.arrayBuffer(); } catch (_) {}
+        this._preflightPypsaNetcdfFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
+        this._preflightPickleFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
+        try {
+            buffer = await entry.file.arrayBuffer();
+        } catch (_) {}
     }
     if (!buffer) buffer = entry.buffer;
     if (!buffer) throw new Error('No buffer available');
@@ -631,6 +661,10 @@ proto._isPypsaNetcdfExtension = function(extension) {
     return extension === '.nc' || extension === '.netcdf';
 };
 
+proto._isPickleExtension = function(extension) {
+    return extension === '.pkl' || extension === '.pickle';
+};
+
 proto._pypsaNetcdfEagerLimitBytes = function() {
     return this.capabilities?.isDesktop
         ? PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES
@@ -644,6 +678,23 @@ proto._preflightPypsaNetcdfFile = function(file, extension = this._fileExtension
     if (!Number.isFinite(size) || size <= limit) return;
     throw new Error(i18n.t('pypsaNetcdfTooLarge')
         .replace('{file}', file?.name || 'network.nc')
+        .replace('{size}', this._formatFileSize(size))
+        .replace('{limit}', this._formatFileSize(limit)));
+};
+
+proto._pickleEagerLimitBytes = function() {
+    return this.capabilities?.isDesktop
+        ? PICKLE_DESKTOP_EAGER_LIMIT_BYTES
+        : PICKLE_WEB_EAGER_LIMIT_BYTES;
+};
+
+proto._preflightPickleFile = function(file, extension = this._fileExtension(file?.name || '')) {
+    if (!this._isPickleExtension(extension)) return;
+    const size = Number(file?.size || 0);
+    const limit = this._pickleEagerLimitBytes();
+    if (!Number.isFinite(size) || size <= limit) return;
+    throw new Error(i18n.t('pickleTooLarge')
+        .replace('{file}', file?.name || 'data.pkl')
         .replace('{size}', this._formatFileSize(size))
         .replace('{limit}', this._formatFileSize(limit)));
 };
@@ -735,6 +786,7 @@ proto._readLocalResultPath = async function(filePath) {
                     throw err;
                 }
                 this._preflightPypsaNetcdfFile(statResult, this._fileExtension(filePath));
+                this._preflightPickleFile(statResult, this._fileExtension(filePath));
             }
             const result = await desktopReader({ path: filePath });
             if (result?.ok === false) {
@@ -758,13 +810,30 @@ proto._readLocalResultPath = async function(filePath) {
         }
     }
 
-    const response = await fetch(`${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`, { cache: 'no-store' });
+    const localUrl = `${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`;
+    const extension = this._fileExtension(filePath);
+    const name = String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'results.csv';
+    if (this._isPypsaNetcdfExtension(extension) || this._isPickleExtension(extension)) {
+        let headResponse = null;
+        try {
+            headResponse = await fetch(localUrl, { method: 'HEAD', cache: 'no-store' });
+        } catch (_) {
+            headResponse = null;
+        }
+        if (headResponse?.ok) {
+            const size = Number(headResponse.headers.get('content-length') || 0);
+            const statLike = { name, size };
+            this._preflightPypsaNetcdfFile(statLike, extension);
+            this._preflightPickleFile(statLike, extension);
+        }
+    }
+
+    const response = await fetch(localUrl, { cache: 'no-store' });
     if (!response.ok) {
         const detail = await response.text().catch(() => '');
         throw new Error(detail || i18n.t('errorLoading'));
     }
     const blob = await response.blob();
-    const name = String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'results.csv';
     const lastModified = Number(response.headers.get('x-omv-last-modified')) || Date.now();
     return new File([blob], name, { lastModified, type: response.headers.get('content-type') || 'application/octet-stream' });
 };
@@ -844,8 +913,10 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
     const extension = this._fileExtension(filename);
     if (extension === '.parquet') return this._parseParquetResult(filename, file);
     if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer);
+    if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer);
     if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file, options);
     if (extension === '.mat') return this.parser.parse(buffer);
+    if (this._looksLikePickleBuffer(buffer)) throw new Error(i18n.t('pickleLooksLikeUnsupportedExtension'));
     if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file, options);
     throw new Error(i18n.t('invalidFile'));
 };
@@ -854,6 +925,24 @@ proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer) {
     const Parser = await loadPypsaNetcdfParserClass();
     const parser = new Parser(this.parser);
     return parser.parse(buffer, filename, { maxFileBytes: this._pypsaNetcdfEagerLimitBytes() });
+};
+
+proto._parsePickleResultBuffer = async function(filename, buffer) {
+    const Parser = await loadPickleParserClass();
+    const parser = new Parser(this.parser);
+    try {
+        return await parser.parse(buffer, filename, { maxFileBytes: this._pickleEagerLimitBytes() });
+    } catch (err) {
+        if (err?.code === 'PICKLE_COMPRESSED_UNSUPPORTED') {
+            throw new Error(i18n.t('pickleCompressedUnsupported')
+                .replace('{format}', err.format || 'unknown'));
+        }
+        if (err?.code === 'PICKLE_UNSUPPORTED_OBJECT') {
+            throw new Error(i18n.t('pickleUnsupportedObject')
+                .replace('{type}', err.type || err.message || 'unknown'));
+        }
+        throw err;
+    }
 };
 
 // Files bigger than this threshold (bytes) trigger DuckDB lazy mode: the
@@ -1467,6 +1556,11 @@ proto._looksLikeTextBuffer = function(buffer) {
     return true;
 };
 
+proto._looksLikePickleBuffer = function(buffer) {
+    const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
+    return bytes.length >= 2 && bytes[0] === 0x80 && bytes[1] >= 2 && bytes[1] <= 5;
+};
+
 proto._nextVersionName = function(name) {
     const base = String(name || 'results').replace(/\s+#\d+$/, '');
     let maxVersion = 1;
@@ -1671,12 +1765,18 @@ proto._fileTypeLabel = function(_entry, fileId = null) {
     if (metadata?.format === 'pypsa-netcdf' || metadata?.source === 'pypsa') {
         return i18n.t('fileTypePypsaNetcdf');
     }
+    if (metadata?.format === 'pandas-pickle' || metadata?.source === 'pandas') {
+        return i18n.t('fileTypePandasPickle');
+    }
     return '';
 };
 
 proto._fileTypeHasWarnings = function(_entry, fileId = null) {
     const metadata = fileId ? this.plotManager.files.get(fileId)?.data?.metadata : null;
-    return Number(metadata?.skippedDynamicCount || metadata?.skippedDynamic?.length || 0) > 0;
+    return Number(metadata?.skippedDynamicCount || metadata?.skippedDynamic?.length || 0) > 0
+        || Number(metadata?.skippedColumnsCount || metadata?.skippedColumns?.length || 0) > 0
+        || Number(metadata?.precisionLossCount || metadata?.precisionWarnings?.length || 0) > 0
+        || Number(metadata?.duplicateColumnCount || metadata?.duplicateColumns?.length || 0) > 0;
 };
 
 proto._fileTypeTooltip = function(_entry, fileId = null, fallback = '') {
@@ -1684,6 +1784,16 @@ proto._fileTypeTooltip = function(_entry, fileId = null, fallback = '') {
     const skipped = Number(metadata?.skippedDynamicCount || metadata?.skippedDynamic?.length || 0);
     if ((metadata?.format === 'pypsa-netcdf' || metadata?.source === 'pypsa') && skipped > 0) {
         return `${fallback}\n${i18n.t('fileTypePypsaSkippedDynamic').replace('{count}', String(skipped))}`;
+    }
+    if (metadata?.format === 'pandas-pickle' || metadata?.source === 'pandas') {
+        const lines = [fallback].filter(Boolean);
+        const skippedColumns = Number(metadata?.skippedColumnsCount || metadata?.skippedColumns?.length || 0);
+        const precision = Number(metadata?.precisionLossCount || metadata?.precisionWarnings?.length || 0);
+        const duplicates = Number(metadata?.duplicateColumnCount || metadata?.duplicateColumns?.length || 0);
+        if (skippedColumns > 0) lines.push(i18n.t('picklesSkippedColumns').replace('{count}', String(skippedColumns)));
+        if (precision > 0) lines.push(i18n.t('picklePrecisionWarnings').replace('{count}', String(precision)));
+        if (duplicates > 0) lines.push(i18n.t('pickleDuplicateColumns').replace('{count}', String(duplicates)));
+        return lines.join('\n');
     }
     return fallback;
 };

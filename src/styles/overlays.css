@@ -232,6 +232,102 @@
     text-align: left;
 }
 
+.modal-dialog-supported-formats {
+    width: min(860px, 94vw);
+    max-width: none;
+    max-height: 88vh;
+}
+
+.modal-dialog-supported-formats .modal-content {
+    padding: 1.5rem;
+    text-align: left;
+}
+
+.modal-dialog-supported-formats .modal-icon {
+    width: 2.4rem;
+    height: 2.4rem;
+    margin: 0 0 0.75rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0;
+}
+
+.supported-formats-icon {
+    width: 1.35rem;
+    height: 1.35rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.modal-dialog-supported-formats .modal-title {
+    text-align: left;
+}
+
+.modal-dialog-supported-formats .modal-message {
+    max-height: 62vh;
+    margin-bottom: 1.15rem;
+    overflow: auto;
+    color: var(--text-primary);
+    text-align: left;
+}
+
+.supported-formats-help {
+    font-size: 0.9rem;
+    line-height: 1.45;
+}
+
+.supported-formats-table-wrap {
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.supported-formats-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 700px;
+}
+
+.supported-formats-table th,
+.supported-formats-table td {
+    padding: 0.58rem 0.7rem;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: top;
+    text-align: left;
+}
+
+.supported-formats-table th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+}
+
+.supported-formats-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.supported-formats-table code {
+    padding: 0.1rem 0.26rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.86em;
+}
+
 .csv-pattern-help {
     display: grid;
     gap: 1rem;

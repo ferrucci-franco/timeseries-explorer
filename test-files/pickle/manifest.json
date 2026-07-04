@@ -1,0 +1,22 @@
+{
+  "generator": "real-pandas",
+  "fixtures": [
+    "compressed.pkl",
+    "datetime_df.pkl",
+    "datetime_tz_nat.pkl",
+    "dict.pkl",
+    "dict_mismatch.pkl",
+    "duplicate_columns.pkl",
+    "mixed.pkl",
+    "multiindex_columns_2.pkl",
+    "multiindex_columns_3.pkl",
+    "numeric_index.pkl",
+    "protocol2.pkl",
+    "protocol4.pkl",
+    "protocol5.pkl",
+    "range_index.pkl",
+    "row_multiindex.pkl",
+    "series.pkl",
+    "unsupported.pkl"
+  ]
+}

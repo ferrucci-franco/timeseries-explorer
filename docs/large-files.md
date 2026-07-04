@@ -35,7 +35,21 @@ would a CSV. The viewer auto-detects the extension, registers the file with
 DuckDB-WASM in lazy mode, and routes all zoom queries through the columnar
 file directly. No further conversion needed.
 
-## 2. Other conversion options
+## 2. pandas pickle: open small files directly, convert large files
+
+The viewer can open uncompressed pandas DataFrame/Series pickles (`.pkl` and
+`.pickle`) directly. Pickle loading is eager, so the whole dataframe is
+materialized in memory before plotting. For large pandas results, or for
+compressed pickles, convert once to Parquet and open the `.parquet` file:
+
+```bash
+python bench/pkl-to-parquet.py path/to/results.pkl
+```
+
+Parquet remains the safer format for large time-series tables because the
+viewer can query it lazily through DuckDB-WASM.
+
+## 3. Other conversion options
 
 If you prefer not to use the Node script:
 
@@ -50,7 +64,7 @@ python -c "import pandas as pd; pd.read_csv('big.csv').to_parquet('big.parquet',
 The viewer accepts any Parquet that conforms to the same schema your
 original CSV did (time column + numeric columns).
 
-## 3. Falling back: load the CSV directly
+## 4. Falling back: load the CSV directly
 
 The viewer will still try to open a > 500 MB CSV through the lazy DuckDB
 path. It works for files that comfortably fit DuckDB's WASM budget

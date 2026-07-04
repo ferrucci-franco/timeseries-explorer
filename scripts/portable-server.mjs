@@ -20,7 +20,12 @@ const mimeTypes = new Map([
     ['.json', 'application/json; charset=utf-8'],
     ['.csv', 'text/csv; charset=utf-8'],
     ['.txt', 'text/plain; charset=utf-8'],
+    ['.parquet', 'application/octet-stream'],
     ['.mat', 'application/octet-stream'],
+    ['.nc', 'application/x-netcdf'],
+    ['.netcdf', 'application/x-netcdf'],
+    ['.pkl', 'application/octet-stream'],
+    ['.pickle', 'application/octet-stream'],
     ['.png', 'image/png'],
     ['.jpg', 'image/jpeg'],
     ['.jpeg', 'image/jpeg'],
@@ -80,7 +85,7 @@ async function handleApi(req, res, url) {
             'cache-control': 'no-store',
             'x-content-type-options': 'nosniff',
         };
-        if (stat.size === 0) {
+        if (req.method === 'HEAD' || stat.size === 0) {
             res.writeHead(200, headers);
             res.end();
             return;

@@ -96,14 +96,52 @@ body {
 }
 
 .app-subtitle {
+    display: flex;
+    align-items: baseline;
+    column-gap: 0.24em;
     margin-top: 0.12rem;
     color: var(--text-secondary);
     font-size: 0.72rem;
     font-weight: 500;
     line-height: 1.15;
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.app-subtitle-text {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.app-subtitle-more-prefix,
+.app-subtitle-link {
+    flex: 0 0 auto;
+}
+
+.app-subtitle-link {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--primary-color);
+    font: inherit;
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.app-subtitle-link:hover,
+.app-subtitle-link:focus-visible {
+    color: var(--primary-hover);
+}
+
+.app-subtitle-link:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+    border-radius: 3px;
 }
 
 .runtime-badge {

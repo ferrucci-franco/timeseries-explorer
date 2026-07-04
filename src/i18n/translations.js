@@ -2,7 +2,22 @@ const translations = {
         en: {
             // App title
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'CSV, Parquet, OpenModelica/Dymola (.MAT) viewer',
+            appSubtitle: 'CSV, OpenModelica/Dymola (.MAT) viewer',
+            appSubtitleMorePrefix: 'and',
+            appSubtitleMoreLink: 'more!',
+            supportedFormatsTitle: 'Supported formats',
+            supportedFormatsBody: `<div class="supported-formats-help">
+                <div class="supported-formats-table-wrap"><table class="supported-formats-table">
+                    <thead><tr><th>Format</th><th>Extensions</th><th>Notes</th></tr></thead>
+                    <tbody>
+                        <tr><td>OpenModelica / Dymola results</td><td><code>.mat</code></td><td>Simulation result files in MAT v4 format.</td></tr>
+                        <tr><td>CSV / text time series</td><td><code>.csv</code>, <code>.txt</code></td><td>Delimited or whitespace-separated numeric tables, with optional headers and automatic time detection.</td></tr>
+                        <tr><td>Parquet time series</td><td><code>.parquet</code></td><td>Good for very large time-series tables and usually faster than CSV.</td></tr>
+                        <tr><td>PyPSA netCDF networks</td><td><code>.nc</code>, <code>.netcdf</code></td><td>PyPSA network files with time-series results.</td></tr>
+                        <tr><td>pandas pickle</td><td><code>.pkl</code>, <code>.pickle</code></td><td>pandas DataFrame/Series pickles. MultiIndex columns appear as a hierarchy. Uncompressed files only; use Parquet for large data.</td></tr>
+                    </tbody>
+                </table></div>
+            </div>`,
             runtimeNoticeWebKicker: 'Web version',
             runtimeNoticeWebTitle: 'Web version',
             runtimeNoticeWebBody: 'This version works directly in your browser. You can open and plot files that you select manually.',
@@ -128,6 +143,14 @@ const translations = {
             pypsaNetcdfTooLarge: '"{file}" is {size}. PyPSA netCDF support currently uses eager loading (limit {limit}); large/lazy PyPSA loading is not available yet.',
             fileTypePypsaNetcdf: 'PyPSA netCDF network',
             fileTypePypsaSkippedDynamic: '{count} unsupported PyPSA time-series dataset(s) were skipped.',
+            pickleTooLarge: '"{file}" is {size}. pandas pickle support uses eager loading (limit {limit}). Export large DataFrames to Parquet with df.to_parquet(...).',
+            fileTypePandasPickle: 'pandas pickle',
+            picklesSkippedColumns: '{count} unsupported pandas pickle column(s) were skipped.',
+            pickleCompressedUnsupported: 'Compressed pandas pickle ({format}) is not supported yet. Save without compression (pd.to_pickle(..., compression=None)) or export to Parquet.',
+            pickleUnsupportedObject: 'Unsupported pickled object: {type}. Open a pandas DataFrame/Series pickle or export to Parquet.',
+            pickleLooksLikeUnsupportedExtension: 'This looks like a Python pickle. Rename it to .pkl or .pickle and try again.',
+            picklePrecisionWarnings: '{count} int64/uint64 value(s) exceeded JavaScript safe integer precision.',
+            pickleDuplicateColumns: '{count} duplicate pandas column label(s) were loaded with unique internal names.',
             csvPreviewAction: 'Adjust CSV parsing...',
             csvPreviewTitle: 'Adjust CSV parsing',
             csvPreviewApply: 'Apply parsing',
@@ -686,7 +709,22 @@ const translations = {
         fr: {
             // App title
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visualiseur CSV, Parquet et OpenModelica/Dymola (.MAT)',
+            appSubtitle: 'Visualiseur CSV et OpenModelica/Dymola (.MAT)',
+            appSubtitleMorePrefix: 'et',
+            appSubtitleMoreLink: 'plus !',
+            supportedFormatsTitle: 'Formats pris en charge',
+            supportedFormatsBody: `<div class="supported-formats-help">
+                <div class="supported-formats-table-wrap"><table class="supported-formats-table">
+                    <thead><tr><th>Format</th><th>Extensions</th><th>Notes</th></tr></thead>
+                    <tbody>
+                        <tr><td>Resultats OpenModelica / Dymola</td><td><code>.mat</code></td><td>Fichiers de resultats de simulation au format MAT v4.</td></tr>
+                        <tr><td>Series temporelles CSV / texte</td><td><code>.csv</code>, <code>.txt</code></td><td>Tables numeriques delimitees ou separees par espaces, avec en-tetes optionnels et detection automatique du temps.</td></tr>
+                        <tr><td>Series temporelles Parquet</td><td><code>.parquet</code></td><td>Pratique pour les tres grands tableaux de series temporelles, et souvent plus rapide que le CSV.</td></tr>
+                        <tr><td>Reseaux PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Fichiers de reseau PyPSA avec des resultats temporels.</td></tr>
+                        <tr><td>pickle pandas</td><td><code>.pkl</code>, <code>.pickle</code></td><td>Pickles pandas DataFrame/Series. Les colonnes MultiIndex apparaissent comme une hierarchie. Fichiers non compresses seulement; utilisez Parquet pour les grands tableaux.</td></tr>
+                    </tbody>
+                </table></div>
+            </div>`,
             runtimeNoticeWebKicker: 'Version web',
             runtimeNoticeWebTitle: 'Version web',
             runtimeNoticeWebBody: 'Cette version fonctionne directement dans le navigateur. Vous pouvez ouvrir et tracer les fichiers que vous selectionnez manuellement.',
@@ -880,6 +918,14 @@ const translations = {
             pypsaNetcdfTooLarge: '"{file}" fait {size}. La prise en charge PyPSA netCDF utilise actuellement un chargement eager (limite {limit}) ; le chargement PyPSA large/lazy n\'est pas encore disponible.',
             fileTypePypsaNetcdf: 'Réseau PyPSA netCDF',
             fileTypePypsaSkippedDynamic: "{count} jeu(x) de données temporelles PyPSA non pris en charge n'ont pas été chargés.",
+            pickleTooLarge: '"{file}" fait {size}. La prise en charge des pickles pandas utilise un chargement eager (limite {limit}). Exportez les grands DataFrames en Parquet avec df.to_parquet(...).',
+            fileTypePandasPickle: 'pickle pandas',
+            picklesSkippedColumns: "{count} colonne(s) pickle pandas non prises en charge n'ont pas été chargées.",
+            pickleCompressedUnsupported: "Les pickles pandas compressés ({format}) ne sont pas encore pris en charge. Enregistrez sans compression (pd.to_pickle(..., compression=None)) ou exportez en Parquet.",
+            pickleUnsupportedObject: 'Objet pickle non pris en charge : {type}. Ouvrez un pickle pandas DataFrame/Series ou exportez en Parquet.',
+            pickleLooksLikeUnsupportedExtension: 'Ce fichier ressemble à un pickle Python. Renommez-le en .pkl ou .pickle puis réessayez.',
+            picklePrecisionWarnings: '{count} valeur(s) int64/uint64 dépassent la précision sûre des entiers JavaScript.',
+            pickleDuplicateColumns: '{count} libellé(s) de colonne pandas dupliqués ont été chargés avec des noms internes uniques.',
             loadingFiles: 'Chargement des fichiers ({current}/{total})',
             loadingFilesPreparing: 'Preparation des fichiers...',
             loadingFilesCurrent: 'Chargement de {file}',
@@ -1370,7 +1416,22 @@ const translations = {
         },
         es: {
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visor de CSV, Parquet y OpenModelica/Dymola (.MAT)',
+            appSubtitle: 'Visor de CSV y OpenModelica/Dymola (.MAT)',
+            appSubtitleMorePrefix: 'y',
+            appSubtitleMoreLink: 'más!',
+            supportedFormatsTitle: 'Formatos compatibles',
+            supportedFormatsBody: `<div class="supported-formats-help">
+                <div class="supported-formats-table-wrap"><table class="supported-formats-table">
+                    <thead><tr><th>Formato</th><th>Extensiones</th><th>Notas</th></tr></thead>
+                    <tbody>
+                        <tr><td>Resultados OpenModelica / Dymola</td><td><code>.mat</code></td><td>Archivos de resultados de simulacion en formato MAT v4.</td></tr>
+                        <tr><td>Series temporales CSV / texto</td><td><code>.csv</code>, <code>.txt</code></td><td>Tablas numericas delimitadas o separadas por espacios, con encabezados opcionales y deteccion automatica del tiempo.</td></tr>
+                        <tr><td>Series temporales Parquet</td><td><code>.parquet</code></td><td>Conveniente para tablas de series temporales muy grandes y normalmente mas rapido que CSV.</td></tr>
+                        <tr><td>Redes PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Archivos de redes PyPSA con resultados de series temporales.</td></tr>
+                        <tr><td>pickle pandas</td><td><code>.pkl</code>, <code>.pickle</code></td><td>Pickles pandas DataFrame/Series. Las columnas MultiIndex aparecen como jerarquia. Solo archivos sin compresion; usa Parquet para datos grandes.</td></tr>
+                    </tbody>
+                </table></div>
+            </div>`,
             runtimeNoticeWebKicker: 'Version web',
             runtimeNoticeWebTitle: 'Version web',
             runtimeNoticeWebBody: 'Esta version funciona directamente en el navegador. Puedes abrir y graficar archivos que selecciones manualmente.',
@@ -1558,6 +1619,14 @@ const translations = {
             pypsaNetcdfTooLarge: '"{file}" pesa {size}. El soporte PyPSA netCDF actualmente usa carga eager (límite {limit}); la carga PyPSA grande/lazy aún no está disponible.',
             fileTypePypsaNetcdf: 'Red PyPSA netCDF',
             fileTypePypsaSkippedDynamic: 'Se omitieron {count} conjunto(s) de series temporales PyPSA no compatibles.',
+            pickleTooLarge: '"{file}" pesa {size}. El soporte de pickle pandas usa carga eager (límite {limit}). Exporta DataFrames grandes a Parquet con df.to_parquet(...).',
+            fileTypePandasPickle: 'pickle pandas',
+            picklesSkippedColumns: 'Se omitieron {count} columna(s) pickle pandas no compatibles.',
+            pickleCompressedUnsupported: 'Los pickles pandas comprimidos ({format}) todavía no son compatibles. Guarda sin compresión (pd.to_pickle(..., compression=None)) o exporta a Parquet.',
+            pickleUnsupportedObject: 'Objeto pickle no compatible: {type}. Abre un pickle pandas DataFrame/Series o exporta a Parquet.',
+            pickleLooksLikeUnsupportedExtension: 'Este archivo parece un pickle de Python. Renómbralo a .pkl o .pickle e inténtalo de nuevo.',
+            picklePrecisionWarnings: '{count} valor(es) int64/uint64 superaron la precisión segura de enteros de JavaScript.',
+            pickleDuplicateColumns: '{count} etiqueta(s) de columna pandas duplicadas se cargaron con nombres internos únicos.',
             loadingFiles: 'Cargando archivos ({current}/{total})',
             loadingFilesPreparing: 'Preparando archivos...',
             loadingFilesCurrent: 'Cargando {file}',
@@ -2024,7 +2093,22 @@ const translations = {
         },
         it: {
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visualizzatore CSV, Parquet e OpenModelica/Dymola (.MAT)',
+            appSubtitle: 'Visualizzatore CSV e OpenModelica/Dymola (.MAT)',
+            appSubtitleMorePrefix: 'e',
+            appSubtitleMoreLink: 'altro!',
+            supportedFormatsTitle: 'Formati supportati',
+            supportedFormatsBody: `<div class="supported-formats-help">
+                <div class="supported-formats-table-wrap"><table class="supported-formats-table">
+                    <thead><tr><th>Formato</th><th>Estensioni</th><th>Note</th></tr></thead>
+                    <tbody>
+                        <tr><td>Risultati OpenModelica / Dymola</td><td><code>.mat</code></td><td>File di risultati di simulazione in formato MAT v4.</td></tr>
+                        <tr><td>Serie temporali CSV / testo</td><td><code>.csv</code>, <code>.txt</code></td><td>Tabelle numeriche delimitate o separate da spazi, con intestazioni opzionali e rilevamento automatico del tempo.</td></tr>
+                        <tr><td>Serie temporali Parquet</td><td><code>.parquet</code></td><td>Utile per tabelle di serie temporali molto grandi e di solito piu veloce del CSV.</td></tr>
+                        <tr><td>Reti PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>File di reti PyPSA con risultati temporali.</td></tr>
+                        <tr><td>pickle pandas</td><td><code>.pkl</code>, <code>.pickle</code></td><td>Pickle pandas DataFrame/Series. Le colonne MultiIndex appaiono come gerarchia. Solo file non compressi; usa Parquet per dati grandi.</td></tr>
+                    </tbody>
+                </table></div>
+            </div>`,
             runtimeNoticeWebKicker: 'Versione web',
             runtimeNoticeWebTitle: 'Versione web',
             runtimeNoticeWebBody: 'Questa versione funziona direttamente nel browser. Puoi aprire e tracciare i file selezionati manualmente.',
@@ -2212,6 +2296,14 @@ const translations = {
             pypsaNetcdfTooLarge: '"{file}" è {size}. Il supporto PyPSA netCDF attualmente usa caricamento eager (limite {limit}); il caricamento PyPSA grande/lazy non è ancora disponibile.',
             fileTypePypsaNetcdf: 'Rete PyPSA netCDF',
             fileTypePypsaSkippedDynamic: 'Sono stati omessi {count} dataset temporali PyPSA non supportati.',
+            pickleTooLarge: '"{file}" è {size}. Il supporto pickle pandas usa caricamento eager (limite {limit}). Esporta DataFrame grandi in Parquet con df.to_parquet(...).',
+            fileTypePandasPickle: 'pickle pandas',
+            picklesSkippedColumns: 'Sono state omesse {count} colonna/e pickle pandas non supportate.',
+            pickleCompressedUnsupported: 'I pickle pandas compressi ({format}) non sono ancora supportati. Salva senza compressione (pd.to_pickle(..., compression=None)) o esporta in Parquet.',
+            pickleUnsupportedObject: 'Oggetto pickle non supportato: {type}. Apri un pickle pandas DataFrame/Series o esporta in Parquet.',
+            pickleLooksLikeUnsupportedExtension: 'Questo file sembra un pickle Python. Rinominalo in .pkl o .pickle e riprova.',
+            picklePrecisionWarnings: '{count} valore/i int64/uint64 superano la precisione intera sicura di JavaScript.',
+            pickleDuplicateColumns: '{count} etichetta/e di colonna pandas duplicate sono state caricate con nomi interni unici.',
             loadingFiles: 'Caricamento file ({current}/{total})',
             loadingFilesPreparing: 'Preparazione file...',
             loadingFilesCurrent: 'Caricamento di {file}',

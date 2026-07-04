@@ -7,6 +7,10 @@ import {
     PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES,
     PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES,
 } from '../src/parsers/pypsa-netcdf-limits.js';
+import {
+    PICKLE_DESKTOP_EAGER_LIMIT_BYTES,
+    PICKLE_WEB_EAGER_LIMIT_BYTES,
+} from '../src/parsers/pickle-limits.js';
 
 class Harness {
     constructor() {
@@ -133,6 +137,31 @@ try {
         /PyPSA netCDF support currently uses eager loading/
     );
 
+    assert.doesNotThrow(() => harness._preflightPickleFile({
+        name: 'desktop-medium-results.pkl',
+        size: PICKLE_DESKTOP_EAGER_LIMIT_BYTES - 1024,
+    }, '.pkl'));
+
+    assert.throws(
+        () => harness._preflightPickleFile({
+            name: 'huge-results.pkl',
+            size: PICKLE_DESKTOP_EAGER_LIMIT_BYTES + 1024,
+        }, '.pkl'),
+        /pandas pickle support uses eager loading/
+    );
+
+    assert.doesNotThrow(() => webHarness._preflightPickleFile({
+        name: 'web-medium-results.pkl',
+        size: PICKLE_WEB_EAGER_LIMIT_BYTES,
+    }, '.pkl'));
+    assert.throws(
+        () => webHarness._preflightPickleFile({
+            name: 'web-too-large-results.pkl',
+            size: PICKLE_WEB_EAGER_LIMIT_BYTES + 1024,
+        }, '.pkl'),
+        /pandas pickle support uses eager loading/
+    );
+
     let readFileCalls = 0;
     globalThis.omvDesktop = {
         statFile: async () => ({
@@ -152,6 +181,72 @@ try {
         /PyPSA netCDF support currently uses eager loading/
     );
     assert.equal(readFileCalls, 0, 'oversized PyPSA netCDF should be rejected before Desktop readFile');
+
+    let pickleReadFileCalls = 0;
+    globalThis.omvDesktop = {
+        statFile: async () => ({
+            ok: true,
+            name: 'huge-results.pkl',
+            size: PICKLE_DESKTOP_EAGER_LIMIT_BYTES + 1024,
+            lastModified: 5678,
+            type: 'application/octet-stream',
+        }),
+        readFile: async () => {
+            pickleReadFileCalls += 1;
+            throw new Error('readFile should not be called for oversized pickle files');
+        },
+    };
+    await assert.rejects(
+        () => harness._readLocalResultPath('C:\\temp\\huge-results.pkl'),
+        /pandas pickle support uses eager loading/
+    );
+    assert.equal(pickleReadFileCalls, 0, 'oversized pandas pickle should be rejected before Desktop readFile');
+
+    const staleBuffer = new ArrayBuffer(8);
+    await assert.rejects(
+        () => harness._readLatestBuffer({
+            fileHandle: {
+                getFile: async () => ({
+                    name: 'huge-results.pkl',
+                    size: PICKLE_DESKTOP_EAGER_LIMIT_BYTES + 1024,
+                    arrayBuffer: async () => {
+                        throw new Error('arrayBuffer should not be called for oversized pickle files');
+                    },
+                }),
+            },
+            file: { name: 'old-results.pkl', size: 8, arrayBuffer: async () => staleBuffer },
+            extension: '.pkl',
+            buffer: staleBuffer,
+        }),
+        /pandas pickle support uses eager loading/
+    );
+
+    const httpMethods = [];
+    globalThis.omvDesktop = {};
+    globalThis.fetch = async (_url, options = {}) => {
+        const method = options.method || 'GET';
+        httpMethods.push(method);
+        if (method === 'HEAD') {
+            return new Response(null, {
+                status: 200,
+                headers: {
+                    'content-length': String(PICKLE_DESKTOP_EAGER_LIMIT_BYTES + 1024),
+                    'content-type': 'application/octet-stream',
+                },
+            });
+        }
+        throw new Error('GET should not be called for oversized pickle files');
+    };
+    await assert.rejects(
+        () => harness._readLocalResultPath('C:\\temp\\huge-results.pkl'),
+        /pandas pickle support uses eager loading/
+    );
+    assert.deepEqual(httpMethods, ['HEAD'], 'local HTTP fallback should reject oversized pickle before GET');
+
+    await assert.rejects(
+        () => harness._parseResultBuffer('results.bin', new Uint8Array([0x80, 0x05, 0x2e]).buffer),
+        /looks like a Python pickle/
+    );
 
     console.log('Desktop streamable file descriptor checks passed.');
 } finally {

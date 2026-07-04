@@ -15,7 +15,11 @@
         <div class="top-bar-left">
             <div class="app-brand">
                 <h1 data-i18n="appTitle">Time Series Explorer</h1>
-                <div class="app-subtitle" data-i18n="appSubtitle">CSV, Parquet, OpenModelica/Dymola (.MAT) viewer</div>
+                <div class="app-subtitle">
+                    <span class="app-subtitle-text" data-i18n="appSubtitle">CSV, OpenModelica/Dymola (.MAT) viewer</span>
+                    <span class="app-subtitle-more-prefix" data-i18n="appSubtitleMorePrefix">and</span>
+                    <button id="supported-formats-link" class="app-subtitle-link" type="button" data-i18n="appSubtitleMoreLink" data-i18n-title="supportedFormatsTitle">more!</button>
+                </div>
             </div>
             <span id="runtime-badge" class="runtime-badge">Light Web</span>
         </div>
@@ -402,7 +406,7 @@
                     <button id="file-select-btn" class="primary-btn" data-i18n="selectFile">Select File</button>
                     <div id="light-version-notice" class="light-version-notice" hidden></div>
                     <div id="drop-zone-status" class="drop-zone-status">Loading application...</div>
-                    <input type="file" id="file-input" multiple style="display: none;">
+                    <input type="file" id="file-input" multiple accept=".mat,.csv,.txt,.parquet,.nc,.netcdf,.pkl,.pickle" style="display: none;">
                 </div>
             </div>
 

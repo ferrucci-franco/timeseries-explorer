@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Convert a pandas pickle (.pkl) dataframe to Parquet.
 
-This is a preparation utility for pandas workflows. Browser builds should load
-the resulting .parquet file, not the pickle itself.
+This is a preparation utility for pandas workflows. The viewer can open small
+uncompressed pandas DataFrame/Series pickles directly, but pickle loading is
+eager. For large or compressed pickles, convert to Parquet so the app can use
+lazy DuckDB loading.
 """
 
 from __future__ import annotations

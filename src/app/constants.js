@@ -41,7 +41,7 @@ const DERIVED_FUNCTION_ALIASES = new Map([
     ['sqr', 'square'],
 ]);
 
-const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.nc', '.netcdf'];
+const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.netcdf', '.pkl', '.pickle'];
 const APP_VERSION = '0.1.0';
 const DESKTOP_MANIFEST_PATH = './downloads/desktop.json';
 const DYMOLA_LOGO_ICON_PATH = `${PUBLIC_BASE}images/dymola-logo.jpg`;

@@ -17,6 +17,10 @@ proto.initEventListeners = function() {
 
     document.getElementById('theme-toggle').addEventListener('click', () => this.toggleTheme());
 
+    document.getElementById('supported-formats-link')?.addEventListener('click', () => {
+        this.showSupportedFormats();
+    });
+
     document.getElementById('toggle-sidebar').addEventListener('click', () => {
         document.getElementById('sidebar').classList.toggle('hidden');
         setTimeout(() => this.plotManager.resizeAll(), 320);
@@ -1121,6 +1125,17 @@ proto.showHelp = function() {
 };
 
 // ─── Drag-and-drop file loading ────────────────────────────────
+
+proto.showSupportedFormats = function() {
+    Modal.alert(i18n.t('supportedFormatsTitle'), i18n.t('supportedFormatsBody'), {
+        iconHtml: `<svg class="supported-formats-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect>
+            <path d="M3.5 9.5h17M9 4.5v15M15 4.5v15M3.5 14.5h17"></path>
+        </svg>`,
+        html: true,
+        className: 'modal-dialog-supported-formats',
+    });
+};
 
 proto.initDragAndDrop = function() {
     const dropZone = document.getElementById('drop-zone');
