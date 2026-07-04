@@ -656,9 +656,14 @@
     box-sizing: border-box;
     min-width: 4.8rem;
     padding-left: 0.35rem;
-    padding-right: 0.25rem;
+    padding-right: 0.45rem;
     text-align: right;
     font-variant-numeric: tabular-nums;
+    color-scheme: light;
+}
+
+.theme-dark .data-tool-number-input {
+    color-scheme: dark;
 }
 
 .data-tool-radio-group {
