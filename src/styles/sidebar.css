@@ -528,6 +528,9 @@
 
 .data-tool-form.collapsed,
 .data-tool-output-wrap.collapsed,
+.data-tool-controls.collapsed,
+#outlier-method-wrap.collapsed,
+#outlier-replacement-wrap.collapsed,
 .outlier-method-controls.collapsed {
     display: none;
 }
@@ -601,6 +604,12 @@
     gap: 0.4rem;
 }
 
+.data-tool-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
 .data-tool-input-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(5.9rem, 1fr));
@@ -641,6 +650,12 @@
     font-size: 0.78rem;
     text-align: right;
     font-variant-numeric: tabular-nums;
+}
+
+.data-tool-number-input {
+    min-width: 0;
+    padding-left: 0.4rem;
+    padding-right: 0.4rem;
 }
 
 .data-tool-radio-group {

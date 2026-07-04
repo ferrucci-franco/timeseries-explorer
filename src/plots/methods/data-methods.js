@@ -1128,12 +1128,16 @@ proto._buildPlotData = function(plot) {
 
 // ── Timeseries ──
 proto._timeseriesStackAttrs = function(plot, traceIndex = 0) {
-    if (!plot?.timeseriesStacked) return {};
+    if (!plot?.timeseriesStacked || plot?.timeseriesY2Enabled) return {};
     return {
         stackgroup: 'timeseries-stack',
         stackgaps: 'infer zero',
         fill: traceIndex === 0 ? 'tozeroy' : 'tonexty',
     };
+};
+
+proto._traceYAxis = function(traceState, plot = null) {
+    return plot?.timeseriesY2Enabled && traceState?.axis === 'y2' ? 'y2' : 'y';
 };
 
 proto._timeseriesTraceSupport = function(traceState) {
@@ -1290,6 +1294,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     const calendarTickFormat = this._calendarTickFormat(t.fileId, timeVar);
     const durationFractionDigits = this._durationFractionDigits(t.fileId);
     const stackAttrs = this._timeseriesStackAttrs(plot, traceIndex);
+    const yaxis = this._traceYAxis(t, plot);
     const hoverX = highResolutionCalendarAxis
         ? `<b>Time</b> = %{customdata}<br>`
         : timeMode === 'calendar'
@@ -1306,6 +1311,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             x: this._plotlyTimeArray(t.fileId, [tStart, tEnd], timeVar), y: [yValue, yValue],
             name, type: 'scatter', mode: 'lines',
             visible: t.visible ?? true,
+            yaxis,
             line: { color: t.color, width: 1.5, dash: 'dash' },
             ...stackAttrs,
             hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}<extra></extra>`,
@@ -1336,6 +1342,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         x: plotX, y: visual.y,
         name, type: plot?.timeseriesStacked ? 'scatter' : (useGL ? 'scattergl' : 'scatter'), mode: 'lines',
         visible: t.visible ?? true,
+        yaxis,
         line,
         ...stackAttrs,
         ...(customdata ? { customdata } : {}),
@@ -1371,17 +1378,24 @@ proto._buildTimeLayout = function(plot) {
             autorange: false,
         }
         : {};
-    const multiTrace = plot.traces.length > 1;
-    let yTitle = '';
-    if (!multiTrace && firstTrace) {
-        const d = this.files.get(firstTrace.fileId)?.data;
-        const v = d?.variables[firstTrace.varName];
+    const axisTraces = {
+        y: plot.traces.filter(t => this._traceYAxis(t, plot) === 'y'),
+        y2: plot.traces.filter(t => this._traceYAxis(t, plot) === 'y2'),
+    };
+    const axisTitle = (traces) => {
+        if (traces.length !== 1) return '';
+        const trace = traces[0];
+        const d = this.files.get(trace.fileId)?.data;
+        const v = d?.variables[trace.varName];
         const unit = v ? this._extractUnit(v.description) : '';
-        const label = this._variableLabel(firstTrace.varName, firstTrace.fileId);
-        yTitle = unit ? `${label} [${unit}]` : label;
-    }
+        const label = this._variableLabel(trace.varName, trace.fileId);
+        return unit ? `${label} [${unit}]` : label;
+    };
+    const yTitle = axisTitle(axisTraces.y);
+    const y2Title = plot.timeseriesY2Enabled ? axisTitle(axisTraces.y2) : '';
+    if (plot.timeseriesY2Enabled) margin.r = Math.max(margin.r || 0, 56);
 
-    return {
+    const layout = {
         paper_bgcolor: bg, plot_bgcolor: bg,
         font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
         showlegend: true,
@@ -1390,12 +1404,24 @@ proto._buildTimeLayout = function(plot) {
                  ...xRangeConfig,
                  title: { text: timeTitle, font: { size: 10 } } },
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
-                 title: (yTitle && !multiTrace) ? { text: yTitle, font: { size: 10 } } : { text: '' } },
+                 title: yTitle ? { text: yTitle, font: { size: 10 } } : { text: '' } },
         legend: this._legendConfig(legendBg, gridColor),
         margin,
         autosize:  true,
         hovermode: this.hoverProximity ? 'closest' : 'x',
     };
+    if (plot.timeseriesY2Enabled) {
+        layout.yaxis2 = {
+            overlaying: 'y',
+            side: 'right',
+            showgrid: false,
+            linecolor: gridColor,
+            tickcolor: gridColor,
+            zeroline: false,
+            title: y2Title ? { text: y2Title, font: { size: 10 } } : { text: '' },
+        };
+    }
+    return layout;
 };
 
 // ── Phase 2D ──

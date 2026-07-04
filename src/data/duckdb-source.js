@@ -369,11 +369,11 @@ export default class DuckDbSource {
         const estimatedRows = this._estimateRowsInRange(legacyData, meta, t0, t1);
         const rawLimit = Math.ceil(maxPoints * 1.2);
         const valueSelect = requested
-            .map(({ variable }, index) => `${this._quoteIdent(variable._duckdbCol || variable.name)} AS v${index}`)
+            .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName)} AS v${index}`)
             .join(',\n                       ');
         if (meta.generatedTime) {
             const generatedValueSelect = requested
-                .map(({ variable }, index) => `${this._quoteIdent(variable._duckdbCol || variable.name)} AS v${index}`)
+                .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName)} AS v${index}`)
                 .join(',\n                           ');
             const generatedValueNames = requested.map((_, index) => `v${index}`).join(', ');
             if (Number.isFinite(estimatedRows) && estimatedRows > 0 && estimatedRows <= rawLimit) {
@@ -584,14 +584,14 @@ export default class DuckDbSource {
     _rangeCacheKey(meta, requested, t0, t1, maxPoints) {
         const tableName = meta?.tableName;
         if (!tableName) return null;
-        const vars = requested.map(({ varName }) => varName).join('\u001f');
+        const vars = requested.map(({ varName, variable }) => `${varName}\u001d${this._dataToolCacheToken(variable)}`).join('\u001f');
         return [tableName, vars, this._roundedRangeKey(t0), this._roundedRangeKey(t1), Math.round(maxPoints)].join('\u001e');
     }
 
     _phaseCacheKey(meta, requested, sourceRange, maxPoints) {
         const tableName = meta?.tableName;
         if (!tableName) return null;
-        const vars = requested.map(({ varName }) => varName).join('\u001f');
+        const vars = requested.map(({ varName, variable }) => `${varName}\u001d${this._dataToolCacheToken(variable)}`).join('\u001f');
         const rangeKey = Array.isArray(sourceRange) && sourceRange.length >= 2
             ? `${this._roundedRangeKey(Number(sourceRange[0]))}\u001f${this._roundedRangeKey(Number(sourceRange[1]))}`
             : 'full';
@@ -659,11 +659,10 @@ export default class DuckDbSource {
         if (!meta) throw new Error('fetchSourceWindow: data is not DuckDB-backed (eager mode)');
         const variable = legacyData.variables?.[varName];
         if (!variable) throw new Error(`fetchSourceWindow: unknown variable "${varName}"`);
-        const sourceCol = variable._duckdbCol || varName;
         const timeCol = meta.timeColumn;
         const escTime = timeCol.replace(/"/g, '""');
-        const escCol = sourceCol.replace(/"/g, '""');
         const tableName = meta.tableName;
+        const valueExpr = this._valueExpressionSql(variable, varName, { castDouble: true });
         const lit = (v) => this._numericLiteral(v);
         const timeKind = legacyData?.metadata?.timeKind;
         const tExpr = meta.timeExprSql || (timeKind === 'datetime'
@@ -682,7 +681,7 @@ export default class DuckDbSource {
                 ? `
                     WITH numbered AS (
                         SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
-                               "${escCol}"::DOUBLE AS v
+                               ${valueExpr} AS v
                         FROM ${tableName}
                     )
                     SELECT * FROM (
@@ -705,7 +704,7 @@ export default class DuckDbSource {
                 : `
                     WITH numbered AS (
                         SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
-                               "${escCol}"::DOUBLE AS v
+                               ${valueExpr} AS v
                         FROM ${tableName}
                     )
                     SELECT * FROM (
@@ -735,7 +734,7 @@ export default class DuckDbSource {
         const sql = direction === 'prev'
             ? `
                 SELECT * FROM (
-                    SELECT ${tExpr} AS t, "${escCol}"::DOUBLE AS v
+                    SELECT ${tExpr} AS t, ${valueExpr} AS v
                     FROM ${tableName}
                     WHERE ${tExpr} < ${lit(fromX)}
                     ORDER BY ${orderByT} DESC
@@ -743,7 +742,7 @@ export default class DuckDbSource {
                 )
                 UNION ALL
                 SELECT * FROM (
-                    SELECT ${tExpr} AS t, "${escCol}"::DOUBLE AS v
+                    SELECT ${tExpr} AS t, ${valueExpr} AS v
                     FROM ${tableName}
                     WHERE ${tExpr} >= ${lit(fromX)}
                     ORDER BY ${orderByT} ASC
@@ -753,7 +752,7 @@ export default class DuckDbSource {
             `
             : `
                 SELECT * FROM (
-                    SELECT ${tExpr} AS t, "${escCol}"::DOUBLE AS v
+                    SELECT ${tExpr} AS t, ${valueExpr} AS v
                     FROM ${tableName}
                     WHERE ${tExpr} <= ${lit(fromX)}
                     ORDER BY ${orderByT} DESC
@@ -761,7 +760,7 @@ export default class DuckDbSource {
                 )
                 UNION ALL
                 SELECT * FROM (
-                    SELECT ${tExpr} AS t, "${escCol}"::DOUBLE AS v
+                    SELECT ${tExpr} AS t, ${valueExpr} AS v
                     FROM ${tableName}
                     WHERE ${tExpr} > ${lit(fromX)}
                     ORDER BY ${orderByT} ASC
@@ -775,6 +774,62 @@ export default class DuckDbSource {
             times: this._extractColumnAsFloat64(result, 0, 'DOUBLE'),
             values: this._extractColumnAsFloat64(result, 1, 'DOUBLE'),
         };
+    }
+
+    async countOutOfBounds(legacyData, varName, params = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('countOutOfBounds: data is not DuckDB-backed (eager mode)');
+        const variable = legacyData.variables?.[varName];
+        if (!variable) throw new Error(`countOutOfBounds: unknown variable "${varName}"`);
+        const base = `try_cast(${this._quoteIdent(variable._duckdbCol || varName)} AS DOUBLE)`;
+        const predicate = this._boundsPredicateSql(base, params);
+        if (!predicate) throw new Error('countOutOfBounds: missing finite bounds');
+        const timeCol = meta.timeColumn;
+        const escTime = timeCol.replace(/"/g, '""');
+        const timeKind = legacyData?.metadata?.timeKind;
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`);
+        const validTimeWhere = meta.generatedTime ? 'TRUE' : `${tExpr} IS NOT NULL`;
+        const result = await this._interactiveQuery(`
+            SELECT COUNT(*)::BIGINT AS n
+            FROM ${meta.tableName}
+            WHERE ${validTimeWhere}
+              AND ${base} IS NOT NULL
+              AND NOT (${predicate});
+        `);
+        return Number(result.getChild('n')?.get(0) ?? 0);
+    }
+
+    async refreshOverview(legacyData) {
+        const meta = legacyData?._duckdb;
+        if (!meta) return;
+        const timeName = legacyData.metadata?.timeName;
+        const timeVar = timeName ? legacyData.variables?.[timeName] : null;
+        const varNames = Object.entries(legacyData.variables || {})
+            .filter(([, variable]) => {
+                if (!variable || variable.kind === 'abscissa' || variable.kind === 'parameter') return false;
+                if (variable.dataType === 'string' || variable.dataType === 'boolean') return false;
+                return !!(variable._duckdbCol || variable._duckdbDataTool);
+            })
+            .map(([name]) => name);
+        if (!timeVar || !varNames.length) return;
+        const currentTime = timeVar.data || [];
+        const t0 = Number.isFinite(Number(legacyData.metadata?.timeStart))
+            ? Number(legacyData.metadata.timeStart)
+            : Number(currentTime[0]);
+        const t1 = Number.isFinite(Number(legacyData.metadata?.timeEnd))
+            ? Number(legacyData.metadata.timeEnd)
+            : Number(currentTime[currentTime.length - 1]);
+        if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 <= t0) return;
+        const target = Math.max(2, Math.round(Number(meta.overviewPoints) || currentTime.length || 10000));
+        this._clearRangeCacheForTable(meta.tableName);
+        const result = await this.getColumnsRange(legacyData, varNames, t0, t1, target);
+        timeVar.data = result.x;
+        for (const name of varNames) {
+            const values = result.yByVar?.get(name);
+            if (values) legacyData.variables[name].data = values;
+        }
     }
 
     async cancelActiveQuery() {
@@ -1099,7 +1154,7 @@ export default class DuckDbSource {
                 ? 1
                 : Math.max(1, Math.ceil(last / Math.max(1, maxPoints - 1)));
             const valueSelect = requested
-                .map(({ variable }, index) => `${this._quoteIdent(variable._duckdbCol || variable.name)}::DOUBLE AS v${index}`)
+                .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
                 .join(',\n                       ');
             const valueNames = requested.map((_, index) => `v${index}`).join(', ');
             const sql = `
@@ -1722,6 +1777,41 @@ export default class DuckDbSource {
 
     _quoteIdent(name) {
         return `"${String(name ?? '').replace(/"/g, '""')}"`;
+    }
+
+    _valueExpressionSql(variable, fallbackName = '', options = {}) {
+        const base = this._quoteIdent(variable?._duckdbCol || fallbackName || variable?.name);
+        const definition = variable?._duckdbDataTool;
+        let expr = base;
+        if (definition?.tool === 'removeOutliers' && definition.method === 'bounds') {
+            const numericBase = `try_cast(${base} AS DOUBLE)`;
+            const predicate = this._boundsPredicateSql(numericBase, definition.params || {});
+            if (predicate) {
+                expr = `CASE WHEN ${numericBase} IS NULL THEN NULL WHEN ${predicate} THEN ${numericBase} ELSE NULL END`;
+            }
+        }
+        return options.castDouble ? `try_cast((${expr}) AS DOUBLE)` : expr;
+    }
+
+    _boundsPredicateSql(baseExpression, params = {}) {
+        const clauses = [];
+        const lower = Number(params.lower);
+        const upper = Number(params.upper);
+        if (Number.isFinite(lower)) clauses.push(`${baseExpression} >= ${this._numericLiteral(lower)}`);
+        if (Number.isFinite(upper)) clauses.push(`${baseExpression} <= ${this._numericLiteral(upper)}`);
+        if (clauses.length >= 2 && lower > upper) return 'FALSE';
+        return clauses.join(' AND ');
+    }
+
+    _dataToolCacheToken(variable) {
+        const definition = variable?._duckdbDataTool;
+        if (!definition) return '';
+        return JSON.stringify({
+            tool: definition.tool || '',
+            method: definition.method || '',
+            params: definition.params || {},
+            replacement: definition.replacement || '',
+        });
     }
 
     _escapeSqlString(value) {

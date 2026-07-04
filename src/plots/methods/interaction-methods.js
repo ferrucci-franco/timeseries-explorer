@@ -62,7 +62,9 @@ proto._onRelayout = function(sourcePanelId, eventData) {
     }
 
     if (plot?.mode === 'timeseries') {
-        const autorangeRequested = update['xaxis.autorange'] === true || eventData?.['yaxis.autorange'] === true;
+        const autorangeRequested = update['xaxis.autorange'] === true
+            || eventData?.['yaxis.autorange'] === true
+            || eventData?.['yaxis2.autorange'] === true;
         if (autorangeRequested) {
             this._autoScalePlot(sourcePanelId, plot);
         } else {
@@ -106,7 +108,11 @@ proto._relayoutEventTouchesYAxis = function(eventData) {
     return eventData['yaxis.range'] !== undefined
         || eventData['yaxis.range[0]'] !== undefined
         || eventData['yaxis.range[1]'] !== undefined
-        || eventData['yaxis.autorange'] !== undefined;
+        || eventData['yaxis.autorange'] !== undefined
+        || eventData['yaxis2.range'] !== undefined
+        || eventData['yaxis2.range[0]'] !== undefined
+        || eventData['yaxis2.range[1]'] !== undefined
+        || eventData['yaxis2.autorange'] !== undefined;
 };
 
 proto._xAxisUpdateFromRelayout = function(eventData) {
@@ -1007,6 +1013,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                                 x: this._plotlyTimeValue(t.fileId, matchedX, this._getTimeVar(t.fileId)),
                                 y: ydata[tidx],
                                 color: t.color,
+                                axis: this._traceYAxis(t, plot),
                             });
                         }
                         lines.push(`<span style="color:${t.color}">●</span> ${this._escapeHTML(label)} = ${this._formatHTMLNumber(ydata[tidx])}${unit ? ' ' + this._escapeHTML(unit) : ''}`);
@@ -1160,13 +1167,13 @@ proto._onUnhover = function(sourcePanelId) {
     }, 80);
 };
 
-proto._hoverOverlayGeometry = function(plot, x, y = null) {
+proto._hoverOverlayGeometry = function(plot, x, y = null, axis = 'y') {
     if (!plot?.div) return null;
     const xValue = this._coerceAxisValue(x);
     if (!Number.isFinite(xValue)) return null;
     const fl = plot.div._fullLayout;
     const xa = fl?.xaxis;
-    const ya = fl?.yaxis;
+    const ya = axis === 'y2' && fl?.yaxis2 ? fl.yaxis2 : fl?.yaxis;
     if (!xa?.range || !ya?.range || !xa._length || !ya._length) return null;
 
     const x0 = this._coerceAxisValue(xa.range[0]);
@@ -1209,7 +1216,7 @@ proto._renderHoverOverlay = function(plot, x, markers = []) {
         `<div class="hover-overlay-line" style="left:${line.left}px;top:${line.topAxis}px;height:${Math.max(0, line.bottomAxis - line.topAxis)}px"></div>`,
     ];
     for (const marker of markers) {
-        const g = this._hoverOverlayGeometry(plot, marker.x, marker.y);
+        const g = this._hoverOverlayGeometry(plot, marker.x, marker.y, marker.axis || 'y');
         if (!g || g.left < g.leftAxis || g.left > g.rightAxis || !Number.isFinite(g.top) || g.top < g.topAxis || g.top > g.bottomAxis) continue;
         const color = this._escapeHTML(marker.color || '#888888');
         parts.push(`<div class="hover-overlay-dot" style="left:${g.left}px;top:${g.top}px;background:${color}"></div>`);
@@ -1440,7 +1447,7 @@ proto._cursorShapes = function(plot) {
         const mode = this._traceInterpolationMode(trace);
         const y = this._interpolateAt(series.times, series.values, x, mode);
         if (!Number.isFinite(y)) continue;
-        shapes.push(this._cursorDotShape(this._cursorPlotlyX(trace, x), y, color));
+        shapes.push(this._cursorDotShape(this._cursorPlotlyX(trace, x), y, color, this._traceYAxis(trace, plot)));
     }
     return shapes;
 };
@@ -1514,11 +1521,11 @@ proto._cursorShape = function(x, color, dash = 'solid') {
     };
 };
 
-proto._cursorDotShape = function(x, y, color) {
+proto._cursorDotShape = function(x, y, color, axis = 'y') {
     const r = 5;
     return {
         type: 'circle',
-        xref: 'x', yref: 'y',
+        xref: 'x', yref: axis === 'y2' ? 'y2' : 'y',
         xsizemode: 'pixel', ysizemode: 'pixel',
         xanchor: x, yanchor: y,
         x0: -r, x1: r, y0: -r, y1: r,
@@ -2602,6 +2609,18 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
             this._toggleTimeseriesStack(panelId);
         });
         timeseriesToolsGroup.appendChild(stackBtn);
+
+        const y2Btn = document.createElement('button');
+        y2Btn.className = 'layout-toolbar-btn panel-action-btn timeseries-y2-btn' + (plot?.timeseriesY2Enabled ? ' active' : '');
+        y2Btn.textContent = i18n.t('timeseriesY2Label');
+        y2Btn.title = i18n.t('timeseriesY2Toggle');
+        y2Btn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
+        y2Btn.setAttribute('aria-pressed', plot?.timeseriesY2Enabled ? 'true' : 'false');
+        y2Btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleTimeseriesY2(panelId);
+        });
+        timeseriesToolsGroup.appendChild(y2Btn);
         toolbar.appendChild(timeseriesToolsGroup);
     }
 
@@ -2838,6 +2857,10 @@ proto._toggleTimeseriesStack = function(panelId) {
     const plot = this.plots.get(panelId);
     if (!plot || plot.mode !== 'timeseries') return;
     plot.timeseriesStacked = !plot.timeseriesStacked;
+    if (plot.timeseriesStacked && plot.timeseriesY2Enabled) {
+        plot.timeseriesY2Enabled = false;
+        plot.traces.forEach(trace => { trace.axis = 'y'; });
+    }
     const capturedView = plot.div ? this._capturePlotView(plot) : null;
     let restoreView = null;
     if (capturedView?.mode === '2d') {
@@ -2865,9 +2888,44 @@ proto._toggleTimeseriesStack = function(panelId) {
         btn.classList.toggle('active', !!plot.timeseriesStacked);
         btn.setAttribute('aria-pressed', plot.timeseriesStacked ? 'true' : 'false');
     }
+    const y2Btn = panelEl?.querySelector('.timeseries-y2-btn');
+    if (y2Btn) {
+        y2Btn.classList.toggle('active', !!plot.timeseriesY2Enabled);
+        y2Btn.setAttribute('aria-pressed', plot.timeseriesY2Enabled ? 'true' : 'false');
+    }
 
     if (plot.div) {
         this._rebuildPanel(panelId, { restoreView: restoreView || capturedView });
+    } else {
+        this._refreshActionBtns(panelId);
+    }
+};
+
+proto._toggleTimeseriesY2 = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'timeseries') return;
+    const capturedView = plot.div ? this._capturePlotView(plot) : null;
+    plot.timeseriesY2Enabled = !plot.timeseriesY2Enabled;
+    if (plot.timeseriesY2Enabled) {
+        plot.timeseriesStacked = false;
+    } else {
+        plot.traces.forEach(trace => { trace.axis = 'y'; });
+    }
+
+    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+    const y2Btn = panelEl?.querySelector('.timeseries-y2-btn');
+    if (y2Btn) {
+        y2Btn.classList.toggle('active', !!plot.timeseriesY2Enabled);
+        y2Btn.setAttribute('aria-pressed', plot.timeseriesY2Enabled ? 'true' : 'false');
+    }
+    const stackBtn = panelEl?.querySelector('.timeseries-stack-btn');
+    if (stackBtn) {
+        stackBtn.classList.toggle('active', !!plot.timeseriesStacked);
+        stackBtn.setAttribute('aria-pressed', plot.timeseriesStacked ? 'true' : 'false');
+    }
+
+    if (plot.div) {
+        this._rebuildPanel(panelId, { restoreView: capturedView });
     } else {
         this._refreshActionBtns(panelId);
     }

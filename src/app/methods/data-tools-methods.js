@@ -1,7 +1,10 @@
 import i18n from '../../i18n/index.js';
 
+const DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage']);
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
+const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward']);
+const INTEGRAL_METHODS = new Set(['trapezoidal', 'rectangular']);
 
 export function installDataToolsMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -23,25 +26,37 @@ proto.initDataTools = function() {
         this._syncDataTools();
     });
     sourceSelect.addEventListener('change', () => {
-        outputInput.value = this._suggestOutlierOutputName(sourceSelect.value);
+        outputInput.value = this._suggestDataToolOutputName(sourceSelect.value);
         this._setOutlierMessage('', '');
         this._syncDataTools();
-        this._scheduleOutlierAutoApply({ immediate: true });
+        this._scheduleDataToolAutoApply({ immediate: true });
     });
     outputInput.addEventListener('input', () => {
         this._syncDataTools();
-        this._scheduleOutlierAutoApply();
+        this._scheduleDataToolAutoApply();
     });
     methodSelect.addEventListener('change', () => this._handleOutlierMethodChange());
+    document.getElementById('derivative-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
+    document.getElementById('integral-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
 
-    this._outlierParameterInputs().forEach(input => {
-        input.addEventListener('input', () => this._handleOutlierLiveChange({
-            immediate: input.id === 'outlier-spike-sensitivity',
-        }));
-        input.addEventListener('change', () => this._scheduleOutlierAutoApply({ immediate: true }));
+    document.getElementById('moving-average-window-slider')?.addEventListener('input', (event) => {
+        const numeric = document.getElementById('moving-average-window');
+        if (numeric) numeric.value = event.target.value;
+        this._syncDataTools();
+        this._scheduleDataToolAutoApply({ immediate: true });
+    });
+    document.getElementById('moving-average-window')?.addEventListener('input', () => {
+        this._syncMovingAverageSliderFromInput();
+        this._syncDataTools();
+        this._scheduleDataToolAutoApply({ immediate: true });
+    });
+
+    this._dataToolParameterInputs().forEach(input => {
+        input.addEventListener('input', () => this._handleOutlierLiveChange({ immediate: true }));
+        input.addEventListener('change', () => this._scheduleDataToolAutoApply({ immediate: true }));
     });
     document.querySelectorAll('input[name="outlier-replacement"], input[name="outlier-target"]').forEach(input => {
-        input.addEventListener('change', () => this._handleOutlierOptionChange());
+        input.addEventListener('change', () => this._handleDataToolOptionChange());
     });
     helpBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -51,7 +66,7 @@ proto.initDataTools = function() {
     this._syncDataTools();
 };
 
-proto._outlierParameterInputs = function() {
+proto._dataToolParameterInputs = function() {
     return [
         'outlier-spike-sensitivity',
         'outlier-lower-bound',
@@ -59,6 +74,10 @@ proto._outlierParameterInputs = function() {
     ]
         .map(id => document.getElementById(id))
         .filter(Boolean);
+};
+
+proto._outlierParameterInputs = function() {
+    return this._dataToolParameterInputs();
 };
 
 proto._syncDataTools = function() {
@@ -71,24 +90,41 @@ proto._syncDataTools = function() {
     const resetBtn = document.getElementById('outlier-reset');
     if (!toolSelect || !form || !sourceSelect || !outputInput || !methodSelect) return;
 
-    const isRemoveOutliers = toolSelect.value === 'removeOutliers';
-    const targetMode = this._getOutlierTargetMode();
-    const createsVariable = targetMode === 'create';
-    form.classList.toggle('collapsed', !isRemoveOutliers);
-    outputWrap?.classList.toggle('collapsed', !createsVariable);
-    this._syncOutlierMethodControls();
-
-    const previous = sourceSelect.value;
     const fileId = this.activeFileId;
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
     const lazy = this._isDataToolLazyData(data);
-    const entries = lazy ? [] : this._getOutlierSourceEntries(data);
+    this._syncDataToolPickerOptions(lazy);
+
+    const tool = this._getSelectedDataTool();
+    const hasTool = !!tool;
+    const targetMode = this._getOutlierTargetMode();
+    const createsVariable = targetMode === 'create';
+    const allowed = hasTool && this._isDataToolAvailableForData(tool, data);
+
+    form.classList.toggle('collapsed', !hasTool);
+    outputWrap?.classList.toggle('collapsed', !createsVariable);
+    document.getElementById('outlier-method-wrap')?.classList.toggle('collapsed', tool !== 'removeOutliers');
+    document.getElementById('outlier-replacement-wrap')?.classList.toggle('collapsed', tool !== 'removeOutliers');
+    document.querySelectorAll('.data-tool-controls').forEach(el => {
+        el.classList.toggle('collapsed', el.dataset.toolKind !== tool);
+    });
+    this._syncOutlierMethodOptions(lazy && tool === 'removeOutliers');
+    this._syncOutlierMethodControls();
+    this._syncMovingAverageControls();
+
+    const previous = sourceSelect.value;
+    const entries = hasTool && allowed ? this._getDataToolSourceEntries(data, tool) : [];
 
     sourceSelect.innerHTML = '';
-    if (lazy) {
+    if (!hasTool) {
         const option = document.createElement('option');
         option.value = '';
-        option.textContent = i18n.t('dataToolLazyUnavailable');
+        option.textContent = i18n.t('outlierSelectVariable');
+        sourceSelect.appendChild(option);
+    } else if (lazy && !allowed) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = i18n.t('dataToolLazyToolUnavailable');
         sourceSelect.appendChild(option);
     } else if (!entries.length) {
         const option = document.createElement('option');
@@ -113,62 +149,192 @@ proto._syncDataTools = function() {
     if (keptPrevious) sourceSelect.value = previous;
     if (!sourceSelect.value) outputInput.value = '';
     if ((!keptPrevious || !outputInput.value.trim()) && sourceSelect.value) {
-        outputInput.value = this._suggestOutlierOutputName(sourceSelect.value);
+        outputInput.value = this._suggestDataToolOutputName(sourceSelect.value);
     }
 
-    const hasSource = isRemoveOutliers && !lazy && !!sourceSelect.value && !!data?.variables?.[sourceSelect.value];
+    const sourceVariable = sourceSelect.value ? data?.variables?.[sourceSelect.value] : null;
+    const hasSource = hasTool && allowed && !!sourceSelect.value && !!sourceVariable;
     const hasOutput = !createsVariable || !!outputInput.value.trim();
-    const hasValidConfig = !hasSource || !!this._tryReadOutlierConfig();
+    const hasValidConfig = !hasSource || !!this._tryReadDataToolConfig();
     const resetTarget = hasSource
         ? this._findOutlierResetDefinition(fileId, {
             sourceName: sourceSelect.value,
             outputName: outputInput.value.trim(),
             targetMode,
+            tool,
         })
         : null;
 
-    sourceSelect.disabled = !isRemoveOutliers || lazy || !entries.length;
+    sourceSelect.disabled = !hasTool || !allowed || !entries.length;
     outputInput.disabled = !hasSource || !createsVariable;
-    methodSelect.disabled = !hasSource;
-    this._outlierParameterInputs().forEach(input => { input.disabled = !hasSource; });
-    document.querySelectorAll('input[name="outlier-replacement"], input[name="outlier-target"]').forEach(input => { input.disabled = !hasSource; });
+    methodSelect.disabled = !hasSource || tool !== 'removeOutliers' || lazy;
+    this._dataToolParameterInputs().forEach(input => { input.disabled = !hasSource || (lazy && input.id !== 'outlier-lower-bound' && input.id !== 'outlier-upper-bound'); });
+    document.getElementById('derivative-method')?.toggleAttribute('disabled', !hasSource || tool !== 'derivative');
+    document.getElementById('integral-method')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
+    document.getElementById('moving-average-window-slider')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
+    document.getElementById('moving-average-window')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
+    document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
+        input.disabled = !hasSource || tool !== 'removeOutliers' || lazy;
+        if (lazy && input.value === 'nan') input.checked = true;
+    });
+    document.querySelectorAll('input[name="outlier-target"]').forEach(input => { input.disabled = !hasSource; });
     if (resetBtn) resetBtn.disabled = !resetTarget;
     form.classList.toggle('data-tool-invalid', hasSource && (!hasOutput || !hasValidConfig));
 
-    if (isRemoveOutliers && lazy) {
+    if (hasTool && lazy && !allowed) {
         this._setOutlierMessage(i18n.t('dataToolLazyDisabled'), 'error');
+    } else if (hasTool && lazy && tool === 'removeOutliers') {
+        const messageEl = document.getElementById('outlier-message');
+        if (!messageEl?.textContent) this._setOutlierMessage(i18n.t('dataToolLazyBoundsOnly'), '');
     }
 };
 
+proto._syncDataToolPickerOptions = function(lazy) {
+    const toolSelect = document.getElementById('data-tool-select');
+    if (!toolSelect) return;
+    for (const option of toolSelect.options) {
+        if (!option.value) continue;
+        option.disabled = !!lazy && option.value !== 'removeOutliers';
+    }
+    if (toolSelect.value && toolSelect.options[toolSelect.selectedIndex]?.disabled) {
+        toolSelect.value = '';
+    }
+};
+
+proto._syncOutlierMethodOptions = function(lazyBoundsOnly) {
+    const methodSelect = document.getElementById('outlier-method');
+    if (!methodSelect) return;
+    for (const option of methodSelect.options) {
+        option.disabled = !!lazyBoundsOnly && option.value !== 'bounds';
+    }
+    if (lazyBoundsOnly && methodSelect.value !== 'bounds') methodSelect.value = 'bounds';
+};
+
 proto._syncOutlierMethodControls = function() {
+    const tool = this._getSelectedDataTool();
     const method = this._getOutlierDetectorMethod();
     document.querySelectorAll('.outlier-method-controls').forEach(el => {
-        el.classList.toggle('collapsed', el.dataset.outlierMethod !== method);
+        el.classList.toggle('collapsed', tool !== 'removeOutliers' || el.dataset.outlierMethod !== method);
     });
     const sliderValue = document.getElementById('outlier-spike-sensitivity-value');
     if (sliderValue) sliderValue.textContent = this._formatOutlierNumber(this._getOutlierSensitivity(), 0);
 };
 
+proto._syncMovingAverageControls = function() {
+    const input = document.getElementById('moving-average-window');
+    const slider = document.getElementById('moving-average-window-slider');
+    const value = document.getElementById('moving-average-window-value');
+    if (!input || !slider) return;
+    const sourceName = document.getElementById('outlier-variable')?.value || '';
+    const source = this.activeFileId
+        ? this.plotManager.files.get(this.activeFileId)?.data?.variables?.[sourceName]
+        : null;
+    const max = Math.max(2, Number(source?.data?.length) || 2);
+    input.max = String(max);
+    const windowSize = this._normalizeMovingAverageWindow(input.value || slider.value, max);
+    if (!input.value) input.value = String(windowSize);
+    if (Number(windowSize) >= Number(slider.min) && Number(windowSize) <= Number(slider.max)) {
+        slider.value = String(windowSize);
+    }
+    if (value) value.textContent = String(windowSize);
+};
+
+proto._syncMovingAverageSliderFromInput = function() {
+    const input = document.getElementById('moving-average-window');
+    const slider = document.getElementById('moving-average-window-slider');
+    const value = document.getElementById('moving-average-window-value');
+    if (!input || !slider) return;
+    const n = Number(input.value);
+    if (Number.isFinite(n) && n >= Number(slider.min) && n <= Number(slider.max)) {
+        slider.value = String(Math.round(n));
+    }
+    if (value && Number.isFinite(n)) value.textContent = String(Math.max(2, Math.round(n)));
+};
+
 proto._handleOutlierMethodChange = function() {
     this._setOutlierMessage('', '');
     this._syncDataTools();
-    this._scheduleOutlierAutoApply({ immediate: true });
+    this._scheduleDataToolAutoApply({ immediate: true });
 };
 
 proto._handleOutlierOptionChange = function() {
-    this._syncDataTools();
-    this._scheduleOutlierAutoApply({ immediate: true });
+    this._handleDataToolOptionChange();
 };
 
-proto._getOutlierSourceEntries = function(data) {
+proto._handleDataToolOptionChange = function() {
+    this._setOutlierMessage('', '');
+    this._syncDataTools();
+    this._scheduleDataToolAutoApply({ immediate: true });
+};
+
+proto._handleOutlierLiveChange = function(options = {}) {
+    this._syncOutlierMethodControls();
+    this._scheduleDataToolAutoApply(options);
+};
+
+proto._scheduleOutlierAutoApply = function(options = {}) {
+    this._scheduleDataToolAutoApply(options);
+};
+
+proto._scheduleDataToolAutoApply = function(options = {}) {
+    if (this._outlierAutoApplyTimer) clearTimeout(this._outlierAutoApplyTimer);
+    const delay = options.immediate ? 0 : 350;
+    this._outlierAutoApplyTimer = setTimeout(() => {
+        this._outlierAutoApplyTimer = null;
+        this._autoApplyOutlierTool();
+    }, delay);
+};
+
+proto._autoApplyOutlierTool = function() {
+    const tool = this._getSelectedDataTool();
+    if (!tool) return;
+    const context = this._getOutlierContext({ quiet: true });
+    if (!context) {
+        this._syncDataTools();
+        return;
+    }
+
+    try {
+        this._getDataToolConfig(tool, context);
+    } catch (err) {
+        this._setOutlierMessage(err?.message || String(err), 'error');
+        this._syncDataTools();
+        return;
+    }
+
+    Promise.resolve(this.applyOutlierTool({ silent: true })).then(result => {
+        if (result) {
+            const key = result.tool === 'removeOutliers' ? 'outlierAutoApplied' : 'dataToolAutoApplied';
+            this._setOutlierMessage(
+                i18n.t(key)
+                    .replace('{count}', String(result.count ?? 0))
+                    .replace('{name}', result.name || context.outputName || context.sourceName),
+                result.warning ? 'error' : (result.count ? 'ok' : '')
+            );
+            if (result.warning) this._setOutlierMessage(result.warning, 'error');
+        }
+        this._syncDataTools();
+    }).catch(err => {
+        this._setOutlierMessage(err?.message || String(err), 'error');
+        this._syncDataTools();
+    });
+};
+
+proto._getDataToolSourceEntries = function(data, tool = this._getSelectedDataTool()) {
+    const lazy = this._isDataToolLazyData(data);
     return Object.entries(data?.variables || {})
         .filter(([, variable]) => {
             if (!variable || variable.kind === 'abscissa' || variable.kind === 'parameter') return false;
             if (variable.plottable === false) return false;
             if (variable.dataType === 'string' || variable.dataType === 'boolean') return false;
-            return this._isOutlierDataSeries(variable.data);
+            if (lazy) return tool === 'removeOutliers' && !!variable._duckdbCol;
+            return this._isDataToolDataSeries(variable.data, tool);
         })
         .sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
+};
+
+proto._getOutlierSourceEntries = function(data) {
+    return this._getDataToolSourceEntries(data, 'removeOutliers');
 };
 
 proto._outlierSourceLabel = function(name, variable) {
@@ -176,10 +342,20 @@ proto._outlierSourceLabel = function(name, variable) {
 };
 
 proto._suggestOutlierOutputName = function(sourceName) {
+    return this._suggestDataToolOutputName(sourceName, 'removeOutliers');
+};
+
+proto._suggestDataToolOutputName = function(sourceName, tool = this._getSelectedDataTool()) {
     if (!sourceName) return '';
-    const existing = this._findDataToolCreateDefinitionName(this.activeFileId, sourceName);
+    const existing = this._findDataToolCreateDefinitionName(this.activeFileId, sourceName, '', tool);
     if (existing) return existing;
-    return this._uniqueDataToolVariableName(`${sourceName} no_outliers`);
+    const suffix = {
+        removeOutliers: 'no_outliers',
+        derivative: 'ddt',
+        integrate: 'int',
+        movingAverage: 'avg',
+    }[tool] || 'tool';
+    return this._uniqueDataToolVariableName(`${sourceName} ${suffix}`);
 };
 
 proto.applyOutlierTool = function(options = {}) {
@@ -187,20 +363,22 @@ proto.applyOutlierTool = function(options = {}) {
     if (!context) return null;
     let config;
     try {
-        config = this._getOutlierConfig();
+        config = this._getDataToolConfig(context.tool, context);
     } catch (err) {
         if (!options.silent) this._setOutlierMessage(err?.message || String(err), 'error');
         return null;
     }
     return context.targetMode === 'create'
-        ? this._applyOutlierCreateMode(context, config, options)
-        : this._applyOutlierModifyMode(context, config, options);
+        ? this._applyDataToolCreateMode(context, config, options)
+        : this._applyDataToolModifyMode(context, config, options);
 };
 
-proto._applyOutlierCreateMode = function(context, config, options = {}) {
-    const { fileId, data, sourceName, sourceVariable, outputName } = context;
+proto._applyDataToolCreateMode = function(context, config, options = {}) {
+    if (context.lazy) return this._applyLazyDataToolCreateMode(context, config, options);
+
+    const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
     const definitions = this.dataToolVariablesByFile?.get(fileId);
-    const previousName = this._findDataToolCreateDefinitionName(fileId, sourceName, outputName);
+    const previousName = this._findDataToolCreateDefinitionName(fileId, sourceName, outputName, tool);
     const existing = data.variables[outputName];
     const existingDefinition = definitions?.get(outputName);
 
@@ -212,20 +390,20 @@ proto._applyOutlierCreateMode = function(context, config, options = {}) {
             definitions?.delete(previousName);
         }
 
-        const result = this._buildOutlierResult(sourceVariable.data, sourceVariable, {
+        const result = this._buildDataToolResult(sourceVariable.data, sourceVariable, {
             ...config,
             sourceName,
             targetName: outputName,
             targetMode: 'create',
-        });
+        }, data);
         data.variables[outputName] = result.variable;
         this._storeDataToolDefinition(fileId, outputName, {
             name: outputName,
-            tool: 'removeOutliers',
+            tool,
             targetMode: 'create',
             sourceName,
             method: config.method,
-            params: this._cloneOutlierParams(config.params),
+            params: this._cloneDataToolParams(config.params),
             replacement: config.replacement,
             variable: result.variable,
         });
@@ -233,14 +411,7 @@ proto._applyOutlierCreateMode = function(context, config, options = {}) {
         this.plotManager.updateFileData(fileId, data);
         this._renderFilteredTree();
         this._syncDataTools();
-        if (!options.silent) {
-            this._setOutlierMessage(
-                i18n.t(existingDefinition ? 'outlierUpdated' : 'outlierCreated')
-                    .replace('{count}', String(result.count))
-                    .replace('{name}', outputName),
-                'ok'
-            );
-        }
+        if (!options.silent) this._setDataToolApplyMessage(result, existingDefinition ? 'updated' : 'created', outputName);
         return result;
     } catch (err) {
         if (!options.silent) this._setOutlierMessage(err?.message || String(err), 'error');
@@ -248,20 +419,22 @@ proto._applyOutlierCreateMode = function(context, config, options = {}) {
     }
 };
 
-proto._applyOutlierModifyMode = function(context, config, options = {}) {
-    const { fileId, data, sourceName, sourceVariable } = context;
+proto._applyDataToolModifyMode = function(context, config, options = {}) {
+    if (context.lazy) return this._applyLazyDataToolModifyMode(context, config, options);
+
+    const { fileId, data, sourceName, sourceVariable, tool } = context;
     const existingDefinition = this.dataToolVariablesByFile?.get(fileId)?.get(sourceName);
     const originalData = existingDefinition?.targetMode === 'modify' && existingDefinition.originalData
         ? Array.from(existingDefinition.originalData)
         : Array.from(sourceVariable.data);
 
     try {
-        const result = this._buildOutlierResult(originalData, sourceVariable, {
+        const result = this._buildDataToolResult(originalData, sourceVariable, {
             ...config,
             sourceName,
             targetName: sourceName,
             targetMode: 'modify',
-        });
+        }, data);
         const variable = data.variables[sourceName];
         variable.data = result.variable.data;
         variable.dataType = result.variable.dataType;
@@ -271,11 +444,11 @@ proto._applyOutlierModifyMode = function(context, config, options = {}) {
 
         this._storeDataToolDefinition(fileId, sourceName, {
             name: sourceName,
-            tool: 'removeOutliers',
+            tool,
             targetMode: 'modify',
             sourceName,
             method: config.method,
-            params: this._cloneOutlierParams(config.params),
+            params: this._cloneDataToolParams(config.params),
             replacement: config.replacement,
             originalData: Array.from(originalData),
             variable,
@@ -284,14 +457,7 @@ proto._applyOutlierModifyMode = function(context, config, options = {}) {
         this.plotManager.updateFileData(fileId, data);
         this._renderFilteredTree();
         this._syncDataTools();
-        if (!options.silent) {
-            this._setOutlierMessage(
-                i18n.t(existingDefinition ? 'outlierModifiedUpdated' : 'outlierModified')
-                    .replace('{count}', String(result.count))
-                    .replace('{name}', sourceName),
-                'ok'
-            );
-        }
+        if (!options.silent) this._setDataToolApplyMessage(result, existingDefinition ? 'modifiedUpdated' : 'modified', sourceName);
         return result;
     } catch (err) {
         if (!options.silent) this._setOutlierMessage(err?.message || String(err), 'error');
@@ -299,44 +465,147 @@ proto._applyOutlierModifyMode = function(context, config, options = {}) {
     }
 };
 
-proto._handleOutlierLiveChange = function(options = {}) {
-    this._syncOutlierMethodControls();
-    this._scheduleOutlierAutoApply(options);
+proto._applyOutlierCreateMode = function(context, config, options = {}) {
+    return this._applyDataToolCreateMode(context, { ...config, tool: 'removeOutliers' }, options);
 };
 
-proto._scheduleOutlierAutoApply = function(options = {}) {
-    if (this._outlierAutoApplyTimer) clearTimeout(this._outlierAutoApplyTimer);
-    const delay = options.immediate ? 0 : 350;
-    this._outlierAutoApplyTimer = setTimeout(() => {
-        this._outlierAutoApplyTimer = null;
-        this._autoApplyOutlierTool();
-    }, delay);
+proto._applyOutlierModifyMode = function(context, config, options = {}) {
+    return this._applyDataToolModifyMode(context, { ...config, tool: 'removeOutliers' }, options);
 };
 
-proto._autoApplyOutlierTool = function() {
-    const toolSelect = document.getElementById('data-tool-select');
-    if (toolSelect?.value !== 'removeOutliers') return;
-    const context = this._getOutlierContext({ quiet: true });
-    if (!context) {
-        this._syncDataTools();
-        return;
+proto._applyLazyDataToolCreateMode = async function(context, config, options = {}) {
+    const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
+    if (!this._isLazyBoundsConfig(config)) throw new Error(i18n.t('dataToolLazyDisabled'));
+    const definitions = this.dataToolVariablesByFile?.get(fileId);
+    const previousName = this._findDataToolCreateDefinitionName(fileId, sourceName, outputName, tool);
+    const existing = data.variables[outputName];
+    const existingDefinition = definitions?.get(outputName);
+
+    if (existing && !existingDefinition) throw new Error(i18n.t('outlierOutputExists').replace('{name}', outputName));
+    if (outputName === sourceName) throw new Error(i18n.t('outlierOutputSameAsSource'));
+    if (previousName && previousName !== outputName) {
+        delete data.variables[previousName];
+        definitions?.delete(previousName);
     }
 
-    let config;
-    try {
-        config = this._getOutlierConfig();
-    } catch (err) {
-        this._setOutlierMessage(err?.message || String(err), 'error');
-        this._syncDataTools();
-        return;
-    }
+    const definition = this._lazyDataToolDefinition(outputName, config, sourceName, 'create');
+    const variable = {
+        ...sourceVariable,
+        name: outputName,
+        data: this._replaceOutliersWithNaN(
+            Array.from(sourceVariable.data || []),
+            this._detectBoundsOutliers(sourceVariable.data || [], config.params)
+        ),
+        description: `Data tool: remove outliers from ${sourceName}; ${this._outlierDetectorDescription(config)}; nan`,
+        kind: 'variable',
+        derived: true,
+        dataToolModified: false,
+        dataTool: { ...definition, outlierCount: null },
+        _duckdbCol: sourceVariable._duckdbCol,
+        _duckdbDataTool: definition,
+    };
+    delete variable.formula;
+    data.variables[outputName] = variable;
+    this._storeDataToolDefinition(fileId, outputName, { ...definition, variable });
+    const count = await this._countLazyBoundsOutliers(data, sourceName, config.params);
+    variable.dataTool.outlierCount = count;
+    await this._refreshLazyDataToolOverview(data);
 
-    const result = this.applyOutlierTool({ silent: true });
-    if (result) this._setOutlierMessage(
-        i18n.t('outlierAutoApplied').replace('{count}', String(result.count)),
-        result.count ? 'ok' : ''
-    );
+    this.plotManager.updateFileData(fileId, data);
+    this._renderFilteredTree();
     this._syncDataTools();
+    const result = { variable, count, tool, name: outputName };
+    if (!options.silent) this._setDataToolApplyMessage(result, existingDefinition ? 'updated' : 'created', outputName);
+    return result;
+};
+
+proto._applyLazyDataToolModifyMode = async function(context, config, options = {}) {
+    const { fileId, data, sourceName, sourceVariable, tool } = context;
+    if (!this._isLazyBoundsConfig(config)) throw new Error(i18n.t('dataToolLazyDisabled'));
+    const existingDefinition = this.dataToolVariablesByFile?.get(fileId)?.get(sourceName);
+    const originalData = existingDefinition?.targetMode === 'modify' && existingDefinition.originalData
+        ? Array.from(existingDefinition.originalData)
+        : Array.from(sourceVariable.data || []);
+    const definition = this._lazyDataToolDefinition(sourceName, config, sourceName, 'modify');
+    const variable = data.variables[sourceName];
+    variable.data = this._replaceOutliersWithNaN(originalData, this._detectBoundsOutliers(originalData, config.params));
+    variable.dataToolModified = true;
+    variable.dataTool = { ...definition, outlierCount: null };
+    variable._duckdbDataTool = definition;
+    const count = await this._countLazyBoundsOutliers(data, sourceName, config.params);
+    variable.dataTool.outlierCount = count;
+    this._storeDataToolDefinition(fileId, sourceName, {
+        ...definition,
+        originalData,
+        variable,
+    });
+    await this._refreshLazyDataToolOverview(data);
+
+    this.plotManager.updateFileData(fileId, data);
+    this._renderFilteredTree();
+    this._syncDataTools();
+    const result = { variable, count, tool, name: sourceName };
+    if (!options.silent) this._setDataToolApplyMessage(result, existingDefinition ? 'modifiedUpdated' : 'modified', sourceName);
+    return result;
+};
+
+proto._lazyDataToolDefinition = function(name, config, sourceName, targetMode) {
+    return {
+        name,
+        tool: 'removeOutliers',
+        targetMode,
+        sourceName,
+        method: 'bounds',
+        params: this._cloneDataToolParams(config.params),
+        replacement: 'nan',
+    };
+};
+
+proto._isLazyBoundsConfig = function(config) {
+    return config?.tool === 'removeOutliers' && config.method === 'bounds';
+};
+
+proto._countLazyBoundsOutliers = async function(data, sourceName, params) {
+    const source = data?._duckdb?.source;
+    if (!source?.countOutOfBounds) return this._detectBoundsOutliers(data?.variables?.[sourceName]?.data || [], params).length;
+    try {
+        return await source.countOutOfBounds(data, sourceName, params);
+    } catch (err) {
+        console.warn('[duckdb] could not count lazy data-tool outliers:', err?.message || err);
+        return null;
+    }
+};
+
+proto._refreshLazyDataToolOverview = async function(data) {
+    const source = data?._duckdb?.source;
+    if (!source?.refreshOverview) return;
+    try {
+        await source.refreshOverview(data);
+    } catch (err) {
+        console.warn('[duckdb] could not refresh lazy data-tool overview:', err?.message || err);
+    }
+};
+
+proto._setDataToolApplyMessage = function(result, action, name) {
+    const tool = result?.tool || 'removeOutliers';
+    const keyByAction = tool === 'removeOutliers'
+        ? {
+            created: 'outlierCreated',
+            updated: 'outlierUpdated',
+            modified: 'outlierModified',
+            modifiedUpdated: 'outlierModifiedUpdated',
+        }
+        : {
+            created: 'dataToolCreated',
+            updated: 'dataToolUpdated',
+            modified: 'dataToolModified',
+            modifiedUpdated: 'dataToolModifiedUpdated',
+        };
+    let message = i18n.t(keyByAction[action] || 'dataToolUpdated')
+        .replace('{count}', String(result?.count ?? 0))
+        .replace('{name}', name || result?.name || '');
+    if (result?.warning) message += ` ${result.warning}`;
+    this._setOutlierMessage(message, result?.warning ? 'error' : 'ok');
 };
 
 proto.resetOutlierTool = function(options = {}) {
@@ -350,7 +619,12 @@ proto.resetOutlierTool = function(options = {}) {
     const sourceName = document.getElementById('outlier-variable')?.value || '';
     const outputName = (document.getElementById('outlier-output-name')?.value || '').trim();
     const targetMode = this._getOutlierTargetMode();
-    const resetTarget = this._findOutlierResetDefinition(fileId, { sourceName, outputName, targetMode });
+    const resetTarget = this._findOutlierResetDefinition(fileId, {
+        sourceName,
+        outputName,
+        targetMode,
+        tool: this._getSelectedDataTool(),
+    });
 
     if (!fileId || !data || !resetTarget) {
         if (!options.silent) this._setOutlierMessage(i18n.t('outlierResetNothing'), '');
@@ -379,8 +653,14 @@ proto._resetOutlierModifiedVariable = function(fileId, data, name, definition, o
     variable.isConstant = this.parser._isConstantValues(originalData);
     delete variable.dataToolModified;
     delete variable.dataTool;
+    delete variable._duckdbDataTool;
     this._deleteDataToolDefinition(fileId, name);
 
+    if (data?._duckdb?.source?.refreshOverview) {
+        data._duckdb.source.refreshOverview(data).catch(err =>
+            console.warn('[duckdb] could not refresh overview after data-tool reset:', err?.message || err)
+        );
+    }
     this.plotManager.updateFileData(fileId, data);
     this._renderFilteredTree();
     this._rebuildPlotsUsingVariable?.(fileId, name);
@@ -402,6 +682,11 @@ proto._resetOutlierCreatedVariable = function(fileId, data, name, options = {}) 
     this.derivedByFile?.get(fileId)?.delete(name);
     this._deleteDataToolDefinition(fileId, name);
     this._removeDataToolVariableFromPlots(fileId, name);
+    if (data?._duckdb?.source?.refreshOverview) {
+        data._duckdb.source.refreshOverview(data).catch(err =>
+            console.warn('[duckdb] could not refresh overview after data-tool reset:', err?.message || err)
+        );
+    }
     this.plotManager.updateFileData(fileId, data);
     this._clearVariableSelection?.();
     this._renderFilteredTree();
@@ -412,42 +697,203 @@ proto._resetOutlierCreatedVariable = function(fileId, data, name, options = {}) 
     return true;
 };
 
+proto._buildDataToolResult = function(sourceValues, sourceVariable, config, data) {
+    if (config.tool === 'derivative') return this._buildDerivativeResult(sourceValues, sourceVariable, config, data);
+    if (config.tool === 'integrate') return this._buildIntegralResult(sourceValues, sourceVariable, config, data);
+    if (config.tool === 'movingAverage') return this._buildMovingAverageResult(sourceValues, sourceVariable, config);
+    return this._buildOutlierResult(sourceValues, sourceVariable, config);
+};
+
+proto._baseDataToolVariable = function(sourceValues, sourceVariable, config, values, extraDataTool = {}) {
+    const variable = {
+        ...sourceVariable,
+        name: config.targetName,
+        data: values,
+        description: config.targetMode === 'create'
+            ? this._dataToolDescription(config)
+            : sourceVariable.description,
+        kind: 'variable',
+        dataType: this.parser._detectDataType(values, 'variable'),
+        isConstant: this.parser._isConstantValues(values),
+        interpolation: sourceVariable.interpolation || 'linear',
+        derived: config.targetMode === 'create' ? true : !!sourceVariable.derived,
+        dataToolModified: config.targetMode === 'modify',
+        dataTool: {
+            tool: config.tool,
+            sourceName: config.sourceName,
+            targetMode: config.targetMode,
+            method: config.method || null,
+            params: this._cloneDataToolParams(config.params),
+            ...extraDataTool,
+        },
+    };
+    if (config.replacement) variable.dataTool.replacement = config.replacement;
+    if (config.targetMode === 'create') {
+        delete variable._duckdbCol;
+        delete variable._duckdbDataTool;
+        delete variable.formula;
+    }
+    return variable;
+};
+
 proto._buildOutlierResult = function(sourceValues, sourceVariable, config) {
     const values = Array.from(sourceValues || []);
     const outlierIndexes = this._detectOutlierIndexes(values, config.method, config.params);
     const cleaned = config.replacement === 'interpolate'
         ? this._interpolateOutliers(values, outlierIndexes)
         : this._replaceOutliersWithNaN(values, outlierIndexes);
+    const variable = this._baseDataToolVariable(values, sourceVariable, {
+        ...config,
+        tool: 'removeOutliers',
+    }, cleaned, {
+        method: config.method,
+        replacement: config.replacement,
+        outlierCount: outlierIndexes.length,
+        outlierIndexes,
+    });
+    return { variable, count: outlierIndexes.length, tool: 'removeOutliers', name: config.targetName };
+};
 
-    const variable = {
-        ...sourceVariable,
-        name: config.targetName,
-        data: cleaned,
-        description: config.targetMode === 'create'
-            ? `Data tool: remove outliers from ${config.sourceName}; ${this._outlierDetectorDescription(config)}; ${config.replacement}`
-            : sourceVariable.description,
-        kind: 'variable',
-        dataType: this.parser._detectDataType(cleaned, 'variable'),
-        isConstant: this.parser._isConstantValues(cleaned),
-        interpolation: sourceVariable.interpolation || 'linear',
-        derived: config.targetMode === 'create' ? true : !!sourceVariable.derived,
-        dataToolModified: config.targetMode === 'modify',
-        dataTool: {
-            tool: 'removeOutliers',
-            sourceName: config.sourceName,
-            targetMode: config.targetMode,
-            method: config.method,
-            params: this._cloneOutlierParams(config.params),
-            replacement: config.replacement,
-            outlierCount: outlierIndexes.length,
-            outlierIndexes,
-        },
-    };
-    if (config.targetMode === 'create') {
-        delete variable._duckdbCol;
-        delete variable.formula;
+proto._buildDerivativeResult = function(sourceValues, sourceVariable, config, data) {
+    const result = this._computeDerivativeValues(sourceValues, data, config.params);
+    const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
+        ...config,
+        tool: 'derivative',
+    }, result.values, { method: config.params.method });
+    return { variable, count: result.values.length, tool: 'derivative', name: config.targetName };
+};
+
+proto._buildIntegralResult = function(sourceValues, sourceVariable, config, data) {
+    const result = this._computeIntegralValues(sourceValues, data, config.params);
+    const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
+        ...config,
+        tool: 'integrate',
+    }, result.values, {
+        method: config.params.method,
+        negativeDtCount: result.negativeDtCount,
+    });
+    const warning = result.negativeDtCount > 0
+        ? i18n.t('dataToolNegativeDtWarning').replace('{count}', String(result.negativeDtCount))
+        : '';
+    return { variable, count: result.values.length, tool: 'integrate', name: config.targetName, warning };
+};
+
+proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config) {
+    const values = this._computeMovingAverageValues(sourceValues, config.params);
+    const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
+        ...config,
+        tool: 'movingAverage',
+    }, values, { window: config.params.window });
+    return { variable, count: values.length, tool: 'movingAverage', name: config.targetName };
+};
+
+proto._dataToolDescription = function(config) {
+    if (config.tool === 'derivative') {
+        return `Data tool: derivative of ${config.sourceName}; ${config.params.method}`;
     }
-    return { variable, count: outlierIndexes.length };
+    if (config.tool === 'integrate') {
+        return `Data tool: integral of ${config.sourceName}; ${config.params.method}`;
+    }
+    if (config.tool === 'movingAverage') {
+        return `Data tool: moving average of ${config.sourceName}; window ${config.params.window}`;
+    }
+    return `Data tool: remove outliers from ${config.sourceName}; ${this._outlierDetectorDescription(config)}; ${config.replacement}`;
+};
+
+proto._computeDerivativeValues = function(sourceValues, data, params = {}) {
+    const values = Array.from(sourceValues || [], Number);
+    const n = values.length;
+    const out = new Array(n).fill(NaN);
+    if (n < 2) return { values: out };
+    const time = this._getDataToolTimeContext(data, n);
+    const method = DERIVATIVE_METHODS.has(params.method) ? params.method : 'centered';
+    const diff = (a, b) => {
+        const y0 = Number(values[a]);
+        const y1 = Number(values[b]);
+        const dt = this._dataToolDelta(time, a, b);
+        if (!Number.isFinite(y0) || !Number.isFinite(y1) || !Number.isFinite(dt) || dt === 0) return NaN;
+        return (y1 - y0) / dt;
+    };
+    for (let i = 0; i < n; i++) {
+        if (method === 'forward') out[i] = i < n - 1 ? diff(i, i + 1) : diff(i - 1, i);
+        else if (method === 'backward') out[i] = i > 0 ? diff(i - 1, i) : diff(i, i + 1);
+        else out[i] = i === 0 ? diff(0, 1) : (i === n - 1 ? diff(n - 2, n - 1) : diff(i - 1, i + 1));
+    }
+    return { values: out };
+};
+
+proto._computeIntegralValues = function(sourceValues, data, params = {}) {
+    const values = Array.from(sourceValues || [], Number);
+    const n = values.length;
+    const out = new Array(n).fill(0);
+    if (!n) return { values: out, negativeDtCount: 0 };
+    const time = this._getDataToolTimeContext(data, n);
+    const method = INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
+    let acc = 0;
+    let negativeDtCount = 0;
+    for (let i = 1; i < n; i++) {
+        const dt = this._dataToolDelta(time, i - 1, i);
+        if (Number.isFinite(dt)) {
+            if (dt < 0) negativeDtCount++;
+            const y0 = Number(values[i - 1]);
+            const y1 = Number(values[i]);
+            if (method === 'rectangular') {
+                if (Number.isFinite(y0)) acc += y0 * dt;
+            } else if (Number.isFinite(y0) && Number.isFinite(y1)) {
+                acc += 0.5 * (y0 + y1) * dt;
+            }
+        }
+        out[i] = acc;
+    }
+    return { values: out, negativeDtCount };
+};
+
+proto._computeMovingAverageValues = function(sourceValues, params = {}) {
+    const values = Array.from(sourceValues || [], Number);
+    const n = values.length;
+    const window = this._normalizeMovingAverageWindow(params.window, n);
+    const left = Math.floor((window - 1) / 2);
+    const right = window - left - 1;
+    const out = new Array(n).fill(NaN);
+    for (let i = 0; i < n; i++) {
+        const start = Math.max(0, i - left);
+        const end = Math.min(n - 1, i + right);
+        let sum = 0;
+        let count = 0;
+        for (let j = start; j <= end; j++) {
+            const value = Number(values[j]);
+            if (!Number.isFinite(value)) continue;
+            sum += value;
+            count++;
+        }
+        out[i] = count ? sum / count : NaN;
+    }
+    return out;
+};
+
+proto._getDataToolTimeContext = function(data, expectedLength) {
+    const timeName = data?.metadata?.timeName;
+    const timeVariable = (timeName && data?.variables?.[timeName])
+        || Object.values(data?.variables || {}).find(v => v.kind === 'abscissa')
+        || null;
+    const values = timeVariable?.data && timeVariable.data.length === expectedLength
+        ? timeVariable.data
+        : null;
+    const metaKind = data?.metadata?.timeKind || timeVariable?.timeKind || '';
+    const kind = metaKind === 'datetime'
+        ? 'datetime'
+        : (metaKind === 'index' || timeVariable?.timeStepMode === 'index' ? 'index' : 'numeric');
+    return { values, kind };
+};
+
+proto._dataToolDelta = function(time, a, b) {
+    if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0) return NaN;
+    if (time.kind === 'index' || !time.values) return b - a;
+    const t0 = Number(time.values[a]);
+    const t1 = Number(time.values[b]);
+    if (!Number.isFinite(t0) || !Number.isFinite(t1)) return NaN;
+    const delta = t1 - t0;
+    return time.kind === 'datetime' ? delta / 1000 : delta;
 };
 
 proto._detectOutlierIndexes = function(values, method, params = {}) {
@@ -523,25 +969,6 @@ proto._detectIqrOutliers = function(values, params = {}) {
     return indexes;
 };
 
-proto._keepShortOutlierRuns = function(indexes, maxRun) {
-    if (!indexes.length) return indexes;
-    const kept = [];
-    let run = [indexes[0]];
-    const flush = () => {
-        if (run.length <= maxRun) kept.push(...run);
-    };
-    for (let i = 1; i < indexes.length; i++) {
-        if (indexes[i] === indexes[i - 1] + 1) {
-            run.push(indexes[i]);
-        } else {
-            flush();
-            run = [indexes[i]];
-        }
-    }
-    flush();
-    return kept;
-};
-
 proto._keepReturningOutlierRuns = function(indexes, values, maxRun, halfWindow, threshold) {
     if (!indexes.length) return indexes;
     const kept = [];
@@ -614,13 +1041,13 @@ proto._median = function(values) {
 };
 
 proto._replaceOutliersWithNaN = function(values, outlierIndexes) {
-    const cleaned = values.slice();
+    const cleaned = Array.from(values || []);
     outlierIndexes.forEach(index => { cleaned[index] = NaN; });
     return cleaned;
 };
 
 proto._interpolateOutliers = function(values, outlierIndexes) {
-    const cleaned = values.slice();
+    const cleaned = Array.from(values || []);
     const outlierSet = new Set(outlierIndexes);
     outlierIndexes.forEach(index => {
         let left = index - 1;
@@ -642,34 +1069,74 @@ proto._interpolateOutliers = function(values, outlierIndexes) {
 proto._getOutlierContext = function(options = {}) {
     const fileId = this.activeFileId;
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+    const tool = this._getSelectedDataTool();
     const sourceName = document.getElementById('outlier-variable')?.value || '';
     const outputName = (document.getElementById('outlier-output-name')?.value || '').trim();
     const targetMode = this._getOutlierTargetMode();
     const sourceVariable = data?.variables?.[sourceName];
-    if (this._isDataToolLazyData(data)) {
-        if (!options.quiet) this._setOutlierMessage(i18n.t('dataToolLazyDisabled'), 'error');
-        return null;
-    }
-    if (!fileId || !data || !sourceVariable || (targetMode === 'create' && !outputName)) {
+    const lazy = this._isDataToolLazyData(data);
+    if (!tool || !fileId || !data || !sourceVariable || (targetMode === 'create' && !outputName)) {
         if (!options.quiet) this._setOutlierMessage(i18n.t('outlierLoadFileFirst'), 'error');
         return null;
     }
-    return { fileId, data, sourceName, sourceVariable, outputName, targetMode };
+    if (lazy && !this._isDataToolAvailableForData(tool, data)) {
+        if (!options.quiet) this._setOutlierMessage(i18n.t('dataToolLazyDisabled'), 'error');
+        return null;
+    }
+    return { fileId, data, sourceName, sourceVariable, outputName, targetMode, tool, lazy };
 };
 
 proto._getOutlierConfig = function() {
+    return this._getDataToolConfig('removeOutliers');
+};
+
+proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context = null) {
+    const data = context?.data || (this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null);
+    const lazy = this._isDataToolLazyData(data);
+    if (tool === 'derivative') {
+        const method = document.getElementById('derivative-method')?.value || 'centered';
+        return { tool, params: { method: DERIVATIVE_METHODS.has(method) ? method : 'centered' } };
+    }
+    if (tool === 'integrate') {
+        const method = document.getElementById('integral-method')?.value || 'trapezoidal';
+        return { tool, params: { method: INTEGRAL_METHODS.has(method) ? method : 'trapezoidal' } };
+    }
+    if (tool === 'movingAverage') {
+        const max = context?.sourceVariable?.data?.length
+            || (document.getElementById('outlier-variable')?.value
+                ? data?.variables?.[document.getElementById('outlier-variable')?.value]?.data?.length
+                : 201)
+            || 201;
+        return { tool, params: { window: this._normalizeMovingAverageWindow(document.getElementById('moving-average-window')?.value, max) } };
+    }
+
     const method = this._getOutlierDetectorMethod();
+    if (lazy && method !== 'bounds') throw new Error(i18n.t('dataToolLazyBoundsOnly'));
     const params = this._getOutlierParams(method);
-    const replacement = this._getOutlierReplacementMethod();
-    return { method, params, replacement };
+    const replacement = lazy ? 'nan' : this._getOutlierReplacementMethod();
+    return { tool: 'removeOutliers', method, params, replacement };
 };
 
 proto._tryReadOutlierConfig = function() {
+    return this._tryReadDataToolConfig();
+};
+
+proto._tryReadDataToolConfig = function() {
     try {
-        return this._getOutlierConfig();
+        return this._getDataToolConfig();
     } catch {
         return null;
     }
+};
+
+proto._getSelectedDataTool = function() {
+    const value = document.getElementById('data-tool-select')?.value;
+    return DATA_TOOLS.has(value) ? value : '';
+};
+
+proto._isDataToolAvailableForData = function(tool, data) {
+    if (!this._isDataToolLazyData(data)) return DATA_TOOLS.has(tool);
+    return tool === 'removeOutliers';
 };
 
 proto._getOutlierDetectorMethod = function() {
@@ -719,7 +1186,7 @@ proto._getOutlierTargetMode = function() {
 
 proto._uniqueDataToolVariableName = function(baseName, fileId = this.activeFileId) {
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
-    const base = String(baseName || 'cleaned').trim() || 'cleaned';
+    const base = String(baseName || 'tool').trim() || 'tool';
     if (!data?.variables?.[base]) return base;
     let index = 2;
     while (data.variables[`${base} ${index}`]) index++;
@@ -731,8 +1198,13 @@ proto._dataToolOutputExists = function(fileId, name) {
 };
 
 proto._isOutlierDataSeries = function(values) {
+    return this._isDataToolDataSeries(values, 'removeOutliers');
+};
+
+proto._isDataToolDataSeries = function(values, tool = 'removeOutliers') {
     const length = Number(values?.length);
-    return Number.isFinite(length) && length > 2;
+    if (!Number.isFinite(length)) return false;
+    return length > (tool === 'removeOutliers' ? 2 : 1);
 };
 
 proto._isDataToolLazyData = function(data) {
@@ -758,10 +1230,11 @@ proto._findOutlierResetDefinition = function(fileId, options = {}) {
     const sourceName = options.sourceName || '';
     const outputName = options.outputName || '';
     const targetMode = options.targetMode || 'modify';
+    const tool = options.tool || this._getSelectedDataTool();
     const normalizeEntry = (name, rawDefinition) => {
         if (!rawDefinition) return null;
         const definition = this._normalizeDataToolDefinition(rawDefinition);
-        if (definition.tool !== 'removeOutliers') return null;
+        if (tool && definition.tool !== tool) return null;
         return { name, definition };
     };
 
@@ -800,26 +1273,49 @@ proto._removeDataToolVariableFromPlots = function(fileId, name) {
 proto._reapplyDataToolVariables = function(fileId, data) {
     const definitions = this.dataToolVariablesByFile?.get(fileId);
     if (!definitions) return;
-    if (this._isDataToolLazyData(data)) {
-        console.warn('Data tools are disabled for DuckDB-backed lazy files.');
-        return;
-    }
     for (const [name, rawDefinition] of definitions) {
         const definition = this._normalizeDataToolDefinition(rawDefinition);
         definitions.set(name, definition);
         try {
-            if (definition.tool !== 'removeOutliers') continue;
             const sourceVariable = data.variables?.[definition.sourceName];
             if (!sourceVariable) throw new Error(`Unknown source variable "${definition.sourceName}".`);
             const targetMode = definition.targetMode || 'create';
-            const result = this._buildOutlierResult(sourceVariable.data, sourceVariable, {
+            if (this._isDataToolLazyData(data)) {
+                if (definition.tool !== 'removeOutliers' || definition.method !== 'bounds') continue;
+                const lazyDefinition = this._lazyDataToolDefinition(name, definition, definition.sourceName, targetMode);
+                if (targetMode === 'modify') {
+                    const originalData = Array.from(sourceVariable.data || []);
+                    sourceVariable.data = this._replaceOutliersWithNaN(originalData, this._detectBoundsOutliers(originalData, definition.params));
+                    sourceVariable.dataToolModified = true;
+                    sourceVariable.dataTool = lazyDefinition;
+                    sourceVariable._duckdbDataTool = lazyDefinition;
+                    definition.originalData = originalData;
+                    definition.variable = sourceVariable;
+                } else {
+                    data.variables[name] = {
+                        ...sourceVariable,
+                        name,
+                        data: this._replaceOutliersWithNaN(sourceVariable.data || [], this._detectBoundsOutliers(sourceVariable.data || [], definition.params)),
+                        description: `Data tool: remove outliers from ${definition.sourceName}; ${this._outlierDetectorDescription(definition)}; nan`,
+                        kind: 'variable',
+                        derived: true,
+                        dataTool: lazyDefinition,
+                        _duckdbCol: sourceVariable._duckdbCol,
+                        _duckdbDataTool: lazyDefinition,
+                    };
+                    definition.variable = data.variables[name];
+                }
+                continue;
+            }
+            const result = this._buildDataToolResult(sourceVariable.data, sourceVariable, {
                 sourceName: definition.sourceName,
                 targetName: name,
                 targetMode,
+                tool: definition.tool,
                 method: definition.method,
-                params: this._cloneOutlierParams(definition.params),
+                params: this._cloneDataToolParams(definition.params),
                 replacement: definition.replacement,
-            });
+            }, data);
             if (targetMode === 'modify') {
                 const originalData = Array.from(sourceVariable.data);
                 sourceVariable.data = result.variable.data;
@@ -837,6 +1333,9 @@ proto._reapplyDataToolVariables = function(fileId, data) {
             console.warn(`Could not reapply data tool variable ${name}:`, err);
         }
     }
+    if (this._isDataToolLazyData(data)) {
+        this._refreshLazyDataToolOverview(data);
+    }
 };
 
 proto._copyDataToolDefinitions = function(sourceId, targetId) {
@@ -851,7 +1350,7 @@ proto._copyDataToolDefinitions = function(sourceId, targetId) {
             targetMode: normalized.targetMode || 'create',
             sourceName: normalized.sourceName,
             method: normalized.method,
-            params: this._cloneOutlierParams(normalized.params),
+            params: this._cloneDataToolParams(normalized.params),
             replacement: normalized.replacement,
             variable: null,
         });
@@ -867,14 +1366,22 @@ proto._clearDataToolDefinitions = function(fileId = null) {
 };
 
 proto._normalizeDataToolDefinition = function(definition = {}) {
+    const tool = DATA_TOOLS.has(definition.tool) ? definition.tool : 'removeOutliers';
+    if (tool !== 'removeOutliers') {
+        return {
+            ...definition,
+            tool,
+            targetMode: definition.targetMode || 'create',
+            params: this._normalizeDataToolParams(tool, definition.params || definition),
+            method: definition.method || definition.params?.method || null,
+            replacement: '',
+        };
+    }
+
     let method = OUTLIER_METHODS.has(definition.method) ? definition.method : '';
     let replacement = OUTLIER_REPLACEMENTS.has(definition.replacement) ? definition.replacement : '';
-
-    // Compatibility with the recovered prototype, where `method` meant
-    // replacement and the detector was always IQR.
     if (!method && Number.isFinite(Number(definition.iqrFactor))) method = 'iqr';
     if (!replacement && OUTLIER_REPLACEMENTS.has(definition.method)) replacement = definition.method;
-
     method ||= 'spike';
     if (method === 'hampel') method = 'spike';
     replacement ||= 'nan';
@@ -885,12 +1392,27 @@ proto._normalizeDataToolDefinition = function(definition = {}) {
 
     return {
         ...definition,
-        tool: definition.tool || 'removeOutliers',
+        tool,
         targetMode: definition.targetMode || 'create',
         method,
         params,
         replacement,
     };
+};
+
+proto._normalizeDataToolParams = function(tool, params = {}) {
+    if (tool === 'derivative') {
+        const method = DERIVATIVE_METHODS.has(params.method) ? params.method : 'centered';
+        return { method };
+    }
+    if (tool === 'integrate') {
+        const method = INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
+        return { method };
+    }
+    if (tool === 'movingAverage') {
+        return { window: this._normalizeMovingAverageWindow(params.window, Number(params.maxLength) || Infinity) };
+    }
+    return this._normalizeOutlierParams(params.method || 'spike', params);
 };
 
 proto._normalizeOutlierParams = function(method, params = {}) {
@@ -908,6 +1430,10 @@ proto._normalizeOutlierParams = function(method, params = {}) {
 };
 
 proto._cloneOutlierParams = function(params = {}) {
+    return this._cloneDataToolParams(params);
+};
+
+proto._cloneDataToolParams = function(params = {}) {
     return JSON.parse(JSON.stringify(params));
 };
 
@@ -920,9 +1446,9 @@ proto._serializeDataToolDefinitions = function(fileId) {
                 tool: definition.tool,
                 targetMode: definition.targetMode || 'create',
                 sourceName: definition.sourceName,
-                method: definition.method,
-                params: this._cloneOutlierParams(definition.params),
-                replacement: definition.replacement,
+                method: definition.method || null,
+                params: this._cloneDataToolParams(definition.params),
+                replacement: definition.replacement || '',
             };
         });
 };
@@ -981,14 +1507,6 @@ proto._zeroMadTolerance = function(median) {
     return Math.max(Number.EPSILON * 32 * Math.max(1, Math.abs(Number(median) || 0)), 1e-12);
 };
 
-proto._normalizeOddInteger = function(value, fallback, min, max) {
-    let n = Math.round(Number(value));
-    if (!Number.isFinite(n)) n = fallback;
-    n = Math.max(min, Math.min(max, n));
-    if (n % 2 === 0) n += n >= max ? -1 : 1;
-    return n;
-};
-
 proto._positiveNumber = function(value, fallback) {
     const n = Number(value);
     return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -997,6 +1515,13 @@ proto._positiveNumber = function(value, fallback) {
 proto._normalizeSensitivity = function(value) {
     const n = Number(value);
     return Number.isFinite(n) ? Math.max(1, Math.min(10, Math.round(n))) : 6;
+};
+
+proto._normalizeMovingAverageWindow = function(value, maxLength = Infinity) {
+    let n = Math.round(Number(value));
+    if (!Number.isFinite(n)) n = 21;
+    const max = Number.isFinite(maxLength) ? Math.max(2, Math.round(maxLength)) : Number.MAX_SAFE_INTEGER;
+    return Math.max(2, Math.min(max, n));
 };
 
 proto._spikeParamsFromSensitivity = function(sensitivity) {
@@ -1013,23 +1538,25 @@ proto._sensitivityFromLegacyThreshold = function(threshold) {
     return this._normalizeSensitivity(12 - this._positiveNumber(threshold, 6));
 };
 
-proto._findDataToolCreateDefinitionName = function(fileId, sourceName, exceptName = '') {
+proto._findDataToolCreateDefinitionName = function(fileId, sourceName, exceptName = '', tool = this._getSelectedDataTool()) {
     const definitions = this.dataToolVariablesByFile?.get(fileId);
     if (!definitions || !sourceName) return '';
     for (const [name, definition] of definitions) {
         const normalized = this._normalizeDataToolDefinition(definition);
-        if (name === exceptName) continue;
-        if (normalized.tool === 'removeOutliers'
+        if (normalized.tool === tool
             && normalized.targetMode === 'create'
-            && normalized.sourceName === sourceName) {
+            && normalized.sourceName === sourceName
+            && name !== exceptName) {
             return name;
         }
     }
     return '';
 };
 
-proto._formatOutlierNumber = function(value, decimals = 1) {
-    return Number(value).toFixed(decimals).replace(/\.0$/, '');
+proto._formatOutlierNumber = function(value, digits = 2) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '';
+    return Number.isInteger(number) ? String(number) : number.toFixed(digits);
 };
 
 }

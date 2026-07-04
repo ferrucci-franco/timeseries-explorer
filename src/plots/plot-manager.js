@@ -434,6 +434,8 @@ class PlotManager {
         plot.stateSlots   = { x: [], dx: [], fileId: null };
         plot.equalAspect2D = false;
         plot.timeseriesStacked = false;
+        plot.timeseriesY2Enabled = false;
+        plot.traces.forEach(trace => { trace.axis = 'y'; });
         plot.cursors = this._defaultCursors();
         plot.liveView = this._defaultLiveViewPolicy(mode);
         plot.animFrame    = 0;
@@ -461,8 +463,9 @@ class PlotManager {
         const getPlaceholder = () => panelEl.querySelector('.layout-panel-placeholder');
         const hasChart = () => { const p = this.plots.get(panelId); return !!(p && p.div); };
 
-        const showDragHint = () => {
-            const msg = this._dropMessage(panelId);
+        const showDragHint = (event = null) => {
+            const axis = this._timeseriesDropAxis(panelId, panelEl, event);
+            const msg = this._dropMessage(panelId, axis);
             if (hasChart()) {
                 // Existing plot: show transparent overlay on top
                 overlay.innerHTML = `<span>${msg}</span>`;
@@ -501,7 +504,7 @@ class PlotManager {
         panelEl.addEventListener('dragover', (e) => {
             if (!this.data) return;
             e.preventDefault();
-            showDragHint();
+            showDragHint(e);
         });
 
         panelEl.addEventListener('dragleave', (e) => {
@@ -514,12 +517,21 @@ class PlotManager {
             hideDragHint();
             const varNames = this._getDroppedVariableNames(e.dataTransfer);
             if (!varNames.length || !this.data) return;
+            const axis = this._timeseriesDropAxis(panelId, panelEl, e);
             if (varNames.length > 1) {
-                this._addDroppedVariables(panelId, varNames, panelEl);
+                this._addDroppedVariables(panelId, varNames, panelEl, { axis });
             } else {
-                this.addTrace(panelId, varNames[0], panelEl);
+                this.addTrace(panelId, varNames[0], panelEl, { axis });
             }
         });
+    }
+
+    _timeseriesDropAxis(panelId, panelEl, event = null) {
+        const plot = this.plots.get(panelId);
+        if (!plot?.timeseriesY2Enabled || plot.mode !== 'timeseries' || !event) return 'y';
+        const rect = panelEl.getBoundingClientRect?.();
+        if (!rect?.width) return 'y';
+        return event.clientX >= rect.left + rect.width / 2 ? 'y2' : 'y';
     }
 
     _getDroppedVariableNames(dataTransfer) {
@@ -536,7 +548,7 @@ class PlotManager {
         return varName ? [varName] : [];
     }
 
-    _addDroppedVariables(panelId, varNames, panelEl) {
+    _addDroppedVariables(panelId, varNames, panelEl, options = {}) {
         if (!this.plots.has(panelId)) this.plots.set(panelId, this._makeState());
         const plot = this.plots.get(panelId);
         const names = varNames.filter(varName => {
@@ -546,7 +558,7 @@ class PlotManager {
         if (!names.length) return;
 
         if (plot.mode === 'timeseries') {
-            names.forEach(varName => this.addTrace(panelId, varName, panelEl));
+            names.forEach(varName => this.addTrace(panelId, varName, panelEl, { axis: options.axis || 'y' }));
             return;
         }
 
@@ -609,7 +621,7 @@ class PlotManager {
     }
 
     /** Message shown in the drop overlay depending on mode and current state. */
-    _dropMessage(panelId) {
+    _dropMessage(panelId, axis = null) {
         const plot = this.plots.get(panelId);
         if (!plot) return i18n.t('dropVariableHere');
 
@@ -619,6 +631,9 @@ class PlotManager {
 
         // Timeseries: always accept more variables
         if (mode === 'timeseries') {
+            if (plot.timeseriesY2Enabled) {
+                return axis === 'y2' ? i18n.t('timeseriesDropRightAxis') : i18n.t('timeseriesDropLeftAxis');
+            }
             return plot.traces.length === 0
                 ? i18n.t('dropTimeseriesMulti')
                 : i18n.t('dropToAddTrace');
@@ -649,7 +664,7 @@ class PlotManager {
 
     // ─── Adding variables ──────────────────────────────────────────
 
-    addTrace(panelId, varName, panelEl) {
+    addTrace(panelId, varName, panelEl, options = {}) {
         if (!this.data) return;
         const variable = this.data.variables[varName];
         if (!variable || variable.plottable === false || variable.kind === 'abscissa' || variable.dataType === 'string') return;
@@ -660,7 +675,7 @@ class PlotManager {
         const plot = this.plots.get(panelId);
 
         if (plot.mode === 'timeseries') {
-            this._addTimeseries(panelId, varName, panelEl, plot);
+            this._addTimeseries(panelId, varName, panelEl, plot, options);
         } else if (plot.mode === 'state-anim') {
             this._addStateAnimVar(panelId, varName, panelEl, plot);
         } else {
@@ -683,10 +698,11 @@ class PlotManager {
         });
     }
 
-    _addTimeseries(panelId, varName, panelEl, plot) {
+    _addTimeseries(panelId, varName, panelEl, plot, options = {}) {
         if (plot.traces.find(t => t.varName === varName && t.fileId === this.activeFileId)) return; // deduplicate
         if (!this._canAddTraceWithFileTime(plot, this.activeFileId)) return;
-        plot.traces.push({ varName, color: this._nextTraceColor(plot.traces), fileId: this.activeFileId });
+        const axis = plot.timeseriesY2Enabled && options.axis === 'y2' ? 'y2' : 'y';
+        plot.traces.push({ varName, color: this._nextTraceColor(plot.traces), fileId: this.activeFileId, axis });
 
         if (!plot.div) {
             this._createChart(panelId, panelEl);
@@ -705,7 +721,9 @@ class PlotManager {
             });
             // Update Y axis title: clear when 2+ traces (X/time label always stays)
             const layout = this._buildTimeLayout(plot);
-            Plotly.relayout(plot.div, { 'yaxis.title': layout.yaxis.title });
+            const relayout = { 'yaxis.title': layout.yaxis.title, margin: layout.margin };
+            if (layout.yaxis2) relayout.yaxis2 = layout.yaxis2;
+            Plotly.relayout(plot.div, relayout);
             this._syncCursorDisplay(panelId, plot);
         }
     }
@@ -824,8 +842,11 @@ class PlotManager {
                     e.stopPropagation();
                     const startX = e.clientX, startY = e.clientY;
                     const x0 = xa.range.slice(), y0 = ya.range.slice();
+                    const y2a = plot.timeseriesY2Enabled ? fl?.yaxis2 : null;
+                    const y20 = y2a?.range ? y2a.range.slice() : null;
                     const xNumeric0 = x0.map(value => this._coerceAxisValue(value));
                     const yNumeric0 = y0.map(value => Number(value));
+                    const y2Numeric0 = y20?.map(value => Number(value)) || null;
                     if (!xNumeric0.every(Number.isFinite) || !yNumeric0.every(Number.isFinite)) return;
                     const xLen = xa._length, yLen = ya._length;
                     const isDateXAxis = xa.type === 'date';
@@ -840,10 +861,16 @@ class PlotManager {
                         const dy =  ((mv.clientY - startY) / yLen) * ySpan;
                         latestXRange = formatXRange([xNumeric0[0] + dx, xNumeric0[1] + dx]);
                         plot._relayoutLiveOnly = true;
-                        Plotly.relayout(div, {
+                        const update = {
                             'xaxis.range': latestXRange,
                             'yaxis.range': [yNumeric0[0] + dy, yNumeric0[1] + dy],
-                        }).finally(() => {
+                        };
+                        if (y2Numeric0?.every(Number.isFinite) && y2a?._length) {
+                            const y2Span = y2Numeric0[1] - y2Numeric0[0];
+                            const dy2 = ((mv.clientY - startY) / y2a._length) * y2Span;
+                            update['yaxis2.range'] = [y2Numeric0[0] + dy2, y2Numeric0[1] + dy2];
+                        }
+                        Plotly.relayout(div, update).finally(() => {
                             if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: latestXRange, lightweight: true });
                         });
                     };
@@ -856,7 +883,10 @@ class PlotManager {
                     document.addEventListener('mousemove', onMove);
                     document.addEventListener('mouseup', onUp);
                 }, { capture: true });
-                div.addEventListener('contextmenu', (e) => e.preventDefault());
+                div.addEventListener('contextmenu', (e) => {
+                    if (plot.mode === 'timeseries' && plot.timeseriesY2Enabled && this._handleTimeseriesLegendContextMenu(panelId, plot, e)) return;
+                    e.preventDefault();
+                });
             }
             // Track legend visibility in our own state so it survives re-renders.
             // We match by trace name, not by curveNumber, because marker traces inserted via
@@ -996,6 +1026,49 @@ class PlotManager {
         });
     }
 
+    _handleTimeseriesLegendContextMenu(panelId, plot, event) {
+        const item = event.target?.closest?.('.legend .traces');
+        if (!item || !plot?.timeseriesY2Enabled) return false;
+        const items = [...plot.div.querySelectorAll('.legend .traces')];
+        const legendIndex = items.indexOf(item);
+        if (legendIndex < 0) return false;
+        const legendTraces = (plot.div._fullData || []).filter(fd => fd.showlegend !== false && fd.name !== '__hover__');
+        const clickedName = legendTraces[legendIndex]?.name;
+        const trace = plot.traces.find(t => this._traceName(t.varName, t.fileId) === clickedName);
+        if (!trace) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        this._showTimeseriesAxisMenu(panelId, plot, trace, event);
+        return true;
+    }
+
+    _showTimeseriesAxisMenu(panelId, plot, trace, event) {
+        document.querySelector('.timeseries-axis-menu')?.remove();
+        const menu = document.createElement('div');
+        menu.className = 'timeseries-axis-menu';
+        const moveRight = this._traceYAxis(trace, plot) !== 'y2';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = i18n.t(moveRight ? 'timeseriesY2MoveRight' : 'timeseriesY2MoveLeft');
+        button.addEventListener('click', () => {
+            trace.axis = moveRight ? 'y2' : 'y';
+            menu.remove();
+            this._rebuildPanel(panelId, { preserveView: true });
+        });
+        menu.appendChild(button);
+        document.body.appendChild(menu);
+        const x = Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8);
+        const y = Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8);
+        menu.style.left = `${Math.max(8, x)}px`;
+        menu.style.top = `${Math.max(8, y)}px`;
+        const close = (closeEvent) => {
+            if (menu.contains(closeEvent.target)) return;
+            menu.remove();
+            document.removeEventListener('pointerdown', close, true);
+        };
+        setTimeout(() => document.addEventListener('pointerdown', close, true), 0);
+    }
+
     _destroyChart(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
@@ -1041,6 +1114,7 @@ class PlotManager {
             existing.phasePending  = { x: null, y: null, z: null };
             existing.markerTraceIdx = null;
             existing.timeseriesStacked = false;
+            existing.timeseriesY2Enabled = false;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
             existing.cursors = this._defaultCursors();
@@ -1093,6 +1167,13 @@ class PlotManager {
             stackBtn.disabled = !enabled;
             stackBtn.classList.toggle('active', !!plot?.timeseriesStacked);
             stackBtn.setAttribute('aria-pressed', plot?.timeseriesStacked ? 'true' : 'false');
+        }
+        const y2Btn = panelEl.querySelector('.timeseries-y2-btn');
+        if (y2Btn) {
+            const enabled = has && plot?.mode === 'timeseries';
+            y2Btn.disabled = !enabled;
+            y2Btn.classList.toggle('active', !!plot?.timeseriesY2Enabled);
+            y2Btn.setAttribute('aria-pressed', plot?.timeseriesY2Enabled ? 'true' : 'false');
         }
         // Show view-btn-group for 3D modes and state-anim (2D or 3D) with content
         const isAnim = plot?.mode === 'state-anim' && has;
@@ -1620,25 +1701,37 @@ class PlotManager {
         if (plot.mode === 'timeseries') {
             const visibleTraces = plot.traces.filter(t => this._isVisible(t));
             if (!visibleTraces.length) {
-                return Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
+                const update = { 'xaxis.autorange': true, 'yaxis.autorange': true };
+                if (plot.timeseriesY2Enabled) update['yaxis2.autorange'] = true;
+                return Plotly.relayout(plot.div, update);
             }
 
             const xArrays = [];
             const yArrays = [];
+            const y2Arrays = [];
             const traceSeries = [];
+            const traceSeriesY2 = [];
             for (const t of visibleTraces) {
                 const d = this.files.get(t.fileId)?.data;
                 const v = d?.variables?.[t.varName];
                 if (!d || !v || v.kind === 'parameter') continue;
                 const x = this._getTransformedTimeData(t.fileId);
                 const y = this._getTransformedVariableData(t.fileId, t.varName);
-                traceSeries.push({ x, y });
                 xArrays.push(x);
-                yArrays.push(y);
+                if (this._traceYAxis(t, plot) === 'y2') {
+                    traceSeriesY2.push({ x, y });
+                    y2Arrays.push(y);
+                } else {
+                    traceSeries.push({ x, y });
+                    yArrays.push(y);
+                }
             }
 
             const xExtent = this._finiteExtent(xArrays);
             const yExtent = this._timeseriesYExtentForSeries(plot, traceSeries, yArrays);
+            const y2Extent = plot.timeseriesY2Enabled
+                ? this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, traceSeriesY2, y2Arrays)
+                : null;
             const update = {};
             if (xExtent) {
                 const primaryFileId = visibleTraces[0]?.fileId;
@@ -1651,6 +1744,14 @@ class PlotManager {
             else update['xaxis.autorange'] = true;
             if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
             else update['yaxis.autorange'] = true;
+            if (plot.timeseriesY2Enabled) {
+                if (y2Extent) {
+                    update['yaxis2.range'] = this._padRange(y2Extent.min, y2Extent.max);
+                    update['yaxis2.autorange'] = false;
+                } else {
+                    update['yaxis2.autorange'] = true;
+                }
+            }
             return Plotly.relayout(plot.div, update);
         }
 
@@ -1788,6 +1889,7 @@ class PlotManager {
             projection: 'orthographic',                    // 3D camera projection
             markerTraceIdx: null,                          // index of the hover-marker trace in plot.div.data
             timeseriesStacked: false,
+            timeseriesY2Enabled: false,
             equalAspect2D: false,
             resizeObserver: null,
             // state-anim mode
@@ -1887,6 +1989,10 @@ class PlotManager {
         } else {
             update['yaxis.autorange'] = true;
         }
+        if (view.y2Range && plot.timeseriesY2Enabled) {
+            update['yaxis2.range'] = view.y2Range;
+            update['yaxis2.autorange'] = false;
+        }
         return Plotly.relayout(plot.div, update).then(() => this._refreshPanelDomOverlays(plot));
     }
 
@@ -1924,17 +2030,24 @@ class PlotManager {
         if (!visibleTraces.length) return captured;
 
         const traceSeries = [];
+        const traceSeriesY2 = [];
         const xArrays = [];
         const yArrays = [];
+        const y2Arrays = [];
         for (const trace of visibleTraces) {
             const data = this.files.get(trace.fileId)?.data;
             const variable = data?.variables?.[trace.varName];
             if (!variable || variable.kind === 'parameter') continue;
             const x = this._getTransformedTimeData(trace.fileId);
             const y = this._getTransformedVariableData(trace.fileId, trace.varName);
-            traceSeries.push({ x, y });
             xArrays.push(x);
-            yArrays.push(y);
+            if (this._traceYAxis(trace, plot) === 'y2') {
+                traceSeriesY2.push({ x, y });
+                y2Arrays.push(y);
+            } else {
+                traceSeries.push({ x, y });
+                yArrays.push(y);
+            }
         }
 
         const xExtent = this._finiteExtent(xArrays);
@@ -1963,10 +2076,16 @@ class PlotManager {
 
         if (policy.yMode === 'autoscale') {
             nextView.yRange = null;
+            if (plot.timeseriesY2Enabled) nextView.y2Range = null;
         } else if (policy.yMode === 'expand') {
             const yExtent = nextView.xRange
                 ? this._timeseriesYExtentForSeries(plot, traceSeries, yArrays, nextView.xRange)
                 : this._timeseriesYExtentForSeries(plot, traceSeries, yArrays);
+            const y2Extent = plot.timeseriesY2Enabled
+                ? (nextView.xRange
+                    ? this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, traceSeriesY2, y2Arrays, nextView.xRange)
+                    : this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, traceSeriesY2, y2Arrays))
+                : null;
             const oldRange = captured.yRange?.map(Number);
             if (!yExtent) {
                 nextView.yRange = captured.yRange;
@@ -1982,8 +2101,23 @@ class PlotManager {
             } else {
                 nextView.yRange = this._padRange(yExtent.min, yExtent.max);
             }
+            if (plot.timeseriesY2Enabled) {
+                const oldY2Range = captured.y2Range?.map(Number);
+                if (!y2Extent) {
+                    nextView.y2Range = captured.y2Range;
+                } else if (oldY2Range?.every(Number.isFinite)) {
+                    const oldMin = Math.min(oldY2Range[0], oldY2Range[1]);
+                    const oldMax = Math.max(oldY2Range[0], oldY2Range[1]);
+                    const min = Math.min(oldMin, y2Extent.min);
+                    const max = Math.max(oldMax, y2Extent.max);
+                    nextView.y2Range = min === max ? this._padRange(min, max) : (oldY2Range[0] <= oldY2Range[1] ? [min, max] : [max, min]);
+                } else {
+                    nextView.y2Range = this._padRange(y2Extent.min, y2Extent.max);
+                }
+            }
         } else {
             nextView.yRange = captured.yRange;
+            if (plot.timeseriesY2Enabled) nextView.y2Range = captured.y2Range;
         }
 
         return nextView;
@@ -2068,6 +2202,7 @@ class PlotManager {
             mode: '2d',
             xRange: fl.xaxis?.range ? [...fl.xaxis.range] : null,
             yRange: fl.yaxis?.range ? [...fl.yaxis.range] : null,
+            y2Range: fl.yaxis2?.range ? [...fl.yaxis2.range] : null,
         };
     }
 
@@ -2121,6 +2256,7 @@ class PlotManager {
         } else {
             if (view.xRange) { update['xaxis.range'] = view.xRange; update['xaxis.autorange'] = false; }
             if (view.yRange) { update['yaxis.range'] = view.yRange; update['yaxis.autorange'] = false; }
+            if (view.y2Range && plot.timeseriesY2Enabled) { update['yaxis2.range'] = view.y2Range; update['yaxis2.autorange'] = false; }
         }
         if (!Object.keys(update).length) return Promise.resolve();
         return Plotly.relayout(plot.div, update).then(() => this._updateCameraOverlay(plot));

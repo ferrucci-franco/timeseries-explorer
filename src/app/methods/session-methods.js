@@ -179,6 +179,8 @@ proto._capturePlotSessions = function() {
             animFrame: plot.animFrame || 0,
             animSpeed: plot.animSpeed || 1,
             autoPlayOnRender: false,
+            timeseriesStacked: !!plot.timeseriesStacked,
+            timeseriesY2Enabled: !!plot.timeseriesY2Enabled,
             view: this.plotManager._capturePlotView(plot),
         });
     }
@@ -513,6 +515,9 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.animFrame = saved.animFrame || 0;
         plot.animSpeed = saved.animSpeed || 1;
         plot.autoPlayOnRender = false;
+        plot.timeseriesStacked = !!saved.timeseriesStacked && !saved.timeseriesY2Enabled;
+        plot.timeseriesY2Enabled = !!saved.timeseriesY2Enabled;
+        if (!plot.timeseriesY2Enabled) plot.traces.forEach(trace => { trace.axis = 'y'; });
         plot.stateSlots = this._mappedStateSlots(saved.stateSlots, fileMap);
 
         if (saved.view) plot._pendingViewRestore = this._cloneSerializable(saved.view);
