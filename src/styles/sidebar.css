@@ -655,8 +655,9 @@
 .data-tool-number-input {
     box-sizing: border-box;
     min-width: 4.8rem;
-    padding-left: 0.4rem;
-    padding-right: 1.2rem;
+    padding-left: 0.35rem;
+    padding-right: 0.25rem;
+    text-align: right;
     font-variant-numeric: tabular-nums;
 }
 

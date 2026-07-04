@@ -240,9 +240,9 @@ proto._syncMovingAverageControls = function() {
     input.max = String(max);
     const windowSize = this._normalizeMovingAverageWindow(input.value || slider.value, max);
     if (!input.value) input.value = String(windowSize);
-    if (Number(windowSize) >= Number(slider.min) && Number(windowSize) <= Number(slider.max)) {
-        slider.value = String(windowSize);
-    }
+    const sliderMin = Number(slider.min);
+    const sliderMax = Number(slider.max);
+    slider.value = String(Math.max(sliderMin, Math.min(sliderMax, windowSize)));
     if (value) value.textContent = String(windowSize);
 };
 
@@ -252,8 +252,10 @@ proto._syncMovingAverageSliderFromInput = function() {
     const value = document.getElementById('moving-average-window-value');
     if (!input || !slider) return;
     const n = Number(input.value);
-    if (Number.isFinite(n) && n >= Number(slider.min) && n <= Number(slider.max)) {
-        slider.value = String(Math.round(n));
+    if (Number.isFinite(n)) {
+        const sliderMin = Number(slider.min);
+        const sliderMax = Number(slider.max);
+        slider.value = String(Math.max(sliderMin, Math.min(sliderMax, Math.round(n))));
     }
     if (value && Number.isFinite(n)) value.textContent = String(Math.max(2, Math.round(n)));
 };
