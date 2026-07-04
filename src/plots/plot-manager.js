@@ -1545,21 +1545,59 @@ class PlotManager {
     // ─── Helpers ───────────────────────────────────────────────────
 
     _relayoutAll() {
-        if (!this.data) return;
         for (const [, plot] of this.plots) {
             if (!plot.div) continue;
-            if (this._is3D(plot.mode) || this._isStateAnim3D(plot)) {
-                const layout = this._buildPlotData(plot).layout;
-                const currentCamera = plot.div._fullLayout?.scene?.camera;
-                if (currentCamera && layout.scene) layout.scene.camera = currentCamera;
-                Plotly.relayout(plot.div, layout);
-                this._refreshAxisDecorations(plot);
-            } else {
-                Plotly.relayout(plot.div, this._buildPlotData(plot).layout);
-                // Origin cross marker color follows theme — restyle it
-                this._refreshOriginCross(plot);
-            }
+            Plotly.relayout(plot.div, this._themeRelayoutUpdate(plot));
+            this._refreshAxisDecorations(plot);
+            // Origin cross marker color follows theme; restyle it separately.
+            this._refreshOriginCross(plot);
         }
+    }
+
+    _themeRelayoutUpdate(plot) {
+        const { bg, gridColor, fontColor, legendBg } = this._colors();
+        // Theme changes must not include range/autorange/camera keys; those alter the user's current view.
+        const update = {
+            paper_bgcolor: bg,
+            plot_bgcolor: bg,
+            'font.color': fontColor,
+            'font.size': 11,
+            'font.family': 'system-ui, sans-serif',
+            'legend.bgcolor': legendBg,
+            'legend.bordercolor': gridColor,
+            'legend.font.color': fontColor,
+        };
+
+        if (this._is3D(plot.mode) || this._isStateAnim3D(plot)) {
+            update['scene.bgcolor'] = bg;
+            for (const axis of ['xaxis', 'yaxis', 'zaxis']) {
+                update[`scene.${axis}.gridcolor`] = gridColor;
+                update[`scene.${axis}.linecolor`] = gridColor;
+                update[`scene.${axis}.tickcolor`] = gridColor;
+                update[`scene.${axis}.backgroundcolor`] = bg;
+                update[`scene.${axis}.tickfont.color`] = fontColor;
+            }
+            return update;
+        }
+
+        for (const axis of ['xaxis', 'yaxis']) {
+            update[`${axis}.gridcolor`] = gridColor;
+            update[`${axis}.linecolor`] = gridColor;
+            update[`${axis}.tickcolor`] = gridColor;
+            update[`${axis}.zerolinecolor`] = gridColor;
+            update[`${axis}.tickfont.color`] = fontColor;
+            update[`${axis}.title.font.color`] = fontColor;
+        }
+
+        if (plot.timeseriesY2Enabled || plot.div?._fullLayout?.yaxis2) {
+            update['yaxis2.linecolor'] = gridColor;
+            update['yaxis2.tickcolor'] = gridColor;
+            update['yaxis2.zerolinecolor'] = gridColor;
+            update['yaxis2.tickfont.color'] = fontColor;
+            update['yaxis2.title.font.color'] = fontColor;
+        }
+
+        return update;
     }
 
     /** Re-apply axis decoration colors (no-op now; X/Y/Z colors are theme-independent). */
