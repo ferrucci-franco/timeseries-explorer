@@ -17,9 +17,10 @@ proto.initDataTools = function() {
 
     toolSelect.value = '';
     toolSelect.addEventListener('change', () => {
+        sourceSelect.value = '';
+        outputInput.value = '';
         this._setOutlierMessage('', '');
         this._syncDataTools();
-        this._scheduleOutlierAutoApply();
     });
     sourceSelect.addEventListener('change', () => {
         outputInput.value = this._suggestOutlierOutputName(sourceSelect.value);
@@ -93,6 +94,10 @@ proto._syncDataTools = function() {
         option.textContent = i18n.t('outlierNoVariables');
         sourceSelect.appendChild(option);
     } else {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = i18n.t('outlierSelectVariable');
+        sourceSelect.appendChild(option);
         for (const [name, variable] of entries) {
             const option = document.createElement('option');
             option.value = name;
@@ -104,6 +109,7 @@ proto._syncDataTools = function() {
 
     const keptPrevious = entries.some(([name]) => name === previous);
     if (keptPrevious) sourceSelect.value = previous;
+    if (!sourceSelect.value) outputInput.value = '';
     if ((!keptPrevious || !outputInput.value.trim()) && sourceSelect.value) {
         outputInput.value = this._suggestOutlierOutputName(sourceSelect.value);
     }
