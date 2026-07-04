@@ -988,6 +988,33 @@
     opacity: 1;
 }
 
+.drop-overlay.timeseries-y2-drop {
+    overflow: hidden;
+}
+
+.drop-overlay.timeseries-y2-drop::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 50%;
+    background-color: color-mix(in srgb, var(--primary-color) 18%, transparent);
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary-color) 72%, transparent);
+}
+
+.drop-overlay.timeseries-y2-drop.axis-left::before {
+    left: 0;
+}
+
+.drop-overlay.timeseries-y2-drop.axis-right::before {
+    right: 0;
+}
+
+.drop-overlay.timeseries-y2-drop > span {
+    position: relative;
+    z-index: 1;
+}
+
 /* Persistent hint while waiting for next variable drop */
 .drop-overlay.pending {
     opacity: 0.7;

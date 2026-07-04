@@ -76,6 +76,12 @@ closeArray(
 );
 
 closeArray(
+    h._computeIntegralValues([2, 4, 6], numericData([0, 1, 2], 'index'), { method: 'rectangular' }).values,
+    [0, 2, 6],
+    'rectangular integral index axis uses unit dt',
+);
+
+closeArray(
     h._computeIntegralValues([1, NaN, 3], numericData([0, 1, 2]), { method: 'trapezoidal' }).values,
     [0, 0, 0],
     'integral skips NaN intervals',

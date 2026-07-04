@@ -466,11 +466,17 @@ class PlotManager {
         const showDragHint = (event = null) => {
             const axis = this._timeseriesDropAxis(panelId, panelEl, event);
             const msg = this._dropMessage(panelId, axis);
+            const plot = this.plots.get(panelId);
+            const y2Drop = !!(plot?.mode === 'timeseries' && plot.timeseriesY2Enabled);
             if (hasChart()) {
                 // Existing plot: show transparent overlay on top
                 overlay.innerHTML = `<span>${msg}</span>`;
                 overlay.classList.add('active');
+                overlay.classList.toggle('timeseries-y2-drop', y2Drop);
+                overlay.classList.toggle('axis-left', y2Drop && axis !== 'y2');
+                overlay.classList.toggle('axis-right', y2Drop && axis === 'y2');
             } else {
+                overlay.classList.remove('timeseries-y2-drop', 'axis-left', 'axis-right');
                 // Empty panel: update the placeholder text in-place (no position shift)
                 const ph = getPlaceholder();
                 if (ph) {
@@ -491,6 +497,7 @@ class PlotManager {
             } else {
                 overlay.classList.remove('active', 'pending');
             }
+            overlay.classList.remove('timeseries-y2-drop', 'axis-left', 'axis-right');
             const ph = getPlaceholder();
             if (ph) {
                 ph.classList.remove('drag-over');
