@@ -35,7 +35,9 @@ proto.initDataTools = function() {
     methodSelect.addEventListener('change', () => this._handleOutlierMethodChange());
 
     this._outlierParameterInputs().forEach(input => {
-        input.addEventListener('input', () => this._handleOutlierLiveChange());
+        input.addEventListener('input', () => this._handleOutlierLiveChange({
+            immediate: input.id === 'outlier-spike-sensitivity',
+        }));
         input.addEventListener('change', () => this._scheduleOutlierAutoApply({ immediate: true }));
     });
     document.querySelectorAll('input[name="outlier-replacement"], input[name="outlier-target"]').forEach(input => {
@@ -297,9 +299,9 @@ proto._applyOutlierModifyMode = function(context, config, options = {}) {
     }
 };
 
-proto._handleOutlierLiveChange = function() {
+proto._handleOutlierLiveChange = function(options = {}) {
     this._syncOutlierMethodControls();
-    this._scheduleOutlierAutoApply();
+    this._scheduleOutlierAutoApply(options);
 };
 
 proto._scheduleOutlierAutoApply = function(options = {}) {
