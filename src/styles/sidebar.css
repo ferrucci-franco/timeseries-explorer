@@ -631,7 +631,7 @@
 
 .data-tool-slider-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 2.6rem;
+    grid-template-columns: minmax(0, 1fr) 4.8rem;
     align-items: center;
     gap: 0.5rem;
 }
@@ -653,9 +653,11 @@
 }
 
 .data-tool-number-input {
-    min-width: 0;
+    box-sizing: border-box;
+    min-width: 4.8rem;
     padding-left: 0.4rem;
-    padding-right: 0.4rem;
+    padding-right: 1.2rem;
+    font-variant-numeric: tabular-nums;
 }
 
 .data-tool-radio-group {

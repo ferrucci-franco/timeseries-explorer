@@ -717,7 +717,8 @@ class PlotManager {
             const t = plot.traces[plot.traces.length - 1];
             const insertIndex = Number.isInteger(plot.markerTraceIdx) ? plot.markerTraceIdx : undefined;
             const traceIndex = plot.traces.length - 1;
-            const builtTrace = this._buildTimeTrace(t, null, plot, traceIndex);
+            const currentRange = plot.div._fullLayout?.xaxis?.range || plot.div.layout?.xaxis?.range || null;
+            const builtTrace = this._buildTimeTrace(t, currentRange, plot, traceIndex);
             const addTracePromise = insertIndex === undefined
                 ? Plotly.addTraces(plot.div, builtTrace)
                 : Plotly.addTraces(plot.div, builtTrace, insertIndex);
@@ -725,6 +726,7 @@ class PlotManager {
                 if (insertIndex !== undefined) plot.markerTraceIdx += 1;
                 this._syncTimeseriesMarkerColors(plot);
                 this._installLegendHoverHint(plot.div);
+                this._refreshTimeseriesVisuals(panelId, plot, currentRange);
             });
             // Update Y axis title: clear when 2+ traces (X/time label always stays)
             const layout = this._buildTimeLayout(plot);
