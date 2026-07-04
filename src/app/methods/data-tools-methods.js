@@ -19,14 +19,17 @@ proto.initDataTools = function() {
     if (!toolSelect || !sourceSelect || !outputInput || !methodSelect) return;
 
     toolSelect.value = '';
+    this._clearDataToolTargetMode();
     toolSelect.addEventListener('change', () => {
         sourceSelect.value = '';
         outputInput.value = '';
+        this._clearDataToolTargetMode();
         this._setOutlierMessage('', '');
         this._syncDataTools();
     });
     sourceSelect.addEventListener('change', () => {
         outputInput.value = this._suggestDataToolOutputName(sourceSelect.value);
+        this._clearDataToolTargetMode();
         this._setOutlierMessage('', '');
         this._syncDataTools();
         this._scheduleDataToolAutoApply({ immediate: true });
@@ -98,6 +101,7 @@ proto._syncDataTools = function() {
     const tool = this._getSelectedDataTool();
     const hasTool = !!tool;
     const targetMode = this._getOutlierTargetMode();
+    const hasTargetMode = targetMode === 'modify' || targetMode === 'create';
     const createsVariable = targetMode === 'create';
     const allowed = hasTool && this._isDataToolAvailableForData(tool, data);
 
@@ -179,10 +183,13 @@ proto._syncDataTools = function() {
     });
     document.querySelectorAll('input[name="outlier-target"]').forEach(input => { input.disabled = !hasSource; });
     if (resetBtn) resetBtn.disabled = !resetTarget;
-    form.classList.toggle('data-tool-invalid', hasSource && (!hasOutput || !hasValidConfig));
+    form.classList.toggle('data-tool-invalid', hasSource && (!hasTargetMode || !hasOutput || !hasValidConfig));
 
     if (hasTool && lazy && !allowed) {
         this._setOutlierMessage(i18n.t('dataToolLazyDisabled'), 'error');
+    } else if (hasSource && !hasTargetMode) {
+        const messageEl = document.getElementById('outlier-message');
+        if (!messageEl?.textContent) this._setOutlierMessage(i18n.t('dataToolChooseTargetMode'), '');
     } else if (hasTool && lazy && tool === 'removeOutliers') {
         const messageEl = document.getElementById('outlier-message');
         if (!messageEl?.textContent) this._setOutlierMessage(i18n.t('dataToolLazyBoundsOnly'), '');
@@ -1075,8 +1082,16 @@ proto._getOutlierContext = function(options = {}) {
     const targetMode = this._getOutlierTargetMode();
     const sourceVariable = data?.variables?.[sourceName];
     const lazy = this._isDataToolLazyData(data);
-    if (!tool || !fileId || !data || !sourceVariable || (targetMode === 'create' && !outputName)) {
+    if (!tool || !fileId || !data || !sourceVariable) {
         if (!options.quiet) this._setOutlierMessage(i18n.t('outlierLoadFileFirst'), 'error');
+        return null;
+    }
+    if (!targetMode) {
+        if (!options.quiet) this._setOutlierMessage(i18n.t('dataToolChooseTargetMode'), '');
+        return null;
+    }
+    if (targetMode === 'create' && !outputName) {
+        if (!options.quiet) this._setOutlierMessage(i18n.t('dataToolOutputNameRequired'), 'error');
         return null;
     }
     if (lazy && !this._isDataToolAvailableForData(tool, data)) {
@@ -1178,10 +1193,16 @@ proto._getOutlierReplacementMethod = function() {
     return OUTLIER_REPLACEMENTS.has(value) ? value : 'nan';
 };
 
+proto._clearDataToolTargetMode = function() {
+    if (typeof document === 'undefined') return;
+    document.querySelectorAll('input[name="outlier-target"]').forEach(input => {
+        input.checked = false;
+    });
+};
+
 proto._getOutlierTargetMode = function() {
-    return document.querySelector('input[name="outlier-target"]:checked')?.value === 'create'
-        ? 'create'
-        : 'modify';
+    const value = document.querySelector('input[name="outlier-target"]:checked')?.value;
+    return value === 'modify' || value === 'create' ? value : '';
 };
 
 proto._uniqueDataToolVariableName = function(baseName, fileId = this.activeFileId) {
@@ -1460,6 +1481,7 @@ proto._resetDataToolPicker = function() {
     }
     const toolSelect = document.getElementById('data-tool-select');
     if (toolSelect) toolSelect.value = '';
+    this._clearDataToolTargetMode();
     this._toggleOutlierHelpPopover?.(false);
     this._setOutlierMessage('', '');
     this._syncDataTools?.();

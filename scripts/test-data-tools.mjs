@@ -35,6 +35,47 @@ const numericData = (time, timeKind = 'numeric') => ({
     },
 });
 
+const withDocument = (mockDocument, fn) => {
+    const previous = globalThis.document;
+    globalThis.document = mockDocument;
+    try {
+        fn();
+    } finally {
+        if (previous === undefined) delete globalThis.document;
+        else globalThis.document = previous;
+    }
+};
+
+withDocument({
+    querySelector: () => null,
+    querySelectorAll: () => [],
+}, () => {
+    assert.equal(h._getOutlierTargetMode(), '', 'data tool target mode starts unselected');
+});
+
+withDocument({
+    querySelector: () => ({ value: 'modify' }),
+    querySelectorAll: () => [],
+}, () => {
+    assert.equal(h._getOutlierTargetMode(), 'modify', 'modify target mode is explicit');
+});
+
+withDocument({
+    querySelector: () => ({ value: 'create' }),
+    querySelectorAll: () => [],
+}, () => {
+    assert.equal(h._getOutlierTargetMode(), 'create', 'create target mode is explicit');
+});
+
+const targetModeRadios = [{ checked: true }, { checked: true }];
+withDocument({
+    querySelector: () => null,
+    querySelectorAll: () => targetModeRadios,
+}, () => {
+    h._clearDataToolTargetMode();
+    assert.deepEqual(targetModeRadios.map(input => input.checked), [false, false], 'target mode clear unchecks all radios');
+});
+
 closeArray(
     h._computeDerivativeValues([0, 1, 5, 11], numericData([0, 1, 3, 6]), { method: 'centered' }).values,
     [1, 5 / 3, 2, 2],
