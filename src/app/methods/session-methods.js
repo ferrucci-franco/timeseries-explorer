@@ -468,6 +468,7 @@ proto._applySessionDataToolVariables = function(session, fileMap) {
                 method: item.method,
                 params: this._cloneSerializable(item.params || {}),
                 replacement: item.replacement || 'nan',
+                steps: Array.isArray(item.steps) ? this._cloneSerializable(item.steps) : undefined,
                 variable: null,
             });
         }

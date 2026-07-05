@@ -416,6 +416,7 @@ proto._applyDataToolCreateMode = function(context, config, options = {}) {
             replacement: config.replacement,
             variable: result.variable,
         });
+        this._reapplyDataToolDependents(fileId, data, outputName);
 
         this.plotManager.updateFileData(fileId, data);
         this._renderFilteredTree();
@@ -433,6 +434,9 @@ proto._applyDataToolModifyMode = function(context, config, options = {}) {
 
     const { fileId, data, sourceName, sourceVariable, tool } = context;
     const existingDefinition = this.dataToolVariablesByFile?.get(fileId)?.get(sourceName);
+    if (existingDefinition?.targetMode === 'create') {
+        return this._applyDataToolAppendToCreatedVariable(context, config, existingDefinition, options);
+    }
     const originalData = existingDefinition?.targetMode === 'modify' && existingDefinition.originalData
         ? Array.from(existingDefinition.originalData)
         : Array.from(sourceVariable.data);
@@ -462,11 +466,65 @@ proto._applyDataToolModifyMode = function(context, config, options = {}) {
             originalData: Array.from(originalData),
             variable,
         });
+        this._reapplyDataToolDependents(fileId, data, sourceName);
 
         this.plotManager.updateFileData(fileId, data);
         this._renderFilteredTree();
         this._syncDataTools();
         if (!options.silent) this._setDataToolApplyMessage(result, existingDefinition ? 'modifiedUpdated' : 'modified', sourceName);
+        return result;
+    } catch (err) {
+        if (!options.silent) this._setOutlierMessage(err?.message || String(err), 'error');
+        return null;
+    }
+};
+
+proto._applyDataToolAppendToCreatedVariable = function(context, config, existingDefinition, options = {}) {
+    const { fileId, data, sourceName, tool } = context;
+    const normalized = this._normalizeDataToolDefinition(existingDefinition);
+    const baseSourceName = normalized.sourceName;
+    const baseVariable = data.variables?.[baseSourceName];
+    if (!baseSourceName || baseSourceName === sourceName || !baseVariable) {
+        if (!options.silent) this._setOutlierMessage(i18n.t('outlierOutputSameAsSource'), 'error');
+        return null;
+    }
+
+    try {
+        const currentSteps = this._dataToolStepsFromDefinition(normalized);
+        const nextStep = this._dataToolStepFromConfig({ ...config, tool });
+        const replaceLast = currentSteps.length > 0 && currentSteps[currentSteps.length - 1].tool === nextStep.tool;
+        const steps = replaceLast
+            ? currentSteps.slice(0, -1).concat(nextStep)
+            : currentSteps.concat(nextStep);
+        const last = steps[steps.length - 1];
+        const result = this._buildDataToolResult(baseVariable.data, baseVariable, {
+            sourceName: baseSourceName,
+            targetName: sourceName,
+            targetMode: 'create',
+            tool: last.tool,
+            method: last.method,
+            params: this._cloneDataToolParams(last.params),
+            replacement: last.replacement,
+            steps,
+        }, data);
+        data.variables[sourceName] = result.variable;
+        this._storeDataToolDefinition(fileId, sourceName, {
+            name: sourceName,
+            tool: last.tool,
+            targetMode: 'create',
+            sourceName: baseSourceName,
+            method: last.method,
+            params: this._cloneDataToolParams(last.params),
+            replacement: last.replacement,
+            steps,
+            variable: result.variable,
+        });
+        this._reapplyDataToolDependents(fileId, data, sourceName);
+
+        this.plotManager.updateFileData(fileId, data);
+        this._renderFilteredTree();
+        this._syncDataTools();
+        if (!options.silent) this._setDataToolApplyMessage(result, 'updated', sourceName);
         return result;
     } catch (err) {
         if (!options.silent) this._setOutlierMessage(err?.message || String(err), 'error');
@@ -707,10 +765,58 @@ proto._resetOutlierCreatedVariable = function(fileId, data, name, options = {}) 
 };
 
 proto._buildDataToolResult = function(sourceValues, sourceVariable, config, data) {
+    if (Array.isArray(config.steps) && config.steps.length) {
+        return this._buildDataToolPipelineResult(sourceValues, sourceVariable, config, data);
+    }
+    return this._buildSingleDataToolResult(sourceValues, sourceVariable, config, data);
+};
+
+proto._buildSingleDataToolResult = function(sourceValues, sourceVariable, config, data) {
     if (config.tool === 'derivative') return this._buildDerivativeResult(sourceValues, sourceVariable, config, data);
     if (config.tool === 'integrate') return this._buildIntegralResult(sourceValues, sourceVariable, config, data);
     if (config.tool === 'movingAverage') return this._buildMovingAverageResult(sourceValues, sourceVariable, config);
     return this._buildOutlierResult(sourceValues, sourceVariable, config);
+};
+
+proto._buildDataToolPipelineResult = function(sourceValues, sourceVariable, config, data) {
+    const steps = config.steps.map(step => this._normalizeDataToolStep(step));
+    let currentValues = sourceValues;
+    let currentVariable = sourceVariable;
+    let result = null;
+    for (const step of steps) {
+        result = this._buildSingleDataToolResult(currentValues, currentVariable, {
+            ...step,
+            sourceName: config.sourceName,
+            targetName: config.targetName,
+            targetMode: config.targetMode,
+        }, data);
+        currentValues = result.variable.data;
+        currentVariable = result.variable;
+    }
+
+    const last = steps[steps.length - 1];
+    const {
+        tool: _tool,
+        sourceName: _sourceName,
+        targetMode: _targetMode,
+        method: _method,
+        params: _params,
+        replacement: _replacement,
+        steps: _steps,
+        ...finalDataTool
+    } = result?.variable?.dataTool || {};
+    const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
+        ...config,
+        tool: last.tool,
+        method: last.method,
+        params: this._cloneDataToolParams(last.params),
+        replacement: last.replacement,
+    }, currentValues, {
+        ...finalDataTool,
+        steps: steps.map(step => this._cloneDataToolParams(step)),
+    });
+    if (config.targetMode === 'create') variable.description = this._dataToolDescription({ ...config, steps });
+    return { ...result, variable, tool: last.tool, name: config.targetName };
 };
 
 proto._baseDataToolVariable = function(sourceValues, sourceVariable, config, values, extraDataTool = {}) {
@@ -797,6 +903,10 @@ proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config)
 };
 
 proto._dataToolDescription = function(config) {
+    if (Array.isArray(config.steps) && config.steps.length) {
+        const labels = config.steps.map(step => this._dataToolStepLabel(step)).join(' -> ');
+        return `Data tool: ${labels} of ${config.sourceName}`;
+    }
     if (config.tool === 'derivative') {
         return `Data tool: derivative of ${config.sourceName}; ${config.params.method}`;
     }
@@ -807,6 +917,13 @@ proto._dataToolDescription = function(config) {
         return `Data tool: moving average of ${config.sourceName}; window ${config.params.window}`;
     }
     return `Data tool: remove outliers from ${config.sourceName}; ${this._outlierDetectorDescription(config)}; ${config.replacement}`;
+};
+
+proto._dataToolStepLabel = function(step) {
+    if (step.tool === 'derivative') return `derivative (${step.params.method})`;
+    if (step.tool === 'integrate') return `integral (${step.params.method})`;
+    if (step.tool === 'movingAverage') return `moving average (window ${step.params.window})`;
+    return `remove outliers (${this._outlierDetectorDescription(step)}; ${step.replacement})`;
 };
 
 proto._computeDerivativeValues = function(sourceValues, data, params = {}) {
@@ -864,17 +981,27 @@ proto._computeMovingAverageValues = function(sourceValues, params = {}) {
     const left = Math.floor((window - 1) / 2);
     const right = window - left - 1;
     const out = new Array(n).fill(NaN);
+    let start = 0;
+    let end = -1;
+    let sum = 0;
+    let count = 0;
+    const add = index => {
+        const value = Number(values[index]);
+        if (!Number.isFinite(value)) return;
+        sum += value;
+        count++;
+    };
+    const remove = index => {
+        const value = Number(values[index]);
+        if (!Number.isFinite(value)) return;
+        sum -= value;
+        count--;
+    };
     for (let i = 0; i < n; i++) {
-        const start = Math.max(0, i - left);
-        const end = Math.min(n - 1, i + right);
-        let sum = 0;
-        let count = 0;
-        for (let j = start; j <= end; j++) {
-            const value = Number(values[j]);
-            if (!Number.isFinite(value)) continue;
-            sum += value;
-            count++;
-        }
+        const nextStart = Math.max(0, i - left);
+        const nextEnd = Math.min(n - 1, i + right);
+        while (end < nextEnd) add(++end);
+        while (start < nextStart) remove(start++);
         out[i] = count ? sum / count : NaN;
     }
     return out;
@@ -1296,68 +1423,123 @@ proto._removeDataToolVariableFromPlots = function(fileId, name) {
 proto._reapplyDataToolVariables = function(fileId, data) {
     const definitions = this.dataToolVariablesByFile?.get(fileId);
     if (!definitions) return;
-    for (const [name, rawDefinition] of definitions) {
-        const definition = this._normalizeDataToolDefinition(rawDefinition);
-        definitions.set(name, definition);
-        try {
-            const sourceVariable = data.variables?.[definition.sourceName];
-            if (!sourceVariable) throw new Error(`Unknown source variable "${definition.sourceName}".`);
-            const targetMode = definition.targetMode || 'create';
-            if (this._isDataToolLazyData(data)) {
-                if (definition.tool !== 'removeOutliers' || definition.method !== 'bounds') continue;
-                const lazyDefinition = this._lazyDataToolDefinition(name, definition, definition.sourceName, targetMode);
-                if (targetMode === 'modify') {
-                    const originalData = Array.from(sourceVariable.data || []);
-                    sourceVariable.data = this._replaceOutliersWithNaN(originalData, this._detectBoundsOutliers(originalData, definition.params));
-                    sourceVariable.dataToolModified = true;
-                    sourceVariable.dataTool = lazyDefinition;
-                    sourceVariable._duckdbDataTool = lazyDefinition;
-                    definition.originalData = originalData;
-                    definition.variable = sourceVariable;
-                } else {
-                    data.variables[name] = {
-                        ...sourceVariable,
-                        name,
-                        data: this._replaceOutliersWithNaN(sourceVariable.data || [], this._detectBoundsOutliers(sourceVariable.data || [], definition.params)),
-                        description: `Data tool: remove outliers from ${definition.sourceName}; ${this._outlierDetectorDescription(definition)}; nan`,
-                        kind: 'variable',
-                        derived: true,
-                        dataTool: lazyDefinition,
-                        _duckdbCol: sourceVariable._duckdbCol,
-                        _duckdbDataTool: lazyDefinition,
-                    };
-                    definition.variable = data.variables[name];
-                }
-                continue;
-            }
-            const result = this._buildDataToolResult(sourceVariable.data, sourceVariable, {
-                sourceName: definition.sourceName,
-                targetName: name,
-                targetMode,
-                tool: definition.tool,
-                method: definition.method,
-                params: this._cloneDataToolParams(definition.params),
-                replacement: definition.replacement,
-            }, data);
-            if (targetMode === 'modify') {
-                const originalData = Array.from(sourceVariable.data);
-                sourceVariable.data = result.variable.data;
-                sourceVariable.dataType = result.variable.dataType;
-                sourceVariable.isConstant = result.variable.isConstant;
-                sourceVariable.dataToolModified = true;
-                sourceVariable.dataTool = result.variable.dataTool;
-                definition.originalData = originalData;
-                definition.variable = sourceVariable;
-            } else {
-                data.variables[name] = result.variable;
-                definition.variable = result.variable;
-            }
-        } catch (err) {
-            console.warn(`Could not reapply data tool variable ${name}:`, err);
-        }
+    for (const [name, definition] of this._orderedDataToolDefinitions(fileId)) {
+        this._reapplyDataToolDefinition(fileId, data, name, definition);
     }
     if (this._isDataToolLazyData(data)) {
         this._refreshLazyDataToolOverview(data);
+    }
+};
+
+proto._reapplyDataToolDependents = function(fileId, data, changedName) {
+    if (!changedName) return;
+    const changed = new Set([changedName]);
+    for (const [name, definition] of this._orderedDataToolDefinitions(fileId)) {
+        if (name === changedName || !changed.has(definition.sourceName)) continue;
+        if (this._reapplyDataToolDefinition(fileId, data, name, definition)) changed.add(name);
+    }
+};
+
+proto._orderedDataToolDefinitions = function(fileId) {
+    const definitions = this.dataToolVariablesByFile?.get(fileId);
+    if (!definitions) return [];
+    const normalizedByName = new Map();
+    for (const [name, rawDefinition] of definitions) {
+        const normalized = this._normalizeDataToolDefinition(rawDefinition);
+        definitions.set(name, normalized);
+        normalizedByName.set(name, normalized);
+    }
+
+    const ordered = [];
+    const visiting = new Set();
+    const visited = new Set();
+    const visit = name => {
+        if (visited.has(name)) return;
+        if (visiting.has(name)) {
+            console.warn(`Circular data-tool dependency involving ${name}; using current variable values.`);
+            return;
+        }
+        const definition = normalizedByName.get(name);
+        if (!definition) return;
+        visiting.add(name);
+        if (definition.sourceName && definition.sourceName !== name && normalizedByName.has(definition.sourceName)) {
+            visit(definition.sourceName);
+        }
+        visiting.delete(name);
+        visited.add(name);
+        ordered.push([name, definition]);
+    };
+
+    for (const name of normalizedByName.keys()) visit(name);
+    return ordered;
+};
+
+proto._reapplyDataToolDefinition = function(fileId, data, name, definition) {
+    const definitions = this.dataToolVariablesByFile?.get(fileId);
+    definitions?.set(name, definition);
+    try {
+        const sourceVariable = data.variables?.[definition.sourceName];
+        if (!sourceVariable) throw new Error(`Unknown source variable "${definition.sourceName}".`);
+        const targetMode = definition.targetMode || 'create';
+        if (this._isDataToolLazyData(data)) {
+            if (definition.tool !== 'removeOutliers' || definition.method !== 'bounds') return false;
+            const lazyDefinition = this._lazyDataToolDefinition(name, definition, definition.sourceName, targetMode);
+            if (targetMode === 'modify') {
+                const originalData = definition.originalData?.length
+                    ? Array.from(definition.originalData)
+                    : Array.from(sourceVariable.data || []);
+                sourceVariable.data = this._replaceOutliersWithNaN(originalData, this._detectBoundsOutliers(originalData, definition.params));
+                sourceVariable.dataToolModified = true;
+                sourceVariable.dataTool = lazyDefinition;
+                sourceVariable._duckdbDataTool = lazyDefinition;
+                definition.originalData = originalData;
+                definition.variable = sourceVariable;
+            } else {
+                data.variables[name] = {
+                    ...sourceVariable,
+                    name,
+                    data: this._replaceOutliersWithNaN(sourceVariable.data || [], this._detectBoundsOutliers(sourceVariable.data || [], definition.params)),
+                    description: `Data tool: remove outliers from ${definition.sourceName}; ${this._outlierDetectorDescription(definition)}; nan`,
+                    kind: 'variable',
+                    derived: true,
+                    dataTool: lazyDefinition,
+                    _duckdbCol: sourceVariable._duckdbCol,
+                    _duckdbDataTool: lazyDefinition,
+                };
+                definition.variable = data.variables[name];
+            }
+            return true;
+        }
+        const sourceValues = targetMode === 'modify' && definition.originalData?.length
+            ? Array.from(definition.originalData)
+            : Array.from(sourceVariable.data);
+        const result = this._buildDataToolResult(sourceValues, sourceVariable, {
+            sourceName: definition.sourceName,
+            targetName: name,
+            targetMode,
+            tool: definition.tool,
+            method: definition.method,
+            params: this._cloneDataToolParams(definition.params),
+            replacement: definition.replacement,
+            steps: Array.isArray(definition.steps) ? definition.steps.map(step => this._cloneDataToolParams(step)) : undefined,
+        }, data);
+        if (targetMode === 'modify') {
+            const originalData = sourceValues;
+            sourceVariable.data = result.variable.data;
+            sourceVariable.dataType = result.variable.dataType;
+            sourceVariable.isConstant = result.variable.isConstant;
+            sourceVariable.dataToolModified = true;
+            sourceVariable.dataTool = result.variable.dataTool;
+            definition.originalData = Array.from(originalData);
+            definition.variable = sourceVariable;
+        } else {
+            data.variables[name] = result.variable;
+            definition.variable = result.variable;
+        }
+        return true;
+    } catch (err) {
+        console.warn(`Could not reapply data tool variable ${name}:`, err);
+        return false;
     }
 };
 
@@ -1375,6 +1557,9 @@ proto._copyDataToolDefinitions = function(sourceId, targetId) {
             method: normalized.method,
             params: this._cloneDataToolParams(normalized.params),
             replacement: normalized.replacement,
+            steps: Array.isArray(normalized.steps)
+                ? normalized.steps.map(step => this._cloneDataToolParams(step))
+                : undefined,
             variable: null,
         });
     }
@@ -1389,6 +1574,20 @@ proto._clearDataToolDefinitions = function(fileId = null) {
 };
 
 proto._normalizeDataToolDefinition = function(definition = {}) {
+    if (Array.isArray(definition.steps) && definition.steps.length) {
+        const steps = definition.steps.map(step => this._normalizeDataToolStep(step));
+        const last = steps[steps.length - 1];
+        return {
+            ...definition,
+            tool: last.tool,
+            targetMode: definition.targetMode || 'create',
+            method: last.method,
+            params: this._cloneDataToolParams(last.params),
+            replacement: last.replacement || '',
+            steps,
+        };
+    }
+
     const tool = DATA_TOOLS.has(definition.tool) ? definition.tool : 'removeOutliers';
     if (tool !== 'removeOutliers') {
         return {
@@ -1421,6 +1620,50 @@ proto._normalizeDataToolDefinition = function(definition = {}) {
         params,
         replacement,
     };
+};
+
+proto._normalizeDataToolStep = function(step = {}) {
+    const tool = DATA_TOOLS.has(step.tool) ? step.tool : 'removeOutliers';
+    if (tool !== 'removeOutliers') {
+        const params = this._normalizeDataToolParams(tool, step.params || step);
+        return {
+            tool,
+            method: step.method || params.method || null,
+            params,
+            replacement: '',
+        };
+    }
+
+    let method = OUTLIER_METHODS.has(step.method) ? step.method : '';
+    let replacement = OUTLIER_REPLACEMENTS.has(step.replacement) ? step.replacement : '';
+    if (!method && OUTLIER_METHODS.has(step.params?.method)) method = step.params.method;
+    if (!replacement && OUTLIER_REPLACEMENTS.has(step.method)) replacement = step.method;
+    method ||= 'spike';
+    if (method === 'hampel') method = 'spike';
+    replacement ||= 'nan';
+    return {
+        tool,
+        method,
+        params: this._normalizeOutlierParams(method, step.params || step),
+        replacement,
+    };
+};
+
+proto._dataToolStepFromConfig = function(config = {}) {
+    return this._normalizeDataToolStep({
+        tool: config.tool,
+        method: config.method,
+        params: config.params,
+        replacement: config.replacement,
+    });
+};
+
+proto._dataToolStepsFromDefinition = function(definition = {}) {
+    const normalized = this._normalizeDataToolDefinition(definition);
+    if (Array.isArray(normalized.steps) && normalized.steps.length) {
+        return normalized.steps.map(step => this._normalizeDataToolStep(step));
+    }
+    return [this._dataToolStepFromConfig(normalized)];
 };
 
 proto._normalizeDataToolParams = function(tool, params = {}) {
@@ -1464,7 +1707,7 @@ proto._serializeDataToolDefinitions = function(fileId) {
     return [...(this.dataToolVariablesByFile?.get(fileId) || new Map()).values()]
         .map(item => {
             const definition = this._normalizeDataToolDefinition(item);
-            return {
+            const serialized = {
                 name: definition.name,
                 tool: definition.tool,
                 targetMode: definition.targetMode || 'create',
@@ -1473,6 +1716,10 @@ proto._serializeDataToolDefinitions = function(fileId) {
                 params: this._cloneDataToolParams(definition.params),
                 replacement: definition.replacement || '',
             };
+            if (Array.isArray(definition.steps) && definition.steps.length) {
+                serialized.steps = definition.steps.map(step => this._cloneDataToolParams(step));
+            }
+            return serialized;
         });
 };
 

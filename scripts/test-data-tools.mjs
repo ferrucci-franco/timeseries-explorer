@@ -144,4 +144,81 @@ closeArray(
     'moving average ignores NaN',
 );
 
+const sourceVariable = { name: 'x', kind: 'variable', data: [2, 4, 6] };
+const pipelineData = numericData([0, 1, 2], 'index');
+const pipeline = h._buildDataToolResult(sourceVariable.data, sourceVariable, {
+    sourceName: 'x',
+    targetName: 'x avg',
+    targetMode: 'create',
+    tool: 'integrate',
+    params: { method: 'rectangular' },
+    steps: [
+        { tool: 'movingAverage', params: { window: 2 } },
+        { tool: 'integrate', params: { method: 'rectangular' } },
+    ],
+}, pipelineData);
+closeArray(pipeline.variable.data, [0, 3, 8], 'pipeline moving average then rectangular integral');
+assert.deepEqual(pipeline.variable.dataTool.steps.map(step => step.tool), ['movingAverage', 'integrate']);
+
+const app = new DataToolHarness();
+const chainData = numericData([0, 1, 2], 'index');
+chainData.variables.x = { ...sourceVariable };
+chainData.variables['x avg'] = h._buildMovingAverageResult(sourceVariable.data, sourceVariable, {
+    sourceName: 'x',
+    targetName: 'x avg',
+    targetMode: 'create',
+    tool: 'movingAverage',
+    params: { window: 2 },
+}).variable;
+app.dataToolVariablesByFile = new Map([['file', new Map([['x avg', {
+    name: 'x avg',
+    tool: 'movingAverage',
+    targetMode: 'create',
+    sourceName: 'x',
+    params: { window: 2 },
+}]])]]);
+app.plotManager = {
+    files: new Map([['file', { data: chainData }]]),
+    updateFileData: () => {},
+};
+app._renderFilteredTree = () => {};
+app._syncDataTools = () => {};
+app._setOutlierMessage = () => {};
+
+const appended = app._applyDataToolModifyMode({
+    fileId: 'file',
+    data: chainData,
+    sourceName: 'x avg',
+    sourceVariable: chainData.variables['x avg'],
+    tool: 'integrate',
+}, {
+    tool: 'integrate',
+    params: { method: 'rectangular' },
+}, { silent: true });
+assert.ok(appended, 'append tool to created variable succeeds');
+closeArray(chainData.variables['x avg'].data, [0, 3, 8], 'modify created variable appends pipeline step');
+const chainedDefinition = app.dataToolVariablesByFile.get('file').get('x avg');
+assert.equal(chainedDefinition.targetMode, 'create');
+assert.equal(chainedDefinition.sourceName, 'x');
+assert.deepEqual(chainedDefinition.steps.map(step => step.tool), ['movingAverage', 'integrate']);
+app._reapplyDataToolVariables('file', chainData);
+closeArray(chainData.variables['x avg'].data, [0, 3, 8], 'pipeline reapply is stable once');
+app._reapplyDataToolVariables('file', chainData);
+closeArray(chainData.variables['x avg'].data, [0, 3, 8], 'pipeline reapply is stable twice');
+
+const modifyData = numericData([0, 1, 2], 'index');
+modifyData.variables.y = { name: 'y', kind: 'variable', data: [1, 2, 3] };
+app.dataToolVariablesByFile.set('modify', new Map([['y', {
+    name: 'y',
+    tool: 'integrate',
+    targetMode: 'modify',
+    sourceName: 'y',
+    params: { method: 'rectangular' },
+    originalData: [1, 2, 3],
+}]]));
+app._reapplyDataToolVariables('modify', modifyData);
+closeArray(modifyData.variables.y.data, [0, 1, 3], 'modify reapply uses original data once');
+app._reapplyDataToolVariables('modify', modifyData);
+closeArray(modifyData.variables.y.data, [0, 1, 3], 'modify reapply does not compound');
+
 console.log('data tools logic tests passed');
