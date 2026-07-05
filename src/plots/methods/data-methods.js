@@ -697,6 +697,7 @@ proto._formatDuration = function(value, unit = 's') {
 proto._primaryTimeFileId = function(plot) {
     if (!plot) return this.activeFileId;
     if (plot.mode === 'timeseries') return plot.traces?.[0]?.fileId || this.activeFileId;
+    if (plot.mode === 'fft') return plot.traces?.[0]?.fileId || this.activeFileId;
     if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
         return plot.phaseTraces?.[0]?.fileId || this.activeFileId;
     }

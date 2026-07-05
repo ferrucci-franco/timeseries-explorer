@@ -4,6 +4,7 @@ import Plotly from '../vendor/plotly.js';
 import { installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';
+import { installPlotFftMethods } from './methods/fft-methods.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -76,7 +77,7 @@ class PlotManager {
         const affectedPanels = new Set();
 
         for (const [panelId, plot] of this.plots) {
-            if (plot.mode === 'timeseries') {
+            if (plot.mode === 'timeseries' || plot.mode === 'fft') {
                 const before = plot.traces.length;
                 plot.traces = plot.traces.filter(t => t.fileId !== fileId);
                 if (plot.traces.length < before) affectedPanels.add(panelId);
@@ -294,7 +295,7 @@ class PlotManager {
         this.hoverProximity = next;
         const hovermode = next ? 'closest' : 'x';
         for (const [, plot] of this.plots) {
-            if (plot?.div && plot.mode === 'timeseries') {
+            if (plot?.div && (plot.mode === 'timeseries' || plot.mode === 'fft')) {
                 Plotly.relayout(plot.div, { hovermode });
             }
         }
@@ -305,6 +306,7 @@ class PlotManager {
         this.mouseWheelZoom = next;
         for (const [, plot] of this.plots) {
             this._applyMouseWheelZoomConfig(plot?.div, next);
+            this._applyMouseWheelZoomConfig(plot?.fftDiv, next);
         }
     }
 
@@ -347,6 +349,7 @@ class PlotManager {
             Promise.resolve(Plotly.Plots.resize(plot.div)).then(() => {
                 this._refreshPanelDomOverlays(plot);
             });
+            if (plot.fftDiv) Plotly.Plots.resize(plot.fftDiv);
         }
     }
 
@@ -401,25 +404,26 @@ class PlotManager {
     _unmountPanel(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
-        this._stopAnim(plot);
-        if (plot.resizeObserver) { plot.resizeObserver.disconnect(); }
-        if (plot._cursorDocListeners) {
-            document.removeEventListener('mousemove', plot._cursorDocListeners.move);
-            document.removeEventListener('mouseup',   plot._cursorDocListeners.up);
-            plot._cursorDocListeners = null;
-        }
-        if (plot.div)            { Plotly.purge(plot.div); }
+        this._destroyChart(panelId);
         this.plots.delete(panelId);  // panel is gone from DOM — remove completely
     }
 
     // ─── Mode switching ────────────────────────────────────────────
 
-    _setMode(panelId, mode, stateAnimDim = null) {
+    _setMode(panelId, mode, stateAnimDim = null, options = {}) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        const previousMode = plot.mode;
         const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
         if (plot.mode === mode && plot.stateAnimDim === nextDim) return;
         this._dismissModeChangeWarning?.(panelId);
+        const preserveTimeTraces = !!options.preserveTimeTraces
+            && (previousMode === 'timeseries' || previousMode === 'fft')
+            && (mode === 'timeseries' || mode === 'fft');
+        const preservedTraces = preserveTimeTraces
+            ? plot.traces.map(trace => ({ ...trace, axis: 'y' }))
+            : [];
+        const restoreView = preserveTimeTraces ? this._capturePlotView(plot) : null;
 
         // Stop animation if running
         this._stopAnim(plot);
@@ -428,7 +432,7 @@ class PlotManager {
         this._destroyChart(panelId);
         plot.mode         = mode;
         plot.stateAnimDim = nextDim;
-        plot.traces       = [];
+        plot.traces       = preservedTraces;
         plot.phaseTraces  = [];
         plot.phasePending = { x: null, y: null, z: null, fileId: null };
         plot.stateSlots   = { x: [], dx: [], fileId: null };
@@ -437,6 +441,7 @@ class PlotManager {
         plot.timeseriesY2Enabled = false;
         plot.traces.forEach(trace => { trace.axis = 'y'; });
         plot.cursors = this._defaultCursors();
+        plot.fft = this._defaultFftState?.() || plot.fft;
         plot.liveView = this._defaultLiveViewPolicy(mode);
         plot.animFrame    = 0;
 
@@ -446,7 +451,14 @@ class PlotManager {
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) { placeholder.style.display = ''; placeholder.classList.remove('drag-over'); }
         this._injectModeButtons(panelId, panelEl, mode);
-        this._updatePlaceholder(panelId, panelEl);
+        if (restoreView) plot._pendingViewRestore = restoreView;
+        if (this._hasContent(plot)) {
+            if (placeholder) placeholder.style.display = 'none';
+            if (mode === 'state-anim') this._createStateAnimChart(panelId, panelEl);
+            else this._createChart(panelId, panelEl);
+        } else {
+            this._updatePlaceholder(panelId, panelEl);
+        }
     }
 
     // ─── Drop handling ─────────────────────────────────────────────
@@ -569,6 +581,11 @@ class PlotManager {
             return;
         }
 
+        if (plot.mode === 'fft') {
+            names.forEach(varName => this.addTrace(panelId, varName, panelEl));
+            return;
+        }
+
         if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
             const groupSize = plot.mode === 'phase3d' ? 3 : 2;
             if (!this._canAddTraceWithFileTime(plot, this.activeFileId)) return;
@@ -646,6 +663,12 @@ class PlotManager {
                 : i18n.t('dropToAddTrace');
         }
 
+        if (mode === 'fft') {
+            return plot.traces.length === 0
+                ? i18n.t('dropFftMulti')
+                : i18n.t('dropToAddTrace');
+        }
+
         // State-anim mode
         if (mode === 'state-anim') {
             const sx = plot.stateSlots?.x || [];
@@ -683,6 +706,8 @@ class PlotManager {
 
         if (plot.mode === 'timeseries') {
             this._addTimeseries(panelId, varName, panelEl, plot, options);
+        } else if (plot.mode === 'fft') {
+            this._addFftTrace(panelId, varName, panelEl, plot);
         } else if (plot.mode === 'state-anim') {
             this._addStateAnimVar(panelId, varName, panelEl, plot);
         } else {
@@ -781,6 +806,10 @@ class PlotManager {
     _createChart(panelId, panelEl) {
         const plot = this.plots.get(panelId);
         if (!this._hasContent(plot)) return;
+        if (plot.mode === 'fft') {
+            this._createFftChart(panelId, panelEl);
+            return;
+        }
         const restoreView = plot._pendingViewRestore || null;
         delete plot._pendingViewRestore;
 
@@ -1083,6 +1112,7 @@ class PlotManager {
         if (typeof this._cleanupLazyDetailForPanel === 'function') {
             this._cleanupLazyDetailForPanel(panelId, plot);
         }
+        this._abortFftWorkerJob?.(plot, 'FFT panel destroyed');
         this._stopAnim(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
         // Reset dynamic trace indices
@@ -1097,12 +1127,34 @@ class PlotManager {
         }
         delete plot._cursorHandlersDiv;
         if (plot.div) {
-            // Remove state-anim container if present (wraps the plot div)
-            const saContainer = plot.div.closest('.state-anim-container');
-            if (saContainer) { Plotly.purge(plot.div); saContainer.remove(); }
-            else { Plotly.purge(plot.div); plot.div.remove(); }
-            plot.div = null;
+            const fftContainer = plot.div.closest('.fft-container');
+            if (fftContainer) {
+                if (plot.fftDiv) Plotly.purge(plot.fftDiv);
+                Plotly.purge(plot.div);
+                fftContainer.remove();
+                plot.div = null;
+                plot.fftDiv = null;
+                plot.fftContainer = null;
+            } else {
+                // Remove state-anim container if present (wraps the plot div)
+                const saContainer = plot.div.closest('.state-anim-container');
+                if (saContainer) { Plotly.purge(plot.div); saContainer.remove(); }
+                else { Plotly.purge(plot.div); plot.div.remove(); }
+                plot.div = null;
+            }
         }
+        if (plot._fftSelectionDocListeners) {
+            document.removeEventListener('mousemove', plot._fftSelectionDocListeners.move);
+            document.removeEventListener('mouseup', plot._fftSelectionDocListeners.up);
+            plot._fftSelectionDocListeners = null;
+        }
+        if (plot._fftSplitterDocListeners) {
+            document.removeEventListener('mousemove', plot._fftSplitterDocListeners.move);
+            document.removeEventListener('mouseup', plot._fftSplitterDocListeners.up);
+            plot._fftSplitterDocListeners = null;
+        }
+        plot._fftHandlersInstalled = false;
+        plot._fftSelectionDiv = null;
         plot.cameraOverlayEl = null;
     }
 
@@ -1123,6 +1175,7 @@ class PlotManager {
             existing.markerTraceIdx = null;
             existing.timeseriesStacked = false;
             existing.timeseriesY2Enabled = false;
+            existing.fft = this._defaultFftState?.() || existing.fft;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
             existing.cursors = this._defaultCursors();
@@ -1161,7 +1214,7 @@ class PlotManager {
         }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {
-            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && this.files.size > 1);
+            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && this.files.size > 1);
         }
         const cursorBtn = panelEl.querySelector('.cursor-btn');
         if (cursorBtn) {
@@ -1204,7 +1257,7 @@ class PlotManager {
         const headers = [];
         const columns = [];
 
-        if (plot.mode === 'timeseries') {
+        if (plot.mode === 'timeseries' || plot.mode === 'fft') {
             // Use first trace's file for the time column
             const firstFid = plot.traces[0]?.fileId;
             const timeVar  = this._getTimeVar(firstFid);
@@ -1311,7 +1364,7 @@ class PlotManager {
 
     _compareAcrossFiles(panelId) {
         const plot = this.plots.get(panelId);
-        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim') return;
+        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim' || plot.mode === 'fft') return;
 
         // Collect variables used. Overlay must be decided per trace signature,
         // not per file: a file can already contribute var_1 and still be
@@ -1474,7 +1527,7 @@ class PlotManager {
             });
         };
 
-        if (plot.mode === 'timeseries') {
+        if (plot.mode === 'timeseries' || plot.mode === 'fft') {
             plot.traces.forEach(t => addVar(t.fileId, t.varName));
         } else if (plot.mode === 'state-anim') {
             plot.stateSlots.x.forEach(v => addVar(plot.stateSlots.fileId, v));
@@ -1549,6 +1602,7 @@ class PlotManager {
         for (const [, plot] of this.plots) {
             if (!plot.div) continue;
             Plotly.relayout(plot.div, this._themeRelayoutUpdate(plot));
+            if (plot.fftDiv) Plotly.relayout(plot.fftDiv, this._themeRelayoutUpdate(plot));
             this._refreshAxisDecorations(plot);
             // Origin cross marker color follows theme; restyle it separately.
             this._refreshOriginCross(plot);
@@ -1625,6 +1679,7 @@ class PlotManager {
     _hasContent(plot) {
         if (!plot) return false;
         if (plot.mode === 'timeseries') return plot.traces.length > 0;
+        if (plot.mode === 'fft') return plot.traces.length > 0;
         if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= (plot.stateAnimDim || 2);
         return plot.phaseTraces.length > 0;
     }
@@ -1664,7 +1719,7 @@ class PlotManager {
     }
 
     _plotModeRequiresCompatibleTime(mode) {
-        return mode === 'timeseries' || mode === 'phase2dt';
+        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft';
     }
 
     _padRange(min, max, pad = 0.05) {
@@ -1743,6 +1798,10 @@ class PlotManager {
 
     _autoScalePlot(panelId, plot = this.plots.get(panelId)) {
         if (!plot?.div) return Promise.resolve();
+
+        if (plot.mode === 'fft') {
+            return this._autoScaleFftPanel(panelId, plot);
+        }
 
         if (plot.mode === 'timeseries') {
             const visibleTraces = plot.traces.filter(t => this._isVisible(t));
@@ -1919,6 +1978,7 @@ class PlotManager {
             }
             else if (plot.mode === 'phase2d') update.margin = { l: 60, r: 15, t: this.legendPosition === 'above' ? 50 : 10, b: 50 };
             Plotly.relayout(plot.div, update);
+            if (plot.fftDiv) Plotly.relayout(plot.fftDiv, update);
         }
     }
 
@@ -1938,6 +1998,9 @@ class PlotManager {
             timeseriesY2Enabled: false,
             equalAspect2D: false,
             resizeObserver: null,
+            fftDiv: null,
+            fftContainer: null,
+            fft: this._defaultFftState?.() || null,
             // state-anim mode
             stateSlots:   { x: [], dx: [], fileId: null }, // x: [varName,...], dx: [derName,...]
             stateAnimDim: 2,
@@ -2431,5 +2494,6 @@ class PlotManager {
 installPlotDataMethods(PlotManager);
 installPlotStateMethods(PlotManager);
 installPlotInteractionMethods(PlotManager);
+installPlotFftMethods(PlotManager);
 
 export default PlotManager;

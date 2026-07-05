@@ -61,7 +61,7 @@ proto._onRelayout = function(sourcePanelId, eventData) {
         return;
     }
 
-    if (plot?.mode === 'timeseries') {
+    if (plot?.mode === 'timeseries' || plot?.mode === 'fft') {
         const autorangeRequested = update['xaxis.autorange'] === true
             || eventData?.['yaxis.autorange'] === true
             || eventData?.['yaxis2.autorange'] === true;
@@ -70,6 +70,10 @@ proto._onRelayout = function(sourcePanelId, eventData) {
         } else {
             const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
             this._refreshTimeseriesVisuals(sourcePanelId, plot, visibleRange);
+        }
+        if (plot.mode === 'fft') {
+            this._updateFftSelectionShapes?.(sourcePanelId, plot);
+            return;
         }
         if (plot?.cursors?.enabled) this._renderCursorOverlay(plot);
     }
@@ -134,7 +138,7 @@ proto._xAxisUpdateFromRelayout = function(eventData) {
 };
 
 proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelId), visibleRange = null) {
-    if (!plot?.div || plot.mode !== 'timeseries') return;
+    if (!plot?.div || (plot.mode !== 'timeseries' && plot.mode !== 'fft')) return;
     const range = visibleRange
         || plot.div._fullLayout?.xaxis?.range
         || plot.div.layout?.xaxis?.range
@@ -882,7 +886,7 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 
 };
 
 proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
-    if (!plot?.div || plot.mode !== 'timeseries') return;
+    if (!plot?.div || (plot.mode !== 'timeseries' && plot.mode !== 'fft')) return;
     const fid = this._primaryTimeFileId(plot);
     const timeVar = this._getTimeVar(fid);
     const generatedCalendarAxis = this._isGeneratedCalendarTime(fid, timeVar);
@@ -920,7 +924,7 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
 
 proto._refreshAllTimeseriesVisuals = function() {
     for (const [panelId, plot] of this.plots) {
-        if (plot?.div && plot.mode === 'timeseries') {
+        if (plot?.div && (plot.mode === 'timeseries' || plot.mode === 'fft')) {
             this._refreshTimeseriesVisuals(panelId, plot);
         }
     }
@@ -2572,6 +2576,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     const modes = [
         { id: 'timeseries', label: '📈', titleKey: 'modeTimeseries' },
+        { id: 'fft',        label: 'FFT', titleKey: 'modeFFT'       },
         { id: 'phase2d',    label: '2D',  titleKey: 'modePhase2d'   },
         { id: 'phase2dt',   label: '2D+t',titleKey: 'modePhase2dt'  },
         { id: 'phase3d',    label: '3D',     titleKey: 'modePhase3d'   },
@@ -2706,6 +2711,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     compareBtn.title = i18n.t('compareFiles');
     const canCompare = this._hasContent(plot)
         && plot.mode !== 'state-anim'
+        && plot.mode !== 'fft'
         && this.files.size > 1;
     compareBtn.disabled = !canCompare;
     compareBtn.addEventListener('click', (e) => {
@@ -2767,6 +2773,12 @@ proto._requestModeChange = function(panelId, mode, stateAnimDim = null) {
     const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
     if (plot.mode === mode && plot.stateAnimDim === nextDim) {
         this._dismissModeChangeWarning(panelId);
+        return;
+    }
+    const preservesTimeTraces = (plot.mode === 'timeseries' || plot.mode === 'fft')
+        && (mode === 'timeseries' || mode === 'fft');
+    if (preservesTimeTraces) {
+        this._setMode(panelId, mode, stateAnimDim, { preserveTimeTraces: true });
         return;
     }
     if (!this._hasContent(plot)) {
@@ -2984,6 +2996,9 @@ proto._updatePlaceholder = function(panelId, panelEl) {
             msg = !pp.x ? i18n.t('dropPhase3dMulti')
                 : !pp.y ? i18n.t('dropY')
                 :         i18n.t('dropZ');
+            break;
+        case 'fft':
+            msg = i18n.t('dropFftMulti');
             break;
         default: // timeseries
             msg = i18n.t('dropTimeseriesMulti');

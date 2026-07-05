@@ -1270,6 +1270,280 @@ body.cursor-box-dragging {
     height: 100% !important;
 }
 
+.fft-container {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary);
+    --fft-split: 50%;
+}
+
+.fft-topbar {
+    flex: 0 0 auto;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 7px;
+    border-bottom: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-tertiary) 74%, var(--bg-secondary));
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+}
+
+.fft-topbar-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: 0 0 auto;
+}
+
+.fft-tool-btn {
+    height: 24px;
+    min-width: 28px;
+    padding: 0 7px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.fft-tool-btn:hover {
+    border-color: color-mix(in srgb, var(--primary-color) 68%, var(--border-color));
+}
+
+.fft-range-indicator {
+    flex: 0 0 auto;
+    max-width: 132px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+.fft-status {
+    margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.72rem;
+}
+
+.fft-status-warning {
+    color: var(--warning-color);
+}
+
+.fft-status-ready {
+    color: color-mix(in srgb, #16a34a 78%, var(--text-primary));
+}
+
+.fft-status-loading {
+    color: var(--primary-color);
+}
+
+.fft-workspace {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+}
+
+.fft-plot-area {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    overflow: hidden;
+}
+
+.fft-layout-horizontal .fft-plot-area {
+    grid-template-columns: minmax(0, var(--fft-split)) 7px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+
+.fft-layout-vertical .fft-plot-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, var(--fft-split)) 7px minmax(0, 1fr);
+}
+
+.fft-pane {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+}
+
+.fft-splitter {
+    background: color-mix(in srgb, var(--border-color) 72%, transparent);
+    position: relative;
+    z-index: 2;
+}
+
+.fft-layout-horizontal .fft-splitter {
+    cursor: col-resize;
+}
+
+.fft-layout-vertical .fft-splitter {
+    cursor: row-resize;
+}
+
+.fft-splitter:hover {
+    background: color-mix(in srgb, var(--primary-color) 42%, var(--border-color));
+}
+
+.fft-options {
+    flex: 0 0 286px;
+    width: 286px;
+    max-width: min(42vw, 320px);
+    min-width: 230px;
+    padding: 9px;
+    border-left: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    overflow: auto;
+    color: var(--text-primary);
+}
+
+.fft-options[hidden] {
+    display: none;
+}
+
+.fft-options-title,
+.fft-options-subtitle {
+    font-size: 0.78rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin: 2px 0 8px;
+}
+
+.fft-options-subtitle {
+    margin-top: 12px;
+    color: var(--text-secondary);
+}
+
+.fft-message {
+    margin: 0 0 9px;
+    padding: 7px 8px;
+    border-radius: 5px;
+    font-size: 0.73rem;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.fft-message[hidden] {
+    display: none;
+}
+
+.fft-message-warning {
+    color: color-mix(in srgb, var(--warning-color) 88%, var(--text-primary));
+    border: 1px solid color-mix(in srgb, var(--warning-color) 48%, var(--border-color));
+    background: color-mix(in srgb, var(--warning-color) 12%, var(--bg-primary));
+}
+
+.fft-message-loading {
+    color: var(--primary-color);
+    border: 1px solid color-mix(in srgb, var(--primary-color) 38%, var(--border-color));
+    background: color-mix(in srgb, var(--primary-color) 9%, var(--bg-primary));
+}
+
+.fft-option-row {
+    display: grid;
+    grid-template-columns: minmax(82px, 0.8fr) minmax(0, 1.2fr);
+    align-items: center;
+    gap: 7px;
+    min-height: 30px;
+    margin-bottom: 6px;
+    font-size: 0.74rem;
+}
+
+.fft-option-row > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--text-secondary);
+}
+
+.fft-number-input,
+.fft-select {
+    width: 100%;
+    min-width: 0;
+    height: 26px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    padding: 0 6px;
+    font-size: 0.74rem;
+}
+
+.fft-checkbox {
+    justify-self: start;
+}
+
+.fft-range-grid,
+.fft-axis-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    margin-bottom: 8px;
+}
+
+.fft-range-bound,
+.fft-axis-bound {
+    min-width: 0;
+}
+
+.fft-range-bound .fft-option-row,
+.fft-axis-bound .fft-option-row {
+    margin-bottom: 2px;
+}
+
+.fft-range-input {
+    width: 100%;
+    min-width: 0;
+    display: block;
+}
+
+body.fft-selection-dragging,
+body.fft-split-dragging {
+    user-select: none;
+}
+
+body.fft-selection-dragging {
+    cursor: ew-resize;
+}
+
+body.fft-selection-dragging.fft-selection-moving {
+    cursor: move;
+}
+
+body.fft-split-dragging {
+    cursor: col-resize;
+}
+
+@media (max-width: 760px) {
+    .fft-workspace {
+        flex-direction: column;
+    }
+
+    .fft-options {
+        flex: 0 0 auto;
+        width: auto;
+        max-width: none;
+        max-height: 42%;
+        border-left: 0;
+        border-top: 1px solid var(--border-color);
+    }
+
+    .fft-topbar {
+        gap: 4px;
+    }
+}
+
 .cursor-plot-overlay {
     position: absolute;
     inset: 0;

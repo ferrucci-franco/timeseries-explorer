@@ -170,6 +170,7 @@ proto._capturePlotSessions = function() {
             stateSlots: this._cloneSerializable(plot.stateSlots),
             stateAnimDim: plot.stateAnimDim || 2,
             stateConfig: this._cloneSerializable(plot.stateConfig),
+            fft: this._cloneSerializable(plot.fft || this.plotManager._defaultFftState?.()),
             projection: plot.projection || 'orthographic',
             equalAspect2D: !!plot.equalAspect2D,
             liveView: this._cloneSerializable(plot.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode)),
@@ -507,6 +508,9 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.phasePending = { x: null, y: null, z: null, fileId: null };
         plot.stateAnimDim = saved.stateAnimDim || 2;
         plot.stateConfig = { ...plot.stateConfig, ...(saved.stateConfig || {}) };
+        plot.fft = this.plotManager._normalizeFftState
+            ? this.plotManager._normalizeFftState(saved.fft || plot.fft)
+            : this._cloneSerializable(saved.fft || plot.fft);
         plot.projection = saved.projection || 'orthographic';
         plot.equalAspect2D = !!saved.equalAspect2D;
         plot.liveView = this._cloneSerializable(saved.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode));

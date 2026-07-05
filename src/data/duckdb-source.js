@@ -344,6 +344,85 @@ export default class DuckDbSource {
         }
     }
 
+    /**
+     * Fetch exact source samples for algorithms such as FFT that must not use
+     * the overview or server-side aggregation. The caller gets up to
+     * `maxRows + 1` rows; `truncated` tells the UI to reject the request before
+     * running an expensive calculation on an oversized selection.
+     */
+    async getRawColumnsRange(legacyData, varNames, t0, t1, maxRows = 500000) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getRawColumnsRange: data is not DuckDB-backed (eager mode)');
+        const requested = [...new Set(varNames || [])]
+            .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
+            .filter(item => item.variable)
+            .sort((a, b) => String(a.varName).localeCompare(String(b.varName)));
+        if (!requested.length) {
+            return { x: new Float64Array(0), rowIndex: new Float64Array(0), yByVar: new Map(), truncated: false };
+        }
+
+        let lo = Number(t0);
+        let hi = Number(t1);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+            return { x: new Float64Array(0), rowIndex: new Float64Array(0), yByVar: new Map(), truncated: false };
+        }
+        if (lo > hi) [lo, hi] = [hi, lo];
+
+        const limit = Math.max(1, Math.round(Number(maxRows) || 1)) + 1;
+        const timeCol = meta.timeColumn;
+        const escTime = timeCol.replace(/"/g, '""');
+        const tableName = meta.tableName;
+        const lit = (v) => this._numericLiteral(v);
+        const timeKind = legacyData?.metadata?.timeKind;
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`);
+        const valueSelect = requested
+            .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
+            .join(',\n                               ');
+        const valueNames = requested.map((_, index) => `v${index}`).join(', ');
+
+        const baseTime = meta.generatedTime
+            ? '(ROW_NUMBER() OVER () - 1)::DOUBLE'
+            : tExpr;
+        const rowIndexExpr = meta.generatedTime
+            ? 't AS rn'
+            : '(ROW_NUMBER() OVER (ORDER BY t) - 1)::DOUBLE AS rn';
+        const sql = `
+            WITH base AS (
+                SELECT ${baseTime} AS t,
+                       ${valueSelect}
+                FROM ${tableName}
+            ),
+            numbered AS (
+                SELECT t,
+                       ${rowIndexExpr},
+                       ${valueNames}
+                FROM base
+            )
+            SELECT t,
+                   rn,
+                   ${valueNames}
+            FROM numbered
+            WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}
+            ORDER BY t
+            LIMIT ${limit};
+        `;
+        const result = await this._interactiveQuery(sql);
+        const xFull = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+        const rowIndexFull = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
+        const truncated = xFull.length > limit - 1;
+        const keep = truncated ? limit - 1 : xFull.length;
+        const x = truncated ? xFull.slice(0, keep) : xFull;
+        const rowIndex = truncated ? rowIndexFull.slice(0, keep) : rowIndexFull;
+        const yByVar = new Map();
+        requested.forEach(({ varName }, index) => {
+            const values = this._extractColumnAsFloat64(result, index + 2, 'DOUBLE');
+            yByVar.set(varName, truncated ? values.slice(0, keep) : values);
+        });
+        return { x, rowIndex, yByVar, truncated };
+    }
+
     async _queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints = 4000) {
         const queryStartedAt = this._now();
         const timeCol = meta.timeColumn;
