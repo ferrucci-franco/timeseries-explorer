@@ -24,6 +24,7 @@ proto._defaultFftState = function() {
         layout: 'vertical',
         split: 0.5,
         optionsVisible: true,
+        rangeFull: true,
         x1: null,
         x2: null,
         windowType: 'none',
@@ -59,6 +60,10 @@ proto._normalizeFftState = function(raw = {}) {
         layout,
         split: Number.isFinite(split) ? Math.max(0.2, Math.min(0.8, split)) : defaults.split,
         optionsVisible: raw.optionsVisible !== false,
+        // Sessions predating rangeFull carry an explicit window: keep it.
+        rangeFull: raw.rangeFull !== undefined
+            ? !!raw.rangeFull
+            : !(hasFiniteFftValue(rawX1) || hasFiniteFftValue(rawX2)),
         x1: finiteOrNull(rawX1),
         x2: finiteOrNull(rawX2),
         windowType: normalizeFftWindow(raw.windowType),
@@ -812,6 +817,7 @@ proto._resetFftView = function(panelId) {
     state.fMax = null;
     state.yMin = null;
     state.yMax = null;
+    state.rangeFull = true;
     this._ensureFftRange(plot, { reset: true });
     this._syncFftOptionsPanel(plot);
     this._refreshFftTimePlot(panelId, plot);
@@ -822,6 +828,14 @@ proto._resetFftView = function(panelId) {
 proto._activeFftRange = function(plot) {
     const state = this._ensureFftState(plot);
     const domain = this._fftDomain(plot);
+    if (state.rangeFull) {
+        // Whole signal: track the current domain so live-appended data is
+        // always included.
+        if (domain && Number.isFinite(domain.min) && Number.isFinite(domain.max)) {
+            return [domain.min, domain.max];
+        }
+        return [0, 1];
+    }
     let lo = hasFiniteFftValue(state.x1) ? Number(state.x1) : NaN;
     let hi = hasFiniteFftValue(state.x2) ? Number(state.x2) : NaN;
     if (!hasFiniteFftValue(lo) || !hasFiniteFftValue(hi)) {
@@ -868,6 +882,7 @@ proto._fftDomain = function(plot) {
 };
 
 proto._fftSelectionShapes = function(plot) {
+    if (this._ensureFftState(plot).rangeFull) return [];
     const [lo, hi] = this._activeFftRange(plot);
     const firstTrace = plot.traces?.[0];
     const timeVar = firstTrace ? this._getTimeVar(firstTrace.fileId) : null;
@@ -911,6 +926,7 @@ proto._installFftSelectionHandlers = function(panelId, plot) {
     plot._fftSelectionDiv = plot.div;
     let dragging = null;
     const hitTest = (event) => {
+        if (this._ensureFftState(plot).rangeFull) return null;
         if (!this._eventInsidePlotArea(plot.div, event)) return null;
         const x = this._eventToXValue(plot.div, event);
         if (!Number.isFinite(x)) return null;
@@ -1052,6 +1068,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         input.value = formatFftInputValue(isAxisLimit ? this._fftAxisLimitDisplayValue(plot, key) : state[key]);
         input.dataset.fftKey = key;
         if (isAxisLimit) input.dataset.fftAxisLimit = 'true';
+        if (key === 'x1' || key === 'x2') input.disabled = !!state.rangeFull;
         input.addEventListener('change', () => {
             const state = this._ensureFftState(plot);
             const n = Number(input.value);
@@ -1079,6 +1096,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
             input.step = 'any';
         }
         input.value = fmt(state[key]);
+        input.disabled = !!state.rangeFull;
         input.addEventListener('input', () => {
             const state = this._ensureFftState(plot);
             const n = Number(input.value);
@@ -1172,6 +1190,54 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     message.className = 'fft-message';
     message.hidden = true;
     options.appendChild(message);
+
+    const segmented = document.createElement('div');
+    segmented.className = 'fft-segmented';
+    const makeSegment = (labelKey, tooltipKey, isFull) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = i18n.t(labelKey);
+        btn.title = i18n.t(tooltipKey);
+        btn.dataset.fftRangeFull = String(isFull);
+        btn.classList.toggle('active', !!state.rangeFull === isFull);
+        btn.addEventListener('click', (event) => {
+            event.preventDefault();
+            const state = this._ensureFftState(plot);
+            if (!!state.rangeFull === isFull) return;
+            state.rangeFull = isFull;
+            if (!isFull) {
+                // The selection starts as the currently visible time span.
+                const domain = this._fftDomain(plot);
+                const xa = plot.div?._fullLayout?.xaxis;
+                let lo = this._coerceAxisValue(xa?.range?.[0]);
+                let hi = this._coerceAxisValue(xa?.range?.[1]);
+                if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+                    lo = domain?.min;
+                    hi = domain?.max;
+                }
+                if (Number.isFinite(lo) && Number.isFinite(hi)) {
+                    if (lo > hi) [lo, hi] = [hi, lo];
+                    if (domain) {
+                        lo = Math.max(domain.min, Math.min(domain.max, lo));
+                        hi = Math.max(domain.min, Math.min(domain.max, hi));
+                    }
+                    state.x1 = lo;
+                    state.x2 = hi;
+                }
+                this._ensureFftRange(plot);
+            }
+            this._updateFftSelectionShapes(panelId, plot);
+            this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+            this._scheduleFftRecompute(panelId);
+            this._syncFftOptionsPanel(plot);
+        });
+        return btn;
+    };
+    segmented.append(
+        makeSegment('fftRangeFull', 'fftRangeFullTooltip', true),
+        makeSegment('fftRangeSelection', 'fftRangeSelectionTooltip', false),
+    );
+    options.appendChild(makeRow(i18n.t('fftRange'), segmented));
 
     const rangeGrid = document.createElement('div');
     rangeGrid.className = 'fft-range-grid';
@@ -1307,9 +1373,13 @@ proto._syncFftOptionsPanel = function(plot, options = {}) {
     const panel = plot?.fftContainer?.querySelector('.fft-options');
     if (!panel) return;
     const fmt = value => Number.isFinite(Number(value)) ? String(Number(Number(value).toPrecision(12))) : '';
+    panel.querySelectorAll('[data-fft-range-full]').forEach(btn => {
+        btn.classList.toggle('active', String(!!state.rangeFull) === btn.dataset.fftRangeFull);
+    });
     panel.querySelectorAll('[data-fft-key]').forEach(input => {
         const key = input.dataset.fftKey;
         if (!key || !(key in state)) return;
+        if (key === 'x1' || key === 'x2') input.disabled = !!state.rangeFull;
         const isAxisLimit = input.dataset.fftAxisLimit === 'true';
         if (input.type === 'checkbox') input.checked = !!state[key];
         else if (input.tagName?.toLowerCase() === 'select') input.value = String(state[key]);

@@ -1482,6 +1482,47 @@ body.cursor-box-dragging {
     justify-self: end;
 }
 
+.fft-number-input:disabled,
+.fft-range-input:disabled {
+    opacity: 0.45;
+}
+
+.fft-segmented {
+    display: inline-flex;
+    justify-self: end;
+}
+
+.fft-segmented button {
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.fft-segmented button:first-child {
+    border-radius: 5px 0 0 5px;
+}
+
+.fft-segmented button:last-child {
+    border-radius: 0 5px 5px 0;
+    margin-left: -1px;
+}
+
+.fft-segmented button:hover {
+    color: var(--text-primary);
+}
+
+.fft-segmented button.active {
+    background: color-mix(in srgb, var(--primary-color) 16%, var(--bg-primary));
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    position: relative;
+    z-index: 1;
+}
+
 .fft-option-row > .fft-select {
     width: 118px;
     justify-self: end;
