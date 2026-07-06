@@ -1487,15 +1487,18 @@ body.cursor-box-dragging {
     opacity: 0.45;
 }
 
-/* Datetime Start/End: the picker needs the full row width. */
+/* Datetime Start/End: the picker (with hh:mm:ss) needs more width than
+   sharing a row with the label allows - stack label above the input. */
 .fft-number-input[type="datetime-local"] {
     max-width: none;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     padding: 0 4px;
 }
 
 .fft-range-bound-datetime .fft-option-row {
-    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 2px;
+    min-height: 0;
 }
 
 .fft-segmented {
