@@ -141,7 +141,7 @@ proto._createFftChart = function(panelId, panelEl) {
         return button;
     };
     layoutGroup.append(
-        makeButton('fft-tool-btn fft-layout-btn', state.layout === 'horizontal' ? 'H' : 'V', i18n.t('fftLayoutToggle'), () => {
+        makeButton('fft-tool-btn fft-layout-btn', 'V/H', i18n.t('fftLayoutToggle'), () => {
             const current = this._ensureFftState(plot).layout;
             this._setFftLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
         }),
@@ -774,8 +774,6 @@ proto._setFftLayout = function(panelId, layout) {
     state.layout = layout;
     plot.fftContainer.classList.toggle('fft-layout-horizontal', layout === 'horizontal');
     plot.fftContainer.classList.toggle('fft-layout-vertical', layout === 'vertical');
-    const layoutBtn = plot.fftContainer.querySelector('.fft-layout-btn');
-    if (layoutBtn) layoutBtn.textContent = layout === 'horizontal' ? 'H' : 'V';
     Plotly.Plots.resize(plot.div);
     Plotly.Plots.resize(plot.fftDiv);
 };
@@ -1247,6 +1245,22 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         makeAxisBound('yMax'),
     );
     options.appendChild(axisGrid);
+
+    const autoAmplitudeBtn = document.createElement('button');
+    autoAmplitudeBtn.type = 'button';
+    autoAmplitudeBtn.className = 'fft-auto-amplitude-btn';
+    autoAmplitudeBtn.textContent = i18n.t('fftAutoAmplitude');
+    autoAmplitudeBtn.title = i18n.t('fftAutoAmplitudeTooltip');
+    autoAmplitudeBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        const state = this._ensureFftState(plot);
+        state.yMin = null;
+        state.yMax = null;
+        // Only the amplitude axis: leave any manual frequency zoom alone.
+        if (plot.fftDiv) Plotly.relayout(plot.fftDiv, { 'yaxis.autorange': true });
+        this._syncFftOptionsPanel(plot);
+    });
+    options.appendChild(autoAmplitudeBtn);
 };
 
 proto._installFftHelpDismissHandlers = function(plot) {

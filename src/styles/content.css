@@ -1482,6 +1482,11 @@ body.cursor-box-dragging {
     justify-self: end;
 }
 
+.fft-option-row > .fft-select {
+    width: 118px;
+    justify-self: end;
+}
+
 .fft-checkbox {
     justify-self: start;
 }
@@ -1491,10 +1496,30 @@ body.cursor-box-dragging {
     align-items: center;
     gap: 5px;
     min-width: 0;
+    width: 118px;
+    justify-self: end;
 }
 
 .fft-control-help .fft-select {
     flex: 1;
+    min-width: 0;
+}
+
+.fft-auto-amplitude-btn {
+    display: block;
+    width: 100%;
+    margin-top: 2px;
+    height: 26px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.74rem;
+    cursor: pointer;
+}
+
+.fft-auto-amplitude-btn:hover {
+    border-color: color-mix(in srgb, var(--primary-color) 68%, var(--border-color));
 }
 
 .fft-help-btn {
