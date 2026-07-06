@@ -498,6 +498,13 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.fftDiv || plot.mode !== 'fft') return;
     clearTimeout(plot._fftRecomputeTimer);
+    // Merge view-preservation flags across coalesced calls: one "don't
+    // preserve" request wins over any queued "preserve" ones.
+    const prev = plot._fftRecomputeView || {};
+    plot._fftRecomputeView = {
+        preserveX: options.preserveSpectrumX !== false && prev.preserveX !== false,
+        preserveY: options.preserveSpectrumY !== false && prev.preserveY !== false,
+    };
     const run = () => this._refreshFftSpectrumPlot(panelId, plot);
     if (options.immediate) run();
     else plot._fftRecomputeTimer = setTimeout(run, 120);
@@ -573,7 +580,21 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     state.warnings = warnings;
     plot._fftSpectra = spectra;
     if (plot._fftToken !== token) return;
-    await Plotly.react(plot.fftDiv, spectra, this._buildFftSpectrumLayout(plot), this._getPlotlyConfig());
+    // Preserve the user's manual zoom on the spectrum across recomputes:
+    // if an axis is not on autorange, keep its current range instead of
+    // letting the rebuilt layout fall back to autorange / state limits.
+    const view = plot._fftRecomputeView || {};
+    plot._fftRecomputeView = null;
+    const layout = this._buildFftSpectrumLayout(plot);
+    const keepAxis = (axisKey, preserve) => {
+        if (preserve === false) return;
+        const axis = plot.fftDiv?._fullLayout?.[axisKey];
+        if (!axis || axis.autorange !== false || !Array.isArray(axis.range)) return;
+        layout[axisKey] = { ...layout[axisKey], range: axis.range.slice(), autorange: false };
+    };
+    keepAxis('xaxis', view.preserveX);
+    keepAxis('yaxis', view.preserveY);
+    await Plotly.react(plot.fftDiv, spectra, layout, this._getPlotlyConfig());
     if (plot._fftToken !== token) return;
     this._installLegendHoverHint(plot.fftDiv);
     this._syncFftOptionsPanel(plot);
@@ -787,7 +808,7 @@ proto._resetFftView = function(panelId) {
     this._syncFftOptionsPanel(plot);
     this._refreshFftTimePlot(panelId, plot);
     this._autoScalePlot(panelId, plot);
-    this._scheduleFftRecompute(panelId, { immediate: true });
+    this._scheduleFftRecompute(panelId, { immediate: true, preserveSpectrumX: false, preserveSpectrumY: false });
 };
 
 proto._activeFftRange = function(plot) {
@@ -869,6 +890,14 @@ proto._updateFftSelectionShapes = function(panelId, plot = this.plots.get(panelI
     this._syncFftOptionsPanel(plot);
 };
 
+// The windowed overlay is cut to the analyzed range, so it must be rebuilt
+// whenever the selection changes (drag end, inputs, sliders).
+proto._refreshFftWindowedOverlayIfNeeded = function(panelId, plot = this.plots.get(panelId)) {
+    if (!plot || plot.mode !== 'fft') return;
+    if (!this._ensureFftState(plot).showWindowed) return;
+    this._refreshFftTimePlot(panelId, plot, { preserveView: true });
+};
+
 proto._installFftSelectionHandlers = function(panelId, plot) {
     if (!plot?.div || plot._fftSelectionDiv === plot.div) return;
     plot._fftSelectionDiv = plot.div;
@@ -946,6 +975,7 @@ proto._installFftSelectionHandlers = function(panelId, plot) {
         document.body.classList.remove('fft-selection-dragging');
         document.body.classList.remove('fft-selection-moving');
         if (plot.div) setCursorHint(null);
+        this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
         this._scheduleFftRecompute(panelId);
     };
     document.addEventListener('mousemove', onMove);
@@ -1023,6 +1053,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
             } else {
                 this._ensureFftRange(plot);
                 this._updateFftSelectionShapes(panelId, plot);
+                this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
                 this._scheduleFftRecompute(panelId);
             }
             this._syncFftOptionsPanel(plot);
@@ -1047,7 +1078,10 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
             this._syncFftOptionsPanel(plot, { skipRangeSliders: true });
             this._updateFftSelectionShapes(panelId, plot);
         });
-        input.addEventListener('change', () => this._scheduleFftRecompute(panelId));
+        input.addEventListener('change', () => {
+            this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+            this._scheduleFftRecompute(panelId);
+        });
         return input;
     };
     const makeAxisLimitRange = (key) => {
@@ -1084,7 +1118,8 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
             if (key === 'windowType') state[key] = normalizeFftWindow(state[key]);
             if (key === 'amplitudeScale') state[key] = normalizeFftScale(state[key]);
             if (key === 'zeroPaddingFactor') state[key] = normalizeZeroPaddingFactor(state[key]);
-            if (key === 'amplitudeScale' && state[key] !== previous) {
+            const scaleChanged = key === 'amplitudeScale' && state[key] !== previous;
+            if (scaleChanged) {
                 state.yMin = null;
                 state.yMax = null;
                 this._renderFftOptionsPanel(panelId, plot);
@@ -1094,7 +1129,9 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
             if (key === 'windowType' && state.showWindowed) {
                 this._refreshFftTimePlot(panelId, plot, { preserveView: true, preserveY: false });
             }
-            this._scheduleFftRecompute(panelId);
+            // A scale change swaps the Y units (linear <-> dB): a preserved
+            // Y zoom would be meaningless.
+            this._scheduleFftRecompute(panelId, scaleChanged ? { preserveSpectrumY: false } : {});
         });
         return select;
     };
