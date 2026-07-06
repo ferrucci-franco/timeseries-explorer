@@ -1479,6 +1479,7 @@ body.cursor-box-dragging {
 
 .fft-number-input {
     max-width: 92px;
+    justify-self: end;
 }
 
 .fft-checkbox {
