@@ -14,7 +14,6 @@ import {
 import Plotly from '../../vendor/plotly.js';
 
 const FFT_LAYOUTS = new Set(['horizontal', 'vertical']);
-const FFT_RANGE_MODES = new Set(['numeric', 'visual']);
 const FFT_AXIS_LIMIT_KEYS = new Set(['fMin', 'fMax', 'yMin', 'yMax']);
 
 export function installPlotFftMethods(TargetClass) {
@@ -22,12 +21,9 @@ export function installPlotFftMethods(TargetClass) {
 
 proto._defaultFftState = function() {
     return {
-        layout: 'horizontal',
+        layout: 'vertical',
         split: 0.5,
         optionsVisible: true,
-        rangeMode: 'numeric',
-        xMin: null,
-        xMax: null,
         x1: null,
         x2: null,
         windowType: 'none',
@@ -51,19 +47,20 @@ proto._normalizeFftState = function(raw = {}) {
         return Number.isFinite(n) ? n : null;
     };
     const layout = FFT_LAYOUTS.has(raw.layout) ? raw.layout : defaults.layout;
-    const rangeMode = FFT_RANGE_MODES.has(raw.rangeMode) ? raw.rangeMode : defaults.rangeMode;
     const split = Number(raw.split);
-    return {
+    // Sessions saved before the range-mode split was removed carry
+    // rangeMode + xMin/xMax; honor whichever pair was active back then.
+    const preferNumeric = raw.rangeMode === 'numeric';
+    const rawX1 = preferNumeric ? (raw.xMin ?? raw.x1) : (raw.x1 ?? raw.xMin);
+    const rawX2 = preferNumeric ? (raw.xMax ?? raw.x2) : (raw.x2 ?? raw.xMax);
+    const state = {
         ...defaults,
         ...raw,
         layout,
         split: Number.isFinite(split) ? Math.max(0.2, Math.min(0.8, split)) : defaults.split,
         optionsVisible: raw.optionsVisible !== false,
-        rangeMode,
-        xMin: finiteOrNull(raw.xMin),
-        xMax: finiteOrNull(raw.xMax),
-        x1: finiteOrNull(raw.x1),
-        x2: finiteOrNull(raw.x2),
+        x1: finiteOrNull(rawX1),
+        x2: finiteOrNull(rawX2),
         windowType: normalizeFftWindow(raw.windowType),
         showWindowed: !!raw.showWindowed,
         removeMean: raw.removeMean !== false,
@@ -75,6 +72,10 @@ proto._normalizeFftState = function(raw = {}) {
         yMax: finiteOrNull(raw.yMax),
         warnings: Array.isArray(raw.warnings) ? raw.warnings.slice(0, 10) : [],
     };
+    delete state.rangeMode;
+    delete state.xMin;
+    delete state.xMax;
+    return state;
 };
 
 proto._ensureFftState = function(plot) {
@@ -140,26 +141,27 @@ proto._createFftChart = function(panelId, panelEl) {
         return button;
     };
     layoutGroup.append(
-        makeButton('fft-tool-btn', 'H', i18n.t('fftLayoutHorizontal'), () => this._setFftLayout(panelId, 'horizontal')),
-        makeButton('fft-tool-btn', 'V', i18n.t('fftLayoutVertical'), () => this._setFftLayout(panelId, 'vertical')),
+        makeButton('fft-tool-btn fft-layout-btn', state.layout === 'horizontal' ? 'H' : 'V', i18n.t('fftLayoutToggle'), () => {
+            const current = this._ensureFftState(plot).layout;
+            this._setFftLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
+        }),
     );
-
-    const rangeIndicator = document.createElement('span');
-    rangeIndicator.className = 'fft-range-indicator';
-    rangeIndicator.textContent = state.rangeMode === 'visual' ? i18n.t('fftRangeVisualShort') : i18n.t('fftRangeNumericShort');
 
     const actionGroup = document.createElement('div');
     actionGroup.className = 'fft-topbar-group';
+    const optionsBtn = makeButton('fft-tool-btn fft-options-btn', i18n.t('fftOptionsLabel'), i18n.t('fftOptionsToggle'), () => this._toggleFftOptions(panelId));
+    optionsBtn.classList.toggle('active', state.optionsVisible);
+    optionsBtn.setAttribute('aria-pressed', String(state.optionsVisible));
     actionGroup.append(
-        makeButton('fft-tool-btn', 'R', i18n.t('fftResetView'), () => this._resetFftView(panelId)),
-        makeButton('fft-tool-btn', 'Opt', i18n.t('fftOptionsToggle'), () => this._toggleFftOptions(panelId)),
+        makeButton('fft-tool-btn', i18n.t('fftResetLabel'), i18n.t('fftResetView'), () => this._resetFftView(panelId)),
+        optionsBtn,
     );
 
     const status = document.createElement('span');
     status.className = 'fft-status';
     status.setAttribute('aria-live', 'polite');
 
-    topbar.append(layoutGroup, rangeIndicator, actionGroup, status);
+    topbar.append(layoutGroup, actionGroup, status);
 
     const workspace = document.createElement('div');
     workspace.className = 'fft-workspace';
@@ -241,11 +243,11 @@ proto._installFftPlotHandlers = function(panelId, plot) {
     bindLegend(plot.fftDiv);
     plot.div.on('plotly_relayout', ed => this._onRelayout(panelId, ed));
     plot.div.on('plotly_doubleclick', () => {
-        this._autoScalePlot(panelId, plot);
+        this._autoScalePlotTimeOnly(plot);
         return false;
     });
     plot.fftDiv.on('plotly_doubleclick', () => {
-        this._autoScaleFftSpectrum(plot);
+        this._applyFftAxisLimits(plot);
         return false;
     });
     this._installLegendHoverHint(plot.div);
@@ -318,6 +320,9 @@ proto._buildFftTimeLayout = function(plot) {
     layout.shapes = this._fftSelectionShapes(plot);
     layout.margin = { ...(layout.margin || {}), t: 8 };
     layout.hovermode = this.hoverProximity ? 'closest' : 'x';
+    // Keep hover out of the way of the selection handles: only show the
+    // tooltip when the pointer is really close to a trace (px, default 20).
+    layout.hoverdistance = 8;
     return layout;
 };
 
@@ -464,7 +469,7 @@ proto._configureFftAxisLimitSlider = function(input, plot, key) {
     input.max = fmt(domain.max);
     input.step = 'any';
     input.value = fmt(this._fftAxisLimitDisplayValue(plot, key, domain));
-    input.title = this._fftAxisLimitLabel(plot, key);
+    input.title = this._fftAxisLimitTooltip(key);
 };
 
 proto._refreshFftTimePlot = function(panelId, plot = this.plots.get(panelId), options = {}) {
@@ -482,6 +487,10 @@ proto._refreshFftTimePlot = function(panelId, plot = this.plots.get(panelId), op
         .then(() => {
             this._installLegendHoverHint(plot.div);
             this._installFftSelectionHandlers(panelId, plot);
+            // The react above rebuilt traces from the base arrays (full-range
+            // downsample / lazy overview); restore the resolution that matches
+            // the preserved view, refetching raw detail for lazy files.
+            this._refreshTimeseriesVisuals(panelId, plot);
         });
 };
 
@@ -744,6 +753,8 @@ proto._setFftLayout = function(panelId, layout) {
     state.layout = layout;
     plot.fftContainer.classList.toggle('fft-layout-horizontal', layout === 'horizontal');
     plot.fftContainer.classList.toggle('fft-layout-vertical', layout === 'vertical');
+    const layoutBtn = plot.fftContainer.querySelector('.fft-layout-btn');
+    if (layoutBtn) layoutBtn.textContent = layout === 'horizontal' ? 'H' : 'V';
     Plotly.Plots.resize(plot.div);
     Plotly.Plots.resize(plot.fftDiv);
 };
@@ -755,6 +766,11 @@ proto._toggleFftOptions = function(panelId) {
     state.optionsVisible = !state.optionsVisible;
     const options = plot.fftContainer.querySelector('.fft-options');
     if (options) options.hidden = !state.optionsVisible;
+    const optionsBtn = plot.fftContainer.querySelector('.fft-options-btn');
+    if (optionsBtn) {
+        optionsBtn.classList.toggle('active', state.optionsVisible);
+        optionsBtn.setAttribute('aria-pressed', String(state.optionsVisible));
+    }
     Plotly.Plots.resize(plot.div);
     Plotly.Plots.resize(plot.fftDiv);
 };
@@ -777,11 +793,8 @@ proto._resetFftView = function(panelId) {
 proto._activeFftRange = function(plot) {
     const state = this._ensureFftState(plot);
     const domain = this._fftDomain(plot);
-    const pair = state.rangeMode === 'visual'
-        ? [state.x1, state.x2]
-        : [state.xMin, state.xMax];
-    let lo = hasFiniteFftValue(pair[0]) ? Number(pair[0]) : NaN;
-    let hi = hasFiniteFftValue(pair[1]) ? Number(pair[1]) : NaN;
+    let lo = hasFiniteFftValue(state.x1) ? Number(state.x1) : NaN;
+    let hi = hasFiniteFftValue(state.x2) ? Number(state.x2) : NaN;
     if (!hasFiniteFftValue(lo) || !hasFiniteFftValue(hi)) {
         lo = domain?.min;
         hi = domain?.max;
@@ -800,31 +813,15 @@ proto._ensureFftRange = function(plot, options = {}) {
     const domain = this._fftDomain(plot);
     if (!domain) return state;
     const domainHasSpan = Number.isFinite(domain.min) && Number.isFinite(domain.max) && domain.min !== domain.max;
-    const numericDegenerate = domainHasSpan
-        && hasFiniteFftValue(state.xMin)
-        && hasFiniteFftValue(state.xMax)
-        && Number(state.xMin) === Number(state.xMax);
-    const visualDegenerate = domainHasSpan
+    const degenerate = domainHasSpan
         && hasFiniteFftValue(state.x1)
         && hasFiniteFftValue(state.x2)
         && Number(state.x1) === Number(state.x2);
-    const needsNumeric = options.reset
-        || !hasFiniteFftValue(state.xMin)
-        || !hasFiniteFftValue(state.xMax)
-        || numericDegenerate;
-    if (needsNumeric) {
-        state.xMin = domain.min;
-        state.xMax = domain.max;
+    if (options.reset || !hasFiniteFftValue(state.x1) || !hasFiniteFftValue(state.x2) || degenerate) {
+        state.x1 = domain.min;
+        state.x2 = domain.max;
     }
-    const needsVisual = options.reset
-        || !hasFiniteFftValue(state.x1)
-        || !hasFiniteFftValue(state.x2)
-        || visualDegenerate;
-    if (needsVisual) {
-        state.x1 = state.xMin;
-        state.x2 = state.xMax;
-    }
-    for (const key of ['xMin', 'xMax', 'x1', 'x2']) {
+    for (const key of ['x1', 'x2']) {
         if (!hasFiniteFftValue(state[key])) continue;
         state[key] = Math.max(domain.min, Math.min(domain.max, Number(state[key])));
     }
@@ -842,13 +839,12 @@ proto._fftDomain = function(plot) {
 };
 
 proto._fftSelectionShapes = function(plot) {
-    const state = this._ensureFftState(plot);
     const [lo, hi] = this._activeFftRange(plot);
     const firstTrace = plot.traces?.[0];
     const timeVar = firstTrace ? this._getTimeVar(firstTrace.fileId) : null;
     const x0 = firstTrace ? this._plotlyTimeValue(firstTrace.fileId, lo, timeVar) : lo;
     const x1 = firstTrace ? this._plotlyTimeValue(firstTrace.fileId, hi, timeVar) : hi;
-    const color = state.rangeMode === 'visual' ? '#ff9800' : '#607d8b';
+    const color = '#ff9800';
     return [
         {
             type: 'rect',
@@ -858,7 +854,7 @@ proto._fftSelectionShapes = function(plot) {
             x1,
             y0: 0,
             y1: 1,
-            fillcolor: state.rangeMode === 'visual' ? 'rgba(255, 152, 0, 0.12)' : 'rgba(96, 125, 139, 0.08)',
+            fillcolor: 'rgba(255, 152, 0, 0.12)',
             line: { width: 0 },
             layer: 'below',
         },
@@ -878,8 +874,6 @@ proto._installFftSelectionHandlers = function(panelId, plot) {
     plot._fftSelectionDiv = plot.div;
     let dragging = null;
     const hitTest = (event) => {
-        const state = this._ensureFftState(plot);
-        if (state.rangeMode !== 'visual') return null;
         if (!this._eventInsidePlotArea(plot.div, event)) return null;
         const x = this._eventToXValue(plot.div, event);
         if (!Number.isFinite(x)) return null;
@@ -896,13 +890,19 @@ proto._installFftSelectionHandlers = function(panelId, plot) {
         if (x >= lo && x <= hi && Math.abs(hi - lo) < domainSpan - tolerance) return 'move';
         return null;
     };
+    // Plotly's drag layer pins its own cursor (crosshair), so a plain
+    // style.cursor on the container never shows: toggle classes that
+    // override the drag-layer cursor from CSS instead.
+    const setCursorHint = (hit) => {
+        plot.div.classList.toggle('fft-cursor-ew', hit === 'left' || hit === 'right');
+        plot.div.classList.toggle('fft-cursor-grab', hit === 'move');
+    };
     plot.div.addEventListener('mousemove', event => {
         if (dragging) return;
-        const hit = hitTest(event);
-        plot.div.style.cursor = hit === 'move' ? 'move' : hit ? 'ew-resize' : '';
+        setCursorHint(hitTest(event));
     });
     plot.div.addEventListener('mouseleave', () => {
-        if (!dragging && plot.div) plot.div.style.cursor = '';
+        if (!dragging && plot.div) setCursorHint(null);
     });
     plot.div.addEventListener('mousedown', event => {
         if (event.button !== 0) return;
@@ -945,6 +945,7 @@ proto._installFftSelectionHandlers = function(panelId, plot) {
         dragging = null;
         document.body.classList.remove('fft-selection-dragging');
         document.body.classList.remove('fft-selection-moving');
+        if (plot.div) setCursorHint(null);
         this._scheduleFftRecompute(panelId);
     };
     document.addEventListener('mousemove', onMove);
@@ -995,9 +996,10 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     if (!options) return;
     const domain = this._fftDomain(plot);
     const fmt = value => Number.isFinite(Number(value)) ? String(Number(Number(value).toPrecision(12))) : '';
-    const makeRow = (labelText, control) => {
+    const makeRow = (labelText, control, tooltip = '') => {
         const label = document.createElement('label');
         label.className = 'fft-option-row';
+        if (tooltip) label.title = tooltip;
         const span = document.createElement('span');
         span.textContent = labelText;
         label.append(span, control);
@@ -1009,7 +1011,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         input.type = 'number';
         input.step = 'any';
         input.className = `fft-number-input ${className}`.trim();
-        input.value = fmt(isAxisLimit ? this._fftAxisLimitDisplayValue(plot, key) : state[key]);
+        input.value = formatFftInputValue(isAxisLimit ? this._fftAxisLimitDisplayValue(plot, key) : state[key]);
         input.dataset.fftKey = key;
         if (isAxisLimit) input.dataset.fftAxisLimit = 'true';
         input.addEventListener('change', () => {
@@ -1038,9 +1040,6 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
             input.step = 'any';
         }
         input.value = fmt(state[key]);
-        input.title = key === 'xMin' || key === 'x1'
-            ? i18n.t('fftRangeStart')
-            : i18n.t('fftRangeEnd');
         input.addEventListener('input', () => {
             const state = this._ensureFftState(plot);
             const n = Number(input.value);
@@ -1079,7 +1078,6 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         }
         select.value = state[key];
         select.addEventListener('change', () => {
-            if (key === 'rangeMode') return;
             const state = this._ensureFftState(plot);
             const previous = state[key];
             state[key] = select.value;
@@ -1091,8 +1089,11 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
                 state.yMax = null;
                 this._renderFftOptionsPanel(panelId, plot);
             }
-            const preserveY = !(state.showWindowed && key === 'windowType');
-            this._refreshFftTimePlot(panelId, plot, { preserveView: true, preserveY });
+            // Only the windowed overlay lives on the time plot; every other
+            // option must leave the time traces (view + resolution) alone.
+            if (key === 'windowType' && state.showWindowed) {
+                this._refreshFftTimePlot(panelId, plot, { preserveView: true, preserveY: false });
+            }
             this._scheduleFftRecompute(panelId);
         });
         return select;
@@ -1106,8 +1107,11 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         input.addEventListener('change', () => {
             const state = this._ensureFftState(plot);
             state[key] = !!input.checked;
-            const preserveY = !(key === 'showWindowed' && state.showWindowed);
-            this._refreshFftTimePlot(panelId, plot, { preserveView: true, preserveY });
+            if (key === 'showWindowed') {
+                this._refreshFftTimePlot(panelId, plot, { preserveView: true, preserveY: !state.showWindowed });
+            } else if (key === 'removeMean' && state.showWindowed) {
+                this._refreshFftTimePlot(panelId, plot, { preserveView: true });
+            }
             this._scheduleFftRecompute(panelId);
         });
         return input;
@@ -1124,42 +1128,19 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     message.hidden = true;
     options.appendChild(message);
 
-    const rangeMode = makeSelect('rangeMode', [
-        { value: 'numeric', label: i18n.t('fftRangeNumeric') },
-        { value: 'visual', label: i18n.t('fftRangeVisual') },
-    ]);
-    rangeMode.addEventListener('change', () => {
-        const state = this._ensureFftState(plot);
-        const [lo, hi] = this._activeFftRange(plot);
-        state.rangeMode = rangeMode.value;
-        if (state.rangeMode === 'visual') {
-            state.x1 = lo;
-            state.x2 = hi;
-        } else {
-            state.xMin = lo;
-            state.xMax = hi;
-        }
-        this._ensureFftRange(plot);
-        this._renderFftOptionsPanel(panelId, plot);
-        this._syncFftRangeIndicator(plot);
-        this._updateFftSelectionShapes(panelId, plot);
-        this._scheduleFftRecompute(panelId);
-    });
-    options.appendChild(makeRow(i18n.t('fftRangeMode'), rangeMode));
-
     const rangeGrid = document.createElement('div');
     rangeGrid.className = 'fft-range-grid';
-    const leftKey = state.rangeMode === 'visual' ? 'x1' : 'xMin';
-    const rightKey = state.rangeMode === 'visual' ? 'x2' : 'xMax';
-    const makeBound = (labelText, key) => {
+    const makeBound = (labelText, key, tooltip) => {
         const wrap = document.createElement('div');
         wrap.className = 'fft-range-bound';
-        wrap.append(makeRow(labelText, makeInput(key)), makeRange(key));
+        const slider = makeRange(key);
+        slider.title = tooltip;
+        wrap.append(makeRow(labelText, makeInput(key), tooltip), slider);
         return wrap;
     };
     rangeGrid.append(
-        makeBound(i18n.t('fftRangeStart'), leftKey),
-        makeBound(i18n.t('fftRangeEnd'), rightKey),
+        makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('fftRangeStartTooltip')),
+        makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('fftRangeEndTooltip')),
     );
     options.appendChild(rangeGrid);
 
@@ -1169,21 +1150,45 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         { value: 'hamming', label: 'Hamming' },
         { value: 'blackman', label: 'Blackman' },
         { value: 'flattop', label: 'Flat top' },
-    ])));
-    options.appendChild(makeRow(i18n.t('fftShowWindowed'), makeToggle('showWindowed')));
-    options.appendChild(makeRow(i18n.t('fftRemoveMean'), makeToggle('removeMean')));
-    options.appendChild(makeRow(i18n.t('fftZeroPadding'), makeSelect('zeroPaddingFactor', [
+    ]), i18n.t('fftWindowTooltip')));
+    options.appendChild(makeRow(i18n.t('fftShowWindowed'), makeToggle('showWindowed'), i18n.t('fftShowWindowedTooltip')));
+    options.appendChild(makeRow(i18n.t('fftRemoveMean'), makeToggle('removeMean'), i18n.t('fftRemoveMeanTooltip')));
+
+    const zeroPaddingWrap = document.createElement('div');
+    zeroPaddingWrap.className = 'fft-control-help';
+    const zeroPaddingHelpBtn = document.createElement('button');
+    zeroPaddingHelpBtn.type = 'button';
+    zeroPaddingHelpBtn.className = 'fft-help-btn';
+    zeroPaddingHelpBtn.textContent = '?';
+    zeroPaddingHelpBtn.title = i18n.t('fftZeroPaddingTooltip');
+    zeroPaddingHelpBtn.setAttribute('aria-expanded', 'false');
+    const zeroPaddingPopover = document.createElement('div');
+    zeroPaddingPopover.className = 'fft-help-popover';
+    zeroPaddingPopover.hidden = true;
+    zeroPaddingPopover.textContent = i18n.t('fftZeroPaddingHelp');
+    zeroPaddingHelpBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const show = zeroPaddingPopover.hidden;
+        zeroPaddingPopover.hidden = !show;
+        zeroPaddingHelpBtn.setAttribute('aria-expanded', String(show));
+    });
+    zeroPaddingWrap.append(makeSelect('zeroPaddingFactor', [
         { value: '1', label: 'x1' },
         { value: '2', label: 'x2' },
         { value: '4', label: 'x4' },
         { value: '8', label: 'x8' },
         { value: '16', label: 'x16' },
-    ])));
+    ]), zeroPaddingHelpBtn);
+    options.appendChild(makeRow(i18n.t('fftZeroPadding'), zeroPaddingWrap, i18n.t('fftZeroPaddingTooltip')));
+    options.appendChild(zeroPaddingPopover);
+    this._installFftHelpDismissHandlers(plot);
+
     options.appendChild(makeRow(i18n.t('fftAmplitudeScale'), makeSelect('amplitudeScale', [
         { value: 'normal', label: i18n.t('fftScaleNormal') },
         { value: 'db', label: 'dB' },
         { value: 'dbRelative', label: i18n.t('fftScaleDbRelative') },
-    ])));
+    ]), i18n.t('fftAmplitudeScaleTooltip')));
 
     const axesTitle = document.createElement('div');
     axesTitle.className = 'fft-options-subtitle';
@@ -1194,7 +1199,8 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     const makeAxisBound = (key) => {
         const wrap = document.createElement('div');
         wrap.className = 'fft-axis-bound';
-        wrap.append(makeRow(this._fftAxisLimitLabel(plot, key), makeInput(key)), makeAxisLimitRange(key));
+        const tooltip = this._fftAxisLimitTooltip(key);
+        wrap.append(makeRow(this._fftAxisLimitLabel(plot, key), makeInput(key), tooltip), makeAxisLimitRange(key));
         return wrap;
     };
     axisGrid.append(
@@ -1204,6 +1210,35 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         makeAxisBound('yMax'),
     );
     options.appendChild(axisGrid);
+};
+
+proto._installFftHelpDismissHandlers = function(plot) {
+    if (!plot || plot._fftHelpDocListeners) return;
+    const closeHelp = () => {
+        const popover = plot.fftContainer?.querySelector('.fft-help-popover');
+        if (!popover || popover.hidden) return false;
+        popover.hidden = true;
+        plot.fftContainer?.querySelector('.fft-help-btn')?.setAttribute('aria-expanded', 'false');
+        return true;
+    };
+    const onClick = (event) => {
+        if (event.target.closest?.('.fft-help-btn') || event.target.closest?.('.fft-help-popover')) return;
+        closeHelp();
+    };
+    const onKey = (event) => {
+        if (event.key === 'Escape') closeHelp();
+    };
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('keydown', onKey);
+    plot._fftHelpDocListeners = { click: onClick, key: onKey };
+};
+
+proto._fftAxisLimitTooltip = function(key) {
+    if (key === 'fMin') return i18n.t('fftFMinTooltip');
+    if (key === 'fMax') return i18n.t('fftFMaxTooltip');
+    if (key === 'yMin') return i18n.t('fftYMinTooltip');
+    if (key === 'yMax') return i18n.t('fftYMaxTooltip');
+    return '';
 };
 
 proto._syncFftOptionsPanel = function(plot, options = {}) {
@@ -1221,17 +1256,10 @@ proto._syncFftOptionsPanel = function(plot, options = {}) {
             if (isAxisLimit) this._configureFftAxisLimitSlider(input, plot, key);
             else if (!options.skipRangeSliders) input.value = fmt(state[key]);
         } else if (isAxisLimit) {
-            input.value = fmt(this._fftAxisLimitDisplayValue(plot, key));
-        } else input.value = fmt(state[key]);
+            input.value = formatFftInputValue(this._fftAxisLimitDisplayValue(plot, key));
+        } else input.value = formatFftInputValue(state[key]);
     });
     this._syncFftMessage(plot);
-    this._syncFftRangeIndicator(plot);
-};
-
-proto._syncFftRangeIndicator = function(plot) {
-    const state = this._ensureFftState(plot);
-    const indicator = plot?.fftContainer?.querySelector('.fft-range-indicator');
-    if (indicator) indicator.textContent = state.rangeMode === 'visual' ? i18n.t('fftRangeVisualShort') : i18n.t('fftRangeNumericShort');
 };
 
 proto._setFftStatus = function(plot, message, type = 'muted') {
@@ -1275,14 +1303,6 @@ proto._fftWarningText = function(trace, reason, extra = {}) {
     return prefix + i18n.t('fftWarningInvalid');
 };
 
-proto._autoScaleFftSpectrum = function(plot) {
-    if (!plot?.fftDiv) return Promise.resolve();
-    return Plotly.relayout(plot.fftDiv, {
-        'xaxis.autorange': true,
-        'yaxis.autorange': true,
-    });
-};
-
 proto._applyFftAxisLimits = function(plot) {
     if (!plot?.fftDiv) return Promise.resolve();
     const xRange = this._fftResolvedAxisLimitRange(plot, 'fMin', 'fMax');
@@ -1306,7 +1326,8 @@ proto._applyFftAxisLimits = function(plot) {
 proto._autoScaleFftPanel = function(panelId, plot = this.plots.get(panelId)) {
     if (!plot?.div || !plot?.fftDiv) return Promise.resolve();
     const timePromise = this._autoScalePlotTimeOnly(plot);
-    const spectrumPromise = this._autoScaleFftSpectrum(plot);
+    // Respect manual fMin/fMax/yMin/yMax: autorange only the unset axes.
+    const spectrumPromise = this._applyFftAxisLimits(plot);
     return Promise.all([timePromise, spectrumPromise]);
 };
 
@@ -1349,4 +1370,13 @@ function transferFftInputBuffers(input) {
 function hasFiniteFftValue(value) {
     if (value === null || value === undefined || value === '') return false;
     return Number.isFinite(Number(value));
+}
+
+// Display-only rounding for the option-panel number inputs: the state (and
+// every computation) keeps full precision; only what the user reads is short.
+function formatFftInputValue(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '';
+    if (n !== 0 && Math.abs(n) < 0.01) return n.toExponential(2);
+    return String(Number(n.toFixed(2)));
 }

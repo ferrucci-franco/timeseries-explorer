@@ -66,7 +66,10 @@ proto._onRelayout = function(sourcePanelId, eventData) {
             || eventData?.['yaxis.autorange'] === true
             || eventData?.['yaxis2.autorange'] === true;
         if (autorangeRequested) {
-            this._autoScalePlot(sourcePanelId, plot);
+            // FFT: the relayout comes from the time sub-plot; leave the
+            // spectrum axes (and manual fMin/fMax/yMin/yMax) untouched.
+            if (plot.mode === 'fft') this._autoScalePlotTimeOnly(plot);
+            else this._autoScalePlot(sourcePanelId, plot);
         } else {
             const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
             this._refreshTimeseriesVisuals(sourcePanelId, plot, visibleRange);

@@ -1153,6 +1153,11 @@ class PlotManager {
             document.removeEventListener('mouseup', plot._fftSplitterDocListeners.up);
             plot._fftSplitterDocListeners = null;
         }
+        if (plot._fftHelpDocListeners) {
+            document.removeEventListener('click', plot._fftHelpDocListeners.click, true);
+            document.removeEventListener('keydown', plot._fftHelpDocListeners.key);
+            plot._fftHelpDocListeners = null;
+        }
         plot._fftHandlersInstalled = false;
         plot._fftSelectionDiv = null;
         plot.cameraOverlayEl = null;

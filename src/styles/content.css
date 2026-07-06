@@ -1318,13 +1318,10 @@ body.cursor-box-dragging {
     border-color: color-mix(in srgb, var(--primary-color) 68%, var(--border-color));
 }
 
-.fft-range-indicator {
-    flex: 0 0 auto;
-    max-width: 132px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-secondary);
+.fft-tool-btn.active {
+    background: color-mix(in srgb, var(--primary-color) 16%, var(--bg-primary));
+    border-color: var(--primary-color);
+    color: var(--primary-color);
 }
 
 .fft-status {
@@ -1480,8 +1477,59 @@ body.cursor-box-dragging {
     font-size: 0.74rem;
 }
 
+.fft-number-input {
+    max-width: 92px;
+}
+
 .fft-checkbox {
     justify-self: start;
+}
+
+.fft-control-help {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+}
+
+.fft-control-help .fft-select {
+    flex: 1;
+}
+
+.fft-help-btn {
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+}
+
+.fft-help-btn:hover,
+.fft-help-btn[aria-expanded="true"] {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.fft-help-popover {
+    margin: 0 0 8px;
+    padding: 8px 9px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+.fft-help-popover[hidden] {
+    display: none;
 }
 
 .fft-range-grid,
@@ -1518,7 +1566,22 @@ body.fft-selection-dragging {
 }
 
 body.fft-selection-dragging.fft-selection-moving {
-    cursor: move;
+    cursor: grabbing;
+}
+
+/* Plotly pins its own cursor (crosshair) on the drag layer, so the
+   selection-hit hints must override it from here. */
+.plotly-mode-fft-time.fft-cursor-ew .nsewdrag,
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-fft-time .nsewdrag {
+    cursor: ew-resize !important;
+}
+
+.plotly-mode-fft-time.fft-cursor-grab .nsewdrag {
+    cursor: grab !important;
+}
+
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-fft-time .nsewdrag {
+    cursor: grabbing !important;
 }
 
 body.fft-split-dragging {
