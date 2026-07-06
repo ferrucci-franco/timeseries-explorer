@@ -1495,7 +1495,9 @@ body.cursor-box-dragging {
     padding: 0 4px;
 }
 
-.fft-range-bound-datetime .fft-option-row {
+/* Higher specificity than the generic .fft-range-bound .fft-option-row
+   rule further down (which pins a 92px input track). */
+.fft-range-bound.fft-range-bound-datetime .fft-option-row {
     grid-template-columns: minmax(0, 1fr);
     row-gap: 2px;
     min-height: 0;
