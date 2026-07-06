@@ -325,10 +325,9 @@ proto._buildFftTimeLayout = function(plot) {
     const layout = this._buildTimeLayout(plot);
     layout.shapes = this._fftSelectionShapes(plot);
     layout.margin = { ...(layout.margin || {}), t: 8 };
-    layout.hovermode = this.hoverProximity ? 'closest' : 'x';
-    // Keep hover out of the way of the selection handles: only show the
-    // tooltip when the pointer is really close to a trace (px, default 20).
-    layout.hoverdistance = 8;
+    // No hover on the time plot: the tooltips get in the way of the
+    // selection handles. The spectrum plot keeps its hover.
+    layout.hovermode = false;
     return layout;
 };
 
@@ -573,7 +572,7 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
             name: this._traceName(trace.varName, trace.fileId),
             visible: trace.visible ?? true,
             line: { color: trace.color, width: 1.5 },
-            hovertemplate: `<b>%{fullData.name}</b><br>${i18n.t('fftFrequency')} = %{x:.6g}<br>${i18n.t('fftAmplitudeShort')} = %{y:.6g}<extra></extra>`,
+            hovertemplate: `<b>%{fullData.name}</b><br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{x:.6g}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`,
             _fftExtent: {
                 xMin: spectrum.frequencies.length ? Number(spectrum.frequencies[0]) : 0,
                 xMax: spectrum.frequencies.length ? Number(spectrum.frequencies[spectrum.frequencies.length - 1]) : 1,
