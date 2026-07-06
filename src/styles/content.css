@@ -1487,6 +1487,17 @@ body.cursor-box-dragging {
     opacity: 0.45;
 }
 
+/* Datetime Start/End: the picker needs the full row width. */
+.fft-number-input[type="datetime-local"] {
+    max-width: none;
+    font-size: 0.7rem;
+    padding: 0 4px;
+}
+
+.fft-range-bound-datetime .fft-option-row {
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+}
+
 .fft-segmented {
     display: inline-flex;
     justify-self: end;

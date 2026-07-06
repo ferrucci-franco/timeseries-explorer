@@ -763,6 +763,11 @@ proto._fftTimeKind = function(fileId) {
     return 'numeric';
 };
 
+proto._fftUsesCalendarTime = function(plot) {
+    const trace = (plot?.traces || []).find(t => this._isVisible(t)) || plot?.traces?.[0];
+    return trace ? this._fftTimeKind(trace.fileId) === 'datetime' : false;
+};
+
 proto._fftFrequencyAxisTitle = function(plot) {
     const trace = (plot?.traces || []).find(t => this._isVisible(t)) || plot?.traces?.[0];
     if (!trace) return i18n.t('fftFrequency');
@@ -1060,17 +1065,22 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     };
     const makeInput = (key, className = '') => {
         const isAxisLimit = FFT_AXIS_LIMIT_KEYS.has(key);
+        // Datetime axes store x1/x2 as epoch ms: show a date-time picker
+        // instead of a meaningless 13-digit number.
+        const isCalendarRange = (key === 'x1' || key === 'x2') && this._fftUsesCalendarTime(plot);
         const input = document.createElement('input');
-        input.type = 'number';
-        input.step = 'any';
+        input.type = isCalendarRange ? 'datetime-local' : 'number';
+        input.step = isCalendarRange ? '1' : 'any';
         input.className = `fft-number-input ${className}`.trim();
-        input.value = formatFftInputValue(isAxisLimit ? this._fftAxisLimitDisplayValue(plot, key) : state[key]);
+        input.value = isCalendarRange
+            ? fftMsToDatetimeInput(state[key])
+            : formatFftInputValue(isAxisLimit ? this._fftAxisLimitDisplayValue(plot, key) : state[key]);
         input.dataset.fftKey = key;
         if (isAxisLimit) input.dataset.fftAxisLimit = 'true';
         if (key === 'x1' || key === 'x2') input.disabled = !!state.rangeFull;
         input.addEventListener('change', () => {
             const state = this._ensureFftState(plot);
-            const n = Number(input.value);
+            const n = isCalendarRange ? fftDatetimeInputToMs(input.value) : Number(input.value);
             state[key] = Number.isFinite(n) ? n : null;
             if (FFT_AXIS_LIMIT_KEYS.has(key)) {
                 this._applyFftAxisLimits(plot);
@@ -1243,6 +1253,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     const makeBound = (labelText, key, tooltip) => {
         const wrap = document.createElement('div');
         wrap.className = 'fft-range-bound';
+        if (this._fftUsesCalendarTime(plot)) wrap.classList.add('fft-range-bound-datetime');
         const slider = makeRange(key);
         slider.title = tooltip;
         wrap.append(makeRow(labelText, makeInput(key), tooltip), slider);
@@ -1387,6 +1398,8 @@ proto._syncFftOptionsPanel = function(plot, options = {}) {
             else if (!options.skipRangeSliders) input.value = fmt(state[key]);
         } else if (isAxisLimit) {
             input.value = formatFftInputValue(this._fftAxisLimitDisplayValue(plot, key));
+        } else if (input.type === 'datetime-local') {
+            input.value = fftMsToDatetimeInput(state[key]);
         } else input.value = formatFftInputValue(state[key]);
     });
     this._syncFftMessage(plot);
@@ -1509,4 +1522,21 @@ function formatFftInputValue(value) {
     if (!Number.isFinite(n)) return '';
     if (n !== 0 && Math.abs(n) < 0.01) return n.toExponential(2);
     return String(Number(n.toFixed(2)));
+}
+
+// Calendar time axes store epoch ms rendered as naive UTC (see
+// _plotlyTimeValue): the datetime-local inputs must use the same UTC
+// convention so they match the axis tick labels.
+function fftMsToDatetimeInput(ms) {
+    const n = Number(ms);
+    if (!Number.isFinite(n)) return '';
+    const date = new Date(n);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 19);
+}
+
+function fftDatetimeInputToMs(text) {
+    if (!text) return NaN;
+    const ms = Date.parse(`${text}Z`);
+    return Number.isFinite(ms) ? ms : NaN;
 }
