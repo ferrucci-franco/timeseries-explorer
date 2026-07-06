@@ -2081,7 +2081,9 @@ class PlotManager {
                 const view = this._timeseriesLiveAppendView(plot, this._primaryTimeFileId(plot) || this.activeFileId, captured, this._normalizeLiveViewPolicy(plot));
                 this._applyLiveViewRelayout(plot, view);
             } else {
-                if (plot.mode === 'timeseries' || plot.mode === 'state-anim') continue;
+                // FFT panels keep their own view; the phase autoscale policy
+                // must not reset their time plot or spectrum.
+                if (plot.mode === 'timeseries' || plot.mode === 'state-anim' || plot.mode === 'fft') continue;
                 const policy = this._normalizeLiveViewPolicy(plot);
                 if (policy.viewMode === 'autoscale') this._autoScalePlot(panelId, plot);
             }
@@ -2312,12 +2314,22 @@ class PlotManager {
             };
         }
 
-        return {
+        const view = {
             mode: '2d',
             xRange: fl.xaxis?.range ? [...fl.xaxis.range] : null,
             yRange: fl.yaxis?.range ? [...fl.yaxis.range] : null,
             y2Range: fl.yaxis2?.range ? [...fl.yaxis2.range] : null,
         };
+        // FFT panels have a second plot: keep the spectrum's manual zoom
+        // across rebuilds (live update, transforms) too.
+        if (plot.mode === 'fft') {
+            const sfl = plot.fftDiv?._fullLayout;
+            view.fftSpectrum = {
+                xRange: sfl?.xaxis?.autorange === false && Array.isArray(sfl.xaxis.range) ? [...sfl.xaxis.range] : null,
+                yRange: sfl?.yaxis?.autorange === false && Array.isArray(sfl.yaxis.range) ? [...sfl.yaxis.range] : null,
+            };
+        }
+        return view;
     }
 
     _timeShiftForMode(transform, mode) {

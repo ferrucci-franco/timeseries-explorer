@@ -115,6 +115,7 @@ proto._createFftChart = function(panelId, panelEl) {
     this._ensureFftRange(plot);
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
+    if (restoreView?.fftSpectrum) plot._fftPendingSpectrumView = restoreView.fftSpectrum;
 
     const placeholder = panelEl.querySelector('.layout-panel-placeholder');
     if (placeholder) placeholder.style.display = 'none';
@@ -585,15 +586,24 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     // letting the rebuilt layout fall back to autorange / state limits.
     const view = plot._fftRecomputeView || {};
     plot._fftRecomputeView = null;
+    // A panel rebuild (live update, transform change) hands the previous
+    // spectrum zoom over via _fftPendingSpectrumView; otherwise fall back
+    // to whatever the live spectrum axes currently show.
+    const pending = plot._fftPendingSpectrumView || null;
+    plot._fftPendingSpectrumView = null;
     const layout = this._buildFftSpectrumLayout(plot);
-    const keepAxis = (axisKey, preserve) => {
+    const keepAxis = (axisKey, preserve, pendingRange) => {
         if (preserve === false) return;
+        if (Array.isArray(pendingRange)) {
+            layout[axisKey] = { ...layout[axisKey], range: pendingRange.slice(), autorange: false };
+            return;
+        }
         const axis = plot.fftDiv?._fullLayout?.[axisKey];
         if (!axis || axis.autorange !== false || !Array.isArray(axis.range)) return;
         layout[axisKey] = { ...layout[axisKey], range: axis.range.slice(), autorange: false };
     };
-    keepAxis('xaxis', view.preserveX);
-    keepAxis('yaxis', view.preserveY);
+    keepAxis('xaxis', view.preserveX, pending?.xRange);
+    keepAxis('yaxis', view.preserveY, pending?.yRange);
     await Plotly.react(plot.fftDiv, spectra, layout, this._getPlotlyConfig());
     if (plot._fftToken !== token) return;
     this._installLegendHoverHint(plot.fftDiv);
