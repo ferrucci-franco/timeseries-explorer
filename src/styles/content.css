@@ -1549,6 +1549,9 @@ body.cursor-box-dragging {
 .fft-range-bound .fft-option-row,
 .fft-axis-bound .fft-option-row {
     margin-bottom: 2px;
+    /* Narrow fixed input track: the label gets the remaining width and
+       fits on one line (e.g. "Frequency min [1/x-unit]"). */
+    grid-template-columns: minmax(0, 1fr) 92px;
 }
 
 .fft-range-input {
