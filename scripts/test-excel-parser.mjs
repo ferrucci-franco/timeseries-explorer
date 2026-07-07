@@ -99,6 +99,32 @@ async function run() {
     }
 
     {
+        const { data } = await parseSheet('no-header-datetime.xlsx');
+        assert(data.metadata.numTimesteps === 30, `no-header-datetime: expected 30 rows, got ${data.metadata.numTimesteps}`);
+        assert(data.metadata.timeKind === 'datetime', `no-header-datetime: expected datetime axis, got ${data.metadata.timeKind}`);
+        assert(data.metadata.hasHeader === false, 'no-header-datetime: should detect no header row');
+    }
+
+    for (const filename of ['no-header-numeric.xlsx', 'no-header-numeric.ods']) {
+        const { data } = await parseSheet(filename);
+        assert(data.metadata.numTimesteps === 40, `${filename}: expected 40 rows, got ${data.metadata.numTimesteps}`);
+        assert(data.metadata.hasHeader === false, `${filename}: should detect no header row`);
+    }
+
+    {
+        const { data } = await parseSheet('excel-serial-dates.xlsx');
+        assert(data.metadata.numTimesteps === 48, `excel-serial-dates: expected 48 rows, got ${data.metadata.numTimesteps}`);
+        assert(data.metadata.timeKind === 'datetime', `excel-serial-dates: serial numbers should map to a datetime axis, got ${data.metadata.timeKind}`);
+        const originYear = new Date(data.metadata.timeOriginMs).getFullYear();
+        assert(originYear === 2024, `excel-serial-dates: origin should land in 2024, got ${originYear}`);
+    }
+
+    {
+        const { data } = await parseSheet('microgrid-demo.xlsx');
+        assertDatetimeTable('microgrid-demo', data, 192, ['P_carga', 'P_solar', 'SOC']);
+    }
+
+    {
         const { data } = await parseSheet('dates-1904.xlsx');
         assertDatetimeTable('dates-1904', data, 24, ['Voltage']);
         const originMs = data.metadata.timeOriginMs;

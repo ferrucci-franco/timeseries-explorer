@@ -118,6 +118,59 @@ export function makeExcelFixtures() {
         workbook.Workbook = { WBProps: { date1904: true } };
         writeBook(workbook, 'dates-1904.xlsx', 'xlsx');
     }
+
+    // no header row: datetime axis + two value columns
+    {
+        const rows = hourlyDates(30).map((date, i) => [date, 10 + i * 0.5, Math.cos(i / 4) * 3]);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, sheetFromAoa(rows), 'Sheet1');
+        writeBook(workbook, 'no-header-datetime.xlsx', 'xlsx');
+    }
+
+    // no header row: plain numeric table, first column is seconds (.xlsx + .ods)
+    {
+        const rows = Array.from({ length: 40 }, (_, i) => [i, Math.sin(i / 5), Math.cos(i / 5)]);
+        for (const [filename, bookType] of [
+            ['no-header-numeric.xlsx', 'xlsx'],
+            ['no-header-numeric.ods', 'ods'],
+        ]) {
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, sheetFromAoa(rows), 'Sheet1');
+            writeBook(workbook, filename, bookType);
+        }
+    }
+
+    // dates stored as raw Excel serial numbers (no date format applied):
+    // the CSV pipeline's excel-serial time detection must pick them up
+    {
+        const rows = [['Fecha', 'Energia_kWh']];
+        const startSerial = 45292; // 2024-01-01 in the 1900 system
+        for (let i = 0; i < 48; i++) {
+            rows.push([startSerial + i / 24, 120 + Math.sin(i / 6) * 15]);
+        }
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Serial');
+        writeBook(workbook, 'excel-serial-dates.xlsx', 'xlsx');
+    }
+
+    // realistic microgrid-style log: Spanish headers, 15-minute data, 2 days
+    {
+        const rows = [['Fecha y hora', 'P_carga (kW)', 'P_solar (kW)', 'SOC (%)']];
+        const start = new Date(2026, 5, 1).getTime();
+        for (let i = 0; i < 192; i++) {
+            const hourOfDay = (i * 0.25) % 24;
+            const solar = Math.max(0, Math.sin(((hourOfDay - 6) / 12) * Math.PI)) * 85;
+            rows.push([
+                new Date(start + i * 15 * 60_000),
+                45 + Math.sin(i / 8) * 12 + (i % 7),
+                Math.round(solar * 100) / 100,
+                Math.min(100, Math.max(20, 60 + Math.sin(i / 20) * 35)),
+            ]);
+        }
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, sheetFromAoa(rows), 'Registro');
+        writeBook(workbook, 'microgrid-demo.xlsx', 'xlsx');
+    }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

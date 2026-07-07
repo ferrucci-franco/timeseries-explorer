@@ -29,12 +29,20 @@ const TIME_HEADER_KEYWORDS = [
     { kw: 'timestamp',  weight: 1.00, kind: 'datetime' },
     { kw: 'horodatage', weight: 1.00, kind: 'datetime' },
     { kw: 'date',       weight: 0.85, kind: 'date' },
+    { kw: 'fecha',      weight: 0.85, kind: 'date' },
     { kw: 'time',       weight: 0.85, kind: 'time' },
     { kw: 'temps',      weight: 0.85, kind: 'time' },
     { kw: 'heure',      weight: 0.85, kind: 'time' },
+    { kw: 'hora',       weight: 0.85, kind: 'time' },
     { kw: 'horaire',    weight: 0.80, kind: 'time' },
+    { kw: 'orario',     weight: 0.80, kind: 'time' },
+    // Italian 'data'/'ora' must be exact: as substrings they would match
+    // "dataset", "storage", "temporal", ...
+    { kw: 'data',       weight: 0.85, kind: 'date', exact: true },
+    { kw: 'ora',        weight: 0.85, kind: 'time', exact: true },
     { kw: 'day',        weight: 0.55, kind: 'date' },
     { kw: 'jour',       weight: 0.55, kind: 'date' },
+    { kw: 'dia',        weight: 0.55, kind: 'date', exact: true },
     { kw: 't',          weight: 0.45, kind: 'time', exact: true },
 ];
 
