@@ -1408,7 +1408,12 @@ proto._syncFftOptionsPanel = function(plot, options = {}) {
 proto._setFftStatus = function(plot, message, type = 'muted') {
     const el = plot?.fftContainer?.querySelector('.fft-status');
     if (el) {
-        el.textContent = message || '';
+        // Warnings show in full only in the side panel; the topbar just
+        // points there (the panel may be hidden). The tooltip keeps the
+        // full text either way.
+        el.textContent = (type === 'warning' && message)
+            ? i18n.t('fftWarningSeePanel')
+            : (message || '');
         el.className = `fft-status fft-status-${type}`;
         el.title = message || '';
     }
