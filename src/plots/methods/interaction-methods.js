@@ -76,6 +76,7 @@ proto._onRelayout = function(sourcePanelId, eventData) {
         }
         if (plot.mode === 'fft') {
             this._updateFftSelectionShapes?.(sourcePanelId, plot);
+            if (plot.cursors?.enabled) this._syncCursorDisplay(sourcePanelId, plot);
             return;
         }
         if (plot?.cursors?.enabled) this._renderCursorOverlay(plot);
@@ -95,7 +96,7 @@ proto._onRelayout = function(sourcePanelId, eventData) {
 
 proto._onRelayouting = function(sourcePanelId, eventData) {
     const plot = this.plots.get(sourcePanelId);
-    if (!plot?.div || plot.mode !== 'timeseries' || !plot.cursors?.enabled) return;
+    if (!plot?.div || !this._plotSupportsCursors(plot) || !plot.cursors?.enabled) return;
     if (plot._cursorBoxZoomActive) {
         return;
     }
@@ -1296,50 +1297,118 @@ proto._defaultCursors = function() {
     return { enabled: false, a: null, b: null, traceA: null, traceB: null, showSecant: false };
 };
 
+// ---- Cursor views ---------------------------------------------------------
+// The measurement-cursor machinery runs per "view": a small descriptor that
+// names which plotly div and which cursor-state object to operate on. The
+// timeseries mode has one view ('main'). The FFT mode has two: 'main' (the
+// FFT time pane — plot.div, identical semantics to timeseries) and
+// 'spectrum' (plot.fftDiv, fed by the computed spectra; x is frequency,
+// 1/Δx is a period, and the secant/slope have no meaning there).
+
+proto._plotSupportsCursors = function(plot) {
+    return plot?.mode === 'timeseries' || plot?.mode === 'fft';
+};
+
+proto._cursorViews = function(panelId, plot) {
+    if (!plot?.div || !this._plotSupportsCursors(plot)) return [];
+    const main = { id: 'main', panelId, plot, isSpectrum: false };
+    if (plot.mode !== 'fft') return [main];
+    return plot.fftDiv ? [main, { id: 'spectrum', panelId, plot, isSpectrum: true }] : [main];
+};
+
+proto._viewDiv = function(view) {
+    return view.isSpectrum ? view.plot.fftDiv : view.plot.div;
+};
+
+proto._viewCursors = function(view) {
+    const plot = view.plot;
+    if (view.isSpectrum) {
+        if (!plot.cursorsSpectrum) plot.cursorsSpectrum = this._defaultCursors();
+        return plot.cursorsSpectrum;
+    }
+    if (!plot.cursors) plot.cursors = this._defaultCursors();
+    return plot.cursors;
+};
+
+// The spectrum series backing a trace: the computed spectrum whose plotly
+// name matches the trace (plot._fftSpectra is rebuilt on every recompute).
+proto._fftSpectrumSeriesForTrace = function(plot, trace) {
+    if (!trace) return null;
+    const name = this._traceName(trace.varName, trace.fileId);
+    const spectrum = (plot._fftSpectra || []).find(s => s.name === name);
+    if (!spectrum?.x?.length || !spectrum?.y?.length) return null;
+    return { times: spectrum.x, values: spectrum.y };
+};
+
+proto._cursorSeriesForTrace = function(view, trace) {
+    if (view.isSpectrum) return this._fftSpectrumSeriesForTrace(view.plot, trace);
+    return this._traceInterpolationSeries(view.plot, trace);
+};
+
+proto._cursorInterpolationMode = function(view, trace) {
+    return view.isSpectrum ? 'linear' : this._traceInterpolationMode(trace);
+};
+
 proto._toggleCursors = function(panelId) {
     const plot = this.plots.get(panelId);
-    if (!plot || plot.mode !== 'timeseries' || !plot.div) return;
+    if (!plot || !plot.div || !this._plotSupportsCursors(plot)) return;
+    // Merge with the defaults so cursors restored from older sessions gain
+    // any newly added fields.
     plot.cursors = { ...this._defaultCursors(), ...(plot.cursors || {}) };
-    plot.cursors.enabled = !plot.cursors.enabled;
-    if (plot.cursors.enabled) {
-        this._initializeCursorPositionsInView(plot);
-        this._ensureCursorBoxDrag(panelId, plot);
+    plot.cursorsSpectrum = { ...this._defaultCursors(), ...(plot.cursorsSpectrum || {}) };
+    const enabled = !plot.cursors.enabled;
+    for (const view of this._cursorViews(panelId, plot)) {
+        this._viewCursors(view).enabled = enabled;
+    }
+    if (enabled) {
+        for (const view of this._cursorViews(panelId, plot)) {
+            this._initializeCursorPositionsInView(view);
+        }
+        this._installCursorHandlers(panelId, plot);
         this._syncCursorDisplay(panelId, plot);
         this._refreshActionBtns(panelId);
     } else {
         document.body.classList.remove('cursor-dragging', 'cursor-box-dragging');
-        plot.div.style.cursor = '';
+        for (const view of this._cursorViews(panelId, plot)) {
+            const div = this._viewDiv(view);
+            if (div) div.style.cursor = '';
+            this._hideCursorOverlay(view);
+        }
         plot.div.closest('.layout-panel')?.classList.remove('cursor-near');
-        this._hideCursorOverlay(plot);
         this._hideCursorBox(plot.div.closest('.layout-panel'));
         this._refreshActionBtns(panelId);
     }
 };
 
-proto._ensureCursorPositions = function(plot) {
-    this._ensureCursorPosition(plot, 'a', 0.25);
-    this._ensureCursorPosition(plot, 'b', 0.75);
+proto._ensureCursorPositions = function(view) {
+    this._ensureCursorPosition(view, 'a', 0.25);
+    this._ensureCursorPosition(view, 'b', 0.75);
 };
 
-proto._initializeCursorPositionsInView = function(plot) {
-    this._initializeCursorPositionInView(plot, 'a', 0.25);
-    this._initializeCursorPositionInView(plot, 'b', 0.75);
+proto._initializeCursorPositionsInView = function(view) {
+    this._initializeCursorPositionInView(view, 'a', 0.25);
+    this._initializeCursorPositionInView(view, 'b', 0.75);
 };
 
-proto._cursorTraceBounds = function(trace) {
+proto._cursorTraceBounds = function(view, trace) {
     if (!trace) return null;
-    const times = this._getTransformedTimeData(trace.fileId);
+    let times;
+    if (view.isSpectrum) {
+        times = this._fftSpectrumSeriesForTrace(view.plot, trace)?.times;
+    } else {
+        times = this._getTransformedTimeData(trace.fileId);
+    }
     if (!times?.length) return null;
-    const start = times[0];
-    const end = times[times.length - 1];
+    const start = Number(times[0]);
+    const end = Number(times[times.length - 1]);
     if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
     return start <= end ? { start, end } : { start: end, end: start };
 };
 
-proto._cursorViewBounds = function(plot, trace) {
-    const traceBounds = this._cursorTraceBounds(trace);
+proto._cursorViewBounds = function(view, trace) {
+    const traceBounds = this._cursorTraceBounds(view, trace);
     if (!traceBounds) return null;
-    const range = plot.div?._fullLayout?.xaxis?.range;
+    const range = this._viewDiv(view)?._fullLayout?.xaxis?.range;
     const range0 = this._coerceAxisValue(range?.[0]);
     const range1 = this._coerceAxisValue(range?.[1]);
     const viewStart = Number.isFinite(range0) ? range0 : traceBounds.start;
@@ -1375,44 +1444,46 @@ proto._xAxisRangeLock = function(plot) {
     };
 };
 
-proto._clampCursorX = function(plot, which, x) {
+proto._clampCursorX = function(view, which, x) {
     if (!Number.isFinite(x)) return x;
-    const trace = this._resolveCursorTrace(plot, which);
-    const bounds = this._cursorTraceBounds(trace);
+    const trace = this._resolveCursorTrace(view, which);
+    const bounds = this._cursorTraceBounds(view, trace);
     if (!bounds) return x;
     return Math.max(bounds.start, Math.min(bounds.end, x));
 };
 
-proto._ensureCursorPosition = function(plot, which, fraction) {
-    if (!plot?.cursors) return;
-    const trace = this._resolveCursorTrace(plot, which);
-    const bounds = this._cursorViewBounds(plot, trace);
+proto._ensureCursorPosition = function(view, which, fraction) {
+    const cursors = this._viewCursors(view);
+    const trace = this._resolveCursorTrace(view, which);
+    const bounds = this._cursorViewBounds(view, trace);
     if (!bounds) return;
     const span = bounds.end - bounds.start;
     const target = bounds.start + (span || 0) * fraction;
-    plot.cursors[which] = Number.isFinite(plot.cursors[which])
-        ? this._clampCursorX(plot, which, plot.cursors[which])
-        : this._clampCursorX(plot, which, target);
+    cursors[which] = Number.isFinite(cursors[which])
+        ? this._clampCursorX(view, which, cursors[which])
+        : this._clampCursorX(view, which, target);
 };
 
-proto._initializeCursorPositionInView = function(plot, which, fraction) {
-    if (!plot?.cursors) return;
-    const trace = this._resolveCursorTrace(plot, which);
-    const bounds = this._cursorViewBounds(plot, trace);
+proto._initializeCursorPositionInView = function(view, which, fraction) {
+    const cursors = this._viewCursors(view);
+    const trace = this._resolveCursorTrace(view, which);
+    const bounds = this._cursorViewBounds(view, trace);
     if (!bounds) return;
     const span = bounds.end - bounds.start;
-    plot.cursors[which] = this._clampCursorX(plot, which, bounds.start + (span || 0) * fraction);
+    cursors[which] = this._clampCursorX(view, which, bounds.start + (span || 0) * fraction);
 };
 
-proto._resolveCursorTrace = function(plot, which) {
-    if (!plot?.traces?.length || !plot.cursors) return null;
+proto._resolveCursorTrace = function(view, which) {
+    const plot = view.plot;
+    if (!plot?.traces?.length) return null;
+    const cursors = this._viewCursors(view);
     const visibleTraces = plot.traces.filter(t => t.visible !== false && t.visible !== 'legendonly');
     if (!visibleTraces.length) return null;
     const key = which === 'b' ? 'traceB' : 'traceA';
-    if (!plot.cursors[key] && plot.cursors.trace) {
-        plot.cursors[key] = plot.cursors.trace;
+    if (!cursors[key] && cursors.trace) {
+        cursors[key] = cursors.trace;
     }
-    const preferred = plot.cursors[key];
+    const preferred = cursors[key];
     if (preferred) {
         const found = visibleTraces.find(t => t.fileId === preferred.fileId && t.varName === preferred.varName);
         if (found) return found;
@@ -1420,43 +1491,12 @@ proto._resolveCursorTrace = function(plot, which) {
     const fallback = which === 'b'
         ? (visibleTraces[1] || visibleTraces[0])
         : visibleTraces[0];
-    if (fallback) plot.cursors[key] = { fileId: fallback.fileId, varName: fallback.varName };
+    if (fallback) cursors[key] = { fileId: fallback.fileId, varName: fallback.varName };
     return fallback;
 };
 
 proto._sameCursorTrace = function(traceA, traceB) {
     return !!(traceA && traceB && traceA.fileId === traceB.fileId && traceA.varName === traceB.varName);
-};
-
-proto._cursorShapes = function(plot) {
-    if (!plot?.cursors?.enabled) return [];
-    const c = plot.cursors;
-    if (!Number.isFinite(c.a) || !Number.isFinite(c.b)) return [];
-    const traceA = this._resolveCursorTrace(plot, 'a');
-    const traceB = this._resolveCursorTrace(plot, 'b');
-    const colorA = traceA?.color || '#ff9800';
-    const colorB = traceB?.color || '#2196f3';
-    const sameTrace = this._sameCursorTrace(traceA, traceB);
-    const visualXA = this._cursorPlotlyX(traceA, c.a);
-    const visualXB = this._cursorPlotlyX(traceB, c.b);
-    const shapes = [
-        this._cursorShape(visualXA, colorA, 'solid'),
-        this._cursorShape(visualXB, colorB, sameTrace ? 'dash' : 'solid'),
-    ];
-    const dotPairs = [
-        { trace: traceA, x: c.a, color: colorA },
-        { trace: traceB, x: c.b, color: colorB },
-    ];
-    for (const { trace, x, color } of dotPairs) {
-        if (!trace) continue;
-        const series = this._traceInterpolationSeries(plot, trace);
-        if (!series) continue;
-        const mode = this._traceInterpolationMode(trace);
-        const y = this._interpolateAt(series.times, series.values, x, mode);
-        if (!Number.isFinite(y)) continue;
-        shapes.push(this._cursorDotShape(this._cursorPlotlyX(trace, x), y, color, this._traceYAxis(trace, plot)));
-    }
-    return shapes;
 };
 
 /**
@@ -1508,37 +1548,6 @@ proto._cursorNumericTimes = function(values) {
         out[i] = this._coerceAxisValue(values[i]);
     }
     return out;
-};
-
-proto._cursorPlotlyX = function(trace, x) {
-    if (!trace) return x;
-    return this._plotlyTimeValue(trace.fileId, x, this._getTimeVar(trace.fileId));
-};
-
-proto._cursorShape = function(x, color, dash = 'solid') {
-    return {
-        type: 'line',
-        xref: 'x',
-        yref: 'paper',
-        x0: x,
-        x1: x,
-        y0: 0,
-        y1: 1,
-        line: { color, width: 2, dash },
-    };
-};
-
-proto._cursorDotShape = function(x, y, color, axis = 'y') {
-    const r = 5;
-    return {
-        type: 'circle',
-        xref: 'x', yref: axis === 'y2' ? 'y2' : 'y',
-        xsizemode: 'pixel', ysizemode: 'pixel',
-        xanchor: x, yanchor: y,
-        x0: -r, x1: r, y0: -r, y1: r,
-        fillcolor: color,
-        line: { color, width: 0 },
-    };
 };
 
 proto._traceInterpolationMode = function(trace) {
@@ -1715,13 +1724,23 @@ proto._findLazyCursorTarget = async function(fileData, trace, cursorX, target, d
     return NaN;
 };
 
-proto._jumpCursorTo = async function(panelId, which, target, direction = 'next') {
-    const plot = this.plots.get(panelId);
-    if (!plot?.cursors?.enabled) return;
-    const trace = this._resolveCursorTrace(plot, which);
+proto._jumpCursorTo = async function(view, which, target, direction = 'next') {
+    const { panelId, plot } = view;
+    const cursors = this._viewCursors(view);
+    if (!cursors.enabled) return;
+    const trace = this._resolveCursorTrace(view, which);
     if (!trace) return;
-    const cursorX = plot.cursors[which];
+    const cursorX = cursors[which];
     if (!Number.isFinite(cursorX)) return;
+
+    if (view.isSpectrum) {
+        const series = this._fftSpectrumSeriesForTrace(plot, trace);
+        const nextX = this._findCursorTargetInSeries(trace, target, series?.times, series?.values, cursorX, direction);
+        if (!Number.isFinite(nextX)) return;
+        cursors[which] = nextX;
+        this._syncCursorDisplay(panelId, plot);
+        return;
+    }
 
     let times = null;
     let values = null;
@@ -1745,7 +1764,7 @@ proto._jumpCursorTo = async function(panelId, which, target, direction = 'next')
             direction,
         );
         if (Number.isFinite(renderedNextX)) {
-            plot.cursors[which] = renderedNextX;
+            cursors[which] = renderedNextX;
             this._syncCursorDisplay(panelId, plot);
             return;
         }
@@ -1753,7 +1772,7 @@ proto._jumpCursorTo = async function(panelId, which, target, direction = 'next')
         try {
             const lazyNextX = await this._findLazyCursorTarget(fileData, trace, cursorX, target, direction);
             if (Number.isFinite(lazyNextX)) {
-                plot.cursors[which] = lazyNextX;
+                cursors[which] = lazyNextX;
                 this._syncCursorDisplay(panelId, plot);
                 return;
             }
@@ -1770,7 +1789,7 @@ proto._jumpCursorTo = async function(panelId, which, target, direction = 'next')
     let nextX = NaN;
     nextX = this._findCursorTargetInSeries(trace, target, times, values, cursorX, direction);
     if (!Number.isFinite(nextX)) return;
-    plot.cursors[which] = nextX;
+    cursors[which] = nextX;
     this._syncCursorDisplay(panelId, plot);
 };
 
@@ -1779,16 +1798,23 @@ proto._panelGuideShapes = function(plot, extra = []) {
 };
 
 proto._syncCursorDisplay = function(panelId, plot) {
-    if (!plot?.div || plot.mode !== 'timeseries') return;
-    if (plot.cursors?.enabled) this._ensureCursorPositions(plot);
-    if (plot.cursors?.enabled) this._renderCursorOverlay(plot);
-    else this._hideCursorOverlay(plot);
-    this._updateCursorBox(panelId, plot);
+    if (!plot?.div || !this._plotSupportsCursors(plot)) return;
+    for (const view of this._cursorViews(panelId, plot)) {
+        const cursors = this._viewCursors(view);
+        if (cursors.enabled) {
+            this._ensureCursorPositions(view);
+            this._renderCursorViewOverlay(view);
+        } else {
+            this._hideCursorOverlay(view);
+        }
+        this._updateCursorBox(view);
+    }
 };
 
-proto._cursorOverlayGeometry = function(plot, trace, x, options = {}) {
-    if (!plot?.div || !trace || !Number.isFinite(x)) return null;
-    const fl = plot.div._fullLayout;
+proto._cursorOverlayGeometry = function(view, trace, x, options = {}) {
+    const div = this._viewDiv(view);
+    if (!div || !trace || !Number.isFinite(x)) return null;
+    const fl = div._fullLayout;
     const xa = fl?.xaxis;
     const ya = fl?.yaxis;
     if (!xa?.range || !ya?.range || !xa._length || !ya._length) return null;
@@ -1803,9 +1829,9 @@ proto._cursorOverlayGeometry = function(plot, trace, x, options = {}) {
 
     let y = NaN;
     if (!options.lightweight) {
-        const series = this._traceInterpolationSeries(plot, trace);
+        const series = this._cursorSeriesForTrace(view, trace);
         y = series
-            ? this._interpolateAt(series.times, series.values, x, this._traceInterpolationMode(trace))
+            ? this._interpolateAt(series.times, series.values, x, this._cursorInterpolationMode(view, trace))
             : NaN;
     }
     const y0 = Number(ya.range[0]);
@@ -1894,28 +1920,41 @@ proto._svgNumber = function(value) {
     return Number(value).toFixed(2).replace(/\.?0+$/, '');
 };
 
+// Compatibility wrapper: external callers hold a plot; render every view.
 proto._renderCursorOverlay = function(plot, options = {}) {
-    if (!plot?.div || !plot.cursors?.enabled) return;
+    for (const view of this._cursorViews(null, plot)) {
+        if (!this._viewCursors(view).enabled) continue;
+        // options.range comes from timeseries relayout events and only makes
+        // sense for the main view's x axis.
+        this._renderCursorViewOverlay(view, view.isSpectrum ? { lightweight: options.lightweight, force: options.force } : options);
+    }
+};
+
+proto._renderCursorViewOverlay = function(view, options = {}) {
+    const plot = view.plot;
+    const div = this._viewDiv(view);
+    const cursors = this._viewCursors(view);
+    if (!div || !cursors.enabled) return;
     if (plot._cursorBoxZoomActive && !options.force) {
         return;
     }
-    let overlay = plot.div.querySelector('.cursor-plot-overlay');
+    let overlay = div.querySelector('.cursor-plot-overlay');
     if (!overlay) {
         overlay = document.createElement('div');
         overlay.className = 'cursor-plot-overlay';
-        plot.div.appendChild(overlay);
+        div.appendChild(overlay);
     }
 
-    const traceA = this._resolveCursorTrace(plot, 'a');
-    const traceB = this._resolveCursorTrace(plot, 'b');
+    const traceA = this._resolveCursorTrace(view, 'a');
+    const traceB = this._resolveCursorTrace(view, 'b');
     const items = [
-        { key: 'a', trace: traceA, x: plot.cursors.a, color: traceA?.color || '#ff9800', dash: false },
-        { key: 'b', trace: traceB, x: plot.cursors.b, color: traceB?.color || '#2196f3', dash: this._sameCursorTrace(traceA, traceB) },
+        { key: 'a', trace: traceA, x: cursors.a, color: traceA?.color || '#ff9800', dash: false },
+        { key: 'b', trace: traceB, x: cursors.b, color: traceB?.color || '#2196f3', dash: this._sameCursorTrace(traceA, traceB) },
     ];
     const parts = [];
     const geometries = {};
     for (const item of items) {
-        const g = this._cursorOverlayGeometry(plot, item.trace, item.x, options);
+        const g = this._cursorOverlayGeometry(view, item.trace, item.x, options);
         if (!g) continue;
         if (g.left < g.leftAxis || g.left > g.rightAxis) continue;
         geometries[item.key] = g;
@@ -1931,7 +1970,7 @@ proto._renderCursorOverlay = function(plot, options = {}) {
             parts.push(`<div class="cursor-overlay-dot cursor-overlay-dot-${item.key}" style="left:${g.left}px;top:${g.top}px;background:${item.color};border-color:${item.color}"></div>`);
         }
     }
-    if (!options.lightweight && plot.cursors.showSecant && geometries.a && geometries.b) {
+    if (!options.lightweight && !view.isSpectrum && cursors.showSecant && geometries.a && geometries.b) {
         const secant = this._cursorSecantClip(geometries.a, geometries.b);
         if (secant) {
             const color = this._escapeHTML(traceA?.color || traceB?.color || '#555555');
@@ -1946,8 +1985,8 @@ proto._renderCursorOverlay = function(plot, options = {}) {
     overlay.style.display = parts.length ? 'block' : 'none';
 };
 
-proto._hideCursorOverlay = function(plot) {
-    const overlay = plot?.div?.querySelector('.cursor-plot-overlay');
+proto._hideCursorOverlay = function(view) {
+    const overlay = this._viewDiv(view)?.querySelector('.cursor-plot-overlay');
     if (overlay) {
         overlay.style.display = 'none';
         overlay.innerHTML = '';
@@ -1988,15 +2027,15 @@ proto._eventInsidePlotArea = function(div, event) {
     return x >= left && x <= right && y >= top && y <= bottom;
 };
 
-proto._cursorPairSlideDelta = function(plot, startA, startB, delta) {
+proto._cursorPairSlideDelta = function(view, startA, startB, delta) {
     if (!Number.isFinite(delta)) return 0;
     let minDelta = -Infinity;
     let maxDelta = Infinity;
     for (const which of ['a', 'b']) {
         const start = which === 'a' ? startA : startB;
         if (!Number.isFinite(start)) continue;
-        const trace = this._resolveCursorTrace(plot, which);
-        const bounds = this._cursorTraceBounds(trace);
+        const trace = this._resolveCursorTrace(view, which);
+        const bounds = this._cursorTraceBounds(view, trace);
         if (!bounds) continue;
         minDelta = Math.max(minDelta, bounds.start - start);
         maxDelta = Math.min(maxDelta, bounds.end - start);
@@ -2008,20 +2047,31 @@ proto._cursorPairSlideDelta = function(plot, startA, startB, delta) {
 };
 
 proto._installCursorHandlers = function(panelId, plot) {
-    if (!plot?.div || plot._cursorHandlersDiv === plot.div) return;
-    if (plot._cursorDocListeners) {
-        document.removeEventListener('mousemove', plot._cursorDocListeners.move);
-        document.removeEventListener('mouseup',   plot._cursorDocListeners.up);
-        plot._cursorDocListeners = null;
+    for (const view of this._cursorViews(panelId, plot)) {
+        this._installCursorViewHandlers(view);
     }
-    plot._cursorHandlersDiv = plot.div;
+};
+
+proto._installCursorViewHandlers = function(view) {
+    const { panelId, plot } = view;
+    const div = this._viewDiv(view);
+    const guardKey = `_cursorHandlersDiv_${view.id}`;
+    const docKey = `_cursorDocListeners_${view.id}`;
+    if (!div || plot[guardKey] === div) return;
+    if (plot[docKey]) {
+        document.removeEventListener('mousemove', plot[docKey].move);
+        document.removeEventListener('mouseup',   plot[docKey].up);
+        plot[docKey] = null;
+    }
+    plot[guardKey] = div;
 
     let dragging = null;
     const cursorNearPointer = (event) => {
-        if (!plot.cursors?.enabled || plot.mode !== 'timeseries') return null;
-        const xa = plot.div?._fullLayout?.xaxis;
-        if (!xa || !Number.isFinite(plot.cursors.a) || !Number.isFinite(plot.cursors.b)) return null;
-        const x = this._eventToXValue(plot.div, event);
+        const cursors = this._viewCursors(view);
+        if (!cursors.enabled || !this._plotSupportsCursors(plot)) return null;
+        const xa = div?._fullLayout?.xaxis;
+        if (!xa || !Number.isFinite(cursors.a) || !Number.isFinite(cursors.b)) return null;
+        const x = this._eventToXValue(div, event);
         if (!Number.isFinite(x)) return null;
         const range = xa.range;
         const r0 = this._coerceAxisValue(range?.[0]);
@@ -2029,55 +2079,58 @@ proto._installCursorHandlers = function(panelId, plot) {
         const span = Math.abs(r1 - r0) || 1;
         const xLen = Math.abs(xa._length) || 1;
         const tolerance = (5 / xLen) * span;
-        const da = Math.abs(x - plot.cursors.a);
-        const db = Math.abs(x - plot.cursors.b);
+        const da = Math.abs(x - cursors.a);
+        const db = Math.abs(x - cursors.b);
         const near = Math.min(da, db);
         if (near > tolerance) return null;
         return da <= db ? 'a' : 'b';
     };
 
-    plot.div.addEventListener('mousedown', (event) => {
+    div.addEventListener('mousedown', (event) => {
         if (event.button !== 0) return;
+        const cursors = this._viewCursors(view);
         const hit = cursorNearPointer(event);
         if (!hit) {
-            if (plot.cursors?.enabled
-                && plot.div?._fullLayout?.dragmode !== 'pan'
-                && this._eventInsidePlotArea(plot.div, event)) {
+            if (cursors.enabled
+                && div?._fullLayout?.dragmode !== 'pan'
+                && this._eventInsidePlotArea(div, event)) {
                 this._beginCursorBoxZoomSuppress(panelId, plot);
             }
             return;
         }
-        const x = this._eventToXValue(plot.div, event);
+        const x = this._eventToXValue(div, event);
         dragging = event.ctrlKey && Number.isFinite(x)
-            ? { mode: 'pair', which: hit, startPointerX: x, startA: plot.cursors.a, startB: plot.cursors.b }
+            ? { mode: 'pair', which: hit, startPointerX: x, startA: cursors.a, startB: cursors.b }
             : { mode: 'single', which: hit };
         event.preventDefault();
         event.stopPropagation();
+        event.stopImmediatePropagation?.();
         document.body.classList.add('cursor-dragging');
     }, true);
 
-    plot.div.addEventListener('mousemove', (event) => {
-        if (dragging || !plot.cursors?.enabled) return;
+    div.addEventListener('mousemove', (event) => {
+        if (dragging || !this._viewCursors(view).enabled) return;
         const near = !!cursorNearPointer(event);
-        plot.div.style.cursor = near ? 'ew-resize' : '';
-        plot.div.closest('.layout-panel')?.classList.toggle('cursor-near', near);
+        div.style.cursor = near ? 'ew-resize' : '';
+        div.closest('.layout-panel')?.classList.toggle('cursor-near', near);
     });
 
-    plot.div.addEventListener('mouseleave', () => {
-        if (!dragging && plot.div) plot.div.style.cursor = '';
-        plot.div?.closest('.layout-panel')?.classList.remove('cursor-near');
+    div.addEventListener('mouseleave', () => {
+        if (!dragging && div) div.style.cursor = '';
+        div?.closest('.layout-panel')?.classList.remove('cursor-near');
     });
 
     const onDocMove = (event) => {
-        if (!dragging || !plot.div) return;
-        const x = this._eventToXValue(plot.div, event);
+        if (!dragging || !div) return;
+        const cursors = this._viewCursors(view);
+        const x = this._eventToXValue(div, event);
         if (!Number.isFinite(x)) return;
         if (dragging.mode === 'pair') {
-            const delta = this._cursorPairSlideDelta(plot, dragging.startA, dragging.startB, x - dragging.startPointerX);
-            plot.cursors.a = this._clampCursorX(plot, 'a', dragging.startA + delta);
-            plot.cursors.b = this._clampCursorX(plot, 'b', dragging.startB + delta);
+            const delta = this._cursorPairSlideDelta(view, dragging.startA, dragging.startB, x - dragging.startPointerX);
+            cursors.a = this._clampCursorX(view, 'a', dragging.startA + delta);
+            cursors.b = this._clampCursorX(view, 'b', dragging.startB + delta);
         } else {
-            plot.cursors[dragging.which] = this._clampCursorX(plot, dragging.which, x);
+            cursors[dragging.which] = this._clampCursorX(view, dragging.which, x);
         }
         this._syncCursorDisplay(panelId, plot);
     };
@@ -2085,11 +2138,11 @@ proto._installCursorHandlers = function(panelId, plot) {
         if (!dragging) return;
         dragging = null;
         document.body.classList.remove('cursor-dragging');
-        plot.div?.closest('.layout-panel')?.classList.remove('cursor-near');
+        div?.closest('.layout-panel')?.classList.remove('cursor-near');
     };
     document.addEventListener('mousemove', onDocMove);
     document.addEventListener('mouseup',   onDocUp);
-    plot._cursorDocListeners = { move: onDocMove, up: onDocUp };
+    plot[docKey] = { move: onDocMove, up: onDocUp };
 };
 
 proto._eventToXValue = function(div, event) {
@@ -2124,35 +2177,38 @@ proto._interpolateAt = function(times, values, x, mode = 'linear') {
     return y0 + (y1 - y0) * ((x - t0) / (t1 - t0));
 };
 
-proto._updateCursorBox = function(panelId, plot) {
+proto._updateCursorBox = function(view) {
+    const { panelId, plot } = view;
     const panelEl = plot.div?.closest('.layout-panel');
     if (!panelEl) return;
-    if (!plot.cursors?.enabled) {
-        this._hideCursorBox(panelEl);
+    const cursors = this._viewCursors(view);
+    if (!cursors.enabled) {
+        this._hideCursorViewBox(panelEl, view.id);
         return;
     }
-    const traceA = this._resolveCursorTrace(plot, 'a');
-    const traceB = this._resolveCursorTrace(plot, 'b');
+    const traceA = this._resolveCursorTrace(view, 'a');
+    const traceB = this._resolveCursorTrace(view, 'b');
     if (!traceA && !traceB) {
-        this._showCursorBox(panelEl, i18n.t('cursorsNoTrace'));
+        this._showCursorBox(view, i18n.t('cursorsNoTrace'));
         return;
     }
-    const aX = plot.cursors.a;
-    const bX = plot.cursors.b;
+    const aX = cursors.a;
+    const bX = cursors.b;
     const measure = (trace, x) => {
         if (!trace) return { y: NaN, timeUnit: 's', yUnit: '', name: '' };
-        const series   = this._traceInterpolationSeries(plot, trace);
-        const mode     = this._traceInterpolationMode(trace);
+        const series   = this._cursorSeriesForTrace(view, trace);
+        const mode     = this._cursorInterpolationMode(view, trace);
         const y        = series
             ? this._interpolateAt(series.times, series.values, x, mode)
             : NaN;
-        const timeVar  = this._getTimeVar(trace.fileId);
         const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
         return {
             y,
             fileId: trace.fileId,
-            timeUnit: this._timeUnitLabel(trace.fileId),
-            yUnit:    variable ? this._extractUnit(variable.description) : '',
+            timeUnit: view.isSpectrum ? '' : this._timeUnitLabel(trace.fileId),
+            yUnit: view.isSpectrum
+                ? this._fftCursorAmplitudeUnit(plot)
+                : (variable ? this._extractUnit(variable.description) : ''),
             name:     this._traceName(trace.varName, trace.fileId),
         };
     };
@@ -2170,7 +2226,9 @@ proto._updateCursorBox = function(panelId, plot) {
     const timeUnit  = a.timeUnit || b.timeUnit;
     const unit = (u) => u ? ` ${this._escapeHTML(u)}` : '';
     const normalizedTimeUnit = String(timeUnit || '').trim().toLowerCase();
-    const inverseTimeUnit = isDateTimeCursor || isDurationCursor
+    const inverseTimeUnit = view.isSpectrum
+        ? this._fftCursorPeriodUnit(plot)
+        : isDateTimeCursor || isDurationCursor
         ? 'Hz'
         : !timeUnit
         ? ''
@@ -2186,6 +2244,7 @@ proto._updateCursorBox = function(panelId, plot) {
         .map(t => `${t.fileId}\u0000${t.varName}\u0000${t.color || ''}`)
         .join('\u0001');
     const boxSignature = [
+        view.id,
         i18n.currentLang,
         optionsKey,
         traceKey(traceA),
@@ -2193,7 +2252,7 @@ proto._updateCursorBox = function(panelId, plot) {
         colorA,
         colorB,
         sameTrace ? 'same' : 'different',
-        plot.cursors.showSecant ? 'secant' : 'no-secant',
+        cursors.showSecant ? 'secant' : 'no-secant',
     ].join('\u0002');
     const buildOptions = (selectedTrace) => visibleTraces
         .map((t, index) => {
@@ -2220,7 +2279,7 @@ proto._updateCursorBox = function(panelId, plot) {
     const labelSlope = this._escapeHTML(i18n.t('cursorLabelSlope'));
     const labelInvDx = this._escapeHTML(i18n.t('cursorLabelInverseDeltaX'));
     const secantLabel = this._escapeHTML(i18n.t('cursorSecantLine'));
-    const secantChecked = plot.cursors.showSecant ? ' checked' : '';
+    const secantChecked = cursors.showSecant ? ' checked' : '';
     const buildExtremaBtns = (which, color) => `
         <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="max"  style="color:${color}" title="${maxTitle} (${which.toUpperCase()}) | ${shiftHint}"  aria-label="${maxTitle} (${which.toUpperCase()}) | ${shiftHint}">${maxIcon}</button>
         <button type="button" class="cursor-extremum-btn" data-cursor="${which}" data-target="min"  style="color:${color}" title="${minTitle} (${which.toUpperCase()}) | ${shiftHint}"  aria-label="${minTitle} (${which.toUpperCase()}) | ${shiftHint}">${minIcon}</button>
@@ -2246,28 +2305,46 @@ proto._updateCursorBox = function(panelId, plot) {
         </label>
     `;
     const moveIcon = `<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>`;
+    // Spectrum view: x is frequency, Δx a frequency delta and 1/Δx a period;
+    // the slope has no physical meaning there.
+    const xLabel = view.isSpectrum ? 'f' : labelX;
+    const dxLabel = view.isSpectrum ? '&Delta;f' : labelDx;
+    const invDxLabel = view.isSpectrum ? '1/&Delta;f' : labelInvDx;
+    const freqUnit = view.isSpectrum ? this._fftCursorFrequencyUnit(plot) : '';
+    const formatXValue = (m, x) => (view.isSpectrum
+        ? this._formatHTMLNumber(x)
+        : this._escapeHTML(this._formatTimeValue(m.fileId, x)));
+    const xUnitSuffix = view.isSpectrum
+        ? unit(freqUnit)
+        : ((isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit));
+    const dxText = view.isSpectrum
+        ? `${this._formatHTMLNumber(dx)}${unit(freqUnit)}`
+        : `${this._escapeHTML(isDateTimeCursor ? this._formatDuration(dx, 'datetime') : (isDurationCursor ? this._formatDuration(dx, 's') : this._formatHTMLNumber(dx)))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)}`;
     const valuesHTML = `
-            <div><b style="color:${colorA}">A</b> ${labelX}=${this._escapeHTML(this._formatTimeValue(a.fileId, aX))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
-            <div><b style="color:${colorB}">B</b> ${labelX}=${this._escapeHTML(this._formatTimeValue(b.fileId, bX))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
-            <div><b>${labelDx}=</b>${this._escapeHTML(isDateTimeCursor ? this._formatDuration(dx, 'datetime') : (isDurationCursor ? this._formatDuration(dx, 's') : this._formatHTMLNumber(dx)))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)}</div>
+            <div><b style="color:${colorA}">A</b> ${xLabel}=${formatXValue(a, aX)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
+            <div><b style="color:${colorB}">B</b> ${xLabel}=${formatXValue(b, bX)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
+            <div><b>${dxLabel}=</b>${dxText}</div>
             <div><b>${labelDy}=</b>${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
-            <div><b>${labelSlope}=</b>${this._formatHTMLNumber(slope)}</div>
-            <div><b>${labelInvDx}=</b>${this._formatHTMLNumber(inverseDx)}${unit(inverseTimeUnit)}</div>
+            ${view.isSpectrum ? '' : `<div><b>${labelSlope}=</b>${this._formatHTMLNumber(slope)}</div>`}
+            <div><b>${invDxLabel}=</b>${this._formatHTMLNumber(inverseDx)}${unit(inverseTimeUnit)}</div>
     `;
-    const existingBox = panelEl.querySelector('.cursor-info-box');
+    const existingBox = this._cursorViewBoxElement(panelEl, view.id);
     if (existingBox?.dataset.cursorSignature === boxSignature) {
         const valuesEl = existingBox.querySelector('.cursor-info-values');
         if (valuesEl) valuesEl.innerHTML = valuesHTML;
-        this._applyCursorBoxPosition(panelEl, existingBox, plot);
+        this._applyCursorBoxPosition(panelEl, existingBox, view);
         existingBox.style.display = 'block';
         return;
     }
+    const titleSuffix = plot.mode === 'fft'
+        ? ` — ${i18n.t(view.isSpectrum ? 'fftCursorSpectrumSection' : 'fftCursorTimeSection')}`
+        : '';
     const html = `
         <div class="cursor-info-header">
-            <span class="cursor-info-title">${moveIcon}${this._escapeHTML(i18n.t('cursorsToggle'))}</span>
+            <span class="cursor-info-title">${moveIcon}${this._escapeHTML(i18n.t('cursorsToggle') + titleSuffix)}</span>
         </div>
         ${selectorsHTML}
-        ${secantHTML}
+        ${view.isSpectrum ? '' : secantHTML}
         <div class="cursor-info-hint">
             <div>${shiftHint}</div>
             <div>${slideHint}</div>
@@ -2276,78 +2353,118 @@ proto._updateCursorBox = function(panelId, plot) {
             ${valuesHTML}
         </div>
     `;
-    const box = this._showCursorBox(panelEl, html, panelId, plot);
+    const box = this._showCursorBox(view, html);
     if (box) box.dataset.cursorSignature = boxSignature;
 };
 
-proto._showCursorBox = function(panelEl, html, panelId = null, plot = null) {
-    let box = panelEl.querySelector('.cursor-info-box');
+proto._fftCursorFrequencyUnit = function(plot) {
+    return String(this._fftFrequencyUnitSuffix?.(plot) || '').replace(/[[\]]/g, '').trim();
+};
+
+proto._fftCursorAmplitudeUnit = function(plot) {
+    return String(this._fftAmplitudeUnitSuffix?.(plot) || '').replace(/[[\]]/g, '').trim();
+};
+
+proto._fftCursorPeriodUnit = function(plot) {
+    const freqUnit = this._fftCursorFrequencyUnit(plot);
+    if (!freqUnit || freqUnit === 'Hz') return 's';
+    const inverse = freqUnit.match(/^1\/(.+)$/);
+    return inverse ? inverse[1] : `1/${freqUnit}`;
+};
+
+proto._cursorViewBoxElement = function(panelEl, viewId) {
+    return panelEl?.querySelector(`.cursor-info-box[data-cursor-view="${viewId}"]`)
+        // Pre-view boxes had no scope attribute; treat them as the main box.
+        || (viewId === 'main' ? panelEl?.querySelector('.cursor-info-box:not([data-cursor-view])') : null);
+};
+
+proto._showCursorBox = function(view, html) {
+    const { panelId, plot } = view;
+    const panelEl = plot.div?.closest('.layout-panel');
+    if (!panelEl) return null;
+    let box = this._cursorViewBoxElement(panelEl, view.id);
     if (!box) {
         box = document.createElement('div');
         box.className = 'cursor-info-box';
+        box.dataset.cursorView = view.id;
         panelEl.appendChild(box);
     }
+    box.dataset.cursorView = view.id;
     box.innerHTML = html;
-    if (panelId && plot) {
-        box.querySelectorAll('.cursor-trace-select').forEach(label => {
-            const which = label.getAttribute('data-cursor');
-            const select = label.querySelector('select');
-            if (!select || (which !== 'a' && which !== 'b')) return;
-            const syncSelectColor = () => {
-                const option = select.options[select.selectedIndex];
-                select.style.color = option?.style?.color || '';
-            };
+    box.querySelectorAll('.cursor-trace-select').forEach(label => {
+        const which = label.getAttribute('data-cursor');
+        const select = label.querySelector('select');
+        if (!select || (which !== 'a' && which !== 'b')) return;
+        const syncSelectColor = () => {
+            const option = select.options[select.selectedIndex];
+            select.style.color = option?.style?.color || '';
+        };
+        syncSelectColor();
+        select.addEventListener('change', (event) => {
+            const cursors = this._viewCursors(view);
+            const visibleTraces = plot.traces
+                .filter(t => t.visible !== false && t.visible !== 'legendonly');
+            const selectedTrace = visibleTraces[Number(event.target.value)];
+            if (!selectedTrace) return;
+            const key = which === 'b' ? 'traceB' : 'traceA';
+            cursors[key] = { fileId: selectedTrace.fileId, varName: selectedTrace.varName };
+            cursors[which] = this._clampCursorX(view, which, cursors[which]);
             syncSelectColor();
-            select.addEventListener('change', (event) => {
-                const visibleTraces = plot.traces
-                    .filter(t => t.visible !== false && t.visible !== 'legendonly');
-                const selectedTrace = visibleTraces[Number(event.target.value)];
-                if (!selectedTrace) return;
-                const key = which === 'b' ? 'traceB' : 'traceA';
-                plot.cursors[key] = { fileId: selectedTrace.fileId, varName: selectedTrace.varName };
-                plot.cursors[which] = this._clampCursorX(plot, which, plot.cursors[which]);
-                syncSelectColor();
-                this._syncCursorDisplay(panelId, plot);
-            });
+            this._syncCursorDisplay(panelId, plot);
         });
-        box.querySelectorAll('.cursor-extremum-btn').forEach(btn => {
-            const which  = btn.getAttribute('data-cursor');
-            const target = btn.getAttribute('data-target');
-            if ((which !== 'a' && which !== 'b') || !['max', 'min', 'zero', 'sample'].includes(target)) return;
-            btn.addEventListener('mousedown', (e) => { e.stopPropagation(); });
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const direction = e.shiftKey ? 'prev' : 'next';
-                this._jumpCursorTo(panelId, which, target, direction);
-            });
+    });
+    box.querySelectorAll('.cursor-extremum-btn').forEach(btn => {
+        const which  = btn.getAttribute('data-cursor');
+        const target = btn.getAttribute('data-target');
+        if ((which !== 'a' && which !== 'b') || !['max', 'min', 'zero', 'sample'].includes(target)) return;
+        btn.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const direction = e.shiftKey ? 'prev' : 'next';
+            this._jumpCursorTo(view, which, target, direction);
         });
-        const secantCheckbox = box.querySelector('.cursor-secant-checkbox');
-        if (secantCheckbox) {
-            secantCheckbox.addEventListener('change', (e) => {
-                e.stopPropagation();
-                plot.cursors.showSecant = !!e.target.checked;
-                this._syncCursorDisplay(panelId, plot);
-            });
-        }
+    });
+    const secantCheckbox = box.querySelector('.cursor-secant-checkbox');
+    if (secantCheckbox) {
+        secantCheckbox.addEventListener('change', (e) => {
+            e.stopPropagation();
+            this._viewCursors(view).showSecant = !!e.target.checked;
+            this._syncCursorDisplay(panelId, plot);
+        });
     }
-    if (panelId && plot) this._ensureCursorBoxDrag(panelId, plot);
-    this._applyCursorBoxPosition(panelEl, box, plot);
+    this._ensureCursorBoxDrag(view, box);
+    this._applyCursorBoxPosition(panelEl, box, view);
     box.style.display = 'block';
     return box;
 };
 
-proto._applyCursorBoxPosition = function(panelEl, box, plot) {
-    const pos = plot?.cursors?.boxPos;
+proto._applyCursorBoxPosition = function(panelEl, box, view) {
+    let pos = this._viewCursors(view).boxPos;
+    if (!pos && view.isSpectrum) {
+        // First display of the spectrum box: anchor it to the top-right of
+        // the spectrum pane so it does not stack over the time-pane box.
+        const div = this._viewDiv(view);
+        if (div && box.offsetWidth) {
+            const panelRect = panelEl.getBoundingClientRect();
+            const divRect = div.getBoundingClientRect();
+            pos = {
+                x: Math.max(6, divRect.right - panelRect.left - box.offsetWidth - 12),
+                y: Math.max(6, divRect.top - panelRect.top + 10),
+            };
+            this._viewCursors(view).boxPos = pos;
+        }
+    }
     if (!pos) return;
     box.style.left = `${pos.x}px`;
     box.style.top = `${pos.y}px`;
     box.style.right = 'auto';
 };
 
-proto._ensureCursorBoxDrag = function(panelId, plot) {
+proto._ensureCursorBoxDrag = function(view, box = null) {
+    const { plot } = view;
     const panelEl = plot.div?.closest('.layout-panel');
-    const box = panelEl?.querySelector('.cursor-info-box');
+    box = box || this._cursorViewBoxElement(panelEl, view.id);
     if (!panelEl || !box || box._dragBound) return;
     box._dragBound = true;
     let drag = null;
@@ -2373,8 +2490,8 @@ proto._ensureCursorBoxDrag = function(panelId, plot) {
         const maxY = Math.max(0, rect.height - box.offsetHeight - 6);
         const x = Math.max(6, Math.min(maxX, event.clientX - rect.left - drag.offsetX));
         const y = Math.max(6, Math.min(maxY, event.clientY - rect.top - drag.offsetY));
-        plot.cursors.boxPos = { x, y };
-        this._applyCursorBoxPosition(panelEl, box, plot);
+        this._viewCursors(view).boxPos = { x, y };
+        this._applyCursorBoxPosition(panelEl, box, view);
     });
 
     document.addEventListener('mouseup', () => {
@@ -2384,9 +2501,15 @@ proto._ensureCursorBoxDrag = function(panelId, plot) {
     });
 };
 
-proto._hideCursorBox = function(panelEl) {
-    const box = panelEl?.querySelector('.cursor-info-box');
+proto._hideCursorViewBox = function(panelEl, viewId) {
+    const box = this._cursorViewBoxElement(panelEl, viewId);
     if (box) box.style.display = 'none';
+};
+
+proto._hideCursorBox = function(panelEl) {
+    panelEl?.querySelectorAll('.cursor-info-box').forEach(box => {
+        box.style.display = 'none';
+    });
 };
 
 /** Add hidden marker trace(s) for hover sync. Called once after newPlot. */
@@ -2727,7 +2850,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     cursorBtn.className = 'layout-toolbar-btn panel-action-btn cursor-btn' + (plot?.cursors?.enabled ? ' active' : '');
     cursorBtn.textContent = 'A|B';
     cursorBtn.title = i18n.t('cursorsToggle');
-    cursorBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
+    cursorBtn.disabled = !(this._hasContent(plot) && this._plotSupportsCursors(plot));
     cursorBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._toggleCursors(panelId);

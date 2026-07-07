@@ -1361,41 +1361,6 @@ body.cursor-box-dragging {
     position: relative;
 }
 
-.fft-cursor-readout {
-    position: absolute;
-    top: 6px;
-    right: 8px;
-    z-index: 7;
-    max-width: min(46%, 340px);
-    padding: 6px 9px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
-    color: var(--text-primary);
-    font-size: 0.72rem;
-    line-height: 1.45;
-    font-variant-numeric: tabular-nums;
-    pointer-events: none;
-    overflow-wrap: anywhere;
-}
-
-.fft-cursor-readout .fft-cursor-section {
-    font-weight: 600;
-    opacity: 0.75;
-    text-transform: uppercase;
-    font-size: 0.62rem;
-    letter-spacing: 0.04em;
-    margin-top: 4px;
-}
-
-.fft-cursor-readout .fft-cursor-section:first-child {
-    margin-top: 0;
-}
-
-.fft-cursor-readout .fft-cursor-trace-name {
-    font-weight: 600;
-}
-
 .fft-layout-horizontal .fft-plot-area {
     grid-template-columns: minmax(0, var(--fft-split)) 7px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
@@ -1710,17 +1675,13 @@ body.fft-split-dragging {
     cursor: col-resize;
 }
 
-/* Measurement cursor (A/B) drag hints on both FFT panes. */
-.plotly-mode-fft-time.fft-cursor-ab .nsewdrag,
-.plotly-mode-fft-spectrum.fft-cursor-ab .nsewdrag,
-body.fft-cursor-dragging .plotly-mode-fft-time .nsewdrag,
-body.fft-cursor-dragging .plotly-mode-fft-spectrum .nsewdrag {
+/* The shared measurement cursors set inline div.style.cursor, but Plotly's
+   drag layer pins its own crosshair on the FFT panes; override it there. */
+body.cursor-dragging .plotly-mode-fft-time .nsewdrag,
+body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
+.layout-panel.cursor-near .plotly-mode-fft-time .nsewdrag,
+.layout-panel.cursor-near .plotly-mode-fft-spectrum .nsewdrag {
     cursor: ew-resize !important;
-}
-
-body.fft-cursor-dragging {
-    cursor: ew-resize;
-    user-select: none;
 }
 
 @media (max-width: 760px) {

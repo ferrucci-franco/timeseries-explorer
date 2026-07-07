@@ -355,7 +355,7 @@ class PlotManager {
 
     _refreshPanelDomOverlays(plot) {
         if (!plot?.div || !plot.div.isConnected) return;
-        if (plot.mode === 'timeseries' && plot.cursors?.enabled && typeof this._renderCursorOverlay === 'function') {
+        if (this._plotSupportsCursors?.(plot) && plot.cursors?.enabled && typeof this._renderCursorOverlay === 'function') {
             this._renderCursorOverlay(plot);
         }
         if (this.syncHover && typeof this._hideHoverOverlay === 'function') {
@@ -441,6 +441,7 @@ class PlotManager {
         plot.timeseriesY2Enabled = false;
         plot.traces.forEach(trace => { trace.axis = 'y'; });
         plot.cursors = this._defaultCursors();
+        plot.cursorsSpectrum = this._defaultCursors();
         plot.fft = this._defaultFftState?.() || plot.fft;
         plot.liveView = this._defaultLiveViewPolicy(mode);
         plot.animFrame    = 0;
@@ -1184,6 +1185,7 @@ class PlotManager {
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
             existing.cursors = this._defaultCursors();
+            existing.cursorsSpectrum = this._defaultCursors();
             existing.showCameraOverlay = false;
             existing.homeCamera = null;
             existing.animFrame     = 0;
@@ -1956,8 +1958,9 @@ class PlotManager {
             }
         } else {
             document.body.classList.remove('cursor-dragging', 'cursor-box-dragging');
-            if (plot.mode === 'timeseries') {
+            if (plot.mode === 'timeseries' || plot.mode === 'fft') {
                 plot.cursors = this._defaultCursors();
+                plot.cursorsSpectrum = this._defaultCursors();
             }
             const ph = panelEl.querySelector('.layout-panel-placeholder');
             if (ph) { ph.style.display = ''; ph.classList.remove('drag-over'); }

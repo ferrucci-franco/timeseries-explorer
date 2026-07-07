@@ -176,6 +176,7 @@ proto._capturePlotSessions = function() {
             equalAspect2D: !!plot.equalAspect2D,
             liveView: this._cloneSerializable(plot.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode)),
             cursors: this._cloneSerializable(plot.cursors || this.plotManager._defaultCursors()),
+            cursorsSpectrum: this._cloneSerializable(plot.cursorsSpectrum || this.plotManager._defaultCursors()),
             showCameraOverlay: !!plot.showCameraOverlay,
             homeCamera: this._cloneSerializable(plot.homeCamera),
             animFrame: plot.animFrame || 0,
@@ -533,6 +534,7 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.equalAspect2D = !!saved.equalAspect2D;
         plot.liveView = this._cloneSerializable(saved.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode));
         plot.cursors = this._cloneSerializable(saved.cursors || this.plotManager._defaultCursors());
+        plot.cursorsSpectrum = this._cloneSerializable(saved.cursorsSpectrum || this.plotManager._defaultCursors());
         plot.showCameraOverlay = !!saved.showCameraOverlay;
         plot.homeCamera = this._cloneSerializable(saved.homeCamera);
         plot.animFrame = saved.animFrame || 0;
