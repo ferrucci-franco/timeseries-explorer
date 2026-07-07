@@ -15,6 +15,7 @@ const translations = {
                         <tr><td>Parquet time series</td><td><code>.parquet</code></td><td>Good for very large time-series tables and usually faster than CSV.</td></tr>
                         <tr><td>PyPSA netCDF networks</td><td><code>.nc</code>, <code>.netcdf</code></td><td>PyPSA network files with time-series results.</td></tr>
                         <tr><td>pandas pickle</td><td><code>.pkl</code>, <code>.pickle</code></td><td>pandas DataFrame/Series pickles. MultiIndex columns appear as a hierarchy. Uncompressed files only; use Parquet for large data.</td></tr>
+                        <tr><td>Excel / LibreOffice spreadsheets</td><td><code>.xlsx</code>, <code>.xlsm</code>, <code>.xls</code>, <code>.ods</code></td><td>Each selected sheet is converted to a table on load, with the same header and time detection as CSV files.</td></tr>
                     </tbody>
                 </table></div>
             </div>`,
@@ -172,6 +173,13 @@ const translations = {
             pickleLooksLikeUnsupportedExtension: 'This looks like a Python pickle. Rename it to .pkl or .pickle and try again.',
             picklePrecisionWarnings: '{count} int64/uint64 value(s) exceeded JavaScript safe integer precision.',
             pickleDuplicateColumns: '{count} duplicate pandas column label(s) were loaded with unique internal names.',
+            excelSheetPickerTitle: 'Select sheets',
+            excelSheetPickerBody: '"{file}" contains several sheets. Choose which one(s) to load; each sheet becomes its own dataset.',
+            excelSheetPickerLoad: 'Load selected',
+            excelSheetEmpty: 'empty',
+            excelSheetHidden: 'hidden',
+            excelTooLarge: '"{file}" is {size}. Spreadsheet support uses eager in-memory loading (limit {limit}). Export large tables to CSV or Parquet instead.',
+            excelNoDataSheets: '"{file}" has no sheets with data.',
             csvPreviewAction: 'Adjust CSV parsing...',
             csvPreviewTitle: 'Adjust CSV parsing',
             csvPreviewApply: 'Apply parsing',
@@ -811,6 +819,7 @@ const translations = {
                         <tr><td>Series temporelles Parquet</td><td><code>.parquet</code></td><td>Pratique pour les tres grands tableaux de series temporelles, et souvent plus rapide que le CSV.</td></tr>
                         <tr><td>Reseaux PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Fichiers de reseau PyPSA avec des resultats temporels.</td></tr>
                         <tr><td>pickle pandas</td><td><code>.pkl</code>, <code>.pickle</code></td><td>Pickles pandas DataFrame/Series. Les colonnes MultiIndex apparaissent comme une hierarchie. Fichiers non compresses seulement; utilisez Parquet pour les grands tableaux.</td></tr>
+                        <tr><td>Feuilles de calcul Excel / LibreOffice</td><td><code>.xlsx</code>, <code>.xlsm</code>, <code>.xls</code>, <code>.ods</code></td><td>Chaque feuille sélectionnée est convertie en table au chargement, avec la même détection d'en-têtes et de temps que les fichiers CSV.</td></tr>
                     </tbody>
                 </table></div>
             </div>`,
@@ -1036,6 +1045,13 @@ const translations = {
             pickleLooksLikeUnsupportedExtension: 'Ce fichier ressemble à un pickle Python. Renommez-le en .pkl ou .pickle puis réessayez.',
             picklePrecisionWarnings: '{count} valeur(s) int64/uint64 dépassent la précision sûre des entiers JavaScript.',
             pickleDuplicateColumns: '{count} libellé(s) de colonne pandas dupliqués ont été chargés avec des noms internes uniques.',
+            excelSheetPickerTitle: 'Sélectionner les feuilles',
+            excelSheetPickerBody: '"{file}" contient plusieurs feuilles. Choisissez celle(s) à charger ; chaque feuille devient un jeu de données distinct.',
+            excelSheetPickerLoad: 'Charger la sélection',
+            excelSheetEmpty: 'vide',
+            excelSheetHidden: 'masquée',
+            excelTooLarge: '"{file}" fait {size}. La prise en charge des feuilles de calcul utilise un chargement eager en mémoire (limite {limit}). Exportez les grandes tables en CSV ou Parquet.',
+            excelNoDataSheets: '"{file}" ne contient aucune feuille avec des données.',
             loadingFiles: 'Chargement des fichiers ({current}/{total})',
             loadingFilesPreparing: 'Preparation des fichiers...',
             loadingFilesCurrent: 'Chargement de {file}',
@@ -1607,6 +1623,7 @@ const translations = {
                         <tr><td>Series temporales Parquet</td><td><code>.parquet</code></td><td>Conveniente para tablas de series temporales muy grandes y normalmente mas rapido que CSV.</td></tr>
                         <tr><td>Redes PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Archivos de redes PyPSA con resultados de series temporales.</td></tr>
                         <tr><td>pickle pandas</td><td><code>.pkl</code>, <code>.pickle</code></td><td>Pickles pandas DataFrame/Series. Las columnas MultiIndex aparecen como jerarquia. Solo archivos sin compresion; usa Parquet para datos grandes.</td></tr>
+                        <tr><td>Planillas Excel / LibreOffice</td><td><code>.xlsx</code>, <code>.xlsm</code>, <code>.xls</code>, <code>.ods</code></td><td>Cada hoja seleccionada se convierte en tabla al cargar, con la misma detección de encabezados y tiempo que los archivos CSV.</td></tr>
                     </tbody>
                 </table></div>
             </div>`,
@@ -1826,6 +1843,13 @@ const translations = {
             pickleLooksLikeUnsupportedExtension: 'Este archivo parece un pickle de Python. Renómbralo a .pkl o .pickle e inténtalo de nuevo.',
             picklePrecisionWarnings: '{count} valor(es) int64/uint64 superaron la precisión segura de enteros de JavaScript.',
             pickleDuplicateColumns: '{count} etiqueta(s) de columna pandas duplicadas se cargaron con nombres internos únicos.',
+            excelSheetPickerTitle: 'Seleccionar hojas',
+            excelSheetPickerBody: '"{file}" contiene varias hojas. Elige cuál(es) cargar; cada hoja se convierte en un dataset independiente.',
+            excelSheetPickerLoad: 'Cargar selección',
+            excelSheetEmpty: 'vacía',
+            excelSheetHidden: 'oculta',
+            excelTooLarge: '"{file}" pesa {size}. El soporte de planillas usa carga eager en memoria (límite {limit}). Exporta tablas grandes a CSV o Parquet.',
+            excelNoDataSheets: '"{file}" no tiene hojas con datos.',
             loadingFiles: 'Cargando archivos ({current}/{total})',
             loadingFilesPreparing: 'Preparando archivos...',
             loadingFilesCurrent: 'Cargando {file}',
@@ -2373,6 +2397,7 @@ const translations = {
                         <tr><td>Serie temporali Parquet</td><td><code>.parquet</code></td><td>Utile per tabelle di serie temporali molto grandi e di solito piu veloce del CSV.</td></tr>
                         <tr><td>Reti PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>File di reti PyPSA con risultati temporali.</td></tr>
                         <tr><td>pickle pandas</td><td><code>.pkl</code>, <code>.pickle</code></td><td>Pickle pandas DataFrame/Series. Le colonne MultiIndex appaiono come gerarchia. Solo file non compressi; usa Parquet per dati grandi.</td></tr>
+                        <tr><td>Fogli di calcolo Excel / LibreOffice</td><td><code>.xlsx</code>, <code>.xlsm</code>, <code>.xls</code>, <code>.ods</code></td><td>Ogni foglio selezionato viene convertito in tabella al caricamento, con lo stesso rilevamento di intestazioni e tempo dei file CSV.</td></tr>
                     </tbody>
                 </table></div>
             </div>`,
@@ -2592,6 +2617,13 @@ const translations = {
             pickleLooksLikeUnsupportedExtension: 'Questo file sembra un pickle Python. Rinominalo in .pkl o .pickle e riprova.',
             picklePrecisionWarnings: '{count} valore/i int64/uint64 superano la precisione intera sicura di JavaScript.',
             pickleDuplicateColumns: '{count} etichetta/e di colonna pandas duplicate sono state caricate con nomi interni unici.',
+            excelSheetPickerTitle: 'Seleziona i fogli',
+            excelSheetPickerBody: '"{file}" contiene più fogli. Scegli quale/i caricare; ogni foglio diventa un dataset separato.',
+            excelSheetPickerLoad: 'Carica selezione',
+            excelSheetEmpty: 'vuoto',
+            excelSheetHidden: 'nascosto',
+            excelTooLarge: '"{file}" è {size}. Il supporto dei fogli di calcolo usa caricamento eager in memoria (limite {limit}). Esporta le tabelle grandi in CSV o Parquet.',
+            excelNoDataSheets: '"{file}" non ha fogli con dati.',
             loadingFiles: 'Caricamento file ({current}/{total})',
             loadingFilesPreparing: 'Preparazione file...',
             loadingFilesCurrent: 'Caricamento di {file}',

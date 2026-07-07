@@ -19,6 +19,7 @@
     "build:portable": "node scripts/build-portable.mjs",
     "build:all": "npm run build:portable && npm run build:web",
     "test:csv": "node scripts/test-csv-fixtures.mjs",
+    "test:excel": "node scripts/test-excel-parser.mjs",
     "test:capabilities": "node scripts/test-runtime-capabilities.mjs",
     "test:live-update": "node scripts/test-live-update-logic.mjs",
     "test:local-file-http": "node scripts/test-local-file-http.mjs",
@@ -46,7 +47,8 @@
     "fflate": "^0.8.3",
     "h5wasm": "^0.10.3",
     "pickleparser": "^0.2.1",
-    "plotly.js-dist-min": "^3.5.1"
+    "plotly.js-dist-min": "^3.5.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "build": {
     "appId": "io.github.ferrucci-franco.timeseries-explorer",

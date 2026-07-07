@@ -133,6 +133,53 @@
     max-width: min(820px, calc(100vw - 32px));
 }
 
+.modal-dialog-excel-sheets {
+    min-width: min(420px, calc(100vw - 32px));
+    max-width: min(560px, calc(100vw - 32px));
+}
+
+.excel-sheet-list {
+    max-height: 46vh;
+    overflow-y: auto;
+    margin: 0 0 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    text-align: left;
+}
+
+.excel-sheet-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+}
+
+.excel-sheet-row + .excel-sheet-row {
+    border-top: 1px solid var(--border-color);
+}
+
+.excel-sheet-row:hover {
+    background: var(--bg-secondary);
+}
+
+.excel-sheet-row-empty {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.excel-sheet-name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.excel-sheet-detail {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
 .modal-dialog-session-missing .modal-message {
     text-align: center;
 }

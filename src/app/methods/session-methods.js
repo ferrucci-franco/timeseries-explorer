@@ -117,6 +117,7 @@ proto._createSessionSnapshot = function(options = {}) {
             contentHash: entry.contentHash || '',
             transform: this._normalizeFileTransform(entry.transform),
             csvProfile,
+            excel: entry.excel ? this._cloneSerializable(entry.excel) : null,
             variableNames: data ? Object.keys(data.variables || {}) : [],
             derived,
             dataTools,
@@ -218,7 +219,9 @@ proto._loadProjectDataFromZip = async function(session, entries) {
         const bytes = entries[fileMeta.archivePath];
         if (!bytes) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || fileMeta.archivePath));
         const file = new File([bytes], fileMeta.displayName || `${fileMeta.name || 'results'}${fileMeta.extension || '.mat'}`);
-        await this.loadFile(file);
+        // The archived bytes of an Excel entry are the raw workbook; restore
+        // the recorded sheet directly so the sheet picker never re-appears.
+        await this.loadFile(file, { excelSheetName: fileMeta.excel?.sheetName || null });
     }
 };
 
@@ -410,6 +413,23 @@ proto._applySessionFileMetadata = async function(session, fileMap) {
 
         try {
             const displayName = this._fileDisplayName(entry);
+            if (this._isExcelExtension?.(entry.extension)) {
+                // Entry bytes are the raw workbook: re-derive the CSV view of
+                // the recorded sheet before applying the user profile.
+                const { csvBuffer, rawBuffer, sheetName, sheetNames } = await this._convertExcelEntryToCsvBuffer(entry, {
+                    refresh: true,
+                    sheetName: meta.excel?.sheetName || null,
+                });
+                const data = await this._parseCsvResultBuffer(displayName, csvBuffer, null, {
+                    csvProfile: meta.csvProfile,
+                });
+                data.metadata.excel = { sheetName, sheetNames };
+                entry.excel = { sheetName, sheetNames };
+                entry.buffer = rawBuffer;
+                entry.contentHash = await this._hashBuffer(rawBuffer);
+                this.plotManager.updateFileData(fileId, data);
+                continue;
+            }
             const streamable = this._canParseFromFile?.(entry.file, entry.extension);
             const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
             const buffer = streamable ? null : await this._readLatestBuffer(entry);

@@ -9,12 +9,17 @@ import {
     PICKLE_DESKTOP_EAGER_LIMIT_BYTES,
     PICKLE_WEB_EAGER_LIMIT_BYTES,
 } from '../../parsers/pickle-limits.js';
+import {
+    EXCEL_DESKTOP_EAGER_LIMIT_BYTES,
+    EXCEL_WEB_EAGER_LIMIT_BYTES,
+} from '../../parsers/excel-limits.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
 let duckDbSourceClassPromise = null;
 let pypsaNetcdfParserClassPromise = null;
 let pickleParserClassPromise = null;
+let excelWorkbookModulePromise = null;
 
 async function loadDuckDbSourceClass() {
     if (globalThis.__OMV_PORTABLE__ === true) return null;
@@ -57,6 +62,23 @@ async function loadPickleParserClass() {
     return pickleParserClassPromise;
 }
 
+async function loadExcelWorkbookModule() {
+    if (!excelWorkbookModulePromise) {
+        excelWorkbookModulePromise = import('../../parsers/excel-workbook.js');
+    }
+    return excelWorkbookModulePromise;
+}
+
+function resolveExcelSheetName(excelModule, workbook, preferredName = null) {
+    if (preferredName && workbook?.Sheets?.[preferredName]) return preferredName;
+    const names = excelModule.nonEmptySheetNames(workbook);
+    if (!names.length) return null;
+    if (preferredName) {
+        console.warn(`[excel] sheet "${preferredName}" not found; falling back to "${names[0]}".`);
+    }
+    return names[0];
+}
+
 function csvProfileWithoutRowFilter(csvProfile) {
     const clone = cloneCsvProfileForIpc(csvProfile);
     if (!clone) return null;
@@ -84,6 +106,7 @@ proto.loadFile = async function(file, options = {}) {
                 extension = this._fileExtension(currentFile.name);
                 this._preflightPypsaNetcdfFile(currentFile, extension);
                 this._preflightPickleFile(currentFile, extension);
+                this._preflightExcelFile(currentFile, extension);
                 const preflight = await this._maybeConvertLargeCsvBeforeLoad(currentFile, { ...options, extension });
                 if (preflight?.cancelled) return null;
                 if (preflight?.csvProfile) {
@@ -111,6 +134,8 @@ proto.loadFile = async function(file, options = {}) {
                     : this._fileFingerprint(currentFile);
                 data = await this._parseResultBuffer(currentFile.name, buffer, currentFile, {
                     csvProfile: options.csvProfile || null,
+                    excelSheetName: options.excelSheetName || null,
+                    excelWorkbook: options.excelWorkbook || null,
                 });
                 break;
             } catch (err) {
@@ -123,7 +148,10 @@ proto.loadFile = async function(file, options = {}) {
         }
 
         const fileId   = `f${this._nextFileId++}`;
-        const baseName = this._fileBaseName(currentFile.name);
+        let baseName = this._fileBaseName(currentFile.name);
+        if (options.excelAppendSheetName && data?.metadata?.excel?.sheetName) {
+            baseName = `${baseName} — ${data.metadata.excel.sheetName}`;
+        }
         const transform = this._defaultFileTransform();
         this.files.set(fileId, {
             file: currentFile,
@@ -135,6 +163,7 @@ proto.loadFile = async function(file, options = {}) {
             name: baseName,
             extension,
             transform,
+            excel: data?.metadata?.excel ? { ...data.metadata.excel } : null,
         });
 
         // PlotManager takes ownership of the data
@@ -170,7 +199,9 @@ proto.loadFile = async function(file, options = {}) {
 };
 
 proto.loadFiles = async function(items = []) {
-    const entries = Array.from(items || []);
+    // Sheet selection happens before the loading overlay so the picker is not
+    // stacked under it and the progress counter reflects the expanded count.
+    const entries = await this._expandExcelEntries(Array.from(items || []));
     if (!entries.length) return [];
 
     const loaded = [];
@@ -184,7 +215,14 @@ proto.loadFiles = async function(items = []) {
             const localPath = item?.localPath || '';
             if (!file && !fileHandle) continue;
             this._updateFileLoadingOverlay(index + 1, entries.length, file?.name || fileHandle?.name || '', file?.size);
-            const result = await this.loadFile(file, { fileHandle, localPath, deferUi: true });
+            const result = await this.loadFile(file, {
+                fileHandle,
+                localPath,
+                deferUi: true,
+                excelSheetName: item?.excelSheetName || null,
+                excelWorkbook: item?.excelWorkbook || null,
+                excelAppendSheetName: item?.excelAppendSheetName === true,
+            });
             if (result) loaded.push(result);
             await this._yieldToBrowser();
         }
@@ -207,6 +245,62 @@ proto.loadFiles = async function(items = []) {
     }
 
     return loaded;
+};
+
+// Expands each spreadsheet in a load batch into one entry per selected sheet.
+// The parsed workbook rides along on the entry so loadFile does not re-read
+// the zip per sheet; it is dropped once the batch finishes (never stored).
+proto._expandExcelEntries = async function(entries) {
+    const expanded = [];
+    for (const item of entries) {
+        const fileHandle = item?.fileHandle || null;
+        let file = item?.file || (fileHandle ? null : item);
+        const sourceName = file?.name || fileHandle?.name || '';
+        const extension = this._fileExtension(sourceName);
+        if (!this._isExcelExtension(extension)) {
+            expanded.push(item);
+            continue;
+        }
+        try {
+            if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
+            if (!file) continue;
+            this._preflightExcelFile(file, extension);
+            const excel = await loadExcelWorkbookModule();
+            const rawBuffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+            const workbook = excel.readWorkbook(await excel.loadXlsxModule(), rawBuffer);
+            const sheets = excel.listSheets(workbook);
+            const nonEmpty = sheets.filter(sheet => !sheet.empty);
+            if (!nonEmpty.length) {
+                await Modal.alert(
+                    i18n.t('excelSheetPickerTitle'),
+                    i18n.t('excelNoDataSheets').replace('{file}', file.name),
+                    { icon: 'XLS' },
+                );
+                continue;
+            }
+            let selected = [nonEmpty[0].name];
+            if (nonEmpty.length > 1) {
+                const { default: ExcelSheetPickerDialog } = await import('../../ui/excel-sheet-picker-dialog.js');
+                const picked = await ExcelSheetPickerDialog.open({ fileName: file.name, sheets });
+                if (!picked || !picked.length) continue;
+                selected = picked;
+            }
+            for (const sheetName of selected) {
+                expanded.push({
+                    file,
+                    fileHandle,
+                    localPath: item?.localPath || '',
+                    excelSheetName: sheetName,
+                    excelWorkbook: workbook,
+                    excelAppendSheetName: selected.length > 1,
+                });
+            }
+        } catch (err) {
+            console.error('Error preparing Excel file:', err);
+            await Modal.alert(i18n.t('errorLoading'), err?.message || String(err), { icon: 'XLS' });
+        }
+    }
+    return expanded;
 };
 
 proto._hasRepeatedDatetimeWarning = function(data) {
@@ -339,7 +433,9 @@ proto.reloadActiveFile = async function() {
     const currentProfile = this.plotManager.files.get(id)?.data?.metadata?.csvProfile || null;
     const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, latestFile || entry.file, {
         csvProfile: currentProfile?.profileSource === 'user' ? currentProfile : null,
+        excelSheetName: entry.excel?.sheetName || null,
     });
+    if (data?.metadata?.excel) entry.excel = { ...data.metadata.excel };
     this._reapplyDerivedVariables(id, data);
     this._reapplyDataToolVariables?.(id, data);
 
@@ -377,6 +473,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
         : null;
     const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, latestFile || source.file, {
         csvProfile: reloadProfile,
+        excelSheetName: source.excel?.sheetName || null,
     });
 
     const fileId = `f${this._nextFileId++}`;
@@ -393,6 +490,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
         name,
         extension: source.extension || '.mat',
         transform: this._normalizeFileTransform(source.transform),
+        excel: data?.metadata?.excel ? { ...data.metadata.excel } : (source.excel ? { ...source.excel } : null),
     });
     this.plotManager.addFile(fileId, name, data, this.files.get(fileId).transform);
     this.plotManager.setActiveFile(fileId);
@@ -446,6 +544,7 @@ proto._readLatestBuffer = async function(entry) {
         const file = await this._readLocalResultPath(entry.localPath);
         this._preflightPypsaNetcdfFile(file, this._fileExtension(file.name));
         this._preflightPickleFile(file, this._fileExtension(file.name));
+        this._preflightExcelFile(file, this._fileExtension(file.name));
         const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
         entry.file = file;
         entry.extension = this._fileExtension(file.name);
@@ -462,6 +561,7 @@ proto._readLatestBuffer = async function(entry) {
         if (file) {
             this._preflightPypsaNetcdfFile(file, this._fileExtension(file.name));
             this._preflightPickleFile(file, this._fileExtension(file.name));
+            this._preflightExcelFile(file, this._fileExtension(file.name));
             try {
                 const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
                 entry.file = file;
@@ -486,6 +586,7 @@ proto._readLatestBuffer = async function(entry) {
         entry.extension = this._fileExtension(file.name);
         this._preflightPypsaNetcdfFile(file, entry.extension);
         this._preflightPickleFile(file, entry.extension);
+        this._preflightExcelFile(file, entry.extension);
         return file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file);
     }
 
@@ -495,6 +596,7 @@ proto._readLatestBuffer = async function(entry) {
     if (entry.file?.arrayBuffer) {
         this._preflightPypsaNetcdfFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
         this._preflightPickleFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
+        this._preflightExcelFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
         try {
             buffer = await entry.file.arrayBuffer();
         } catch (_) {}
@@ -699,6 +801,30 @@ proto._preflightPickleFile = function(file, extension = this._fileExtension(file
         .replace('{limit}', this._formatFileSize(limit)));
 };
 
+proto._isExcelExtension = function(extension) {
+    return extension === '.xlsx'
+        || extension === '.xlsm'
+        || extension === '.xls'
+        || extension === '.ods';
+};
+
+proto._excelEagerLimitBytes = function() {
+    return this.capabilities?.isDesktop
+        ? EXCEL_DESKTOP_EAGER_LIMIT_BYTES
+        : EXCEL_WEB_EAGER_LIMIT_BYTES;
+};
+
+proto._preflightExcelFile = function(file, extension = this._fileExtension(file?.name || '')) {
+    if (!this._isExcelExtension(extension)) return;
+    const size = Number(file?.size || 0);
+    const limit = this._excelEagerLimitBytes();
+    if (!Number.isFinite(size) || size <= limit) return;
+    throw new Error(i18n.t('excelTooLarge')
+        .replace('{file}', file?.name || 'data.xlsx')
+        .replace('{size}', this._formatFileSize(size))
+        .replace('{limit}', this._formatFileSize(limit)));
+};
+
 proto._createDesktopLocalHttpFile = function(filePath, info) {
     const name = info?.name || String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'results.csv';
     const size = Math.max(0, Number(info?.size) || 0);
@@ -787,6 +913,7 @@ proto._readLocalResultPath = async function(filePath) {
                 }
                 this._preflightPypsaNetcdfFile(statResult, this._fileExtension(filePath));
                 this._preflightPickleFile(statResult, this._fileExtension(filePath));
+                this._preflightExcelFile(statResult, this._fileExtension(filePath));
             }
             const result = await desktopReader({ path: filePath });
             if (result?.ok === false) {
@@ -813,7 +940,7 @@ proto._readLocalResultPath = async function(filePath) {
     const localUrl = `${LOCAL_API_BASE}/file?path=${encodeURIComponent(filePath)}`;
     const extension = this._fileExtension(filePath);
     const name = String(filePath).split(/[\\/]/).filter(Boolean).pop() || 'results.csv';
-    if (this._isPypsaNetcdfExtension(extension) || this._isPickleExtension(extension)) {
+    if (this._isPypsaNetcdfExtension(extension) || this._isPickleExtension(extension) || this._isExcelExtension(extension)) {
         let headResponse = null;
         try {
             headResponse = await fetch(localUrl, { method: 'HEAD', cache: 'no-store' });
@@ -825,6 +952,7 @@ proto._readLocalResultPath = async function(filePath) {
             const statLike = { name, size };
             this._preflightPypsaNetcdfFile(statLike, extension);
             this._preflightPickleFile(statLike, extension);
+            this._preflightExcelFile(statLike, extension);
         }
     }
 
@@ -914,6 +1042,7 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
     if (extension === '.parquet') return this._parseParquetResult(filename, file);
     if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer);
     if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer);
+    if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
     if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file, options);
     if (extension === '.mat') return this.parser.parse(buffer);
     if (this._looksLikePickleBuffer(buffer)) throw new Error(i18n.t('pickleLooksLikeUnsupportedExtension'));
@@ -925,6 +1054,50 @@ proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer) {
     const Parser = await loadPypsaNetcdfParserClass();
     const parser = new Parser(this.parser);
     return parser.parse(buffer, filename, { maxFileBytes: this._pypsaNetcdfEagerLimitBytes() });
+};
+
+// Spreadsheets are not parsed directly: the selected sheet is serialized to
+// deterministic CSV text and fed to the CSV pipeline, so header/time
+// detection, profiles and the parsing-preview dialog all apply unchanged.
+proto._parseExcelResultBuffer = async function(filename, buffer, options = {}) {
+    const excel = await loadExcelWorkbookModule();
+    const workbook = options.excelWorkbook
+        || excel.readWorkbook(await excel.loadXlsxModule(), buffer);
+    const sheetName = resolveExcelSheetName(excel, workbook, options.excelSheetName || null);
+    if (!sheetName) {
+        throw new Error(i18n.t('excelNoDataSheets').replace('{file}', filename));
+    }
+    const csvBuffer = excel.csvTextToBuffer(excel.sheetToCsvText(workbook, sheetName));
+    // file = null on purpose: it keeps the converted buffer out of the DuckDB
+    // lazy path and the Parquet hints, while still using the parser worker.
+    const data = await this._parseCsvResultBuffer(filename, csvBuffer, null, {
+        csvProfile: options.csvProfile || null,
+    });
+    data.metadata.excel = {
+        sheetName,
+        sheetNames: excel.listSheets(workbook).map(sheet => sheet.name),
+    };
+    return data;
+};
+
+// Re-derives the CSV view of an Excel-origin entry (adjust-parsing, session
+// profile restore). Any caller that re-parses an entry with entry.excel set
+// must go through this instead of feeding raw workbook bytes to the CSV path.
+proto._convertExcelEntryToCsvBuffer = async function(entry, { refresh = false, sheetName = null } = {}) {
+    const rawBuffer = (!refresh && entry.buffer) ? entry.buffer : await this._readLatestBuffer(entry);
+    const excel = await loadExcelWorkbookModule();
+    const workbook = excel.readWorkbook(await excel.loadXlsxModule(), rawBuffer);
+    const resolvedName = resolveExcelSheetName(excel, workbook, sheetName || entry.excel?.sheetName || null);
+    if (!resolvedName) {
+        throw new Error(i18n.t('excelNoDataSheets').replace('{file}', this._fileDisplayName(entry)));
+    }
+    const csvBuffer = excel.csvTextToBuffer(excel.sheetToCsvText(workbook, resolvedName));
+    return {
+        csvBuffer,
+        rawBuffer,
+        sheetName: resolvedName,
+        sheetNames: excel.listSheets(workbook).map(sheet => sheet.name),
+    };
 };
 
 proto._parsePickleResultBuffer = async function(filename, buffer) {
@@ -1833,24 +2006,52 @@ proto.adjustCsvParsing = async function(fileId) {
     const displayName = this._fileDisplayName(entry);
     const plotEntry = this.plotManager.files.get(fileId);
     const currentProfile = plotEntry?.data?.metadata?.csvProfile || null;
+    const isExcel = this._isExcelExtension(entry.extension);
 
     try {
-        const reviewedProfile = await this._openCsvParsingPreviewForFileObject(entry.file, {
+        let previewFile = entry.file;
+        let previewSampleBuffer = entry.file ? null : entry.buffer;
+        if (isExcel) {
+            // The dialog must see the converted CSV view, never workbook bytes.
+            const { csvBuffer } = await this._convertExcelEntryToCsvBuffer(entry);
+            previewFile = new File([csvBuffer], displayName.replace(/\.[^.]+$/, '.csv'));
+            previewSampleBuffer = null;
+        }
+        const reviewedProfile = await this._openCsvParsingPreviewForFileObject(previewFile, {
             csvProfile: currentProfile,
-            sampleBuffer: entry.file ? null : entry.buffer,
+            sampleBuffer: previewSampleBuffer,
             title: displayName,
         });
         if (!reviewedProfile) return;
 
         this._showFileLoadingOverlay(1);
         this._updateFileLoadingOverlay(1, 1, displayName, entry.file?.size);
+        let data;
+        if (isExcel) {
+            const { csvBuffer, rawBuffer, sheetName, sheetNames } = await this._convertExcelEntryToCsvBuffer(entry, { refresh: true });
+            data = await this._parseCsvResultBuffer(displayName, csvBuffer, null, { csvProfile: reviewedProfile });
+            data.metadata.excel = { sheetName, sheetNames };
+            entry.excel = { sheetName, sheetNames };
+            entry.buffer = rawBuffer;
+            entry.contentHash = await this._hashBuffer(rawBuffer);
+            this._reapplyDerivedVariables(fileId, data);
+            this._reapplyDataToolVariables?.(fileId, data);
+            this.plotManager.updateFileData(fileId, data);
+            this.plotManager.setActiveFile(fileId);
+            this._clearVariableSelection();
+            this.renderVariablesTree(data.tree);
+            this._renderFilesList();
+            this._updateActionButtons();
+            await this._showDatetimeAxisWarningIfNeeded(fileId, data);
+            return;
+        }
         const streamable = this._canParseFromFile(entry.file, entry.extension);
         const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
         const buffer = streamable ? null : await this._readLatestBuffer(entry);
         const contentHash = buffer
             ? await this._hashBuffer(buffer)
             : this._fileFingerprint(latestFile || entry.file);
-        const data = await this._parseCsvResultBuffer(displayName, buffer, latestFile || entry.file, { csvProfile: reviewedProfile });
+        data = await this._parseCsvResultBuffer(displayName, buffer, latestFile || entry.file, { csvProfile: reviewedProfile });
         this._reapplyDerivedVariables(fileId, data);
         this._reapplyDataToolVariables?.(fileId, data);
         if (latestFile) entry.file = latestFile;
