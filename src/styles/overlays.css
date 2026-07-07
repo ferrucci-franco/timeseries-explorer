@@ -499,7 +499,29 @@
 
 .csv-preview-header {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.csv-preview-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.csv-preview-close:hover {
+    border-color: var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
 }
 
 .csv-preview-title {

@@ -415,18 +415,16 @@ proto._applySessionFileMetadata = async function(session, fileMap) {
             const displayName = this._fileDisplayName(entry);
             if (this._isExcelExtension?.(entry.extension)) {
                 // Entry bytes are the raw workbook: re-derive the CSV view of
-                // the recorded sheet before applying the user profile.
-                const { csvBuffer, rawBuffer, sheetName, sheetNames } = await this._convertExcelEntryToCsvBuffer(entry, {
-                    refresh: true,
+                // the recorded sheet (cached from load unless the session asks
+                // for a different sheet) before applying the user profile.
+                const { csvBuffer, sheetName, sheetNames } = await this._convertExcelEntryToCsvBuffer(entry, {
                     sheetName: meta.excel?.sheetName || null,
                 });
                 const data = await this._parseCsvResultBuffer(displayName, csvBuffer, null, {
                     csvProfile: meta.csvProfile,
                 });
-                data.metadata.excel = { sheetName, sheetNames };
-                entry.excel = { sheetName, sheetNames };
-                entry.buffer = rawBuffer;
-                entry.contentHash = await this._hashBuffer(rawBuffer);
+                data.metadata.excel = { sheetName, sheetNames: sheetNames || entry.excel?.sheetNames || null };
+                entry.excel = { ...data.metadata.excel };
                 this.plotManager.updateFileData(fileId, data);
                 continue;
             }

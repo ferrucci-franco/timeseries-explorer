@@ -165,6 +165,7 @@ proto.loadFile = async function(file, options = {}) {
             transform,
             excel: data?.metadata?.excel ? { ...data.metadata.excel } : null,
         });
+        this._adoptExcelCsvCache(this.files.get(fileId), data);
 
         // PlotManager takes ownership of the data
         this.plotManager.addFile(fileId, baseName, data, transform);
@@ -486,6 +487,7 @@ proto.reloadActiveFile = async function() {
 
     entry.buffer = buffer;
     entry.contentHash = contentHash;
+    this._adoptExcelCsvCache(entry, data);
     this.plotManager.updateFileData(id, data);
     this._updateTopBar();
     this._clearVariableSelection();
@@ -537,6 +539,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
         transform: this._normalizeFileTransform(source.transform),
         excel: data?.metadata?.excel ? { ...data.metadata.excel } : (source.excel ? { ...source.excel } : null),
     });
+    this._adoptExcelCsvCache(this.files.get(fileId), data);
     this.plotManager.addFile(fileId, name, data, this.files.get(fileId).transform);
     this.plotManager.setActiveFile(fileId);
 
@@ -1122,27 +1125,66 @@ proto._parseExcelResultBuffer = async function(filename, buffer, options = {}) {
         sheetName,
         sheetNames: excel.listSheets(workbook).map(sheet => sheet.name),
     };
+    // Non-enumerable so it never leaks into session snapshots; the caller
+    // moves it onto the file entry via _adoptExcelCsvCache.
+    Object.defineProperty(data, '_excelCsvBuffer', {
+        value: csvBuffer,
+        configurable: true,
+        writable: true,
+        enumerable: false,
+    });
     return data;
 };
 
 // Re-derives the CSV view of an Excel-origin entry (adjust-parsing, session
 // profile restore). Any caller that re-parses an entry with entry.excel set
 // must go through this instead of feeding raw workbook bytes to the CSV path.
-proto._convertExcelEntryToCsvBuffer = async function(entry, { refresh = false, sheetName = null } = {}) {
-    const rawBuffer = (!refresh && entry.buffer) ? entry.buffer : await this._readLatestBuffer(entry);
+// The converted CSV is cached on the entry: decoding a large workbook takes
+// tens of seconds of blocked main thread, so it must happen at most once per
+// workbook version (the cache is keyed on the raw-buffer identity + sheet).
+proto._convertExcelEntryToCsvBuffer = async function(entry, { sheetName = null } = {}) {
+    const preferredName = sheetName || entry.excel?.sheetName || null;
+    const rawBuffer = entry.buffer || await this._readLatestBuffer(entry);
+    if (this._hasExcelCsvCache(entry, rawBuffer, preferredName)) {
+        return {
+            csvBuffer: entry.excelCsvBuffer,
+            rawBuffer,
+            sheetName: entry.excelCsvSheetName,
+            sheetNames: entry.excel?.sheetNames || null,
+        };
+    }
     const excel = await loadExcelWorkbookModule();
     const workbook = excel.readWorkbook(await excel.loadXlsxModule(), rawBuffer);
-    const resolvedName = resolveExcelSheetName(excel, workbook, sheetName || entry.excel?.sheetName || null);
+    const resolvedName = resolveExcelSheetName(excel, workbook, preferredName);
     if (!resolvedName) {
         throw new Error(i18n.t('excelNoDataSheets').replace('{file}', this._fileDisplayName(entry)));
     }
     const csvBuffer = excel.csvTextToBuffer(excel.sheetToCsvText(workbook, resolvedName));
+    entry.excelCsvBuffer = csvBuffer;
+    entry.excelCsvSheetName = resolvedName;
+    entry.excelCsvSourceBuffer = rawBuffer;
     return {
         csvBuffer,
         rawBuffer,
         sheetName: resolvedName,
         sheetNames: excel.listSheets(workbook).map(sheet => sheet.name),
     };
+};
+
+proto._hasExcelCsvCache = function(entry, rawBuffer = entry?.buffer, preferredName = entry?.excel?.sheetName || null) {
+    return !!(entry?.excelCsvBuffer
+        && entry.excelCsvSourceBuffer === rawBuffer
+        && (!preferredName || entry.excelCsvSheetName === preferredName));
+};
+
+// _parseExcelResultBuffer stashes the converted CSV on the parsed data so
+// callers that own a file entry can adopt it into the entry-level cache.
+proto._adoptExcelCsvCache = function(entry, data) {
+    if (!entry || !data?._excelCsvBuffer) return;
+    entry.excelCsvBuffer = data._excelCsvBuffer;
+    entry.excelCsvSheetName = data.metadata?.excel?.sheetName || null;
+    entry.excelCsvSourceBuffer = entry.buffer || null;
+    delete data._excelCsvBuffer;
 };
 
 proto._parsePickleResultBuffer = async function(filename, buffer) {
@@ -2058,7 +2100,20 @@ proto.adjustCsvParsing = async function(fileId) {
         let previewSampleBuffer = entry.file ? null : entry.buffer;
         if (isExcel) {
             // The dialog must see the converted CSV view, never workbook bytes.
-            const { csvBuffer } = await this._convertExcelEntryToCsvBuffer(entry);
+            // Normally cached from the initial load; a miss means seconds of
+            // synchronous workbook decoding, so give feedback first.
+            const cached = this._hasExcelCsvCache(entry);
+            if (!cached) {
+                this._showFileLoadingOverlay(1);
+                this._updateFileLoadingOverlay(1, 1, displayName, entry.file?.size);
+                await this._waitForNextPaint();
+            }
+            let csvBuffer;
+            try {
+                ({ csvBuffer } = await this._convertExcelEntryToCsvBuffer(entry));
+            } finally {
+                if (!cached) this._hideFileLoadingOverlay();
+            }
             previewFile = new File([csvBuffer], displayName.replace(/\.[^.]+$/, '.csv'));
             previewSampleBuffer = null;
         }
@@ -2073,12 +2128,13 @@ proto.adjustCsvParsing = async function(fileId) {
         this._updateFileLoadingOverlay(1, 1, displayName, entry.file?.size);
         let data;
         if (isExcel) {
-            const { csvBuffer, rawBuffer, sheetName, sheetNames } = await this._convertExcelEntryToCsvBuffer(entry, { refresh: true });
+            // Reuses the cached CSV: re-reading the workbook from disk here
+            // would block the UI for seconds again (the Reload button covers
+            // picking up external file changes).
+            const { csvBuffer, sheetName, sheetNames } = await this._convertExcelEntryToCsvBuffer(entry);
             data = await this._parseCsvResultBuffer(displayName, csvBuffer, null, { csvProfile: reviewedProfile });
-            data.metadata.excel = { sheetName, sheetNames };
-            entry.excel = { sheetName, sheetNames };
-            entry.buffer = rawBuffer;
-            entry.contentHash = await this._hashBuffer(rawBuffer);
+            data.metadata.excel = { sheetName, sheetNames: sheetNames || entry.excel?.sheetNames || null };
+            entry.excel = { ...data.metadata.excel };
             this._reapplyDerivedVariables(fileId, data);
             this._reapplyDataToolVariables?.(fileId, data);
             this.plotManager.updateFileData(fileId, data);

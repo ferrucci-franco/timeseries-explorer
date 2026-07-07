@@ -19,7 +19,17 @@ export async function loadXlsxModule() {
 export function readWorkbook(XLSX, buffer) {
     const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
     // cellDates resolves both the 1900 and 1904 date systems to JS Dates.
-    return XLSX.read(bytes, { type: 'array', cellDates: true, dense: true });
+    // Formatted text, formula strings and HTML are skipped: the serializer
+    // only reads raw values, and generating them roughly doubles the decode
+    // time on large workbooks.
+    return XLSX.read(bytes, {
+        type: 'array',
+        cellDates: true,
+        dense: true,
+        cellText: false,
+        cellFormula: false,
+        cellHTML: false,
+    });
 }
 
 const COLUMN_BASE = 26;

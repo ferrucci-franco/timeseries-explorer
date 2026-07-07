@@ -751,7 +751,14 @@ export default class CsvParsingPreviewDialog {
         subtitle.textContent = this.title || '';
         this.confidence = document.createElement('div');
         this.confidence.className = 'csv-preview-confidence';
-        header.append(heading, subtitle, this.confidence);
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'csv-preview-close';
+        closeBtn.textContent = '✕';
+        closeBtn.title = i18n.t('cancel');
+        closeBtn.setAttribute('aria-label', i18n.t('cancel'));
+        closeBtn.addEventListener('click', () => this._finish(null));
+        header.append(heading, subtitle, this.confidence, closeBtn);
 
         const toolbar = document.createElement('div');
         toolbar.className = 'csv-preview-toolbar';
