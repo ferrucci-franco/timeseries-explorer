@@ -1225,7 +1225,7 @@ class PlotManager {
         }
         const cursorBtn = panelEl.querySelector('.cursor-btn');
         if (cursorBtn) {
-            const enabled = has && plot?.mode === 'timeseries';
+            const enabled = has && this._plotSupportsCursors?.(plot);
             cursorBtn.disabled = !enabled;
             cursorBtn.classList.toggle('active', !!plot?.cursors?.enabled);
         }
