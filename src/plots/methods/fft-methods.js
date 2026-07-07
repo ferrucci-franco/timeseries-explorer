@@ -15,6 +15,8 @@ import Plotly from '../../vendor/plotly.js';
 
 const FFT_LAYOUTS = new Set(['horizontal', 'vertical']);
 const FFT_AXIS_LIMIT_KEYS = new Set(['fMin', 'fMax', 'yMin', 'yMax']);
+// Distinct from the orange selection-range lines.
+const FFT_CURSOR_COLORS = { a: '#4caf50', b: '#2196f3' };
 
 export function installPlotFftMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -37,6 +39,7 @@ proto._defaultFftState = function() {
         yMin: null,
         yMax: null,
         warnings: [],
+        cursors: { enabled: false, timeA: null, timeB: null, specA: null, specB: null },
     };
 };
 
@@ -76,6 +79,13 @@ proto._normalizeFftState = function(raw = {}) {
         yMin: finiteOrNull(raw.yMin),
         yMax: finiteOrNull(raw.yMax),
         warnings: Array.isArray(raw.warnings) ? raw.warnings.slice(0, 10) : [],
+        cursors: {
+            enabled: !!raw.cursors?.enabled,
+            timeA: finiteOrNull(raw.cursors?.timeA),
+            timeB: finiteOrNull(raw.cursors?.timeB),
+            specA: finiteOrNull(raw.cursors?.specA),
+            specB: finiteOrNull(raw.cursors?.specB),
+        },
     };
     delete state.rangeMode;
     delete state.xMin;
@@ -158,8 +168,12 @@ proto._createFftChart = function(panelId, panelEl) {
     const optionsBtn = makeButton('fft-tool-btn fft-options-btn', i18n.t('fftOptionsLabel'), i18n.t('fftOptionsToggle'), () => this._toggleFftOptions(panelId));
     optionsBtn.classList.toggle('active', state.optionsVisible);
     optionsBtn.setAttribute('aria-pressed', String(state.optionsVisible));
+    const cursorsBtn = makeButton('fft-tool-btn fft-cursors-btn', 'A|B', i18n.t('cursorsToggle'), () => this._toggleFftCursors(panelId));
+    cursorsBtn.classList.toggle('active', !!state.cursors?.enabled);
+    cursorsBtn.setAttribute('aria-pressed', String(!!state.cursors?.enabled));
     actionGroup.append(
         makeButton('fft-tool-btn', i18n.t('fftResetLabel'), i18n.t('fftResetView'), () => this._resetFftView(panelId)),
+        cursorsBtn,
         optionsBtn,
     );
 
@@ -211,8 +225,12 @@ proto._createFftChart = function(panelId, panelEl) {
         if (restoreView) this._restorePlotView(plot, restoreView);
         this._refreshTimeseriesVisuals(panelId, plot);
         this._installFftPlotHandlers(panelId, plot);
+        // Cursor handlers first: their capture listeners must run before the
+        // selection ones so a cursor line inside the selection stays grabbable.
+        this._installFftCursorHandlers(panelId, plot);
         this._installFftSelectionHandlers(panelId, plot);
         this._installFftSplitterHandlers(panelId, plot);
+        this._updateFftCursorReadout(plot);
         this._scheduleFftRecompute(panelId, { immediate: true });
         let timer;
         const ro = new ResizeObserver(() => {
@@ -323,7 +341,7 @@ proto._buildFftWindowedTimeTraces = function(plot) {
 
 proto._buildFftTimeLayout = function(plot) {
     const layout = this._buildTimeLayout(plot);
-    layout.shapes = this._fftSelectionShapes(plot);
+    layout.shapes = [...this._fftSelectionShapes(plot), ...this._fftTimeCursorShapes(plot)];
     layout.margin = { ...(layout.margin || {}), t: 8 };
     // No hover on the time plot: the tooltips get in the way of the
     // selection handles. The spectrum plot keeps its hover.
@@ -366,6 +384,7 @@ proto._buildFftSpectrumLayout = function(plot) {
         margin: { l: 58, r: 16, t: 8, b: 46 },
         autosize: true,
         hovermode: 'closest',
+        shapes: this._fftSpectrumCursorShapes(plot),
     };
 };
 
@@ -491,6 +510,7 @@ proto._refreshFftTimePlot = function(panelId, plot = this.plots.get(panelId), op
     return Plotly.react(plot.div, this._buildFftTimeTraces(plot), layout, this._getPlotlyConfig())
         .then(() => {
             this._installLegendHoverHint(plot.div);
+            this._installFftCursorHandlers(panelId, plot);
             this._installFftSelectionHandlers(panelId, plot);
             // The react above rebuilt traces from the base arrays (full-range
             // downsample / lazy overview); restore the resolution that matches
@@ -612,6 +632,7 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     if (plot._fftToken !== token) return;
     this._installLegendHoverHint(plot.fftDiv);
     this._syncFftOptionsPanel(plot);
+    this._updateFftCursorReadout(plot);
     if (warnings.length) this._setFftStatus(plot, warnings.join(' | '), 'warning');
     else this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
 };
@@ -913,7 +934,7 @@ proto._fftSelectionShapes = function(plot) {
 
 proto._updateFftSelectionShapes = function(panelId, plot = this.plots.get(panelId)) {
     if (!plot?.div || plot.mode !== 'fft') return;
-    Plotly.relayout(plot.div, { shapes: this._fftSelectionShapes(plot) });
+    Plotly.relayout(plot.div, { shapes: [...this._fftSelectionShapes(plot), ...this._fftTimeCursorShapes(plot)] });
     this._syncFftOptionsPanel(plot);
 };
 
@@ -1009,6 +1030,254 @@ proto._installFftSelectionHandlers = function(panelId, plot) {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     plot._fftSelectionDocListeners = { move: onMove, up: onUp };
+};
+
+// ---- Measurement cursors (A/B) on both FFT panes -------------------------
+// On the time pane they read t / dt / 1/dt (expected frequency); on the
+// spectrum pane f / df / 1/df (period) plus per-trace amplitudes. Unlike the
+// timeseries cursors there is no secant line: it has no meaning here.
+
+proto._toggleFftCursors = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'fft') return;
+    const state = this._ensureFftState(plot);
+    state.cursors.enabled = !state.cursors.enabled;
+    if (state.cursors.enabled) this._initializeFftCursorPositions(plot);
+    const btn = plot.fftContainer?.querySelector('.fft-cursors-btn');
+    if (btn) {
+        btn.classList.toggle('active', state.cursors.enabled);
+        btn.setAttribute('aria-pressed', String(state.cursors.enabled));
+    }
+    this._updateFftCursorVisuals(panelId, plot);
+};
+
+proto._fftVisibleXSpan = function(div, fallback = null) {
+    const range = div?._fullLayout?.xaxis?.range;
+    const lo = this._coerceAxisValue(range?.[0]);
+    const hi = this._coerceAxisValue(range?.[1]);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && lo !== hi) return lo < hi ? [lo, hi] : [hi, lo];
+    return fallback;
+};
+
+proto._fftSpectrumXBounds = function(plot) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const spectrum of plot._fftSpectra || []) {
+        if (spectrum.visible === 'legendonly' || !spectrum.x?.length) continue;
+        min = Math.min(min, Number(spectrum.x[0]));
+        max = Math.max(max, Number(spectrum.x[spectrum.x.length - 1]));
+    }
+    return Number.isFinite(min) && Number.isFinite(max) && min !== max ? [min, max] : null;
+};
+
+proto._initializeFftCursorPositions = function(plot) {
+    const cursors = this._ensureFftState(plot).cursors;
+    const domain = this._fftDomain(plot);
+    const timeSpan = this._fftVisibleXSpan(plot.div, domain ? [domain.min, domain.max] : null);
+    if (timeSpan) {
+        cursors.timeA = timeSpan[0] + (timeSpan[1] - timeSpan[0]) * 0.25;
+        cursors.timeB = timeSpan[0] + (timeSpan[1] - timeSpan[0]) * 0.75;
+    }
+    const specSpan = this._fftVisibleXSpan(plot.fftDiv, this._fftSpectrumXBounds(plot));
+    if (specSpan) {
+        cursors.specA = specSpan[0] + (specSpan[1] - specSpan[0]) * 0.25;
+        cursors.specB = specSpan[0] + (specSpan[1] - specSpan[0]) * 0.75;
+    }
+};
+
+proto._fftCursorLineShape = function(x, color) {
+    return {
+        type: 'line',
+        xref: 'x',
+        yref: 'paper',
+        x0: x,
+        x1: x,
+        y0: 0,
+        y1: 1,
+        line: { color, width: 1.5, dash: 'dash' },
+    };
+};
+
+proto._fftTimeCursorShapes = function(plot) {
+    const cursors = this._ensureFftState(plot).cursors;
+    if (!cursors?.enabled) return [];
+    const firstTrace = plot.traces?.[0];
+    const timeVar = firstTrace ? this._getTimeVar(firstTrace.fileId) : null;
+    const toPlotly = value => (firstTrace ? this._plotlyTimeValue(firstTrace.fileId, value, timeVar) : value);
+    const out = [];
+    if (Number.isFinite(cursors.timeA)) out.push(this._fftCursorLineShape(toPlotly(cursors.timeA), FFT_CURSOR_COLORS.a));
+    if (Number.isFinite(cursors.timeB)) out.push(this._fftCursorLineShape(toPlotly(cursors.timeB), FFT_CURSOR_COLORS.b));
+    return out;
+};
+
+proto._fftSpectrumCursorShapes = function(plot) {
+    const cursors = this._ensureFftState(plot).cursors;
+    if (!cursors?.enabled) return [];
+    const out = [];
+    if (Number.isFinite(cursors.specA)) out.push(this._fftCursorLineShape(cursors.specA, FFT_CURSOR_COLORS.a));
+    if (Number.isFinite(cursors.specB)) out.push(this._fftCursorLineShape(cursors.specB, FFT_CURSOR_COLORS.b));
+    return out;
+};
+
+proto._updateFftCursorVisuals = function(panelId, plot = this.plots.get(panelId)) {
+    if (!plot || plot.mode !== 'fft') return;
+    if (plot.div) {
+        Plotly.relayout(plot.div, { shapes: [...this._fftSelectionShapes(plot), ...this._fftTimeCursorShapes(plot)] });
+    }
+    if (plot.fftDiv) {
+        Plotly.relayout(plot.fftDiv, { shapes: this._fftSpectrumCursorShapes(plot) });
+    }
+    this._updateFftCursorReadout(plot);
+};
+
+proto._installFftCursorHandlers = function(panelId, plot) {
+    this._installFftCursorDrag(panelId, plot, plot.div, 'timeA', 'timeB', '_fftCursorTimeDiv');
+    this._installFftCursorDrag(panelId, plot, plot.fftDiv, 'specA', 'specB', '_fftCursorSpecDiv');
+};
+
+proto._installFftCursorDrag = function(panelId, plot, div, keyA, keyB, guardKey) {
+    if (!div || plot[guardKey] === div) return;
+    plot[guardKey] = div;
+    const previous = plot[`${guardKey}DocListeners`];
+    if (previous) {
+        document.removeEventListener('mousemove', previous.move);
+        document.removeEventListener('mouseup', previous.up);
+    }
+    let dragging = null;
+    const hitTest = (event) => {
+        const cursors = this._ensureFftState(plot).cursors;
+        if (!cursors?.enabled) return null;
+        if (!this._eventInsidePlotArea(div, event)) return null;
+        const x = this._eventToXValue(div, event);
+        if (!Number.isFinite(x)) return null;
+        const xa = div._fullLayout?.xaxis;
+        const span = Math.abs(this._coerceAxisValue(xa?.range?.[1]) - this._coerceAxisValue(xa?.range?.[0])) || 1;
+        const tolerance = Math.max((10 / (xa?._length || 1)) * span, span * 1e-6);
+        const distA = Number.isFinite(cursors[keyA]) ? Math.abs(x - cursors[keyA]) : Infinity;
+        const distB = Number.isFinite(cursors[keyB]) ? Math.abs(x - cursors[keyB]) : Infinity;
+        if (Math.min(distA, distB) > tolerance) return null;
+        return distA <= distB ? keyA : keyB;
+    };
+    div.addEventListener('mousemove', event => {
+        if (dragging || document.body.classList.contains('fft-selection-dragging')) return;
+        div.classList.toggle('fft-cursor-ab', !!hitTest(event));
+    });
+    div.addEventListener('mouseleave', () => {
+        if (!dragging) div.classList.remove('fft-cursor-ab');
+    });
+    div.addEventListener('mousedown', event => {
+        if (event.button !== 0) return;
+        const hit = hitTest(event);
+        if (!hit) return;
+        dragging = hit;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        document.body.classList.add('fft-cursor-dragging');
+    }, true);
+    const clampBounds = () => (keyA === 'timeA'
+        ? (() => { const d = this._fftDomain(plot); return d ? [d.min, d.max] : null; })()
+        : this._fftSpectrumXBounds(plot));
+    const onMove = event => {
+        if (!dragging) return;
+        let x = this._eventToXValue(div, event);
+        if (!Number.isFinite(x)) return;
+        const bounds = clampBounds();
+        if (bounds) x = Math.max(bounds[0], Math.min(bounds[1], x));
+        this._ensureFftState(plot).cursors[dragging] = x;
+        this._updateFftCursorVisuals(panelId, plot);
+    };
+    const onUp = () => {
+        if (!dragging) return;
+        dragging = null;
+        document.body.classList.remove('fft-cursor-dragging');
+        if (plot[guardKey]) plot[guardKey].classList.remove('fft-cursor-ab');
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    plot[`${guardKey}DocListeners`] = { move: onMove, up: onUp };
+};
+
+proto._fftSpectrumValueAt = function(spectrum, frequency) {
+    const xs = spectrum?.x;
+    const ys = spectrum?.y;
+    const n = Math.min(xs?.length || 0, ys?.length || 0);
+    if (!n || !Number.isFinite(frequency)) return NaN;
+    let lo = 0;
+    let hi = n - 1;
+    while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (Number(xs[mid]) <= frequency) lo = mid;
+        else hi = mid;
+    }
+    const nearest = Math.abs(Number(xs[lo]) - frequency) <= Math.abs(Number(xs[hi]) - frequency) ? lo : hi;
+    return Number(ys[nearest]);
+};
+
+proto._updateFftCursorReadout = function(plot) {
+    const host = plot?.fftContainer?.querySelector('.fft-plot-area');
+    if (!host) return;
+    let box = host.querySelector('.fft-cursor-readout');
+    const cursors = this._ensureFftState(plot).cursors;
+    if (!cursors?.enabled) {
+        box?.remove();
+        return;
+    }
+    if (!box) {
+        box = document.createElement('div');
+        box.className = 'fft-cursor-readout';
+        host.appendChild(box);
+    }
+    const colorA = FFT_CURSOR_COLORS.a;
+    const colorB = FFT_CURSOR_COLORS.b;
+    const rows = [];
+    const firstTrace = (plot.traces || []).find(t => this._isVisible(t)) || plot.traces?.[0];
+    const fileId = firstTrace?.fileId;
+    const timeUnit = fileId ? this._timeUnitLabel(fileId) : 's';
+    const isDatetime = timeUnit === 'datetime';
+    const isDuration = timeUnit === 'duration';
+    const plainSeconds = ['s', 'sec', 'secs', 'second', 'seconds'].includes(String(timeUnit || '').trim().toLowerCase());
+    const timeUnitSuffix = (isDatetime || isDuration) ? '' : ` ${this._escapeHTML(timeUnit || '')}`;
+
+    if (Number.isFinite(cursors.timeA) && Number.isFinite(cursors.timeB)) {
+        const dt = cursors.timeB - cursors.timeA;
+        const dtSeconds = isDatetime ? dt / 1000 : dt;
+        const rate = dtSeconds !== 0 ? 1 / dtSeconds : NaN;
+        const rateUnit = (isDatetime || isDuration || plainSeconds) ? 'Hz' : (timeUnit ? `1/${timeUnit}` : '');
+        const dtText = isDatetime
+            ? this._formatDuration(dt, 'datetime')
+            : isDuration
+                ? this._formatDuration(dt, 's')
+                : this._formatHTMLNumber(dt);
+        rows.push(`<div class="fft-cursor-section">${this._escapeHTML(i18n.t('fftCursorTimeSection'))}</div>`);
+        rows.push(`<div><b style="color:${colorA}">A</b> t = ${this._escapeHTML(this._formatTimeValue(fileId, cursors.timeA))}${timeUnitSuffix}</div>`);
+        rows.push(`<div><b style="color:${colorB}">B</b> t = ${this._escapeHTML(this._formatTimeValue(fileId, cursors.timeB))}${timeUnitSuffix}</div>`);
+        rows.push(`<div><b>&Delta;t =</b> ${this._escapeHTML(dtText)}${timeUnitSuffix}</div>`);
+        rows.push(`<div><b>1/&Delta;t =</b> ${this._formatHTMLNumber(rate)}${rateUnit ? ` ${this._escapeHTML(rateUnit)}` : ''}</div>`);
+    }
+
+    if (Number.isFinite(cursors.specA) && Number.isFinite(cursors.specB)) {
+        const freqUnit = this._escapeHTML(this._fftFrequencyUnitSuffix(plot).trim());
+        const ampUnit = this._escapeHTML(this._fftAmplitudeUnitSuffix(plot).trim());
+        const df = cursors.specB - cursors.specA;
+        const period = df !== 0 ? 1 / df : NaN;
+        // 1/df is a period: seconds when the frequency axis is in Hz.
+        const periodUnit = (isDatetime || isDuration || plainSeconds) ? 's' : (timeUnit ? this._escapeHTML(timeUnit) : '');
+        rows.push(`<div class="fft-cursor-section">${this._escapeHTML(i18n.t('fftCursorSpectrumSection'))}</div>`);
+        rows.push(`<div><b style="color:${colorA}">A</b> f = ${this._formatHTMLNumber(cursors.specA)} ${freqUnit}</div>`);
+        rows.push(`<div><b style="color:${colorB}">B</b> f = ${this._formatHTMLNumber(cursors.specB)} ${freqUnit}</div>`);
+        rows.push(`<div><b>&Delta;f =</b> ${this._formatHTMLNumber(df)} ${freqUnit}</div>`);
+        rows.push(`<div><b>1/&Delta;f =</b> ${this._formatHTMLNumber(period)}${periodUnit ? ` ${periodUnit}` : ''}</div>`);
+        for (const spectrum of plot._fftSpectra || []) {
+            if (spectrum.visible === 'legendonly') continue;
+            const ampA = this._fftSpectrumValueAt(spectrum, cursors.specA);
+            const ampB = this._fftSpectrumValueAt(spectrum, cursors.specB);
+            rows.push(`<div class="fft-cursor-trace"><span class="fft-cursor-trace-name" style="color:${this._escapeHTML(spectrum.line?.color || '')}">${this._escapeHTML(spectrum.name || '')}</span> <b style="color:${colorA}">A</b> ${this._formatHTMLNumber(ampA)}${ampUnit ? ` ${ampUnit}` : ''} <b style="color:${colorB}">B</b> ${this._formatHTMLNumber(ampB)}${ampUnit ? ` ${ampUnit}` : ''}</div>`);
+        }
+    }
+
+    box.innerHTML = rows.join('');
+    box.hidden = !rows.length;
 };
 
 proto._installFftSplitterHandlers = function(panelId, plot) {
