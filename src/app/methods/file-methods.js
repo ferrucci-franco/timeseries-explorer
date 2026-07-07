@@ -252,6 +252,20 @@ proto.loadFiles = async function(items = []) {
 // the zip per sheet; it is dropped once the batch finishes (never stored).
 proto._expandExcelEntries = async function(entries) {
     const expanded = [];
+    // The loading overlay covers the read + SheetJS decode (synchronous and
+    // potentially seconds long) but must be hidden while a modal is open.
+    let overlayShown = false;
+    const showBusy = async (file) => {
+        this._showFileLoadingOverlay(1);
+        this._updateFileLoadingOverlay(1, 1, file?.name || '', file?.size);
+        overlayShown = true;
+        await this._waitForNextPaint();
+    };
+    const hideBusy = () => {
+        if (!overlayShown) return;
+        this._hideFileLoadingOverlay();
+        overlayShown = false;
+    };
     for (const item of entries) {
         const fileHandle = item?.fileHandle || null;
         let file = item?.file || (fileHandle ? null : item);
@@ -265,12 +279,14 @@ proto._expandExcelEntries = async function(entries) {
             if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
             if (!file) continue;
             this._preflightExcelFile(file, extension);
+            await showBusy(file);
             const excel = await loadExcelWorkbookModule();
             const rawBuffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
             const workbook = excel.readWorkbook(await excel.loadXlsxModule(), rawBuffer);
             const sheets = excel.listSheets(workbook);
             const nonEmpty = sheets.filter(sheet => !sheet.empty);
             if (!nonEmpty.length) {
+                hideBusy();
                 await Modal.alert(
                     i18n.t('excelSheetPickerTitle'),
                     i18n.t('excelNoDataSheets').replace('{file}', file.name),
@@ -280,6 +296,7 @@ proto._expandExcelEntries = async function(entries) {
             }
             let selected = [nonEmpty[0].name];
             if (nonEmpty.length > 1) {
+                hideBusy();
                 const { default: ExcelSheetPickerDialog } = await import('../../ui/excel-sheet-picker-dialog.js');
                 const picked = await ExcelSheetPickerDialog.open({ fileName: file.name, sheets });
                 if (!picked || !picked.length) continue;
@@ -296,10 +313,14 @@ proto._expandExcelEntries = async function(entries) {
                 });
             }
         } catch (err) {
+            hideBusy();
             console.error('Error preparing Excel file:', err);
             await Modal.alert(i18n.t('errorLoading'), err?.message || String(err), { icon: 'XLS' });
         }
     }
+    // When entries follow, loadFiles takes over the same overlay (reused by
+    // _showFileLoadingOverlay); otherwise nothing else will hide it.
+    if (!expanded.length) hideBusy();
     return expanded;
 };
 
@@ -353,8 +374,32 @@ proto._yieldToBrowser = function() {
     return new Promise(resolve => setTimeout(resolve, 0));
 };
 
+// Resolves after the next frame is painted; needed before synchronous heavy
+// work (e.g. spreadsheet decoding) so the overlay is actually visible. The
+// timeout fallback covers hidden tabs, where rAF does not fire.
+proto._waitForNextPaint = function() {
+    return new Promise(resolve => {
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve();
+        };
+        const timer = setTimeout(finish, 100);
+        requestAnimationFrame(() => requestAnimationFrame(finish));
+    });
+};
+
 proto._showFileLoadingOverlay = function(total = 1) {
-    document.getElementById('file-loading-overlay')?.remove();
+    const existing = document.getElementById('file-loading-overlay');
+    if (existing?.classList.contains('show')) {
+        // Already visible (e.g. shown during spreadsheet preparation): reuse
+        // it so chained show calls do not re-trigger the fade-in.
+        this._updateFileLoadingOverlay(0, total, '');
+        return;
+    }
+    existing?.remove();
     const overlay = document.createElement('div');
     overlay.id = 'file-loading-overlay';
     overlay.className = 'example-loading-overlay';
