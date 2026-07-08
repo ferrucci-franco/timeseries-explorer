@@ -2059,11 +2059,14 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     if (!div || div._wheelPanBound) return;
     div._wheelPanBound = true;
 
-    // A gesture is a run of wheel events < IDLE_MS apart; the OS keeps firing
-    // during inertia, so the pan glides to a stop on its own.
-    const IDLE_MS = 180;
-    const END_MS = 240;
-    const state = { mode: null, lastTime: 0, raf: 0, endTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null };
+    // A single idle timer defines the gesture: while it is alive the mode
+    // never changes, so a swipe that starts horizontal keeps panning even
+    // when it turns vertical (changing direction on a trackpad usually
+    // includes a brief slowdown that must NOT be read as a new gesture).
+    // The window is generous for that reason; the OS also keeps firing
+    // inertia events, so the pan glides to a stop on its own.
+    const END_MS = 400;
+    const state = { mode: null, raf: 0, endTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null };
 
     const deltaScale = (event) => {
         if (event.deltaMode === 1) return 16;   // lines -> px (Firefox)
@@ -2138,15 +2141,19 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     };
 
     div.addEventListener('wheel', (event) => {
-        const now = performance.now();
-        if (now - state.lastTime > IDLE_MS) state.mode = null; // new gesture
-        state.lastTime = now;
         if (state.mode === null) {
-            // Pinch (ctrlKey) and vertical-dominant gestures stay with Plotly.
+            // First event decides for the whole gesture. Pinch (ctrlKey) and
+            // vertical-dominant starts stay with Plotly's zoom.
             state.mode = (!event.ctrlKey && Math.abs(event.deltaX) > Math.abs(event.deltaY)) ? 'pan' : 'zoom';
-            if (state.mode === 'pan') state.base = captureBase();
-            if (!state.base) state.mode = 'zoom';
+            if (state.mode === 'pan') {
+                state.base = captureBase();
+                if (!state.base) state.mode = 'zoom';
+            }
         }
+        // Keep the gesture (and its latched mode) alive on every event,
+        // including the vertical continuation of a horizontal-started pan.
+        clearTimeout(state.endTimer);
+        state.endTimer = setTimeout(endGesture, END_MS);
         if (state.mode !== 'pan') return; // let Plotly's scroll-zoom handle it
         // Capture-phase stopPropagation keeps the event from Plotly's inner
         // drag-layer wheel handler; preventDefault stops the page/zoom default.
@@ -2156,8 +2163,6 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
         state.pendingDX += event.deltaX * scale;
         state.pendingDY += event.deltaY * scale;
         if (!state.raf) state.raf = requestAnimationFrame(flush);
-        clearTimeout(state.endTimer);
-        state.endTimer = setTimeout(endGesture, END_MS);
     }, { capture: true, passive: false });
 };
 
