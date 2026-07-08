@@ -2351,7 +2351,17 @@ proto._updateCursorBox = function(view) {
     const existingBox = this._cursorViewBoxElement(panelEl, view.id);
     if (existingBox?.dataset.cursorSignature === boxSignature) {
         const valuesEl = existingBox.querySelector('.cursor-info-values');
-        if (valuesEl) valuesEl.innerHTML = valuesHTML;
+        if (valuesEl) {
+            // The help popover lives inside the values area: keep it open
+            // across the value refreshes that happen while dragging.
+            const helpWasOpen = !!valuesEl.querySelector('.cursor-help-popover:not([hidden])');
+            valuesEl.innerHTML = valuesHTML;
+            if (helpWasOpen) {
+                const popover = valuesEl.querySelector('.cursor-help-popover');
+                if (popover) popover.hidden = false;
+                valuesEl.querySelector('.cursor-help-btn')?.setAttribute('aria-expanded', 'true');
+            }
+        }
         this._applyCursorBoxPosition(panelEl, existingBox, view);
         existingBox.style.display = 'block';
         return;
@@ -2457,6 +2467,14 @@ proto._showCursorBox = function(view, html) {
         // Delegated so the binding survives the innerHTML swaps of the
         // values area while cursors are being dragged.
         box._helpBound = true;
+        // The panel-level mousedown re-renders the box contents (same reason
+        // the extremum buttons stop it): without this, the button is replaced
+        // before its click event ever fires.
+        box.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.cursor-help-btn') || e.target.closest('.cursor-help-popover')) {
+                e.stopPropagation();
+            }
+        });
         box.addEventListener('click', (e) => {
             const helpBtn = e.target.closest('.cursor-help-btn');
             const popover = box.querySelector('.cursor-help-popover');
