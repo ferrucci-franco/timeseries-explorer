@@ -1675,7 +1675,14 @@ body.fft-split-dragging {
     cursor: col-resize;
 }
 
-/* 1/Δf caption + help popover inside the spectrum cursor box. */
+/* 1/Δf caption + help popover inside the spectrum cursor box. The values
+   area is pointer-events:none, so the interactive help controls must
+   re-enable hit-testing explicitly. */
+.cursor-info-values .cursor-help-btn,
+.cursor-info-values .cursor-help-popover {
+    pointer-events: auto;
+}
+
 .cursor-inverse-spacing-note {
     display: flex;
     align-items: center;
@@ -1691,10 +1698,18 @@ body.fft-split-dragging {
     font-size: 0.62rem;
 }
 
+/* Floating overlay: it must not grow the cursor box (near a panel edge the
+   inline flow would truncate the text). Positioned from JS next to the
+   help button and clamped to the viewport. */
 .cursor-info-box .cursor-help-popover {
-    margin: 6px 0 0;
-    max-width: 260px;
+    position: fixed;
+    z-index: 40;
+    width: 300px;
+    max-width: calc(100vw - 16px);
+    margin: 0;
     white-space: normal;
+    background: var(--bg-primary);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
 /* The shared measurement cursors set inline div.style.cursor, but Plotly's

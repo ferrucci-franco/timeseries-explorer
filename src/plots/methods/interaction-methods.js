@@ -2360,6 +2360,7 @@ proto._updateCursorBox = function(view) {
                 const popover = valuesEl.querySelector('.cursor-help-popover');
                 if (popover) popover.hidden = false;
                 valuesEl.querySelector('.cursor-help-btn')?.setAttribute('aria-expanded', 'true');
+                this._positionCursorHelpPopover(existingBox);
             }
         }
         this._applyCursorBoxPosition(panelEl, existingBox, view);
@@ -2400,6 +2401,26 @@ proto._fftCursorPeriodUnit = function(plot) {
     if (!freqUnit || freqUnit === 'Hz') return 's';
     const inverse = freqUnit.match(/^1\/(.+)$/);
     return inverse ? inverse[1] : `1/${freqUnit}`;
+};
+
+// Floats the help popover (position: fixed) next to its button, clamped to
+// the viewport so it never truncates when the box sits near a panel edge.
+proto._positionCursorHelpPopover = function(box) {
+    const btn = box?.querySelector('.cursor-help-btn');
+    const popover = box?.querySelector('.cursor-help-popover');
+    if (!btn || !popover || popover.hidden) return;
+    const margin = 8;
+    const btnRect = btn.getBoundingClientRect();
+    const width = popover.offsetWidth;
+    const height = popover.offsetHeight;
+    let left = Math.min(btnRect.right - width, window.innerWidth - width - margin);
+    left = Math.max(margin, left);
+    let top = btnRect.bottom + 6;
+    if (top + height > window.innerHeight - margin) {
+        top = Math.max(margin, btnRect.top - height - 6);
+    }
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
 };
 
 proto._cursorViewBoxElement = function(panelEl, viewId) {
@@ -2484,6 +2505,7 @@ proto._showCursorBox = function(view, html) {
                 const show = popover.hidden;
                 popover.hidden = !show;
                 helpBtn.setAttribute('aria-expanded', String(show));
+                if (show) this._positionCursorHelpPopover(box);
                 return;
             }
             if (!e.target.closest('.cursor-help-popover')) {
@@ -2507,17 +2529,21 @@ proto._applyCursorBoxPosition = function(panelEl, box, view) {
     let pos = this._viewCursors(view).boxPos;
     if (!pos && view.isSpectrum && box.offsetWidth) {
         // First display of the spectrum box: right-aligned, stacked under
-        // the time-pane box so the two never overlap.
+        // the time-pane box, clamped inside the panel — a box hanging past
+        // the panel edge would sit under the neighboring panel's chart and
+        // swallow every click.
         const panelRect = panelEl.getBoundingClientRect();
         const mainBox = this._cursorViewBoxElement(panelEl, 'main');
+        const maxX = Math.max(6, panelRect.width - box.offsetWidth - 10);
+        const maxY = Math.max(6, panelRect.height - box.offsetHeight - 6);
         let y = 42;
         if (mainBox && mainBox.style.display !== 'none') {
             const mainRect = mainBox.getBoundingClientRect();
-            y = Math.max(6, mainRect.bottom - panelRect.top + 8);
+            y = mainRect.bottom - panelRect.top + 8;
         }
         pos = {
-            x: Math.max(6, panelRect.width - box.offsetWidth - 10),
-            y,
+            x: maxX,
+            y: Math.min(maxY, Math.max(6, y)),
         };
         this._viewCursors(view).boxPos = pos;
     }
@@ -2539,6 +2565,13 @@ proto._ensureCursorBoxDrag = function(view, box = null) {
         if (!event.target.closest('.cursor-info-header')) return;
         event.preventDefault();
         event.stopPropagation();
+        // The help popover is position:fixed; it would stay behind while
+        // the box moves, so close it when a drag starts.
+        const openPopover = box.querySelector('.cursor-help-popover:not([hidden])');
+        if (openPopover) {
+            openPopover.hidden = true;
+            box.querySelector('.cursor-help-btn')?.setAttribute('aria-expanded', 'false');
+        }
         const panelRect = panelEl.getBoundingClientRect();
         const boxRect = box.getBoundingClientRect();
         drag = {
