@@ -2478,26 +2478,30 @@ proto._showCursorBox = function(view, html) {
         });
     }
     this._ensureCursorBoxDrag(view, box);
-    this._applyCursorBoxPosition(panelEl, box, view);
+    // Displayed before positioning: the spectrum default position needs the
+    // box measurable (offsetWidth is 0 while display is none).
     box.style.display = 'block';
+    this._applyCursorBoxPosition(panelEl, box, view);
     return box;
 };
 
 proto._applyCursorBoxPosition = function(panelEl, box, view) {
     let pos = this._viewCursors(view).boxPos;
-    if (!pos && view.isSpectrum) {
-        // First display of the spectrum box: anchor it to the top-right of
-        // the spectrum pane so it does not stack over the time-pane box.
-        const div = this._viewDiv(view);
-        if (div && box.offsetWidth) {
-            const panelRect = panelEl.getBoundingClientRect();
-            const divRect = div.getBoundingClientRect();
-            pos = {
-                x: Math.max(6, divRect.right - panelRect.left - box.offsetWidth - 12),
-                y: Math.max(6, divRect.top - panelRect.top + 10),
-            };
-            this._viewCursors(view).boxPos = pos;
+    if (!pos && view.isSpectrum && box.offsetWidth) {
+        // First display of the spectrum box: right-aligned, stacked under
+        // the time-pane box so the two never overlap.
+        const panelRect = panelEl.getBoundingClientRect();
+        const mainBox = this._cursorViewBoxElement(panelEl, 'main');
+        let y = 42;
+        if (mainBox && mainBox.style.display !== 'none') {
+            const mainRect = mainBox.getBoundingClientRect();
+            y = Math.max(6, mainRect.bottom - panelRect.top + 8);
         }
+        pos = {
+            x: Math.max(6, panelRect.width - box.offsetWidth - 10),
+            y,
+        };
+        this._viewCursors(view).boxPos = pos;
     }
     if (!pos) return;
     box.style.left = `${pos.x}px`;

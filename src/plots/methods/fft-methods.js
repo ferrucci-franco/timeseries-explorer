@@ -248,7 +248,13 @@ proto._installFftPlotHandlers = function(panelId, plot) {
             return false;
         });
         div.on('plotly_legenddoubleclick', () => false);
-        div.on('plotly_afterplot', () => this._installLegendHoverHint(div));
+        div.on('plotly_afterplot', () => {
+            this._installLegendHoverHint(div);
+            // Y-only pans/zooms produce no x-axis relayout update, so the
+            // cursor overlays (line/dot pixels) must follow the redraw here,
+            // like the timeseries chart does via _refreshPanelDomOverlays.
+            this._refreshPanelDomOverlays(plot);
+        });
     };
     bindLegend(plot.div);
     bindLegend(plot.fftDiv);
