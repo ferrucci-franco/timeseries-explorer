@@ -2143,20 +2143,20 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     };
 
     div.addEventListener('wheel', (event) => {
-        if (state.mode === null) {
-            // First event decides for the whole gesture. Pinch (ctrlKey) and
-            // vertical-dominant starts stay with Plotly's zoom.
-            state.mode = (!event.ctrlKey && Math.abs(event.deltaX) > Math.abs(event.deltaY)) ? 'pan' : 'zoom';
-            if (state.mode === 'pan') {
+        // Only PAN is latched. While the latch is alive a vertical event still
+        // pans (bridging the lift-and-replace). Otherwise every event is
+        // re-evaluated, so a horizontal swipe starts a pan immediately — even
+        // right after a vertical zoom, which is never latched.
+        if (state.mode !== 'pan') {
+            if (!event.ctrlKey && Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
                 state.base = captureBase();
-                if (!state.base) state.mode = 'zoom';
+                if (state.base) state.mode = 'pan';
             }
         }
-        // Keep the gesture (and its latched mode) alive on every event,
-        // including the vertical continuation of a horizontal-started pan.
+        if (state.mode !== 'pan') return; // vertical / pinch -> Plotly's zoom
+        // Refresh the pan latch on each pan event.
         clearTimeout(state.endTimer);
         state.endTimer = setTimeout(endGesture, END_MS);
-        if (state.mode !== 'pan') return; // let Plotly's scroll-zoom handle it
         // Capture-phase stopPropagation keeps the event from Plotly's inner
         // drag-layer wheel handler; preventDefault stops the page/zoom default.
         event.preventDefault();
