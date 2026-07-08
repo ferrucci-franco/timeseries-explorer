@@ -925,6 +925,13 @@ class PlotManager {
                     if (plot.mode === 'timeseries' && plot.timeseriesY2Enabled && this._handleTimeseriesLegendContextMenu(panelId, plot, e)) return;
                     e.preventDefault();
                 });
+                // Two-finger horizontal trackpad swipe pans; vertical keeps
+                // Plotly's zoom.
+                this._installWheelPan(panelId, plot, div, {
+                    finalize: plot.mode === 'timeseries'
+                        ? (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange })
+                        : null,
+                });
             }
             // Track legend visibility in our own state so it survives re-renders.
             // We match by trace name, not by curveNumber, because marker traces inserted via

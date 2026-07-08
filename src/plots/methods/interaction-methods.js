@@ -2047,6 +2047,120 @@ proto._cursorPairSlideDelta = function(view, startA, startB, delta) {
     return delta;
 };
 
+// Two-finger trackpad pan on 2D cartesian plots.
+//
+// Plotly only maps the wheel to zoom (via deltaY), so a horizontal swipe does
+// nothing today. This adds an ADDITIVE gesture: a swipe that STARTS
+// horizontally latches into "pan" for the whole gesture — panning by both
+// deltaX and deltaY — so "sideways then up" pans in 2D. A gesture that starts
+// vertically (or a pinch, ctrlKey) is left untouched so Plotly's zoom keeps
+// working exactly as before. 3D scenes are never wired up.
+proto._installWheelPan = function(panelId, plot, div, options = {}) {
+    if (!div || div._wheelPanBound) return;
+    div._wheelPanBound = true;
+
+    // A gesture is a run of wheel events < IDLE_MS apart; the OS keeps firing
+    // during inertia, so the pan glides to a stop on its own.
+    const IDLE_MS = 180;
+    const END_MS = 240;
+    const state = { mode: null, lastTime: 0, raf: 0, endTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null };
+
+    const deltaScale = (event) => {
+        if (event.deltaMode === 1) return 16;   // lines -> px (Firefox)
+        if (event.deltaMode === 2) return div.clientHeight || 800; // pages -> px
+        return 1;
+    };
+
+    const captureBase = () => {
+        const fl = div._fullLayout;
+        const xa = fl?.xaxis, ya = fl?.yaxis;
+        if (!xa || !ya || !xa._length || !ya._length) return null;
+        const xNumeric = xa.range.map(v => this._coerceAxisValue(v));
+        const yNumeric = ya.range.map(v => Number(v));
+        if (!xNumeric.every(Number.isFinite) || !yNumeric.every(Number.isFinite)) return null;
+        const y2a = (plot.timeseriesY2Enabled && plot.mode === 'timeseries') ? fl?.yaxis2 : null;
+        const y2Numeric = y2a?.range ? y2a.range.map(v => Number(v)) : null;
+        return {
+            xLen: xa._length,
+            yLen: ya._length,
+            xSpan: xNumeric[1] - xNumeric[0],
+            ySpan: yNumeric[1] - yNumeric[0],
+            curX: xNumeric.slice(),
+            curY: yNumeric.slice(),
+            isDateX: xa.type === 'date',
+            y2Len: y2a?._length || null,
+            y2Span: y2Numeric ? y2Numeric[1] - y2Numeric[0] : null,
+            curY2: y2Numeric ? y2Numeric.slice() : null,
+        };
+    };
+
+    const flush = () => {
+        state.raf = 0;
+        const base = state.base;
+        if (!base) return;
+        // Browser convention: deltaX>0 scrolls right, deltaY>0 scrolls down.
+        // Panning follows the revealed direction (scroll right -> later data,
+        // scroll up -> higher values), so the view tracks the fingers.
+        const dxPx = state.pendingDX;
+        const dyPx = state.pendingDY;
+        state.pendingDX = 0;
+        state.pendingDY = 0;
+        const xShift = (dxPx / base.xLen) * base.xSpan;
+        const yShift = -(dyPx / base.yLen) * base.ySpan;
+        base.curX = [base.curX[0] + xShift, base.curX[1] + xShift];
+        base.curY = [base.curY[0] + yShift, base.curY[1] + yShift];
+        state.latestXRange = base.isDateX ? base.curX.map(v => new Date(v).toISOString()) : base.curX.slice();
+        const update = {
+            'xaxis.range': state.latestXRange,
+            'yaxis.range': base.curY.slice(),
+        };
+        if (base.curY2 && base.y2Len && base.y2Span != null) {
+            // The secondary Y pans by the same pixel delta as the primary.
+            const y2Shift = -(dyPx / base.y2Len) * base.y2Span;
+            base.curY2 = [base.curY2[0] + y2Shift, base.curY2[1] + y2Shift];
+            update['yaxis2.range'] = base.curY2.slice();
+        }
+        plot._relayoutLiveOnly = true;
+        Plotly.relayout(div, update).finally(() => {
+            if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: state.latestXRange, lightweight: true });
+        });
+    };
+
+    const endGesture = () => {
+        state.endTimer = 0;
+        state.mode = null;
+        state.base = null;
+        plot._relayoutLiveOnly = false;
+        if (typeof options.finalize === 'function' && state.latestXRange) {
+            options.finalize(state.latestXRange);
+        }
+        state.latestXRange = null;
+    };
+
+    div.addEventListener('wheel', (event) => {
+        const now = performance.now();
+        if (now - state.lastTime > IDLE_MS) state.mode = null; // new gesture
+        state.lastTime = now;
+        if (state.mode === null) {
+            // Pinch (ctrlKey) and vertical-dominant gestures stay with Plotly.
+            state.mode = (!event.ctrlKey && Math.abs(event.deltaX) > Math.abs(event.deltaY)) ? 'pan' : 'zoom';
+            if (state.mode === 'pan') state.base = captureBase();
+            if (!state.base) state.mode = 'zoom';
+        }
+        if (state.mode !== 'pan') return; // let Plotly's scroll-zoom handle it
+        // Capture-phase stopPropagation keeps the event from Plotly's inner
+        // drag-layer wheel handler; preventDefault stops the page/zoom default.
+        event.preventDefault();
+        event.stopPropagation();
+        const scale = deltaScale(event);
+        state.pendingDX += event.deltaX * scale;
+        state.pendingDY += event.deltaY * scale;
+        if (!state.raf) state.raf = requestAnimationFrame(flush);
+        clearTimeout(state.endTimer);
+        state.endTimer = setTimeout(endGesture, END_MS);
+    }, { capture: true, passive: false });
+};
+
 proto._installCursorHandlers = function(panelId, plot) {
     for (const view of this._cursorViews(panelId, plot)) {
         this._installCursorViewHandlers(view);
