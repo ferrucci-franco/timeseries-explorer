@@ -1675,6 +1675,28 @@ body.fft-split-dragging {
     cursor: col-resize;
 }
 
+/* 1/Δf caption + help popover inside the spectrum cursor box. */
+.cursor-inverse-spacing-note {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    margin-top: -2px;
+}
+
+.cursor-inverse-spacing-note .cursor-help-btn {
+    width: 16px;
+    height: 16px;
+    font-size: 0.62rem;
+}
+
+.cursor-info-box .cursor-help-popover {
+    margin: 6px 0 0;
+    max-width: 260px;
+    white-space: normal;
+}
+
 /* The shared measurement cursors set inline div.style.cursor, but Plotly's
    drag layer pins its own crosshair on the FFT panes; override it there. */
 body.cursor-dragging .plotly-mode-fft-time .nsewdrag,

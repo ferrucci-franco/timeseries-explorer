@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
+import { spectrumCursorMeasurements } from '../../utils/fft.js';
 
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -2214,6 +2215,7 @@ proto._updateCursorBox = function(view) {
     };
     const a = measure(traceA, aX);
     const b = measure(traceB, bX);
+    const spectrum = view.isSpectrum ? spectrumCursorMeasurements(aX, bX) : null;
     const dx = bX - aX;
     const isDateTimeCursor = a.timeUnit === 'datetime' || b.timeUnit === 'datetime';
     const isDurationCursor = a.timeUnit === 'duration' || b.timeUnit === 'duration';
@@ -2305,28 +2307,46 @@ proto._updateCursorBox = function(view) {
         </label>
     `;
     const moveIcon = `<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>`;
-    // Spectrum view: x is frequency, Δx a frequency delta and 1/Δx a period;
-    // the slope has no physical meaning there.
+    // Spectrum view: x is frequency; each cursor also reads its own period
+    // T = 1/|f|. Δf is the absolute cursor separation, and 1/Δf is presented
+    // as the inverse frequency spacing (a beat period only when A and B mark
+    // two real nearby components — see the help popover). The slope has no
+    // physical meaning there.
     const xLabel = view.isSpectrum ? 'f' : labelX;
     const dxLabel = view.isSpectrum ? '&Delta;f' : labelDx;
     const invDxLabel = view.isSpectrum ? '1/&Delta;f' : labelInvDx;
     const freqUnit = view.isSpectrum ? this._fftCursorFrequencyUnit(plot) : '';
+    const formatCursorNumber = (value) => (value === Infinity
+        ? '&infin;'
+        : value === -Infinity ? '-&infin;' : this._formatHTMLNumber(value));
     const formatXValue = (m, x) => (view.isSpectrum
-        ? this._formatHTMLNumber(x)
+        ? formatCursorNumber(x)
         : this._escapeHTML(this._formatTimeValue(m.fileId, x)));
     const xUnitSuffix = view.isSpectrum
         ? unit(freqUnit)
         : ((isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit));
+    const periodSuffix = (period) => (view.isSpectrum
+        ? ` T=${formatCursorNumber(period)}${unit(inverseTimeUnit)}`
+        : '');
     const dxText = view.isSpectrum
-        ? `${this._formatHTMLNumber(dx)}${unit(freqUnit)}`
+        ? `${formatCursorNumber(spectrum.deltaF)}${unit(freqUnit)}`
         : `${this._escapeHTML(isDateTimeCursor ? this._formatDuration(dx, 'datetime') : (isDurationCursor ? this._formatDuration(dx, 's') : this._formatHTMLNumber(dx)))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)}`;
+    const inverseDxValue = view.isSpectrum ? spectrum.inverseDeltaF : inverseDx;
+    const inverseSpacingHTML = view.isSpectrum
+        ? `
+            <div class="cursor-inverse-spacing-note">${this._escapeHTML(i18n.t('fftCursorInverseSpacing'))}
+                <button type="button" class="fft-help-btn cursor-help-btn" title="${this._escapeHTML(i18n.t('fftCursorInverseSpacing'))}" aria-expanded="false">?</button>
+            </div>
+            <div class="fft-help-popover cursor-help-popover" hidden>${this._escapeHTML(i18n.t('fftCursorInverseSpacingHelp'))}</div>`
+        : '';
     const valuesHTML = `
-            <div><b style="color:${colorA}">A</b> ${xLabel}=${formatXValue(a, aX)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
-            <div><b style="color:${colorB}">B</b> ${xLabel}=${formatXValue(b, bX)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
+            <div><b style="color:${colorA}">A</b> ${xLabel}=${formatXValue(a, aX)}${xUnitSuffix}${periodSuffix(spectrum?.periodA)} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
+            <div><b style="color:${colorB}">B</b> ${xLabel}=${formatXValue(b, bX)}${xUnitSuffix}${periodSuffix(spectrum?.periodB)} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
             <div><b>${dxLabel}=</b>${dxText}</div>
             <div><b>${labelDy}=</b>${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
             ${view.isSpectrum ? '' : `<div><b>${labelSlope}=</b>${this._formatHTMLNumber(slope)}</div>`}
-            <div><b>${invDxLabel}=</b>${this._formatHTMLNumber(inverseDx)}${unit(inverseTimeUnit)}</div>
+            <div><b>${invDxLabel}=</b>${formatCursorNumber(inverseDxValue)}${unit(inverseTimeUnit)}</div>
+            ${inverseSpacingHTML}
     `;
     const existingBox = this._cursorViewBoxElement(panelEl, view.id);
     if (existingBox?.dataset.cursorSignature === boxSignature) {
@@ -2431,6 +2451,30 @@ proto._showCursorBox = function(view, html) {
             e.stopPropagation();
             this._viewCursors(view).showSecant = !!e.target.checked;
             this._syncCursorDisplay(panelId, plot);
+        });
+    }
+    if (!box._helpBound) {
+        // Delegated so the binding survives the innerHTML swaps of the
+        // values area while cursors are being dragged.
+        box._helpBound = true;
+        box.addEventListener('click', (e) => {
+            const helpBtn = e.target.closest('.cursor-help-btn');
+            const popover = box.querySelector('.cursor-help-popover');
+            if (helpBtn && popover) {
+                e.preventDefault();
+                e.stopPropagation();
+                const show = popover.hidden;
+                popover.hidden = !show;
+                helpBtn.setAttribute('aria-expanded', String(show));
+                return;
+            }
+            if (!e.target.closest('.cursor-help-popover')) {
+                const openPopover = box.querySelector('.cursor-help-popover:not([hidden])');
+                if (openPopover) {
+                    openPopover.hidden = true;
+                    box.querySelector('.cursor-help-btn')?.setAttribute('aria-expanded', 'false');
+                }
+            }
         });
     }
     this._ensureCursorBoxDrag(view, box);

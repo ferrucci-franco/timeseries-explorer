@@ -6,6 +6,30 @@ export const FFT_MAX_POINTS_DESKTOP = 2 ** 26;
 
 const TWO_PI = Math.PI * 2;
 
+// Readout values for the spectrum measurement cursors. Periods use the
+// magnitude of the exact frequencies (two-sided spectra can be negative);
+// f = 0 and deltaF = 0 map to Infinity instead of dividing blindly, and the
+// callers render Infinity as an infinity symbol.
+export function spectrumCursorMeasurements(freqA, freqB) {
+    const periodOf = (frequency) => {
+        if (!Number.isFinite(frequency)) return NaN;
+        if (frequency === 0) return Infinity;
+        return 1 / Math.abs(frequency);
+    };
+    const deltaF = Number.isFinite(freqA) && Number.isFinite(freqB)
+        ? Math.abs(freqB - freqA)
+        : NaN;
+    const inverseDeltaF = !Number.isFinite(deltaF)
+        ? NaN
+        : (deltaF === 0 ? Infinity : 1 / deltaF);
+    return {
+        periodA: periodOf(freqA),
+        periodB: periodOf(freqB),
+        deltaF,
+        inverseDeltaF,
+    };
+}
+
 export function nextPowerOfTwo(value) {
     const n = Math.ceil(Number(value));
     if (!Number.isFinite(n) || n <= 1) return 1;

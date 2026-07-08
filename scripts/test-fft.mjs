@@ -5,7 +5,9 @@ import {
     fftRadix2,
     fftWindowCoefficients,
     nextPowerOfTwo,
+    spectrumCursorMeasurements,
 } from '../src/utils/fft.js';
+import translations from '../src/i18n/translations.js';
 
 const close = (actual, expected, tolerance, label) => {
     assert.ok(
@@ -219,6 +221,50 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
     const fail = analyzeSampling(gap);
     assert.equal(fail.ok, false, '2x gap fails uniformity check');
     assert.equal(fail.reason, 'nonUniform');
+}
+
+{
+    // Spectrum measurement-cursor readout math.
+    const basic = spectrumCursorMeasurements(0.5, 2);
+    close(basic.periodA, 2, 1e-12, 'fA=0.5 Hz gives TA=2 s');
+    close(basic.periodB, 0.5, 1e-12, 'fB=2 Hz gives TB=0.5 s');
+    close(basic.deltaF, 1.5, 1e-12, 'deltaF is |fB - fA|');
+
+    const spaced = spectrumCursorMeasurements(10, 12);
+    close(spaced.deltaF, 2, 1e-12, 'fA=10, fB=12 gives deltaF=2 Hz');
+    close(spaced.inverseDeltaF, 0.5, 1e-12, 'fA=10, fB=12 gives 1/deltaF=0.5 s');
+
+    const reversed = spectrumCursorMeasurements(12, 10);
+    close(reversed.deltaF, 2, 1e-12, 'deltaF uses the absolute separation');
+
+    const same = spectrumCursorMeasurements(3, 3);
+    assert.equal(same.deltaF, 0, 'fA=fB gives deltaF=0');
+    assert.equal(same.inverseDeltaF, Infinity, 'fA=fB maps 1/deltaF to Infinity, not NaN');
+    assert.ok(!Number.isNaN(same.inverseDeltaF), 'no NaN when cursors coincide');
+
+    const zero = spectrumCursorMeasurements(0, 2);
+    assert.equal(zero.periodA, Infinity, 'f=0 maps the period to Infinity without errors');
+    close(zero.deltaF, 2, 1e-12, 'deltaF still finite with f=0');
+
+    const negative = spectrumCursorMeasurements(-2, 4);
+    close(negative.periodA, 0.5, 1e-12, 'negative frequency uses T=1/|f|');
+    close(negative.deltaF, 6, 1e-12, 'deltaF spans across zero');
+
+    const undefinedCursor = spectrumCursorMeasurements(NaN, 2);
+    assert.ok(Number.isNaN(undefinedCursor.periodA), 'undefined cursor gives NaN period');
+    assert.ok(Number.isNaN(undefinedCursor.deltaF), 'undefined cursor gives NaN deltaF');
+    assert.ok(Number.isNaN(undefinedCursor.inverseDeltaF), 'undefined cursor gives NaN 1/deltaF');
+
+    // The inverse-spacing helper exists in every language and explains the
+    // beat-period interpretation.
+    for (const lang of ['en', 'fr', 'es', 'it']) {
+        const strings = translations[lang];
+        assert.ok(strings?.fftCursorInverseSpacing, `${lang}: inverse-spacing label present`);
+        const help = strings?.fftCursorInverseSpacingHelp || '';
+        assert.ok(help.length > 120, `${lang}: inverse-spacing help present`);
+        assert.ok(/batt|beat|batido/i.test(help), `${lang}: help mentions the beat interpretation`);
+        assert.ok(help.includes('1/|f2 - f1|'), `${lang}: help states the 1/|f2 - f1| relation`);
+    }
 }
 
 console.log('FFT tests passed');
