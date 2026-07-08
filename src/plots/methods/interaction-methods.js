@@ -2068,7 +2068,11 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     // "vertical two-finger = zoom". The OS also fires inertia events, so a
     // plain pan glides to a stop on its own.
     const END_MS = 800;
-    const state = { mode: null, raf: 0, endTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null };
+    // The data refresh (new points at the right resolution for the new
+    // window) fires this soon after movement stops — decoupled from the long
+    // pan-mode latch, so points do not appear only when the latch expires.
+    const SETTLE_MS = 150;
+    const state = { mode: null, raf: 0, endTimer: 0, settleTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null };
 
     const deltaScale = (event) => {
         if (event.deltaMode === 1) return 16;   // lines -> px (Firefox)
@@ -2131,14 +2135,23 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
         });
     };
 
+    // Redraw at the panned range and let the full relayout settle (lazy
+    // refetch, downsample to the new window, axis sync). Owned by the short
+    // settle timer so new points show promptly, not at latch expiry.
+    const settle = () => {
+        state.settleTimer = 0;
+        if (!state.latestXRange) return;
+        plot._relayoutLiveOnly = false;
+        if (typeof options.finalize === 'function') options.finalize(state.latestXRange);
+    };
+
     const endGesture = () => {
         state.endTimer = 0;
         state.mode = null;
         state.base = null;
-        plot._relayoutLiveOnly = false;
-        if (typeof options.finalize === 'function' && state.latestXRange) {
-            options.finalize(state.latestXRange);
-        }
+        // settle() owns the refresh; run any pending one now so nothing is left
+        // half-applied if the latch expires first.
+        if (state.settleTimer) { clearTimeout(state.settleTimer); settle(); }
         state.latestXRange = null;
     };
 
@@ -2154,9 +2167,12 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
             }
         }
         if (state.mode !== 'pan') return; // vertical / pinch -> Plotly's zoom
-        // Refresh the pan latch on each pan event.
+        // Refresh both timers on each pan event: the long latch keeps pan mode
+        // alive (lift-and-replace bridge), the short one refreshes the points.
         clearTimeout(state.endTimer);
         state.endTimer = setTimeout(endGesture, END_MS);
+        clearTimeout(state.settleTimer);
+        state.settleTimer = setTimeout(settle, SETTLE_MS);
         // Capture-phase stopPropagation keeps the event from Plotly's inner
         // drag-layer wheel handler; preventDefault stops the page/zoom default.
         event.preventDefault();
