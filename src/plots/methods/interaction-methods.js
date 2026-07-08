@@ -2059,13 +2059,15 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     if (!div || div._wheelPanBound) return;
     div._wheelPanBound = true;
 
-    // A single idle timer defines the gesture: while it is alive the mode
-    // never changes, so a swipe that starts horizontal keeps panning even
-    // when it turns vertical (changing direction on a trackpad usually
-    // includes a brief slowdown that must NOT be read as a new gesture).
-    // The window is generous for that reason; the OS also keeps firing
-    // inertia events, so the pan glides to a stop on its own.
-    const END_MS = 400;
+    // A single idle timer defines the gesture: while it is alive the latched
+    // mode never changes. Windows locks the scroll axis per physical touch,
+    // so a horizontal-started gesture never delivers deltaY — to pan
+    // vertically the user must lift and re-place their fingers, which starts
+    // a fresh (Y-locked) gesture. This window keeps the pan latch alive long
+    // enough to bridge that lift-and-replace before it reverts to
+    // "vertical two-finger = zoom". The OS also fires inertia events, so a
+    // plain pan glides to a stop on its own.
+    const END_MS = 800;
     const state = { mode: null, raf: 0, endTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null };
 
     const deltaScale = (event) => {
