@@ -522,6 +522,25 @@ async function testExistingIndexColumnRenameDrivesAxisName() {
     assert(Object.keys(dialog.state.columnOverrides).length === 0, 'Column reset should restore detected names');
 }
 
+async function testEco2mixSparseRowsKeepRealHeader() {
+    const path = 'test-files/csv/eco2mix-national-cons-def.csv';
+    const buffer = readFileSync(path);
+    const ab = arrayBufferFromNodeBuffer(buffer);
+    const profile = parser.inspectSample(ab, { maxRows: 700 });
+    assert(profile.delimiter === ';', 'eco2mix fixture should detect semicolon delimiter');
+    assert(profile.headerIndex === 0, 'eco2mix fixture should keep the first row as header');
+    assert(profile.rawHeaders[0] === 'Périmètre', 'eco2mix fixture should keep the real first header');
+    assert(profile.rawHeaders[2] === 'Date', 'eco2mix fixture should keep Date header');
+    assert(profile.rawHeaders[3] === 'Heure', 'eco2mix fixture should keep Heure header');
+    assert(profile.timeSource?.strategy === 'split-date-time', 'eco2mix fixture should use split Date + Heure time');
+    assert(profile.timeSource?.sourceHeaders?.join('|') === 'Date|Heure', 'eco2mix fixture should use Date and Heure columns');
+    assert(profile.timeSource?.format?.dashSeparator === true, 'eco2mix split time should preserve dash date separator');
+
+    const data = await parser.parse(ab);
+    assert(data.metadata.timeName === 'Date Heure', 'eco2mix parsed time variable should use Date Heure name');
+    assert(data.variables['Consommation']?.description === '[MW]', 'eco2mix parsed variables should use real headers and units');
+}
+
 const rows = [];
 for (const path of fixtureFiles()) {
     const buffer = readFileSync(path);
@@ -563,5 +582,6 @@ testCsvPreviewHeaderlessProfileStaysHeaderless();
 await testUsMdySlashDatetimeWithAmPm();
 testCsvPreviewCustomExcelMatlabAliases();
 await testExistingIndexColumnRenameDrivesAxisName();
+await testEco2mixSparseRowsKeepRealHeader();
 
 console.log(`CSV fixtures OK: ${rows.length} files`);

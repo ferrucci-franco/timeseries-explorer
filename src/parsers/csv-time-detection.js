@@ -860,6 +860,7 @@ function evaluateSplitColumns(dateCol, timeCol, preferred) {
     const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
     if (top === 'iso') {
         order = 'YMD';
+        dashSeparator = true;
     } else if (top === 'slash') {
         const r = resolveDmyOrMdy(dc.slashCounts, preferred);
         order = r.order; ambiguous = r.ambiguous;

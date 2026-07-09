@@ -298,6 +298,7 @@ async function createWindow(url) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   });
 

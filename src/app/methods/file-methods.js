@@ -1207,7 +1207,7 @@ proto._parsePickleResultBuffer = async function(filename, buffer) {
 
 // Files bigger than this threshold (bytes) trigger DuckDB lazy mode: the
 // in-memory copy holds a downsampled overview, and zoom queries hit DuckDB.
-const DUCKDB_LAZY_THRESHOLD_BYTES = 50 * 1024 * 1024;
+const DUCKDB_LAZY_THRESHOLD_BYTES = 150 * 1024 * 1024;
 // CSV files larger than this should ideally be pre-converted to Parquet
 // (`node bench/csv-to-parquet.mjs file.csv`) — the WASM heap ceiling makes
 // the raw CSV path risky above this size.

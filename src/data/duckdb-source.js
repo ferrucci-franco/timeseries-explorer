@@ -448,11 +448,11 @@ export default class DuckDbSource {
         const estimatedRows = this._estimateRowsInRange(legacyData, meta, t0, t1);
         const rawLimit = Math.ceil(maxPoints * 1.2);
         const valueSelect = requested
-            .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName)} AS v${index}`)
+            .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
             .join(',\n                       ');
         if (meta.generatedTime) {
             const generatedValueSelect = requested
-                .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName)} AS v${index}`)
+                .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
                 .join(',\n                           ');
             const generatedValueNames = requested.map((_, index) => `v${index}`).join(', ');
             if (Number.isFinite(estimatedRows) && estimatedRows > 0 && estimatedRows <= rawLimit) {

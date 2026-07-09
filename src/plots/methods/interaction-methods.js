@@ -49,9 +49,9 @@ const formatPlaceholderHint = (key) => {
 };
 
 proto._onRelayout = function(sourcePanelId, eventData) {
-    const update = this._xAxisUpdateFromRelayout(eventData);
-    if (!update) return;
     const plot = this.plots.get(sourcePanelId);
+    const update = this._xAxisUpdateFromRelayout(eventData, plot);
+    if (!update) return;
 
     if (this._syncing && sourcePanelId !== this._syncSourcePanelId) {
         return;
@@ -61,6 +61,7 @@ proto._onRelayout = function(sourcePanelId, eventData) {
         this._onRelayouting(sourcePanelId, eventData);
         return;
     }
+    this._clearRelayoutingRefresh(plot);
 
     if (plot?.mode === 'timeseries' || plot?.mode === 'fft') {
         const autorangeRequested = update['xaxis.autorange'] === true
@@ -97,19 +98,45 @@ proto._onRelayout = function(sourcePanelId, eventData) {
 
 proto._onRelayouting = function(sourcePanelId, eventData) {
     const plot = this.plots.get(sourcePanelId);
-    if (!plot?.div || !this._plotSupportsCursors(plot) || !plot.cursors?.enabled) return;
+    if (!plot?.div) return;
+    const update = this._xAxisUpdateFromRelayout(eventData, plot);
+    const range = Array.isArray(update?.['xaxis.range'])
+        ? update['xaxis.range']
+        : plot.div._fullLayout?.xaxis?.range;
+
+    if (!plot._relayoutLiveOnly && (plot.mode === 'timeseries' || plot.mode === 'fft') && Array.isArray(range) && range.length >= 2) {
+        this._scheduleRelayoutingRefresh(sourcePanelId, plot, range);
+    }
+
+    if (!this._plotSupportsCursors(plot) || !plot.cursors?.enabled) return;
     if (plot._cursorBoxZoomActive) {
         return;
     }
     if (!plot._relayoutLiveOnly && this._relayoutEventTouchesYAxis(eventData)) {
         return;
     }
-    const update = this._xAxisUpdateFromRelayout(eventData);
-    const range = Array.isArray(update?.['xaxis.range'])
-        ? update['xaxis.range']
-        : plot.div._fullLayout?.xaxis?.range;
     if (!Array.isArray(range) || range.length < 2) return;
     this._renderCursorOverlay(plot, { range, lightweight: true });
+};
+
+proto._scheduleRelayoutingRefresh = function(panelId, plot, range) {
+    if (!plot?.div || !Array.isArray(range) || range.length < 2) return;
+    plot._relayoutingRefreshRange = [range[0], range[1]];
+    if (plot._relayoutingRefreshTimer) clearTimeout(plot._relayoutingRefreshTimer);
+    plot._relayoutingRefreshTimer = setTimeout(() => {
+        plot._relayoutingRefreshTimer = 0;
+        const latestRange = plot._relayoutingRefreshRange;
+        plot._relayoutingRefreshRange = null;
+        if (!latestRange || plot._relayoutLiveOnly || this.plots.get(panelId) !== plot || !plot.div) return;
+        this._onRelayout(panelId, { 'xaxis.range': latestRange });
+    }, 140);
+};
+
+proto._clearRelayoutingRefresh = function(plot) {
+    if (!plot) return;
+    if (plot._relayoutingRefreshTimer) clearTimeout(plot._relayoutingRefreshTimer);
+    plot._relayoutingRefreshTimer = 0;
+    plot._relayoutingRefreshRange = null;
 };
 
 proto._relayoutEventTouchesYAxis = function(eventData) {
@@ -124,7 +151,7 @@ proto._relayoutEventTouchesYAxis = function(eventData) {
         || eventData['yaxis2.autorange'] !== undefined;
 };
 
-proto._xAxisUpdateFromRelayout = function(eventData) {
+proto._xAxisUpdateFromRelayout = function(eventData, plot = null) {
     if (!eventData) return null;
     if (eventData['xaxis.autorange'] === true) return { 'xaxis.autorange': true };
 
@@ -137,6 +164,15 @@ proto._xAxisUpdateFromRelayout = function(eventData) {
     const r1 = eventData['xaxis.range[1]'];
     if (r0 !== undefined && r1 !== undefined) {
         return { 'xaxis.range': [r0, r1] };
+    }
+
+    const touchedXAxis = eventData['xaxis.autorange'] === false
+        || eventData['xaxis.range'] !== undefined
+        || r0 !== undefined
+        || r1 !== undefined;
+    const currentRange = plot?.div?._fullLayout?.xaxis?.range;
+    if (touchedXAxis && Array.isArray(currentRange) && currentRange.length >= 2) {
+        return { 'xaxis.range': [currentRange[0], currentRange[1]] };
     }
 
     return null;
@@ -191,7 +227,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     const token = (this._zoomTokens.get(panelId) || 0) + 1;
     this._zoomTokens.set(panelId, token);
     this._cancelPendingLazyDetail(panelId);
-    this._cancelActiveLazySources(panelId);
+    const cancelActivePromise = this._cancelActiveLazySources(panelId);
 
     const targetInfo = this._lazyTimeseriesTarget();
     const target = targetInfo.limit;
@@ -312,6 +348,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     }
     this._rememberActiveLazySources(panelId, queryGroupsList.map(group => group.source));
     const settled = this._scheduleLazyDetail(panelId, async () => {
+        await cancelActivePromise;
         if (perf) perf.debounceMs = this._roundPerfMs(this._perfNow() - perf.startedAt - (perf.setupMs || 0));
         const results = [];
         for (const group of queryGroupsList) {
@@ -387,11 +424,12 @@ proto._refreshPhaseVisualsLazy = function(panelId, plot = this.plots.get(panelId
     const token = (this._phaseLazyTokens.get(panelId) || 0) + 1;
     this._phaseLazyTokens.set(panelId, token);
     this._cancelPendingLazyDetail(panelId);
-    this._cancelActiveLazySources(panelId);
+    const cancelActivePromise = this._cancelActiveLazySources(panelId);
     this._setLazyDetailLoading(plot, true, targetInfo, 'phase');
     this._rememberActiveLazySources(panelId, lazyItems.map(item => item.source));
 
     const settled = this._scheduleLazyDetail(panelId, async () => {
+        await cancelActivePromise;
         const results = [];
         for (const item of lazyItems) {
             if (this._phaseLazyTokens.get(panelId) !== token) break;
@@ -535,16 +573,16 @@ proto._clearActiveLazySources = function(panelId) {
 
 proto._cancelActiveLazySources = function(panelId) {
     const active = this._lazyActiveSources?.get(panelId);
-    if (!active?.size) return;
+    if (!active?.size) return Promise.resolve(false);
     this._lazyActiveSources.delete(panelId);
-    for (const source of active) {
-        if (typeof source?.cancelActiveQuery === 'function') {
-            Promise.resolve(source.cancelActiveQuery()).catch(() => null);
-        }
-    }
+    return Promise.allSettled([...active].map(source => {
+        if (typeof source?.cancelActiveQuery !== 'function') return false;
+        return Promise.resolve(source.cancelActiveQuery()).catch(() => null);
+    }));
 };
 
 proto._cleanupLazyDetailForPanel = function(panelId, plot = this.plots?.get(panelId)) {
+    this._clearRelayoutingRefresh(plot);
     this._cancelPendingLazyDetail(panelId);
     this._cancelActiveLazySources(panelId);
     if (this._zoomTokens) {
