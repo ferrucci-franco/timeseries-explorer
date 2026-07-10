@@ -816,9 +816,10 @@ proto._isPickleExtension = function(extension) {
 };
 
 proto._pypsaNetcdfEagerLimitBytes = function() {
-    return this.capabilities?.isDesktop
+    const fallback = this.capabilities?.isDesktop
         ? PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES
         : PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES;
+    return this._advancedSettingBytes('pypsaNetcdfFullLoadMb', fallback);
 };
 
 proto._preflightPypsaNetcdfFile = function(file, extension = this._fileExtension(file?.name || '')) {
@@ -833,9 +834,10 @@ proto._preflightPypsaNetcdfFile = function(file, extension = this._fileExtension
 };
 
 proto._pickleEagerLimitBytes = function() {
-    return this.capabilities?.isDesktop
+    const fallback = this.capabilities?.isDesktop
         ? PICKLE_DESKTOP_EAGER_LIMIT_BYTES
         : PICKLE_WEB_EAGER_LIMIT_BYTES;
+    return this._advancedSettingBytes('pickleFullLoadMb', fallback);
 };
 
 proto._preflightPickleFile = function(file, extension = this._fileExtension(file?.name || '')) {
@@ -857,9 +859,10 @@ proto._isExcelExtension = function(extension) {
 };
 
 proto._excelEagerLimitBytes = function() {
-    return this.capabilities?.isDesktop
+    const fallback = this.capabilities?.isDesktop
         ? EXCEL_DESKTOP_EAGER_LIMIT_BYTES
         : EXCEL_WEB_EAGER_LIMIT_BYTES;
+    return this._advancedSettingBytes('excelFullLoadMb', fallback);
 };
 
 proto._preflightExcelFile = function(file, extension = this._fileExtension(file?.name || '')) {
@@ -1216,6 +1219,25 @@ const PARQUET_HINT_THRESHOLD_BYTES = 500 * 1024 * 1024;
 // into one string and can OOM the browser tab before throwing cleanly.
 const LEGACY_CSV_FALLBACK_MAX_BYTES = 450 * 1024 * 1024;
 const CSV_PREVIEW_SEGMENT_BYTES = 2 * 1024 * 1024;
+const MB_BYTES = 1024 * 1024;
+
+proto._advancedSettingMb = function(key, fallbackMb) {
+    const raw = Number(this.advancedSettings?.[key]);
+    return Number.isFinite(raw) && raw > 0 ? raw : fallbackMb;
+};
+
+proto._advancedSettingBytes = function(key, fallbackBytes) {
+    const fallbackMb = fallbackBytes / MB_BYTES;
+    return Math.round(this._advancedSettingMb(key, fallbackMb) * MB_BYTES);
+};
+
+proto._csvFullLoadLimitBytes = function() {
+    return this._advancedSettingBytes('csvFullLoadMb', DUCKDB_LAZY_THRESHOLD_BYTES);
+};
+
+proto._csvCompactHintBytes = function() {
+    return this._advancedSettingBytes('csvCompactHintMb', PARQUET_HINT_THRESHOLD_BYTES);
+};
 
 proto._canParseFromFile = function(file, extension = this._fileExtension(file?.name || '')) {
     return !!file
@@ -1288,7 +1310,7 @@ proto._shouldOfferLargeCsvPreflight = function(file, options = {}) {
     if (extension !== '.csv') return false;
     if (!this.capabilities?.isDesktop) return false;
     if (!file?.localPath) return false;
-    if (Number(file.size || 0) < PARQUET_HINT_THRESHOLD_BYTES) return false;
+    if (Number(file.size || 0) < this._csvCompactHintBytes()) return false;
     if (typeof globalThis.omvDesktop?.convertToParquet !== 'function') return false;
     const key = this._largeCsvDecisionKey(file);
     return !this._largeCsvRawApproved?.has(key);
@@ -1649,7 +1671,7 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null, opti
 
     // Hint the user toward Parquet for very large CSVs. Non-blocking — the
     // parse still proceeds.
-    if (file && fileSize >= PARQUET_HINT_THRESHOLD_BYTES) {
+    if (file && fileSize >= this._csvCompactHintBytes()) {
         this._showLargeCsvParquetHint(filename, fileSize, file, csvProfile);
     }
     // Try DuckDB-WASM first when available — it bypasses the ~512 MB string
@@ -1658,7 +1680,7 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null, opti
     if (file && this._canUseDuckDb() && duckDbCsvCompatible) {
         try {
             const source = await this._getDuckDbSource();
-            const lazy = (file.size ?? 0) >= DUCKDB_LAZY_THRESHOLD_BYTES;
+            const lazy = (file.size ?? 0) >= this._csvFullLoadLimitBytes();
             const data = await source.parseCsvFile(file, filename, { lazy, csvProfile });
             data.filename = filename;
             return attachCsvProfile(data);

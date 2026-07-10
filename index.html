@@ -370,49 +370,6 @@
                         <span data-i18n="legendHidden">Hide legend</span>
                     </label>
                 </div>
-                <div class="options-group">
-                    <div class="options-group-header">
-                        <span class="options-group-label" data-i18n="downsampling">Downsampling</span>
-                        <button id="timeseries-downsampling-help-toggle" class="tree-control-btn derived-help-toggle options-help-toggle" title="Downsampling help" data-i18n-title="timeseriesDownsamplingHelpTitle" aria-haspopup="dialog" aria-expanded="false" aria-controls="timeseries-downsampling-help-popover">
-                            <span>?</span>
-                        </button>
-                    </div>
-                    <div id="timeseries-downsampling-help-popover" class="derived-help-popover options-help-popover" role="dialog" aria-labelledby="timeseries-downsampling-help-title" hidden>
-                        <div class="derived-help-title" id="timeseries-downsampling-help-title" data-i18n="timeseriesDownsamplingHelpTitle">Downsampling help</div>
-                        <div class="derived-help-row">
-                            <span class="derived-help-label" data-i18n="timeseriesDownsamplingHelpTimeseriesLabel">Time-series</span>
-                            <span data-i18n="timeseriesDownsamplingHelpTimeseries">Uses visual downsampling based on the currently visible time window. If the visible window contains fewer points than the selected limit, all visible points are shown.</span>
-                        </div>
-                        <div class="derived-help-row">
-                            <span class="derived-help-label" data-i18n="timeseriesDownsamplingHelpPhaseLabel">2D / 2D+t / 3D</span>
-                            <span data-i18n="timeseriesDownsamplingHelpPhase">Uses one common temporal subsampling for the whole trajectory. It is not viewport-dependent.</span>
-                        </div>
-                        <div class="derived-help-row">
-                            <span class="derived-help-label" data-i18n="timeseriesDownsamplingHelpDataLabel">Data</span>
-                            <span data-i18n="timeseriesDownsamplingHelpData">In both cases this is visual only. The original data in memory is unchanged.</span>
-                        </div>
-                    </div>
-                    <label class="options-subgroup-label" for="timeseries-downsampling" data-i18n="timeseriesDownsampling">Time-series downsampling</label>
-                    <select id="timeseries-downsampling" class="variable-filter">
-                        <option value="2000" data-i18n="timeseriesDownsampling2k" selected>2k points</option>
-                        <option value="4000" data-i18n="timeseriesDownsampling4k">4k points</option>
-                        <option value="6000" data-i18n="timeseriesDownsampling6k">6k points</option>
-                        <option value="8000" data-i18n="timeseriesDownsampling8k">8k points</option>
-                        <option value="10000" data-i18n="timeseriesDownsampling10k">10k points</option>
-                        <option value="none" data-i18n="timeseriesDownsamplingNone">No downsampling</option>
-                    </select>
-                </div>
-                <div class="options-group">
-                    <label class="options-subgroup-label" for="phase-downsampling" data-i18n="phaseDownsampling">2D / 2D+t / 3D downsampling</label>
-                    <select id="phase-downsampling" class="variable-filter">
-                        <option value="none" data-i18n="timeseriesDownsamplingNone">No downsampling</option>
-                        <option value="2000" data-i18n="timeseriesDownsampling2k">2k points</option>
-                        <option value="4000" data-i18n="timeseriesDownsampling4k" selected>4k points</option>
-                        <option value="6000" data-i18n="timeseriesDownsampling6k">6k points</option>
-                        <option value="8000" data-i18n="timeseriesDownsampling8k">8k points</option>
-                        <option value="10000" data-i18n="timeseriesDownsampling10k">10k points</option>
-                    </select>
-                </div>
             </div>
 
             <!-- Layout Configuration -->

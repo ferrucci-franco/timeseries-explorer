@@ -38,9 +38,11 @@ class OpenModelicaViewer {
         this.scrollablePlotArea = false;
         this.mouseWheelZoom = true;
         this.capabilities = initialCapabilities();
+        this.advancedSettings = this._loadAdvancedSettings();
 
         this.layoutManager = new LayoutManager('plots-area');
         this.plotManager   = new PlotManager(this.parser);
+        this.plotManager.setRelayoutRefreshMode(this.advancedSettings.panZoomRefreshMode);
         this.layoutManager.setScrollablePlotArea(this.scrollablePlotArea);
 
         this.layoutManager.onPanelMount   = (id, el) => this.plotManager.onPanelMount(id, el);
@@ -175,6 +177,68 @@ class OpenModelicaViewer {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    _defaultAdvancedSettings() {
+        const desktop = !!this.capabilities?.isDesktop;
+        return {
+            csvFullLoadMb: 150,
+            excelFullLoadMb: desktop ? 150 : 50,
+            pickleFullLoadMb: desktop ? 200 : 80,
+            pypsaNetcdfFullLoadMb: desktop ? 1024 : 250,
+            csvCompactHintMb: 500,
+            panZoomRefreshMode: 'auto',
+        };
+    }
+
+    _loadAdvancedSettings() {
+        const defaults = this._defaultAdvancedSettings();
+        let saved = null;
+        try {
+            saved = JSON.parse(globalThis.localStorage?.getItem('omv_advanced_settings') || 'null');
+        } catch (_) {
+            saved = null;
+        }
+        return this._normalizeAdvancedSettings({ ...defaults, ...(saved || {}) });
+    }
+
+    _normalizeAdvancedSettings(settings = {}) {
+        const defaults = this._defaultAdvancedSettings();
+        const ranges = {
+            csvFullLoadMb: [10, 1000],
+            excelFullLoadMb: [10, 500],
+            pickleFullLoadMb: [10, 1000],
+            pypsaNetcdfFullLoadMb: [50, 2048],
+            csvCompactHintMb: [100, 4096],
+        };
+        const next = {};
+        for (const [key, fallback] of Object.entries(defaults)) {
+            if (key === 'panZoomRefreshMode') {
+                next[key] = ['auto', 'smooth', 'responsive'].includes(settings[key]) ? settings[key] : fallback;
+                continue;
+            }
+            const [min, max] = ranges[key] || [1, Number.MAX_SAFE_INTEGER];
+            const raw = Number(settings[key]);
+            const value = Number.isFinite(raw) ? raw : fallback;
+            next[key] = Math.round(Math.min(max, Math.max(min, value)));
+        }
+        return next;
+    }
+
+    _saveAdvancedSettings(settings = this.advancedSettings) {
+        this.advancedSettings = this._normalizeAdvancedSettings(settings);
+        try {
+            globalThis.localStorage?.setItem('omv_advanced_settings', JSON.stringify(this.advancedSettings));
+        } catch (_) {}
+        return this.advancedSettings;
+    }
+
+    _resetAdvancedSettings() {
+        this.advancedSettings = this._defaultAdvancedSettings();
+        try {
+            globalThis.localStorage?.removeItem('omv_advanced_settings');
+        } catch (_) {}
+        return this.advancedSettings;
     }
 }
 

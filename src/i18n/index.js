@@ -67,7 +67,6 @@ const i18n = {
             'toggle-sort':        'sortAZ',
             'toggle-descriptions':'toggleDescriptions',
             'derived-help-toggle':'derivedFormulaHelp',
-            'timeseries-downsampling-help-toggle':'timeseriesDownsamplingHelpTitle',
             'outlier-help-toggle':'outlierHelpTitle',
             'expand-all':         'expandAll',
             'collapse-all':       'collapseAll',

@@ -364,16 +364,6 @@ proto._toggleDerivedHelpPopover = function(show) {
     button.setAttribute('aria-expanded', String(willShow));
 };
 
-proto._toggleTimeseriesDownsamplingHelpPopover = function(show) {
-    const popover = document.getElementById('timeseries-downsampling-help-popover');
-    const button = document.getElementById('timeseries-downsampling-help-toggle');
-    if (!popover || !button) return;
-    const willShow = typeof show === 'boolean' ? show : popover.hidden;
-    popover.hidden = !willShow;
-    button.classList.toggle('active', willShow);
-    button.setAttribute('aria-expanded', String(willShow));
-};
-
 proto._getDerivedSuggestions = function(prefix) {
     const data = this.plotManager.data;
     if (!data || !prefix) return [];

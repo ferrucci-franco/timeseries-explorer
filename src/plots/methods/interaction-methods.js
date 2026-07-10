@@ -104,14 +104,18 @@ proto._onRelayouting = function(sourcePanelId, eventData) {
         ? update['xaxis.range']
         : plot.div._fullLayout?.xaxis?.range;
 
+    if (plot._cursorBoxZoomActive) return;
+
     if (!plot._relayoutLiveOnly && (plot.mode === 'timeseries' || plot.mode === 'fft') && Array.isArray(range) && range.length >= 2) {
-        this._scheduleRelayoutingRefresh(sourcePanelId, plot, range);
+        const touchesYAxis = this._relayoutEventTouchesYAxis(eventData);
+        if (!touchesYAxis && this._canLiveRefreshTimeseriesRelayout(plot, range)) {
+            this._scheduleLiveRelayoutingRefresh(sourcePanelId, plot, range);
+        } else {
+            this._scheduleRelayoutingRefresh(sourcePanelId, plot, range);
+        }
     }
 
     if (!this._plotSupportsCursors(plot) || !plot.cursors?.enabled) return;
-    if (plot._cursorBoxZoomActive) {
-        return;
-    }
     if (!plot._relayoutLiveOnly && this._relayoutEventTouchesYAxis(eventData)) {
         return;
     }
@@ -121,13 +125,15 @@ proto._onRelayouting = function(sourcePanelId, eventData) {
 
 proto._scheduleRelayoutingRefresh = function(panelId, plot, range) {
     if (!plot?.div || !Array.isArray(range) || range.length < 2) return;
+    if (plot._cursorBoxZoomActive) return;
+    this._clearLiveRelayoutingRefresh(plot);
     plot._relayoutingRefreshRange = [range[0], range[1]];
     if (plot._relayoutingRefreshTimer) clearTimeout(plot._relayoutingRefreshTimer);
     plot._relayoutingRefreshTimer = setTimeout(() => {
         plot._relayoutingRefreshTimer = 0;
         const latestRange = plot._relayoutingRefreshRange;
         plot._relayoutingRefreshRange = null;
-        if (!latestRange || plot._relayoutLiveOnly || this.plots.get(panelId) !== plot || !plot.div) return;
+        if (!latestRange || plot._relayoutLiveOnly || plot._cursorBoxZoomActive || this.plots.get(panelId) !== plot || !plot.div) return;
         this._onRelayout(panelId, { 'xaxis.range': latestRange });
     }, 140);
 };
@@ -137,6 +143,97 @@ proto._clearRelayoutingRefresh = function(plot) {
     if (plot._relayoutingRefreshTimer) clearTimeout(plot._relayoutingRefreshTimer);
     plot._relayoutingRefreshTimer = 0;
     plot._relayoutingRefreshRange = null;
+    this._clearLiveRelayoutingRefresh(plot);
+};
+
+proto._scheduleLiveRelayoutingRefresh = function(panelId, plot, range, options = {}) {
+    if (!plot?.div || !Array.isArray(range) || range.length < 2) return;
+    if (plot._relayoutingRefreshTimer) clearTimeout(plot._relayoutingRefreshTimer);
+    plot._relayoutingRefreshTimer = 0;
+    plot._relayoutingRefreshRange = null;
+    plot._liveRelayoutingRefreshRange = [range[0], range[1]];
+    if (plot._liveRelayoutingRefreshFrame) return;
+
+    const scheduleFrame = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (callback) => setTimeout(callback, 16);
+    plot._liveRelayoutingRefreshFrame = scheduleFrame(() => {
+        plot._liveRelayoutingRefreshFrame = 0;
+        const latestRange = plot._liveRelayoutingRefreshRange;
+        plot._liveRelayoutingRefreshRange = null;
+        if (!latestRange || plot._cursorBoxZoomActive || (!options.allowRelayoutLiveOnly && plot._relayoutLiveOnly) || this.plots.get(panelId) !== plot || !plot.div) return;
+        if (!this._canLiveRefreshTimeseriesRelayout(plot, latestRange)) {
+            this._scheduleRelayoutingRefresh(panelId, plot, latestRange);
+            return;
+        }
+        this._refreshTimeseriesVisuals(panelId, plot, latestRange);
+    });
+};
+
+proto._clearLiveRelayoutingRefresh = function(plot) {
+    if (!plot) return;
+    const frame = plot._liveRelayoutingRefreshFrame;
+    if (frame) {
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+        else clearTimeout(frame);
+    }
+    plot._liveRelayoutingRefreshFrame = 0;
+    plot._liveRelayoutingRefreshRange = null;
+};
+
+proto._liveRelayoutSuppressed = function(plot) {
+    const until = Number(plot?._suppressLiveRelayoutUntil);
+    if (!Number.isFinite(until)) return false;
+    const now = globalThis.performance?.now?.() ?? Date.now();
+    return now < until;
+};
+
+proto._suppressLiveRelayout = function(plot, ms = 240) {
+    if (!plot) return;
+    const now = globalThis.performance?.now?.() ?? Date.now();
+    plot._suppressLiveRelayoutUntil = Math.max(Number(plot._suppressLiveRelayoutUntil) || 0, now + ms);
+    this._clearLiveRelayoutingRefresh(plot);
+};
+
+proto._canLiveRefreshTimeseriesRelayout = function(plot, range) {
+    if (!plot?.div || (plot.mode !== 'timeseries' && plot.mode !== 'fft')) return false;
+    if (!Array.isArray(range) || range.length < 2) return false;
+    if (!Array.isArray(plot.traces) || plot.traces.length === 0) return false;
+    if (plot._cursorBoxZoomActive) return false;
+    const refreshMode = this.relayoutRefreshMode || 'auto';
+    if (refreshMode === 'smooth') return false;
+    if (this._liveRelayoutSuppressed(plot)) return false;
+    if (plot.traces.some(t => this.files.get(t.fileId)?.data?._duckdb)) return false;
+
+    const fullLimit = PlotManager.LIVE_RELAYOUT_MAX_SOURCE_POINTS || 1250000;
+    const viewLimit = PlotManager.LIVE_RELAYOUT_MAX_VIEW_POINTS || 250000;
+    const [raw0, raw1] = range.map(value => this._coerceAxisValue?.(value) ?? Number(value));
+    const minX = Math.min(raw0, raw1);
+    const maxX = Math.max(raw0, raw1);
+    const hasNumericRange = Number.isFinite(minX) && Number.isFinite(maxX);
+
+    let totalSourcePoints = 0;
+    let totalVisiblePoints = 0;
+    for (const trace of plot.traces) {
+        const fileData = this.files.get(trace.fileId)?.data;
+        const variable = fileData?.variables?.[trace.varName];
+        if (!variable) return false;
+        if (variable.kind === 'parameter') continue;
+
+        const timeData = this._getTransformedTimeData(trace.fileId);
+        const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+        const sourceLength = Math.min(timeData?.length || 0, values?.length || 0);
+        if (refreshMode === 'responsive') continue;
+        totalSourcePoints += sourceLength;
+        if (totalSourcePoints <= fullLimit) continue;
+
+        if (!hasNumericRange || !timeData?.length) return false;
+        const start = Math.max(0, this._lowerBound(timeData, minX) - 1);
+        const end = Math.min(sourceLength, this._upperBound(timeData, maxX) + 1);
+        totalVisiblePoints += Math.max(0, end - start);
+        if (totalVisiblePoints > viewLimit) return false;
+    }
+    return refreshMode === 'responsive' || totalSourcePoints <= fullLimit || totalVisiblePoints <= viewLimit;
 };
 
 proto._relayoutEventTouchesYAxis = function(eventData) {
@@ -2035,11 +2132,13 @@ proto._hideCursorOverlay = function(view) {
 proto._beginCursorBoxZoomSuppress = function(panelId, plot) {
     if (!plot?.div || plot._cursorBoxZoomActive) return;
     plot._cursorBoxZoomActive = true;
+    this._suppressLiveRelayout(plot, 2000);
     const release = () => {
         document.removeEventListener('mouseup', release, true);
         document.removeEventListener('keydown', cancel, true);
         window.setTimeout(() => {
             plot._cursorBoxZoomActive = false;
+            plot._suppressLiveRelayoutUntil = 0;
             if (plot?.cursors?.enabled) this._syncCursorDisplay(panelId, plot);
         }, 0);
     };
@@ -2168,6 +2267,9 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
             update['yaxis2.range'] = base.curY2.slice();
         }
         plot._relayoutLiveOnly = true;
+        if (plot.mode === 'timeseries' && this._canLiveRefreshTimeseriesRelayout(plot, state.latestXRange)) {
+            this._scheduleLiveRelayoutingRefresh(panelId, plot, state.latestXRange, { allowRelayoutLiveOnly: true });
+        }
         Plotly.relayout(div, update).finally(() => {
             if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: state.latestXRange, lightweight: true });
         });
@@ -2204,7 +2306,14 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
                 if (state.base) state.mode = 'pan';
             }
         }
-        if (state.mode !== 'pan') return; // vertical / pinch -> Plotly's zoom
+        if (state.mode !== 'pan') {
+            // Vertical two-finger wheel/pinch is Plotly zoom. Avoid changing
+            // trace data mid-zoom; doing so can fight Plotly's zoom transform.
+            if (plot.mode === 'timeseries' || plot.mode === 'fft') {
+                this._suppressLiveRelayout(plot);
+            }
+            return;
+        }
         // Refresh both timers on each pan event: the long latch keeps pan mode
         // alive (lift-and-replace bridge), the short one refreshes the points.
         clearTimeout(state.endTimer);
