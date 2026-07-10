@@ -74,10 +74,6 @@ proto.initEventListeners = function() {
         e.stopPropagation();
         this._toggleDerivedHelpPopover();
     });
-    document.getElementById('timeseries-downsampling-help-toggle').addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._toggleTimeseriesDownsamplingHelpPopover();
-    });
     document.getElementById('derived-toggle').addEventListener('click', () => this._toggleDerivedForm(true));
     document.getElementById('derived-cancel').addEventListener('click', () => this._toggleDerivedForm(false));
     document.getElementById('derived-create').addEventListener('click', () => this.createDerivedVariable());
@@ -92,9 +88,6 @@ proto.initEventListeners = function() {
         if (!e.target.closest('#derived-help-popover') && !e.target.closest('#derived-help-toggle')) {
             this._toggleDerivedHelpPopover(false);
         }
-        if (!e.target.closest('#timeseries-downsampling-help-popover') && !e.target.closest('#timeseries-downsampling-help-toggle')) {
-            this._toggleTimeseriesDownsamplingHelpPopover(false);
-        }
         if (!e.target.closest('#outlier-help-popover') && !e.target.closest('#outlier-help-toggle')) {
             this._toggleOutlierHelpPopover?.(false);
         }
@@ -103,11 +96,6 @@ proto.initEventListeners = function() {
         if (e.key === 'Escape' && !document.getElementById('derived-help-popover')?.hidden) {
             e.preventDefault();
             this._toggleDerivedHelpPopover(false);
-            return;
-        }
-        if (e.key === 'Escape' && !document.getElementById('timeseries-downsampling-help-popover')?.hidden) {
-            e.preventDefault();
-            this._toggleTimeseriesDownsamplingHelpPopover(false);
             return;
         }
         if (e.key === 'Escape' && !document.getElementById('outlier-help-popover')?.hidden) {
@@ -162,15 +150,6 @@ proto.initEventListeners = function() {
             this.plotManager.setMouseWheelZoom(this.mouseWheelZoom);
         });
     }
-
-    document.getElementById('timeseries-downsampling').addEventListener('change', (e) => {
-        const raw = e.target.value;
-        this.plotManager.setTimeseriesDownsamplingLimit(raw === 'none' ? null : Number(raw));
-    });
-    document.getElementById('phase-downsampling').addEventListener('change', (e) => {
-        const raw = e.target.value;
-        this.plotManager.setPhaseDownsamplingLimit(raw === 'none' ? null : Number(raw));
-    });
 
     document.querySelectorAll('input[name="legend-pos"]').forEach(radio => {
         radio.addEventListener('change', (e) => {
@@ -697,6 +676,362 @@ proto._showTransientStatus = function(message) {
     }, 1600);
 };
 
+proto.showDisplaySettings = function() {
+    const previousActive = document.activeElement;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-dialog plot-settings-dialog';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'plot-settings-title');
+
+    const content = document.createElement('div');
+    content.className = 'modal-content plot-settings-content';
+
+    const header = document.createElement('div');
+    header.className = 'plot-settings-header';
+
+    const title = document.createElement('div');
+    title.id = 'plot-settings-title';
+    title.className = 'modal-title plot-settings-title';
+    title.textContent = i18n.t('displaySettingsTitle');
+
+    const helpWrap = document.createElement('div');
+    helpWrap.className = 'plot-settings-help-wrap';
+
+    const helpBtn = document.createElement('button');
+    helpBtn.type = 'button';
+    helpBtn.className = 'fft-help-btn plot-settings-help-btn';
+    helpBtn.textContent = '?';
+    helpBtn.title = i18n.t('displaySettingsHelpTitle');
+    helpBtn.setAttribute('aria-label', i18n.t('displaySettingsHelpTitle'));
+    helpBtn.setAttribute('aria-expanded', 'false');
+
+    const escapeHtml = (value) => String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+
+    const helpPopover = document.createElement('div');
+    helpPopover.className = 'fft-help-popover plot-settings-help-popover';
+    helpPopover.hidden = true;
+    helpPopover.innerHTML = `
+        <div class="plot-settings-help-title">${escapeHtml(i18n.t('displaySettingsHelpTitle'))}</div>
+        <div class="plot-settings-help-row">
+            <span>${escapeHtml(i18n.t('displaySettingsHelpTimeLabel'))}</span>
+            <p>${escapeHtml(i18n.t('displaySettingsHelpTime'))}</p>
+        </div>
+        <div class="plot-settings-help-row">
+            <span>${escapeHtml(i18n.t('displaySettingsHelpTrajectoryLabel'))}</span>
+            <p>${escapeHtml(i18n.t('displaySettingsHelpTrajectory'))}</p>
+        </div>
+        <div class="plot-settings-help-row">
+            <span>${escapeHtml(i18n.t('displaySettingsHelpLargeFilesLabel'))}</span>
+            <p>${escapeHtml(i18n.t('displaySettingsHelpLargeFiles'))}</p>
+        </div>
+        <div class="plot-settings-help-row">
+            <span>${escapeHtml(i18n.t('displaySettingsHelpDataLabel'))}</span>
+            <p>${escapeHtml(i18n.t('displaySettingsHelpData'))}</p>
+        </div>`;
+
+    helpBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const show = helpPopover.hidden;
+        helpPopover.hidden = !show;
+        helpBtn.setAttribute('aria-expanded', String(show));
+    });
+
+    helpWrap.append(helpBtn, helpPopover);
+    header.append(title);
+
+    const intro = document.createElement('p');
+    intro.className = 'plot-settings-intro';
+    intro.textContent = i18n.t('displaySettingsIntro');
+
+    const form = document.createElement('div');
+    form.className = 'plot-settings-form';
+
+    const options = [
+        ['2000', 'timeseriesDownsampling2k'],
+        ['4000', 'timeseriesDownsampling4k'],
+        ['6000', 'timeseriesDownsampling6k'],
+        ['8000', 'timeseriesDownsampling8k'],
+        ['10000', 'timeseriesDownsampling10k'],
+        ['none', 'displaySettingsEveryPoint'],
+    ];
+
+    const currentValue = (value) => value == null ? 'none' : String(Math.round(Number(value)));
+    const makeSelect = (id, labelKey, helpKey, value, selectOptions = options) => {
+        const field = document.createElement('label');
+        field.className = 'plot-settings-field';
+        field.setAttribute('for', id);
+
+        const label = document.createElement('span');
+        label.className = 'plot-settings-label';
+        label.textContent = i18n.t(labelKey);
+
+        const select = document.createElement('select');
+        select.id = id;
+        select.className = 'plot-settings-select';
+        for (const [optionValue, optionKey] of selectOptions) {
+            const option = document.createElement('option');
+            option.value = optionValue;
+            option.textContent = i18n.t(optionKey);
+            select.appendChild(option);
+        }
+        select.value = currentValue(value);
+
+        const help = document.createElement('span');
+        help.className = 'plot-settings-help';
+        help.textContent = i18n.t(helpKey);
+
+        field.append(label, select, help);
+        return { field, select };
+    };
+
+    const timeControl = makeSelect(
+        'timeseries-downsampling',
+        'displaySettingsTimeDetail',
+        'displaySettingsTimeDetailHelp',
+        this.plotManager.timeseriesVisualMaxPoints,
+    );
+    const trajectoryControl = makeSelect(
+        'phase-downsampling',
+        'displaySettingsTrajectoryDetail',
+        'displaySettingsTrajectoryDetailHelp',
+        this.plotManager.phaseVisualMaxPoints,
+    );
+
+    const downsamplingSection = document.createElement('section');
+    downsamplingSection.className = 'plot-settings-section downsampling-settings';
+
+    const downsamplingHeader = document.createElement('div');
+    downsamplingHeader.className = 'plot-settings-section-header';
+
+    const downsamplingHeading = document.createElement('div');
+    downsamplingHeading.className = 'plot-settings-section-title';
+    downsamplingHeading.textContent = i18n.t('downsampling');
+
+    downsamplingHeader.append(downsamplingHeading, helpWrap);
+
+    const panZoomOptions = [
+        ['auto', 'panZoomRefreshAuto'],
+        ['smooth', 'panZoomRefreshSmooth'],
+        ['responsive', 'panZoomRefreshResponsive'],
+    ];
+
+    const panZoomControl = makeSelect(
+        'pan-zoom-refresh-mode',
+        'panZoomRefreshMode',
+        'panZoomRefreshModeHelp',
+        this.advancedSettings?.panZoomRefreshMode || 'auto',
+        panZoomOptions,
+    );
+    panZoomControl.select.value = ['auto', 'smooth', 'responsive'].includes(this.advancedSettings?.panZoomRefreshMode)
+        ? this.advancedSettings.panZoomRefreshMode
+        : 'auto';
+
+    const fileSection = document.createElement('section');
+    fileSection.className = 'plot-settings-section file-loading-settings';
+
+    const fileHeading = document.createElement('div');
+    fileHeading.className = 'plot-settings-section-title';
+    fileHeading.textContent = i18n.t('fileLoadingSettingsTitle');
+
+    const fileIntro = document.createElement('p');
+    fileIntro.className = 'plot-settings-section-intro';
+    fileIntro.textContent = i18n.t('fileLoadingSettingsIntro');
+
+    const fileGrid = document.createElement('div');
+    fileGrid.className = 'file-limit-grid';
+
+    const makeNumberField = (key, labelKey, helpKey, min, max) => {
+        const field = document.createElement('label');
+        field.className = 'file-limit-field';
+        field.setAttribute('for', key);
+
+        const label = document.createElement('span');
+        label.className = 'plot-settings-label';
+        label.textContent = i18n.t(labelKey);
+
+        const inputWrap = document.createElement('span');
+        inputWrap.className = 'file-limit-input-wrap';
+
+        const input = document.createElement('input');
+        input.id = key;
+        input.className = 'file-limit-input';
+        input.type = 'number';
+        input.min = String(min);
+        input.max = String(max);
+        input.step = '1';
+        input.value = String(this.advancedSettings?.[key] ?? this._defaultAdvancedSettings()[key]);
+
+        const unit = document.createElement('span');
+        unit.className = 'file-limit-unit';
+        unit.textContent = 'MB';
+        inputWrap.append(input, unit);
+
+        const help = document.createElement('span');
+        help.className = 'plot-settings-help';
+        help.textContent = i18n.t(helpKey);
+
+        field.append(label, inputWrap, help);
+        return { field, input, key };
+    };
+
+    const fileLimitControls = [
+        makeNumberField('csvFullLoadMb', 'csvFullLoadLimit', 'csvFullLoadLimitHelp', 10, 1000),
+        makeNumberField('excelFullLoadMb', 'excelFullLoadLimit', 'excelFullLoadLimitHelp', 10, 500),
+        makeNumberField('pickleFullLoadMb', 'pickleFullLoadLimit', 'pickleFullLoadLimitHelp', 10, 1000),
+        makeNumberField('pypsaNetcdfFullLoadMb', 'pypsaNetcdfFullLoadLimit', 'pypsaNetcdfFullLoadLimitHelp', 50, 2048),
+    ];
+
+    const compactControl = makeNumberField('csvCompactHintMb', 'csvCompactHintLimit', 'csvCompactHintLimitHelp', 100, 4096);
+    compactControl.field.classList.add('compact-format-limit-field');
+
+    const compactHelp = document.createElement('button');
+    compactHelp.type = 'button';
+    compactHelp.className = 'fft-help-btn compact-format-help-btn';
+    compactHelp.textContent = '?';
+    compactHelp.title = i18n.t('compactFormatHelpTitle');
+    compactHelp.setAttribute('aria-label', i18n.t('compactFormatHelpTitle'));
+    compactHelp.setAttribute('aria-expanded', 'false');
+
+    const compactPopover = document.createElement('div');
+    compactPopover.className = 'fft-help-popover compact-format-help-popover';
+    compactPopover.hidden = true;
+    compactPopover.textContent = i18n.t('compactFormatHelpBody');
+
+    const compactLabel = compactControl.field.querySelector('.plot-settings-label');
+    const compactLabelWrap = document.createElement('span');
+    compactLabelWrap.className = 'compact-format-label-wrap';
+    compactLabel.replaceWith(compactLabelWrap);
+    compactLabelWrap.append(compactLabel, compactHelp, compactPopover);
+    compactHelp.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const show = compactPopover.hidden;
+        compactPopover.hidden = !show;
+        compactHelp.setAttribute('aria-expanded', String(show));
+    });
+
+    const applyFileSettings = () => {
+        const next = { ...(this.advancedSettings || {}) };
+        for (const control of [...fileLimitControls, compactControl]) {
+            next[control.key] = Number(control.input.value);
+        }
+        this._saveAdvancedSettings(next);
+        for (const control of [...fileLimitControls, compactControl]) {
+            control.input.value = String(this.advancedSettings[control.key]);
+        }
+    };
+
+    for (const control of [...fileLimitControls, compactControl]) {
+        control.input.addEventListener('change', applyFileSettings);
+    }
+
+    const applyPanZoomSettings = () => {
+        const nextMode = panZoomControl.select.value;
+        this.plotManager.setRelayoutRefreshMode(nextMode);
+        this._saveAdvancedSettings({ ...(this.advancedSettings || {}), panZoomRefreshMode: nextMode });
+        panZoomControl.select.value = this.advancedSettings.panZoomRefreshMode;
+    };
+    panZoomControl.select.addEventListener('change', applyPanZoomSettings);
+
+    fileGrid.append(...fileLimitControls.map(control => control.field), compactControl.field);
+    fileSection.append(fileHeading, fileIntro, fileGrid);
+
+    const applySettings = () => {
+        const timeRaw = timeControl.select.value;
+        const trajectoryRaw = trajectoryControl.select.value;
+        this.plotManager.setTimeseriesDownsamplingLimit(timeRaw === 'none' ? null : Number(timeRaw));
+        this.plotManager.setPhaseDownsamplingLimit(trajectoryRaw === 'none' ? null : Number(trajectoryRaw));
+    };
+
+    timeControl.select.addEventListener('change', applySettings);
+    trajectoryControl.select.addEventListener('change', applySettings);
+    form.classList.add('plot-settings-form-compact');
+
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'modal-btn modal-btn-cancel plot-settings-reset';
+    resetBtn.textContent = i18n.t('resetDisplaySettings');
+    resetBtn.addEventListener('click', () => {
+        timeControl.select.value = '2000';
+        trajectoryControl.select.value = '4000';
+        applySettings();
+        this._resetAdvancedSettings();
+        this.plotManager.setRelayoutRefreshMode(this.advancedSettings.panZoomRefreshMode);
+        panZoomControl.select.value = this.advancedSettings.panZoomRefreshMode;
+        for (const control of [...fileLimitControls, compactControl]) {
+            control.input.value = String(this.advancedSettings[control.key]);
+        }
+    });
+
+    form.append(timeControl.field, trajectoryControl.field, panZoomControl.field);
+    downsamplingSection.append(downsamplingHeader, form);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'modal-buttons plot-settings-buttons';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'modal-btn modal-btn-confirm';
+    closeBtn.textContent = i18n.t('helpClose');
+
+    buttons.append(resetBtn, closeBtn);
+    content.append(header, intro, downsamplingSection, fileSection, buttons);
+    modal.appendChild(content);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    let settled = false;
+    const finish = () => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', escHandler);
+        Modal.close(overlay, previousActive);
+    };
+
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+            finish();
+            return;
+        }
+        if (!helpPopover.hidden && !e.target.closest('.plot-settings-help-wrap')) {
+            helpPopover.hidden = true;
+            helpBtn.setAttribute('aria-expanded', 'false');
+        }
+        if (!compactPopover.hidden && !e.target.closest('.compact-format-label-wrap')) {
+            compactPopover.hidden = true;
+            compactHelp.setAttribute('aria-expanded', 'false');
+        }
+    });
+    const escHandler = (e) => {
+        if (e.key === 'Escape' && !helpPopover.hidden) {
+            e.preventDefault();
+            helpPopover.hidden = true;
+            helpBtn.setAttribute('aria-expanded', 'false');
+            return;
+        }
+        if (e.key === 'Escape' && !compactPopover.hidden) {
+            e.preventDefault();
+            compactPopover.hidden = true;
+            compactHelp.setAttribute('aria-expanded', 'false');
+            return;
+        }
+        if (e.key === 'Escape') finish();
+    };
+    document.addEventListener('keydown', escHandler);
+    closeBtn.addEventListener('click', finish);
+
+    requestAnimationFrame(() => overlay.classList.add('show'));
+    setTimeout(() => timeControl.select.focus(), 100);
+};
+
 proto._initExtraMenu = function() {
     const btn  = document.getElementById('extra-menu-btn');
     const menu = document.getElementById('extra-menu');
@@ -791,6 +1126,10 @@ proto._renderExtraMenu = function() {
         });
     }, { titleKey: 'extraLoadSessionProjectTooltip' });
 
+    const displaySettingsItem = makeAction('Aa', 'extraDisplaySettings', () => {
+        this.showDisplaySettings();
+    }, { titleKey: 'extraDisplaySettingsTooltip' });
+
     const helpItem = makeAction('?', 'help', () => {
         this.showHelp();
     });
@@ -840,7 +1179,7 @@ proto._renderExtraMenu = function() {
 
     versionRow.append(versionIcon, versionLabel, versionValue);
 
-    const items = [saveViewItem, saveProjectItem, loadSessionItem];
+    const items = [saveViewItem, saveProjectItem, loadSessionItem, displaySettingsItem];
     if (this.capabilities?.canUseLocalPath) {
         items.push(openTempItem, dymolaDirItem);
     }

@@ -31,6 +31,7 @@ class PlotManager {
         this.legendOverlayCorner = 'tl';
         this.timeseriesVisualMaxPoints = PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
         this.phaseVisualMaxPoints = PlotManager.DEFAULT_VISUAL_MAX_POINTS_PHASE;
+        this.relayoutRefreshMode = 'auto';
         this._syncing       = false;
         this._syncSourcePanelId = null;
         this._pendingAxisSync = null;
@@ -274,6 +275,9 @@ class PlotManager {
     setPhaseDownsamplingLimit(limit) {
         this.phaseVisualMaxPoints = this._normalizePhaseDownsamplingLimit(limit);
         this._refreshAllPhaseVisuals();
+    }
+    setRelayoutRefreshMode(mode) {
+        this.relayoutRefreshMode = ['auto', 'smooth', 'responsive'].includes(mode) ? mode : 'auto';
     }
     setSyncHover(v) {
         this.syncHover = v;
@@ -864,6 +868,12 @@ class PlotManager {
             //                 manipulate axis ranges directly on mousemove.
             if (plot.mode === 'timeseries' || plot.mode === 'phase2d') {
                 div.addEventListener('mousedown', (e) => {
+                    if (e.button === 0
+                        && plot.mode === 'timeseries'
+                        && div?._fullLayout?.dragmode !== 'pan'
+                        && this._eventInsidePlotArea(div, e)) {
+                        this._beginCursorBoxZoomSuppress(panelId, plot);
+                    }
                     if (e.button === 1) {
                         e.preventDefault();
                         Plotly.relayout(div, { dragmode: 'pan' });
@@ -907,6 +917,9 @@ class PlotManager {
                             const y2Span = y2Numeric0[1] - y2Numeric0[0];
                             const dy2 = ((mv.clientY - startY) / y2a._length) * y2Span;
                             update['yaxis2.range'] = [y2Numeric0[0] + dy2, y2Numeric0[1] + dy2];
+                        }
+                        if (plot.mode === 'timeseries' && this._canLiveRefreshTimeseriesRelayout(plot, latestXRange)) {
+                            this._scheduleLiveRelayoutingRefresh(panelId, plot, latestXRange, { allowRelayoutLiveOnly: true });
                         }
                         Plotly.relayout(div, update).finally(() => {
                             if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: latestXRange, lightweight: true });
@@ -2501,6 +2514,8 @@ class PlotManager {
     static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 2000;
     static DEFAULT_VISUAL_MAX_POINTS_PHASE = 4000;
     static MAX_MENU_VISUAL_POINTS = 10000;
+    static LIVE_RELAYOUT_MAX_SOURCE_POINTS = 1250000;
+    static LIVE_RELAYOUT_MAX_VIEW_POINTS = 250000;
 
     _nextColor(idx) { return PlotManager.COLORS[idx % PlotManager.COLORS.length]; }
     _nextTraceColor(traceStates) {
