@@ -27,6 +27,7 @@
     "test:csv-to-parquet": "node scripts/test-csv-to-parquet-core.mjs",
     "test:data-tools": "node scripts/test-data-tools.mjs",
     "test:fft": "node scripts/test-fft.mjs",
+    "test:histogram": "node scripts/test-histogram.mjs",
     "test:lazy-phase": "node scripts/test-lazy-phase-logic.mjs",
     "test:pickle": "node scripts/test-pickle-parser.mjs",
     "test:pypsa": "node scripts/test-pypsa-netcdf-parser.mjs",

@@ -548,9 +548,19 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     const state = this._ensureFftState(plot);
     const range = this._activeFftRange(plot);
     const visible = (plot.traces || []).filter(trace => this._isVisible(trace));
+    // Hidden traces must keep a greyed legend entry. An EMPTY legendonly trace
+    // produces no legend entry in Plotly, so reuse the trace's PREVIOUS spectrum
+    // data (it is hidden anyway; it refreshes when shown again).
+    const prevByName = new Map((plot._fftSpectra || []).filter(s => s && s.name).map(s => [s.name, s]));
+    const legendPlaceholder = (trace) => {
+        const name = this._traceName(trace.varName, trace.fileId);
+        const prev = prevByName.get(name);
+        if (prev) return { ...prev, visible: 'legendonly' };
+        return { x: [], y: [], type: 'scatter', mode: 'lines', name, visible: 'legendonly', line: { color: trace.color, width: 1.5 } };
+    };
     if (!visible.length) {
         this._setFftStatus(plot, i18n.t('fftNoVisibleTraces'), 'muted');
-        await Plotly.react(plot.fftDiv, [], this._buildFftSpectrumLayout(plot), this._getPlotlyConfig());
+        await Plotly.react(plot.fftDiv, (plot.traces || []).map(legendPlaceholder), this._buildFftSpectrumLayout(plot), this._getPlotlyConfig());
         return;
     }
 
@@ -605,6 +615,13 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
                 yMax: amplitudeExtent?.max,
             },
         });
+    }
+
+    // Keep hidden traces in the spectrum data as legendonly placeholders so
+    // their legend entry persists (greyed) instead of vanishing on toggle.
+    for (const trace of plot.traces || []) {
+        if (this._isVisible(trace)) continue;
+        spectra.push(legendPlaceholder(trace));
     }
 
     state.warnings = warnings;

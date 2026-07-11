@@ -276,7 +276,7 @@ proto._xAxisUpdateFromRelayout = function(eventData, plot = null) {
 };
 
 proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelId), visibleRange = null) {
-    if (!plot?.div || (plot.mode !== 'timeseries' && plot.mode !== 'fft')) return;
+    if (!plot?.div || (plot.mode !== 'timeseries' && plot.mode !== 'fft' && plot.mode !== 'histogram')) return;
     const range = visibleRange
         || plot.div._fullLayout?.xaxis?.range
         || plot.div.layout?.xaxis?.range
@@ -3086,6 +3086,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     const modes = [
         { id: 'timeseries', label: '📈', titleKey: 'modeTimeseries' },
         { id: 'fft',        label: 'FFT', titleKey: 'modeFFT'       },
+        { id: 'histogram',  label: i18n.t('modeHistogramLabel'), titleKey: 'modeHistogram' },
         { id: 'phase2d',    label: '2D',  titleKey: 'modePhase2d'   },
         { id: 'phase2dt',   label: '2D+t',titleKey: 'modePhase2dt'  },
         { id: 'phase3d',    label: '3D',     titleKey: 'modePhase3d'   },
@@ -3284,8 +3285,8 @@ proto._requestModeChange = function(panelId, mode, stateAnimDim = null) {
         this._dismissModeChangeWarning(panelId);
         return;
     }
-    const preservesTimeTraces = (plot.mode === 'timeseries' || plot.mode === 'fft')
-        && (mode === 'timeseries' || mode === 'fft');
+    const timeTraceModes = new Set(['timeseries', 'fft', 'histogram']);
+    const preservesTimeTraces = timeTraceModes.has(plot.mode) && timeTraceModes.has(mode);
     if (preservesTimeTraces) {
         this._setMode(panelId, mode, stateAnimDim, { preserveTimeTraces: true });
         return;

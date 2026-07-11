@@ -5,6 +5,7 @@ import { installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';
 import { installPlotFftMethods } from './methods/fft-methods.js';
+import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -421,9 +422,10 @@ class PlotManager {
         const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
         if (plot.mode === mode && plot.stateAnimDim === nextDim) return;
         this._dismissModeChangeWarning?.(panelId);
+        const timeTraceModes = new Set(['timeseries', 'fft', 'histogram']);
         const preserveTimeTraces = !!options.preserveTimeTraces
-            && (previousMode === 'timeseries' || previousMode === 'fft')
-            && (mode === 'timeseries' || mode === 'fft');
+            && timeTraceModes.has(previousMode)
+            && timeTraceModes.has(mode);
         const preservedTraces = preserveTimeTraces
             ? plot.traces.map(trace => ({ ...trace, axis: 'y' }))
             : [];
@@ -444,9 +446,19 @@ class PlotManager {
         plot.timeseriesStacked = false;
         plot.timeseriesY2Enabled = false;
         plot.traces.forEach(trace => { trace.axis = 'y'; });
-        plot.cursors = this._defaultCursors();
-        plot.cursorsSpectrum = this._defaultCursors();
-        plot.fft = this._defaultFftState?.() || plot.fft;
+        // Preserve per-mode config (FFT options, histogram bins/normalization/
+        // selection, cursors) when switching within the timeseries/fft/histogram
+        // trio, so the user can move between those modes without losing settings.
+        // A hard change to a phase/state mode still starts each config fresh.
+        if (preserveTimeTraces) {
+            plot.fft = plot.fft || this._defaultFftState?.();
+            plot.histogram = plot.histogram || this._defaultHistogramState?.();
+        } else {
+            plot.cursors = this._defaultCursors();
+            plot.cursorsSpectrum = this._defaultCursors();
+            plot.fft = this._defaultFftState?.() || plot.fft;
+            plot.histogram = this._defaultHistogramState?.() || plot.histogram;
+        }
         plot.liveView = this._defaultLiveViewPolicy(mode);
         plot.animFrame    = 0;
 
@@ -591,6 +603,11 @@ class PlotManager {
             return;
         }
 
+        if (plot.mode === 'histogram') {
+            names.forEach(varName => this.addTrace(panelId, varName, panelEl));
+            return;
+        }
+
         if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
             const groupSize = plot.mode === 'phase3d' ? 3 : 2;
             if (!this._canAddTraceWithFileTime(plot, this.activeFileId)) return;
@@ -674,6 +691,12 @@ class PlotManager {
                 : i18n.t('dropToAddTrace');
         }
 
+        if (mode === 'histogram') {
+            return plot.traces.length === 0
+                ? i18n.t('dropHistogramMulti')
+                : i18n.t('dropToAddTrace');
+        }
+
         // State-anim mode
         if (mode === 'state-anim') {
             const sx = plot.stateSlots?.x || [];
@@ -713,6 +736,8 @@ class PlotManager {
             this._addTimeseries(panelId, varName, panelEl, plot, options);
         } else if (plot.mode === 'fft') {
             this._addFftTrace(panelId, varName, panelEl, plot);
+        } else if (plot.mode === 'histogram') {
+            this._addHistogramTrace(panelId, varName, panelEl, plot);
         } else if (plot.mode === 'state-anim') {
             this._addStateAnimVar(panelId, varName, panelEl, plot);
         } else {
@@ -813,6 +838,10 @@ class PlotManager {
         if (!this._hasContent(plot)) return;
         if (plot.mode === 'fft') {
             this._createFftChart(panelId, panelEl);
+            return;
+        }
+        if (plot.mode === 'histogram') {
+            this._createHistogramChart(panelId, panelEl);
             return;
         }
         const restoreView = plot._pendingViewRestore || null;
@@ -1149,7 +1178,15 @@ class PlotManager {
         delete plot._cursorHandlersDiv;
         if (plot.div) {
             const fftContainer = plot.div.closest('.fft-container');
-            if (fftContainer) {
+            const histContainer = plot.div.closest('.hist-container');
+            if (histContainer) {
+                if (plot.histogramDiv) Plotly.purge(plot.histogramDiv);
+                Plotly.purge(plot.div);
+                histContainer.remove();
+                plot.div = null;
+                plot.histogramDiv = null;
+                plot.histogramContainer = null;
+            } else if (fftContainer) {
                 if (plot.fftDiv) Plotly.purge(plot.fftDiv);
                 Plotly.purge(plot.div);
                 fftContainer.remove();
@@ -1181,6 +1218,19 @@ class PlotManager {
         }
         plot._fftHandlersInstalled = false;
         plot._fftSelectionDiv = null;
+        if (plot._histSelectionDocListeners) {
+            document.removeEventListener('mousemove', plot._histSelectionDocListeners.move);
+            document.removeEventListener('mouseup', plot._histSelectionDocListeners.up);
+            plot._histSelectionDocListeners = null;
+        }
+        if (plot._histSplitterDocListeners) {
+            document.removeEventListener('mousemove', plot._histSplitterDocListeners.move);
+            document.removeEventListener('mouseup', plot._histSplitterDocListeners.up);
+            plot._histSplitterDocListeners = null;
+        }
+        clearTimeout(plot._histRecomputeTimer);
+        plot._histHandlersInstalled = false;
+        plot._histSelectionDiv = null;
         plot.cameraOverlayEl = null;
     }
 
@@ -1707,6 +1757,7 @@ class PlotManager {
         if (!plot) return false;
         if (plot.mode === 'timeseries') return plot.traces.length > 0;
         if (plot.mode === 'fft') return plot.traces.length > 0;
+        if (plot.mode === 'histogram') return plot.traces.length > 0;
         if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= (plot.stateAnimDim || 2);
         return plot.phaseTraces.length > 0;
     }
@@ -1746,7 +1797,7 @@ class PlotManager {
     }
 
     _plotModeRequiresCompatibleTime(mode) {
-        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft';
+        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft' || mode === 'histogram';
     }
 
     _padRange(min, max, pad = 0.05) {
@@ -2007,6 +2058,7 @@ class PlotManager {
             else if (plot.mode === 'phase2d') update.margin = { l: 60, r: 15, t: this.legendPosition === 'above' ? 50 : 10, b: 50 };
             Plotly.relayout(plot.div, update);
             if (plot.fftDiv) Plotly.relayout(plot.fftDiv, update);
+            if (plot.histogramDiv) Plotly.relayout(plot.histogramDiv, update);
         }
     }
 
@@ -2029,6 +2081,9 @@ class PlotManager {
             fftDiv: null,
             fftContainer: null,
             fft: this._defaultFftState?.() || null,
+            histogramDiv: null,
+            histogramContainer: null,
+            histogram: this._defaultHistogramState?.() || null,
             // state-anim mode
             stateSlots:   { x: [], dx: [], fileId: null }, // x: [varName,...], dx: [derName,...]
             stateAnimDim: 2,
@@ -2537,5 +2592,6 @@ installPlotDataMethods(PlotManager);
 installPlotStateMethods(PlotManager);
 installPlotInteractionMethods(PlotManager);
 installPlotFftMethods(PlotManager);
+installPlotHistogramMethods(PlotManager);
 
 export default PlotManager;

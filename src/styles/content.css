@@ -1657,17 +1657,22 @@ body.fft-selection-dragging.fft-selection-moving {
 }
 
 /* Plotly pins its own cursor (crosshair) on the drag layer, so the
-   selection-hit hints must override it from here. */
+   selection-hit hints must override it from here. Histogram reuses the exact
+   same selection mechanic, so its time pane gets the same rules. */
 .plotly-mode-fft-time.fft-cursor-ew .nsewdrag,
-body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-fft-time .nsewdrag {
+.plotly-mode-hist-time.fft-cursor-ew .nsewdrag,
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-fft-time .nsewdrag,
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-hist-time .nsewdrag {
     cursor: ew-resize !important;
 }
 
-.plotly-mode-fft-time.fft-cursor-grab .nsewdrag {
+.plotly-mode-fft-time.fft-cursor-grab .nsewdrag,
+.plotly-mode-hist-time.fft-cursor-grab .nsewdrag {
     cursor: grab !important;
 }
 
-body.fft-selection-dragging.fft-selection-moving .plotly-mode-fft-time .nsewdrag {
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-fft-time .nsewdrag,
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-hist-time .nsewdrag {
     cursor: grabbing !important;
 }
 
@@ -1852,4 +1857,137 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     border-radius: 999px;
     transform: translate(-50%, -50%);
     box-shadow: 0 0 0 2px var(--bg-primary), 0 1px 4px rgba(0,0,0,0.25);
+}
+
+/* ─── Histogram mode ─── structure mirrors the FFT split view ─── */
+.hist-container {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary);
+    --hist-split: 50%;
+}
+.hist-topbar {
+    flex: 0 0 auto;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 7px;
+    border-bottom: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-tertiary) 74%, var(--bg-secondary));
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+}
+.hist-topbar-group { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
+.hist-tool-btn {
+    height: 24px;
+    min-width: 28px;
+    padding: 0 7px;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+.hist-tool-btn:hover { border-color: color-mix(in srgb, var(--primary-color) 68%, var(--border-color)); }
+.hist-tool-btn.active {
+    background: color-mix(in srgb, var(--primary-color) 16%, var(--bg-primary));
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+.hist-status {
+    margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.72rem;
+}
+.hist-status-warning { color: var(--warning-color); }
+.hist-status-error { color: var(--danger-color, #dc2626); }
+.hist-status-ready { color: color-mix(in srgb, #16a34a 78%, var(--text-primary)); }
+.hist-status-loading { color: var(--primary-color); }
+.hist-workspace { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.hist-plot-area {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    overflow: hidden;
+    position: relative;
+}
+.hist-layout-horizontal .hist-plot-area {
+    grid-template-columns: minmax(0, var(--hist-split)) 7px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+.hist-layout-vertical .hist-plot-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, var(--hist-split)) 7px minmax(0, 1fr);
+}
+.hist-pane { min-width: 0; min-height: 0; display: flex; }
+.hist-splitter { background: color-mix(in srgb, var(--border-color) 72%, transparent); position: relative; z-index: 2; }
+.hist-layout-horizontal .hist-splitter { cursor: col-resize; }
+.hist-layout-vertical .hist-splitter { cursor: row-resize; }
+.hist-splitter:hover { background: color-mix(in srgb, var(--primary-color) 42%, var(--border-color)); }
+
+.hist-option-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 4px 0;
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+}
+.hist-option-row .fft-number-input { width: 96px; }
+.hist-segmented {
+    display: inline-flex;
+    gap: 0;
+    margin: 2px 0 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+    flex-wrap: wrap;
+}
+.hist-seg-btn {
+    padding: 3px 9px;
+    border: none;
+    border-right: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.hist-seg-btn:last-child { border-right: none; }
+.hist-seg-btn.active {
+    background: color-mix(in srgb, var(--primary-color) 18%, var(--bg-primary));
+    color: var(--primary-color);
+}
+.hist-seg-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.hist-summary { font-size: 0.71rem; color: var(--text-secondary); }
+.hist-summary-row { margin: 4px 0; line-height: 1.35; }
+.hist-range-bound { margin: 2px 0 8px; }
+.hist-range-bound .fft-range-input { width: 100%; margin-top: 2px; }
+/* Calendar Start/End: the datetime picker (with hh:mm:ss) needs full width,
+   so stack the label above the input exactly like FFT does. */
+.hist-range-bound.hist-range-bound-datetime .hist-option-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+}
+.hist-range-bound.hist-range-bound-datetime .hist-option-row .fft-number-input[type="datetime-local"] {
+    width: 100%;
+    max-width: none;
+    font-size: 0.72rem;
+    padding: 0 4px;
 }
