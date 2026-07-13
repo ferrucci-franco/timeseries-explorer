@@ -1680,6 +1680,7 @@ class PlotManager {
             if (!plot.div) continue;
             Plotly.relayout(plot.div, this._themeRelayoutUpdate(plot));
             if (plot.fftDiv) Plotly.relayout(plot.fftDiv, this._themeRelayoutUpdate(plot));
+            if (plot.histogramDiv) Plotly.relayout(plot.histogramDiv, this._themeRelayoutUpdate(plot));
             this._refreshAxisDecorations(plot);
             // Origin cross marker color follows theme; restyle it separately.
             this._refreshOriginCross(plot);
