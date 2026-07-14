@@ -12,7 +12,17 @@ export const CALENDAR_HEATMAP_RECOMPUTE_DEBOUNCE_MS = 150;
 export const CALENDAR_HEATMAP_MANY_TRACES_WARNING = 6;
 
 export const CALENDAR_HEATMAP_MODES = new Set(['week-day', 'day-hour']);
-export const CALENDAR_HEATMAP_AGGREGATIONS = new Set(['mean', 'min', 'max', 'sum', 'count']);
+export const CALENDAR_HEATMAP_AGGREGATIONS = new Set(['mean', 'min', 'max', 'sum', 'count', 'integral']);
+
+// A step longer than this many times the median step is a hole in the data, not
+// a sample: integrating across it would invent area nobody measured. The cells
+// it touches are reported as gaps instead of getting a plausible-looking value.
+export const CALENDAR_HEATMAP_GAP_FACTOR = 1.5;
+// The median step is estimated from at most this many consecutive steps.
+const STEP_SAMPLE_LIMIT = 100_000;
+// A gap can span an arbitrary stretch of calendar; stop marking its cells well
+// before the dense grid limits would reject the figure anyway.
+const MAX_GAP_CELLS = 200_000;
 
 export const CALENDAR_HEATMAP_HOUR_MS = 60 * 60 * 1000;
 export const CALENDAR_HEATMAP_DAY_MS = 24 * CALENDAR_HEATMAP_HOUR_MS;
@@ -187,12 +197,65 @@ function createAccumulator(cell, range) {
         mean: null,
         min: null,
         max: null,
+        // Integral state: area in value·ms, how much of the cell the integrated
+        // intervals actually cover, and how much of it falls inside a gap.
+        integralMs: 0,
+        coveredMs: 0,
+        missingMs: 0,
+        hasGap: false,
+        integral: null,
         partial: isPartialCell(cell.cellStartMs, cell.cellEndMs, range),
     };
 }
 
 function accumulatorKey(columnStartMs, rowIndex) {
     return `${columnStartMs}:${rowIndex}`;
+}
+
+function medianOfSteps(steps) {
+    if (!steps.length) return NaN;
+    const sorted = steps.slice().sort((a, b) => a - b);
+    const middle = sorted.length >> 1;
+    return sorted.length % 2
+        ? sorted[middle]
+        : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+// Trapezoidal area of one inter-sample interval, split at every calendar
+// boundary it crosses so no energy leaks into the neighbouring cell.
+function integrateInterval(startMs, startValue, endMs, endValue, mode, ensure) {
+    const span = endMs - startMs;
+    if (!(span > 0)) return;
+    let segmentStartMs = startMs;
+    let segmentStartValue = startValue;
+    while (segmentStartMs < endMs) {
+        const cell = calendarHeatmapCellCore(segmentStartMs, mode);
+        const segmentEndMs = Math.min(cell.cellEndMs, endMs);
+        const segmentEndValue = startValue
+            + (endValue - startValue) * ((segmentEndMs - startMs) / span);
+        const accumulator = ensure(cell);
+        const duration = segmentEndMs - segmentStartMs;
+        accumulator.integralMs += ((segmentStartValue + segmentEndValue) / 2) * duration;
+        accumulator.coveredMs += duration;
+        segmentStartMs = segmentEndMs;
+        segmentStartValue = segmentEndValue;
+    }
+}
+
+// Every cell touched by a gap is flagged: its integral would be missing the
+// data that is not there, so it is reported as a gap rather than as a value.
+function markGapCells(startMs, endMs, mode, ensure) {
+    let cursorMs = startMs;
+    let guard = 0;
+    while (cursorMs < endMs && guard++ < MAX_GAP_CELLS) {
+        const cell = calendarHeatmapCellCore(cursorMs, mode);
+        const overlapEndMs = Math.min(cell.cellEndMs, endMs);
+        const accumulator = ensure(cell);
+        accumulator.hasGap = true;
+        accumulator.missingMs += overlapEndMs - cursorMs;
+        cursorMs = overlapEndMs;
+    }
+    return guard >= MAX_GAP_CELLS;
 }
 
 // One-pass sparse aggregation for one trace. The selected range is closed
@@ -225,6 +288,11 @@ export function aggregateCalendarHeatmap(options = {}) {
     let minTimestampMs = Infinity;
     let maxTimestampMs = -Infinity;
     let aggregateOverflow = false;
+    // Integration needs ordered pairs and a notion of the normal step, both
+    // gathered here so the source arrays are never copied.
+    const steps = [];
+    let previousFiniteMs = null;
+    let timeSorted = true;
 
     for (let i = 0; i < nTime; i++) {
         const sourceTimeMs = epochMs(times[i]);
@@ -266,6 +334,12 @@ export function aggregateCalendarHeatmap(options = {}) {
 
         accumulator.nFinite++;
         nFinite++;
+        if (previousFiniteMs != null) {
+            const step = timestampMs - previousFiniteMs;
+            if (step < 0) timeSorted = false;
+            else if (step > 0 && steps.length < STEP_SAMPLE_LIMIT) steps.push(step);
+        }
+        previousFiniteMs = timestampMs;
         accumulator.sum += sample;
         // A weighted form of the online mean avoids overflowing merely from
         // adding two large finite samples whose true mean is still finite.
@@ -280,21 +354,75 @@ export function aggregateCalendarHeatmap(options = {}) {
         }
     }
 
+    const warnings = [];
+    const medianStepMs = medianOfSteps(steps);
+    const gapThresholdMs = Number.isFinite(medianStepMs) && medianStepMs > 0
+        ? medianStepMs * CALENDAR_HEATMAP_GAP_FACTOR
+        : NaN;
+    // Out-of-order timestamps would pair unrelated samples, so the integral is
+    // withheld rather than guessed. Every other aggregation is order-agnostic.
+    const integralAvailable = timeSorted && Number.isFinite(gapThresholdMs) && nFinite > 1;
+    let gapCellsTruncated = false;
+
+    if (integralAvailable) {
+        const ensure = (cell) => {
+            const key = accumulatorKey(cell.columnStartMs, cell.rowIndex);
+            let accumulator = sparse.get(key);
+            if (!accumulator) {
+                accumulator = createAccumulator(cell, range);
+                sparse.set(key, accumulator);
+            }
+            return accumulator;
+        };
+        let previousMs = null;
+        let previousValue = null;
+        for (let i = 0; i < nTime; i++) {
+            const timestampMs = epochMs(times[i]) + shift;
+            if (!isFiniteEpochMs(timestampMs)) continue;
+            if (range.active && (timestampMs < range.startMs || timestampMs > range.endMs)) continue;
+            const sample = numericSample(values[i]);
+            if (sample == null) continue;
+            if (previousMs != null && timestampMs > previousMs) {
+                if (timestampMs - previousMs > gapThresholdMs) {
+                    gapCellsTruncated = markGapCells(previousMs, timestampMs, mode, ensure) || gapCellsTruncated;
+                } else {
+                    integrateInterval(previousMs, previousValue, timestampMs, sample, mode, ensure);
+                }
+            }
+            previousMs = timestampMs;
+            previousValue = sample;
+        }
+    } else if (nFinite > 1) {
+        warnings.push('integralUnavailable');
+    }
+
     const accumulators = [...sparse.values()].sort((a, b) => (
         a.columnStartMs - b.columnStartMs || a.rowIndex - b.rowIndex
     ));
+    let nGapCells = 0;
     for (const accumulator of accumulators) {
         accumulator.nInvalid = accumulator.nScope - accumulator.nFinite;
         // Match SQL SUM/AVG semantics and the empty-cell rule: an occupied
         // cell containing no finite values is still null, never a synthetic 0.
         if (accumulator.nFinite === 0) accumulator.sum = null;
+        if (accumulator.hasGap) nGapCells++;
+        // Accumulated in value·ms, reported in value·hours: a power in MW yields
+        // energy in MWh.
+        accumulator.integral = integralAvailable && accumulator.coveredMs > 0
+            ? accumulator.integralMs / CALENDAR_HEATMAP_HOUR_MS
+            : null;
+        if (accumulator.integral != null && !Number.isFinite(accumulator.integral)) {
+            accumulator.integral = null;
+            aggregateOverflow = true;
+        }
     }
     const nInvalid = nScope - nFinite;
-    const warnings = [];
     if (nTime !== nValues) warnings.push('unalignedData');
     if (nInvalidTimestamp > 0) warnings.push('invalidTimestamps');
     if (nScope > 0 && nFinite === 0) warnings.push('noFiniteValues');
     if (aggregateOverflow) warnings.push('aggregateOverflow');
+    if (nGapCells > 0) warnings.push('dataGaps');
+    if (gapCellsTruncated) warnings.push('gapCellsTruncated');
 
     return {
         ok: true,
@@ -321,6 +449,11 @@ export function aggregateCalendarHeatmap(options = {}) {
             maxTimestampMs: nScope ? maxTimestampMs : null,
             aggregateOverflow,
             unaligned: nTime !== nValues,
+            medianStepMs: Number.isFinite(medianStepMs) ? medianStepMs : null,
+            gapThresholdMs: Number.isFinite(gapThresholdMs) ? gapThresholdMs : null,
+            integralAvailable,
+            timeSorted,
+            nGapCells,
         },
         warnings: uniqueWarnings(warnings),
     };
@@ -328,7 +461,12 @@ export function aggregateCalendarHeatmap(options = {}) {
 
 export function calendarHeatmapCellValue(cell, aggregation = 'mean') {
     const key = normalizeAggregation(aggregation);
-    if (!key || !cell || !(Number(cell.nFinite) > 0)) return null;
+    if (!key || !cell) return null;
+    // A cell touched by a gap has no trustworthy integral: it is reported as a
+    // gap (rendered in the palette's gap color), never as a partial area that
+    // would read like a complete one.
+    if (key === 'integral' && cell.hasGap === true) return null;
+    if (!(Number(cell.nFinite) > 0)) return null;
     const raw = key === 'count' ? cell.nFinite : cell[key];
     if (raw == null) return null;
     const value = Number(raw);
@@ -559,6 +697,10 @@ export function densifyCalendarHeatmap(source, options = {}) {
             mean: cell.mean == null ? null : Number(cell.mean),
             min: cell.min == null ? null : Number(cell.min),
             max: cell.max == null ? null : Number(cell.max),
+            integral: cell.integral == null ? null : Number(cell.integral),
+            hasGap: cell.hasGap === true,
+            coveredMs: Math.max(0, Number(cell.coveredMs) || 0),
+            missingMs: Math.max(0, Number(cell.missingMs) || 0),
             partial: cell.partial === true || isPartialCell(
                 bounds.cellStartMs,
                 bounds.cellEndMs,
@@ -570,7 +712,13 @@ export function densifyCalendarHeatmap(source, options = {}) {
             ),
         };
         const value = calendarHeatmapCellValue(custom, aggregation);
-        if (custom.nFinite > 0 && value == null) warnings.push('aggregateOverflow');
+        // Under the integral a null is expected wherever the cell was not fully
+        // covered by integrated intervals: gap cells and the domain-edge cell
+        // whose sample has no following sample. Real overflow was already flagged
+        // by the kernel, so only the value-based aggregations use this heuristic.
+        if (aggregation !== 'integral' && custom.nFinite > 0 && value == null) {
+            warnings.push('aggregateOverflow');
+        }
         z[rowOffset][columnIndex] = value;
         customdata[rowOffset][columnIndex] = custom;
     }

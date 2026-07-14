@@ -7,8 +7,12 @@ import Plotly from '../../vendor/plotly.js';
 
 const HEATMAP_LAYOUTS = new Set(['horizontal', 'vertical']);
 const HEATMAP_CALENDAR_MODES = new Set(['week-day', 'day-hour']);
-const HEATMAP_AGGREGATIONS = new Set(['mean', 'min', 'max', 'sum', 'count']);
+const HEATMAP_AGGREGATIONS = new Set(['mean', 'min', 'max', 'sum', 'count', 'integral']);
 const HEATMAP_COLOR_SCALES = new Set(['Viridis', 'Cividis', 'RdBu']);
+// Cells whose integral is broken by missing data are painted in a color that
+// belongs to no part of the chosen palette, so they cannot be mistaken for a
+// value: warm red over the blue-to-yellow scales, green over the red-blue one.
+const HEATMAP_GAP_COLORS = { Viridis: '#e03131', Cividis: '#e03131', RdBu: '#2f9e44' };
 const HEATMAP_COLOR_RANGE_MODES = new Set(['auto', 'manual']);
 const HEATMAP_RECOMPUTE_DEBOUNCE_MS = 150;
 const HEATMAP_MANY_TRACES_WARNING = 6;
@@ -75,6 +79,14 @@ const fallbackText = {
     heatmapSumTooltip: 'Sample sum: adds the finite samples of the cell. It is not a time integral (energy). With regular sampling it is just the mean times a constant sample count, so the map can look nearly uniform',
     heatmapCount: 'Finite count',
     heatmapCountTooltip: 'Finite count: how many finite samples fall in the cell, ignoring their value. With regular sampling every full cell holds the same number of samples, so a nearly flat map is expected; it mainly reveals gaps, partial cells and missing data',
+    heatmapIntegral: 'Integral',
+    heatmapIntegralTooltip: 'Integral: area of the signal over time inside the cell (trapezoidal, split at the cell boundaries), reported in unit x hours — a power in MW gives energy in MWh. Cells whose data has holes are painted in the gap color instead of an untrustworthy value',
+    heatmapGapCell: 'Missing data: no integral for this cell',
+    heatmapGapMissing: 'time not covered',
+    heatmapGapLegend: 'Gap (missing data)',
+    heatmapIntegralUnsorted: 'The integral needs timestamps in chronological order.',
+    heatmapDataGaps: 'Some cells have missing data and carry no integral.',
+    heatmapMedianStep: 'Sampling step',
     heatmapTimeZone: 'Time zone',
     heatmapTimeZoneTooltip: 'Cell boundaries are always computed in UTC so the same file gives the same cells on any machine',
     heatmapColor: 'Color',
@@ -122,6 +134,7 @@ const aggregationLabelKey = {
     max: 'heatmapMax',
     sum: 'heatmapSum',
     count: 'heatmapCount',
+    integral: 'heatmapIntegral',
 };
 
 const aggregationTooltipKey = {
@@ -130,7 +143,26 @@ const aggregationTooltipKey = {
     max: 'heatmapMaxTooltip',
     sum: 'heatmapSumTooltip',
     count: 'heatmapCountTooltip',
+    integral: 'heatmapIntegralTooltip',
 };
+
+// The integral of a value sampled over time carries the value's unit times
+// hours: a power in MW integrates to energy in MW·h.
+function unitForAggregation(unit, aggregation) {
+    if (aggregation === 'count') return '';
+    if (aggregation !== 'integral') return unit || '';
+    return unit ? `${unit}·h` : 'h';
+}
+
+function formatDurationMs(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value <= 0) return '';
+    const hours = value / 3600000;
+    if (hours >= 1) return `${Number(hours.toFixed(2))} h`;
+    const minutes = value / 60000;
+    if (minutes >= 1) return `${Number(minutes.toFixed(1))} min`;
+    return `${Math.round(value / 1000)} s`;
+}
 
 function text(key) {
     const translated = i18n.t(key);
@@ -853,7 +885,15 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
                 warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${reason}`);
                 continue;
             }
-            if (Array.isArray(grid.warnings)) warnings.push(...grid.warnings.map(item => `${this._traceName(trace.varName, trace.fileId)}: ${item}`));
+            if (Array.isArray(grid.warnings)) {
+                for (const item of grid.warnings) {
+                    // Gaps only invalidate the integral; under the other
+                    // aggregations they are not worth a warning.
+                    if ((item === 'dataGaps' || item === 'integralUnavailable') && state.aggregation !== 'integral') continue;
+                    const message = { dataGaps: text('heatmapDataGaps'), integralUnavailable: text('heatmapIntegralUnsorted') }[item] || item;
+                    warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${message}`);
+                }
+            }
             models.push({ trace, grid });
         } catch (error) {
             warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
@@ -892,7 +932,7 @@ proto._calendarHeatmapGridHoverText = function(grid, trace, z, aggregation) {
     const x = grid?.x || [];
     const y = grid?.y || [];
     const name = escapeHtml(this._traceName(trace.varName, trace.fileId));
-    const unit = escapeHtml(this._varUnit(trace.varName, trace.fileId));
+    const unit = escapeHtml(unitForAggregation(this._varUnit(trace.varName, trace.fileId), aggregation));
     const aggregationLabel = escapeHtml(text(aggregationLabelKey[aggregation] || aggregation));
     return z.map((row, rowIndex) => row.map((value, columnIndex) => {
         const cell = customdata?.[rowIndex]?.[columnIndex];
@@ -952,6 +992,57 @@ proto._calendarHeatmapColorBounds = function(state, zMatrices) {
     return [minimum, maximum];
 };
 
+// Gap cells hold no integral, so the main trace leaves them empty and this
+// overlay paints them in the palette's gap color. It is drawn after the trace it
+// belongs to, and only under the integral, where a hole in the data actually
+// invalidates the value.
+proto._buildCalendarHeatmapGapTrace = function(plot, model, axisSuffix) {
+    const state = this._ensureCalendarHeatmapState(plot);
+    if (state.aggregation !== 'integral') return null;
+    const grid = model.grid;
+    const customdata = grid?.customdata;
+    if (!Array.isArray(customdata)) return null;
+
+    let gapCount = 0;
+    const z = customdata.map(row => (Array.isArray(row) ? row.map((cell) => {
+        if (!cell?.hasGap) return null;
+        gapCount++;
+        return 1;
+    }) : []));
+    if (!gapCount) return null;
+
+    const name = escapeHtml(this._traceName(model.trace.varName, model.trace.fileId));
+    const hoverText = customdata.map(row => (Array.isArray(row) ? row.map((cell) => {
+        if (!cell?.hasGap) return '';
+        const missing = formatDurationMs(cell.missingMs);
+        return [
+            `<b>${name}</b>`,
+            `${text('heatmapInterval')}: ${escapeHtml(utcIso(cell.cellStartMs))} → ${escapeHtml(utcIso(cell.cellEndMs))}`,
+            text('heatmapGapCell'),
+            missing ? `${text('heatmapGapMissing')}: ${missing}` : '',
+        ].filter(Boolean).join('<br>');
+    }) : []));
+
+    const color = HEATMAP_GAP_COLORS[state.colorScale] || HEATMAP_GAP_COLORS.Viridis;
+    return {
+        type: 'heatmap',
+        x: (grid.x || []).map(utcIso),
+        y: grid.y || [],
+        z,
+        text: hoverText,
+        hovertemplate: '%{text}<extra></extra>',
+        hoverongaps: false,
+        colorscale: [[0, color], [1, color]],
+        zmin: 0,
+        zmax: 1,
+        showscale: false,
+        zsmooth: false,
+        name: text('heatmapGapLegend'),
+        xaxis: 'x',
+        yaxis: `y${axisSuffix}`,
+    };
+};
+
 proto._buildCalendarHeatmapPlot = function(plot, models) {
     const state = this._ensureCalendarHeatmapState(plot);
     const visibleModels = (models || []).filter(model => this._isVisible(model.trace));
@@ -994,10 +1085,15 @@ proto._buildCalendarHeatmapPlot = function(plot, models) {
                 y: 1 - (index + 0.5) / Math.max(1, visibleModels.length),
                 len: Math.max(0.12, 0.82 / Math.max(1, visibleModels.length)),
                 thickness: 10,
-                title: { text: state.aggregation === 'count' ? '' : this._varUnit(model.trace.varName, model.trace.fileId), side: 'right' },
+                title: {
+                    text: unitForAggregation(this._varUnit(model.trace.varName, model.trace.fileId), state.aggregation),
+                    side: 'right',
+                },
             };
         }
         traces.push(heatmapTrace);
+        const gapTrace = this._buildCalendarHeatmapGapTrace(plot, model, axisSuffix);
+        if (gapTrace) traces.push(gapTrace);
     });
     return { traces, layout: this._buildCalendarHeatmapLayout(plot, visibleModels, matrices, sharedBounds) };
 };
@@ -1485,6 +1581,7 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         { value: 'max', label: text('heatmapMax'), title: text('heatmapMaxTooltip') },
         { value: 'sum', label: text('heatmapSum'), title: text('heatmapSumTooltip') },
         { value: 'count', label: text('heatmapCount'), title: text('heatmapCountTooltip') },
+        { value: 'integral', label: text('heatmapIntegral'), title: text('heatmapIntegralTooltip') },
     ], state.aggregation, (aggregation) => {
         if (!HEATMAP_AGGREGATIONS.has(aggregation)) return;
         state.aggregation = aggregation;

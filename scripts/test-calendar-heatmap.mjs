@@ -194,7 +194,15 @@ assert.equal(formatUtcIsoWeek(NaN), '');
         utc('2024-01-03T00:00:00Z'),
     ]);
     assert.deepEqual(day.z[1], [0, null, 2], 'real zero differs from empty day');
-    assert.equal(day.customdata[1][1], null, 'empty cell has no fake counts');
+    // A cell can hold no sample and still be crossed by the integrated interval,
+    // so it may carry integral state — but never fake counts or a fake value.
+    const emptyCell = day.customdata[1][1];
+    if (emptyCell) {
+        assert.equal(emptyCell.nScope, 0, 'empty cell has no fake counts');
+        assert.equal(emptyCell.nFinite, 0, 'empty cell has no fake counts');
+        assert.equal(calendarHeatmapCellValue(emptyCell, 'sum'), null, 'empty cell has no fake value');
+        assert.equal(calendarHeatmapCellValue(emptyCell, 'count'), null, 'empty cell has no fake count');
+    }
     assert.equal(day.customdata[1][0].nFinite, 1);
 
     const week = buildCalendarHeatmap({
@@ -454,6 +462,101 @@ assert.equal(formatUtcIsoWeek(NaN), '');
         rangeStart: utc('2025-01-01T00:00:00Z'),
         rangeEnd: utc('2025-01-02T00:00:00Z'),
     }).reason, 'noRows');
+}
+
+// Integral: trapezoidal area in value·hours, split at calendar boundaries, with
+// gaps reported instead of invented.
+{
+    const hour = CALENDAR_HEATMAP_HOUR_MS;
+    const day0 = utc('2026-01-05T00:00:00Z'); // a Monday
+
+    // A constant power of 10 sampled every 15 min over one full day: every hour
+    // integrates to exactly 10 units·h, and the day to 240.
+    const times = [];
+    const values = [];
+    for (let ms = 0; ms <= CALENDAR_HEATMAP_DAY_MS; ms += 15 * 60 * 1000) {
+        times.push(day0 + ms);
+        values.push(10);
+    }
+    const hourly = buildCalendarHeatmap({ times, values, calendarMode: 'day-hour', aggregation: 'integral' });
+    assert.ok(hourly.ok);
+    close(cellAt(hourly, 0).z, 10, 1e-9, 'constant power integrates to value x 1h per hour cell');
+    close(cellAt(hourly, 23).z, 10, 1e-9, 'last hour of the day integrates to 10');
+    const daily = buildCalendarHeatmap({ times, values, calendarMode: 'week-day', aggregation: 'integral' });
+    close(cellAt(daily, 1).z, 240, 1e-9, 'a full day of constant 10 integrates to 240 unit-hours');
+
+    // A ramp is trapezoidal, not sample-and-hold: 0 -> 60 over one hour is 30.
+    const ramp = buildCalendarHeatmap({
+        times: [day0, day0 + 30 * 60 * 1000, day0 + hour],
+        values: [0, 30, 60],
+        calendarMode: 'day-hour',
+        aggregation: 'integral',
+    });
+    close(cellAt(ramp, 0).z, 30, 1e-9, 'linear ramp integrates to the trapezoid area');
+
+    // An interval that straddles a cell boundary is split, not attributed whole.
+    const straddle = buildCalendarHeatmap({
+        times: [day0 + 30 * 60 * 1000, day0 + 90 * 60 * 1000],
+        values: [10, 10],
+        calendarMode: 'day-hour',
+        aggregation: 'integral',
+    });
+    close(cellAt(straddle, 0).z, 5, 1e-9, 'half of the interval lands in hour 0');
+    close(cellAt(straddle, 1).z, 5, 1e-9, 'the other half lands in hour 1');
+
+    // A step far longer than the median is a gap: the cells it touches carry no
+    // integral, and the untouched ones still do.
+    const gapped = buildCalendarHeatmap({
+        times: [day0, day0 + hour, day0 + 6 * hour, day0 + 7 * hour],
+        values: [10, 10, 10, 10],
+        calendarMode: 'day-hour',
+        aggregation: 'integral',
+    });
+    close(cellAt(gapped, 0).z, 10, 1e-9, 'the hour before the gap integrates normally');
+    assert.equal(cellAt(gapped, 3).z, null, 'a cell inside the gap has no integral');
+    assert.equal(cellAt(gapped, 3).customdata.hasGap, true, 'a cell inside the gap is flagged');
+    assert.equal(cellAt(gapped, 1).customdata.hasGap, true, 'the cell where the gap starts is flagged');
+    close(cellAt(gapped, 6).z, 10, 1e-9, 'the hour after the gap integrates normally');
+    assert.ok(gapped.warnings.includes('dataGaps'), 'gaps are reported as a warning');
+
+    // A missing value creates the same hole as a missing row.
+    const holed = buildCalendarHeatmap({
+        times: [day0, day0 + hour, day0 + 2 * hour, day0 + 3 * hour, day0 + 4 * hour],
+        values: [10, 10, NaN, 10, 10],
+        calendarMode: 'day-hour',
+        aggregation: 'integral',
+    });
+    assert.equal(cellAt(holed, 2).customdata.hasGap, true, 'a NaN opens a gap around its hour');
+    assert.equal(cellAt(holed, 2).z, null, 'the hour around a NaN has no integral');
+
+    // Other aggregations stay available on the very same cells.
+    assert.equal(cellAt(gapped, 3).customdata.nFinite, 0);
+    const meanGrid = buildCalendarHeatmap({
+        times: [day0, day0 + hour, day0 + 6 * hour, day0 + 7 * hour],
+        values: [10, 10, 10, 10],
+        calendarMode: 'day-hour',
+        aggregation: 'mean',
+    });
+    close(cellAt(meanGrid, 1).z, 10, 1e-9, 'a gap does not suppress the mean');
+    assert.equal(calendarHeatmapCellValue(cellAt(gapped, 1).customdata, 'mean'), 10);
+    assert.equal(calendarHeatmapCellValue(cellAt(gapped, 1).customdata, 'integral'), null);
+
+    // Out-of-order timestamps withhold the integral instead of pairing unrelated
+    // samples; the order-agnostic aggregations still work.
+    const unsorted = buildCalendarHeatmap({
+        times: [day0 + hour, day0, day0 + 2 * hour],
+        values: [10, 10, 10],
+        calendarMode: 'day-hour',
+        aggregation: 'integral',
+    });
+    assert.equal(unsorted.stats.integralAvailable, false);
+    assert.ok(unsorted.warnings.includes('integralUnavailable'));
+    assert.equal(cellAt(unsorted, 0).z, null, 'no integral is reported for unsorted input');
+    assert.equal(calendarHeatmapCellValue(cellAt(unsorted, 0).customdata, 'mean'), 10);
+
+    // The gap threshold follows the data's own cadence.
+    assert.equal(hourly.stats.medianStepMs, 15 * 60 * 1000);
+    close(hourly.stats.gapThresholdMs, 1.5 * 15 * 60 * 1000, 1e-9, 'threshold is 1.5x the median step');
 }
 
 console.log('Calendar heatmap kernel tests passed.');
