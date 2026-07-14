@@ -1,4 +1,37 @@
+import { getCalendarDateTickFormat } from '../plotly-locale.js';
 
+export function getCalendarTimeFormats(mode = '24h', language = 'en') {
+    const useAmPm = mode === 'ampm' || mode === 'calendar-ampm';
+    const tickformat = useAmPm ? '%-I:%M %p' : '%H:%M';
+    const hoverformat = useAmPm ? '%-I:%M:%S %p' : '%H:%M:%S';
+    return {
+        tickformat,
+        // Plotly treats the text after \n as a secondary date label, keeping
+        // the day visible when it changes without making locale the clock source.
+        tickformatWithDate: `${tickformat}\n${getCalendarDateTickFormat(language)}`,
+        hoverformat,
+        traceHoverformat: `%Y-%m-%d ${hoverformat}`,
+    };
+}
+
+function finiteAxisExtent(input) {
+    let min = Infinity;
+    let max = -Infinity;
+    const visit = (value) => {
+        const isIterableView = ArrayBuffer.isView(value)
+            && typeof value?.[Symbol.iterator] === 'function';
+        if (Array.isArray(value) || isIterableView) {
+            for (const item of value) visit(item);
+            return;
+        }
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return;
+        if (numeric < min) min = numeric;
+        if (numeric > max) max = numeric;
+    };
+    visit(input ?? []);
+    return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+}
 
 export function installPlotDataMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -41,7 +74,9 @@ proto._normalizeFileTransform = function(transform = null) {
     })();
     return {
         timeDisplayMode: mode,
-        calendarTimeFormat: t.calendarTimeFormat === 'ampm' ? 'ampm' : null,
+        calendarTimeFormat: t.calendarTimeFormat === 'ampm'
+            ? 'ampm'
+            : (t.calendarTimeFormat === '24h' ? '24h' : null),
         timeShift: t.timeShift === '' || t.timeShift === null || t.timeShift === undefined ? 0 : t.timeShift,
         timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
@@ -176,20 +211,32 @@ proto._calendarTimeFormat = function(fileId, timeVar = null) {
     return transform.calendarTimeFormat || timeVar?.calendarTimeFormat || '24h';
 };
 
+proto._calendarTimeFormats = function(fileId, timeVar = null) {
+    return getCalendarTimeFormats(this._calendarTimeFormat(fileId, timeVar), this.language);
+};
+
 proto._calendarTickFormat = function(fileId, timeVar = null) {
-    return this._calendarTimeFormat(fileId, timeVar) === 'ampm'
-        ? '%Y-%m-%d %I:%M:%S %p'
-        : '%Y-%m-%d %H:%M:%S';
+    return this._calendarTimeFormats(fileId, timeVar).traceHoverformat;
 };
 
 proto._calendarAxisConfig = function(fileId, timeVar = null, rangeOrValues = null) {
     if (this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) {
         return this._highResolutionCalendarAxisConfig(fileId, timeVar, rangeOrValues);
     }
+    const formats = this._calendarTimeFormats(fileId, timeVar);
     return {
         type: 'date',
-        hoverformat: this._calendarTickFormat(fileId, timeVar),
+        tickformat: formats.tickformatWithDate,
+        hoverformat: formats.hoverformat,
     };
+};
+
+proto._timeAxisRelayoutUpdate = function(axisConfig = {}, axisPath = 'xaxis') {
+    const update = {};
+    for (const key of ['type', 'tickmode', 'tickvals', 'ticktext', 'tickformat', 'hoverformat']) {
+        if (axisConfig[key] !== undefined) update[`${axisPath}.${key}`] = axisConfig[key];
+    }
+    return update;
 };
 
 proto._isCalendarTime = function(fileId) {
@@ -362,11 +409,9 @@ proto._plotlyTimeArray = function(fileId, values, timeVar = null) {
 };
 
 proto._elapsedDateTimeAxisConfig = function(rangeOrValues, fileId = null) {
-    const values = Array.isArray(rangeOrValues?.[0]) ? rangeOrValues.flat() : (rangeOrValues || []);
-    const finite = values.map(Number).filter(Number.isFinite);
-    if (!finite.length) return {};
-    let min = Math.min(...finite);
-    let max = Math.max(...finite);
+    const extent = finiteAxisExtent(rangeOrValues);
+    if (!extent) return {};
+    let { min, max } = extent;
     if (min > max) [min, max] = [max, min];
     if (min === max) {
         min -= 1;
@@ -382,11 +427,9 @@ proto._elapsedDateTimeAxisConfig = function(rangeOrValues, fileId = null) {
 };
 
 proto._highResolutionCalendarAxisConfig = function(fileId, timeVar = null, rangeOrValues = null) {
-    const values = Array.isArray(rangeOrValues?.[0]) ? rangeOrValues.flat() : (rangeOrValues || []);
-    const finite = values.map(Number).filter(Number.isFinite);
-    if (!finite.length) return { type: 'linear' };
-    let min = Math.min(...finite);
-    let max = Math.max(...finite);
+    const extent = finiteAxisExtent(rangeOrValues);
+    if (!extent) return { type: 'linear' };
+    let { min, max } = extent;
     if (min > max) [min, max] = [max, min];
     if (min === max) {
         min -= 1;
@@ -577,7 +620,7 @@ proto._calendarFractionDigits = function(fileId) {
     return 3;
 };
 
-proto._formatCalendarDateTime = function(fileId, value, timeVar = null) {
+proto._formatCalendarDateTime = function(fileId, value, timeVar = null, calendarTimeFormat = null) {
     if (!Number.isFinite(value)) return this._formatHTMLNumber(value);
     const digits = this._calendarFractionDigits(fileId);
     let secondMs = Math.floor(value / 1000) * 1000;
@@ -597,18 +640,18 @@ proto._formatCalendarDateTime = function(fileId, value, timeVar = null) {
     const minute = pad2(d.getUTCMinutes());
     const second = pad2(d.getUTCSeconds());
     const fractionText = digits > 0 ? `.${String(fractionInt).padStart(digits, '0')}` : '';
-    if (this._calendarTimeFormat(fileId, timeVar) === 'ampm') {
+    if ((calendarTimeFormat || this._calendarTimeFormat(fileId, timeVar)) === 'ampm') {
         const h24 = d.getUTCHours();
         const suffix = h24 >= 12 ? 'PM' : 'AM';
         const h12 = h24 % 12 || 12;
-        return `${year}-${month}-${day} ${pad2(h12)}:${minute}:${second}${fractionText} ${suffix} UTC`;
+        return `${year}-${month}-${day} ${h12}:${minute}:${second}${fractionText} ${suffix} UTC`;
     }
     return `${year}-${month}-${day} ${pad2(d.getUTCHours())}:${minute}:${second}${fractionText} UTC`;
 };
 
-proto._formatGeneratedCalendarDateTime = function(fileId, value, timeVar = null) {
+proto._formatGeneratedCalendarDateTime = function(fileId, value, timeVar = null, calendarTimeFormat = null) {
     if (!this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) {
-        return this._formatCalendarDateTime(fileId, value, timeVar);
+        return this._formatCalendarDateTime(fileId, value, timeVar, calendarTimeFormat);
     }
     if (!Number.isFinite(value)) return this._formatHTMLNumber(value);
     const originMs = this._timeOriginMsForVar(fileId, timeVar);
@@ -632,11 +675,11 @@ proto._formatGeneratedCalendarDateTime = function(fileId, value, timeVar = null)
     const minute = pad2(d.getUTCMinutes());
     const second = pad2(d.getUTCSeconds());
     const fractionText = digits > 0 ? `.${String(fractionInt).padStart(digits, '0')}` : '';
-    if (this._calendarTimeFormat(fileId, timeVar) === 'ampm') {
+    if ((calendarTimeFormat || this._calendarTimeFormat(fileId, timeVar)) === 'ampm') {
         const h24 = d.getUTCHours();
         const suffix = h24 >= 12 ? 'PM' : 'AM';
         const h12 = h24 % 12 || 12;
-        return `${year}-${month}-${day} ${pad2(h12)}:${minute}:${second}${fractionText} ${suffix} UTC`;
+        return `${year}-${month}-${day} ${h12}:${minute}:${second}${fractionText} ${suffix} UTC`;
     }
     return `${year}-${month}-${day} ${pad2(d.getUTCHours())}:${minute}:${second}${fractionText} UTC`;
 };
@@ -659,7 +702,7 @@ proto._formatTimeValue = function(fileId, value) {
         const h24 = d.getUTCHours();
         const suffix = h24 >= 12 ? 'PM' : 'AM';
         const h12 = h24 % 12 || 12;
-        return `${year}-${month}-${day} ${pad2(h12)}:${minute}:${second} ${suffix} UTC`;
+        return `${year}-${month}-${day} ${h12}:${minute}:${second} ${suffix} UTC`;
     }
     return `${year}-${month}-${day} ${pad2(d.getUTCHours())}:${minute}:${second} UTC`;
 };
@@ -698,6 +741,7 @@ proto._primaryTimeFileId = function(plot) {
     if (!plot) return this.activeFileId;
     if (plot.mode === 'timeseries') return plot.traces?.[0]?.fileId || this.activeFileId;
     if (plot.mode === 'fft') return plot.traces?.[0]?.fileId || this.activeFileId;
+    if (plot.mode === 'histogram') return plot.traces?.[0]?.fileId || this.activeFileId;
     if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
         return plot.phaseTraces?.[0]?.fileId || this.activeFileId;
     }
@@ -1292,14 +1336,17 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     const hoverName = this._escapeHTML(name);
     const hoverTimeUnit = this._escapeHTML(timeUnit);
     const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
-    const calendarTickFormat = this._calendarTickFormat(t.fileId, timeVar);
+    const primaryTimeTrace = plot?.traces?.[0] || t;
+    const primaryTimeVar = this._getTimeVar(primaryTimeTrace.fileId);
+    const primaryCalendarTimeFormat = this._calendarTimeFormat(primaryTimeTrace.fileId, primaryTimeVar);
+    const calendarHoverFormat = this._calendarTickFormat(primaryTimeTrace.fileId, primaryTimeVar);
     const durationFractionDigits = this._durationFractionDigits(t.fileId);
     const stackAttrs = this._timeseriesStackAttrs(plot, traceIndex);
     const yaxis = this._traceYAxis(t, plot);
     const hoverX = highResolutionCalendarAxis
         ? `<b>Time</b> = %{customdata}<br>`
         : timeMode === 'calendar'
-        ? `<b>Time</b> = %{x|${calendarTickFormat}}<br>`
+        ? `<b>Time</b> = %{x|${calendarHoverFormat}}<br>`
         : (durationAxis
             ? `<b>Elapsed</b> = %{customdata}<br>`
             : `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br>`);
@@ -1317,7 +1364,12 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             ...stackAttrs,
             hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}<extra></extra>`,
             ...(highResolutionCalendarAxis
-                ? { customdata: [tStart, tEnd].map(value => this._formatGeneratedCalendarDateTime(t.fileId, value, timeVar)) }
+                ? { customdata: [tStart, tEnd].map(value => this._formatGeneratedCalendarDateTime(
+                    t.fileId,
+                    value,
+                    timeVar,
+                    primaryCalendarTimeFormat,
+                )) }
                 : durationAxis
                     ? { customdata: [tStart, tEnd].map(value => this._formatElapsedDateTime(value, durationFractionDigits)) }
                     : {}),
@@ -1332,7 +1384,12 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     );
     const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
     const customdata = highResolutionCalendarAxis
-        ? Array.from(visual.x || [], value => this._formatGeneratedCalendarDateTime(t.fileId, value, timeVar))
+        ? Array.from(visual.x || [], value => this._formatGeneratedCalendarDateTime(
+            t.fileId,
+            value,
+            timeVar,
+            primaryCalendarTimeFormat,
+        ))
         : durationAxis
         ? Array.from(visual.x || [], value => this._formatElapsedDateTime(value, durationFractionDigits))
         : undefined;
@@ -1496,6 +1553,20 @@ proto._buildPhase2DLayout = function(plot) {
 };
 
 // ── Phase 2D+t: x=var1, y=time, z=var2 ──
+proto._phase2DtHighResolutionTimeCustomData = function(plot, pt, timeValues) {
+    const timeVar = this._getTimeVar(pt.fileId);
+    if (!this._isHighResolutionGeneratedCalendarTime(pt.fileId, timeVar)) return null;
+    const primary = plot?.phaseTraces?.[0] || pt;
+    const primaryTimeVar = this._getTimeVar(primary.fileId);
+    const calendarTimeFormat = this._calendarTimeFormat(primary.fileId, primaryTimeVar);
+    return Array.from(timeValues || [], value => this._formatGeneratedCalendarDateTime(
+        pt.fileId,
+        value,
+        timeVar,
+        calendarTimeFormat,
+    ));
+};
+
 proto._buildPhase2DtTraces = function(plot) {
     return plot.phaseTraces.map(pt => {
         const d = this.files.get(pt.fileId)?.data;
@@ -1503,14 +1574,24 @@ proto._buildPhase2DtTraces = function(plot) {
         if (!d) return null;
         const visual = this._phaseVisualDataForTrace(plot, pt);
         if (!visual) return null;
+        const name = this._phaseTraceName(plot, pt);
+        const customdata = this._phase2DtHighResolutionTimeCustomData(plot, pt, visual.time);
+        const highResolutionHover = customdata ? {
+            customdata,
+            hovertemplate: `<b>Time</b> = %{customdata}<br>`
+                + `<b>${this._escapeHTML(this._variableLabel(pt.x, pt.fileId))}</b> = %{y:.4g}<br>`
+                + `<b>${this._escapeHTML(this._variableLabel(pt.y, pt.fileId))}</b> = %{z:.4g}`
+                + `<extra>${this._escapeHTML(name)}</extra>`,
+        } : {};
         return {
             x: this._plotlyTimeArray(pt.fileId, visual.time, timeVar),
             y: visual.x,
             z: visual.y,
-            name: this._phaseTraceName(plot, pt),
+            name,
             type: 'scatter3d', mode: 'lines',
             visible: pt.visible ?? true,
             line: { color: pt.color, width: 3 },
+            ...highResolutionHover,
         };
     }).filter(Boolean);
 };

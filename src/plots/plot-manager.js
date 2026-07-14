@@ -1,6 +1,7 @@
 import i18n from '../i18n/index.js';
 import Modal from '../ui/modal.js';
 import Plotly from '../vendor/plotly.js';
+import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
 import { installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';
@@ -27,6 +28,7 @@ class PlotManager {
         this.files          = new Map();   // fileId → { name, data }
         this.activeFileId   = null;
         this.theme          = 'light';
+        this.language       = 'en';
         this.syncAxes       = true;
         this.legendPosition = 'overlay';
         this.legendOverlayCorner = 'tl';
@@ -259,6 +261,13 @@ class PlotManager {
     }
 
     setTheme(theme)            { this.theme = theme;          this._relayoutAll(); }
+    setLanguage(language)      { this.language = normalizeAppLanguage(language); }
+    preserveViewsForNextRender() {
+        for (const [, plot] of this.plots) {
+            const view = this._capturePlotView(plot, { manualRangesOnly: true });
+            if (view) plot._pendingViewRestore = view;
+        }
+    }
     setSyncAxes(v)             { this.syncAxes = v; }
     setLegendPosition(pos) {
         this.legendPosition = ['overlay', 'above', 'right', 'hidden'].includes(pos) ? pos : 'overlay';
@@ -321,6 +330,7 @@ class PlotManager {
             displayModeBar: true,
             displaylogo: false,
             scrollZoom: this.mouseWheelZoom,
+            locale: getPlotlyLocale(this.language),
             ...overrides,
         };
     }
@@ -1093,6 +1103,9 @@ class PlotManager {
             relayoutUpdate['scene.xaxis.range'] = layout.scene.xaxis.range;
             relayoutUpdate['scene.yaxis.range'] = layout.scene.yaxis.range;
             relayoutUpdate['scene.zaxis.range'] = layout.scene.zaxis.range;
+            if (isTimez) {
+                Object.assign(relayoutUpdate, this._timeAxisRelayoutUpdate(layout.scene.xaxis, 'scene.xaxis'));
+            }
             if (cam) relayoutUpdate['scene.camera'] = cam;
         }
         Plotly.relayout(plot.div, relayoutUpdate);
@@ -1278,7 +1291,8 @@ class PlotManager {
         if (!panelEl) return;
         const plot = this.plots.get(panelId);
         const has = this._hasContent(plot);
-        if (plot?.mode !== 'timeseries') {
+        const isTimeseriesFamily = ['timeseries', 'fft', 'histogram'].includes(plot?.mode);
+        if (!isTimeseriesFamily) {
             panelEl.querySelector('.timeseries-tools-group')?.remove();
         }
         const csvBtn = panelEl.querySelector('.csv-export-btn');
@@ -1313,10 +1327,18 @@ class PlotManager {
             y2Btn.classList.toggle('active', !!plot?.timeseriesY2Enabled);
             y2Btn.setAttribute('aria-pressed', plot?.timeseriesY2Enabled ? 'true' : 'false');
         }
+        panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
+            const active = btn.dataset.mode === plot?.mode;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-pressed', String(active));
+        });
+        panelEl.querySelectorAll('.panel-autoscale-btn').forEach(btn => {
+            btn.disabled = !has;
+        });
         // Show view-btn-group for 3D modes and state-anim (2D or 3D) with content
         const isAnim = plot?.mode === 'state-anim' && has;
         const is3DMode = this._is3D(plot?.mode) || this._isStateAnim3D(plot);
-        const showGroup = is3DMode || isAnim;
+        const showGroup = is3DMode || isAnim || this._supportsEqualAspect2D(plot);
         const viewGroup = panelEl.querySelector('.view-btn-group');
         if (viewGroup) {
             viewGroup.style.display = showGroup ? '' : 'none';
@@ -1882,12 +1904,17 @@ class PlotManager {
             return this._autoScaleFftPanel(panelId, plot);
         }
 
+        if (plot.mode === 'histogram') {
+            return this._autoScaleHistogramPanel(panelId, plot);
+        }
+
         if (plot.mode === 'timeseries') {
             const visibleTraces = plot.traces.filter(t => this._isVisible(t));
             if (!visibleTraces.length) {
                 const update = { 'xaxis.autorange': true, 'yaxis.autorange': true };
                 if (plot.timeseriesY2Enabled) update['yaxis2.autorange'] = true;
-                return Plotly.relayout(plot.div, update);
+                return Plotly.relayout(plot.div, update)
+                    .then(() => this._refreshElapsedDateTimeAxisTicks(plot));
             }
 
             const xArrays = [];
@@ -1936,7 +1963,9 @@ class PlotManager {
                     update['yaxis2.autorange'] = true;
                 }
             }
-            return Plotly.relayout(plot.div, update);
+            const tickRange = xExtent ? [xExtent.min, xExtent.max] : null;
+            return Plotly.relayout(plot.div, update)
+                .then(() => this._refreshElapsedDateTimeAxisTicks(plot, tickRange));
         }
 
         if (plot.mode === 'phase2d') {
@@ -1978,6 +2007,9 @@ class PlotManager {
                 'scene.zaxis.range': layout.scene.zaxis.range,
             };
             const is2dt = plot.mode === 'phase2dt';
+            if (is2dt) {
+                Object.assign(update, this._timeAxisRelayoutUpdate(layout.scene.xaxis, 'scene.xaxis'));
+            }
             const homeCamera = plot.homeCamera || (is2dt
                 ? { eye: { x: 1.25, y: -1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } }
                 : { eye: { x: 1.25, y: 1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 } });
@@ -2378,34 +2410,48 @@ class PlotManager {
         return [lo - pad * span, hi + pad * span];
     }
 
-    _capturePlotView(plot) {
+    _capturePlotView(plot, options = {}) {
         if (!plot?.div?._fullLayout) return null;
         const fl = plot.div._fullLayout;
+        const axisRange = (axis) => {
+            if (!Array.isArray(axis?.range)) return null;
+            if (options.manualRangesOnly && axis.autorange !== false) return null;
+            return [...axis.range];
+        };
+        const manualAxisRange = (axis) => axis?.autorange === false && Array.isArray(axis.range)
+            ? [...axis.range]
+            : null;
         if (this._is3D(plot.mode) || this._isStateAnim3D(plot)) {
             const scene = fl.scene;
             if (!scene) return null;
             return {
                 mode: '3d',
                 camera: scene.camera ? JSON.parse(JSON.stringify(scene.camera)) : null,
-                xRange: scene.xaxis?.range ? [...scene.xaxis.range] : null,
-                yRange: scene.yaxis?.range ? [...scene.yaxis.range] : null,
-                zRange: scene.zaxis?.range ? [...scene.zaxis.range] : null,
+                xRange: axisRange(scene.xaxis),
+                yRange: axisRange(scene.yaxis),
+                zRange: axisRange(scene.zaxis),
             };
         }
 
         const view = {
             mode: '2d',
-            xRange: fl.xaxis?.range ? [...fl.xaxis.range] : null,
-            yRange: fl.yaxis?.range ? [...fl.yaxis.range] : null,
-            y2Range: fl.yaxis2?.range ? [...fl.yaxis2.range] : null,
+            xRange: axisRange(fl.xaxis),
+            yRange: axisRange(fl.yaxis),
+            y2Range: axisRange(fl.yaxis2),
         };
         // FFT panels have a second plot: keep the spectrum's manual zoom
         // across rebuilds (live update, transforms) too.
         if (plot.mode === 'fft') {
             const sfl = plot.fftDiv?._fullLayout;
             view.fftSpectrum = {
-                xRange: sfl?.xaxis?.autorange === false && Array.isArray(sfl.xaxis.range) ? [...sfl.xaxis.range] : null,
-                yRange: sfl?.yaxis?.autorange === false && Array.isArray(sfl.yaxis.range) ? [...sfl.yaxis.range] : null,
+                xRange: manualAxisRange(sfl?.xaxis),
+                yRange: manualAxisRange(sfl?.yaxis),
+            };
+        } else if (plot.mode === 'histogram') {
+            const hfl = plot.histogramDiv?._fullLayout;
+            view.histogramBars = {
+                xRange: manualAxisRange(hfl?.xaxis),
+                yRange: manualAxisRange(hfl?.yaxis),
             };
         }
         return view;

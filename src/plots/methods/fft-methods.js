@@ -2,6 +2,8 @@ import i18n from '../../i18n/index.js';
 import {
     computeAmplitudeSpectrum,
     fftWindowCoefficients,
+    formatNaturalDuration,
+    frequencyPeriod,
     nextPowerOfTwo,
     normalizeFftScale,
     normalizeFftWindow,
@@ -23,6 +25,7 @@ proto._defaultFftState = function() {
     return {
         layout: 'vertical',
         split: 0.5,
+        timeSeriesHidden: false,
         optionsVisible: true,
         rangeFull: true,
         x1: null,
@@ -59,6 +62,7 @@ proto._normalizeFftState = function(raw = {}) {
         ...raw,
         layout,
         split: Number.isFinite(split) ? Math.max(0.2, Math.min(0.8, split)) : defaults.split,
+        timeSeriesHidden: raw.timeSeriesHidden === true,
         optionsVisible: raw.optionsVisible !== false,
         // Sessions predating rangeFull carry an explicit window: keep it.
         rangeFull: raw.rangeFull !== undefined
@@ -128,7 +132,7 @@ proto._createFftChart = function(panelId, panelEl) {
     panelEl.querySelector('.fft-container')?.remove();
 
     const container = document.createElement('div');
-    container.className = `fft-container fft-layout-${state.layout}`;
+    container.className = `fft-container fft-layout-${state.layout}${state.timeSeriesHidden ? ' fft-time-series-hidden' : ''}`;
     container.style.setProperty('--fft-split', `${Math.round(state.split * 1000) / 10}%`);
 
     const topbar = document.createElement('div');
@@ -147,11 +151,20 @@ proto._createFftChart = function(panelId, panelEl) {
         });
         return button;
     };
+    const timeSeriesBtn = makeButton(
+        'fft-tool-btn fft-time-series-btn',
+        i18n.t('hideTimeSeries'),
+        i18n.t('hideTimeSeriesTooltip'),
+        () => this._toggleFftTimeSeries(panelId),
+    );
+    timeSeriesBtn.classList.toggle('active', state.timeSeriesHidden);
+    timeSeriesBtn.setAttribute('aria-pressed', String(state.timeSeriesHidden));
     layoutGroup.append(
         makeButton('fft-tool-btn fft-layout-btn', 'V/H', i18n.t('fftLayoutToggle'), () => {
             const current = this._ensureFftState(plot).layout;
             this._setFftLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
         }),
+        timeSeriesBtn,
     );
 
     const actionGroup = document.createElement('div');
@@ -209,8 +222,8 @@ proto._createFftChart = function(panelId, panelEl) {
         Plotly.newPlot(spectrumDiv, [], this._buildFftSpectrumLayout(plot), config),
     ]).then(() => {
         this._refreshActionBtns(panelId);
-        if (restoreView) this._restorePlotView(plot, restoreView);
-        this._refreshTimeseriesVisuals(panelId, plot);
+        const viewPromise = restoreView ? this._restorePlotView(plot, restoreView) : Promise.resolve();
+        Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
         this._installFftPlotHandlers(panelId, plot);
         // Cursor handlers first: their capture listeners must run before the
         // selection ones so a cursor line inside the selection stays grabbable.
@@ -599,15 +612,27 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
             warnings.push(this._fftWarningText(trace, warning, spectrum));
         }
         const amplitudeExtent = this._finiteExtent([spectrum.amplitudes]);
+        const periodUnit = this._fftCursorPeriodUnit(plot);
+        const periodValues = new Float64Array(spectrum.frequencies.length);
+        const naturalPeriodSuffixes = [];
+        for (let i = 0; i < spectrum.frequencies.length; i++) {
+            const period = frequencyPeriod(Number(spectrum.frequencies[i]));
+            periodValues[i] = period;
+            if (periodUnit === 's' && Number.isFinite(period) && period >= 60) {
+                naturalPeriodSuffixes[i] = ` (${formatNaturalDuration(period, 2)})`;
+            }
+        }
         spectra.push({
             x: spectrum.frequencies,
             y: spectrum.amplitudes,
+            customdata: periodValues,
+            text: naturalPeriodSuffixes,
             type: 'scatter',
             mode: 'lines',
             name: this._traceName(trace.varName, trace.fileId),
             visible: trace.visible ?? true,
             line: { color: trace.color, width: 1.5 },
-            hovertemplate: `<b>%{fullData.name}</b><br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{x:.6g}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`,
+            hovertemplate: `<b>%{fullData.name}</b><br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{x:.6g}<br>${i18n.t('fftPeriod')} = %{customdata:.6g}${periodUnit ? ` ${periodUnit}` : ''}%{text}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`,
             _fftExtent: {
                 xMin: spectrum.frequencies.length ? Number(spectrum.frequencies[0]) : 0,
                 xMax: spectrum.frequencies.length ? Number(spectrum.frequencies[spectrum.frequencies.length - 1]) : 1,
@@ -839,6 +864,25 @@ proto._setFftLayout = function(panelId, layout) {
     plot.fftContainer.classList.toggle('fft-layout-vertical', layout === 'vertical');
     Plotly.Plots.resize(plot.div);
     Plotly.Plots.resize(plot.fftDiv);
+};
+
+proto._toggleFftTimeSeries = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot?.fftContainer) return;
+    const state = this._ensureFftState(plot);
+    state.timeSeriesHidden = !state.timeSeriesHidden;
+    plot.fftContainer.classList.toggle('fft-time-series-hidden', state.timeSeriesHidden);
+    const button = plot.fftContainer.querySelector('.fft-time-series-btn');
+    if (button) {
+        button.classList.toggle('active', state.timeSeriesHidden);
+        button.setAttribute('aria-pressed', String(state.timeSeriesHidden));
+    }
+    if (!state.timeSeriesHidden && plot.div) {
+        Plotly.Plots.resize(plot.div);
+        this._refreshPanelDomOverlays(plot);
+    }
+    if (plot.fftDiv) Plotly.Plots.resize(plot.fftDiv);
+    this._syncCursorDisplay(panelId, plot);
 };
 
 proto._toggleFftOptions = function(panelId) {
@@ -1545,7 +1589,9 @@ proto._autoScalePlotTimeOnly = function(plot) {
     } else update['xaxis.autorange'] = true;
     if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
     else update['yaxis.autorange'] = true;
-    return Plotly.relayout(plot.div, update);
+    const tickRange = xExtent ? [xExtent.min, xExtent.max] : null;
+    return Plotly.relayout(plot.div, update)
+        .then(() => this._refreshElapsedDateTimeAxisTicks(plot, tickRange));
 };
 
 }

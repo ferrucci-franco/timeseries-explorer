@@ -1,6 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
-import { spectrumCursorMeasurements } from '../../utils/fft.js';
+import { formatSpectrumPeriod, spectrumCursorMeasurements } from '../../utils/fft.js';
 
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -63,14 +63,14 @@ proto._onRelayout = function(sourcePanelId, eventData) {
     }
     this._clearRelayoutingRefresh(plot);
 
-    if (plot?.mode === 'timeseries' || plot?.mode === 'fft') {
+    if (plot?.mode === 'timeseries' || plot?.mode === 'fft' || plot?.mode === 'histogram') {
         const autorangeRequested = update['xaxis.autorange'] === true
             || eventData?.['yaxis.autorange'] === true
             || eventData?.['yaxis2.autorange'] === true;
         if (autorangeRequested) {
             // FFT: the relayout comes from the time sub-plot; leave the
             // spectrum axes (and manual fMin/fMax/yMin/yMax) untouched.
-            if (plot.mode === 'fft') this._autoScalePlotTimeOnly(plot);
+            if (plot.mode === 'fft' || plot.mode === 'histogram') this._autoScalePlotTimeOnly(plot);
             else this._autoScalePlot(sourcePanelId, plot);
         } else {
             const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
@@ -591,6 +591,8 @@ proto._applyBatchedPhaseRestyle = function(plot, results = []) {
     const xs = [];
     const ys = [];
     const zs = [];
+    const customdata = [];
+    let anyCustomdata = false;
     const indices = [];
     for (const result of valid) {
         const { pt, visual } = result;
@@ -599,6 +601,9 @@ proto._applyBatchedPhaseRestyle = function(plot, results = []) {
             xs.push(this._plotlyTimeArray(pt.fileId, visual.time, timeVar));
             ys.push(visual.x);
             zs.push(visual.y);
+            const timeCustomdata = this._phase2DtHighResolutionTimeCustomData(plot, pt, visual.time);
+            customdata.push(timeCustomdata);
+            if (timeCustomdata) anyCustomdata = true;
         } else if (plot.mode === 'phase3d') {
             xs.push(visual.x);
             ys.push(visual.y);
@@ -611,6 +616,7 @@ proto._applyBatchedPhaseRestyle = function(plot, results = []) {
     }
     const update = { x: xs, y: ys };
     if (plot.mode === 'phase2dt' || plot.mode === 'phase3d') update.z = zs;
+    if (plot.mode === 'phase2dt' && anyCustomdata) update.customdata = customdata;
     return Plotly.restyle(plot.div, update, indices);
 };
 
@@ -626,6 +632,9 @@ proto._relayoutPhaseLazyExtents = function(plot) {
         update['scene.xaxis.range'] = layout.scene.xaxis.range;
         update['scene.yaxis.range'] = layout.scene.yaxis.range;
         update['scene.zaxis.range'] = layout.scene.zaxis.range;
+        if (plot.mode === 'phase2dt') {
+            Object.assign(update, this._timeAxisRelayoutUpdate(layout.scene.xaxis, 'scene.xaxis'));
+        }
         const cam = plot.div._fullLayout?.scene?.camera;
         if (cam) update['scene.camera'] = cam;
     }
@@ -1026,7 +1035,9 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 
 };
 
 proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
-    if (!plot?.div || (plot.mode !== 'timeseries' && plot.mode !== 'fft')) return;
+    if (!plot?.div || (plot.mode !== 'timeseries' && plot.mode !== 'fft' && plot.mode !== 'histogram')) {
+        return Promise.resolve();
+    }
     const fid = this._primaryTimeFileId(plot);
     const timeVar = this._getTimeVar(fid);
     const generatedCalendarAxis = this._isGeneratedCalendarTime(fid, timeVar);
@@ -1038,15 +1049,16 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
             })
             : plot.traces.map(t => this._getTransformedTimeData(t.fileId));
         const config = this._calendarAxisConfig(fid, timeVar, values);
-        if (!config.tickvals || !config.ticktext) return;
-        Plotly.relayout(plot.div, {
+        if (!config.tickvals || !config.ticktext) return Promise.resolve();
+        return Plotly.relayout(plot.div, {
             'xaxis.tickmode': config.tickmode,
             'xaxis.tickvals': config.tickvals,
             'xaxis.ticktext': config.ticktext,
         });
-        return;
     }
-    if (this._timeDisplayModeForVar(fid, timeVar) !== 'elapsedDateTime' && !this._isGeneratedDurationTime(fid, timeVar)) return;
+    if (this._timeDisplayModeForVar(fid, timeVar) !== 'elapsedDateTime' && !this._isGeneratedDurationTime(fid, timeVar)) {
+        return Promise.resolve();
+    }
     const values = Array.isArray(range) && range.length >= 2
         ? range.map(value => {
             const numeric = Number(value);
@@ -1054,8 +1066,8 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
         })
         : plot.traces.map(t => this._getTransformedTimeData(t.fileId));
     const config = this._elapsedDateTimeAxisConfig(values, fid);
-    if (!config.tickvals || !config.ticktext) return;
-    Plotly.relayout(plot.div, {
+    if (!config.tickvals || !config.ticktext) return Promise.resolve();
+    return Plotly.relayout(plot.div, {
         'xaxis.tickmode': config.tickmode,
         'xaxis.tickvals': config.tickvals,
         'xaxis.ticktext': config.ticktext,
@@ -1064,7 +1076,7 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
 
 proto._refreshAllTimeseriesVisuals = function() {
     for (const [panelId, plot] of this.plots) {
-        if (plot?.div && (plot.mode === 'timeseries' || plot.mode === 'fft')) {
+        if (plot?.div && (plot.mode === 'timeseries' || plot.mode === 'fft' || plot.mode === 'histogram')) {
             this._refreshTimeseriesVisuals(panelId, plot);
         }
     }
@@ -1933,13 +1945,20 @@ proto._panelGuideShapes = function(plot, extra = []) {
     return extra;
 };
 
-proto._syncCursorDisplay = function(panelId, plot) {
+proto._syncCursorDisplay = function(panelId, plot, options = {}) {
     if (!plot?.div || !this._plotSupportsCursors(plot)) return;
+    const panelEl = plot.div.closest('.layout-panel');
+    const timeSeriesHidden = plot.mode === 'fft' && plot.fft?.timeSeriesHidden === true;
     for (const view of this._cursorViews(panelId, plot)) {
+        if (timeSeriesHidden && !view.isSpectrum) {
+            this._hideCursorOverlay(view);
+            this._hideCursorViewBox(panelEl, view.id);
+            continue;
+        }
         const cursors = this._viewCursors(view);
         if (cursors.enabled) {
             this._ensureCursorPositions(view);
-            this._renderCursorViewOverlay(view);
+            this._renderCursorViewOverlay(view, options);
         } else {
             this._hideCursorOverlay(view);
         }
@@ -2417,7 +2436,11 @@ proto._installCursorViewHandlers = function(view) {
         } else {
             cursors[dragging.which] = this._clampCursorX(view, dragging.which, x);
         }
-        this._syncCursorDisplay(panelId, plot);
+        // A left-button gesture inside a timeseries plot temporarily enables
+        // the box-zoom overlay guard before the cursor hit-test runs. Once a
+        // cursor drag is confirmed, its visual overlay must bypass that guard
+        // so the vertical line follows every mousemove just like its readout.
+        this._syncCursorDisplay(panelId, plot, { force: true });
     };
     const onDocUp = () => {
         if (!dragging) return;
@@ -2609,13 +2632,14 @@ proto._updateCursorBox = function(view) {
     const xUnitSuffix = view.isSpectrum
         ? unit(freqUnit)
         : ((isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit));
-    const periodSuffix = (period) => (view.isSpectrum
-        ? ` T=${formatCursorNumber(period)}${unit(inverseTimeUnit)}`
-        : '');
+    const formatPeriod = (period) => this._escapeHTML(formatSpectrumPeriod(period, inverseTimeUnit));
     const dxText = view.isSpectrum
         ? `${formatCursorNumber(spectrum.deltaF)}${unit(freqUnit)}`
         : `${this._escapeHTML(isDateTimeCursor ? this._formatDuration(dx, 'datetime') : (isDurationCursor ? this._formatDuration(dx, 's') : this._formatHTMLNumber(dx)))}${(isDateTimeCursor || isDurationCursor) ? '' : unit(timeUnit)}`;
     const inverseDxValue = view.isSpectrum ? spectrum.inverseDeltaF : inverseDx;
+    const inverseDxText = view.isSpectrum
+        ? formatPeriod(inverseDxValue)
+        : `${formatCursorNumber(inverseDxValue)}${unit(inverseTimeUnit)}`;
     const inverseSpacingHTML = view.isSpectrum
         ? `
             <div class="cursor-inverse-spacing-note">${this._escapeHTML(i18n.t('fftCursorInverseSpacing'))}
@@ -2623,13 +2647,20 @@ proto._updateCursorBox = function(view) {
             </div>
             <div class="fft-help-popover cursor-help-popover" hidden>${this._escapeHTML(i18n.t('fftCursorInverseSpacingHelp'))}</div>`
         : '';
+    const spectrumCursorRows = (letter, color, measurement, x, period) => `
+            <div class="cursor-spectrum-frequency-row"><b style="color:${color}">${letter}</b> ${xLabel}=${formatXValue(measurement, x)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(measurement.y)}${unit(measurement.yUnit)}</div>
+            <div class="cursor-spectrum-period-row">T=${formatPeriod(period)}</div>`;
+    const cursorRowsHTML = view.isSpectrum
+        ? `${spectrumCursorRows('A', colorA, a, aX, spectrum.periodA)}
+           ${spectrumCursorRows('B', colorB, b, bX, spectrum.periodB)}`
+        : `<div><b style="color:${colorA}">A</b> ${xLabel}=${formatXValue(a, aX)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
+           <div><b style="color:${colorB}">B</b> ${xLabel}=${formatXValue(b, bX)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>`;
     const valuesHTML = `
-            <div><b style="color:${colorA}">A</b> ${xLabel}=${formatXValue(a, aX)}${xUnitSuffix}${periodSuffix(spectrum?.periodA)} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
-            <div><b style="color:${colorB}">B</b> ${xLabel}=${formatXValue(b, bX)}${xUnitSuffix}${periodSuffix(spectrum?.periodB)} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>
+            ${cursorRowsHTML}
             <div><b>${dxLabel}=</b>${dxText}</div>
             <div><b>${labelDy}=</b>${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}</div>
             ${view.isSpectrum ? '' : `<div><b>${labelSlope}=</b>${this._formatHTMLNumber(slope)}</div>`}
-            <div><b>${invDxLabel}=</b>${formatCursorNumber(inverseDxValue)}${unit(inverseTimeUnit)}</div>
+            <div><b>${invDxLabel}=</b>${inverseDxText}</div>
             ${inverseSpacingHTML}
     `;
     const existingBox = this._cursorViewBoxElement(panelEl, view.id);
@@ -2681,6 +2712,8 @@ proto._fftCursorAmplitudeUnit = function(plot) {
 };
 
 proto._fftCursorPeriodUnit = function(plot) {
+    const trace = (plot?.traces || []).find(item => this._isVisible(item)) || plot?.traces?.[0];
+    if (trace && this._fftTimeKind?.(trace.fileId) === 'index') return i18n.t('fftSampleUnit');
     const freqUnit = this._fftCursorFrequencyUnit(plot);
     if (!freqUnit || freqUnit === 'Hz') return 's';
     const inverse = freqUnit.match(/^1\/(.+)$/);
@@ -3078,6 +3111,22 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
 
     const plot = this.plots.get(panelId);
+    const timeseriesFamilyModes = new Set(['timeseries', 'fft', 'histogram']);
+    const isTimeseriesFamily = timeseriesFamilyModes.has(currentMode);
+    const activePrimaryMode = isTimeseriesFamily ? 'timeseries' : currentMode;
+    const createAutoscaleButton = () => {
+        const button = document.createElement('button');
+        button.className = 'layout-toolbar-btn panel-action-btn view-btn panel-autoscale-btn';
+        // Keep this icon identical to the global "Auto-fit all plots" action.
+        button.textContent = '⛶';
+        button.title = i18n.t('viewHome');
+        button.disabled = !this._hasContent(plot);
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this._autoScalePlot(panelId, this.plots.get(panelId));
+        });
+        return button;
+    };
 
     // Mode toggle group
     const modeGroup = document.createElement('div');
@@ -3085,8 +3134,6 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     const modes = [
         { id: 'timeseries', label: '📈', titleKey: 'modeTimeseries' },
-        { id: 'fft',        label: 'FFT', titleKey: 'modeFFT'       },
-        { id: 'histogram',  label: i18n.t('modeHistogramLabel'), titleKey: 'modeHistogram' },
         { id: 'phase2d',    label: '2D',  titleKey: 'modePhase2d'   },
         { id: 'phase2dt',   label: '2D+t',titleKey: 'modePhase2dt'  },
         { id: 'phase3d',    label: '3D',     titleKey: 'modePhase3d'   },
@@ -3095,7 +3142,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     ];
     modes.forEach(m => {
         const btn = document.createElement('button');
-        const isActive = m.id === currentMode && (m.id !== 'state-anim' || (plot?.stateAnimDim || 2) === m.stateAnimDim);
+        const isActive = m.id === activePrimaryMode && (m.id !== 'state-anim' || (plot?.stateAnimDim || 2) === m.stateAnimDim);
         btn.className = 'layout-toolbar-btn mode-btn' + (isActive ? ' active' : '');
         btn.textContent = m.label;
         btn.dataset.mode = m.id;
@@ -3109,9 +3156,11 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     });
     toolbar.appendChild(modeGroup);
 
-    if (currentMode === 'timeseries') {
+    if (isTimeseriesFamily) {
         const timeseriesToolsGroup = document.createElement('div');
         timeseriesToolsGroup.className = 'timeseries-tools-group';
+
+        timeseriesToolsGroup.appendChild(createAutoscaleButton());
 
         const stackBtn = document.createElement('button');
         stackBtn.className = 'layout-toolbar-btn panel-action-btn timeseries-stack-btn' + (plot?.timeseriesStacked ? ' active' : '');
@@ -3136,17 +3185,54 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
             this._toggleTimeseriesY2(panelId);
         });
         timeseriesToolsGroup.appendChild(y2Btn);
+
+        const analysisModes = [
+            { id: 'fft', label: 'Fourier', titleKey: 'modeFFT', className: 'timeseries-fourier-btn' },
+            { id: 'histogram', label: i18n.t('modeHistogramLabel'), titleKey: 'modeHistogram', className: 'timeseries-histogram-btn' },
+        ];
+        analysisModes.forEach(({ id, label, titleKey, className }) => {
+            const active = currentMode === id;
+            const button = document.createElement('button');
+            button.className = `layout-toolbar-btn panel-action-btn timeseries-analysis-btn ${className}${active ? ' active' : ''}`;
+            button.textContent = label;
+            button.title = i18n.t(titleKey);
+            button.dataset.mode = id;
+            button.setAttribute('aria-pressed', String(active));
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                this._toggleTimeseriesAnalysisMode(panelId, id);
+            });
+            timeseriesToolsGroup.appendChild(button);
+        });
         toolbar.appendChild(timeseriesToolsGroup);
     }
 
-    // 3D view buttons (visible only in 3D modes)
+    // Contextual view buttons. In 2D modes this group contains Autoscale and
+    // 1:1; 3D modes add their camera/projection controls after Autoscale.
     const viewGroup = document.createElement('div');
     viewGroup.className = 'view-btn-group';
-    viewGroup.style.display = this._is3D(currentMode) ? '' : 'none';
+    const supportsEqualAspect2D = this._supportsEqualAspect2D(plot);
+    const show3DControls = this._is3D(currentMode) || this._isStateAnim3D(plot);
+    viewGroup.style.display = (show3DControls || supportsEqualAspect2D) ? '' : 'none';
+
+    if (!isTimeseriesFamily) {
+        viewGroup.appendChild(createAutoscaleButton());
+    }
+
+    if (supportsEqualAspect2D) {
+        const equalAspectBtn = document.createElement('button');
+        equalAspectBtn.className = 'layout-toolbar-btn panel-action-btn equal-aspect-btn' + (plot?.equalAspect2D ? ' active' : '');
+        equalAspectBtn.textContent = '1:1';
+        equalAspectBtn.title = i18n.t('equalAspect2D');
+        equalAspectBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleEqualAspect2D(panelId);
+        });
+        viewGroup.appendChild(equalAspectBtn);
+    }
 
     const is2dt = currentMode === 'phase2dt';
     const views = [
-        { preset: 'home',  label: '⌂',                titleKey: 'viewHome'  },
         { preset: 'top',   label: is2dt ? 'x vs t' : 'XY', titleKey: is2dt ? 'view2dtXt' : 'viewTop'   },
         { preset: 'front', label: is2dt ? 'y vs t' : 'XZ', titleKey: is2dt ? 'view2dtYt' : 'viewFront' },
         { preset: 'yz',    label: is2dt ? 'y vs x' : 'YZ', titleKey: is2dt ? 'view2dtXY' : 'viewSide'  },
@@ -3154,18 +3240,13 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     views.forEach(v => {
         const btn = document.createElement('button');
-        btn.className = 'layout-toolbar-btn view-btn' + (v.preset !== 'home' ? ' view-btn-3d-only' : '');
+        btn.className = 'layout-toolbar-btn view-btn view-btn-3d-only';
         btn.textContent = v.label;
         btn.title = i18n.t(v.titleKey);
+        btn.style.display = show3DControls ? '' : 'none';
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (v.preset === 'home') {
-                // Home performs a true autoscale in every mode.
-                const p = this.plots.get(panelId);
-                this._autoScalePlot(panelId, p);
-            } else {
-                this._setCamera(panelId, v.preset === 'yz' ? 'yz' : v.preset);
-            }
+            this._setCamera(panelId, v.preset === 'yz' ? 'yz' : v.preset);
         });
         viewGroup.appendChild(btn);
     });
@@ -3176,6 +3257,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     projBtn.className = 'layout-toolbar-btn view-btn proj-btn view-btn-3d-only' + (isOrtho ? ' active' : '');
     projBtn.textContent = 'Iso';
     projBtn.title = i18n.t(isOrtho ? 'projIsometric' : 'projPerspective');
+    projBtn.style.display = show3DControls ? '' : 'none';
     projBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this._toggleProjection(panelId, panelEl);
@@ -3193,6 +3275,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         btn.className = 'layout-toolbar-btn view-btn view-btn-3d-only rot-btn';
         btn.textContent = r.label;
         btn.title = r.title;
+        btn.style.display = show3DControls ? '' : 'none';
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             this._animateRotation(panelId, r.axis, Math.PI / 2, 400);
@@ -3201,18 +3284,6 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     });
 
     toolbar.appendChild(viewGroup);
-
-    if (this._supportsEqualAspect2D(plot)) {
-        const equalAspectBtn = document.createElement('button');
-        equalAspectBtn.className = 'layout-toolbar-btn panel-action-btn equal-aspect-btn' + (plot?.equalAspect2D ? ' active' : '');
-        equalAspectBtn.textContent = '1:1';
-        equalAspectBtn.title = i18n.t('equalAspect2D');
-        equalAspectBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._toggleEqualAspect2D(panelId);
-        });
-        toolbar.appendChild(equalAspectBtn);
-    }
 
     // Compare (overlay traces from other files) — left of CSV
     const compareBtn = document.createElement('button');
@@ -3275,6 +3346,14 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         this._clearPanel(panelId);
     });
     toolbar.appendChild(clearBtn);
+};
+
+proto._toggleTimeseriesAnalysisMode = function(panelId, analysisMode) {
+    if (!['fft', 'histogram'].includes(analysisMode)) return;
+    const plot = this.plots.get(panelId);
+    if (!plot) return;
+    const targetMode = plot.mode === analysisMode ? 'timeseries' : analysisMode;
+    this._requestModeChange(panelId, targetMode);
 };
 
 proto._requestModeChange = function(panelId, mode, stateAnimDim = null) {
@@ -3363,10 +3442,18 @@ proto._dismissModeChangeWarning = function(panelId) {
 proto._updateModeButtons = function(panelEl, activeMode) {
     const panelId = panelEl.dataset.id;
     const plot = panelId ? this.plots.get(panelId) : null;
+    const activePrimaryMode = ['timeseries', 'fft', 'histogram'].includes(activeMode)
+        ? 'timeseries'
+        : activeMode;
     panelEl.querySelectorAll('.mode-btn').forEach(btn => {
         const mode = btn.dataset.mode;
         const dim = btn.dataset.stateAnimDim ? Number(btn.dataset.stateAnimDim) : null;
-        btn.classList.toggle('active', mode === activeMode && (!dim || dim === (plot?.stateAnimDim || 2)));
+        btn.classList.toggle('active', mode === activePrimaryMode && (!dim || dim === (plot?.stateAnimDim || 2)));
+    });
+    panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
+        const active = btn.dataset.mode === activeMode;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-pressed', String(active));
     });
 };
 

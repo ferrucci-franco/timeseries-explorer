@@ -884,9 +884,21 @@
     display: flex;
     flex: 0 0 auto;
     gap: 2px;
+}
+
+.mode-btn-group {
     margin-left: 4px;
     border-left: 1px solid var(--border-color);
     padding-left: 4px;
+}
+
+/* Contextual options belong to the selected plot family. A stronger divider
+   keeps them visually distinct from the primary plot-type buttons. */
+.timeseries-tools-group,
+.view-btn-group {
+    margin-left: 8px;
+    border-left: 3px solid color-mix(in srgb, var(--primary-color) 68%, var(--border-color));
+    padding-left: 8px;
 }
 
 .mode-btn.active,
@@ -1242,6 +1254,15 @@
     pointer-events: none;
 }
 
+.cursor-spectrum-period-row {
+    padding-left: 16px;
+    color: var(--text-secondary);
+}
+
+.cursor-spectrum-period-row + .cursor-spectrum-frequency-row {
+    margin-top: 2px;
+}
+
 body.cursor-dragging {
     cursor: ew-resize;
     user-select: none;
@@ -1284,6 +1305,7 @@ body.cursor-box-dragging {
     flex: 0 0 auto;
     min-height: 32px;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
     padding: 4px 7px;
@@ -1326,6 +1348,7 @@ body.cursor-box-dragging {
 
 .fft-status {
     margin-left: auto;
+    flex: 1 1 0;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1369,6 +1392,21 @@ body.cursor-box-dragging {
 .fft-layout-vertical .fft-plot-area {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, var(--fft-split)) 7px minmax(0, 1fr);
+}
+
+.fft-container.fft-time-series-hidden .fft-plot-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+
+.fft-time-series-hidden .fft-time-pane,
+.fft-time-series-hidden .fft-splitter {
+    display: none;
+}
+
+.fft-time-series-hidden .fft-spectrum-pane {
+    grid-column: 1;
+    grid-row: 1;
 }
 
 .fft-pane {
@@ -1873,6 +1911,7 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     flex: 0 0 auto;
     min-height: 32px;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
     padding: 4px 7px;
@@ -1903,6 +1942,7 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 }
 .hist-status {
     margin-left: auto;
+    flex: 1 1 0;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1929,6 +1969,18 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 .hist-layout-vertical .hist-plot-area {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, var(--hist-split)) 7px minmax(0, 1fr);
+}
+.hist-container.hist-time-series-hidden .hist-plot-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+.hist-time-series-hidden .hist-time-pane,
+.hist-time-series-hidden .hist-splitter {
+    display: none;
+}
+.hist-time-series-hidden .hist-hist-pane {
+    grid-column: 1;
+    grid-row: 1;
 }
 .hist-pane { min-width: 0; min-height: 0; display: flex; }
 .hist-splitter { background: color-mix(in srgb, var(--border-color) 72%, transparent); position: relative; z-index: 2; }

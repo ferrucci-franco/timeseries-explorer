@@ -6,16 +6,72 @@ export const FFT_MAX_POINTS_DESKTOP = 2 ** 26;
 
 const TWO_PI = Math.PI * 2;
 
+const FFT_PERIOD_SIGNIFICANT_DIGITS = 6;
+
+function formatFftReadoutNumber(value) {
+    if (Number.isNaN(value)) return '\u2014';
+    if (value === Infinity) return '\u221e';
+    if (value === -Infinity) return '-\u221e';
+    if (!Number.isFinite(value)) return '\u2014';
+    if (Object.is(value, -0) || value === 0) return '0';
+    return Number(value.toPrecision(FFT_PERIOD_SIGNIFICANT_DIGITS)).toString();
+}
+
+// A compact, deterministic duration for spectrum readouts. The two largest
+// non-zero components are enough to make long periods immediately legible
+// without turning Plotly hovers or the cursor box into a paragraph.
+export function formatNaturalDuration(seconds, maxParts = 2) {
+    const value = Number(seconds);
+    if (!Number.isFinite(value)) return formatFftReadoutNumber(value);
+
+    const sign = value < 0 ? '-' : '';
+    const magnitude = Math.abs(value);
+    if (magnitude < 60) return `${formatFftReadoutNumber(value)} s`;
+
+    let remaining = Math.floor(magnitude);
+    const parts = [];
+    const limit = Math.max(1, Math.floor(Number(maxParts) || 2));
+    const units = [
+        [86400, 'd'],
+        [3600, 'h'],
+        [60, 'min'],
+        [1, 's'],
+    ];
+    for (const [size, label] of units) {
+        const amount = Math.floor(remaining / size);
+        remaining %= size;
+        if (!amount) continue;
+        parts.push(`${amount} ${label}`);
+        if (parts.length >= limit) break;
+    }
+    return `${sign}${parts.join(' ')}`;
+}
+
+// The raw value and its physical unit are always retained. Only second-based
+// periods receive the additional natural form; sample or generic x-axis units
+// must never be presented as clock time.
+export function formatSpectrumPeriod(period, unit = 's') {
+    const value = Number(period);
+    const numberText = formatFftReadoutNumber(value);
+    if (numberText === '\u2014') return numberText;
+    const normalizedUnit = String(unit || '').trim();
+    const raw = normalizedUnit ? `${numberText} ${normalizedUnit}` : numberText;
+    if (normalizedUnit !== 's' || !Number.isFinite(value) || Math.abs(value) < 60) return raw;
+    const natural = formatNaturalDuration(value, 2);
+    return natural && natural !== raw ? `${raw} (${natural})` : raw;
+}
+
+export function frequencyPeriod(frequency) {
+    if (!Number.isFinite(frequency)) return NaN;
+    if (frequency === 0) return Infinity;
+    return 1 / Math.abs(frequency);
+}
+
 // Readout values for the spectrum measurement cursors. Periods use the
 // magnitude of the exact frequencies (two-sided spectra can be negative);
 // f = 0 and deltaF = 0 map to Infinity instead of dividing blindly, and the
 // callers render Infinity as an infinity symbol.
 export function spectrumCursorMeasurements(freqA, freqB) {
-    const periodOf = (frequency) => {
-        if (!Number.isFinite(frequency)) return NaN;
-        if (frequency === 0) return Infinity;
-        return 1 / Math.abs(frequency);
-    };
     const deltaF = Number.isFinite(freqA) && Number.isFinite(freqB)
         ? Math.abs(freqB - freqA)
         : NaN;
@@ -23,8 +79,8 @@ export function spectrumCursorMeasurements(freqA, freqB) {
         ? NaN
         : (deltaF === 0 ? Infinity : 1 / deltaF);
     return {
-        periodA: periodOf(freqA),
-        periodB: periodOf(freqB),
+        periodA: frequencyPeriod(freqA),
+        periodB: frequencyPeriod(freqB),
         deltaF,
         inverseDeltaF,
     };

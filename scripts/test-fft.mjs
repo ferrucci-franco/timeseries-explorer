@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
     analyzeSampling,
     computeAmplitudeSpectrum,
     fftRadix2,
     fftWindowCoefficients,
+    formatNaturalDuration,
+    formatSpectrumPeriod,
     nextPowerOfTwo,
     spectrumCursorMeasurements,
 } from '../src/utils/fft.js';
 import translations from '../src/i18n/translations.js';
+
+const fftMethodsSource = readFileSync(new URL('../src/plots/methods/fft-methods.js', import.meta.url), 'utf8');
+const interactionMethodsSource = readFileSync(new URL('../src/plots/methods/interaction-methods.js', import.meta.url), 'utf8');
 
 const close = (actual, expected, tolerance, label) => {
     assert.ok(
@@ -265,6 +271,104 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
         assert.ok(/batt|beat|batido/i.test(help), `${lang}: help mentions the beat interpretation`);
         assert.ok(help.includes('1/|f2 - f1|'), `${lang}: help states the 1/|f2 - f1| relation`);
     }
+}
+
+{
+    // Human-readable spectrum periods: preserve the exact value in seconds,
+    // then add at most two non-zero natural components. Components below the
+    // limit are intentionally truncated rather than rounded.
+    assert.equal(formatNaturalDuration(0), '0 s', 'zero duration stays in seconds');
+    assert.equal(formatNaturalDuration(0.25), '0.25 s', 'subsecond duration stays in seconds');
+    assert.equal(formatNaturalDuration(45.125), '45.125 s', 'fractional seconds are preserved');
+    assert.equal(formatNaturalDuration(90), '1 min 30 s', 'seconds decompose into minutes and seconds');
+    assert.equal(formatNaturalDuration(5400), '1 h 30 min', '90 minutes decompose into hours and minutes');
+    assert.equal(formatNaturalDuration(86400), '1 d', '24 hours become one day');
+    assert.equal(formatNaturalDuration(86461), '1 d 1 min', 'zero intermediate components do not consume the two-part limit');
+    assert.equal(formatNaturalDuration(90061), '1 d 1 h', 'components below the two-part limit are truncated');
+    assert.equal(formatNaturalDuration(2592000), '30 d', '30 days remain an exact day count');
+    assert.equal(formatNaturalDuration(289855.072), '3 d 8 h', 'the motivating low-frequency period uses two natural components');
+    assert.equal(formatNaturalDuration(5400, 1), '1 h', 'the maxParts argument limits the decomposition');
+    assert.equal(formatNaturalDuration(Infinity), '∞', 'infinite duration uses the infinity symbol');
+    assert.equal(formatNaturalDuration(NaN), '—', 'invalid duration uses an unavailable marker');
+
+    assert.equal(formatSpectrumPeriod(0.25), '0.25 s', 'no redundant natural suffix is added for subsecond periods');
+    assert.equal(formatSpectrumPeriod(90), '90 s (1 min 30 s)', 'natural decomposition supplements exact seconds');
+    assert.equal(formatSpectrumPeriod(5400), '5400 s (1 h 30 min)', '90-minute period keeps seconds and natural units');
+    assert.equal(formatSpectrumPeriod(86400), '86400 s (1 d)', 'daily period keeps seconds and natural units');
+    assert.equal(formatSpectrumPeriod(2592000), '2592000 s (30 d)', 'monthly-scale period keeps seconds and natural units');
+    assert.equal(formatSpectrumPeriod(2, 'samples'), '2 samples', 'sample periods are not presented as clock time');
+    assert.equal(formatSpectrumPeriod(2, 'x-unit'), '2 x-unit', 'generic inverse-frequency units are preserved');
+    assert.equal(formatSpectrumPeriod(Infinity), '∞ s', 'infinite Hz period retains the seconds unit');
+    assert.equal(formatSpectrumPeriod(Infinity, ''), '∞', 'infinite unitless period has no dangling space');
+    assert.equal(formatSpectrumPeriod(NaN), '—', 'invalid period is presented consistently');
+
+    for (const lang of ['en', 'fr', 'es', 'it']) {
+        assert.ok(translations[lang]?.fftPeriod, `${lang}: spectrum period label present`);
+        assert.ok(translations[lang]?.fftSampleUnit, `${lang}: sample-period unit present`);
+    }
+
+    // Lightweight integration guards: the Plotly trace must carry the
+    // preformatted period readout, and measurement cursors must render each
+    // frequency and period on separate semantic rows. These intentionally
+    // avoid asserting the surrounding HTML whitespace or localized labels.
+    assert.match(fftMethodsSource, /\bfrequencyPeriod\b/, 'spectrum builds a period value for every frequency');
+    assert.match(fftMethodsSource, /\bformatNaturalDuration\b/, 'spectrum hover builds compact natural suffixes');
+    assert.match(
+        fftMethodsSource,
+        /const periodValues = new Float64Array\(spectrum\.frequencies\.length\)/,
+        'spectrum keeps numeric periods in a compact typed array',
+    );
+    assert.match(fftMethodsSource, /customdata:\s*periodValues/, 'spectrum carries numeric period values through customdata');
+    assert.match(fftMethodsSource, /text:\s*naturalPeriodSuffixes/, 'spectrum carries only natural-unit suffixes through text');
+    assert.match(
+        fftMethodsSource,
+        /hovertemplate:[^\n]*fftPeriod[^\n]*%\{customdata:\.6g\}[^\n]*%\{text\}/,
+        'spectrum hover combines numeric customdata with the optional natural suffix',
+    );
+    assert.match(interactionMethodsSource, /\bformatSpectrumPeriod\b/, 'measurement cursors use the shared period formatter');
+    assert.match(
+        interactionMethodsSource,
+        /const inverseDxText = view\.isSpectrum\s*\?\s*formatPeriod\(inverseDxValue\)/,
+        'spectrum 1/delta-f readout uses the same natural period formatter',
+    );
+    assert.match(interactionMethodsSource, /fftSampleUnit/, 'index spectra use a sample period instead of clock time');
+    assert.match(interactionMethodsSource, /cursor-spectrum-frequency-row/, 'measurement cursors have a semantic frequency row');
+    assert.match(interactionMethodsSource, /cursor-spectrum-period-row/, 'measurement cursors have a separate semantic period row');
+
+    // Cursor-drag regression: Plotly can briefly leave the box-zoom guard set
+    // while a cursor drag is already active. The readout still refreshes in
+    // that state, but an unforced overlay render leaves the vertical line at
+    // its old position until mouseup. Keep the complete mousemove -> forced
+    // sync -> overlay-render path covered without requiring a browser DOM.
+    const cursorMoveStart = interactionMethodsSource.indexOf('const onDocMove = (event) => {');
+    const cursorUpStart = interactionMethodsSource.indexOf('const onDocUp = () => {', cursorMoveStart);
+    assert.ok(cursorMoveStart >= 0 && cursorUpStart > cursorMoveStart, 'cursor mousemove and mouseup handlers are present');
+    const cursorMoveSource = interactionMethodsSource.slice(cursorMoveStart, cursorUpStart);
+    assert.match(
+        cursorMoveSource,
+        /this\._syncCursorDisplay\(panelId, plot, \{ force: true \}\)/,
+        'cursor mousemove forces the visual overlay refresh before mouseup',
+    );
+
+    const cursorSyncStart = interactionMethodsSource.indexOf('proto._syncCursorDisplay = function');
+    const cursorGeometryStart = interactionMethodsSource.indexOf('proto._cursorOverlayGeometry = function', cursorSyncStart);
+    assert.ok(cursorSyncStart >= 0 && cursorGeometryStart > cursorSyncStart, 'cursor display synchronizer is present');
+    const cursorSyncSource = interactionMethodsSource.slice(cursorSyncStart, cursorGeometryStart);
+    assert.match(
+        cursorSyncSource,
+        /this\._renderCursorViewOverlay\(view, options\)/,
+        'cursor display synchronization forwards force to the visual renderer',
+    );
+
+    const cursorRenderStart = interactionMethodsSource.indexOf('proto._renderCursorViewOverlay = function');
+    const cursorHideStart = interactionMethodsSource.indexOf('proto._hideCursorOverlay = function', cursorRenderStart);
+    assert.ok(cursorRenderStart >= 0 && cursorHideStart > cursorRenderStart, 'cursor overlay renderer is present');
+    const cursorRenderSource = interactionMethodsSource.slice(cursorRenderStart, cursorHideStart);
+    assert.match(
+        cursorRenderSource,
+        /plot\._cursorBoxZoomActive\s*&&\s*!options\.force/,
+        'forced cursor renders bypass the transient box-zoom guard',
+    );
 }
 
 console.log('FFT tests passed');

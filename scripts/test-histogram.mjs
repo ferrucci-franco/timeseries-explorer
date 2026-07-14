@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import translations from '../src/i18n/translations.js';
 import {
     HISTOGRAM_AUTO_MAX_BINS,
     HISTOGRAM_MANUAL_MAX_BINS,
@@ -11,12 +13,67 @@ import {
     normalizeHistogramOptions,
 } from '../src/utils/histogram.js';
 
+const histogramMethodsSource = readFileSync(
+    new URL('../src/plots/methods/histogram-methods.js', import.meta.url),
+    'utf8',
+);
+const interactionMethodsSource = readFileSync(
+    new URL('../src/plots/methods/interaction-methods.js', import.meta.url),
+    'utf8',
+);
+
 const close = (actual, expected, tolerance, label) => {
     assert.ok(
         Math.abs(actual - expected) <= tolerance,
         `${label}: expected ${expected}, got ${actual}`,
     );
 };
+
+for (const language of ['en', 'fr', 'es', 'it']) {
+    const strings = translations[language];
+    assert.equal(strings.histogramBinAuto, 'Auto', `${language}: automatic bin mode keeps its compact label`);
+    assert.notEqual(strings.histogramRangeAuto, 'Auto', `${language}: full value range is not confused with automatic bins`);
+    assert.notEqual(strings.histogramRangeManual, 'Manual', `${language}: custom value range uses a clearer label`);
+}
+
+// Histogram must opt into the same carefully tuned trackpad helper used by
+// the other 2D views. Both of its Plotly panes need exactly one binding, and
+// the shared helper remains responsible for preventing duplicate listeners.
+{
+    const createStart = histogramMethodsSource.indexOf('proto._createHistogramChart = function');
+    const createEnd = histogramMethodsSource.indexOf('proto._installHistogramPlotHandlers = function', createStart);
+    assert.ok(createStart >= 0 && createEnd > createStart, 'histogram chart creation method is present');
+    const createSource = histogramMethodsSource.slice(createStart, createEnd);
+
+    const wheelPanTargets = [...createSource.matchAll(
+        /this\._installWheelPan\(panelId, plot, (plot\.(?:div|histogramDiv))/g,
+    )].map(match => match[1]);
+    assert.deepEqual(
+        wheelPanTargets.sort(),
+        ['plot.div', 'plot.histogramDiv'].sort(),
+        'histogram installs shared trackpad pan once on the time-series pane and once on the bars pane',
+    );
+    assert.doesNotMatch(
+        histogramMethodsSource,
+        /addEventListener\(\s*['"]wheel['"]/,
+        'histogram does not duplicate the shared wheel gesture implementation',
+    );
+
+    const helperStart = interactionMethodsSource.indexOf('proto._installWheelPan = function');
+    const helperEnd = interactionMethodsSource.indexOf('proto._installCursorHandlers = function', helperStart);
+    assert.ok(helperStart >= 0 && helperEnd > helperStart, 'shared trackpad pan helper is present');
+    const helperSource = interactionMethodsSource.slice(helperStart, helperEnd);
+    assert.match(
+        helperSource,
+        /if \(!div \|\| div\._wheelPanBound\) return;\s*div\._wheelPanBound = true;/,
+        'shared helper guards each Plotly div against duplicate wheel listeners',
+    );
+    assert.equal(
+        [...helperSource.matchAll(/addEventListener\(\s*['"]wheel['"]/g)].length,
+        1,
+        'shared helper owns a single wheel listener implementation',
+    );
+}
 
 // Convenience: full eager pipeline for a single series with given options.
 const runSingle = (values, options = {}) => {

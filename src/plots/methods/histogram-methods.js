@@ -40,6 +40,7 @@ proto._defaultHistogramState = function() {
     return {
         layout: 'vertical',
         split: 0.5,
+        timeSeriesHidden: false,
         optionsVisible: true,
         rangeFull: true,
         x1: null,
@@ -68,6 +69,7 @@ proto._normalizeHistogramState = function(raw = {}) {
         ...raw,
         layout: HIST_LAYOUTS.has(raw.layout) ? raw.layout : defaults.layout,
         split: Number.isFinite(split) ? Math.max(0.2, Math.min(0.8, split)) : defaults.split,
+        timeSeriesHidden: raw.timeSeriesHidden === true,
         optionsVisible: raw.optionsVisible !== false,
         rangeFull: raw.rangeFull !== undefined
             ? !!raw.rangeFull
@@ -135,13 +137,14 @@ proto._createHistogramChart = function(panelId, panelEl) {
     const state = this._ensureHistogramState(plot);
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
+    if (restoreView?.histogramBars) plot._histogramPendingBarView = restoreView.histogramBars;
 
     const placeholder = panelEl.querySelector('.layout-panel-placeholder');
     if (placeholder) placeholder.style.display = 'none';
     panelEl.querySelector('.hist-container')?.remove();
 
     const container = document.createElement('div');
-    container.className = `hist-container hist-layout-${state.layout}`;
+    container.className = `hist-container hist-layout-${state.layout}${state.timeSeriesHidden ? ' hist-time-series-hidden' : ''}`;
     container.style.setProperty('--hist-split', `${Math.round(state.split * 1000) / 10}%`);
 
     // Topbar: H/V, Reset, Show options, status.
@@ -158,11 +161,20 @@ proto._createHistogramChart = function(panelId, panelEl) {
     };
     const layoutGroup = document.createElement('div');
     layoutGroup.className = 'hist-topbar-group';
+    const timeSeriesBtn = makeButton(
+        'hist-tool-btn hist-time-series-btn',
+        i18n.t('hideTimeSeries'),
+        i18n.t('hideTimeSeriesTooltip'),
+        () => this._toggleHistogramTimeSeries(panelId),
+    );
+    timeSeriesBtn.classList.toggle('active', state.timeSeriesHidden);
+    timeSeriesBtn.setAttribute('aria-pressed', String(state.timeSeriesHidden));
     layoutGroup.append(
         makeButton('hist-tool-btn', 'V/H', i18n.t('fftLayoutToggle'), () => {
             const current = this._ensureHistogramState(plot).layout;
             this._setHistogramLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
         }),
+        timeSeriesBtn,
     );
     const actionGroup = document.createElement('div');
     actionGroup.className = 'hist-topbar-group';
@@ -218,14 +230,15 @@ proto._createHistogramChart = function(panelId, panelEl) {
         Plotly.newPlot(histDiv, [], this._buildHistogramBarLayout(plot), config),
     ]).then(() => {
         this._refreshActionBtns(panelId);
-        if (restoreView) this._restorePlotView(plot, restoreView);
-        this._refreshTimeseriesVisuals(panelId, plot);
+        const viewPromise = restoreView ? this._restorePlotView(plot, restoreView) : Promise.resolve();
+        Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
         this._installHistogramPlotHandlers(panelId, plot);
         this._installHistogramSelectionHandlers(panelId, plot);
         this._installHistogramSplitterHandlers(panelId, plot);
         this._installWheelPan(panelId, plot, plot.div, {
             finalize: (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange }),
         });
+        this._installWheelPan(panelId, plot, plot.histogramDiv);
         this._scheduleHistogramRecompute(panelId, { immediate: true });
         let timer;
         const ro = new ResizeObserver(() => {
@@ -369,6 +382,19 @@ proto._buildHistogramBarLayout = function(plot) {
     };
 };
 
+proto._buildHistogramBarLayoutForReact = function(plot) {
+    const layout = this._buildHistogramBarLayout(plot);
+    const pending = plot?._histogramPendingBarView || null;
+    plot._histogramPendingBarView = null;
+    if (Array.isArray(pending?.xRange)) {
+        layout.xaxis = { ...layout.xaxis, range: pending.xRange.slice(), autorange: false };
+    }
+    if (Array.isArray(pending?.yRange)) {
+        layout.yaxis = { ...layout.yaxis, range: pending.yRange.slice(), autorange: false };
+    }
+    return layout;
+};
+
 proto._scheduleHistogramRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.histogramDiv || plot.mode !== 'histogram') return;
@@ -407,7 +433,7 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
 
     if (!allTraces.length) {
         this._setHistogramStatus(plot, i18n.t('fftNoVisibleTraces'), 'muted');
-        Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayout(plot), config);
+        Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayoutForReact(plot), config);
         return;
     }
 
@@ -425,7 +451,7 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
     if (!eager.length) {
         this._setHistogramStatus(plot, warnings.join(' | '), 'warning');
         state.warnings = warnings;
-        Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayout(plot), config);
+        Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayoutForReact(plot), config);
         return;
     }
 
@@ -456,7 +482,7 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
         plot._histSummary = [];
         state.warnings = warnings;
         if (plot._histToken !== token) return;
-        Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayout(plot), config);
+        Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayoutForReact(plot), config);
         this._setHistogramStatus(plot, i18n.t('histogramNoFinite'), 'warning');
         return;
     }
@@ -538,7 +564,7 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
     plot._histSpec = spec;
     if (plot._histToken !== token) return;
 
-    Plotly.react(plot.histogramDiv, bars, this._buildHistogramBarLayout(plot), config).then(() => {
+    Plotly.react(plot.histogramDiv, bars, this._buildHistogramBarLayoutForReact(plot), config).then(() => {
         this._installLegendHoverHint(plot.histogramDiv);
         this._syncHistogramSummary(plot, spec, unit);
     });
@@ -715,6 +741,24 @@ proto._setHistogramLayout = function(panelId, layout) {
     Plotly.Plots.resize(plot.histogramDiv);
 };
 
+proto._toggleHistogramTimeSeries = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot?.histogramContainer) return;
+    const state = this._ensureHistogramState(plot);
+    state.timeSeriesHidden = !state.timeSeriesHidden;
+    plot.histogramContainer.classList.toggle('hist-time-series-hidden', state.timeSeriesHidden);
+    const button = plot.histogramContainer.querySelector('.hist-time-series-btn');
+    if (button) {
+        button.classList.toggle('active', state.timeSeriesHidden);
+        button.setAttribute('aria-pressed', String(state.timeSeriesHidden));
+    }
+    if (!state.timeSeriesHidden && plot.div) {
+        Plotly.Plots.resize(plot.div);
+        this._refreshPanelDomOverlays(plot);
+    }
+    if (plot.histogramDiv) Plotly.Plots.resize(plot.histogramDiv);
+};
+
 proto._toggleHistogramOptions = function(panelId) {
     const plot = this.plots.get(panelId);
     if (!plot?.histogramContainer) return;
@@ -746,6 +790,15 @@ proto._resetHistogramView = function(panelId) {
     this._autoScalePlotTimeOnly(plot);
     if (plot.histogramDiv) Plotly.relayout(plot.histogramDiv, { 'xaxis.autorange': true, 'yaxis.autorange': true });
     this._scheduleHistogramRecompute(panelId, { immediate: true });
+};
+
+proto._autoScaleHistogramPanel = function(panelId, plot = this.plots.get(panelId)) {
+    if (!plot?.div) return Promise.resolve();
+    const timePromise = this._autoScalePlotTimeOnly(plot);
+    const histogramPromise = plot.histogramDiv
+        ? Plotly.relayout(plot.histogramDiv, { 'xaxis.autorange': true, 'yaxis.autorange': true })
+        : Promise.resolve();
+    return Promise.all([timePromise, histogramPromise]);
 };
 
 proto._installHistogramSplitterHandlers = function(panelId, plot) {

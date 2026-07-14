@@ -2214,7 +2214,9 @@ proto._normalizeFileTransform = function(transform = null) {
     })();
     return {
         timeDisplayMode: mode,
-        calendarTimeFormat: t.calendarTimeFormat === 'ampm' ? 'ampm' : null,
+        calendarTimeFormat: t.calendarTimeFormat === 'ampm'
+            ? 'ampm'
+            : (t.calendarTimeFormat === '24h' ? '24h' : null),
         timeShift: t.timeShift === '' || t.timeShift === null || t.timeShift === undefined ? 0 : t.timeShift,
         timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
@@ -2394,7 +2396,9 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             const nextIsIndex = selected === 'index';
             const patch = {
                 timeDisplayMode: nextIsCalendar ? 'calendar' : selected,
-                calendarTimeFormat: nextIsCalendar && selected === 'calendar-ampm' ? 'ampm' : null,
+                calendarTimeFormat: nextIsCalendar
+                    ? (selected === 'calendar-ampm' ? 'ampm' : '24h')
+                    : null,
             };
             if (!nextIsIndex) {
                 patch.timeStepMode = null;

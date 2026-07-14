@@ -74,10 +74,12 @@ class OpenModelicaViewer {
     }
 
     setLanguage(lang) {
-        this.language = lang;
+        this.plotManager.preserveViewsForNextRender();
         i18n.setLanguage(lang);
+        this.language = i18n.currentLang;
+        this.plotManager.setLanguage(this.language);
         document.querySelectorAll('.lang-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.getAttribute('data-lang') === lang);
+            btn.classList.toggle('active', btn.getAttribute('data-lang') === this.language);
         });
         this._applyReloadModeUI();
         this._applyCapabilitiesToUi();
