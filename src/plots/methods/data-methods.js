@@ -1176,7 +1176,12 @@ proto._timeseriesStackAttrs = function(plot, traceIndex = 0) {
     if (!plot?.timeseriesStacked || plot?.timeseriesY2Enabled) return {};
     return {
         stackgroup: 'timeseries-stack',
-        stackgaps: 'infer zero',
+        // Each trace is min/max-downsampled independently, so their rendered
+        // x coordinates do not necessarily match. Inferring zero at the other
+        // traces' x positions creates false vertical drops in oscillatory
+        // signals. Interpolation preserves the continuous stacked envelope;
+        // explicit zero-padding below still handles genuinely disjoint support.
+        stackgaps: 'interpolate',
         fill: traceIndex === 0 ? 'tozeroy' : 'tonexty',
     };
 };

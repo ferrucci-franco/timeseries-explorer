@@ -3163,7 +3163,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         timeseriesToolsGroup.appendChild(createAutoscaleButton());
 
         const stackBtn = document.createElement('button');
-        stackBtn.className = 'layout-toolbar-btn panel-action-btn timeseries-stack-btn' + (plot?.timeseriesStacked ? ' active' : '');
+        stackBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-stack-btn' + (plot?.timeseriesStacked ? ' active' : '');
         stackBtn.textContent = i18n.t('timeseriesStackLabel');
         stackBtn.title = i18n.t('timeseriesStackToggle');
         stackBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
@@ -3175,7 +3175,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         timeseriesToolsGroup.appendChild(stackBtn);
 
         const y2Btn = document.createElement('button');
-        y2Btn.className = 'layout-toolbar-btn panel-action-btn timeseries-y2-btn' + (plot?.timeseriesY2Enabled ? ' active' : '');
+        y2Btn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-y2-btn' + (plot?.timeseriesY2Enabled ? ' active' : '');
         y2Btn.textContent = i18n.t('timeseriesY2Label');
         y2Btn.title = i18n.t('timeseriesY2Toggle');
         y2Btn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
@@ -3193,7 +3193,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         analysisModes.forEach(({ id, label, titleKey, className }) => {
             const active = currentMode === id;
             const button = document.createElement('button');
-            button.className = `layout-toolbar-btn panel-action-btn timeseries-analysis-btn ${className}${active ? ' active' : ''}`;
+            button.className = `layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-analysis-btn ${className}${active ? ' active' : ''}`;
             button.textContent = label;
             button.title = i18n.t(titleKey);
             button.dataset.mode = id;
@@ -3221,9 +3221,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     if (supportsEqualAspect2D) {
         const equalAspectBtn = document.createElement('button');
-        equalAspectBtn.className = 'layout-toolbar-btn panel-action-btn equal-aspect-btn' + (plot?.equalAspect2D ? ' active' : '');
+        equalAspectBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn equal-aspect-btn' + (plot?.equalAspect2D ? ' active' : '');
         equalAspectBtn.textContent = '1:1';
         equalAspectBtn.title = i18n.t('equalAspect2D');
+        equalAspectBtn.setAttribute('aria-pressed', String(!!plot?.equalAspect2D));
         equalAspectBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             this._toggleEqualAspect2D(panelId);
@@ -3556,7 +3557,10 @@ proto._toggleEqualAspect2D = function(panelId) {
     }
     const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
     const btn = panelEl?.querySelector('.equal-aspect-btn');
-    if (btn) btn.classList.toggle('active', plot.equalAspect2D);
+    if (btn) {
+        btn.classList.toggle('active', plot.equalAspect2D);
+        btn.setAttribute('aria-pressed', String(plot.equalAspect2D));
+    }
 };
 
 // ─── Placeholder text ──────────────────────────────────────────

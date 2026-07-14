@@ -1302,6 +1302,7 @@ class PlotManager {
         const equalAspectBtn = panelEl.querySelector('.equal-aspect-btn');
         if (equalAspectBtn) {
             equalAspectBtn.classList.toggle('active', !!plot?.equalAspect2D);
+            equalAspectBtn.setAttribute('aria-pressed', String(!!plot?.equalAspect2D));
         }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {

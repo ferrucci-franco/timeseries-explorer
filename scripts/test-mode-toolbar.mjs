@@ -174,14 +174,26 @@ vm.runInNewContext([
     methodAssignment('_requestModeChange'),
 ].join('\n'), sandbox);
 
-const renderToolbar = (mode, stateAnimDim = 2) => {
+const renderToolbar = (mode, stateAnimDim = 2, plotState = {}) => {
     const manager = new ToolbarHarness(mode, stateAnimDim);
+    Object.assign(manager.plot, plotState);
     const panel = new FakeElement('section');
     const toolbar = new FakeElement('div');
     toolbar.className = 'layout-panel-toolbar';
     panel.appendChild(toolbar);
     manager._injectModeButtons('panel', panel, mode);
     return { manager, toolbar };
+};
+
+const cssRuleBody = (selector) => {
+    const bodies = [...contentCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+        .filter(match => match[1]
+            .split(',')
+            .map(value => value.trim())
+            .some(value => value === selector || value.endsWith(selector)))
+        .map(match => match[2]);
+    assert.ok(bodies.length > 0, `${selector} CSS rule is present`);
+    return bodies.join('\n');
 };
 
 const findModeButton = (toolbar, mode, className = 'timeseries-analysis-btn') => (
@@ -223,7 +235,8 @@ for (const mode of ['timeseries', 'fft', 'histogram']) {
     assert.equal(manager.autoscaleCalls[0].panelId, 'panel', `${mode}: contextual Autoscale targets its panel`);
     assert.equal(manager.autoscaleCalls[0].plot, manager.plot, `${mode}: contextual Autoscale passes the current plot`);
     assert.ok(stackBtn, `${mode}: Stack shares the contextual group`);
-    assert.ok(tools.querySelector('.timeseries-y2-btn'), `${mode}: Y shares the contextual group`);
+    const y2Btn = tools.querySelector('.timeseries-y2-btn');
+    assert.ok(y2Btn, `${mode}: Y shares the contextual group`);
 
     const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
     assert.deepEqual(
@@ -231,6 +244,17 @@ for (const mode of ['timeseries', 'fft', 'histogram']) {
         ['fft', 'histogram'],
         `${mode}: Fourier and Histogram share the contextual group beside Stack/Y`,
     );
+    for (const button of [stackBtn, y2Btn, ...analysisButtons]) {
+        assert.ok(
+            button.classList.contains('panel-toggle-btn'),
+            `${mode}: ${button.textContent} uses the common pressed/unpressed button treatment`,
+        );
+        assert.notEqual(
+            button.getAttribute('aria-pressed'),
+            null,
+            `${mode}: ${button.textContent} always exposes its toggle state`,
+        );
+    }
     for (const button of analysisButtons) {
         const expectedPressed = button.dataset.mode === mode;
         assert.equal(
@@ -243,6 +267,20 @@ for (const mode of ['timeseries', 'fft', 'histogram']) {
             String(expectedPressed),
             `${mode}: ${button.dataset.mode} exposes its sticky state to assistive technology`,
         );
+    }
+}
+
+// Stack and Y2 expose the same visual and accessibility state as the analysis
+// toggles when their stored option is already enabled.
+{
+    const { toolbar } = renderToolbar('timeseries', 2, {
+        timeseriesStacked: true,
+        timeseriesY2Enabled: true,
+    });
+    for (const selector of ['.timeseries-stack-btn', '.timeseries-y2-btn']) {
+        const button = toolbar.querySelector(selector);
+        assert.ok(button.classList.contains('active'), `${selector}: enabled option renders pressed`);
+        assert.equal(button.getAttribute('aria-pressed'), 'true', `${selector}: enabled option reports pressed`);
     }
 }
 
@@ -282,6 +320,9 @@ for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
         assert.ok(equalAspectBtn, `${label}: 1:1 is available for the 2D view`);
         assert.equal(viewGroup.children[1], equalAspectBtn, `${label}: 1:1 sits immediately to the right of Autoscale`);
         assert.equal(equalAspectBtn.textContent, '1:1', `${label}: equal-aspect label remains unchanged`);
+        assert.ok(equalAspectBtn.classList.contains('panel-toggle-btn'), `${label}: 1:1 uses the common toggle treatment`);
+        assert.equal(equalAspectBtn.classList.contains('active'), false, `${label}: disabled 1:1 renders released`);
+        assert.equal(equalAspectBtn.getAttribute('aria-pressed'), 'false', `${label}: disabled 1:1 reports released`);
     } else {
         assert.equal(equalAspectBtn, null, `${label}: 3D views do not expose the 2D-only 1:1 action`);
     }
@@ -289,6 +330,17 @@ for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
     autoscaleBtn.click();
     assert.equal(manager.autoscaleCalls.length, 1, `${label}: contextual Autoscale triggers one autoscale`);
     assert.equal(manager.autoscaleCalls[0].plot, manager.plot, `${label}: contextual Autoscale targets the current plot`);
+}
+
+for (const { mode, stateAnimDim = 2 } of [
+    { mode: 'phase2d' },
+    { mode: 'state-anim', stateAnimDim: 2 },
+]) {
+    const label = mode === 'state-anim' ? 'state-anim-2d' : mode;
+    const { toolbar } = renderToolbar(mode, stateAnimDim, { equalAspect2D: true });
+    const equalAspectBtn = toolbar.querySelector('.equal-aspect-btn');
+    assert.ok(equalAspectBtn.classList.contains('active'), `${label}: enabled 1:1 renders pressed`);
+    assert.equal(equalAspectBtn.getAttribute('aria-pressed'), 'true', `${label}: enabled 1:1 reports pressed`);
 }
 
 // Chart creation calls _refreshActionBtns after injecting the toolbar. Keep
@@ -312,6 +364,20 @@ for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
         refreshSource,
         /querySelectorAll\('\.timeseries-analysis-btn'\)[\s\S]*?btn\.dataset\.mode === plot\?\.mode[\s\S]*?aria-pressed/,
         'toolbar refresh keeps sticky analysis state synchronized after redraws',
+    );
+    assert.match(
+        refreshSource,
+        /equalAspectBtn\.classList\.toggle\('active',[\s\S]*?equalAspectBtn\.setAttribute\('aria-pressed'/,
+        'toolbar refresh keeps 1:1 visual and accessibility state synchronized after redraws',
+    );
+}
+
+{
+    const equalAspectToggleSource = methodAssignment('_toggleEqualAspect2D');
+    assert.match(
+        equalAspectToggleSource,
+        /btn\.classList\.toggle\('active',\s*plot\.equalAspect2D\)[\s\S]*?btn\.setAttribute\('aria-pressed',\s*String\(plot\.equalAspect2D\)\)/,
+        'clicking 1:1 updates active and aria-pressed together',
     );
 }
 
@@ -401,6 +467,41 @@ for (const [from, clicked, expected] of [
     assert.ok(viewSeparatorBlock, 'phase/state contextual view group defines an explicit divider');
     assert.match(viewSeparatorBlock, /border-left\s*:\s*3px\s+solid\b/, 'phase/state divider is a pronounced 3px line');
     assert.match(viewSeparatorBlock, /color-mix\([^)]*var\(--primary-color\)/, 'phase/state divider uses the same visible primary-color mix');
+}
+
+// Stack, Y2, Fourier, Histogram and 1:1 intentionally look like toggles:
+// released is a normal outlined button, while pressed uses the softer accent
+// treatment already established by Show options / Hide time-series. Keep the
+// toolbar labels regular-weight even though the internal FFT buttons are bold.
+{
+    const baseToggleCss = cssRuleBody('.panel-toggle-btn');
+    assert.match(baseToggleCss, /font-weight\s*:\s*(?:400|normal)\b/, 'shared toggle labels are not bold');
+
+    const hoverToggleCss = cssRuleBody('.panel-toggle-btn:hover:not(:disabled)');
+    assert.match(
+        hoverToggleCss,
+        /background(?:-color)?\s*:\s*color-mix\([^)]*var\(--primary-color\)/,
+        'toggle hover uses a soft primary tint',
+    );
+    assert.doesNotMatch(
+        hoverToggleCss,
+        /background(?:-color)?\s*:\s*var\(--primary-color\)\s*;/,
+        'toggle hover does not become a solid primary fill',
+    );
+
+    const activeToggleCss = cssRuleBody('.panel-toggle-btn.active');
+    assert.match(
+        activeToggleCss,
+        /background(?:-color)?\s*:\s*color-mix\([^)]*var\(--primary-color\)/,
+        'pressed toggles use a soft primary tint',
+    );
+    assert.match(activeToggleCss, /border-color\s*:\s*var\(--primary-color\)/, 'pressed toggles use a primary border');
+    assert.match(activeToggleCss, /color\s*:\s*var\(--primary-color\)/, 'pressed toggles use primary text');
+    assert.doesNotMatch(
+        activeToggleCss,
+        /font-weight\s*:\s*(?:[6-9]00|bold(?:er)?)\b/,
+        'pressed toggles remain regular-weight',
+    );
 }
 
 console.log('Mode toolbar tests passed');
