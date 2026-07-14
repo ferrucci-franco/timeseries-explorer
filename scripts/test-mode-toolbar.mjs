@@ -14,6 +14,10 @@ const histogramMethodsSource = readFileSync(
     new URL('../src/plots/methods/histogram-methods.js', import.meta.url),
     'utf8',
 );
+const heatmapMethodsSource = readFileSync(
+    new URL('../src/plots/methods/heatmap-methods.js', import.meta.url),
+    'utf8',
+);
 const contentCss = readFileSync(
     new URL('../src/styles/content.css', import.meta.url),
     'utf8',
@@ -143,6 +147,7 @@ class ToolbarHarness {
             timeseriesY2Enabled: false,
             fft: { window: 'hann', zeroPadding: 4 },
             histogram: { binMode: 'width', binWidth: 0.25 },
+            heatmap: { calendarMode: 'day-hour', aggregation: 'max' },
             cursors: { enabled: false },
         };
         this.plots = new Map([['panel', this.plot]]);
@@ -207,9 +212,9 @@ assert.ok(globalAutoscaleIconMatch, 'global autoscale button icon is present');
 const globalAutoscaleIcon = globalAutoscaleIconMatch[1].trim();
 assert.equal(globalAutoscaleIcon, '⛶', 'global autoscale uses the expected icon');
 
-// Fourier and Histogram are contextual actions of the time-series family,
+// Fourier, Histogram and Heatmap are contextual actions of the time-series family,
 // not primary plot types alongside 2D/3D/state animation.
-for (const mode of ['timeseries', 'fft', 'histogram']) {
+for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
     const { manager, toolbar } = renderToolbar(mode);
     const primaryModes = toolbar
         .querySelector('.mode-btn-group')
@@ -217,6 +222,7 @@ for (const mode of ['timeseries', 'fft', 'histogram']) {
         .map(button => button.dataset.mode);
     assert.ok(!primaryModes.includes('fft'), `${mode}: Fourier is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('histogram'), `${mode}: Histogram is absent from the primary plot-mode group`);
+    assert.ok(!primaryModes.includes('heatmap'), `${mode}: Heatmap is absent from the primary plot-mode group`);
 
     const timeseriesPrimary = findModeButton(toolbar, 'timeseries', 'mode-btn');
     assert.ok(timeseriesPrimary?.classList.contains('active'), `${mode}: time-series family keeps its primary mode pressed`);
@@ -241,8 +247,8 @@ for (const mode of ['timeseries', 'fft', 'histogram']) {
     const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
     assert.deepEqual(
         analysisButtons.map(button => button.dataset.mode).sort(),
-        ['fft', 'histogram'],
-        `${mode}: Fourier and Histogram share the contextual group beside Stack/Y`,
+        ['fft', 'heatmap', 'histogram'],
+        `${mode}: Fourier, Histogram and Heatmap share the contextual group beside Stack/Y`,
     );
     for (const button of [stackBtn, y2Btn, ...analysisButtons]) {
         assert.ok(
@@ -289,6 +295,7 @@ for (const mode of ['timeseries', 'fft', 'histogram']) {
     assert.equal(toolbar.querySelector('.timeseries-tools-group'), null, 'non-time-series plots hide the contextual options group');
     assert.equal(findModeButton(toolbar, 'fft'), undefined, 'non-time-series plots do not expose Fourier');
     assert.equal(findModeButton(toolbar, 'histogram'), undefined, 'non-time-series plots do not expose Histogram');
+    assert.equal(findModeButton(toolbar, 'heatmap'), undefined, 'non-time-series plots do not expose Heatmap');
 }
 
 // Phase/state views use the same contextual Autoscale action. In 2D it owns
@@ -344,7 +351,7 @@ for (const { mode, stateAnimDim = 2 } of [
 }
 
 // Chart creation calls _refreshActionBtns after injecting the toolbar. Keep
-// that later refresh from deleting the contextual group in Fourier/Histogram.
+// that later refresh from deleting the contextual group in Fourier/Histogram/Heatmap.
 {
     const refreshStart = plotManagerSource.indexOf('    _refreshActionBtns(panelId) {');
     const refreshEnd = plotManagerSource.indexOf('\n    _exportCSV(', refreshStart + 1);
@@ -352,7 +359,7 @@ for (const { mode, stateAnimDim = 2 } of [
     const refreshSource = plotManagerSource.slice(refreshStart, refreshEnd);
     assert.match(
         refreshSource,
-        /\['timeseries',\s*'fft',\s*'histogram'\]\.includes\(plot\?\.mode\)/,
+        /\['timeseries',\s*'fft',\s*'histogram',\s*'heatmap'\]\.includes\(plot\?\.mode\)/,
         'toolbar refresh recognizes every member of the time-series family',
     );
     assert.match(
@@ -387,14 +394,21 @@ for (const { mode, stateAnimDim = 2 } of [
 for (const [from, clicked, expected] of [
     ['timeseries', 'fft', 'fft'],
     ['timeseries', 'histogram', 'histogram'],
+    ['timeseries', 'heatmap', 'heatmap'],
     ['fft', 'fft', 'timeseries'],
     ['histogram', 'histogram', 'timeseries'],
+    ['heatmap', 'heatmap', 'timeseries'],
     ['fft', 'histogram', 'histogram'],
     ['histogram', 'fft', 'fft'],
+    ['fft', 'heatmap', 'heatmap'],
+    ['histogram', 'heatmap', 'heatmap'],
+    ['heatmap', 'fft', 'fft'],
+    ['heatmap', 'histogram', 'histogram'],
 ]) {
     const { manager, toolbar } = renderToolbar(from);
     const fftConfig = manager.plot.fft;
     const histogramConfig = manager.plot.histogram;
+    const heatmapConfig = manager.plot.heatmap;
     findModeButton(toolbar, clicked).click();
     assert.equal(manager.modeChanges.length, 1, `${from} -> ${clicked}: exactly one mode change is requested`);
     assert.equal(manager.modeChanges[0].mode, expected, `${from} -> ${clicked}: resolves to ${expected}`);
@@ -405,6 +419,7 @@ for (const [from, clicked, expected] of [
     );
     assert.equal(manager.plot.fft, fftConfig, `${from} -> ${clicked}: Fourier config object is retained`);
     assert.equal(manager.plot.histogram, histogramConfig, `${from} -> ${clicked}: Histogram config object is retained`);
+    assert.equal(manager.plot.heatmap, heatmapConfig, `${from} -> ${clicked}: Heatmap config object is retained`);
     assert.equal(manager.warnings.length, 0, `${from} -> ${clicked}: family transition needs no destructive-change warning`);
 }
 
@@ -415,6 +430,7 @@ for (const [from, clicked, expected] of [
     const setModeSource = plotManagerSource.slice(setModeStart, setModeEnd);
     assert.match(setModeSource, /plot\.fft\s*=\s*plot\.fft\s*\|\|/, 'family mode switches retain an existing Fourier configuration');
     assert.match(setModeSource, /plot\.histogram\s*=\s*plot\.histogram\s*\|\|/, 'family mode switches retain an existing Histogram configuration');
+    assert.match(setModeSource, /plot\.heatmap\s*=\s*plot\.heatmap\s*\|\|/, 'family mode switches retain an existing Heatmap configuration');
 }
 
 // The common toolbar action must reach the correct autoscale implementation
@@ -436,6 +452,11 @@ for (const [from, clicked, expected] of [
         /plot\.mode === 'histogram'[\s\S]*?return this\._autoScaleHistogramPanel\(panelId, plot\)/,
         'central Autoscale dispatches Histogram to its non-destructive two-pane implementation',
     );
+    assert.match(
+        autoscaleSource,
+        /plot\.mode === 'heatmap'[\s\S]*?return this\._autoScaleHeatmapPanel\(panelId, plot\)/,
+        'central Autoscale dispatches Heatmap to its two-pane implementation',
+    );
 
     const helperStart = histogramMethodsSource.indexOf('proto._autoScaleHistogramPanel = function');
     const helperEnd = histogramMethodsSource.indexOf('\nproto.', helperStart + 1);
@@ -449,6 +470,13 @@ for (const [from, clicked, expected] of [
     );
     assert.match(helperSource, /Promise\.all\(/, 'Histogram Autoscale waits for both pane updates');
     assert.doesNotMatch(helperSource, /_resetHistogramView/, 'Histogram Autoscale does not reset analysis configuration or selection');
+
+    const heatmapHelperStart = heatmapMethodsSource.indexOf('proto._autoScaleHeatmapPanel = function');
+    const heatmapHelperEnd = heatmapMethodsSource.indexOf('\nproto.', heatmapHelperStart + 1);
+    assert.ok(heatmapHelperStart >= 0 && heatmapHelperEnd > heatmapHelperStart, 'Heatmap two-pane Autoscale helper is present');
+    const heatmapHelperSource = heatmapMethodsSource.slice(heatmapHelperStart, heatmapHelperEnd);
+    assert.match(heatmapHelperSource, /this\._autoScalePlotTimeOnly\(plot\)/, 'Heatmap Autoscale resets the time-series pane');
+    assert.match(heatmapHelperSource, /Plotly\.relayout\(plot\.heatmapDiv/, 'Heatmap Autoscale resets the calendar pane');
 }
 
 // The contextual option family needs a clearly visible divider from the

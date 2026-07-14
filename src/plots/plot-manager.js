@@ -7,6 +7,7 @@ import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';
 import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
+import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -81,7 +82,7 @@ class PlotManager {
         const affectedPanels = new Set();
 
         for (const [panelId, plot] of this.plots) {
-            if (plot.mode === 'timeseries' || plot.mode === 'fft') {
+            if (['timeseries', 'fft', 'histogram', 'heatmap'].includes(plot.mode)) {
                 const before = plot.traces.length;
                 plot.traces = plot.traces.filter(t => t.fileId !== fileId);
                 if (plot.traces.length < before) affectedPanels.add(panelId);
@@ -321,6 +322,8 @@ class PlotManager {
         for (const [, plot] of this.plots) {
             this._applyMouseWheelZoomConfig(plot?.div, next);
             this._applyMouseWheelZoomConfig(plot?.fftDiv, next);
+            this._applyMouseWheelZoomConfig(plot?.histogramDiv, next);
+            this._applyMouseWheelZoomConfig(plot?.heatmapDiv, next);
         }
     }
 
@@ -365,6 +368,8 @@ class PlotManager {
                 this._refreshPanelDomOverlays(plot);
             });
             if (plot.fftDiv) Plotly.Plots.resize(plot.fftDiv);
+            if (plot.histogramDiv) Plotly.Plots.resize(plot.histogramDiv);
+            if (plot.heatmapDiv) Plotly.Plots.resize(plot.heatmapDiv);
         }
     }
 
@@ -432,7 +437,7 @@ class PlotManager {
         const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
         if (plot.mode === mode && plot.stateAnimDim === nextDim) return;
         this._dismissModeChangeWarning?.(panelId);
-        const timeTraceModes = new Set(['timeseries', 'fft', 'histogram']);
+        const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap']);
         const preserveTimeTraces = !!options.preserveTimeTraces
             && timeTraceModes.has(previousMode)
             && timeTraceModes.has(mode);
@@ -456,18 +461,20 @@ class PlotManager {
         plot.timeseriesStacked = false;
         plot.timeseriesY2Enabled = false;
         plot.traces.forEach(trace => { trace.axis = 'y'; });
-        // Preserve per-mode config (FFT options, histogram bins/normalization/
-        // selection, cursors) when switching within the timeseries/fft/histogram
-        // trio, so the user can move between those modes without losing settings.
+        // Preserve per-mode config (FFT, histogram and calendar heatmap options,
+        // selection, cursors) when switching inside the time-series family, so
+        // the user can move between those modes without losing settings.
         // A hard change to a phase/state mode still starts each config fresh.
         if (preserveTimeTraces) {
             plot.fft = plot.fft || this._defaultFftState?.();
             plot.histogram = plot.histogram || this._defaultHistogramState?.();
+            plot.heatmap = plot.heatmap || this._defaultHeatmapState?.();
         } else {
             plot.cursors = this._defaultCursors();
             plot.cursorsSpectrum = this._defaultCursors();
             plot.fft = this._defaultFftState?.() || plot.fft;
             plot.histogram = this._defaultHistogramState?.() || plot.histogram;
+            plot.heatmap = this._defaultHeatmapState?.() || plot.heatmap;
         }
         plot.liveView = this._defaultLiveViewPolicy(mode);
         plot.animFrame    = 0;
@@ -618,6 +625,11 @@ class PlotManager {
             return;
         }
 
+        if (plot.mode === 'heatmap') {
+            names.forEach(varName => this.addTrace(panelId, varName, panelEl));
+            return;
+        }
+
         if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
             const groupSize = plot.mode === 'phase3d' ? 3 : 2;
             if (!this._canAddTraceWithFileTime(plot, this.activeFileId)) return;
@@ -707,6 +719,12 @@ class PlotManager {
                 : i18n.t('dropToAddTrace');
         }
 
+        if (mode === 'heatmap') {
+            return plot.traces.length === 0
+                ? i18n.t('dropHeatmapMulti')
+                : i18n.t('dropToAddTrace');
+        }
+
         // State-anim mode
         if (mode === 'state-anim') {
             const sx = plot.stateSlots?.x || [];
@@ -748,6 +766,8 @@ class PlotManager {
             this._addFftTrace(panelId, varName, panelEl, plot);
         } else if (plot.mode === 'histogram') {
             this._addHistogramTrace(panelId, varName, panelEl, plot);
+        } else if (plot.mode === 'heatmap') {
+            this._addHeatmapTrace(panelId, varName, panelEl, plot);
         } else if (plot.mode === 'state-anim') {
             this._addStateAnimVar(panelId, varName, panelEl, plot);
         } else {
@@ -852,6 +872,10 @@ class PlotManager {
         }
         if (plot.mode === 'histogram') {
             this._createHistogramChart(panelId, panelEl);
+            return;
+        }
+        if (plot.mode === 'heatmap') {
+            this._createHeatmapChart(panelId, panelEl);
             return;
         }
         const restoreView = plot._pendingViewRestore || null;
@@ -1192,7 +1216,16 @@ class PlotManager {
         if (plot.div) {
             const fftContainer = plot.div.closest('.fft-container');
             const histContainer = plot.div.closest('.hist-container');
-            if (histContainer) {
+            const heatmapContainer = plot.div.closest('.heatmap-container');
+            if (heatmapContainer) {
+                this._cleanupHeatmapChart?.(panelId, plot);
+                if (plot.heatmapDiv) Plotly.purge(plot.heatmapDiv);
+                Plotly.purge(plot.div);
+                heatmapContainer.remove();
+                plot.div = null;
+                plot.heatmapDiv = null;
+                plot.heatmapContainer = null;
+            } else if (histContainer) {
                 if (plot.histogramDiv) Plotly.purge(plot.histogramDiv);
                 Plotly.purge(plot.div);
                 histContainer.remove();
@@ -1244,6 +1277,7 @@ class PlotManager {
         clearTimeout(plot._histRecomputeTimer);
         plot._histHandlersInstalled = false;
         plot._histSelectionDiv = null;
+        this._cleanupHeatmapChart?.(panelId, plot);
         plot.cameraOverlayEl = null;
     }
 
@@ -1265,6 +1299,7 @@ class PlotManager {
             existing.timeseriesStacked = false;
             existing.timeseriesY2Enabled = false;
             existing.fft = this._defaultFftState?.() || existing.fft;
+            existing.heatmap = this._defaultHeatmapState?.() || existing.heatmap;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
             existing.cursors = this._defaultCursors();
@@ -1291,14 +1326,22 @@ class PlotManager {
         if (!panelEl) return;
         const plot = this.plots.get(panelId);
         const has = this._hasContent(plot);
-        const isTimeseriesFamily = ['timeseries', 'fft', 'histogram'].includes(plot?.mode);
+        const isTimeseriesFamily = ['timeseries', 'fft', 'histogram', 'heatmap'].includes(plot?.mode);
         if (!isTimeseriesFamily) {
             panelEl.querySelector('.timeseries-tools-group')?.remove();
         }
         const csvBtn = panelEl.querySelector('.csv-export-btn');
-        if (csvBtn) csvBtn.disabled = !has;
+        if (csvBtn) {
+            // Aggregated Heatmap CSV belongs to the dedicated export phase;
+            // never fall back to exporting a visually unrelated raw table.
+            csvBtn.disabled = !has || plot?.mode === 'heatmap';
+            if (plot?.mode === 'heatmap') csvBtn.title = i18n.t('heatmapExportPending');
+        }
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
-        if (statsBtn) statsBtn.disabled = !has;
+        if (statsBtn) {
+            statsBtn.disabled = !has || plot?.mode === 'heatmap';
+            if (plot?.mode === 'heatmap') statsBtn.title = i18n.t('heatmapStatsPending');
+        }
         const equalAspectBtn = panelEl.querySelector('.equal-aspect-btn');
         if (equalAspectBtn) {
             equalAspectBtn.classList.toggle('active', !!plot?.equalAspect2D);
@@ -1306,7 +1349,7 @@ class PlotManager {
         }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {
-            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && this.files.size > 1);
+            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && plot?.mode !== 'heatmap' && this.files.size > 1);
         }
         const cursorBtn = panelEl.querySelector('.cursor-btn');
         if (cursorBtn) {
@@ -1464,7 +1507,8 @@ class PlotManager {
 
     _compareAcrossFiles(panelId) {
         const plot = this.plots.get(panelId);
-        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim' || plot.mode === 'fft') return;
+        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim' || plot.mode === 'fft' || plot.mode === 'heatmap') return;
+        const usesTimeTraces = ['timeseries', 'histogram'].includes(plot.mode);
 
         // Collect variables used. Overlay must be decided per trace signature,
         // not per file: a file can already contribute var_1 and still be
@@ -1472,7 +1516,7 @@ class PlotManager {
         const vars = new Set();
         const existingTimeseries = new Set();
         const existingPhase = new Set();
-        if (plot.mode === 'timeseries') {
+        if (usesTimeTraces) {
             for (const t of plot.traces) {
                 vars.add(t.varName);
                 existingTimeseries.add(`${t.fileId}\u0000${t.varName}`);
@@ -1493,7 +1537,7 @@ class PlotManager {
         // Clone traces with the new fileId where the variables exist. Dedupe originals first so
         // that running overlay a second time (after loading more files) doesn't multiply
         // copies by the number of files already overlaid.
-        if (plot.mode === 'timeseries') {
+        if (usesTimeTraces) {
             const seen = new Set();
             const originals = plot.traces.filter(t => {
                 if (seen.has(t.varName)) return false;
@@ -1699,11 +1743,17 @@ class PlotManager {
     // ─── Helpers ───────────────────────────────────────────────────
 
     _relayoutAll() {
-        for (const [, plot] of this.plots) {
+        for (const [panelId, plot] of this.plots) {
             if (!plot.div) continue;
             Plotly.relayout(plot.div, this._themeRelayoutUpdate(plot));
             if (plot.fftDiv) Plotly.relayout(plot.fftDiv, this._themeRelayoutUpdate(plot));
             if (plot.histogramDiv) Plotly.relayout(plot.histogramDiv, this._themeRelayoutUpdate(plot));
+            if (plot.heatmapDiv) {
+                // Rebuild only the cached Plotly traces/layout so every
+                // small-multiple y-axis picks up the theme. Source data and
+                // calendar accumulators are deliberately not recomputed.
+                this._renderCalendarHeatmapModels?.(panelId, plot, { preserveView: true });
+            }
             this._refreshAxisDecorations(plot);
             // Origin cross marker color follows theme; restyle it separately.
             this._refreshOriginCross(plot);
@@ -1782,6 +1832,7 @@ class PlotManager {
         if (plot.mode === 'timeseries') return plot.traces.length > 0;
         if (plot.mode === 'fft') return plot.traces.length > 0;
         if (plot.mode === 'histogram') return plot.traces.length > 0;
+        if (plot.mode === 'heatmap') return plot.traces.length > 0;
         if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= (plot.stateAnimDim || 2);
         return plot.phaseTraces.length > 0;
     }
@@ -1821,7 +1872,7 @@ class PlotManager {
     }
 
     _plotModeRequiresCompatibleTime(mode) {
-        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft' || mode === 'histogram';
+        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft' || mode === 'histogram' || mode === 'heatmap';
     }
 
     _padRange(min, max, pad = 0.05) {
@@ -1907,6 +1958,10 @@ class PlotManager {
 
         if (plot.mode === 'histogram') {
             return this._autoScaleHistogramPanel(panelId, plot);
+        }
+
+        if (plot.mode === 'heatmap') {
+            return this._autoScaleHeatmapPanel(panelId, plot);
         }
 
         if (plot.mode === 'timeseries') {
@@ -2093,6 +2148,7 @@ class PlotManager {
             Plotly.relayout(plot.div, update);
             if (plot.fftDiv) Plotly.relayout(plot.fftDiv, update);
             if (plot.histogramDiv) Plotly.relayout(plot.histogramDiv, update);
+            if (plot.heatmapDiv) Plotly.relayout(plot.heatmapDiv, { ...update, showlegend: false });
         }
     }
 
@@ -2118,6 +2174,9 @@ class PlotManager {
             histogramDiv: null,
             histogramContainer: null,
             histogram: this._defaultHistogramState?.() || null,
+            heatmapDiv: null,
+            heatmapContainer: null,
+            heatmap: this._defaultHeatmapState?.() || null,
             // state-anim mode
             stateSlots:   { x: [], dx: [], fileId: null }, // x: [varName,...], dx: [derName,...]
             stateAnimDim: 2,
@@ -2454,6 +2513,12 @@ class PlotManager {
                 xRange: manualAxisRange(hfl?.xaxis),
                 yRange: manualAxisRange(hfl?.yaxis),
             };
+        } else if (plot.mode === 'heatmap') {
+            const hfl = plot.heatmapDiv?._fullLayout;
+            view.heatmapCalendar = {
+                xRange: manualAxisRange(hfl?.xaxis),
+                yRange: manualAxisRange(hfl?.yaxis),
+            };
         }
         return view;
     }
@@ -2641,5 +2706,6 @@ installPlotStateMethods(PlotManager);
 installPlotInteractionMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
+installPlotCalendarHeatmapMethods(PlotManager);
 
 export default PlotManager;

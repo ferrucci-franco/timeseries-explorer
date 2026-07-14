@@ -172,6 +172,7 @@ proto._capturePlotSessions = function() {
             stateAnimDim: plot.stateAnimDim || 2,
             stateConfig: this._cloneSerializable(plot.stateConfig),
             fft: this._cloneSerializable(plot.fft || this.plotManager._defaultFftState?.()),
+            heatmap: this._cloneSerializable(plot.heatmap || this.plotManager._defaultCalendarHeatmapState?.()),
             projection: plot.projection || 'orthographic',
             equalAspect2D: !!plot.equalAspect2D,
             liveView: this._cloneSerializable(plot.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode)),
@@ -530,6 +531,9 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.fft = this.plotManager._normalizeFftState
             ? this.plotManager._normalizeFftState(saved.fft || plot.fft)
             : this._cloneSerializable(saved.fft || plot.fft);
+        plot.heatmap = this.plotManager._normalizeCalendarHeatmapState
+            ? this.plotManager._normalizeCalendarHeatmapState(saved.heatmap || plot.heatmap || {})
+            : this._cloneSerializable(saved.heatmap || plot.heatmap);
         plot.projection = saved.projection || 'orthographic';
         plot.equalAspect2D = !!saved.equalAspect2D;
         plot.liveView = this._cloneSerializable(saved.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode));

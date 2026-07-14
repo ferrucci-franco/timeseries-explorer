@@ -27,6 +27,7 @@
     "test:csv-to-parquet": "node scripts/test-csv-to-parquet-core.mjs",
     "test:data-tools": "node scripts/test-data-tools.mjs",
     "test:calendar-axis": "node scripts/test-calendar-axis.mjs",
+    "test:calendar-heatmap": "node scripts/test-calendar-heatmap.mjs",
     "test:fft": "node scripts/test-fft.mjs",
     "test:histogram": "node scripts/test-histogram.mjs",
     "test:mode-toolbar": "node scripts/test-mode-toolbar.mjs",
