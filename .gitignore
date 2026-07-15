@@ -16,6 +16,8 @@
 
 # Track project source and metadata.
 !/.gitignore
+!/.github/
+!/.github/**
 !/*.js
 !/*.html
 !/*.css
