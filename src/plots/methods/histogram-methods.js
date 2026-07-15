@@ -239,6 +239,12 @@ proto._createHistogramChart = function(panelId, panelEl) {
             finalize: (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange }),
         });
         this._installWheelPan(panelId, plot, plot.histogramDiv);
+        // Right-button drag pans the same panes (Plotly's native drag ignores
+        // button 2, which otherwise snaps to a zoom-box scale on release).
+        this._installRightButtonPan(panelId, plot, plot.div, {
+            finalize: (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange }),
+        });
+        this._installRightButtonPan(panelId, plot, plot.histogramDiv);
         this._scheduleHistogramRecompute(panelId, { immediate: true });
         let timer;
         const ro = new ResizeObserver(() => {

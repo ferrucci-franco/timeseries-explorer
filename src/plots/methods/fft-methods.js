@@ -237,6 +237,14 @@ proto._createFftChart = function(panelId, panelEl) {
         this._installWheelPan(panelId, plot, plot.fftDiv, {
             finalize: () => { if (plot.cursorsSpectrum?.enabled) this._syncCursorDisplay(panelId, plot); },
         });
+        // Right-button drag pans the same panes (Plotly's native drag ignores
+        // button 2, which otherwise snaps to a zoom-box scale on release).
+        this._installRightButtonPan(panelId, plot, plot.div, {
+            finalize: (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange }),
+        });
+        this._installRightButtonPan(panelId, plot, plot.fftDiv, {
+            finalize: () => { if (plot.cursorsSpectrum?.enabled) this._syncCursorDisplay(panelId, plot); },
+        });
         this._syncCursorDisplay(panelId, plot);
         this._scheduleFftRecompute(panelId, { immediate: true });
         let timer;

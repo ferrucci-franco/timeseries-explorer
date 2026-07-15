@@ -2358,6 +2358,77 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     }, { capture: true, passive: false });
 };
 
+// Right-button drag pans a Plotly pane by manipulating its axis ranges
+// directly — Plotly's own drag only reacts to button 0, so without this a
+// right-drag falls through to the native zoom-box and snaps to a strange
+// scale on release. Generic over the given `div` (time pane, spectrum,
+// histogram, …); the trackpad two-finger pan in _installWheelPan is left
+// untouched and both share the same live/finalize contract.
+proto._installRightButtonPan = function(panelId, plot, div, options = {}) {
+    if (!div || div._rightPanBound) return;
+    div._rightPanBound = true;
+
+    div.addEventListener('mousedown', (e) => {
+        if (e.button !== 2) return;
+        const fl = div._fullLayout;
+        const xa = fl?.xaxis, ya = fl?.yaxis;
+        if (!xa || !ya || !xa._length || !ya._length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX, startY = e.clientY;
+        const x0 = xa.range.slice(), y0 = ya.range.slice();
+        // Secondary Y only exists (and only pans) on the timeseries chart.
+        const y2a = (plot.timeseriesY2Enabled && plot.mode === 'timeseries') ? fl?.yaxis2 : null;
+        const y20 = y2a?.range ? y2a.range.slice() : null;
+        const xNumeric0 = x0.map(value => this._coerceAxisValue(value));
+        const yNumeric0 = y0.map(value => Number(value));
+        const y2Numeric0 = y20?.map(value => Number(value)) || null;
+        if (!xNumeric0.every(Number.isFinite) || !yNumeric0.every(Number.isFinite)) return;
+        const xLen = xa._length, yLen = ya._length;
+        const isDateXAxis = xa.type === 'date';
+        let latestXRange = x0;
+        const formatXRange = (range) => isDateXAxis
+            ? range.map(value => new Date(value).toISOString())
+            : range;
+        const onMove = (mv) => {
+            const xSpan = xNumeric0[1] - xNumeric0[0];
+            const ySpan = yNumeric0[1] - yNumeric0[0];
+            const dx = -((mv.clientX - startX) / xLen) * xSpan;
+            const dy =  ((mv.clientY - startY) / yLen) * ySpan;
+            latestXRange = formatXRange([xNumeric0[0] + dx, xNumeric0[1] + dx]);
+            plot._relayoutLiveOnly = true;
+            const update = {
+                'xaxis.range': latestXRange,
+                'yaxis.range': [yNumeric0[0] + dy, yNumeric0[1] + dy],
+            };
+            if (y2Numeric0?.every(Number.isFinite) && y2a?._length) {
+                const y2Span = y2Numeric0[1] - y2Numeric0[0];
+                const dy2 = ((mv.clientY - startY) / y2a._length) * y2Span;
+                update['yaxis2.range'] = [y2Numeric0[0] + dy2, y2Numeric0[1] + dy2];
+            }
+            if (plot.mode === 'timeseries' && this._canLiveRefreshTimeseriesRelayout(plot, latestXRange)) {
+                this._scheduleLiveRelayoutingRefresh(panelId, plot, latestXRange, { allowRelayoutLiveOnly: true });
+            }
+            Plotly.relayout(div, update).finally(() => {
+                if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: latestXRange, lightweight: true });
+            });
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            plot._relayoutLiveOnly = false;
+            // Mirror the wheel-pan settle: only the caller-supplied finalize
+            // commits the pan (e.g. refetch the time pane). Panes without one
+            // (spectrum, histogram) keep the range already applied above.
+            if (typeof options.finalize === 'function') options.finalize(latestXRange);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }, { capture: true });
+
+    div.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+};
+
 proto._installCursorHandlers = function(panelId, plot) {
     for (const view of this._cursorViews(panelId, plot)) {
         this._installCursorViewHandlers(view);
