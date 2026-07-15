@@ -49,6 +49,7 @@ export default class DuckDbSource {
         this._nextTableId = 0;
         this._rangeCache = new Map();
         this._phaseCache = new Map();
+        this._heatmapCache = new Map();
         this._activeInteractiveQuery = null;
         this._connectionQueue = Promise.resolve();
     }
@@ -1132,6 +1133,198 @@ export default class DuckDbSource {
      * physical file order after a monotonicity guard, avoiding a full ORDER BY
      * sort that can OOM on multi-GB CSV in DuckDB-WASM.
      */
+    /**
+     * Exact calendar-heatmap aggregates for a lazy (DuckDB-backed) file. Never
+     * uses the overview, reservoir or any viewport downsampling as a result.
+     *
+     * Buckets are computed with pure integer arithmetic on epoch-ms (the same
+     * floored-modulo math as the JS kernel), so no date_part/timezone is
+     * involved and eager/lazy parity holds by construction. All requested vars
+     * share one table scan via conditional aggregates.
+     *
+     * Returns `{ ok, calendarMode, blocked, traces: [{ varName, cells }] }`
+     * where each `cell` matches the kernel accumulator shape consumed by
+     * densifyCalendarHeatmap: { columnStartMs, rowIndex, nScope, nFinite,
+     * nInvalid, sum, mean, min, max }.
+     */
+    async getCalendarHeatmapAggregates(legacyData, varNames, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getCalendarHeatmapAggregates: data is not DuckDB-backed (eager mode)');
+        const calendarMode = options.calendarMode === 'day-hour' ? 'day-hour' : 'week-day';
+        if (legacyData?.metadata?.timeKind !== 'datetime') {
+            return { ok: false, reason: 'notDatetime', calendarMode, blocked: [], traces: [] };
+        }
+
+        const requested = [...new Set(varNames || [])]
+            .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
+            .filter(item => item.variable);
+        // Only vars backed by an exact SQL column/expression are allowed; a
+        // purely overview-derived series has no truthful lazy aggregate.
+        const usable = [];
+        const blocked = [];
+        for (const item of requested) {
+            if (item.variable._duckdbCol || item.variable._duckdbDataTool) usable.push(item);
+            else blocked.push(item.varName);
+        }
+        if (!usable.length) return { ok: true, calendarMode, blocked, traces: [] };
+
+        const shiftMs = Math.trunc(Number(options.timeShiftMs) || 0);
+        const cropRange = this._normalizeMsRange(options.cropRange);
+        const selectionRange = this._normalizeMsRange(options.selectionRange);
+        const transforms = options.transforms || {};
+
+        const cacheKey = this._calendarHeatmapCacheKey(meta, usable, {
+            calendarMode, shiftMs, cropRange, selectionRange, transforms,
+        });
+        const cached = cacheKey ? this._heatmapCache.get(cacheKey) : null;
+        if (cached) return (cached instanceof Promise) ? cached : cached;
+
+        const promise = this._queryCalendarHeatmapAggregates(meta, legacyData, usable, {
+            calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked,
+        });
+        if (cacheKey) {
+            this._heatmapCache.set(cacheKey, promise);
+            while (this._heatmapCache.size > 16) {
+                const first = this._heatmapCache.keys().next().value;
+                this._heatmapCache.delete(first);
+            }
+        }
+        try {
+            const result = await promise;
+            if (cacheKey) this._heatmapCache.set(cacheKey, result);
+            return result;
+        } catch (err) {
+            if (cacheKey) this._heatmapCache.delete(cacheKey);
+            throw err;
+        }
+    }
+
+    _normalizeMsRange(range) {
+        if (!Array.isArray(range) || range.length < 2) return null;
+        let [lo, hi] = range.map(Number);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+        if (lo > hi) [lo, hi] = [hi, lo];
+        return [lo, hi];
+    }
+
+    _calendarHeatmapCacheKey(meta, usable, opts) {
+        const tableName = meta?.tableName;
+        if (!tableName) return null;
+        const vars = usable
+            .map(({ varName, variable }) => {
+                const t = opts.transforms[varName] || {};
+                return [
+                    varName,
+                    this._dataToolCacheToken(variable),
+                    Number(t.gain ?? 1),
+                    Number(t.yOffset ?? 0),
+                ].join('');
+            })
+            .join('');
+        // meta.appendRows makes any live-appended data miss a stale entry.
+        return [
+            tableName,
+            'calheat',
+            Number(meta.appendRows) || 0,
+            opts.calendarMode,
+            opts.shiftMs,
+            opts.cropRange ? opts.cropRange.join('_') : '',
+            opts.selectionRange ? opts.selectionRange.join('_') : '',
+            vars,
+        ].join('');
+    }
+
+    async _queryCalendarHeatmapAggregates(meta, legacyData, usable, opts) {
+        const { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked } = opts;
+        const tableName = meta.tableName;
+        // epoch-ms in display space (pre-shift); crop compares against this.
+        const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
+        // Shifted epoch-ms drives bucketing and the selection filter.
+        const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
+
+        const where = [`(${meta.timeExprSql}) IS NOT NULL`];
+        if (cropRange) {
+            where.push(`${baseMsExpr} BETWEEN ${this._numericLiteral(cropRange[0])} AND ${this._numericLiteral(cropRange[1])}`);
+        }
+        if (selectionRange) {
+            where.push(`${tExpr} BETWEEN ${this._numericLiteral(selectionRange[0])} AND ${this._numericLiteral(selectionRange[1])}`);
+        }
+
+        const dayStart = `(t_ms - (((t_ms % 86400000) + 86400000) % 86400000))`;
+        const colRowSql = calendarMode === 'day-hour'
+            ? `${dayStart} AS col_start,
+               ((t_ms - (((t_ms % 3600000) + 3600000) % 3600000)) - ${dayStart}) / 3600000 AS row_idx`
+            : `(${dayStart} - (((((${dayStart}) / 86400000) + 3) % 7 + 7) % 7) * 86400000) AS col_start,
+               (((((${dayStart}) / 86400000) + 3) % 7 + 7) % 7 + 1) AS row_idx`;
+
+        const valueSelect = usable.map(({ variable, varName }, index) => {
+            const t = transforms[varName] || {};
+            const gain = Number(t.gain ?? 1);
+            const yOffset = Number(t.yOffset ?? 0);
+            let expr = this._valueExpressionSql(variable, varName, { castDouble: true });
+            if (gain !== 1) expr = `(${expr}) * ${this._numericLiteral(gain)}`;
+            if (yOffset !== 0) expr = `(${expr}) + ${this._numericLiteral(yOffset)}`;
+            return `${expr} AS v${index}`;
+        }).join(',\n                   ');
+
+        const aggSelect = usable.map((_, index) => {
+            const finite = `CASE WHEN v${index} IS NOT NULL AND isfinite(v${index}) THEN v${index} END`;
+            return `COUNT(${finite})::BIGINT AS nf${index},
+                   SUM(${finite})::DOUBLE AS s${index},
+                   AVG(${finite})::DOUBLE AS a${index},
+                   MIN(${finite})::DOUBLE AS mi${index},
+                   MAX(${finite})::DOUBLE AS ma${index}`;
+        }).join(',\n                   ');
+
+        const sql = `
+            WITH base AS (
+                SELECT ${tExpr} AS t_ms,
+                       ${valueSelect}
+                FROM ${tableName}
+                WHERE ${where.join(' AND ')}
+            ),
+            bucketed AS (
+                SELECT ${colRowSql},
+                       ${usable.map((_, i) => `v${i}`).join(', ')}
+                FROM base
+            )
+            SELECT col_start::DOUBLE AS col_start,
+                   row_idx::BIGINT AS row_idx,
+                   COUNT(*)::BIGINT AS n_scope,
+                   ${aggSelect}
+            FROM bucketed
+            GROUP BY col_start, row_idx`;
+
+        const result = await this._interactiveQuery(sql);
+        const rows = this._arrowRowsToObjects(result);
+        const traces = usable.map(({ varName }, index) => {
+            const cells = [];
+            for (const row of rows) {
+                const nScope = Number(row.n_scope) || 0;
+                const nFinite = Number(row[`nf${index}`]) || 0;
+                const sum = row[`s${index}`];
+                const mean = row[`a${index}`];
+                const min = row[`mi${index}`];
+                const max = row[`ma${index}`];
+                cells.push({
+                    columnStartMs: Number(row.col_start),
+                    bucketStartMs: Number(row.col_start),
+                    rowIndex: Number(row.row_idx),
+                    nScope,
+                    nFinite,
+                    nInvalid: Math.max(0, nScope - nFinite),
+                    sum: nFinite === 0 || sum == null ? null : Number(sum),
+                    mean: nFinite === 0 || mean == null ? null : Number(mean),
+                    min: nFinite === 0 || min == null ? null : Number(min),
+                    max: nFinite === 0 || max == null ? null : Number(max),
+                });
+            }
+            return { varName, cells };
+        });
+
+        return { ok: true, calendarMode, blocked, traces };
+    }
+
     async getPhaseTrajectory(legacyData, varNames, options = {}) {
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getPhaseTrajectory: data is not DuckDB-backed (eager mode)');

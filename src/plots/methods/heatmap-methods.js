@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import {
     buildCalendarHeatmap,
     calendarHeatmapCellValue,
+    densifyCalendarHeatmap,
 } from '../../utils/calendar-heatmap.js';
 import Plotly from '../../vendor/plotly.js';
 
@@ -115,6 +116,8 @@ const fallbackText = {
     heatmapDatetimeRequired: 'Heatmap requires a DateTime index.',
     heatmapGeneratedTimeUnsupported: 'Heatmap cannot use a generated numeric time index.',
     heatmapLazyUnsupported: 'Exact Heatmaps for lazy files are not available yet; the overview was not used.',
+    heatmapLazyIntegralUnsupported: 'The Integral is not available for lazy files yet; use All/Selection with another aggregation.',
+    heatmapLazyDerivedUnsupported: 'This overview-derived signal has no exact lazy aggregate.',
     heatmapNoRows: 'No rows in the selected time scope.',
     heatmapLoading: 'Building Heatmap…',
     heatmapReady: 'Heatmap ready',
@@ -626,7 +629,10 @@ proto._handleCalendarHeatmapLegendClick = function(panelId, plot, clickedName, s
 proto._calendarHeatmapDomain = function(plot) {
     const arrays = [];
     for (const trace of plot?.traces || []) {
-        if (!this._calendarHeatmapTraceEligibility(trace).ok || traceIsLazy(this, trace)) continue;
+        if (!this._calendarHeatmapTraceEligibility(trace).ok) continue;
+        // Lazy files expose a downsampled overview whose first/last rows are the
+        // exact time endpoints, so the x-axis extent is correct without a query.
+        // The overview is never used as the heatmap result.
         const times = this._getTransformedTimeData(trace.fileId);
         if (times?.length) arrays.push(times);
     }
@@ -808,6 +814,7 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
     this._setCalendarHeatmapStatus(plot, text('heatmapLoading'), 'loading');
     plot.heatmapContainer?.setAttribute('aria-busy', 'true');
 
+    const lazyTraces = [];
     for (const trace of allTraces) {
         const name = this._traceName(trace.varName, trace.fileId);
         const eligibility = this._calendarHeatmapTraceEligibility(trace);
@@ -816,13 +823,19 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
             continue;
         }
         if (traceIsLazy(this, trace)) {
-            warnings.push(`${name}: ${text('heatmapLazyUnsupported')}`);
+            // Trapezoidal integration over inter-sample intervals is not yet
+            // expressed in SQL; block it clearly instead of a silent fallback.
+            if (state.aggregation === 'integral') {
+                warnings.push(`${name}: ${text('heatmapLazyIntegralUnsupported')}`);
+                continue;
+            }
+            lazyTraces.push(trace);
             continue;
         }
         eager.push(trace);
     }
 
-    if (!eager.length) {
+    if (!eager.length && !lazyTraces.length) {
         plot._calendarHeatmapModels = [];
         state.warnings = warnings;
         Plotly.react(plot.heatmapDiv, [], this._buildCalendarHeatmapLayout(plot, []), this._getPlotlyConfig());
@@ -847,12 +860,35 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
     }
 
     const [rangeStart, rangeEnd] = this._activeCalendarHeatmapRange(plot);
-    // Every eager trace is retained so legend hide/show can expose its subplot
-    // without rereading source arrays. Count those retained dense grids for the
-    // hard memory limit, including temporarily hidden ones.
-    const retainedTraceCount = eager.length || 1;
+    // Every eligible trace (eager or lazy) is retained so legend hide/show can
+    // expose its subplot without recomputing. Count those retained dense grids
+    // for the hard memory limit, including temporarily hidden ones.
+    const retainedTraceCount = (eager.length + lazyTraces.length) || 1;
     const runtime = globalThis.electronAPI ? 'desktop' : 'web';
-    const models = [];
+    const densifyOptions = {
+        calendarMode: state.calendarMode,
+        aggregation: state.aggregation,
+        domainStart: state.rangeFull ? domain.min : rangeStart,
+        domainEnd: state.rangeFull ? domain.max : rangeEnd,
+        traceCount: retainedTraceCount,
+        runtime,
+    };
+    const modelByTrace = new Map();
+    const noteGridWarnings = (trace, grid) => {
+        if (!Array.isArray(grid?.warnings)) return;
+        for (const item of grid.warnings) {
+            if ((item === 'dataGaps' || item === 'integralUnavailable') && state.aggregation !== 'integral') continue;
+            const message = { dataGaps: text('heatmapDataGaps'), integralUnavailable: text('heatmapIntegralUnsorted') }[item] || item;
+            warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${message}`);
+        }
+    };
+    const noteGridFailure = (trace, grid) => {
+        const reason = grid?.reason === 'cellLimit'
+            ? `cell limit (${grid?.limit?.gridCells ?? grid?.meta?.gridCells ?? '?'})`
+            : (grid?.reason || text('heatmapNoRows'));
+        warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${reason}`);
+    };
+
     for (const trace of eager) {
         const times = this._getTransformedTimeData(trace.fileId);
         const values = this._getTransformedVariableData(trace.fileId, trace.varName);
@@ -873,58 +909,143 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
                 rangeEnd: state.rangeFull ? null : rangeEnd,
                 // Transformed arrays already include crop and timeShift.
                 timeShiftMs: 0,
-                domainStart: state.rangeFull ? domain.min : rangeStart,
-                domainEnd: state.rangeFull ? domain.max : rangeEnd,
+                domainStart: densifyOptions.domainStart,
+                domainEnd: densifyOptions.domainEnd,
                 traceCount: retainedTraceCount,
                 runtime,
             });
-            if (!grid?.ok) {
-                const reason = grid?.reason === 'cellLimit'
-                    ? `cell limit (${grid?.limit?.gridCells ?? grid?.meta?.gridCells ?? '?'})`
-                    : (grid?.reason || text('heatmapNoRows'));
-                warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${reason}`);
-                continue;
-            }
-            if (Array.isArray(grid.warnings)) {
-                for (const item of grid.warnings) {
-                    // Gaps only invalidate the integral; under the other
-                    // aggregations they are not worth a warning.
-                    if ((item === 'dataGaps' || item === 'integralUnavailable') && state.aggregation !== 'integral') continue;
-                    const message = { dataGaps: text('heatmapDataGaps'), integralUnavailable: text('heatmapIntegralUnsorted') }[item] || item;
-                    warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${message}`);
-                }
-            }
-            models.push({ trace, grid });
+            if (!grid?.ok) { noteGridFailure(trace, grid); continue; }
+            noteGridWarnings(trace, grid);
+            modelByTrace.set(trace, { trace, grid });
         } catch (error) {
             warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
         }
     }
 
-    if (plot._calendarHeatmapToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'heatmap') return;
-    if (models.filter(model => this._isVisible(model.trace)).length > HEATMAP_MANY_TRACES_WARNING) {
-        warnings.push(text('heatmapManyTraces'));
-    }
-    if (state.sharedColorRange && state.aggregation !== 'count') {
-        const units = new Set(models
-            .filter(model => this._isVisible(model.trace))
-            .map(model => this._varUnit(model.trace.varName, model.trace.fileId) || ''));
-        if (units.size > 1) warnings.push(text('heatmapSharedUnitsWarning'));
-    }
-    plot._calendarHeatmapModels = models;
-    state.warnings = warnings.slice(0, 20);
-    this._renderCalendarHeatmapModels(panelId, plot, { preserveView: false }).then((rendered) => {
-        if (!rendered) return;
+    // Lazy traces are aggregated exactly in DuckDB (never the overview), then
+    // densified through the same kernel path as eager. Group by file so each
+    // file is scanned once for all of its requested vars.
+    const lazyPromise = lazyTraces.length
+        ? this._runLazyCalendarHeatmap(panelId, plot, token, lazyTraces, densifyOptions, {
+            rangeFull: state.rangeFull, rangeStart, rangeEnd, warnings, noteGridWarnings, noteGridFailure, modelByTrace,
+        })
+        : Promise.resolve();
+
+    lazyPromise.then(() => {
         if (plot._calendarHeatmapToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'heatmap') return;
-        plot.heatmapContainer?.setAttribute('aria-busy', 'false');
-        const cells = models.reduce((total, model) => total + gridCellCount(model.grid), 0);
-        const ready = `${text('heatmapReady')} · ${models.length} × ${cells.toLocaleString()} cells`;
-        this._setCalendarHeatmapStatus(plot, warnings.length ? `${ready} — ${warnings.join(' | ')}` : ready, warnings.length ? 'warning' : 'ready');
-        this._syncCalendarHeatmapSummary(plot);
+        // Preserve original trace order across the eager/lazy split.
+        const models = allTraces.map(trace => modelByTrace.get(trace)).filter(Boolean);
+        if (models.filter(model => this._isVisible(model.trace)).length > HEATMAP_MANY_TRACES_WARNING) {
+            warnings.push(text('heatmapManyTraces'));
+        }
+        if (state.sharedColorRange && state.aggregation !== 'count') {
+            const units = new Set(models
+                .filter(model => this._isVisible(model.trace))
+                .map(model => this._varUnit(model.trace.varName, model.trace.fileId) || ''));
+            if (units.size > 1) warnings.push(text('heatmapSharedUnitsWarning'));
+        }
+        plot._calendarHeatmapModels = models;
+        state.warnings = warnings.slice(0, 20);
+        if (!models.length) {
+            Plotly.react(plot.heatmapDiv, [], this._buildCalendarHeatmapLayout(plot, []), this._getPlotlyConfig());
+            this._setCalendarHeatmapStatus(plot, warnings.join(' | ') || text('heatmapNoRows'), warnings.length ? 'warning' : 'muted');
+            plot.heatmapContainer?.setAttribute('aria-busy', 'false');
+            this._syncCalendarHeatmapSummary(plot);
+            return;
+        }
+        this._renderCalendarHeatmapModels(panelId, plot, { preserveView: false }).then((rendered) => {
+            if (!rendered) return;
+            if (plot._calendarHeatmapToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'heatmap') return;
+            plot.heatmapContainer?.setAttribute('aria-busy', 'false');
+            const cells = models.reduce((total, model) => total + gridCellCount(model.grid), 0);
+            const ready = `${text('heatmapReady')} · ${models.length} × ${cells.toLocaleString()} cells`;
+            this._setCalendarHeatmapStatus(plot, warnings.length ? `${ready} — ${warnings.join(' | ')}` : ready, warnings.length ? 'warning' : 'ready');
+            this._syncCalendarHeatmapSummary(plot);
+        });
     }).catch((error) => {
         if (plot._calendarHeatmapToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'heatmap') return;
         plot.heatmapContainer?.setAttribute('aria-busy', 'false');
         this._setCalendarHeatmapStatus(plot, error?.message || String(error), 'error');
     });
+};
+
+// Query DuckDB for the lazy traces (grouped per file, one scan each), densify
+// each returned sparse trace through the shared kernel, and fill modelByTrace.
+proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces, densifyOptions, ctx) {
+    const byFile = new Map();
+    for (const trace of lazyTraces) {
+        if (!byFile.has(trace.fileId)) byFile.set(trace.fileId, []);
+        byFile.get(trace.fileId).push(trace);
+    }
+    for (const [fileId, traces] of byFile) {
+        if (plot._calendarHeatmapToken !== token) return;
+        const data = this.files.get(fileId)?.data;
+        const source = data?._duckdb?.source;
+        if (!source?.getCalendarHeatmapAggregates) {
+            for (const trace of traces) ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapLazyUnsupported')}`);
+            continue;
+        }
+        const transform = this._fileTransform(fileId);
+        const timeShiftMs = this._parseTimeShift(fileId, transform.timeShift) || 0;
+        const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
+        const cropEnd = this._parseTimeBoundary(fileId, transform.cropEnd);
+        const cropRange = (cropStart != null || cropEnd != null)
+            ? [cropStart ?? -Infinity, cropEnd ?? Infinity]
+            : null;
+        const transforms = {};
+        for (const trace of traces) transforms[trace.varName] = { gain: transform.gain, yOffset: transform.yOffset };
+        try {
+            const result = await source.getCalendarHeatmapAggregates(data, traces.map(t => t.varName), {
+                calendarMode: densifyOptions.calendarMode,
+                timeShiftMs,
+                cropRange,
+                selectionRange: ctx.rangeFull ? null : [ctx.rangeStart, ctx.rangeEnd],
+                transforms,
+            });
+            if (plot._calendarHeatmapToken !== token) return;
+            if (!result?.ok) {
+                for (const trace of traces) ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapLazyUnsupported')}`);
+                continue;
+            }
+            for (const blockedName of result.blocked || []) {
+                ctx.warnings.push(`${this._traceName(blockedName, fileId)}: ${text('heatmapLazyDerivedUnsupported')}`);
+            }
+            const cellsByVar = new Map(result.traces.map(entry => [entry.varName, entry.cells]));
+            for (const trace of traces) {
+                const cells = cellsByVar.get(trace.varName);
+                if (!cells) continue;
+                const dense = densifyCalendarHeatmap(
+                    {
+                        accumulators: cells,
+                        calendarMode: densifyOptions.calendarMode,
+                        rangeActive: !ctx.rangeFull,
+                        rangeStartMs: ctx.rangeFull ? null : ctx.rangeStart,
+                        rangeEndMs: ctx.rangeFull ? null : ctx.rangeEnd,
+                        domainStartMs: densifyOptions.domainStart,
+                        domainEndMs: densifyOptions.domainEnd,
+                    },
+                    densifyOptions,
+                );
+                if (!dense?.ok) { ctx.noteGridFailure(trace, dense); continue; }
+                if (!dense.stats) dense.stats = this._calendarHeatmapStatsFromCells(cells);
+                ctx.noteGridWarnings(trace, dense);
+                ctx.modelByTrace.set(trace, { trace, grid: dense });
+            }
+        } catch (error) {
+            for (const trace of traces) ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
+        }
+    }
+};
+
+// Total-sample counts for the drawer summary, matching the eager stats shape.
+proto._calendarHeatmapStatsFromCells = function(cells) {
+    let nScope = 0;
+    let nFinite = 0;
+    for (const cell of cells || []) {
+        nScope += Number(cell.nScope) || 0;
+        nFinite += Number(cell.nFinite) || 0;
+    }
+    return { nScope, nFinite, nInvalid: Math.max(0, nScope - nFinite) };
 };
 
 proto._calendarHeatmapGridHoverText = function(grid, trace, z, aggregation) {

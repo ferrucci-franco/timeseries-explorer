@@ -121,6 +121,15 @@ class PlotManager {
                          plot.phaseTraces.some(t => t.fileId === fileId) ||
                          plot.stateSlots?.fileId === fileId;
             if (!uses) continue;
+            // A lazy Heatmap must not silently re-scan a multi-GB file on every
+            // live poll: flag it dirty and let the user click Update. Eager
+            // Heatmaps and every other mode recompute as before.
+            if (options.liveAppend
+                && plot.mode === 'heatmap'
+                && plot.traces.some(t => t.fileId === fileId && !!this.files.get(t.fileId)?.data?._duckdb)) {
+                this._markCalendarHeatmapDirty?.(panelId);
+                continue;
+            }
             const captured = this._capturePlotView(plot);
             const restoreView = options.liveAppend
                 ? this._liveAppendRestoreView(plot, fileId, captured, previousData, newData)
