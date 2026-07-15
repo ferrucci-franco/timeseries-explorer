@@ -462,10 +462,16 @@ export function aggregateCalendarHeatmap(options = {}) {
 export function calendarHeatmapCellValue(cell, aggregation = 'mean') {
     const key = normalizeAggregation(aggregation);
     if (!key || !cell) return null;
-    // A cell touched by a gap has no trustworthy integral: it is reported as a
-    // gap (rendered in the palette's gap color), never as a partial area that
-    // would read like a complete one.
-    if (key === 'integral' && cell.hasGap === true) return null;
+    // The integral is defined by time coverage, not by whether a sample happens
+    // to land inside the cell: an hour crossed by the line between two samples
+    // has a real area even with nFinite === 0. So it is gated on the gap flag
+    // and its own (coverage-derived) value, never on the sample count. A cell
+    // touched by a gap is reported as a gap, never a misleading partial area.
+    if (key === 'integral') {
+        if (cell.hasGap === true || cell.integral == null) return null;
+        const integral = Number(cell.integral);
+        return Number.isFinite(integral) ? integral : null;
+    }
     if (!(Number(cell.nFinite) > 0)) return null;
     const raw = key === 'count' ? cell.nFinite : cell[key];
     if (raw == null) return null;

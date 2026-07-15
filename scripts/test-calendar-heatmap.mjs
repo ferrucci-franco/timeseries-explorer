@@ -557,6 +557,25 @@ assert.equal(formatUtcIsoWeek(NaN), '');
     // The gap threshold follows the data's own cadence.
     assert.equal(hourly.stats.medianStepMs, 15 * 60 * 1000);
     close(hourly.stats.gapThresholdMs, 1.5 * 15 * 60 * 1000, 1e-9, 'threshold is 1.5x the median step');
+
+    // Coarse sampling: an hour crossed by the line between two distant samples
+    // has a real integral even with no sample of its own (nFinite === 0). The
+    // intermediate cell must carry the trapezoid area, not be suppressed.
+    const coarse = buildCalendarHeatmap({
+        times: [day0, day0 + 6 * hour],
+        values: [0, 60],
+        calendarMode: 'day-hour',
+        aggregation: 'integral',
+    });
+    // Hours 0..5 are all covered by the single 6h ramp 0->60; each is a full
+    // hour with linear values, integrating to the midpoint value in unit-hours.
+    for (let h = 0; h < 6; h++) {
+        const midpoint = (h + 0.5) * 10; // ramp slope is 10 per hour
+        close(cellAt(coarse, h).z, midpoint, 1e-9, `intermediate hour ${h} carries its trapezoid area`);
+        assert.equal(cellAt(coarse, h).customdata.nFinite, h === 0 ? 1 : 0, `hour ${h} sample count`);
+    }
+    // The endpoint cell at exactly +6h has a sample but zero coverage -> null.
+    assert.equal(cellAt(coarse, 6).z, null, 'the endpoint-boundary cell has no coverage');
 }
 
 console.log('Calendar heatmap kernel tests passed.');

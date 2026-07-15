@@ -823,12 +823,6 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
             continue;
         }
         if (traceIsLazy(this, trace)) {
-            // Trapezoidal integration over inter-sample intervals is not yet
-            // expressed in SQL; block it clearly instead of a silent fallback.
-            if (state.aggregation === 'integral') {
-                warnings.push(`${name}: ${text('heatmapLazyIntegralUnsupported')}`);
-                continue;
-            }
             lazyTraces.push(trace);
             continue;
         }
@@ -997,6 +991,7 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
         try {
             const result = await source.getCalendarHeatmapAggregates(data, traces.map(t => t.varName), {
                 calendarMode: densifyOptions.calendarMode,
+                aggregation: densifyOptions.aggregation,
                 timeShiftMs,
                 cropRange,
                 selectionRange: ctx.rangeFull ? null : [ctx.rangeStart, ctx.rangeEnd],
@@ -1010,10 +1005,14 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
             for (const blockedName of result.blocked || []) {
                 ctx.warnings.push(`${this._traceName(blockedName, fileId)}: ${text('heatmapLazyDerivedUnsupported')}`);
             }
-            const cellsByVar = new Map(result.traces.map(entry => [entry.varName, entry.cells]));
+            const entryByVar = new Map(result.traces.map(entry => [entry.varName, entry]));
             for (const trace of traces) {
-                const cells = cellsByVar.get(trace.varName);
+                const entry = entryByVar.get(trace.varName);
+                const cells = entry?.cells;
                 if (!cells) continue;
+                if (densifyOptions.aggregation === 'integral' && entry.integralAvailable === false) {
+                    ctx.warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapIntegralUnsorted')}`);
+                }
                 const dense = densifyCalendarHeatmap(
                     {
                         accumulators: cells,
@@ -1705,12 +1704,22 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         { value: 'integral', label: text('heatmapIntegral'), title: text('heatmapIntegralTooltip') },
     ], state.aggregation, (aggregation) => {
         if (!HEATMAP_AGGREGATIONS.has(aggregation)) return;
+        const previous = state.aggregation;
         state.aggregation = aggregation;
         aggregationHint.textContent = text(aggregationTooltipKey[aggregation]);
-        // z is derived from the retained per-cell accumulators/customdata; no
-        // transformed source array is read again here.
-        this._renderCalendarHeatmapModels(panelId, plot, { preserveView: true });
-        this._syncCalendarHeatmapSummary(plot);
+        // Eager keeps every accumulator, so any switch is a restyle. Lazy caches
+        // one aggregate shape: switching to or from the Integral (a different SQL
+        // pipeline and cell shape) needs a re-query; among the sample-weighted
+        // aggregations the cached cells already carry sum/mean/min/max/count.
+        const hasLazy = (plot.traces || []).some(trace => traceIsLazy(this, trace));
+        if (hasLazy && (aggregation === 'integral' || previous === 'integral')) {
+            this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true });
+        } else {
+            // z is derived from the retained per-cell accumulators/customdata; no
+            // transformed source array is read again here.
+            this._renderCalendarHeatmapModels(panelId, plot, { preserveView: true });
+            this._syncCalendarHeatmapSummary(plot);
+        }
     }), text('heatmapAggregationTooltip'));
     options.appendChild(aggregationHint);
     const zone = document.createElement('input');

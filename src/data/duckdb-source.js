@@ -1172,16 +1172,20 @@ export default class DuckDbSource {
         const cropRange = this._normalizeMsRange(options.cropRange);
         const selectionRange = this._normalizeMsRange(options.selectionRange);
         const transforms = options.transforms || {};
+        // The integral needs a different pipeline (ordered pairs, gap detection,
+        // boundary-split trapezoids); everything else is one GROUP BY.
+        const integral = options.aggregation === 'integral';
 
         const cacheKey = this._calendarHeatmapCacheKey(meta, usable, {
-            calendarMode, shiftMs, cropRange, selectionRange, transforms,
+            calendarMode, shiftMs, cropRange, selectionRange, transforms, integral,
         });
         const cached = cacheKey ? this._heatmapCache.get(cacheKey) : null;
         if (cached) return (cached instanceof Promise) ? cached : cached;
 
-        const promise = this._queryCalendarHeatmapAggregates(meta, legacyData, usable, {
-            calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked,
-        });
+        const queryOpts = { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked };
+        const promise = integral
+            ? this._queryCalendarHeatmapIntegral(meta, legacyData, usable, queryOpts)
+            : this._queryCalendarHeatmapAggregates(meta, legacyData, usable, queryOpts);
         if (cacheKey) {
             this._heatmapCache.set(cacheKey, promise);
             while (this._heatmapCache.size > 16) {
@@ -1230,6 +1234,7 @@ export default class DuckDbSource {
             opts.shiftMs,
             opts.cropRange ? opts.cropRange.join('_') : '',
             opts.selectionRange ? opts.selectionRange.join('_') : '',
+            opts.integral ? 'integral' : 'agg',
             vars,
         ].join('');
     }
@@ -1321,6 +1326,154 @@ export default class DuckDbSource {
             }
             return { varName, cells };
         });
+
+        return { ok: true, calendarMode, blocked, traces };
+    }
+
+    // Exact trapezoidal integral per cell for lazy files. Runs one query per var
+    // (integration needs the var's own ordered finite samples): pairs consecutive
+    // finite samples, drops gaps longer than 1.5x the median step, and splits
+    // every kept interval at the cell boundaries via unnest(range()) so the area
+    // is attributed to each hour/day it crosses. Verified cell-for-cell against
+    // the JS kernel (fine + coarse sampling, gaps, week-day, pre-1970).
+    async _queryCalendarHeatmapIntegral(meta, legacyData, usable, opts) {
+        const { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked } = opts;
+        const tableName = meta.tableName;
+        const cm = calendarMode === 'day-hour' ? 3600000 : 86400000;
+        const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
+        const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
+
+        const where = [`(${meta.timeExprSql}) IS NOT NULL`];
+        if (cropRange) {
+            where.push(`${baseMsExpr} BETWEEN ${this._numericLiteral(cropRange[0])} AND ${this._numericLiteral(cropRange[1])}`);
+        }
+        if (selectionRange) {
+            where.push(`${tExpr} BETWEEN ${this._numericLiteral(selectionRange[0])} AND ${this._numericLiteral(selectionRange[1])}`);
+        }
+        const whereSql = where.join(' AND ');
+
+        const floorTo = (x, m) => `((${x}) - ((((${x}) % ${m}) + ${m}) % ${m}))`;
+        const cellStartExpr = floorTo('t_ms', cm);
+        const cellIdx = (x) => `CAST(${floorTo(x, cm)} / ${cm} AS BIGINT)`;
+        // Derive (col_start, row_idx) from a cell_start already floored to cm.
+        const colRowFromCellStart = calendarMode === 'day-hour'
+            ? {
+                col: `(cell_start - (((cell_start % 86400000) + 86400000) % 86400000))`,
+                row: `((cell_start - (cell_start - (((cell_start % 86400000) + 86400000) % 86400000))) / 3600000)`,
+            }
+            : {
+                col: `(cell_start - (((((cell_start / 86400000)) + 3) % 7 + 7) % 7) * 86400000)`,
+                row: `((((cell_start / 86400000) + 3) % 7 + 7) % 7 + 1)`,
+            };
+
+        const traces = [];
+        for (const { varName, variable } of usable) {
+            const t = transforms[varName] || {};
+            const gain = Number(t.gain ?? 1);
+            const yOffset = Number(t.yOffset ?? 0);
+            let vExpr = this._valueExpressionSql(variable, varName, { castDouble: true });
+            if (gain !== 1) vExpr = `(${vExpr}) * ${this._numericLiteral(gain)}`;
+            if (yOffset !== 0) vExpr = `(${vExpr}) + ${this._numericLiteral(yOffset)}`;
+
+            const sql = `
+                WITH src AS (
+                    SELECT ${tExpr} AS t_ms, ${vExpr} AS v
+                    FROM ${tableName}
+                    WHERE ${whereSql}
+                ),
+                mono AS (
+                    SELECT COALESCE(SUM(CASE WHEN prev_t IS NOT NULL AND t_ms < prev_t THEN 1 ELSE 0 END), 0) AS violations
+                    FROM (SELECT t_ms, LAG(t_ms) OVER () AS prev_t FROM src)
+                ),
+                fin AS (SELECT t_ms, v FROM src WHERE v IS NOT NULL AND isfinite(v)),
+                pairs AS (
+                    SELECT LAG(t_ms) OVER (ORDER BY t_ms) AS a, LAG(v) OVER (ORDER BY t_ms) AS va, t_ms AS b, v AS vb FROM fin
+                ),
+                med AS (SELECT median(b - a) AS m FROM pairs WHERE a IS NOT NULL AND b > a),
+                intervals AS (
+                    SELECT a, va, b, vb, (b - a) AS dur, ${cellIdx('a')} AS a_idx, ${cellIdx('b')} AS b_idx,
+                        CASE WHEN (SELECT m FROM med) IS NULL THEN 0
+                             WHEN (b - a) > 1.5 * (SELECT m FROM med) THEN 1 ELSE 0 END AS is_gap
+                    FROM pairs WHERE a IS NOT NULL AND b > a
+                ),
+                seg0 AS (
+                    SELECT a, va, b, vb, dur, is_gap, unnest(range(a_idx, b_idx + 1)) AS cell_idx FROM intervals
+                ),
+                seg AS (
+                    SELECT is_gap, (cell_idx * ${cm}) AS cell_start,
+                        greatest(a, cell_idx * ${cm}) AS s, least(b, cell_idx * ${cm} + ${cm}) AS e,
+                        a, va, b, vb, dur
+                    FROM seg0
+                ),
+                seg2 AS (
+                    SELECT cell_start, is_gap, (e - s) AS overlap,
+                        (va + (vb - va) * ((s - a)::DOUBLE / dur)) AS vs,
+                        (va + (vb - va) * ((e - a)::DOUBLE / dur)) AS ve
+                    FROM seg WHERE e > s
+                ),
+                integ AS (
+                    SELECT cell_start,
+                        SUM(CASE WHEN is_gap = 0 THEN (vs + ve) / 2.0 * overlap ELSE 0 END) AS integral_ms,
+                        SUM(CASE WHEN is_gap = 0 THEN overlap ELSE 0 END) AS covered_ms,
+                        SUM(CASE WHEN is_gap = 1 THEN overlap ELSE 0 END) AS missing_ms,
+                        MAX(is_gap) AS has_gap
+                    FROM seg2 GROUP BY cell_start
+                ),
+                base AS (
+                    SELECT ${cellStartExpr} AS cell_start,
+                        COUNT(*)::BIGINT AS n_scope,
+                        COUNT(CASE WHEN v IS NOT NULL AND isfinite(v) THEN 1 END)::BIGINT AS n_finite
+                    FROM src GROUP BY cell_start
+                ),
+                joined AS (
+                    SELECT COALESCE(base.cell_start, integ.cell_start) AS cell_start,
+                        COALESCE(base.n_scope, 0) AS n_scope,
+                        COALESCE(base.n_finite, 0) AS n_finite,
+                        integ.integral_ms, integ.covered_ms, integ.missing_ms,
+                        COALESCE(integ.has_gap, 0) AS has_gap
+                    FROM base FULL OUTER JOIN integ ON base.cell_start = integ.cell_start
+                )
+                SELECT ${colRowFromCellStart.col}::DOUBLE AS col_start,
+                    ${colRowFromCellStart.row}::BIGINT AS row_idx,
+                    cell_start::DOUBLE AS cell_start,
+                    n_scope::BIGINT AS n_scope,
+                    n_finite::BIGINT AS n_finite,
+                    integral_ms::DOUBLE AS integral_ms,
+                    covered_ms::DOUBLE AS covered_ms,
+                    missing_ms::DOUBLE AS missing_ms,
+                    has_gap::BIGINT AS has_gap,
+                    (SELECT violations FROM mono)::BIGINT AS violations,
+                    (SELECT m FROM med)::DOUBLE AS median_step
+                FROM joined`;
+
+            const rows = this._arrowRowsToObjects(await this._interactiveQuery(sql));
+            const violations = rows.length ? Number(rows[0].violations) : 0;
+            const medianStep = rows.length ? rows[0].median_step : null;
+            // Mirror the eager kernel: unsorted input or fewer than two finite
+            // samples means no trustworthy integral.
+            const integralAvailable = violations === 0 && medianStep != null;
+            const cells = [];
+            for (const row of rows) {
+                const nScope = Number(row.n_scope) || 0;
+                const nFinite = Number(row.n_finite) || 0;
+                const hasGap = Number(row.has_gap) === 1;
+                const coveredMs = row.covered_ms == null ? 0 : Number(row.covered_ms);
+                const integralMs = row.integral_ms == null ? null : Number(row.integral_ms);
+                cells.push({
+                    columnStartMs: Number(row.col_start),
+                    bucketStartMs: Number(row.col_start),
+                    rowIndex: Number(row.row_idx),
+                    nScope,
+                    nFinite,
+                    nInvalid: Math.max(0, nScope - nFinite),
+                    integral: (integralAvailable && coveredMs > 0 && integralMs != null) ? integralMs / 3600000 : null,
+                    coveredMs,
+                    missingMs: row.missing_ms == null ? 0 : Number(row.missing_ms),
+                    hasGap,
+                });
+            }
+            traces.push({ varName, cells, integralAvailable });
+        }
 
         return { ok: true, calendarMode, blocked, traces };
     }
