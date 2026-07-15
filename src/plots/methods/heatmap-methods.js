@@ -110,6 +110,7 @@ const fallbackText = {
     heatmapSharedRangeDisabled: 'Only available with two or more signals',
     heatmapSharedUnitsWarning: 'A shared color range is comparing signals with different units.',
     heatmapSamplingHelp: 'The Heatmap aggregates recorded samples. With irregular sampling, more densely sampled periods have more weight. Sum is not a time integral.',
+    heatmapIntegralHelp: 'The Integral weighs samples by the time between them (trapezoidal), so it does not depend on sampling density. Cells with data gaps show the gap color instead of a value.',
     heatmapNoTraces: 'Drop a numeric signal with a calendar DateTime index.',
     heatmapNoVisibleTraces: 'No visible signals.',
     heatmapCalendarRequired: 'Heatmap requires Calendar time mode.',
@@ -1707,6 +1708,9 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         const previous = state.aggregation;
         state.aggregation = aggregation;
         aggregationHint.textContent = text(aggregationTooltipKey[aggregation]);
+        // The bottom help is not re-rendered on a restyle, so refresh it here.
+        const samplingHelp = options.querySelector('.heatmap-sampling-help');
+        if (samplingHelp) samplingHelp.textContent = text(aggregation === 'integral' ? 'heatmapIntegralHelp' : 'heatmapSamplingHelp');
         // Eager keeps every accumulator, so any switch is a restyle. Lazy caches
         // one aggregate shape: switching to or from the Integral (a different SQL
         // pipeline and cell shape) needs a re-query; among the sample-weighted
@@ -1789,8 +1793,10 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
     }
 
     const help = document.createElement('p');
-    help.className = 'heatmap-help';
-    help.textContent = text('heatmapSamplingHelp');
+    help.className = 'heatmap-help heatmap-sampling-help';
+    // The Integral weighs by time, not by sample count, so the sample-weight
+    // note would contradict it; show the integral-specific help instead.
+    help.textContent = text(state.aggregation === 'integral' ? 'heatmapIntegralHelp' : 'heatmapSamplingHelp');
     options.appendChild(help);
     const summary = document.createElement('div');
     summary.className = 'heatmap-summary';
