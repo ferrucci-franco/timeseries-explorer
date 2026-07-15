@@ -4,6 +4,7 @@ import {
     analyzeSampling,
     computeAmplitudeSpectrum,
     detectSamplingGaps,
+    detectNaNRuns,
     fftRadix2,
     fftWindowCoefficients,
     formatNaturalDuration,
@@ -119,6 +120,22 @@ assert.equal(nextPowerOfTwo(513), 1024);
 
     const perfect = detectSamplingGaps(Float64Array.from({ length: 50 }, (_, i) => i * step));
     assert.equal(perfect.count, 0, 'a perfectly uniform series has no gaps');
+}
+
+{
+    // detectNaNRuns: intervals span from the last good sample before a NaN run
+    // to the first good sample after it, so a band covers the real hole.
+    const times = [0, 1, 2, 3, 4, 5, 6, 7];
+    const values = [10, NaN, NaN, 40, 50, 60, NaN, 80];
+    const runs = detectNaNRuns(times, values);
+    assert.equal(runs.length, 2, 'both NaN runs are detected');
+    assert.equal(runs[0].t0, 0, 'run starts at the last good sample before it');
+    assert.equal(runs[0].t1, 3, 'run ends at the first good sample after it');
+    assert.equal(runs[0].count, 2, 'run reports how many samples are NaN');
+    assert.equal(runs[1].t0, 5, 'second run brackets its hole');
+    assert.equal(runs[1].t1, 7, 'second run brackets its hole');
+
+    assert.equal(detectNaNRuns(times, [10, 20, 30, 40, 50, 60, 70, 80]).length, 0, 'all-finite series has no NaN runs');
 }
 
 for (const windowType of ['hann', 'hamming', 'blackman']) {

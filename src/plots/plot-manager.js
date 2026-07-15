@@ -469,6 +469,7 @@ class PlotManager {
         plot.equalAspect2D = false;
         plot.timeseriesStacked = false;
         plot.timeseriesY2Enabled = false;
+        plot.showMissingData = false;
         plot.traces.forEach(trace => { trace.axis = 'y'; });
         // Preserve per-mode config (FFT, histogram and calendar heatmap options,
         // selection, cursors) when switching inside the time-series family, so
@@ -1307,6 +1308,7 @@ class PlotManager {
             existing.markerTraceIdx = null;
             existing.timeseriesStacked = false;
             existing.timeseriesY2Enabled = false;
+            existing.showMissingData = false;
             existing.fft = this._defaultFftState?.() || existing.fft;
             existing.heatmap = this._defaultHeatmapState?.() || existing.heatmap;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
@@ -1379,6 +1381,13 @@ class PlotManager {
             y2Btn.disabled = !enabled;
             y2Btn.classList.toggle('active', !!plot?.timeseriesY2Enabled);
             y2Btn.setAttribute('aria-pressed', plot?.timeseriesY2Enabled ? 'true' : 'false');
+        }
+        const missingBtn = panelEl.querySelector('.timeseries-missing-btn');
+        if (missingBtn) {
+            const enabled = has && plot?.mode === 'timeseries';
+            missingBtn.disabled = !enabled;
+            missingBtn.classList.toggle('active', !!plot?.showMissingData);
+            missingBtn.setAttribute('aria-pressed', plot?.showMissingData ? 'true' : 'false');
         }
         panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
             const active = btn.dataset.mode === plot?.mode;
@@ -2175,6 +2184,7 @@ class PlotManager {
             markerTraceIdx: null,                          // index of the hover-marker trace in plot.div.data
             timeseriesStacked: false,
             timeseriesY2Enabled: false,
+            showMissingData: false,
             equalAspect2D: false,
             resizeObserver: null,
             fftDiv: null,

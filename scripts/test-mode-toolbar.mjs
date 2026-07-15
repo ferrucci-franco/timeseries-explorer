@@ -243,6 +243,8 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
     assert.ok(stackBtn, `${mode}: Stack shares the contextual group`);
     const y2Btn = tools.querySelector('.timeseries-y2-btn');
     assert.ok(y2Btn, `${mode}: Y shares the contextual group`);
+    const missingBtn = tools.querySelector('.timeseries-missing-btn');
+    assert.ok(missingBtn, `${mode}: Missing-data toggle shares the contextual group`);
 
     const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
     assert.deepEqual(
@@ -250,7 +252,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
         ['fft', 'heatmap', 'histogram'],
         `${mode}: Fourier, Histogram and Heatmap share the contextual group beside Stack/Y`,
     );
-    for (const button of [stackBtn, y2Btn, ...analysisButtons]) {
+    for (const button of [stackBtn, y2Btn, missingBtn, ...analysisButtons]) {
         assert.ok(
             button.classList.contains('panel-toggle-btn'),
             `${mode}: ${button.textContent} uses the common pressed/unpressed button treatment`,
@@ -282,8 +284,9 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
     const { toolbar } = renderToolbar('timeseries', 2, {
         timeseriesStacked: true,
         timeseriesY2Enabled: true,
+        showMissingData: true,
     });
-    for (const selector of ['.timeseries-stack-btn', '.timeseries-y2-btn']) {
+    for (const selector of ['.timeseries-stack-btn', '.timeseries-y2-btn', '.timeseries-missing-btn']) {
         const button = toolbar.querySelector(selector);
         assert.ok(button.classList.contains('active'), `${selector}: enabled option renders pressed`);
         assert.equal(button.getAttribute('aria-pressed'), 'true', `${selector}: enabled option reports pressed`);

@@ -282,6 +282,31 @@ export function detectSamplingGaps(times, options = {}) {
     return { medianDt, gaps, count: gaps.length, totalMissing, largest };
 }
 
+// Runs of non-finite (NaN/Inf) values, returned as the time interval each
+// hole spans — from the last good sample before the run to the first good
+// sample after — so a band drawn over [t0, t1] covers the actual break in the
+// line. `times`/`values` share an index; the interval is in `times` units.
+export function detectNaNRuns(times, values) {
+    const t = times instanceof Float64Array ? times : Float64Array.from(times || [], Number);
+    const n = Math.min(t.length, values?.length || 0);
+    const runs = [];
+    let start = -1;
+    for (let i = 0; i < n; i++) {
+        const bad = !Number.isFinite(Number(values[i]));
+        if (bad && start < 0) start = i;
+        if (start >= 0 && (!bad || i === n - 1)) {
+            const end = bad ? i : i - 1;
+            const t0 = start > 0 ? t[start - 1] : t[start];
+            const t1 = end < n - 1 ? t[end + 1] : t[end];
+            if (Number.isFinite(t0) && Number.isFinite(t1) && t1 > t0) {
+                runs.push({ t0, t1, count: end - start + 1 });
+            }
+            start = -1;
+        }
+    }
+    return runs;
+}
+
 export function computeAmplitudeSpectrum(input = {}) {
     const rawTimes = input.times || [];
     const rawValues = input.values || [];

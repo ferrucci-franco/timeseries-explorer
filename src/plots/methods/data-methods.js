@@ -1168,7 +1168,18 @@ proto._buildPlotData = function(plot) {
         case 'phase2dt':   return { traces: this._buildPhase2DtTraces(plot), layout: this._buildPhase3DLayout(plot, true)  };
         case 'phase3d':    return { traces: this._buildPhase3DTraces(plot),  layout: this._buildPhase3DLayout(plot, false) };
         case 'state-anim': return { traces: this._buildStateAnimTraces(plot), layout: this._buildStateAnimLayout(plot) };
-        default:           return { traces: plot.traces.map((t, idx) => this._buildTimeTrace(t, null, plot, idx)).filter(Boolean), layout: this._buildTimeLayout(plot) };
+        default: {
+            const showMissing = plot.mode === 'timeseries' && plot.showMissingData;
+            const missInfo = showMissing ? this._missingDataInfo(plot) : null;
+            const traces = plot.traces
+                .map((t, idx) => {
+                    const built = this._buildTimeTrace(t, null, plot, idx, showMissing ? { attachSourceX: true } : {});
+                    if (built && showMissing) this._applyLineBreaks(built, missInfo.traceIntervals.get(this._missTraceKey(t)));
+                    return built;
+                })
+                .filter(Boolean);
+            return { traces, layout: this._buildTimeLayout(plot) };
+        }
     }
 };
 
@@ -1488,6 +1499,11 @@ proto._buildTimeLayout = function(plot) {
             zeroline: false,
             title: y2Title ? { text: y2Title, font: { size: 10 } } : { text: '' },
         };
+    }
+    // Opt-in "show missing data" bands (timeseries only; the FFT/histogram/
+    // heatmap panes that also call this builder set their own shapes afterward).
+    if (plot.mode === 'timeseries' && plot.showMissingData) {
+        layout.shapes = this._missingDataBandShapes(plot);
     }
     return layout;
 };

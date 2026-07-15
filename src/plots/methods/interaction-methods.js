@@ -309,15 +309,22 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     const cds = [];
     const indices = [];
     let anyCustomdata = false;
-    // The FFT time pane breaks its line across sampling gaps. This restyle is
-    // the authoritative data path (it runs after create and on every zoom), so
-    // the breaks must be re-applied here or they are overwritten.
-    const gapInfo = plot.mode === 'fft' ? this._fftGapInfo(plot) : null;
-    const gapsByFile = gapInfo ? new Map(gapInfo.perFile.map(f => [f.fileId, f])) : null;
+    // Line breaks across missing data must be re-applied here: this restyle is
+    // the authoritative data path (runs after create and on every zoom), so it
+    // would otherwise overwrite the breaks. The FFT pane always breaks across
+    // sampling gaps; timeseries mode does so only under the opt-in flag, where
+    // each trace also breaks across its own NaN runs.
+    const showMissing = plot.mode === 'timeseries' && plot.showMissingData;
+    const fftMode = plot.mode === 'fft';
+    const missInfo = showMissing ? this._missingDataInfo(plot) : null;
+    const fftGapInfo = fftMode ? this._fftGapInfo(plot) : null;
+    const fftGapsByFile = fftGapInfo ? new Map(fftGapInfo.perFile.map(f => [f.fileId, f])) : null;
+    const attachSourceX = showMissing || fftMode;
     plot.traces.forEach((t, idx) => {
-        const built = this._buildTimeTrace(t, range, plot, idx, gapsByFile ? { attachSourceX: true } : {});
+        const built = this._buildTimeTrace(t, range, plot, idx, attachSourceX ? { attachSourceX: true } : {});
         if (!built) return;
-        if (gapsByFile) this._applyFftGapBreaks(built, gapsByFile.get(t.fileId));
+        if (showMissing) this._applyLineBreaks(built, missInfo.traceIntervals.get(this._missTraceKey(t)));
+        else if (fftMode) this._applyLineBreaks(built, fftGapsByFile.get(t.fileId)?.gaps);
         xs.push(built.x);
         ys.push(built.y);
         cds.push(built.customdata ?? null);
@@ -328,6 +335,11 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
         const update = { x: xs, y: ys };
         if (anyCustomdata) update.customdata = cds;
         Plotly.restyle(plot.div, update, indices);
+    }
+    // Keep the bands' adaptive width in step with the zoom. A shapes-only
+    // relayout is ignored by _onRelayout (no x-axis change), so this cannot loop.
+    if (showMissing && plot.div) {
+        Plotly.relayout(plot.div, { shapes: this._missingDataBandShapes(plot) });
     }
     this._refreshElapsedDateTimeAxisTicks(plot, range);
 };
@@ -3271,6 +3283,18 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         });
         timeseriesToolsGroup.appendChild(y2Btn);
 
+        const missingBtn = document.createElement('button');
+        missingBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-missing-btn' + (plot?.showMissingData ? ' active' : '');
+        missingBtn.textContent = i18n.t('timeseriesMissingLabel');
+        missingBtn.title = i18n.t('timeseriesMissingToggle');
+        missingBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
+        missingBtn.setAttribute('aria-pressed', plot?.showMissingData ? 'true' : 'false');
+        missingBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleMissingData(panelId);
+        });
+        timeseriesToolsGroup.appendChild(missingBtn);
+
         const analysisModes = [
             { id: 'fft', label: 'Fourier', titleKey: 'modeFFT', className: 'timeseries-fourier-btn' },
             { id: 'histogram', label: i18n.t('modeHistogramLabel'), titleKey: 'modeHistogram', className: 'timeseries-histogram-btn' },
@@ -3596,6 +3620,25 @@ proto._toggleTimeseriesStack = function(panelId) {
     } else {
         this._refreshActionBtns(panelId);
     }
+};
+
+proto._toggleMissingData = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'timeseries') return;
+    const capturedView = plot.div ? this._capturePlotView(plot) : null;
+    plot.showMissingData = !plot.showMissingData;
+
+    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+    const btn = panelEl?.querySelector('.timeseries-missing-btn');
+    if (btn) {
+        btn.classList.toggle('active', !!plot.showMissingData);
+        btn.setAttribute('aria-pressed', plot.showMissingData ? 'true' : 'false');
+    }
+
+    // Rebuild rather than restyle: turning the flag off must both remove the
+    // bands (layout shapes) and reconnect the line (drop the NaN breaks).
+    if (plot.div) this._rebuildPanel(panelId, { restoreView: capturedView });
+    else this._refreshActionBtns(panelId);
 };
 
 proto._toggleTimeseriesY2 = function(panelId) {

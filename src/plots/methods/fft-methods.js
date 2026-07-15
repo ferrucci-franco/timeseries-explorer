@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import {
     computeAmplitudeSpectrum,
     detectSamplingGaps,
+    detectNaNRuns,
     fftWindowCoefficients,
     formatNaturalDuration,
     frequencyPeriod,
@@ -327,7 +328,7 @@ proto._buildFftTimeTraces = function(plot) {
     const traces = plot.traces
         .map((t, idx) => {
             const built = this._buildTimeTrace(t, null, plot, idx, { attachSourceX: true });
-            if (built) this._applyFftGapBreaks(built, gapsByFile.get(t.fileId));
+            if (built) this._applyLineBreaks(built, gapsByFile.get(t.fileId)?.gaps);
             return built;
         })
         .filter(Boolean);
@@ -1037,19 +1038,19 @@ proto._fftGapInfo = function(plot) {
     return result;
 };
 
-// (A) Red bands marking each gap on the time pane, so the user can see where
-// data is missing and drag the Selection to a gap-free span. Appearance keys
-// off the gap's on-screen width (recomputed on every zoom via
-// _updateFftSelectionShapes): wide gaps get a soft borderless fill that shows
-// their extent; narrow gaps — whose fill is sub-pixel and would otherwise
-// vanish — get a stronger fill plus a pixel-width stroke so they stay visible.
-proto._fftGapBandShapes = function(plot) {
-    const info = this._fftGapInfo(plot);
-    if (!info.count) return [];
+// Red bands marking missing-data intervals on a time pane. Appearance keys
+// off each interval's on-screen width (recomputed on zoom): wide intervals get
+// a soft borderless fill that shows their extent; narrow ones — whose fill is
+// sub-pixel and would otherwise vanish — get a stronger fill plus a pixel-width
+// stroke so they stay visible. `items` are { fileId, timeVar, t0, t1 } in
+// transformed-time units. Shared by the FFT pane and the timeseries
+// "show missing data" overlay.
+proto._adaptiveGapBandShapes = function(plot, items) {
+    if (!items?.length) return [];
     const MAX_BANDS = 500;
 
-    // Pixels per data unit for the current view, so a gap's screen width is
-    // gap.dt * pxPerUnit. NaN until the axis has laid out — treat as narrow.
+    // Pixels per data unit for the current view, so an interval's screen width
+    // is (t1 - t0) * pxPerUnit. NaN until the axis has laid out — treat narrow.
     const xa = plot.div?._fullLayout?.xaxis;
     let pxPerUnit = NaN;
     if (xa && Array.isArray(xa.range) && xa._length) {
@@ -1057,38 +1058,50 @@ proto._fftGapBandShapes = function(plot) {
         if (span > 0) pxPerUnit = xa._length / span;
     }
 
+    // With pathologically many intervals the series is effectively irregular;
+    // keep only the widest so we never flood Plotly with shapes.
+    const list = items.length > MAX_BANDS
+        ? items.slice().sort((a, b) => (b.t1 - b.t0) - (a.t1 - a.t0)).slice(0, MAX_BANDS)
+        : items;
+
     const shapes = [];
-    for (const file of info.perFile) {
-        // With pathologically many gaps the series is effectively irregular;
-        // keep only the widest so we never flood Plotly with shapes.
-        const gaps = file.gaps.length > MAX_BANDS
-            ? file.gaps.slice().sort((a, b) => b.dt - a.dt).slice(0, MAX_BANDS)
-            : file.gaps;
-        for (const gap of gaps) {
-            const widthPx = Number.isFinite(pxPerUnit) ? gap.dt * pxPerUnit : 0;
-            // Fill fades from strong (narrow) to soft (wide) as the band grows.
-            const fillT = Math.max(0, Math.min(1, (widthPx - 3) / (30 - 3)));
-            const fillAlpha = 0.8 + (0.28 - 0.8) * fillT;
-            // Stroke only rescues truly narrow gaps; it is gone by ~3px, so
-            // wide bands never get the outline the user disliked.
-            const strokeWidth = Math.max(0, 2 - widthPx / 1.5);
-            shapes.push({
-                type: 'rect',
-                xref: 'x',
-                yref: 'paper',
-                x0: this._plotlyTimeValue(file.fileId, gap.t0, file.timeVar),
-                x1: this._plotlyTimeValue(file.fileId, gap.t1, file.timeVar),
-                y0: 0,
-                y1: 1,
-                fillcolor: `rgba(229, 57, 53, ${fillAlpha.toFixed(3)})`,
-                line: strokeWidth > 0
-                    ? { color: 'rgba(229, 57, 53, 0.9)', width: strokeWidth }
-                    : { width: 0 },
-                layer: 'below',
-            });
-        }
+    for (const it of list) {
+        const widthPx = Number.isFinite(pxPerUnit) ? (it.t1 - it.t0) * pxPerUnit : 0;
+        // Fill fades from strong (narrow) to soft (wide) as the band grows.
+        const fillT = Math.max(0, Math.min(1, (widthPx - 3) / (30 - 3)));
+        const fillAlpha = 0.8 + (0.28 - 0.8) * fillT;
+        // Stroke only rescues truly narrow gaps; it is gone by ~3px, so wide
+        // bands never get the outline the user disliked.
+        const strokeWidth = Math.max(0, 2 - widthPx / 1.5);
+        shapes.push({
+            type: 'rect',
+            xref: 'x',
+            yref: 'paper',
+            x0: this._plotlyTimeValue(it.fileId, it.t0, it.timeVar),
+            x1: this._plotlyTimeValue(it.fileId, it.t1, it.timeVar),
+            y0: 0,
+            y1: 1,
+            fillcolor: `rgba(229, 57, 53, ${fillAlpha.toFixed(3)})`,
+            line: strokeWidth > 0
+                ? { color: 'rgba(229, 57, 53, 0.9)', width: strokeWidth }
+                : { width: 0 },
+            layer: 'below',
+        });
     }
     return shapes;
+};
+
+// (A) FFT time pane: bands over the sampling gaps of every visible file.
+proto._fftGapBandShapes = function(plot) {
+    const info = this._fftGapInfo(plot);
+    if (!info.count) return [];
+    const items = [];
+    for (const file of info.perFile) {
+        for (const gap of file.gaps) {
+            items.push({ fileId: file.fileId, timeVar: file.timeVar, t0: gap.t0, t1: gap.t1 });
+        }
+    }
+    return this._adaptiveGapBandShapes(plot, items);
 };
 
 // The time pane draws gap bands beneath the Selection rectangle.
@@ -1096,19 +1109,19 @@ proto._fftTimePaneShapes = function(plot) {
     return [...this._fftGapBandShapes(plot), ...this._fftSelectionShapes(plot)];
 };
 
-// (B) Break the plotted line across each gap so the pane never connects two
-// points with a straight segment that pretends data exists in between. The
-// break is inserted into the (possibly downsampled) trace by matching the
-// numeric source x carried on __srcX against the detected gap intervals.
-proto._applyFftGapBreaks = function(trace, fileGaps) {
+// (B) Break the plotted line across each missing-data interval so the pane
+// never connects two points with a straight segment that pretends data exists
+// in between. The break is inserted into the (possibly downsampled) trace by
+// matching the numeric source x carried on __srcX against `intervals` (sorted
+// ascending by t0). Used for FFT sampling gaps and timeseries gaps + NaN runs.
+proto._applyLineBreaks = function(trace, intervals) {
     const srcX = trace.__srcX;
     delete trace.__srcX;
-    if (!fileGaps?.gaps?.length || !srcX?.length) return;
+    if (!intervals?.length || !srcX?.length) return;
     const y = trace.y;
     const x = trace.x;
     const custom = Array.isArray(trace.customdata) ? trace.customdata : null;
     const nPts = Math.min(srcX.length, y.length);
-    const gaps = fileGaps.gaps;
     const outX = [];
     const outY = [];
     const outCustom = custom ? [] : null;
@@ -1121,8 +1134,8 @@ proto._applyFftGapBreaks = function(trace, fileGaps) {
         if (i + 1 >= nPts) continue;
         const a = srcX[i];
         const b = srcX[i + 1];
-        while (gi < gaps.length && gaps[gi].t0 < a - 1e-6) gi++;
-        if (gi < gaps.length && gaps[gi].t1 <= b + 1e-6) {
+        while (gi < intervals.length && intervals[gi].t0 < a - 1e-6) gi++;
+        if (gi < intervals.length && intervals[gi].t1 <= b + 1e-6) {
             // A NaN y-value with a duplicated x breaks the connecting segment.
             outX.push(x[i]);
             outY.push(NaN);
@@ -1133,9 +1146,58 @@ proto._applyFftGapBreaks = function(trace, fileGaps) {
     trace.x = outX;
     trace.y = outY;
     if (outCustom) trace.customdata = outCustom;
-    // WebGL scatter does not render NaN gaps reliably; the pane is capped at
-    // ~2000 points, so SVG scatter is cheap and shows the breaks correctly.
+    // WebGL scatter does not render NaN gaps reliably; the panes are capped at
+    // ~2000 plotted points, so SVG scatter is cheap and shows breaks correctly.
     if (broke && trace.type === 'scattergl') trace.type = 'scatter';
+};
+
+// ── Timeseries "show missing data" overlay (opt-in) ──
+// Trace identity for the per-trace break-interval map.
+proto._missTraceKey = function(t) {
+    return `${t.fileId} ${t.varName}`;
+};
+
+// Union of time gaps (per file) and NaN runs (per visible trace), memoized by
+// a cheap signature. Only called when the opt-in flag is on, so large files
+// pay nothing by default; even then it is one cached O(n) pass over the same
+// in-memory / overview arrays the plot already holds.
+proto._missingDataInfo = function(plot) {
+    const visible = (plot?.traces || []).filter(t => this._isVisible(t));
+    const sig = visible.map(t => {
+        const times = this._getTransformedTimeData(t.fileId);
+        const n = times?.length || 0;
+        return `${t.fileId} ${t.varName}:${n}:${n ? times[0] : ''}:${n ? times[n - 1] : ''}`;
+    }).join('|');
+    if (plot._missSig === sig && plot._missCache) return plot._missCache;
+
+    const fileGaps = new Map();       // fileId -> { timeVar, gaps: [{t0,t1}] }
+    const traceIntervals = new Map(); // missTraceKey -> sorted [{t0,t1}]
+    const bandItems = [];
+    for (const t of visible) {
+        if (!fileGaps.has(t.fileId)) {
+            const times = this._getTransformedTimeData(t.fileId);
+            const timeVar = this._getTimeVar(t.fileId);
+            const gaps = detectSamplingGaps(times).gaps.map(g => ({ t0: g.t0, t1: g.t1 }));
+            fileGaps.set(t.fileId, { timeVar, gaps });
+            for (const g of gaps) bandItems.push({ fileId: t.fileId, timeVar, t0: g.t0, t1: g.t1 });
+        }
+        const entry = fileGaps.get(t.fileId);
+        const times = this._getTransformedTimeData(t.fileId);
+        const values = this._getTransformedVariableData(t.fileId, t.varName);
+        const nanRuns = detectNaNRuns(times, values);
+        for (const r of nanRuns) bandItems.push({ fileId: t.fileId, timeVar: entry.timeVar, t0: r.t0, t1: r.t1 });
+        const merged = [...entry.gaps, ...nanRuns.map(r => ({ t0: r.t0, t1: r.t1 }))]
+            .sort((p, q) => p.t0 - q.t0);
+        traceIntervals.set(this._missTraceKey(t), merged);
+    }
+    const result = { fileGaps, traceIntervals, bandItems };
+    plot._missSig = sig;
+    plot._missCache = result;
+    return result;
+};
+
+proto._missingDataBandShapes = function(plot) {
+    return this._adaptiveGapBandShapes(plot, this._missingDataInfo(plot).bandItems);
 };
 
 // (C) When gaps fall inside the analyzed range, explain what the red bands
