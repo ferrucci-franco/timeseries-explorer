@@ -1318,7 +1318,7 @@ proto._applyTimeseriesStackZeroPadding = function(plot, traceState, visual) {
     return { x: outX, y: outY };
 };
 
-proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex = 0) {
+proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex = 0, options = {}) {
     const fileData = this.files.get(t.fileId)?.data;
     if (!fileData) return null;
     const variable = fileData.variables[t.varName];
@@ -1410,6 +1410,10 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         line,
         ...stackAttrs,
         ...(customdata ? { customdata } : {}),
+        // Numeric, pre-Plotly x aligned 1:1 with y — the FFT pane uses it to
+        // locate sampling gaps for line breaks, then strips it before Plotly
+        // sees the trace. Never emitted in timeseries mode.
+        ...(options.attachSourceX ? { __srcX: visual.x } : {}),
         hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}<extra></extra>`,
     };
 };

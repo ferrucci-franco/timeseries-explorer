@@ -309,9 +309,15 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     const cds = [];
     const indices = [];
     let anyCustomdata = false;
+    // The FFT time pane breaks its line across sampling gaps. This restyle is
+    // the authoritative data path (it runs after create and on every zoom), so
+    // the breaks must be re-applied here or they are overwritten.
+    const gapInfo = plot.mode === 'fft' ? this._fftGapInfo(plot) : null;
+    const gapsByFile = gapInfo ? new Map(gapInfo.perFile.map(f => [f.fileId, f])) : null;
     plot.traces.forEach((t, idx) => {
-        const built = this._buildTimeTrace(t, range, plot, idx);
+        const built = this._buildTimeTrace(t, range, plot, idx, gapsByFile ? { attachSourceX: true } : {});
         if (!built) return;
+        if (gapsByFile) this._applyFftGapBreaks(built, gapsByFile.get(t.fileId));
         xs.push(built.x);
         ys.push(built.y);
         cds.push(built.customdata ?? null);

@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import {
     computeAmplitudeSpectrum,
+    detectSamplingGaps,
     fftWindowCoefficients,
     formatNaturalDuration,
     frequencyPeriod,
@@ -321,8 +322,14 @@ proto._handleFftLegendClick = function(panelId, plot, clickedName, shiftClick = 
 };
 
 proto._buildFftTimeTraces = function(plot) {
+    const gapInfo = this._fftGapInfo(plot);
+    const gapsByFile = new Map(gapInfo.perFile.map(f => [f.fileId, f]));
     const traces = plot.traces
-        .map((t, idx) => this._buildTimeTrace(t, null, plot, idx))
+        .map((t, idx) => {
+            const built = this._buildTimeTrace(t, null, plot, idx, { attachSourceX: true });
+            if (built) this._applyFftGapBreaks(built, gapsByFile.get(t.fileId));
+            return built;
+        })
         .filter(Boolean);
     if (this._ensureFftState(plot).showWindowed) {
         traces.push(...this._buildFftWindowedTimeTraces(plot));
@@ -367,7 +374,7 @@ proto._buildFftWindowedTimeTraces = function(plot) {
 
 proto._buildFftTimeLayout = function(plot) {
     const layout = this._buildTimeLayout(plot);
-    layout.shapes = this._fftSelectionShapes(plot);
+    layout.shapes = this._fftTimePaneShapes(plot);
     layout.margin = { ...(layout.margin || {}), t: 8 };
     // No hover on the time plot: the tooltips get in the way of the
     // selection handles. The spectrum plot keeps its hover.
@@ -689,8 +696,17 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     this._syncFftOptionsPanel(plot);
     this._installCursorHandlers(panelId, plot);
     this._syncCursorDisplay(panelId, plot);
-    if (warnings.length) this._setFftStatus(plot, warnings.join(' | '), 'warning');
-    else this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
+    const gapNote = this._fftGapsSummaryText(plot);
+    if (warnings.length) {
+        const base = warnings.join(' | ');
+        this._setFftStatus(plot, gapNote ? `${base} - ${gapNote}` : base, 'warning');
+    } else if (gapNote) {
+        // Spectrum computed, but the analyzed span still straddles gaps worth
+        // flagging (e.g. a lone dropped sample the tolerance happened to allow).
+        this._setFftStatus(plot, gapNote, 'warning');
+    } else {
+        this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
+    }
 };
 
 proto._fftSeriesForTrace = async function(trace, range, state) {
@@ -981,6 +997,162 @@ proto._fftDomain = function(plot) {
     return extent ? { min: extent.min, max: extent.max } : null;
 };
 
+// Sampling gaps over the full transformed series of each visible file,
+// memoized by a cheap signature so per-drag shape relayouts stay free.
+proto._fftGapInfo = function(plot) {
+    const visible = (plot?.traces || []).filter(t => this._isVisible(t));
+    const seen = new Set();
+    const files = [];
+    const sigParts = [];
+    for (const t of visible) {
+        if (seen.has(t.fileId)) continue;
+        seen.add(t.fileId);
+        const times = this._getTransformedTimeData(t.fileId);
+        const n = times?.length || 0;
+        files.push({ fileId: t.fileId, times, n });
+        sigParts.push(`${t.fileId}:${n}:${n ? times[0] : ''}:${n ? times[n - 1] : ''}`);
+    }
+    const sig = sigParts.join('|');
+    if (plot._fftGapsSig === sig && plot._fftGapsCache) return plot._fftGapsCache;
+
+    const perFile = [];
+    let count = 0;
+    let totalMissing = 0;
+    let largest = null;
+    for (const file of files) {
+        const info = detectSamplingGaps(file.times);
+        if (!info.gaps.length) continue;
+        const timeKind = this._fftTimeKind(file.fileId);
+        const timeVar = this._getTimeVar(file.fileId);
+        perFile.push({ fileId: file.fileId, timeVar, timeKind, ...info });
+        count += info.count;
+        totalMissing += info.totalMissing;
+        if (info.largest && (!largest || info.largest.dt > largest.dt)) {
+            largest = { ...info.largest, timeKind };
+        }
+    }
+    const result = { perFile, count, totalMissing, largest };
+    plot._fftGapsSig = sig;
+    plot._fftGapsCache = result;
+    return result;
+};
+
+// (A) Red bands marking each gap on the time pane, so the user can see where
+// data is missing and drag the Selection to a gap-free span. Appearance keys
+// off the gap's on-screen width (recomputed on every zoom via
+// _updateFftSelectionShapes): wide gaps get a soft borderless fill that shows
+// their extent; narrow gaps — whose fill is sub-pixel and would otherwise
+// vanish — get a stronger fill plus a pixel-width stroke so they stay visible.
+proto._fftGapBandShapes = function(plot) {
+    const info = this._fftGapInfo(plot);
+    if (!info.count) return [];
+    const MAX_BANDS = 500;
+
+    // Pixels per data unit for the current view, so a gap's screen width is
+    // gap.dt * pxPerUnit. NaN until the axis has laid out — treat as narrow.
+    const xa = plot.div?._fullLayout?.xaxis;
+    let pxPerUnit = NaN;
+    if (xa && Array.isArray(xa.range) && xa._length) {
+        const span = Math.abs(this._coerceAxisValue(xa.range[1]) - this._coerceAxisValue(xa.range[0]));
+        if (span > 0) pxPerUnit = xa._length / span;
+    }
+
+    const shapes = [];
+    for (const file of info.perFile) {
+        // With pathologically many gaps the series is effectively irregular;
+        // keep only the widest so we never flood Plotly with shapes.
+        const gaps = file.gaps.length > MAX_BANDS
+            ? file.gaps.slice().sort((a, b) => b.dt - a.dt).slice(0, MAX_BANDS)
+            : file.gaps;
+        for (const gap of gaps) {
+            const widthPx = Number.isFinite(pxPerUnit) ? gap.dt * pxPerUnit : 0;
+            // Fill fades from strong (narrow) to soft (wide) as the band grows.
+            const fillT = Math.max(0, Math.min(1, (widthPx - 3) / (30 - 3)));
+            const fillAlpha = 0.8 + (0.28 - 0.8) * fillT;
+            // Stroke only rescues truly narrow gaps; it is gone by ~3px, so
+            // wide bands never get the outline the user disliked.
+            const strokeWidth = Math.max(0, 2 - widthPx / 1.5);
+            shapes.push({
+                type: 'rect',
+                xref: 'x',
+                yref: 'paper',
+                x0: this._plotlyTimeValue(file.fileId, gap.t0, file.timeVar),
+                x1: this._plotlyTimeValue(file.fileId, gap.t1, file.timeVar),
+                y0: 0,
+                y1: 1,
+                fillcolor: `rgba(229, 57, 53, ${fillAlpha.toFixed(3)})`,
+                line: strokeWidth > 0
+                    ? { color: 'rgba(229, 57, 53, 0.9)', width: strokeWidth }
+                    : { width: 0 },
+                layer: 'below',
+            });
+        }
+    }
+    return shapes;
+};
+
+// The time pane draws gap bands beneath the Selection rectangle.
+proto._fftTimePaneShapes = function(plot) {
+    return [...this._fftGapBandShapes(plot), ...this._fftSelectionShapes(plot)];
+};
+
+// (B) Break the plotted line across each gap so the pane never connects two
+// points with a straight segment that pretends data exists in between. The
+// break is inserted into the (possibly downsampled) trace by matching the
+// numeric source x carried on __srcX against the detected gap intervals.
+proto._applyFftGapBreaks = function(trace, fileGaps) {
+    const srcX = trace.__srcX;
+    delete trace.__srcX;
+    if (!fileGaps?.gaps?.length || !srcX?.length) return;
+    const y = trace.y;
+    const x = trace.x;
+    const custom = Array.isArray(trace.customdata) ? trace.customdata : null;
+    const nPts = Math.min(srcX.length, y.length);
+    const gaps = fileGaps.gaps;
+    const outX = [];
+    const outY = [];
+    const outCustom = custom ? [] : null;
+    let gi = 0;
+    let broke = false;
+    for (let i = 0; i < nPts; i++) {
+        outX.push(x[i]);
+        outY.push(y[i]);
+        if (outCustom) outCustom.push(custom[i]);
+        if (i + 1 >= nPts) continue;
+        const a = srcX[i];
+        const b = srcX[i + 1];
+        while (gi < gaps.length && gaps[gi].t0 < a - 1e-6) gi++;
+        if (gi < gaps.length && gaps[gi].t1 <= b + 1e-6) {
+            // A NaN y-value with a duplicated x breaks the connecting segment.
+            outX.push(x[i]);
+            outY.push(NaN);
+            if (outCustom) outCustom.push(null);
+            broke = true;
+        }
+    }
+    trace.x = outX;
+    trace.y = outY;
+    if (outCustom) trace.customdata = outCustom;
+    // WebGL scatter does not render NaN gaps reliably; the pane is capped at
+    // ~2000 points, so SVG scatter is cheap and shows the breaks correctly.
+    if (broke && trace.type === 'scattergl') trace.type = 'scatter';
+};
+
+// (C) When gaps fall inside the analyzed range, explain what the red bands
+// mean and how to act — that is what makes the "not uniform" failure
+// actionable. Static text (no counts): the bands already convey the extent.
+proto._fftGapsSummaryText = function(plot) {
+    const info = this._fftGapInfo(plot);
+    if (!info.count) return '';
+    const [lo, hi] = this._activeFftRange(plot);
+    for (const file of info.perFile) {
+        for (const gap of file.gaps) {
+            if (gap.t1 > lo && gap.t0 < hi) return i18n.t('fftGapsWarning');
+        }
+    }
+    return '';
+};
+
 proto._fftSelectionShapes = function(plot) {
     if (this._ensureFftState(plot).rangeFull) return [];
     const [lo, hi] = this._activeFftRange(plot);
@@ -1009,7 +1181,7 @@ proto._fftSelectionShapes = function(plot) {
 
 proto._updateFftSelectionShapes = function(panelId, plot = this.plots.get(panelId)) {
     if (!plot?.div || plot.mode !== 'fft') return;
-    Plotly.relayout(plot.div, { shapes: this._fftSelectionShapes(plot) });
+    Plotly.relayout(plot.div, { shapes: this._fftTimePaneShapes(plot) });
     this._syncFftOptionsPanel(plot);
 };
 

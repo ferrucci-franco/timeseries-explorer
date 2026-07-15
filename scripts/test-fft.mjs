@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
     analyzeSampling,
     computeAmplitudeSpectrum,
+    detectSamplingGaps,
     fftRadix2,
     fftWindowCoefficients,
     formatNaturalDuration,
@@ -97,6 +98,27 @@ assert.equal(nextPowerOfTwo(513), 1024);
     const p = peak(spectrum);
     close(p.frequency, frequency, 1e-12, 'duplicate timestamp sine frequency');
     close(p.amplitude, amplitude, amplitude * 0.01, 'duplicate timestamp sine amplitude');
+}
+
+{
+    // detectSamplingGaps: uniform 10-min series (in ms) with two dropped runs.
+    const step = 600_000; // 10 min in ms, mimicking datetime timeKind
+    const times = [];
+    let t = 0;
+    for (let i = 0; i < 20; i++) { times.push(t); t += step; }
+    t += step * 3;                       // 3 missing samples (single gap)
+    for (let i = 0; i < 20; i++) { times.push(t); t += step; }
+    t += step;                           // 1 missing sample
+    for (let i = 0; i < 20; i++) { times.push(t); t += step; }
+    const info = detectSamplingGaps(times);
+    assert.equal(info.medianDt, step, 'gap detector uses the median step');
+    assert.equal(info.count, 2, 'both gaps are detected');
+    assert.equal(info.totalMissing, 4, 'missing-sample count sums across gaps');
+    assert.equal(info.largest.missing, 3, 'largest gap reports its missing run');
+    assert.ok(info.gaps[0].t1 > info.gaps[0].t0, 'gap interval is ordered');
+
+    const perfect = detectSamplingGaps(Float64Array.from({ length: 50 }, (_, i) => i * step));
+    assert.equal(perfect.count, 0, 'a perfectly uniform series has no gaps');
 }
 
 for (const windowType of ['hann', 'hamming', 'blackman']) {

@@ -235,6 +235,53 @@ export function analyzeSampling(times, options = {}) {
     };
 }
 
+// Default multiple of the median step above which an interval counts as a
+// gap (missing samples). 1.5x flags a single dropped sample while staying
+// clear of ordinary jitter.
+export const FFT_GAP_THRESHOLD_FACTOR = 1.5;
+
+// Locate gaps (runs of missing samples) in a time vector. Pure and unit-
+// agnostic: `times` are the raw values (ms for datetime series, x-units
+// otherwise), and every returned dt/t0/t1 is in those same units so callers
+// can draw them or intersect them with a selection range directly. Used to
+// highlight gaps in the FFT time pane; it does not itself relax the FFT
+// uniformity gate.
+export function detectSamplingGaps(times, options = {}) {
+    const factor = Number.isFinite(Number(options.thresholdFactor))
+        ? Number(options.thresholdFactor)
+        : FFT_GAP_THRESHOLD_FACTOR;
+    const values = times instanceof Float64Array ? times : Float64Array.from(times || [], Number);
+    const n = values.length;
+    const empty = { medianDt: NaN, gaps: [], count: 0, totalMissing: 0, largest: null };
+    if (n < 3) return empty;
+
+    const deltas = [];
+    for (let i = 1; i < n; i++) {
+        const d = values[i] - values[i - 1];
+        if (Number.isFinite(d) && d > 0) deltas.push(d);
+    }
+    if (deltas.length < 2) return empty;
+    deltas.sort((a, b) => a - b);
+    const mid = deltas.length >> 1;
+    const medianDt = deltas.length % 2 ? deltas[mid] : (deltas[mid - 1] + deltas[mid]) / 2;
+    if (!Number.isFinite(medianDt) || medianDt <= 0) return { ...empty, medianDt };
+
+    const threshold = medianDt * factor;
+    const gaps = [];
+    let totalMissing = 0;
+    let largest = null;
+    for (let i = 1; i < n; i++) {
+        const dt = values[i] - values[i - 1];
+        if (!(dt > threshold)) continue;
+        const missing = Math.max(1, Math.round(dt / medianDt) - 1);
+        const gap = { index: i - 1, t0: values[i - 1], t1: values[i], dt, missing };
+        gaps.push(gap);
+        totalMissing += missing;
+        if (!largest || dt > largest.dt) largest = gap;
+    }
+    return { medianDt, gaps, count: gaps.length, totalMissing, largest };
+}
+
 export function computeAmplitudeSpectrum(input = {}) {
     const rawTimes = input.times || [];
     const rawValues = input.values || [];
