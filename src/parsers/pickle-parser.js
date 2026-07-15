@@ -871,6 +871,9 @@ function validatePickleEnvelope(bytes, limits) {
             case 0x55:
             case 0x8c: skip((bytes[offset++] || 0)); break;
             case 0x8d: { const n = Number(view.getBigUint64(offset, true)); offset += 8 + n; break; }
+            case 0x96: { const n = Number(view.getBigUint64(offset, true)); offset += 8 + n; break; } // BYTEARRAY8
+            case 0x68: skip(1); break; // BINGET
+            case 0x6a: skip(4); break; // LONG_BINGET
             case 0x4a:
             case 0x84: skip(4); break;
             case 0x47: skip(8); break;
