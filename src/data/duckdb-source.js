@@ -26,6 +26,7 @@ import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?ur
 import { customDatetimePatternInfo, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
 import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
+import { buildPairCorrelationSql, parsePairCorrelations } from './pair-correlation-sql.js';
 
 const BUNDLES = {
     mvp: { mainModule: mvpWasmUrl, mainWorker: mvpWorkerUrl },
@@ -50,6 +51,8 @@ export default class DuckDbSource {
         this._rangeCache = new Map();
         this._phaseCache = new Map();
         this._heatmapCache = new Map();
+        this._correlationCache = new Map();
+        this._corrCapable = null; // cached "does DuckDB expose corr()" probe
         this._activeInteractiveQuery = null;
         this._connectionQueue = Promise.resolve();
     }
@@ -705,6 +708,11 @@ export default class DuckDbSource {
 
     _clearRangeCacheForTable(tableName) {
         if (!tableName) return;
+        if (this._correlationCache?.size) {
+            for (const key of [...this._correlationCache.keys()]) {
+                if (String(key).startsWith(tableName + '')) this._correlationCache.delete(key);
+            }
+        }
         if (this._rangeCache?.size) {
             for (const key of [...this._rangeCache.keys()]) {
                 if (String(key).startsWith(`${tableName}\u001e`)) this._rangeCache.delete(key);
@@ -1518,6 +1526,109 @@ export default class DuckDbSource {
             if (cacheKey) this._phaseCache.delete(cacheKey);
             throw err;
         }
+    }
+
+    // ── Pearson correlation for variable pairs (lazy exact, TODO 9 phase 3) ──
+    // One aggregate query per file computes corr/count/avg/stddev over the
+    // source range for every pair, converting non-finite values to NULL and
+    // applying pairwise deletion — exact parity with the eager kernel. Never
+    // reads raw rows; returns O(pairs). All pairs are from `legacyData`.
+    async getPairCorrelations(legacyData, pairs, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getPairCorrelations: data is not DuckDB-backed (eager mode)');
+        const list = Array.isArray(pairs) ? pairs : [];
+        const resolved = list.map(p => {
+            const vx = legacyData.variables?.[p?.x];
+            const vy = legacyData.variables?.[p?.y];
+            return { pair: p, vx, vy, ok: !!(vx && vy) };
+        });
+        const active = resolved.filter(r => r.ok);
+        if (!active.length) return resolved.map(() => ({ status: 'noSql' }));
+
+        if (!(await this._supportsCorr())) {
+            return resolved.map(r => ({ status: r.ok ? 'noCorr' : 'noSql' }));
+        }
+
+        const gain = Number.isFinite(Number(options.gain)) ? Number(options.gain) : 1;
+        const yOffset = Number.isFinite(Number(options.yOffset)) ? Number(options.yOffset) : 0;
+        const sourceRange = Array.isArray(options.sourceTimeRange) ? options.sourceTimeRange : null;
+
+        const cacheKey = this._pairCorrelationCacheKey(meta, active, sourceRange, gain, yOffset);
+        const cached = cacheKey ? this._correlationCache.get(cacheKey) : null;
+        if (cached) {
+            const activeResults = cached instanceof Promise ? await cached : cached;
+            return this._reindexPairResults(resolved, activeResults);
+        }
+
+        const timeCol = meta.timeColumn;
+        const escTime = String(timeCol).replace(/"/g, '""');
+        const timeKind = legacyData?.metadata?.timeKind;
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`);
+        const where = this._phaseWhereSql(tExpr, sourceRange);
+        const gLit = this._numericLiteral(gain);
+        const oLit = this._numericLiteral(yOffset);
+        // gain/yOffset go into SQL so a negative gain flips r's sign exactly as
+        // it does on screen; positive gain/offset leave r unchanged.
+        const valueExpr = (variable, name) => `(${this._valueExpressionSql(variable, name, { castDouble: true })} * ${gLit} + ${oLit})`;
+        const pairExprs = active.map((r, i) => ({ i, vx: valueExpr(r.vx, r.pair.x), vy: valueExpr(r.vy, r.pair.y) }));
+        const sql = buildPairCorrelationSql(tExpr, meta.tableName, where, pairExprs);
+
+        const promise = (async () => {
+            const result = await this._interactiveQuery(sql);
+            return parsePairCorrelations(
+                (name) => { const v = result?.getChild?.(name)?.get(0); return v == null ? NaN : Number(v); },
+                active.length,
+            );
+        })();
+        if (cacheKey) this._rememberCorrelationCache(cacheKey, promise);
+        try {
+            const activeResults = await promise;
+            if (cacheKey) this._correlationCache.set(cacheKey, activeResults);
+            return this._reindexPairResults(resolved, activeResults);
+        } catch (err) {
+            if (cacheKey) this._correlationCache.delete(cacheKey);
+            throw err;
+        }
+    }
+
+
+    _reindexPairResults(resolved, activeResults) {
+        let k = 0;
+        return resolved.map(r => (r.ok ? (activeResults[k++] ?? { status: 'undefined' }) : { status: 'noSql' }));
+    }
+
+    _pairCorrelationCacheKey(meta, active, sourceRange, gain, yOffset) {
+        const tableName = meta?.tableName;
+        if (!tableName) return null;
+        const pairsKey = active.map(r => (
+            `${r.pair.x}${this._dataToolCacheToken(r.vx)}${r.pair.y}${this._dataToolCacheToken(r.vy)}`
+        )).join('');
+        const rangeKey = Array.isArray(sourceRange) && sourceRange.length >= 2
+            ? `${this._roundedRangeKey(Number(sourceRange[0]))}${this._roundedRangeKey(Number(sourceRange[1]))}`
+            : 'full';
+        const version = [Number(meta.appendRows) || 0, Number(meta.appendBytes) || 0, Number(meta.totalRows) || ''].join('');
+        return [tableName, 'corr', pairsKey, rangeKey, gain, yOffset, version].join('');
+    }
+
+    _rememberCorrelationCache(key, value) {
+        this._correlationCache.set(key, value);
+        while (this._correlationCache.size > 12) {
+            const first = this._correlationCache.keys().next().value;
+            this._correlationCache.delete(first);
+        }
+    }
+
+    async _supportsCorr() {
+        if (this._corrCapable !== null) return this._corrCapable;
+        try {
+            await this._interactiveQuery('SELECT corr(1.0, 2.0) AS c;');
+            this._corrCapable = true;
+        } catch (_) {
+            this._corrCapable = false;
+        }
+        return this._corrCapable;
     }
 
     async _queryPhaseTrajectory(legacyData, meta, requested, sourceRange, maxPoints) {

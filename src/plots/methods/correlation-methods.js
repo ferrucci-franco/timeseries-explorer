@@ -498,7 +498,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         else plot._correlationRecomputeTimer = setTimeout(run, 150);
     };
 
-    proto._refreshCorrelationResults = function(panelId, plot = this.plots.get(panelId)) {
+    proto._refreshCorrelationResults = async function(panelId, plot = this.plots.get(panelId)) {
         if (!plot?.correlationDiv || plot.mode !== 'correlation') return;
         const token = (plot._correlationToken || 0) + 1;
         plot._correlationToken = token;
@@ -513,22 +513,62 @@ export function installPlotCorrelationMethods(TargetClass) {
         }
         this._setCorrelationStatus(plot, i18n.t('correlationCalculating'), 'loading');
         const range = this._activeCorrelationRange(plot);
-        const results = [];
-        const warnings = [];
-        for (const pair of pairs) {
-            const label = `${this._traceName(pair.x, pair.fileId)} ↔ ${this._traceName(pair.y, pair.fileId)}`;
+        const label = (pair) => `${this._traceName(pair.x, pair.fileId)} ↔ ${this._traceName(pair.y, pair.fileId)}`;
+        const results = new Array(pairs.length);
+
+        // Eager pairs compute synchronously; lazy pairs are grouped per file and
+        // computed exactly in DuckDB (one aggregate query each, never overview).
+        const lazyByFile = new Map();
+        pairs.forEach((pair, index) => {
             if (this._isLazyFile(pair.fileId)) {
-                // Exact lazy correlation via SQL is phase 3; never use the overview.
-                results.push({ pair, label, status: 'unsupported' });
-                warnings.push(`${label}: ${i18n.t('correlationLazyPending')}`);
-                continue;
+                if (!lazyByFile.has(pair.fileId)) lazyByFile.set(pair.fileId, []);
+                lazyByFile.get(pair.fileId).push({ index, pair });
+                return;
             }
             const series = this._correlationPairSeries(pair, range, state.rangeFull);
             const stats = pearsonCorrelation(series.x, series.y);
-            results.push({ pair, label, nScope: series.nScope, ...stats });
-            if (stats.status !== 'ok') warnings.push(`${label}: ${i18n.t('correlationUndefined')}`);
+            results[index] = { pair, label: label(pair), nScope: series.nScope, ...stats };
+        });
+
+        if (lazyByFile.size) {
+            const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
+                const data = this.files.get(fileId)?.data;
+                const source = data?._duckdb?.source;
+                if (!source?.getPairCorrelations) return { entries, error: true };
+                const transform = this._fileTransform(fileId);
+                const timeVar = this._getTimeVar(fileId);
+                const sourceTimeRange = state.rangeFull ? null : this._sourceRangeForDisplayRange(fileId, range, timeVar);
+                try {
+                    const stats = await source.getPairCorrelations(
+                        data,
+                        entries.map(e => ({ x: e.pair.x, y: e.pair.y })),
+                        { sourceTimeRange, gain: transform.gain, yOffset: transform.yOffset },
+                    );
+                    return { entries, stats };
+                } catch (err) {
+                    console.warn('[correlation] lazy query failed:', err);
+                    return { entries, error: true };
+                }
+            });
+            const settled = await Promise.all(jobs);
+            if (plot._correlationToken !== token) return; // superseded while awaiting
+            for (const { entries, stats, error } of settled) {
+                entries.forEach((e, k) => {
+                    const s = (!error && stats?.[k]) ? stats[k] : { status: 'error' };
+                    results[e.index] = { pair: e.pair, label: label(e.pair), ...s, n: s.nPair ?? s.n };
+                });
+            }
         }
+
         if (plot._correlationToken !== token) return;
+
+        const warnings = [];
+        for (const r of results) {
+            if (!r || r.status === 'ok') continue;
+            if (r.status === 'undefined') warnings.push(`${r.label}: ${i18n.t('correlationUndefined')}`);
+            else if (r.status === 'noSql' || r.status === 'noCorr') warnings.push(`${r.label}: ${i18n.t('correlationNoSql')}`);
+            else warnings.push(`${r.label}: ${i18n.t('correlationLazyError')}`);
+        }
         state.warnings = warnings;
         plot._correlationResults = results;
         Plotly.react(plot.correlationDiv, this._buildCorrelationResultTraces(results), this._buildCorrelationResultLayout(plot, results), this._getPlotlyConfig());
@@ -574,7 +614,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         // N/A annotations for undefined pairs (a row with no bar).
         const annotations = results.map((r, i) => (r.status === 'ok' ? null : {
             xref: 'x', yref: 'y', x: 0, y: `P${i + 1}`,
-            text: r.status === 'unsupported' ? 'lazy' : 'N/A',
+            text: 'N/A',
             showarrow: false, font: { color: fontColor, size: 10 }, xanchor: 'left', xshift: 6,
         })).filter(Boolean);
         return {
@@ -832,7 +872,7 @@ export function installPlotCorrelationMethods(TargetClass) {
             const rVal = document.createElement('span');
             rVal.className = 'correlation-pair-r';
             rVal.textContent = res
-                ? (res.status === 'ok' ? `r=${res.r.toFixed(4)}` : (res.status === 'unsupported' ? 'lazy' : 'N/A'))
+                ? (res.status === 'ok' ? `r=${res.r.toFixed(4)}` : 'N/A')
                 : '';
             const invertBtn = document.createElement('button');
             invertBtn.type = 'button';
