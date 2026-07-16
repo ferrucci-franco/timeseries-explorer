@@ -55,8 +55,17 @@ proto.initDataTools = function() {
     });
 
     this._dataToolParameterInputs().forEach(input => {
-        input.addEventListener('input', () => this._handleOutlierLiveChange({ immediate: true }));
-        input.addEventListener('change', () => this._scheduleDataToolAutoApply({ immediate: true }));
+        const isBound = input.id === 'outlier-lower-bound' || input.id === 'outlier-upper-bound';
+        if (isBound) {
+            // Number inputs commit on blur/Enter only. Auto-applying every
+            // keystroke would run the tool on partial values (e.g. the "1" of
+            // "10"), which can cut most of the signal and freeze the app.
+            input.addEventListener('input', () => this._syncOutlierMethodControls());
+            input.addEventListener('change', () => this._scheduleDataToolAutoApply({ immediate: true }));
+        } else {
+            input.addEventListener('input', () => this._handleOutlierLiveChange({ immediate: true }));
+            input.addEventListener('change', () => this._scheduleDataToolAutoApply({ immediate: true }));
+        }
     });
     document.querySelectorAll('input[name="outlier-replacement"], input[name="outlier-target"]').forEach(input => {
         input.addEventListener('change', () => this._handleDataToolOptionChange());
@@ -1183,22 +1192,36 @@ proto._replaceOutliersWithNaN = function(values, outlierIndexes) {
 };
 
 proto._interpolateOutliers = function(values, outlierIndexes) {
+    const n = values?.length || 0;
     const cleaned = Array.from(values || []);
+    if (!n || !outlierIndexes?.length) return cleaned;
+
+    // O(n) instead of O(n²): precompute, in two passes, the nearest VALID
+    // (non-outlier and finite) neighbour to each index. The old per-outlier
+    // left/right walk was quadratic when most points are outliers (e.g. a
+    // bound that removes the whole signal), which froze the app.
     const outlierSet = new Set(outlierIndexes);
-    outlierIndexes.forEach(index => {
-        let left = index - 1;
-        while (left >= 0 && (outlierSet.has(left) || !Number.isFinite(Number(values[left])))) left--;
-        let right = index + 1;
-        while (right < values.length && (outlierSet.has(right) || !Number.isFinite(Number(values[right])))) right++;
-        const leftOk = left >= 0 && Number.isFinite(Number(values[left]));
-        const rightOk = right < values.length && Number.isFinite(Number(values[right]));
-        if (leftOk && rightOk) {
-            const ratio = (index - left) / (right - left);
-            cleaned[index] = Number(values[left]) + ratio * (Number(values[right]) - Number(values[left]));
+    const valid = new Array(n);
+    for (let i = 0; i < n; i++) valid[i] = !outlierSet.has(i) && Number.isFinite(Number(values[i]));
+
+    const prevValid = new Array(n);
+    let last = -1;
+    for (let i = 0; i < n; i++) { if (valid[i]) last = i; prevValid[i] = last; }
+    const nextValid = new Array(n);
+    let next = -1;
+    for (let i = n - 1; i >= 0; i--) { if (valid[i]) next = i; nextValid[i] = next; }
+
+    for (const index of outlierIndexes) {
+        const left = prevValid[index];   // nearest valid < index (index is invalid)
+        const right = nextValid[index];  // nearest valid > index
+        if (left >= 0 && right >= 0) {
+            const l = Number(values[left]);
+            const r = Number(values[right]);
+            cleaned[index] = l + ((index - left) / (right - left)) * (r - l);
         } else {
             cleaned[index] = NaN;
         }
-    });
+    }
     return cleaned;
 };
 

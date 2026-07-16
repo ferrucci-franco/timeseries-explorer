@@ -259,6 +259,30 @@ export function installPlotCorrelationMethods(TargetClass) {
             // on zoom/pan automatically — no relayout listener needed (and one
             // would loop against our own shapes relayout).
             plot.div.on('plotly_doubleclick', () => { this._autoScaleCorrelationTime(plot); return false; });
+            // Zoom/pan on the time pane -> re-fit the downsampling to the window.
+            // Only x-axis changes matter; a shapes-only relayout is ignored so
+            // this never loops against _updateCorrelationSelectionShapes.
+            plot.div.on('plotly_relayout', (ed) => {
+                const touchesX = ed && (
+                    ed['xaxis.autorange'] !== undefined
+                    || ed['xaxis.range'] !== undefined
+                    || ed['xaxis.range[0]'] !== undefined
+                    || ed['xaxis.range[1]'] !== undefined
+                );
+                if (!touchesX) return;
+                clearTimeout(plot._corrVisualTimer);
+                plot._corrVisualTimer = setTimeout(() => {
+                    const r = plot.div?._fullLayout?.xaxis?.range;
+                    this._refreshCorrelationTimeVisuals(panelId, plot, Array.isArray(r) ? r : null);
+                }, 120);
+            });
+            // Results pane double-click: restore the fixed r range and the pair
+            // order. Plotly's default autorange would drop 'reversed' and flip
+            // P1..Pn vertically, so re-apply it explicitly and suppress default.
+            plot.correlationDiv.on('plotly_doubleclick', () => {
+                Plotly.relayout(plot.correlationDiv, { 'xaxis.range': [-1, 1], 'yaxis.autorange': 'reversed' });
+                return false;
+            });
             this._installCorrelationSelectionHandlers(panelId, plot);
             this._installCorrelationSplitterHandlers(panelId, plot);
             // Same pan gestures as the FFT/Histogram time pane: two-finger
@@ -320,6 +344,27 @@ export function installPlotCorrelationMethods(TargetClass) {
             built.name = `P${d.pairIndex + 1}·${d.role}: ${this._traceName(d.varName, d.fileId)}`;
             return built;
         }).filter(Boolean);
+    };
+
+    // Re-fit the downsampling to the visible x-window (restyle x/y only), like
+    // the timeseries/FFT panes do — otherwise a zoom keeps the coarse full-range
+    // ~2000-point decimation and looks blocky when zoomed in.
+    proto._refreshCorrelationTimeVisuals = function(panelId, plot = this.plots.get(panelId), range = null) {
+        if (!plot?.div || plot.mode !== 'correlation') return;
+        const descriptors = this._correlationTimeDescriptors(plot);
+        if (!descriptors.length) return;
+        const plotLike = { ...plot, traces: descriptors, timeseriesStacked: false, timeseriesY2Enabled: false };
+        const xs = [], ys = [], indices = [];
+        let plotIdx = 0; // must track the same null-filtering as _buildCorrelationTimeTraces
+        for (const d of descriptors) {
+            const built = this._buildTimeTrace(d, range, plotLike, plotIdx);
+            if (!built) continue;
+            xs.push(built.x);
+            ys.push(built.y);
+            indices.push(plotIdx);
+            plotIdx++;
+        }
+        if (indices.length) Plotly.restyle(plot.div, { x: xs, y: ys }, indices);
     };
 
     proto._buildCorrelationTimeLayout = function(plot) {

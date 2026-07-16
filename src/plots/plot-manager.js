@@ -122,6 +122,12 @@ class PlotManager {
                          plot.phaseTraces.some(t => t.fileId === fileId) ||
                          plot.stateSlots?.fileId === fileId;
             if (!uses) continue;
+            // The missing-data / sampling-gap overlays memoize by a time-only
+            // signature, which does not change when a data tool alters a
+            // variable's VALUES (e.g. NaN -> interpolated). Drop those caches so
+            // the bands recompute against the new data instead of persisting.
+            plot._missSig = null; plot._missCache = null;
+            plot._fftGapsSig = null; plot._fftGapsCache = null;
             // A lazy Heatmap must not silently re-scan a multi-GB file on every
             // live poll: flag it dirty and let the user click Update. Eager
             // Heatmaps and every other mode recompute as before.
@@ -1330,6 +1336,7 @@ class PlotManager {
             plot._correlationSplitterDocListeners = null;
         }
         clearTimeout(plot._correlationRecomputeTimer);
+        clearTimeout(plot._corrVisualTimer);
         plot._correlationSelectionDiv = null;
         this._cleanupHeatmapChart?.(panelId, plot);
         plot.cameraOverlayEl = null;
@@ -2032,8 +2039,9 @@ class PlotManager {
 
         if (plot.mode === 'correlation') {
             this._autoScaleCorrelationTime(plot);
-            // Results pane: restore the fixed r range and re-fit the pair rows (Y).
-            if (plot.correlationDiv) Plotly.relayout(plot.correlationDiv, { 'xaxis.range': [-1, 1], 'yaxis.autorange': true });
+            // Results pane: restore the fixed r range and the reversed pair order
+            // (P1 on top). Plain autorange would flip P1..Pn vertically.
+            if (plot.correlationDiv) Plotly.relayout(plot.correlationDiv, { 'xaxis.range': [-1, 1], 'yaxis.autorange': 'reversed' });
             return Promise.resolve();
         }
 
