@@ -7,6 +7,7 @@ import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';
 import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
+import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
 import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js';
 
 /**
@@ -453,6 +454,14 @@ class PlotManager {
         const preservedTraces = preserveTimeTraces
             ? plot.traces.map(trace => ({ ...trace, axis: 'y' }))
             : [];
+        // phase2d and correlation share the pair list; preserve pairs (and the
+        // correlation window) when toggling between them so the user keeps them.
+        const phasePairModes = new Set(['phase2d', 'correlation']);
+        const preservePhasePairs = phasePairModes.has(previousMode) && phasePairModes.has(mode);
+        const preservedPhaseTraces = preservePhasePairs ? plot.phaseTraces.map(t => ({ ...t })) : [];
+        const preservedPhasePending = preservePhasePairs
+            ? { ...plot.phasePending }
+            : { x: null, y: null, z: null, fileId: null };
         const restoreView = preserveTimeTraces ? this._capturePlotView(plot) : null;
 
         // Stop animation if running
@@ -463,8 +472,8 @@ class PlotManager {
         plot.mode         = mode;
         plot.stateAnimDim = nextDim;
         plot.traces       = preservedTraces;
-        plot.phaseTraces  = [];
-        plot.phasePending = { x: null, y: null, z: null, fileId: null };
+        plot.phaseTraces  = preservedPhaseTraces;
+        plot.phasePending = preservedPhasePending;
         plot.stateSlots   = { x: [], dx: [], fileId: null };
         plot.equalAspect2D = false;
         plot.timeseriesStacked = false;
@@ -486,6 +495,9 @@ class PlotManager {
             plot.histogram = this._defaultHistogramState?.() || plot.histogram;
             plot.heatmap = this._defaultHeatmapState?.() || plot.heatmap;
         }
+        plot.correlation = preservePhasePairs
+            ? (plot.correlation || this._defaultCorrelationState?.())
+            : (this._defaultCorrelationState?.() || plot.correlation);
         plot.liveView = this._defaultLiveViewPolicy(mode);
         plot.animFrame    = 0;
 
@@ -744,6 +756,10 @@ class PlotManager {
             return dim === 3 ? i18n.t('dropStateX3') : i18n.t('dropVariableHere');
         }
 
+        if (mode === 'correlation') {
+            return !pp.x ? i18n.t('correlationDropX') : i18n.t('correlationDropY');
+        }
+
         // Phase modes: guide axis by axis
         switch (mode) {
             case 'phase2d':
@@ -848,6 +864,7 @@ class PlotManager {
 
         const ready = (mode === 'phase2d'  && pp.x && pp.y)          ||
                       (mode === 'phase2dt' && pp.x && pp.y)          ||
+                      (mode === 'correlation' && pp.x && pp.y)       ||
                       (mode === 'phase3d'  && pp.x && pp.y && pp.z);
 
         if (ready) {
@@ -862,6 +879,7 @@ class PlotManager {
             plot.phasePending = { x: null, y: null, z: null, fileId: null };
 
             if (!plot.div) this._createChart(panelId, panelEl);
+            else if (mode === 'correlation') this._updateCorrelationChart(panelId, plot);
             else           this._updatePhaseChart(panelId, plot);
             this._setPendingOverlay(panelId, panelEl, false);
         } else {
@@ -886,6 +904,10 @@ class PlotManager {
         }
         if (plot.mode === 'heatmap') {
             this._createHeatmapChart(panelId, panelEl);
+            return;
+        }
+        if (plot.mode === 'correlation') {
+            this._createCorrelationChart(panelId, panelEl);
             return;
         }
         const restoreView = plot._pendingViewRestore || null;
@@ -1224,10 +1246,20 @@ class PlotManager {
         }
         delete plot._cursorHandlersDiv;
         if (plot.div) {
+            const correlationContainer = plot.div.closest('.correlation-container');
             const fftContainer = plot.div.closest('.fft-container');
             const histContainer = plot.div.closest('.hist-container');
             const heatmapContainer = plot.div.closest('.heatmap-container');
-            if (heatmapContainer) {
+            if (correlationContainer) {
+                // Checked before .fft-container: the shell reuses fft-* CSS but
+                // carries a distinct correlation-container marker.
+                if (plot.correlationDiv) Plotly.purge(plot.correlationDiv);
+                Plotly.purge(plot.div);
+                correlationContainer.remove();
+                plot.div = null;
+                plot.correlationDiv = null;
+                plot.correlationContainer = null;
+            } else if (heatmapContainer) {
                 this._cleanupHeatmapChart?.(panelId, plot);
                 if (plot.heatmapDiv) Plotly.purge(plot.heatmapDiv);
                 Plotly.purge(plot.div);
@@ -1287,6 +1319,18 @@ class PlotManager {
         clearTimeout(plot._histRecomputeTimer);
         plot._histHandlersInstalled = false;
         plot._histSelectionDiv = null;
+        if (plot._correlationSelectionDocListeners) {
+            document.removeEventListener('mousemove', plot._correlationSelectionDocListeners.move);
+            document.removeEventListener('mouseup', plot._correlationSelectionDocListeners.up);
+            plot._correlationSelectionDocListeners = null;
+        }
+        if (plot._correlationSplitterDocListeners) {
+            document.removeEventListener('mousemove', plot._correlationSplitterDocListeners.move);
+            document.removeEventListener('mouseup', plot._correlationSplitterDocListeners.up);
+            plot._correlationSplitterDocListeners = null;
+        }
+        clearTimeout(plot._correlationRecomputeTimer);
+        plot._correlationSelectionDiv = null;
         this._cleanupHeatmapChart?.(panelId, plot);
         plot.cameraOverlayEl = null;
     }
@@ -1311,6 +1355,7 @@ class PlotManager {
             existing.showMissingData = false;
             existing.fft = this._defaultFftState?.() || existing.fft;
             existing.heatmap = this._defaultHeatmapState?.() || existing.heatmap;
+            existing.correlation = this._defaultCorrelationState?.() || existing.correlation;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
             existing.cursors = this._defaultCursors();
@@ -1345,12 +1390,13 @@ class PlotManager {
         if (csvBtn) {
             // Aggregated Heatmap CSV belongs to the dedicated export phase;
             // never fall back to exporting a visually unrelated raw table.
-            csvBtn.disabled = !has || plot?.mode === 'heatmap';
+            // Correlation CSV is a later phase; disable rather than export garbage.
+            csvBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'correlation';
             if (plot?.mode === 'heatmap') csvBtn.title = i18n.t('heatmapExportPending');
         }
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
         if (statsBtn) {
-            statsBtn.disabled = !has || plot?.mode === 'heatmap';
+            statsBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'correlation';
             if (plot?.mode === 'heatmap') statsBtn.title = i18n.t('heatmapStatsPending');
         }
         const equalAspectBtn = panelEl.querySelector('.equal-aspect-btn');
@@ -1360,7 +1406,7 @@ class PlotManager {
         }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {
-            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && plot?.mode !== 'heatmap' && this.files.size > 1);
+            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && plot?.mode !== 'heatmap' && plot?.mode !== 'correlation' && this.files.size > 1);
         }
         const cursorBtn = panelEl.querySelector('.cursor-btn');
         if (cursorBtn) {
@@ -1397,10 +1443,12 @@ class PlotManager {
         panelEl.querySelectorAll('.panel-autoscale-btn').forEach(btn => {
             btn.disabled = !has;
         });
-        // Show view-btn-group for 3D modes and state-anim (2D or 3D) with content
+        // Show view-btn-group for 3D modes, state-anim (2D or 3D), and the
+        // phase2d/correlation family (which hosts the Correlation toggle here).
         const isAnim = plot?.mode === 'state-anim' && has;
         const is3DMode = this._is3D(plot?.mode) || this._isStateAnim3D(plot);
-        const showGroup = is3DMode || isAnim || this._supportsEqualAspect2D(plot);
+        const isPhase2dFamilyMode = plot?.mode === 'phase2d' || plot?.mode === 'correlation';
+        const showGroup = is3DMode || isAnim || this._supportsEqualAspect2D(plot) || isPhase2dFamilyMode;
         const viewGroup = panelEl.querySelector('.view-btn-group');
         if (viewGroup) {
             viewGroup.style.display = showGroup ? '' : 'none';
@@ -1890,7 +1938,7 @@ class PlotManager {
     }
 
     _plotModeRequiresCompatibleTime(mode) {
-        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft' || mode === 'histogram' || mode === 'heatmap';
+        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft' || mode === 'histogram' || mode === 'heatmap' || mode === 'correlation';
     }
 
     _padRange(min, max, pad = 0.05) {
@@ -1980,6 +2028,13 @@ class PlotManager {
 
         if (plot.mode === 'heatmap') {
             return this._autoScaleHeatmapPanel(panelId, plot);
+        }
+
+        if (plot.mode === 'correlation') {
+            this._autoScaleCorrelationTime(plot);
+            // Results pane: restore the fixed r range and re-fit the pair rows (Y).
+            if (plot.correlationDiv) Plotly.relayout(plot.correlationDiv, { 'xaxis.range': [-1, 1], 'yaxis.autorange': true });
+            return Promise.resolve();
         }
 
         if (plot.mode === 'timeseries') {
@@ -2196,6 +2251,9 @@ class PlotManager {
             heatmapDiv: null,
             heatmapContainer: null,
             heatmap: this._defaultHeatmapState?.() || null,
+            correlationDiv: null,
+            correlationContainer: null,
+            correlation: this._defaultCorrelationState?.() || null,
             // state-anim mode
             stateSlots:   { x: [], dx: [], fileId: null }, // x: [varName,...], dx: [derName,...]
             stateAnimDim: 2,
@@ -2725,6 +2783,7 @@ installPlotStateMethods(PlotManager);
 installPlotInteractionMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
+installPlotCorrelationMethods(PlotManager);
 installPlotCalendarHeatmapMethods(PlotManager);
 
 export default PlotManager;

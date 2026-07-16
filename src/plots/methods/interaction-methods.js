@@ -3209,8 +3209,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     const plot = this.plots.get(panelId);
     const timeseriesFamilyModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap']);
+    const phase2dFamilyModes = new Set(['phase2d', 'correlation']);
     const isTimeseriesFamily = timeseriesFamilyModes.has(currentMode);
-    const activePrimaryMode = isTimeseriesFamily ? 'timeseries' : currentMode;
+    const isPhase2dFamily = phase2dFamilyModes.has(currentMode);
+    const activePrimaryMode = isTimeseriesFamily ? 'timeseries' : (isPhase2dFamily ? 'phase2d' : currentMode);
     const createAutoscaleButton = () => {
         const button = document.createElement('button');
         button.className = 'layout-toolbar-btn panel-action-btn view-btn panel-autoscale-btn';
@@ -3323,7 +3325,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     viewGroup.className = 'view-btn-group';
     const supportsEqualAspect2D = this._supportsEqualAspect2D(plot);
     const show3DControls = this._is3D(currentMode) || this._isStateAnim3D(plot);
-    viewGroup.style.display = (show3DControls || supportsEqualAspect2D) ? '' : 'none';
+    viewGroup.style.display = (show3DControls || supportsEqualAspect2D || isPhase2dFamily) ? '' : 'none';
 
     if (!isTimeseriesFamily) {
         viewGroup.appendChild(createAutoscaleButton());
@@ -3340,6 +3342,22 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
             this._toggleEqualAspect2D(panelId);
         });
         viewGroup.appendChild(equalAspectBtn);
+    }
+
+    // Correlation is an analysis toggle of the 2D/pair family (shares the pair
+    // list). It lives in the view group, right after 1:1 — no separate divider.
+    if (isPhase2dFamily) {
+        const corrActive = currentMode === 'correlation';
+        const corrBtn = document.createElement('button');
+        corrBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn correlation-toggle-btn' + (corrActive ? ' active' : '');
+        corrBtn.textContent = i18n.t('modeCorrelationLabel');
+        corrBtn.title = i18n.t('modeCorrelation');
+        corrBtn.setAttribute('aria-pressed', String(corrActive));
+        corrBtn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this._toggleCorrelationMode(panelId);
+        });
+        viewGroup.appendChild(corrBtn);
     }
 
     const is2dt = currentMode === 'phase2dt';
@@ -3405,6 +3423,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         && plot.mode !== 'state-anim'
         && plot.mode !== 'fft'
         && plot.mode !== 'heatmap'
+        && plot.mode !== 'correlation'
         && this.files.size > 1;
     compareBtn.disabled = !canCompare;
     compareBtn.addEventListener('click', (e) => {
@@ -3480,6 +3499,12 @@ proto._requestModeChange = function(panelId, mode, stateAnimDim = null) {
     const preservesTimeTraces = timeTraceModes.has(plot.mode) && timeTraceModes.has(mode);
     if (preservesTimeTraces) {
         this._setMode(panelId, mode, stateAnimDim, { preserveTimeTraces: true });
+        return;
+    }
+    // phase2d ↔ correlation keep the shared pair list; switch without warning.
+    const phasePairModes = new Set(['phase2d', 'correlation']);
+    if (phasePairModes.has(plot.mode) && phasePairModes.has(mode)) {
+        this._setMode(panelId, mode, stateAnimDim);
         return;
     }
     if (!this._hasContent(plot)) {
@@ -3620,6 +3645,14 @@ proto._toggleTimeseriesStack = function(panelId) {
     } else {
         this._refreshActionBtns(panelId);
     }
+};
+
+proto._toggleCorrelationMode = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot) return;
+    if (plot.mode !== 'phase2d' && plot.mode !== 'correlation') return;
+    // _setMode preserves phaseTraces/pending across the phase2d↔correlation pair family.
+    this._setMode(panelId, plot.mode === 'correlation' ? 'phase2d' : 'correlation');
 };
 
 proto._toggleMissingData = function(panelId) {

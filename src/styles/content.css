@@ -1719,18 +1719,22 @@ body.fft-selection-dragging.fft-selection-moving {
    same selection mechanic, so its time pane gets the same rules. */
 .plotly-mode-fft-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-hist-time.fft-cursor-ew .nsewdrag,
+.plotly-mode-correlation-time.fft-cursor-ew .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-fft-time .nsewdrag,
-body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-hist-time .nsewdrag {
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-hist-time .nsewdrag,
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-correlation-time .nsewdrag {
     cursor: ew-resize !important;
 }
 
 .plotly-mode-fft-time.fft-cursor-grab .nsewdrag,
-.plotly-mode-hist-time.fft-cursor-grab .nsewdrag {
+.plotly-mode-hist-time.fft-cursor-grab .nsewdrag,
+.plotly-mode-correlation-time.fft-cursor-grab .nsewdrag {
     cursor: grab !important;
 }
 
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-fft-time .nsewdrag,
-body.fft-selection-dragging.fft-selection-moving .plotly-mode-hist-time .nsewdrag {
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-hist-time .nsewdrag,
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-correlation-time .nsewdrag {
     cursor: grabbing !important;
 }
 
@@ -2389,4 +2393,113 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
         border-top: 1px solid var(--border-color);
     }
     .heatmap-topbar { gap: 4px; }
+}
+
+/* ── Correlation mode (reuses the .fft-* shell layout) ── */
+.correlation-options .fft-options-section {
+    margin-bottom: 12px;
+}
+.correlation-options .fft-options-section h4 {
+    margin: 0 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+/* Pearson equation via native MathML (real fraction + radicals, no dependency),
+   shown in the help modal. */
+.corr-math {
+    font-size: 1.35em;
+    margin: 6px 0 14px;
+    overflow-x: auto;
+    color: var(--text-primary);
+}
+.correlation-help-modal { text-align: left; line-height: 1.55; }
+.correlation-help-modal p { margin: 0 0 10px; }
+.correlation-pending-hint {
+    margin: 6px 0;
+    padding: 5px 8px;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+}
+.correlation-warning {
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--warning-color);
+}
+.correlation-message {
+    margin-bottom: 10px;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--warning-color);
+    background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warning-color) 40%, transparent);
+    border-radius: 4px;
+}
+.correlation-message div + div {
+    margin-top: 3px;
+}
+.correlation-empty {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.correlation-pair-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: corr-pair;
+}
+.correlation-pair-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 12px;
+}
+.correlation-pair-item::before {
+    counter-increment: corr-pair;
+    content: 'P' counter(corr-pair);
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+.correlation-pair-swatch {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+}
+.correlation-pair-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.correlation-pair-r {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+.correlation-pair-btn {
+    flex: 0 0 auto;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    line-height: 1;
+}
+.correlation-pair-btn:hover {
+    background: var(--hover-bg);
+    color: var(--text-primary);
 }

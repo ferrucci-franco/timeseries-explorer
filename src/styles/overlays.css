@@ -36,6 +36,14 @@
     max-width: none;
 }
 
+.modal-dialog.correlation-help-dialog {
+    width: min(880px, calc(100vw - 32px));
+    max-width: none;
+}
+.modal-dialog.correlation-help-dialog .modal-message {
+    text-align: left;
+}
+
 .modal-dialog-choice .modal-message {
     text-align: left;
     color: var(--text-secondary);
