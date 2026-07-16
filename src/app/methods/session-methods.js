@@ -173,6 +173,7 @@ proto._capturePlotSessions = function() {
             stateConfig: this._cloneSerializable(plot.stateConfig),
             fft: this._cloneSerializable(plot.fft || this.plotManager._defaultFftState?.()),
             heatmap: this._cloneSerializable(plot.heatmap || this.plotManager._defaultCalendarHeatmapState?.()),
+            correlation: this._cloneSerializable(plot.correlation || this.plotManager._defaultCorrelationState?.()),
             projection: plot.projection || 'orthographic',
             equalAspect2D: !!plot.equalAspect2D,
             liveView: this._cloneSerializable(plot.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode)),
@@ -534,6 +535,13 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.heatmap = this.plotManager._normalizeCalendarHeatmapState
             ? this.plotManager._normalizeCalendarHeatmapState(saved.heatmap || plot.heatmap || {})
             : this._cloneSerializable(saved.heatmap || plot.heatmap);
+        plot.correlation = this.plotManager._normalizeCorrelationState
+            ? this.plotManager._normalizeCorrelationState(saved.correlation || plot.correlation || {})
+            : this._cloneSerializable(saved.correlation || plot.correlation);
+        // Correlation results (r) are never persisted — the rebuilt panel
+        // recomputes them from the restored pairs — so start clean: drop any
+        // saved warnings/dirty flag that the fresh compute will regenerate.
+        if (plot.correlation) { plot.correlation.warnings = []; plot.correlation.dirty = false; }
         plot.projection = saved.projection || 'orthographic';
         plot.equalAspect2D = !!saved.equalAspect2D;
         plot.liveView = this._cloneSerializable(saved.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode));

@@ -195,20 +195,25 @@ export function installPlotCorrelationMethods(TargetClass) {
         );
         timeSeriesBtn.classList.toggle('active', state.timeSeriesHidden);
         timeSeriesBtn.setAttribute('aria-pressed', String(state.timeSeriesHidden));
-        layoutGroup.append(
-            makeButton('fft-tool-btn', 'V/H', i18n.t('fftLayoutToggle'), () => {
-                const current = this._ensureCorrelationState(plot).layout;
-                this._setCorrelationLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
-            }),
-            timeSeriesBtn,
-        );
+        const layoutBtn = makeButton('fft-tool-btn', 'V/H', i18n.t('fftLayoutToggle'), () => {
+            const current = this._ensureCorrelationState(plot).layout;
+            this._setCorrelationLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
+        });
+        layoutBtn.setAttribute('aria-label', i18n.t('fftLayoutToggle'));
+        layoutGroup.append(layoutBtn, timeSeriesBtn);
         const actionGroup = document.createElement('div');
         actionGroup.className = 'fft-topbar-group';
         const optionsBtn = makeButton('fft-tool-btn fft-options-btn', i18n.t('fftOptionsLabel'), i18n.t('fftOptionsToggle'), () => this._toggleCorrelationOptions(panelId));
         optionsBtn.classList.toggle('active', state.optionsVisible);
         optionsBtn.setAttribute('aria-pressed', String(state.optionsVisible));
+        // Shown only while a lazy (DuckDB) pair is stale after a live append —
+        // re-running the aggregate query every poll would be too costly, so the
+        // user triggers the recompute (mirrors the Heatmap's Update button).
+        const refreshBtn = makeButton('fft-tool-btn correlation-refresh-btn', i18n.t('correlationRefresh'), i18n.t('correlationRefreshTooltip'), () => this._refreshDirtyCorrelation(panelId));
+        refreshBtn.hidden = !state.dirty;
         actionGroup.append(
             makeButton('fft-tool-btn', i18n.t('fftResetLabel'), i18n.t('fftResetView'), () => this._resetCorrelationView(panelId)),
+            refreshBtn,
             optionsBtn,
         );
         const status = document.createElement('span');
@@ -543,6 +548,34 @@ export function installPlotCorrelationMethods(TargetClass) {
         else plot._correlationRecomputeTimer = setTimeout(run, 150);
     };
 
+    // ── Live-update dirty state (lazy pairs only; see updateFileData) ──
+    proto._markCorrelationDirty = function(panelId, message = i18n.t('correlationDirty')) {
+        const plot = this.plots.get(panelId);
+        if (!plot || plot.mode !== 'correlation') return;
+        this._ensureCorrelationState(plot).dirty = true;
+        this._syncCorrelationDirtyUi(plot);
+        this._setCorrelationStatus(plot, message, 'warning');
+    };
+
+    proto._syncCorrelationDirtyUi = function(plot) {
+        const state = this._ensureCorrelationState(plot);
+        const button = plot?.correlationContainer?.querySelector('.correlation-refresh-btn');
+        if (button) {
+            button.hidden = !state.dirty;
+            button.disabled = !state.dirty;
+        }
+    };
+
+    proto._refreshDirtyCorrelation = function(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        this._ensureCorrelationState(plot).dirty = false;
+        this._syncCorrelationDirtyUi(plot);
+        // Pull the newly appended data into the time pane, then recompute r.
+        this._refreshCorrelationTimePlot(panelId, plot, { preserveView: true, preserveY: false });
+        this._scheduleCorrelationRecompute(panelId, { immediate: true });
+    };
+
     proto._refreshCorrelationResults = async function(panelId, plot = this.plots.get(panelId)) {
         if (!plot?.correlationDiv || plot.mode !== 'correlation') return;
         const token = (plot._correlationToken || 0) + 1;
@@ -615,6 +648,10 @@ export function installPlotCorrelationMethods(TargetClass) {
             else warnings.push(`${r.label}: ${i18n.t('correlationLazyError')}`);
         }
         state.warnings = warnings;
+        // A completed compute is by definition up to date, so drop any pending
+        // live-append dirty flag (e.g. after a rebuild that ran while dirty).
+        state.dirty = false;
+        this._syncCorrelationDirtyUi(plot);
         plot._correlationResults = results;
         Plotly.react(plot.correlationDiv, this._buildCorrelationResultTraces(results), this._buildCorrelationResultLayout(plot, results), this._getPlotlyConfig());
         this._renderCorrelationOptionsPanel(panelId, plot);
@@ -904,32 +941,39 @@ export function installPlotCorrelationMethods(TargetClass) {
         }
         const list = document.createElement('ol');
         list.className = 'correlation-pair-list';
+        list.setAttribute('aria-label', i18n.t('correlationPairsTitle'));
         pairs.forEach((pair, idx) => {
             const li = document.createElement('li');
             li.className = 'correlation-pair-item';
             const swatch = document.createElement('span');
             swatch.className = 'correlation-pair-swatch';
             swatch.style.background = pair.color || '#888';
+            swatch.setAttribute('aria-hidden', 'true'); // decorative colour key
+            const pairLabel = `${this._traceName(pair.x, pair.fileId)} ↔ ${this._traceName(pair.y, pair.fileId)}`;
             const label = document.createElement('span');
             label.className = 'correlation-pair-label';
-            label.textContent = `${this._traceName(pair.x, pair.fileId)} ↔ ${this._traceName(pair.y, pair.fileId)}`;
+            label.textContent = pairLabel;
             const res = results[idx];
             const rVal = document.createElement('span');
             rVal.className = 'correlation-pair-r';
             rVal.textContent = res
                 ? (res.status === 'ok' ? `r=${res.r.toFixed(4)}` : 'N/A')
                 : '';
+            // Icon-only buttons: title alone isn't reliably announced, so name
+            // each action and scope it to its pair for screen-reader users.
             const invertBtn = document.createElement('button');
             invertBtn.type = 'button';
             invertBtn.className = 'correlation-pair-btn';
             invertBtn.textContent = '⇄';
             invertBtn.title = i18n.t('correlationInvert');
+            invertBtn.setAttribute('aria-label', `${i18n.t('correlationInvert')}: ${pairLabel}`);
             invertBtn.addEventListener('click', () => this._invertCorrelationPair(panelId, idx));
             const removeBtn = document.createElement('button');
             removeBtn.type = 'button';
             removeBtn.className = 'correlation-pair-btn';
             removeBtn.textContent = '✕';
             removeBtn.title = i18n.t('correlationRemovePair');
+            removeBtn.setAttribute('aria-label', `${i18n.t('correlationRemovePair')}: ${pairLabel}`);
             removeBtn.addEventListener('click', () => this._removeCorrelationPair(panelId, idx));
             li.append(swatch, label, rVal, invertBtn, removeBtn);
             list.appendChild(li);
@@ -951,6 +995,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         helpBtn.className = 'fft-help-btn';
         helpBtn.textContent = '?';
         helpBtn.title = i18n.t('correlationHelpMore');
+        helpBtn.setAttribute('aria-label', i18n.t('correlationHelpMore'));
         helpBtn.addEventListener('click', () => this._showCorrelationHelp());
         helpSection.querySelector('h4').appendChild(helpBtn);
         panel.appendChild(helpSection);

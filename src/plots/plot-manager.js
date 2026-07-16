@@ -137,6 +137,15 @@ class PlotManager {
                 this._markCalendarHeatmapDirty?.(panelId);
                 continue;
             }
+            // Same guard for lazy Correlation: a DuckDB pair must not re-run its
+            // aggregate query on every live poll. Flag dirty and let the user
+            // click Update. Eager pairs recompute via the rebuild below.
+            if (options.liveAppend
+                && plot.mode === 'correlation'
+                && plot.phaseTraces.some(t => t.fileId === fileId && !!this.files.get(t.fileId)?.data?._duckdb)) {
+                this._markCorrelationDirty?.(panelId);
+                continue;
+            }
             const captured = this._capturePlotView(plot);
             const restoreView = options.liveAppend
                 ? this._liveAppendRestoreView(plot, fileId, captured, previousData, newData)
