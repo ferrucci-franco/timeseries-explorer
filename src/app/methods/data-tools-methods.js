@@ -356,7 +356,8 @@ proto._getOutlierSourceEntries = function(data) {
 };
 
 proto._outlierSourceLabel = function(name, variable) {
-    return variable?.dataToolModified ? `${name} ${i18n.t('outlierModifiedSuffix')}` : name;
+    const label = variable?.displayName || name;
+    return variable?.dataToolModified ? `${label} ${i18n.t('outlierModifiedSuffix')}` : label;
 };
 
 proto._suggestOutlierOutputName = function(sourceName) {

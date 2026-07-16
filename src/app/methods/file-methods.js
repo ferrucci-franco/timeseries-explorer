@@ -1968,7 +1968,6 @@ proto._renderFilesList = function() {
     if (count) count.textContent = `(${this.files.size})`;
     list.innerHTML = '';
     for (const [fileId, entryData] of this.files) {
-        const { name } = entryData;
         const item = document.createElement('div');
         item.className = 'file-list-item';
 
@@ -1980,7 +1979,7 @@ proto._renderFilesList = function() {
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'file-entry-name';
-        nameSpan.textContent = name;
+        nameSpan.textContent = this._fileDisplayName(entryData);
         nameSpan.title = this._fileDisplayName(entryData);
         nameSpan.addEventListener('click', () => this.setActiveFile(fileId));
 

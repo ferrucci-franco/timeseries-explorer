@@ -1091,22 +1091,13 @@ proto._adaptiveGapBandShapes = function(plot, items) {
     return shapes;
 };
 
-// (A) FFT time pane: bands over the sampling gaps of every visible file.
-proto._fftGapBandShapes = function(plot) {
-    const info = this._fftGapInfo(plot);
-    if (!info.count) return [];
-    const items = [];
-    for (const file of info.perFile) {
-        for (const gap of file.gaps) {
-            items.push({ fileId: file.fileId, timeVar: file.timeVar, t0: gap.t0, t1: gap.t1 });
-        }
-    }
-    return this._adaptiveGapBandShapes(plot, items);
-};
-
-// The time pane draws gap bands beneath the Selection rectangle.
+// The time pane draws missing-data bands beneath the Selection rectangle:
+// sampling gaps (missing timestamps) AND NaN-value runs. NaN values don't
+// break time uniformity, so they don't reach the "not uniform" gap warning,
+// but they still block a clean FFT — the fftWarningNaN message tells the user
+// to pick a NaN-free span, so the bands must show where those NaN are.
 proto._fftTimePaneShapes = function(plot) {
-    return [...this._fftGapBandShapes(plot), ...this._fftSelectionShapes(plot)];
+    return [...this._missingDataBandShapes(plot), ...this._fftSelectionShapes(plot)];
 };
 
 // (B) Break the plotted line across each missing-data interval so the pane
@@ -1151,16 +1142,20 @@ proto._applyLineBreaks = function(trace, intervals) {
     if (broke && trace.type === 'scattergl') trace.type = 'scatter';
 };
 
-// ── Timeseries "show missing data" overlay (opt-in) ──
+// ── Missing-data bands (sampling gaps + NaN runs) ──
+// Shared by the FFT time pane (always on) and the timeseries "show missing
+// data" overlay (opt-in). The per-trace break-interval map (traceIntervals)
+// is only consumed by the timeseries overlay's line-cutting.
 // Trace identity for the per-trace break-interval map.
 proto._missTraceKey = function(t) {
     return `${t.fileId} ${t.varName}`;
 };
 
 // Union of time gaps (per file) and NaN runs (per visible trace), memoized by
-// a cheap signature. Only called when the opt-in flag is on, so large files
-// pay nothing by default; even then it is one cached O(n) pass over the same
-// in-memory / overview arrays the plot already holds.
+// a cheap signature. In FFT mode it runs on the same in-memory / overview
+// arrays the time pane already builds; in timeseries mode it is behind the
+// opt-in flag so large files pay nothing by default. Either way it is one
+// cached O(n) pass — recomputed only when the signature changes.
 proto._missingDataInfo = function(plot) {
     const visible = (plot?.traces || []).filter(t => this._isVisible(t));
     const sig = visible.map(t => {
