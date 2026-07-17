@@ -477,7 +477,21 @@ class PlotManager {
         const preservedPhasePending = preservePhasePairs
             ? { ...plot.phasePending }
             : { x: null, y: null, z: null, fileId: null };
-        const restoreView = preserveTimeTraces ? this._capturePlotView(plot) : null;
+        // Remember each analysis's own zoom (time pane + its results pane) so
+        // returning to a mode restores what the user last had there — not the
+        // view of the mode they came from. A mode visited for the first time
+        // still inherits the current time window (the previous behaviour).
+        plot._modeViews = plot._modeViews || {};
+        const leavingView = plot.div ? this._capturePlotView(plot) : null;
+        let restoreView = null;
+        if (preserveTimeTraces) {
+            if (leavingView) plot._modeViews[previousMode] = leavingView;
+            restoreView = plot._modeViews[mode] || leavingView;
+        } else {
+            // A family change resets the traces, so old per-mode views no longer
+            // describe the same data.
+            plot._modeViews = {};
+        }
 
         // Stop animation if running
         this._stopAnim(plot);
