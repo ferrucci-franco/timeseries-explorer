@@ -646,13 +646,27 @@ proto._applyBatchedPhaseRestyle = function(plot, results = []) {
         .sort((a, b) => a.idx - b.idx);
     if (!valid.length) return Promise.resolve();
 
+    // Map a phaseTraces index to the REAL div trace index. Adding a pair appends
+    // its data trace with Plotly.addTraces AFTER the __origin__ cross and the
+    // __hover__ markers, so the phaseTraces index no longer equals the div index
+    // — restyling by the raw index would land on the origin (its cross marker
+    // then draws the pair's points as black crosses with no legend entry).
+    const dataTraceIndices = [];
+    (plot.div.data || []).forEach((tr, i) => {
+        if (tr && tr.name !== '__origin__' && tr.name !== '__hover__') dataTraceIndices.push(i);
+    });
+
+    const isPhase2d = plot.mode === 'phase2d';
     const xs = [];
     const ys = [];
     const zs = [];
+    const types = [];
     const customdata = [];
     let anyCustomdata = false;
     const indices = [];
     for (const result of valid) {
+        const divIdx = dataTraceIndices[result.idx];
+        if (divIdx === undefined) continue;
         const { pt, visual } = result;
         if (plot.mode === 'phase2dt') {
             const timeVar = this._getTimeVar(pt.fileId);
@@ -670,11 +684,20 @@ proto._applyBatchedPhaseRestyle = function(plot, results = []) {
             xs.push(visual.x);
             ys.push(visual.y);
         }
-        indices.push(result.idx);
+        if (isPhase2d) {
+            // The trace was built while its lazy data was still empty, so it is a
+            // plain SVG 'scatter'; switch large fetched data to WebGL or panning
+            // crawls.
+            const n = visual.x?.length || 0;
+            types.push(n >= PlotManager.GL_POINT_THRESHOLD ? 'scattergl' : 'scatter');
+        }
+        indices.push(divIdx);
     }
+    if (!indices.length) return Promise.resolve();
     const update = { x: xs, y: ys };
     if (plot.mode === 'phase2dt' || plot.mode === 'phase3d') update.z = zs;
     if (plot.mode === 'phase2dt' && anyCustomdata) update.customdata = customdata;
+    if (isPhase2d) update.type = types;
     return Plotly.restyle(plot.div, update, indices);
 };
 
