@@ -194,7 +194,9 @@ proto.loadFile = async function(file, options = {}) {
             this._hideFileLoadingOverlay();
         }
         console.error('Error loading file:', err);
-        alert(i18n.t('errorLoading') + ': ' + (err?.message || String(err)));
+        // A formatted dialog (not the browser's native alert) so limit/parse
+        // errors read as an in-app warning, with the actionable message intact.
+        await Modal.alert(i18n.t('errorLoading'), err?.message || String(err));
         return null;
     }
 };
