@@ -140,16 +140,29 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const indices = [];
         const modes = [];
         const markers = [];
+        const types = [];
+        let typeChanged = false;
         data.forEach((tr, i) => {
-            if (!tr || tr.name === '__origin__') return; // leave the origin cross alone
+            // Leave the origin cross and transient hover markers alone.
+            if (!tr || tr.name === '__origin__' || tr.name === '__hover__') return;
             indices.push(i);
             modes.push(mode);
             const color = tr.line?.color || tr.marker?.color;
             markers.push(showMarkers
                 ? { color, size: state.markerSize, opacity: state.markerOpacity }
                 : { color });
+            // Toggling markers on/off can cross the WebGL point threshold, so a
+            // Points display doesn't crawl in SVG. Only send `type` when it
+            // actually changes — restyling `type` forces a replot, and marker
+            // size/opacity tweaks must stay cheap.
+            const len = Math.max(tr.x?.length || 0, tr.y?.length || 0);
+            const wantType = this._phase2dUseGL(len, showMarkers) ? 'scattergl' : 'scatter';
+            types.push(wantType);
+            if (wantType !== (tr.type || 'scatter')) typeChanged = true;
         });
         if (!indices.length) return;
-        Plotly.restyle(plot.div, { mode: modes, marker: markers }, indices);
+        const update = { mode: modes, marker: markers };
+        if (typeChanged) update.type = types;
+        Plotly.restyle(plot.div, update, indices);
     };
 }

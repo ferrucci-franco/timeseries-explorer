@@ -657,6 +657,9 @@ proto._applyBatchedPhaseRestyle = function(plot, results = []) {
     });
 
     const isPhase2d = plot.mode === 'phase2d';
+    const phase2dShowsMarkers = isPhase2d
+        ? this._phase2dShowsMarkers(this._ensurePhase2dState(plot))
+        : false;
     const xs = [];
     const ys = [];
     const zs = [];
@@ -687,9 +690,10 @@ proto._applyBatchedPhaseRestyle = function(plot, results = []) {
         if (isPhase2d) {
             // The trace was built while its lazy data was still empty, so it is a
             // plain SVG 'scatter'; switch large fetched data to WebGL or panning
-            // crawls.
+            // crawls. Marker displays cross to WebGL earlier (SVG makes one DOM
+            // node per point).
             const n = visual.x?.length || 0;
-            types.push(n >= PlotManager.GL_POINT_THRESHOLD ? 'scattergl' : 'scatter');
+            types.push(this._phase2dUseGL(n, phase2dShowsMarkers) ? 'scattergl' : 'scatter');
         }
         indices.push(divIdx);
     }

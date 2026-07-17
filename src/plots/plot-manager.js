@@ -2860,6 +2860,9 @@ class PlotManager {
         '#9C27B0', '#00BCD4', '#F44336', '#8BC34A',
     ];
     static GL_POINT_THRESHOLD = 50000;
+    // Markers are far heavier than a single line <path> in SVG (one DOM node per
+    // point), so 2D point/lines+points displays switch to WebGL much earlier.
+    static GL_MARKER_THRESHOLD = 10000;
     static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 2000;
     static DEFAULT_VISUAL_MAX_POINTS_PHASE = 4000;
     static MAX_MENU_VISUAL_POINTS = 10000;
