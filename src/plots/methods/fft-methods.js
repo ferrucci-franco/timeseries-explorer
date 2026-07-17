@@ -791,7 +791,9 @@ proto._buildFftSpectrumTrace = function(plot, entry, range) {
         windowSpectrumForDisplay(entry.frequencies, entry.amplitudes, lo, hi);
     const periodUnit = this._fftCursorPeriodUnit(plot);
     const periodValues = new Float64Array(dispFreqs.length);
-    const naturalPeriodSuffixes = [];
+    // Dense (filled with '') — a sparse array leaves holes that Plotly renders
+    // as "-" in %{text}, so the hover showed e.g. "1.09227 s-" instead of "s".
+    const naturalPeriodSuffixes = new Array(dispFreqs.length).fill('');
     for (let i = 0; i < dispFreqs.length; i++) {
         const period = frequencyPeriod(Number(dispFreqs[i]));
         periodValues[i] = period;
