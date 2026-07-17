@@ -2244,6 +2244,8 @@ proto._toggleFileTransformPanel = function(fileId) {
 };
 
 proto._renderFileTransformPanel = function(fileId, entryData) {
+    // Drop any floating help popup left over from a previous render.
+    document.querySelectorAll('.file-transform-help-popover').forEach(el => el.remove());
     const transform = this._normalizeFileTransform(entryData.transform);
     const timeVar = this.plotManager?._getTimeVar?.(fileId);
     const isDateTime = timeVar?.timeKind === 'datetime';
@@ -2262,6 +2264,65 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     panel.className = 'file-transform-panel';
     panel.addEventListener('click', e => e.stopPropagation());
 
+    // Yellow "?" help button that opens a FLOATING popup (not an in-flow box):
+    // the popover is fixed-positioned and lives on <body> only while open, so it
+    // overlays the UI near the button instead of pushing the menu around.
+    const makeTransformHelp = (titleKey, bodyKey) => {
+        const helpBtn = document.createElement('button');
+        helpBtn.type = 'button';
+        helpBtn.className = 'fft-help-btn file-transform-help-btn';
+        helpBtn.textContent = '?';
+        helpBtn.title = i18n.t(titleKey);
+        helpBtn.setAttribute('aria-label', i18n.t(titleKey));
+        helpBtn.setAttribute('aria-expanded', 'false');
+
+        const helpPopover = document.createElement('div');
+        helpPopover.className = 'fft-help-popover file-transform-help-popover';
+        helpPopover.hidden = true;
+        helpPopover.innerHTML = `<div class="file-transform-help-title">${i18n.t(titleKey)}</div>${i18n.t(bodyKey)}`;
+
+        const positionPopover = () => {
+            const rect = helpBtn.getBoundingClientRect();
+            const margin = 8;
+            const w = helpPopover.offsetWidth;
+            const h = helpPopover.offsetHeight;
+            let left = Math.min(rect.left, window.innerWidth - w - margin);
+            left = Math.max(margin, left);
+            let top = rect.bottom + 6;
+            if (top + h > window.innerHeight - margin) top = Math.max(margin, rect.top - h - 6);
+            helpPopover.style.left = `${left}px`;
+            helpPopover.style.top = `${top}px`;
+        };
+        const onDocMouseDown = (event) => {
+            if (!helpPopover.contains(event.target) && event.target !== helpBtn) closeHelp();
+        };
+        function closeHelp() {
+            helpPopover.hidden = true;
+            helpPopover.remove();
+            helpBtn.setAttribute('aria-expanded', 'false');
+            document.removeEventListener('mousedown', onDocMouseDown, true);
+            window.removeEventListener('resize', closeHelp);
+            window.removeEventListener('scroll', closeHelp, true);
+        }
+        // Stop the wrapping <label> from redirecting the click to the input.
+        helpBtn.addEventListener('mousedown', (event) => { event.preventDefault(); event.stopPropagation(); });
+        helpBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!helpPopover.hidden) { closeHelp(); return; }
+            document.body.appendChild(helpPopover);
+            helpPopover.hidden = false;
+            helpBtn.setAttribute('aria-expanded', 'true');
+            positionPopover();
+            setTimeout(() => {
+                document.addEventListener('mousedown', onDocMouseDown, true);
+                window.addEventListener('resize', closeHelp);
+                window.addEventListener('scroll', closeHelp, true);
+            }, 0);
+        });
+        return { helpBtn, helpPopover };
+    };
+
     const makeInput = (key, label, value, placeholder = '0', options = {}) => {
         const wrap = document.createElement('label');
         wrap.className = 'file-transform-field';
@@ -2269,8 +2330,17 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         if (options.title) wrap.title = options.title;
 
         const span = document.createElement('span');
-        span.textContent = label;
-        if (options.title) span.title = options.title;
+        if (options.help) {
+            span.className = 'file-transform-label-with-help';
+            const labelText = document.createElement('span');
+            labelText.textContent = label;
+            if (options.title) labelText.title = options.title;
+            const help = makeTransformHelp(options.help.titleKey, options.help.bodyKey);
+            span.append(labelText, help.helpBtn);
+        } else {
+            span.textContent = label;
+            if (options.title) span.title = options.title;
+        }
 
         const input = document.createElement('input');
         input.type = options.type || 'number';
@@ -2335,50 +2405,15 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         const raw = String(transform.customTimeStep || '').trim();
         const match = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(ps|ns|us|ms|s|min|h|day|year)?$/i);
         const wrap = document.createElement('label');
-        wrap.className = 'file-transform-field';
+        // Full width so it sits right under the Mode selector; the value and the
+        // unit dropdown share one line (see .file-transform-step-row). No help
+        // button here — the unit dropdown is self-explanatory.
+        wrap.className = 'file-transform-field file-transform-field-wide';
         wrap.title = i18n.t('indexCustomStepTooltip');
 
         const span = document.createElement('span');
-        span.className = 'file-transform-label-with-help';
-        const labelText = document.createElement('span');
-        labelText.textContent = i18n.t('indexCustomStepLabel');
-        labelText.title = i18n.t('indexCustomStepTooltip');
-
-        // Yellow "?" help button + popover (same idea as the Derived-variables
-        // help), because the plain hover tooltip is easy to miss.
-        const helpBtn = document.createElement('button');
-        helpBtn.type = 'button';
-        helpBtn.className = 'fft-help-btn file-transform-help-btn';
-        helpBtn.textContent = '?';
-        helpBtn.title = i18n.t('indexCustomStepHelpTitle');
-        helpBtn.setAttribute('aria-label', i18n.t('indexCustomStepHelpTitle'));
-        helpBtn.setAttribute('aria-expanded', 'false');
-        span.append(labelText, helpBtn);
-
-        const helpPopover = document.createElement('div');
-        helpPopover.className = 'fft-help-popover file-transform-help-popover';
-        helpPopover.hidden = true;
-        helpPopover.innerHTML = `<div class="file-transform-help-title">${i18n.t('indexCustomStepHelpTitle')}</div>${i18n.t('indexCustomStepHelpBody')}`;
-
-        const closeHelp = () => {
-            helpPopover.hidden = true;
-            helpBtn.setAttribute('aria-expanded', 'false');
-            document.removeEventListener('mousedown', onDocMouseDown, true);
-        };
-        const onDocMouseDown = (event) => {
-            if (!helpPopover.contains(event.target) && event.target !== helpBtn) closeHelp();
-        };
-        // Prevent the wrapping <label> from redirecting the click to the input.
-        helpBtn.addEventListener('mousedown', (event) => { event.preventDefault(); event.stopPropagation(); });
-        helpBtn.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            const show = helpPopover.hidden;
-            helpPopover.hidden = !show;
-            helpBtn.setAttribute('aria-expanded', String(show));
-            if (show) setTimeout(() => document.addEventListener('mousedown', onDocMouseDown, true), 0);
-            else document.removeEventListener('mousedown', onDocMouseDown, true);
-        });
+        span.textContent = i18n.t('indexCustomStepLabel');
+        span.title = i18n.t('indexCustomStepTooltip');
 
         const input = document.createElement('input');
         input.type = 'number';
@@ -2404,14 +2439,12 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         });
         select.addEventListener('change', commit);
 
-        wrap.append(span, input, select);
+        const row = document.createElement('div');
+        row.className = 'file-transform-step-row';
+        row.append(input, select);
+        wrap.append(span, row);
         wrap.input = input;
-        // The field sits in one grid cell; the popover spans the full panel
-        // width on the next row (see .file-transform-help-popover).
-        const frag = document.createDocumentFragment();
-        frag.append(wrap, helpPopover);
-        frag.input = input;
-        return frag;
+        return wrap;
     };
 
     if (isDateTime) {
@@ -2714,6 +2747,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         ? {
             type: 'text',
             title: (timeDisplayMode === 'calendar' || isGeneratedCalendarAxis) ? i18n.t('calendarOffsetTooltip') : i18n.t('durationOffsetTooltip'),
+            help: { titleKey: 'timeShiftHelpTitle', bodyKey: 'timeShiftHelpBody' },
             placeholder: '0 h',
             updateOnChange: false,
             onInput: clearApplyErrorOnInput,

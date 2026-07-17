@@ -1730,15 +1730,36 @@ body.cursor-box-dragging {
     border-color: #a2861f;
 }
 
+/* Floating popup (lives on <body> while open, positioned near the button). */
 .file-transform-help-popover {
-    grid-column: 1 / -1;
-    margin: 0 0 2px;
+    position: fixed;
+    z-index: 10000;
+    max-width: 320px;
+    margin: 0;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
 
 .file-transform-help-title {
     font-weight: 700;
     color: var(--text-primary);
     margin-bottom: 4px;
+}
+
+/* Custom step: value input + unit dropdown share one line. */
+.file-transform-step-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.file-transform-step-row input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.file-transform-step-row select {
+    flex: 0 0 auto;
 }
 
 .fft-range-grid,
