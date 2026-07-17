@@ -1384,6 +1384,7 @@ class PlotManager {
 
     _clearPanel(panelId) {
         const existing = this.plots.get(panelId);
+        let modeReset = false;
         this._dismissModeChangeWarning?.(panelId);
         if (typeof this._cleanupLazyDetailForPanel === 'function') {
             this._cleanupLazyDetailForPanel(panelId, existing);
@@ -1410,11 +1411,17 @@ class PlotManager {
             existing.showCameraOverlay = false;
             existing.homeCamera = null;
             existing.animFrame     = 0;
-            // keep existing.mode so the user's mode choice is preserved
+            // An analysis (FFT/Histogram/Heatmap, or Correlation in the 2D
+            // family) is a toggle on top of a base view; clearing drops it and
+            // returns to that base so its toolbar button un-presses. Other modes
+            // (timeseries, 2D, 3D, state-anim) are kept.
+            if (['fft', 'histogram', 'heatmap'].includes(existing.mode)) { existing.mode = 'timeseries'; modeReset = true; }
+            else if (existing.mode === 'correlation') { existing.mode = 'phase2d'; modeReset = true; }
         }
 
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         if (panelEl) {
+            if (modeReset) this._injectModeButtons(panelId, panelEl, existing.mode);
             const placeholder = panelEl.querySelector('.layout-panel-placeholder');
             if (placeholder) { placeholder.style.display = ''; placeholder.classList.remove('drag-over'); }
             this._setPendingOverlay(panelId, panelEl, false);

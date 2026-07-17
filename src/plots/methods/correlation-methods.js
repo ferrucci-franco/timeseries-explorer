@@ -281,11 +281,10 @@ export function installPlotCorrelationMethods(TargetClass) {
                     this._refreshCorrelationTimeVisuals(panelId, plot, Array.isArray(r) ? r : null);
                 }, 120);
             });
-            // Results pane double-click: restore the fixed r range and the pair
-            // order. Plotly's default autorange would drop 'reversed' and flip
-            // P1..Pn vertically, so re-apply it explicitly and suppress default.
+            // Results pane double-click: restore the fixed r range. The pair
+            // order stays put on its own now that the y-axis is fixedrange.
             plot.correlationDiv.on('plotly_doubleclick', () => {
-                Plotly.relayout(plot.correlationDiv, { 'xaxis.range': [-1, 1], 'yaxis.autorange': 'reversed' });
+                Plotly.relayout(plot.correlationDiv, { 'xaxis.range': [-1, 1] });
                 return false;
             });
             this._installCorrelationSelectionHandlers(panelId, plot);
@@ -710,7 +709,9 @@ export function installPlotCorrelationMethods(TargetClass) {
                 title: { text: i18n.t('correlationPearson'), font: { size: 10 } },
             },
             yaxis: {
-                type: 'category', automargin: true, autorange: 'reversed',
+                // fixedrange stops a double-click / drag from resetting the axis
+                // to normal autorange, which flipped P1..Pn upside down each time.
+                type: 'category', automargin: true, autorange: 'reversed', fixedrange: true,
                 gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor,
                 categoryarray: labels,
             },
