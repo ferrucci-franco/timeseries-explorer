@@ -315,7 +315,8 @@
     position: relative;
 }
 
-/* Panel toolbar — visible on hover */
+/* Panel toolbar — always visible (kept on screen even when the panel is not
+   hovered / in the foreground). */
 .layout-panel-toolbar {
     display: flex;
     align-items: center;
@@ -323,7 +324,7 @@
     padding: 4px 6px 7px;
     background-color: var(--bg-tertiary);
     border-bottom: 1px solid var(--border-color);
-    opacity: 0;
+    opacity: 1;
     transition: opacity 0.15s;
     flex-shrink: 0;
     min-width: 0;
@@ -807,10 +808,6 @@
     background-color: #e53935 !important;
     border-color: #e53935 !important;
     color: white !important;
-}
-
-.layout-panel:hover .layout-panel-toolbar {
-    opacity: 1;
 }
 
 .layout-toolbar-btn {
