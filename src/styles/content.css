@@ -830,6 +830,53 @@
     color: white;
 }
 
+/* 2D-mode Display + marker controls (TODO 10). */
+.phase2d-tools-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.phase2d-display-select {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.7rem;
+    padding: 2px 4px;
+    cursor: pointer;
+}
+
+.phase2d-marker-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.phase2d-marker-controls[hidden] {
+    display: none;
+}
+
+.phase2d-marker-field {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.66rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.phase2d-marker-input {
+    width: 48px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.7rem;
+    padding: 2px 4px;
+}
+
 .layout-toolbar-btn:disabled {
     opacity: 0.35;
     cursor: not-allowed;

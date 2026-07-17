@@ -174,6 +174,7 @@ proto._capturePlotSessions = function() {
             fft: this._cloneSerializable(plot.fft || this.plotManager._defaultFftState?.()),
             heatmap: this._cloneSerializable(plot.heatmap || this.plotManager._defaultCalendarHeatmapState?.()),
             correlation: this._cloneSerializable(plot.correlation || this.plotManager._defaultCorrelationState?.()),
+            phase2d: this._cloneSerializable(plot.phase2d || this.plotManager._defaultPhase2dState?.()),
             projection: plot.projection || 'orthographic',
             equalAspect2D: !!plot.equalAspect2D,
             liveView: this._cloneSerializable(plot.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode)),
@@ -542,6 +543,10 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         // recomputes them from the restored pairs — so start clean: drop any
         // saved warnings/dirty flag that the fresh compute will regenerate.
         if (plot.correlation) { plot.correlation.warnings = []; plot.correlation.dirty = false; }
+        plot.phase2d = this.plotManager._normalizePhase2dState
+            ? this.plotManager._normalizePhase2dState(saved.phase2d || plot.phase2d || {})
+            : this._cloneSerializable(saved.phase2d || plot.phase2d);
+        if (plot.phase2d) { plot.phase2d.warnings = []; plot.phase2d.dirty = false; }
         plot.projection = saved.projection || 'orthographic';
         plot.equalAspect2D = !!saved.equalAspect2D;
         plot.liveView = this._cloneSerializable(saved.liveView || this.plotManager._defaultLiveViewPolicy(plot.mode));

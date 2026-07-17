@@ -39,7 +39,8 @@
     "test:pickle": "node scripts/test-pickle-parser.mjs",
     "test:pypsa": "node scripts/test-pypsa-netcdf-parser.mjs",
     "test:pypsa-session": "node scripts/test-pypsa-session.mjs",
-    "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs"
+    "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs",
+    "test:phase2d": "node scripts/test-phase2d.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",

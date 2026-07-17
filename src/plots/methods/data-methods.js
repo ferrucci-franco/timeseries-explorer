@@ -1510,18 +1510,27 @@ proto._buildTimeLayout = function(plot) {
 
 // ── Phase 2D ──
 proto._buildPhase2DTraces = function(plot) {
+    // Display mode (Lines / Points / Lines+points) and marker options come from
+    // the phase2d state (TODO 10); default to the legacy line trajectory.
+    const state = this._ensurePhase2dState ? this._ensurePhase2dState(plot) : null;
+    const mode = this._phase2dPlotlyMode ? this._phase2dPlotlyMode(state) : 'lines';
+    const showMarkers = this._phase2dShowsMarkers ? this._phase2dShowsMarkers(state) : false;
     const traces = plot.phaseTraces.map(pt => {
         const visual = this._phaseVisualDataForTrace(plot, pt);
         if (!visual) return null;
         const useGL = (visual.x?.length || 0) >= PlotManager.GL_POINT_THRESHOLD
             || (visual.y?.length || 0) >= PlotManager.GL_POINT_THRESHOLD;
-        return {
+        const trace = {
             x: visual.x, y: visual.y,
             name: this._phaseTraceName(plot, pt),
-            type: useGL ? 'scattergl' : 'scatter', mode: 'lines',
+            type: useGL ? 'scattergl' : 'scatter', mode,
             visible: pt.visible ?? true,
             line: { color: pt.color, width: 1.5 },
         };
+        if (showMarkers) {
+            trace.marker = { color: pt.color, size: state?.markerSize ?? 4, opacity: state?.markerOpacity ?? 0.65 };
+        }
+        return trace;
     }).filter(Boolean);
     traces.push(this._originCross2D());
     return traces;

@@ -3497,6 +3497,9 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     toolbar.appendChild(viewGroup);
 
+    // 2D-only Display (Lines / Points / Lines+points) + marker controls (TODO 10).
+    this._injectPhase2dDisplayControls?.(panelId, toolbar, plot);
+
     // Compare (overlay traces from other files) — left of CSV
     const compareBtn = document.createElement('button');
     compareBtn.className = 'layout-toolbar-btn panel-action-btn compare-files-btn';

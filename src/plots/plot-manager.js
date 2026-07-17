@@ -8,6 +8,7 @@ import { installPlotInteractionMethods } from './methods/interaction-methods.js'
 import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
+import { installPlotPhase2dFitMethods } from './methods/phase2d-fit-methods.js';
 import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js';
 
 /**
@@ -1404,6 +1405,7 @@ class PlotManager {
             existing.fft = this._defaultFftState?.() || existing.fft;
             existing.heatmap = this._defaultHeatmapState?.() || existing.heatmap;
             existing.correlation = this._defaultCorrelationState?.() || existing.correlation;
+            existing.phase2d = this._defaultPhase2dState?.() || existing.phase2d;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
             existing.cursors = this._defaultCursors();
@@ -2886,6 +2888,7 @@ installPlotInteractionMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotCorrelationMethods(PlotManager);
+installPlotPhase2dFitMethods(PlotManager);
 installPlotCalendarHeatmapMethods(PlotManager);
 
 export default PlotManager;
