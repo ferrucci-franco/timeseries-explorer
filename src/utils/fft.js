@@ -4,6 +4,65 @@ export const FFT_LIVE_MAX_POINTS = 2 ** 22;
 export const FFT_MAX_POINTS_WEB = 2 ** 24;
 export const FFT_MAX_POINTS_DESKTOP = 2 ** 26;
 
+// A zero-padded spectrum can hold hundreds of thousands of bins (NFFT/2), but a
+// pane is only ~1000px wide. Rendering, hover, and the per-bin period-label pass
+// all scale with the point count and freeze the tab at high padding. Collapse to
+// min/max buckets: each bucket keeps its lowest AND highest amplitude sample at
+// their true frequencies, so peaks (and troughs) survive exactly — a cursor
+// still snaps to the real peak — while the drawn point count stays bounded.
+// Frequencies are ascending, so the output stays sorted.
+export const FFT_SPECTRUM_MAX_DISPLAY = 12000;
+export function downsampleSpectrumForDisplay(frequencies, amplitudes, maxPoints = FFT_SPECTRUM_MAX_DISPLAY) {
+    const n = Math.min(frequencies?.length || 0, amplitudes?.length || 0);
+    if (n <= maxPoints) return { frequencies, amplitudes };
+    const buckets = Math.max(1, Math.floor(maxPoints / 2));
+    const outF = new Float64Array(buckets * 2);
+    const outA = new Float64Array(buckets * 2);
+    let out = 0;
+    for (let b = 0; b < buckets; b++) {
+        const start = Math.floor((b * n) / buckets);
+        const end = Math.min(n, Math.floor(((b + 1) * n) / buckets));
+        if (end <= start) continue;
+        let minI = start;
+        let maxI = start;
+        for (let i = start + 1; i < end; i++) {
+            if (amplitudes[i] < amplitudes[minI]) minI = i;
+            if (amplitudes[i] > amplitudes[maxI]) maxI = i;
+        }
+        const lo = Math.min(minI, maxI);
+        const hi = Math.max(minI, maxI);
+        outF[out] = frequencies[lo]; outA[out] = amplitudes[lo]; out++;
+        if (hi !== lo) { outF[out] = frequencies[hi]; outA[out] = amplitudes[hi]; out++; }
+    }
+    return { frequencies: outF.subarray(0, out), amplitudes: outA.subarray(0, out) };
+}
+
+// Downsample only the [lo, hi] frequency slice of a spectrum. Zooming shrinks
+// the window, so fewer bins fall inside it and they are shown at full (or near
+// full) resolution — that is how the fine detail zero-padding buys becomes
+// visible without ever drawing the whole padded spectrum at once. Frequencies
+// must be ascending (they are, straight from the FFT). Pass lo/hi = null to get
+// the whole spectrum downsampled (the zoomed-all-the-way-out view).
+export function windowSpectrumForDisplay(frequencies, amplitudes, lo, hi, maxPoints = FFT_SPECTRUM_MAX_DISPLAY) {
+    const n = Math.min(frequencies?.length || 0, amplitudes?.length || 0);
+    if (!n) return { frequencies: new Float64Array(0), amplitudes: new Float64Array(0) };
+    let start = 0;
+    let end = n;
+    if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) {
+        let a = 0;
+        let b = n;
+        while (a < b) { const m = (a + b) >> 1; if (frequencies[m] < lo) a = m + 1; else b = m; }
+        start = a;
+        a = start; b = n;
+        while (a < b) { const m = (a + b) >> 1; if (frequencies[m] <= hi) a = m + 1; else b = m; }
+        end = a;
+        // One extra sample each side so the drawn line reaches the pane edges.
+        if (start > 0) start -= 1;
+        if (end < n) end += 1;
+    }
+    return downsampleSpectrumForDisplay(frequencies.subarray(start, end), amplitudes.subarray(start, end), maxPoints);
+}
+
 const TWO_PI = Math.PI * 2;
 
 const FFT_PERIOD_SIGNIFICANT_DIGITS = 6;

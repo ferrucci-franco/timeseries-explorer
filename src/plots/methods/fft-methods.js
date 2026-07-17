@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import {
     computeAmplitudeSpectrum,
+    windowSpectrumForDisplay,
     detectSamplingGaps,
     detectNaNRuns,
     fftWindowCoefficients,
@@ -297,10 +298,23 @@ proto._installFftPlotHandlers = function(panelId, plot) {
         this._applyFftAxisLimits(plot);
         return false;
     });
-    // Keep the spectrum-pane cursors glued to their frequencies when the
-    // user zooms or pans the spectrum.
-    plot.fftDiv.on('plotly_relayout', () => {
+    // Keep the spectrum-pane cursors glued to their frequencies when the user
+    // zooms or pans the spectrum, and re-window the drawn points to the new
+    // frequency range so zooming reveals the fine zero-padded detail.
+    plot.fftDiv.on('plotly_relayout', (ed) => {
         if (plot.cursorsSpectrum?.enabled) this._syncCursorDisplay(panelId, plot);
+        const touchesX = ed && (
+            ed['xaxis.autorange'] !== undefined
+            || ed['xaxis.range'] !== undefined
+            || ed['xaxis.range[0]'] !== undefined
+            || ed['xaxis.range[1]'] !== undefined
+        );
+        if (!touchesX) return;
+        clearTimeout(plot._fftSpectrumWindowTimer);
+        plot._fftSpectrumWindowTimer = setTimeout(() => {
+            const r = plot.fftDiv?._fullLayout?.xaxis?.range;
+            this._refreshFftSpectrumWindow(panelId, plot, Array.isArray(r) ? r.slice() : null);
+        }, 120);
     });
     this._installLegendHoverHint(plot.div);
     this._installLegendHoverHint(plot.fftDiv);
@@ -585,7 +599,7 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         const name = this._traceName(trace.varName, trace.fileId);
         const prev = prevByName.get(name);
         if (prev) return { ...prev, visible: 'legendonly' };
-        return { x: [], y: [], type: 'scatter', mode: 'lines', name, visible: 'legendonly', line: { color: trace.color, width: 1.5 } };
+        return { x: [], y: [], type: 'scattergl', mode: 'lines', name, visible: 'legendonly', line: { color: trace.color, width: 1.5 } };
     };
     if (!visible.length) {
         this._setFftStatus(plot, i18n.t('fftNoVisibleTraces'), 'muted');
@@ -595,6 +609,7 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
 
     this._setFftStatus(plot, i18n.t('fftCalculating'), 'loading');
     const spectra = [];
+    const fullEntries = [];
     const warnings = [];
     for (const trace of visible) {
         if (plot._fftToken !== token) return;
@@ -627,46 +642,24 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         for (const warning of spectrum.warnings || []) {
             warnings.push(this._fftWarningText(trace, warning, spectrum));
         }
-        const amplitudeExtent = this._finiteExtent([spectrum.amplitudes]);
-        const periodUnit = this._fftCursorPeriodUnit(plot);
-        const periodValues = new Float64Array(spectrum.frequencies.length);
-        const naturalPeriodSuffixes = [];
-        for (let i = 0; i < spectrum.frequencies.length; i++) {
-            const period = frequencyPeriod(Number(spectrum.frequencies[i]));
-            periodValues[i] = period;
-            if (periodUnit === 's' && Number.isFinite(period) && period >= 60) {
-                naturalPeriodSuffixes[i] = ` (${formatNaturalDuration(period, 2)})`;
-            }
-        }
-        spectra.push({
-            x: spectrum.frequencies,
-            y: spectrum.amplitudes,
-            customdata: periodValues,
-            text: naturalPeriodSuffixes,
-            type: 'scatter',
-            mode: 'lines',
+        // Keep the FULL spectrum (all NFFT/2 bins) so a zoom can reveal the fine
+        // detail zero-padding buys. The drawn trace is a bounded, windowed
+        // downsample built by _buildFftSpectrumTrace and rebuilt on zoom by
+        // _refreshFftSpectrumWindow; storing the whole array here is cheap (one
+        // typed array), unlike the per-bin period-label + render pass.
+        fullEntries.push({
+            index: fullEntries.length,
             name: this._traceName(trace.varName, trace.fileId),
+            color: trace.color,
             visible: trace.visible ?? true,
-            line: { color: trace.color, width: 1.5 },
-            hovertemplate: `<b>%{fullData.name}</b><br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{x:.6g}<br>${i18n.t('fftPeriod')} = %{customdata:.6g}${periodUnit ? ` ${periodUnit}` : ''}%{text}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`,
-            _fftExtent: {
-                xMin: spectrum.frequencies.length ? Number(spectrum.frequencies[0]) : 0,
-                xMax: spectrum.frequencies.length ? Number(spectrum.frequencies[spectrum.frequencies.length - 1]) : 1,
-                yMin: amplitudeExtent?.min,
-                yMax: amplitudeExtent?.max,
-            },
+            frequencies: spectrum.frequencies,
+            amplitudes: spectrum.amplitudes,
+            yExtent: this._finiteExtent([spectrum.amplitudes]),
         });
     }
 
-    // Keep hidden traces in the spectrum data as legendonly placeholders so
-    // their legend entry persists (greyed) instead of vanishing on toggle.
-    for (const trace of plot.traces || []) {
-        if (this._isVisible(trace)) continue;
-        spectra.push(legendPlaceholder(trace));
-    }
-
     state.warnings = warnings;
-    plot._fftSpectra = spectra;
+    plot._fftSpectraFull = fullEntries;
     if (plot._fftToken !== token) return;
     // Preserve the user's manual zoom on the spectrum across recomputes:
     // if an axis is not on autorange, keep its current range instead of
@@ -678,6 +671,24 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     // to whatever the live spectrum axes currently show.
     const pending = plot._fftPendingSpectrumView || null;
     plot._fftPendingSpectrumView = null;
+
+    // Window the drawn points to the frequency range the pane will actually
+    // show, so a preserved zoom renders at full padded detail from the start.
+    const liveXAxis = plot.fftDiv?._fullLayout?.xaxis;
+    let displayRange = null;
+    if (Array.isArray(pending?.xRange)) displayRange = pending.xRange;
+    else if (view.preserveX !== false && liveXAxis && liveXAxis.autorange === false && Array.isArray(liveXAxis.range)) {
+        displayRange = liveXAxis.range;
+    }
+    for (const entry of fullEntries) spectra.push(this._buildFftSpectrumTrace(plot, entry, displayRange));
+    // Keep hidden traces in the spectrum data as legendonly placeholders so
+    // their legend entry persists (greyed) instead of vanishing on toggle.
+    for (const trace of plot.traces || []) {
+        if (this._isVisible(trace)) continue;
+        spectra.push(legendPlaceholder(trace));
+    }
+    plot._fftSpectra = spectra;
+
     const layout = this._buildFftSpectrumLayout(plot);
     const keepAxis = (axisKey, preserve, pendingRange) => {
         if (preserve === false) return;
@@ -708,6 +719,80 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     } else {
         this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
     }
+};
+
+// Build one drawn spectrum trace from a full-resolution entry, windowed to the
+// frequency range currently shown. `_fftExtent` always reports the FULL span so
+// autoscale/axis limits cover the whole spectrum, not just the visible window.
+proto._buildFftSpectrumTrace = function(plot, entry, range) {
+    let lo = null;
+    let hi = null;
+    if (Array.isArray(range) && range.length >= 2) {
+        lo = this._coerceAxisValue(range[0]);
+        hi = this._coerceAxisValue(range[1]);
+        if (Number.isFinite(lo) && Number.isFinite(hi) && lo > hi) { const t = lo; lo = hi; hi = t; }
+    }
+    const { frequencies: dispFreqs, amplitudes: dispAmps } =
+        windowSpectrumForDisplay(entry.frequencies, entry.amplitudes, lo, hi);
+    const periodUnit = this._fftCursorPeriodUnit(plot);
+    const periodValues = new Float64Array(dispFreqs.length);
+    const naturalPeriodSuffixes = [];
+    for (let i = 0; i < dispFreqs.length; i++) {
+        const period = frequencyPeriod(Number(dispFreqs[i]));
+        periodValues[i] = period;
+        if (periodUnit === 's' && Number.isFinite(period) && period >= 60) {
+            naturalPeriodSuffixes[i] = ` (${formatNaturalDuration(period, 2)})`;
+        }
+    }
+    const full = entry.frequencies;
+    return {
+        x: dispFreqs,
+        y: dispAmps,
+        customdata: periodValues,
+        text: naturalPeriodSuffixes,
+        // WebGL keeps the windowed envelope smooth to pan/zoom and is cheap for
+        // the bounded point count.
+        type: 'scattergl',
+        mode: 'lines',
+        name: entry.name,
+        visible: entry.visible,
+        line: { color: entry.color, width: 1.5 },
+        hovertemplate: `<b>%{fullData.name}</b><br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{x:.6g}<br>${i18n.t('fftPeriod')} = %{customdata:.6g}${periodUnit ? ` ${periodUnit}` : ''}%{text}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`,
+        _fftFullIndex: entry.index,
+        _fftExtent: {
+            xMin: full.length ? Number(full[0]) : 0,
+            xMax: full.length ? Number(full[full.length - 1]) : 1,
+            yMin: entry.yExtent?.min,
+            yMax: entry.yExtent?.max,
+        },
+    };
+};
+
+// Zoom/pan on the spectrum re-windows each visible trace to the new frequency
+// range, so the detail zero-padding computed appears as you zoom in. Restyle
+// only touches the point arrays (not the axis range), so it can't loop against
+// the relayout listener; legendonly placeholders are left untouched.
+proto._refreshFftSpectrumWindow = function(panelId, plot = this.plots.get(panelId), range = null) {
+    if (!plot?.fftDiv || !Array.isArray(plot._fftSpectraFull) || !plot._fftSpectraFull.length) return;
+    const data = plot.fftDiv.data || [];
+    const indices = [];
+    const xs = [];
+    const ys = [];
+    const customs = [];
+    const texts = [];
+    data.forEach((tr, i) => {
+        if (!tr || tr.visible === 'legendonly' || tr._fftFullIndex == null) return;
+        const entry = plot._fftSpectraFull[tr._fftFullIndex];
+        if (!entry) return;
+        const built = this._buildFftSpectrumTrace(plot, entry, range);
+        indices.push(i);
+        xs.push(built.x);
+        ys.push(built.y);
+        customs.push(built.customdata);
+        texts.push(built.text);
+    });
+    if (!indices.length) return;
+    Plotly.restyle(plot.fftDiv, { x: xs, y: ys, customdata: customs, text: texts }, indices);
 };
 
 proto._fftSeriesForTrace = async function(trace, range, state) {
@@ -1781,18 +1866,26 @@ proto._applyFftAxisLimits = function(plot) {
     const xRange = this._fftResolvedAxisLimitRange(plot, 'fMin', 'fMax');
     const yRange = this._fftResolvedAxisLimitRange(plot, 'yMin', 'yMax');
     const update = {};
-    if (xRange) {
-        update['xaxis.range'] = xRange;
-        update['xaxis.autorange'] = false;
-    } else {
-        update['xaxis.autorange'] = true;
-    }
-    if (yRange) {
-        update['yaxis.range'] = yRange;
-        update['yaxis.autorange'] = false;
-    } else {
-        update['yaxis.autorange'] = true;
-    }
+    // The drawn trace is windowed for display, so Plotly's own autorange would
+    // fit only the visible slice. Reset to the FULL spectrum extent explicitly
+    // (from each trace's full-span _fftExtent) so a double-click really zooms
+    // all the way out — matching the pre-windowing behaviour.
+    const applyAxis = (axisKey, manualRange, extentAxis) => {
+        if (manualRange) {
+            update[`${axisKey}.range`] = manualRange;
+            update[`${axisKey}.autorange`] = false;
+            return;
+        }
+        const ext = this._fftSpectrumExtent(plot, extentAxis);
+        if (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max) {
+            update[`${axisKey}.range`] = [ext.min, ext.max];
+            update[`${axisKey}.autorange`] = false;
+        } else {
+            update[`${axisKey}.autorange`] = true;
+        }
+    };
+    applyAxis('xaxis', xRange, 'x');
+    applyAxis('yaxis', yRange, 'y');
     return Plotly.relayout(plot.fftDiv, update);
 };
 

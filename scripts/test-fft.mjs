@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import {
     analyzeSampling,
     computeAmplitudeSpectrum,
+    downsampleSpectrumForDisplay,
+    windowSpectrumForDisplay,
     detectSamplingGaps,
     detectNaNRuns,
     fftRadix2,
@@ -354,7 +356,7 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
     assert.match(fftMethodsSource, /\bformatNaturalDuration\b/, 'spectrum hover builds compact natural suffixes');
     assert.match(
         fftMethodsSource,
-        /const periodValues = new Float64Array\(spectrum\.frequencies\.length\)/,
+        /const periodValues = new Float64Array\(dispFreqs\.length\)/,
         'spectrum keeps numeric periods in a compact typed array',
     );
     assert.match(fftMethodsSource, /customdata:\s*periodValues/, 'spectrum carries numeric period values through customdata');
@@ -408,6 +410,56 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
         /plot\._cursorBoxZoomActive\s*&&\s*!options\.force/,
         'forced cursor renders bypass the transient box-zoom guard',
     );
+}
+
+// Spectrum display downsampling: bounded output that preserves peaks exactly.
+{
+    const n = 500000;
+    const freqs = new Float64Array(n);
+    const amps = new Float64Array(n);
+    for (let i = 0; i < n; i++) { freqs[i] = i * 0.5; amps[i] = 1 + Math.sin(i / 900); }
+    // Plant a sharp global peak and a sharp global trough at known frequencies.
+    const peakI = 123457; const troughI = 401234;
+    amps[peakI] = 42; amps[troughI] = -7;
+
+    const small = downsampleSpectrumForDisplay(freqs, amps, 8000);
+    assert.ok(small.frequencies.length <= 8000, 'downsampled point count stays within the budget');
+    assert.ok(small.frequencies.length > 1000, 'downsampled spectrum keeps a usable resolution');
+
+    const peakIdx = small.amplitudes.indexOf(42);
+    const troughIdx = small.amplitudes.indexOf(-7);
+    assert.ok(peakIdx >= 0, 'global peak amplitude survives downsampling');
+    assert.ok(troughIdx >= 0, 'global trough amplitude survives downsampling');
+    assert.equal(small.frequencies[peakIdx], freqs[peakI], 'peak keeps its exact frequency (cursor can still snap to it)');
+    assert.equal(small.frequencies[troughIdx], freqs[troughI], 'trough keeps its exact frequency');
+
+    let sorted = true;
+    for (let i = 1; i < small.frequencies.length; i++) {
+        if (small.frequencies[i] < small.frequencies[i - 1]) { sorted = false; break; }
+    }
+    assert.ok(sorted, 'downsampled frequencies stay ascending');
+
+    // Below the budget it must be a no-op (same arrays, no copy, no peak drift).
+    const tiny = downsampleSpectrumForDisplay(freqs.subarray(0, 100), amps.subarray(0, 100), 8000);
+    assert.equal(tiny.frequencies.length, 100, 'small spectra pass through untouched');
+
+    // Zooming in (a narrow window) must reveal full detail: every bin in the
+    // window is drawn, so the fine structure zero-padding computes is visible.
+    const winLo = freqs[200000];
+    const winHi = freqs[200400]; // ~400 bins inside -> well under the budget
+    const zoomed = windowSpectrumForDisplay(freqs, amps, winLo, winHi, 8000);
+    assert.ok(zoomed.frequencies.length >= 400 && zoomed.frequencies.length <= 410,
+        'a narrow zoom window is drawn at full (un-downsampled) resolution');
+    let inRange = true;
+    for (let i = 0; i < zoomed.frequencies.length; i++) {
+        if (zoomed.frequencies[i] < winLo - 1 || zoomed.frequencies[i] > winHi + 1) { inRange = false; break; }
+    }
+    assert.ok(inRange, 'windowed points stay within the requested frequency range');
+
+    // Zoomed all the way out (null window) falls back to the bounded envelope.
+    const full = windowSpectrumForDisplay(freqs, amps, null, null, 8000);
+    assert.ok(full.frequencies.length <= 8000, 'the full-range window stays within the budget');
+    assert.ok(full.amplitudes.indexOf(42) >= 0, 'the global peak still survives the full-range window');
 }
 
 console.log('FFT tests passed');
