@@ -147,7 +147,7 @@ try {
             name: 'huge-results.pkl',
             size: PICKLE_DESKTOP_EAGER_LIMIT_BYTES + 1024,
         }, '.pkl'),
-        /pandas pickle support uses eager loading/
+        /exceeds the pickle size limit/
     );
 
     assert.doesNotThrow(() => webHarness._preflightPickleFile({
@@ -159,7 +159,7 @@ try {
             name: 'web-too-large-results.pkl',
             size: PICKLE_WEB_EAGER_LIMIT_BYTES + 1024,
         }, '.pkl'),
-        /pandas pickle support uses eager loading/
+        /exceeds the pickle size limit/
     );
 
     let readFileCalls = 0;
@@ -198,7 +198,7 @@ try {
     };
     await assert.rejects(
         () => harness._readLocalResultPath('C:\\temp\\huge-results.pkl'),
-        /pandas pickle support uses eager loading/
+        /exceeds the pickle size limit/
     );
     assert.equal(pickleReadFileCalls, 0, 'oversized pandas pickle should be rejected before Desktop readFile');
 
@@ -218,7 +218,7 @@ try {
             extension: '.pkl',
             buffer: staleBuffer,
         }),
-        /pandas pickle support uses eager loading/
+        /exceeds the pickle size limit/
     );
 
     const httpMethods = [];
@@ -239,7 +239,7 @@ try {
     };
     await assert.rejects(
         () => harness._readLocalResultPath('C:\\temp\\huge-results.pkl'),
-        /pandas pickle support uses eager loading/
+        /exceeds the pickle size limit/
     );
     assert.deepEqual(httpMethods, ['HEAD'], 'local HTTP fallback should reject oversized pickle before GET');
 

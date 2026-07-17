@@ -115,7 +115,7 @@ async function run() {
         const { data } = await parseSheet('excel-serial-dates.xlsx');
         assert(data.metadata.numTimesteps === 48, `excel-serial-dates: expected 48 rows, got ${data.metadata.numTimesteps}`);
         assert(data.metadata.timeKind === 'datetime', `excel-serial-dates: serial numbers should map to a datetime axis, got ${data.metadata.timeKind}`);
-        const originYear = new Date(data.metadata.timeOriginMs).getFullYear();
+        const originYear = new Date(data.metadata.timeOriginMs).getUTCFullYear();
         assert(originYear === 2024, `excel-serial-dates: origin should land in 2024, got ${originYear}`);
     }
 
