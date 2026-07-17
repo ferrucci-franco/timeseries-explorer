@@ -1641,7 +1641,8 @@ body.cursor-box-dragging {
     min-width: 0;
 }
 
-.fft-auto-amplitude-btn {
+.fft-auto-amplitude-btn,
+.fft-auto-xrange-btn {
     display: block;
     width: 100%;
     margin-top: 2px;
@@ -1654,7 +1655,8 @@ body.cursor-box-dragging {
     cursor: pointer;
 }
 
-.fft-auto-amplitude-btn:hover {
+.fft-auto-amplitude-btn:hover,
+.fft-auto-xrange-btn:hover {
     border-color: color-mix(in srgb, var(--primary-color) 68%, var(--border-color));
 }
 

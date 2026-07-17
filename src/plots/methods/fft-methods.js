@@ -1825,6 +1825,31 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         this._syncFftOptionsPanel(plot);
     });
     options.appendChild(autoAmplitudeBtn);
+
+    const autoXRangeBtn = document.createElement('button');
+    autoXRangeBtn.type = 'button';
+    autoXRangeBtn.className = 'fft-auto-xrange-btn';
+    autoXRangeBtn.textContent = i18n.t('fftAutoXRange');
+    autoXRangeBtn.title = i18n.t('fftAutoXRangeTooltip');
+    autoXRangeBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        const state = this._ensureFftState(plot);
+        state.fMin = null;
+        state.fMax = null;
+        // Reset to the FULL frequency span. The drawn trace is windowed, so
+        // Plotly autorange would only fit the visible slice — use the full
+        // extent explicitly (the relayout then re-windows back to full).
+        if (plot.fftDiv) {
+            const ext = this._fftSpectrumExtent(plot, 'x');
+            if (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max) {
+                Plotly.relayout(plot.fftDiv, { 'xaxis.range': [ext.min, ext.max], 'xaxis.autorange': false });
+            } else {
+                Plotly.relayout(plot.fftDiv, { 'xaxis.autorange': true });
+            }
+        }
+        this._syncFftOptionsPanel(plot);
+    });
+    options.appendChild(autoXRangeBtn);
 };
 
 proto._installFftHelpDismissHandlers = function(plot) {
