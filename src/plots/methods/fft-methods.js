@@ -366,12 +366,20 @@ proto._buildFftTimeTraces = function(plot) {
         })
         .filter(Boolean);
     if (this._ensureFftState(plot).showWindowed) {
-        traces.push(...this._buildFftWindowedTimeTraces(plot));
+        traces.push(...this._buildFftWindowedTimeTraces(plot, this._fftCurrentVisibleRange(plot)));
     }
     return traces;
 };
 
-proto._buildFftWindowedTimeTraces = function(plot) {
+// The current zoom window (frequency-independent x-range) of the time pane, or
+// null when it is on autorange (full view). Used so the windowed overlay is
+// downsampled to the same visible window as the real signals.
+proto._fftCurrentVisibleRange = function(plot) {
+    const xa = plot?.div?._fullLayout?.xaxis;
+    return (xa && xa.autorange === false && Array.isArray(xa.range)) ? xa.range.slice() : null;
+};
+
+proto._buildFftWindowedTimeTraces = function(plot, visibleRange = null) {
     const state = this._ensureFftState(plot);
     const range = this._activeFftRange(plot);
     const out = [];
@@ -390,7 +398,11 @@ proto._buildFftWindowedTimeTraces = function(plot) {
         }
         const y = new Float64Array(n);
         for (let i = 0; i < n; i++) y[i] = (Number(selected.values[i]) - (state.removeMean ? mean : 0)) * window[i];
-        const visual = this._buildTimeseriesVisualData(selected.times, y, null, false);
+        // Window is applied over the full selected range, then the RESULT is
+        // downsampled to the visible window with the same config (and same
+        // min/max downsampler) as the real signals — so zooming shows the same
+        // level of detail instead of a coarse full-range overview.
+        const visual = this._buildTimeseriesVisualData(selected.times, y, visibleRange, false);
         out.push({
             x: this._plotlyTimeArray(trace.fileId, visual.x, this._getTimeVar(trace.fileId)),
             y: visual.y,
@@ -401,9 +413,33 @@ proto._buildFftWindowedTimeTraces = function(plot) {
             hoverinfo: 'skip',
             line: { color: trace.color, width: 1, dash: 'dot' },
             opacity: 0.7,
+            _fftWindowed: true,
         });
     }
     return out;
+};
+
+// Re-downsample the windowed overlay to the visible window on zoom/pan, in step
+// with the real signals (_refreshTimeseriesVisuals only touches plot.traces, so
+// the windowed overlay — extra traces — would otherwise stay at full-range res).
+proto._refreshFftWindowedVisuals = function(panelId, plot = this.plots.get(panelId), visibleRange = null) {
+    if (!plot?.div || plot.mode !== 'fft' || !this._ensureFftState(plot).showWindowed) return;
+    const rebuilt = this._buildFftWindowedTimeTraces(plot, visibleRange);
+    if (!rebuilt.length) return;
+    const byName = new Map(rebuilt.map(tr => [tr.name, tr]));
+    const indices = [];
+    const xs = [];
+    const ys = [];
+    (plot.div.data || []).forEach((tr, i) => {
+        if (!tr?._fftWindowed) return;
+        const next = byName.get(tr.name);
+        if (!next) return;
+        indices.push(i);
+        xs.push(next.x);
+        ys.push(next.y);
+    });
+    if (!indices.length) return;
+    Plotly.restyle(plot.div, { x: xs, y: ys }, indices);
 };
 
 proto._buildFftTimeLayout = function(plot) {

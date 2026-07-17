@@ -77,6 +77,10 @@ proto._onRelayout = function(sourcePanelId, eventData) {
             this._refreshTimeseriesVisuals(sourcePanelId, plot, visibleRange);
         }
         if (plot.mode === 'fft') {
+            // Keep the windowed overlay downsampled to the same visible window
+            // as the real signals (it is an extra trace, so the restyle above
+            // does not reach it).
+            this._refreshFftWindowedVisuals?.(sourcePanelId, plot, this._fftCurrentVisibleRange?.(plot));
             this._updateFftSelectionShapes?.(sourcePanelId, plot);
             if (plot.cursors?.enabled) this._syncCursorDisplay(sourcePanelId, plot);
             return;
