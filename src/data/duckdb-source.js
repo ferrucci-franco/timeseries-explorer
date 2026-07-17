@@ -497,9 +497,8 @@ export default class DuckDbSource {
                     }),
                 };
             }
-            const aggregateSelect = requested
-                .map((_, index) => `AVG(v${index}) AS v${index}`)
-                .join(',\n                       ');
+            const maxBuckets = Math.max(1, Math.floor(maxPoints / 2));
+            const aggregateSelect = this._minMaxBucketAggregateSql(requested);
             const sql = `
                 WITH numbered AS (
                     SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
@@ -515,23 +514,20 @@ export default class DuckDbSource {
                 bucketed AS (
                     SELECT t,
                            ${generatedValueNames},
-                           CAST(LEAST(${maxPoints - 1},
-                                FLOOR((t - ${lit(t0)}) / NULLIF(${lit(t1)} - ${lit(t0)}, 0) * ${maxPoints})) AS BIGINT) AS bucket
+                           CAST(LEAST(${maxBuckets - 1},
+                                FLOOR((t - ${lit(t0)}) / NULLIF(${lit(t1)} - ${lit(t0)}, 0) * ${maxBuckets})) AS BIGINT) AS bucket
                     FROM visible
                 )
-                SELECT MIN(t) AS t,
+                SELECT MIN(t) AS t_lo,
+                       MAX(t) AS t_hi,
                        ${aggregateSelect}
                 FROM bucketed
                 GROUP BY bucket
-                ORDER BY t;
+                ORDER BY bucket;
             `;
             const result = await this._interactiveQuery(sql);
             const extractStartedAt = this._now();
-            const yByVar = new Map();
-            requested.forEach(({ varName }, index) => {
-                yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
-            });
-            const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+            const { x, yByVar } = this._expandMinMaxBucketResult(result, requested);
             return {
                 x,
                 yByVar,
@@ -582,9 +578,8 @@ export default class DuckDbSource {
                 }),
             };
         }
-        const aggregateSelect = requested
-            .map((_, index) => `AVG(v${index}) AS v${index}`)
-            .join(',\n                   ');
+        const maxBuckets = Math.max(1, Math.floor(maxPoints / 2));
+        const aggregateSelect = this._minMaxBucketAggregateSql(requested);
         const sql = `
             WITH visible AS (
                 SELECT ${tExpr} AS t,
@@ -595,14 +590,15 @@ export default class DuckDbSource {
             bucketed AS (
                 SELECT t,
                        ${requested.map((_, index) => `v${index}`).join(', ')},
-                       CAST(LEAST(${maxPoints - 1},
+                       CAST(LEAST(${maxBuckets - 1},
                                   GREATEST(0,
                                            FLOOR((t - ${lit(t0)})
-                                                 * ${maxPoints} / ${lit(span)})))
+                                                 * ${maxBuckets} / ${lit(span)})))
                             AS BIGINT) AS bucket
                 FROM visible
             )
-            SELECT MIN(t) AS t,
+            SELECT MIN(t) AS t_lo,
+                   MAX(t) AS t_hi,
                    ${aggregateSelect}
             FROM bucketed
             GROUP BY bucket
@@ -610,11 +606,7 @@ export default class DuckDbSource {
         `;
         const result = await this._interactiveQuery(sql);
         const extractStartedAt = this._now();
-        const yByVar = new Map();
-        requested.forEach(({ varName }, index) => {
-            yByVar.set(varName, this._extractColumnAsFloat64(result, index + 1, 'DOUBLE'));
-        });
-        const x = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+        const { x, yByVar } = this._expandMinMaxBucketResult(result, requested);
         return {
             x,
             yByVar,
@@ -650,6 +642,37 @@ export default class DuckDbSource {
             totalMs: this._roundMs(finishedAt - startedAt),
             cacheHit: false,
         };
+    }
+
+    // Per-bucket MIN and MAX of every requested value column (v0..vN-1). Using
+    // min/max instead of AVG keeps the amplitude envelope truthful at every zoom
+    // level — AVG flattened the peaks so the Y axis appeared to shrink when
+    // zooming out. Emits two value columns per variable: min{i}, max{i}.
+    _minMaxBucketAggregateSql(requested) {
+        return requested
+            .map((_, index) => `MIN(v${index}) AS min${index}, MAX(v${index}) AS max${index}`)
+            .join(',\n                   ');
+    }
+
+    // Expand a MIN(t)/MAX(t)/min_i/max_i bucket result into a plottable series:
+    // two points per bucket — (t_lo, min…) then (t_hi, max…) — so each bucket
+    // draws its true vertical extent (the same idea as the eager min/max
+    // downsampler). Column layout: 0=t_lo, 1=t_hi, then min_i,max_i per variable.
+    _expandMinMaxBucketResult(result, requested) {
+        const tLo = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+        const tHi = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
+        const nb = Math.min(tLo.length, tHi.length);
+        const x = new Float64Array(nb * 2);
+        for (let b = 0; b < nb; b++) { x[2 * b] = tLo[b]; x[2 * b + 1] = tHi[b]; }
+        const yByVar = new Map();
+        requested.forEach(({ varName }, index) => {
+            const minCol = this._extractColumnAsFloat64(result, 2 + index * 2, 'DOUBLE');
+            const maxCol = this._extractColumnAsFloat64(result, 3 + index * 2, 'DOUBLE');
+            const y = new Float64Array(nb * 2);
+            for (let b = 0; b < nb; b++) { y[2 * b] = minCol[b]; y[2 * b + 1] = maxCol[b]; }
+            yByVar.set(varName, y);
+        });
+        return { x, yByVar };
     }
 
     _estimateRowsInRange(legacyData, meta, t0, t1) {
