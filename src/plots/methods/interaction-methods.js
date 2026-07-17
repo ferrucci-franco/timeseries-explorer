@@ -2343,8 +2343,11 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
         plot._relayoutLiveOnly = true;
         // Read the Pan/zoom refresh setting live so it applies immediately in
         // whatever analysis mode owns this pane. Responsive re-fits during the
-        // drag; Auto/After-pan defer to the settle finalize below.
-        if ((this.relayoutRefreshMode || 'auto') === 'responsive') {
+        // drag; Auto/After-pan defer to the settle finalize below. Only the
+        // TIME pane (plot.div) may drive this — panning the results pane
+        // (spectrum/histogram) carries a FREQUENCY range that must never be fed
+        // to the time pane, or its traces empty out.
+        if (div === plot.div && (this.relayoutRefreshMode || 'auto') === 'responsive') {
             this._scheduleLivePanRefresh(panelId, plot, state.latestXRange);
         }
         Plotly.relayout(div, update).finally(() => {
@@ -2457,7 +2460,9 @@ proto._installRightButtonPan = function(panelId, plot, div, options = {}) {
                 const dy2 = ((mv.clientY - startY) / y2a._length) * y2Span;
                 update['yaxis2.range'] = [y2Numeric0[0] + dy2, y2Numeric0[1] + dy2];
             }
-            if ((this.relayoutRefreshMode || 'auto') === 'responsive') {
+            // Only the TIME pane may live re-fit; the results pane carries a
+            // frequency range that would empty the time-pane traces.
+            if (div === plot.div && (this.relayoutRefreshMode || 'auto') === 'responsive') {
                 this._scheduleLivePanRefresh(panelId, plot, latestXRange);
             }
             Plotly.relayout(div, update).finally(() => {
