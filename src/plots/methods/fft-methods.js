@@ -1174,6 +1174,8 @@ proto._fftGapInfo = function(plot) {
     let totalMissing = 0;
     let largest = null;
     for (const file of files) {
+        // Skip lazy overview samples — their irregular spacing isn't a real gap.
+        if (!this._hasTruthfulGapSeries(file.fileId)) continue;
         const info = detectSamplingGaps(file.times);
         if (!info.gaps.length) continue;
         const timeKind = this._fftTimeKind(file.fileId);
@@ -1300,6 +1302,17 @@ proto._applyLineBreaks = function(trace, intervals) {
 // data" overlay (opt-in). The per-trace break-interval map (traceIntervals)
 // is only consumed by the timeseries overlay's line-cutting.
 // Trace identity for the per-trace break-interval map.
+// Sampling-gap and NaN-run detection read the in-memory time/value arrays. For
+// a lazy file in view mode those are a RESERVOIR SAMPLE of the rows: the times
+// are irregularly spaced by construction and the sampled NaNs are sparse, so
+// detectSamplingGaps / detectNaNRuns would fabricate gaps and bands that don't
+// exist (a clean uniform signal ends up flagged everywhere). Only trust a
+// full-resolution, non-sampled series; truthful gap detection over a lazy file
+// would need a dedicated DuckDB scan (future work), not the overview sample.
+proto._hasTruthfulGapSeries = function(fileId) {
+    return !this.files.get(fileId)?.data?._duckdb?.viewMode;
+};
+
 proto._missTraceKey = function(t) {
     return `${t.fileId} ${t.varName}`;
 };
@@ -1322,6 +1335,8 @@ proto._missingDataInfo = function(plot) {
     const traceIntervals = new Map(); // missTraceKey -> sorted [{t0,t1}]
     const bandItems = [];
     for (const t of visible) {
+        // A reservoir-sampled overview has no truthful time spacing or NaN runs.
+        if (!this._hasTruthfulGapSeries(t.fileId)) continue;
         if (!fileGaps.has(t.fileId)) {
             const times = this._getTransformedTimeData(t.fileId);
             const timeVar = this._getTimeVar(t.fileId);

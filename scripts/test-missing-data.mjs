@@ -30,11 +30,13 @@ const methodSource = (name) => {
 };
 
 class Harness {
-    constructor({ times = {}, values = {} } = {}) {
+    constructor({ times = {}, values = {}, sampled = [] } = {}) {
         this._times = times;   // fileId -> number[]
         this._values = values; // `${fileId}|${varName}` -> number[]
+        this._sampled = new Set(sampled); // fileIds whose times are a lazy overview sample
     }
     _isVisible(t) { return t.visible !== false; }
+    _hasTruthfulGapSeries(fileId) { return !this._sampled.has(fileId); }
     _getTimeVar() { return {}; }
     _getTransformedTimeData(fileId) { return this._times[fileId] || []; }
     _getTransformedVariableData(fileId, varName) { return this._values[`${fileId}|${varName}`] || []; }
@@ -142,6 +144,23 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     const info = h._missingDataInfo({ traces: [trace] });
     assert.equal(info.bandItems.length, 0, 'clean data has no bands');
     assert.deepEqual(plain(info.traceIntervals.get(h._missTraceKey(trace))), [], 'clean data has no break intervals');
+}
+
+// A lazy overview (reservoir sample) has no truthful time spacing, so even
+// though its irregular sample times + sparse NaNs would look like gaps
+// everywhere, no bands or per-file gaps are produced for it.
+{
+    const times = [0, 600, 1200, 1800, 2400, 4800, 5400, 6000];
+    const h = new Harness({
+        times: { f1: times },
+        values: { 'f1|a': [10, NaN, NaN, 40, 50, 60, 70, 80] },
+        sampled: ['f1'],
+    });
+    const trace = { fileId: 'f1', varName: 'a' };
+    const info = h._missingDataInfo({ traces: [trace] });
+    assert.equal(info.bandItems.length, 0, 'a sampled overview yields no missing-data bands');
+    assert.equal(info.fileGaps.size, 0, 'no per-file gaps are computed for a sampled overview');
+    assert.equal(info.traceIntervals.get(h._missTraceKey(trace)), undefined, 'a sampled trace has no break intervals');
 }
 
 // ── _adaptiveGapBandShapes: appearance keys off on-screen width ──
