@@ -3287,7 +3287,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     if (!toolbar) return;
 
     // Remove existing mode buttons if any (re-render case)
-    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group').forEach(el => el.remove());
+    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group, .phase2d-tools-group').forEach(el => el.remove());
     toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
 
     const plot = this.plots.get(panelId);
