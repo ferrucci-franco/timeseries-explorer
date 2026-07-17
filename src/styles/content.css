@@ -1198,6 +1198,29 @@
     user-select: none;
 }
 
+.cursor-close-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    margin-left: 6px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.cursor-close-btn:hover {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
 .cursor-trace-select {
     display: flex;
     align-items: center;

@@ -822,6 +822,7 @@ const translations = {
             cursorLabelInverseDeltaX: '1/ΔX',
             cursorSecantLine: 'Show A-B line',
             cursorsToggle: 'Measurement cursors',
+            cursorClose: 'Close cursors',
             cursorsNoTrace: 'Choose at least one visible trace to use cursors.',
             equalAspect2D: 'Lock equal aspect ratio',
 
@@ -1847,6 +1848,7 @@ const translations = {
             cursorLabelInverseDeltaX: '1/ΔX',
             cursorSecantLine: 'Afficher la droite A-B',
             cursorsToggle: 'Curseurs de mesure',
+            cursorClose: 'Fermer les curseurs',
             cursorsNoTrace: 'Choisissez au moins une trace visible pour utiliser les curseurs.',
             equalAspect2D: 'Verrouiller le rapport 1:1',
 
@@ -2860,6 +2862,7 @@ const translations = {
             cursorLabelInverseDeltaX: '1/ΔX',
             cursorSecantLine: 'Mostrar recta A-B',
             cursorsToggle: 'Cursores de medida',
+            cursorClose: 'Cerrar cursores',
             cursorsNoTrace: 'Elige al menos una traza visible para usar cursores.',
             equalAspect2D: 'Bloquear aspecto 1:1',
             fileTransformTitle: 'Alinear este archivo',
@@ -3855,6 +3858,7 @@ const translations = {
             cursorLabelInverseDeltaX: '1/ΔX',
             cursorSecantLine: 'Mostra retta A-B',
             cursorsToggle: 'Cursori di misura',
+            cursorClose: 'Chiudi cursori',
             cursorsNoTrace: 'Scegli almeno una traccia visibile per usare i cursori.',
             equalAspect2D: 'Blocca rapporto 1:1',
             fileTransformTitle: 'Allinea questo file',

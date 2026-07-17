@@ -1511,6 +1511,15 @@ proto._plotSupportsCursors = function(plot) {
     return plot?.mode === 'timeseries' || plot?.mode === 'fft' || plot?.mode === 'heatmap';
 };
 
+// True while ANY cursor window is open. FFT has two (time + spectrum); the A|B
+// button reflects this, so it reads "on" until both are closed, and one press
+// then closes whatever remains before the next press reopens both.
+proto._anyCursorEnabled = function(plot) {
+    if (!plot) return false;
+    if (plot.cursors?.enabled) return true;
+    return plot.mode === 'fft' && !!plot.cursorsSpectrum?.enabled;
+};
+
 proto._cursorViews = function(panelId, plot) {
     if (!plot?.div || !this._plotSupportsCursors(plot)) return [];
     const main = { id: 'main', panelId, plot, isSpectrum: false };
@@ -1558,7 +1567,9 @@ proto._toggleCursors = function(panelId) {
     // any newly added fields.
     plot.cursors = { ...this._defaultCursors(), ...(plot.cursors || {}) };
     plot.cursorsSpectrum = { ...this._defaultCursors(), ...(plot.cursorsSpectrum || {}) };
-    const enabled = !plot.cursors.enabled;
+    // Any open window means the press closes everything first; only from the
+    // fully-closed state does a press reopen all views.
+    const enabled = !this._anyCursorEnabled(plot);
     for (const view of this._cursorViews(panelId, plot)) {
         this._viewCursors(view).enabled = enabled;
     }
@@ -1580,6 +1591,25 @@ proto._toggleCursors = function(panelId) {
         this._hideCursorBox(plot.div.closest('.layout-panel'));
         this._refreshActionBtns(panelId);
     }
+};
+
+// Close a single cursor window (the X on its box). In FFT the other window
+// stays open; the A|B button reflects _anyCursorEnabled, so it only switches
+// off once every window is closed.
+proto._closeCursorView = function(panelId, plot, view) {
+    if (!plot || !view) return;
+    this._viewCursors(view).enabled = false;
+    const div = this._viewDiv(view);
+    if (div) div.style.cursor = '';
+    this._hideCursorOverlay(view);
+    const panelEl = plot.div?.closest('.layout-panel');
+    this._hideCursorViewBox(panelEl, view.id);
+    // When nothing is left open, drop the shared drag/hover affordances too.
+    if (!this._anyCursorEnabled(plot)) {
+        document.body.classList.remove('cursor-dragging', 'cursor-box-dragging');
+        panelEl?.classList.remove('cursor-near');
+    }
+    this._refreshActionBtns(panelId);
 };
 
 proto._ensureCursorPositions = function(view) {
@@ -2824,6 +2854,7 @@ proto._updateCursorBox = function(view) {
     const html = `
         <div class="cursor-info-header">
             <span class="cursor-info-title">${moveIcon}${this._escapeHTML(i18n.t('cursorsToggle') + titleSuffix)}</span>
+            <button type="button" class="cursor-close-btn" title="${this._escapeHTML(i18n.t('cursorClose'))}" aria-label="${this._escapeHTML(i18n.t('cursorClose'))}">×</button>
         </div>
         ${selectorsHTML}
         ${view.isSpectrum ? '' : secantHTML}
@@ -2945,11 +2976,17 @@ proto._showCursorBox = function(view, html) {
         // the extremum buttons stop it): without this, the button is replaced
         // before its click event ever fires.
         box.addEventListener('mousedown', (e) => {
-            if (e.target.closest('.cursor-help-btn') || e.target.closest('.cursor-help-popover')) {
+            if (e.target.closest('.cursor-help-btn') || e.target.closest('.cursor-help-popover') || e.target.closest('.cursor-close-btn')) {
                 e.stopPropagation();
             }
         });
         box.addEventListener('click', (e) => {
+            if (e.target.closest('.cursor-close-btn')) {
+                e.preventDefault();
+                e.stopPropagation();
+                this._closeCursorView(panelId, plot, view);
+                return;
+            }
             const helpBtn = e.target.closest('.cursor-help-btn');
             const popover = box.querySelector('.cursor-help-popover');
             if (helpBtn && popover) {
@@ -3016,6 +3053,7 @@ proto._ensureCursorBoxDrag = function(view, box = null) {
 
     box.addEventListener('mousedown', (event) => {
         if (!event.target.closest('.cursor-info-header')) return;
+        if (event.target.closest('.cursor-close-btn')) return; // let the close click through
         event.preventDefault();
         event.stopPropagation();
         // The help popover is position:fixed; it would stay behind while
@@ -3472,7 +3510,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     toolbar.appendChild(compareBtn);
 
     const cursorBtn = document.createElement('button');
-    cursorBtn.className = 'layout-toolbar-btn panel-action-btn cursor-btn' + (plot?.cursors?.enabled ? ' active' : '');
+    cursorBtn.className = 'layout-toolbar-btn panel-action-btn cursor-btn' + (this._anyCursorEnabled(plot) ? ' active' : '');
     cursorBtn.textContent = 'A|B';
     cursorBtn.title = i18n.t('cursorsToggle');
     cursorBtn.disabled = !(this._hasContent(plot) && this._plotSupportsCursors(plot));

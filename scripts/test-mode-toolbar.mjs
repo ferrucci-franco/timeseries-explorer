@@ -158,6 +158,7 @@ class ToolbarHarness {
     _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) >= 3; }
     _supportsEqualAspect2D(plot) { return plot?.mode === 'phase2d' || (plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) === 2); }
     _plotSupportsCursors() { return true; }
+    _anyCursorEnabled(plot) { return !!(plot?.cursors?.enabled || (plot?.mode === 'fft' && plot?.cursorsSpectrum?.enabled)); }
     _autoScalePlot(panelId, plot) { this.autoscaleCalls.push({ panelId, plot }); }
     _dismissModeChangeWarning() {}
     _showModeChangeWarning(panelId, mode) { this.warnings.push({ panelId, mode }); }

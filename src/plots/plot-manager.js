@@ -503,6 +503,11 @@ class PlotManager {
             plot.fft = plot.fft || this._defaultFftState?.();
             plot.histogram = plot.histogram || this._defaultHistogramState?.();
             plot.heatmap = plot.heatmap || this._defaultHeatmapState?.();
+            // Switching analysis tears down the chart (and the cursor overlay
+            // with it). Keep cursor positions, but close the windows so the A|B
+            // button is not left stuck "on" over a chart that has no cursors.
+            if (plot.cursors) plot.cursors.enabled = false;
+            if (plot.cursorsSpectrum) plot.cursorsSpectrum.enabled = false;
         } else {
             plot.cursors = this._defaultCursors();
             plot.cursorsSpectrum = this._defaultCursors();
@@ -1435,7 +1440,7 @@ class PlotManager {
         if (cursorBtn) {
             const enabled = has && this._plotSupportsCursors?.(plot);
             cursorBtn.disabled = !enabled;
-            cursorBtn.classList.toggle('active', !!plot?.cursors?.enabled);
+            cursorBtn.classList.toggle('active', !!this._anyCursorEnabled?.(plot));
         }
         const stackBtn = panelEl.querySelector('.timeseries-stack-btn');
         if (stackBtn) {
