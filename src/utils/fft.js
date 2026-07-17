@@ -3,6 +3,11 @@ export const FFT_DB_FLOOR = -200;
 export const FFT_LIVE_MAX_POINTS = 2 ** 22;
 export const FFT_MAX_POINTS_WEB = 2 ** 24;
 export const FFT_MAX_POINTS_DESKTOP = 2 ** 26;
+// Above this NFFT, compute off the main thread (Web Worker) so a heavy
+// zero-padded transform never freezes the tab. Below it, the synchronous cost
+// (~<100ms) is cheaper than spawning + messaging a worker. This is only a
+// "where to run it" switch; the hard/live caps above still bound the size.
+export const FFT_WORKER_THRESHOLD_POINTS = 2 ** 18;
 
 // A zero-padded spectrum can hold hundreds of thousands of bins (NFFT/2), but a
 // pane is only ~1000px wide. Rendering, hover, and the per-bin period-label pass

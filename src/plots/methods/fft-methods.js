@@ -15,6 +15,7 @@ import {
     FFT_LIVE_MAX_POINTS,
     FFT_MAX_POINTS_DESKTOP,
     FFT_MAX_POINTS_WEB,
+    FFT_WORKER_THRESHOLD_POINTS,
 } from '../../utils/fft.js';
 import Plotly from '../../vendor/plotly.js';
 
@@ -863,9 +864,13 @@ proto._computeFftSpectrumForSeries = async function(plot, series, state) {
         maxNfft: this._fftComputationMaxNfft(),
     };
 
-    if (estimatedNfft <= this._fftLiveMaxNfft()) {
+    // Small transforms: synchronous is faster than spawning a worker.
+    if (estimatedNfft <= this._fftWorkerThresholdNfft()) {
         return computeAmplitudeSpectrum(input);
     }
+    // Larger ones go off the main thread so the tab never freezes. Without a
+    // worker (e.g. file:// protocol) fall back to the synchronous path capped at
+    // the main-thread limit exactly as before — unchanged for those setups.
     if (!this._canUseFftWorker()) {
         return computeAmplitudeSpectrum({ ...input, maxNfft: this._fftLiveMaxNfft() });
     }
@@ -941,6 +946,13 @@ proto._fftComputationMaxNfft = function() {
 
 proto._fftLiveMaxNfft = function() {
     return FFT_LIVE_MAX_POINTS;
+};
+
+// NFFT above which we prefer the Web Worker over a synchronous compute. Only a
+// scheduling switch; when no worker is available we still fall back to the
+// synchronous path up to _fftLiveMaxNfft (see _computeFftSpectrumForSeries).
+proto._fftWorkerThresholdNfft = function() {
+    return FFT_WORKER_THRESHOLD_POINTS;
 };
 
 proto._fftHardMaxNfft = function() {
