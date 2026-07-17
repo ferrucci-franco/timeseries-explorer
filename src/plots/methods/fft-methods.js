@@ -1205,6 +1205,45 @@ proto._fftGapInfo = function(plot) {
 // stroke so they stay visible. `items` are { fileId, timeVar, t0, t1 } in
 // transformed-time units. Shared by the FFT pane and the timeseries
 // "show missing data" overlay.
+// Amber "highlighter" tone for missing-data bands. Deliberately not red: red
+// collides with the 2nd trace colour (which is always present), making the
+// bands blend into the data. Fill fades soft→strong with width; the stroke
+// rescues sub-pixel bands.
+proto._gapBandFill = (alpha) => `rgba(255, 193, 7, ${alpha.toFixed(3)})`;
+proto._gapBandStroke = 'rgba(230, 145, 0, 0.95)';
+
+// Merge missing-data intervals (per file, in x-order) whose present gap is
+// narrower than ~1px at the current zoom. A signal with dense scattered missing
+// data — e.g. 6% random NaN over millions of rows — otherwise produces hundreds
+// of thousands of sub-pixel bands that pile into a solid wall; coalescing first
+// yields a few honest "missing throughout" bands when zoomed out and separates
+// them back into individual gaps as the user zooms in. Without axis metrics
+// (pxPerUnit not finite) it merges only touching/overlapping intervals.
+proto._coalesceGapItems = function(items, pxPerUnit) {
+    const minGapData = Number.isFinite(pxPerUnit) && pxPerUnit > 0 ? 1 / pxPerUnit : 0;
+    const byFile = new Map(); // one x-mapping per file+timeVar
+    for (const it of items) {
+        const key = `${it.fileId} ${it.timeVar ?? ''}`;
+        let group = byFile.get(key);
+        if (!group) { group = []; byFile.set(key, group); }
+        group.push(it);
+    }
+    const out = [];
+    for (const group of byFile.values()) {
+        group.sort((a, b) => a.t0 - b.t0);
+        let cur = null;
+        for (const it of group) {
+            if (cur && it.t0 - cur.t1 <= minGapData) {
+                if (it.t1 > cur.t1) cur.t1 = it.t1;
+            } else {
+                cur = { fileId: it.fileId, timeVar: it.timeVar, t0: it.t0, t1: it.t1 };
+                out.push(cur);
+            }
+        }
+    }
+    return out;
+};
+
 proto._adaptiveGapBandShapes = function(plot, items) {
     if (!items?.length) return [];
     const MAX_BANDS = 500;
@@ -1218,11 +1257,13 @@ proto._adaptiveGapBandShapes = function(plot, items) {
         if (span > 0) pxPerUnit = xa._length / span;
     }
 
-    // With pathologically many intervals the series is effectively irregular;
-    // keep only the widest so we never flood Plotly with shapes.
-    const list = items.length > MAX_BANDS
-        ? items.slice().sort((a, b) => (b.t1 - b.t0) - (a.t1 - a.t0)).slice(0, MAX_BANDS)
-        : items;
+    // Coalesce at pixel resolution first, so dense missing data never floods
+    // Plotly. If it is STILL pathologically fragmented (sub-2px alternation),
+    // keep only the widest merged bands as a final guard.
+    const merged = this._coalesceGapItems(items, pxPerUnit);
+    const list = merged.length > MAX_BANDS
+        ? merged.slice().sort((a, b) => (b.t1 - b.t0) - (a.t1 - a.t0)).slice(0, MAX_BANDS)
+        : merged;
 
     const shapes = [];
     for (const it of list) {
@@ -1241,9 +1282,9 @@ proto._adaptiveGapBandShapes = function(plot, items) {
             x1: this._plotlyTimeValue(it.fileId, it.t1, it.timeVar),
             y0: 0,
             y1: 1,
-            fillcolor: `rgba(229, 57, 53, ${fillAlpha.toFixed(3)})`,
+            fillcolor: this._gapBandFill(fillAlpha),
             line: strokeWidth > 0
-                ? { color: 'rgba(229, 57, 53, 0.9)', width: strokeWidth }
+                ? { color: this._gapBandStroke, width: strokeWidth }
                 : { width: 0 },
             layer: 'below',
         });

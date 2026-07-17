@@ -42,6 +42,8 @@ class Harness {
     _getTransformedVariableData(fileId, varName) { return this._values[`${fileId}|${varName}`] || []; }
     _coerceAxisValue(v) { return Number(v); }
     _plotlyTimeValue(fileId, v) { return v; }
+    _gapBandFill(alpha) { return `rgba(255, 193, 7, ${alpha.toFixed(3)})`; }
+    get _gapBandStroke() { return 'rgba(230, 145, 0, 0.95)'; }
 }
 
 const sandbox = { proto: Harness.prototype, detectSamplingGaps, detectNaNRuns };
@@ -49,6 +51,7 @@ vm.runInNewContext([
     methodSource('_applyLineBreaks'),
     methodSource('_missTraceKey'),
     methodSource('_missingDataInfo'),
+    methodSource('_coalesceGapItems'),
     methodSource('_adaptiveGapBandShapes'),
 ].join('\n'), sandbox);
 
@@ -168,12 +171,14 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     const h = new Harness();
     // 1 px per data unit.
     const plot = { div: { _fullLayout: { xaxis: { range: [0, 1000], _length: 1000 } } } };
+    // Kept apart (gap 499 px ≫ 1 px) so coalescing leaves them as two bands.
     const shapes = h._adaptiveGapBandShapes(plot, [
-        { fileId: 'f', timeVar: null, t0: 0, t1: 1 },     // 1 px  → narrow
-        { fileId: 'f', timeVar: null, t0: 0, t1: 100 },   // 100 px → wide
+        { fileId: 'f', timeVar: null, t0: 0, t1: 1 },       // 1 px   → narrow
+        { fileId: 'f', timeVar: null, t0: 500, t1: 600 },   // 100 px → wide
     ]);
     assert.equal(shapes.length, 2, 'one band per interval');
-    assert.ok(shapes.every(s => s.type === 'rect' && String(s.fillcolor).startsWith('rgba(229, 57, 53,')), 'bands are red rects');
+    assert.ok(shapes.every(s => s.type === 'rect' && String(s.fillcolor).startsWith('rgba(255, 193, 7,')), 'bands are amber rects');
+    assert.ok(shapes.every(s => s.line.width === 0 || String(s.line.color).startsWith('rgba(230, 145, 0,')), 'the stroke is amber too');
     assert.ok(shapes[0].line.width > 0, 'a narrow (sub-pixel) band keeps a pixel-width stroke so it stays visible');
     assert.equal(shapes[1].line.width, 0, 'a wide band drops the stroke — no outline');
 
@@ -182,6 +187,34 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     const noAxis = h._adaptiveGapBandShapes({ div: {} }, [{ fileId: 'f', timeVar: null, t0: 0, t1: 1 }]);
     assert.equal(noAxis.length, 1, 'missing axis layout still produces a (narrow-styled) band');
     assert.ok(noAxis[0].line.width > 0, 'without axis metrics a band defaults to visible/narrow');
+}
+
+// ── Coalescing: dense sub-pixel gaps merge instead of flooding the pane ──
+{
+    const h = new Harness();
+    // 1 px per data unit. Many 1-unit gaps separated by 0.5-unit present slivers
+    // (< 1 px) must collapse to a single band; a far-away gap stays separate.
+    const plot = { div: { _fullLayout: { xaxis: { range: [0, 1000], _length: 1000 } } } };
+    const dense = [];
+    for (let t = 0; t < 20; t += 1.5) dense.push({ fileId: 'f', timeVar: null, t0: t, t1: t + 1 });
+    dense.push({ fileId: 'f', timeVar: null, t0: 500, t1: 520 });
+    const shapes = h._adaptiveGapBandShapes(plot, dense);
+    assert.equal(shapes.length, 2, 'the dense run collapses to one band; the distant gap is the second');
+
+    // A present sliver WIDER than 1 px keeps the two gaps separate.
+    const plotZoom = { div: { _fullLayout: { xaxis: { range: [0, 10], _length: 1000 } } } }; // 100 px per unit
+    const zoomed = h._adaptiveGapBandShapes(plotZoom, [
+        { fileId: 'f', timeVar: null, t0: 0, t1: 1 },
+        { fileId: 'f', timeVar: null, t0: 1.5, t1: 2.5 }, // 0.5 unit = 50 px gap
+    ]);
+    assert.equal(zoomed.length, 2, 'when the present sliver is > 1 px the gaps stay separate');
+
+    // Per-file grouping: identical intervals on different files never merge.
+    const twoFiles = h._adaptiveGapBandShapes(plot, [
+        { fileId: 'a', timeVar: null, t0: 0, t1: 1 },
+        { fileId: 'b', timeVar: null, t0: 0, t1: 1 },
+    ]);
+    assert.equal(twoFiles.length, 2, 'intervals from different files are not coalesced together');
 }
 
 // ── Gating: with the flag off, nothing changes ──
