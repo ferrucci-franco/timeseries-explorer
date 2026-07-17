@@ -310,11 +310,29 @@ proto._installFftPlotHandlers = function(panelId, plot) {
             || ed['xaxis.range[1]'] !== undefined
         );
         if (!touchesX) return;
-        clearTimeout(plot._fftSpectrumWindowTimer);
-        plot._fftSpectrumWindowTimer = setTimeout(() => {
+        const doWindow = () => {
             const r = plot.fftDiv?._fullLayout?.xaxis?.range;
             this._refreshFftSpectrumWindow(panelId, plot, Array.isArray(r) ? r.slice() : null);
-        }, 120);
+        };
+        clearTimeout(plot._fftSpectrumWindowTimer);
+        plot._fftSpectrumWindowTimer = 0;
+        // Honour the Pan/zoom refresh setting on the spectrum pane too:
+        // Responsive re-windows during the drag (coalesced to one frame so the
+        // restyle never runs re-entrantly inside the relayout event); Auto /
+        // After-pan defer until panning settles.
+        if ((this.relayoutRefreshMode || 'auto') === 'responsive') {
+            if (!plot._fftSpectrumWindowFrame) {
+                const scheduleFrame = typeof requestAnimationFrame === 'function'
+                    ? requestAnimationFrame
+                    : (callback) => setTimeout(callback, 16);
+                plot._fftSpectrumWindowFrame = scheduleFrame(() => {
+                    plot._fftSpectrumWindowFrame = 0;
+                    doWindow();
+                });
+            }
+        } else {
+            plot._fftSpectrumWindowTimer = setTimeout(doWindow, 120);
+        }
     });
     this._installLegendHoverHint(plot.div);
     this._installLegendHoverHint(plot.fftDiv);

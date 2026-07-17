@@ -1347,6 +1347,11 @@ class PlotManager {
         clearTimeout(plot._correlationRecomputeTimer);
         clearTimeout(plot._corrVisualTimer);
         clearTimeout(plot._fftSpectrumWindowTimer);
+        if (plot._fftSpectrumWindowFrame) {
+            if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(plot._fftSpectrumWindowFrame);
+            else clearTimeout(plot._fftSpectrumWindowFrame);
+            plot._fftSpectrumWindowFrame = 0;
+        }
         this._clearLivePanRefresh?.(plot);
         plot._correlationSelectionDiv = null;
         this._cleanupHeatmapChart?.(panelId, plot);
