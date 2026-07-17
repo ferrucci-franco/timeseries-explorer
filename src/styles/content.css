@@ -1694,6 +1694,53 @@ body.cursor-box-dragging {
     display: none;
 }
 
+/* Yellow "?" help next to the Custom-step (Δt) field in the file transform. */
+.file-transform-label-with-help {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.file-transform-help-btn {
+    width: 15px;
+    height: 15px;
+    font-size: 0.6rem;
+    background-color: #fff3b0;
+    border-color: #e3c55a;
+    color: #5f4b00;
+}
+
+.file-transform-help-btn:hover,
+.file-transform-help-btn[aria-expanded="true"] {
+    background-color: #ffe680;
+    border-color: #d3ad2f;
+    color: #3f3100;
+}
+
+.theme-dark .file-transform-help-btn {
+    background-color: #6a560d;
+    border-color: #8a721b;
+    color: #ffe9a3;
+}
+
+.theme-dark .file-transform-help-btn:hover,
+.theme-dark .file-transform-help-btn[aria-expanded="true"] {
+    background-color: #7d6712;
+    border-color: #a2861f;
+}
+
+.file-transform-help-popover {
+    grid-column: 1 / -1;
+    margin: 0 0 2px;
+}
+
+.file-transform-help-title {
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
 .fft-range-grid,
 .fft-axis-grid {
     display: grid;

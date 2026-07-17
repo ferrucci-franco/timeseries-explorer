@@ -2339,8 +2339,46 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         wrap.title = i18n.t('indexCustomStepTooltip');
 
         const span = document.createElement('span');
-        span.textContent = i18n.t('indexCustomStepLabel');
-        span.title = i18n.t('indexCustomStepTooltip');
+        span.className = 'file-transform-label-with-help';
+        const labelText = document.createElement('span');
+        labelText.textContent = i18n.t('indexCustomStepLabel');
+        labelText.title = i18n.t('indexCustomStepTooltip');
+
+        // Yellow "?" help button + popover (same idea as the Derived-variables
+        // help), because the plain hover tooltip is easy to miss.
+        const helpBtn = document.createElement('button');
+        helpBtn.type = 'button';
+        helpBtn.className = 'fft-help-btn file-transform-help-btn';
+        helpBtn.textContent = '?';
+        helpBtn.title = i18n.t('indexCustomStepHelpTitle');
+        helpBtn.setAttribute('aria-label', i18n.t('indexCustomStepHelpTitle'));
+        helpBtn.setAttribute('aria-expanded', 'false');
+        span.append(labelText, helpBtn);
+
+        const helpPopover = document.createElement('div');
+        helpPopover.className = 'fft-help-popover file-transform-help-popover';
+        helpPopover.hidden = true;
+        helpPopover.innerHTML = `<div class="file-transform-help-title">${i18n.t('indexCustomStepHelpTitle')}</div>${i18n.t('indexCustomStepHelpBody')}`;
+
+        const closeHelp = () => {
+            helpPopover.hidden = true;
+            helpBtn.setAttribute('aria-expanded', 'false');
+            document.removeEventListener('mousedown', onDocMouseDown, true);
+        };
+        const onDocMouseDown = (event) => {
+            if (!helpPopover.contains(event.target) && event.target !== helpBtn) closeHelp();
+        };
+        // Prevent the wrapping <label> from redirecting the click to the input.
+        helpBtn.addEventListener('mousedown', (event) => { event.preventDefault(); event.stopPropagation(); });
+        helpBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const show = helpPopover.hidden;
+            helpPopover.hidden = !show;
+            helpBtn.setAttribute('aria-expanded', String(show));
+            if (show) setTimeout(() => document.addEventListener('mousedown', onDocMouseDown, true), 0);
+            else document.removeEventListener('mousedown', onDocMouseDown, true);
+        });
 
         const input = document.createElement('input');
         input.type = 'number';
@@ -2368,7 +2406,12 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
 
         wrap.append(span, input, select);
         wrap.input = input;
-        return wrap;
+        // The field sits in one grid cell; the popover spans the full panel
+        // width on the next row (see .file-transform-help-popover).
+        const frag = document.createDocumentFragment();
+        frag.append(wrap, helpPopover);
+        frag.input = input;
+        return frag;
     };
 
     if (isDateTime) {
