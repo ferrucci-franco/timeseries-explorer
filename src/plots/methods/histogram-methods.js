@@ -233,6 +233,9 @@ proto._createHistogramChart = function(panelId, panelEl) {
         const viewPromise = restoreView ? this._restorePlotView(plot, restoreView) : Promise.resolve();
         Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
         this._installHistogramPlotHandlers(panelId, plot);
+        // Cursor capture handlers before selection handlers, so an enabled
+        // cursor over a selection boundary keeps the pointer (as in Heatmap).
+        this._installCursorHandlers?.(panelId, plot);
         this._installHistogramSelectionHandlers(panelId, plot);
         this._installHistogramSplitterHandlers(panelId, plot);
         this._installWheelPan(panelId, plot, plot.div, {
@@ -245,6 +248,7 @@ proto._createHistogramChart = function(panelId, panelEl) {
             finalize: (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange }),
         });
         this._installRightButtonPan(panelId, plot, plot.histogramDiv);
+        this._syncCursorDisplay?.(panelId, plot);
         this._scheduleHistogramRecompute(panelId, { immediate: true });
         let timer;
         const ro = new ResizeObserver(() => {

@@ -524,6 +524,11 @@ class PlotManager {
         // Update UI — re-inject all buttons so view labels reflect the new mode
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         if (!panelEl) return;
+        // Cursor windows live on the panel, not the (now torn-down) plot divs,
+        // and each is only re-hidden by a mode whose _cursorViews still lists it
+        // (e.g. the FFT 'spectrum' box). Remove them all on a mode change so none
+        // is stranded — cursors were just closed above.
+        panelEl.querySelectorAll('.cursor-info-box').forEach(box => box.remove());
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) { placeholder.style.display = ''; placeholder.classList.remove('drag-over'); }
         this._injectModeButtons(panelId, panelEl, mode);

@@ -1508,7 +1508,8 @@ proto._defaultCursors = function() {
 // 1/Δx is a period, and the secant/slope have no meaning there).
 
 proto._plotSupportsCursors = function(plot) {
-    return plot?.mode === 'timeseries' || plot?.mode === 'fft' || plot?.mode === 'heatmap';
+    return plot?.mode === 'timeseries' || plot?.mode === 'fft'
+        || plot?.mode === 'histogram' || plot?.mode === 'heatmap';
 };
 
 // True while ANY cursor window is open. FFT has two (time + spectrum); the A|B
@@ -2033,6 +2034,7 @@ proto._syncCursorDisplay = function(panelId, plot, options = {}) {
     if (!plot?.div || !this._plotSupportsCursors(plot)) return;
     const panelEl = plot.div.closest('.layout-panel');
     const timeSeriesHidden = (plot.mode === 'fft' && plot.fft?.timeSeriesHidden === true)
+        || (plot.mode === 'histogram' && plot.histogram?.timeSeriesHidden === true)
         || (plot.mode === 'heatmap' && plot.heatmap?.timeSeriesHidden === true);
     for (const view of this._cursorViews(panelId, plot)) {
         if (timeSeriesHidden && !view.isSpectrum) {
