@@ -1346,6 +1346,8 @@ class PlotManager {
         }
         clearTimeout(plot._correlationRecomputeTimer);
         clearTimeout(plot._corrVisualTimer);
+        clearTimeout(plot._fftSpectrumWindowTimer);
+        this._clearLivePanRefresh?.(plot);
         plot._correlationSelectionDiv = null;
         this._cleanupHeatmapChart?.(panelId, plot);
         plot.cameraOverlayEl = null;

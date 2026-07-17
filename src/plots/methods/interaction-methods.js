@@ -188,6 +188,35 @@ proto._clearLiveRelayoutingRefresh = function(plot) {
     plot._liveRelayoutingRefreshRange = null;
 };
 
+// Live pane re-fit during a wheel / right-button drag pan (analysis modes).
+// Reuses the same per-mode visual refresh the settle path runs via _onRelayout,
+// coalesced to one animation frame so a fast drag does not pile up work. The
+// Pan/zoom refresh setting is read at drag time (not captured at chart
+// creation), so changing it applies immediately without re-entering the mode.
+proto._scheduleLivePanRefresh = function(panelId, plot, range) {
+    if (!plot?.div || !Array.isArray(range) || range.length < 2) return;
+    plot._livePanRange = [range[0], range[1]];
+    if (plot._livePanFrame) return;
+    const scheduleFrame = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (callback) => setTimeout(callback, 16);
+    plot._livePanFrame = scheduleFrame(() => {
+        plot._livePanFrame = 0;
+        const latest = plot._livePanRange;
+        plot._livePanRange = null;
+        if (!latest || this.plots.get(panelId) !== plot || !plot.div) return;
+        this._refreshTimeseriesVisuals(panelId, plot, latest);
+    });
+};
+
+proto._clearLivePanRefresh = function(plot) {
+    if (!plot?._livePanFrame) return;
+    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(plot._livePanFrame);
+    else clearTimeout(plot._livePanFrame);
+    plot._livePanFrame = 0;
+    plot._livePanRange = null;
+};
+
 proto._liveRelayoutSuppressed = function(plot) {
     const until = Number(plot?._suppressLiveRelayoutUntil);
     if (!Number.isFinite(until)) return false;
@@ -2312,8 +2341,11 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
             update['yaxis2.range'] = base.curY2.slice();
         }
         plot._relayoutLiveOnly = true;
-        if (plot.mode === 'timeseries' && this._canLiveRefreshTimeseriesRelayout(plot, state.latestXRange)) {
-            this._scheduleLiveRelayoutingRefresh(panelId, plot, state.latestXRange, { allowRelayoutLiveOnly: true });
+        // Read the Pan/zoom refresh setting live so it applies immediately in
+        // whatever analysis mode owns this pane. Responsive re-fits during the
+        // drag; Auto/After-pan defer to the settle finalize below.
+        if ((this.relayoutRefreshMode || 'auto') === 'responsive') {
+            this._scheduleLivePanRefresh(panelId, plot, state.latestXRange);
         }
         Plotly.relayout(div, update).finally(() => {
             if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: state.latestXRange, lightweight: true });
@@ -2326,6 +2358,7 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     const settle = () => {
         state.settleTimer = 0;
         if (!state.latestXRange) return;
+        this._clearLivePanRefresh(plot);
         plot._relayoutLiveOnly = false;
         if (typeof options.finalize === 'function') options.finalize(state.latestXRange);
     };
@@ -2424,8 +2457,8 @@ proto._installRightButtonPan = function(panelId, plot, div, options = {}) {
                 const dy2 = ((mv.clientY - startY) / y2a._length) * y2Span;
                 update['yaxis2.range'] = [y2Numeric0[0] + dy2, y2Numeric0[1] + dy2];
             }
-            if (plot.mode === 'timeseries' && this._canLiveRefreshTimeseriesRelayout(plot, latestXRange)) {
-                this._scheduleLiveRelayoutingRefresh(panelId, plot, latestXRange, { allowRelayoutLiveOnly: true });
+            if ((this.relayoutRefreshMode || 'auto') === 'responsive') {
+                this._scheduleLivePanRefresh(panelId, plot, latestXRange);
             }
             Plotly.relayout(div, update).finally(() => {
                 if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: latestXRange, lightweight: true });
@@ -2434,6 +2467,7 @@ proto._installRightButtonPan = function(panelId, plot, div, options = {}) {
         const onUp = () => {
             document.removeEventListener('mousemove', onMove);
             document.removeEventListener('mouseup', onUp);
+            this._clearLivePanRefresh(plot);
             plot._relayoutLiveOnly = false;
             // Mirror the wheel-pan settle: only the caller-supplied finalize
             // commits the pan (e.g. refetch the time pane). Panes without one

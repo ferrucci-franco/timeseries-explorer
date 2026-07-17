@@ -523,6 +523,12 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
             finalize: (range) => this._onRelayout(panelId, { 'xaxis.range': range }),
         });
         this._installWheelPan(panelId, plot, plot.heatmapDiv);
+        // Right-button drag pans the same panes, matching FFT/Histogram (Plotly's
+        // native drag ignores button 2, which otherwise snaps to a zoom-box).
+        this._installRightButtonPan(panelId, plot, plot.div, {
+            finalize: (range) => this._onRelayout(panelId, { 'xaxis.range': range }),
+        });
+        this._installRightButtonPan(panelId, plot, plot.heatmapDiv);
         this._syncCursorDisplay?.(panelId, plot);
         this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true });
 
