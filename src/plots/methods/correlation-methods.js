@@ -553,6 +553,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (!plot || plot.mode !== 'correlation') return;
         this._ensureCorrelationState(plot).dirty = true;
         this._syncCorrelationDirtyUi(plot);
+        this._refreshActionBtns(panelId); // CSV export is blocked while dirty
         this._setCorrelationStatus(plot, message, 'warning');
     };
 
@@ -651,6 +652,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         // live-append dirty flag (e.g. after a rebuild that ran while dirty).
         state.dirty = false;
         this._syncCorrelationDirtyUi(plot);
+        this._refreshActionBtns(panelId); // fresh results -> CSV export allowed again
         plot._correlationResults = results;
         Plotly.react(plot.correlationDiv, this._buildCorrelationResultTraces(results), this._buildCorrelationResultLayout(plot, results), this._getPlotlyConfig());
         this._renderCorrelationOptionsPanel(panelId, plot);
@@ -1009,6 +1011,49 @@ export function installPlotCorrelationMethods(TargetClass) {
             icon: false,
             className: 'correlation-help-dialog',
         });
+    };
+
+    // Σ Stats for correlation: the exact per-pair results already computed
+    // (Pearson r, r², valid/excluded counts, and mean/std of X and Y), never a
+    // recomputation over overview points. μ/σ symbols keep the header language-
+    // neutral, so no new i18n strings are needed.
+    proto._showCorrelationStats = function(plot) {
+        const results = plot?._correlationResults || [];
+        if (!results.length) {
+            Modal.alert(i18n.t('panelStatsTitle'), i18n.t('correlationNoPairs'), { icon: 'Σ' });
+            return;
+        }
+        const fmt = (v) => Number.isFinite(v) ? Number(v).toPrecision(6) : '—';
+        const rowsHTML = results.map((r, i) => {
+            const label = r?.label
+                || (r?.pair ? `${this._traceName(r.pair.x, r.pair.fileId)} ↔ ${this._traceName(r.pair.y, r.pair.fileId)}` : '');
+            const ok = r?.status === 'ok';
+            return `<tr>
+                <td>P${i + 1}</td>
+                <td>${this._escapeHTML(label)}</td>
+                <td>${ok ? fmt(r.r) : 'N/A'}</td>
+                <td>${ok ? fmt(r.r2) : 'N/A'}</td>
+                <td>${fmt(r?.n ?? r?.nPair)}</td>
+                <td>${fmt(r?.nExcluded)}</td>
+                <td>${fmt(r?.meanX)}</td>
+                <td>${fmt(r?.stdX)}</td>
+                <td>${fmt(r?.meanY)}</td>
+                <td>${fmt(r?.stdY)}</td>
+            </tr>`;
+        }).join('');
+        const th = (text) => `<th>${this._escapeHTML(text)}</th>`;
+        const body = `
+            <div class="stats-table-wrap">
+                <table class="stats-table">
+                    <thead><tr>
+                        ${th('#')}${th(i18n.t('correlationPairsTitle'))}
+                        ${th('r')}${th('r²')}${th('N')}${th(i18n.t('correlationExcludedShort'))}
+                        ${th('μx')}${th('σx')}${th('μy')}${th('σy')}
+                    </tr></thead>
+                    <tbody>${rowsHTML}</tbody>
+                </table>
+            </div>`;
+        Modal.alert(i18n.t('panelStatsTitle'), body, { icon: 'Σ', html: true, className: 'modal-dialog-stats' });
     };
 
     proto._syncCorrelationRangeInputs = function(plot, options = {}) {

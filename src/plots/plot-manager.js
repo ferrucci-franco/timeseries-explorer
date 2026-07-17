@@ -1442,15 +1442,16 @@ class PlotManager {
         }
         const csvBtn = panelEl.querySelector('.csv-export-btn');
         if (csvBtn) {
-            // Aggregated Heatmap CSV belongs to the dedicated export phase;
-            // never fall back to exporting a visually unrelated raw table.
-            // Correlation CSV is a later phase; disable rather than export garbage.
-            csvBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'correlation';
+            // Aggregated Heatmap CSV belongs to the dedicated export phase; never
+            // fall back to exporting a visually unrelated raw table. Correlation
+            // exports a per-pair summary, but not while a lazy pair is dirty.
+            csvBtn.disabled = !has || plot?.mode === 'heatmap'
+                || (plot?.mode === 'correlation' && !!plot?.correlation?.dirty);
             if (plot?.mode === 'heatmap') csvBtn.title = i18n.t('heatmapExportPending');
         }
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
         if (statsBtn) {
-            statsBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'correlation';
+            statsBtn.disabled = !has || plot?.mode === 'heatmap';
             if (plot?.mode === 'heatmap') statsBtn.title = i18n.t('heatmapStatsPending');
         }
         const equalAspectBtn = panelEl.querySelector('.equal-aspect-btn');
@@ -1579,6 +1580,50 @@ class PlotManager {
                     headers.push(u ? `${name} [${u}]` : name);
                     columns.push(Array.from(this._getTransformedVariableData(slots.fileId, name, { includeYOffset: false })));
                 }
+            }
+        } else if (plot.mode === 'correlation') {
+            const results = plot._correlationResults || [];
+            if (!results.length) return;
+            const state = this._ensureCorrelationState(plot);
+            const scope = state.rangeFull ? 'all' : 'selection';
+            const selStart = state.rangeFull ? '' : (state.x1 ?? '');
+            const selEnd = state.rangeFull ? '' : (state.x2 ?? '');
+            const num = (v) => Number.isFinite(v) ? String(v) : '';
+            const varUnit = (fileId, varName) => {
+                const v = this.files.get(fileId)?.data?.variables?.[varName];
+                return v ? this._extractUnit(v.description) : '';
+            };
+            const esc = (value) => {
+                const s = String(value ?? '');
+                return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+            };
+            // One row per pair (summary of exact results, never overview points).
+            const fields = [
+                ['pair_index', (r, i) => i + 1],
+                ['file', (r) => this.files.get(r.pair.fileId)?.name ?? r.pair.fileId ?? ''],
+                ['x', (r) => this._variableLabel(r.pair.x, r.pair.fileId)],
+                ['y', (r) => this._variableLabel(r.pair.y, r.pair.fileId)],
+                ['x_unit', (r) => varUnit(r.pair.fileId, r.pair.x)],
+                ['y_unit', (r) => varUnit(r.pair.fileId, r.pair.y)],
+                ['temporal_scope', () => scope],
+                ['selection_start', () => selStart],
+                ['selection_end', () => selEnd],
+                ['method', () => 'pearson'],
+                ['n_scope', (r) => num(r.nScope)],
+                ['n_pair', (r) => num(r.n ?? r.nPair)],
+                ['n_excluded', (r) => num(r.nExcluded)],
+                ['pearson_r', (r) => num(r.r)],
+                ['r_squared', (r) => num(r.r2)],
+                ['mean_x', (r) => num(r.meanX)],
+                ['std_x', (r) => num(r.stdX)],
+                ['mean_y', (r) => num(r.meanY)],
+                ['std_y', (r) => num(r.stdY)],
+                ['status', (r) => r.status ?? ''],
+                ['warning', (r) => (r.status && r.status !== 'ok') ? r.status : ''],
+            ];
+            for (const [header, fn] of fields) {
+                headers.push(header);
+                columns.push(results.map((r, i) => esc(fn(r, i))));
             }
         }
 
@@ -1776,6 +1821,8 @@ class PlotManager {
     _showPanelStats(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot || !this._hasContent(plot)) return;
+        // Correlation reports the exact per-pair results, not raw variable stats.
+        if (plot.mode === 'correlation') { this._showCorrelationStats?.(plot); return; }
 
         const entries = [];
         const addVar = (fileId, varName) => {
