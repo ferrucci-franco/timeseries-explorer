@@ -868,13 +868,22 @@
 }
 
 .phase2d-marker-input {
-    width: 48px;
+    width: 58px;
     border: 1px solid var(--border-color);
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
     font-size: 0.7rem;
-    padding: 2px 4px;
+    /* No right padding so the native spinner sits flush against the border
+       (removes the white gap); the extra width keeps a two-decimal value like
+       0.65 from colliding with the arrows. */
+    padding: 2px 0 2px 5px;
+}
+
+.phase2d-marker-input::-webkit-inner-spin-button,
+.phase2d-marker-input::-webkit-outer-spin-button {
+    margin: 0;
+    opacity: 1;
 }
 
 .layout-toolbar-btn:disabled {

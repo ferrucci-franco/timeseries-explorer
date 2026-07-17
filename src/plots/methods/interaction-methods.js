@@ -3428,19 +3428,20 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     }
 
     // Correlation is an analysis toggle of the 2D/pair family (shares the pair
-    // list). It lives in the view group, right after 1:1 — no separate divider.
+    // list). Appended AFTER the 2D Display controls (below) so it reads as its
+    // own toggle, not as a label for the Display dropdown.
+    let phase2dCorrelationBtn = null;
     if (isPhase2dFamily) {
         const corrActive = currentMode === 'correlation';
-        const corrBtn = document.createElement('button');
-        corrBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn correlation-toggle-btn' + (corrActive ? ' active' : '');
-        corrBtn.textContent = i18n.t('modeCorrelationLabel');
-        corrBtn.title = i18n.t('modeCorrelation');
-        corrBtn.setAttribute('aria-pressed', String(corrActive));
-        corrBtn.addEventListener('click', (event) => {
+        phase2dCorrelationBtn = document.createElement('button');
+        phase2dCorrelationBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn correlation-toggle-btn' + (corrActive ? ' active' : '');
+        phase2dCorrelationBtn.textContent = i18n.t('modeCorrelationLabel');
+        phase2dCorrelationBtn.title = i18n.t('modeCorrelation');
+        phase2dCorrelationBtn.setAttribute('aria-pressed', String(corrActive));
+        phase2dCorrelationBtn.addEventListener('click', (event) => {
             event.stopPropagation();
             this._toggleCorrelationMode(panelId);
         });
-        viewGroup.appendChild(corrBtn);
     }
 
     const is2dt = currentMode === 'phase2dt';
@@ -3497,8 +3498,11 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     toolbar.appendChild(viewGroup);
 
-    // 2D-only Display (Lines / Points / Lines+points) + marker controls (TODO 10).
+    // 2D-only Display (Lines / Points / Lines+points) + marker controls (TODO 10),
+    // then the Correlation toggle last so the Display dropdown is not mistaken
+    // for a Correlation option.
     this._injectPhase2dDisplayControls?.(panelId, toolbar, plot);
+    if (phase2dCorrelationBtn) toolbar.appendChild(phase2dCorrelationBtn);
 
     // Compare (overlay traces from other files) — left of CSV
     const compareBtn = document.createElement('button');
