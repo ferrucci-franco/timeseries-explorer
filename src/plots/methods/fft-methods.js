@@ -658,11 +658,13 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     };
     if (!visible.length) {
         this._setFftStatus(plot, i18n.t('fftNoVisibleTraces'), 'muted');
+        this._setFftComputing(plot, false);
         await Plotly.react(plot.fftDiv, (plot.traces || []).map(legendPlaceholder), this._buildFftSpectrumLayout(plot), this._getPlotlyConfig());
         return;
     }
 
     this._setFftStatus(plot, i18n.t('fftCalculating'), 'loading');
+    this._setFftComputing(plot, true);
     const spectra = [];
     const fullEntries = [];
     const warnings = [];
@@ -774,6 +776,9 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     } else {
         this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
     }
+    // Terminal for this token (superseding runs manage their own pill on the
+    // token-mismatch early returns above, so this only fires for the live run).
+    this._setFftComputing(plot, false);
 };
 
 // Build one drawn spectrum trace from a full-resolution entry, windowed to the
@@ -1921,6 +1926,34 @@ proto._syncFftOptionsPanel = function(plot, options = {}) {
         } else input.value = formatFftInputValue(state[key]);
     });
     this._syncFftMessage(plot);
+};
+
+// A prominent, non-blocking "computing" pill centered over the spectrum pane.
+// Unlike the small topbar status text, it reads at a glance, and because it is
+// pointer-events:none and the spectrum is only replaced at the final
+// Plotly.react, the user can keep panning/zooming the spectrum already shown
+// while a new range recomputes. Reuses the lazy-detail indicator styling.
+proto._setFftComputing = function(plot, loading) {
+    const pane = plot?.fftDiv?.parentElement; // .fft-spectrum-pane
+    if (!pane) return;
+    let pill = pane.querySelector('.fft-computing-indicator');
+    if (loading) {
+        if (!pill) {
+            pill = document.createElement('div');
+            pill.className = 'lazy-detail-indicator fft-computing-indicator';
+            pill.setAttribute('aria-live', 'polite');
+            pill.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
+            pane.appendChild(pill);
+        }
+        const label = i18n.t('fftCalculating');
+        const text = pill.querySelector('.lazy-detail-text');
+        if (text) text.textContent = label;
+        pill.setAttribute('aria-label', label);
+        pill.classList.add('active');
+    } else if (pill) {
+        pill.classList.remove('active');
+        pill.remove();
+    }
 };
 
 proto._setFftStatus = function(plot, message, type = 'muted') {

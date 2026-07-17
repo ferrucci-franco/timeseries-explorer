@@ -1511,6 +1511,15 @@ body.cursor-box-dragging {
     display: flex;
 }
 
+/* Positioning context for the non-blocking "computing" pill over the spectrum. */
+.fft-spectrum-pane {
+    position: relative;
+}
+
+.fft-computing-indicator {
+    top: 10px;
+}
+
 .fft-splitter {
     background: color-mix(in srgb, var(--border-color) 72%, transparent);
     position: relative;
