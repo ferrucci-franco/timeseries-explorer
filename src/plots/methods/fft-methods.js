@@ -1359,7 +1359,12 @@ proto._adaptiveGapBandShapes = function(plot, items, denseOverride = null) {
 // but they still block a clean FFT — the fftWarningNaN message tells the user
 // to pick a NaN-free span, so the bands must show where those NaN are.
 proto._fftTimePaneShapes = function(plot) {
-    return [...this._missingDataBandShapes(plot), ...this._fftSelectionShapes(plot)];
+    // Lazy (view-mode) files can't be scanned in JS; their bands come from the
+    // DuckDB bucket query cached on the plot by _refreshLazyMissingBands. Eager
+    // files use the in-memory detection. Selection rectangle always on top.
+    const lazy = (plot?.traces || []).some(t => this.files.get(t.fileId)?.data?._duckdb?.viewMode);
+    const missing = lazy ? this._lazyMissingShapes(plot) : this._missingDataBandShapes(plot);
+    return [...missing, ...this._fftSelectionShapes(plot)];
 };
 
 // (B) Break the plotted line across each missing-data interval so the pane

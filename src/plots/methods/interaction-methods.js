@@ -1175,7 +1175,12 @@ proto._setMissingDensityNotice = function(plot, state) {
 // sharing the panel keep their sync detection (they are view-mode-gated out of
 // the query but flow through _missingDataInfo here).
 proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
-    if (!plot?.div || plot.mode !== 'timeseries' || !plot.showMissingData) return;
+    // Timeseries: opt-in via the Missing/NaN button. FFT time pane: always on
+    // (the bands tell the user which spans are clean enough to select for the
+    // FFT). Other modes: nothing.
+    const active = plot?.div
+        && (plot.mode === 'fft' || (plot.mode === 'timeseries' && plot.showMissingData));
+    if (!active) return;
 
     const perFile = new Map();
     for (const t of plot.traces) {
@@ -1192,14 +1197,21 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
     }
     const eagerItems = this._missingDataInfo(plot).bandItems; // non-view files only
 
-    // Wash (any-missing, dense-aware, wall-suppressed) with fully-missing gaps /
-    // blocks (`solidItems`) always painted ON TOP — so a big gap still shows even
-    // when the scattered wash is suppressed as a uniform wall.
+    // Cache the verdict, then paint. Timeseries paints the bands directly and
+    // shows the "zoom in" pill; the FFT time pane re-derives its shapes via
+    // _fftTimePaneShapes (so the selection rectangle survives) and skips the pill.
     const render = (allItems, solidItems, dense) => {
-        if (!plot.div || !plot.showMissingData) return;
-        const wash = this._adaptiveGapBandShapes(plot, allItems, dense);
-        const solid = dense ? this._adaptiveGapBandShapes(plot, solidItems, false) : [];
-        Plotly.relayout(plot.div, { shapes: [...wash, ...solid] });
+        if (!plot.div) return;
+        plot._lazyMissItems = allItems;
+        plot._lazyMissSolid = solidItems;
+        plot._lazyMissDense = dense;
+        if (plot.mode === 'fft') {
+            this._setMissingDensityNotice(plot, false); // no pill on the FFT pane
+            Plotly.relayout(plot.div, { shapes: this._fftTimePaneShapes(plot) });
+            return;
+        }
+        if (!plot.showMissingData) return;
+        Plotly.relayout(plot.div, { shapes: this._lazyMissingShapes(plot) });
         this._setMissingDensityNotice(plot, dense);
     };
 
@@ -1245,13 +1257,24 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
         const items = [...eagerItems, ...lazyItems];
         const dense = lazyDense || this._missingViewIsDense(plot, eagerItems);
         plot._lazyMissSig = sig;
-        plot._lazyMissItems = items;
-        plot._lazyMissSolid = solidItems;
-        plot._lazyMissDense = dense;
-        render(items, solidItems, dense);
+        render(items, solidItems, dense); // caches items/solid/dense on the plot
     }).catch(() => {
-        if (this._zoomTokens?.get(panelId) === token) this._setMissingDensityNotice(plot, false);
+        if (this._zoomTokens?.get(panelId) === token && plot.mode === 'timeseries') {
+            this._setMissingDensityNotice(plot, false);
+        }
     });
+};
+
+// Shapes for the cached lazy Missing/NaN verdict: the wash (any-missing,
+// dense-aware, wall-suppressed) with fully-missing gaps/blocks always on top.
+proto._lazyMissingShapes = function(plot) {
+    const items = plot?._lazyMissItems || [];
+    const solid = plot?._lazyMissSolid || [];
+    if (!items.length && !solid.length) return [];
+    const dense = !!plot._lazyMissDense;
+    const wash = this._adaptiveGapBandShapes(plot, items, dense);
+    const solidShapes = dense ? this._adaptiveGapBandShapes(plot, solid, false) : [];
+    return [...wash, ...solidShapes];
 };
 
 // Buckets for the lazy Missing/NaN query: ~one per on-screen pixel, but never
