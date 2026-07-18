@@ -247,6 +247,26 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         info.textContent = this.parser.getVariableInfo(variable);
 
         itemDiv.append(spacer, icon, label, info);
+        if (canPlot && variable.kind !== 'abscissa') {
+            const inverted = this.plotManager.isVariableSignInverted(this.activeFileId, variable.name);
+            const signToggle = document.createElement('button');
+            signToggle.type = 'button';
+            signToggle.className = `tree-sign-toggle${inverted ? ' active' : ''}`;
+            signToggle.innerHTML = inverted
+                ? '<svg viewBox="0 0 20 14" aria-hidden="true"><path d="M5 7h10"/></svg>'
+                : '<svg viewBox="0 0 20 14" aria-hidden="true"><path d="M6.5 5h7M10 1.5v7M6.5 12.5h7"/></svg>';
+            signToggle.title = i18n.t(inverted ? 'variableSignRestore' : 'variableSignInvert');
+            signToggle.setAttribute('aria-label', signToggle.title);
+            signToggle.setAttribute('aria-pressed', String(inverted));
+            signToggle.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.plotManager.setVariableSignInverted(this.activeFileId, variable.name, !inverted);
+                this._renderFilteredTree();
+            });
+            signToggle.addEventListener('dragstart', event => event.preventDefault());
+            itemDiv.appendChild(signToggle);
+        }
         if (options.derivedActions) {
             const remove = document.createElement('button');
             remove.className = 'tree-derived-remove';
@@ -270,7 +290,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         }
 
         itemDiv.addEventListener('click', (e) => {
-            if (e.target.closest('.tree-derived-remove')) return;
+            if (e.target.closest('.tree-derived-remove, .tree-sign-toggle')) return;
             if (!canPlot) {
                 if (this.selectedVariables.size > 0) this._clearVariableSelection();
                 return;

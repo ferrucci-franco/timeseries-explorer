@@ -838,7 +838,8 @@ proto._getTransformedVariableData = function(fileId, varName, options = {}) {
     if (variable.kind === 'abscissa') return this._getTransformedTimeData(fileId);
 
     const transform = this._fileTransform(fileId);
-    const gain = transform.gain;
+    const sign = this.isVariableSignInverted?.(fileId, varName) ? -1 : 1;
+    const gain = transform.gain * sign;
     const yOffset = includeYOffset ? transform.yOffset : 0;
     const indexData = this._getTransformIndexData(fileId);
     const cache = this._transformCache(fileId);
@@ -1125,7 +1126,6 @@ proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, raw
     let hi = cropEnd ?? Infinity;
     if (lo > hi) [lo, hi] = [hi, lo];
 
-    const gain = transform.gain;
     const yOffset = transform.yOffset;
     const n = rawTime?.length || 0;
     // Preallocate typed arrays and fill by index (subarray at the end for any
@@ -1155,7 +1155,8 @@ proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, raw
         outTime[k] = displayTime + timeShift;
         for (const col of outCols) {
             const value = col.src ? Number(col.src[i]) : NaN;
-            col.dst[k] = Number.isFinite(value) ? value * gain + yOffset : value;
+            const sign = this.isVariableSignInverted?.(fileId, col.name) ? -1 : 1;
+            col.dst[k] = Number.isFinite(value) ? value * transform.gain * sign + yOffset : value;
         }
         k++;
     }
