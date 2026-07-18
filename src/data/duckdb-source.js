@@ -386,32 +386,44 @@ export default class DuckDbSource {
             .join(',\n                               ');
         const valueNames = requested.map((_, index) => `v${index}`).join(', ');
 
-        const baseTime = meta.generatedTime
-            ? '(ROW_NUMBER() OVER () - 1)::DOUBLE'
-            : tExpr;
-        const rowIndexExpr = meta.generatedTime
-            ? 't AS rn'
-            : '(ROW_NUMBER() OVER (ORDER BY t) - 1)::DOUBLE AS rn';
-        const sql = `
-            WITH base AS (
-                SELECT ${baseTime} AS t,
-                       ${valueSelect}
-                FROM ${tableName}
-            ),
-            numbered AS (
+        // `rn` (the file-absolute row index) is only consumed downstream for
+        // GENERATED-time files (_transformFetchedPhaseTrajectory maps rn ->
+        // display time). For a real time column it is unused, so we must NOT pay
+        // for `ROW_NUMBER() OVER (ORDER BY t)` — that is a full-table sort of
+        // every row and OOMs DuckDB-WASM on multi-million-row files (surfacing
+        // as "Could not fetch raw samples"). Generated time gets its index from
+        // the cheap physical-order ROW_NUMBER() OVER () that also defines t.
+        let sql;
+        if (meta.generatedTime) {
+            sql = `
+                WITH base AS (
+                    SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
+                           ${valueSelect}
+                    FROM ${tableName}
+                )
                 SELECT t,
-                       ${rowIndexExpr},
+                       t AS rn,
                        ${valueNames}
                 FROM base
-            )
-            SELECT t,
-                   rn,
-                   ${valueNames}
-            FROM numbered
-            WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}
-            ORDER BY t
-            LIMIT ${limit};
-        `;
+                WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}
+                ORDER BY t
+                LIMIT ${limit};
+            `;
+        } else {
+            sql = `
+                SELECT t,
+                       CAST(NULL AS DOUBLE) AS rn,
+                       ${valueNames}
+                FROM (
+                    SELECT ${tExpr} AS t,
+                           ${valueSelect}
+                    FROM ${tableName}
+                )
+                WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}
+                ORDER BY t
+                LIMIT ${limit};
+            `;
+        }
         const result = await this._interactiveQuery(sql);
         const xFull = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
         const rowIndexFull = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
