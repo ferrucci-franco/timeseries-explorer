@@ -295,25 +295,38 @@ proto._reapplyDerivedVariables = function(fileId, data) {
     const derived = this.derivedByFile.get(fileId);
     if (!derived) return;
     for (const [name, entry] of derived) {
-        try {
-            const result = this._evaluateDerivedFormula(entry.formula, data);
-            const variable = {
-                name,
-                data: result.values,
-                description: `Derived: ${entry.formula}`,
-                kind: 'variable',
-                dataType: this.parser._detectDataType(result.values, 'variable'),
-                isConstant: this.parser._isConstantValues(result.values),
-                interpolation: 'linear',
-                derived: true,
-                formula: entry.formula,
-                ...(result.independentIndex ? { independentIndex: true, sampleIndexLength: result.values.length } : {}),
-            };
-            data.variables[name] = variable;
-            entry.variable = variable;
-        } catch (err) {
-            console.warn(`Could not reapply derived variable ${name}:`, err);
-        }
+        this._reapplyDerivedVariable(fileId, data, name, entry);
+    }
+};
+
+proto._derivedFormulaReferences = function(formula, variableNames = []) {
+    const variables = Object.fromEntries([...variableNames].map(name => [name, {}]));
+    return this._tokenizeDerivedFormula(formula, variables)
+        .filter(token => token.type === 'name')
+        .map(token => token.value);
+};
+
+proto._reapplyDerivedVariable = function(fileId, data, name, entry) {
+    try {
+        const result = this._evaluateDerivedFormula(entry.formula, data);
+        const variable = {
+            name,
+            data: result.values,
+            description: `Derived: ${entry.formula}`,
+            kind: 'variable',
+            dataType: this.parser._detectDataType(result.values, 'variable'),
+            isConstant: this.parser._isConstantValues(result.values),
+            interpolation: 'linear',
+            derived: true,
+            formula: entry.formula,
+            ...(result.independentIndex ? { independentIndex: true, sampleIndexLength: result.values.length } : {}),
+        };
+        data.variables[name] = variable;
+        entry.variable = variable;
+        return true;
+    } catch (err) {
+        console.warn(`Could not reapply derived variable ${name}:`, err);
+        return false;
     }
 };
 

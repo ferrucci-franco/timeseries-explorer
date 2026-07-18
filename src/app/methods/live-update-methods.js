@@ -87,6 +87,7 @@ proto._ensureLiveUpdateState = function(fileId) {
             lastParsedOffset: Number(entry.file?.size) || 0,
             lastCompleteLine: '',
             trailingPartialLine: '',
+            hasAppliedAppend: false,
             localPath: entry.localPath || '',
             csvProfile: null,
         };
@@ -254,6 +255,7 @@ proto._pollLiveUpdate = async function(fileId) {
         state.lastSize = appendProbe?.stat?.size ?? state.lastSize;
         state.lastModified = appendProbe?.stat?.lastModified ?? state.lastModified;
         this._applyLiveUpdateAppendProbeCursor(state, appendProbe);
+        if (addedRows > 0) state.hasAppliedAppend = true;
 
         this._reapplyDerivedVariables(fileId, nextData);
         this._reapplyDataToolVariables?.(fileId, nextData);

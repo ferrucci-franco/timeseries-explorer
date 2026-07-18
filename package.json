@@ -48,6 +48,8 @@
     "test:pickle": "node scripts/test-pickle-parser.mjs",
     "test:pypsa": "node scripts/test-pypsa-netcdf-parser.mjs",
     "test:pypsa-session": "node scripts/test-pypsa-session.mjs",
+    "test:session-project": "node scripts/test-session-project-save.mjs",
+    "test:session-state": "node scripts/test-session-state-roundtrip.mjs",
     "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs",
     "test:phase2d": "node scripts/test-phase2d.mjs"
   },

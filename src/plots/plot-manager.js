@@ -62,7 +62,7 @@ class PlotManager {
         return this.activeFileId ? (this.files.get(this.activeFileId)?.data ?? null) : null;
     }
 
-    addFile(fileId, name, data, transform = null) {
+    addFile(fileId, name, data, transform = null, options = {}) {
         const wasOne = this.files.size === 1;
         this.files.set(fileId, {
             name,
@@ -73,7 +73,7 @@ class PlotManager {
         });
         this.activeFileId = fileId;
         // If going 1→2 files, rebuild all panels so legend labels gain [filename]
-        if (wasOne) this._rebuildAllPanels();
+        if (wasOne && !options.deferRebuild) this._rebuildAllPanels();
     }
 
     setActiveFile(fileId) {

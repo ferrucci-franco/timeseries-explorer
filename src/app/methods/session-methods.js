@@ -23,7 +23,29 @@ proto.saveViewSession = async function() {
 proto.saveProjectSession = async function() {
     if (!this.files.size) {
         await Modal.alert(i18n.t('sessionNoFilesTitle'), i18n.t('sessionNoFilesBody'), { icon: 'ZIP' });
-        return;
+        return false;
+    }
+
+    const lazyFiles = [];
+    for (const [fileId, entry] of this.files) {
+        if (this.plotManager.files.get(fileId)?.data?._duckdb) {
+            lazyFiles.push(this._fileDisplayName(entry));
+        }
+    }
+    if (lazyFiles.length) {
+        const list = lazyFiles
+            .map(name => `<li title="${this._escapeSessionHTML(name)}">${this._escapeSessionHTML(name)}</li>`)
+            .join('');
+        const body = `
+            <div class="session-missing-intro">${this._escapeSessionHTML(i18n.t('sessionProjectLazyFilesBody'))}</div>
+            <ul class="session-missing-files">${list}</ul>
+        `;
+        await Modal.alert(i18n.t('sessionProjectLazyFilesTitle'), body, {
+            icon: 'ZIP',
+            html: true,
+            className: 'modal-dialog-session-missing',
+        });
+        return false;
     }
 
     const session = this._createSessionSnapshot({ includeData: true });
@@ -31,14 +53,62 @@ proto.saveProjectSession = async function() {
         'session.json': strToU8(`${JSON.stringify(session, null, 2)}\n`),
     };
 
-    for (const fileMeta of session.files) {
-        const entry = this.files.get(fileMeta.id);
-        if (!entry?.buffer || !fileMeta.archivePath) continue;
-        zipEntries[fileMeta.archivePath] = new Uint8Array(entry.buffer);
+    try {
+        for (const fileMeta of session.files) {
+            const entry = this.files.get(fileMeta.id);
+            if (!entry || !fileMeta.archivePath) throw new Error(fileMeta.displayName || fileMeta.name || 'file');
+            zipEntries[fileMeta.archivePath] = await this._readProjectEntryBytes(entry);
+        }
+    } catch (err) {
+        const fileName = err?.projectFileName || err?.message || i18n.t('file');
+        await Modal.alert(
+            i18n.t('sessionProjectReadFailedTitle'),
+            i18n.t('sessionProjectReadFailedBody').replace('{file}', fileName),
+            { icon: 'ZIP', className: 'modal-dialog-session-missing' },
+        );
+        return false;
     }
 
     const zipped = zipSync(zipEntries, { level: 6 });
     this._downloadBlob(new Blob([zipped], { type: 'application/zip' }), this._defaultSessionFileName('project', 'zip'));
+    return true;
+};
+
+proto._readProjectEntryBytes = async function(entry) {
+    const toBytes = value => {
+        if (value instanceof ArrayBuffer) return new Uint8Array(value);
+        if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        return null;
+    };
+
+    try {
+        if (entry?.liveUpdate?.hasAppliedAppend) {
+            const file = await this._readLiveUpdateFile(entry);
+            const parsedEnd = Number(entry.liveUpdate.lastParsedOffset);
+            if (!Number.isFinite(parsedEnd) || parsedEnd <= 0 || Number(file?.size) < parsedEnd) {
+                throw new Error('Live Update source no longer matches the displayed data');
+            }
+            const visibleFile = typeof file.slice === 'function' ? file.slice(0, parsedEnd) : file;
+            const liveBytes = toBytes(await (visibleFile.arrayBuffer
+                ? visibleFile.arrayBuffer()
+                : this._readAsArrayBuffer(visibleFile)));
+            if (!liveBytes) throw new Error('Could not read Live Update source');
+            return liveBytes;
+        }
+
+        let bytes = toBytes(entry?.buffer);
+        if (!bytes && entry?.file?.arrayBuffer) bytes = toBytes(await entry.file.arrayBuffer());
+        if (!bytes) bytes = toBytes(await this._readLatestBuffer(entry));
+        if (bytes) return bytes;
+    } catch (err) {
+        const wrapped = new Error(this._fileDisplayName(entry));
+        wrapped.projectFileName = this._fileDisplayName(entry);
+        wrapped.cause = err;
+        throw wrapped;
+    }
+    const error = new Error(this._fileDisplayName(entry));
+    error.projectFileName = this._fileDisplayName(entry);
+    throw error;
 };
 
 proto.openSessionOrProjectFromUser = function() {
@@ -55,8 +125,8 @@ proto.openSessionOrProjectFromUser = function() {
             cleanup();
             if (!file) { resolve(false); return; }
             try {
-                await this.loadSessionOrProjectFile(file);
-                resolve(true);
+                const loaded = await this.loadSessionOrProjectFile(file);
+                resolve(loaded !== false);
             } catch (err) {
                 reject(err);
             }
@@ -71,8 +141,18 @@ proto.loadSessionOrProjectFile = async function(file) {
     if (extension === '.json') {
         const text = await file.text();
         const session = this._parseSessionJson(text);
-        await this._applySessionSnapshot(session, { source: 'view' });
-        return;
+        const previousSession = this._createSessionSnapshot({ includeData: false });
+        try {
+            return await this._applySessionSnapshot(session, { source: 'view' });
+        } catch (err) {
+            const previousMap = new Map((previousSession.files || []).map(meta => [meta.id, meta.id]));
+            await this._applySessionSnapshot(previousSession, {
+                source: 'view',
+                fileMap: previousMap,
+                silent: true,
+            });
+            throw err;
+        }
     }
 
     if (extension === '.zip') {
@@ -81,9 +161,19 @@ proto.loadSessionOrProjectFile = async function(file) {
         const sessionBytes = entries['session.json'];
         if (!sessionBytes) throw new Error(i18n.t('sessionZipMissing'));
         const session = this._parseSessionJson(strFromU8(sessionBytes));
-        await this._loadProjectDataFromZip(session, entries);
-        await this._applySessionSnapshot(session, { source: 'project' });
-        return;
+        const transaction = await this._loadProjectDataFromZip(session, entries);
+        try {
+            const applied = await this._applySessionSnapshot(session, { source: 'project', fileMap: transaction.fileMap });
+            if (!applied) {
+                await this._rollbackProjectTransaction(transaction);
+                return false;
+            }
+            await this._finalizeProjectTransaction(transaction);
+        } catch (err) {
+            await this._rollbackProjectTransaction(transaction);
+            throw err;
+        }
+        return true;
     }
 
     throw new Error(i18n.t('sessionUnsupportedFile'));
@@ -124,6 +214,7 @@ proto._createSessionSnapshot = function(options = {}) {
             derived,
             dataTools,
             invertedVariables,
+            transformPanelExpanded: !!this._expandedFileTransforms?.has(fileId),
             archivePath,
         });
     }
@@ -143,6 +234,7 @@ proto._createSessionSnapshot = function(options = {}) {
 };
 
 proto._captureSessionSettings = function() {
+    const sidebar = typeof document !== 'undefined' ? document.getElementById('sidebar') : null;
     return {
         theme: this.theme,
         language: this.language,
@@ -159,6 +251,11 @@ proto._captureSessionSettings = function() {
         legendOverlayCorner: this.plotManager.legendOverlayCorner,
         timeseriesVisualMaxPoints: this.plotManager.timeseriesVisualMaxPoints,
         phaseVisualMaxPoints: this.plotManager.phaseVisualMaxPoints,
+        liveViewDefaults: this._cloneSerializable(this.plotManager.liveViewDefaults || {}),
+        advancedSettings: this._cloneSerializable(this.advancedSettings || {}),
+        variableFilterText: this._filterText || '',
+        sidebarHidden: !!sidebar?.classList.contains('hidden'),
+        sidebarWidth: sidebar?.style.width || '',
     };
 };
 
@@ -175,6 +272,7 @@ proto._capturePlotSessions = function() {
             stateAnimDim: plot.stateAnimDim || 2,
             stateConfig: this._cloneSerializable(plot.stateConfig),
             fft: this._cloneSerializable(plot.fft || this.plotManager._defaultFftState?.()),
+            histogram: this._cloneSerializable(plot.histogram || this.plotManager._defaultHistogramState?.()),
             heatmap: this._cloneSerializable(plot.heatmap || this.plotManager._defaultCalendarHeatmapState?.()),
             correlation: this._cloneSerializable(plot.correlation || this.plotManager._defaultCorrelationState?.()),
             phase2d: this._cloneSerializable(plot.phase2d || this.plotManager._defaultPhase2dState?.()),
@@ -187,9 +285,11 @@ proto._capturePlotSessions = function() {
             homeCamera: this._cloneSerializable(plot.homeCamera),
             animFrame: plot.animFrame || 0,
             animSpeed: plot.animSpeed || 1,
-            autoPlayOnRender: false,
+            animPlaying: !!plot.animPlaying,
             timeseriesStacked: !!plot.timeseriesStacked,
             timeseriesY2Enabled: !!plot.timeseriesY2Enabled,
+            showMissingData: !!plot.showMissingData,
+            modeViews: this._cloneSerializable(plot._modeViews || {}),
             view: this.plotManager._capturePlotView(plot),
         });
     }
@@ -210,6 +310,11 @@ proto._parseSessionJson = function(text) {
 };
 
 proto._loadProjectDataFromZip = async function(session, entries) {
+    for (const fileMeta of session.files || []) {
+        if (!fileMeta.archivePath) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || 'file'));
+        if (!entries[fileMeta.archivePath]) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || fileMeta.archivePath));
+    }
+
     if (this.files.size || this.plotManager.hasAnyTraces()) {
         const ok = await Modal.confirm(i18n.t('sessionProjectReplaceWarning'), { icon: 'ZIP' });
         if (!ok) {
@@ -219,24 +324,107 @@ proto._loadProjectDataFromZip = async function(session, entries) {
         }
     }
 
-    this._resetWorkspaceForSession();
+    const previousActiveFileId = this.activeFileId;
+    const previousSession = this._createSessionSnapshot({ includeData: false });
+    const previousFiles = [...this.files.entries()];
+    const previousPlotFiles = [...this.plotManager.files.entries()];
+    const previousDerivedByFile = [...this.derivedByFile.entries()];
+    const previousDataToolsByFile = [...(this.dataToolVariablesByFile || new Map()).entries()];
+    const previousAdvancedSettings = this._cloneSerializable(this.advancedSettings || {});
+    if (session.settings?.advancedSettings && this._normalizeAdvancedSettings) {
+        this.advancedSettings = this._normalizeAdvancedSettings(session.settings.advancedSettings);
+    }
 
-    for (const fileMeta of session.files || []) {
-        if (!fileMeta.archivePath) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || 'file'));
-        const bytes = entries[fileMeta.archivePath];
-        if (!bytes) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || fileMeta.archivePath));
-        const file = new File([bytes], fileMeta.displayName || `${fileMeta.name || 'results'}${fileMeta.extension || '.mat'}`);
-        // The archived bytes of an Excel entry are the raw workbook; restore
-        // the recorded sheet directly so the sheet picker never re-appears.
-        await this.loadFile(file, {
-            excelSheetName: fileMeta.excel?.sheetName || null,
-            matSelection: fileMeta.matlab || null,
-        });
+    const stagedIds = [];
+    const fileMap = new Map();
+    try {
+        for (const fileMeta of session.files || []) {
+            const bytes = entries[fileMeta.archivePath];
+            const file = new File([bytes], fileMeta.displayName || `${fileMeta.name || 'results'}${fileMeta.extension || '.mat'}`);
+            // The archived bytes of an Excel entry are the raw workbook; restore
+            // the recorded sheet directly so the sheet picker never re-appears.
+            const result = await this.loadFile(file, {
+                excelSheetName: fileMeta.excel?.sheetName || null,
+                matSelection: fileMeta.matlab || null,
+                deferUi: true,
+                deferPlotRebuild: true,
+                throwOnError: true,
+            });
+            if (!result?.fileId) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', file.name));
+            stagedIds.push(result.fileId);
+            fileMap.set(fileMeta.id, result.fileId);
+        }
+    } catch (err) {
+        await this._discardStagedProjectFiles(stagedIds, previousActiveFileId);
+        this.advancedSettings = previousAdvancedSettings;
+        this.plotManager.setRelayoutRefreshMode?.(previousAdvancedSettings.panZoomRefreshMode || 'auto');
+        throw err;
+    }
+
+    await this._commitStagedProjectFiles(stagedIds);
+    return {
+        fileMap,
+        stagedIds,
+        previousSession,
+        previousFiles,
+        previousPlotFiles,
+        previousDerivedByFile,
+        previousDataToolsByFile,
+        previousActiveFileId,
+        previousAdvancedSettings,
+    };
+};
+
+proto._discardStagedProjectFiles = async function(stagedIds, previousActiveFileId = null) {
+    for (const fileId of stagedIds || []) {
+        const data = this.plotManager.files.get(fileId)?.data;
+        try { await data?._duckdb?.source?.release?.(data); } catch (_) {}
+        this.files.delete(fileId);
+        this.plotManager.files.delete(fileId);
+    }
+    this.plotManager.activeFileId = previousActiveFileId && this.files.has(previousActiveFileId)
+        ? previousActiveFileId
+        : (this.files.keys().next().value || null);
+};
+
+proto._commitStagedProjectFiles = async function(stagedIds) {
+    const stagedSet = new Set(stagedIds || []);
+    const stagedFiles = [...stagedSet].map(fileId => [fileId, this.files.get(fileId)]);
+    const stagedPlotFiles = [...stagedSet].map(fileId => [fileId, this.plotManager.files.get(fileId)]);
+
+    this._resetWorkspaceForSession();
+    for (const [fileId, entry] of stagedFiles) if (entry) this.files.set(fileId, entry);
+    for (const [fileId, entry] of stagedPlotFiles) if (entry) this.plotManager.files.set(fileId, entry);
+    this.plotManager.activeFileId = stagedIds?.[0] || null;
+};
+
+proto._finalizeProjectTransaction = async function(transaction) {
+    for (const [, plotEntry] of transaction?.previousPlotFiles || []) {
+        try { await plotEntry?.data?._duckdb?.source?.release?.(plotEntry.data); } catch (_) {}
     }
 };
 
+proto._rollbackProjectTransaction = async function(transaction) {
+    for (const [, plotEntry] of this.plotManager.files) {
+        try { await plotEntry?.data?._duckdb?.source?.release?.(plotEntry.data); } catch (_) {}
+    }
+    this._resetWorkspaceForSession();
+    for (const [fileId, entry] of transaction?.previousFiles || []) this.files.set(fileId, entry);
+    for (const [fileId, entry] of transaction?.previousPlotFiles || []) this.plotManager.files.set(fileId, entry);
+    for (const [fileId, definitions] of transaction?.previousDerivedByFile || []) this.derivedByFile.set(fileId, definitions);
+    for (const [fileId, definitions] of transaction?.previousDataToolsByFile || []) this.dataToolVariablesByFile.set(fileId, definitions);
+    this.plotManager.activeFileId = transaction?.previousActiveFileId || null;
+    this.advancedSettings = this._cloneSerializable(transaction?.previousAdvancedSettings || {});
+    const previousMap = new Map((transaction?.previousSession?.files || []).map(meta => [meta.id, meta.id]));
+    await this._applySessionSnapshot(transaction.previousSession, {
+        source: 'view',
+        fileMap: previousMap,
+        silent: true,
+    });
+};
+
 proto._applySessionSnapshot = async function(session, options = {}) {
-    const fileMap = this._matchSessionFiles(session);
+    const fileMap = options.fileMap instanceof Map ? options.fileMap : this._matchSessionFiles(session);
     const missing = this._missingSessionFiles(session, fileMap);
     if (missing.length) {
         const list = missing
@@ -255,9 +443,12 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     }
 
     this._applySessionSettings(session.settings || {});
-    await this._applySessionFileMetadata(session, fileMap);
-    this._applySessionDerivedVariables(session, fileMap);
-    this._applySessionDataToolVariables(session, fileMap);
+    this._clearGeneratedVariablesForSession(fileMap);
+    await this._applySessionFileMetadata(session, fileMap, { projectData: options.source === 'project' });
+    this._applySessionDerivedVariables(session, fileMap, { defer: true });
+    this._applySessionDataToolVariables(session, fileMap, { defer: true });
+    this._reapplySessionGeneratedVariables(session, fileMap);
+    this._applySessionInvertedVariables(session, fileMap);
     this._applySessionLayout(session.layout);
     await this._applySessionPlots(session.plots || [], fileMap);
 
@@ -268,16 +459,21 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     this._updateTopBar();
     this._renderFilesList();
     this._updateActionButtons();
+    this._syncSessionSettingsUI();
     const activeData = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
     if (activeData) this.renderVariablesTree(activeData.tree);
     this._resetDataToolPicker?.();
-    document.getElementById('drop-zone')?.classList.toggle('active', this.files.size === 0);
+    if (typeof document !== 'undefined') {
+        document.getElementById('drop-zone')?.classList.toggle('active', this.files.size === 0);
+    }
 
-    await Modal.alert(
-        i18n.t('sessionAppliedTitle'),
-        i18n.t(options.source === 'project' ? 'sessionProjectLoadedBody' : 'sessionViewAppliedBody'),
-        { icon: options.source === 'project' ? 'ZIP' : 'JSON' },
-    );
+    if (!options.silent) {
+        await Modal.alert(
+            i18n.t('sessionAppliedTitle'),
+            i18n.t(options.source === 'project' ? 'sessionProjectLoadedBody' : 'sessionViewAppliedBody'),
+            { icon: options.source === 'project' ? 'ZIP' : 'JSON' },
+        );
+    }
     return true;
 };
 
@@ -343,7 +539,12 @@ proto._scoreSessionFileMatch = function(session, meta, fileId, entry) {
 
 proto._missingSessionFiles = function(session, fileMap) {
     return (session.files || [])
-        .filter(meta => !fileMap.has(meta.id))
+        .filter(meta => {
+            const fileId = fileMap.get(meta.id);
+            const variables = fileId ? this.plotManager.files.get(fileId)?.data?.variables : null;
+            if (!variables) return true;
+            return this._sessionRequiredVariables(meta.id, session).some(name => !variables[name]);
+        })
         .map(meta => {
             const required = this._sessionRequiredVariables(meta.id, session);
             const suffix = required.length ? ` (${required.slice(0, 5).join(', ')}${required.length > 5 ? ', ...' : ''})` : '';
@@ -372,8 +573,16 @@ proto._sessionRequiredVariables = function(sessionFileId, session) {
                 if (!generatedNames.has(name)) names.add(name);
             });
         }
+        if (plot.phasePending?.fileId === sessionFileId) {
+            [plot.phasePending.x, plot.phasePending.y, plot.phasePending.z].filter(Boolean).forEach(name => {
+                if (!generatedNames.has(name)) names.add(name);
+            });
+        }
         if (plot.stateSlots?.fileId === sessionFileId) {
             (plot.stateSlots.x || []).filter(Boolean).forEach(name => {
+                if (!generatedNames.has(name)) names.add(name);
+            });
+            (plot.stateSlots.dx || []).filter(Boolean).forEach(name => {
                 if (!generatedNames.has(name)) names.add(name);
             });
         }
@@ -390,36 +599,108 @@ proto._applySessionSettings = function(settings) {
     this.showDescriptions = !!settings.showDescriptions;
     this.sortAlphabetical = settings.sortAlphabetical !== false;
     this.reloadAsNewVersionMode = !!settings.reloadAsNewVersionMode;
+    this.mouseWheelZoom = settings.mouseWheelZoom !== false;
+    this._filterText = String(settings.variableFilterText || '').trim().toLowerCase();
+    this._sessionSidebarHidden = !!settings.sidebarHidden;
+    this._sessionSidebarWidth = typeof settings.sidebarWidth === 'string' ? settings.sidebarWidth : '';
+    if (settings.advancedSettings && this._normalizeAdvancedSettings) {
+        this.advancedSettings = this._normalizeAdvancedSettings(settings.advancedSettings);
+        this._saveAdvancedSettings?.(this.advancedSettings);
+        this.plotManager.setRelayoutRefreshMode?.(this.advancedSettings.panZoomRefreshMode);
+    }
     this.plotManager.setSyncAxes(settings.syncAxes !== false);
     this.plotManager.setSyncHover(!!settings.syncHover);
     this.plotManager.setHoverInfoCorner(settings.hoverInfoCorner || 'bl');
     this.plotManager.setHoverProximity(settings.hoverProximity !== false);
     this.plotManager.setLegendPosition(settings.legendPosition || 'overlay');
     this.plotManager.setLegendOverlayCorner(settings.legendOverlayCorner || 'tl');
-    this.plotManager.setMouseWheelZoom(settings.mouseWheelZoom !== false);
+    this.plotManager.setMouseWheelZoom(this.mouseWheelZoom);
     this.plotManager.setTimeseriesDownsamplingLimit(settings.timeseriesVisualMaxPoints ?? this.plotManager.timeseriesVisualMaxPoints);
     this.plotManager.setPhaseDownsamplingLimit(settings.phaseVisualMaxPoints ?? this.plotManager.phaseVisualMaxPoints);
+    if (settings.liveViewDefaults) {
+        this.plotManager.liveViewDefaults = {
+            ...(this.plotManager.liveViewDefaults || {}),
+            ...this._cloneSerializable(settings.liveViewDefaults),
+        };
+    }
     this.scrollablePlotArea = !!settings.scrollablePlotArea;
     this.layoutManager.setScrollablePlotArea(this.scrollablePlotArea);
     this._syncScrollablePlotAreaUI();
     this._syncHoverCornerPicker?.();
+    this._syncSessionSettingsUI();
 };
 
-proto._applySessionFileMetadata = async function(session, fileMap) {
+proto._clearGeneratedVariablesForSession = function(fileMap) {
+    for (const fileId of new Set(fileMap.values())) {
+        const data = this.plotManager.files.get(fileId)?.data;
+        if (!data) continue;
+        const toolDefinitions = this.dataToolVariablesByFile?.get(fileId) || new Map();
+        for (const [name, definition] of toolDefinitions) {
+            if ((definition.targetMode || 'create') === 'modify') {
+                const variable = data.variables?.[definition.sourceName || name];
+                const originalData = definition.originalData;
+                if (variable && originalData?.length) {
+                    variable.data = Array.from(originalData);
+                    variable.dataType = this.parser._detectDataType(variable.data, 'variable');
+                    variable.isConstant = this.parser._isConstantValues(variable.data);
+                    delete variable.dataToolModified;
+                    delete variable.dataTool;
+                    delete variable._duckdbDataTool;
+                }
+            } else {
+                delete data.variables?.[name];
+            }
+        }
+        for (const name of this.derivedByFile.get(fileId)?.keys() || []) delete data.variables?.[name];
+    }
+    this.derivedByFile.clear();
+    this.dataToolVariablesByFile?.clear();
+};
+
+proto._syncSessionSettingsUI = function() {
+    if (typeof document === 'undefined') return;
+    const checked = (selector, value) => {
+        const input = document.querySelector(selector);
+        if (input) input.checked = !!value;
+    };
+    checked('#link-time-axes', this.plotManager.syncAxes);
+    checked('#sync-hover', this.plotManager.syncHover);
+    checked('#hover-proximity', this.plotManager.hoverProximity);
+    checked('#mouse-wheel-zoom', this.mouseWheelZoom);
+    checked('#scrollable-plot-area', this.scrollablePlotArea);
+    checked('#reload-as-version-toggle', this.reloadAsNewVersionMode);
+    document.querySelectorAll('input[name="legend-pos"]').forEach(input => {
+        input.checked = input.value === this.plotManager.legendPosition;
+    });
+    document.getElementById('toggle-descriptions')?.classList.toggle('active', this.showDescriptions);
+    document.getElementById('toggle-sort')?.classList.toggle('active', this.sortAlphabetical);
+    const variableFilter = document.getElementById('variable-filter');
+    if (variableFilter) variableFilter.value = this._filterText;
+    const clearVariableFilter = document.getElementById('clear-variable-filter');
+    if (clearVariableFilter) clearVariableFilter.hidden = !this._filterText;
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) {
+        sidebar.classList.toggle('hidden', !!this._sessionSidebarHidden);
+        if (this._sessionSidebarWidth) sidebar.style.width = this._sessionSidebarWidth;
+    }
+    this._applyReloadModeUI?.();
+    this._syncLegendCornerPicker?.();
+    this._syncHoverCornerPicker?.();
+};
+
+proto._applySessionFileMetadata = async function(session, fileMap, options = {}) {
     const skippedProfiles = [];
     for (const meta of session.files || []) {
         const fileId = fileMap.get(meta.id);
         const entry = fileId ? this.files.get(fileId) : null;
         if (!entry) continue;
         entry.transform = this._normalizeFileTransform(meta.transform);
+        this._expandedFileTransforms ||= new Set();
+        if (meta.transformPanelExpanded) this._expandedFileTransforms.add(fileId);
+        else this._expandedFileTransforms.delete(fileId);
         this.plotManager.setFileTransform(fileId, entry.transform);
         const plotEntry = this.plotManager.files.get(fileId);
-        if (plotEntry) {
-            plotEntry.invertedVariables = new Set(
-                (meta.invertedVariables || []).filter(name => !!plotEntry.data?.variables?.[name]),
-            );
-            plotEntry._transformCache = null;
-        }
+        if (plotEntry) plotEntry._transformCache = null;
         if (meta.csvProfile?.profileSource !== 'user') continue;
 
         const currentHash = entry.contentHash || '';
@@ -446,7 +727,9 @@ proto._applySessionFileMetadata = async function(session, fileMap) {
                 continue;
             }
             const streamable = this._canParseFromFile?.(entry.file, entry.extension);
-            const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
+            const latestFile = streamable
+                ? (options.projectData ? entry.file : await this._readLatestFileForStreamableReload(entry))
+                : null;
             const buffer = streamable ? null : await this._readLatestBuffer(entry);
             const contentHash = buffer
                 ? await this._hashBuffer(buffer)
@@ -471,7 +754,7 @@ proto._applySessionFileMetadata = async function(session, fileMap) {
     }
 };
 
-proto._applySessionDerivedVariables = function(session, fileMap) {
+proto._applySessionDerivedVariables = function(session, fileMap, options = {}) {
     for (const meta of session.files || []) {
         const fileId = fileMap.get(meta.id);
         const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
@@ -482,14 +765,14 @@ proto._applySessionDerivedVariables = function(session, fileMap) {
         }
         if (definitions.size) {
             this.derivedByFile.set(fileId, definitions);
-            this._reapplyDerivedVariables(fileId, data);
+            if (!options.defer) this._reapplyDerivedVariables(fileId, data);
         } else {
             this.derivedByFile.delete(fileId);
         }
     }
 };
 
-proto._applySessionDataToolVariables = function(session, fileMap) {
+proto._applySessionDataToolVariables = function(session, fileMap, options = {}) {
     for (const meta of session.files || []) {
         const fileId = fileMap.get(meta.id);
         const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
@@ -510,10 +793,68 @@ proto._applySessionDataToolVariables = function(session, fileMap) {
         }
         if (definitions.size) {
             this.dataToolVariablesByFile.set(fileId, definitions);
-            this._reapplyDataToolVariables?.(fileId, data);
+            if (!options.defer) this._reapplyDataToolVariables?.(fileId, data);
         } else {
             this.dataToolVariablesByFile.delete(fileId);
         }
+    }
+};
+
+proto._reapplySessionGeneratedVariables = function(session, fileMap) {
+    for (const meta of session.files || []) {
+        const fileId = fileMap.get(meta.id);
+        const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+        if (!fileId || !data) continue;
+
+        const pendingDerived = new Map(this.derivedByFile.get(fileId) || []);
+        const pendingTools = new Map(this.dataToolVariablesByFile?.get(fileId) || []);
+        const knownVariableNames = new Set([
+            ...Object.keys(data.variables || {}),
+            ...pendingDerived.keys(),
+            ...pendingTools.keys(),
+        ]);
+        const maxPasses = pendingDerived.size + pendingTools.size + 1;
+        for (let pass = 0; pass < maxPasses && (pendingDerived.size || pendingTools.size); pass++) {
+            let progressed = false;
+            for (const [name, definition] of [...pendingTools]) {
+                if (this._reapplyDataToolDefinition?.(fileId, data, name, definition)) {
+                    pendingTools.delete(name);
+                    progressed = true;
+                }
+            }
+            for (const [name, entry] of [...pendingDerived]) {
+                const references = this._derivedFormulaReferences?.(entry.formula, knownVariableNames) || [];
+                const waitsForModifier = [...pendingTools.values()].some(definition => (
+                    (definition.targetMode || 'create') === 'modify'
+                    && references.includes(definition.sourceName)
+                ));
+                if (waitsForModifier) continue;
+                if (this._reapplyDerivedVariable?.(fileId, data, name, entry)) {
+                    pendingDerived.delete(name);
+                    progressed = true;
+                }
+            }
+            if (!progressed) break;
+        }
+        if (data._duckdb) this._refreshLazyDataToolOverview?.(data);
+        if (pendingDerived.size || pendingTools.size) {
+            console.warn('[session] unresolved generated variables:', [
+                ...pendingDerived.keys(),
+                ...pendingTools.keys(),
+            ].join(', '));
+        }
+    }
+};
+
+proto._applySessionInvertedVariables = function(session, fileMap) {
+    for (const meta of session.files || []) {
+        const fileId = fileMap.get(meta.id);
+        const plotEntry = fileId ? this.plotManager.files.get(fileId) : null;
+        if (!plotEntry) continue;
+        plotEntry.invertedVariables = new Set(
+            (meta.invertedVariables || []).filter(name => !!plotEntry.data?.variables?.[name]),
+        );
+        plotEntry._transformCache = null;
     }
 };
 
@@ -546,6 +887,9 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.fft = this.plotManager._normalizeFftState
             ? this.plotManager._normalizeFftState(saved.fft || plot.fft)
             : this._cloneSerializable(saved.fft || plot.fft);
+        plot.histogram = this.plotManager._normalizeHistogramState
+            ? this.plotManager._normalizeHistogramState(saved.histogram || plot.histogram || {})
+            : this._cloneSerializable(saved.histogram || plot.histogram);
         plot.heatmap = this.plotManager._normalizeCalendarHeatmapState
             ? this.plotManager._normalizeCalendarHeatmapState(saved.heatmap || plot.heatmap || {})
             : this._cloneSerializable(saved.heatmap || plot.heatmap);
@@ -569,11 +913,14 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.homeCamera = this._cloneSerializable(saved.homeCamera);
         plot.animFrame = saved.animFrame || 0;
         plot.animSpeed = saved.animSpeed || 1;
-        plot.autoPlayOnRender = false;
+        plot.autoPlayOnRender = !!saved.animPlaying;
         plot.timeseriesStacked = !!saved.timeseriesStacked && !saved.timeseriesY2Enabled;
         plot.timeseriesY2Enabled = !!saved.timeseriesY2Enabled;
+        plot.showMissingData = !!saved.showMissingData;
+        plot._modeViews = this._cloneSerializable(saved.modeViews || {});
         if (!plot.timeseriesY2Enabled) plot.traces.forEach(trace => { trace.axis = 'y'; });
         plot.stateSlots = this._mappedStateSlots(saved.stateSlots, fileMap);
+        plot.phasePending = this._mappedPhasePending(saved.phasePending, fileMap);
 
         if (saved.view) plot._pendingViewRestore = this._cloneSerializable(saved.view);
         this.plotManager._rebuildPanel(saved.panelId);
@@ -595,6 +942,16 @@ proto._mappedStateSlots = function(slots, fileMap) {
     const x = (slots?.x || []).filter(name => !!variables[name]);
     const dx = (slots?.dx || []).filter(name => !!variables[name]);
     return { x, dx, fileId: fileId || null };
+};
+
+proto._mappedPhasePending = function(pending, fileMap) {
+    const fileId = fileMap.get(pending?.fileId);
+    if (!fileId) return { x: null, y: null, z: null, fileId: null };
+    const variables = this.plotManager.files.get(fileId)?.data?.variables || {};
+    const x = pending?.x && variables[pending.x] ? pending.x : null;
+    const y = pending?.y && variables[pending.y] ? pending.y : null;
+    const z = pending?.z && variables[pending.z] ? pending.z : null;
+    return { x, y, z, fileId: x || y || z ? fileId : null };
 };
 
 proto._resetWorkspaceForSession = function() {

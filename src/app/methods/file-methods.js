@@ -190,7 +190,9 @@ proto.loadFile = async function(file, options = {}) {
         this._adoptExcelCsvCache(this.files.get(fileId), data);
 
         // PlotManager takes ownership of the data
-        this.plotManager.addFile(fileId, baseName, data, transform);
+        this.plotManager.addFile(fileId, baseName, data, transform, {
+            deferRebuild: options.deferPlotRebuild === true,
+        });
 
         if (!options.deferUi) {
             // Hide drop zone after first file
@@ -217,6 +219,7 @@ proto.loadFile = async function(file, options = {}) {
             this._hideFileLoadingOverlay();
         }
         console.error('Error loading file:', err);
+        if (options.throwOnError) throw err;
         // A formatted dialog (not the browser's native alert) so limit/parse
         // errors read as an in-app warning, with the actionable message intact.
         await Modal.alert(i18n.t('errorLoading'), err?.message || String(err));
