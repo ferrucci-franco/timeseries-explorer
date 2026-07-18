@@ -36,6 +36,9 @@
 !/docs/**
 !/scripts/
 !/scripts/**
+# Personal Spyder worksheets.
+/scripts/gen-multiindex-parquet-spyder.py
+/scripts/__pycache__/
 !/electron/
 !/electron/**
 !/build/
