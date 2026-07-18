@@ -253,6 +253,13 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     assert.equal(plot._missingTooDense, true, 'more gaps than half the pixel width flags dense');
     assert.ok(shapes.every(s => s.line.width === 0), 'dense bands carry no stroke');
     assert.ok(shapes.every(s => alphaOf(s) <= 0.15), 'dense bands use a faint wash so the signal reads through');
+
+    // In timeseries mode a dense view draws NO band at all — the "zoom in" pill
+    // carries the message and the (WebGL) signal stays completely clear.
+    const tsPlot = { mode: 'timeseries', div: { _fullLayout: { xaxis: { range: [0, 1000], _length: 100 } } } };
+    const tsShapes = h._adaptiveGapBandShapes(tsPlot, items);
+    assert.equal(tsShapes.length, 0, 'dense timeseries view draws no band (pill only)');
+    assert.equal(tsPlot._missingTooDense, true, 'but the dense flag is still set so the pill shows');
 }
 
 // ── Gating: with the flag off, nothing changes ──

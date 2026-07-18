@@ -1288,6 +1288,12 @@ proto._adaptiveGapBandShapes = function(plot, items) {
         && clipped.length > xa._length * 0.5;
     plot._missingTooDense = dense;
 
+    // Timeseries: when dense, draw NOTHING — any wash, however faint, sits over
+    // the (WebGL) trace and buries the signal. The "zoom in" pill carries the
+    // message instead, leaving the trace fully clear. The FFT time pane has no
+    // such pill, so it keeps a faint wash below to still flag missing samples.
+    if (dense && plot.mode === 'timeseries') return [];
+
     // Coalesce at pixel resolution, so dense missing data never floods Plotly.
     // If it is STILL pathologically fragmented (sub-2px alternation), keep only
     // the widest merged bands as a final guard.
