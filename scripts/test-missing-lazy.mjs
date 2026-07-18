@@ -57,6 +57,7 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
     assert.equal(r.coverage, 1, 'coverage is 1');
     assert.equal(r.dense, true, 'uniform scatter is dense');
     assert.equal(r.intervals[0].fileId, 'f', 'carries fileId for per-file grouping');
+    assert.equal(r.solidIntervals.length, 0, 'scattered (partial) buckets are never solid');
 }
 
 // Blocks: two fully-missing buckets (2,3) and one fully-missing (7) → two intervals,
@@ -69,6 +70,18 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
     assert.deepEqual([r.intervals[1].t0, r.intervals[1].t1], [700, 800], 'second block is bucket 7');
     assert.equal(r.partialCount, 0, 'fully-missing blocks are not partial');
     assert.equal(r.dense, false, 'resolvable blocks are not dense');
+    assert.deepEqual(r.solidIntervals.map(i => [i.t0, i.t1]), [[200, 400], [700, 800]], 'full blocks are solid intervals');
+}
+
+// A block that is dense elsewhere: a fully-missing bucket surrounded by partial
+// buckets is still its own SOLID interval (always painted), while the partials
+// make the view dense (wash / pill).
+{
+    const buckets = Array.from({ length: 10 }, (_, b) => ({ b, nTotal: 100, nMissing: b === 5 ? 100 : 40 }));
+    const r = missingBucketsToIntervals(buckets, opts());
+    assert.equal(r.dense, true, 'the surrounding partial buckets make it dense');
+    assert.deepEqual(r.solidIntervals.map(i => [i.t0, i.t1]), [[500, 600]], 'the fully-missing bucket is a solid interval');
+    assert.equal(r.intervals.length, 1, 'the any-missing extent coalesces to one interval');
 }
 
 // Time gap: an ABSENT interior bucket (5) is a gap; absent edge buckets are outside data.
@@ -79,6 +92,7 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
     assert.equal(r.intervals.length, 1, 'only the interior empty bucket is a gap');
     assert.deepEqual([r.intervals[0].t0, r.intervals[0].t1], [500, 600], 'gap spans the empty interior bucket');
     assert.equal(r.missingBuckets, 1, 'edge-absent buckets (outside data) are not missing');
+    assert.deepEqual(r.solidIntervals.map(i => [i.t0, i.t1]), [[500, 600]], 'a time gap is a solid interval');
 }
 
 // Empty input / zero span are safe.

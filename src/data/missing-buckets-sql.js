@@ -59,7 +59,7 @@ export function buildMissingBucketsSql(tExpr, tableName, valueExprs, lit, lo, hi
 export function missingBucketsToIntervals(buckets, { t0, t1, nBuckets, fileId = null, timeVar = null } = {}) {
     const nb = Math.max(1, Math.floor(nBuckets));
     const span = t1 - t0;
-    const empty = { intervals: [], partialCount: 0, coverage: 0, dense: false, missingBuckets: 0 };
+    const empty = { intervals: [], solidIntervals: [], partialCount: 0, coverage: 0, dense: false, missingBuckets: 0 };
     if (!(span > 0) || !Array.isArray(buckets) || !buckets.length) return empty;
 
     const total = new Float64Array(nb);
@@ -79,28 +79,30 @@ export function missingBucketsToIntervals(buckets, { t0, t1, nBuckets, fileId = 
     if (last < first) return empty;
 
     const bucketLo = (i) => t0 + (i / nb) * span;
-    const intervals = [];
+    const mk = (r) => ({ fileId, timeVar, t0: bucketLo(r[0]), t1: bucketLo(r[1] + 1) });
+    const intervals = [];      // ANY missing (drives the wash / coverage / dense)
+    const solidIntervals = []; // FULLY missing (gaps + full blocks) — always drawn
     let partialCount = 0;
     let missingBuckets = 0;
-    let run = null; // [startBucket, endBucket]
+    let anyRun = null;   // run of any-missing buckets
+    let solidRun = null; // run of fully-missing buckets
     for (let i = first; i <= last; i++) {
         const present = total[i] > 0;
         const miss = missing[i];
-        const isMissing = !present || miss > 0; // gap inside data, or some NaN
+        const isMissing = !present || miss > 0;                 // gap inside data, or some NaN
+        const isFull = !present || miss >= total[i];            // whole bucket missing (gap / full block)
         if (present && miss > 0 && miss < total[i]) partialCount++;
-        if (isMissing) {
-            missingBuckets++;
-            if (run) run[1] = i; else run = [i, i];
-        } else if (run) {
-            intervals.push({ fileId, timeVar, t0: bucketLo(run[0]), t1: bucketLo(run[1] + 1) });
-            run = null;
-        }
+        if (isMissing) { missingBuckets++; if (anyRun) anyRun[1] = i; else anyRun = [i, i]; }
+        else if (anyRun) { intervals.push(mk(anyRun)); anyRun = null; }
+        if (isFull) { if (solidRun) solidRun[1] = i; else solidRun = [i, i]; }
+        else if (solidRun) { solidIntervals.push(mk(solidRun)); solidRun = null; }
     }
-    if (run) intervals.push({ fileId, timeVar, t0: bucketLo(run[0]), t1: bucketLo(run[1] + 1) });
+    if (anyRun) intervals.push(mk(anyRun));
+    if (solidRun) solidIntervals.push(mk(solidRun));
 
     const coverage = missingBuckets / nb;
     // Dense = enough partial buckets that the scattered missing cannot be
     // resolved at this zoom (blocks/gaps alone stay resolvable → not dense).
     const dense = partialCount >= Math.max(3, Math.floor(nb * 0.01));
-    return { intervals, partialCount, coverage, dense, missingBuckets };
+    return { intervals, solidIntervals, partialCount, coverage, dense, missingBuckets };
 }

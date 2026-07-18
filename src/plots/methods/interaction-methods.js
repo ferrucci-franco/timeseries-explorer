@@ -1136,21 +1136,27 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 
 // current view. Reuses the lazy-detail pill styling (pointer-events:none) but
 // without a spinner. Toggled from the authoritative restyle path so it tracks
 // zoom, and cleared when the Missing/NaN overlay is turned off.
-proto._setMissingDensityNotice = function(plot, dense) {
+// `state`: false/null → hide; true/'dense' → "too dense, zoom in"; 'loading' →
+// a spinner + "Searching for missing data…" while the lazy DuckDB query runs
+// (so the user knows something is happening before the bands appear).
+proto._setMissingDensityNotice = function(plot, state) {
     const panelEl = plot?.div?.closest('.layout-panel');
     if (!panelEl) return;
+    const mode = state === true ? 'dense' : (state || null);
     let pill = panelEl.querySelector('.missing-dense-indicator');
-    if (dense) {
+    if (mode === 'dense' || mode === 'loading') {
         if (!pill) {
             pill = document.createElement('div');
             pill.className = 'lazy-detail-indicator missing-dense-indicator';
             pill.setAttribute('aria-live', 'polite');
-            pill.innerHTML = '<span class="lazy-detail-text"></span>';
+            pill.innerHTML = '<span class="lazy-detail-spinner missing-notice-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
             panelEl.appendChild(pill);
         }
-        const label = i18n.t('timeseriesMissingDense');
+        const label = i18n.t(mode === 'loading' ? 'timeseriesMissingSearching' : 'timeseriesMissingDense');
         const text = pill.querySelector('.lazy-detail-text');
         if (text) text.textContent = label;
+        const spinner = pill.querySelector('.missing-notice-spinner');
+        if (spinner) spinner.style.display = mode === 'loading' ? '' : 'none';
         pill.title = label;
         pill.setAttribute('aria-label', label);
         pill.classList.add('active');
@@ -1186,46 +1192,86 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
     }
     const eagerItems = this._missingDataInfo(plot).bandItems; // non-view files only
 
-    const render = (items, dense) => {
+    // Wash (any-missing, dense-aware, wall-suppressed) with fully-missing gaps /
+    // blocks (`solidItems`) always painted ON TOP — so a big gap still shows even
+    // when the scattered wash is suppressed as a uniform wall.
+    const render = (allItems, solidItems, dense) => {
         if (!plot.div || !plot.showMissingData) return;
-        Plotly.relayout(plot.div, { shapes: this._adaptiveGapBandShapes(plot, items, dense) });
+        const wash = this._adaptiveGapBandShapes(plot, allItems, dense);
+        const solid = dense ? this._adaptiveGapBandShapes(plot, solidItems, false) : [];
+        Plotly.relayout(plot.div, { shapes: [...wash, ...solid] });
         this._setMissingDensityNotice(plot, dense);
     };
 
     if (!perFile.size) {
-        render(eagerItems, this._missingViewIsDense(plot, eagerItems));
+        render(eagerItems, [], this._missingViewIsDense(plot, eagerItems));
         return;
     }
 
     const xa = plot.div._fullLayout?.xaxis;
-    const nBuckets = Math.max(50, Math.min(2000, Math.round(xa?._length || 1500)));
+    const pxWidth = Math.max(50, Math.min(2000, Math.round(xa?._length || 1500)));
     const sig = [
-        nBuckets, Math.round(t0), Math.round(t1), eagerItems.length,
+        pxWidth, Math.round(t0), Math.round(t1), eagerItems.length,
         [...perFile.entries()].map(([fid, e]) => `${fid}:${[...e.varNames].sort().join(',')}`).join('|'),
     ].join('');
     if (plot._lazyMissSig === sig && plot._lazyMissItems) {
-        render(plot._lazyMissItems, plot._lazyMissDense);
+        render(plot._lazyMissItems, plot._lazyMissSolid || [], plot._lazyMissDense);
         return;
     }
 
+    // Immediate feedback: a spinner pill while the query runs.
+    this._setMissingDensityNotice(plot, 'loading');
+
     Promise.all([...perFile.entries()].map(([fileId, entry]) => {
         const src = this._sourceRangeForDisplayRange(fileId, [t0, t1], entry.timeVar);
-        if (!src || !src.every(Number.isFinite)) return { intervals: [], dense: false };
+        if (!src || !src.every(Number.isFinite)) return { intervals: [], solidIntervals: [], dense: false };
+        // Cap buckets to the estimated sample count in view. Finer than the real
+        // sampling, most buckets would be empty and read as false time gaps
+        // (whole view painted yellow at deep zoom) — so ~one bucket per sample.
+        const nBuckets = this._lazyMissingBucketCount(entry.data, src[0], src[1], pxWidth);
         return entry.source.getMissingIntervals(entry.data, [...entry.varNames], src[0], src[1], nBuckets)
             .then(({ buckets }) => missingBucketsToIntervals(buckets, { t0, t1, nBuckets, fileId, timeVar: entry.timeVar }))
-            .catch(err => { console.warn('[missing] lazy query failed:', err); return { intervals: [], dense: false }; });
+            .catch(err => { console.warn('[missing] lazy query failed:', err); return { intervals: [], solidIntervals: [], dense: false }; });
     })).then(perFileResults => {
         if (this._zoomTokens?.get(panelId) !== token || !plot.div || !plot.showMissingData) return;
         const lazyItems = [];
+        const solidItems = [];
         let lazyDense = false;
-        for (const r of perFileResults) { lazyItems.push(...r.intervals); if (r.dense) lazyDense = true; }
+        for (const r of perFileResults) {
+            lazyItems.push(...(r.intervals || []));
+            solidItems.push(...(r.solidIntervals || []));
+            if (r.dense) lazyDense = true;
+        }
         const items = [...eagerItems, ...lazyItems];
         const dense = lazyDense || this._missingViewIsDense(plot, eagerItems);
         plot._lazyMissSig = sig;
         plot._lazyMissItems = items;
+        plot._lazyMissSolid = solidItems;
         plot._lazyMissDense = dense;
-        render(items, dense);
-    }).catch(() => { /* per-file errors already swallowed */ });
+        render(items, solidItems, dense);
+    }).catch(() => {
+        if (this._zoomTokens?.get(panelId) === token) this._setMissingDensityNotice(plot, false);
+    });
+};
+
+// Buckets for the lazy Missing/NaN query: ~one per on-screen pixel, but never
+// more than the estimated number of samples in view (uniform-rate estimate from
+// totalRows over the data's time extent) — otherwise sub-sampling buckets sit
+// empty and get read as time gaps.
+proto._lazyMissingBucketCount = function(data, sourceLo, sourceHi, pxWidth) {
+    const meta = data?._duckdb;
+    const totalRows = Number(meta?.totalRows);
+    const dataStart = Number(data?.metadata?.timeStart);
+    const dataEnd = Number(data?.metadata?.timeEnd);
+    let estimate = pxWidth;
+    if (Number.isFinite(totalRows) && totalRows > 0
+        && Number.isFinite(dataStart) && Number.isFinite(dataEnd) && dataEnd > dataStart) {
+        const lo = Math.min(sourceLo, sourceHi);
+        const hi = Math.max(sourceLo, sourceHi);
+        const overlap = Math.max(0, Math.min(hi, dataEnd) - Math.max(lo, dataStart));
+        estimate = totalRows * (overlap / (dataEnd - dataStart));
+    }
+    return Math.max(1, Math.min(pxWidth, Math.ceil(estimate)));
 };
 
 proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
