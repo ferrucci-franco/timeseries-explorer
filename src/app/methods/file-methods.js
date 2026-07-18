@@ -91,6 +91,7 @@ export function installFileMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.loadFile = async function(file, options = {}) {
     let hideParquetOverlayAfterLoad = false;
+    const isCancelled = () => options.loadToken?.cancelled === true;
     try {
         let currentFile = file;
         let extension;
@@ -99,6 +100,7 @@ proto.loadFile = async function(file, options = {}) {
         let data;
         for (let attempt = 0; ; attempt++) {
             try {
+                if (isCancelled()) return null;
                 if ((!currentFile || attempt > 0) && options.fileHandle?.getFile) {
                     currentFile = await options.fileHandle.getFile();
                 }
@@ -137,6 +139,10 @@ proto.loadFile = async function(file, options = {}) {
                     excelSheetName: options.excelSheetName || null,
                     excelWorkbook: options.excelWorkbook || null,
                 });
+                if (isCancelled()) {
+                    await data?._duckdb?.source?.release?.(data);
+                    return null;
+                }
                 break;
             } catch (err) {
                 if (isTransientFileReadError(err) && attempt < 4) {
@@ -190,6 +196,7 @@ proto.loadFile = async function(file, options = {}) {
         console.log('Loaded:', currentFile.name, '- variables:', Object.keys(data.variables).length);
         return { fileId, data };
     } catch (err) {
+        if (isCancelled()) return null;
         if (hideParquetOverlayAfterLoad && !options.deferUi) {
             this._hideFileLoadingOverlay();
         }
@@ -208,10 +215,12 @@ proto.loadFiles = async function(items = []) {
     if (!entries.length) return [];
 
     const loaded = [];
-    this._showFileLoadingOverlay(entries.length);
+    const loadToken = { cancelled: false };
+    this._showFileLoadingOverlay(entries.length, loadToken);
     await this._yieldToBrowser();
     try {
         for (let index = 0; index < entries.length; index++) {
+            if (loadToken.cancelled) break;
             const item = entries[index];
             const fileHandle = item?.fileHandle || null;
             const file = item?.file || (fileHandle ? null : item);
@@ -225,8 +234,10 @@ proto.loadFiles = async function(items = []) {
                 excelSheetName: item?.excelSheetName || null,
                 excelWorkbook: item?.excelWorkbook || null,
                 excelAppendSheetName: item?.excelAppendSheetName === true,
+                loadToken,
             });
             if (result) loaded.push(result);
+            if (loadToken.cancelled) break;
             await this._yieldToBrowser();
         }
 
@@ -240,11 +251,12 @@ proto.loadFiles = async function(items = []) {
             this._updateActionButtons();
         }
     } finally {
-        this._hideFileLoadingOverlay();
+        this._hideFileLoadingOverlay(loadToken);
     }
 
     for (const result of loaded) {
         await this._showDatetimeAxisWarningIfNeeded(result.fileId, result.data);
+        if (result.data?._duckdb) this._showLazyFileNotice(result.fileId);
     }
 
     return loaded;
@@ -394,12 +406,15 @@ proto._waitForNextPaint = function() {
     });
 };
 
-proto._showFileLoadingOverlay = function(total = 1) {
+proto._showFileLoadingOverlay = function(total = 1, loadToken = null) {
     const existing = document.getElementById('file-loading-overlay');
     if (existing?.classList.contains('show')) {
         // Already visible (e.g. shown during spreadsheet preparation): reuse
         // it so chained show calls do not re-trigger the fade-in.
         this._updateFileLoadingOverlay(0, total, '');
+        const cancelHint = document.getElementById('file-loading-cancel-hint');
+        if (cancelHint) cancelHint.hidden = !loadToken;
+        this._installFileLoadingCancellation(loadToken);
         return;
     }
     existing?.remove();
@@ -421,12 +436,38 @@ proto._showFileLoadingOverlay = function(total = 1) {
     const hint = document.createElement('div');
     hint.className = 'example-loading-hint';
     hint.id = 'file-loading-hint';
+    const cancelHint = document.createElement('div');
+    cancelHint.className = 'example-loading-hint';
+    cancelHint.id = 'file-loading-cancel-hint';
+    cancelHint.textContent = i18n.t('loadingFilesCancelHint');
 
-    dialog.append(spinner, title, hint);
+    dialog.append(spinner, title, hint, cancelHint);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     this._updateFileLoadingOverlay(0, total, '');
+    this._installFileLoadingCancellation(loadToken);
+    if (!loadToken) {
+        cancelHint.hidden = true;
+    }
     requestAnimationFrame(() => overlay.classList.add('show'));
+    overlay.tabIndex = -1;
+    overlay.focus({ preventScroll: true });
+};
+
+proto._installFileLoadingCancellation = function(loadToken) {
+    if (!loadToken) return;
+    if (this._fileLoadingEscHandler) {
+        document.removeEventListener('keydown', this._fileLoadingEscHandler, true);
+    }
+    this._fileLoadingToken = loadToken;
+    this._fileLoadingEscHandler = (event) => {
+        if (event.key !== 'Escape' || this._fileLoadingToken !== loadToken) return;
+        event.preventDefault();
+        event.stopPropagation();
+        loadToken.cancelled = true;
+        this._hideFileLoadingOverlay(loadToken);
+    };
+    document.addEventListener('keydown', this._fileLoadingEscHandler, true);
 };
 
 proto._updateFileLoadingOverlay = function(current, total, filename = '', size = null) {
@@ -460,11 +501,61 @@ proto._formatFileSize = function(size) {
     return `${value.toFixed(decimals)} ${units[unitIndex]}`;
 };
 
-proto._hideFileLoadingOverlay = function() {
+proto._hideFileLoadingOverlay = function(loadToken = null) {
+    if (loadToken && this._fileLoadingToken && this._fileLoadingToken !== loadToken) return;
+    if (this._fileLoadingEscHandler) {
+        document.removeEventListener('keydown', this._fileLoadingEscHandler, true);
+        this._fileLoadingEscHandler = null;
+    }
+    this._fileLoadingToken = null;
     const overlay = document.getElementById('file-loading-overlay');
     if (!overlay) return;
     overlay.classList.remove('show');
     setTimeout(() => overlay.remove(), 220);
+};
+
+proto._showLazyFileNotice = function(fileId) {
+    const entry = this.files.get(fileId);
+    if (!entry) return;
+    const noticeId = `lazy-file-notice-${fileId}`;
+    document.getElementById(noticeId)?.remove();
+
+    const notice = document.createElement('div');
+    notice.id = noticeId;
+    notice.className = 'dismissible-notice';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+
+    const content = document.createElement('div');
+    content.className = 'dismissible-notice-content';
+    const title = document.createElement('div');
+    title.className = 'dismissible-notice-title';
+    title.textContent = i18n.t('lazyFileNoticeTitle');
+    const body = document.createElement('div');
+    body.className = 'dismissible-notice-body';
+    body.textContent = i18n.t('lazyFileNoticeBody').replace('{file}', this._fileDisplayName(entry));
+    const actions = document.createElement('div');
+    actions.className = 'dismissible-notice-actions';
+    const settings = document.createElement('button');
+    settings.type = 'button';
+    settings.className = 'dismissible-notice-action primary';
+    settings.textContent = i18n.t('lazyFileNoticeSettings');
+    settings.addEventListener('click', () => {
+        notice.remove();
+        this.showDisplaySettings();
+    });
+    actions.appendChild(settings);
+    content.append(title, body, actions);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'dismissible-notice-close';
+    close.textContent = '×';
+    close.title = i18n.t('closeFile');
+    close.addEventListener('click', () => notice.remove());
+    notice.append(content, close);
+    document.body.appendChild(notice);
+    requestAnimationFrame(() => notice.classList.add('show'));
 };
 
 proto.reloadActiveFile = async function() {
@@ -1994,6 +2085,14 @@ proto._renderFilesList = function() {
         typeBadge.hidden = !typeLabel;
         typeBadge.addEventListener('click', () => this.setActiveFile(fileId));
 
+        const lazyIndicator = document.createElement('span');
+        lazyIndicator.className = 'file-entry-lazy-indicator';
+        lazyIndicator.textContent = '☘️';
+        lazyIndicator.title = i18n.t('lazyFileIndicatorTooltip');
+        lazyIndicator.setAttribute('role', 'img');
+        lazyIndicator.setAttribute('aria-label', i18n.t('lazyFileIndicatorTooltip'));
+        lazyIndicator.hidden = !this.plotManager.files.get(fileId)?.data?._duckdb;
+
         const transformBtn = document.createElement('button');
         transformBtn.className = 'file-entry-transform';
         transformBtn.textContent = '⛭';
@@ -2031,6 +2130,7 @@ proto._renderFilesList = function() {
 
         entry.appendChild(nameSpan);
         entry.appendChild(typeBadge);
+        entry.appendChild(lazyIndicator);
         if (entryData.liveUpdate?.enabled) entry.appendChild(liveIndicator);
         entry.appendChild(csvParsingBtn);
         entry.appendChild(transformBtn);
