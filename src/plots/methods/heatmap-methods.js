@@ -677,11 +677,12 @@ proto._calendarHeatmapSelectionShapes = function(plot) {
     const timeVariable = firstTrace ? this._getTimeVar(firstTrace.fileId) : null;
     const x0 = firstTrace ? this._plotlyTimeValue(firstTrace.fileId, lower, timeVariable) : lower;
     const x1 = firstTrace ? this._plotlyTimeValue(firstTrace.fileId, upper, timeVariable) : upper;
-    const orange = '#ff9800';
+    // Green selection so it never reads as the amber Missing/NaN wash.
+    const green = '#43a047';
     return [
-        { type: 'rect', xref: 'x', yref: 'paper', x0, x1, y0: 0, y1: 1, fillcolor: 'rgba(255,152,0,0.12)', line: { width: 0 }, layer: 'below' },
-        { type: 'line', xref: 'x', yref: 'paper', x0, x1: x0, y0: 0, y1: 1, line: { color: orange, width: 2 } },
-        { type: 'line', xref: 'x', yref: 'paper', x0: x1, x1, y0: 0, y1: 1, line: { color: orange, width: 2 } },
+        { type: 'rect', xref: 'x', yref: 'paper', x0, x1, y0: 0, y1: 1, fillcolor: 'rgba(67,160,71,0.14)', line: { width: 0 }, layer: 'below' },
+        { type: 'line', xref: 'x', yref: 'paper', x0, x1: x0, y0: 0, y1: 1, line: { color: green, width: 2 } },
+        { type: 'line', xref: 'x', yref: 'paper', x0: x1, x1, y0: 0, y1: 1, line: { color: green, width: 2 } },
     ];
 };
 
