@@ -217,6 +217,29 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     assert.equal(twoFiles.length, 2, 'intervals from different files are not coalesced together');
 }
 
+// ── Viewport clipping: bands line up with the visible range ──
+{
+    const h = new Harness();
+    // Visible window [100, 200], 10 px per unit.
+    const plot = { div: { _fullLayout: { xaxis: { range: [100, 200], _length: 1000 } } } };
+    const shapes = h._adaptiveGapBandShapes(plot, [
+        { fileId: 'f', timeVar: null, t0: 0, t1: 10 },      // fully left of view → dropped
+        { fileId: 'f', timeVar: null, t0: 300, t1: 320 },   // fully right of view → dropped
+        { fileId: 'f', timeVar: null, t0: 150, t1: 152 },   // inside → kept as-is
+        { fileId: 'f', timeVar: null, t0: 90, t1: 110 },    // straddles left edge → clamped to [100,110]
+    ]);
+    assert.equal(shapes.length, 2, 'off-screen gaps are dropped, on-screen ones kept');
+    const xs = shapes.map(s => [s.x0, s.x1]).sort((a, b) => a[0] - b[0]);
+    assert.deepEqual(xs[0], [100, 110], 'a straddling gap is clamped to the visible edge');
+    assert.deepEqual(xs[1], [150, 152], 'an interior gap is unchanged');
+
+    // A single narrow gap that is the ONLY thing on screen still renders — the
+    // global "widest N" cap must never drop the gap in front of the user.
+    const one = h._adaptiveGapBandShapes(plot, [{ fileId: 'f', timeVar: null, t0: 150, t1: 150.05 }]);
+    assert.equal(one.length, 1, 'the only visible gap is always drawn');
+    assert.ok(one[0].line.width > 0, 'and it keeps a visible stroke');
+}
+
 // ── Gating: with the flag off, nothing changes ──
 // Behavioural guard: a trace built without the opt-in (no __srcX attached) is a
 // no-op through the break helper, so the "off" path can never alter the line.

@@ -1250,17 +1250,39 @@ proto._adaptiveGapBandShapes = function(plot, items) {
 
     // Pixels per data unit for the current view, so an interval's screen width
     // is (t1 - t0) * pxPerUnit. NaN until the axis has laid out — treat narrow.
+    // lo/hi are the VISIBLE range in the same units the items use (both are the
+    // transformed-time values _plotlyTimeValue maps from; _coerceAxisValue turns
+    // a date-string range into those ms).
     const xa = plot.div?._fullLayout?.xaxis;
     let pxPerUnit = NaN;
+    let lo = -Infinity;
+    let hi = Infinity;
     if (xa && Array.isArray(xa.range) && xa._length) {
-        const span = Math.abs(this._coerceAxisValue(xa.range[1]) - this._coerceAxisValue(xa.range[0]));
+        lo = this._coerceAxisValue(xa.range[0]);
+        hi = this._coerceAxisValue(xa.range[1]);
+        if (lo > hi) { const t = lo; lo = hi; hi = t; }
+        const span = Math.abs(hi - lo);
         if (span > 0) pxPerUnit = xa._length / span;
     }
 
-    // Coalesce at pixel resolution first, so dense missing data never floods
-    // Plotly. If it is STILL pathologically fragmented (sub-2px alternation),
-    // keep only the widest merged bands as a final guard.
-    const merged = this._coalesceGapItems(items, pxPerUnit);
+    // Clip to the visible range BEFORE coalescing/capping. Otherwise coalescing
+    // spans off-screen gaps and the "widest N" guard is chosen globally — so a
+    // gap right in front of the user (narrow, but the only one on screen) gets
+    // dropped, while zoomed out the merges land on off-screen structure. Bands
+    // must line up with the discontinuities actually visible in the trace.
+    const clipped = [];
+    for (const it of items) {
+        if (it.t1 < lo || it.t0 > hi) continue;
+        const t0 = it.t0 < lo ? lo : it.t0;
+        const t1 = it.t1 > hi ? hi : it.t1;
+        clipped.push(t0 === it.t0 && t1 === it.t1 ? it : { fileId: it.fileId, timeVar: it.timeVar, t0, t1 });
+    }
+    if (!clipped.length) return [];
+
+    // Coalesce at pixel resolution, so dense missing data never floods Plotly.
+    // If it is STILL pathologically fragmented (sub-2px alternation), keep only
+    // the widest merged bands as a final guard.
+    const merged = this._coalesceGapItems(clipped, pxPerUnit);
     const list = merged.length > MAX_BANDS
         ? merged.slice().sort((a, b) => (b.t1 - b.t0) - (a.t1 - a.t0)).slice(0, MAX_BANDS)
         : merged;
