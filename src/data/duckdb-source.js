@@ -27,6 +27,7 @@ import { customDatetimePatternInfo, parseCsvNumber, parseCsvTimeValue } from '..
 import { registerDuckDbFile } from './duckdb-file-registration.js';
 import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
 import { buildPairCorrelationSql, parsePairCorrelations } from './pair-correlation-sql.js';
+import { buildMissingBucketsSql } from './missing-buckets-sql.js';
 
 const BUNDLES = {
     mvp: { mainModule: mvpWasmUrl, mainWorker: mvpWorkerUrl },
@@ -440,6 +441,46 @@ export default class DuckDbSource {
             yByVar.set(varName, truncated ? values.slice(0, keep) : values);
         });
         return { x, rowIndex, yByVar, truncated };
+    }
+
+    /**
+     * Truthful Missing/NaN detection for a lazy file over a visible range.
+     * Buckets the range into `nBuckets` (~one per pixel) and returns, per bucket
+     * that held rows, how many rows fell in it and how many had a non-finite
+     * value for ANY of `varNames`. Empty buckets inside the data are time gaps
+     * (inferred JS-side). One O(nBuckets) aggregate — no full-resolution scan,
+     * no sort. See missing-buckets-sql.js for the pure builder/reducer.
+     */
+    async getMissingIntervals(legacyData, varNames, t0, t1, nBuckets = 1500) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getMissingIntervals: data is not DuckDB-backed (eager mode)');
+        const requested = [...new Set(varNames || [])]
+            .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
+            .filter(item => item.variable);
+        let lo = Number(t0);
+        let hi = Number(t1);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { buckets: [] };
+        if (lo > hi) [lo, hi] = [hi, lo];
+
+        const timeKind = legacyData?.metadata?.timeKind;
+        const escTime = (meta.timeColumn || '').replace(/"/g, '""');
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`);
+        const baseTime = meta.generatedTime ? '(ROW_NUMBER() OVER () - 1)::DOUBLE' : tExpr;
+        const valueExprs = requested.map(({ variable, varName }) =>
+            this._valueExpressionSql(variable, varName, { castDouble: true }));
+
+        const sql = buildMissingBucketsSql(
+            baseTime, meta.tableName, valueExprs, (v) => this._numericLiteral(v), lo, hi, nBuckets, !!meta.generatedTime);
+        const result = await this._interactiveQuery(sql);
+        const b = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+        const nTotal = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
+        const nMissing = this._extractColumnAsFloat64(result, 2, 'DOUBLE');
+        const n = Math.min(b.length, nTotal.length, nMissing.length);
+        const buckets = new Array(n);
+        for (let i = 0; i < n; i++) buckets[i] = { b: b[i], nTotal: nTotal[i], nMissing: nMissing[i] };
+        return { buckets };
     }
 
     async _queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints = 4000) {

@@ -1262,7 +1262,10 @@ proto._missingViewIsDense = function(plot, items) {
     return visible > xa._length * 0.5;
 };
 
-proto._adaptiveGapBandShapes = function(plot, items) {
+// `denseOverride` lets the lazy path supply its own density verdict (derived
+// from DuckDB bucket counts), since its intervals are already coalesced and
+// `_missingViewIsDense` — which counts raw intervals — would misjudge them.
+proto._adaptiveGapBandShapes = function(plot, items, denseOverride = null) {
     if (!items?.length) return [];
     const MAX_BANDS = 500;
 
@@ -1301,7 +1304,7 @@ proto._adaptiveGapBandShapes = function(plot, items) {
     // merge into a wall that buries the signal (SVG shapes sit over a WebGL
     // trace regardless of layer:'below'). The caller also skips per-gap line
     // breaks in this case, so the clean signal envelope stays visible.
-    const dense = this._missingViewIsDense(plot, items);
+    const dense = denseOverride === null ? this._missingViewIsDense(plot, items) : !!denseOverride;
     plot._missingTooDense = dense;
 
     // Coalesce at pixel resolution, so dense missing data never floods Plotly.

@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
 import { formatSpectrumPeriod, spectrumCursorMeasurements } from '../../utils/fft.js';
+import { missingBucketsToIntervals } from '../../data/missing-buckets-sql.js';
 
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -396,6 +397,9 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     const target = targetInfo.limit;
     const [t0, t1] = range.map(v => this._coerceAxisValue(v));
     if (!Number.isFinite(t0) || !Number.isFinite(t1)) return Promise.resolve();
+    // Truthful Missing/NaN bands for the visible range (opt-in; its own async
+    // DuckDB query, token-guarded, independent of the trace-data queries).
+    this._refreshLazyMissingBands(panelId, plot, t0, t1, token);
     const perf = this._beginLazyPerf(panelId, plot, {
         token,
         range: [t0, t1],
@@ -1154,6 +1158,74 @@ proto._setMissingDensityNotice = function(plot, dense) {
         pill.classList.remove('active');
         pill.remove();
     }
+};
+
+// Truthful Missing/NaN bands for a LAZY (DuckDB) timeseries view. The eager
+// _refreshTimeseriesVisuals path never runs for a lazy panel (it returns early
+// to _refreshTimeseriesVisualsLazy), and the in-memory overview is a reservoir
+// sample that can't reveal real gaps — so query DuckDB for per-pixel-bucket
+// missing counts over the visible range, reduce to coalesced intervals, and
+// render exactly like eager (bands + faint wash + "zoom in" pill). Eager files
+// sharing the panel keep their sync detection (they are view-mode-gated out of
+// the query but flow through _missingDataInfo here).
+proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
+    if (!plot?.div || plot.mode !== 'timeseries' || !plot.showMissingData) return;
+
+    const perFile = new Map();
+    for (const t of plot.traces) {
+        if (!this._isVisible(t)) continue;
+        const data = this.files.get(t.fileId)?.data;
+        const source = data?._duckdb?.source;
+        if (!source?.getMissingIntervals || !data._duckdb.viewMode) continue;
+        let entry = perFile.get(t.fileId);
+        if (!entry) {
+            entry = { data, source, timeVar: this._getTimeVar(t.fileId), varNames: new Set() };
+            perFile.set(t.fileId, entry);
+        }
+        entry.varNames.add(t.varName);
+    }
+    const eagerItems = this._missingDataInfo(plot).bandItems; // non-view files only
+
+    const render = (items, dense) => {
+        if (!plot.div || !plot.showMissingData) return;
+        Plotly.relayout(plot.div, { shapes: this._adaptiveGapBandShapes(plot, items, dense) });
+        this._setMissingDensityNotice(plot, dense);
+    };
+
+    if (!perFile.size) {
+        render(eagerItems, this._missingViewIsDense(plot, eagerItems));
+        return;
+    }
+
+    const xa = plot.div._fullLayout?.xaxis;
+    const nBuckets = Math.max(50, Math.min(2000, Math.round(xa?._length || 1500)));
+    const sig = [
+        nBuckets, Math.round(t0), Math.round(t1), eagerItems.length,
+        [...perFile.entries()].map(([fid, e]) => `${fid}:${[...e.varNames].sort().join(',')}`).join('|'),
+    ].join('');
+    if (plot._lazyMissSig === sig && plot._lazyMissItems) {
+        render(plot._lazyMissItems, plot._lazyMissDense);
+        return;
+    }
+
+    Promise.all([...perFile.entries()].map(([fileId, entry]) => {
+        const src = this._sourceRangeForDisplayRange(fileId, [t0, t1], entry.timeVar);
+        if (!src || !src.every(Number.isFinite)) return { intervals: [], dense: false };
+        return entry.source.getMissingIntervals(entry.data, [...entry.varNames], src[0], src[1], nBuckets)
+            .then(({ buckets }) => missingBucketsToIntervals(buckets, { t0, t1, nBuckets, fileId, timeVar: entry.timeVar }))
+            .catch(err => { console.warn('[missing] lazy query failed:', err); return { intervals: [], dense: false }; });
+    })).then(perFileResults => {
+        if (this._zoomTokens?.get(panelId) !== token || !plot.div || !plot.showMissingData) return;
+        const lazyItems = [];
+        let lazyDense = false;
+        for (const r of perFileResults) { lazyItems.push(...r.intervals); if (r.dense) lazyDense = true; }
+        const items = [...eagerItems, ...lazyItems];
+        const dense = lazyDense || this._missingViewIsDense(plot, eagerItems);
+        plot._lazyMissSig = sig;
+        plot._lazyMissItems = items;
+        plot._lazyMissDense = dense;
+        render(items, dense);
+    }).catch(() => { /* per-file errors already swallowed */ });
 };
 
 proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
@@ -3822,7 +3894,9 @@ proto._toggleMissingData = function(panelId) {
         btn.setAttribute('aria-pressed', plot.showMissingData ? 'true' : 'false');
     }
 
-    // Turning the flag off must also drop the "too dense" hint.
+    // Turning the flag off must also drop the "too dense" hint. Either way,
+    // invalidate the lazy Missing/NaN cache so a re-enable re-queries fresh.
+    plot._lazyMissSig = null;
     if (!plot.showMissingData) this._setMissingDensityNotice(plot, false);
 
     // Rebuild rather than restyle: turning the flag off must both remove the

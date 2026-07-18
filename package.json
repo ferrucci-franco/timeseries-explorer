@@ -33,6 +33,7 @@
     "test:mode-toolbar": "node scripts/test-mode-toolbar.mjs",
     "test:timeseries-stack": "node scripts/test-timeseries-stack.mjs",
     "test:missing-data": "node scripts/test-missing-data.mjs",
+    "test:missing-lazy": "node scripts/test-missing-lazy.mjs",
     "test:correlation": "node scripts/test-correlation.mjs",
     "test:correlation-lazy": "node scripts/test-correlation-lazy.mjs",
     "test:lazy-phase": "node scripts/test-lazy-phase-logic.mjs",
