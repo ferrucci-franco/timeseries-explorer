@@ -486,6 +486,10 @@ for (const [from, clicked, expected] of [
 // The contextual option family needs a clearly visible divider from the
 // primary plot modes; the previous one-pixel shared border was too subtle.
 {
+    const modeSeparatorBlock = cssRuleBody('.mode-btn-group');
+    assert.match(modeSeparatorBlock, /border-left\s*:\s*3px\s+solid\b/, 'plot modes have a pronounced divider from panel arrows');
+    assert.match(modeSeparatorBlock, /color-mix\([^)]*var\(--success-color\)/, 'plot-mode divider uses the theme-aware success color');
+
     const separatorBlock = [...contentCss.matchAll(/([^{}]*\.timeseries-tools-group[^{}]*)\{([^{}]*)\}/g)]
         .map(match => match[2])
         .find(body => /border-left\s*:/.test(body));

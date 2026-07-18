@@ -962,9 +962,9 @@
 }
 
 .mode-btn-group {
-    margin-left: 4px;
-    border-left: 1px solid var(--border-color);
-    padding-left: 4px;
+    margin-left: 8px;
+    border-left: 3px solid color-mix(in srgb, var(--success-color) 70%, var(--border-color));
+    padding-left: 8px;
 }
 
 /* Contextual options belong to the selected plot family. A stronger divider

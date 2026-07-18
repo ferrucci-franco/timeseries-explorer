@@ -2,7 +2,7 @@ import i18n from '../i18n/index.js';
 import Modal from '../ui/modal.js';
 import Plotly from '../vendor/plotly.js';
 import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
-import { installPlotDataMethods } from './methods/data-methods.js';
+import { expandedAxisRangeForExtent, installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';
 import { installPlotFftMethods } from './methods/fft-methods.js';
@@ -212,8 +212,37 @@ class PlotManager {
                 if (trace.fileId === fileId && trace.varName === varName) trace._lazyDetailCache = null;
             }
             const restoreView = this._capturePlotView(plot);
+            if (plot.mode === 'timeseries') {
+                this._expandCapturedTimeseriesYForVariable(plot, restoreView, fileId, varName);
+            }
             this._rebuildPanel(panelId, { restoreView });
         }
+    }
+
+    _expandCapturedTimeseriesYForVariable(plot, view, fileId, varName) {
+        if (!plot || !view || view.mode !== '2d') return;
+        const changedTrace = (plot.traces || []).find(trace =>
+            trace.fileId === fileId && trace.varName === varName && this._isVisible(trace));
+        if (!changedTrace) return;
+        const axis = this._traceYAxis(changedTrace, plot);
+        const rangeKey = axis === 'y2' ? 'y2Range' : 'yRange';
+        const currentRange = view[rangeKey];
+        if (!Array.isArray(currentRange)) return;
+        const traces = plot.timeseriesStacked
+            ? (plot.traces || []).filter(trace => this._isVisible(trace) && this._traceYAxis(trace, plot) === axis)
+            : [changedTrace];
+        const series = traces.map(trace => ({
+            x: this._getTransformedTimeData(trace.fileId),
+            y: this._getTransformedVariableData(trace.fileId, trace.varName),
+        }));
+        const extent = this._timeseriesYExtentForSeries(
+            plot,
+            series,
+            series.map(item => item.y),
+            view.xRange,
+        );
+        const expanded = expandedAxisRangeForExtent(currentRange, extent);
+        if (expanded) view[rangeKey] = expanded;
     }
 
     setExampleLayout(fileId, { tlId, trId, blId, brId }) {
@@ -905,6 +934,7 @@ class PlotManager {
                 if (insertIndex !== undefined) plot.markerTraceIdx += 1;
                 this._syncTimeseriesMarkerColors(plot);
                 this._installLegendHoverHint(plot.div);
+                this._expandTimeseriesYAxisForAddedTrace(plot, builtTrace, axis);
             });
             // Update Y axis title: clear when 2+ traces (X/time label always stays)
             const layout = this._buildTimeLayout(plot);
@@ -913,6 +943,22 @@ class PlotManager {
             Plotly.relayout(plot.div, relayout);
             this._syncCursorDisplay(panelId, plot);
         }
+    }
+
+    _expandTimeseriesYAxisForAddedTrace(plot, builtTrace, axis = 'y') {
+        if (!plot?.div || !builtTrace) return Promise.resolve();
+        const axisKey = axis === 'y2' ? 'yaxis2' : 'yaxis';
+        const axisLayout = plot.div._fullLayout?.[axisKey];
+        // Plotly already expands an autoranged axis. This helper is only for a
+        // user-controlled Y view, where addTraces intentionally preserves zoom.
+        if (!axisLayout || axisLayout.autorange !== false) return Promise.resolve();
+        const extent = this._finiteExtent([builtTrace.y]);
+        const range = expandedAxisRangeForExtent(axisLayout.range, extent);
+        if (!range) return Promise.resolve();
+        return Plotly.relayout(plot.div, {
+            [`${axisKey}.range`]: range,
+            [`${axisKey}.autorange`]: false,
+        });
     }
 
     _addPhaseVar(panelId, varName, panelEl, plot) {

@@ -33,6 +33,25 @@ function finiteAxisExtent(input) {
     return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
 }
 
+export function expandedAxisRangeForExtent(currentRange, extent, padding = 0.05) {
+    if (!Array.isArray(currentRange) || currentRange.length < 2 || !extent) return null;
+    const first = Number(currentRange[0]);
+    const second = Number(currentRange[1]);
+    const extentMin = Number(extent.min);
+    const extentMax = Number(extent.max);
+    if (![first, second, extentMin, extentMax].every(Number.isFinite)) return null;
+    const reversed = first > second;
+    const currentMin = Math.min(first, second);
+    const currentMax = Math.max(first, second);
+    if (extentMin >= currentMin && extentMax <= currentMax) return null;
+    const unionMin = Math.min(currentMin, extentMin);
+    const unionMax = Math.max(currentMax, extentMax);
+    const pad = Math.max((unionMax - unionMin) * Math.max(0, Number(padding) || 0), 1e-9);
+    const nextMin = extentMin < currentMin ? extentMin - pad : currentMin;
+    const nextMax = extentMax > currentMax ? extentMax + pad : currentMax;
+    return reversed ? [nextMax, nextMin] : [nextMin, nextMax];
+}
+
 export function installPlotDataMethods(TargetClass) {
     const proto = TargetClass.prototype;
     const PlotManager = TargetClass;

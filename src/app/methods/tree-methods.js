@@ -216,6 +216,17 @@ proto._renderTreeNode = function(node, parentElement, level, filter, autoExpand)
     }
 };
 
+proto._syncVariableSignToggle = function(button, inverted) {
+    if (!button) return;
+    button.classList.toggle('active', inverted);
+    button.innerHTML = inverted
+        ? '<svg viewBox="0 0 20 14" aria-hidden="true"><path d="M5 7h10"/></svg>'
+        : '<svg viewBox="0 0 20 14" aria-hidden="true"><path d="M6.5 5h7M10 1.5v7M6.5 12.5h7"/></svg>';
+    button.title = i18n.t(inverted ? 'variableSignRestore' : 'variableSignInvert');
+    button.setAttribute('aria-label', button.title);
+    button.setAttribute('aria-pressed', String(inverted));
+};
+
 proto._renderVarLeaves = function(entries, parentElement, options = {}) {
     for (const [name, variable] of entries) {
         const nodeDiv = document.createElement('div');
@@ -251,18 +262,15 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             const inverted = this.plotManager.isVariableSignInverted(this.activeFileId, variable.name);
             const signToggle = document.createElement('button');
             signToggle.type = 'button';
-            signToggle.className = `tree-sign-toggle${inverted ? ' active' : ''}`;
-            signToggle.innerHTML = inverted
-                ? '<svg viewBox="0 0 20 14" aria-hidden="true"><path d="M5 7h10"/></svg>'
-                : '<svg viewBox="0 0 20 14" aria-hidden="true"><path d="M6.5 5h7M10 1.5v7M6.5 12.5h7"/></svg>';
-            signToggle.title = i18n.t(inverted ? 'variableSignRestore' : 'variableSignInvert');
-            signToggle.setAttribute('aria-label', signToggle.title);
-            signToggle.setAttribute('aria-pressed', String(inverted));
+            signToggle.className = 'tree-sign-toggle';
+            this._syncVariableSignToggle(signToggle, inverted);
             signToggle.addEventListener('click', (event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                this.plotManager.setVariableSignInverted(this.activeFileId, variable.name, !inverted);
-                this._renderFilteredTree();
+                const currentInverted = this.plotManager.isVariableSignInverted(this.activeFileId, variable.name);
+                this.plotManager.setVariableSignInverted(this.activeFileId, variable.name, !currentInverted);
+                const nextInverted = this.plotManager.isVariableSignInverted(this.activeFileId, variable.name);
+                this._syncVariableSignToggle(signToggle, nextInverted);
             });
             signToggle.addEventListener('dragstart', event => event.preventDefault());
             itemDiv.appendChild(signToggle);

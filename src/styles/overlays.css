@@ -1444,6 +1444,19 @@
     text-align: center;
 }
 
+/* File names and their size should normally fit on one line. Keep example
+   dialogs compact, but let the file-loading/conversion dialog use the room
+   available without becoming an oversized sheet on wide displays. */
+#file-loading-overlay .example-loading-dialog {
+    width: clamp(22rem, 65vw, 48rem);
+    max-width: calc(100vw - 2rem);
+    box-sizing: border-box;
+}
+
+#file-loading-hint {
+    overflow-wrap: anywhere;
+}
+
 .example-loading-spinner {
     width: 36px;
     height: 36px;
