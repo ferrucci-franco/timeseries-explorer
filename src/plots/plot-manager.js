@@ -68,6 +68,7 @@ class PlotManager {
             name,
             data,
             transform: this._normalizeFileTransform(transform),
+            invertedVariables: new Set(),
             _transformCache: null,
         });
         this.activeFileId = fileId;
@@ -186,6 +187,33 @@ class PlotManager {
 
     getFileTransform(fileId) {
         return this._normalizeFileTransform(this.files.get(fileId)?.transform);
+    }
+
+    isVariableSignInverted(fileId, varName) {
+        return this.files.get(fileId)?.invertedVariables?.has(varName) === true;
+    }
+
+    setVariableSignInverted(fileId, varName, inverted) {
+        const entry = this.files.get(fileId);
+        const variable = entry?.data?.variables?.[varName];
+        if (!entry || !variable || variable.kind === 'abscissa' || variable.dataType === 'string') return;
+        entry.invertedVariables ||= new Set();
+        if (inverted) entry.invertedVariables.add(varName);
+        else entry.invertedVariables.delete(varName);
+        entry._transformCache = null;
+
+        for (const [panelId, plot] of this.plots) {
+            const uses = plot.traces.some(t => t.fileId === fileId && t.varName === varName)
+                || plot.phaseTraces.some(t => t.fileId === fileId && [t.x, t.y, t.z].includes(varName))
+                || (plot.stateSlots?.fileId === fileId
+                    && [...(plot.stateSlots.x || []), ...(plot.stateSlots.dx || [])].includes(varName));
+            if (!uses) continue;
+            for (const trace of plot.traces) {
+                if (trace.fileId === fileId && trace.varName === varName) trace._lazyDetailCache = null;
+            }
+            const restoreView = this._capturePlotView(plot);
+            this._rebuildPanel(panelId, { restoreView });
+        }
     }
 
     setExampleLayout(fileId, { tlId, trId, blId, brId }) {

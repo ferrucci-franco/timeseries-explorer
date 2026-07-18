@@ -884,6 +884,11 @@ proto._lazyCacheResult = function(trace, idx, t0, t1, target) {
     if (minX < cache.start || maxX > cache.end) return null;
     if (!this._lazyCacheHasViewportDetail(cache, minX, maxX, target)) return null;
     const visual = this._visualFromSeriesRange(cache.x, cache.y, minX, maxX, target);
+    if (visual && this.isVariableSignInverted?.(trace.fileId, trace.varName)) {
+        visual.y = ArrayBuffer.isView(visual.y)
+            ? visual.y.map(value => Number.isFinite(value) ? -value : value)
+            : visual.y.map(value => Number.isFinite(value) ? -value : value);
+    }
     return visual ? { idx, trace, x: visual.x, y: visual.y } : null;
 };
 

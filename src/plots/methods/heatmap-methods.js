@@ -995,7 +995,10 @@ proto._runLazyCalendarHeatmap = async function(panelId, plot, token, lazyTraces,
             ? [cropStart ?? -Infinity, cropEnd ?? Infinity]
             : null;
         const transforms = {};
-        for (const trace of traces) transforms[trace.varName] = { gain: transform.gain, yOffset: transform.yOffset };
+        for (const trace of traces) {
+            const sign = this.isVariableSignInverted?.(fileId, trace.varName) ? -1 : 1;
+            transforms[trace.varName] = { gain: transform.gain * sign, yOffset: transform.yOffset };
+        }
         try {
             const result = await source.getCalendarHeatmapAggregates(data, traces.map(t => t.varName), {
                 calendarMode: densifyOptions.calendarMode,

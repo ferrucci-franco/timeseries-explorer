@@ -302,6 +302,43 @@
     color: var(--text-secondary);
 }
 
+.tree-sign-toggle {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.tree-sign-toggle svg {
+    width: 16px;
+    height: 13px;
+    display: block;
+    margin: auto;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+}
+
+.tree-sign-toggle:hover {
+    background: var(--hover-bg);
+    color: var(--primary-color);
+}
+
+.tree-sign-toggle.active {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+    color: #fff;
+}
+
 .tree-children {
     margin-left: 1.25rem;
     border-left: 1px solid var(--border-color);

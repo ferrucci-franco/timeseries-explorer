@@ -108,6 +108,7 @@ proto._createSessionSnapshot = function(options = {}) {
         const dataTools = typeof this._serializeDataToolDefinitions === 'function'
             ? this._serializeDataToolDefinitions(fileId)
             : [];
+        const invertedVariables = [...(this.plotManager.files.get(fileId)?.invertedVariables || [])];
 
         files.push({
             id: fileId,
@@ -121,6 +122,7 @@ proto._createSessionSnapshot = function(options = {}) {
             variableNames: data ? Object.keys(data.variables || {}) : [],
             derived,
             dataTools,
+            invertedVariables,
             archivePath,
         });
     }
@@ -407,6 +409,13 @@ proto._applySessionFileMetadata = async function(session, fileMap) {
         if (!entry) continue;
         entry.transform = this._normalizeFileTransform(meta.transform);
         this.plotManager.setFileTransform(fileId, entry.transform);
+        const plotEntry = this.plotManager.files.get(fileId);
+        if (plotEntry) {
+            plotEntry.invertedVariables = new Set(
+                (meta.invertedVariables || []).filter(name => !!plotEntry.data?.variables?.[name]),
+            );
+            plotEntry._transformCache = null;
+        }
         if (meta.csvProfile?.profileSource !== 'user') continue;
 
         const currentHash = entry.contentHash || '';

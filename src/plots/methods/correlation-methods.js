@@ -622,6 +622,21 @@ export function installPlotCorrelationMethods(TargetClass) {
                         entries.map(e => ({ x: e.pair.x, y: e.pair.y })),
                         { sourceTimeRange, gain: transform.gain, yOffset: transform.yOffset },
                     );
+                    for (let index = 0; index < (stats?.length || 0); index++) {
+                        const pair = entries[index]?.pair;
+                        const signX = this.isVariableSignInverted?.(fileId, pair?.x) ? -1 : 1;
+                        const signY = this.isVariableSignInverted?.(fileId, pair?.y) ? -1 : 1;
+                        if (stats[index]) {
+                            const r = Number.isFinite(stats[index].r) ? stats[index].r * signX * signY : stats[index].r;
+                            stats[index] = {
+                                ...stats[index],
+                                r,
+                                r2: Number.isFinite(r) ? r * r : stats[index].r2,
+                                meanX: Number.isFinite(stats[index].meanX) ? stats[index].meanX * signX : stats[index].meanX,
+                                meanY: Number.isFinite(stats[index].meanY) ? stats[index].meanY * signY : stats[index].meanY,
+                            };
+                        }
+                    }
                     return { entries, stats };
                 } catch (err) {
                     console.warn('[correlation] lazy query failed:', err);
