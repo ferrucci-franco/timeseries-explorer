@@ -185,6 +185,7 @@ class OpenModelicaViewer {
         const desktop = !!this.capabilities?.isDesktop;
         return {
             csvFullLoadMb: 150,
+            parquetFullLoadMb: desktop ? 200 : 100,
             excelFullLoadMb: desktop ? 150 : 50,
             pickleFullLoadMb: desktop ? 200 : 80,
             pypsaNetcdfFullLoadMb: desktop ? 1024 : 250,
@@ -208,6 +209,7 @@ class OpenModelicaViewer {
         const defaults = this._defaultAdvancedSettings();
         const ranges = {
             csvFullLoadMb: [10, 1000],
+            parquetFullLoadMb: [10, 1000],
             excelFullLoadMb: [10, 500],
             pickleFullLoadMb: [10, 1000],
             pypsaNetcdfFullLoadMb: [50, 2048],

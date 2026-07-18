@@ -1304,6 +1304,7 @@ proto._parsePickleResultBuffer = async function(filename, buffer) {
 // Files bigger than this threshold (bytes) trigger DuckDB lazy mode: the
 // in-memory copy holds a downsampled overview, and zoom queries hit DuckDB.
 const DUCKDB_LAZY_THRESHOLD_BYTES = 150 * 1024 * 1024;
+const PARQUET_LAZY_THRESHOLD_BYTES = 100 * 1024 * 1024;
 // CSV files larger than this should ideally be pre-converted to Parquet
 // (`node bench/csv-to-parquet.mjs file.csv`) — the WASM heap ceiling makes
 // the raw CSV path risky above this size.
@@ -1326,6 +1327,10 @@ proto._advancedSettingBytes = function(key, fallbackBytes) {
 
 proto._csvFullLoadLimitBytes = function() {
     return this._advancedSettingBytes('csvFullLoadMb', DUCKDB_LAZY_THRESHOLD_BYTES);
+};
+
+proto._parquetFullLoadLimitBytes = function() {
+    return this._advancedSettingBytes('parquetFullLoadMb', PARQUET_LAZY_THRESHOLD_BYTES);
 };
 
 proto._csvCompactHintBytes = function() {
@@ -1740,7 +1745,8 @@ proto._parseParquetResult = async function(filename, file) {
     if (!file) throw new Error(`Parquet files must be loaded via a File handle (got buffer-only for ${filename}).`);
     if (!this._canUseDuckDb()) throw new Error(`Parquet support requires DuckDB-WASM (current page does not allow Workers).`);
     const source = await this._getDuckDbSource();
-    const data = await source.parseParquetFile(file, filename, { lazy: true });
+    const lazy = (file.size ?? 0) >= this._parquetFullLoadLimitBytes();
+    const data = await source.parseParquetFile(file, filename, { lazy });
     data.filename = filename;
     return data;
 };

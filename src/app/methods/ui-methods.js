@@ -885,6 +885,7 @@ proto.showDisplaySettings = function() {
 
     const fileLimitControls = [
         makeNumberField('csvFullLoadMb', 'csvFullLoadLimit', 'csvFullLoadLimitHelp', 10, 1000),
+        makeNumberField('parquetFullLoadMb', 'parquetFullLoadLimit', 'parquetFullLoadLimitHelp', 10, 1000),
         makeNumberField('excelFullLoadMb', 'excelFullLoadLimit', 'excelFullLoadLimitHelp', 10, 500),
         makeNumberField('pickleFullLoadMb', 'pickleFullLoadLimit', 'pickleFullLoadLimitHelp', 10, 1000),
         makeNumberField('pypsaNetcdfFullLoadMb', 'pypsaNetcdfFullLoadLimit', 'pypsaNetcdfFullLoadLimitHelp', 50, 2048),

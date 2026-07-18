@@ -375,6 +375,16 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
     assert.match(interactionMethodsSource, /fftSampleUnit/, 'index spectra use a sample period instead of clock time');
     assert.match(interactionMethodsSource, /cursor-spectrum-frequency-row/, 'measurement cursors have a semantic frequency row');
     assert.match(interactionMethodsSource, /cursor-spectrum-period-row/, 'measurement cursors have a separate semantic period row');
+    assert.match(
+        fftMethodsSource,
+        /plot\.fftDiv\.on\('plotly_doubleclick',[\s\S]*?_scheduleFftAxisLimitReset\(plot\)/,
+        'spectrum double-click defers restoring the configured FFT axis limits',
+    );
+    assert.match(
+        fftMethodsSource,
+        /_scheduleFftAxisLimitReset[\s\S]*?setTimeout\([\s\S]*?_applyFftAxisLimits\(plot\)/,
+        'deferred FFT reset wins over Plotly native autorange in the same event cycle',
+    );
 
     // Cursor-drag regression: Plotly can briefly leave the box-zoom guard set
     // while a cursor drag is already active. The readout still refreshes in

@@ -1400,6 +1400,7 @@ class PlotManager {
         clearTimeout(plot._correlationRecomputeTimer);
         clearTimeout(plot._corrVisualTimer);
         clearTimeout(plot._fftSpectrumWindowTimer);
+        clearTimeout(plot._fftAxisLimitResetTimer);
         if (plot._fftSpectrumWindowFrame) {
             if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(plot._fftSpectrumWindowFrame);
             else clearTimeout(plot._fftSpectrumWindowFrame);

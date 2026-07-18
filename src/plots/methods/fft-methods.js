@@ -296,7 +296,7 @@ proto._installFftPlotHandlers = function(panelId, plot) {
         return false;
     });
     plot.fftDiv.on('plotly_doubleclick', () => {
-        this._applyFftAxisLimits(plot);
+        this._scheduleFftAxisLimitReset(plot);
         return false;
     });
     // Keep the spectrum-pane cursors glued to their frequencies when the user
@@ -2136,6 +2136,18 @@ proto._applyFftAxisLimits = function(plot) {
     applyAxis('xaxis', xRange, 'x');
     applyAxis('yaxis', yRange, 'y');
     return Plotly.relayout(plot.fftDiv, update);
+};
+
+// Plotly performs its native double-click autorange in the same event cycle as
+// `plotly_doubleclick`. Reapply the configured slider limits on the next task
+// so the native reset cannot overwrite fMin/fMax (or yMin/yMax) afterwards.
+proto._scheduleFftAxisLimitReset = function(plot) {
+    if (!plot?.fftDiv) return;
+    clearTimeout(plot._fftAxisLimitResetTimer);
+    plot._fftAxisLimitResetTimer = setTimeout(() => {
+        plot._fftAxisLimitResetTimer = 0;
+        this._applyFftAxisLimits(plot);
+    }, 0);
 };
 
 proto._autoScaleFftPanel = function(panelId, plot = this.plots.get(panelId)) {
