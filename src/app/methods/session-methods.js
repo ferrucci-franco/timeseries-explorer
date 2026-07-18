@@ -119,6 +119,7 @@ proto._createSessionSnapshot = function(options = {}) {
             transform: this._normalizeFileTransform(entry.transform),
             csvProfile,
             excel: entry.excel ? this._cloneSerializable(entry.excel) : null,
+            matlab: entry.matlab ? this._cloneSerializable(entry.matlab) : null,
             variableNames: data ? Object.keys(data.variables || {}) : [],
             derived,
             dataTools,
@@ -227,7 +228,10 @@ proto._loadProjectDataFromZip = async function(session, entries) {
         const file = new File([bytes], fileMeta.displayName || `${fileMeta.name || 'results'}${fileMeta.extension || '.mat'}`);
         // The archived bytes of an Excel entry are the raw workbook; restore
         // the recorded sheet directly so the sheet picker never re-appears.
-        await this.loadFile(file, { excelSheetName: fileMeta.excel?.sheetName || null });
+        await this.loadFile(file, {
+            excelSheetName: fileMeta.excel?.sheetName || null,
+            matSelection: fileMeta.matlab || null,
+        });
     }
 };
 

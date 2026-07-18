@@ -1444,6 +1444,75 @@
     text-align: center;
 }
 
+.modal-dialog-mat-variables {
+    width: min(980px, calc(100vw - 32px));
+    max-width: none;
+    max-height: 90vh;
+}
+
+.mat-picker-toolbar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+}
+
+.mat-picker-toolbar .modal-btn {
+    padding: 0.35rem 0.7rem;
+}
+
+.mat-variable-table-wrap {
+    max-height: 48vh;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.mat-variable-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.84rem;
+    text-align: left;
+}
+
+.mat-variable-table th,
+.mat-variable-table td {
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: top;
+}
+
+.mat-variable-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+}
+
+.mat-variable-name {
+    min-width: 160px;
+    overflow-wrap: anywhere;
+}
+
+.mat-variable-preview {
+    max-width: 320px;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.mat-variable-unsupported {
+    opacity: 0.55;
+}
+
+.mat-picker-time-row {
+    display: grid;
+    grid-template-columns: max-content minmax(180px, 1fr);
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+    text-align: left;
+}
+
 /* File names and their size should normally fit on one line. Keep example
    dialogs compact, but let the file-loading/conversion dialog use the room
    available without becoming an oversized sheet on wide displays. */

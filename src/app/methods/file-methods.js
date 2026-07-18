@@ -13,6 +13,10 @@ import {
     EXCEL_DESKTOP_EAGER_LIMIT_BYTES,
     EXCEL_WEB_EAGER_LIMIT_BYTES,
 } from '../../parsers/excel-limits.js';
+import {
+    MATLAB_MAT_DESKTOP_EAGER_LIMIT_BYTES,
+    MATLAB_MAT_WEB_EAGER_LIMIT_BYTES,
+} from '../../parsers/matlab-mat-limits.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -20,6 +24,7 @@ let duckDbSourceClassPromise = null;
 let pypsaNetcdfParserClassPromise = null;
 let pickleParserClassPromise = null;
 let excelWorkbookModulePromise = null;
+let matlabMatFileClassPromise = null;
 
 async function loadDuckDbSourceClass() {
     if (globalThis.__OMV_PORTABLE__ === true) return null;
@@ -69,6 +74,13 @@ async function loadExcelWorkbookModule() {
     return excelWorkbookModulePromise;
 }
 
+async function loadMatlabMatFileClass() {
+    if (!matlabMatFileClassPromise) {
+        matlabMatFileClassPromise = import('../../parsers/matlab-mat-file.js').then(module => module.default);
+    }
+    return matlabMatFileClassPromise;
+}
+
 function resolveExcelSheetName(excelModule, workbook, preferredName = null) {
     if (preferredName && workbook?.Sheets?.[preferredName]) return preferredName;
     const names = excelModule.nonEmptySheetNames(workbook);
@@ -109,6 +121,7 @@ proto.loadFile = async function(file, options = {}) {
                 this._preflightPypsaNetcdfFile(currentFile, extension);
                 this._preflightPickleFile(currentFile, extension);
                 this._preflightExcelFile(currentFile, extension);
+                this._preflightMatlabFile(currentFile, extension);
                 const preflight = await this._maybeConvertLargeCsvBeforeLoad(currentFile, { ...options, extension });
                 if (preflight?.cancelled) return null;
                 if (preflight?.csvProfile) {
@@ -130,7 +143,7 @@ proto.loadFile = async function(file, options = {}) {
                     extension = this._fileExtension(currentFile.name);
                 }
                 const streamable = this._canParseFromFile(currentFile, extension);
-                buffer = streamable ? null : await (currentFile.arrayBuffer ? currentFile.arrayBuffer() : this._readAsArrayBuffer(currentFile));
+                buffer = options.matBuffer || (streamable ? null : await (currentFile.arrayBuffer ? currentFile.arrayBuffer() : this._readAsArrayBuffer(currentFile)));
                 contentHash = buffer
                     ? await this._hashBuffer(buffer)
                     : this._fileFingerprint(currentFile);
@@ -138,6 +151,8 @@ proto.loadFile = async function(file, options = {}) {
                     csvProfile: options.csvProfile || null,
                     excelSheetName: options.excelSheetName || null,
                     excelWorkbook: options.excelWorkbook || null,
+                    matInspection: options.matInspection || null,
+                    matSelection: options.matSelection || null,
                 });
                 if (isCancelled()) {
                     await data?._duckdb?.source?.release?.(data);
@@ -170,6 +185,7 @@ proto.loadFile = async function(file, options = {}) {
             extension,
             transform,
             excel: data?.metadata?.excel ? { ...data.metadata.excel } : null,
+            matlab: data?.metadata?.matlab ? { ...data.metadata.matlab } : null,
         });
         this._adoptExcelCsvCache(this.files.get(fileId), data);
 
@@ -211,7 +227,8 @@ proto.loadFile = async function(file, options = {}) {
 proto.loadFiles = async function(items = []) {
     // Sheet selection happens before the loading overlay so the picker is not
     // stacked under it and the progress counter reflects the expanded count.
-    const entries = await this._expandExcelEntries(Array.from(items || []));
+    const excelEntries = await this._expandExcelEntries(Array.from(items || []));
+    const entries = await this._expandMatEntries(excelEntries);
     if (!entries.length) return [];
 
     const loaded = [];
@@ -234,6 +251,9 @@ proto.loadFiles = async function(items = []) {
                 excelSheetName: item?.excelSheetName || null,
                 excelWorkbook: item?.excelWorkbook || null,
                 excelAppendSheetName: item?.excelAppendSheetName === true,
+                matBuffer: item?.matBuffer || null,
+                matInspection: item?.matInspection || null,
+                matSelection: item?.matSelection || null,
                 loadToken,
             });
             if (result) loaded.push(result);
@@ -336,6 +356,58 @@ proto._expandExcelEntries = async function(entries) {
     // When entries follow, loadFiles takes over the same overlay (reused by
     // _showFileLoadingOverlay); otherwise nothing else will hide it.
     if (!expanded.length) hideBusy();
+    return expanded;
+};
+
+// MATLAB files are inspected before the loading batch begins. Simulation
+// results keep the legacy direct path; general MAT containers expose a
+// spreadsheet-like catalog so the user controls which arrays are imported.
+proto._expandMatEntries = async function(entries) {
+    const expanded = [];
+    for (const item of entries || []) {
+        const fileHandle = item?.fileHandle || null;
+        let file = item?.file || (fileHandle ? null : item);
+        const sourceName = file?.name || fileHandle?.name || '';
+        if (this._fileExtension(sourceName) !== '.mat') {
+            expanded.push(item);
+            continue;
+        }
+        try {
+            if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
+            if (!file) continue;
+            this._preflightMatlabFile(file, '.mat');
+            this._showFileLoadingOverlay(1);
+            this._updateFileLoadingOverlay(1, 1, file.name || '', file.size);
+            await this._waitForNextPaint();
+            const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
+            const Parser = await loadMatlabMatFileClass();
+            const parser = new Parser(this.parser);
+            const inspection = await parser.inspect(buffer, file.name);
+            this._hideFileLoadingOverlay();
+            let selection = null;
+            if (inspection.kind === 'general') {
+                const { default: MatVariablePickerDialog } = await import('../../ui/mat-variable-picker-dialog.js');
+                selection = await MatVariablePickerDialog.open({
+                    fileName: file.name,
+                    version: inspection.version,
+                    entries: inspection.entries,
+                });
+                if (!selection?.selectedIds?.length) continue;
+            }
+            expanded.push({
+                ...(item?.file || item?.fileHandle ? item : {}),
+                file,
+                fileHandle,
+                matBuffer: buffer,
+                matInspection: inspection,
+                matSelection: selection,
+            });
+        } catch (err) {
+            this._hideFileLoadingOverlay();
+            console.error('Error inspecting MAT file:', err);
+            await Modal.alert(i18n.t('errorLoading'), err?.message || String(err), { icon: 'MAT' });
+        }
+    }
     return expanded;
 };
 
@@ -573,8 +645,10 @@ proto.reloadActiveFile = async function() {
     const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, latestFile || entry.file, {
         csvProfile: currentProfile?.profileSource === 'user' ? currentProfile : null,
         excelSheetName: entry.excel?.sheetName || null,
+        matSelection: entry.matlab || null,
     });
     if (data?.metadata?.excel) entry.excel = { ...data.metadata.excel };
+    if (data?.metadata?.matlab) entry.matlab = { ...data.metadata.matlab };
     this._reapplyDerivedVariables(id, data);
     this._reapplyDataToolVariables?.(id, data);
 
@@ -614,6 +688,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
     const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, latestFile || source.file, {
         csvProfile: reloadProfile,
         excelSheetName: source.excel?.sheetName || null,
+        matSelection: source.matlab || null,
     });
 
     const fileId = `f${this._nextFileId++}`;
@@ -631,6 +706,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
         extension: source.extension || '.mat',
         transform: this._normalizeFileTransform(source.transform),
         excel: data?.metadata?.excel ? { ...data.metadata.excel } : (source.excel ? { ...source.excel } : null),
+        matlab: data?.metadata?.matlab ? { ...data.metadata.matlab } : (source.matlab ? { ...source.matlab } : null),
     });
     this._adoptExcelCsvCache(this.files.get(fileId), data);
     this.plotManager.addFile(fileId, name, data, this.files.get(fileId).transform);
@@ -1188,10 +1264,36 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
     if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer);
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
     if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file, options);
-    if (extension === '.mat') return this.parser.parse(buffer);
+    if (extension === '.mat') return this._parseMatlabResultBuffer(filename, buffer, options);
     if (this._looksLikePickleBuffer(buffer)) throw new Error(i18n.t('pickleLooksLikeUnsupportedExtension'));
     if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file, options);
     throw new Error(i18n.t('invalidFile'));
+};
+
+proto._matlabEagerLimitBytes = function() {
+    return this.capabilities?.isDesktop
+        ? MATLAB_MAT_DESKTOP_EAGER_LIMIT_BYTES
+        : MATLAB_MAT_WEB_EAGER_LIMIT_BYTES;
+};
+
+proto._preflightMatlabFile = function(file, extension = this._fileExtension(file?.name || '')) {
+    if (extension !== '.mat') return;
+    const size = Number(file?.size || 0);
+    const limit = this._matlabEagerLimitBytes();
+    if (!Number.isFinite(size) || size <= limit) return;
+    throw new Error(i18n.t('matTooLarge')
+        .replace('{file}', file?.name || 'data.mat')
+        .replace('{size}', this._formatFileSize(size))
+        .replace('{limit}', this._formatFileSize(limit)));
+};
+
+proto._parseMatlabResultBuffer = async function(filename, buffer, options = {}) {
+    const Parser = await loadMatlabMatFileClass();
+    const parser = new Parser(this.parser);
+    return parser.parse(buffer, filename, {
+        inspection: options.matInspection || null,
+        selection: options.matSelection || null,
+    });
 };
 
 proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer) {
@@ -2156,6 +2258,9 @@ proto._fileTypeLabel = function(_entry, fileId = null) {
     }
     if (metadata?.format === 'pandas-pickle' || metadata?.source === 'pandas') {
         return i18n.t('fileTypePandasPickle');
+    }
+    if (metadata?.source === 'matlab') {
+        return i18n.t('fileTypeMatlab').replace('{version}', metadata.matVersion || '?');
     }
     return '';
 };

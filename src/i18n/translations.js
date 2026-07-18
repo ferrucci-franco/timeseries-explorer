@@ -2,7 +2,7 @@ const translations = {
         en: {
             // App title
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'CSV, OpenModelica/Dymola (.MAT) viewer',
+            appSubtitle: 'CSV, MATLAB, OpenModelica/Dymola viewer',
             appSubtitleMorePrefix: 'and',
             appSubtitleMoreLink: 'more!',
             supportedFormatsTitle: 'Supported formats',
@@ -10,7 +10,7 @@ const translations = {
                 <div class="supported-formats-table-wrap"><table class="supported-formats-table">
                     <thead><tr><th>Format</th><th>Extensions</th><th>Notes</th></tr></thead>
                     <tbody>
-                        <tr><td>OpenModelica / Dymola results</td><td><code>.mat</code></td><td>Simulation result files in MAT v4 format.</td></tr>
+                        <tr><td>MATLAB / OpenModelica / Dymola</td><td><code>.mat</code></td><td>General MATLAB MAT v4-v7.3 arrays and OpenModelica/Dymola simulation results.</td></tr>
                         <tr><td>CSV / text time series</td><td><code>.csv</code>, <code>.txt</code></td><td>Delimited or whitespace-separated numeric tables, with optional headers and automatic time detection.</td></tr>
                         <tr><td>Parquet time series</td><td><code>.parquet</code></td><td>Good for very large time-series tables and usually faster than CSV.</td></tr>
                         <tr><td>PyPSA netCDF networks</td><td><code>.nc</code>, <code>.netcdf</code></td><td>PyPSA network files with time-series results.</td></tr>
@@ -208,6 +208,7 @@ const translations = {
             fileTypePypsaSkippedDynamic: '{count} unsupported PyPSA time-series dataset(s) were skipped.',
             pickleTooLarge: '"{file}" ({size}) exceeds the pickle size limit ({limit}). Raise it in Settings → File loading → Pickle full load limit, or export to Parquet.',
             fileTypePandasPickle: 'pandas pickle',
+            fileTypeMatlab: 'MATLAB MAT {version}',
             picklesSkippedColumns: '{count} unsupported pandas pickle column(s) were skipped.',
             pickleCompressedUnsupported: 'Compressed pandas pickle ({format}) is not supported yet. Save without compression (pd.to_pickle(..., compression=None)) or export to Parquet.',
             pickleUnsupportedObject: 'Unsupported pickled object: {type}. Open a pandas DataFrame/Series pickle or export to Parquet.',
@@ -220,7 +221,23 @@ const translations = {
             excelSheetEmpty: 'empty',
             excelSheetHidden: 'hidden',
             excelTooLarge: '"{file}" is {size}. Spreadsheet support uses eager in-memory loading (limit {limit}). Export large tables to CSV or Parquet instead.',
+            matTooLarge: '"{file}" is {size}. General MATLAB MAT import currently uses eager in-memory loading (limit {limit}). Select a smaller file or export the needed arrays.',
             excelNoDataSheets: '"{file}" has no sheets with data.',
+            matPickerTitle: 'Select MATLAB arrays',
+            matPickerBody: '"{file}" is a MATLAB MAT {version} file. Review its contents and choose the arrays to import.',
+            matPickerSelectAll: 'Select all',
+            matPickerSelectNone: 'Select none',
+            matPickerName: 'Name / path',
+            matPickerType: 'Type',
+            matPickerSize: 'Size',
+            matPickerOverview: 'Overview',
+            matPickerTime: 'Time axis',
+            matPickerTimeAuto: 'Auto-detect time, otherwise use sample index',
+            matPickerSampleDimension: 'Samples are stored in',
+            matPickerSampleDimensionAuto: 'Auto-detect rows or columns',
+            matPickerSampleDimensionRows: 'Rows',
+            matPickerSampleDimensionColumns: 'Columns',
+            matPickerImport: 'Import selected',
             csvPreviewAction: 'Adjust CSV parsing...',
             csvPreviewTitle: 'Adjust CSV parsing',
             csvPreviewApply: 'Apply parsing',
@@ -1055,7 +1072,7 @@ const translations = {
         fr: {
             // App title
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visualiseur CSV et OpenModelica/Dymola (.MAT)',
+            appSubtitle: 'Visualiseur CSV, MATLAB et OpenModelica/Dymola',
             appSubtitleMorePrefix: 'et',
             appSubtitleMoreLink: 'plus !',
             supportedFormatsTitle: 'Formats pris en charge',
@@ -1063,7 +1080,7 @@ const translations = {
                 <div class="supported-formats-table-wrap"><table class="supported-formats-table">
                     <thead><tr><th>Format</th><th>Extensions</th><th>Notes</th></tr></thead>
                     <tbody>
-                        <tr><td>Resultats OpenModelica / Dymola</td><td><code>.mat</code></td><td>Fichiers de resultats de simulation au format MAT v4.</td></tr>
+                        <tr><td>MATLAB / OpenModelica / Dymola</td><td><code>.mat</code></td><td>Tableaux MATLAB MAT v4-v7.3 et résultats de simulation OpenModelica/Dymola.</td></tr>
                         <tr><td>Series temporelles CSV / texte</td><td><code>.csv</code>, <code>.txt</code></td><td>Tables numeriques delimitees ou separees par espaces, avec en-tetes optionnels et detection automatique du temps.</td></tr>
                         <tr><td>Series temporelles Parquet</td><td><code>.parquet</code></td><td>Pratique pour les tres grands tableaux de series temporelles, et souvent plus rapide que le CSV.</td></tr>
                         <tr><td>Reseaux PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Fichiers de reseau PyPSA avec des resultats temporels.</td></tr>
@@ -1329,6 +1346,7 @@ const translations = {
             fileTypePypsaSkippedDynamic: "{count} jeu(x) de données temporelles PyPSA non pris en charge n'ont pas été chargés.",
             pickleTooLarge: '"{file}" ({size}) dépasse la limite pickle ({limit}). Augmentez-la dans Réglages d affichage → Chargement des fichiers → Limite de chargement complet Pickle, ou exportez en Parquet.',
             fileTypePandasPickle: 'pickle pandas',
+            fileTypeMatlab: 'MATLAB MAT {version}',
             picklesSkippedColumns: "{count} colonne(s) pickle pandas non prises en charge n'ont pas été chargées.",
             pickleCompressedUnsupported: "Les pickles pandas compressés ({format}) ne sont pas encore pris en charge. Enregistrez sans compression (pd.to_pickle(..., compression=None)) ou exportez en Parquet.",
             pickleUnsupportedObject: 'Objet pickle non pris en charge : {type}. Ouvrez un pickle pandas DataFrame/Series ou exportez en Parquet.',
@@ -1341,7 +1359,23 @@ const translations = {
             excelSheetEmpty: 'vide',
             excelSheetHidden: 'masquée',
             excelTooLarge: '"{file}" fait {size}. La prise en charge des feuilles de calcul utilise un chargement eager en mémoire (limite {limit}). Exportez les grandes tables en CSV ou Parquet.',
+            matTooLarge: '"{file}" fait {size}. L importation MATLAB MAT générale utilise actuellement un chargement eager en mémoire (limite {limit}). Sélectionnez un fichier plus petit ou exportez les tableaux nécessaires.',
             excelNoDataSheets: '"{file}" ne contient aucune feuille avec des données.',
+            matPickerTitle: 'Sélectionner les tableaux MATLAB',
+            matPickerBody: '"{file}" est un fichier MATLAB MAT {version}. Vérifiez son contenu et choisissez les tableaux à importer.',
+            matPickerSelectAll: 'Tout sélectionner',
+            matPickerSelectNone: 'Tout désélectionner',
+            matPickerName: 'Nom / chemin',
+            matPickerType: 'Type',
+            matPickerSize: 'Taille',
+            matPickerOverview: 'Aperçu',
+            matPickerTime: 'Axe temporel',
+            matPickerTimeAuto: 'Détecter le temps, sinon utiliser l index des échantillons',
+            matPickerSampleDimension: 'Les échantillons sont stockés dans',
+            matPickerSampleDimensionAuto: 'Détecter les lignes ou colonnes',
+            matPickerSampleDimensionRows: 'Lignes',
+            matPickerSampleDimensionColumns: 'Colonnes',
+            matPickerImport: 'Importer la sélection',
             loadingFiles: 'Chargement des fichiers ({current}/{total})',
             loadingFilesPreparing: 'Preparation des fichiers...',
             loadingFilesCurrent: 'Chargement de {file}',
@@ -2108,7 +2142,7 @@ const translations = {
         },
         es: {
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visor de CSV y OpenModelica/Dymola (.MAT)',
+            appSubtitle: 'Visor de CSV, MATLAB y OpenModelica/Dymola',
             appSubtitleMorePrefix: 'y',
             appSubtitleMoreLink: 'más!',
             supportedFormatsTitle: 'Formatos compatibles',
@@ -2116,7 +2150,7 @@ const translations = {
                 <div class="supported-formats-table-wrap"><table class="supported-formats-table">
                     <thead><tr><th>Formato</th><th>Extensiones</th><th>Notas</th></tr></thead>
                     <tbody>
-                        <tr><td>Resultados OpenModelica / Dymola</td><td><code>.mat</code></td><td>Archivos de resultados de simulacion en formato MAT v4.</td></tr>
+                        <tr><td>MATLAB / OpenModelica / Dymola</td><td><code>.mat</code></td><td>Matrices MATLAB MAT v4-v7.3 y resultados de simulación OpenModelica/Dymola.</td></tr>
                         <tr><td>Series temporales CSV / texto</td><td><code>.csv</code>, <code>.txt</code></td><td>Tablas numericas delimitadas o separadas por espacios, con encabezados opcionales y deteccion automatica del tiempo.</td></tr>
                         <tr><td>Series temporales Parquet</td><td><code>.parquet</code></td><td>Conveniente para tablas de series temporales muy grandes y normalmente mas rapido que CSV.</td></tr>
                         <tr><td>Redes PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Archivos de redes PyPSA con resultados de series temporales.</td></tr>
@@ -2376,6 +2410,7 @@ const translations = {
             fileTypePypsaSkippedDynamic: 'Se omitieron {count} conjunto(s) de series temporales PyPSA no compatibles.',
             pickleTooLarge: '"{file}" ({size}) supera el límite de pickle ({limit}). Auméntalo en Ajustes de visualización → Carga de archivos → Límite de carga completa Pickle, o exporta a Parquet.',
             fileTypePandasPickle: 'pickle pandas',
+            fileTypeMatlab: 'MATLAB MAT {version}',
             picklesSkippedColumns: 'Se omitieron {count} columna(s) pickle pandas no compatibles.',
             pickleCompressedUnsupported: 'Los pickles pandas comprimidos ({format}) todavía no son compatibles. Guarda sin compresión (pd.to_pickle(..., compression=None)) o exporta a Parquet.',
             pickleUnsupportedObject: 'Objeto pickle no compatible: {type}. Abre un pickle pandas DataFrame/Series o exporta a Parquet.',
@@ -2388,7 +2423,23 @@ const translations = {
             excelSheetEmpty: 'vacía',
             excelSheetHidden: 'oculta',
             excelTooLarge: '"{file}" pesa {size}. El soporte de planillas usa carga eager en memoria (límite {limit}). Exporta tablas grandes a CSV o Parquet.',
+            matTooLarge: '"{file}" pesa {size}. La importación MATLAB MAT general usa actualmente carga eager en memoria (límite {limit}). Selecciona un archivo más pequeño o exporta las matrices necesarias.',
             excelNoDataSheets: '"{file}" no tiene hojas con datos.',
+            matPickerTitle: 'Seleccionar matrices MATLAB',
+            matPickerBody: '"{file}" es un archivo MATLAB MAT {version}. Revisa su contenido y elige las matrices o variables que quieres importar.',
+            matPickerSelectAll: 'Seleccionar todo',
+            matPickerSelectNone: 'No seleccionar nada',
+            matPickerName: 'Nombre / ruta',
+            matPickerType: 'Tipo',
+            matPickerSize: 'Tamaño',
+            matPickerOverview: 'Vista previa',
+            matPickerTime: 'Eje temporal',
+            matPickerTimeAuto: 'Detectar tiempo; si no, usar el índice de muestras',
+            matPickerSampleDimension: 'Las muestras están guardadas en',
+            matPickerSampleDimensionAuto: 'Detectar filas o columnas',
+            matPickerSampleDimensionRows: 'Filas',
+            matPickerSampleDimensionColumns: 'Columnas',
+            matPickerImport: 'Importar selección',
             loadingFiles: 'Cargando archivos ({current}/{total})',
             loadingFilesPreparing: 'Preparando archivos...',
             loadingFilesCurrent: 'Cargando {file}',
@@ -3131,7 +3182,7 @@ const translations = {
         },
         it: {
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visualizzatore CSV e OpenModelica/Dymola (.MAT)',
+            appSubtitle: 'Visualizzatore CSV, MATLAB e OpenModelica/Dymola',
             appSubtitleMorePrefix: 'e',
             appSubtitleMoreLink: 'altro!',
             supportedFormatsTitle: 'Formati supportati',
@@ -3139,7 +3190,7 @@ const translations = {
                 <div class="supported-formats-table-wrap"><table class="supported-formats-table">
                     <thead><tr><th>Formato</th><th>Estensioni</th><th>Note</th></tr></thead>
                     <tbody>
-                        <tr><td>Risultati OpenModelica / Dymola</td><td><code>.mat</code></td><td>File di risultati di simulazione in formato MAT v4.</td></tr>
+                        <tr><td>MATLAB / OpenModelica / Dymola</td><td><code>.mat</code></td><td>Array MATLAB MAT v4-v7.3 e risultati di simulazione OpenModelica/Dymola.</td></tr>
                         <tr><td>Serie temporali CSV / testo</td><td><code>.csv</code>, <code>.txt</code></td><td>Tabelle numeriche delimitate o separate da spazi, con intestazioni opzionali e rilevamento automatico del tempo.</td></tr>
                         <tr><td>Serie temporali Parquet</td><td><code>.parquet</code></td><td>Utile per tabelle di serie temporali molto grandi e di solito piu veloce del CSV.</td></tr>
                         <tr><td>Reti PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>File di reti PyPSA con risultati temporali.</td></tr>
@@ -3399,6 +3450,7 @@ const translations = {
             fileTypePypsaSkippedDynamic: 'Sono stati omessi {count} dataset temporali PyPSA non supportati.',
             pickleTooLarge: '"{file}" ({size}) supera il limite pickle ({limit}). Aumentalo in Impostazioni visualizzazione → Caricamento file → Limite caricamento completo Pickle, o esporta in Parquet.',
             fileTypePandasPickle: 'pickle pandas',
+            fileTypeMatlab: 'MATLAB MAT {version}',
             picklesSkippedColumns: 'Sono state omesse {count} colonna/e pickle pandas non supportate.',
             pickleCompressedUnsupported: 'I pickle pandas compressi ({format}) non sono ancora supportati. Salva senza compressione (pd.to_pickle(..., compression=None)) o esporta in Parquet.',
             pickleUnsupportedObject: 'Oggetto pickle non supportato: {type}. Apri un pickle pandas DataFrame/Series o esporta in Parquet.',
@@ -3411,7 +3463,23 @@ const translations = {
             excelSheetEmpty: 'vuoto',
             excelSheetHidden: 'nascosto',
             excelTooLarge: '"{file}" è {size}. Il supporto dei fogli di calcolo usa caricamento eager in memoria (limite {limit}). Esporta le tabelle grandi in CSV o Parquet.',
+            matTooLarge: '"{file}" è {size}. L importazione MATLAB MAT generale usa attualmente il caricamento eager in memoria (limite {limit}). Seleziona un file più piccolo o esporta gli array necessari.',
             excelNoDataSheets: '"{file}" non ha fogli con dati.',
+            matPickerTitle: 'Seleziona array MATLAB',
+            matPickerBody: '"{file}" è un file MATLAB MAT {version}. Controlla il contenuto e scegli gli array da importare.',
+            matPickerSelectAll: 'Seleziona tutto',
+            matPickerSelectNone: 'Deseleziona tutto',
+            matPickerName: 'Nome / percorso',
+            matPickerType: 'Tipo',
+            matPickerSize: 'Dimensione',
+            matPickerOverview: 'Anteprima',
+            matPickerTime: 'Asse temporale',
+            matPickerTimeAuto: 'Rileva il tempo; altrimenti usa l indice dei campioni',
+            matPickerSampleDimension: 'I campioni sono memorizzati in',
+            matPickerSampleDimensionAuto: 'Rileva righe o colonne',
+            matPickerSampleDimensionRows: 'Righe',
+            matPickerSampleDimensionColumns: 'Colonne',
+            matPickerImport: 'Importa selezione',
             loadingFiles: 'Caricamento file ({current}/{total})',
             loadingFilesPreparing: 'Preparazione file...',
             loadingFilesCurrent: 'Caricamento di {file}',
