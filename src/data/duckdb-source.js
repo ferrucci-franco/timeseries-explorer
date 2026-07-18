@@ -28,6 +28,7 @@ import { registerDuckDbFile } from './duckdb-file-registration.js';
 import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
 import { buildPairCorrelationSql, parsePairCorrelations } from './pair-correlation-sql.js';
 import { buildMissingBucketsSql } from './missing-buckets-sql.js';
+import { pandasColumnPaths } from './parquet-pandas-metadata.js';
 
 const BUNDLES = {
     mvp: { mainModule: mvpWasmUrl, mainWorker: mvpWorkerUrl },
@@ -1118,6 +1119,9 @@ export default class DuckDbSource {
         const schema = this._arrowRowsToObjects(schemaResult);
         const columnNames = schema.map(s => s.column_name);
         const columnTypes = schema.map(s => String(s.column_type || '').toUpperCase());
+        const pandasPaths = format === 'parquet'
+            ? await this._parquetPandasColumnPaths(escapedHandle)
+            : new Map();
 
         const timeInfo = this._timeInfoFromProfile(columnNames, columnTypes, csvProfile)
             || this._timeInfoFromDuckDbSchema(columnNames, columnTypes);
@@ -1166,7 +1170,15 @@ export default class DuckDbSource {
             i === 0 ? 'DOUBLE' : String(f.type || '').toUpperCase()
         );
 
-        const legacy = this._buildLegacyFromArrow(dataResult, projectedNames, projectedTypes, 0, totalRows, timeInfo);
+        const legacy = this._buildLegacyFromArrow(
+            dataResult,
+            projectedNames,
+            projectedTypes,
+            0,
+            totalRows,
+            timeInfo,
+            { format, pandasPaths },
+        );
 
         if (viewMode) {
             // In view mode the overview is a small reservoir sample, so its
@@ -2467,7 +2479,7 @@ export default class DuckDbSource {
         return rows;
     }
 
-    _buildLegacyFromArrow(table, columnNames, columnTypes, timeColIndex, totalRows, timeInfo = null) {
+    _buildLegacyFromArrow(table, columnNames, columnTypes, timeColIndex, totalRows, timeInfo = null, sourceInfo = {}) {
         const result = {
             filename: '',
             metadata: {},
@@ -2482,6 +2494,7 @@ export default class DuckDbSource {
         const datetimeAxisStalled = timeKind === 'datetime' && this._isStalledTimeAxis(timeData);
 
         const usedNames = new Set();
+        const variablePaths = new Map();
         const sanitize = (raw) => {
             const base = String(raw ?? '').trim() || `column`;
             return base;
@@ -2516,12 +2529,13 @@ export default class DuckDbSource {
         for (let i = 0; i < columnNames.length; i++) {
             if (i === timeColIndex) continue;
             const colName = sanitize(columnNames[i]);
+            const columnPath = sourceInfo.pandasPaths?.get(columnNames[i]) || null;
             const colType = columnTypes[i];
             const isNumeric = /INT|BIGINT|DOUBLE|REAL|FLOAT|DECIMAL|NUMERIC/.test(colType);
             const data = isNumeric
                 ? this._extractColumnAsFloat64(table, i, colType)
                 : this._extractColumnAsStrings(table, i);
-            const uniqueName = this._uniqueName(colName, usedNames);
+            const uniqueName = this._uniqueName(columnPath?.join('.') || colName, usedNames);
             usedNames.add(uniqueName);
             const isConstant = this._isConstantData(data);
             result.variables[uniqueName] = {
@@ -2533,9 +2547,14 @@ export default class DuckDbSource {
                 isConstant,
                 interpolation: 'linear',
                 negate: false,
-                source: 'csv',
+                source: sourceInfo.format === 'parquet' ? 'parquet' : 'csv',
                 _duckdbCol: columnNames[i],
             };
+            if (columnPath) {
+                result.variables[uniqueName].displayName = columnPath.join('.');
+                result.variables[uniqueName].pandas = { columnPath: columnPath.slice() };
+                variablePaths.set(uniqueName, columnPath);
+            }
             numTimevarying++;
         }
 
@@ -2546,7 +2565,8 @@ export default class DuckDbSource {
             numTimesteps: timeData.length,
             timeStart: timeData.length ? timeData[0] : 0,
             timeEnd: timeData.length ? timeData[timeData.length - 1] : 0,
-            csv: true,
+            csv: sourceInfo.format !== 'parquet',
+            format: sourceInfo.format || 'csv',
             delimiter: 'auto',
             hasHeader: true,
             skippedRows: 0,
@@ -2561,12 +2581,62 @@ export default class DuckDbSource {
             backend: 'duckdb',
         };
 
-        if (this.structureParser?._buildTree) {
+        if (variablePaths.size) {
+            result.tree = this._buildColumnPathTree(result.variables, variablePaths);
+            result.metadata.pandasMultiIndex = true;
+            result.metadata.pandasColumnLevels = Math.max(...[...variablePaths.values()].map(path => path.length));
+        } else if (this.structureParser?._buildTree) {
             result.tree = this.structureParser._buildTree(result.variables);
         } else {
             result.tree = this._flatTree(result.variables);
         }
         return result;
+    }
+
+    _buildColumnPathTree(variables, variablePaths) {
+        const root = { _type: 'root', _name: '', _children: {}, _variables: {} };
+        for (const [name, variable] of Object.entries(variables)) {
+            const path = variablePaths.get(name);
+            if (!path?.length) {
+                root._variables[name] = variable;
+                continue;
+            }
+            let node = root;
+            for (const part of path.slice(0, -1)) {
+                if (!node._children[part]) {
+                    node._children[part] = {
+                        _type: 'component',
+                        _name: part,
+                        _fullName: '',
+                        _children: {},
+                        _variables: {},
+                    };
+                }
+                node = node._children[part];
+            }
+            let leaf = path[path.length - 1] || name;
+            let suffix = 2;
+            while (node._variables[leaf]) leaf = `${path[path.length - 1]} #${suffix++}`;
+            node._variables[leaf] = variable;
+        }
+        return root;
+    }
+
+    async _parquetPandasColumnPaths(escapedHandle) {
+        try {
+            const table = await this._conn.query(`
+                SELECT value
+                FROM parquet_kv_metadata('${escapedHandle}')
+                WHERE CAST(key AS VARCHAR) = 'pandas'
+                LIMIT 1
+            `);
+            const raw = table.getChild('value')?.get(0);
+            if (raw == null) return new Map();
+            const json = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+            return pandasColumnPaths(JSON.parse(json));
+        } catch (_) {
+            return new Map();
+        }
     }
 
     _extractColumnAsFloat64(table, idx, type) {
