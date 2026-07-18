@@ -255,12 +255,28 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     assert.ok(shapes.every(s => s.line.width === 0), 'dense bands carry no stroke');
     assert.ok(shapes.every(s => alphaOf(s) <= 0.15), 'dense bands use a faint wash so the signal reads through');
 
-    // In timeseries mode a dense view draws NO band at all — the "zoom in" pill
-    // carries the message and the (WebGL) signal stays completely clear.
+    // Dense but STRUCTURED (gaps cover only ~8% of the view): even in timeseries
+    // mode the faint wash is drawn, so the user sees which regions hold missing
+    // data and which are clean — plus the dense flag (pill) is set.
     const tsPlot = { mode: 'timeseries', div: { _fullLayout: { xaxis: { range: [0, 1000], _length: 100 } } } };
     const tsShapes = h._adaptiveGapBandShapes(tsPlot, items);
-    assert.equal(tsShapes.length, 0, 'dense timeseries view draws no band (pill only)');
-    assert.equal(tsPlot._missingTooDense, true, 'but the dense flag is still set so the pill shows');
+    assert.ok(tsShapes.length > 0, 'a structured dense timeseries view still draws the faint wash');
+    assert.ok(tsShapes.every(s => alphaOf(s) <= 0.15 && s.line.width === 0), 'and it is the faint stroke-less wash');
+    assert.equal(tsPlot._missingTooDense, true, 'the dense flag is set so the pill shows too');
+
+    // Dense AND a near-total wall (gaps cover ~100% of the view): in timeseries
+    // mode suppress the wash — it carries no information and only tints the
+    // signal; the pill speaks instead. (The flag is still set.)
+    const wallPlot = { mode: 'timeseries', div: { _fullLayout: { xaxis: { range: [0, 1000], _length: 100 } } } };
+    const wall = [];
+    for (let i = 0; i <= 220; i++) wall.push({ fileId: 'f', timeVar: null, t0: i * 5, t1: i * 5 + 6 }); // overlap → one full band
+    const wallShapes = h._adaptiveGapBandShapes(wallPlot, wall);
+    assert.equal(wallShapes.length, 0, 'a uniform full-view wall draws nothing in timeseries (pill only)');
+    assert.equal(wallPlot._missingTooDense, true, 'but it is still flagged dense so the pill shows');
+
+    // The FFT pane keeps the wash even for a full wall (it has no pill).
+    const fftWall = h._adaptiveGapBandShapes({ mode: 'fft', div: { _fullLayout: { xaxis: { range: [0, 1000], _length: 100 } } } }, wall);
+    assert.ok(fftWall.length > 0, 'the FFT pane still washes a full wall (no pill to fall back on)');
 }
 
 // ── Gating: with the flag off, nothing changes ──

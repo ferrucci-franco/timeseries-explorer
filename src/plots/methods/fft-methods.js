@@ -1304,12 +1304,6 @@ proto._adaptiveGapBandShapes = function(plot, items) {
     const dense = this._missingViewIsDense(plot, items);
     plot._missingTooDense = dense;
 
-    // Timeseries: when dense, draw NOTHING — any wash, however faint, sits over
-    // the (WebGL) trace and buries the signal. The "zoom in" pill carries the
-    // message instead, leaving the trace fully clear. The FFT time pane has no
-    // such pill, so it keeps a faint wash below to still flag missing samples.
-    if (dense && plot.mode === 'timeseries') return [];
-
     // Coalesce at pixel resolution, so dense missing data never floods Plotly.
     // If it is STILL pathologically fragmented (sub-2px alternation), keep only
     // the widest merged bands as a final guard.
@@ -1317,6 +1311,18 @@ proto._adaptiveGapBandShapes = function(plot, items) {
     const list = merged.length > MAX_BANDS
         ? merged.slice().sort((a, b) => (b.t1 - b.t0) - (a.t1 - a.t0)).slice(0, MAX_BANDS)
         : merged;
+
+    // A dense view still gets a faint wash that reveals WHICH regions hold
+    // missing data (and which are clean) — genuinely useful, e.g. region-based
+    // gaps. The one exception (timeseries only): if the wash would cover almost
+    // the entire view it is a uniform wall carrying no information and only
+    // tinting the signal, so suppress it and let the "zoom in" pill speak. The
+    // FFT pane has no pill, so it always keeps the wash.
+    if (dense && plot.mode === 'timeseries') {
+        const span = hi - lo;
+        const covered = list.reduce((sum, it) => sum + (it.t1 - it.t0), 0);
+        if (!(span > 0) || covered / span >= 0.9) return [];
+    }
 
     const shapes = [];
     for (const it of list) {
