@@ -232,7 +232,7 @@ class PlotManager {
             ? (plot.traces || []).filter(trace => this._isVisible(trace) && this._traceYAxis(trace, plot) === axis)
             : [changedTrace];
         const series = traces.map(trace => ({
-            x: this._getTransformedTimeData(trace.fileId),
+            x: this._getTransformedTimeDataForVariable(trace.fileId, trace.varName),
             y: this._getTransformedVariableData(trace.fileId, trace.varName),
         }));
         const extent = this._timeseriesYExtentForSeries(
@@ -1710,19 +1710,29 @@ class PlotManager {
         const columns = [];
 
         if (plot.mode === 'timeseries' || plot.mode === 'fft') {
-            // Use first trace's file for the time column
+            const independentIndexes = plot.traces.some(trace =>
+                this.files.get(trace.fileId)?.data?.variables?.[trace.varName]?.independentIndex);
             const firstFid = plot.traces[0]?.fileId;
-            const timeVar  = this._getTimeVar(firstFid);
-            const times    = firstFid ? this._getTransformedTimeData(firstFid) : [];
-            const timeUnit = firstFid ? this._timeUnitLabel(firstFid) : (timeVar ? this._extractUnit(timeVar.description) : 's');
-            headers.push(this._isCalendarTime(firstFid) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
-            columns.push(times.map(value => this._formatTimeForExport(firstFid, value)));
+            if (!independentIndexes) {
+                const timeVar = this._getTimeVar(firstFid);
+                const times = firstFid
+                    ? this._getTransformedTimeDataForVariable(firstFid, plot.traces[0]?.varName)
+                    : [];
+                const timeUnit = firstFid ? this._timeUnitLabel(firstFid) : (timeVar ? this._extractUnit(timeVar.description) : 's');
+                headers.push(this._isCalendarTime(firstFid) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
+                columns.push(times.map(value => this._formatTimeForExport(firstFid, value)));
+            }
             for (const t of plot.traces) {
                 const d = this.files.get(t.fileId)?.data;
                 const v = d?.variables[t.varName];
                 if (!v) continue;
                 const u    = this._extractUnit(v.description);
                 const name = this._traceName(t.varName, t.fileId);
+                if (independentIndexes) {
+                    headers.push(`${name} index`);
+                    columns.push(this._getTransformedTimeDataForVariable(t.fileId, t.varName)
+                        .map(value => this._formatTimeForExport(t.fileId, value)));
+                }
                 headers.push(u ? `${name} [${u}]` : name);
                 columns.push(Array.from(this._getTransformedVariableData(t.fileId, t.varName)));
             }
@@ -1846,7 +1856,8 @@ class PlotManager {
         headers.push(this._isCalendarTime(phaseTrace.fileId)
             ? `${timeName} [datetime UTC]`
             : (timeUnit ? `${timeName} [${timeUnit}]` : timeName));
-        columns.push(this._getTransformedTimeData(phaseTrace.fileId).map(value => this._formatTimeForExport(phaseTrace.fileId, value)));
+        columns.push(this._getTransformedTimeDataForVariable(phaseTrace.fileId, phaseTrace.x)
+            .map(value => this._formatTimeForExport(phaseTrace.fileId, value)));
 
         axes.forEach((axis, index) => {
             const varName = phaseTrace[axis];
@@ -2344,8 +2355,8 @@ class PlotManager {
             for (const t of visibleTraces) {
                 const d = this.files.get(t.fileId)?.data;
                 const v = d?.variables?.[t.varName];
-                if (!d || !v || v.kind === 'parameter') continue;
-                const x = this._getTransformedTimeData(t.fileId);
+                if (!d || !v) continue;
+                const x = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
                 const y = this._getTransformedVariableData(t.fileId, t.varName);
                 xArrays.push(x);
                 if (this._traceYAxis(t, plot) === 'y2') {
@@ -2691,8 +2702,8 @@ class PlotManager {
         for (const trace of visibleTraces) {
             const data = this.files.get(trace.fileId)?.data;
             const variable = data?.variables?.[trace.varName];
-            if (!variable || variable.kind === 'parameter') continue;
-            const x = this._getTransformedTimeData(trace.fileId);
+            if (!variable) continue;
+            const x = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
             const y = this._getTransformedVariableData(trace.fileId, trace.varName);
             xArrays.push(x);
             if (this._traceYAxis(trace, plot) === 'y2') {

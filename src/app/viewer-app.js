@@ -186,6 +186,7 @@ class OpenModelicaViewer {
         return {
             csvFullLoadMb: 150,
             parquetFullLoadMb: desktop ? 200 : 100,
+            matlabFullLoadMb: desktop ? 1024 : 250,
             excelFullLoadMb: desktop ? 150 : 50,
             pickleFullLoadMb: desktop ? 200 : 80,
             pypsaNetcdfFullLoadMb: desktop ? 1024 : 250,
@@ -210,6 +211,7 @@ class OpenModelicaViewer {
         const ranges = {
             csvFullLoadMb: [10, 1000],
             parquetFullLoadMb: [10, 1000],
+            matlabFullLoadMb: [10, 2048],
             excelFullLoadMb: [10, 500],
             pickleFullLoadMb: [10, 1000],
             pypsaNetcdfFullLoadMb: [50, 2048],

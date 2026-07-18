@@ -640,7 +640,7 @@ proto._calendarHeatmapDomain = function(plot) {
         // Lazy files expose a downsampled overview whose first/last rows are the
         // exact time endpoints, so the x-axis extent is correct without a query.
         // The overview is never used as the heatmap result.
-        const times = this._getTransformedTimeData(trace.fileId);
+        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (times?.length) arrays.push(times);
     }
     const extent = this._finiteExtent(arrays);
@@ -892,7 +892,7 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
     };
 
     for (const trace of eager) {
-        const times = this._getTransformedTimeData(trace.fileId);
+        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         const values = this._getTransformedVariableData(trace.fileId, trace.varName);
         if (!times?.length || !values?.length) {
             warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapNoRows')}`);

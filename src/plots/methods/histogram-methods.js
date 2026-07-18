@@ -420,7 +420,7 @@ proto._histogramSamplesForTrace = function(trace, range) {
     const values = this._getTransformedVariableData(trace.fileId, trace.varName);
     if (!values || !values.length) return [];
     if (!range) return values;
-    const times = this._getTransformedTimeData(trace.fileId);
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
     if (!times || times.length !== values.length) return values;
     const [lo, hi] = range;
     const out = [];
@@ -596,7 +596,7 @@ proto._setHistogramStatus = function(plot, text, kind = 'muted') {
 proto._histogramDomain = function(plot) {
     const arrays = [];
     for (const trace of plot?.traces || []) {
-        const values = this._getTransformedTimeData(trace.fileId);
+        const values = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (values?.length) arrays.push(values);
     }
     const extent = this._finiteExtent(arrays);

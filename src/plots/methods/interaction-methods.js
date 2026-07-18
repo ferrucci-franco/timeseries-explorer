@@ -261,7 +261,7 @@ proto._canLiveRefreshTimeseriesRelayout = function(plot, range) {
         if (!variable) return false;
         if (variable.kind === 'parameter') continue;
 
-        const timeData = this._getTransformedTimeData(trace.fileId);
+        const timeData = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         const values = this._getTransformedVariableData(trace.fileId, trace.varName);
         const sourceLength = Math.min(timeData?.length || 0, values?.length || 0);
         if (refreshMode === 'responsive') continue;
@@ -1357,7 +1357,7 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
                 const numeric = Number(value);
                 return Number.isFinite(numeric) ? numeric : NaN;
             })
-            : plot.traces.map(t => this._getTransformedTimeData(t.fileId));
+            : plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName));
         const config = this._calendarAxisConfig(fid, timeVar, values);
         if (!config.tickvals || !config.ticktext) return Promise.resolve();
         return Plotly.relayout(plot.div, {
@@ -1374,7 +1374,7 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
             const numeric = Number(value);
             return Number.isFinite(numeric) ? numeric : NaN;
         })
-        : plot.traces.map(t => this._getTransformedTimeData(t.fileId));
+        : plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName));
     const config = this._elapsedDateTimeAxisConfig(values, fid);
     if (!config.tickvals || !config.ticktext) return Promise.resolve();
     return Plotly.relayout(plot.div, {
@@ -1466,7 +1466,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                     if (t.visible === 'legendonly' || t.visible === false) return;
                     const d    = this.files.get(t.fileId)?.data;
                     const v    = d?.variables[t.varName];
-                    const tdata = this._getTransformedTimeData(t.fileId);
+                    const tdata = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
                     const traceXVal = this._mapTimeValueBetweenFiles(srcFid, t.fileId, sourceXVal);
                     const tidx = this._findTimeIdx(tdata, traceXVal);
                     const ydata = v ? this._getTransformedVariableData(t.fileId, t.varName) : [];
@@ -1496,7 +1496,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                         if (!d) return;
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                         if (!xv || !yv) return;
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tdata = this._getTransformedTimeDataForVariable(pt2.fileId, pt2.x);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
                         const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
@@ -1514,7 +1514,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                     if (!d) return;
                     const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                     if (xv && yv) {
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tdata = this._getTransformedTimeDataForVariable(pt2.fileId, pt2.x);
                         const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
                         if (!Number.isFinite(traceXVal)) return;
                         const tidx = this._findTimeIdx(tdata, traceXVal);
@@ -1535,7 +1535,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                         if (!d) return;
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                         if (!xv || !yv) return;
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tdata = this._getTransformedTimeDataForVariable(pt2.fileId, pt2.x);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
                         const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
@@ -1553,7 +1553,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                     if (!d) return;
                     const xv = d.variables[pt2.x], yv = d.variables[pt2.y];
                     if (xv && yv) {
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tdata = this._getTransformedTimeDataForVariable(pt2.fileId, pt2.x);
                         const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
                         if (!Number.isFinite(traceXVal)) return;
                         const tidx = this._findTimeIdx(tdata, traceXVal);
@@ -1574,7 +1574,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                         if (!d) return;
                         const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
                         if (!xv || !yv || !zv) return;
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tdata = this._getTransformedTimeDataForVariable(pt2.fileId, pt2.x);
                         const midx = Array.isArray(plot.markerTraceIdx) ? plot.markerTraceIdx[i] : plot.markerTraceIdx;
                         if (hidden) { Plotly.restyle(plot.div, { visible: false }, [midx]); return; }
                         const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
@@ -1593,7 +1593,7 @@ proto._onHover = function(sourcePanelId, eventData) {
                     if (!d) return;
                     const xv = d.variables[pt2.x], yv = d.variables[pt2.y], zv = d.variables[pt2.z];
                     if (xv && yv && zv) {
-                        const tdata = this._getTransformedTimeData(pt2.fileId);
+                        const tdata = this._getTransformedTimeDataForVariable(pt2.fileId, pt2.x);
                         const traceXVal = this._mapTimeValueBetweenFiles(srcFid, pt2.fileId, sourceXVal);
                         if (!Number.isFinite(traceXVal)) return;
                         const tidx = this._findTimeIdx(tdata, traceXVal);
@@ -1611,7 +1611,10 @@ proto._onHover = function(sourcePanelId, eventData) {
             } else if (plot.mode === 'state-anim') {
                 const tvar = this._getTimeVar(plot.stateSlots.fileId);
                 if (tvar) {
-                    const tidx = this._findTimeIdx(this._getTransformedTimeData(plot.stateSlots.fileId), xVal);
+                    const tidx = this._findTimeIdx(this._getTransformedTimeDataForVariable(
+                        plot.stateSlots.fileId,
+                        plot.stateSlots.x?.[0],
+                    ), xVal);
                     this._stateAnimUpdateFrame(plot, tidx);
                 }
             }
@@ -1885,7 +1888,7 @@ proto._cursorTraceBounds = function(view, trace) {
     if (view.isSpectrum) {
         times = this._fftSpectrumSeriesForTrace(view.plot, trace)?.times;
     } else {
-        times = this._getTransformedTimeData(trace.fileId);
+        times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
     }
     if (!times?.length) return null;
     const start = Number(times[0]);
@@ -2016,7 +2019,7 @@ proto._traceInterpolationSeries = function(plot, trace) {
             if (times?.length === ry.length) return { times, values: ry };
         }
     }
-    const times = this._getTransformedTimeData(trace.fileId);
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
     const values = this._getTransformedVariableData(trace.fileId, trace.varName);
     if (!times?.length || !values?.length) return null;
     return { times, values };
@@ -2271,7 +2274,7 @@ proto._jumpCursorTo = async function(view, which, target, direction = 'next') {
     }
 
     if (!times) {
-        times = this._getTransformedTimeData(trace.fileId);
+        times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         values = this._getTransformedVariableData(trace.fileId, trace.varName);
     }
 
@@ -3958,7 +3961,7 @@ proto._toggleTimeseriesStack = function(panelId) {
             const data = this.files.get(trace.fileId)?.data;
             const variable = data?.variables?.[trace.varName];
             if (!variable || variable.kind === 'parameter') continue;
-            const x = this._getTransformedTimeData(trace.fileId);
+            const x = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
             const y = this._getTransformedVariableData(trace.fileId, trace.varName);
             traceSeries.push({ x, y });
             yArrays.push(y);

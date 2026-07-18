@@ -455,16 +455,29 @@ export default class MatlabMatFile {
         const selectedIds = new Set(selection?.selectedIds || inspection.entries.filter(entry => entry.selected).map(entry => entry.id));
         const selected = inspection.entries.filter(entry => entry.selectable && selectedIds.has(entry.id));
         if (!selected.length) throw new Error('Select at least one numeric MATLAB array.');
-        const timeEntry = this._chooseTimeEntry(selected, selection?.timeId || null);
-        const sampleLength = timeEntry?.elementCount || this._commonSampleLength(selected);
+        const timeMode = selection?.timeMode || 'auto';
+        const timeEntry = timeMode === 'index'
+            ? null
+            : this._chooseTimeEntry(selected, selection?.timeId || null);
+        const matrixOrientations = selection?.matrixOrientations || {};
+        const sampleLength = timeEntry?.elementCount || (timeMode === 'index'
+            ? this._indexSampleLength(selected, matrixOrientations)
+            : this._commonSampleLength(selected, matrixOrientations));
         const variables = {};
         const timeName = timeEntry ? this._safeName(timeEntry.path) : 'index';
         const timeData = timeEntry ? Float64Array.from(timeEntry.data, numericValue) : Float64Array.from({ length: sampleLength }, (_, index) => index);
         variables[timeName] = this._variable(timeName, timeData, 'abscissa', timeEntry, 'MATLAB sample axis');
+        if (!timeEntry) variables[timeName].syntheticIndex = true;
 
         for (const entry of selected) {
             if (entry === timeEntry) continue;
-            this._addEntryVariables(variables, entry, sampleLength, selection?.sampleAxisMode || 'auto');
+            this._addEntryVariables(
+                variables,
+                entry,
+                sampleLength,
+                matrixOrientations[entry.id] || selection?.sampleAxisMode || 'auto',
+                timeMode === 'index',
+            );
         }
         if (Object.keys(variables).length === 1 && !timeEntry) throw new Error('The selected MATLAB arrays do not contain a usable vector or matrix.');
         const result = {
@@ -484,13 +497,72 @@ export default class MatlabMatFile {
                 matlab: {
                     selectedIds: [...selectedIds],
                     timeId: timeEntry?.id || null,
+                    timeMode,
                     sampleAxisMode: selection?.sampleAxisMode || 'auto',
+                    matrixOrientations: { ...matrixOrientations },
                 },
             },
             variables,
         };
-        result.tree = this.structureParser._buildTree(variables);
+        result.tree = this._buildMatlabTree(variables);
         return result;
+    }
+
+    _buildMatlabTree(variables) {
+        const tree = { _type: 'root', _name: '', _children: {}, _variables: {} };
+        const component = (parent, name, fullName) => {
+            if (!parent._children[name]) {
+                parent._children[name] = {
+                    _type: 'component', _name: name, _fullName: fullName,
+                    _children: {}, _variables: {},
+                };
+            }
+            return parent._children[name];
+        };
+        const addVariable = (path, leaf, variable) => {
+            let node = tree;
+            const parts = [];
+            for (const part of path) {
+                parts.push(part);
+                node = component(node, part, parts.join('.'));
+            }
+            node._variables[leaf] = variable;
+        };
+
+        for (const [name, variable] of Object.entries(variables)) {
+            if (variable.syntheticIndex) continue;
+            const shape = variable.matlab?.shape || [];
+            const displayShape = variable.matlab?.displayShape || shape;
+            const matrix = shape.length === 2 && shape[0] > 1 && shape[1] > 1;
+            if (!matrix) {
+                const { path, leaf } = this.structureParser.splitModelicaName(name);
+                addVariable(path, leaf, variable);
+                continue;
+            }
+
+            const matrixName = this._safeName(variable.matlab.path);
+            const { path, leaf } = this.structureParser.splitModelicaName(matrixName);
+            let node = tree;
+            const parts = [];
+            for (const part of path) {
+                parts.push(part);
+                node = component(node, part, parts.join('.'));
+            }
+            parts.push(leaf);
+            const matrixNode = component(node, leaf, parts.join('.'));
+            matrixNode._info = `(${displayShape.join(' × ')})`;
+            matrixNode._matlabMatrix = {
+                path: variable.matlab.path,
+                shape: [...shape],
+                displayShape: [...displayShape],
+                orientation: variable.matlab.sampleAxisMode || 'rows',
+            };
+            const suffix = name.startsWith(matrixName)
+                ? name.slice(matrixName.length).replace(/^\./, '')
+                : name;
+            matrixNode._variables[suffix || name] = variable;
+        }
+        return tree;
     }
 
     _chooseTimeEntry(entries, requestedId) {
@@ -500,13 +572,35 @@ export default class MatlabMatFile {
         return null;
     }
 
-    _commonSampleLength(entries) {
+    _commonSampleLength(entries, matrixOrientations = {}) {
         const counts = new Map();
         for (const entry of entries) {
+            const orientation = matrixOrientations[entry.id];
+            if (orientation === 'rows' && entry.shape?.[0] > 1) {
+                counts.set(entry.shape[0], (counts.get(entry.shape[0]) || 0) + 1);
+                continue;
+            }
+            if (orientation === 'columns' && entry.shape?.[1] > 1) {
+                counts.set(entry.shape[1], (counts.get(entry.shape[1]) || 0) + 1);
+                continue;
+            }
             for (const size of entry.shape || []) if (size > 1) counts.set(size, (counts.get(size) || 0) + 1);
         }
         const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]);
         return ranked[0]?.[0] || 1;
+    }
+
+    _indexSampleLength(entries, matrixOrientations = {}) {
+        let longest = 1;
+        for (const entry of entries) {
+            if (entry.elementCount <= 1) continue;
+            const orientation = matrixOrientations[entry.id];
+            if (orientation === 'rows' && entry.shape?.[0]) longest = Math.max(longest, entry.shape[0]);
+            else if (orientation === 'columns' && entry.shape?.[1]) longest = Math.max(longest, entry.shape[1]);
+            else if (this._isVector(entry)) longest = Math.max(longest, entry.elementCount);
+            else longest = Math.max(longest, ...(entry.shape || [entry.elementCount]));
+        }
+        return longest;
     }
 
     _isVector(entry) {
@@ -524,7 +618,7 @@ export default class MatlabMatFile {
         return true;
     }
 
-    _addEntryVariables(variables, entry, sampleLength, sampleAxisMode = 'auto') {
+    _addEntryVariables(variables, entry, sampleLength, sampleAxisMode = 'auto', independentIndex = false) {
         const baseName = this._safeName(entry.path);
         if (entry.elementCount === 1) {
             if (entry.complex) {
@@ -537,13 +631,18 @@ export default class MatlabMatFile {
         }
         const shape = entry.shape || [entry.elementCount];
         let sampleAxis = -1;
-        if (sampleAxisMode === 'rows' && shape[0] === sampleLength) sampleAxis = 0;
-        if (sampleAxisMode === 'columns' && shape[1] === sampleLength) sampleAxis = 1;
+        if (sampleAxisMode === 'rows' && (independentIndex || shape[0] === sampleLength)) sampleAxis = 0;
+        if (sampleAxisMode === 'columns' && (independentIndex || shape[1] === sampleLength)) sampleAxis = 1;
+        if (sampleAxis < 0 && this._isVector(entry)) sampleAxis = shape.findIndex(size => size > 1);
         if (sampleAxis < 0) sampleAxis = shape.findIndex(size => size === sampleLength);
+        if (sampleAxis < 0 && independentIndex) {
+            sampleAxis = shape.reduce((best, size, axis) => size > (shape[best] || 0) ? axis : best, 0);
+        }
         if (sampleAxis < 0) return;
-        const seriesCount = Math.max(1, entry.elementCount / sampleLength);
+        const entrySampleLength = shape[sampleAxis] || entry.elementCount;
+        const seriesCount = Math.max(1, entry.elementCount / entrySampleLength);
         for (let seriesIndex = 0; seriesIndex < seriesCount; seriesIndex++) {
-            const values = this._extractSeries(entry, sampleAxis, seriesIndex, sampleLength);
+            const values = this._extractSeries(entry, sampleAxis, seriesIndex, entrySampleLength);
             const suffix = seriesCount > 1 ? this._seriesSuffix(shape, sampleAxis, seriesIndex) : '';
             const name = `${baseName}${suffix}`;
             if (entry.complex) {
@@ -551,9 +650,27 @@ export default class MatlabMatFile {
             } else {
                 variables[name] = this._variable(name, values, 'variable', entry);
             }
+            const created = entry.complex ? variables[`${name}.real`] : variables[name];
+            created.matlab.sampleAxisMode = sampleAxisMode;
+            created.matlab.displayShape = sampleAxisMode === 'columns' && shape.length === 2
+                ? [shape[1], shape[0]]
+                : [...shape];
+            if (independentIndex) {
+                created.independentIndex = true;
+                created.sampleIndexLength = values.length;
+            }
             if (entry.complex && entry.imaginary) {
                 const imaginaryEntry = { ...entry, data: entry.imaginary, complex: false };
-                variables[`${name}.imag`] = this._variable(`${name}.imag`, this._extractSeries(imaginaryEntry, sampleAxis, seriesIndex, sampleLength), 'variable', entry, 'imaginary component');
+                const rawImaginary = this._extractSeries(imaginaryEntry, sampleAxis, seriesIndex, entrySampleLength);
+                variables[`${name}.imag`] = this._variable(`${name}.imag`, rawImaginary, 'variable', entry, 'imaginary component');
+                variables[`${name}.imag`].matlab.sampleAxisMode = sampleAxisMode;
+                variables[`${name}.imag`].matlab.displayShape = sampleAxisMode === 'columns' && shape.length === 2
+                    ? [shape[1], shape[0]]
+                    : [...shape];
+                if (independentIndex) {
+                    variables[`${name}.imag`].independentIndex = true;
+                    variables[`${name}.imag`].sampleIndexLength = rawImaginary.length;
+                }
             }
         }
     }

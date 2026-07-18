@@ -3,6 +3,96 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import MatParser from '../src/parsers/mat-parser.js';
 import MatlabMatFile, { detectMatFileVersion } from '../src/parsers/matlab-mat-file.js';
+import { installFileMethods } from '../src/app/methods/file-methods.js';
+import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
+import { installTreeMethods, transposeMatrixSeries } from '../src/app/methods/tree-methods.js';
+
+const MB = 1024 * 1024;
+
+class MatlabLimitHarness {
+    constructor({ desktop = false, limitMb } = {}) {
+        this.capabilities = { isDesktop: desktop };
+        this.advancedSettings = limitMb == null ? {} : { matlabFullLoadMb: limitMb };
+    }
+}
+
+installFileMethods(MatlabLimitHarness);
+
+assert.equal(new MatlabLimitHarness()._matlabEagerLimitBytes(), 250 * MB,
+    'Light Web defaults to a 250 MB MAT eager limit');
+assert.equal(new MatlabLimitHarness({ desktop: true })._matlabEagerLimitBytes(), 1024 * MB,
+    'Full Desktop defaults to a 1024 MB MAT eager limit');
+assert.equal(new MatlabLimitHarness({ limitMb: 375 })._matlabEagerLimitBytes(), 375 * MB,
+    'the configured MAT full-load limit overrides the runtime default');
+
+class IndependentIndexPlotHarness {
+    constructor() {
+        this.files = new Map([['mat', { data: { variables: {
+            short: { name: 'short', kind: 'variable', data: Float64Array.from([10, 20]), independentIndex: true },
+        } } }]]);
+    }
+}
+installPlotDataMethods(IndependentIndexPlotHarness);
+const indexPlot = new IndependentIndexPlotHarness();
+indexPlot._getTransformIndexData = () => ({ indexes: [0, 1, 2, 3], times: [0, 1, 2, 3] });
+indexPlot._fileTransform = () => ({ gain: 1, yOffset: 0 });
+indexPlot._transformCache = () => null;
+indexPlot.isVariableSignInverted = () => false;
+assert.deepEqual(indexPlot._getTransformedTimeDataForVariable('mat', 'short'), [0, 1],
+    'a MAT signal uses only its own index extent');
+assert.deepEqual(Array.from(indexPlot._getTransformedVariableData('mat', 'short')), [10, 20],
+    'a MAT signal is transformed without NaN padding');
+
+const transposedSeries = transposeMatrixSeries([
+    Float64Array.from([1, 2]),
+    Float64Array.from([3, 4]),
+    Float64Array.from([5, 6]),
+]);
+assert.deepEqual(transposedSeries.map(values => Array.from(values)), [[1, 3, 5], [2, 4, 6]],
+    'on-the-fly matrix transposition swaps series and sample dimensions');
+assert.deepEqual(transposeMatrixSeries(transposedSeries).map(values => Array.from(values)), [[1, 2], [3, 4], [5, 6]],
+    'transposing twice restores the original matrix series');
+
+class MatrixTreeHarness {
+    constructor() {
+        const variable = (name, values) => ({
+            name, data: Float64Array.from(values), kind: 'variable', dataType: 'real',
+            independentIndex: true, sampleIndexLength: values.length,
+            matlab: { path: 'matrix', shape: [2, 3], displayShape: [2, 3], sampleAxisMode: 'rows' },
+        });
+        const data = {
+            variables: {
+                index: { name: 'index', data: Float64Array.from([0, 1]), kind: 'abscissa', syntheticIndex: true },
+                'matrix[1]': variable('matrix[1]', [1, 2]),
+                'matrix[2]': variable('matrix[2]', [3, 4]),
+                'matrix[3]': variable('matrix[3]', [5, 6]),
+            },
+            metadata: { timeName: 'index', matlab: { matrixOrientations: { matrix: 'rows' } } },
+        };
+        this.node = {
+            _variables: { '[1]': data.variables['matrix[1]'], '[2]': data.variables['matrix[2]'], '[3]': data.variables['matrix[3]'] },
+            _matlabMatrix: { path: 'matrix', shape: [2, 3], displayShape: [2, 3], orientation: 'rows' },
+        };
+        data.tree = { _children: { matrix: this.node }, _variables: {} };
+        this.activeFileId = 'mat';
+        this.parser = new MatParser();
+        this.plotManager = { files: new Map([['mat', { data }]]), plots: new Map() };
+        this.derivedByFile = new Map();
+        this.selectedVariables = new Set();
+    }
+}
+installTreeMethods(MatrixTreeHarness);
+MatrixTreeHarness.prototype._renderFilteredTree = function() {
+    this.fullTreeRenderCount = (this.fullTreeRenderCount || 0) + 1;
+};
+const matrixTree = new MatrixTreeHarness();
+assert.equal(await matrixTree._transposeMatlabMatrixNode(matrixTree.node), true,
+    'an independent-index matrix can be transposed from its tree node');
+assert.deepEqual(Array.from(matrixTree.plotManager.files.get('mat').data.variables['matrix[1]'].data), [1, 3, 5]);
+assert.equal(matrixTree.node._info, '(3 × 2)', 'on-the-fly transposition updates the displayed matrix size');
+assert.equal(matrixTree.node._matlabMatrix.orientation, 'columns', 'on-the-fly orientation is persisted');
+assert.equal(matrixTree.fullTreeRenderCount || 0, 0,
+    'on-the-fly matrix transposition does not rebuild and collapse the full variable tree');
 
 const fixture = name => {
     const bytes = readFileSync(new URL(`../test-files/matlab/${name}`, import.meta.url));
@@ -47,6 +137,9 @@ for (const name of ['general-v4.mat', 'general-v5.mat', 'general-v7-compressed.m
     assert.deepEqual(Array.from(data.variables['signals[2]'].data), [100, 101, 102, 103, 104]);
     assert.equal(data.variables.scalar.data[0], 42.5);
     assert.equal(data.metadata.matlab.sampleAxisMode, 'rows');
+    assert.ok(data.tree._children.signals, `${name} keeps a matrix container in the variable tree`);
+    assert.equal(data.tree._children.signals._info, '(5 × 2)', `${name} shows matrix dimensions on its tree node`);
+    assert.ok(data.tree._children.signals._variables['[1]'], `${name} nests generated series below the matrix`);
     if (name === 'general-v4.mat') {
         assert.equal(inspection.entries.find(entry => entry.path === 'complex_signal')?.complex, true,
             'MAT v4 complex arrays retain their imaginary component');
@@ -61,6 +154,28 @@ assert.equal(complex.complex, true, 'Level 5 complex flag is retained');
 const complexData = parser.materialize(level5, { selectedIds: ['time', 'complex_signal'], timeId: 'time' });
 assert.ok(complexData.variables['complex_signal.real'], 'complex real component is imported explicitly');
 assert.ok(complexData.variables['complex_signal.imag'], 'complex imaginary component is imported');
+const transposedData = parser.materialize(level5, {
+    selectedIds: ['signals'],
+    timeMode: 'index',
+    matrixOrientations: { signals: 'columns' },
+});
+assert.equal(transposedData.metadata.numTimesteps, 2, 'a matrix can independently use its columns as samples');
+assert.deepEqual(Array.from(transposedData.variables['signals[1]'].data), [0, 100],
+    'per-matrix transposition produces one series per original row');
+assert.equal(transposedData.tree._children.signals._info, '(2 × 5)',
+    'a transposed matrix reports its imported orientation in the variable tree');
+assert.equal(transposedData.tree._variables.index, undefined,
+    'the internal shared index is hidden when signals own their indexes');
+const mixedLengthIndexData = parser.materialize(level5, {
+    selectedIds: ['time', 'signals'],
+    timeMode: 'index',
+    matrixOrientations: { signals: 'columns' },
+});
+assert.equal(mixedLengthIndexData.metadata.numTimesteps, 5,
+    'index mode uses the longest selected signal as its common index');
+assert.deepEqual(Array.from(mixedLengthIndexData.variables['signals[1]'].data), [0, 100]);
+assert.equal(mixedLengthIndexData.variables['signals[1]'].independentIndex, true,
+    'index mode preserves each signal length and marks its index as independent');
 assert.ok(level5.entries.some(entry => entry.path === 'config.gain'), 'Level 5 structs expose numeric fields');
 assert.ok(level5.entries.some(entry => entry.path === 'config.profile'), 'Level 5 struct vectors are selectable');
 assert.ok(level5.entries.some(entry => entry.path === 'config.nested.offset'), 'Level 5 nested struct paths remain hierarchical');
@@ -82,17 +197,29 @@ const source = readFileSync(new URL('../src/ui/mat-variable-picker-dialog.js', i
 assert.match(source, /checkbox\.type = 'checkbox'/, 'MAT overview uses variable checkboxes');
 assert.match(source, /matPickerOverview/, 'MAT overview includes value previews');
 assert.match(source, /timeSelect/, 'MAT overview exposes time-axis selection');
-assert.match(source, /sampleAxisSelect/, 'MAT overview lets the user choose rows or columns as samples');
+assert.match(source, /mat-matrix-disclosure/, 'MAT matrices are expandable objects');
+assert.match(source, /indexOption\.selected = true/, 'MAT imports use the independent sample index by default');
+assert.match(source, /disclosure\.innerHTML = '<svg/, 'MAT matrix disclosure uses a chevron instead of a play symbol');
+assert.match(source, /initialSelection/, 'MAT picker can restore a previous array selection');
+assert.match(source, /matrixOrientations/, 'MAT matrices persist independent row or column orientation');
+assert.match(source, /matPickerTransposeBlocked/, 'MAT matrix transposition respects the selected time vector');
+assert.match(source, /mat-picker-filter-wrap/, 'MAT overview reuses the sidebar variable-filter control');
+assert.match(source, /clearVariableFilter/, 'MAT variable filtering includes the standard clear action');
+const treeMethodsSource = readFileSync(new URL('../src/app/methods/tree-methods.js', import.meta.url), 'utf8');
+assert.match(treeMethodsSource, /tree-matrix-transpose/, 'independent MAT matrix nodes expose an on-the-fly transpose control');
+assert.match(treeMethodsSource, /_transposeMatlabMatrixNode/, 'MAT tree transposition rebuilds matrix children');
 
 const fileMethodsSource = readFileSync(new URL('../src/app/methods/file-methods.js', import.meta.url), 'utf8');
 assert.match(fileMethodsSource, /_expandMatEntries\(excelEntries\)/, 'MAT inspection runs before the loading batch');
 assert.match(fileMethodsSource, /matSelection: entry\.matlab \|\| null/, 'reload preserves the chosen MATLAB arrays');
 assert.match(fileMethodsSource, /_parseMatlabResultBuffer/, '.mat files use the general MATLAB dispatcher');
+assert.match(fileMethodsSource, /adjustMatlabArrays/, 'loaded general MAT files can reopen the array selector');
+assert.match(fileMethodsSource, /file-entry-mat-arrays/, 'general MAT file rows expose the array-selection button');
 const sessionSource = readFileSync(new URL('../src/app/methods/session-methods.js', import.meta.url), 'utf8');
 assert.match(sessionSource, /matlab: entry\.matlab/, 'project sessions serialize MATLAB import choices');
 assert.match(sessionSource, /matSelection: fileMeta\.matlab/, 'project sessions restore MATLAB import choices without reopening the picker');
 const translationsSource = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
-for (const key of ['matPickerTitle', 'matPickerBody', 'matPickerOverview', 'matPickerTime', 'matPickerSampleDimension', 'matPickerImport', 'fileTypeMatlab', 'matTooLarge']) {
+for (const key of ['matPickerTitle', 'matSelectArraysAction', 'matPickerBody', 'matPickerOverview', 'matPickerTime', 'matPickerTimeIndex', 'matPickerSampleDimension', 'matPickerTranspose', 'matPickerTransposeBlocked', 'matPickerIncompatibleLengths', 'matlabMatrixTranspose', 'matlabMatrixTransposeConfirm', 'matPickerImport', 'fileTypeMatlab', 'matTooLarge', 'matlabFullLoadLimit', 'matlabFullLoadLimitHelp']) {
     assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} is translated in all languages`);
 }
 

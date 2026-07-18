@@ -661,6 +661,63 @@ proto.reloadActiveFile = async function() {
     this.renderVariablesTree(data.tree);
 };
 
+proto.adjustMatlabArrays = async function(fileId) {
+    const entry = this.files.get(fileId);
+    const currentData = this.plotManager.files.get(fileId)?.data;
+    const currentSelection = currentData?.metadata?.matlab || entry?.matlab || null;
+    if (!entry || currentData?.metadata?.source !== 'matlab' || !Array.isArray(currentSelection?.selectedIds)) return;
+
+    let loading = false;
+    try {
+        this._showFileLoadingOverlay(1);
+        loading = true;
+        this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(entry), entry.file?.size || entry.buffer?.byteLength);
+        await this._waitForNextPaint();
+
+        const buffer = entry.buffer || await this._readLatestBuffer(entry);
+        const Parser = await loadMatlabMatFileClass();
+        const parser = new Parser(this.parser);
+        const inspection = await parser.inspect(buffer, this._fileDisplayName(entry));
+        this._hideFileLoadingOverlay();
+        loading = false;
+        if (inspection.kind !== 'general') return;
+
+        const { default: MatVariablePickerDialog } = await import('../../ui/mat-variable-picker-dialog.js');
+        const selection = await MatVariablePickerDialog.open({
+            fileName: this._fileDisplayName(entry),
+            version: inspection.version,
+            entries: inspection.entries,
+            initialSelection: currentSelection,
+        });
+        if (!selection?.selectedIds?.length) return;
+
+        this._showFileLoadingOverlay(1);
+        loading = true;
+        this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(entry), buffer.byteLength);
+        await this._waitForNextPaint();
+        const data = await parser.parse(buffer, this._fileDisplayName(entry), { inspection, selection });
+        this._reapplyDerivedVariables(fileId, data);
+        this._reapplyDataToolVariables?.(fileId, data);
+
+        entry.buffer = buffer;
+        entry.matlab = data?.metadata?.matlab ? { ...data.metadata.matlab } : { ...selection };
+        this.plotManager.updateFileData(fileId, data);
+        if (fileId === this.activeFileId) {
+            this._clearVariableSelection();
+            this.renderVariablesTree(data.tree);
+        }
+        this._renderFilesList();
+        this._updateActionButtons();
+        await this._showDatetimeAxisWarningIfNeeded(fileId, data);
+    } catch (err) {
+        if (err?.name === 'AbortError') return;
+        console.error('Error updating MATLAB array selection:', err);
+        await Modal.alert(i18n.t('errorLoading'), err?.message || String(err), { icon: 'MAT' });
+    } finally {
+        if (loading) this._hideFileLoadingOverlay();
+    }
+};
+
 proto.reloadActiveFileAsNewVersion = async function() {
     const sourceId = this.plotManager.activeFileId;
     if (!sourceId) return;
@@ -1271,9 +1328,10 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
 };
 
 proto._matlabEagerLimitBytes = function() {
-    return this.capabilities?.isDesktop
+    const fallback = this.capabilities?.isDesktop
         ? MATLAB_MAT_DESKTOP_EAGER_LIMIT_BYTES
         : MATLAB_MAT_WEB_EAGER_LIMIT_BYTES;
+    return this._advancedSettingBytes('matlabFullLoadMb', fallback);
 };
 
 proto._preflightMatlabFile = function(file, extension = this._fileExtension(file?.name || '')) {
@@ -2223,6 +2281,19 @@ proto._renderFilesList = function() {
             this.adjustCsvParsing(fileId);
         });
 
+        const matArraysBtn = document.createElement('button');
+        matArraysBtn.type = 'button';
+        matArraysBtn.className = 'file-entry-mat-arrays';
+        matArraysBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4" width="12" height="12" rx="1.5"/><path d="M7.5 4v12M11.5 4v12M3.5 8h12M3.5 12h12M19 13v8M15 17h8"/></svg>';
+        matArraysBtn.title = i18n.t('matSelectArraysAction');
+        matArraysBtn.setAttribute('aria-label', i18n.t('matSelectArraysAction'));
+        matArraysBtn.hidden = this.plotManager.files.get(fileId)?.data?.metadata?.source !== 'matlab'
+            || !Array.isArray(this.plotManager.files.get(fileId)?.data?.metadata?.matlab?.selectedIds);
+        matArraysBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.adjustMatlabArrays(fileId);
+        });
+
         const liveIndicator = document.createElement('span');
         liveIndicator.className = 'file-entry-live-indicator';
         liveIndicator.title = 'This file is being polled in real time';
@@ -2241,6 +2312,7 @@ proto._renderFilesList = function() {
         entry.appendChild(lazyIndicator);
         if (entryData.liveUpdate?.enabled) entry.appendChild(liveIndicator);
         entry.appendChild(csvParsingBtn);
+        entry.appendChild(matArraysBtn);
         entry.appendChild(transformBtn);
         entry.appendChild(closeBtn);
         item.appendChild(entry);
@@ -3022,10 +3094,14 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     resetCropBtn.addEventListener('click', () => {
         cropStartField.input.value = '';
         cropEndField.input.value = '';
+        timeShiftField.input.value = durationShift ? '0 h' : '0';
+        yOffsetField.input.value = '0';
         setFieldInvalid(cropStartField, false);
         setFieldInvalid(cropEndField, false);
+        setFieldInvalid(timeShiftField, false);
+        setFieldInvalid(yOffsetField, false);
         setApplyError('');
-        this._updateFileTransform(fileId, { cropStart: null, cropEnd: null });
+        this._resetFileCropAndOffsets(fileId);
     });
     applyActions.append(applyErrorLabel, applyBtn, resetCropBtn);
     panel.appendChild(applyActions);
@@ -3050,6 +3126,15 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     panel.appendChild(actions);
 
     return panel;
+};
+
+proto._resetFileCropAndOffsets = function(fileId) {
+    this._updateFileTransform(fileId, {
+        cropStart: null,
+        cropEnd: null,
+        timeShift: 0,
+        yOffset: 0,
+    });
 };
 
 proto._updateFileTransform = function(fileId, patch, options = {}) {

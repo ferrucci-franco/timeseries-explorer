@@ -28,7 +28,8 @@ proto.createDerivedVariable = function() {
             isConstant: this.parser._isConstantValues(result.values),
             interpolation: 'linear',
             derived: true,
-            formula
+            formula,
+            ...(result.independentIndex ? { independentIndex: true, sampleIndexLength: result.values.length } : {}),
         };
 
         data.variables[name] = variable;
@@ -52,10 +53,16 @@ proto._evaluateDerivedFormula = function(formula, data) {
     if (!timeVar?.data?.length) throw new Error('No time vector found.');
     const tokens = this._tokenizeDerivedFormula(formula, data.variables);
     const ast = this._parseDerivedExpression(tokens);
-    const n = timeVar.data.length;
+    const referenced = tokens
+        .filter(token => token.type === 'name')
+        .map(token => data.variables[token.value])
+        .filter(variable => variable && variable.kind !== 'parameter');
+    const independentIndex = referenced.some(variable => variable.independentIndex);
+    const lengths = referenced.map(variable => variable.data?.length || 0).filter(Boolean);
+    const n = lengths.length ? Math.min(timeVar.data.length, ...lengths) : timeVar.data.length;
     const evaluated = this._evalDerivedNode(ast, data, n);
     const values = evaluated.kind === 'series' ? evaluated.values : Array.from({ length: n }, () => evaluated.value);
-    return { values };
+    return { values, independentIndex };
 };
 
 proto._tokenizeDerivedFormula = function(formula, variables) {
@@ -299,7 +306,8 @@ proto._reapplyDerivedVariables = function(fileId, data) {
                 isConstant: this.parser._isConstantValues(result.values),
                 interpolation: 'linear',
                 derived: true,
-                formula: entry.formula
+                formula: entry.formula,
+                ...(result.independentIndex ? { independentIndex: true, sampleIndexLength: result.values.length } : {}),
             };
             data.variables[name] = variable;
             entry.variable = variable;
