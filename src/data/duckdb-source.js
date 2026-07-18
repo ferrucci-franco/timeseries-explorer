@@ -393,6 +393,11 @@ export default class DuckDbSource {
         // every row and OOMs DuckDB-WASM on multi-million-row files (surfacing
         // as "Could not fetch raw samples"). Generated time gets its index from
         // the cheap physical-order ROW_NUMBER() OVER () that also defines t.
+        // No ORDER BY: a full sort of every matching row (up to millions) is what
+        // OOMs DuckDB-WASM in the browser (LIMIT is far above the row count, so
+        // top-N never kicks in). Rows come back in physical storage order, which
+        // for a time-sorted file IS time order; the FFT's own monotonicity gate
+        // catches any file that is not sorted. Same precedent as getPhaseTrajectory.
         let sql;
         if (meta.generatedTime) {
             sql = `
@@ -406,7 +411,6 @@ export default class DuckDbSource {
                        ${valueNames}
                 FROM base
                 WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}
-                ORDER BY t
                 LIMIT ${limit};
             `;
         } else {
@@ -420,7 +424,6 @@ export default class DuckDbSource {
                     FROM ${tableName}
                 )
                 WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}
-                ORDER BY t
                 LIMIT ${limit};
             `;
         }

@@ -1127,9 +1127,14 @@ proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, raw
 
     const gain = transform.gain;
     const yOffset = transform.yOffset;
-    const outTime = [];
-    const outByVar = new Map(varNames.map(name => [name, []]));
     const n = rawTime?.length || 0;
+    // Preallocate typed arrays and fill by index (subarray at the end for any
+    // dropped rows). Pushing into regular JS arrays and Float64Array.from-ing
+    // afterwards holds ~3x the memory — enough to OOM the browser on a
+    // multi-million-row lazy FFT fetch. `k` counts kept rows.
+    const outTime = new Float64Array(n);
+    const outCols = varNames.map(name => ({ name, src: rawByVar?.get(name) || null, dst: new Float64Array(n) }));
+    let k = 0;
     const generatedCalendar = generatedFromDetectedTime && this._isGeneratedCalendarTime(fileId, timeVar);
     const highResolutionCalendar = generatedCalendar && this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
     const generatedCalendarOrigin = generatedCalendar ? this._timeOriginMsForVar(fileId, timeVar) : 0;
@@ -1147,16 +1152,17 @@ proto._transformFetchedPhaseTrajectory = function(fileId, rawTime, rowIndex, raw
             : this._timeDisplayValueForVar(fileId, raw, timeVar);
         if (!Number.isFinite(displayTime)) continue;
         if (cropped && (displayTime < lo || displayTime > hi)) continue;
-        outTime.push(displayTime + timeShift);
-        for (const name of varNames) {
-            const values = rawByVar?.get(name);
-            const value = values ? Number(values[i]) : NaN;
-            outByVar.get(name).push(Number.isFinite(value) ? value * gain + yOffset : value);
+        outTime[k] = displayTime + timeShift;
+        for (const col of outCols) {
+            const value = col.src ? Number(col.src[i]) : NaN;
+            col.dst[k] = Number.isFinite(value) ? value * gain + yOffset : value;
         }
+        k++;
     }
+    const trim = (arr) => (k === n ? arr : arr.slice(0, k));
     return {
-        time: Float64Array.from(outTime),
-        valuesByVar: new Map([...outByVar].map(([name, values]) => [name, Float64Array.from(values)])),
+        time: trim(outTime),
+        valuesByVar: new Map(outCols.map(col => [col.name, trim(col.dst)])),
     };
 };
 
