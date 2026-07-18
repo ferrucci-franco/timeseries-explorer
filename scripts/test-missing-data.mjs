@@ -52,6 +52,7 @@ vm.runInNewContext([
     methodSource('_missTraceKey'),
     methodSource('_missingDataInfo'),
     methodSource('_coalesceGapItems'),
+    methodSource('_missingViewIsDense'),
     methodSource('_adaptiveGapBandShapes'),
 ].join('\n'), sandbox);
 
@@ -293,8 +294,8 @@ assert.match(
 );
 assert.match(
     interactionMethodsSource,
-    /if \(showMissing\) this\._applyLineBreaks\(built, missInfo\.traceIntervals\.get/,
-    'restyle applies line breaks only when the flag is on',
+    /if \(showMissing && !missDense\) this\._applyLineBreaks\(built, missInfo\.traceIntervals\.get/,
+    'restyle applies line breaks only when the flag is on AND the view can resolve gaps',
 );
 assert.match(
     interactionMethodsSource,

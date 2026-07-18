@@ -350,13 +350,18 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     const showMissing = plot.mode === 'timeseries' && plot.showMissingData;
     const fftMode = plot.mode === 'fft';
     const missInfo = showMissing ? this._missingDataInfo(plot) : null;
+    // When the view is too dense to resolve gaps, per-gap line breaks would
+    // shred the downsampled trace into invisible fragments — skip them (and the
+    // bands) and let the "zoom in" pill carry the message, keeping the signal
+    // envelope intact. Bands/breaks return in step once the user zooms in.
+    const missDense = showMissing ? this._missingViewIsDense(plot, missInfo.bandItems) : false;
     const fftGapInfo = fftMode ? this._fftGapInfo(plot) : null;
     const fftGapsByFile = fftGapInfo ? new Map(fftGapInfo.perFile.map(f => [f.fileId, f])) : null;
     const attachSourceX = showMissing || fftMode;
     plot.traces.forEach((t, idx) => {
         const built = this._buildTimeTrace(t, range, plot, idx, attachSourceX ? { attachSourceX: true } : {});
         if (!built) return;
-        if (showMissing) this._applyLineBreaks(built, missInfo.traceIntervals.get(this._missTraceKey(t)));
+        if (showMissing && !missDense) this._applyLineBreaks(built, missInfo.traceIntervals.get(this._missTraceKey(t)));
         else if (fftMode) this._applyLineBreaks(built, fftGapsByFile.get(t.fileId)?.gaps);
         xs.push(built.x);
         ys.push(built.y);
@@ -375,7 +380,7 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     // surface the "zoom in" hint accordingly.
     if (showMissing && plot.div) {
         Plotly.relayout(plot.div, { shapes: this._missingDataBandShapes(plot) });
-        this._setMissingDensityNotice(plot, !!plot._missingTooDense);
+        this._setMissingDensityNotice(plot, missDense);
     }
     this._refreshElapsedDateTimeAxisTicks(plot, range);
 };

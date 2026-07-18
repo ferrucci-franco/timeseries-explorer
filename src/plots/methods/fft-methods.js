@@ -1244,6 +1244,24 @@ proto._coalesceGapItems = function(items, pxPerUnit) {
     return out;
 };
 
+// Whether the current view holds more missing intervals than there are pixels
+// to resolve them (worse than one gap per 2px). Past that point individual
+// bands merge into a wall AND per-gap line breaks shred the downsampled trace
+// into invisible fragments — so callers fall back to: no bands, no breaks, just
+// the clean signal envelope plus a "zoom in" hint. `items` are {t0,t1,...} in
+// the transformed-time units that match the axis range.
+proto._missingViewIsDense = function(plot, items) {
+    if (!items?.length) return false;
+    const xa = plot?.div?._fullLayout?.xaxis;
+    if (!xa || !Array.isArray(xa.range) || !(xa._length > 0)) return false;
+    let lo = this._coerceAxisValue(xa.range[0]);
+    let hi = this._coerceAxisValue(xa.range[1]);
+    if (lo > hi) { const t = lo; lo = hi; hi = t; }
+    let visible = 0;
+    for (const it of items) { if (it.t1 >= lo && it.t0 <= hi) visible++; }
+    return visible > xa._length * 0.5;
+};
+
 proto._adaptiveGapBandShapes = function(plot, items) {
     if (!items?.length) return [];
     const MAX_BANDS = 500;
@@ -1279,13 +1297,11 @@ proto._adaptiveGapBandShapes = function(plot, items) {
     }
     if (!clipped.length) return [];
 
-    // "Dense" = there are more missing intervals in view than there are pixels
-    // to resolve them (worse than one gap per 2px). At that point individual
-    // bands are meaningless — they merge into a wall that buries the signal
-    // (SVG shapes sit over a WebGL trace regardless of layer:'below'). Fall back
-    // to a single gentle wash and let the caller surface a "zoom in" hint.
-    const dense = Number.isFinite(pxPerUnit) && xa && xa._length > 0
-        && clipped.length > xa._length * 0.5;
+    // Dense (see _missingViewIsDense): individual bands are meaningless — they
+    // merge into a wall that buries the signal (SVG shapes sit over a WebGL
+    // trace regardless of layer:'below'). The caller also skips per-gap line
+    // breaks in this case, so the clean signal envelope stays visible.
+    const dense = this._missingViewIsDense(plot, items);
     plot._missingTooDense = dense;
 
     // Timeseries: when dense, draw NOTHING — any wash, however faint, sits over
