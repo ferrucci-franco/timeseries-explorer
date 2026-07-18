@@ -2020,6 +2020,13 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     white-space: nowrap;
 }
 
+/* "Missing data too dense — zoom in" hint: same pill, amber-tinted to match the
+   missing-data bands, and no spinner. */
+.missing-dense-indicator {
+    background: rgba(255, 193, 7, 0.18);
+    border-color: rgba(230, 145, 0, 0.75);
+}
+
 @keyframes lazy-detail-spin {
     to { transform: rotate(360deg); }
 }

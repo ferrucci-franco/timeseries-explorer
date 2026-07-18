@@ -1279,6 +1279,15 @@ proto._adaptiveGapBandShapes = function(plot, items) {
     }
     if (!clipped.length) return [];
 
+    // "Dense" = there are more missing intervals in view than there are pixels
+    // to resolve them (worse than one gap per 2px). At that point individual
+    // bands are meaningless — they merge into a wall that buries the signal
+    // (SVG shapes sit over a WebGL trace regardless of layer:'below'). Fall back
+    // to a single gentle wash and let the caller surface a "zoom in" hint.
+    const dense = Number.isFinite(pxPerUnit) && xa && xa._length > 0
+        && clipped.length > xa._length * 0.5;
+    plot._missingTooDense = dense;
+
     // Coalesce at pixel resolution, so dense missing data never floods Plotly.
     // If it is STILL pathologically fragmented (sub-2px alternation), keep only
     // the widest merged bands as a final guard.
@@ -1290,12 +1299,11 @@ proto._adaptiveGapBandShapes = function(plot, items) {
     const shapes = [];
     for (const it of list) {
         const widthPx = Number.isFinite(pxPerUnit) ? (it.t1 - it.t0) * pxPerUnit : 0;
-        // Fill fades from strong (narrow) to soft (wide) as the band grows.
+        // Dense: a faint wash that keeps the signal readable (no stroke).
+        // Sparse: fill fades strong(narrow)→soft(wide); narrow gaps get a stroke.
         const fillT = Math.max(0, Math.min(1, (widthPx - 3) / (30 - 3)));
-        const fillAlpha = 0.8 + (0.28 - 0.8) * fillT;
-        // Stroke only rescues truly narrow gaps; it is gone by ~3px, so wide
-        // bands never get the outline the user disliked.
-        const strokeWidth = Math.max(0, 2 - widthPx / 1.5);
+        const fillAlpha = dense ? 0.14 : 0.8 + (0.28 - 0.8) * fillT;
+        const strokeWidth = dense ? 0 : Math.max(0, 2 - widthPx / 1.5);
         shapes.push({
             type: 'rect',
             xref: 'x',

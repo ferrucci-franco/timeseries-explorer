@@ -238,6 +238,21 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     const one = h._adaptiveGapBandShapes(plot, [{ fileId: 'f', timeVar: null, t0: 150, t1: 150.05 }]);
     assert.equal(one.length, 1, 'the only visible gap is always drawn');
     assert.ok(one[0].line.width > 0, 'and it keeps a visible stroke');
+    assert.equal(plot._missingTooDense, false, 'a couple of gaps is not "dense"');
+}
+
+// ── Density flag: more gaps than pixels → faint wash + zoom-in hint ──
+{
+    const h = new Harness();
+    const alphaOf = (s) => Number(String(s.fillcolor).match(/,\s*([0-9.]+)\)\s*$/)[1]);
+    // 100 px wide view; 80 separate gaps in view > 100*0.5 → unresolvable.
+    const plot = { div: { _fullLayout: { xaxis: { range: [0, 1000], _length: 100 } } } };
+    const items = [];
+    for (let i = 0; i < 80; i++) items.push({ fileId: 'f', timeVar: null, t0: i * 12, t1: i * 12 + 1 });
+    const shapes = h._adaptiveGapBandShapes(plot, items);
+    assert.equal(plot._missingTooDense, true, 'more gaps than half the pixel width flags dense');
+    assert.ok(shapes.every(s => s.line.width === 0), 'dense bands carry no stroke');
+    assert.ok(shapes.every(s => alphaOf(s) <= 0.15), 'dense bands use a faint wash so the signal reads through');
 }
 
 // ── Gating: with the flag off, nothing changes ──

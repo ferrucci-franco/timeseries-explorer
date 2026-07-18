@@ -371,8 +371,11 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     }
     // Keep the bands' adaptive width in step with the zoom. A shapes-only
     // relayout is ignored by _onRelayout (no x-axis change), so this cannot loop.
+    // _missingDataBandShapes sets plot._missingTooDense for the current view;
+    // surface the "zoom in" hint accordingly.
     if (showMissing && plot.div) {
         Plotly.relayout(plot.div, { shapes: this._missingDataBandShapes(plot) });
+        this._setMissingDensityNotice(plot, !!plot._missingTooDense);
     }
     this._refreshElapsedDateTimeAxisTicks(plot, range);
 };
@@ -1116,6 +1119,35 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 
     } else {
         indicator.classList.remove('active');
         indicator.remove();
+    }
+};
+
+// Non-blocking "missing data too dense — zoom in" hint over the timeseries
+// plot, shown when _adaptiveGapBandShapes flagged plot._missingTooDense for the
+// current view. Reuses the lazy-detail pill styling (pointer-events:none) but
+// without a spinner. Toggled from the authoritative restyle path so it tracks
+// zoom, and cleared when the Missing/NaN overlay is turned off.
+proto._setMissingDensityNotice = function(plot, dense) {
+    const panelEl = plot?.div?.closest('.layout-panel');
+    if (!panelEl) return;
+    let pill = panelEl.querySelector('.missing-dense-indicator');
+    if (dense) {
+        if (!pill) {
+            pill = document.createElement('div');
+            pill.className = 'lazy-detail-indicator missing-dense-indicator';
+            pill.setAttribute('aria-live', 'polite');
+            pill.innerHTML = '<span class="lazy-detail-text"></span>';
+            panelEl.appendChild(pill);
+        }
+        const label = i18n.t('timeseriesMissingDense');
+        const text = pill.querySelector('.lazy-detail-text');
+        if (text) text.textContent = label;
+        pill.title = label;
+        pill.setAttribute('aria-label', label);
+        pill.classList.add('active');
+    } else if (pill) {
+        pill.classList.remove('active');
+        pill.remove();
     }
 };
 
@@ -3784,6 +3816,9 @@ proto._toggleMissingData = function(panelId) {
         btn.classList.toggle('active', !!plot.showMissingData);
         btn.setAttribute('aria-pressed', plot.showMissingData ? 'true' : 'false');
     }
+
+    // Turning the flag off must also drop the "too dense" hint.
+    if (!plot.showMissingData) this._setMissingDensityNotice(plot, false);
 
     // Rebuild rather than restyle: turning the flag off must both remove the
     // bands (layout shapes) and reconnect the line (drop the NaN breaks).
