@@ -508,6 +508,7 @@
 
 .file-entry-transform,
 .file-entry-csv-parsing,
+.file-entry-mat-arrays,
 .file-entry-close {
     flex-shrink: 0;
     background: none;
@@ -658,6 +659,51 @@
 }
 
 .file-entry-csv-parsing[hidden] {
+    display: none;
+}
+
+.file-entry-mat-arrays {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.55rem;
+    height: 1.45rem;
+    padding: 0.15rem;
+    border: 1px solid transparent;
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, #7c3aed 13%, var(--bg-primary));
+    color: var(--text-primary);
+    opacity: 1;
+}
+
+.file-entry-mat-arrays svg {
+    display: block;
+    width: 1.05rem;
+    height: 1.05rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.file-entry-mat-arrays:hover {
+    border-color: color-mix(in srgb, #7c3aed 62%, var(--border-color));
+    background: color-mix(in srgb, #7c3aed 22%, var(--bg-primary));
+}
+
+.file-entry.active .file-entry-mat-arrays {
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.42);
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.file-entry.active .file-entry-mat-arrays:hover {
+    border-color: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.24);
+}
+
+.file-entry-mat-arrays[hidden] {
     display: none;
 }
 

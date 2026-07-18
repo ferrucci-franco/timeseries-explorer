@@ -1444,6 +1444,210 @@
     text-align: center;
 }
 
+.modal-dialog-mat-variables {
+    width: min(980px, calc(100vw - 32px));
+    max-width: none;
+    height: min(90vh, 920px);
+    max-height: 90vh;
+}
+
+.modal-dialog-mat-variables .modal-content {
+    box-sizing: border-box;
+    height: 100%;
+    padding: clamp(1rem, 2.2vh, 2rem);
+    display: grid;
+    grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto auto;
+    overflow: hidden;
+}
+
+.modal-dialog-mat-variables .modal-buttons {
+    padding-top: 0.65rem;
+}
+
+.modal-dialog-mat-variables .modal-icon {
+    margin-bottom: 0.35rem;
+}
+
+.modal-dialog-mat-variables .modal-title {
+    margin-bottom: 0.45rem;
+}
+
+.modal-dialog-mat-variables .modal-message {
+    margin-bottom: 0.75rem;
+}
+
+.mat-picker-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+}
+
+.mat-picker-toolbar .modal-btn {
+    padding: 0.35rem 0.7rem;
+}
+
+.mat-picker-toolbar .mat-picker-filter-wrap {
+    flex: 1 1 16rem;
+    min-width: 10rem;
+    margin: 0 0 0 0.2rem;
+}
+
+.mat-variable-table-wrap {
+    min-height: 0;
+    max-height: none;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.mat-variable-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.84rem;
+    text-align: left;
+}
+
+.mat-variable-table th,
+.mat-variable-table td {
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: top;
+}
+
+.mat-variable-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+}
+
+.mat-variable-name {
+    min-width: 160px;
+    overflow-wrap: anywhere;
+}
+
+.mat-variable-name-wrap {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+}
+
+.mat-matrix-disclosure,
+.mat-matrix-transpose {
+    flex: 0 0 auto;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.mat-matrix-disclosure {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.55rem;
+    height: 1.55rem;
+    padding: 0;
+    line-height: 1;
+}
+
+.mat-matrix-disclosure svg {
+    display: block;
+    width: 0.9rem;
+    height: 0.9rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 120ms ease;
+}
+
+.mat-matrix-disclosure[aria-expanded="true"] svg {
+    transform: rotate(90deg);
+}
+
+.mat-matrix-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+    margin-top: 0.35rem;
+}
+
+.mat-matrix-orientation {
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+}
+
+.mat-matrix-transpose {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.8rem;
+    min-height: 1.8rem;
+    padding: 0.1rem 0.35rem;
+    font-size: 1rem;
+}
+
+.mat-matrix-transpose svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.mat-matrix-transpose:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+}
+
+.mat-variable-matrix-row {
+    background: color-mix(in srgb, var(--accent-color, #3b82f6) 5%, transparent);
+}
+
+.mat-variable-child-row td {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+}
+
+.mat-variable-child-row .mat-variable-name {
+    padding-left: 2.55rem;
+}
+
+.mat-variable-preview {
+    max-width: 320px;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.mat-variable-unsupported {
+    opacity: 0.55;
+}
+
+.mat-picker-time-row {
+    display: grid;
+    grid-template-columns: max-content minmax(180px, 1fr);
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+    text-align: left;
+}
+
+.mat-picker-validation {
+    margin-top: 0.65rem;
+    color: var(--danger-color, #c0392b);
+    font-size: 0.82rem;
+    text-align: left;
+}
+
 /* File names and their size should normally fit on one line. Keep example
    dialogs compact, but let the file-loading/conversion dialog use the room
    available without becoming an oversized sheet on wide displays. */

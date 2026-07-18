@@ -118,8 +118,10 @@ export function installPlotCorrelationMethods(TargetClass) {
         for (const pair of plot?.phaseTraces || []) {
             if (seen.has(pair.fileId)) continue;
             seen.add(pair.fileId);
-            const times = this._getTransformedTimeData(pair.fileId);
-            if (times?.length) arrays.push(times);
+            const xTimes = this._getTransformedTimeDataForVariable(pair.fileId, pair.x);
+            const yTimes = this._getTransformedTimeDataForVariable(pair.fileId, pair.y);
+            if (xTimes?.length) arrays.push(xTimes);
+            if (yTimes?.length) arrays.push(yTimes);
         }
         const extent = this._finiteExtent(arrays);
         return extent ? { min: extent.min, max: extent.max } : null;
@@ -518,7 +520,7 @@ export function installPlotCorrelationMethods(TargetClass) {
     // whose transformed time falls inside [lo, hi]. Value-level NaN/±Inf are
     // left for the kernel to exclude (and count).
     proto._correlationPairSeries = function(pair, range, rangeFull) {
-        const times = this._getTransformedTimeData(pair.fileId);
+        const times = this._getTransformedTimeDataForVariable(pair.fileId, pair.x);
         const xVals = this._getTransformedVariableData(pair.fileId, pair.x);
         const yVals = this._getTransformedVariableData(pair.fileId, pair.y);
         const n = Math.min(times?.length || 0, xVals?.length || 0, yVals?.length || 0);

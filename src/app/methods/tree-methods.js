@@ -1,4 +1,13 @@
 import i18n from '../../i18n/index.js';
+import Modal from '../../ui/modal.js';
+
+export function transposeMatrixSeries(series) {
+    if (!Array.isArray(series) || !series.length) return [];
+    const sampleLength = series[0]?.length || 0;
+    if (!sampleLength || series.some(values => values?.length !== sampleLength)) return [];
+    return Array.from({ length: sampleLength }, (_, sample) =>
+        Float64Array.from(series, values => values[sample]));
+}
 
 export function installTreeMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -136,6 +145,166 @@ proto._nodeMatchesFilter = function(node, filter) {
     return false;
 };
 
+proto._transposeMatlabMatrixNode = async function(node) {
+    const matrix = node?._matlabMatrix;
+    const fileId = this.activeFileId;
+    const fileEntry = fileId ? this.plotManager?.files?.get(fileId) : null;
+    const data = fileEntry?.data;
+    if (!matrix || !data) return false;
+
+    const oldEntries = Object.entries(data.variables || {})
+        .filter(([, variable]) => variable?.matlab?.path === matrix.path && variable.kind === 'variable');
+    if (!oldEntries.length || oldEntries.some(([, variable]) => !variable.independentIndex)) return false;
+
+    const oldNames = new Set(oldEntries.map(([name]) => name));
+    const removedNames = new Set(oldNames);
+    const derived = this.derivedByFile?.get(fileId);
+    if (derived) {
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const [name, entry] of derived) {
+                if (removedNames.has(name)) continue;
+                let dependencies = [];
+                try {
+                    dependencies = this._tokenizeDerivedFormula(entry.formula, data.variables)
+                        .filter(token => token.type === 'name')
+                        .map(token => token.value);
+                } catch (_) {
+                    dependencies = [...removedNames].filter(variableName => String(entry.formula || '').includes(variableName));
+                }
+                if (dependencies.some(dependency => removedNames.has(dependency))) {
+                    removedNames.add(name);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    const plotUsesMatrix = [...(this.plotManager?.plots?.values?.() || [])].some(plot =>
+        (plot.traces || []).some(trace => trace.fileId === fileId && removedNames.has(trace.varName))
+        || (plot.phaseTraces || []).some(trace => trace.fileId === fileId
+            && [trace.x, trace.y, trace.z].some(name => removedNames.has(name)))
+        || (plot.stateSlots?.fileId === fileId
+            && [...(plot.stateSlots.x || []), ...(plot.stateSlots.dx || [])].some(name => removedNames.has(name))));
+    const hasDependentDerived = [...removedNames].some(name => !oldNames.has(name));
+    if (plotUsesMatrix || hasDependentDerived) {
+        const confirmed = await Modal.confirm(
+            i18n.t('matlabMatrixTransposeConfirm').replace('{matrix}', matrix.path),
+            { icon: '↔', title: i18n.t('matlabMatrixTranspose') },
+        );
+        if (!confirmed) return false;
+    }
+
+    const originalShape = [...matrix.shape];
+    const currentOrientation = matrix.orientation || oldEntries[0][1].matlab?.sampleAxisMode || 'rows';
+    const nextOrientation = currentOrientation === 'columns' ? 'rows' : 'columns';
+    const nextDisplayShape = currentOrientation === 'columns'
+        ? [...originalShape]
+        : [originalShape[1], originalShape[0]];
+    const complex = oldEntries.some(([, variable]) => variable.matlab?.complex);
+    const seriesIndex = name => Number(name.match(/\[(\d+)\](?:\.(?:real|imag))?$/)?.[1] || 0);
+    const componentEntries = component => oldEntries
+        .filter(([name]) => complex
+            ? name.endsWith(`.${component}`)
+            : component === 'real' && !name.endsWith('.imag'))
+        .sort((left, right) => seriesIndex(left[0]) - seriesIndex(right[0]));
+    const matrixName = String(matrix.path || '').replace(/\//g, '.');
+    const newVariables = new Map();
+
+    for (const component of complex ? ['real', 'imag'] : ['real']) {
+        const sourceEntries = componentEntries(component);
+        if (!sourceEntries.length) continue;
+        const transposed = transposeMatrixSeries(sourceEntries.map(([, variable]) => variable.data));
+        if (!transposed.length) return false;
+        const template = sourceEntries[0][1];
+        transposed.forEach((values, index) => {
+            const name = `${matrixName}[${index + 1}]${complex ? `.${component}` : ''}`;
+            const variable = {
+                ...template,
+                name,
+                data: values,
+                dataType: this.parser._detectDataType(values, 'variable'),
+                isConstant: this.parser._isConstantValues(values),
+                sampleIndexLength: values.length,
+                dataToolModified: false,
+                matlab: {
+                    ...template.matlab,
+                    sampleAxisMode: nextOrientation,
+                    displayShape: [...nextDisplayShape],
+                },
+            };
+            newVariables.set(name, variable);
+        });
+    }
+
+    for (const name of removedNames) {
+        delete data.variables[name];
+        derived?.delete(name);
+        this.selectedVariables?.delete(name);
+        fileEntry.invertedVariables?.delete(name);
+    }
+    for (const [name, variable] of newVariables) data.variables[name] = variable;
+
+    node._variables = {};
+    for (const [name, variable] of newVariables) {
+        const suffix = name.startsWith(matrixName) ? name.slice(matrixName.length).replace(/^\./, '') : name;
+        node._variables[suffix] = variable;
+    }
+    matrix.orientation = nextOrientation;
+    matrix.displayShape = [...nextDisplayShape];
+    node._info = `(${nextDisplayShape.join(' × ')})`;
+
+    data.metadata.matlab ||= {};
+    data.metadata.matlab.matrixOrientations ||= {};
+    data.metadata.matlab.matrixOrientations[matrix.path] = nextOrientation;
+    const sourceEntry = this.files?.get(fileId);
+    if (sourceEntry) sourceEntry.matlab = {
+        ...(sourceEntry.matlab || {}),
+        ...data.metadata.matlab,
+        matrixOrientations: { ...data.metadata.matlab.matrixOrientations },
+    };
+    const syntheticIndex = Object.values(data.variables).find(variable => variable.syntheticIndex);
+    if (syntheticIndex) {
+        const longest = Math.max(1, ...Object.values(data.variables)
+            .filter(variable => variable.independentIndex && variable.kind === 'variable')
+            .map(variable => variable.data?.length || 0));
+        syntheticIndex.data = Float64Array.from({ length: longest }, (_, index) => index);
+        data.metadata.numTimesteps = longest;
+        data.metadata.timeStart = 0;
+        data.metadata.timeEnd = longest - 1;
+    }
+    data.metadata.numVariables = Object.keys(data.variables).length;
+    data.metadata.numTimevarying = Object.values(data.variables)
+        .filter(variable => variable.kind === 'variable').length;
+    fileEntry._transformCache = null;
+
+    for (const [panelId, plot] of this.plotManager.plots) {
+        const beforeTraces = plot.traces.length;
+        const beforePhase = plot.phaseTraces.length;
+        plot.traces = plot.traces.filter(trace => !(trace.fileId === fileId && removedNames.has(trace.varName)));
+        plot.phaseTraces = plot.phaseTraces.filter(trace => !(trace.fileId === fileId
+            && [trace.x, trace.y, trace.z].some(name => removedNames.has(name))));
+        let stateChanged = false;
+        if (plot.stateSlots?.fileId === fileId
+            && [...(plot.stateSlots.x || []), ...(plot.stateSlots.dx || [])].some(name => removedNames.has(name))) {
+            plot.stateSlots = { x: [], dx: [], fileId: null };
+            stateChanged = true;
+        }
+        if (plot.phasePending?.fileId === fileId
+            && [plot.phasePending.x, plot.phasePending.y, plot.phasePending.z].some(name => removedNames.has(name))) {
+            plot.phasePending = { x: null, y: null, z: null, fileId: null };
+            stateChanged = true;
+        }
+        if (beforeTraces !== plot.traces.length || beforePhase !== plot.phaseTraces.length || stateChanged) {
+            this.plotManager._rebuildPanel(panelId);
+        }
+    }
+
+    this._currentTree = data.tree;
+    return true;
+};
+
 proto._renderTreeNode = function(node, parentElement, level, filter, autoExpand) {
     // Collect children entries
     let childrenEntries = Object.entries(node._children || {});
@@ -185,9 +354,36 @@ proto._renderTreeNode = function(node, parentElement, level, filter, autoExpand)
 
         const info = document.createElement('span');
         info.className = 'tree-info';
-        info.textContent = `(${this.parser.countVariables(child)})`;
+        info.textContent = child._info || `(${this.parser.countVariables(child)})`;
 
         itemDiv.append(toggle, icon, label, info);
+        const canTransposeMatrix = child._matlabMatrix
+            && Object.values(child._variables || {}).some(variable => variable.independentIndex);
+        if (canTransposeMatrix) {
+            const transpose = document.createElement('button');
+            transpose.type = 'button';
+            transpose.className = 'tree-matrix-transpose';
+            transpose.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 8 3 12l4 4M3 12h18M17 8l4 4-4 4"/></svg>';
+            transpose.title = i18n.t('matlabMatrixTranspose');
+            transpose.setAttribute('aria-label', `${i18n.t('matlabMatrixTranspose')}: ${name}`);
+            transpose.addEventListener('click', async event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (transpose.disabled) return;
+                transpose.disabled = true;
+                try {
+                    const changed = await this._transposeMatlabMatrixNode(child);
+                    if (changed) {
+                        info.textContent = child._info || `(${this.parser.countVariables(child)})`;
+                        childrenDiv.replaceChildren();
+                        this._renderTreeNode(child, childrenDiv, level + 1, filter, false);
+                    }
+                } finally {
+                    transpose.disabled = false;
+                }
+            });
+            itemDiv.appendChild(transpose);
+        }
 
         const childrenDiv = document.createElement('div');
         childrenDiv.className = 'tree-children' + (autoExpand ? '' : ' collapsed');

@@ -206,6 +206,7 @@ export default class MatParser {
             }
 
             const P = Math.floor((mopt % 100) / 10);
+            const T = mopt % 10;
             const elemSize = this.ELEM_SIZES[P] || 8;
 
             offset += 20;
@@ -224,8 +225,11 @@ export default class MatParser {
             const data = this._readMatrixData(buffer, offset, numElements, P, littleEndian);
             offset += numElements * elemSize;
 
-            // Skip imaginary part if present
+            // Retain the imaginary component for the general MATLAB wrapper.
+            // The OpenModelica/Dymola path continues to use only `data`.
+            let imaginary = null;
             if (imagf) {
+                imaginary = this._readMatrixData(buffer, offset, numElements, P, littleEndian);
                 offset += numElements * elemSize;
             }
 
@@ -237,7 +241,9 @@ export default class MatParser {
                 mrows: mrows,
                 ncols: ncols,
                 P: P,
-                data: reshaped
+                T: T,
+                data: reshaped,
+                imaginaryData: imaginary ? this._reshapeColumnMajor(imaginary, mrows, ncols) : null,
             };
         }
 

@@ -886,6 +886,7 @@ proto.showDisplaySettings = function() {
     const fileLimitControls = [
         makeNumberField('csvFullLoadMb', 'csvFullLoadLimit', 'csvFullLoadLimitHelp', 10, 1000),
         makeNumberField('parquetFullLoadMb', 'parquetFullLoadLimit', 'parquetFullLoadLimitHelp', 10, 1000),
+        makeNumberField('matlabFullLoadMb', 'matlabFullLoadLimit', 'matlabFullLoadLimitHelp', 10, 2048),
         makeNumberField('excelFullLoadMb', 'excelFullLoadLimit', 'excelFullLoadLimitHelp', 10, 500),
         makeNumberField('pickleFullLoadMb', 'pickleFullLoadLimit', 'pickleFullLoadLimitHelp', 10, 1000),
         makeNumberField('pypsaNetcdfFullLoadMb', 'pypsaNetcdfFullLoadLimit', 'pypsaNetcdfFullLoadLimitHelp', 50, 2048),
@@ -1505,18 +1506,21 @@ proto.initSidebarResize = function() {
     proxy.className = 'sidebar-resize-proxy';
     document.body.appendChild(proxy);
     let isResizing = false, startX = 0, startWidth = 0;
-    const edgeWidth = 14;
 
     const updateProxy = () => {
         const rect = sidebar.getBoundingClientRect();
         const hidden = sidebar.classList.contains('hidden') || rect.width < 2;
         proxy.style.display = hidden ? 'none' : '';
-        proxy.style.left = `${rect.right - 6}px`;
+        // Keep the resize target fully outside the scrollable sidebar. Firefox
+        // reports native scrollbar presses as pointer events on the sidebar,
+        // so any inside-edge hit target can steal scrollbar interaction.
+        proxy.style.left = `${rect.right}px`;
         proxy.style.top = `${rect.top}px`;
         proxy.style.height = `${rect.height}px`;
     };
 
     const startResize = (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
         isResizing = true; startX = e.clientX; startWidth = sidebar.offsetWidth;
         handle.classList.add('resizing');
         proxy.classList.add('resizing');
@@ -1529,18 +1533,6 @@ proto.initSidebarResize = function() {
 
     handle.addEventListener('pointerdown', startResize);
     proxy.addEventListener('pointerdown', startResize);
-
-    sidebar.addEventListener('pointerdown', (e) => {
-        const rect = sidebar.getBoundingClientRect();
-        const nearRightEdge = rect.right - e.clientX <= edgeWidth;
-        if (nearRightEdge && !sidebar.classList.contains('hidden')) startResize(e);
-    }, true);
-
-    sidebar.addEventListener('pointermove', (e) => {
-        if (isResizing || sidebar.classList.contains('hidden')) return;
-        const rect = sidebar.getBoundingClientRect();
-        sidebar.classList.toggle('resize-ready', rect.right - e.clientX <= edgeWidth);
-    });
 
     document.addEventListener('pointermove', (e) => {
         if (!isResizing) return;
@@ -1555,7 +1547,6 @@ proto.initSidebarResize = function() {
         handle.classList.remove('resizing');
         proxy.classList.remove('resizing');
         sidebar.classList.remove('resizing');
-        sidebar.classList.remove('resize-ready');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         proxy.releasePointerCapture?.(e.pointerId);

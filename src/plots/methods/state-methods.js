@@ -137,7 +137,11 @@ proto._createStateAnimChart = function(panelId, panelEl) {
     const d = this.files.get(slots.fileId)?.data;
     const timeVar = this._getTimeVar(slots.fileId);
     if (!d || !timeVar) return;
-    const nPts = this._getTransformedTimeData(slots.fileId).length;
+    const stateTimes = this._getTransformedTimeDataForVariable(slots.fileId, slots.x[0]);
+    const stateLengths = slots.x
+        .map(name => this._getTransformedVariableData(slots.fileId, name)?.length || 0)
+        .filter(Boolean);
+    const nPts = Math.min(stateTimes.length, ...stateLengths);
     if (!nPts) return;
 
     // Set scrubber range
@@ -357,18 +361,17 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
     const timeVar = this._getTimeVar(slots.fileId);
     if (!d || !timeVar) return;
 
-    const timeData = this._getTransformedTimeData(slots.fileId);
-    const nPts = timeData.length;
+    const xAll = d.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : [];
+    const yAll = d.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : [];
+    const timeData = this._getTransformedTimeDataForVariable(slots.fileId, slots.x[0]);
+    const is3D = slots.x.length >= 3;
+    const zAll = is3D && d.variables[slots.x[2]] ? this._getTransformedVariableData(slots.fileId, slots.x[2]) : null;
+    const nPts = Math.min(timeData.length, xAll.length, yAll.length, ...(zAll ? [zAll.length] : []));
     if (!nPts) return;
     frame = Math.max(0, Math.min(nPts - 1, frame));
     plot.animFrame = frame;
 
-    const is3D = slots.x.length >= 3;
     const cfg = plot.stateConfig;
-
-    const xAll = d.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : [];
-    const yAll = d.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : [];
-    const zAll = is3D && d.variables[slots.x[2]] ? this._getTransformedVariableData(slots.fileId, slots.x[2]) : null;
 
     const xNow = xAll[frame] || 0;
     const yNow = yAll[frame] || 0;
@@ -651,7 +654,10 @@ proto._stateAnimTogglePlay = function(panelId) {
 
         const timeVar = this._getTimeVar(plot.stateSlots.fileId);
         if (!timeVar) return;
-        const timeData = this._getTransformedTimeData(plot.stateSlots.fileId);
+        const timeData = this._getTransformedTimeDataForVariable(
+            plot.stateSlots.fileId,
+            plot.stateSlots.x?.[0],
+        );
         const nPts = timeData.length;
         if (!nPts) return;
         const totalDuration = timeData[nPts - 1] - timeData[0];

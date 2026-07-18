@@ -465,6 +465,20 @@ for (const [from, clicked, expected] of [
         /plot\.mode === 'heatmap'[\s\S]*?return this\._autoScaleHeatmapPanel\(panelId, plot\)/,
         'central Autoscale dispatches Heatmap to its two-pane implementation',
     );
+    assert.doesNotMatch(
+        autoscaleSource,
+        /v\.kind\s*===\s*'parameter'/,
+        'time-series Autoscale includes visible constant parameters in its Y range',
+    );
+
+    const liveViewStart = plotManagerSource.indexOf('    _timeseriesLiveAppendView(plot');
+    const liveViewEnd = plotManagerSource.indexOf('\n    _finiteYExtentInXRange(', liveViewStart + 1);
+    const liveViewSource = plotManagerSource.slice(liveViewStart, liveViewEnd);
+    assert.doesNotMatch(
+        liveViewSource,
+        /variable\.kind\s*===\s*'parameter'/,
+        'live time-series Y expansion includes visible constant parameters',
+    );
 
     const helperStart = histogramMethodsSource.indexOf('proto._autoScaleHistogramPanel = function');
     const helperEnd = histogramMethodsSource.indexOf('\nproto.', helperStart + 1);

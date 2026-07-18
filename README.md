@@ -1,6 +1,6 @@
 # Time Series Explorer
 
-Frontend web app for visualizing OpenModelica, Dymola, CSV, Parquet, PyPSA netCDF, and small pandas pickle result files.
+Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, PyPSA netCDF, and small pandas pickle result files.
 
 ## Versions and local runs
 
@@ -74,7 +74,7 @@ output path.
 - `public`: files copied as-is into the final build
 - `src/app`: top-level application orchestration
 - `src/plots`: plot lifecycle, modes, interactions, Plotly integration
-- `src/parsers`: eager file parsers for `.mat`, `.csv`, PyPSA netCDF, and pandas pickle inputs
+- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, PyPSA netCDF, and pandas pickle inputs
 - `src/ui`: layout engine and modal helpers
 - `src/i18n`: translations and DOM localization
 - `src/styles`: split CSS source files

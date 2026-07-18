@@ -49,20 +49,21 @@
 
 .sidebar-resize-proxy {
     position: fixed;
-    width: 10px;
+    width: 8px;
     cursor: ew-resize;
     z-index: 1200;
     background: transparent;
+    touch-action: none;
 }
 
 .sidebar-resize-proxy:hover,
 .sidebar-resize-proxy.resizing {
     background: linear-gradient(
         to right,
-        transparent 0,
-        transparent 7px,
-        var(--primary-color) 7px,
-        var(--primary-color) 10px
+        var(--primary-color) 0,
+        var(--primary-color) 3px,
+        transparent 3px,
+        transparent 8px
     );
 }
 
@@ -315,6 +316,45 @@
     font-size: 0.78rem;
     font-weight: 700;
     line-height: 1;
+}
+
+.tree-matrix-transpose {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.tree-matrix-transpose:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: var(--hover-bg);
+}
+
+.tree-matrix-transpose:disabled {
+    cursor: wait;
+    opacity: 0.55;
+}
+
+.tree-matrix-transpose svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .tree-sign-toggle svg {

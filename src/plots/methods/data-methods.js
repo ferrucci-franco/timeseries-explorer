@@ -849,6 +849,27 @@ proto._getTransformedTimeData = function(fileId = this.activeFileId) {
     return this._getTransformIndexData(fileId).times;
 };
 
+proto._getTransformIndexDataForVariable = function(fileId, varName) {
+    const base = this._getTransformIndexData(fileId);
+    const variable = this.files.get(fileId)?.data?.variables?.[varName];
+    if (!variable?.independentIndex || variable.kind === 'parameter') return base;
+    const length = Math.max(0, Number(variable.data?.length) || 0);
+    if (!base.indexes) return { indexes: null, times: base.times.slice(0, length) };
+    const indexes = [];
+    const times = [];
+    for (let position = 0; position < base.indexes.length; position++) {
+        const sourceIndex = base.indexes[position];
+        if (sourceIndex >= length) continue;
+        indexes.push(sourceIndex);
+        times.push(base.times[position]);
+    }
+    return { indexes, times };
+};
+
+proto._getTransformedTimeDataForVariable = function(fileId, varName) {
+    return this._getTransformIndexDataForVariable(fileId, varName).times;
+};
+
 proto._getTransformedVariableData = function(fileId, varName, options = {}) {
     const includeYOffset = options.includeYOffset !== false;
     const d = this.files.get(fileId)?.data;
@@ -860,7 +881,7 @@ proto._getTransformedVariableData = function(fileId, varName, options = {}) {
     const sign = this.isVariableSignInverted?.(fileId, varName) ? -1 : 1;
     const gain = transform.gain * sign;
     const yOffset = includeYOffset ? transform.yOffset : 0;
-    const indexData = this._getTransformIndexData(fileId);
+    const indexData = this._getTransformIndexDataForVariable(fileId, varName);
     const cache = this._transformCache(fileId);
     const cacheKey = `${varName}\u0000${includeYOffset ? 'y' : 'n'}\u0000${gain}`;
     if (cache?.series.has(cacheKey)) return cache.series.get(cacheKey);
@@ -1086,7 +1107,7 @@ proto._phaseVisualDataForTrace = function(plot, pt, targetInfo = this._phaseTarg
     if (plot.mode === 'phase2dt') {
         const timeVar = this._getTimeVar(pt.fileId);
         const [time, x, y] = this._buildPhaseVisualSeries([
-            timeVar ? this._getTransformedTimeData(pt.fileId) : [],
+            timeVar ? this._getTransformedTimeDataForVariable(pt.fileId, pt.x) : [],
             this._getTransformedVariableData(pt.fileId, pt.x),
             this._getTransformedVariableData(pt.fileId, pt.y),
         ]);
@@ -1230,7 +1251,7 @@ proto._traceYAxis = function(traceState, plot = null) {
 
 proto._timeseriesTraceSupport = function(traceState) {
     if (!traceState) return null;
-    const timeData = this._getTransformedTimeData(traceState.fileId);
+    const timeData = this._getTransformedTimeDataForVariable(traceState.fileId, traceState.varName);
     const values = this._getTransformedVariableData(traceState.fileId, traceState.varName);
     const n = Math.min(timeData?.length || 0, values?.length || 0);
     if (!n) return null;
@@ -1361,7 +1382,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     const variable = fileData.variables[t.varName];
     if (!variable) return null;
     const timeVar  = this._getTimeVar(t.fileId);
-    const timeData = this._getTransformedTimeData(t.fileId);
+    const timeData = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
     const values   = this._getTransformedVariableData(t.fileId, t.varName);
     const timeMode = this._timeDisplayModeForVar(t.fileId, timeVar);
     const generatedIndexAxis = this._isGeneratedIndexTime(t.fileId, timeVar);
@@ -1467,13 +1488,13 @@ proto._buildTimeLayout = function(plot) {
     const generatedElapsedDurationAxis = this._isGeneratedDurationTime(firstFileId, firstTimeVar) && !generatedCalendarAxis;
     const timeTitle = this._timeAxisTitleForVar(firstFileId, firstTimeVar);
     const xAxisMode = firstTimeMode === 'calendar' || generatedCalendarAxis
-        ? this._calendarAxisConfig(firstFileId, firstTimeVar, plot.traces.map(t => this._getTransformedTimeData(t.fileId)))
+        ? this._calendarAxisConfig(firstFileId, firstTimeVar, plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)))
         : (firstTimeMode === 'elapsedDateTime' || generatedElapsedDurationAxis
-            ? this._elapsedDateTimeAxisConfig(plot.traces.map(t => this._getTransformedTimeData(t.fileId)), firstFileId)
+            ? this._elapsedDateTimeAxisConfig(plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)), firstFileId)
             : { type: 'linear' });
     const xExtent = this._finiteExtent(plot.traces
         .filter(t => this._isVisible(t))
-        .map(t => this._getTransformedTimeData(t.fileId)));
+        .map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)));
     const xRange = xExtent ? this._exactRange(xExtent.min, xExtent.max) : null;
     const xRangeConfig = xRange
         ? {

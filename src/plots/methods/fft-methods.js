@@ -385,7 +385,7 @@ proto._buildFftWindowedTimeTraces = function(plot, visibleRange = null) {
     const out = [];
     for (const trace of plot.traces || []) {
         if (!this._isVisible(trace)) continue;
-        const times = this._getTransformedTimeData(trace.fileId);
+        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         const values = this._getTransformedVariableData(trace.fileId, trace.varName);
         const selected = selectFftRange(times, values, range);
         const n = Math.min(selected.times?.length || 0, selected.values?.length || 0);
@@ -879,7 +879,7 @@ proto._fftSeriesForTrace = async function(trace, range, state) {
         };
     }
 
-    const times = this._getTransformedTimeData(trace.fileId);
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
     const values = this._getTransformedVariableData(trace.fileId, trace.varName);
     const selected = selectFftRange(times, values, range);
     return {
@@ -1149,7 +1149,7 @@ proto._ensureFftRange = function(plot, options = {}) {
 proto._fftDomain = function(plot) {
     const arrays = [];
     for (const trace of plot?.traces || []) {
-        const values = this._getTransformedTimeData(trace.fileId);
+        const values = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (values?.length) arrays.push(values);
     }
     const extent = this._finiteExtent(arrays);
@@ -1166,7 +1166,7 @@ proto._fftGapInfo = function(plot) {
     for (const t of visible) {
         if (seen.has(t.fileId)) continue;
         seen.add(t.fileId);
-        const times = this._getTransformedTimeData(t.fileId);
+        const times = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
         const n = times?.length || 0;
         files.push({ fileId: t.fileId, times, n });
         sigParts.push(`${t.fileId}:${n}:${n ? times[0] : ''}:${n ? times[n - 1] : ''}`);
@@ -1437,7 +1437,7 @@ proto._missTraceKey = function(t) {
 proto._missingDataInfo = function(plot) {
     const visible = (plot?.traces || []).filter(t => this._isVisible(t));
     const sig = visible.map(t => {
-        const times = this._getTransformedTimeData(t.fileId);
+        const times = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
         const n = times?.length || 0;
         return `${t.fileId} ${t.varName}:${n}:${n ? times[0] : ''}:${n ? times[n - 1] : ''}`;
     }).join('|');
@@ -1450,14 +1450,14 @@ proto._missingDataInfo = function(plot) {
         // A reservoir-sampled overview has no truthful time spacing or NaN runs.
         if (!this._hasTruthfulGapSeries(t.fileId)) continue;
         if (!fileGaps.has(t.fileId)) {
-            const times = this._getTransformedTimeData(t.fileId);
+            const times = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
             const timeVar = this._getTimeVar(t.fileId);
             const gaps = detectSamplingGaps(times).gaps.map(g => ({ t0: g.t0, t1: g.t1 }));
             fileGaps.set(t.fileId, { timeVar, gaps });
             for (const g of gaps) bandItems.push({ fileId: t.fileId, timeVar, t0: g.t0, t1: g.t1 });
         }
         const entry = fileGaps.get(t.fileId);
-        const times = this._getTransformedTimeData(t.fileId);
+        const times = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
         const values = this._getTransformedVariableData(t.fileId, t.varName);
         const nanRuns = detectNaNRuns(times, values);
         for (const r of nanRuns) bandItems.push({ fileId: t.fileId, timeVar: entry.timeVar, t0: r.t0, t1: r.t1 });
@@ -2164,7 +2164,7 @@ proto._autoScalePlotTimeOnly = function(plot) {
     const xArrays = [];
     const yArrays = [];
     for (const t of visibleTraces) {
-        xArrays.push(this._getTransformedTimeData(t.fileId));
+        xArrays.push(this._getTransformedTimeDataForVariable(t.fileId, t.varName));
         yArrays.push(this._getTransformedVariableData(t.fileId, t.varName));
     }
     const xExtent = this._finiteExtent(xArrays);
