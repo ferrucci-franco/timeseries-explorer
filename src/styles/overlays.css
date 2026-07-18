@@ -36,6 +36,11 @@
     max-width: none;
 }
 
+.modal-dialog-mat-too-large {
+    width: clamp(400px, 50vw, 900px);
+    max-width: calc(100vw - 32px);
+}
+
 .modal-dialog.correlation-help-dialog {
     width: min(880px, calc(100vw - 32px));
     max-width: none;

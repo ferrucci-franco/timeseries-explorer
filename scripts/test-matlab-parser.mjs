@@ -222,5 +222,9 @@ const translationsSource = readFileSync(new URL('../src/i18n/translations.js', i
 for (const key of ['matPickerTitle', 'matSelectArraysAction', 'matPickerBody', 'matPickerOverview', 'matPickerTime', 'matPickerTimeIndex', 'matPickerSampleDimension', 'matPickerTranspose', 'matPickerTransposeBlocked', 'matPickerIncompatibleLengths', 'matlabMatrixTranspose', 'matlabMatrixTransposeConfirm', 'matPickerImport', 'fileTypeMatlab', 'matTooLarge', 'matlabFullLoadLimit', 'matlabFullLoadLimitHelp']) {
     assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} is translated in all languages`);
 }
+const matTooLargeMessages = [...translationsSource.matchAll(/\bmatTooLarge:\s*'([^\n]+)'/g)].map((match) => match[1]);
+assert.equal(matTooLargeMessages.length, 4, 'all locales define the MAT size-limit message');
+assert.ok(matTooLargeMessages.every((message) => !/\beager\b/i.test(message)), 'MAT size-limit messages avoid implementation jargon');
+assert.match(fileMethodsSource, /MAT_FILE_TOO_LARGE[\s\S]*modal-dialog-mat-too-large/, 'oversized MAT files use the wider alert');
 
 console.log('MATLAB MAT parser tests passed.');

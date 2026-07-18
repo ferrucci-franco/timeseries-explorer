@@ -405,7 +405,10 @@ proto._expandMatEntries = async function(entries) {
         } catch (err) {
             this._hideFileLoadingOverlay();
             console.error('Error inspecting MAT file:', err);
-            await Modal.alert(i18n.t('errorLoading'), err?.message || String(err), { icon: 'MAT' });
+            await Modal.alert(i18n.t('errorLoading'), err?.message || String(err), {
+                icon: 'MAT',
+                className: err?.code === 'MAT_FILE_TOO_LARGE' ? 'modal-dialog-mat-too-large' : '',
+            });
         }
     }
     return expanded;
@@ -1339,10 +1342,12 @@ proto._preflightMatlabFile = function(file, extension = this._fileExtension(file
     const size = Number(file?.size || 0);
     const limit = this._matlabEagerLimitBytes();
     if (!Number.isFinite(size) || size <= limit) return;
-    throw new Error(i18n.t('matTooLarge')
+    const error = new Error(i18n.t('matTooLarge')
         .replace('{file}', file?.name || 'data.mat')
         .replace('{size}', this._formatFileSize(size))
         .replace('{limit}', this._formatFileSize(limit)));
+    error.code = 'MAT_FILE_TOO_LARGE';
+    throw error;
 };
 
 proto._parseMatlabResultBuffer = async function(filename, buffer, options = {}) {

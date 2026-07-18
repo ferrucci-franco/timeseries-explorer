@@ -11,6 +11,13 @@ import {
 export function installUiMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.initEventListeners = function() {
+    // The browser menu does not provide app actions and can obscure the UI.
+    // Prevent only the native default: target-level contextmenu handlers still
+    // receive the event and can open the app's own contextual menus.
+    document.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+    });
+
     document.querySelectorAll('.lang-btn').forEach(btn => {
         btn.addEventListener('click', (e) => this.setLanguage(e.target.getAttribute('data-lang')));
     });
@@ -1079,6 +1086,7 @@ proto._renderExtraMenu = function() {
 
         const iconSpan = document.createElement('span');
         iconSpan.className = 'extra-menu-icon';
+        if (options.iconClass) iconSpan.classList.add(options.iconClass);
         if (options.iconHtml) iconSpan.innerHTML = icon;
         else iconSpan.textContent = icon;
 
@@ -1128,9 +1136,15 @@ proto._renderExtraMenu = function() {
         });
     }, { titleKey: 'extraLoadSessionProjectTooltip' });
 
-    const displaySettingsItem = makeAction('Aa', 'extraDisplaySettings', () => {
-        this.showDisplaySettings();
-    }, { titleKey: 'extraDisplaySettingsTooltip' });
+    const displaySettingsItem = makeAction(
+        '⛭',
+        'extraDisplaySettings',
+        () => this.showDisplaySettings(),
+        {
+            titleKey: 'extraDisplaySettingsTooltip',
+            iconClass: 'extra-menu-icon-settings',
+        },
+    );
 
     const helpItem = makeAction('?', 'help', () => {
         this.showHelp();

@@ -1034,6 +1034,17 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     border-radius: 0.2rem;
 }
 
+.extra-menu-icon-settings {
+    color: #8b5cf6;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.15rem;
+    font-weight: 600;
+    line-height: 1;
+    opacity: 1;
+}
+
 .extra-menu-static {
     color: var(--text-primary);
     cursor: default;
