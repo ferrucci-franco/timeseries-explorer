@@ -1144,7 +1144,7 @@ class PlotManager {
                     document.addEventListener('mouseup', onUp);
                 }, { capture: true });
                 div.addEventListener('contextmenu', (e) => {
-                    if (plot.mode === 'timeseries' && plot.timeseriesY2Enabled && this._handleTimeseriesLegendContextMenu(panelId, plot, e)) return;
+                    if (plot.mode === 'timeseries' && this._handleTimeseriesLegendContextMenu(panelId, plot, e)) return;
                     e.preventDefault();
                 });
                 // Two-finger horizontal trackpad swipe pans; vertical keeps
@@ -1189,6 +1189,12 @@ class PlotManager {
                 lastMouseDownHadShift = !!e.shiftKey;
             }, { capture: true });
             div.on('plotly_legendclick', (ed) => {
+                // Plotly also emits legendclick for the secondary mouse button.
+                // The context menu owns that gesture, so it must never toggle visibility.
+                if (ed.event?.button !== undefined && ed.event.button !== 0) {
+                    lastMouseDownHadShift = false;
+                    return false;
+                }
                 const clickedName = ed.data[ed.curveNumber]?.name;
                 const shiftClick = !!(ed.event?.shiftKey || lastMouseDownHadShift);
                 lastMouseDownHadShift = false;
@@ -1298,7 +1304,7 @@ class PlotManager {
 
     _handleTimeseriesLegendContextMenu(panelId, plot, event) {
         const item = event.target?.closest?.('.legend .traces');
-        if (!item || !plot?.timeseriesY2Enabled) return false;
+        if (!item) return false;
         const items = [...plot.div.querySelectorAll('.legend .traces')];
         const legendIndex = items.indexOf(item);
         if (legendIndex < 0) return false;
@@ -1317,26 +1323,131 @@ class PlotManager {
         const menu = document.createElement('div');
         menu.className = 'timeseries-axis-menu';
         const moveRight = this._traceYAxis(trace, plot) !== 'y2';
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = i18n.t(moveRight ? 'timeseriesY2MoveRight' : 'timeseriesY2MoveLeft');
-        button.addEventListener('click', () => {
-            trace.axis = moveRight ? 'y2' : 'y';
+        const close = (closeEvent = null) => {
+            if (closeEvent && menu.contains(closeEvent.target)) return;
             menu.remove();
-            this._rebuildPanel(panelId, { preserveView: true });
-        });
-        menu.appendChild(button);
+            document.removeEventListener('pointerdown', close, true);
+        };
+        const addAction = (labelKey, action, className = '') => {
+            const actionButton = document.createElement('button');
+            actionButton.type = 'button';
+            actionButton.textContent = i18n.t(labelKey);
+            if (className) actionButton.className = className;
+            actionButton.addEventListener('click', async () => {
+                actionButton.disabled = true;
+                close();
+                try {
+                    await action();
+                } catch (error) {
+                    console.error('[legend] context-menu action failed:', error);
+                }
+            });
+            menu.appendChild(actionButton);
+            return actionButton;
+        };
+        const hideButton = addAction('legendMenuHideTrace', () =>
+            this._setTimeseriesLegendSelection(panelId, plot, trace, 'hide'));
+        hideButton.disabled = trace.visible === 'legendonly' || trace.visible === false;
+        addAction('legendMenuSelectOnlyTrace', () =>
+            this._setTimeseriesLegendSelection(panelId, plot, trace, 'only'));
+        addAction('legendMenuRemoveTrace', () =>
+            this._removeTimeseriesTraceFromLegend(panelId, plot, trace));
+        addAction(
+            moveRight ? 'timeseriesY2MoveRight' : 'timeseriesY2MoveLeft',
+            () => this._moveTimeseriesTraceToAxis(panelId, plot, trace, moveRight ? 'y2' : 'y'),
+            'timeseries-axis-menu-divider',
+        );
         document.body.appendChild(menu);
         const x = Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8);
         const y = Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8);
         menu.style.left = `${Math.max(8, x)}px`;
         menu.style.top = `${Math.max(8, y)}px`;
-        const close = (closeEvent) => {
-            if (menu.contains(closeEvent.target)) return;
-            menu.remove();
-            document.removeEventListener('pointerdown', close, true);
-        };
         setTimeout(() => document.addEventListener('pointerdown', close, true), 0);
+    }
+
+    async _setTimeseriesLegendSelection(panelId, plot, selectedTrace, action) {
+        if (!plot?.div || plot.mode !== 'timeseries') return;
+        const updates = [];
+        for (const trace of plot.traces || []) {
+            let visible = trace.visible === 'legendonly' || trace.visible === false ? 'legendonly' : true;
+            if (action === 'hide' && trace === selectedTrace) visible = 'legendonly';
+            if (action === 'only') visible = trace === selectedTrace ? true : 'legendonly';
+            trace.visible = visible;
+            const name = this._traceName(trace.varName, trace.fileId);
+            const curveIndex = (plot.div._fullData || []).findIndex(fullTrace =>
+                fullTrace.name === name && fullTrace.showlegend !== false);
+            if (curveIndex >= 0) updates.push({ curveIndex, visible });
+        }
+        if (!updates.length) return;
+        await Plotly.restyle(
+            plot.div,
+            { visible: updates.map(update => update.visible) },
+            updates.map(update => update.curveIndex),
+        );
+        this._syncCursorDisplay(panelId, plot);
+        this._refreshPanelDomOverlays(plot);
+    }
+
+    async _removeTimeseriesTraceFromLegend(panelId, plot, trace) {
+        if (!plot?.div || plot.mode !== 'timeseries') return;
+        const stateIndex = plot.traces.indexOf(trace);
+        if (stateIndex < 0) return;
+        const traceName = this._traceName(trace.varName, trace.fileId);
+        const curveIndex = (plot.div._fullData || []).findIndex(fullTrace =>
+            fullTrace.name === traceName && fullTrace.showlegend !== false);
+        if (curveIndex < 0) return;
+        plot.traces.splice(stateIndex, 1);
+        await Plotly.deleteTraces(plot.div, curveIndex);
+        if (!plot.traces.length) {
+            this._clearPanel(panelId);
+            return;
+        }
+        const layout = this._buildTimeLayout(plot);
+        await Plotly.relayout(plot.div, {
+            'yaxis.title': layout.yaxis.title,
+            'yaxis2.title': layout.yaxis2?.title || { text: '' },
+            margin: layout.margin,
+        });
+        this._syncCursorDisplay(panelId, plot);
+        this._refreshPanelDomOverlays(plot);
+    }
+
+    async _moveTimeseriesTraceToAxis(panelId, plot, trace, targetAxis) {
+        if (!plot?.div || plot.mode !== 'timeseries') return;
+        const axis = targetAxis === 'y2' ? 'y2' : 'y';
+        if (this._traceYAxis(trace, plot) === axis) return;
+        const traceName = this._traceName(trace.varName, trace.fileId);
+        const curveIndex = (plot.div._fullData || []).findIndex(fullTrace =>
+            fullTrace.name === traceName && fullTrace.showlegend !== false);
+        if (curveIndex < 0) return;
+
+        const view = this._capturePlotView(plot);
+        if (axis === 'y2' && !plot.timeseriesY2Enabled) {
+            plot.timeseriesY2Enabled = true;
+            plot.timeseriesStacked = false;
+            const enabledLayout = this._buildTimeLayout(plot);
+            await Plotly.relayout(plot.div, {
+                yaxis2: enabledLayout.yaxis2,
+                margin: enabledLayout.margin,
+            });
+            this._refreshActionBtns(panelId);
+        }
+        trace.axis = axis;
+        await Plotly.restyle(plot.div, { yaxis: axis }, [curveIndex]);
+
+        const layout = this._buildTimeLayout(plot);
+        const relayout = {
+            'yaxis.title': layout.yaxis.title,
+            'yaxis2.title': layout.yaxis2?.title || { text: '' },
+            margin: layout.margin,
+        };
+        await Plotly.relayout(plot.div, relayout);
+
+        const traceIndex = plot.traces.indexOf(trace);
+        const builtTrace = this._buildTimeTrace(trace, view?.xRange || null, plot, traceIndex);
+        await this._expandTimeseriesYAxisForAddedTrace(plot, builtTrace, axis);
+        this._syncCursorDisplay(panelId, plot);
+        this._refreshPanelDomOverlays(plot);
     }
 
     _destroyChart(panelId) {

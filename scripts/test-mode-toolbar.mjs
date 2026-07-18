@@ -10,6 +10,10 @@ const plotManagerSource = readFileSync(
     new URL('../src/plots/plot-manager.js', import.meta.url),
     'utf8',
 );
+const translationsSource = readFileSync(
+    new URL('../src/i18n/translations.js', import.meta.url),
+    'utf8',
+);
 const histogramMethodsSource = readFileSync(
     new URL('../src/plots/methods/histogram-methods.js', import.meta.url),
     'utf8',
@@ -481,6 +485,51 @@ for (const [from, clicked, expected] of [
     const heatmapHelperSource = heatmapMethodsSource.slice(heatmapHelperStart, heatmapHelperEnd);
     assert.match(heatmapHelperSource, /this\._autoScalePlotTimeOnly\(plot\)/, 'Heatmap Autoscale resets the time-series pane');
     assert.match(heatmapHelperSource, /Plotly\.relayout\(plot\.heatmapDiv/, 'Heatmap Autoscale resets the calendar pane');
+}
+
+// Moving a legend trace between Y axes must be an in-place Plotly update. A
+// full panel rebuild from the context-menu callback can re-enter Plotly and
+// freeze the application, especially for lazy files.
+{
+    const contextMenuCss = cssRuleBody('.timeseries-axis-menu');
+    assert.match(contextMenuCss, /grid-template-columns\s*:\s*max-content\b/,
+        'legend context menu sizes itself from the active-language labels');
+    assert.match(contextMenuCss, /max-width\s*:\s*calc\(100vw\s*-\s*16px\)/,
+        'legend context menu stays within narrow viewports');
+
+    const legendClickStart = plotManagerSource.indexOf("div.on('plotly_legendclick'");
+    const legendClickEnd = plotManagerSource.indexOf("div.on('plotly_legenddoubleclick'", legendClickStart);
+    const legendClickSource = plotManagerSource.slice(legendClickStart, legendClickEnd);
+    assert.match(legendClickSource, /ed\.event\?\.button[^\n]*!== 0/,
+        'right-clicking a legend item is ignored by the visibility handler');
+
+    const menuStart = plotManagerSource.indexOf('_showTimeseriesAxisMenu(');
+    const menuEnd = plotManagerSource.indexOf('\n    async _setTimeseriesLegendSelection', menuStart);
+    const menuSource = plotManagerSource.slice(menuStart, menuEnd);
+    assert.doesNotMatch(menuSource, /if \(plot\.timeseriesY2Enabled\)/,
+        'the move-to-Y-axis action is always present in the legend menu');
+
+    const moveStart = plotManagerSource.indexOf('async _moveTimeseriesTraceToAxis');
+    const moveEnd = plotManagerSource.indexOf('\n    _destroyChart(', moveStart);
+    assert.ok(moveStart >= 0 && moveEnd > moveStart, 'in-place Y-axis move helper is present');
+    const moveSource = plotManagerSource.slice(moveStart, moveEnd);
+    assert.match(moveSource, /Plotly\.restyle\(plot\.div,\s*\{\s*yaxis:\s*axis\s*\}/,
+        'legend Y-axis move restyles the existing trace');
+    assert.match(moveSource, /_expandTimeseriesYAxisForAddedTrace\(plot, builtTrace, axis\)/,
+        'legend Y-axis move expands only the destination Y range when needed');
+    assert.doesNotMatch(moveSource, /_rebuildPanel/,
+        'legend Y-axis move never rebuilds the panel from the menu callback');
+    assert.doesNotMatch(moveSource, /xaxis\./,
+        'legend Y-axis move never relayouts the X axis');
+    assert.match(moveSource, /plot\.timeseriesY2Enabled = true/,
+        'moving to the right Y axis enables dual-axis mode');
+    assert.match(moveSource, /this\._refreshActionBtns\(panelId\)/,
+        'moving to the right Y axis activates its toolbar button');
+
+    for (const key of ['legendMenuHideTrace', 'legendMenuSelectOnlyTrace', 'legendMenuRemoveTrace']) {
+        assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4,
+            `${key} is translated in every supported language`);
+    }
 }
 
 // The contextual option family needs a clearly visible divider from the

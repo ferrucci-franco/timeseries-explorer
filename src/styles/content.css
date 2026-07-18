@@ -1158,7 +1158,11 @@
 .timeseries-axis-menu {
     position: fixed;
     z-index: 5200;
-    min-width: 132px;
+    display: grid;
+    grid-template-columns: max-content;
+    width: auto;
+    min-width: 0;
+    max-width: calc(100vw - 16px);
     padding: 4px;
     background-color: var(--bg-primary);
     border: 1px solid var(--border-color);
@@ -1167,7 +1171,7 @@
 }
 
 .timeseries-axis-menu button {
-    width: 100%;
+    width: auto;
     border: 0;
     border-radius: 4px;
     padding: 6px 8px;
@@ -1176,10 +1180,22 @@
     cursor: pointer;
     font-size: 0.78rem;
     text-align: left;
+    white-space: nowrap;
 }
 
 .timeseries-axis-menu button:hover {
     background-color: var(--hover-bg);
+}
+
+.timeseries-axis-menu button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.timeseries-axis-menu-divider {
+    margin-top: 4px;
+    border-top: 1px solid var(--border-color) !important;
+    border-radius: 0 0 4px 4px !important;
 }
 
 @keyframes pending-pulse {
