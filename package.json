@@ -25,6 +25,7 @@
     "test:local-file-http": "node scripts/test-local-file-http.mjs",
     "test:desktop-streamable": "node scripts/test-desktop-streamable-file.mjs",
     "test:csv-to-parquet": "node scripts/test-csv-to-parquet-core.mjs",
+    "test:parquet-pandas": "node scripts/test-parquet-pandas-metadata.mjs",
     "test:data-tools": "node scripts/test-data-tools.mjs",
     "test:calendar-axis": "node scripts/test-calendar-axis.mjs",
     "test:calendar-heatmap": "node scripts/test-calendar-heatmap.mjs",
