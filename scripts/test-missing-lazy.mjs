@@ -1,8 +1,55 @@
-// Unit tests for the pure lazy Missing/NaN SQL builder + bucket reducer.
+// Unit tests for the pure lazy Missing/NaN SQL builder + bucket reducer, plus
+// the min/max-envelope gap-break helpers extracted from interaction-methods.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import { buildMissingBucketsSql, missingBucketsToIntervals } from '../src/data/missing-buckets-sql.js';
 
 const lit = (v) => (Number.isFinite(v) ? String(v) : 'NULL');
+
+// Extract two pure prototype methods (no `this` use) and run them on a mock.
+const interactionSrc = readFileSync(new URL('../src/plots/methods/interaction-methods.js', import.meta.url), 'utf8');
+const extract = (name) => {
+    const marker = `proto.${name} = function`;
+    const start = interactionSrc.indexOf(marker);
+    assert.ok(start >= 0, `${name} present`);
+    const next = interactionSrc.indexOf('\nproto.', start + marker.length);
+    return interactionSrc.slice(start, next >= 0 ? next : interactionSrc.length);
+};
+const gapBox = { proto: {} };
+vm.runInNewContext([extract('_lazyGapBreakIndices'), extract('_insertTraceGapBreaks')].join('\n'), gapBox);
+const gaps = gapBox.proto;
+const plain = (v) => JSON.parse(JSON.stringify(v)); // re-home cross-realm arrays
+
+// ── _lazyGapBreakIndices ──
+{
+    // Uniform min/max envelope (2 pts per bucket, no hole) → no breaks.
+    const x = [];
+    for (let b = 0; b < 20; b++) { x.push(b * 10, b * 10 + 9); }
+    assert.deepEqual(plain(gaps._lazyGapBreakIndices(x)), [], 'a uniform envelope has no gap breaks');
+
+    // Insert a big hole between index 9 and 10.
+    const g = x.slice();
+    for (let i = 10; i < g.length; i++) g[i] += 5000; // shove the tail far right
+    const idx = plain(gaps._lazyGapBreakIndices(g));
+    assert.ok(idx.includes(9), 'the large jump is flagged as a break after index 9');
+    assert.equal(idx.length, 1, 'only the real hole breaks');
+
+    assert.deepEqual(plain(gaps._lazyGapBreakIndices([0, 1, 2])), [], 'too few points → no breaks');
+}
+
+// ── _insertTraceGapBreaks ──
+{
+    const out = gaps._insertTraceGapBreaks([0, 1, 2, 3], [10, 20, 30, 40], undefined, [1]);
+    assert.deepEqual(plain(out.x), [0, 1, 1, 2, 3], 'x duplicated at the break');
+    assert.equal(out.y.length, 5, 'one NaN point inserted');
+    assert.ok(Number.isNaN(out.y[2]), 'the inserted y is NaN so the line cuts');
+    assert.deepEqual([...out.y].filter(v => !Number.isNaN(v)), [10, 20, 30, 40], 'real samples preserved');
+    assert.equal(out.customdata, undefined, 'no customdata stays undefined');
+
+    const cd = gaps._insertTraceGapBreaks([0, 1], [1, 2], ['a', 'b'], [0]);
+    assert.deepEqual(plain(cd.customdata), ['a', null, 'b'], 'customdata gets a null at the break');
+}
 
 // ── buildMissingBucketsSql: structure ──
 {

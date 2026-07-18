@@ -975,11 +975,15 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     const ys = [];
     const cds = [];
     let anyCustomdata = false;
+    // Cut the min/max envelope across real time gaps (empty buckets) so it never
+    // draws a diagonal across a hole — same intent as the eager line breaks.
+    // FFT pane: always; timeseries: only under the Missing/NaN opt-in.
+    const breakGaps = plot.mode === 'fft' || (plot.mode === 'timeseries' && plot.showMissingData);
     for (const result of valid) {
         const trace = result.trace || plot.traces[result.idx];
         const prepared = result.prepared
             ? { x: result.x, y: result.y, customdata: result.customdata }
-            : this._prepareLazyTimeseriesRestyle(trace, result.x, result.y, plot);
+            : this._prepareLazyTimeseriesRestyle(trace, result.x, result.y, plot, breakGaps);
         xs.push(prepared.x);
         ys.push(prepared.y);
         cds.push(prepared.customdata ?? null);
@@ -990,7 +994,7 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     return Plotly.restyle(plot.div, update, valid.map(result => result.idx));
 };
 
-proto._prepareLazyTimeseriesRestyle = function(trace, x, y, plot = null) {
+proto._prepareLazyTimeseriesRestyle = function(trace, x, y, plot = null, breakGaps = false) {
     const fileId = trace?.fileId;
     const timeVar = this._getTimeVar(fileId);
     let visualX = Array.from(x || [], (value, index) =>
@@ -1002,19 +1006,57 @@ proto._prepareLazyTimeseriesRestyle = function(trace, x, y, plot = null) {
         visualX = padded.x;
         visualY = padded.y;
     }
+    // Detect gap-break positions on the numeric display time BEFORE the Plotly
+    // conversion (which may return Date objects / strings that don't subtract).
+    const breaks = breakGaps ? this._lazyGapBreakIndices(visualX) : null;
     const plotX = this._plotlyTimeArray(fileId, visualX, timeVar);
     const generatedCalendarAxis = this._isGeneratedCalendarTime(fileId, timeVar);
     const durationAxis = this._timeDisplayModeForVar(fileId, timeVar) === 'elapsedDateTime'
         || (this._isGeneratedDurationTime(fileId, timeVar) && !generatedCalendarAxis);
-    return {
-        x: plotX,
-        y: visualY,
-        customdata: generatedCalendarAxis
-            ? visualX.map(value => this._formatGeneratedCalendarDateTime(fileId, value, timeVar))
-            : durationAxis
-            ? visualX.map(value => this._formatElapsedDateTime(value, this._durationFractionDigits(fileId)))
-            : undefined,
-    };
+    const customdata = generatedCalendarAxis
+        ? visualX.map(value => this._formatGeneratedCalendarDateTime(fileId, value, timeVar))
+        : durationAxis
+        ? visualX.map(value => this._formatElapsedDateTime(value, this._durationFractionDigits(fileId)))
+        : undefined;
+    if (breaks && breaks.length) return this._insertTraceGapBreaks(plotX, visualY, customdata, breaks);
+    return { x: plotX, y: visualY, customdata };
+};
+
+// Indices i (0-based) after which a min/max-envelope trace jumps across a real
+// time gap: the visible range is bucketed uniformly (~2 points per bucket), so a
+// normal step is at most one bucket width; anything well beyond that is a hole.
+proto._lazyGapBreakIndices = function(visualX) {
+    const n = visualX?.length || 0;
+    if (n < 4) return [];
+    const span = visualX[n - 1] - visualX[0];
+    if (!(span > 0)) return [];
+    const threshold = (span / (n / 2)) * 1.5; // 1.5 × bucket width
+    const idx = [];
+    for (let i = 1; i < n; i++) {
+        if (visualX[i] - visualX[i - 1] > threshold) idx.push(i - 1);
+    }
+    return idx;
+};
+
+// Insert a NaN point after each break index so Plotly cuts the connecting
+// segment (mirrors _applyLineBreaks for the eager path).
+proto._insertTraceGapBreaks = function(plotX, y, customdata, breakIdx) {
+    const breakSet = new Set(breakIdx);
+    const n = Math.min(plotX.length, y.length);
+    const outX = [];
+    const outY = [];
+    const outCd = customdata ? [] : undefined;
+    for (let i = 0; i < n; i++) {
+        outX.push(plotX[i]);
+        outY.push(y[i]);
+        if (outCd) outCd.push(customdata[i]);
+        if (breakSet.has(i)) {
+            outX.push(plotX[i]);
+            outY.push(NaN);
+            if (outCd) outCd.push(null);
+        }
+    }
+    return { x: outX, y: outY, customdata: outCd };
 };
 
 proto._beginLazyPerf = function(panelId, plot, base = {}) {
