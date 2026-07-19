@@ -2,6 +2,10 @@
 
 Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, PyPSA netCDF, and small pandas pickle result files.
 
+Created by [Franco Ferrucci](https://github.com/ferrucci-franco). A technical
+publication about the application is [in preparation](PUBLICATION.md).
+Citation metadata for the software is available in [CITATION.cff](CITATION.cff).
+
 ## Versions and local runs
 
 The app is split by runtime capability, not by duplicated source branches:
@@ -116,3 +120,11 @@ The portable web package supports two offline modes:
 - Local browser mode: run the platform start script (`start-windows.bat`, `start-linux.sh`, or `start-macos.command`) to serve the same app at `http://127.0.0.1`.
 
 The local browser mode bundles the Node runtime from the platform that built the zip, starts a localhost-only server, and opens the browser without requiring users to install Python, Node, npm, or internet access. Live Update belongs to the Full Desktop app.
+
+## License
+
+Time Series Explorer's own source code is licensed under the permissive
+[MIT License](LICENSE). It may be used, modified, and redistributed, including
+for commercial purposes, provided that the copyright and license notice are
+preserved. Third-party components retain their own licenses; the principal
+libraries are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

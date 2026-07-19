@@ -663,7 +663,10 @@ export default class CsvParsingPreviewDialog {
             decimalSeparator: this.autoProfile?.decimalSeparator || 'auto',
             hasHeader: this.autoProfile?.hasHeader !== false,
             headerIndex: Math.max(0, Number(this.autoProfile?.headerIndex) || 0),
-            unitsMode: this.autoProfile?.unitsMode || (Number.isFinite(Number(this.autoProfile?.unitRowIndex)) ? 'row' : 'none'),
+            unitsMode: this.autoProfile?.unitsMode
+                || (Number.isFinite(Number(this.autoProfile?.unitRowIndex))
+                    ? 'row'
+                    : (this._profileUsesInlineUnits(this.autoProfile) ? 'inline' : 'none')),
             unitRowIndex: Number.isFinite(Number(this.autoProfile?.unitRowIndex)) ? Number(this.autoProfile.unitRowIndex) : null,
             inlineUnitFormat: this.autoProfile?.inlineUnitFormat || 'auto',
             ignoredColumns: Array.isArray(this.autoProfile?.ignoredColumns) ? this.autoProfile.ignoredColumns.slice() : [],
@@ -1259,6 +1262,23 @@ export default class CsvParsingPreviewDialog {
             ?.row || null;
     }
 
+    _profileUsesInlineUnits(profile = {}) {
+        if (!profile || profile.unitsMode) return false;
+        if (Number.isFinite(Number(profile.unitRowIndex))) return false;
+        if (profile.hasHeader === false) return false;
+        const rawHeaders = Array.isArray(profile.rawHeaders) ? profile.rawHeaders : [];
+        const headers = Array.isArray(profile.headers) ? profile.headers : [];
+        if (rawHeaders.length < 2 || !headers.length) return false;
+        return headers.some((header, index) => {
+            const description = String(header?.description || '').trim();
+            if (!description.startsWith('[') || !description.endsWith(']')) return false;
+            const parsed = typeof this.parser?._parseHeader === 'function'
+                ? this.parser._parseHeader(rawHeaders[index], index)
+                : null;
+            return !!parsed && parsed.description === description;
+        });
+    }
+
     _detectedUnitRowIndex(profile = {}) {
         const hasHeader = profile.hasHeader !== false;
         const headerIndex = Math.max(0, Number(profile.headerIndex) || 0);
@@ -1291,7 +1311,10 @@ export default class CsvParsingPreviewDialog {
             ? Number(profile.unitRowIndex)
             : this._detectedUnitRowIndex(profile);
         if (options.resetUnits || !this.resultProfile) {
-            this.state.unitsMode = profile.unitsMode || (detectedUnitRowIndex !== null ? 'row' : 'none');
+            this.state.unitsMode = profile.unitsMode
+                || (detectedUnitRowIndex !== null
+                    ? 'row'
+                    : (this._profileUsesInlineUnits(profile) ? 'inline' : 'none'));
             this.state.unitRowIndex = detectedUnitRowIndex;
             this.state.inlineUnitFormat = profile.inlineUnitFormat || 'auto';
         }
@@ -1412,7 +1435,9 @@ export default class CsvParsingPreviewDialog {
             ? cloneProfile(previousProfile.headers)
             : (this.state.unitsMode === 'inline'
                 ? makeUniqueInlineHeaders(rawHeaders, this.state.inlineUnitFormat)
-                : this.parser._makeUniqueHeaders(rawHeaders));
+                : this.state.unitsMode === 'none'
+                    ? this.parser._makeUniquePlainHeaders(rawHeaders)
+                    : this.parser._makeUniqueHeaders(rawHeaders));
         if (unitRowIndex !== null) {
             const unitRow = isStartSample ? (this._rowForLogicalIndex(unitRowIndex) || []) : [];
             headers = headers.map((header, index) => {
@@ -2060,7 +2085,7 @@ export default class CsvParsingPreviewDialog {
         const thead = document.createElement('thead');
         const headRow = document.createElement('tr');
         const rowNumberHead = document.createElement('th');
-        rowNumberHead.textContent = i18n.t('csvPreviewFileRowNumber');
+        rowNumberHead.textContent = i18n.t('csvPreviewFileRowNumberShort');
         rowNumberHead.title = i18n.t('csvPreviewFileRowNumber');
         headRow.appendChild(rowNumberHead);
         const parsedHead = document.createElement('th');

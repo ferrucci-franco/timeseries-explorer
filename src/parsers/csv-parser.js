@@ -926,10 +926,28 @@ export default class CsvParser {
         });
     }
 
+    _makeUniquePlainHeaders(rawHeaders) {
+        const seen = new Map();
+        return rawHeaders.map((raw, index) => {
+            const fallback = index === 0 ? 'time' : `column_${index + 1}`;
+            const base = this._sanitizeHeaderName(raw, fallback);
+            const count = (seen.get(base) || 0) + 1;
+            seen.set(base, count);
+            return {
+                name: count === 1 ? base : `${base}_${count}`,
+                description: ''
+            };
+        });
+    }
+
     _normalizeProfileHeaders(headers, rawHeaders, profile = null) {
+        // An explicit 'none' opts out of unit extraction; undefined keeps the
+        // legacy behavior (auto profiles and pre-unitsMode saved profiles).
         const fallback = profile?.unitsMode === 'inline'
             ? this._makeUniqueInlineHeaders(rawHeaders, profile.inlineUnitFormat || 'auto')
-            : this._makeUniqueHeaders(rawHeaders);
+            : profile?.unitsMode === 'none'
+                ? this._makeUniquePlainHeaders(rawHeaders)
+                : this._makeUniqueHeaders(rawHeaders);
         if (!Array.isArray(headers) || !headers.length) return fallback;
         return rawHeaders.map((raw, index) => {
             const header = headers[index];

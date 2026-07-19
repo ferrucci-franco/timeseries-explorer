@@ -26,6 +26,10 @@
 !/package-lock.json
 !/README.md
 !/CONTRIBUTING.md
+!/LICENSE
+!/PUBLICATION.md
+!/CITATION.cff
+!/THIRD_PARTY_LICENSES.md
 !/.codex/
 !/.codex/TODO.txt
 !/src/

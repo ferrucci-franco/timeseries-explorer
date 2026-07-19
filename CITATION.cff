@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "A technical publication is in preparation. Until it is available, please cite this software."
+title: "Time Series Explorer"
+type: software
+authors:
+  - family-names: "Ferrucci"
+    given-names: "Franco"
+version: 0.1.0
+repository-code: "https://github.com/ferrucci-franco/timeseries-explorer"
+url: "https://ferrucci-franco.github.io/timeseries-explorer/"
+license: MIT

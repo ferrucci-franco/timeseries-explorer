@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Desktop and web time-series explorer for OpenModelica, Dymola, CSV, and Parquet result files.",
   "author": "Franco Ferrucci",
+  "license": "MIT",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -51,6 +52,7 @@
     "test:session-project": "node scripts/test-session-project-save.mjs",
     "test:session-state": "node scripts/test-session-state-roundtrip.mjs",
     "test:help-layout": "node scripts/test-help-layout.mjs",
+    "test:settings-layout": "node scripts/test-settings-layout.mjs",
     "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs",
     "test:phase2d": "node scripts/test-phase2d.mjs"
   },

@@ -10,30 +10,36 @@ import {
 
 const HELP_TOPICS = [
     { section: '1', icon: 'compass', color: '#3b82f6' },
-    { section: '2', icon: 'chart', color: '#8b5cf6' },
-    { section: '5', icon: 'animation', color: '#ec4899' },
-    { section: '3', icon: 'folder', color: '#f59e0b' },
-    { section: '10', icon: 'align', color: '#14b8a6' },
+    { section: '2', icon: 'folder', color: '#f59e0b' },
+    { section: '3', icon: 'model', color: '#2563eb' },
     { section: '4', icon: 'layers', color: '#06b6d4' },
-    { section: '11', icon: 'save', color: '#22c55e' },
-    { section: '6', icon: 'reload', color: '#0ea5e9' },
-    { section: '7', icon: 'formula', color: '#f97316' },
-    { section: '8', icon: 'temporary', color: '#a855f7' },
-    { section: '9', icon: 'cursor', color: '#ef4444' },
+    { section: '5', icon: 'chart', color: '#8b5cf6' },
+    { section: '6', icon: 'spectrum', color: '#ec4899' },
+    { section: '7', icon: 'animation', color: '#a855f7' },
+    { section: '8', icon: 'cursor', color: '#ef4444' },
+    { section: '9', icon: 'align', color: '#14b8a6' },
+    { section: '10', icon: 'formula', color: '#f97316' },
+    { section: '11', icon: 'database', color: '#64748b' },
+    { section: '12', icon: 'reload', color: '#0ea5e9' },
+    { section: '13', icon: 'save', color: '#22c55e' },
+    { section: '14', icon: 'info', color: '#6366f1' },
 ];
 
 const HELP_ICON_PATHS = {
     compass: '<circle cx="12" cy="12" r="8.5"/><path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9 4.9-2.1Z"/>',
     chart: '<path d="M4 19.5V5m0 14.5h16"/><path d="m7 15 3-3 2.5 2 4.5-6 2 1.5"/>',
+    spectrum: '<path d="M3 12h3l2-7 3 14 3-9 2 4h5"/><path d="M3 20h18"/>',
     animation: '<path d="M7.5 6.5A7 7 0 0 1 19 10l1.5-1.5M20 10h-4"/><path d="M16.5 17.5A7 7 0 0 1 5 14l-1.5 1.5M4 14h4"/><circle cx="12" cy="12" r="2"/>',
     folder: '<path d="M3.5 7.5h6l2-2h9v13h-17z"/><path d="M3.5 9.5h17"/>',
+    model: '<circle cx="6" cy="6" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M8.2 6h7.6M7.3 7.8l3.5 8.2M16.7 7.8 13.2 16"/>',
     align: '<path d="M4 7h10m3 0h3M4 17h3m3 0h10"/><circle cx="15.5" cy="7" r="1.5"/><circle cx="8.5" cy="17" r="1.5"/>',
     layers: '<path d="m12 4 8 4-8 4-8-4 8-4Z"/><path d="m4 12 8 4 8-4M4 16l8 4 8-4"/>',
     save: '<path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/>',
     reload: '<path d="M19 8a7.5 7.5 0 0 0-13-2L4 8m0 0V4m0 4h4"/><path d="M5 16a7.5 7.5 0 0 0 13 2l2-2m0 0v4m0-4h-4"/>',
     formula: '<path d="M15.5 4.5h-2a3 3 0 0 0-3 3v9a3 3 0 0 1-3 3h-2"/><path d="M7.5 11.5h6M16 14l4 4m0-4-4 4"/>',
-    temporary: '<path d="M3.5 8h6l2-2h9v12.5h-17z"/><circle cx="16" cy="14" r="3.5"/><path d="M16 12v2.2l1.4.8"/>',
+    database: '<ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/>',
     cursor: '<circle cx="12" cy="12" r="5"/><path d="M12 3v4m0 10v4M3 12h4m10 0h4"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 10.5v6M12 7.25h.01"/>',
 };
 
 function helpIcon(name, className = 'help-topic-icon-svg') {
@@ -732,10 +738,24 @@ proto.showDisplaySettings = function() {
     const header = document.createElement('div');
     header.className = 'plot-settings-header';
 
+    const heading = document.createElement('div');
+    heading.className = 'plot-settings-heading';
+
+    const headingIcon = document.createElement('span');
+    headingIcon.className = 'plot-settings-heading-icon';
+    headingIcon.innerHTML = helpIcon('align', 'plot-settings-heading-icon-svg');
+
     const title = document.createElement('div');
     title.id = 'plot-settings-title';
     title.className = 'modal-title plot-settings-title';
     title.textContent = i18n.t('displaySettingsTitle');
+
+    const headerCloseBtn = document.createElement('button');
+    headerCloseBtn.type = 'button';
+    headerCloseBtn.className = 'plot-settings-header-close';
+    headerCloseBtn.title = i18n.t('helpClose');
+    headerCloseBtn.setAttribute('aria-label', i18n.t('helpClose'));
+    headerCloseBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>';
 
     const helpWrap = document.createElement('div');
     helpWrap.className = 'plot-settings-help-wrap';
@@ -785,7 +805,8 @@ proto.showDisplaySettings = function() {
     });
 
     helpWrap.append(helpBtn, helpPopover);
-    header.append(title);
+    heading.append(headingIcon, title);
+    header.append(heading, headerCloseBtn);
 
     const intro = document.createElement('p');
     intro.className = 'plot-settings-intro';
@@ -876,10 +897,6 @@ proto.showDisplaySettings = function() {
 
     const fileSection = document.createElement('section');
     fileSection.className = 'plot-settings-section file-loading-settings';
-
-    const fileHeading = document.createElement('div');
-    fileHeading.className = 'plot-settings-section-title';
-    fileHeading.textContent = i18n.t('fileLoadingSettingsTitle');
 
     const fileIntro = document.createElement('p');
     fileIntro.className = 'plot-settings-section-intro';
@@ -983,7 +1000,7 @@ proto.showDisplaySettings = function() {
     panZoomControl.select.addEventListener('change', applyPanZoomSettings);
 
     fileGrid.append(...fileLimitControls.map(control => control.field), compactControl.field);
-    fileSection.append(fileHeading, fileIntro, fileGrid);
+    fileSection.append(fileGrid);
 
     const applySettings = () => {
         const timeRaw = timeControl.select.value;
@@ -1024,10 +1041,120 @@ proto.showDisplaySettings = function() {
     closeBtn.textContent = i18n.t('helpClose');
 
     buttons.append(resetBtn, closeBtn);
-    content.append(header, intro, downsamplingSection, fileSection, buttons);
+
+    const settingsMain = document.createElement('div');
+    settingsMain.className = 'plot-settings-main';
+
+    const settingsSidebar = document.createElement('nav');
+    settingsSidebar.className = 'plot-settings-sidebar';
+    settingsSidebar.setAttribute('role', 'tablist');
+    settingsSidebar.setAttribute('aria-label', i18n.t('displaySettingsTitle'));
+
+    const settingsPanels = document.createElement('div');
+    settingsPanels.className = 'plot-settings-panels';
+
+    const makeTopicButton = (id, label, icon, color, panelId) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.id = id;
+        button.className = 'plot-settings-topic-button';
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-controls', panelId);
+        button.style.setProperty('--settings-topic-color', color);
+        button.innerHTML = `<span class="plot-settings-topic-icon">${helpIcon(icon, 'plot-settings-topic-icon-svg')}</span><span class="plot-settings-topic-label"></span>`;
+        button.querySelector('.plot-settings-topic-label').textContent = label;
+        return button;
+    };
+
+    const visualTab = makeTopicButton(
+        'plot-settings-visual-tab',
+        i18n.t('visualSettingsTitle'),
+        'chart',
+        '#8b5cf6',
+        'plot-settings-visual-panel',
+    );
+    const fileTab = makeTopicButton(
+        'plot-settings-file-tab',
+        i18n.t('fileLoadingSettingsTitle'),
+        'folder',
+        '#f59e0b',
+        'plot-settings-file-panel',
+    );
+
+    const makePanelHeading = (titleText, introElement, icon, color) => {
+        const panelHeader = document.createElement('div');
+        panelHeader.className = 'plot-settings-panel-header';
+        panelHeader.style.setProperty('--settings-topic-color', color);
+        const iconWrap = document.createElement('span');
+        iconWrap.className = 'plot-settings-panel-icon';
+        iconWrap.innerHTML = helpIcon(icon, 'plot-settings-panel-icon-svg');
+        const copy = document.createElement('div');
+        copy.className = 'plot-settings-panel-heading-copy';
+        const panelTitle = document.createElement('h3');
+        panelTitle.textContent = titleText;
+        copy.append(panelTitle, introElement);
+        panelHeader.append(iconWrap, copy);
+        return panelHeader;
+    };
+
+    const visualPanel = document.createElement('section');
+    visualPanel.id = 'plot-settings-visual-panel';
+    visualPanel.className = 'plot-settings-panel';
+    visualPanel.setAttribute('role', 'tabpanel');
+    visualPanel.setAttribute('aria-labelledby', visualTab.id);
+    visualPanel.tabIndex = 0;
+    visualPanel.append(
+        makePanelHeading(i18n.t('visualSettingsTitle'), intro, 'chart', '#8b5cf6'),
+        downsamplingSection,
+    );
+
+    const filePanel = document.createElement('section');
+    filePanel.id = 'plot-settings-file-panel';
+    filePanel.className = 'plot-settings-panel';
+    filePanel.setAttribute('role', 'tabpanel');
+    filePanel.setAttribute('aria-labelledby', fileTab.id);
+    filePanel.tabIndex = 0;
+    filePanel.append(
+        makePanelHeading(i18n.t('fileLoadingSettingsTitle'), fileIntro, 'folder', '#f59e0b'),
+        fileSection,
+    );
+
+    const tabs = [visualTab, fileTab];
+    const panels = [visualPanel, filePanel];
+    const selectSettingsTopic = (index, focus = false) => {
+        tabs.forEach((tab, tabIndex) => {
+            const selected = tabIndex === index;
+            tab.classList.toggle('active', selected);
+            tab.setAttribute('aria-selected', String(selected));
+            tab.tabIndex = selected ? 0 : -1;
+            panels[tabIndex].hidden = !selected;
+        });
+        settingsPanels.scrollTop = 0;
+        if (focus) tabs[index]?.focus();
+    };
+    tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => selectSettingsTopic(index));
+        tab.addEventListener('keydown', event => {
+            let next = null;
+            if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+            else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+            else if (event.key === 'Home') next = 0;
+            else if (event.key === 'End') next = tabs.length - 1;
+            if (next == null) return;
+            event.preventDefault();
+            selectSettingsTopic(next, true);
+            tabs[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        });
+    });
+
+    settingsSidebar.append(...tabs);
+    settingsPanels.append(...panels);
+    settingsMain.append(settingsSidebar, settingsPanels);
+    content.append(header, settingsMain, buttons);
     modal.appendChild(content);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+    selectSettingsTopic(0);
 
     let settled = false;
     const finish = () => {
@@ -1052,6 +1179,22 @@ proto.showDisplaySettings = function() {
         }
     });
     const escHandler = (e) => {
+        if (e.key === 'Tab') {
+            const focusable = [...modal.querySelectorAll('button:not([disabled]), select:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+                .filter(element => !element.hidden && element.offsetParent !== null);
+            if (focusable.length) {
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            }
+            return;
+        }
         if (e.key === 'Escape' && !helpPopover.hidden) {
             e.preventDefault();
             helpPopover.hidden = true;
@@ -1067,10 +1210,11 @@ proto.showDisplaySettings = function() {
         if (e.key === 'Escape') finish();
     };
     document.addEventListener('keydown', escHandler);
+    headerCloseBtn.addEventListener('click', finish);
     closeBtn.addEventListener('click', finish);
 
     requestAnimationFrame(() => overlay.classList.add('show'));
-    setTimeout(() => timeControl.select.focus(), 100);
+    setTimeout(() => visualTab.focus(), 100);
 };
 
 proto._initExtraMenu = function() {
