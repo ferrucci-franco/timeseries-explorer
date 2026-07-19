@@ -50,8 +50,14 @@
 !/build/icons/**
 !/test-files/
 !/test-files/csv/
-!/test-files/csv/date-parsing-options/
-!/test-files/csv/date-parsing-options/**
+!/test-files/csv/**
+# Generated locally by scripts/gen-*-large-csv.py (large, regenerable).
+/test-files/csv/correlation-large.csv
+/test-files/csv/missing-large.csv
+!/test-files/excel/
+!/test-files/excel/**
+!/test-files/parquet/
+!/test-files/parquet/**
 !/test-files/live_update/
 !/test-files/live_update/*.py
 !/test-files/pypsa/

@@ -561,9 +561,15 @@ for (const path of fixtureFiles()) {
 const tesla = rows.find(row => row.path.endsWith('09_tesla_stock_dirty.csv'));
 assert(tesla?.skippedInvalidTimeRows >= 1, 'Tesla dirty fixture should skip at least one invalid time row');
 
+// bench/data is git-ignored (large, regenerable), so this fixture only exists
+// on machines that generated it — skip instead of failing elsewhere.
 const datacenters = rows.find(row => row.path.endsWith('datacenters_load_2030.csv'));
-assert(datacenters?.timeKind === 'datetime', 'datacenters fixture should parse as datetime');
-assert(datacenters?.vars === 2, 'datacenters fixture should expose two variables');
+if (datacenters) {
+    assert(datacenters.timeKind === 'datetime', 'datacenters fixture should parse as datetime');
+    assert(datacenters.vars === 2, 'datacenters fixture should expose two variables');
+} else {
+    console.warn('SKIP: bench/data/datacenters_load_2030.csv not present (git-ignored bench data)');
+}
 
 const airline = rows.find(row => row.path.endsWith('01_airline_passengers_monthly.csv'));
 assert(airline?.strategy === 'partial-year-month', 'Airline monthly fixture should parse YYYY-MM as year-month datetime');
