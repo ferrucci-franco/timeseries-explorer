@@ -50,6 +50,7 @@
     "test:pypsa-session": "node scripts/test-pypsa-session.mjs",
     "test:session-project": "node scripts/test-session-project-save.mjs",
     "test:session-state": "node scripts/test-session-state-roundtrip.mjs",
+    "test:help-layout": "node scripts/test-help-layout.mjs",
     "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs",
     "test:phase2d": "node scripts/test-phase2d.mjs"
   },

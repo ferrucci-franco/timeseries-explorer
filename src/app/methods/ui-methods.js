@@ -8,6 +8,38 @@ import {
     OPENMODELICA_MODELING_ICON_PATH,
 } from '../constants.js';
 
+const HELP_TOPICS = [
+    { section: '1', icon: 'compass', color: '#3b82f6' },
+    { section: '2', icon: 'chart', color: '#8b5cf6' },
+    { section: '5', icon: 'animation', color: '#ec4899' },
+    { section: '3', icon: 'folder', color: '#f59e0b' },
+    { section: '10', icon: 'align', color: '#14b8a6' },
+    { section: '4', icon: 'layers', color: '#06b6d4' },
+    { section: '11', icon: 'save', color: '#22c55e' },
+    { section: '6', icon: 'reload', color: '#0ea5e9' },
+    { section: '7', icon: 'formula', color: '#f97316' },
+    { section: '8', icon: 'temporary', color: '#a855f7' },
+    { section: '9', icon: 'cursor', color: '#ef4444' },
+];
+
+const HELP_ICON_PATHS = {
+    compass: '<circle cx="12" cy="12" r="8.5"/><path d="m15.5 8.5-2.1 4.9-4.9 2.1 2.1-4.9 4.9-2.1Z"/>',
+    chart: '<path d="M4 19.5V5m0 14.5h16"/><path d="m7 15 3-3 2.5 2 4.5-6 2 1.5"/>',
+    animation: '<path d="M7.5 6.5A7 7 0 0 1 19 10l1.5-1.5M20 10h-4"/><path d="M16.5 17.5A7 7 0 0 1 5 14l-1.5 1.5M4 14h4"/><circle cx="12" cy="12" r="2"/>',
+    folder: '<path d="M3.5 7.5h6l2-2h9v13h-17z"/><path d="M3.5 9.5h17"/>',
+    align: '<path d="M4 7h10m3 0h3M4 17h3m3 0h10"/><circle cx="15.5" cy="7" r="1.5"/><circle cx="8.5" cy="17" r="1.5"/>',
+    layers: '<path d="m12 4 8 4-8 4-8-4 8-4Z"/><path d="m4 12 8 4 8-4M4 16l8 4 8-4"/>',
+    save: '<path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/>',
+    reload: '<path d="M19 8a7.5 7.5 0 0 0-13-2L4 8m0 0V4m0 4h4"/><path d="M5 16a7.5 7.5 0 0 0 13 2l2-2m0 0v4m0-4h-4"/>',
+    formula: '<path d="M15.5 4.5h-2a3 3 0 0 0-3 3v9a3 3 0 0 1-3 3h-2"/><path d="M7.5 11.5h6M16 14l4 4m0-4-4 4"/>',
+    temporary: '<path d="M3.5 8h6l2-2h9v12.5h-17z"/><circle cx="16" cy="14" r="3.5"/><path d="M16 12v2.2l1.4.8"/>',
+    cursor: '<circle cx="12" cy="12" r="5"/><path d="M12 3v4m0 10v4M3 12h4m10 0h4"/>',
+};
+
+function helpIcon(name, className = 'help-topic-icon-svg') {
+    return `<svg class="${className}" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${HELP_ICON_PATHS[name] || HELP_ICON_PATHS.compass}</svg>`;
+}
+
 export function installUiMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.initEventListeners = function() {
@@ -1435,48 +1467,153 @@ proto._loadScriptOnce = function(src) {
 };
 
 proto.showHelp = function() {
-    const sections = ['1','2','5','3','10','4','11','6','7','8','9'];
+    const existingHelp = document.querySelector('.help-backdrop');
+    if (existingHelp) {
+        const existingClose = existingHelp.querySelector('.help-modal-close');
+        if (existingClose) existingClose.click();
+        else existingHelp.remove();
+    }
+    const previouslyFocused = document.activeElement;
 
     const backdrop = document.createElement('div');
     backdrop.className = 'help-backdrop';
 
     const modal = document.createElement('div');
     modal.className = 'help-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'help-modal-title');
 
     const header = document.createElement('div');
     header.className = 'help-modal-header';
+    const heading = document.createElement('div');
+    heading.className = 'help-modal-heading';
+    const headingIcon = document.createElement('span');
+    headingIcon.className = 'help-modal-heading-icon';
+    headingIcon.innerHTML = helpIcon('compass', 'help-modal-heading-svg');
     const title = document.createElement('h2');
+    title.id = 'help-modal-title';
     title.textContent = i18n.t('helpTitle');
     const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
     closeBtn.className = 'help-modal-close';
-    closeBtn.textContent = '✕';
     closeBtn.title = i18n.t('helpClose');
-    header.append(title, closeBtn);
+    closeBtn.setAttribute('aria-label', i18n.t('helpClose'));
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+    heading.append(headingIcon, title);
+    header.append(heading, closeBtn);
+
+    const main = document.createElement('div');
+    main.className = 'help-modal-main';
+
+    const sidebar = document.createElement('nav');
+    sidebar.className = 'help-topic-sidebar';
+    sidebar.setAttribute('aria-label', i18n.t('helpTitle'));
+    sidebar.setAttribute('role', 'tablist');
 
     const body = document.createElement('div');
     body.className = 'help-modal-body';
 
-    for (const n of sections) {
-        const sec = document.createElement('div');
-        sec.className = 'help-section';
-        const h3 = document.createElement('h3');
-        h3.textContent = i18n.t(`helpSec${n}Title`);
-        const p = document.createElement('p');
-        p.innerHTML = i18n.t(`helpSec${n}Body`);
-        sec.append(h3, p);
-        body.appendChild(sec);
-    }
+    const tabs = [];
+    const panels = [];
+    const selectTopic = (index, focus = false) => {
+        tabs.forEach((tab, tabIndex) => {
+            const selected = tabIndex === index;
+            tab.classList.toggle('active', selected);
+            tab.setAttribute('aria-selected', String(selected));
+            tab.tabIndex = selected ? 0 : -1;
+            panels[tabIndex].hidden = !selected;
+        });
+        if (focus) tabs[index]?.focus();
+        body.scrollTop = 0;
+    };
 
-    modal.append(header, body);
+    HELP_TOPICS.forEach((topic, index) => {
+        const sectionId = `help-section-${topic.section}`;
+        const tabId = `help-topic-${topic.section}`;
+        const label = i18n.t(`helpSec${topic.section}Title`);
+        const tab = document.createElement('button');
+        tab.type = 'button';
+        tab.id = tabId;
+        tab.className = 'help-topic-button';
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('aria-controls', sectionId);
+        tab.style.setProperty('--help-topic-color', topic.color);
+        tab.innerHTML = `<span class="help-topic-icon">${helpIcon(topic.icon)}</span><span class="help-topic-label"></span>`;
+        tab.querySelector('.help-topic-label').textContent = label;
+        tab.addEventListener('click', () => selectTopic(index));
+        tab.addEventListener('keydown', event => {
+            let next = null;
+            if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % HELP_TOPICS.length;
+            else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index - 1 + HELP_TOPICS.length) % HELP_TOPICS.length;
+            else if (event.key === 'Home') next = 0;
+            else if (event.key === 'End') next = HELP_TOPICS.length - 1;
+            if (next == null) return;
+            event.preventDefault();
+            selectTopic(next, true);
+            tabs[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        });
+
+        const sec = document.createElement('section');
+        sec.id = sectionId;
+        sec.className = 'help-section';
+        sec.setAttribute('role', 'tabpanel');
+        sec.setAttribute('aria-labelledby', tabId);
+        sec.tabIndex = 0;
+        sec.style.setProperty('--help-topic-color', topic.color);
+        const sectionHeading = document.createElement('div');
+        sectionHeading.className = 'help-section-heading';
+        const sectionIcon = document.createElement('span');
+        sectionIcon.className = 'help-section-icon';
+        sectionIcon.innerHTML = helpIcon(topic.icon);
+        const h3 = document.createElement('h3');
+        h3.textContent = label;
+        sectionHeading.append(sectionIcon, h3);
+        const content = document.createElement('div');
+        content.className = 'help-section-content';
+        content.innerHTML = i18n.t(`helpSec${topic.section}Body`);
+        sec.append(sectionHeading, content);
+        sidebar.appendChild(tab);
+        body.appendChild(sec);
+        tabs.push(tab);
+        panels.push(sec);
+    });
+
+    main.append(sidebar, body);
+    modal.append(header, main);
     backdrop.appendChild(modal);
     document.body.appendChild(backdrop);
+    selectTopic(0);
 
-    const close = () => backdrop.remove();
+    const close = () => {
+        document.removeEventListener('keydown', onDocumentKeydown);
+        backdrop.remove();
+        previouslyFocused?.focus?.();
+    };
+    const onDocumentKeydown = event => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            close();
+            return;
+        }
+        if (event.key !== 'Tab') return;
+        const focusable = [...modal.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+            .filter(element => !element.hidden && element.offsetParent !== null);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    };
     closeBtn.addEventListener('click', close);
     backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-    document.addEventListener('keydown', function onKey(e) {
-        if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
-    });
+    document.addEventListener('keydown', onDocumentKeydown);
+    requestAnimationFrame(() => tabs[0]?.focus());
 };
 
 // ─── Drag-and-drop file loading ────────────────────────────────
