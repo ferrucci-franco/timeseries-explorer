@@ -464,7 +464,7 @@ highResolutionOverlay.files.set(secondaryId, highResolutionSecondary);
 highResolutionOverlay._isHighResolutionGeneratedCalendarTime = () => true;
 highResolutionOverlay._timeOriginMsForVar = fileId => Date.UTC(2025, 0, fileId === secondaryId ? 2 : 1, 0);
 highResolutionOverlay._calendarFractionDigits = () => 6;
-highResolutionOverlay._getTransformedTimeData = () => Float64Array.from(HOURS, hour => hour * 60 * 60);
+highResolutionOverlay._getTransformedTimeDataForVariable = () => Float64Array.from(HOURS, hour => hour * 60 * 60);
 highResolutionOverlay._getTransformedVariableData = () => Float64Array.from([1, 2, 3, 4, 5]);
 const highResolutionOverlayTrace = highResolutionOverlay._buildTimeTrace(
     overlayPlot.traces[1],

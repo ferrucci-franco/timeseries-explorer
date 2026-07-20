@@ -39,6 +39,7 @@ class Harness {
     _hasTruthfulGapSeries(fileId) { return !this._sampled.has(fileId); }
     _getTimeVar() { return {}; }
     _getTransformedTimeData(fileId) { return this._times[fileId] || []; }
+    _getTransformedTimeDataForVariable(fileId) { return this._times[fileId] || []; }
     _getTransformedVariableData(fileId, varName) { return this._values[`${fileId}|${varName}`] || []; }
     _coerceAxisValue(v) { return Number(v); }
     _plotlyTimeValue(fileId, v) { return v; }
