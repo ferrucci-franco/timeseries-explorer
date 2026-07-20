@@ -7,6 +7,7 @@ import {
     DYMOLA_LOGO_ICON_PATH,
     EXAMPLES,
     OPENMODELICA_MODELING_ICON_PATH,
+    RESET_LAYOUT_ICON_SVG,
 } from '../constants.js';
 
 const HELP_TOPICS = [
@@ -50,6 +51,8 @@ function helpIcon(name, className = 'help-topic-icon-svg') {
 export function installUiMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.initEventListeners = function() {
+    const resetLayoutIcon = document.querySelector('#reset-layout .reset-layout-icon');
+    if (resetLayoutIcon) resetLayoutIcon.innerHTML = RESET_LAYOUT_ICON_SVG;
     // The browser menu does not provide app actions and can obscure the UI.
     // Prevent only the native default: target-level contextmenu handlers still
     // receive the event and can open the app's own contextual menus.
@@ -220,7 +223,9 @@ proto.initEventListeners = function() {
     this._syncHoverCornerPicker();
 
     document.getElementById('reset-layout').addEventListener('click', async () => {
-        const ok = await Modal.confirm(i18n.t('resetLayoutWarning'), { icon: '⬜' });
+        const ok = await Modal.confirm(i18n.t('resetLayoutWarning'), {
+            iconHtml: RESET_LAYOUT_ICON_SVG,
+        });
         if (ok) this.layoutManager.reset();
     });
 
@@ -2048,17 +2053,41 @@ proto.showSupportedFormats = function() {
 
 proto.initDragAndDrop = function() {
     const dropZone = document.getElementById('drop-zone');
+    let dragDepth = 0;
+    let wasInitiallyVisible = dropZone.classList.contains('active');
+    const containsFiles = event => Array.from(event.dataTransfer?.types || []).includes('Files');
+    const hideDropTarget = () => {
+        dragDepth = 0;
+        dropZone.classList.remove('dragging', 'subsequent-drop', 'initial-file-drop');
+        if (!wasInitiallyVisible && this.files?.size) dropZone.classList.remove('active');
+    };
 
-    dropZone.addEventListener('dragover', (e) => {
+    // The initial drop zone is hidden after the first load, so file drops must
+    // be captured at document level to keep working while plots are visible.
+    document.addEventListener('dragenter', (e) => {
+        if (!containsFiles(e)) return;
         e.preventDefault();
-        dropZone.classList.add('dragging');
+        if (dragDepth === 0) wasInitiallyVisible = dropZone.classList.contains('active');
+        dragDepth++;
+        dropZone.classList.add('subsequent-drop');
+        dropZone.classList.toggle('initial-file-drop', !this.files?.size);
+        dropZone.classList.add('active', 'dragging');
     });
-
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
-
-    dropZone.addEventListener('drop', async (e) => {
+    document.addEventListener('dragover', (e) => {
+        if (!containsFiles(e)) return;
         e.preventDefault();
-        dropZone.classList.remove('dragging');
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    });
+    document.addEventListener('dragleave', (e) => {
+        if (dragDepth === 0) return;
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) hideDropTarget();
+    });
+    window.addEventListener('blur', hideDropTarget);
+    document.addEventListener('drop', async (e) => {
+        if (!containsFiles(e)) return;
+        e.preventDefault();
+        hideDropTarget();
         const files = await this._getDroppedResultFiles(e.dataTransfer);
         if (!files.length) { alert(i18n.t('invalidFile')); return; }
         await this.loadFiles(files);

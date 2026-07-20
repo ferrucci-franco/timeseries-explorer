@@ -103,6 +103,7 @@ class OpenModelicaViewer {
         document.body.classList.add(`theme-${this.theme}`);
         document.querySelector('#theme-toggle .icon').textContent = this.theme === 'light' ? '🌙' : '☀️';
         this.plotManager.setTheme(this.theme);
+        globalThis.omvDesktop?.setTheme?.(this.theme);
     }
 
     // ─── Helpers ──────────────────────────────────────────────────
@@ -155,19 +156,27 @@ class OpenModelicaViewer {
 
     _runtimeNoticeHtml(caps) {
         const noticeMode = caps.isDesktop ? 'Desktop' : 'Web';
-        const mode = i18n.t(`runtimeNotice${noticeMode}Kicker`);
         const title = i18n.t(`runtimeNotice${noticeMode}Title`);
         const body = i18n.t(`runtimeNotice${noticeMode}Body`);
         const privacy = i18n.t('runtimeNoticePrivacy');
         const desktop = caps.isDesktop ? '' : i18n.t('runtimeNoticeDesktopDownload');
+        const desktopTitle = this._escapeHtml(i18n.t('runtimeNoticeDesktopTitle'));
+        const escapedDesktop = this._escapeHtml(desktop);
+        const desktopTitleIndex = escapedDesktop.toLocaleLowerCase().indexOf(desktopTitle.toLocaleLowerCase());
+        const desktopHtml = desktopTitleIndex < 0 ? escapedDesktop : [
+            escapedDesktop.slice(0, desktopTitleIndex),
+            '<strong>',
+            escapedDesktop.slice(desktopTitleIndex, desktopTitleIndex + desktopTitle.length),
+            '</strong>',
+            escapedDesktop.slice(desktopTitleIndex + desktopTitle.length),
+        ].join('');
         const featureList = i18n.t(`runtimeNotice${noticeMode}Features`);
         const features = (Array.isArray(featureList) ? featureList : []).map(feature => `<li>${this._escapeHtml(feature)}</li>`).join('');
         return `
-            <div class="light-notice-kicker">${mode}</div>
             <h3>${title}</h3>
             <p>${this._escapeHtml(body)}</p>
             <p class="light-notice-privacy">${this._escapeHtml(privacy)}</p>
-            ${desktop ? `<p>${this._escapeHtml(desktop)}</p>` : ''}
+            ${desktop ? `<p>${desktopHtml}</p>` : ''}
             ${features ? `<ul>${features}</ul>` : ''}
         `;
     }

@@ -30,7 +30,8 @@ const Modal = {
             // Icon
             const icon = document.createElement('div');
             icon.className = 'modal-icon';
-            icon.textContent = options.icon || '⚠️';
+            if (options.iconHtml) icon.innerHTML = options.iconHtml;
+            else icon.textContent = options.icon || '⚠️';
             content.appendChild(icon);
 
             // Message

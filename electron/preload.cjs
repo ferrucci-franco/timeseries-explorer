@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('omvDesktop', {
   platform: process.platform,
+  setTheme: theme => ipcRenderer.send('omv:set-theme', theme),
   selectFilePath: options => ipcRenderer.invoke('omv:select-file-path', options || {}),
   selectFilePaths: options => ipcRenderer.invoke('omv:select-file-paths', options || {}),
   selectParquetOutputPath: options => ipcRenderer.invoke('omv:select-parquet-output-path', options || {}),

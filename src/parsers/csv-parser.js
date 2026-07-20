@@ -70,9 +70,7 @@ export default class CsvParser {
         const hasHeader = table.hasHeader;
         const headerRow = rows[table.headerIndex] || [];
         const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
-        if (rawHeaders.length < 2) {
-            throw new Error('CSV must contain at least two columns.');
-        }
+        if (rawHeaders.length < 1) throw new Error('CSV must contain at least one column.');
 
         const dataRows = rows.slice(table.dataStartIndex)
             .filter(row => row.some(cell => cell !== '') && row.length === rawHeaders.length);
@@ -235,9 +233,7 @@ export default class CsvParser {
         const hasHeader = table.hasHeader;
         const headerRow = rows[table.headerIndex] || [];
         const rawHeaders = hasHeader ? headerRow : headerRow.map((_, index) => `column_${index + 1}`);
-        if (rawHeaders.length < 2) {
-            throw new Error('CSV sample must contain at least two columns.');
-        }
+        if (rawHeaders.length < 1) throw new Error('CSV sample must contain at least one column.');
 
         const dataRows = rows
             .slice(table.dataStartIndex)

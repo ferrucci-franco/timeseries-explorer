@@ -26,9 +26,9 @@
 }
 
 .drop-zone.dragging {
-    background-color: var(--primary-color);
-    opacity: 0.1;
+    background-color: var(--drop-zone-bg);
     border-color: var(--primary-color);
+    box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--primary-color) 28%, transparent);
 }
 
 .drop-zone-content {
@@ -2267,12 +2267,72 @@ body.cursor-box-dragging {
 }
 
 .file-transform-step-row input {
-    flex: 1 1 auto;
-    min-width: 0;
+    width: auto;
+    flex: 1 1 0;
+    min-width: 5rem;
+}
+
+.drop-zone-drag-card {
+    display: none;
+}
+
+/* Compact target used whenever files are being dragged over the app. It keeps
+   existing plots visible and deliberately excludes all initial welcome copy. */
+.drop-zone.subsequent-drop {
+    border: 0;
+    background: color-mix(in srgb, var(--bg-primary) 28%, transparent);
+    box-shadow: none;
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+}
+
+.drop-zone.subsequent-drop .drop-zone-content {
+    display: none;
+}
+
+.drop-zone.subsequent-drop .drop-zone-drag-card {
+    position: relative;
+    z-index: 1;
+    display: block;
+    text-align: center;
+    width: min(420px, calc(100vw - 3rem));
+    padding: 2rem 2.5rem;
+    border: 2px dashed color-mix(in srgb, var(--primary-color) 78%, var(--border-color));
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--bg-primary) 94%, transparent);
+    box-shadow: 0 18px 55px rgba(0, 0, 0, 0.2), 0 0 0 5px color-mix(in srgb, var(--primary-color) 12%, transparent);
+}
+
+.drop-zone.subsequent-drop .drop-zone-drag-card .icon {
+    display: block;
+    font-size: 3.25rem;
+    margin-bottom: 0.65rem;
+}
+
+.drop-zone.subsequent-drop .drop-zone-drag-card h2 {
+    margin: 0;
+    font-size: 1.5rem;
+}
+
+.drop-zone.subsequent-drop.initial-file-drop {
+    background: var(--drop-zone-bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.drop-zone.subsequent-drop.initial-file-drop .drop-zone-content {
+    display: block;
+    position: absolute;
+    filter: blur(3px);
+}
+
+.drop-zone.subsequent-drop.initial-file-drop .drop-zone-drag-card {
+    background: var(--bg-primary);
 }
 
 .file-transform-step-row select {
-    flex: 0 0 auto;
+    width: 5.25rem;
+    flex: 0 0 5.25rem;
 }
 
 .fft-range-grid,

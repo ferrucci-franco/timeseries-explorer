@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } = require('electron');
 const crypto = require('node:crypto');
 const http = require('node:http');
 const fs = require('node:fs');
@@ -30,6 +30,14 @@ let temporaryParquetSessionDir = null;
 if (process.env.OMV_REMOTE_DEBUGGING_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', String(process.env.OMV_REMOTE_DEBUGGING_PORT));
 }
+
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+
+ipcMain.on('omv:set-theme', (_event, theme) => {
+  nativeTheme.themeSource = theme === 'dark' ? 'dark' : 'light';
+});
 
 function desktopReadErrorPayload(err) {
   const code = err?.code || '';

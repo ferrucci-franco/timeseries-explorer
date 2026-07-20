@@ -236,6 +236,12 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     stroke-linecap: round;
 }
 
+.reset-layout-icon .reset-layout-glyph {
+    width: 1.3rem;
+    height: 1.3rem;
+    display: block;
+}
+
 .icon-btn:hover:not(:disabled) {
     background-color: var(--hover-bg);
     transform: translateY(-1px);

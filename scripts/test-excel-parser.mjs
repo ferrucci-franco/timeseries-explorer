@@ -55,6 +55,21 @@ async function run() {
         makeExcelFixtures();
     }
 
+    {
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+            ['Signal'],
+            [10],
+            [20],
+            [30],
+        ]), 'Single column');
+        const text = sheetToCsvText(workbook, 'Single column');
+        const data = await parser.parse(csvTextToBuffer(text));
+        assert(data.metadata.timeKind === 'index', `single-column: expected generated index, got ${data.metadata.timeKind}`);
+        assert(data.variables.index?.data.join(',') === '0,1,2', 'single-column: expected zero-based index');
+        assert(data.variables.Signal?.data.join(',') === '10,20,30', 'single-column: expected Signal values');
+    }
+
     for (const filename of ['basic-datetime.xlsx', 'basic-datetime.ods', 'basic-datetime.xls']) {
         const { data } = await parseSheet(filename);
         // CsvParser extracts inline "(V)" units, so variables lose the suffix.

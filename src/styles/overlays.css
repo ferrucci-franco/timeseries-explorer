@@ -77,6 +77,13 @@
     object-fit: contain;
 }
 
+.modal-icon .reset-layout-glyph {
+    display: block;
+    width: 3rem;
+    height: 3rem;
+    margin: 0 auto;
+}
+
 .modal-title {
     font-size: 1.15rem;
     font-weight: 600;

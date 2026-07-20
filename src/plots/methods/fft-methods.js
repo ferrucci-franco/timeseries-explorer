@@ -226,7 +226,9 @@ proto._createFftChart = function(panelId, panelEl) {
         Plotly.newPlot(spectrumDiv, [], this._buildFftSpectrumLayout(plot), config),
     ]).then(() => {
         this._refreshActionBtns(panelId);
-        const viewPromise = restoreView ? this._restorePlotView(plot, restoreView) : Promise.resolve();
+        const viewPromise = restoreView
+            ? this._restorePlotView(plot, restoreView)
+            : this._autoScalePlotTimeOnly(plot);
         Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
         this._installFftPlotHandlers(panelId, plot);
         // Cursor handlers first: their capture listeners must run before the
@@ -250,7 +252,11 @@ proto._createFftChart = function(panelId, panelEl) {
             finalize: () => { if (plot.cursorsSpectrum?.enabled) this._syncCursorDisplay(panelId, plot); },
         });
         this._syncCursorDisplay(panelId, plot);
-        this._scheduleFftRecompute(panelId, { immediate: true });
+        this._scheduleFftRecompute(panelId, {
+            immediate: true,
+            preserveSpectrumX: !!restoreView,
+            preserveSpectrumY: !!restoreView,
+        });
         let timer;
         const ro = new ResizeObserver(() => {
             clearTimeout(timer);
@@ -2179,7 +2185,10 @@ proto._autoScalePlotTimeOnly = function(plot) {
         update['xaxis.autorange'] = false;
     } else update['xaxis.autorange'] = true;
     if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
-    else update['yaxis.autorange'] = true;
+    else {
+        update['yaxis.range'] = [-1, 1];
+        update['yaxis.autorange'] = false;
+    }
     const tickRange = xExtent ? [xExtent.min, xExtent.max] : null;
     return Plotly.relayout(plot.div, update)
         .then(() => this._refreshElapsedDateTimeAxisTicks(plot, tickRange));

@@ -2,7 +2,7 @@ const translations = {
         en: {
             // App title
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'CSV, MATLAB, OpenModelica/Dymola viewer',
+            appSubtitle: 'CSV, Excel, MATLAB, OpenModelica/Dymola viewer',
             appSubtitleMorePrefix: 'and',
             appSubtitleMoreLink: 'more!',
             supportedFormatsTitle: 'Supported formats',
@@ -21,7 +21,7 @@ const translations = {
             </div>`,
             runtimeNoticeWebKicker: 'Web version',
             runtimeNoticeWebTitle: 'Web version',
-            runtimeNoticeWebBody: 'This version works directly in your browser. You can open and plot files that you select manually.',
+            runtimeNoticeWebBody: 'This version works directly in your browser.',
             runtimeNoticeDesktopKicker: 'Desktop version',
             runtimeNoticeDesktopTitle: 'Desktop version',
             runtimeNoticeDesktopBody: 'This version runs as an app on your computer, with better local file access for live-updating files, very large files, offline work, and Parquet export when available.',
@@ -199,6 +199,7 @@ const translations = {
 
             // Drop zone
             dragFile: 'Drag & drop a result or text file here',
+            dropFilesToAdd: 'Drop files to open them',
             or: 'or',
             selectFile: 'Select File',
 
@@ -1114,7 +1115,7 @@ const translations = {
         fr: {
             // App title
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visualiseur CSV, MATLAB et OpenModelica/Dymola',
+            appSubtitle: 'Visualiseur CSV, Excel, MATLAB et OpenModelica/Dymola',
             appSubtitleMorePrefix: 'et',
             appSubtitleMoreLink: 'plus !',
             supportedFormatsTitle: 'Formats pris en charge',
@@ -1133,7 +1134,7 @@ const translations = {
             </div>`,
             runtimeNoticeWebKicker: 'Version web',
             runtimeNoticeWebTitle: 'Version web',
-            runtimeNoticeWebBody: 'Cette version fonctionne directement dans le navigateur. Vous pouvez ouvrir et tracer les fichiers que vous selectionnez manuellement.',
+            runtimeNoticeWebBody: 'Cette version fonctionne directement dans le navigateur.',
             runtimeNoticeDesktopKicker: 'Version bureau',
             runtimeNoticeDesktopTitle: 'Version bureau',
             runtimeNoticeDesktopBody: 'Cette version fonctionne comme une application sur votre ordinateur, avec un meilleur acces aux fichiers locaux pour les fichiers mis a jour en direct, les tres gros fichiers, le travail hors ligne et l export Parquet lorsque disponible.',
@@ -1379,6 +1380,7 @@ const translations = {
 
             // Drop zone
             dragFile: 'Glissez-déposez un fichier de résultats ou texte ici',
+            dropFilesToAdd: 'Déposez les fichiers pour les ouvrir',
             or: 'ou',
             selectFile: 'Sélectionner un fichier',
 
@@ -2226,7 +2228,7 @@ const translations = {
         },
         es: {
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visor de CSV, MATLAB y OpenModelica/Dymola',
+            appSubtitle: 'Visor de CSV, Excel, MATLAB y OpenModelica/Dymola',
             appSubtitleMorePrefix: 'y',
             appSubtitleMoreLink: 'más!',
             supportedFormatsTitle: 'Formatos compatibles',
@@ -2245,7 +2247,7 @@ const translations = {
             </div>`,
             runtimeNoticeWebKicker: 'Version web',
             runtimeNoticeWebTitle: 'Version web',
-            runtimeNoticeWebBody: 'Esta version funciona directamente en el navegador. Puedes abrir y graficar archivos que selecciones manualmente.',
+            runtimeNoticeWebBody: 'Esta version funciona directamente en el navegador.',
             runtimeNoticeDesktopKicker: 'Version de escritorio',
             runtimeNoticeDesktopTitle: 'Version de escritorio',
             runtimeNoticeDesktopBody: 'Esta version funciona como una app en tu computadora, con mejor acceso a archivos locales para archivos que se actualizan en vivo, archivos muy grandes, trabajo sin conexion y exportacion a Parquet cuando este disponible.',
@@ -2487,6 +2489,7 @@ const translations = {
             compactFormatHelpTitle: 'Que es este formato?',
             compactFormatHelpBody: 'Parquet es un formato compacto para archivos de tablas. La app puede convertir un CSV grande a Parquet para leer los datos en partes, en vez de cargar todo el archivo de texto en RAM. Esto suele ser mas rapido y mas amable con la memoria en series temporales muy grandes. Si no lo conoces o no lo necesitas, puedes ignorar la recomendacion; CSV sigue funcionando dentro de los limites configurados.',
             dragFile: 'Arrastra y suelta un archivo de resultados o texto aquí',
+            dropFilesToAdd: 'Suelta los archivos para abrirlos',
             or: 'o',
             selectFile: 'Seleccionar archivo',
             fileLoaded: 'Archivo cargado correctamente',
@@ -3308,7 +3311,7 @@ const translations = {
         },
         it: {
             appTitle: 'Time Series Explorer',
-            appSubtitle: 'Visualizzatore CSV, MATLAB e OpenModelica/Dymola',
+            appSubtitle: 'Visualizzatore CSV, Excel, MATLAB e OpenModelica/Dymola',
             appSubtitleMorePrefix: 'e',
             appSubtitleMoreLink: 'altro!',
             supportedFormatsTitle: 'Formati supportati',
@@ -3327,7 +3330,7 @@ const translations = {
             </div>`,
             runtimeNoticeWebKicker: 'Versione web',
             runtimeNoticeWebTitle: 'Versione web',
-            runtimeNoticeWebBody: 'Questa versione funziona direttamente nel browser. Puoi aprire e tracciare i file selezionati manualmente.',
+            runtimeNoticeWebBody: 'Questa versione funziona direttamente nel browser.',
             runtimeNoticeDesktopKicker: 'Versione desktop',
             runtimeNoticeDesktopTitle: 'Versione desktop',
             runtimeNoticeDesktopBody: 'Questa versione funziona come app sul computer, con un accesso migliore ai file locali per file aggiornati in tempo reale, file molto grandi, lavoro offline ed esportazione Parquet quando disponibile.',
@@ -3569,6 +3572,7 @@ const translations = {
             compactFormatHelpTitle: 'Che formato e?',
             compactFormatHelpBody: 'Parquet e un formato compatto per file tabellari. L app puo convertire un CSV grande in Parquet per leggere i dati a pezzi, invece di caricare tutto il file di testo in RAM. Di solito e piu rapido e usa meno memoria con serie temporali molto grandi. Se non lo conosci o non ti serve, puoi ignorare la raccomandazione; CSV funziona comunque entro i limiti configurati.',
             dragFile: 'Trascina qui un file risultati o testo',
+            dropFilesToAdd: 'Rilascia i file per aprirli',
             or: 'oppure',
             selectFile: 'Seleziona file',
             fileLoaded: 'File caricato correttamente',

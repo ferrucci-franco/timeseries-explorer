@@ -545,6 +545,9 @@ class PlotManager {
         if (preserveTimeTraces) {
             if (leavingView) plot._modeViews[previousMode] = leavingView;
             restoreView = plot._modeViews[mode] || leavingView;
+            // Entering Fourier is an analysis action: show the complete finite
+            // signal instead of inheriting a stale/manual zoom.
+            if (mode === 'fft') restoreView = null;
         } else {
             // A family change resets the traces, so old per-mode views no longer
             // describe the same data.
@@ -2384,13 +2387,19 @@ class PlotManager {
             }
             else update['xaxis.autorange'] = true;
             if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
-            else update['yaxis.autorange'] = true;
+            else {
+                // Plotly can loop indefinitely while autoranging an all-NaN
+                // trace. An explicit empty range is safe and deterministic.
+                update['yaxis.range'] = [-1, 1];
+                update['yaxis.autorange'] = false;
+            }
             if (plot.timeseriesY2Enabled) {
                 if (y2Extent) {
                     update['yaxis2.range'] = this._padRange(y2Extent.min, y2Extent.max);
                     update['yaxis2.autorange'] = false;
                 } else {
-                    update['yaxis2.autorange'] = true;
+                    update['yaxis2.range'] = [-1, 1];
+                    update['yaxis2.autorange'] = false;
                 }
             }
             const tickRange = xExtent ? [xExtent.min, xExtent.max] : null;
