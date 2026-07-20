@@ -1294,6 +1294,10 @@
     left: 0;
     z-index: 4;
     width: 3.2rem;
+    /* The auto table layout can squeeze this column below its width when the
+       grid overflows; the next sticky column is anchored at left: 3.2rem, so
+       anything narrower opens a gap between them. */
+    min-width: 3.2rem;
     max-width: 3.2rem;
     background: var(--bg-secondary);
     color: var(--text-secondary);
