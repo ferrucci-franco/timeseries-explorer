@@ -3,9 +3,11 @@
  * JS parser can be tested against the real subsystem layout without needing
  * MATLAB (scipy cannot write class objects).
  *
- * Two fixtures are produced, covering the two serialization forms MATLAB uses:
+ * Three fixtures are produced, covering the serialization forms MATLAB uses:
  *   - timetable-v5.mat: a `timetable`, whose tabular fields live in one nested
  *     struct property and whose datetime row-times are the axis.
+ *   - regular-timetable-v5.mat: a `timetable` whose regularly spaced row-times
+ *     are stored compactly as an origin plus step size/sample rate.
  *   - table-v5.mat: a `table`, whose fields (data/varnames/nrows/…) are stored
  *     directly on the object and whose first column is a datetime variable.
  *
@@ -201,6 +203,45 @@ function timetableFixture() {
     });
 }
 
+// ---- regular timetable fixture (compact row-times form) -------------------
+
+function regularTimetableFixture() {
+    const rows = 5;
+    const start = Date.UTC(2021, 0, 6, 0, 0, 0);
+    const tabular = structMatrix('', [1, 1], {
+        data: cellMatrix('', [1, 1], [doubleMatrix('', [rows, 1], [10, 20, 30, 40, 50])]),
+        varNames: cellMatrix('', [1, 1], [charMatrix('', 'solar_kW')]),
+        dimNames: cellMatrix('', [1, 2], [charMatrix('', 'date'), charMatrix('', 'Variables')]),
+        numRows: doubleMatrix('', [1, 1], [rows]),
+        numVars: doubleMatrix('', [1, 1], [1]),
+        rowTimes: structMatrix('', [1, 1], {
+            origin: objectReference('', 2, 1),
+            specifiedAsRate: uint8Matrix('', [1, 1], [0]),
+            stepSize: objectReference('', 3, 2),
+            sampleRate: doubleMatrix('', [1, 1], [1 / 60]),
+        }),
+    });
+    return buildMcosFile({
+        topVar: 'solar', className: 'timetable', topObjectId: 1,
+        names: ['', 'any', 'data', 'datetime', 'millis', 'duration', 'timetable'],
+        classes: [
+            { name: 'datetime', nameIdx: 3 },
+            { name: 'duration', nameIdx: 5 },
+            { name: 'timetable', nameIdx: 6 },
+        ],
+        objects: [
+            { classId: 3, seg1: [{ nameIdx: 1, flag: 1, value: 2 }] },
+            { classId: 1, seg2: [{ nameIdx: 2, flag: 1, value: 0 }] },
+            { classId: 2, seg2: [{ nameIdx: 4, flag: 1, value: 1 }] },
+        ],
+        valueCells: [
+            doubleMatrix('', [1, 1], [start]),
+            doubleMatrix('', [1, 1], [60000]),
+            tabular,
+        ],
+    });
+}
+
 // ---- table fixture (direct-property form, datetime column) -----------------
 
 function tableFixture() {
@@ -244,7 +285,9 @@ function tableFixture() {
 }
 
 const timetablePath = fileURLToPath(new URL('../test-files/matlab/timetable-v5.mat', import.meta.url));
+const regularTimetablePath = fileURLToPath(new URL('../test-files/matlab/regular-timetable-v5.mat', import.meta.url));
 const tablePath = fileURLToPath(new URL('../test-files/matlab/table-v5.mat', import.meta.url));
 writeFileSync(timetablePath, timetableFixture());
+writeFileSync(regularTimetablePath, regularTimetableFixture());
 writeFileSync(tablePath, tableFixture());
-console.log(`Generated MATLAB MCOS fixtures:\n  ${timetablePath}\n  ${tablePath}`);
+console.log(`Generated MATLAB MCOS fixtures:\n  ${timetablePath}\n  ${regularTimetablePath}\n  ${tablePath}`);

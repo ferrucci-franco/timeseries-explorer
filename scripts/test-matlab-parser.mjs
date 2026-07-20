@@ -226,6 +226,25 @@ assert.deepEqual(Array.from(timetableData.variables.power_kW.data), [1.5, 2.5, 3
 assert.equal(timetableData.variables.power_kW.kind, 'variable', 'the timetable column is a plottable series');
 assert.ok(timetableData.tree._children || timetableData.tree._variables, 'the timetable builds a variable tree');
 
+// MATLAB timetable with regularly spaced row-times. MATLAB stores this
+// axis compactly as origin + stepSize/sampleRate rather than one datetime per row.
+const regularTimetableInspection = await parser.inspect(fixture('regular-timetable-v5.mat'), 'regular-timetable-v5.mat');
+const regularDateAxis = regularTimetableInspection.entries.find(entry => entry.path === 'date');
+assert.equal(regularDateAxis?.preferredTime, true, 'compact timetable row-times are the preferred time axis');
+assert.equal(regularDateAxis?.datetime, true, 'compact timetable row-times retain datetime semantics');
+assert.equal(regularDateAxis?.elementCount, 5, 'compact timetable row-times expand to the table row count');
+assert.equal(regularDateAxis?.data[0], Date.UTC(2021, 0, 6), 'compact timetable origin is decoded');
+assert.equal(regularDateAxis?.data[1] - regularDateAxis?.data[0], 60000, 'compact timetable step size is decoded');
+const regularTimetableData = parser.materialize(regularTimetableInspection, {
+    selectedIds: regularTimetableInspection.entries.filter(entry => entry.selectable).map(entry => entry.id),
+    timeMode: 'auto',
+}, 'regular-timetable-v5.mat');
+assert.equal(regularTimetableData.metadata.timeName, 'date', 'the timetable uses its date dimension as time');
+assert.equal(regularTimetableData.metadata.timeKind, 'datetime', 'the timetable imports a calendar axis');
+assert.equal(regularTimetableData.metadata.numTimesteps, 5, 'the timetable keeps every timestamp');
+assert.deepEqual(Array.from(regularTimetableData.variables.solar_kW.data), [10, 20, 30, 40, 50],
+    'the timetable signal matches its expanded time axis');
+
 // MCOS table: a plain `table` stores its fields directly on the object (not in
 // a nested struct) and its datetime lives in a column rather than as row-times.
 // That column should still surface as a selectable, pre-selected datetime axis.

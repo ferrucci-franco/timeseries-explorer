@@ -332,6 +332,32 @@ export default class McosSubsystem {
         return [];
     }
 
+    /** Expand MATLAB's compact representation of regularly spaced row times. */
+    _regularRowTimes(rowTimes, numRows) {
+        if (!rowTimes || Array.isArray(rowTimes) || numRows <= 0) return null;
+        const origin = Array.isArray(rowTimes.origin) ? rowTimes.origin[0] : null;
+        if (origin?.className !== 'datetime' && origin?.className !== 'duration') return null;
+        const originValue = this._objectMillis(origin)[0];
+        if (!Number.isFinite(originValue)) return null;
+
+        const stepObject = Array.isArray(rowTimes.stepSize) ? rowTimes.stepSize[0] : null;
+        const stepMillis = stepObject?.className === 'duration' ? this._objectMillis(stepObject)[0] : NaN;
+        const sampleRate = this._scalar(rowTimes.sampleRate);
+        const specifiedAsRate = !!this._scalar(rowTimes.specifiedAsRate);
+        const intervalMillis = specifiedAsRate && Number.isFinite(sampleRate) && sampleRate > 0
+            ? 1000 / sampleRate
+            : (Number.isFinite(stepMillis) && stepMillis > 0
+                ? stepMillis
+                : (Number.isFinite(sampleRate) && sampleRate > 0 ? 1000 / sampleRate : NaN));
+        if (!Number.isFinite(intervalMillis) || intervalMillis <= 0) return null;
+
+        const scale = origin.className === 'duration' ? 1 / 1000 : 1;
+        return {
+            kind: origin.className === 'datetime' ? 'datetime' : 'numeric',
+            values: Array.from({ length: numRows }, (_, index) => (originValue + index * intervalMillis) * scale),
+        };
+    }
+
     /**
      * Locate the tabular fields of a resolved table/timetable object. MATLAB
      * uses two serialization forms: a `table` stores fields directly on the
@@ -408,6 +434,9 @@ export default class McosSubsystem {
             time = { kind: 'datetime', name: info.dimNames[0] || 'Time', values: this._objectMillis(rowTimes) };
         } else if (rowTimes?.className === 'duration') {
             time = { kind: 'numeric', name: info.dimNames[0] || 'Time', values: this._objectMillis(rowTimes).map(ms => ms / 1000) };
+        } else {
+            const regular = this._regularRowTimes(info.rowTimes, info.numRows);
+            if (regular) time = { ...regular, name: info.dimNames[0] || 'Time' };
         }
 
         const columns = [];
