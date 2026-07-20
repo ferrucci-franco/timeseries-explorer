@@ -1519,8 +1519,9 @@ proto._showDesktopDownloadDialog = function(manifest, publishedAssets = null) {
         const platform = manifest.platforms?.[platformId] || fallback;
         const assets = Array.isArray(platform.assets) && platform.assets.length ? platform.assets : fallback.assets;
         const assetStates = assets.map(asset => {
+            const githubNormalizedName = asset.fileName?.replaceAll(' ', '.');
             const verifiedUrl = asset.fileName && publishedAssets instanceof Map
-                ? publishedAssets.get(asset.fileName)
+                ? publishedAssets.get(asset.fileName) || publishedAssets.get(githubNormalizedName)
                 : null;
             const canTrustManifest = !(publishedAssets instanceof Map) && platform.status === 'available';
             return {

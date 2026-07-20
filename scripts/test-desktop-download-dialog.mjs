@@ -32,7 +32,7 @@ for (const locale of ['en', 'fr', 'es', 'it']) {
 
 assert.match(manifest.releaseApiUrl, /^https:\/\/api\.github\.com\/repos\//);
 assert.deepEqual(Object.keys(manifest.platforms), ['windows', 'macos', 'linux']);
-assert.equal(manifest.platforms.windows.status, 'publishing');
+assert.equal(manifest.platforms.windows.status, 'available');
 assert.deepEqual(manifest.platforms.windows.assets.map(asset => asset.kind), ['installer', 'portable']);
 assert.deepEqual(manifest.platforms.macos.assets.map(asset => asset.format), ['DMG', 'ZIP']);
 assert.deepEqual(manifest.platforms.linux.assets.map(asset => asset.format), ['DEB', 'AppImage']);
@@ -44,6 +44,7 @@ for (const platform of ['windows', 'apple', 'linux']) {
 
 assert.match(ui, /_showDesktopDownloadDialog/, 'Menu action should open a selector instead of downloading immediately');
 assert.match(ui, /releaseApiUrl[\s\S]*publishedAssets = new Map/s, 'Published GitHub assets should be verified before enabling downloads');
+assert.match(ui, /replaceAll\(' ', '\.'\)/, 'GitHub-normalized asset names should still be recognized');
 assert.match(ui, /releaseResponse\.status === 404[\s\S]*new Map\(\)/s, 'An unpublished release should produce a safe disabled state');
 assert.match(ui, /for \(const platformId of \['windows', 'macos', 'linux'\]\)/, 'All three platforms should be rendered');
 assert.match(ui, /document\.createElement\(asset\.available \? 'a' : 'button'\)/, 'Unavailable assets should render as disabled buttons');

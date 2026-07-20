@@ -25,8 +25,8 @@ for (const excluded of ['node-gyp', 'cacache', 'make-fetch-happen', 'tar']) {
 assert.equal(manifest.version, pkg.version);
 assert.equal(manifest.platform, 'windows');
 assert.equal(manifest.architecture, 'x64');
-assert.match(manifest.downloadUrl, /v0\.1\.0-beta\.2\/Time%20Series%20Explorer-0\.1\.0-beta\.2-setup-x64\.exe$/);
-assert.match(manifest.portableUrl, /v0\.1\.0-beta\.2\/Time%20Series%20Explorer-0\.1\.0-beta\.2-portable-x64\.exe$/);
+assert.match(manifest.downloadUrl, /v0\.1\.0-beta\.2\/Time\.Series\.Explorer-0\.1\.0-beta\.2-setup-x64\.exe$/);
+assert.match(manifest.portableUrl, /v0\.1\.0-beta\.2\/Time\.Series\.Explorer-0\.1\.0-beta\.2-portable-x64\.exe$/);
 
 assert.match(workflow, /tags:\s*\n\s*- ['"]v\*['"]/);
 assert.match(workflow, /node-version:\s*22/);

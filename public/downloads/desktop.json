@@ -3,30 +3,30 @@
   "channel": "beta",
   "platform": "windows",
   "architecture": "x64",
-  "fileName": "Time Series Explorer-0.1.0-beta.2-setup-x64.exe",
-  "downloadUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-setup-x64.exe",
-  "portableFileName": "Time Series Explorer-0.1.0-beta.2-portable-x64.exe",
-  "portableUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-portable-x64.exe",
+  "fileName": "Time.Series.Explorer-0.1.0-beta.2-setup-x64.exe",
+  "downloadUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time.Series.Explorer-0.1.0-beta.2-setup-x64.exe",
+  "portableFileName": "Time.Series.Explorer-0.1.0-beta.2-portable-x64.exe",
+  "portableUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time.Series.Explorer-0.1.0-beta.2-portable-x64.exe",
   "releaseUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/tag/v0.1.0-beta.2",
   "releaseApiUrl": "https://api.github.com/repos/ferrucci-franco/timeseries-explorer/releases/tags/v0.1.0-beta.2",
   "platforms": {
     "windows": {
-      "status": "publishing",
+      "status": "available",
       "requirement": "Windows 10/11 · x64",
       "assets": [
         {
           "kind": "installer",
           "format": "EXE",
           "architecture": "x64",
-          "fileName": "Time Series Explorer-0.1.0-beta.2-setup-x64.exe",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-setup-x64.exe"
+          "fileName": "Time.Series.Explorer-0.1.0-beta.2-setup-x64.exe",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time.Series.Explorer-0.1.0-beta.2-setup-x64.exe"
         },
         {
           "kind": "portable",
           "format": "EXE",
           "architecture": "x64",
-          "fileName": "Time Series Explorer-0.1.0-beta.2-portable-x64.exe",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-portable-x64.exe"
+          "fileName": "Time.Series.Explorer-0.1.0-beta.2-portable-x64.exe",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time.Series.Explorer-0.1.0-beta.2-portable-x64.exe"
         }
       ]
     },
