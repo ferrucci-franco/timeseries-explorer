@@ -135,10 +135,14 @@ export default class MatVariablePickerDialog {
                 option.textContent = `${entry.path} (${entry.shapeLabel})`;
                 timeSelect.appendChild(option);
             });
+            const preferredTimeEntry = entries.find(entry => entry.selectable && entry.preferredTime && isVector(entry));
             if (initialSelection?.timeMode === 'auto') timeSelect.value = '';
             else if (initialSelection?.timeMode === 'selected' && initialSelection.timeId) {
                 timeSelect.value = initialSelection.timeId;
                 if (timeSelect.value !== initialSelection.timeId) timeSelect.value = '__index__';
+            } else if (!initialSelection && preferredTimeEntry) {
+                // A timetable's row-times are pre-selected as the time axis.
+                timeSelect.value = preferredTimeEntry.id;
             } else {
                 timeSelect.value = '__index__';
             }
@@ -303,7 +307,8 @@ export default class MatVariablePickerDialog {
             const autoTimeEntry = () => rowStates
                 .filter(state => state.checkbox.checked && state.entry.selectable && isVector(state.entry))
                 .map(state => state.entry)
-                .find(entry => /^(?:time|times|t|tiempo|temps|timestamp|timestamps)$/i.test(entry.name) && isMonotonic(entry));
+                .find(entry => entry.preferredTime
+                    || (/^(?:time|times|t|tiempo|temps|timestamp|timestamps)$/i.test(entry.name) && isMonotonic(entry)));
             const activeTimeEntry = () => {
                 if (timeSelect.value === '__index__') return null;
                 if (timeSelect.value) return stateForId(timeSelect.value)?.entry || null;

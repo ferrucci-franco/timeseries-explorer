@@ -193,7 +193,60 @@ assert.ok(v73.entries.some(entry => entry.path === 'samples_cell'), 'v7.3 cell r
 assert.ok(v73.entries.some(entry => entry.path === 'settings/gain'), 'v7.3 struct field references are dereferenced');
 assert.equal(v73.entries.find(entry => entry.path === 'complex_signal')?.complex, true, 'v7.3 compound complex arrays are recognized');
 
+// MCOS timetable: a Level-5 file whose only variable is a `timetable` object.
+// Its datetime row-times and columns are surfaced as ordinary picker entries,
+// so the timetable lists in the same "Select MATLAB arrays" dialog as plain
+// arrays, with the row-times pre-selected as the time axis.
+assert.equal(detectMatFileVersion(fixture('timetable-v5.mat')), '5-7', 'a timetable MAT-file is a Level 5/7 container');
+const timetableInspection = await parser.inspect(fixture('timetable-v5.mat'), 'timetable-v5.mat');
+assert.equal(timetableInspection.kind, 'general', 'a timetable lists in the standard MAT array picker');
+const timeAxisEntry = timetableInspection.entries.find(entry => entry.path === 'time');
+assert.ok(timeAxisEntry?.selectable, 'the datetime row-times are a selectable entry');
+assert.equal(timeAxisEntry.className, 'datetime', 'the row-times entry is typed as datetime');
+assert.equal(timeAxisEntry.datetime, true, 'the row-times entry is flagged as a datetime axis');
+assert.equal(timeAxisEntry.preferredTime, true, 'the row-times entry is the preferred time axis');
+const columnEntry = timetableInspection.entries.find(entry => entry.path === 'power_kW');
+assert.ok(columnEntry?.selectable, 'the timetable column is a selectable numeric entry');
+assert.deepEqual(columnEntry.shape, [4, 1], 'the timetable column keeps its length');
+
+// Auto time selection uses the datetime row-times as the calendar axis.
+const timetableData = parser.materialize(timetableInspection, {
+    selectedIds: timetableInspection.entries.filter(entry => entry.selectable).map(entry => entry.id),
+    timeMode: 'auto',
+}, 'timetable-v5.mat');
+assert.equal(timetableData.metadata.timeName, 'time', 'the timetable time axis keeps its dimension name');
+assert.equal(timetableData.metadata.timeKind, 'datetime', 'timetable row-times import as a datetime axis');
+assert.equal(timetableData.metadata.timeDisplayMode, 'calendar', 'a datetime axis defaults to the calendar display');
+assert.equal(timetableData.metadata.numTimesteps, 4, 'the timetable preserves its row count');
+const timetableTime = timetableData.variables.time;
+assert.equal(timetableTime.timeKind, 'datetime', 'the time variable is flagged as datetime');
+assert.equal(timetableTime.data[0], Date.UTC(2020, 0, 1, 0, 0, 0), 'row-times decode as epoch milliseconds');
+assert.equal(timetableTime.timeOriginMs, timetableTime.data[0], 'the datetime origin is the first row time');
+assert.deepEqual(Array.from(timetableData.variables.power_kW.data), [1.5, 2.5, 3.5, 4.5], 'the timetable column values are recovered in order');
+assert.equal(timetableData.variables.power_kW.kind, 'variable', 'the timetable column is a plottable series');
+assert.ok(timetableData.tree._children || timetableData.tree._variables, 'the timetable builds a variable tree');
+
+// MCOS table: a plain `table` stores its fields directly on the object (not in
+// a nested struct) and its datetime lives in a column rather than as row-times.
+// That column should still surface as a selectable, pre-selected datetime axis.
+const tableInspection = await parser.inspect(fixture('table-v5.mat'), 'table-v5.mat');
+assert.equal(tableInspection.kind, 'general', 'a table lists in the standard MAT array picker');
+const dateColumn = tableInspection.entries.find(entry => entry.path === 'date');
+assert.equal(dateColumn?.className, 'datetime', 'a datetime column is typed as datetime');
+assert.equal(dateColumn?.datetime, true, 'a datetime column can serve as a calendar axis');
+assert.equal(dateColumn?.preferredTime, true, 'the first datetime column is the preferred time axis');
+assert.ok(tableInspection.entries.find(entry => entry.path === 'load_MW')?.selectable, 'table numeric columns are selectable');
+const tableData = parser.materialize(tableInspection, {
+    selectedIds: tableInspection.entries.filter(entry => entry.selectable).map(entry => entry.id),
+    timeMode: 'auto',
+}, 'table-v5.mat');
+assert.equal(tableData.metadata.timeName, 'date', 'the table datetime column becomes the time axis');
+assert.equal(tableData.metadata.timeKind, 'datetime', 'the table datetime column drives a datetime axis');
+assert.equal(tableData.variables.date.data[0], Date.UTC(2016, 0, 1, 0, 0, 0), 'the table datetime column decodes as epoch milliseconds');
+assert.deepEqual(Array.from(tableData.variables.load_MW.data), [10, 20, 30], 'table numeric column values are recovered');
+
 const source = readFileSync(new URL('../src/ui/mat-variable-picker-dialog.js', import.meta.url), 'utf8');
+assert.match(source, /preferredTime/, 'the array picker pre-selects a timetable row-times axis');
 assert.match(source, /checkbox\.type = 'checkbox'/, 'MAT overview uses variable checkboxes');
 assert.match(source, /matPickerOverview/, 'MAT overview includes value previews');
 assert.match(source, /timeSelect/, 'MAT overview exposes time-axis selection');

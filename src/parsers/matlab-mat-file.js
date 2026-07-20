@@ -1,6 +1,7 @@
 import { unzlibSync } from 'fflate';
 import h5wasm from 'h5wasm';
 import MatParser from './mat-parser.js';
+import McosSubsystem, { isObjectReferenceArray, decodeObjectReference } from './matlab-mcos.js';
 
 const HDF5_MAGIC = [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a];
 const MAT5_TYPES = new Set([1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18]);
@@ -78,21 +79,36 @@ class Mat5Reader {
         const marker = decodeAscii(new Uint8Array(buffer, 126, 2));
         this.littleEndian = marker === 'IM';
         if (!this.littleEndian && marker !== 'MI') throw new Error('Invalid MATLAB Level 5 endian marker.');
+        // The file header records the byte offset of the MCOS subsystem (which
+        // stores timetable/table/datetime and other class objects), or 0 when
+        // there is none. It is only meaningful at the top level of the file.
+        const header = new DataView(buffer);
+        const low = header.getUint32(116, this.littleEndian);
+        const high = header.getUint32(120, this.littleEndian);
+        const subsysOffset = high * 2 ** 32 + low;
+        this.subsysOffset = subsysOffset >= 128 && subsysOffset < buffer.byteLength ? subsysOffset : 0;
+        this.subsystem = null;
     }
 
     read() {
         const nodes = [];
-        this._readElements(new Uint8Array(this.buffer, 128), nodes, '');
+        this._readElements(new Uint8Array(this.buffer, 128), nodes, '', 128);
         return nodes;
     }
 
-    _readElements(bytes, nodes, prefix) {
+    _readElements(bytes, nodes, prefix, baseOffset = null) {
         let offset = 0;
         while (offset + 8 <= bytes.byteLength) {
             const tag = this._tag(bytes, offset);
             if (!tag || tag.nextOffset <= offset || tag.dataOffset + tag.length > bytes.byteLength) break;
             const payload = bytes.subarray(tag.dataOffset, tag.dataOffset + tag.length);
-            if (tag.type === 15) {
+            const absolute = baseOffset != null ? baseOffset + offset : -1;
+            if (absolute >= 0 && absolute === this.subsysOffset) {
+                // The subsystem is not a user variable — parse it into MCOS state
+                // instead of emitting it as a stray uint8 array. Both branches
+                // hand _readSubsystem the full miMATRIX element (tag included).
+                this._readSubsystem(tag.type === 15 ? unzlibSync(payload) : bytes.subarray(offset, tag.nextOffset));
+            } else if (tag.type === 15) {
                 const inflated = unzlibSync(payload);
                 this._readElements(inflated, nodes, prefix);
             } else if (tag.type === 14) {
@@ -100,6 +116,21 @@ class Mat5Reader {
                 if (node) nodes.push(node);
             }
             offset = tag.nextOffset;
+        }
+    }
+
+    _readSubsystem(bytes) {
+        try {
+            // `bytes` is the decompressed subsystem miMATRIX (a uint8 wrapper);
+            // its last subelement is the byte stream holding the FileWrapper.
+            const tag = this._tag(bytes, 0);
+            if (!tag) return;
+            const parts = this._subelements(bytes.subarray(tag.dataOffset, tag.dataOffset + tag.length));
+            const payload = parts[parts.length - 1]?.bytes;
+            if (payload) this.subsystem = new McosSubsystem(payload, this.littleEndian);
+        } catch (error) {
+            // A subsystem we cannot decode should not stop the rest of the file.
+            this.subsystem = null;
         }
     }
 
@@ -141,6 +172,9 @@ class Mat5Reader {
         if (parts.length < 3) return null;
         const flags = this._numbers(parts[0]);
         const classId = Number(flags[0] || 0) & 0xff;
+
+        if (classId === 17) return this._opaque(parts, prefix);
+
         const className = CLASS_NAMES[classId] || `class-${classId}`;
         const flagBits = Number(flags[0] || 0);
         const shape = this._numbers(parts[1]).map(value => Math.max(0, Number(value) || 0));
@@ -167,6 +201,23 @@ class Mat5Reader {
         base.storageType = parts[3] ? TYPE_NAMES[parts[3].type] || String(parts[3].type) : className;
         base.layout = 'column-major';
         return base;
+    }
+
+    _opaque(parts, prefix) {
+        // mxOPAQUE_CLASS: [flags, name, typeSystem, className, referenceMatrix].
+        const texts = parts.slice(1).filter(part => part.type === 4 || part.type === 16 || part.type === 1)
+            .map(part => decodeAscii(part.bytes));
+        const name = texts[0] || 'unnamed';
+        const className = texts.length >= 3 ? texts[texts.length - 1] : (texts[1] || '');
+        const refTag = parts.find(part => part.type === 14);
+        let ref = null;
+        if (refTag) {
+            const refParts = this._subelements(refTag.bytes);
+            const values = refParts.length ? this._numbers(refParts[refParts.length - 1]) : [];
+            if (isObjectReferenceArray(values)) ref = decodeObjectReference(values);
+        }
+        const path = prefix ? `${prefix}.${name}` : name;
+        return { name, path, className, opaque: true, ref, children: [] };
     }
 
     _nestedMatrix(tag, prefix) {
@@ -304,15 +355,98 @@ export default class MatlabMatFile {
     }
 
     _inspectV5(buffer, filename) {
-        const nodes = new Mat5Reader(buffer).read();
+        const reader = new Mat5Reader(buffer);
+        const nodes = reader.read();
         const entries = [];
+        const opaques = [];
         const visit = node => {
+            if (node.opaque) { opaques.push(node); return; }
             if (node.children?.length) node.children.forEach(visit);
             if (node.data || node.text != null) entries.push(this._descriptor(node));
         };
         nodes.forEach(visit);
+        // timetable/table objects (stored in the MCOS subsystem) are flattened
+        // into ordinary picker entries — their datetime row-times as a selectable
+        // time axis, their columns as numeric arrays — so they list alongside any
+        // plain arrays and share the same "Select MATLAB arrays" dialog.
+        if (reader.subsystem && opaques.length) {
+            for (const entry of this._mcosEntries(reader.subsystem, opaques)) entries.push(entry);
+        }
         if (!entries.length) throw new Error('The MATLAB Level 5 file contains no readable arrays.');
         return { version: '5-7', kind: 'general', filename, entries };
+    }
+
+    _mcosEntries(subsystem, opaques) {
+        const tables = [];
+        for (const node of opaques) {
+            const objectId = node.ref?.objectIds?.[0];
+            if (objectId == null) continue;
+            let table = null;
+            try { table = subsystem.interpretTable(objectId); } catch { table = null; }
+            if (table && table.columns.length) tables.push({ node, table });
+        }
+        if (!tables.length) return [];
+
+        const multiple = tables.length > 1;
+        const used = new Set();
+        const unique = path => {
+            let candidate = path || 'var';
+            let suffix = 2;
+            while (used.has(candidate)) candidate = `${path}_${suffix++}`;
+            used.add(candidate);
+            return candidate;
+        };
+        const entries = [];
+        for (const { node, table } of tables) {
+            const prefix = multiple ? `${this._safeName(node.name)}.` : '';
+            // The first datetime axis in a table — its row-times, or failing
+            // that its first datetime column — is pre-selected as the time axis.
+            let preferredAssigned = false;
+            if (table.time && table.time.kind !== 'index' && table.time.values?.length) {
+                const path = unique(`${prefix}${table.time.name || 'Time'}`);
+                entries.push(this._mcosAxisEntry(path, table.time.name, table.time.values, table.time.kind === 'datetime', true));
+                preferredAssigned = true;
+            }
+            for (const column of table.columns) {
+                const path = unique(`${prefix}${column.name}`);
+                if (column.kind === 'datetime') {
+                    entries.push(this._mcosAxisEntry(path, column.name, column.data, true, !preferredAssigned));
+                    preferredAssigned = true;
+                } else {
+                    entries.push(this._descriptor({
+                        path, name: column.name, className: 'double', storageType: 'mcos-column',
+                        shape: [column.data.length, 1], data: Array.from(column.data, numericValue),
+                        layout: 'column-major',
+                    }));
+                }
+            }
+        }
+        return entries;
+    }
+
+    _mcosAxisEntry(path, name, values, isDatetime, preferred) {
+        const data = Array.from(values, numericValue);
+        const entry = this._descriptor({
+            path, name: name || 'Time',
+            className: isDatetime ? 'datetime' : 'double',
+            storageType: isDatetime ? 'mcos-datetime' : 'mcos-time', shape: [data.length, 1], data, layout: 'column-major',
+        });
+        entry.selectable = true;
+        entry.selected = true;
+        if (isDatetime) {
+            entry.datetime = true;
+            entry.preview = this._datetimePreview(data);
+        }
+        if (preferred) entry.preferredTime = true;
+        return entry;
+    }
+
+    _datetimePreview(values, limit = 4) {
+        const preview = values.slice(0, limit).map(value => {
+            const date = new Date(Number(value));
+            return Number.isFinite(date.getTime()) ? date.toISOString().replace('T', ' ').replace('.000Z', '') : String(value);
+        }).join(', ');
+        return values.length > limit ? `${preview}, …` : preview;
     }
 
     async _inspectV73(buffer, filename) {
@@ -468,6 +602,14 @@ export default class MatlabMatFile {
         const timeData = timeEntry ? Float64Array.from(timeEntry.data, numericValue) : Float64Array.from({ length: sampleLength }, (_, index) => index);
         variables[timeName] = this._variable(timeName, timeData, 'abscissa', timeEntry, 'MATLAB sample axis');
         if (!timeEntry) variables[timeName].syntheticIndex = true;
+        // A timetable's datetime row-times drive a calendar axis, like CSV dates.
+        const datetimeAxis = !!timeEntry?.datetime;
+        if (datetimeAxis) {
+            const timeVariable = variables[timeName];
+            timeVariable.timeKind = 'datetime';
+            timeVariable.timeDisplayMode = 'calendar';
+            timeVariable.timeOriginMs = timeData.length ? timeData[0] : null;
+        }
 
         for (const entry of selected) {
             if (entry === timeEntry) continue;
@@ -487,7 +629,9 @@ export default class MatlabMatFile {
                 source: 'matlab',
                 matVersion: inspection.version,
                 timeName,
-                timeKind: timeEntry ? 'numeric' : 'index',
+                timeKind: timeEntry ? (datetimeAxis ? 'datetime' : 'numeric') : 'index',
+                timeDisplayMode: timeEntry ? (datetimeAxis ? 'calendar' : 'numeric') : 'index',
+                timeOriginMs: datetimeAxis ? (timeData.length ? timeData[0] : null) : null,
                 numVariables: Object.keys(variables).length,
                 numParams: Object.values(variables).filter(variable => variable.kind === 'parameter').length,
                 numTimevarying: Object.values(variables).filter(variable => variable.kind === 'variable').length,
@@ -567,6 +711,9 @@ export default class MatlabMatFile {
 
     _chooseTimeEntry(entries, requestedId) {
         if (requestedId) return entries.find(entry => entry.id === requestedId && this._isVector(entry)) || null;
+        // A timetable's own row-times are the natural axis when nothing is requested.
+        const preferred = entries.find(entry => entry.preferredTime && this._isVector(entry));
+        if (preferred) return preferred;
         const named = entries.find(entry => this._isVector(entry) && /^(?:time|times|t|tiempo|temps|timestamp|timestamps)$/i.test(entry.name));
         if (named && this._monotonic(named.data)) return named;
         return null;
