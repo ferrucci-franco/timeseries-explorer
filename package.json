@@ -1,7 +1,7 @@
 {
   "name": "timeseries-explorer",
   "private": true,
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "Desktop and web time-series explorer for OpenModelica, Dymola, CSV, and Parquet result files.",
   "author": "Franco Ferrucci",
   "license": "MIT",

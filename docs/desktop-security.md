@@ -8,7 +8,7 @@ The application does not require Internet access after installation. There is no
 
 ## Dependency audit
 
-The v0.1.0-beta.1 source dependency audit reports no critical vulnerabilities. It reports high-severity `tar` advisories through `duckdb -> node-gyp` for which npm currently offers no fixed dependency path. These modules are installation/build tooling: the application never exposes tar extraction to user data. The known build-only packages (`node-gyp`, `cacache`, `make-fetch-happen` and `tar`) are explicitly excluded from the packaged application, and the packaged runtime is inspected during release validation.
+The v0.1.0-beta.2 source dependency audit reports no critical vulnerabilities. It reports high-severity `tar` advisories through `duckdb -> node-gyp` for which npm currently offers no fixed dependency path. These modules are installation/build tooling: the application never exposes tar extraction to user data. The known build-only packages (`node-gyp`, `cacache`, `make-fetch-happen` and `tar`) are explicitly excluded from the packaged application, and the packaged runtime is inspected during release validation.
 
 Release automation fails on critical production advisories. The documented high-severity build-tool exception must be reviewed again when DuckDB updates its dependency chain; it must not be generalized to unrelated advisories.
 

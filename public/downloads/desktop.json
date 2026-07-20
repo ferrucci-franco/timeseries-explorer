@@ -1,11 +1,11 @@
 {
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "channel": "beta",
   "platform": "windows",
   "architecture": "x64",
-  "fileName": "Time Series Explorer-0.1.0-beta.1-setup-x64.exe",
-  "downloadUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.1/Time%20Series%20Explorer-0.1.0-beta.1-setup-x64.exe",
-  "portableFileName": "Time Series Explorer-0.1.0-beta.1-portable-x64.exe",
-  "portableUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.1/Time%20Series%20Explorer-0.1.0-beta.1-portable-x64.exe",
-  "releaseUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/tag/v0.1.0-beta.1"
+  "fileName": "Time Series Explorer-0.1.0-beta.2-setup-x64.exe",
+  "downloadUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-setup-x64.exe",
+  "portableFileName": "Time Series Explorer-0.1.0-beta.2-portable-x64.exe",
+  "portableUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-portable-x64.exe",
+  "releaseUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/tag/v0.1.0-beta.2"
 }

@@ -1,21 +1,24 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const outputDir = path.resolve(process.env.OMV_DIST_OUTPUT?.trim() || 'desktop-dist');
+const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+const productName = pkg.build?.productName || pkg.productName || pkg.name;
+const expectedExecutables = [
+  `${productName}-${pkg.version}-portable-x64.exe`,
+  `${productName}-${pkg.version}-setup-x64.exe`,
+].sort((a, b) => a.localeCompare(b));
 const entries = await readdir(outputDir, { withFileTypes: true });
 const executables = entries
-  .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.exe'))
+  .filter(entry => entry.isFile() && expectedExecutables.includes(entry.name))
   .map(entry => entry.name)
   .sort((a, b) => a.localeCompare(b));
 
-const setup = executables.filter(name => /-setup-x64\.exe$/i.test(name));
-const portable = executables.filter(name => /-portable-x64\.exe$/i.test(name));
-
-if (setup.length !== 1 || portable.length !== 1 || executables.length !== 2) {
+if (executables.length !== expectedExecutables.length) {
   throw new Error(
-    `Expected exactly one x64 setup and one x64 portable executable in ${outputDir}; found: ${executables.join(', ') || 'none'}`,
+    `Expected release executables ${expectedExecutables.join(', ')} in ${outputDir}; found: ${executables.join(', ') || 'none'}`,
   );
 }
 
