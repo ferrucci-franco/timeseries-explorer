@@ -1,10 +1,18 @@
 {
   "name": "timeseries-explorer",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "description": "Desktop and web time-series explorer for OpenModelica, Dymola, CSV, and Parquet result files.",
   "author": "Franco Ferrucci",
   "license": "MIT",
+  "homepage": "https://ferrucci-franco.github.io/timeseries-explorer/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ferrucci-franco/timeseries-explorer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ferrucci-franco/timeseries-explorer/issues"
+  },
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -13,6 +21,9 @@
     "desktop": "npm run build:web && node scripts/start-electron.mjs",
     "desktop:pack": "npm run build:web && node scripts/run-electron-builder.mjs --dir",
     "desktop:dist": "npm run build:web && node scripts/run-electron-builder.mjs --win nsis portable",
+    "desktop:dist:x64": "npm run build:web && node scripts/run-electron-builder.mjs --win nsis portable --x64",
+    "desktop:checksums": "node scripts/create-desktop-checksums.mjs",
+    "desktop:verify-package": "node scripts/verify-packaged-desktop.mjs",
     "desktop:icon": "node scripts/render-desktop-icon.mjs",
     "build:web": "vite build",
     "build": "npm run build:web",
@@ -28,6 +39,8 @@
     "test:loading-overlay-layout": "node scripts/test-loading-overlay-layout.mjs",
     "test:sidebar-resize": "node scripts/test-sidebar-resize.mjs",
     "test:desktop-streamable": "node scripts/test-desktop-streamable-file.mjs",
+    "test:electron-navigation": "node scripts/test-electron-navigation-policy.mjs",
+    "test:desktop-release": "node scripts/test-desktop-release-config.mjs",
     "test:csv-to-parquet": "node scripts/test-csv-to-parquet-core.mjs",
     "test:parquet-pandas": "node scripts/test-parquet-pandas-metadata.mjs",
     "test:parquet-loading": "node scripts/test-parquet-loading-mode.mjs",
@@ -54,7 +67,8 @@
     "test:help-layout": "node scripts/test-help-layout.mjs",
     "test:settings-layout": "node scripts/test-settings-layout.mjs",
     "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs",
-    "test:phase2d": "node scripts/test-phase2d.mjs"
+    "test:phase2d": "node scripts/test-phase2d.mjs",
+    "test:release": "node scripts/run-release-tests.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",
@@ -77,6 +91,7 @@
   "build": {
     "appId": "io.github.ferrucci-franco.timeseries-explorer",
     "productName": "Time Series Explorer",
+    "copyright": "Copyright © 2026 Franco Ferrucci",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "icon": "build/icons/timeseries-explorer-icon.png",
     "directories": {
@@ -88,7 +103,15 @@
       "src/data/csv-to-parquet-core.js",
       "src/parsers/**/*",
       "build/icons/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/node-gyp{,/**/*}",
+      "!node_modules/**/node-gyp{,/**/*}",
+      "!node_modules/cacache{,/**/*}",
+      "!node_modules/**/cacache{,/**/*}",
+      "!node_modules/make-fetch-happen{,/**/*}",
+      "!node_modules/**/make-fetch-happen{,/**/*}",
+      "!node_modules/tar{,/**/*}",
+      "!node_modules/**/tar{,/**/*}"
     ],
     "asar": true,
     "asarUnpack": [

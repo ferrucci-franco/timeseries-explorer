@@ -42,6 +42,8 @@ npm run desktop
 ```
 
 It builds the web app into `dist/`, starts an Electron-local localhost server, and opens the app as Full Desktop.
+The packaged Desktop app works offline: application assets and data processing stay local. Web links open in the
+operating system's default browser, and the Electron renderer does not make external network requests.
 On Windows, you can also double-click `start-full-desktop.bat`. The first run installs missing npm dependencies if needed.
 
 To build Windows desktop artifacts:
@@ -54,6 +56,12 @@ The generated files are written to `desktop-dist/`:
 
 - `Time Series Explorer-<version>-setup-x64.exe`: Windows installer.
 - `Time Series Explorer-<version>-portable-x64.exe`: portable executable.
+
+Public Desktop releases are built from version tags and distributed through
+[GitHub Releases](https://github.com/ferrucci-franco/timeseries-explorer/releases).
+The current Windows x64 beta is available from the application's Download Desktop command.
+Maintainer instructions, signing policy, validation and rollback are documented in
+[docs/desktop-release.md](docs/desktop-release.md).
 
 If the repository lives in a synced folder such as OneDrive and Windows locks
 `desktop-dist/`, set `OMV_DIST_OUTPUT` to a non-synced directory before running
