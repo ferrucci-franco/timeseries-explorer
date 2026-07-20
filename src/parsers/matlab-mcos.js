@@ -332,11 +332,33 @@ export default class McosSubsystem {
         return [];
     }
 
-    _tabularStruct(object) {
-        for (const value of Object.values(object.props || {})) {
-            if (value && typeof value === 'object' && !Array.isArray(value)
-                && 'varNames' in value && 'data' in value) {
-                return value;
+    /**
+     * Locate the tabular fields of a resolved table/timetable object. MATLAB
+     * uses two serialization forms: a `table` stores fields directly on the
+     * object (lowercase `data`/`varnames`/`nrows`…), while a `timetable` nests
+     * them inside a single struct property (camelCase `data`/`varNames`…).
+     */
+    _tabularInfo(object) {
+        const props = object.props || {};
+        const read = source => {
+            const pick = (...keys) => { for (const key of keys) if (key in source) return source[key]; return undefined; };
+            const data = pick('data');
+            const varNames = pick('varNames', 'varnames');
+            if (data === undefined || varNames === undefined) return null;
+            return {
+                dataColumns: Array.isArray(data) ? data : [],
+                varNames: this._stringList(varNames),
+                numRows: this._scalar(pick('numRows', 'nrows')) || 0,
+                dimNames: this._stringList(pick('dimNames', 'dimnames')),
+                rowTimes: pick('rowTimes', 'rowtimes'),
+            };
+        };
+        const direct = read(props);
+        if (direct) return direct;
+        for (const value of Object.values(props)) {
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+                const nested = read(value);
+                if (nested) return nested;
             }
         }
         return null;
@@ -344,23 +366,26 @@ export default class McosSubsystem {
 
     _columnSeries(name, column, numRows) {
         const series = [];
-        // A variable that is itself a datetime/duration object collapses to ms.
+        // A column that is itself a datetime/duration object collapses to values:
+        // datetimes stay as epoch milliseconds, durations become seconds.
         if (Array.isArray(column) && column[0]?.className) {
-            series.push({ name, data: this._objectMillis(column[0]) });
+            const className = column[0].className;
+            if (className === 'datetime') series.push({ name, kind: 'datetime', data: this._objectMillis(column[0]) });
+            else if (className === 'duration') series.push({ name, kind: 'numeric', data: this._objectMillis(column[0]).map(ms => ms / 1000) });
             return series;
         }
         if (!column || column.kind !== 'numeric') return series;
         const rows = numRows || column.dims?.[0] || column.data.length;
         const cols = rows > 0 ? Math.max(1, Math.round(column.data.length / rows)) : 1;
         if (cols <= 1) {
-            series.push({ name, data: column.data.map(Number) });
+            series.push({ name, kind: 'numeric', data: column.data.map(Number) });
             return series;
         }
         // Column-major matrix variable: one series per sub-column.
         for (let col = 0; col < cols; col++) {
             const values = new Array(rows);
             for (let row = 0; row < rows; row++) values[row] = Number(column.data[col * rows + row]);
-            series.push({ name: `${name}[${col + 1}]`, data: values });
+            series.push({ name: `${name}[${col + 1}]`, kind: 'numeric', data: values });
         }
         return series;
     }
@@ -372,27 +397,24 @@ export default class McosSubsystem {
     interpretTable(objectId) {
         const object = this.resolveObject(objectId);
         if (object.className !== 'timetable' && object.className !== 'table') return null;
-        const guts = this._tabularStruct(object);
-        if (!guts) return null;
-        const numRows = this._scalar(guts.numRows) || 0;
-        const varNames = this._stringList(guts.varNames);
-        const dimNames = this._stringList(guts.dimNames);
-        const dataColumns = Array.isArray(guts.data) ? guts.data : [];
+        const info = this._tabularInfo(object);
+        if (!info) return null;
 
-        let time = { kind: 'index', name: dimNames[0] || 'Row', values: null };
-        const rowTimes = Array.isArray(guts.rowTimes) ? guts.rowTimes[0] : null;
+        // A timetable carries its own row-times axis; a plain table does not
+        // (its datetime, if any, is just one of the columns).
+        let time = { kind: 'index', name: info.dimNames[0] || 'Row', values: null };
+        const rowTimes = Array.isArray(info.rowTimes) ? info.rowTimes[0] : null;
         if (rowTimes?.className === 'datetime') {
-            time = { kind: 'datetime', name: dimNames[0] || 'Time', values: this._objectMillis(rowTimes) };
+            time = { kind: 'datetime', name: info.dimNames[0] || 'Time', values: this._objectMillis(rowTimes) };
         } else if (rowTimes?.className === 'duration') {
-            // durations are relative; expose as seconds on a numeric axis.
-            time = { kind: 'numeric', name: dimNames[0] || 'Time', values: this._objectMillis(rowTimes).map(ms => ms / 1000) };
+            time = { kind: 'numeric', name: info.dimNames[0] || 'Time', values: this._objectMillis(rowTimes).map(ms => ms / 1000) };
         }
 
         const columns = [];
-        varNames.forEach((name, index) => {
-            for (const series of this._columnSeries(name, dataColumns[index], numRows)) columns.push(series);
+        info.varNames.forEach((name, index) => {
+            for (const column of this._columnSeries(name, info.dataColumns[index], info.numRows)) columns.push(column);
         });
-        return { className: object.className, numRows, time, columns };
+        return { className: object.className, numRows: info.numRows, time, columns };
     }
 
     resolveObject(objectId, classIdHint = null) {

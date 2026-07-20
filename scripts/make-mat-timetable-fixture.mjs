@@ -1,18 +1,19 @@
 /**
- * Generate a tiny MATLAB Level-5 MAT-file that stores a `timetable`, so the JS
- * parser can be tested against the real MCOS subsystem layout without needing
+ * Generate tiny MATLAB Level-5 MAT-files that store MCOS class objects, so the
+ * JS parser can be tested against the real subsystem layout without needing
  * MATLAB (scipy cannot write class objects).
  *
- * The file mirrors what MATLAB emits for `timetable(datetime(...), values)`:
- * a top-level mxOPAQUE placeholder plus a subsystem holding a FileWrapper__
- * object whose cell array carries the metadata table, the datetime row-times
- * and the tabular struct. Elements are written uncompressed for clarity.
+ * Two fixtures are produced, covering the two serialization forms MATLAB uses:
+ *   - timetable-v5.mat: a `timetable`, whose tabular fields live in one nested
+ *     struct property and whose datetime row-times are the axis.
+ *   - table-v5.mat: a `table`, whose fields (data/varnames/nrows/…) are stored
+ *     directly on the object and whose first column is a datetime variable.
+ *
+ * Elements are written uncompressed for clarity; real files zlib-compress them.
  */
 
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-
-const OUT = fileURLToPath(new URL('../test-files/matlab/timetable-v5.mat', import.meta.url));
 
 const LE = true;
 const enc = new TextEncoder();
@@ -38,26 +39,17 @@ function element(type, data) {
 
 const u8 = values => Uint8Array.from(values, v => v & 0xff);
 const i8 = text => enc.encode(text);
-function u32(values) {
-    const out = new Uint8Array(values.length * 4);
+function typedBytes(values, bytesPer, setter) {
+    const out = new Uint8Array(values.length * bytesPer);
     const view = new DataView(out.buffer);
-    values.forEach((value, index) => view.setUint32(index * 4, value >>> 0, LE));
+    values.forEach((value, index) => setter(view, index * bytesPer, value));
     return out;
 }
-function i32(values) {
-    const out = new Uint8Array(values.length * 4);
-    const view = new DataView(out.buffer);
-    values.forEach((value, index) => view.setInt32(index * 4, value | 0, LE));
-    return out;
-}
-function f64(values) {
-    const out = new Uint8Array(values.length * 8);
-    const view = new DataView(out.buffer);
-    values.forEach((value, index) => view.setFloat64(index * 8, value, LE));
-    return out;
-}
+const u32 = values => typedBytes(values, 4, (view, offset, value) => view.setUint32(offset, value >>> 0, LE));
+const i32 = values => typedBytes(values, 4, (view, offset, value) => view.setInt32(offset, value | 0, LE));
+const f64 = values => typedBytes(values, 8, (view, offset, value) => view.setFloat64(offset, value, LE));
 
-const arrayFlags = (classId, flagBits = 0) => element(6, u32([(flagBits << 8) | classId, 0]));
+const arrayFlags = classId => element(6, u32([classId, 0]));
 
 function matrix(classId, dims, name, dataElements) {
     return element(14, concat([
@@ -77,7 +69,7 @@ const cellMatrix = (name, dims, items) => matrix(1, dims, name, items);
 
 function structMatrix(name, dims, fields) {
     const names = Object.keys(fields);
-    const fieldLen = Math.max(...names.map(field => field.length)) + 1;
+    const fieldLen = Math.max(1, ...names.map(field => field.length)) + 1;
     const nameBlock = new Uint8Array(names.length * fieldLen);
     names.forEach((field, index) => nameBlock.set(i8(field), index * fieldLen));
     return matrix(2, dims, name, [
@@ -103,97 +95,156 @@ const OBJECT_REFERENCE_MARKER = 0xdd000000;
 const objectReference = (name, objectId, classId) =>
     uint32Matrix(name, [1, 6], [OBJECT_REFERENCE_MARKER, 2, 1, 1, objectId, classId]);
 
-// ---- Sample timetable content ---------------------------------------------
+// ---- MCOS metadata + file assembly ----------------------------------------
 
-const rows = 4;
-const startMs = Date.UTC(2020, 0, 1, 0, 0, 0);
-const rowTimesMs = Array.from({ length: rows }, (_, index) => startMs + index * 3600000);
-const values = [1.5, 2.5, 3.5, 4.5];
+/** Serialize property blocks into 8-byte-aligned uint32 words. */
+function serializeSegment(blocks) {
+    const words = [];
+    for (const block of blocks) {
+        words.push(block.length);
+        for (const prop of block) words.push(prop.nameIdx, prop.flag, prop.value);
+        if (words.length % 2 !== 0) words.push(0); // pad to an 8-byte boundary
+    }
+    return words;
+}
 
-// ---- MCOS metadata blob ----------------------------------------------------
-// Names are 1-indexed: any=1 (timetable payload), data=2 (datetime payload),
-// datetime=3, timetable=4.
-const names = ['any', 'data', 'datetime', 'timetable'];
-function buildMetadata() {
-    const header = 32;
-    let nameBytes = 0;
-    for (const name of names) nameBytes += name.length + 1;
-    const namesEnd = header + Math.ceil(nameBytes / 8) * 8;
+/**
+ * Build a whole MAT-file for one MCOS object.
+ * @param names   1-indexed string table (index 0 is '').
+ * @param classes classId 1..N -> { nameIdx }.
+ * @param objects objId 1..M -> { classId, seg1: props[], seg2: props[] } where
+ *                a prop is { nameIdx, flag, value }; value indexes valueCells.
+ * @param valueCells miMATRIX elements addressed by property value (0-based).
+ */
+function buildMcosFile({ topVar, className, topObjectId, names, classes, objects, valueCells }) {
+    const seg1Blocks = [[]];
+    const seg2Blocks = [[]];
+    const objectMeta = objects.map(object => {
+        let seg1 = 0;
+        let seg2 = 0;
+        if (object.seg1?.length) { seg1 = seg1Blocks.length; seg1Blocks.push(object.seg1); }
+        if (object.seg2?.length) { seg2 = seg2Blocks.length; seg2Blocks.push(object.seg2); }
+        return { classId: object.classId, seg1, seg2 };
+    });
+    const seg1Words = serializeSegment(seg1Blocks);
+    const seg2Words = serializeSegment(seg2Blocks);
 
-    const classTable = namesEnd;                 // reserved, datetime, timetable
-    const segment1 = classTable + 3 * 16;
-    const objectTable = segment1 + 24;           // reserved, timetable, datetime
-    const segment2 = objectTable + 3 * 24;
-    const segment3 = segment2 + 24;
+    const nameBytes = names.slice(1).reduce((sum, name) => sum + name.length + 1, 0);
+    const headerEnd = 32;
+    const classTable = headerEnd + Math.ceil(nameBytes / 8) * 8;
+    const segment1 = classTable + (classes.length + 1) * 16;
+    const objectTable = segment1 + seg1Words.length * 4;
+    const segment2 = objectTable + (objectMeta.length + 1) * 24;
+    const segment3 = segment2 + seg2Words.length * 4;
     const end = segment3;
 
     const blob = new Uint8Array(end);
     const view = new DataView(blob.buffer);
     const setU32 = (offset, value) => view.setUint32(offset, value >>> 0, LE);
-
-    // Header: [ver, nStrings, region offsets...]. Only the offsets are read back.
     [4, names.length, classTable, segment1, objectTable, segment2, segment3, end]
         .forEach((value, index) => setU32(index * 4, value));
 
-    // String table.
-    let cursor = header;
-    for (const name of names) { blob.set(i8(name), cursor); cursor += name.length + 1; }
+    let cursor = headerEnd;
+    for (const name of names.slice(1)) { blob.set(i8(name), cursor); cursor += name.length + 1; }
 
-    // Class table: [namespaceNameIdx, classNameIdx, 0, 0]; entry 0 is reserved.
-    setU32(classTable + 16 + 4, 3); // classId 1 -> datetime
-    setU32(classTable + 32 + 4, 4); // classId 2 -> timetable
+    classes.forEach((entry, index) => setU32(classTable + (index + 1) * 16 + 4, entry.nameIdx));
+    seg1Words.forEach((word, index) => setU32(segment1 + index * 4, word));
+    objectMeta.forEach((object, index) => {
+        const base = objectTable + (index + 1) * 24;
+        setU32(base, object.classId);
+        setU32(base + 12, object.seg1);
+        setU32(base + 16, object.seg2);
+    });
+    seg2Words.forEach((word, index) => setU32(segment2 + index * 4, word));
 
-    // Property segment 1 (block index 1 = timetable): { any(1), flag 1, cell value 1 }.
-    [0, 0, 1, 1, 1, 1].forEach((value, index) => setU32(segment1 + index * 4, value));
+    // FileWrapper cells: [metadata, reserved, ...valueCells]; property value v
+    // addresses cell index v + 2.
+    const cells = [uint8Matrix('', [blob.length, 1], blob), emptyMatrix(''), ...valueCells];
+    const fileWrapper = opaque('', 'MCOS', 'FileWrapper__', cellMatrix('', [cells.length, 1], cells));
+    const innerHeader = u8([0x00, 0x01, 0x49, 0x4d, 0, 0, 0, 0]);
+    const innerStream = concat([innerHeader, structMatrix('', [1, 1], { MCOS: fileWrapper })]);
+    const subsystemElement = uint8Matrix('', [1, innerStream.length], innerStream);
+    const topVariable = opaque(topVar, 'MCOS', className, objectReference('', topObjectId, classes.findIndex(c => c.name === className) + 1));
 
-    // Object table: [classId, 0, 0, seg1Idx, seg2Idx, dep]; entry 0 reserved.
-    [2, 0, 0, 1, 0, 0].forEach((value, index) => setU32(objectTable + 24 + index * 4, value)); // obj1 timetable
-    [1, 0, 0, 0, 1, 0].forEach((value, index) => setU32(objectTable + 48 + index * 4, value)); // obj2 datetime
-
-    // Property segment 2 (block index 1 = datetime): { data(2), flag 1, cell value 0 }.
-    [0, 0, 1, 2, 1, 0].forEach((value, index) => setU32(segment2 + index * 4, value));
-
-    return blob;
+    const header = new Uint8Array(128);
+    const headerView = new DataView(header.buffer);
+    header.set(i8('MATLAB 5.0 MAT-file, Platform: synthetic, Created by timeseries-explorer tests'));
+    headerView.setUint32(116, (128 + topVariable.length) >>> 0, LE); // subsystem byte offset
+    headerView.setUint16(124, 0x0100, LE);
+    header.set(i8('IM'), 126);
+    return concat([header, topVariable, subsystemElement]);
 }
 
-// ---- FileWrapper cell array ------------------------------------------------
-// cell{1}=metadata, cell{2}=reserved, cell{3}=datetime ms (value 0),
-// cell{4}=tabular struct (value 1).
-const tabularStruct = structMatrix('', [1, 1], {
-    data: cellMatrix('', [1, 1], [doubleMatrix('', [rows, 1], values)]),
-    varNames: cellMatrix('', [1, 1], [charMatrix('', 'power_kW')]),
-    dimNames: cellMatrix('', [1, 2], [charMatrix('', 'time'), charMatrix('', 'Variables')]),
-    numRows: doubleMatrix('', [1, 1], [rows]),
-    numVars: doubleMatrix('', [1, 1], [1]),
-    rowTimes: objectReference('', 2, 1), // datetime object id 2, class id 1
-});
+// ---- timetable fixture (nested-struct form) --------------------------------
 
-const fileWrapper = opaque('', 'MCOS', 'FileWrapper__', cellMatrix('', [4, 1], [
-    uint8Matrix('', [buildMetadata().length, 1], buildMetadata()),
-    emptyMatrix(''),
-    doubleMatrix('', [rows, 1], rowTimesMs),
-    tabularStruct,
-]));
+function timetableFixture() {
+    const rows = 4;
+    const start = Date.UTC(2020, 0, 1, 0, 0, 0);
+    const rowTimesMs = Array.from({ length: rows }, (_, index) => start + index * 3600000);
+    const tabular = structMatrix('', [1, 1], {
+        data: cellMatrix('', [1, 1], [doubleMatrix('', [rows, 1], [1.5, 2.5, 3.5, 4.5])]),
+        varNames: cellMatrix('', [1, 1], [charMatrix('', 'power_kW')]),
+        dimNames: cellMatrix('', [1, 2], [charMatrix('', 'time'), charMatrix('', 'Variables')]),
+        numRows: doubleMatrix('', [1, 1], [rows]),
+        numVars: doubleMatrix('', [1, 1], [1]),
+        rowTimes: objectReference('', 2, 1),
+    });
+    return buildMcosFile({
+        topVar: 'trace', className: 'timetable', topObjectId: 1,
+        names: ['', 'any', 'data', 'datetime', 'timetable'],
+        classes: [{ name: 'datetime', nameIdx: 3 }, { name: 'timetable', nameIdx: 4 }],
+        objects: [
+            { classId: 2, seg1: [{ nameIdx: 1, flag: 1, value: 1 }] }, // timetable.any -> valueCells[1]
+            { classId: 1, seg2: [{ nameIdx: 2, flag: 1, value: 0 }] }, // datetime.data -> valueCells[0]
+        ],
+        valueCells: [doubleMatrix('', [rows, 1], rowTimesMs), tabular],
+    });
+}
 
-// Inner subsystem stream: 8-byte header + struct{ MCOS: FileWrapper__ }.
-const innerHeader = u8([0x00, 0x01, 0x49, 0x4d, 0, 0, 0, 0]);
-const innerStream = concat([innerHeader, structMatrix('', [1, 1], { MCOS: fileWrapper })]);
+// ---- table fixture (direct-property form, datetime column) -----------------
 
-// The subsystem itself is a uint8 miMATRIX wrapping that stream.
-const subsystemElement = uint8Matrix('', [1, innerStream.length], innerStream);
+function tableFixture() {
+    const rows = 3;
+    const start = Date.UTC(2016, 0, 1, 0, 0, 0);
+    const dateMs = Array.from({ length: rows }, (_, index) => start + index * 3600000);
+    const dataCell = cellMatrix('', [1, 2], [
+        objectReference('', 2, 1),               // date column -> datetime object 2
+        doubleMatrix('', [rows, 1], [10, 20, 30]), // load_MW column
+    ]);
+    return buildMcosFile({
+        topVar: 'edt', className: 'table', topObjectId: 1,
+        names: ['', 'data', 'ndims', 'nrows', 'rownames', 'nvars', 'varnames', 'props', 'datetime', 'table'],
+        classes: [{ name: 'datetime', nameIdx: 8 }, { name: 'table', nameIdx: 9 }],
+        objects: [
+            {
+                classId: 2,
+                seg1: [
+                    { nameIdx: 1, flag: 1, value: 0 }, // data -> valueCells[0]
+                    { nameIdx: 2, flag: 1, value: 3 }, // ndims
+                    { nameIdx: 3, flag: 1, value: 2 }, // nrows
+                    { nameIdx: 4, flag: 1, value: 5 }, // rownames
+                    { nameIdx: 5, flag: 1, value: 4 }, // nvars
+                    { nameIdx: 6, flag: 1, value: 1 }, // varnames -> valueCells[1]
+                    { nameIdx: 7, flag: 1, value: 6 }, // props
+                ],
+            },
+            { classId: 1, seg2: [{ nameIdx: 1, flag: 1, value: 7 }] }, // datetime.data -> valueCells[7]
+        ],
+        valueCells: [
+            dataCell,
+            cellMatrix('', [1, 2], [charMatrix('', 'date'), charMatrix('', 'load_MW')]),
+            doubleMatrix('', [1, 1], [rows]),  // nrows
+            doubleMatrix('', [1, 1], [2]),     // ndims
+            doubleMatrix('', [1, 1], [2]),     // nvars
+            cellMatrix('', [0, 0], []),        // rownames
+            emptyMatrix(''),                   // props
+            doubleMatrix('', [rows, 1], dateMs),
+        ],
+    });
+}
 
-// Top-level opaque timetable variable referencing object id 1 (class id 2).
-const topVariable = opaque('trace', 'MCOS', 'timetable', objectReference('', 1, 2));
-
-// ---- Assemble the file -----------------------------------------------------
-const header = new Uint8Array(128);
-const headerView = new DataView(header.buffer);
-header.set(i8('MATLAB 5.0 MAT-file, Platform: synthetic, Created by timeseries-explorer tests'));
-const subsysOffset = 128 + topVariable.length;
-headerView.setUint32(116, subsysOffset >>> 0, LE); // subsystem byte offset (low)
-headerView.setUint32(120, 0, LE);                   // (high)
-headerView.setUint16(124, 0x0100, LE);              // version
-header.set(i8('IM'), 126);                          // little-endian marker
-
-writeFileSync(OUT, concat([header, topVariable, subsystemElement]));
-console.log(`Generated MATLAB timetable fixture at ${OUT}`);
+const timetablePath = fileURLToPath(new URL('../test-files/matlab/timetable-v5.mat', import.meta.url));
+const tablePath = fileURLToPath(new URL('../test-files/matlab/table-v5.mat', import.meta.url));
+writeFileSync(timetablePath, timetableFixture());
+writeFileSync(tablePath, tableFixture());
+console.log(`Generated MATLAB MCOS fixtures:\n  ${timetablePath}\n  ${tablePath}`);

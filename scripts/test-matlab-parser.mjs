@@ -226,6 +226,25 @@ assert.deepEqual(Array.from(timetableData.variables.power_kW.data), [1.5, 2.5, 3
 assert.equal(timetableData.variables.power_kW.kind, 'variable', 'the timetable column is a plottable series');
 assert.ok(timetableData.tree._children || timetableData.tree._variables, 'the timetable builds a variable tree');
 
+// MCOS table: a plain `table` stores its fields directly on the object (not in
+// a nested struct) and its datetime lives in a column rather than as row-times.
+// That column should still surface as a selectable, pre-selected datetime axis.
+const tableInspection = await parser.inspect(fixture('table-v5.mat'), 'table-v5.mat');
+assert.equal(tableInspection.kind, 'general', 'a table lists in the standard MAT array picker');
+const dateColumn = tableInspection.entries.find(entry => entry.path === 'date');
+assert.equal(dateColumn?.className, 'datetime', 'a datetime column is typed as datetime');
+assert.equal(dateColumn?.datetime, true, 'a datetime column can serve as a calendar axis');
+assert.equal(dateColumn?.preferredTime, true, 'the first datetime column is the preferred time axis');
+assert.ok(tableInspection.entries.find(entry => entry.path === 'load_MW')?.selectable, 'table numeric columns are selectable');
+const tableData = parser.materialize(tableInspection, {
+    selectedIds: tableInspection.entries.filter(entry => entry.selectable).map(entry => entry.id),
+    timeMode: 'auto',
+}, 'table-v5.mat');
+assert.equal(tableData.metadata.timeName, 'date', 'the table datetime column becomes the time axis');
+assert.equal(tableData.metadata.timeKind, 'datetime', 'the table datetime column drives a datetime axis');
+assert.equal(tableData.variables.date.data[0], Date.UTC(2016, 0, 1, 0, 0, 0), 'the table datetime column decodes as epoch milliseconds');
+assert.deepEqual(Array.from(tableData.variables.load_MW.data), [10, 20, 30], 'table numeric column values are recovered');
+
 const source = readFileSync(new URL('../src/ui/mat-variable-picker-dialog.js', import.meta.url), 'utf8');
 assert.match(source, /preferredTime/, 'the array picker pre-selects a timetable row-times axis');
 assert.match(source, /checkbox\.type = 'checkbox'/, 'MAT overview uses variable checkboxes');

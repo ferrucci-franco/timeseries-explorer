@@ -399,37 +399,45 @@ export default class MatlabMatFile {
         const entries = [];
         for (const { node, table } of tables) {
             const prefix = multiple ? `${this._safeName(node.name)}.` : '';
+            // The first datetime axis in a table — its row-times, or failing
+            // that its first datetime column — is pre-selected as the time axis.
+            let preferredAssigned = false;
             if (table.time && table.time.kind !== 'index' && table.time.values?.length) {
                 const path = unique(`${prefix}${table.time.name || 'Time'}`);
-                entries.push(this._mcosTimeEntry(path, table.time));
+                entries.push(this._mcosAxisEntry(path, table.time.name, table.time.values, table.time.kind === 'datetime', true));
+                preferredAssigned = true;
             }
             for (const column of table.columns) {
                 const path = unique(`${prefix}${column.name}`);
-                entries.push(this._descriptor({
-                    path, name: column.name, className: 'double', storageType: 'mcos-column',
-                    shape: [column.data.length, 1], data: Array.from(column.data, numericValue),
-                    layout: 'column-major',
-                }));
+                if (column.kind === 'datetime') {
+                    entries.push(this._mcosAxisEntry(path, column.name, column.data, true, !preferredAssigned));
+                    preferredAssigned = true;
+                } else {
+                    entries.push(this._descriptor({
+                        path, name: column.name, className: 'double', storageType: 'mcos-column',
+                        shape: [column.data.length, 1], data: Array.from(column.data, numericValue),
+                        layout: 'column-major',
+                    }));
+                }
             }
         }
         return entries;
     }
 
-    _mcosTimeEntry(path, time) {
-        const data = Array.from(time.values, numericValue);
+    _mcosAxisEntry(path, name, values, isDatetime, preferred) {
+        const data = Array.from(values, numericValue);
         const entry = this._descriptor({
-            path, name: time.name || 'Time',
-            className: time.kind === 'datetime' ? 'datetime' : 'double',
-            storageType: `mcos-${time.kind}`, shape: [data.length, 1], data, layout: 'column-major',
+            path, name: name || 'Time',
+            className: isDatetime ? 'datetime' : 'double',
+            storageType: isDatetime ? 'mcos-datetime' : 'mcos-time', shape: [data.length, 1], data, layout: 'column-major',
         });
-        // The row-times default to being the imported time axis.
         entry.selectable = true;
         entry.selected = true;
-        entry.preferredTime = true;
-        if (time.kind === 'datetime') {
+        if (isDatetime) {
             entry.datetime = true;
             entry.preview = this._datetimePreview(data);
         }
+        if (preferred) entry.preferredTime = true;
         return entry;
     }
 
