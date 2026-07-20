@@ -2053,6 +2053,432 @@
 }
 
 /* ============================================
+   Full Desktop download selector
+   ============================================ */
+.desktop-download-overlay {
+    background: color-mix(in srgb, #08111f 62%, transparent);
+    backdrop-filter: blur(10px) saturate(125%);
+    -webkit-backdrop-filter: blur(10px) saturate(125%);
+    padding: 1rem;
+}
+
+.desktop-download-dialog {
+    width: min(1120px, calc(100vw - 2rem));
+    max-width: none;
+    max-height: min(760px, calc(100dvh - 2rem));
+    border-radius: 22px;
+    border-color: color-mix(in srgb, var(--border-color) 72%, #6366f1);
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.42), 0 6px 24px rgba(0, 0, 0, 0.2);
+}
+
+.desktop-download-content {
+    display: flex;
+    flex-direction: column;
+    max-height: min(760px, calc(100dvh - 2rem));
+    padding: 0;
+    overflow: hidden;
+    text-align: left;
+}
+
+.desktop-download-header {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.1rem 1.25rem;
+    border-bottom: 1px solid var(--border-color);
+    background:
+        radial-gradient(circle at 12% -60%, color-mix(in srgb, #8b5cf6 25%, transparent), transparent 50%),
+        color-mix(in srgb, var(--bg-primary) 94%, #6366f1);
+}
+
+.desktop-download-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    min-width: 0;
+}
+
+.desktop-download-heading-icon {
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    flex: 0 0 46px;
+    border-radius: 14px;
+    color: #fff;
+    background: linear-gradient(145deg, #2563eb, #8b5cf6);
+    box-shadow: 0 9px 24px color-mix(in srgb, #6366f1 42%, transparent);
+}
+
+.desktop-download-heading-icon svg {
+    width: 25px;
+    height: 25px;
+}
+
+.desktop-download-heading-copy {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.desktop-download-heading-copy h2 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.3rem;
+    font-weight: 750;
+    letter-spacing: -0.02em;
+}
+
+.desktop-download-version {
+    margin-top: 0.14rem;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 650;
+}
+
+.desktop-download-close {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 11px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.desktop-download-close svg {
+    width: 21px;
+    height: 21px;
+}
+
+.desktop-download-close:hover {
+    color: var(--text-primary);
+    background: var(--hover-bg);
+    border-color: var(--border-color);
+}
+
+.desktop-download-intro {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 1.05rem 1.35rem 0;
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
+.desktop-download-grid {
+    display: grid;
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.9rem;
+    padding: 1rem 1.35rem 1.25rem;
+    overflow: auto;
+}
+
+.desktop-platform-card {
+    --desktop-platform-color: #64748b;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 1rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--desktop-platform-color));
+    border-radius: 17px;
+    background:
+        linear-gradient(155deg, color-mix(in srgb, var(--desktop-platform-color) 8%, var(--bg-primary)), var(--bg-primary) 46%);
+    box-shadow: 0 8px 24px color-mix(in srgb, #000 10%, transparent);
+    overflow: hidden;
+}
+
+.desktop-platform-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 4px;
+    background: var(--desktop-platform-color);
+    opacity: 0.88;
+}
+
+.desktop-platform-windows { --desktop-platform-color: #0a84ff; }
+.desktop-platform-macos { --desktop-platform-color: #8b5cf6; }
+.desktop-platform-linux { --desktop-platform-color: #f59e0b; }
+
+.desktop-platform-card.is-coming-soon {
+    background: color-mix(in srgb, var(--bg-secondary) 78%, var(--bg-primary));
+}
+
+.desktop-platform-card.is-coming-soon::before {
+    opacity: 0.45;
+}
+
+.desktop-platform-top {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.desktop-platform-logo-wrap {
+    display: grid;
+    place-items: center;
+    width: 58px;
+    height: 58px;
+    border: 1px solid color-mix(in srgb, var(--desktop-platform-color) 30%, var(--border-color));
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--desktop-platform-color) 11%, var(--bg-primary));
+}
+
+.desktop-platform-logo {
+    width: 34px;
+    height: 34px;
+    object-fit: contain;
+}
+
+.theme-dark .desktop-platform-logo-macos,
+.theme-dark .desktop-platform-logo-linux {
+    filter: invert(1) brightness(1.15);
+}
+
+.desktop-platform-heading {
+    min-width: 0;
+}
+
+.desktop-platform-heading h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.08rem;
+    font-weight: 750;
+}
+
+.desktop-platform-heading p {
+    margin: 0.2rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.35;
+}
+
+.desktop-platform-status {
+    grid-column: 1 / -1;
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    margin-top: 0.7rem;
+    padding: 0.18rem 0.58rem;
+    border-radius: 999px;
+    font-size: 0.69rem;
+    font-weight: 750;
+    letter-spacing: 0.025em;
+    text-transform: uppercase;
+}
+
+.desktop-platform-status.is-available {
+    color: #08783e;
+    background: color-mix(in srgb, #22c55e 18%, var(--bg-primary));
+}
+
+.theme-dark .desktop-platform-status.is-available {
+    color: #86efac;
+}
+
+.desktop-platform-status.is-publishing {
+    color: #9a5b00;
+    background: color-mix(in srgb, #f59e0b 19%, var(--bg-primary));
+}
+
+.theme-dark .desktop-platform-status.is-publishing {
+    color: #fcd34d;
+}
+
+.desktop-platform-status.is-coming-soon {
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+}
+
+.desktop-download-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.55rem;
+    margin-top: 1rem;
+}
+
+.desktop-download-action {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    min-width: 0;
+    min-height: 62px;
+    padding: 0.62rem 0.7rem;
+    border: 1px solid color-mix(in srgb, var(--desktop-platform-color) 38%, var(--border-color));
+    border-radius: 11px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    text-decoration: none;
+    transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+a.desktop-download-action:hover {
+    transform: translateY(-1px);
+    border-color: var(--desktop-platform-color);
+    background: color-mix(in srgb, var(--desktop-platform-color) 8%, var(--bg-primary));
+    box-shadow: 0 7px 18px color-mix(in srgb, var(--desktop-platform-color) 16%, transparent);
+}
+
+.desktop-download-action strong {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    color: inherit;
+    font-size: 0.81rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.desktop-download-action span {
+    display: block;
+    max-width: 100%;
+    margin-top: 0.2rem;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 0.66rem;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+button.desktop-download-action:disabled {
+    cursor: not-allowed;
+    opacity: 0.52;
+}
+
+.desktop-download-close:focus-visible,
+.desktop-download-action:focus-visible,
+.desktop-download-release-link:focus-visible,
+.desktop-download-footer-close:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+.desktop-download-footer {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.9rem 1.25rem;
+    border-top: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-secondary) 62%, var(--bg-primary));
+}
+
+.desktop-download-notes {
+    min-width: 0;
+}
+
+.desktop-download-notes p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+.desktop-download-notes .desktop-download-unsigned-note {
+    margin-top: 0.18rem;
+    color: color-mix(in srgb, var(--warning-color) 80%, var(--text-primary));
+}
+
+.desktop-download-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex: 0 0 auto;
+}
+
+.desktop-download-release-link {
+    color: var(--primary-color);
+    font-size: 0.78rem;
+    font-weight: 650;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.desktop-download-release-link:hover {
+    text-decoration: underline;
+}
+
+.desktop-download-footer-close {
+    min-width: 92px;
+}
+
+@media (max-width: 900px) {
+    .desktop-download-dialog,
+    .desktop-download-content {
+        max-height: calc(100dvh - 1.25rem);
+    }
+
+    .desktop-download-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .desktop-platform-card {
+        min-height: 0;
+    }
+}
+
+@media (max-width: 600px) {
+    .desktop-download-overlay {
+        padding: 0.4rem;
+    }
+
+    .desktop-download-dialog {
+        width: calc(100vw - 0.8rem);
+        border-radius: 16px;
+    }
+
+    .desktop-download-header,
+    .desktop-download-footer {
+        padding: 0.8rem;
+    }
+
+    .desktop-download-heading-icon {
+        width: 40px;
+        height: 40px;
+        flex-basis: 40px;
+    }
+
+    .desktop-download-heading-copy h2 {
+        font-size: 1.05rem;
+    }
+
+    .desktop-download-intro {
+        padding: 0.8rem 0.85rem 0;
+    }
+
+    .desktop-download-grid {
+        padding: 0.8rem 0.85rem 1rem;
+    }
+
+    .desktop-download-footer {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .desktop-download-footer-actions {
+        justify-content: space-between;
+    }
+}
+
+/* ============================================
    Sidebar author footer
    ============================================ */
 .sidebar-author {

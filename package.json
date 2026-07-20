@@ -40,6 +40,7 @@
     "test:sidebar-resize": "node scripts/test-sidebar-resize.mjs",
     "test:desktop-streamable": "node scripts/test-desktop-streamable-file.mjs",
     "test:electron-navigation": "node scripts/test-electron-navigation-policy.mjs",
+    "test:desktop-download": "node scripts/test-desktop-download-dialog.mjs",
     "test:desktop-release": "node scripts/test-desktop-release-config.mjs",
     "test:csv-to-parquet": "node scripts/test-csv-to-parquet-core.mjs",
     "test:parquet-pandas": "node scripts/test-parquet-pandas-metadata.mjs",

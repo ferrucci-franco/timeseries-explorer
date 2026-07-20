@@ -3,6 +3,7 @@ import Modal from '../../ui/modal.js';
 import {
     APP_VERSION,
     DESKTOP_MANIFEST_PATH,
+    DESKTOP_PLATFORM_ICON_PATHS,
     DYMOLA_LOGO_ICON_PATH,
     EXAMPLES,
     OPENMODELICA_MODELING_ICON_PATH,
@@ -1385,18 +1386,289 @@ proto._downloadDesktopPackage = async function() {
         if (!response.ok) throw new Error(`Missing manifest: ${response.status}`);
 
         const manifest = await response.json();
-        const url = manifest?.downloadUrl || manifest?.url || manifest?.zipUrl;
-        if (!url) throw new Error('Missing desktop download URL in manifest');
+        if (!manifest || typeof manifest !== 'object') throw new Error('Invalid desktop download manifest');
 
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = manifest.fileName || '';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+        let publishedAssets = null;
+        if (manifest.releaseApiUrl) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4000);
+            try {
+                const releaseResponse = await fetch(manifest.releaseApiUrl, {
+                    cache: 'no-store',
+                    headers: { Accept: 'application/vnd.github+json' },
+                    signal: controller.signal,
+                });
+                if (releaseResponse.status === 404) {
+                    publishedAssets = new Map();
+                } else if (releaseResponse.ok) {
+                    const release = await releaseResponse.json();
+                    publishedAssets = new Map(
+                        (Array.isArray(release?.assets) ? release.assets : [])
+                            .filter(asset => asset?.name && asset?.browser_download_url)
+                            .map(asset => [asset.name, asset.browser_download_url]),
+                    );
+                }
+            } catch (_) {
+                // Keep the manifest status when GitHub is offline or rate-limited.
+            } finally {
+                clearTimeout(timeout);
+            }
+        }
+
+        this._showDesktopDownloadDialog(manifest, publishedAssets);
     } catch {
         Modal.alert(i18n.t('extraStandalone'), i18n.t('extraStandaloneUnavailableBody'), { icon: '📦' });
     }
+};
+
+proto._showDesktopDownloadDialog = function(manifest, publishedAssets = null) {
+    const previousActive = document.activeElement;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay desktop-download-overlay';
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-dialog desktop-download-dialog';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'desktop-download-title');
+    modal.setAttribute('aria-describedby', 'desktop-download-intro');
+
+    const content = document.createElement('div');
+    content.className = 'modal-content desktop-download-content';
+
+    const header = document.createElement('header');
+    header.className = 'desktop-download-header';
+    const heading = document.createElement('div');
+    heading.className = 'desktop-download-heading';
+    const headingIcon = document.createElement('span');
+    headingIcon.className = 'desktop-download-heading-icon';
+    headingIcon.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M5 18v2h14v-2"/></svg>';
+    const headingCopy = document.createElement('div');
+    headingCopy.className = 'desktop-download-heading-copy';
+    const title = document.createElement('h2');
+    title.id = 'desktop-download-title';
+    title.textContent = i18n.t('desktopDownloadTitle');
+    const version = document.createElement('span');
+    version.className = 'desktop-download-version';
+    version.textContent = `v${manifest.version || APP_VERSION} · ${i18n.t('desktopDownloadBeta')}`;
+    headingCopy.append(title, version);
+    heading.append(headingIcon, headingCopy);
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'desktop-download-close';
+    closeButton.title = i18n.t('helpClose');
+    closeButton.setAttribute('aria-label', i18n.t('helpClose'));
+    closeButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+    header.append(heading, closeButton);
+
+    const intro = document.createElement('p');
+    intro.id = 'desktop-download-intro';
+    intro.className = 'desktop-download-intro';
+    intro.textContent = i18n.t('desktopDownloadIntro');
+
+    const legacyWindowsAssets = [
+        {
+            kind: 'installer',
+            format: 'EXE',
+            architecture: manifest.architecture || 'x64',
+            fileName: manifest.fileName,
+            url: manifest.downloadUrl || manifest.url,
+        },
+        {
+            kind: 'portable',
+            format: 'EXE',
+            architecture: manifest.architecture || 'x64',
+            fileName: manifest.portableFileName,
+            url: manifest.portableUrl || manifest.zipUrl,
+        },
+    ];
+
+    const defaults = {
+        windows: {
+            nameKey: 'desktopDownloadWindows',
+            requirementKey: 'desktopDownloadWindowsRequirement',
+            status: manifest.downloadUrl ? 'available' : 'coming-soon',
+            assets: legacyWindowsAssets,
+        },
+        macos: {
+            nameKey: 'desktopDownloadMacos',
+            requirementKey: 'desktopDownloadMacosRequirement',
+            status: 'coming-soon',
+            assets: [
+                { kind: 'installer', format: 'DMG', architecture: 'Apple silicon / Intel' },
+                { kind: 'portable', format: 'ZIP', architecture: 'Apple silicon / Intel' },
+            ],
+        },
+        linux: {
+            nameKey: 'desktopDownloadLinux',
+            requirementKey: 'desktopDownloadLinuxRequirement',
+            status: 'coming-soon',
+            assets: [
+                { kind: 'installer', format: 'DEB', architecture: 'x86_64' },
+                { kind: 'portable', format: 'AppImage', architecture: 'x86_64' },
+            ],
+        },
+    };
+
+    const cards = document.createElement('div');
+    cards.className = 'desktop-download-grid';
+
+    for (const platformId of ['windows', 'macos', 'linux']) {
+        const fallback = defaults[platformId];
+        const platform = manifest.platforms?.[platformId] || fallback;
+        const assets = Array.isArray(platform.assets) && platform.assets.length ? platform.assets : fallback.assets;
+        const assetStates = assets.map(asset => {
+            const verifiedUrl = asset.fileName && publishedAssets instanceof Map
+                ? publishedAssets.get(asset.fileName)
+                : null;
+            const canTrustManifest = !(publishedAssets instanceof Map) && platform.status === 'available';
+            return {
+                ...asset,
+                url: verifiedUrl || asset.url || '',
+                available: Boolean((verifiedUrl || (canTrustManifest && asset.url)) && asset.fileName),
+            };
+        });
+        const downloadable = assetStates.filter(asset => asset.available);
+        const expectedDownloads = assetStates.filter(asset => asset.url && asset.fileName);
+        const fullyReady = expectedDownloads.length > 0 && downloadable.length === expectedDownloads.length;
+        const status = fullyReady
+            ? 'available'
+            : platform.status === 'coming-soon'
+                ? 'coming-soon'
+                : 'publishing';
+
+        const card = document.createElement('section');
+        card.className = `desktop-platform-card desktop-platform-${platformId} is-${status}`;
+        card.setAttribute('aria-labelledby', `desktop-platform-${platformId}-title`);
+        const cardTop = document.createElement('div');
+        cardTop.className = 'desktop-platform-top';
+        const logoWrap = document.createElement('span');
+        logoWrap.className = 'desktop-platform-logo-wrap';
+        const logo = document.createElement('img');
+        logo.className = `desktop-platform-logo desktop-platform-logo-${platformId}`;
+        logo.src = DESKTOP_PLATFORM_ICON_PATHS[platformId];
+        logo.alt = '';
+        logo.setAttribute('aria-hidden', 'true');
+        logoWrap.appendChild(logo);
+
+        const cardHeading = document.createElement('div');
+        cardHeading.className = 'desktop-platform-heading';
+        const cardTitle = document.createElement('h3');
+        cardTitle.id = `desktop-platform-${platformId}-title`;
+        cardTitle.textContent = i18n.t(fallback.nameKey);
+        const requirement = document.createElement('p');
+        requirement.textContent = platform.requirement || i18n.t(fallback.requirementKey);
+        cardHeading.append(cardTitle, requirement);
+
+        const statusBadge = document.createElement('span');
+        statusBadge.className = `desktop-platform-status is-${status}`;
+        statusBadge.textContent = i18n.t(
+            status === 'available'
+                ? 'desktopDownloadReady'
+                : status === 'publishing'
+                    ? 'desktopDownloadPublishing'
+                    : 'desktopDownloadComingSoon',
+        );
+        cardTop.append(logoWrap, cardHeading, statusBadge);
+
+        const actions = document.createElement('div');
+        actions.className = 'desktop-download-actions';
+        for (const asset of assetStates) {
+            const label = i18n.t(asset.kind === 'portable' ? 'desktopDownloadPortable' : 'desktopDownloadInstaller');
+            const control = document.createElement(asset.available ? 'a' : 'button');
+            control.className = `desktop-download-action desktop-download-action-${asset.kind || 'installer'}`;
+            if (asset.available) {
+                control.href = asset.url;
+                control.target = '_blank';
+                control.rel = 'noopener noreferrer';
+                control.download = asset.fileName;
+                control.setAttribute('aria-label', `${label} ${cardTitle.textContent} ${asset.architecture || ''}`.trim());
+            } else {
+                control.type = 'button';
+                control.disabled = true;
+                control.title = i18n.t(status === 'publishing' ? 'desktopDownloadPublishingHint' : 'desktopDownloadUnavailableHint');
+            }
+            const actionLabel = document.createElement('strong');
+            actionLabel.textContent = label;
+            const actionMeta = document.createElement('span');
+            actionMeta.textContent = [asset.format, asset.architecture].filter(Boolean).join(' · ');
+            control.append(actionLabel, actionMeta);
+            actions.appendChild(control);
+        }
+        card.append(cardTop, actions);
+        cards.appendChild(card);
+    }
+
+    const footer = document.createElement('footer');
+    footer.className = 'desktop-download-footer';
+    const notes = document.createElement('div');
+    notes.className = 'desktop-download-notes';
+    const note = document.createElement('p');
+    note.textContent = i18n.t('desktopDownloadBetaNote');
+    const unsignedNote = document.createElement('p');
+    unsignedNote.className = 'desktop-download-unsigned-note';
+    unsignedNote.textContent = i18n.t('desktopDownloadUnsignedNote');
+    notes.append(note, unsignedNote);
+
+    const footerActions = document.createElement('div');
+    footerActions.className = 'desktop-download-footer-actions';
+    if (manifest.releaseUrl) {
+        const releaseLink = document.createElement('a');
+        releaseLink.className = 'desktop-download-release-link';
+        releaseLink.href = manifest.releaseUrl;
+        releaseLink.target = '_blank';
+        releaseLink.rel = 'noopener noreferrer';
+        releaseLink.textContent = i18n.t('desktopDownloadReleaseDetails');
+        footerActions.appendChild(releaseLink);
+    }
+    const footerClose = document.createElement('button');
+    footerClose.type = 'button';
+    footerClose.className = 'modal-btn modal-btn-confirm desktop-download-footer-close';
+    footerClose.textContent = i18n.t('helpClose');
+    footerActions.appendChild(footerClose);
+    footer.append(notes, footerActions);
+
+    content.append(header, intro, cards, footer);
+    modal.appendChild(content);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    let settled = false;
+    const finish = () => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', keyHandler);
+        Modal.close(overlay, previousActive);
+    };
+    const keyHandler = event => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            finish();
+            return;
+        }
+        if (event.key !== 'Tab') return;
+        const focusable = [...modal.querySelectorAll('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+            .filter(element => element.offsetParent !== null);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    };
+    closeButton.addEventListener('click', finish);
+    footerClose.addEventListener('click', finish);
+    overlay.addEventListener('click', event => {
+        if (event.target === overlay) finish();
+    });
+    document.addEventListener('keydown', keyHandler);
+    requestAnimationFrame(() => overlay.classList.add('show'));
+    setTimeout(() => closeButton.focus(), 100);
 };
 
 proto.loadExample = async function(exampleId = 'pendulum') {

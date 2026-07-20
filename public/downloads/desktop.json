@@ -7,5 +7,44 @@
   "downloadUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-setup-x64.exe",
   "portableFileName": "Time Series Explorer-0.1.0-beta.2-portable-x64.exe",
   "portableUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-portable-x64.exe",
-  "releaseUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/tag/v0.1.0-beta.2"
+  "releaseUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/tag/v0.1.0-beta.2",
+  "releaseApiUrl": "https://api.github.com/repos/ferrucci-franco/timeseries-explorer/releases/tags/v0.1.0-beta.2",
+  "platforms": {
+    "windows": {
+      "status": "publishing",
+      "requirement": "Windows 10/11 · x64",
+      "assets": [
+        {
+          "kind": "installer",
+          "format": "EXE",
+          "architecture": "x64",
+          "fileName": "Time Series Explorer-0.1.0-beta.2-setup-x64.exe",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-setup-x64.exe"
+        },
+        {
+          "kind": "portable",
+          "format": "EXE",
+          "architecture": "x64",
+          "fileName": "Time Series Explorer-0.1.0-beta.2-portable-x64.exe",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.2/Time%20Series%20Explorer-0.1.0-beta.2-portable-x64.exe"
+        }
+      ]
+    },
+    "macos": {
+      "status": "coming-soon",
+      "requirement": "Apple silicon / Intel",
+      "assets": [
+        { "kind": "installer", "format": "DMG", "architecture": "Apple silicon / Intel" },
+        { "kind": "portable", "format": "ZIP", "architecture": "Apple silicon / Intel" }
+      ]
+    },
+    "linux": {
+      "status": "coming-soon",
+      "requirement": "x86_64",
+      "assets": [
+        { "kind": "installer", "format": "DEB", "architecture": "x86_64" },
+        { "kind": "portable", "format": "AppImage", "architecture": "x86_64" }
+      ]
+    }
+  }
 }

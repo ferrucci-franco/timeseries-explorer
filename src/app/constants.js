@@ -44,7 +44,12 @@ const DERIVED_FUNCTION_ALIASES = new Map([
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.netcdf', '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods'];
 const APP_VERSION = '0.1.0-beta.2';
 const DESKTOP_MANIFEST_PATH = './downloads/desktop.json';
+const DESKTOP_PLATFORM_ICON_PATHS = {
+    windows: `${PUBLIC_BASE}images/platforms/windows.svg`,
+    macos: `${PUBLIC_BASE}images/platforms/apple.svg`,
+    linux: `${PUBLIC_BASE}images/platforms/linux.svg`,
+};
 const DYMOLA_LOGO_ICON_PATH = `${PUBLIC_BASE}images/dymola-logo.jpg`;
 const OPENMODELICA_MODELING_ICON_PATH = `${PUBLIC_BASE}images/openmodelica-modeling.png`;
 
-export { APP_VERSION, DESKTOP_MANIFEST_PATH, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, OPENMODELICA_MODELING_ICON_PATH, RESULT_FILE_EXTENSIONS };
+export { APP_VERSION, DESKTOP_MANIFEST_PATH, DESKTOP_PLATFORM_ICON_PATHS, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, OPENMODELICA_MODELING_ICON_PATH, RESULT_FILE_EXTENSIONS };

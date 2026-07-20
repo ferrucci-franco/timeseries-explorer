@@ -13,6 +13,7 @@ own licenses. The principal runtime components are:
 | [fflate](https://github.com/101arrowz/fflate) | ZIP compression and extraction | MIT |
 | [pickleparser](https://github.com/ewfian/pickleparser) | pandas/Python pickle parsing | MIT |
 | [Electron](https://github.com/electron/electron) | Full Desktop version runtime | MIT |
+| [Simple Icons](https://github.com/simple-icons/simple-icons) | Apple and Linux SVG marks in the Desktop download selector | CC0-1.0; third-party trademarks remain with their owners |
 
 Build tools and transitive packages are recorded in `package-lock.json`.
 Their inclusion does not change the Time Series Explorer license, and their
