@@ -63,6 +63,8 @@
 !/test-files/live_update/*.py
 !/test-files/pypsa/
 !/test-files/pypsa/vetea_example_01.nc
+!/test-files/netcdf/
+!/test-files/netcdf/**
 !/test-files/pickle/
 !/test-files/pickle/*.pkl
 !/test-files/pickle/manifest.json

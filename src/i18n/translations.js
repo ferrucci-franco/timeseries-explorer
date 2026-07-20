@@ -13,7 +13,7 @@ const translations = {
                         <tr><td>MATLAB / OpenModelica / Dymola</td><td><code>.mat</code></td><td>General MATLAB MAT v4-v7.3 arrays and OpenModelica/Dymola simulation results.</td></tr>
                         <tr><td>CSV / text time series</td><td><code>.csv</code>, <code>.txt</code></td><td>Delimited or whitespace-separated numeric tables, with optional headers and automatic time detection.</td></tr>
                         <tr><td>Parquet time series</td><td><code>.parquet</code></td><td>Good for very large time-series tables and usually faster than CSV.</td></tr>
-                        <tr><td>PyPSA netCDF networks</td><td><code>.nc</code>, <code>.netcdf</code></td><td>PyPSA network files with time-series results.</td></tr>
+                        <tr><td>netCDF datasets</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Generic netCDF3/netCDF4 datasets and PyPSA networks.</td></tr>
                         <tr><td>pandas pickle</td><td><code>.pkl</code>, <code>.pickle</code></td><td>pandas DataFrame/Series pickles. MultiIndex columns appear as a hierarchy. Uncompressed files only; use Parquet for large data.</td></tr>
                         <tr><td>Excel / LibreOffice spreadsheets</td><td><code>.xlsx</code>, <code>.xlsm</code>, <code>.xls</code>, <code>.ods</code></td><td>Each selected sheet is converted to a table on load, with the same header and time detection as CSV files.</td></tr>
                     </tbody>
@@ -190,8 +190,8 @@ const translations = {
             excelFullLoadLimitHelp: 'Spreadsheet files are expanded in memory while loading.',
             pickleFullLoadLimit: 'Pickle full load limit',
             pickleFullLoadLimitHelp: 'pandas pickle files are loaded fully in memory.',
-            pypsaNetcdfFullLoadLimit: 'PyPSA netCDF full limit',
-            pypsaNetcdfFullLoadLimitHelp: 'PyPSA network files are loaded fully in memory in the current version.',
+            pypsaNetcdfFullLoadLimit: 'netCDF full-load limit',
+            pypsaNetcdfFullLoadLimitHelp: 'Generic and PyPSA netCDF files are loaded fully in memory in the current version.',
             csvCompactHintLimit: 'Suggest CSV conversion above',
             csvCompactHintLimitHelp: 'For CSV files above this size, the app suggests converting the CSV to a file that is easier to handle without loading the whole table into RAM.',
             compactFormatHelpTitle: 'What is this format?',
@@ -206,9 +206,11 @@ const translations = {
             fileLoaded: 'File loaded successfully',
             errorLoading: 'Error loading file',
             invalidFile: 'Invalid result or text file',
-            pypsaNetcdfTooLarge: '"{file}" is {size}. PyPSA netCDF support currently uses eager loading (limit {limit}); large/lazy PyPSA loading is not available yet.',
+            pypsaNetcdfTooLarge: '"{file}" is {size}. netCDF support currently uses eager loading (limit {limit}); large/lazy netCDF loading is not available yet.',
             fileTypePypsaNetcdf: 'PyPSA netCDF network',
             fileTypePypsaSkippedDynamic: '{count} unsupported PyPSA time-series dataset(s) were skipped.',
+            fileTypeGenericNetcdf: 'Generic netCDF dataset',
+            fileTypeNetcdfSkippedVariables: '{count} netCDF variable(s) could not be aligned with the selected X coordinate.',
             pickleTooLarge: '"{file}" ({size}) exceeds the pickle size limit ({limit}). Raise it in Settings → File loading → Pickle full load limit, or export to Parquet.',
             fileTypePandasPickle: 'pandas pickle',
             fileTypeMatlab: 'MATLAB MAT {version}',
@@ -1123,7 +1125,7 @@ const translations = {
                         <tr><td>MATLAB / OpenModelica / Dymola</td><td><code>.mat</code></td><td>Tableaux MATLAB MAT v4-v7.3 et résultats de simulation OpenModelica/Dymola.</td></tr>
                         <tr><td>Series temporelles CSV / texte</td><td><code>.csv</code>, <code>.txt</code></td><td>Tables numeriques delimitees ou separees par espaces, avec en-tetes optionnels et detection automatique du temps.</td></tr>
                         <tr><td>Series temporelles Parquet</td><td><code>.parquet</code></td><td>Pratique pour les tres grands tableaux de series temporelles, et souvent plus rapide que le CSV.</td></tr>
-                        <tr><td>Reseaux PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Fichiers de reseau PyPSA avec des resultats temporels.</td></tr>
+                        <tr><td>Jeux de données netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Jeux netCDF3/netCDF4 génériques et réseaux PyPSA.</td></tr>
                         <tr><td>pickle pandas</td><td><code>.pkl</code>, <code>.pickle</code></td><td>Pickles pandas DataFrame/Series. Les colonnes MultiIndex apparaissent comme une hierarchie. Fichiers non compresses seulement; utilisez Parquet pour les grands tableaux.</td></tr>
                         <tr><td>Feuilles de calcul Excel / LibreOffice</td><td><code>.xlsx</code>, <code>.xlsm</code>, <code>.xls</code>, <code>.ods</code></td><td>Chaque feuille sélectionnée est convertie en table au chargement, avec la même détection d'en-têtes et de temps que les fichiers CSV.</td></tr>
                     </tbody>
@@ -1368,8 +1370,8 @@ const translations = {
             excelFullLoadLimitHelp: 'Les fichiers tableur sont decomprimes en memoire pendant le chargement.',
             pickleFullLoadLimit: 'Limite de chargement complet Pickle',
             pickleFullLoadLimitHelp: 'Les fichiers pandas pickle sont charges entierement en memoire.',
-            pypsaNetcdfFullLoadLimit: 'Limite complete PyPSA netCDF',
-            pypsaNetcdfFullLoadLimitHelp: 'Les fichiers reseau PyPSA sont charges entierement en memoire dans la version actuelle.',
+            pypsaNetcdfFullLoadLimit: 'Limite de chargement complet netCDF',
+            pypsaNetcdfFullLoadLimitHelp: 'Les fichiers netCDF génériques et PyPSA sont chargés entièrement en mémoire dans la version actuelle.',
             csvCompactHintLimit: 'Suggerer une conversion CSV au-dessus de',
             csvCompactHintLimitHelp: 'Pour les CSV au-dessus de cette taille, l app suggere une conversion vers un fichier plus facile a manipuler sans charger toute la table en RAM.',
             compactFormatHelpTitle: 'Quel est ce format ?',
@@ -1384,9 +1386,11 @@ const translations = {
             fileLoaded: 'Fichier chargé avec succès',
             errorLoading: 'Erreur lors du chargement du fichier',
             invalidFile: 'Fichier de résultats ou texte invalide',
-            pypsaNetcdfTooLarge: '"{file}" fait {size}. La prise en charge PyPSA netCDF utilise actuellement un chargement eager (limite {limit}) ; le chargement PyPSA large/lazy n\'est pas encore disponible.',
+            pypsaNetcdfTooLarge: '"{file}" fait {size}. La prise en charge netCDF utilise actuellement un chargement complet (limite {limit}) ; le chargement large/lazy n\'est pas encore disponible.',
             fileTypePypsaNetcdf: 'Réseau PyPSA netCDF',
             fileTypePypsaSkippedDynamic: "{count} jeu(x) de données temporelles PyPSA non pris en charge n'ont pas été chargés.",
+            fileTypeGenericNetcdf: 'Jeu de données netCDF générique',
+            fileTypeNetcdfSkippedVariables: "{count} variable(s) netCDF n'ont pas pu être alignées sur la coordonnée X sélectionnée.",
             pickleTooLarge: '"{file}" ({size}) dépasse la limite pickle ({limit}). Augmentez-la dans Réglages d affichage → Chargement des fichiers → Limite de chargement complet Pickle, ou exportez en Parquet.',
             fileTypePandasPickle: 'pickle pandas',
             fileTypeMatlab: 'MATLAB MAT {version}',
@@ -2233,7 +2237,7 @@ const translations = {
                         <tr><td>MATLAB / OpenModelica / Dymola</td><td><code>.mat</code></td><td>Matrices MATLAB MAT v4-v7.3 y resultados de simulación OpenModelica/Dymola.</td></tr>
                         <tr><td>Series temporales CSV / texto</td><td><code>.csv</code>, <code>.txt</code></td><td>Tablas numericas delimitadas o separadas por espacios, con encabezados opcionales y deteccion automatica del tiempo.</td></tr>
                         <tr><td>Series temporales Parquet</td><td><code>.parquet</code></td><td>Conveniente para tablas de series temporales muy grandes y normalmente mas rapido que CSV.</td></tr>
-                        <tr><td>Redes PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Archivos de redes PyPSA con resultados de series temporales.</td></tr>
+                        <tr><td>Conjuntos netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Conjuntos netCDF3/netCDF4 genéricos y redes PyPSA.</td></tr>
                         <tr><td>pickle pandas</td><td><code>.pkl</code>, <code>.pickle</code></td><td>Pickles pandas DataFrame/Series. Las columnas MultiIndex aparecen como jerarquia. Solo archivos sin compresion; usa Parquet para datos grandes.</td></tr>
                         <tr><td>Planillas Excel / LibreOffice</td><td><code>.xlsx</code>, <code>.xlsm</code>, <code>.xls</code>, <code>.ods</code></td><td>Cada hoja seleccionada se convierte en tabla al cargar, con la misma detección de encabezados y tiempo que los archivos CSV.</td></tr>
                     </tbody>
@@ -2476,8 +2480,8 @@ const translations = {
             excelFullLoadLimitHelp: 'Los archivos de planilla se expanden en memoria durante la carga.',
             pickleFullLoadLimit: 'Limite de carga completa Pickle',
             pickleFullLoadLimitHelp: 'Los archivos pandas pickle se cargan completos en memoria.',
-            pypsaNetcdfFullLoadLimit: 'Limite completo PyPSA netCDF',
-            pypsaNetcdfFullLoadLimitHelp: 'Los archivos de red PyPSA se cargan completos en memoria en la version actual.',
+            pypsaNetcdfFullLoadLimit: 'Límite de carga completa netCDF',
+            pypsaNetcdfFullLoadLimitHelp: 'Los archivos netCDF genéricos y PyPSA se cargan completamente en memoria en la versión actual.',
             csvCompactHintLimit: 'Sugerir conversion CSV por encima de',
             csvCompactHintLimitHelp: 'Para CSV por encima de este tamano, la app sugiere convertir el CSV a un archivo mas facil de manejar sin cargar toda la tabla en RAM.',
             compactFormatHelpTitle: 'Que es este formato?',
@@ -2488,9 +2492,11 @@ const translations = {
             fileLoaded: 'Archivo cargado correctamente',
             errorLoading: 'Error al cargar el archivo',
             invalidFile: 'Archivo de resultados o texto no válido',
-            pypsaNetcdfTooLarge: '"{file}" pesa {size}. El soporte PyPSA netCDF actualmente usa carga eager (límite {limit}); la carga PyPSA grande/lazy aún no está disponible.',
+            pypsaNetcdfTooLarge: '"{file}" pesa {size}. El soporte netCDF usa actualmente carga completa (límite {limit}); la carga grande/lazy aún no está disponible.',
             fileTypePypsaNetcdf: 'Red PyPSA netCDF',
             fileTypePypsaSkippedDynamic: 'Se omitieron {count} conjunto(s) de series temporales PyPSA no compatibles.',
+            fileTypeGenericNetcdf: 'Conjunto netCDF genérico',
+            fileTypeNetcdfSkippedVariables: 'No se pudieron alinear {count} variable(s) netCDF con la coordenada X seleccionada.',
             pickleTooLarge: '"{file}" ({size}) supera el límite de pickle ({limit}). Auméntalo en Ajustes de visualización → Carga de archivos → Límite de carga completa Pickle, o exporta a Parquet.',
             fileTypePandasPickle: 'pickle pandas',
             fileTypeMatlab: 'MATLAB MAT {version}',
@@ -3313,7 +3319,7 @@ const translations = {
                         <tr><td>MATLAB / OpenModelica / Dymola</td><td><code>.mat</code></td><td>Array MATLAB MAT v4-v7.3 e risultati di simulazione OpenModelica/Dymola.</td></tr>
                         <tr><td>Serie temporali CSV / testo</td><td><code>.csv</code>, <code>.txt</code></td><td>Tabelle numeriche delimitate o separate da spazi, con intestazioni opzionali e rilevamento automatico del tempo.</td></tr>
                         <tr><td>Serie temporali Parquet</td><td><code>.parquet</code></td><td>Utile per tabelle di serie temporali molto grandi e di solito piu veloce del CSV.</td></tr>
-                        <tr><td>Reti PyPSA netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>File di reti PyPSA con risultati temporali.</td></tr>
+                        <tr><td>Dataset netCDF</td><td><code>.nc</code>, <code>.netcdf</code></td><td>Dataset netCDF3/netCDF4 generici e reti PyPSA.</td></tr>
                         <tr><td>pickle pandas</td><td><code>.pkl</code>, <code>.pickle</code></td><td>Pickle pandas DataFrame/Series. Le colonne MultiIndex appaiono come gerarchia. Solo file non compressi; usa Parquet per dati grandi.</td></tr>
                         <tr><td>Fogli di calcolo Excel / LibreOffice</td><td><code>.xlsx</code>, <code>.xlsm</code>, <code>.xls</code>, <code>.ods</code></td><td>Ogni foglio selezionato viene convertito in tabella al caricamento, con lo stesso rilevamento di intestazioni e tempo dei file CSV.</td></tr>
                     </tbody>
@@ -3556,8 +3562,8 @@ const translations = {
             excelFullLoadLimitHelp: 'I file foglio di calcolo vengono espansi in memoria durante il caricamento.',
             pickleFullLoadLimit: 'Limite caricamento completo Pickle',
             pickleFullLoadLimitHelp: 'I file pandas pickle vengono caricati interamente in memoria.',
-            pypsaNetcdfFullLoadLimit: 'Limite completo PyPSA netCDF',
-            pypsaNetcdfFullLoadLimitHelp: 'I file rete PyPSA vengono caricati interamente in memoria nella versione attuale.',
+            pypsaNetcdfFullLoadLimit: 'Limite di caricamento completo netCDF',
+            pypsaNetcdfFullLoadLimitHelp: 'I file netCDF generici e PyPSA vengono caricati interamente in memoria nella versione attuale.',
             csvCompactHintLimit: 'Suggerisci conversione CSV sopra',
             csvCompactHintLimitHelp: 'Per CSV sopra questa dimensione, l app suggerisce di convertire il CSV in un file piu facile da gestire senza caricare tutta la tabella in RAM.',
             compactFormatHelpTitle: 'Che formato e?',
@@ -3568,9 +3574,11 @@ const translations = {
             fileLoaded: 'File caricato correttamente',
             errorLoading: 'Errore durante il caricamento del file',
             invalidFile: 'File risultati o testo non valido',
-            pypsaNetcdfTooLarge: '"{file}" è {size}. Il supporto PyPSA netCDF attualmente usa caricamento eager (limite {limit}); il caricamento PyPSA grande/lazy non è ancora disponibile.',
+            pypsaNetcdfTooLarge: '"{file}" è {size}. Il supporto netCDF usa attualmente il caricamento completo (limite {limit}); il caricamento large/lazy non è ancora disponibile.',
             fileTypePypsaNetcdf: 'Rete PyPSA netCDF',
             fileTypePypsaSkippedDynamic: 'Sono stati omessi {count} dataset temporali PyPSA non supportati.',
+            fileTypeGenericNetcdf: 'Dataset netCDF generico',
+            fileTypeNetcdfSkippedVariables: 'Non è stato possibile allineare {count} variabili netCDF alla coordinata X selezionata.',
             pickleTooLarge: '"{file}" ({size}) supera il limite pickle ({limit}). Aumentalo in Impostazioni visualizzazione → Caricamento file → Limite caricamento completo Pickle, o esporta in Parquet.',
             fileTypePandasPickle: 'pickle pandas',
             fileTypeMatlab: 'MATLAB MAT {version}',

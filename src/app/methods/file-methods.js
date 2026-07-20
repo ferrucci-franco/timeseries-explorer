@@ -21,7 +21,7 @@ import {
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
 let duckDbSourceClassPromise = null;
-let pypsaNetcdfParserClassPromise = null;
+let netcdfParserClassPromise = null;
 let pickleParserClassPromise = null;
 let excelWorkbookModulePromise = null;
 let matlabMatFileClassPromise = null;
@@ -54,10 +54,10 @@ function cloneCsvProfileForIpc(csvProfile) {
 }
 
 async function loadPypsaNetcdfParserClass() {
-    if (!pypsaNetcdfParserClassPromise) {
-        pypsaNetcdfParserClassPromise = import('../../parsers/pypsa-netcdf-parser.js').then(module => module.default);
+    if (!netcdfParserClassPromise) {
+        netcdfParserClassPromise = import('../../parsers/netcdf-parser.js').then(module => module.default);
     }
-    return pypsaNetcdfParserClassPromise;
+    return netcdfParserClassPromise;
 }
 
 async function loadPickleParserClass() {
@@ -2336,6 +2336,9 @@ proto._fileTypeLabel = function(_entry, fileId = null) {
     if (metadata?.format === 'pypsa-netcdf' || metadata?.source === 'pypsa') {
         return i18n.t('fileTypePypsaNetcdf');
     }
+    if (metadata?.format === 'generic-netcdf' || metadata?.source === 'netcdf') {
+        return i18n.t('fileTypeGenericNetcdf');
+    }
     if (metadata?.format === 'pandas-pickle' || metadata?.source === 'pandas') {
         return i18n.t('fileTypePandasPickle');
     }
@@ -2348,6 +2351,7 @@ proto._fileTypeLabel = function(_entry, fileId = null) {
 proto._fileTypeHasWarnings = function(_entry, fileId = null) {
     const metadata = fileId ? this.plotManager.files.get(fileId)?.data?.metadata : null;
     return Number(metadata?.skippedDynamicCount || metadata?.skippedDynamic?.length || 0) > 0
+        || Number(metadata?.skippedVariablesCount || metadata?.skippedVariables?.length || 0) > 0
         || Number(metadata?.skippedColumnsCount || metadata?.skippedColumns?.length || 0) > 0
         || Number(metadata?.precisionLossCount || metadata?.precisionWarnings?.length || 0) > 0
         || Number(metadata?.duplicateColumnCount || metadata?.duplicateColumns?.length || 0) > 0;
@@ -2358,6 +2362,10 @@ proto._fileTypeTooltip = function(_entry, fileId = null, fallback = '') {
     const skipped = Number(metadata?.skippedDynamicCount || metadata?.skippedDynamic?.length || 0);
     if ((metadata?.format === 'pypsa-netcdf' || metadata?.source === 'pypsa') && skipped > 0) {
         return `${fallback}\n${i18n.t('fileTypePypsaSkippedDynamic').replace('{count}', String(skipped))}`;
+    }
+    const skippedNetcdf = Number(metadata?.skippedVariablesCount || metadata?.skippedVariables?.length || 0);
+    if ((metadata?.format === 'generic-netcdf' || metadata?.source === 'netcdf') && skippedNetcdf > 0) {
+        return `${fallback}\n${i18n.t('fileTypeNetcdfSkippedVariables').replace('{count}', String(skippedNetcdf))}`;
     }
     if (metadata?.format === 'pandas-pickle' || metadata?.source === 'pandas') {
         const lines = [fallback].filter(Boolean);

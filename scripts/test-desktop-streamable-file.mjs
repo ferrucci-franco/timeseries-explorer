@@ -120,7 +120,7 @@ try {
             name: 'huge-network.nc',
             size: PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES + 1024,
         }, '.nc'),
-        /PyPSA netCDF support currently uses eager loading/
+        /netCDF support currently uses eager loading/
     );
 
     const webHarness = new Harness();
@@ -134,7 +134,7 @@ try {
             name: 'web-too-large-network.nc',
             size: PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES + 1024,
         }, '.nc'),
-        /PyPSA netCDF support currently uses eager loading/
+        /netCDF support currently uses eager loading/
     );
 
     assert.doesNotThrow(() => harness._preflightPickleFile({
@@ -178,7 +178,7 @@ try {
     };
     await assert.rejects(
         () => harness._readLocalResultPath('C:\\temp\\huge-network.nc'),
-        /PyPSA netCDF support currently uses eager loading/
+        /netCDF support currently uses eager loading/
     );
     assert.equal(readFileCalls, 0, 'oversized PyPSA netCDF should be rejected before Desktop readFile');
 

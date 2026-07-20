@@ -10,6 +10,7 @@ own licenses. The principal runtime components are:
 | [DuckDB](https://github.com/duckdb/duckdb) and [DuckDB-Wasm](https://github.com/duckdb/duckdb-wasm) | Queries and memory-saving access to large tabular files | MIT |
 | [SheetJS Community Edition](https://git.sheetjs.com/SheetJS/sheetjs) | Excel and LibreOffice workbook import | Apache-2.0 |
 | [h5wasm](https://github.com/usnistgov/h5wasm) | HDF5/MAT v7.3 access in WebAssembly | NIST software notice and bundled HDF5 license terms |
+| [netcdfjs](https://github.com/cheminfo/netcdfjs) | netCDF3 parsing in web and desktop runtimes | MIT |
 | [fflate](https://github.com/101arrowz/fflate) | ZIP compression and extraction | MIT |
 | [pickleparser](https://github.com/ewfian/pickleparser) | pandas/Python pickle parsing | MIT |
 | [Electron](https://github.com/electron/electron) | Full Desktop version runtime | MIT |

@@ -14,7 +14,7 @@ Time series view:
 
 PyPSA netCDF support:
 0) Research notes / scope:
-   a) Target PyPSA-exported `.nc` / `.netcdf` files first, not arbitrary climate/science netCDF files.
+   a) PyPSA-exported `.nc` / `.netcdf` files were the first target; generic netCDF3/netCDF4 support was added afterward.
    b) PyPSA documents netCDF as a preferred network exchange format: smaller/faster than CSV, cleaner than HDF5, and able to support lazy loading.
    c) `pypsa.Network.export_to_netcdf()` exports the network and components through an `xarray.Dataset`. It includes static and time-series component attributes, but only attributes whose values differ from PyPSA defaults.
    d) PyPSA's CSV/Excel convention is useful for understanding the logical model: static component data is one table per component type, while time-series data is one table per component/attribute pair such as `generators-p_max_pu` or `loads-p_set`.
@@ -56,7 +56,7 @@ PyPSA netCDF support:
       - extensions `.nc` and `.netcdf`;
       - sniff netCDF headers when possible;
       - detect PyPSA-ness from dataset attributes, coordinate names, component dimensions, or known PyPSA variable naming patterns;
-      - if the file is valid netCDF but not recognizable as PyPSA, show a clear "generic netCDF is not supported yet" message.
+      - DONE 2026-07-20: dispatch non-PyPSA files to the generic netCDF parser while retaining the specialized PyPSA tree.
    c) Library spike needed before implementation:
       - Treat HDF5/netCDF4 support as the primary path from day one. A real PyPSA `.nc` fixture is HDF5 even without relying on a hand-made compressed fixture.
       - `netcdfjs` should not be the primary reader for PyPSA; it is only plausible as a fallback if runtime header sniffing finds netCDF3 classic magic bytes (`CDF\x01` / `CDF\x02`).
@@ -141,9 +141,9 @@ PyPSA netCDF support:
    b) Show file type as "PyPSA netCDF network".
    c) In the variable tree, show dynamic variables with normal draggable behavior. Show static attributes as parameter-style info only after the non-plottable behavior from item 5.c is in place; until then, keep them as asset metadata/descriptions.
    d) Search/filter should match component type, asset name, attribute name, carrier, bus, and description.
-   e) A non-PyPSA netCDF file should fail gracefully with a message explaining that generic netCDF browsing is not yet supported.
+   e) DONE 2026-07-20: Non-PyPSA netCDF3 Classic/64-bit-offset and netCDF4/HDF5 files open through the generic coordinate-aware parser.
    f) DONE 2026-07-01: Added explicit `plottable: false` tree handling and PyPSA static-attribute tree entries. Static attributes now appear under each asset as parameter-style info, remain out of `data.variables`, are not draggable/plottable, and are searchable through names/descriptions/PyPSA metadata.
-   g) DONE 2026-07-01: Non-PyPSA HDF5/netCDF files now fail with a clear generic-netCDF-not-supported message before PyPSA snapshot parsing.
+   g) SUPERSEDED 2026-07-20: The earlier generic-netCDF rejection was replaced by generic parsing; malformed and CDF-5 files still fail clearly.
    h) DONE 2026-07-01: PyPSA files now show a localized "PyPSA netCDF network" type badge in the file list.
    i) DONE 2026-07-02: Unsupported/skipped dynamic datasets now appear in the variable tree under "Unsupported time-series datasets" as non-plottable metadata entries, and PyPSA file badges get a localized warning tooltip when any dynamic datasets were skipped.
 8) Fixtures / validation:
@@ -207,9 +207,9 @@ PyPSA netCDF support:
    b) The sidebar shows a useful tree, not a flat list of raw netCDF variables.
    c) At least loads and generators dynamic attributes can be plotted against snapshots.
    d) Static network/component data is visible enough to understand what each series belongs to.
-   e) Unsupported/generic netCDF files fail with a clear user-facing message.
+   e) DONE 2026-07-20: Generic netCDF files open with CF time handling, multidimensional series expansion, coordinate metadata, and clear unsupported-variable entries.
    f) Web Light and Full Desktop behavior is explicit; large files do not crash the renderer silently.
-   g) DONE 2026-07-01: First small/eager implementation criteria are covered by parser tests, committed fixture, generic-netCDF negative tests, web build, and Desktop package validation outside OneDrive.
+   g) DONE 2026-07-20: Small/eager PyPSA and generic netCDF implementations are covered by committed fixtures, parser/integration tests, the release suite, and the web build.
    h) DONE 2026-07-01: Browser render verification completed with local Chrome/CDP at `http://127.0.0.1:5173/`: opened `test-files/pypsa/vetea_example_01.nc`, plotted `Generators / PV1 / p_max_pu`, confirmed Plotly rendered one trace with a date X axis, readable legend/title labels, and a component-grouped PyPSA sidebar.
    i) DONE 2026-07-01: Session save/restore coverage added through `npm run test:pypsa-session`, including deterministic PyPSA ids remapped after reopening the same fixture under a different file id.
    j) DONE 2026-07-02: Oversized PyPSA netCDF files now fail fast with a localized message explaining the eager runtime limit and that large/lazy PyPSA loading is not available yet.
