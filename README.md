@@ -42,6 +42,8 @@ npm run desktop
 ```
 
 It builds the web app into `dist/`, starts an Electron-local localhost server, and opens the app as Full Desktop.
+The packaged Desktop app works offline: application assets and data processing stay local. Web links open in the
+operating system's default browser, and the Electron renderer does not make external network requests.
 On Windows, you can also double-click `start-full-desktop.bat`. The first run installs missing npm dependencies if needed.
 
 To build Windows desktop artifacts:

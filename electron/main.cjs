@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
 const crypto = require('node:crypto');
 const http = require('node:http');
 const fs = require('node:fs');
@@ -11,6 +11,11 @@ const {
   mimeTypeForPath,
   streamLocalFile,
 } = require('./local-file-http.cjs');
+const {
+  appOriginFromUrl,
+  isAllowedRendererUrl,
+  isExternalWebUrl,
+} = require('./navigation-policy.cjs');
 
 const projectRoot = path.resolve(__dirname, '..');
 const staticRoot = path.join(projectRoot, 'dist');
@@ -287,12 +292,14 @@ function listenOnAvailablePort(port) {
 }
 
 async function createWindow(url) {
+  const appOrigin = appOriginFromUrl(url);
   const win = new BrowserWindow({
     width: 1320,
     height: 860,
     minWidth: 980,
     minHeight: 680,
     icon: fs.existsSync(desktopIconPath) ? desktopIconPath : undefined,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -303,6 +310,40 @@ async function createWindow(url) {
   });
 
   mainWindow = win;
+  win.removeMenu();
+
+  // Full Desktop is intentionally offline-first. The packaged renderer may
+  // request only its own loopback origin; external network traffic is denied.
+  win.webContents.session.webRequest.onBeforeRequest(
+    { urls: ['<all_urls>'] },
+    (details, callback) => {
+      callback({ cancel: !isAllowedRendererUrl(details.url, appOrigin) });
+    },
+  );
+
+  const openInSystemBrowser = targetUrl => {
+    if (!isExternalWebUrl(targetUrl, appOrigin)) return;
+    shell.openExternal(targetUrl).catch(err => {
+      console.error('[desktop] could not open external URL', {
+        url: targetUrl,
+        message: err?.message || String(err),
+      });
+    });
+  };
+
+  // Never create secondary Electron windows. Web links belong in the user's
+  // normal browser; every popup request is denied inside Electron.
+  win.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    openInSystemBrowser(targetUrl);
+    return { action: 'deny' };
+  });
+
+  win.webContents.on('will-navigate', (event, targetUrl) => {
+    if (isAllowedRendererUrl(targetUrl, appOrigin)) return;
+    event.preventDefault();
+    openInSystemBrowser(targetUrl);
+  });
+
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
   });
@@ -522,6 +563,7 @@ app.on('before-quit', cleanupTrackedTemporaryParquets);
 app.on('will-quit', cleanupTrackedTemporaryParquets);
 
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
   await sweepTemporaryParquetOrphans();
   await fsp.access(path.join(staticRoot, 'index.html'));
   const { port } = await listenOnAvailablePort(preferredPort);
