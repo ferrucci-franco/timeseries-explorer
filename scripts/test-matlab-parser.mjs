@@ -194,13 +194,26 @@ assert.ok(v73.entries.some(entry => entry.path === 'settings/gain'), 'v7.3 struc
 assert.equal(v73.entries.find(entry => entry.path === 'complex_signal')?.complex, true, 'v7.3 compound complex arrays are recognized');
 
 // MCOS timetable: a Level-5 file whose only variable is a `timetable` object.
-// The subsystem stores the datetime row-times and the tabular columns; the app
-// imports it directly rather than through the array picker.
+// Its datetime row-times and columns are surfaced as ordinary picker entries,
+// so the timetable lists in the same "Select MATLAB arrays" dialog as plain
+// arrays, with the row-times pre-selected as the time axis.
 assert.equal(detectMatFileVersion(fixture('timetable-v5.mat')), '5-7', 'a timetable MAT-file is a Level 5/7 container');
 const timetableInspection = await parser.inspect(fixture('timetable-v5.mat'), 'timetable-v5.mat');
-assert.equal(timetableInspection.kind, 'timetable', 'a timetable bypasses the general array picker');
-assert.ok(timetableInspection.data, 'a timetable inspection carries a ready-to-load result');
-const timetableData = await parser.parse(fixture('timetable-v5.mat'), 'timetable-v5.mat', { inspection: timetableInspection });
+assert.equal(timetableInspection.kind, 'general', 'a timetable lists in the standard MAT array picker');
+const timeAxisEntry = timetableInspection.entries.find(entry => entry.path === 'time');
+assert.ok(timeAxisEntry?.selectable, 'the datetime row-times are a selectable entry');
+assert.equal(timeAxisEntry.className, 'datetime', 'the row-times entry is typed as datetime');
+assert.equal(timeAxisEntry.datetime, true, 'the row-times entry is flagged as a datetime axis');
+assert.equal(timeAxisEntry.preferredTime, true, 'the row-times entry is the preferred time axis');
+const columnEntry = timetableInspection.entries.find(entry => entry.path === 'power_kW');
+assert.ok(columnEntry?.selectable, 'the timetable column is a selectable numeric entry');
+assert.deepEqual(columnEntry.shape, [4, 1], 'the timetable column keeps its length');
+
+// Auto time selection uses the datetime row-times as the calendar axis.
+const timetableData = parser.materialize(timetableInspection, {
+    selectedIds: timetableInspection.entries.filter(entry => entry.selectable).map(entry => entry.id),
+    timeMode: 'auto',
+}, 'timetable-v5.mat');
 assert.equal(timetableData.metadata.timeName, 'time', 'the timetable time axis keeps its dimension name');
 assert.equal(timetableData.metadata.timeKind, 'datetime', 'timetable row-times import as a datetime axis');
 assert.equal(timetableData.metadata.timeDisplayMode, 'calendar', 'a datetime axis defaults to the calendar display');
@@ -211,10 +224,10 @@ assert.equal(timetableTime.data[0], Date.UTC(2020, 0, 1, 0, 0, 0), 'row-times de
 assert.equal(timetableTime.timeOriginMs, timetableTime.data[0], 'the datetime origin is the first row time');
 assert.deepEqual(Array.from(timetableData.variables.power_kW.data), [1.5, 2.5, 3.5, 4.5], 'the timetable column values are recovered in order');
 assert.equal(timetableData.variables.power_kW.kind, 'variable', 'the timetable column is a plottable series');
-assert.ok(timetableData.tree._variables.power_kW, 'the timetable column appears in the variable tree');
-assert.equal(timetableData.tree._variables.time, undefined, 'the datetime axis is not offered as a plottable series');
+assert.ok(timetableData.tree._children || timetableData.tree._variables, 'the timetable builds a variable tree');
 
 const source = readFileSync(new URL('../src/ui/mat-variable-picker-dialog.js', import.meta.url), 'utf8');
+assert.match(source, /preferredTime/, 'the array picker pre-selects a timetable row-times axis');
 assert.match(source, /checkbox\.type = 'checkbox'/, 'MAT overview uses variable checkboxes');
 assert.match(source, /matPickerOverview/, 'MAT overview includes value previews');
 assert.match(source, /timeSelect/, 'MAT overview exposes time-axis selection');

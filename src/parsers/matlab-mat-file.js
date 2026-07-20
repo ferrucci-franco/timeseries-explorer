@@ -327,8 +327,6 @@ export default class MatlabMatFile {
     async parse(buffer, filename = '', options = {}) {
         const inspection = options.inspection || await this.inspect(buffer, filename);
         if (inspection.kind === 'modelica') return inspection.data || this.structureParser.parse(buffer);
-        // timetable/table objects are imported directly (like OpenModelica results).
-        if (inspection.data) return inspection.data;
         return this.materialize(inspection, options.selection || null, filename);
     }
 
@@ -367,17 +365,18 @@ export default class MatlabMatFile {
             if (node.data || node.text != null) entries.push(this._descriptor(node));
         };
         nodes.forEach(visit);
-        // A timetable/table is self-describing (named columns over a defined time
-        // axis), so it is imported directly rather than through the array picker.
+        // timetable/table objects (stored in the MCOS subsystem) are flattened
+        // into ordinary picker entries — their datetime row-times as a selectable
+        // time axis, their columns as numeric arrays — so they list alongside any
+        // plain arrays and share the same "Select MATLAB arrays" dialog.
         if (reader.subsystem && opaques.length) {
-            const data = this._buildMcosResult(reader.subsystem, opaques, filename);
-            if (data) return { version: '5-7', kind: 'timetable', filename, data, entries: [] };
+            for (const entry of this._mcosEntries(reader.subsystem, opaques)) entries.push(entry);
         }
         if (!entries.length) throw new Error('The MATLAB Level 5 file contains no readable arrays.');
         return { version: '5-7', kind: 'general', filename, entries };
     }
 
-    _buildMcosResult(subsystem, opaques, filename) {
+    _mcosEntries(subsystem, opaques) {
         const tables = [];
         for (const node of opaques) {
             const objectId = node.ref?.objectIds?.[0];
@@ -386,103 +385,60 @@ export default class MatlabMatFile {
             try { table = subsystem.interpretTable(objectId); } catch { table = null; }
             if (table && table.columns.length) tables.push({ node, table });
         }
-        if (!tables.length) return null;
+        if (!tables.length) return [];
 
         const multiple = tables.length > 1;
-        const variables = {};
-        const primary = tables[0].table;
-        const timeVariable = this._mcosTimeVariable(primary);
-        const timeName = this._uniqueName(variables, timeVariable.name);
-        timeVariable.name = timeName;
-        variables[timeName] = timeVariable;
-        const primaryLength = timeVariable.data.length;
-
-        let columnCount = 0;
+        const used = new Set();
+        const unique = path => {
+            let candidate = path || 'var';
+            let suffix = 2;
+            while (used.has(candidate)) candidate = `${path}_${suffix++}`;
+            used.add(candidate);
+            return candidate;
+        };
+        const entries = [];
         for (const { node, table } of tables) {
             const prefix = multiple ? `${this._safeName(node.name)}.` : '';
+            if (table.time && table.time.kind !== 'index' && table.time.values?.length) {
+                const path = unique(`${prefix}${table.time.name || 'Time'}`);
+                entries.push(this._mcosTimeEntry(path, table.time));
+            }
             for (const column of table.columns) {
-                const name = this._uniqueName(variables, `${prefix}${column.name}`);
-                const data = Float64Array.from(column.data, numericValue);
-                const variable = this._mcosVariable(name, data, node.className);
-                if (data.length !== primaryLength) {
-                    variable.independentIndex = true;
-                    variable.sampleIndexLength = data.length;
-                }
-                variables[name] = variable;
-                columnCount += 1;
+                const path = unique(`${prefix}${column.name}`);
+                entries.push(this._descriptor({
+                    path, name: column.name, className: 'double', storageType: 'mcos-column',
+                    shape: [column.data.length, 1], data: Array.from(column.data, numericValue),
+                    layout: 'column-major',
+                }));
             }
         }
-
-        const result = {
-            filename,
-            metadata: {
-                format: 'mat-v5-7',
-                source: 'matlab',
-                matVersion: '5-7',
-                timeName,
-                timeKind: timeVariable.timeKind,
-                timeDisplayMode: timeVariable.timeDisplayMode,
-                timeOriginMs: timeVariable.timeOriginMs ?? null,
-                numVariables: Object.keys(variables).length,
-                numParams: 0,
-                numTimevarying: columnCount,
-                numTimesteps: primaryLength,
-                timeStart: timeVariable.data[0],
-                timeEnd: timeVariable.data[primaryLength - 1],
-                matlabTimetable: true,
-            },
-            variables,
-        };
-        // The time axis is not itself a plottable series, so keep it out of the tree.
-        const plottable = Object.fromEntries(Object.entries(variables).filter(([name]) => name !== timeName));
-        result.tree = this.structureParser._buildTree(plottable);
-        return result;
+        return entries;
     }
 
-    _mcosTimeVariable(table) {
-        const time = table.time || { kind: 'index', name: 'Row', values: null };
-        const length = time.values?.length || table.numRows || table.columns[0]?.data.length || 0;
-        const values = time.kind === 'index' || !time.values
-            ? Float64Array.from({ length }, (_, index) => index)
-            : Float64Array.from(time.values, numericValue);
-        const variable = this._mcosVariable(time.name || 'Time', values, table.className, 'abscissa');
+    _mcosTimeEntry(path, time) {
+        const data = Array.from(time.values, numericValue);
+        const entry = this._descriptor({
+            path, name: time.name || 'Time',
+            className: time.kind === 'datetime' ? 'datetime' : 'double',
+            storageType: `mcos-${time.kind}`, shape: [data.length, 1], data, layout: 'column-major',
+        });
+        // The row-times default to being the imported time axis.
+        entry.selectable = true;
+        entry.selected = true;
+        entry.preferredTime = true;
         if (time.kind === 'datetime') {
-            variable.timeKind = 'datetime';
-            variable.timeDisplayMode = 'calendar';
-            variable.timeOriginMs = values.length ? values[0] : null;
-            variable.description = 'MATLAB datetime';
-        } else if (time.kind === 'numeric') {
-            variable.timeKind = 'numeric';
-            variable.timeDisplayMode = 'numeric';
-        } else {
-            variable.timeKind = 'index';
-            variable.timeDisplayMode = 'index';
-            variable.timeStepMode = 'index';
+            entry.datetime = true;
+            entry.preview = this._datetimePreview(data);
         }
-        return variable;
+        return entry;
     }
 
-    _mcosVariable(name, data, className, kind = 'variable') {
-        return {
-            name,
-            data,
-            description: `MATLAB ${className || 'timetable'}`,
-            kind,
-            dataType: this.structureParser._detectDataType(data, kind),
-            isConstant: this.structureParser._isConstantValues(data),
-            interpolation: 'linear',
-            negate: false,
-            source: 'matlab',
-        };
-    }
-
-    _uniqueName(variables, name) {
-        let candidate = name || 'var';
-        let suffix = 2;
-        while (Object.prototype.hasOwnProperty.call(variables, candidate)) {
-            candidate = `${name}_${suffix++}`;
-        }
-        return candidate;
+    _datetimePreview(values, limit = 4) {
+        const preview = values.slice(0, limit).map(value => {
+            const date = new Date(Number(value));
+            return Number.isFinite(date.getTime()) ? date.toISOString().replace('T', ' ').replace('.000Z', '') : String(value);
+        }).join(', ');
+        return values.length > limit ? `${preview}, …` : preview;
     }
 
     async _inspectV73(buffer, filename) {
@@ -638,6 +594,14 @@ export default class MatlabMatFile {
         const timeData = timeEntry ? Float64Array.from(timeEntry.data, numericValue) : Float64Array.from({ length: sampleLength }, (_, index) => index);
         variables[timeName] = this._variable(timeName, timeData, 'abscissa', timeEntry, 'MATLAB sample axis');
         if (!timeEntry) variables[timeName].syntheticIndex = true;
+        // A timetable's datetime row-times drive a calendar axis, like CSV dates.
+        const datetimeAxis = !!timeEntry?.datetime;
+        if (datetimeAxis) {
+            const timeVariable = variables[timeName];
+            timeVariable.timeKind = 'datetime';
+            timeVariable.timeDisplayMode = 'calendar';
+            timeVariable.timeOriginMs = timeData.length ? timeData[0] : null;
+        }
 
         for (const entry of selected) {
             if (entry === timeEntry) continue;
@@ -657,7 +621,9 @@ export default class MatlabMatFile {
                 source: 'matlab',
                 matVersion: inspection.version,
                 timeName,
-                timeKind: timeEntry ? 'numeric' : 'index',
+                timeKind: timeEntry ? (datetimeAxis ? 'datetime' : 'numeric') : 'index',
+                timeDisplayMode: timeEntry ? (datetimeAxis ? 'calendar' : 'numeric') : 'index',
+                timeOriginMs: datetimeAxis ? (timeData.length ? timeData[0] : null) : null,
                 numVariables: Object.keys(variables).length,
                 numParams: Object.values(variables).filter(variable => variable.kind === 'parameter').length,
                 numTimevarying: Object.values(variables).filter(variable => variable.kind === 'variable').length,
@@ -737,6 +703,9 @@ export default class MatlabMatFile {
 
     _chooseTimeEntry(entries, requestedId) {
         if (requestedId) return entries.find(entry => entry.id === requestedId && this._isVector(entry)) || null;
+        // A timetable's own row-times are the natural axis when nothing is requested.
+        const preferred = entries.find(entry => entry.preferredTime && this._isVector(entry));
+        if (preferred) return preferred;
         const named = entries.find(entry => this._isVector(entry) && /^(?:time|times|t|tiempo|temps|timestamp|timestamps)$/i.test(entry.name));
         if (named && this._monotonic(named.data)) return named;
         return null;
