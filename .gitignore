@@ -51,7 +51,8 @@
 !/test-files/
 !/test-files/csv/
 !/test-files/csv/**
-# Generated locally by scripts/gen-*-large-csv.py (large, regenerable).
+# Generated locally by scripts/gen-*-large-csv.py (regenerable).
+/test-files/csv/correlation-demo.csv
 /test-files/csv/correlation-large.csv
 /test-files/csv/missing-large.csv
 !/test-files/excel/
