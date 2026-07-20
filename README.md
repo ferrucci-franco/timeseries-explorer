@@ -1,6 +1,6 @@
 # Time Series Explorer
 
-Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, PyPSA netCDF, and small pandas pickle result files.
+Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, generic and PyPSA netCDF, and small pandas pickle result files.
 
 Created by [Franco Ferrucci](https://github.com/ferrucci-franco). A technical
 publication about the application is [in preparation](PUBLICATION.md).
@@ -86,7 +86,7 @@ output path.
 - `public`: files copied as-is into the final build
 - `src/app`: top-level application orchestration
 - `src/plots`: plot lifecycle, modes, interactions, Plotly integration
-- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, PyPSA netCDF, and pandas pickle inputs
+- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, generic/PyPSA netCDF, and pandas pickle inputs
 - `src/ui`: layout engine and modal helpers
 - `src/i18n`: translations and DOM localization
 - `src/styles`: split CSS source files
@@ -101,6 +101,22 @@ output path.
 - App methods are split by responsibility to reduce context size when editing.
 
 More detail: [docs/architecture.md](docs/architecture.md)
+
+## netCDF support
+
+The `.nc` and `.netcdf` loader accepts generic netCDF3 Classic, netCDF3
+64-bit-offset, and netCDF4/HDF5 datasets, while preserving the specialized
+component tree for PyPSA exports. CF-style time coordinates, units, scale and
+offset packing, missing values, groups, dimension scales, and numeric arrays
+with the time dimension in any position are normalized into plottable series.
+Additional dimensions are expanded using their coordinate labels. Variables
+that cannot share the selected X coordinate remain visible as non-plottable
+metadata.
+
+The current viewer has one shared X coordinate per file and loads netCDF files
+eagerly. CDF-5 is not supported, and non-standard CF calendars such as
+`360_day` remain numeric rather than being converted to calendar timestamps;
+use netCDF4/HDF5 or netCDF3 Classic for maximum compatibility.
 
 ## Production build
 
