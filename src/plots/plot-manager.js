@@ -1287,6 +1287,15 @@ class PlotManager {
 
     _updatePhaseChart(panelId, plot) {
         if (!plot.div) return;
+        // With the 2D fit workspace open, appending one trace would land it after
+        // the fit curves + origin (wrong order) and leave the time pane / pair
+        // dropdown stale. Do a full rebuild of both panes + the drawer instead.
+        if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && plot.phase2dFitContainer) {
+            this._rerenderPhase2dPlot?.(panelId, plot);
+            this._refreshPhase2dFitTimePlot?.(panelId, plot, { preserveView: true, preserveY: false });
+            this._renderPhase2dFitDrawer?.(panelId, plot);
+            return;
+        }
         // Add only the newest phase trace — never touches the camera/scene.
         // Note: _buildPhase2DTraces appends an __origin__ cross AFTER the phase traces,
         // so we index by phaseTraces.length-1 rather than allTraces.length-1.
