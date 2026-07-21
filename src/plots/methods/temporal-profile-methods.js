@@ -14,6 +14,12 @@ const PROFILE_CATEGORIES = ['workday', 'saturday', 'sunday'];
 const PROFILE_RECOMPUTE_DEBOUNCE_MS = 150;
 const PROFILE_BAR_OPACITY = 0.68;
 const PROFILE_RESOLUTION_PRESETS = [1440, 60, 30, 15, 5, 1];
+const PROFILE_PERIOD_DURATION_MINUTES = Object.freeze({
+    day: 24 * 60,
+    week: 7 * 24 * 60,
+    month: 31 * 24 * 60,
+    year: 366 * 24 * 60,
+});
 
 function resolutionPresetsForPeriod(period) {
     return period === 'day'
@@ -37,6 +43,7 @@ const fallbackText = {
     temporalProfileDay: 'Day',
     temporalProfileWeek: 'Week',
     temporalProfileMonth: 'Month',
+    temporalProfileYear: 'Year',
     temporalProfileCategories: 'Day categories',
     temporalProfileWorkdays: 'Workdays',
     temporalProfileSaturdays: 'Saturdays',
@@ -53,6 +60,7 @@ const fallbackText = {
     temporalProfileDiscardDay: 'Discard incomplete days',
     temporalProfileDiscardWeek: 'Discard incomplete weeks',
     temporalProfileDiscardMonth: 'Discard incomplete months',
+    temporalProfileDiscardYear: 'Discard incomplete years',
     temporalProfileDiscardTip: 'Discard a whole period when it contains NaN, a detected time gap, or is cut by the selected range.',
     temporalProfileMean: 'Mean',
     temporalProfileStd: 'Standard deviation',
@@ -73,6 +81,7 @@ const fallbackText = {
     temporalProfileXAxisDay: 'Time of day [UTC]',
     temporalProfileXAxisWeek: 'Time of week [UTC]',
     temporalProfileXAxisMonth: 'Day of month [UTC]',
+    temporalProfileXAxisYear: 'Time of year [UTC]',
 };
 
 function text(key) {
@@ -136,6 +145,17 @@ function localizedWeekdays() {
     return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 }
 
+function localizedMonths() {
+    const locale = i18n.currentLang === 'es' ? 'es' : i18n.currentLang === 'fr' ? 'fr' : i18n.currentLang === 'it' ? 'it' : 'en';
+    const labels = {
+        en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+        es: ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'],
+        fr: ['jan', 'fév', 'mar', 'avr', 'mai', 'juin', 'juil', 'aoû', 'sep', 'oct', 'nov', 'déc'],
+        it: ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'],
+    };
+    return labels[locale];
+}
+
 function resolutionLabel(minutes) {
     const rounded = Math.round(Number(minutes) * 1e6) / 1e6;
     if (rounded === 1440) return `1 ${text('temporalProfileDay').toLowerCase()}`;
@@ -167,7 +187,7 @@ proto._defaultTemporalProfileState = function() {
         x2: null,
         period: 'day',
         resolutionByPeriod: { ...TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES },
-        customResolutionByPeriod: { day: false, week: false, month: false },
+        customResolutionByPeriod: { day: false, week: false, month: false, year: false },
         renderMode: 'line-band',
         workdays: true,
         saturdays: true,
@@ -450,7 +470,7 @@ proto._temporalProfileCategoryEnabled = function(state, categoryId) {
     return true;
 };
 
-proto._temporalProfileMinimumResolutionMinutes = function(plot) {
+proto._temporalProfileDataStepMinutes = function(plot) {
     let minimum = null;
     for (const trace of plot?.traces || []) {
         if (!this._isVisible(trace) || traceIsLazy(this, trace) || this._fftTimeKind(trace.fileId) !== 'datetime') continue;
@@ -461,6 +481,13 @@ proto._temporalProfileMinimumResolutionMinutes = function(plot) {
         minimum = minimum == null ? stepMinutes : Math.max(minimum, stepMinutes);
     }
     return minimum == null ? null : Math.round(minimum * 1e6) / 1e6;
+};
+
+proto._temporalProfileMinimumResolutionMinutes = function(plot, period = this._ensureTemporalProfileState(plot).period) {
+    const dataStep = this._temporalProfileDataStepMinutes(plot);
+    const binLimitMinimum = PROFILE_PERIOD_DURATION_MINUTES[period] / TEMPORAL_PROFILE_MAX_BINS;
+    const minimum = Math.max(dataStep || 0, binLimitMinimum || 0);
+    return Math.round(minimum * 1e6) / 1e6;
 };
 
 proto._scheduleTemporalProfileRecompute = function(panelId, options = {}) {
@@ -478,7 +505,7 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
     plot._temporalProfileToken = token;
     const state = this._ensureTemporalProfileState(plot);
     const range = state.rangeFull ? null : this._activeTemporalProfileRange(plot);
-    const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot);
+    const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot, state.period);
     plot._temporalProfileMinimumResolutionMinutes = minimumResolution;
     if (resolutionBelowStep(state.resolutionByPeriod[state.period], minimumResolution)) {
         const matchingPreset = resolutionPresetsForPeriod(state.period).find(value => !resolutionBelowStep(value, minimumResolution)
@@ -618,9 +645,19 @@ proto._buildTemporalProfileLayout = function(plot, units = {}) {
     } else if (state.period === 'week') {
         const weekdays = localizedWeekdays();
         Object.assign(layout.xaxis, { range: [0, 168], tickmode: 'array', tickvals: weekdays.map((_, index) => index * 24 + 12), ticktext: weekdays, title: { text: text('temporalProfileXAxisWeek'), font: { size: 10 } } });
-    } else {
+    } else if (state.period === 'month') {
         const days = Array.from({ length: 31 }, (_, index) => index + 1);
         Object.assign(layout.xaxis, { range: [0, 31 * 24], tickmode: 'array', tickvals: days.map(day => (day - 0.5) * 24), ticktext: days.map(String), title: { text: text('temporalProfileXAxisMonth'), font: { size: 10 } } });
+    } else {
+        const monthStarts = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
+        const monthLengths = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        Object.assign(layout.xaxis, {
+            range: [0, 366 * 24],
+            tickmode: 'array',
+            tickvals: monthStarts.map((start, index) => (start + monthLengths[index] / 2) * 24),
+            ticktext: localizedMonths(),
+            title: { text: text('temporalProfileXAxisYear'), font: { size: 10 } },
+        });
     }
     const pending = plot?._temporalProfilePendingView;
     plot._temporalProfilePendingView = null;
@@ -851,7 +888,7 @@ proto._resetTemporalProfileView = function(panelId) {
 proto._resetTemporalProfileAnalysisView = function(plot) {
     if (!plot?.temporalProfileDiv) return Promise.resolve();
     const period = this._ensureTemporalProfileState(plot).period;
-    const xMax = period === 'day' ? 24 : period === 'week' ? 168 : 31 * 24;
+    const xMax = period === 'day' ? 24 : period === 'week' ? 168 : period === 'month' ? 31 * 24 : 366 * 24;
     return Plotly.relayout(plot.temporalProfileDiv, {
         'xaxis.range': [0, xMax],
         'xaxis.autorange': false,
@@ -1005,6 +1042,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         { label: text('temporalProfileDay'), value: 'day' },
         { label: text('temporalProfileWeek'), value: 'week' },
         { label: text('temporalProfileMonth'), value: 'month' },
+        { label: text('temporalProfileYear'), value: 'year' },
     ], state.period, period => {
         state.period = period;
         this._renderTemporalProfileOptionsPanel(panelId, plot);
@@ -1020,11 +1058,12 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     section(text('temporalProfileResolution'));
     const currentResolution = state.resolutionByPeriod[state.period];
     const presets = resolutionPresetsForPeriod(state.period);
-    const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot);
-    if (Number.isFinite(minimumResolution) && minimumResolution > 0) {
+    const dataStep = this._temporalProfileDataStepMinutes(plot);
+    const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot, state.period);
+    if (Number.isFinite(dataStep) && dataStep > 0) {
         const stepValue = document.createElement('span');
         stepValue.className = 'hist-option-value';
-        stepValue.textContent = resolutionLabel(minimumResolution);
+        stepValue.textContent = resolutionLabel(dataStep);
         row(text('temporalProfileDataStep'), stepValue);
     }
     const select = document.createElement('select');
@@ -1080,7 +1119,8 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     }));
     const discardKey = state.period === 'day' ? 'temporalProfileDiscardDay'
         : state.period === 'week' ? 'temporalProfileDiscardWeek'
-            : 'temporalProfileDiscardMonth';
+            : state.period === 'month' ? 'temporalProfileDiscardMonth'
+                : 'temporalProfileDiscardYear';
     row(text(discardKey), checkbox(state.discardIncomplete, checked => {
         state.discardIncomplete = checked;
         this._scheduleTemporalProfileRecompute(panelId, { immediate: true });

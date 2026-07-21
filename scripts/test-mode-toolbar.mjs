@@ -205,8 +205,8 @@ vm.runInNewContext([
     temporalMethodAssignment('_ensureTemporalProfileState'),
 ].join('\n'), {
     proto: TemporalStateHarness.prototype,
-    TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES: { day: 60, week: 60, month: 1440 },
-    TEMPORAL_PROFILE_PERIODS: new Set(['day', 'week', 'month']),
+    TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES: { day: 60, week: 60, month: 1440, year: 1440 },
+    TEMPORAL_PROFILE_PERIODS: new Set(['day', 'week', 'month', 'year']),
     PROFILE_LAYOUTS: new Set(['horizontal', 'vertical']),
     PROFILE_RENDER_MODES: new Set(['columns', 'line', 'line-band']),
     finiteOrNull(value) {
@@ -240,8 +240,8 @@ vm.runInNewContext([
     const migrated = manager._ensureTemporalProfileState({
         temporalProfile: {
             period: 'day',
-            resolutionByPeriod: { day: 1440, week: 60, month: 1440 },
-            customResolutionByPeriod: { day: false, week: false, month: false },
+            resolutionByPeriod: { day: 1440, week: 60, month: 1440, year: 1440 },
+            customResolutionByPeriod: { day: false, week: false, month: false, year: false },
         },
     });
     assert.equal(migrated.resolutionByPeriod.day, 60, 'obsolete one-day preset migrates to the hourly Day default');
@@ -259,7 +259,7 @@ assert.match(
 );
 assert.match(
     temporalMethodAssignment('_resetTemporalProfileAnalysisView'),
-    /period === 'day' \? 24 : period === 'week' \? 168 : 31 \* 24/,
+    /period === 'day' \? 24 : period === 'week' \? 168 : period === 'month' \? 31 \* 24 : 366 \* 24/,
     'Temporal Profile double-click restores the complete calendar domain',
 );
 assert.match(
@@ -276,6 +276,12 @@ assert.match(
     temporalMethodAssignment('_recomputeTemporalProfile'),
     /resolutionBelowStep\(state\.resolutionByPeriod\[state\.period\], minimumResolution\)[\s\S]*?state\.resolutionByPeriod\[state\.period\]/,
     'Temporal Profile corrects an existing resolution that becomes too fine',
+);
+assert.match(temporalProfileMethodsSource, /temporalProfileYear/, 'Temporal Profile exposes the Year period');
+assert.match(
+    temporalMethodAssignment('_temporalProfileMinimumResolutionMinutes'),
+    /PROFILE_PERIOD_DURATION_MINUTES\[period\] \/ TEMPORAL_PROFILE_MAX_BINS/,
+    'Temporal Profile disables resolutions that exceed the bin limit for a period',
 );
 
 const renderToolbar = (mode, stateAnimDim = 2, plotState = {}) => {

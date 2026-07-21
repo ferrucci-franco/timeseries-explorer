@@ -4,11 +4,12 @@
 // mean and standard deviation are then calculated across those period means, so
 // a day with denser sampling never receives more weight than another day.
 
-export const TEMPORAL_PROFILE_PERIODS = new Set(['day', 'week', 'month']);
+export const TEMPORAL_PROFILE_PERIODS = new Set(['day', 'week', 'month', 'year']);
 export const TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES = Object.freeze({
     day: 60,
     week: 60,
     month: 1440,
+    year: 1440,
 });
 export const TEMPORAL_PROFILE_MAX_BINS = 10_080;
 export const TEMPORAL_PROFILE_GAP_FACTOR = 1.5;
@@ -51,6 +52,14 @@ function nextUtcMonth(ms) {
     return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
 }
 
+function floorUtcYear(ms) {
+    return Date.UTC(new Date(ms).getUTCFullYear(), 0, 1);
+}
+
+function nextUtcYear(ms) {
+    return Date.UTC(new Date(ms).getUTCFullYear() + 1, 0, 1);
+}
+
 function periodInfo(ms, period) {
     if (period === 'day') {
         const startMs = floorUtcDay(ms);
@@ -62,16 +71,47 @@ function periodInfo(ms, period) {
         const startMs = floorUtcWeek(ms);
         return { startMs, endMs: startMs + WEEK_MS, category: 'all' };
     }
-    const startMs = floorUtcMonth(ms);
-    return { startMs, endMs: nextUtcMonth(startMs), category: 'all' };
+    if (period === 'month') {
+        const startMs = floorUtcMonth(ms);
+        return { startMs, endMs: nextUtcMonth(startMs), category: 'all' };
+    }
+    const startMs = floorUtcYear(ms);
+    const endMs = nextUtcYear(startMs);
+    const leap = endMs - startMs === 366 * DAY_MS;
+    return {
+        startMs,
+        endMs,
+        category: 'all',
+        // The template always reserves Feb 29 so dates from March onward stay
+        // aligned between leap and non-leap years.
+        structuralRanges: leap ? [] : [[59 * DAY_MS, 60 * DAY_MS]],
+    };
 }
 
 function templateDurationMs(period) {
     if (period === 'day') return DAY_MS;
     if (period === 'week') return WEEK_MS;
-    // Month profiles preserve calendar day-of-month alignment. Days beyond the
-    // actual month are structural, rather than missing, for shorter months.
-    return 31 * DAY_MS;
+    if (period === 'month') {
+        // Month profiles preserve calendar day-of-month alignment. Days beyond
+        // the actual month are structural, rather than missing, for shorter months.
+        return 31 * DAY_MS;
+    }
+    return 366 * DAY_MS;
+}
+
+function profileOffsetMs(timestampMs, info, period) {
+    let offset = timestampMs - info.startMs;
+    if (period === 'year' && info.structuralRanges?.length) {
+        const marchStart = Date.UTC(new Date(info.startMs).getUTCFullYear(), 2, 1);
+        if (timestampMs >= marchStart) offset += DAY_MS;
+    }
+    return offset;
+}
+
+function binIsStructural(item, period, binStartMs, binEndMs) {
+    if (period === 'month') return binStartMs >= item.endMs - item.startMs;
+    if (period !== 'year') return false;
+    return (item.structuralRanges || []).some(([start, end]) => binStartMs >= start && binEndMs <= end);
 }
 
 function median(values) {
@@ -198,7 +238,7 @@ export function buildTemporalProfile(options = {}) {
             continue;
         }
         const info = periodInfo(timestampMs, period);
-        const offsetMs = timestampMs - info.startMs;
+        const offsetMs = profileOffsetMs(timestampMs, info, period);
         let binIndex = Math.floor(offsetMs / resolutionMs);
         if (binIndex < 0 || binIndex >= binCount) continue;
         if (!periods.has(info.startMs)) periods.set(info.startMs, createPeriod(info, binCount));
@@ -247,8 +287,8 @@ export function buildTemporalProfile(options = {}) {
         for (let index = 1; gapThresholdMs != null && index < item.timestamps.length; index++) {
             if (item.timestamps[index] - item.timestamps[index - 1] > gapThresholdMs) {
                 item.hasGap = true;
-                const firstBin = Math.max(0, Math.floor((item.timestamps[index - 1] - item.startMs) / resolutionMs));
-                const lastBin = Math.min(binCount - 1, Math.floor((item.timestamps[index] - item.startMs) / resolutionMs));
+                const firstBin = Math.max(0, Math.floor(profileOffsetMs(item.timestamps[index - 1], item, period) / resolutionMs));
+                const lastBin = Math.min(binCount - 1, Math.floor(profileOffsetMs(item.timestamps[index], item, period) / resolutionMs));
                 for (let binIndex = firstBin; binIndex <= lastBin; binIndex++) item.gapByBin[binIndex] = 1;
             }
         }
@@ -283,11 +323,11 @@ export function buildTemporalProfile(options = {}) {
             continue;
         }
         stats.included++;
-        const actualDurationMs = item.endMs - item.startMs;
-        for (let binIndex = 0; binIndex < binCount; binIndex++) {
-            const binStartMs = binIndex * resolutionMs;
-            if (binStartMs >= actualDurationMs) continue; // structural day 29/30/31 absence
-            const acc = accumulators[binIndex];
+            for (let binIndex = 0; binIndex < binCount; binIndex++) {
+                const binStartMs = binIndex * resolutionMs;
+                const binEndMs = Math.min(durationMs, binStartMs + resolutionMs);
+                if (binIsStructural(item, period, binStartMs, binEndMs)) continue;
+                const acc = accumulators[binIndex];
             acc.expected++;
             acc.invalidSamples += item.invalidByBin[binIndex];
             if (item.gapByBin[binIndex]) acc.gapPeriods++;

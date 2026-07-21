@@ -137,6 +137,30 @@ const close = (actual, expected, epsilon = 1e-12, message = '') => {
     assert.equal(result.categories[0].bins[30].coverage, 1);
 }
 
+// Year profiles reserve Feb 29 structurally. March 1 and Dec 31 therefore stay
+// aligned across leap and non-leap years, while only the leap year contributes
+// to the Feb 29 bin.
+{
+    const result = buildTemporalProfile({
+        times: [
+            utc('2023-01-01T00:00:00Z'), utc('2023-03-01T00:00:00Z'), utc('2023-12-31T00:00:00Z'),
+            utc('2024-01-01T00:00:00Z'), utc('2024-02-29T00:00:00Z'), utc('2024-03-01T00:00:00Z'), utc('2024-12-31T00:00:00Z'),
+        ],
+        values: [1, 3, 5, 2, 20, 4, 6],
+        period: 'year',
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.binCount, 366);
+    const bins = result.categories[0].bins;
+    assert.equal(bins[0].mean, 1.5, 'January 1 aligns across years');
+    assert.equal(bins[59].mean, 20, 'only the leap year contributes to February 29');
+    assert.equal(bins[59].nExpectedPeriods, 1, 'February 29 is structural in a non-leap year');
+    assert.equal(bins[60].mean, 3.5, 'March 1 aligns across years');
+    assert.equal(bins[60].nExpectedPeriods, 2);
+    assert.equal(bins[365].mean, 5.5, 'December 31 aligns across years');
+    assert.equal(bins[365].nExpectedPeriods, 2);
+}
+
 // Selection boundaries produce partial periods; strict mode removes them.
 {
     const result = buildTemporalProfile({
