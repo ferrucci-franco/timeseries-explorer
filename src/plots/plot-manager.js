@@ -1294,6 +1294,7 @@ class PlotManager {
             this._rerenderPhase2dPlot?.(panelId, plot);
             this._refreshPhase2dFitTimePlot?.(panelId, plot, { preserveView: true, preserveY: false });
             this._renderPhase2dFitDrawer?.(panelId, plot);
+            if (this._hasLazyPhase2dPairs?.(plot)) this._refreshPhase2dLazyFits?.(panelId, plot);
             return;
         }
         // Add only the newest phase trace — never touches the camera/scene.

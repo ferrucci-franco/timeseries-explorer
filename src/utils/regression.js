@@ -36,7 +36,14 @@ export function regressionMetrics(sse, sst, n) {
 // when the slope is defined (≥2 rows and X has variance) and 'undefined'
 // otherwise; a warning code is attached for the degenerate cases.
 export function linearFit(x, y) {
-    const m = pairwiseMoments(x, y);
+    return linearFromMoments(pairwiseMoments(x, y));
+}
+
+// Same linear OLS result, built from already-accumulated pairwise moments.
+// Shared by the eager kernel and the lazy DuckDB path (which maps DuckDB's
+// regr_sxx/regr_syy/regr_sxy/avg to m2x/m2y/cMoment/means), so both produce
+// identical coefficients and metrics.
+export function linearFromMoments(m) {
     const { n, nExcluded, meanX, meanY, m2x, m2y, cMoment, minX, maxX } = m;
 
     const base = {
@@ -189,6 +196,28 @@ export function quadraticFitCentered(x, y) {
         YY += yi * yi;
     }
 
+    return quadraticFromMoments({
+        n, nExcluded, centerX, scaleX,
+        S0, S1, S2, S3, S4, T0, T1, T2, YY, minX, maxX,
+    });
+}
+
+// Solve the centered quadratic from its sufficient statistics (S_k = Σu^k,
+// T_k = Σu^k·y, YY = Σy², u = (x−centerX)/scaleX). Shared by the eager kernel
+// and the lazy DuckDB path so both produce identical a/b/c and metrics. Expects
+// n ≥ 3 rows already aggregated; returns the same result shape as
+// quadraticFitCentered.
+export function quadraticFromMoments(stats) {
+    const { n, nExcluded, centerX, scaleX, S0, S1, S2, S3, S4, T0, T1, T2, YY, minX, maxX } = stats;
+    const sstRaw = S0 > 0 ? YY - (T0 * T0) / S0 : NaN;
+    const base = {
+        model: 'quadratic', n, nExcluded, minX, maxX,
+        a: NaN, b: NaN, c: NaN, A: NaN, B: NaN, C: NaN,
+        centerX, scaleX, r2: NaN, rmse: NaN, sse: NaN, sst: sstRaw,
+    };
+    if (!(n >= QUADRATIC_MIN_N)) return { ...base, status: 'undefined', warning: 'insufficient-n' };
+    if (!(scaleX > 0) || !Number.isFinite(scaleX)) return { ...base, status: 'undefined', warning: 'x-constant' };
+
     // [S0 S1 S2][C]   [T0]
     // [S1 S2 S3][B] = [T1]
     // [S2 S3 S4][A]   [T2]
@@ -196,14 +225,11 @@ export function quadraticFitCentered(x, y) {
         [[S0, S1, S2], [S1, S2, S3], [S2, S3, S4]],
         [T0, T1, T2],
     );
-    if (singular || !solution) {
-        return { ...base, status: 'undefined', warning: 'singular' };
-    }
+    if (singular || !solution) return { ...base, status: 'undefined', warning: 'singular' };
     const [C, B, A] = solution;
 
     // SSE = Σy² − (C·T0 + B·T1 + A·T2) from the sufficient statistics.
     const sseRaw = YY - (C * T0 + B * T1 + A * T2);
-    const sstRaw = YY - (T0 * T0) / S0; // = m2y, from stats for parity
     const { sse, sst, r2, rmse } = regressionMetrics(sseRaw, sstRaw, n);
 
     // Convert centered coefficients back to y = a·x² + b·x + c.
@@ -213,21 +239,8 @@ export function quadraticFitCentered(x, y) {
     const c = C - (B * centerX) / scaleX + (A * centerX * centerX) / s2;
 
     return {
-        ...base,
-        a,
-        b,
-        c,
-        A,
-        B,
-        C,
-        centerX,
-        scaleX,
-        r2,
-        rmse,
-        sse,
-        sst,
-        status: 'ok',
-        warning: sst > 0 ? null : 'y-constant',
+        ...base, a, b, c, A, B, C, centerX, scaleX,
+        r2, rmse, sse, sst, status: 'ok', warning: sst > 0 ? null : 'y-constant',
     };
 }
 

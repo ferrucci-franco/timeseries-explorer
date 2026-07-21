@@ -268,7 +268,17 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 return;
             }
             if (this._isLazyFile?.(pair.fileId)) {
-                results.push({ pair, index, label, model, fit: null, curve: null, nScope: NaN, lazy: true });
+                // Lazy pairs are fitted exactly in DuckDB by _refreshPhase2dLazyFits
+                // (async). Reuse its cached result when it matches the current
+                // pair/model/range; otherwise show it as pending.
+                const key = this._phase2dLazyFitKey(plot, pair);
+                const cached = plot._phase2dLazyFits?.get(this._phase2dPairId(pair));
+                if (cached && cached.key === key && cached.fit) {
+                    const curve = cached.fit.status === 'ok' ? buildFitCurve(cached.fit) : { x: [], y: [] };
+                    results.push({ pair, index, label, model, fit: cached.fit, curve, nScope: cached.nScope, lazy: true });
+                } else {
+                    results.push({ pair, index, label, model, fit: null, curve: null, nScope: NaN, lazy: true, lazyStatus: cached?.status });
+                }
                 return;
             }
             const series = this._phase2dPairSeries(plot, pair);
@@ -278,6 +288,97 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         });
         plot._phase2dFits = results;
         return results;
+    };
+
+    // ── Lazy (DuckDB) exact fitting — mirrors the correlation lazy path ──
+    proto._phase2dPairId = function(pair) {
+        return `${pair?.x} ${pair?.y} ${pair?.fileId}`;
+    };
+    // Identity of a lazy fit result: recompute when pair, model or range change.
+    proto._phase2dLazyFitKey = function(plot, pair) {
+        const state = this._ensurePhase2dState(plot);
+        const model = this._phase2dPairModel(pair);
+        const range = state.rangeFull ? 'full' : `${state.x1}_${state.x2}`;
+        return `${this._phase2dPairId(pair)} ${model} ${range}`;
+    };
+
+    proto._hasLazyPhase2dPairs = function(plot) {
+        return (plot?.phaseTraces || []).some(p =>
+            p.visible !== false
+            && this._phase2dPairModel(p) !== 'none'
+            && this._isLazyFile?.(p.fileId));
+    };
+
+    // Query DuckDB for the exact fit of every lazy pair with a model, cache the
+    // results on the plot, then re-render curves + drawer. Token-guarded so a
+    // superseded query never paints stale coefficients.
+    proto._refreshPhase2dLazyFits = async function(panelId, plot = this.plots.get(panelId)) {
+        if (!plot || plot.mode !== 'phase2d' || !plot.phase2dFitContainer) return;
+        const state = this._ensurePhase2dState(plot);
+        if (!state.fitEnabled) return;
+        const token = (plot._phase2dLazyToken || 0) + 1;
+        plot._phase2dLazyToken = token;
+        if (!plot._phase2dLazyFits) plot._phase2dLazyFits = new Map();
+
+        const lazyPairs = (plot.phaseTraces || []).filter(p =>
+            p.visible !== false
+            && this._phase2dPairModel(p) !== 'none'
+            && this._isLazyFile?.(p.fileId));
+        if (!lazyPairs.length) return;
+
+        const [lo, hi] = this._phase2dFitActiveRange(plot);
+        const byFile = new Map();
+        for (const pair of lazyPairs) {
+            if (!byFile.has(pair.fileId)) byFile.set(pair.fileId, []);
+            byFile.get(pair.fileId).push(pair);
+        }
+
+        const jobs = [...byFile.entries()].map(async ([fileId, pairs]) => {
+            const data = this.files.get(fileId)?.data;
+            const source = data?._duckdb?.source;
+            if (!source?.getPhaseRegressionStats) return { pairs, error: 'noSql' };
+            const transform = this._fileTransform(fileId);
+            const timeVar = this._getTimeVar(fileId);
+            const sourceTimeRange = state.rangeFull ? null : this._sourceRangeForDisplayRange(fileId, [lo, hi], timeVar);
+            try {
+                const stats = await source.getPhaseRegressionStats(
+                    data,
+                    pairs.map(p => ({
+                        x: p.x, y: p.y, model: this._phase2dPairModel(p),
+                        signX: this.isVariableSignInverted?.(fileId, p.x) ? -1 : 1,
+                        signY: this.isVariableSignInverted?.(fileId, p.y) ? -1 : 1,
+                    })),
+                    { sourceTimeRange, gain: transform.gain, yOffset: transform.yOffset },
+                );
+                return { pairs, stats };
+            } catch (err) {
+                console.warn('[phase2d-fit] lazy query failed:', err);
+                return { pairs, error: 'error' };
+            }
+        });
+
+        const settled = await Promise.all(jobs);
+        if (plot._phase2dLazyToken !== token) return; // superseded while awaiting
+
+        for (const job of settled) {
+            job.pairs.forEach((pair, i) => {
+                const id = this._phase2dPairId(pair);
+                const key = this._phase2dLazyFitKey(plot, pair);
+                if (job.error) {
+                    const prev = plot._phase2dLazyFits.get(id);
+                    plot._phase2dLazyFits.set(id, { key, fit: prev?.fit || null, nScope: prev?.nScope ?? NaN, status: job.error });
+                    return;
+                }
+                const s = job.stats?.[i];
+                if (s && s.status === 'ok' && s.fit) {
+                    plot._phase2dLazyFits.set(id, { key, fit: s.fit, nScope: s.nScope, status: 'ok' });
+                } else {
+                    plot._phase2dLazyFits.set(id, { key, fit: null, nScope: NaN, status: s?.status || 'undefined' });
+                }
+            });
+        }
+        this._rerenderPhase2dPlot(panelId, plot);
+        this._renderPhase2dFitDrawer(panelId, plot);
     };
 
     // Plotly traces for the fit curves: same colour as the pair, thicker dashed
@@ -390,6 +491,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         pair.fitModel = PHASE2D_FIT_MODELS.has(model) ? model : 'none';
         this._rerenderPhase2dPlot(panelId, plot);
         this._renderPhase2dFitDrawer(panelId, plot);
+        if (this._hasLazyPhase2dPairs(plot)) this._refreshPhase2dLazyFits(panelId, plot);
     };
 
     // Re-render the 2D plot preserving the current view (a fit/range change must
@@ -520,6 +622,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         this._renderPhase2dFitDrawer(panelId, plot);
         // Add the fit curves to the (reparented) 2D plot.
         this._rerenderPhase2dPlot(panelId, plot);
+        // Kick off exact lazy fits for any DuckDB-backed pairs.
+        if (this._hasLazyPhase2dPairs(plot)) this._refreshPhase2dLazyFits(panelId, plot);
     };
 
     proto._exitPhase2dFitShell = function(panelId, plot = this.plots.get(panelId)) {
@@ -871,6 +975,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const run = () => {
             this._rerenderPhase2dPlot(panelId, plot);
             this._renderPhase2dFitDrawer(panelId, plot);
+            // Lazy pairs re-query DuckDB on release (never on every drag frame).
+            if (this._hasLazyPhase2dPairs(plot)) this._refreshPhase2dLazyFits(panelId, plot);
         };
         if (options.immediate) run();
         else plot._phase2dFitRecomputeTimer = setTimeout(run, 150);
@@ -910,9 +1016,16 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         );
     };
 
-    proto._phase2dFitWarningText = function(fit, lazy) {
-        if (lazy) return i18n.t('phase2dFitLazyPending');
-        if (!fit) return i18n.t('phase2dFitNoData');
+    proto._phase2dFitWarningText = function(fit, lazy, lazyStatus) {
+        if (!fit) {
+            if (lazy) {
+                if (lazyStatus === 'error') return i18n.t('phase2dFitLazyError');
+                if (lazyStatus === 'noRegr' || lazyStatus === 'noSql') return i18n.t('phase2dFitLazyNoRegr');
+                if (lazyStatus === 'undefined') return i18n.t('phase2dFitNoData');
+                return i18n.t('phase2dFitLazyPending');
+            }
+            return i18n.t('phase2dFitNoData');
+        }
         const map = {
             'insufficient-n': i18n.t('phase2dFitInsufficientN'),
             'x-constant': i18n.t('phase2dFitXConstant'),
@@ -1168,7 +1281,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             block.appendChild(stats);
         }
 
-        const warn = this._phase2dFitWarningText(r.fit, r.lazy);
+        const warn = this._phase2dFitWarningText(r.fit, r.lazy, r.lazyStatus);
         if (warn) {
             const w = document.createElement('div');
             w.className = 'phase2d-fit-warning';

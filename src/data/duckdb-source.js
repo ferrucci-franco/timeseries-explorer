@@ -27,6 +27,13 @@ import { customDatetimePatternInfo, parseCsvNumber, parseCsvTimeValue } from '..
 import { registerDuckDbFile } from './duckdb-file-registration.js';
 import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
 import { buildPairCorrelationSql, parsePairCorrelations } from './pair-correlation-sql.js';
+import {
+    buildRegressionPass1Sql,
+    parseRegressionPass1,
+    buildRegressionPass2Sql,
+    parseRegressionPass2,
+} from './pair-regression-sql.js';
+import { linearFromMoments, quadraticFromMoments } from '../utils/regression.js';
 import { buildMissingBucketsSql } from './missing-buckets-sql.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
 import {
@@ -61,6 +68,8 @@ export default class DuckDbSource {
         this._temporalProfileCache = new Map();
         this._correlationCache = new Map();
         this._corrCapable = null; // cached "does DuckDB expose corr()" probe
+        this._regressionCache = new Map();
+        this._regrCapable = null; // cached "does DuckDB expose regr_*()" probe
         this._activeInteractiveQuery = null;
         this._connectionQueue = Promise.resolve();
     }
@@ -808,6 +817,11 @@ export default class DuckDbSource {
         if (this._correlationCache?.size) {
             for (const key of [...this._correlationCache.keys()]) {
                 if (String(key).startsWith(tableName + '')) this._correlationCache.delete(key);
+            }
+        }
+        if (this._regressionCache?.size) {
+            for (const key of [...this._regressionCache.keys()]) {
+                if (String(key).startsWith(tableName)) this._regressionCache.delete(key);
             }
         }
         if (this._rangeCache?.size) {
@@ -1883,6 +1897,164 @@ export default class DuckDbSource {
         }
     }
 
+
+    // Exact per-pair OLS fitting over the source rows (never overview/stride) —
+    // the analogue of getPhaseTrajectory but for statistics. `pairs` is
+    // [{ x, y, model, signX, signY }]; returns one result per pair aligned to the
+    // input: { status, model, nScope, fit } where fit is the same shape the eager
+    // kernel produces (linearFromMoments / quadraticFromMoments), or a status of
+    // 'noSql' / 'noRegr' when unavailable.
+    async getPhaseRegressionStats(legacyData, pairs, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getPhaseRegressionStats: data is not DuckDB-backed (eager mode)');
+        const list = Array.isArray(pairs) ? pairs : [];
+        const resolved = list.map(p => {
+            const vx = legacyData.variables?.[p?.x];
+            const vy = legacyData.variables?.[p?.y];
+            const model = (p?.model === 'linear' || p?.model === 'quadratic') ? p.model : 'none';
+            return { pair: p, vx, vy, model, ok: !!(vx && vy) && model !== 'none' };
+        });
+        const active = resolved.filter(r => r.ok);
+        if (!active.length) return resolved.map(r => ({ status: r.model === 'none' ? 'none' : 'noSql', model: r.model }));
+
+        if (!(await this._supportsRegr())) {
+            return resolved.map(r => ({ status: r.ok ? 'noRegr' : (r.model === 'none' ? 'none' : 'noSql'), model: r.model }));
+        }
+
+        const gain = Number.isFinite(Number(options.gain)) ? Number(options.gain) : 1;
+        const yOffset = Number.isFinite(Number(options.yOffset)) ? Number(options.yOffset) : 0;
+        const sourceRange = Array.isArray(options.sourceTimeRange) ? options.sourceTimeRange : null;
+
+        const cacheKey = this._regressionCacheKey(meta, active, sourceRange, gain, yOffset);
+        const cached = cacheKey ? this._regressionCache.get(cacheKey) : null;
+        if (cached) {
+            const activeResults = cached instanceof Promise ? await cached : cached;
+            return this._reindexRegressionResults(resolved, activeResults);
+        }
+
+        const timeCol = meta.timeColumn;
+        const escTime = String(timeCol).replace(/"/g, '""');
+        const timeKind = legacyData?.metadata?.timeKind;
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`);
+        const where = this._phaseWhereSql(tExpr, sourceRange);
+        const oLit = this._numericLiteral(yOffset);
+        // Bake gain, per-variable sign and offset into the value expression so the
+        // coefficients match the eager transformed data exactly (transformed =
+        // raw * gain * sign + yOffset).
+        const valueExpr = (variable, name, sign) => {
+            const gLit = this._numericLiteral(gain * (sign < 0 ? -1 : 1));
+            return `(${this._valueExpressionSql(variable, name, { castDouble: true })} * ${gLit} + ${oLit})`;
+        };
+        const pairExprs = active.map((r, i) => ({
+            i,
+            vx: valueExpr(r.vx, r.pair.x, r.pair.signX),
+            vy: valueExpr(r.vy, r.pair.y, r.pair.signY),
+        }));
+
+        const promise = this._runRegressionQueries(meta.tableName, where, pairExprs, active);
+        if (cacheKey) this._rememberRegressionCache(cacheKey, promise);
+        try {
+            const activeResults = await promise;
+            if (cacheKey) this._regressionCache.set(cacheKey, activeResults);
+            return this._reindexRegressionResults(resolved, activeResults);
+        } catch (err) {
+            if (cacheKey) this._regressionCache.delete(cacheKey);
+            throw err;
+        }
+    }
+
+    async _runRegressionQueries(tableName, where, pairExprs, active) {
+        // Pass 1: moments + centre/scale for every pair.
+        const sql1 = buildRegressionPass1Sql(tableName, where, pairExprs);
+        const res1 = await this._interactiveQuery(sql1);
+        const pass1 = parseRegressionPass1(
+            (name) => { const v = res1?.getChild?.(name)?.get(0); return v == null ? NaN : Number(v); },
+            pairExprs.length,
+        );
+
+        // Pass 2: quadratic sufficient statistics (centred), only where needed.
+        const quadExprs = [];
+        active.forEach((r, i) => {
+            if (r.model !== 'quadratic') return;
+            const { centerX, scaleX } = pass1[i];
+            if (!Number.isFinite(centerX) || !(scaleX > 0)) return; // will be flagged below
+            quadExprs.push({ i, vx: pairExprs[i].vx, vy: pairExprs[i].vy, centerX, scaleX });
+        });
+        let pass2 = new Map();
+        if (quadExprs.length) {
+            const sql2 = buildRegressionPass2Sql(tableName, where, quadExprs, (v) => this._numericLiteral(v));
+            const res2 = await this._interactiveQuery(sql2);
+            pass2 = parseRegressionPass2(
+                (name) => { const v = res2?.getChild?.(name)?.get(0); return v == null ? NaN : Number(v); },
+                quadExprs,
+            );
+        }
+
+        return active.map((r, i) => {
+            const { nScope, moments, centerX, scaleX } = pass1[i];
+            if (r.model === 'linear') {
+                return { status: 'ok', model: 'linear', nScope, fit: linearFromMoments(moments) };
+            }
+            // quadratic
+            const stats = pass2.get(i);
+            if (!stats) {
+                // centre/scale undefined (constant/insufficient X) → degenerate fit.
+                const degenerate = quadraticFromMoments({
+                    n: moments.n, nExcluded: moments.nExcluded, centerX, scaleX,
+                    S0: NaN, S1: NaN, S2: NaN, S3: NaN, S4: NaN, T0: NaN, T1: NaN, T2: NaN, YY: NaN,
+                    minX: moments.minX, maxX: moments.maxX,
+                });
+                return { status: 'ok', model: 'quadratic', nScope, fit: degenerate };
+            }
+            const fit = quadraticFromMoments({
+                n: moments.n, nExcluded: moments.nExcluded, centerX, scaleX,
+                ...stats, minX: moments.minX, maxX: moments.maxX,
+            });
+            return { status: 'ok', model: 'quadratic', nScope, fit };
+        });
+    }
+
+    _reindexRegressionResults(resolved, activeResults) {
+        let k = 0;
+        return resolved.map(r => (r.ok
+            ? (activeResults[k++] ?? { status: 'undefined', model: r.model })
+            : { status: r.model === 'none' ? 'none' : 'noSql', model: r.model }));
+    }
+
+    _regressionCacheKey(meta, active, sourceRange, gain, yOffset) {
+        const tableName = meta?.tableName;
+        if (!tableName) return null;
+        const pairsKey = active.map(r => (
+            `${r.pair.x}${this._dataToolCacheToken(r.vx)}${r.pair.y}${this._dataToolCacheToken(r.vy)}`
+            + `${r.model}${r.pair.signX < 0 ? '-' : '+'}${r.pair.signY < 0 ? '-' : '+'}`
+        )).join('');
+        const rangeKey = Array.isArray(sourceRange) && sourceRange.length >= 2
+            ? `${this._roundedRangeKey(Number(sourceRange[0]))}${this._roundedRangeKey(Number(sourceRange[1]))}`
+            : 'full';
+        const version = [Number(meta.appendRows) || 0, Number(meta.appendBytes) || 0, Number(meta.totalRows) || ''].join('');
+        return [tableName, 'regr', pairsKey, rangeKey, gain, yOffset, version].join('');
+    }
+
+    _rememberRegressionCache(key, value) {
+        this._regressionCache.set(key, value);
+        while (this._regressionCache.size > 12) {
+            const first = this._regressionCache.keys().next().value;
+            this._regressionCache.delete(first);
+        }
+    }
+
+    async _supportsRegr() {
+        if (this._regrCapable !== null) return this._regrCapable;
+        try {
+            await this._interactiveQuery('SELECT regr_slope(2.0, 1.0), regr_sxx(2.0, 1.0);');
+            this._regrCapable = true;
+        } catch (_) {
+            this._regrCapable = false;
+        }
+        return this._regrCapable;
+    }
 
     _reindexPairResults(resolved, activeResults) {
         let k = 0;
