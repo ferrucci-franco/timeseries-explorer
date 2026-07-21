@@ -1557,12 +1557,13 @@ proto._buildTimeLayout = function(plot) {
 };
 
 // ── Phase 2D ──
-// Whether a 2D pair trace of `len` points should render with WebGL. Displays
-// that show markers cross to WebGL far earlier (GL_MARKER_THRESHOLD) because in
-// SVG each marker is its own DOM node, whereas a Lines display is one <path>.
+// Whether a 2D pair trace of `len` points should render with WebGL. Marker
+// displays use WebGL for any non-empty trace because SVG creates one DOM node
+// per point; line-only displays stay SVG until the usual large-trace threshold.
 proto._phase2dUseGL = function(len, showMarkers) {
-    const threshold = showMarkers ? PlotManager.GL_MARKER_THRESHOLD : PlotManager.GL_POINT_THRESHOLD;
-    return (len || 0) >= threshold;
+    const pointCount = len || 0;
+    if (showMarkers) return pointCount > 0;
+    return pointCount >= PlotManager.GL_POINT_THRESHOLD;
 };
 
 proto._buildPhase2DTraces = function(plot) {

@@ -209,8 +209,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             markers.push(showMarkers
                 ? { color, size: state.markerSize, opacity: state.markerOpacity }
                 : { color });
-            // Toggling markers on/off can cross the WebGL point threshold, so a
-            // Points display doesn't crawl in SVG. Only send `type` when it
+            // Toggling markers on/off can switch the trace into/out of WebGL, so
+            // a Points display doesn't crawl in SVG. Only send `type` when it
             // actually changes — restyling `type` forces a replot, and marker
             // size/opacity tweaks must stay cheap.
             const len = Math.max(tr.x?.length || 0, tr.y?.length || 0);
