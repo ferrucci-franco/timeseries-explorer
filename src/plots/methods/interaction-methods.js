@@ -788,6 +788,7 @@ proto._cleanupLazyDetailForPanel = function(panelId, plot = this.plots?.get(pane
     this._clearRelayoutingRefresh(plot);
     this._cancelPendingLazyDetail(panelId);
     this._cancelActiveLazySources(panelId);
+    this._cancelLazyMissingRequest(panelId);
     if (this._zoomTokens) {
         this._zoomTokens.set(panelId, (this._zoomTokens.get(panelId) || 0) + 1);
     }
@@ -798,6 +799,18 @@ proto._cleanupLazyDetailForPanel = function(panelId, plot = this.plots?.get(pane
     const panelEl = plot?.div?.closest?.('.layout-panel')
         || (typeof document !== 'undefined' ? document.querySelector(`.layout-panel[data-id="${panelId}"]`) : null);
     panelEl?.querySelectorAll('.lazy-detail-indicator').forEach(indicator => indicator.remove());
+};
+
+// Missing/NaN scans are viewport work too, but they are deliberately tracked
+// separately from trace-detail queries. A fast pan can otherwise enqueue one
+// full-file CSV scan per relayout; token guards prevent stale paint, but do not
+// remove those scans from DuckDB's serialized connection queue.
+proto._cancelLazyMissingRequest = function(panelId) {
+    const request = this._lazyMissingRequests?.get(panelId);
+    if (!request) return false;
+    this._lazyMissingRequests.delete(panelId);
+    request.controller?.abort?.();
+    return true;
 };
 
 proto._runLazyDetailGroup = function(panelId, token, plot, group, target) {
@@ -1235,7 +1248,14 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
     // FFT). Other modes: nothing.
     const active = plot?.div
         && (plot.mode === 'fft' || (plot.mode === 'timeseries' && plot.showMissingData));
-    if (!active) return;
+    if (!active) {
+        this._cancelLazyMissingRequest(panelId);
+        return Promise.resolve([]);
+    }
+
+    // Latest viewport wins. Aborting here cancels an executing scan and also
+    // marks queued scans so DuckDbSource drops them before they reach DuckDB.
+    this._cancelLazyMissingRequest(panelId);
 
     const perFile = new Map();
     for (const t of plot.traces) {
@@ -1272,7 +1292,7 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
 
     if (!perFile.size) {
         render(eagerItems, [], this._missingViewIsDense(plot, eagerItems));
-        return;
+        return Promise.resolve([]);
     }
 
     const xa = plot.div._fullLayout?.xaxis;
@@ -1283,24 +1303,55 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
     ].join('');
     if (plot._lazyMissSig === sig && plot._lazyMissItems) {
         render(plot._lazyMissItems, plot._lazyMissSolid || [], plot._lazyMissDense);
-        return;
+        return Promise.resolve(plot._lazyMissItems);
     }
 
     // Immediate feedback: a spinner pill while the query runs.
-    this._setMissingDensityNotice(plot, 'loading');
+    if (plot.mode === 'timeseries') this._setMissingDensityNotice(plot, 'loading');
 
-    Promise.all([...perFile.entries()].map(([fileId, entry]) => {
+    const controller = new AbortController();
+    const request = { controller, token, plot };
+    if (!this._lazyMissingRequests) this._lazyMissingRequests = new Map();
+    this._lazyMissingRequests.set(panelId, request);
+
+    const settled = Promise.all([...perFile.entries()].map(([fileId, entry]) => {
         const src = this._sourceRangeForDisplayRange(fileId, [t0, t1], entry.timeVar);
         if (!src || !src.every(Number.isFinite)) return { intervals: [], solidIntervals: [], dense: false };
-        // Cap buckets to the estimated sample count in view. Finer than the real
-        // sampling, most buckets would be empty and read as false time gaps
-        // (whole view painted yellow at deep zoom) — so ~one bucket per sample.
-        const nBuckets = this._lazyMissingBucketCount(entry.data, src[0], src[1], pxWidth);
-        return entry.source.getMissingIntervals(entry.data, [...entry.varNames], src[0], src[1], nBuckets)
-            .then(({ buckets }) => missingBucketsToIntervals(buckets, { t0, t1, nBuckets, fileId, timeVar: entry.timeVar }))
-            .catch(err => { console.warn('[missing] lazy query failed:', err); return { intervals: [], solidIntervals: [], dense: false }; });
+        const sourceLo = Math.min(src[0], src[1]);
+        const sourceHi = Math.max(src[0], src[1]);
+        if (!(sourceHi > sourceLo)) return { intervals: [], solidIntervals: [], dense: false };
+        // Cap buckets to the estimated sample count where a cheap row estimate
+        // exists (notably Parquet). Raw CSV views deliberately skip COUNT at
+        // load time; their timestamp bounds make oversampled buckets safe.
+        const nBuckets = this._lazyMissingBucketCount(entry.data, sourceLo, sourceHi, pxWidth);
+        return entry.source.getMissingIntervals(
+            entry.data,
+            [...entry.varNames],
+            sourceLo,
+            sourceHi,
+            nBuckets,
+            { signal: controller.signal },
+        ).then(({ buckets }) => missingBucketsToIntervals(buckets, {
+            t0: sourceLo,
+            t1: sourceHi,
+            nBuckets,
+            fileId,
+            timeVar: entry.timeVar,
+            // The FFT time pane and the trace data both use this canonical
+            // conversion. Keeping bands on it prevents source/display drift.
+            mapTime: value => this._displayTimeForFetchedSourceTime(fileId, value, null, entry.timeVar),
+        })).catch(err => {
+            if (err?.name === 'AbortError') throw err;
+            console.warn('[missing] lazy query failed:', err);
+            return { intervals: [], solidIntervals: [], dense: false };
+        });
     })).then(perFileResults => {
-        if (this._zoomTokens?.get(panelId) !== token || !plot.div || !plot.showMissingData) return;
+        const stillActive = plot.mode === 'fft'
+            || (plot.mode === 'timeseries' && plot.showMissingData);
+        if (this._lazyMissingRequests?.get(panelId) !== request
+            || this._zoomTokens?.get(panelId) !== token
+            || !plot.div
+            || !stillActive) return [];
         const lazyItems = [];
         const solidItems = [];
         let lazyDense = false;
@@ -1313,11 +1364,23 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
         const dense = lazyDense || this._missingViewIsDense(plot, eagerItems);
         plot._lazyMissSig = sig;
         render(items, solidItems, dense); // caches items/solid/dense on the plot
-    }).catch(() => {
-        if (this._zoomTokens?.get(panelId) === token && plot.mode === 'timeseries') {
+        return items;
+    }).catch(err => {
+        if (err?.name !== 'AbortError') console.warn('[missing] lazy refresh failed:', err);
+        if (this._lazyMissingRequests?.get(panelId) === request
+            && this._zoomTokens?.get(panelId) === token
+            && plot.mode === 'timeseries') {
             this._setMissingDensityNotice(plot, false);
         }
+        return [];
+    }).finally(() => {
+        if (this._lazyMissingRequests?.get(panelId) === request) {
+            this._lazyMissingRequests.delete(panelId);
+        }
     });
+    request.promise = settled;
+    this._lastLazyMissingRefresh = settled;
+    return settled;
 };
 
 // Shapes for the cached lazy Missing/NaN verdict: the wash (any-missing,
@@ -4027,7 +4090,10 @@ proto._toggleMissingData = function(panelId) {
     // Turning the flag off must also drop the "too dense" hint. Either way,
     // invalidate the lazy Missing/NaN cache so a re-enable re-queries fresh.
     plot._lazyMissSig = null;
-    if (!plot.showMissingData) this._setMissingDensityNotice(plot, false);
+    if (!plot.showMissingData) {
+        this._cancelLazyMissingRequest(panelId);
+        this._setMissingDensityNotice(plot, false);
+    }
 
     // Rebuild rather than restyle: turning the flag off must both remove the
     // bands (layout shapes) and reconnect the line (drop the NaN breaks).

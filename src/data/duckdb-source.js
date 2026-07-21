@@ -453,12 +453,13 @@ export default class DuckDbSource {
     /**
      * Truthful Missing/NaN detection for a lazy file over a visible range.
      * Buckets the range into `nBuckets` (~one per pixel) and returns, per bucket
-     * that held rows, how many rows fell in it and how many had a non-finite
-     * value for ANY of `varNames`. Empty buckets inside the data are time gaps
-     * (inferred JS-side). One O(nBuckets) aggregate — no full-resolution scan,
-     * no sort. See missing-buckets-sql.js for the pure builder/reducer.
+     * that held rows, how many rows fell in it, how many had a non-finite value
+     * for ANY of `varNames`, and the first/last observed timestamp. The bounds
+     * distinguish real sampling gaps from empty pixel buckets JS-side. One
+     * O(nBuckets) result — no full-resolution arrays in JS and no sort. See
+     * missing-buckets-sql.js for the pure builder/reducer.
      */
-    async getMissingIntervals(legacyData, varNames, t0, t1, nBuckets = 1500) {
+    async getMissingIntervals(legacyData, varNames, t0, t1, nBuckets = 1500, options = {}) {
         const meta = legacyData?._duckdb;
         if (!meta) throw new Error('getMissingIntervals: data is not DuckDB-backed (eager mode)');
         const requested = [...new Set(varNames || [])]
@@ -480,13 +481,23 @@ export default class DuckDbSource {
 
         const sql = buildMissingBucketsSql(
             baseTime, meta.tableName, valueExprs, (v) => this._numericLiteral(v), lo, hi, nBuckets, !!meta.generatedTime);
-        const result = await this._interactiveQuery(sql);
+        const result = await this._interactiveQuery(sql, { signal: options?.signal });
         const b = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
         const nTotal = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
         const nMissing = this._extractColumnAsFloat64(result, 2, 'DOUBLE');
-        const n = Math.min(b.length, nTotal.length, nMissing.length);
+        const tMin = this._extractColumnAsFloat64(result, 3, 'DOUBLE');
+        const tMax = this._extractColumnAsFloat64(result, 4, 'DOUBLE');
+        const n = Math.min(b.length, nTotal.length, nMissing.length, tMin.length, tMax.length);
         const buckets = new Array(n);
-        for (let i = 0; i < n; i++) buckets[i] = { b: b[i], nTotal: nTotal[i], nMissing: nMissing[i] };
+        for (let i = 0; i < n; i++) {
+            buckets[i] = {
+                b: b[i],
+                nTotal: nTotal[i],
+                nMissing: nMissing[i],
+                tMin: tMin[i],
+                tMax: tMax[i],
+            };
+        }
         return { buckets };
     }
 
@@ -1012,13 +1023,19 @@ export default class DuckDbSource {
     }
 
     async cancelActiveQuery() {
-        const active = this._activeInteractiveQuery;
-        if (active) active.cancelled = true;
+        return this._cancelInteractiveQuery(this._activeInteractiveQuery);
+    }
+
+    async _cancelInteractiveQuery(active) {
+        if (!active) return false;
+        active.cancelled = true;
         const tasks = [];
         if (active?.reader?.cancel) {
             tasks.push(Promise.resolve().then(() => active.reader.cancel()).catch(() => null));
         }
-        if (this._conn?.cancelSent) {
+        // cancelSent is connection-wide, so only use it while this request is
+        // still the one executing on the serialized connection.
+        if (this._activeInteractiveQuery === active && this._conn?.cancelSent) {
             tasks.push(Promise.resolve().then(() => this._conn.cancelSent()).catch(() => null));
         }
         if (!tasks.length) return false;
@@ -1039,25 +1056,45 @@ export default class DuckDbSource {
         }
     }
 
-    async _interactiveQuery(sql) {
-        return this._withConnectionLock(() => this._interactiveQueryUnlocked(sql));
+    _queryAbortError() {
+        const err = new Error('DuckDB query cancelled');
+        err.name = 'AbortError';
+        return err;
     }
 
-    async _interactiveQueryUnlocked(sql) {
+    async _interactiveQuery(sql, options = {}) {
+        const signal = options?.signal;
+        if (signal?.aborted) throw this._queryAbortError();
+        return this._withConnectionLock(() => {
+            // A stale viewport request can spend time waiting behind a query.
+            // Re-check here so it never starts a full-file scan after its turn
+            // finally reaches the connection.
+            if (signal?.aborted) throw this._queryAbortError();
+            return this._interactiveQueryUnlocked(sql, { signal });
+        });
+    }
+
+    async _interactiveQueryUnlocked(sql, options = {}) {
         await this.init();
+        const signal = options?.signal;
+        if (signal?.aborted) throw this._queryAbortError();
         const active = { cancelled: false, reader: null };
         this._activeInteractiveQuery = active;
+        const abort = () => { void this._cancelInteractiveQuery(active); };
+        signal?.addEventListener?.('abort', abort, { once: true });
         const t0 = this._now();
         try {
             const reader = await this._conn.send(sql);
             const t1 = this._now();
             active.reader = reader;
+            if (active.cancelled || signal?.aborted) {
+                await this._cancelInteractiveQuery(active);
+                throw this._queryAbortError();
+            }
             const batches = await reader.readAll();
             const t2 = this._now();
             if (active.cancelled) {
-                const err = new Error('DuckDB query cancelled');
-                err.name = 'AbortError';
-                throw err;
+                throw this._queryAbortError();
             }
             const table = new arrow.Table(batches);
             table._omvPerf = {
@@ -1067,6 +1104,7 @@ export default class DuckDbSource {
             };
             return table;
         } finally {
+            signal?.removeEventListener?.('abort', abort);
             if (this._activeInteractiveQuery === active) {
                 this._activeInteractiveQuery = null;
             }
