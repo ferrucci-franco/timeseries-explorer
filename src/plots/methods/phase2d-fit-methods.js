@@ -194,8 +194,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const types = [];
         let typeChanged = false;
         data.forEach((tr, i) => {
-            // Leave the origin cross and transient hover markers alone.
-            if (!tr || tr.name === '__origin__' || tr.name === '__hover__') return;
+            // Leave the origin cross, transient hover markers, and fit curves
+            // alone — fit lines must stay dashed lines regardless of Display.
+            if (!tr || tr.name === '__origin__' || tr.name === '__hover__' || tr._phase2dFit) return;
             indices.push(i);
             modes.push(mode);
             const color = tr.line?.color || tr.marker?.color;
