@@ -3245,8 +3245,10 @@ class PlotManager {
     static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 2000;
     static DEFAULT_VISUAL_MAX_POINTS_PHASE = 4000;
     static MAX_MENU_VISUAL_POINTS = 10000;
-    static LIVE_RELAYOUT_MAX_SOURCE_POINTS = 1250000;
-    static LIVE_RELAYOUT_MAX_VIEW_POINTS = 250000;
+    static LIVE_RELAYOUT_MAX_SOURCE_POINTS = 500000;
+    static LIVE_RELAYOUT_MAX_VIEW_POINTS = 100000;
+    static AUTO_LIVE_RELAYOUT_TRACE_SOFT_LIMIT = 12;
+    static AUTO_LIVE_RELAYOUT_MAX_TRACES = 24;
 
     _nextColor(idx) { return PlotManager.COLORS[idx % PlotManager.COLORS.length]; }
     _nextTraceColor(traceStates) {

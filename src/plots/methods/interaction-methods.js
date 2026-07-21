@@ -246,8 +246,12 @@ proto._canLiveRefreshTimeseriesRelayout = function(plot, range) {
     if (this._liveRelayoutSuppressed(plot)) return false;
     if (plot.traces.some(t => this.files.get(t.fileId)?.data?._duckdb)) return false;
 
-    const fullLimit = PlotManager.LIVE_RELAYOUT_MAX_SOURCE_POINTS || 1250000;
-    const viewLimit = PlotManager.LIVE_RELAYOUT_MAX_VIEW_POINTS || 250000;
+    const autoMode = refreshMode === 'auto';
+    const dataTraceCount = plot.traces.filter(trace => this.files.get(trace.fileId)?.data?.variables?.[trace.varName]?.kind !== 'parameter').length;
+    if (autoMode && dataTraceCount > PlotManager.AUTO_LIVE_RELAYOUT_MAX_TRACES) return false;
+    const traceScale = autoMode && dataTraceCount > PlotManager.AUTO_LIVE_RELAYOUT_TRACE_SOFT_LIMIT ? 0.5 : 1;
+    const fullLimit = Math.max(1, Math.floor((PlotManager.LIVE_RELAYOUT_MAX_SOURCE_POINTS || 500000) * traceScale));
+    const viewLimit = Math.max(1, Math.floor((PlotManager.LIVE_RELAYOUT_MAX_VIEW_POINTS || 100000) * traceScale));
     const [raw0, raw1] = range.map(value => this._coerceAxisValue?.(value) ?? Number(value));
     const minX = Math.min(raw0, raw1);
     const maxX = Math.max(raw0, raw1);
