@@ -446,6 +446,19 @@ export default class McosSubsystem {
         return { className: object.className, numRows: info.numRows, time, columns };
     }
 
+    /**
+     * Interpret a standalone datetime/duration object (e.g. a struct or cell
+     * field that is not part of a table) into a plottable vector. datetimes
+     * become epoch milliseconds; durations become seconds. Returns null for
+     * anything else.
+     */
+    interpretDatetimeObject(objectId) {
+        const object = this.resolveObject(objectId);
+        if (object.className === 'datetime') return { kind: 'datetime', values: this._objectMillis(object) };
+        if (object.className === 'duration') return { kind: 'numeric', values: this._objectMillis(object).map(ms => ms / 1000) };
+        return null;
+    }
+
     resolveObject(objectId, classIdHint = null) {
         if (this._cache.has(objectId)) return this._cache.get(objectId);
         const object = this.objects[objectId];

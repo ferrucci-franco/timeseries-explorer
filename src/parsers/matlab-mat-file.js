@@ -378,14 +378,20 @@ export default class MatlabMatFile {
 
     _mcosEntries(subsystem, opaques) {
         const tables = [];
+        const datetimes = [];
         for (const node of opaques) {
             const objectId = node.ref?.objectIds?.[0];
             if (objectId == null) continue;
             let table = null;
             try { table = subsystem.interpretTable(objectId); } catch { table = null; }
-            if (table && table.columns.length) tables.push({ node, table });
+            if (table && table.columns.length) { tables.push({ node, table }); continue; }
+            // A datetime/duration object that is not part of a table — e.g. a
+            // `t` field inside a struct/cell — still becomes a usable time axis.
+            let object = null;
+            try { object = subsystem.interpretDatetimeObject(objectId); } catch { object = null; }
+            if (object?.values?.length) datetimes.push({ node, object });
         }
-        if (!tables.length) return [];
+        if (!tables.length && !datetimes.length) return [];
 
         const multiple = tables.length > 1;
         const used = new Set();
@@ -397,6 +403,10 @@ export default class MatlabMatFile {
             return candidate;
         };
         const entries = [];
+        for (const { node, object } of datetimes) {
+            const path = unique(this._safeName(node.path || node.name));
+            entries.push(this._mcosAxisEntry(path, node.name, object.values, object.kind === 'datetime', object.kind === 'datetime'));
+        }
         for (const { node, table } of tables) {
             const prefix = multiple ? `${this._safeName(node.name)}.` : '';
             // The first datetime axis in a table — its row-times, or failing
