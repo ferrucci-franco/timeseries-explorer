@@ -19,32 +19,33 @@ const toFinite = (v) => {
     return Number.isFinite(n) ? n : null;
 };
 
-// Pearson r over the aligned rows of x and y.
+// Numerically stable pairwise moments over the aligned rows of x and y.
 //
-// Returns { r, r2, n, nExcluded, meanX, meanY, stdX, stdY, status } where
-// status is 'ok' or 'undefined'. A row participates only when BOTH x[i] and
-// y[i] are finite; any non-finite value on either side excludes the row
-// (pairwise deletion) and is counted in nExcluded. status is 'undefined' when
-// fewer than two valid rows remain or when either variable has zero variance;
-// undefined is never coerced to 0.
-export function pearsonCorrelation(x, y) {
+// This is the shared kernel for Pearson correlation (TODO 9) and OLS linear
+// fitting (TODO 10): both need the same streaming Welford/Chan means, the
+// central second moments m2x/m2y and the co-moment cMoment, and both apply the
+// exact same pairwise-finite deletion. Keeping one accumulator avoids the
+// catastrophic cancellation of naive Σx·Σy / Σx² sums when values are large
+// with a small spread (e.g. ~1e9 ± 1).
+//
+// Returns { n, nRowsSeen, nExcluded, meanX, meanY, m2x, m2y, cMoment,
+// minX, maxX }. A row participates only when BOTH x[i] and y[i] are finite.
+export function pairwiseMoments(x, y) {
     const len = Math.min(x?.length || 0, y?.length || 0);
 
-    // Streaming Welford/Chan: running means plus M2X, M2Y and the co-moment C.
-    // This avoids the catastrophic cancellation of naive Σx·Σy / Σx² sums when
-    // values are large with a small spread (e.g. ~1e9 ± 1).
     let n = 0;
-    let nExcluded = 0;
     let meanX = 0;
     let meanY = 0;
     let m2x = 0;
     let m2y = 0;
     let cMoment = 0;
+    let minX = Infinity;
+    let maxX = -Infinity;
 
     for (let i = 0; i < len; i++) {
         const xi = toFinite(x[i]);
         const yi = toFinite(y[i]);
-        if (xi === null || yi === null) { nExcluded++; continue; }
+        if (xi === null || yi === null) continue;
 
         n++;
         const dx = xi - meanX;
@@ -55,18 +56,42 @@ export function pearsonCorrelation(x, y) {
         cMoment += dx * (yi - meanY);
         m2x += dx * (xi - meanX);
         m2y += dy * (yi - meanY);
+        if (xi < minX) minX = xi;
+        if (xi > maxX) maxX = xi;
     }
 
-    const nRowsSeen = len;
-    // nExcluded is only meaningful relative to the rows actually seen; rows
-    // beyond the shorter array are a length mismatch, not an exclusion.
-    const excludedFromSeen = nRowsSeen - n;
+    return {
+        n,
+        nRowsSeen: len,
+        // nExcluded is only meaningful relative to the rows actually seen; rows
+        // beyond the shorter array are a length mismatch, not an exclusion.
+        nExcluded: len - n,
+        meanX: n ? meanX : NaN,
+        meanY: n ? meanY : NaN,
+        m2x,
+        m2y,
+        cMoment,
+        minX: n ? minX : NaN,
+        maxX: n ? maxX : NaN,
+    };
+}
+
+// Pearson r over the aligned rows of x and y.
+//
+// Returns { r, r2, n, nExcluded, meanX, meanY, stdX, stdY, status } where
+// status is 'ok' or 'undefined'. A row participates only when BOTH x[i] and
+// y[i] are finite; any non-finite value on either side excludes the row
+// (pairwise deletion) and is counted in nExcluded. status is 'undefined' when
+// fewer than two valid rows remain or when either variable has zero variance;
+// undefined is never coerced to 0.
+export function pearsonCorrelation(x, y) {
+    const { n, nExcluded, meanX, meanY, m2x, m2y, cMoment } = pairwiseMoments(x, y);
 
     const base = {
         n,
-        nExcluded: excludedFromSeen,
-        meanX: n ? meanX : NaN,
-        meanY: n ? meanY : NaN,
+        nExcluded,
+        meanX,
+        meanY,
         // Sample standard deviation for display; needs n >= 2. Irrelevant to r.
         stdX: n >= 2 ? Math.sqrt(m2x / (n - 1)) : NaN,
         stdY: n >= 2 ? Math.sqrt(m2y / (n - 1)) : NaN,
