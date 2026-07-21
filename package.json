@@ -53,6 +53,7 @@
     "test:fft": "node scripts/test-fft.mjs",
     "test:histogram": "node scripts/test-histogram.mjs",
     "test:temporal-profile": "node scripts/test-temporal-profile.mjs",
+    "test:temporal-profile-lazy": "node scripts/test-temporal-profile-lazy.mjs",
     "test:mode-toolbar": "node scripts/test-mode-toolbar.mjs",
     "test:timeseries-stack": "node scripts/test-timeseries-stack.mjs",
     "test:timeseries-y-expand": "node scripts/test-timeseries-y-expand.mjs",

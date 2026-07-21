@@ -2533,8 +2533,18 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 /* "Missing data too dense — zoom in" hint: same pill, amber-tinted to match the
    missing-data bands, and no spinner. */
 .missing-dense-indicator {
-    background: rgba(255, 193, 7, 0.18);
+    /* Amber tint the user likes, but composited over the opaque panel bg so the
+       plot no longer shows through the pill. */
+    background: linear-gradient(rgba(255, 193, 7, 0.18), rgba(255, 193, 7, 0.18)), var(--bg-primary);
     border-color: rgba(230, 145, 0, 0.75);
+}
+
+/* When the missing-data search pill and the detail-loading pill are both
+   present they are independent lifecycles that would otherwise sit on the same
+   spot. Keep the missing pill in its home slot and drop the detail pill just
+   below it so the two stack without overlapping. */
+.layout-panel:has(.missing-dense-indicator.active) .lazy-data-detail-indicator.active {
+    top: 88px;
 }
 
 @keyframes lazy-detail-spin {
@@ -2678,6 +2688,8 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     grid-column: 1;
     grid-row: 1;
 }
+.temporal-profile-container .hist-hist-pane { position: relative; }
+.temporal-profile-computing-indicator { top: 10px; }
 .hist-pane { min-width: 0; min-height: 0; display: flex; }
 .hist-splitter { background: color-mix(in srgb, var(--border-color) 72%, transparent); position: relative; z-index: 2; }
 .hist-layout-horizontal .hist-splitter { cursor: col-resize; }

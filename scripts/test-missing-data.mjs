@@ -43,8 +43,13 @@ class Harness {
     _getTransformedVariableData(fileId, varName) { return this._values[`${fileId}|${varName}`] || []; }
     _coerceAxisValue(v) { return Number(v); }
     _plotlyTimeValue(fileId, v) { return v; }
-    _gapBandFill(alpha) { return `rgba(255, 193, 7, ${alpha.toFixed(3)})`; }
-    get _gapBandStroke() { return 'rgba(230, 145, 0, 0.95)'; }
+    // Theme-aware (undefined theme → light). Mirrors fft-methods.js.
+    _gapBandFill(alpha) {
+        const a = alpha.toFixed(3);
+        return this.theme === 'dark' ? `rgba(255, 193, 7, ${a})` : `rgba(217, 119, 6, ${a})`;
+    }
+    // Theme-aware method (undefined theme → light). Mirrors fft-methods.js.
+    _gapBandStroke() { return this.theme === 'dark' ? 'rgba(255, 179, 51, 1)' : 'rgba(184, 96, 0, 1)'; }
 }
 
 const sandbox = { proto: Harness.prototype, detectSamplingGaps, detectNaNRuns };
@@ -179,8 +184,8 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
         { fileId: 'f', timeVar: null, t0: 500, t1: 600 },   // 100 px → wide
     ]);
     assert.equal(shapes.length, 2, 'one band per interval');
-    assert.ok(shapes.every(s => s.type === 'rect' && String(s.fillcolor).startsWith('rgba(255, 193, 7,')), 'bands are amber rects');
-    assert.ok(shapes.every(s => s.line.width === 0 || String(s.line.color).startsWith('rgba(230, 145, 0,')), 'the stroke is amber too');
+    assert.ok(shapes.every(s => s.type === 'rect' && String(s.fillcolor).startsWith('rgba(217, 119, 6,')), 'bands are amber rects');
+    assert.ok(shapes.every(s => s.line.width === 0 || String(s.line.color).startsWith('rgba(184, 96, 0,')), 'the stroke is amber too');
     assert.ok(shapes[0].line.width > 0, 'a narrow (sub-pixel) band keeps a pixel-width stroke so it stays visible');
     assert.equal(shapes[1].line.width, 0, 'a wide band drops the stroke — no outline');
 
@@ -254,7 +259,7 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     const shapes = h._adaptiveGapBandShapes(plot, items);
     assert.equal(plot._missingTooDense, true, 'more gaps than half the pixel width flags dense');
     assert.ok(shapes.every(s => s.line.width === 0), 'dense bands carry no stroke');
-    assert.ok(shapes.every(s => alphaOf(s) <= 0.15), 'dense bands use a faint wash so the signal reads through');
+    assert.ok(shapes.every(s => alphaOf(s) <= 0.2), 'dense bands use a faint wash so the signal reads through');
 
     // Dense but STRUCTURED (gaps cover only ~8% of the view): even in timeseries
     // mode the faint wash is drawn, so the user sees which regions hold missing
@@ -262,7 +267,7 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     const tsPlot = { mode: 'timeseries', div: { _fullLayout: { xaxis: { range: [0, 1000], _length: 100 } } } };
     const tsShapes = h._adaptiveGapBandShapes(tsPlot, items);
     assert.ok(tsShapes.length > 0, 'a structured dense timeseries view still draws the faint wash');
-    assert.ok(tsShapes.every(s => alphaOf(s) <= 0.15 && s.line.width === 0), 'and it is the faint stroke-less wash');
+    assert.ok(tsShapes.every(s => alphaOf(s) <= 0.2 && s.line.width === 0), 'and it is the faint stroke-less wash');
     assert.equal(tsPlot._missingTooDense, true, 'the dense flag is set so the pill shows too');
 
     // Dense AND a near-total wall (gaps cover ~100% of the view): in timeseries

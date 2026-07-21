@@ -60,6 +60,8 @@ const plain = (v) => JSON.parse(JSON.stringify(v)); // re-home cross-realm array
     assert.match(sql, /FROM tbl/, 'reads the file table');
     assert.match(sql, /COUNT\(\*\)::BIGINT AS n_total/, 'counts rows per bucket');
     assert.match(sql, /SUM\(CASE WHEN miss THEN 1 ELSE 0 END\)::BIGINT AS n_missing/, 'counts missing per bucket');
+    assert.match(sql, /MIN\(t\)::DOUBLE AS t_min/, 'keeps the first observed timestamp per bucket');
+    assert.match(sql, /MAX\(t\)::DOUBLE AS t_max/, 'keeps the last observed timestamp per bucket');
     assert.match(sql, /GROUP BY b/, 'groups by bucket');
     // union of non-finite predicates across variables
     assert.match(sql, /try_cast\(\("a"\) AS DOUBLE\) IS NULL OR isnan\(try_cast\(\("a"\) AS DOUBLE\)\) OR isinf/, 'a non-finite predicate');
@@ -131,21 +133,153 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
     assert.equal(r.intervals.length, 1, 'the any-missing extent coalesces to one interval');
 }
 
-// Time gap: an ABSENT interior bucket (5) is a gap; absent edge buckets are outside data.
+// Time gap: observed timestamp distances identify the gap. Empty pixel buckets
+// caused by oversampling are not gaps by themselves.
 {
-    const buckets = [];
-    for (let b = 1; b <= 8; b++) if (b !== 5) buckets.push({ b, nTotal: 100, nMissing: 0 }); // 0 and 9 absent (edges), 5 absent (gap)
+    const buckets = [
+        { b: 0, nTotal: 1, nMissing: 0, tMin: 0, tMax: 0 },
+        { b: 2, nTotal: 1, nMissing: 0, tMin: 100, tMax: 100 },
+        { b: 4, nTotal: 1, nMissing: 0, tMin: 200, tMax: 200 },
+        // One expected timestamp at 300 is absent.
+        { b: 8, nTotal: 1, nMissing: 0, tMin: 400, tMax: 400 },
+        { b: 9, nTotal: 1, nMissing: 0, tMin: 500, tMax: 500 },
+    ];
     const r = missingBucketsToIntervals(buckets, opts());
-    assert.equal(r.intervals.length, 1, 'only the interior empty bucket is a gap');
-    assert.deepEqual([r.intervals[0].t0, r.intervals[0].t1], [500, 600], 'gap spans the empty interior bucket');
-    assert.equal(r.missingBuckets, 1, 'edge-absent buckets (outside data) are not missing');
-    assert.deepEqual(r.solidIntervals.map(i => [i.t0, i.t1]), [[500, 600]], 'a time gap is a solid interval');
+    assert.equal(r.intervals.length, 1, 'only the excessive observed timestamp distance is a gap');
+    assert.deepEqual([r.intervals[0].t0, r.intervals[0].t1], [200, 400], 'gap is bounded by the real adjacent samples');
+    assert.equal(r.missingBuckets, 0, 'ordinary empty pixel buckets are never counted as missing samples');
+    assert.deepEqual(r.solidIntervals.map(i => [i.t0, i.t1]), [[200, 400]], 'a time gap is a solid interval');
+}
+
+// Oversampled view: consecutive invalid samples can occupy separated pixel
+// buckets. Timestamp extents must join them into the same NaN run.
+{
+    const buckets = [
+        { b: 0, nTotal: 1, nMissing: 0, tMin: 0, tMax: 0 },
+        { b: 2, nTotal: 1, nMissing: 1, tMin: 100, tMax: 100 },
+        { b: 4, nTotal: 1, nMissing: 1, tMin: 200, tMax: 200 },
+        { b: 6, nTotal: 1, nMissing: 1, tMin: 300, tMax: 300 },
+        { b: 8, nTotal: 1, nMissing: 0, tMin: 400, tMax: 400 },
+    ];
+    const r = missingBucketsToIntervals(buckets, opts());
+    assert.deepEqual(r.solidIntervals.map(i => [i.t0, i.t1]), [[0, 400]], 'adjacent invalid samples form one eager-style run');
+}
+
+// A row deficit inside a populated coarse bucket remains detectable when the
+// viewport is too wide to place each sample in its own bucket.
+{
+    const buckets = [
+        { b: 0, nTotal: 4, nMissing: 0, tMin: 0, tMax: 300 },
+        // Five timestamps would span 400..800; 600 is omitted (4 rows remain).
+        { b: 1, nTotal: 4, nMissing: 0, tMin: 400, tMax: 800 },
+        { b: 2, nTotal: 4, nMissing: 0, tMin: 900, tMax: 1200 },
+    ];
+    const r = missingBucketsToIntervals(buckets, opts({ t0: 0, t1: 1500, nBuckets: 3 }));
+    assert.deepEqual(r.solidIntervals.map(i => [i.t0, i.t1]), [[500, 1000]], 'coarse bucket with a row deficit is marked');
 }
 
 // Empty input / zero span are safe.
 {
     assert.equal(missingBucketsToIntervals([], opts()).intervals.length, 0, 'no buckets → nothing');
     assert.equal(missingBucketsToIntervals([{ b: 0, nTotal: 1, nMissing: 1 }], opts({ t0: 5, t1: 5 })).intervals.length, 0, 'zero span → nothing');
+}
+
+// Bucket boundaries must use the same source -> display mapping as plotted
+// samples (FFT and timeseries). A scale+shift makes accidental viewport-based
+// mapping obvious and also verifies interval ordering.
+{
+    const buckets = Array.from({ length: 10 }, (_, b) => ({
+        b,
+        nTotal: 10,
+        nMissing: b === 2 ? 10 : 0,
+    }));
+    const r = missingBucketsToIntervals(buckets, opts({
+        t0: 100,
+        t1: 200,
+        mapTime: source => 5000 - source * 2,
+    }));
+    assert.deepEqual(
+        r.intervals.map(interval => [interval.t0, interval.t1]),
+        [[4740, 4760]],
+        'source bucket boundaries are mapped and normalized in display units',
+    );
+    assert.deepEqual(
+        r.solidIntervals.map(interval => [interval.t0, interval.t1]),
+        [[4740, 4760]],
+        'solid intervals use the identical source/display mapping',
+    );
+}
+
+// Extract the lazy refresh coordinator and prove that a newer viewport aborts
+// the previous request rather than leaving a stale full-file scan queued.
+{
+    const coordinatorBox = {
+        proto: {},
+        AbortController,
+        missingBucketsToIntervals,
+        Plotly: { relayout: () => Promise.resolve() },
+        console,
+    };
+    vm.runInNewContext([
+        extract('_cancelLazyMissingRequest'),
+        extract('_refreshLazyMissingBands'),
+    ].join('\n'), coordinatorBox);
+
+    const calls = [];
+    const source = {
+        getMissingIntervals(_data, _vars, _lo, _hi, _n, { signal }) {
+            return new Promise((resolve, reject) => {
+                const call = { signal, resolve, reject };
+                calls.push(call);
+                signal.addEventListener('abort', () => {
+                    const err = new Error('cancelled');
+                    err.name = 'AbortError';
+                    reject(err);
+                }, { once: true });
+            });
+        },
+    };
+    const data = {
+        _duckdb: { source, viewMode: true, totalRows: 100 },
+        metadata: { timeStart: 0, timeEnd: 100 },
+    };
+    const div = { _fullLayout: { xaxis: { _length: 100 } } };
+    const plot = {
+        div,
+        mode: 'timeseries',
+        showMissingData: true,
+        traces: [{ fileId: 'f', varName: 'v' }],
+    };
+    const manager = {
+        ...coordinatorBox.proto,
+        files: new Map([['f', { data }]]),
+        _zoomTokens: new Map([['p', 1]]),
+        _isVisible: () => true,
+        _getTimeVar: () => ({ timeKind: 'datetime' }),
+        _missingDataInfo: () => ({ bandItems: [] }),
+        _missingViewIsDense: () => false,
+        _sourceRangeForDisplayRange: (_fid, range) => range,
+        _lazyMissingBucketCount: () => 10,
+        _displayTimeForFetchedSourceTime: (_fid, value) => value,
+        _lazyMissingShapes: () => [],
+        _setMissingDensityNotice: () => {},
+    };
+
+    const first = manager._refreshLazyMissingBands('p', plot, 0, 100, 1);
+    assert.equal(calls.length, 1, 'first viewport starts one missing query');
+    manager._zoomTokens.set('p', 2);
+    const second = manager._refreshLazyMissingBands('p', plot, 10, 90, 2);
+    assert.equal(calls.length, 2, 'new viewport starts one replacement query');
+    assert.equal(calls[0].signal.aborted, true, 'new viewport aborts the stale query');
+    calls[1].resolve({ buckets: Array.from({ length: 10 }, (_, b) => ({
+        b,
+        nTotal: 10,
+        nMissing: 0,
+        tMin: b * 8,
+        tMax: b * 8 + 7,
+    })) });
+    await Promise.all([first, second]);
+    assert.equal(manager._lazyMissingRequests.size, 0, 'latest request cleans up its ownership');
 }
 
 console.log('Lazy missing-data (buckets) tests passed');

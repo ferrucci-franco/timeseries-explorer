@@ -1215,8 +1215,19 @@ proto._fftGapInfo = function(plot) {
 // collides with the 2nd trace colour (which is always present), making the
 // bands blend into the data. Fill fades soft→strong with width; the stroke
 // rescues sub-pixel bands.
-proto._gapBandFill = (alpha) => `rgba(255, 193, 7, ${alpha.toFixed(3)})`;
-proto._gapBandStroke = 'rgba(230, 145, 0, 0.95)';
+proto._gapBandFill = function(alpha) {
+    const a = alpha.toFixed(3);
+    // Deeper amber in light theme so the faint wide/dense bands stay perceptible
+    // on the white plot; bright amber in dark theme. Alpha (and the dense wash
+    // cap) is unchanged, so the signal still reads through.
+    return this.theme === 'dark' ? `rgba(255, 193, 7, ${a})` : `rgba(217, 119, 6, ${a})`;
+};
+// Stroke for narrow (sub-pixel) gaps. Theme-aware and fully opaque: the old
+// semi-transparent amber all but vanished on the white light-theme plot. Light
+// uses a deep amber for contrast against white; dark uses a brighter amber.
+proto._gapBandStroke = function() {
+    return this.theme === 'dark' ? 'rgba(255, 179, 51, 1)' : 'rgba(184, 96, 0, 1)';
+};
 
 // Merge missing-data intervals (per file, in x-order) whose present gap is
 // narrower than ~1px at the current zoom. A signal with dense scattered missing
@@ -1339,7 +1350,8 @@ proto._adaptiveGapBandShapes = function(plot, items, denseOverride = null) {
         // Dense: a faint wash that keeps the signal readable (no stroke).
         // Sparse: fill fades strong(narrow)→soft(wide); narrow gaps get a stroke.
         const fillT = Math.max(0, Math.min(1, (widthPx - 3) / (30 - 3)));
-        const fillAlpha = dense ? 0.14 : 0.8 + (0.28 - 0.8) * fillT;
+        const denseAlpha = this.theme === 'dark' ? 0.14 : 0.18;
+        const fillAlpha = dense ? denseAlpha : 0.8 + (0.28 - 0.8) * fillT;
         const strokeWidth = dense ? 0 : Math.max(0, 2 - widthPx / 1.5);
         shapes.push({
             type: 'rect',
@@ -1351,7 +1363,7 @@ proto._adaptiveGapBandShapes = function(plot, items, denseOverride = null) {
             y1: 1,
             fillcolor: this._gapBandFill(fillAlpha),
             line: strokeWidth > 0
-                ? { color: this._gapBandStroke, width: strokeWidth }
+                ? { color: this._gapBandStroke(), width: strokeWidth }
                 : { width: 0 },
             layer: 'below',
         });

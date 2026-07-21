@@ -55,6 +55,7 @@
 /test-files/csv/correlation-demo.csv
 /test-files/csv/correlation-large.csv
 /test-files/csv/missing-large.csv
+/test-files/csv/temporal-profile-lazy*/
 !/test-files/excel/
 !/test-files/excel/**
 !/test-files/parquet/

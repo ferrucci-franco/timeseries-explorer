@@ -1060,6 +1060,14 @@ class PlotManager {
         panelEl.appendChild(div);
         plot.div = div;
 
+        // Missing/NaN toggling rebuilds the timeseries so line breaks can be
+        // added safely. Show its lazy-search pill on the first empty frame,
+        // before Plotly initialization and before either DuckDB query starts.
+        const initialLazyMissingSearch = plot.mode === 'timeseries'
+            && plot.showMissingData
+            && plot.traces.some(trace => !!this.files.get(trace.fileId)?.data?._duckdb?.viewMode);
+        if (initialLazyMissingSearch) this._setMissingDensityNotice?.(plot, 'loading');
+
         const { traces, layout } = this._buildPlotData(plot);
         const config = this._getPlotlyConfig();
 
