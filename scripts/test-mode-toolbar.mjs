@@ -229,6 +229,7 @@ vm.runInNewContext([
     assert.equal(recomputedState, controlState, 'Temporal Profile preserves state identity across recomputes');
     controlState.period = 'week';
     controlState.renderMode = 'columns';
+    controlState.groupedBars = true;
     controlState.saturdays = false;
     controlState.resolutionByPeriod.week = 15;
     controlState.dayGrouping = 'all';
@@ -236,6 +237,7 @@ vm.runInNewContext([
     const liveState = manager._ensureTemporalProfileState(plot);
     assert.equal(liveState.period, 'week', 'Period control updates the live state');
     assert.equal(liveState.renderMode, 'columns', 'Display control updates the live state');
+    assert.equal(liveState.groupedBars, true, 'Side-by-side bar control updates the live state');
     assert.equal(liveState.saturdays, false, 'Day-category controls update the live state');
     assert.equal(liveState.resolutionByPeriod.week, 15, 'Resolution control updates the live state');
     assert.equal(liveState.dayGrouping, 'all', 'Day grouping control updates the live state');
@@ -252,7 +254,7 @@ vm.runInNewContext([
 }
 
 assert.doesNotMatch(temporalProfileMethodsSource, /legendgroup\s*:/, 'Temporal Profile legend entries use standard plot spacing');
-assert.match(temporalProfileMethodsSource, /barmode:\s*'overlay'/, 'Temporal Profile columns always overlay');
+assert.match(temporalProfileMethodsSource, /barmode:\s*state\.groupedBars \? 'group' : 'overlay'/, 'Temporal Profile columns switch between overlay and side-by-side groups');
 assert.match(temporalProfileMethodsSource, /opacity:\s*PROFILE_BAR_OPACITY/, 'Temporal Profile overlay columns are translucent');
 assert.doesNotMatch(temporalProfileMethodsSource, /pattern:\s*\{/, 'Temporal Profile columns use one consistent fill style');
 assert.doesNotMatch(temporalProfileMethodsSource, /circle-open|lines\+markers/, 'Temporal Profile lines do not mix point marker styles');
@@ -283,6 +285,7 @@ assert.match(
 );
 assert.match(temporalProfileMethodsSource, /temporalProfileYear/, 'Temporal Profile exposes the Year period');
 assert.match(temporalProfileMethodsSource, /temporalProfileAllDays/, 'Day profiles expose the All days grouping');
+assert.match(temporalProfileMethodsSource, /temporalProfileSideBySide/, 'Column display exposes the side-by-side checkbox');
 assert.match(
     temporalMethodAssignment('_recomputeTemporalProfile'),
     /resolutionUnit:\s*state\.period === 'year' && state\.yearResolution === 'month' \? 'month' : 'minute'/,

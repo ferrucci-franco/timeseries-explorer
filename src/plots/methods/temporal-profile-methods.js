@@ -58,6 +58,7 @@ const fallbackText = {
     temporalProfileTooManyBins: `Resolution produces too many bins (maximum ${TEMPORAL_PROFILE_MAX_BINS})`,
     temporalProfileDisplay: 'Display',
     temporalProfileColumns: 'Columns',
+    temporalProfileSideBySide: 'Side-by-side bars',
     temporalProfileLine: 'Mean line',
     temporalProfileLineBand: 'Mean + standard deviation',
     temporalProfileDiscardDay: 'Discard incomplete days',
@@ -192,6 +193,7 @@ proto._defaultTemporalProfileState = function() {
         resolutionByPeriod: { ...TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES },
         customResolutionByPeriod: { day: false, week: false, month: false, year: false },
         renderMode: 'line-band',
+        groupedBars: false,
         dayGrouping: 'day-type',
         yearResolution: 'day',
         workdays: true,
@@ -234,6 +236,7 @@ proto._normalizeTemporalProfileState = function(raw = {}) {
         resolutionByPeriod,
         customResolutionByPeriod,
         renderMode: PROFILE_RENDER_MODES.has(raw.renderMode) ? raw.renderMode : defaults.renderMode,
+        groupedBars: raw.groupedBars === true,
         dayGrouping: raw.dayGrouping === 'all' ? 'all' : 'day-type',
         yearResolution: raw.yearResolution === 'month' ? 'month' : 'day',
         workdays: raw.workdays !== false,
@@ -643,8 +646,9 @@ proto._buildTemporalProfileLayout = function(plot, units = {}) {
         font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
         showlegend: this.legendPosition !== 'hidden',
         legend: this._legendConfig(legendBg, gridColor),
-        barmode: 'overlay',
-        bargap: 0,
+        barmode: state.groupedBars ? 'group' : 'overlay',
+        bargap: state.groupedBars ? 0.08 : 0,
+        bargroupgap: state.groupedBars ? 0.04 : 0,
         xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false },
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false, title: { text: `${text('temporalProfileMean')}${unitSuffix}`, font: { size: 10 } } },
         margin: { l: 62, r: 18, t: 8, b: 52 },
@@ -1156,8 +1160,15 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         { label: `±1σ`, value: 'line-band' },
     ], state.renderMode, renderMode => {
         state.renderMode = renderMode;
+        this._renderTemporalProfileOptionsPanel(panelId, plot);
         this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
     }));
+    if (state.renderMode === 'columns') {
+        row(text('temporalProfileSideBySide'), checkbox(state.groupedBars, checked => {
+            state.groupedBars = checked;
+            this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
+        }));
+    }
     const discardKey = state.period === 'day' ? 'temporalProfileDiscardDay'
         : state.period === 'week' ? 'temporalProfileDiscardWeek'
             : state.period === 'month' ? 'temporalProfileDiscardMonth'
