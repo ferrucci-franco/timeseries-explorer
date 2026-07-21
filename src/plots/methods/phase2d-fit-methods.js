@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
+import Modal from '../../ui/modal.js';
 import {
     defaultPhase2dState,
     normalizePhase2dState,
@@ -132,30 +133,28 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         );
         group.appendChild(markerWrap);
 
-        // Fitting: Off / Linear / Quadratic (TODO 10 Phase 2). Off keeps the plain
-        // 2D plot; Linear/Quadratic overlay an OLS fit curve per pair and reveal
-        // the collapsible options/results drawer.
-        const fitSelect = document.createElement('select');
-        fitSelect.className = 'phase2d-fit-select';
-        fitSelect.title = i18n.t('phase2dFitTooltip');
-        fitSelect.setAttribute('aria-label', i18n.t('phase2dFitLabel'));
-        [
-            ['none', i18n.t('phase2dFitOff')],
-            ['linear', i18n.t('phase2dFitLinear')],
-            ['quadratic', i18n.t('phase2dFitQuadratic')],
-        ].forEach(([value, label]) => {
-            const opt = document.createElement('option');
-            opt.value = value;
-            opt.textContent = label;
-            if (value === state.fitModel) opt.selected = true;
-            fitSelect.appendChild(opt);
-        });
-        fitSelect.addEventListener('change', () => this._setPhase2dFitModel(panelId, fitSelect.value));
-        group.appendChild(fitSelect);
-        // A fit reveals the FFT-like workspace; its Options toggle lives in the
-        // shell topbar (no separate toolbar button needed).
-
         toolbar.appendChild(group);
+    };
+
+    // "Curve Fit" toolbar toggle (TODO 10) — a press/release button like the
+    // Correlation toggle (blue when active), not a dropdown. Turning it on opens
+    // the FFT-like fit workspace with the last-used model (default linear); the
+    // linear/quadratic choice lives inside the drawer. phase2d only.
+    proto._injectPhase2dFitToggle = function(panelId, container, plot) {
+        if (!container || plot?.mode !== 'phase2d') return;
+        const state = this._ensurePhase2dState(plot);
+        const active = state.fitModel !== 'none';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn phase2d-fit-toggle-btn' + (active ? ' active' : '');
+        btn.textContent = i18n.t('phase2dFitToggleLabel');
+        btn.title = i18n.t('phase2dFitTooltip');
+        btn.setAttribute('aria-pressed', String(active));
+        btn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this._togglePhase2dFit(panelId);
+        });
+        container.appendChild(btn);
     };
 
     proto._setPhase2dDisplayMode = function(panelId, displayMode) {
@@ -326,6 +325,31 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return { x, y };
     };
 
+    // Curve Fit toolbar toggle: on → restore the last-used model (default
+    // linear) and open the shell; off → keep the model in lastFitModel (config
+    // preserved) and tear the shell down.
+    proto._togglePhase2dFit = function(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot || plot.mode !== 'phase2d') return;
+        const state = this._ensurePhase2dState(plot);
+        if (state.fitModel === 'none') {
+            this._setPhase2dFitModel(panelId, state.lastFitModel || 'linear');
+        } else {
+            state.lastFitModel = state.fitModel;
+            this._setPhase2dFitModel(panelId, 'none');
+        }
+    };
+
+    // Sync the toolbar Curve Fit toggle button's pressed/active look.
+    proto._syncPhase2dFitToggleBtn = function(panelId, plot) {
+        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        const btn = panelEl?.querySelector('.phase2d-fit-toggle-btn');
+        if (!btn) return;
+        const active = this._ensurePhase2dState(plot).fitModel !== 'none';
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-pressed', String(active));
+    };
+
     // ── Fit model change: enter / update / exit the FFT-like shell ──
     proto._setPhase2dFitModel = function(panelId, model) {
         const plot = this.plots.get(panelId);
@@ -333,8 +357,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const state = this._ensurePhase2dState(plot);
         const prev = state.fitModel;
         state.fitModel = PHASE2D_FIT_MODELS.has(model) ? model : 'none';
+        if (state.fitModel !== 'none') state.lastFitModel = state.fitModel;
         const active = state.fitModel !== 'none';
         const wasActive = prev !== 'none';
+        this._syncPhase2dFitToggleBtn(panelId, plot);
 
         if (active && !wasActive) {
             this._enterPhase2dFitShell(panelId, plot);
@@ -373,7 +399,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const state = this._ensurePhase2dState(plot);
 
         const container = document.createElement('div');
-        container.className = `fft-container phase2d-fit-container fft-layout-${state.layout}`;
+        container.className = `fft-container phase2d-fit-container fft-layout-${state.layout}${state.timeSeriesHidden ? ' fft-time-series-hidden' : ''}`;
         container.style.setProperty('--fft-split', `${Math.round(state.split * 1000) / 10}%`);
 
         const makeButton = (className, text, title, onClick) => {
@@ -396,7 +422,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             this._setPhase2dFitLayout(panelId, cur === 'horizontal' ? 'vertical' : 'horizontal');
         });
         layoutBtn.setAttribute('aria-label', i18n.t('fftLayoutToggle'));
-        layoutGroup.appendChild(layoutBtn);
+        const timeSeriesBtn = makeButton('fft-tool-btn fft-time-series-btn', i18n.t('hideTimeSeries'), i18n.t('hideTimeSeriesTooltip'), () => this._togglePhase2dFitTimeSeries(panelId));
+        timeSeriesBtn.classList.toggle('active', state.timeSeriesHidden);
+        timeSeriesBtn.setAttribute('aria-pressed', String(state.timeSeriesHidden));
+        layoutGroup.append(layoutBtn, timeSeriesBtn);
         const actionGroup = document.createElement('div');
         actionGroup.className = 'fft-topbar-group';
         const optionsBtn = makeButton('fft-tool-btn fft-options-btn', i18n.t('fftOptionsLabel'), i18n.t('fftOptionsToggle'), () => this._togglePhase2dOptions(panelId));
@@ -632,9 +661,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const timeVar = firstPair ? this._getTimeVar(firstPair.fileId) : null;
         const x0 = firstPair ? this._plotlyTimeValue(firstPair.fileId, lo, timeVar) : lo;
         const x1 = firstPair ? this._plotlyTimeValue(firstPair.fileId, hi, timeVar) : hi;
-        const color = '#ff9800';
+        // Green selection, matching the FFT time-range picker.
+        const color = '#43a047';
         return [
-            { type: 'rect', xref: 'x', yref: 'paper', x0, x1, y0: 0, y1: 1, fillcolor: 'rgba(255, 152, 0, 0.12)', line: { width: 0 }, layer: 'below' },
+            { type: 'rect', xref: 'x', yref: 'paper', x0, x1, y0: 0, y1: 1, fillcolor: 'rgba(67, 160, 71, 0.14)', line: { width: 0 }, layer: 'below' },
             { type: 'line', xref: 'x', yref: 'paper', x0, x1: x0, y0: 0, y1: 1, line: { color, width: 2 } },
             { type: 'line', xref: 'x', yref: 'paper', x0: x1, x1, y0: 0, y1: 1, line: { color, width: 2 } },
         ];
@@ -757,6 +787,21 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (plot.div) Plotly.Plots.resize(plot.div);
     };
 
+    proto._togglePhase2dFitTimeSeries = function(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot?.phase2dFitContainer) return;
+        const state = this._ensurePhase2dState(plot);
+        state.timeSeriesHidden = !state.timeSeriesHidden;
+        plot.phase2dFitContainer.classList.toggle('fft-time-series-hidden', state.timeSeriesHidden);
+        const btn = plot.phase2dFitContainer.querySelector('.fft-time-series-btn');
+        if (btn) {
+            btn.classList.toggle('active', state.timeSeriesHidden);
+            btn.setAttribute('aria-pressed', String(state.timeSeriesHidden));
+        }
+        if (!state.timeSeriesHidden && plot.phase2dFitTimeDiv) Plotly.Plots.resize(plot.phase2dFitTimeDiv);
+        if (plot.div) Plotly.Plots.resize(plot.div);
+    };
+
     proto._togglePhase2dOptions = function(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot?.phase2dFitContainer) return;
@@ -809,19 +854,38 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         else plot._phase2dFitRecomputeTimer = setTimeout(run, 150);
     };
 
-    // Localised, compact equation string for a fit result.
-    proto._phase2dFitEquationText = function(fit) {
-        if (!fit || fit.status !== 'ok') return '—';
+    // Generic model formula + resolved coefficient values for a fit result.
+    // Returns { generic: 'y = a·x + b', coeffs: [['a', '2.5'], ['b', '1.1']] }.
+    proto._phase2dFitEquationParts = function(fit) {
+        if (!fit || fit.status !== 'ok') return null;
         const g = (v) => {
             if (!Number.isFinite(v)) return 'N/A';
             const a = Math.abs(v);
-            return (a !== 0 && (a < 1e-3 || a >= 1e5)) ? v.toExponential(4) : v.toPrecision(5);
+            return (a !== 0 && (a < 1e-3 || a >= 1e5)) ? v.toExponential(4) : String(Number(v.toPrecision(5)));
         };
-        const sign = (v) => (v < 0 ? '−' : '+');
         if (fit.model === 'linear') {
-            return `y = ${g(fit.b1)}·x ${sign(fit.b0)} ${g(Math.abs(fit.b0))}`;
+            return { generic: 'y = a·x + b', coeffs: [['a', g(fit.b1)], ['b', g(fit.b0)]] };
         }
-        return `y = ${g(fit.a)}·x² ${sign(fit.b)} ${g(Math.abs(fit.b))}·x ${sign(fit.c)} ${g(Math.abs(fit.c))}`;
+        return { generic: 'y = a·x² + b·x + c', coeffs: [['a', g(fit.a)], ['b', g(fit.b)], ['c', g(fit.c)]] };
+    };
+
+    // "About this fit" — the OLS methodology, in a modal (same help pattern as
+    // Correlation's "About Pearson").
+    proto._showPhase2dFitHelp = function() {
+        Modal.alert(
+            i18n.t('phase2dFitAboutTitle'),
+            `<div class="phase2d-fit-help-modal">${i18n.t('phase2dFitOlsHelp')}</div>`,
+            { html: true, icon: false, className: 'phase2d-fit-help-dialog' },
+        );
+    };
+
+    // Explains each goodness-of-fit metric (Pearson r, R², RMSE, N).
+    proto._showPhase2dFitMetricsHelp = function() {
+        Modal.alert(
+            i18n.t('phase2dFitMetricsHelpTitle'),
+            `<div class="phase2d-fit-help-modal">${i18n.t('phase2dFitMetricsHelpBody')}</div>`,
+            { html: true, icon: false, className: 'phase2d-fit-help-dialog' },
+        );
     };
 
     proto._phase2dFitWarningText = function(fit, lazy) {
@@ -847,6 +911,33 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const fmt = (v, d = 4) => (Number.isFinite(v) ? v.toPrecision(d) : 'N/A');
 
         drawer.replaceChildren();
+
+        // ── Model: Linear / Quadratic (the Curve Fit toolbar toggle turns
+        // fitting on/off; the model is chosen here) + "About this fit" help ──
+        const modelRow = document.createElement('div');
+        modelRow.className = 'fft-option-row phase2d-fit-model-row';
+        const modelLabel = document.createElement('span');
+        modelLabel.textContent = i18n.t('phase2dFitLabel');
+        const modelSeg = document.createElement('div');
+        modelSeg.className = 'fft-segmented';
+        [['linear', 'phase2dFitLinear'], ['quadratic', 'phase2dFitQuadratic']].forEach(([m, key]) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = i18n.t(key);
+            b.classList.toggle('active', state.fitModel === m);
+            b.addEventListener('click', () => { if (state.fitModel !== m) this._setPhase2dFitModel(panelId, m); });
+            modelSeg.appendChild(b);
+        });
+        const aboutBtn = document.createElement('button');
+        aboutBtn.type = 'button';
+        aboutBtn.className = 'fft-help-btn';
+        aboutBtn.textContent = '?';
+        aboutBtn.title = i18n.t('phase2dFitAboutTitle');
+        aboutBtn.setAttribute('aria-label', i18n.t('phase2dFitAboutTitle'));
+        aboutBtn.addEventListener('click', () => this._showPhase2dFitHelp());
+        modelLabel.appendChild(aboutBtn);
+        modelRow.append(modelLabel, modelSeg);
+        drawer.appendChild(modelRow);
 
         // ── Temporal range: Todo / Selección (mirrors FFT/Correlation) ──
         const domain = this._phase2dFitDomain(plot);
@@ -949,28 +1040,21 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         );
         drawer.appendChild(rangeGrid);
 
+        // Results header: title + round "?" that explains the metrics.
+        const resultsHead = document.createElement('div');
+        resultsHead.className = 'phase2d-fit-results-head';
         const title = document.createElement('h3');
         title.className = 'phase2d-fit-drawer-title';
         title.textContent = i18n.t('phase2dFitResultsTitle');
-        drawer.appendChild(title);
-
-        const help = document.createElement('p');
-        help.className = 'phase2d-fit-help';
-        help.textContent = i18n.t('phase2dFitOlsHelp');
-        drawer.appendChild(help);
-
-        // showEquation toggle.
-        const eqLabel = document.createElement('label');
-        eqLabel.className = 'phase2d-fit-eq-toggle';
-        const eqCheck = document.createElement('input');
-        eqCheck.type = 'checkbox';
-        eqCheck.checked = state.showEquation !== false;
-        eqCheck.addEventListener('change', () => {
-            state.showEquation = eqCheck.checked;
-            this._renderPhase2dFitDrawer(panelId, plot);
-        });
-        eqLabel.append(eqCheck, document.createTextNode(' ' + i18n.t('phase2dFitShowEquation')));
-        drawer.appendChild(eqLabel);
+        const metricsHelpBtn = document.createElement('button');
+        metricsHelpBtn.type = 'button';
+        metricsHelpBtn.className = 'fft-help-btn';
+        metricsHelpBtn.textContent = '?';
+        metricsHelpBtn.title = i18n.t('phase2dFitMetricsHelpTitle');
+        metricsHelpBtn.setAttribute('aria-label', i18n.t('phase2dFitMetricsHelpTitle'));
+        metricsHelpBtn.addEventListener('click', () => this._showPhase2dFitMetricsHelp());
+        resultsHead.append(title, metricsHelpBtn);
+        drawer.appendChild(resultsHead);
 
         if (!results.length) {
             const empty = document.createElement('p');
@@ -996,11 +1080,28 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             block.appendChild(head);
 
             const ok = r.fit && r.fit.status === 'ok';
-            if (state.showEquation !== false && ok) {
+            if (ok) {
+                // Generic formula (a bit larger), then the resolved coefficients.
+                const parts = this._phase2dFitEquationParts(r.fit);
                 const eq = document.createElement('div');
                 eq.className = 'phase2d-fit-equation';
-                eq.textContent = this._phase2dFitEquationText(r.fit);
+                eq.textContent = parts.generic;
                 block.appendChild(eq);
+                const coeffs = document.createElement('div');
+                coeffs.className = 'phase2d-fit-coeffs';
+                for (const [k, v] of parts.coeffs) {
+                    const row = document.createElement('div');
+                    row.className = 'phase2d-fit-coeff';
+                    const kEl = document.createElement('span');
+                    kEl.className = 'phase2d-fit-coeff-k';
+                    kEl.textContent = k;
+                    const vEl = document.createElement('span');
+                    vEl.className = 'phase2d-fit-coeff-v';
+                    vEl.textContent = `= ${v}`;
+                    row.append(kEl, vEl);
+                    coeffs.appendChild(row);
+                }
+                block.appendChild(coeffs);
             }
 
             if (ok) {

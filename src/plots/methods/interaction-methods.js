@@ -3824,11 +3824,17 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     toolbar.appendChild(viewGroup);
 
-    // 2D-only Display (Lines / Points / Lines+points) + marker controls (TODO 10),
-    // then the Correlation toggle last so the Display dropdown is not mistaken
-    // for a Correlation option.
+    // 2D-only Display (Lines / Points / Lines+points) + marker controls (TODO 10).
     this._injectPhase2dDisplayControls?.(panelId, toolbar, plot);
-    if (phase2dCorrelationBtn) toolbar.appendChild(phase2dCorrelationBtn);
+    // Analysis toggles (Correlation + Curve Fit) grouped behind their own
+    // coloured separator so they read as analyses, not Display options.
+    if (isPhase2dFamily) {
+        const analysisGroup = document.createElement('div');
+        analysisGroup.className = 'phase2d-analysis-group';
+        if (phase2dCorrelationBtn) analysisGroup.appendChild(phase2dCorrelationBtn);
+        this._injectPhase2dFitToggle?.(panelId, analysisGroup, plot);
+        if (analysisGroup.childElementCount) toolbar.appendChild(analysisGroup);
+    }
 
     // Compare (overlay traces from other files) — left of CSV
     const compareBtn = document.createElement('button');

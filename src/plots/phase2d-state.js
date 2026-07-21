@@ -27,10 +27,12 @@ export function defaultPhase2dState() {
         displayMode: 'lines',   // 'lines' | 'markers' | 'lines+markers'
         markerSize: 4,
         markerOpacity: 0.65,
-        fitModel: 'none',       // 'none' | 'linear' | 'quadratic' (later phases)
+        fitModel: 'none',       // 'none' | 'linear' | 'quadratic' (active model)
+        lastFitModel: 'linear', // model to restore when Curve Fit is re-enabled
         layout: 'vertical',
         split: 0.5,
         optionsVisible: true,
+        timeSeriesHidden: true, // fit workspace focuses on the 2D scatter by default
         rangeFull: true,
         x1: null,
         x2: null,
@@ -52,9 +54,14 @@ export function normalizePhase2dState(raw = {}) {
         markerSize: clampNumber(raw.markerSize, MARKER_SIZE_MIN, MARKER_SIZE_MAX, defaults.markerSize),
         markerOpacity: clampNumber(raw.markerOpacity, MARKER_OPACITY_MIN, MARKER_OPACITY_MAX, defaults.markerOpacity),
         fitModel: PHASE2D_FIT_MODELS.has(raw.fitModel) ? raw.fitModel : defaults.fitModel,
+        // lastFitModel only ever holds a concrete model (never 'none').
+        lastFitModel: (raw.lastFitModel === 'linear' || raw.lastFitModel === 'quadratic')
+            ? raw.lastFitModel
+            : (raw.fitModel === 'quadratic' ? 'quadratic' : defaults.lastFitModel),
         layout: PHASE2D_LAYOUTS.has(raw.layout) ? raw.layout : defaults.layout,
         split: Number.isFinite(split) ? Math.max(0.2, Math.min(0.8, split)) : defaults.split,
         optionsVisible: raw.optionsVisible !== false,
+        timeSeriesHidden: raw.timeSeriesHidden !== false,
         rangeFull: raw.rangeFull !== undefined ? !!raw.rangeFull : !(x1 !== null || x2 !== null),
         x1,
         x2,
