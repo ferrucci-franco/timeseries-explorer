@@ -1084,6 +1084,12 @@ class PlotManager {
                 if (plot.mode === 'timeseries') this._refreshTimeseriesVisuals(panelId, plot);
                 else if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
                     this._refreshPhaseVisualsLazy?.(panelId, plot);
+                    // Restore the fit options/results drawer for a phase2d panel
+                    // that loads with an active fit (e.g. from a saved session).
+                    if (plot.mode === 'phase2d' && plot.phase2d?.fitModel && plot.phase2d.fitModel !== 'none') {
+                        this._ensurePhase2dFitDrawer?.(panelId, plot);
+                        this._renderPhase2dFitDrawer?.(panelId, plot);
+                    }
                 }
                 finish3DSetup();
             });
@@ -1490,6 +1496,9 @@ class PlotManager {
             this._cleanupLazyDetailForPanel(panelId, plot);
         }
         this._abortFftWorkerJob?.(plot, 'FFT panel destroyed');
+        // The phase2d fit drawer is a sibling <aside> of plot.div, so it is not
+        // torn down by the plot.div removal below — drop it explicitly.
+        this._removePhase2dFitDrawer?.(plot);
         this._stopAnim(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
         // Reset dynamic trace indices

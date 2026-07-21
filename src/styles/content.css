@@ -1316,6 +1316,144 @@
     opacity: 1;
 }
 
+/* Fitting select mirrors the Display select. */
+.phase2d-fit-select {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.7rem;
+    padding: 2px 4px;
+    cursor: pointer;
+}
+
+.phase2d-fit-options-btn {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    cursor: pointer;
+}
+
+.phase2d-fit-options-btn.active {
+    background: var(--accent-color, #2196f3);
+    border-color: var(--accent-color, #2196f3);
+    color: #fff;
+}
+
+.phase2d-fit-options-btn[hidden] {
+    display: none;
+}
+
+/* Collapsible fit results/options drawer — the FFT-style side panel. */
+.phase2d-fit-drawer {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: 260px;
+    max-width: 60%;
+    overflow-y: auto;
+    z-index: 5;
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    font-size: 0.72rem;
+    color: var(--text-primary);
+}
+
+.phase2d-fit-drawer[hidden] {
+    display: none;
+}
+
+.phase2d-fit-drawer-title {
+    margin: 0 0 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.phase2d-fit-help {
+    margin: 0 0 8px;
+    font-size: 0.66rem;
+    color: var(--text-secondary);
+    line-height: 1.35;
+}
+
+.phase2d-fit-eq-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 8px;
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.phase2d-fit-result {
+    border-top: 1px solid var(--border-color);
+    padding: 6px 0;
+}
+
+.phase2d-fit-result-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    margin-bottom: 3px;
+}
+
+.phase2d-fit-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+}
+
+.phase2d-fit-result-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.phase2d-fit-equation {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.68rem;
+    margin-bottom: 4px;
+    word-break: break-word;
+}
+
+.phase2d-fit-stats {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1px 10px;
+    margin: 0;
+}
+
+.phase2d-fit-stats dt {
+    color: var(--text-secondary);
+}
+
+.phase2d-fit-stats dd {
+    margin: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.phase2d-fit-warning {
+    margin-top: 4px;
+    color: #e53935;
+    font-size: 0.66rem;
+}
+
+.phase2d-fit-empty {
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+}
+
 .layout-toolbar-btn:disabled {
     opacity: 0.35;
     cursor: not-allowed;
