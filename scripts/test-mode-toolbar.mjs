@@ -298,6 +298,16 @@ assert.match(
     'Temporal Profile disables every analysis control when no trace has calendar time',
 );
 assert.match(
+    temporalMethodAssignment('_setTemporalProfileStatus'),
+    /kind === 'warning'[\s\S]*?temporalProfileWarningSeePanel[\s\S]*?_syncTemporalProfileMessage/,
+    'Temporal Profile topbar points warning users to the side panel',
+);
+assert.match(
+    temporalMethodAssignment('_syncTemporalProfileMessage'),
+    /temporal-profile-message[\s\S]*?kind === 'warning'/,
+    'Temporal Profile side panel contains the full warning message',
+);
+assert.match(
     temporalMethodAssignment('_recomputeTemporalProfile'),
     /resolutionUnit:\s*state\.period === 'year' && state\.yearResolution === 'month' \? 'month' : 'minute'/,
     'Year Month resolution is sent to the calendar-aware kernel',

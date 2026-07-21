@@ -34,6 +34,7 @@ const fallbackText = {
     temporalProfileCalendarRequired: 'Temporal Profile requires Calendar time mode.',
     temporalProfileLazyUnsupported: 'large/lazy files are not supported yet',
     temporalProfileNoFinite: 'no finite values in range',
+    temporalProfileWarningSeePanel: 'Warning: see message in the Profile side panel',
     temporalProfileTimeScope: 'Range',
     temporalProfileAll: 'All',
     temporalProfileSelection: 'Selection',
@@ -581,7 +582,7 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
     });
     const bins = models[0]?.result?.binCount;
     const ready = bins ? `${bins} bins · UTC` : '';
-    this._setTemporalProfileStatus(plot, warnings.length ? `${ready}${ready ? ' — ' : ''}${warnings.join(' | ')}` : ready, warnings.length ? 'warning' : 'ready');
+    this._setTemporalProfileStatus(plot, warnings.length ? warnings.join(' | ') : ready, warnings.length ? 'warning' : 'ready');
 };
 
 proto._temporalProfileSeriesColor = function(model, categoryIndex) {
@@ -693,9 +694,27 @@ proto._buildTemporalProfileLayout = function(plot, units = {}) {
 
 proto._setTemporalProfileStatus = function(plot, message, kind = 'muted') {
     const status = plot?.temporalProfileContainer?.querySelector('.hist-status');
-    if (!status) return;
-    status.textContent = message || '';
-    status.className = `hist-status hist-status-${kind}`;
+    if (status) {
+        status.textContent = kind === 'warning' && message
+            ? text('temporalProfileWarningSeePanel')
+            : (message || '');
+        status.className = `hist-status hist-status-${kind}`;
+        status.title = message || '';
+    }
+    plot._temporalProfileStatusMessage = message || '';
+    plot._temporalProfileStatusKind = kind;
+    this._syncTemporalProfileMessage(plot);
+};
+
+proto._syncTemporalProfileMessage = function(plot) {
+    const box = plot?.temporalProfileContainer?.querySelector('.temporal-profile-message');
+    if (!box) return;
+    const message = plot._temporalProfileStatusMessage || '';
+    const kind = plot._temporalProfileStatusKind || 'muted';
+    const show = !!message && kind === 'warning';
+    box.hidden = !show;
+    box.textContent = show ? message : '';
+    box.className = `fft-message temporal-profile-message fft-message-${kind}`;
 };
 
 // Temporal selection intentionally mirrors FFT, Heatmap and Histogram: the
@@ -962,6 +981,10 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     const options = plot?.temporalProfileContainer?.querySelector('.hist-options');
     if (!options) return;
     options.innerHTML = '';
+    const message = document.createElement('div');
+    message.className = 'fft-message temporal-profile-message';
+    message.hidden = true;
+    options.appendChild(message);
     const section = (label) => {
         const title = document.createElement('div');
         title.className = 'fft-options-subtitle';
@@ -1197,6 +1220,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     if (controlsDisabled) {
         options.querySelectorAll('button, input, select').forEach(control => { control.disabled = true; });
     }
+    this._syncTemporalProfileMessage(plot);
 };
 
 proto._syncTemporalProfileOptionsPanel = function(plot) {
