@@ -19,7 +19,7 @@ const fallbackText = {
     temporalProfileCalendarRequired: 'Temporal Profile requires Calendar time mode.',
     temporalProfileLazyUnsupported: 'large/lazy files are not supported yet',
     temporalProfileNoFinite: 'no finite values in range',
-    temporalProfileTimeScope: 'Time scope',
+    temporalProfileTimeScope: 'Range',
     temporalProfileAll: 'All',
     temporalProfileSelection: 'Selection',
     temporalProfileStart: 'Start',
@@ -197,8 +197,16 @@ proto._normalizeTemporalProfileState = function(raw = {}) {
 
 proto._ensureTemporalProfileState = function(plot) {
     if (!plot) return this._defaultTemporalProfileState();
-    plot.temporalProfile = this._normalizeTemporalProfileState(plot.temporalProfile || {});
-    return plot.temporalProfile;
+    const current = plot.temporalProfile;
+    const normalized = this._normalizeTemporalProfileState(current || {});
+    if (current && typeof current === 'object' && !Array.isArray(current)) {
+        // Controls keep a reference to this object. Preserve its identity across
+        // recomputes so their event handlers always update the live state.
+        Object.assign(current, normalized);
+        return current;
+    }
+    plot.temporalProfile = normalized;
+    return normalized;
 };
 
 proto._addTemporalProfileTrace = function(panelId, varName, panelEl, plot) {
@@ -504,7 +512,7 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
                 traces.push({
                     type: 'bar', x, y,
                     width: category.bins.map(bin => bin.endHours - bin.startHours),
-                    name, visible, meta, legendgroup: name,
+                    name, visible, meta,
                     marker: {
                         color,
                         line: { color, width: 1 },
@@ -517,12 +525,12 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
             if (state.renderMode === 'line-band') {
                 const lower = category.bins.map(bin => bin.mean == null || bin.std == null ? null : bin.mean - bin.std);
                 const upper = category.bins.map(bin => bin.mean == null || bin.std == null ? null : bin.mean + bin.std);
-                traces.push({ type: 'scatter', mode: 'lines', x, y: lower, line: { width: 0 }, hoverinfo: 'skip', showlegend: false, visible, meta, legendgroup: name });
-                traces.push({ type: 'scatter', mode: 'lines', x, y: upper, line: { width: 0 }, fill: 'tonexty', fillcolor: rgba(color, 0.18), hoverinfo: 'skip', showlegend: false, visible, meta, legendgroup: name });
+                traces.push({ type: 'scatter', mode: 'lines', x, y: lower, line: { width: 0 }, hoverinfo: 'skip', showlegend: false, visible, meta });
+                traces.push({ type: 'scatter', mode: 'lines', x, y: upper, line: { width: 0 }, fill: 'tonexty', fillcolor: rgba(color, 0.18), hoverinfo: 'skip', showlegend: false, visible, meta });
             }
             traces.push({
                 type: 'scatter', mode: 'lines+markers', x, y,
-                name, visible, meta, legendgroup: name,
+                name, visible, meta,
                 line: { color, width: 2 },
                 marker: {
                     color,

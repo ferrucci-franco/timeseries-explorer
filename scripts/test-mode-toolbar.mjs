@@ -43,6 +43,14 @@ const methodAssignment = (name) => {
     return interactionSource.slice(start, next >= 0 ? next : interactionSource.length);
 };
 
+const temporalMethodAssignment = (name) => {
+    const marker = `proto.${name} = function`;
+    const start = temporalProfileMethodsSource.indexOf(marker);
+    assert.ok(start >= 0, `${name} temporal-profile method is present`);
+    const next = temporalProfileMethodsSource.indexOf('\nproto.', start + marker.length);
+    return temporalProfileMethodsSource.slice(start, next >= 0 ? next : temporalProfileMethodsSource.length);
+};
+
 class FakeClassList {
     constructor(element) {
         this.element = element;
@@ -188,6 +196,49 @@ vm.runInNewContext([
     methodAssignment('_toggleTimeseriesAnalysisMode'),
     methodAssignment('_requestModeChange'),
 ].join('\n'), sandbox);
+
+class TemporalStateHarness {}
+
+vm.runInNewContext([
+    temporalMethodAssignment('_defaultTemporalProfileState'),
+    temporalMethodAssignment('_normalizeTemporalProfileState'),
+    temporalMethodAssignment('_ensureTemporalProfileState'),
+].join('\n'), {
+    proto: TemporalStateHarness.prototype,
+    TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES: { day: 60, week: 60, month: 1440 },
+    TEMPORAL_PROFILE_PERIODS: new Set(['day', 'week', 'month']),
+    PROFILE_LAYOUTS: new Set(['horizontal', 'vertical']),
+    PROFILE_RENDER_MODES: new Set(['columns', 'line', 'line-band']),
+    finiteOrNull(value) {
+        if (value === '' || value === null || value === undefined) return null;
+        const number = Number(value);
+        return Number.isFinite(number) ? number : null;
+    },
+    hasFinite(value) {
+        return value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
+    },
+});
+
+// Option controls close over the state object that existed when their DOM was
+// rendered. A normalization/recompute cycle must not replace that object.
+{
+    const manager = new TemporalStateHarness();
+    const plot = { temporalProfile: { period: 'day', renderMode: 'line-band' } };
+    const controlState = manager._ensureTemporalProfileState(plot);
+    const recomputedState = manager._ensureTemporalProfileState(plot);
+    assert.equal(recomputedState, controlState, 'Temporal Profile preserves state identity across recomputes');
+    controlState.period = 'week';
+    controlState.renderMode = 'columns';
+    controlState.saturdays = false;
+    controlState.resolutionByPeriod.week = 15;
+    const liveState = manager._ensureTemporalProfileState(plot);
+    assert.equal(liveState.period, 'week', 'Period control updates the live state');
+    assert.equal(liveState.renderMode, 'columns', 'Display control updates the live state');
+    assert.equal(liveState.saturdays, false, 'Day-category controls update the live state');
+    assert.equal(liveState.resolutionByPeriod.week, 15, 'Resolution control updates the live state');
+}
+
+assert.doesNotMatch(temporalProfileMethodsSource, /legendgroup\s*:/, 'Temporal Profile legend entries use standard plot spacing');
 
 const renderToolbar = (mode, stateAnimDim = 2, plotState = {}) => {
     const manager = new ToolbarHarness(mode, stateAnimDim);
