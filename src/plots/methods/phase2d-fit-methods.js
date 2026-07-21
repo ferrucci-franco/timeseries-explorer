@@ -521,6 +521,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (plot.phase2dFitContainer?.isConnected) return;
         plot.phase2dFitContainer = null;
         const state = this._ensurePhase2dState(plot);
+        // A fresh build re-reads current data, so any prior live-append dirtiness
+        // is resolved by construction.
+        state.dirty = false;
 
         const container = document.createElement('div');
         container.className = `fft-container phase2d-fit-container fft-layout-${state.layout}${state.timeSeriesHidden ? ' fft-time-series-hidden' : ''}`;
@@ -555,8 +558,13 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const optionsBtn = makeButton('fft-tool-btn fft-options-btn', i18n.t('fftOptionsLabel'), i18n.t('fftOptionsToggle'), () => this._togglePhase2dOptions(panelId));
         optionsBtn.classList.toggle('active', state.optionsVisible);
         optionsBtn.setAttribute('aria-pressed', String(state.optionsVisible));
+        // Update button — shown only while a lazy fit is stale after a live
+        // append (re-querying every poll would be too costly).
+        const refreshBtn = makeButton('fft-tool-btn phase2d-fit-refresh-btn', i18n.t('phase2dFitUpdate'), i18n.t('phase2dFitUpdateTooltip'), () => this._refreshDirtyPhase2dFit(panelId));
+        refreshBtn.hidden = !state.dirty;
         actionGroup.append(
             makeButton('fft-tool-btn', i18n.t('fftResetLabel'), i18n.t('fftResetView'), () => this._resetPhase2dFitView(panelId)),
+            refreshBtn,
             optionsBtn,
         );
         const status = document.createElement('span');
@@ -966,6 +974,34 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         el.title = message || '';
     };
 
+    // ── Live-update dirty (lazy pairs only) ────────────────────────
+    proto._markPhase2dFitDirty = function(panelId, message = i18n.t('phase2dFitDirty')) {
+        const plot = this.plots.get(panelId);
+        if (!plot || plot.mode !== 'phase2d') return;
+        this._ensurePhase2dState(plot).dirty = true;
+        this._syncPhase2dFitDirtyUi(plot);
+        this._setPhase2dFitStatus(plot, message, 'warning');
+        this._refreshActionBtns?.(panelId); // CSV export refuses while dirty
+    };
+
+    proto._syncPhase2dFitDirtyUi = function(plot) {
+        const btn = plot?.phase2dFitContainer?.querySelector('.phase2d-fit-refresh-btn');
+        if (!btn) return;
+        const dirty = !!this._ensurePhase2dState(plot).dirty;
+        btn.hidden = !dirty;
+        btn.disabled = !dirty;
+    };
+
+    proto._refreshDirtyPhase2dFit = function(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        this._ensurePhase2dState(plot).dirty = false;
+        this._syncPhase2dFitDirtyUi(plot);
+        this._setPhase2dFitStatus(plot, '', 'muted');
+        // Rebuild so the visual panes AND the lazy fits re-read the appended data.
+        this._rebuildPanel?.(panelId);
+    };
+
     // Debounced recompute of the fits (curves + coefficients + drawer) after a
     // Todo/Selección range change. Eager only for now.
     proto._schedulePhase2dFitRecompute = function(panelId, options = {}) {
@@ -1170,6 +1206,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         pairLbl.textContent = i18n.t('phase2dFitPair');
         const pairSelect = document.createElement('select');
         pairSelect.className = 'phase2d-fit-pair-select';
+        pairSelect.setAttribute('aria-label', i18n.t('phase2dFitPair'));
         visiblePairs.forEach((p, i) => {
             const label = this._phase2dFitPairLabel(plot, p);
             const opt = document.createElement('option');
@@ -1197,6 +1234,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         typeLbl.textContent = i18n.t('phase2dFitType');
         const typeSelect = document.createElement('select');
         typeSelect.className = 'phase2d-fit-type-select';
+        typeSelect.setAttribute('aria-label', i18n.t('phase2dFitType'));
         [['none', 'phase2dFitOff'], ['linear', 'phase2dFitLinear'], ['quadratic', 'phase2dFitQuadratic']].forEach(([m, key]) => {
             const opt = document.createElement('option');
             opt.value = m;

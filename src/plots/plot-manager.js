@@ -149,6 +149,18 @@ class PlotManager {
                 this._markCorrelationDirty?.(panelId);
                 continue;
             }
+            // Same guard for a lazy 2D Curve Fit: a DuckDB fit pair must not
+            // re-run its aggregate query on every live poll. Flag dirty and let
+            // the user click Update.
+            if (options.liveAppend
+                && plot.mode === 'phase2d'
+                && plot.phase2d?.fitEnabled
+                && plot.phaseTraces.some(t => t.fileId === fileId
+                    && this._phase2dPairModel?.(t) !== 'none'
+                    && !!this.files.get(t.fileId)?.data?._duckdb)) {
+                this._markPhase2dFitDirty?.(panelId);
+                continue;
+            }
             const captured = this._capturePlotView(plot);
             const restoreView = options.liveAppend
                 ? this._liveAppendRestoreView(plot, fileId, captured, previousData, newData)
