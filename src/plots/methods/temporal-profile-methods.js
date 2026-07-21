@@ -364,6 +364,19 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
     plot.temporalProfileDiv = profileDiv;
     plot.div = timeDiv;
     this._renderTemporalProfileOptionsPanel(panelId, plot);
+    // Show progress from the very first empty frame. The exact lazy query starts
+    // after Plotly initializes both panes, which can itself take long enough to
+    // leave an apparently blank/unresponsive analysis pane without this early
+    // indicator. The pill is a sibling of the Plotly div, so newPlot cannot
+    // remove it.
+    const initialLazyProfile = (plot.traces || []).some(trace => (
+        traceIsLazy(this, trace) && this._fftTimeKind(trace.fileId) === 'datetime'
+    ));
+    if (initialLazyProfile) {
+        this._setTemporalProfileStatus(plot, text('temporalProfileCalculating'), 'loading');
+        this._setTemporalProfileComputing(plot, true);
+        container.setAttribute('aria-busy', 'true');
+    }
     const config = this._getPlotlyConfig();
     Promise.all([
         Plotly.newPlot(timeDiv, this._buildTemporalProfileTimeTraces(plot), this._buildTemporalProfileTimeLayout(plot), config),

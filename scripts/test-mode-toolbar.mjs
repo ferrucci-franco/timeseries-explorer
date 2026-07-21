@@ -321,6 +321,11 @@ assert.match(
     'Temporal Profile keeps the previous plot in place while the lazy query runs',
 );
 assert.match(
+    temporalMethodAssignment('_createTemporalProfileChart'),
+    /initialLazyProfile[\s\S]*?_setTemporalProfileComputing\(plot, true\)[\s\S]*?Plotly\.newPlot/,
+    'Temporal Profile shows its calculation pill before the first empty Plotly frame initializes',
+);
+assert.match(
     temporalMethodAssignment('_renderTemporalProfileOptionsPanel'),
     /!this\._temporalProfileHasCalendarTrace\(plot\)[\s\S]*?querySelectorAll\('button, input, select'\)[\s\S]*?control\.disabled = true/,
     'Temporal Profile disables every analysis control when no trace has calendar time',
