@@ -264,8 +264,27 @@ assert.equal(tableData.metadata.timeKind, 'datetime', 'the table datetime column
 assert.equal(tableData.variables.date.data[0], Date.UTC(2016, 0, 1, 0, 0, 0), 'the table datetime column decodes as epoch milliseconds');
 assert.deepEqual(Array.from(tableData.variables.load_MW.data), [10, 20, 30], 'table numeric column values are recovered');
 
+// A standalone datetime field (a `t` inside a struct/cell, not a table) must
+// still load as a usable calendar axis alongside its numeric siblings.
+const structInspection = await parser.inspect(fixture('struct-datetime-v5.mat'), 'struct-datetime-v5.mat');
+assert.equal(structInspection.kind, 'general', 'a struct with a datetime field uses the standard picker');
+const structTime = structInspection.entries.find(entry => entry.path === 'site.t');
+assert.equal(structTime?.className, 'datetime', 'a standalone datetime field is typed as datetime');
+assert.equal(structTime?.datetime, true, 'a standalone datetime field can serve as a calendar axis');
+assert.equal(structTime?.preferredTime, true, 'a standalone datetime field is a preferred time axis');
+assert.ok(structInspection.entries.find(entry => entry.path === 'site.P')?.selectable, 'the numeric sibling field is selectable');
+const structData = parser.materialize(structInspection, {
+    selectedIds: structInspection.entries.filter(entry => entry.selectable).map(entry => entry.id),
+    timeMode: 'auto',
+}, 'struct-datetime-v5.mat');
+assert.equal(structData.metadata.timeName, 'site.t', 'the standalone datetime field becomes the time axis');
+assert.equal(structData.metadata.timeKind, 'datetime', 'the standalone datetime field drives a datetime axis');
+assert.equal(structData.variables['site.t'].data[0], Date.UTC(2021, 5, 1, 0, 0, 0), 'the standalone datetime decodes as epoch milliseconds');
+assert.deepEqual(Array.from(structData.variables['site.P'].data), [11, 22, 33], 'the numeric sibling values are recovered');
+
 const source = readFileSync(new URL('../src/ui/mat-variable-picker-dialog.js', import.meta.url), 'utf8');
 assert.match(source, /preferredTime/, 'the array picker pre-selects a timetable row-times axis');
+assert.match(source, /preferredTimeEntries/, 'the picker auto-detects among several datetime axes');
 assert.match(source, /checkbox\.type = 'checkbox'/, 'MAT overview uses variable checkboxes');
 assert.match(source, /matPickerOverview/, 'MAT overview includes value previews');
 assert.match(source, /timeSelect/, 'MAT overview exposes time-axis selection');

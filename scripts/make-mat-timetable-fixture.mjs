@@ -118,7 +118,7 @@ function serializeSegment(blocks) {
  *                a prop is { nameIdx, flag, value }; value indexes valueCells.
  * @param valueCells miMATRIX elements addressed by property value (0-based).
  */
-function buildMcosFile({ topVar, className, topObjectId, names, classes, objects, valueCells }) {
+function buildMcosFile({ topVar, className, topObjectId, names, classes, objects, valueCells, topVariable: customTop }) {
     const seg1Blocks = [[]];
     const seg2Blocks = [[]];
     const objectMeta = objects.map(object => {
@@ -166,7 +166,8 @@ function buildMcosFile({ topVar, className, topObjectId, names, classes, objects
     const innerHeader = u8([0x00, 0x01, 0x49, 0x4d, 0, 0, 0, 0]);
     const innerStream = concat([innerHeader, structMatrix('', [1, 1], { MCOS: fileWrapper })]);
     const subsystemElement = uint8Matrix('', [1, innerStream.length], innerStream);
-    const topVariable = opaque(topVar, 'MCOS', className, objectReference('', topObjectId, classes.findIndex(c => c.name === className) + 1));
+    const topVariable = customTop
+        || opaque(topVar, 'MCOS', className, objectReference('', topObjectId, classes.findIndex(c => c.name === className) + 1));
 
     const header = new Uint8Array(128);
     const headerView = new DataView(header.buffer);
@@ -284,10 +285,33 @@ function tableFixture() {
     });
 }
 
+// ---- struct with a standalone datetime field (not a table) -----------------
+// Mirrors real exports like a cell/struct of measurements: a `t` datetime field
+// alongside a numeric `P` field. The datetime must still surface as a usable
+// calendar axis even though it is not a timetable's row-times.
+function structDatetimeFixture() {
+    const rows = 3;
+    const start = Date.UTC(2021, 5, 1, 0, 0, 0);
+    const t = Array.from({ length: rows }, (_, index) => start + index * 3600000);
+    const topVariable = structMatrix('site', [1, 1], {
+        t: opaque('t', 'MCOS', 'datetime', objectReference('', 1, 1)), // datetime object 1
+        P: doubleMatrix('P', [rows, 1], [11, 22, 33]),
+    });
+    return buildMcosFile({
+        topVariable,
+        names: ['', 'data', 'datetime'],
+        classes: [{ name: 'datetime', nameIdx: 2 }],
+        objects: [{ classId: 1, seg1: [{ nameIdx: 1, flag: 1, value: 0 }] }], // datetime.data -> valueCells[0]
+        valueCells: [doubleMatrix('', [rows, 1], t)],
+    });
+}
+
 const timetablePath = fileURLToPath(new URL('../test-files/matlab/timetable-v5.mat', import.meta.url));
 const regularTimetablePath = fileURLToPath(new URL('../test-files/matlab/regular-timetable-v5.mat', import.meta.url));
 const tablePath = fileURLToPath(new URL('../test-files/matlab/table-v5.mat', import.meta.url));
+const structDatetimePath = fileURLToPath(new URL('../test-files/matlab/struct-datetime-v5.mat', import.meta.url));
 writeFileSync(timetablePath, timetableFixture());
 writeFileSync(regularTimetablePath, regularTimetableFixture());
 writeFileSync(tablePath, tableFixture());
-console.log(`Generated MATLAB MCOS fixtures:\n  ${timetablePath}\n  ${regularTimetablePath}\n  ${tablePath}`);
+writeFileSync(structDatetimePath, structDatetimeFixture());
+console.log(`Generated MATLAB MCOS fixtures:\n  ${timetablePath}\n  ${regularTimetablePath}\n  ${tablePath}\n  ${structDatetimePath}`);

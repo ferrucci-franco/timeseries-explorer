@@ -135,14 +135,18 @@ export default class MatVariablePickerDialog {
                 option.textContent = `${entry.path} (${entry.shapeLabel})`;
                 timeSelect.appendChild(option);
             });
-            const preferredTimeEntry = entries.find(entry => entry.selectable && entry.preferredTime && isVector(entry));
+            const preferredTimeEntries = entries.filter(entry => entry.selectable && entry.preferredTime && isVector(entry));
             if (initialSelection?.timeMode === 'auto') timeSelect.value = '';
             else if (initialSelection?.timeMode === 'selected' && initialSelection.timeId) {
                 timeSelect.value = initialSelection.timeId;
                 if (timeSelect.value !== initialSelection.timeId) timeSelect.value = '__index__';
-            } else if (!initialSelection && preferredTimeEntry) {
-                // A timetable's row-times are pre-selected as the time axis.
-                timeSelect.value = preferredTimeEntry.id;
+            } else if (!initialSelection && preferredTimeEntries.length === 1) {
+                // A single row-times/datetime axis is pre-selected directly.
+                timeSelect.value = preferredTimeEntries[0].id;
+            } else if (!initialSelection && preferredTimeEntries.length > 1) {
+                // Several datetime axes (e.g. one per struct): auto-detect resolves
+                // the axis against whichever entries stay selected.
+                timeSelect.value = '';
             } else {
                 timeSelect.value = '__index__';
             }

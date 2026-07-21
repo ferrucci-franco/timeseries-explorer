@@ -320,7 +320,10 @@ export default class McosSubsystem {
 
     _numericArray(node) {
         if (Array.isArray(node)) return node.length && node[0]?.className ? this._objectMillis(node[0]) : node.map(Number);
-        if (node && node.kind === 'numeric') return node.data.map(Number);
+        // The reader already decodes numeric payloads to JS numbers, so return the
+        // array as-is — callers make a single clean copy. Avoids an extra
+        // full-length pass over million-row datetime vectors.
+        if (node && node.kind === 'numeric') return node.data;
         return null;
     }
 
@@ -444,6 +447,19 @@ export default class McosSubsystem {
             for (const column of this._columnSeries(name, info.dataColumns[index], info.numRows)) columns.push(column);
         });
         return { className: object.className, numRows: info.numRows, time, columns };
+    }
+
+    /**
+     * Interpret a standalone datetime/duration object (e.g. a struct or cell
+     * field that is not part of a table) into a plottable vector. datetimes
+     * become epoch milliseconds; durations become seconds. Returns null for
+     * anything else.
+     */
+    interpretDatetimeObject(objectId) {
+        const object = this.resolveObject(objectId);
+        if (object.className === 'datetime') return { kind: 'datetime', values: this._objectMillis(object) };
+        if (object.className === 'duration') return { kind: 'numeric', values: this._objectMillis(object).map(ms => ms / 1000) };
+        return null;
     }
 
     resolveObject(objectId, classIdHint = null) {
