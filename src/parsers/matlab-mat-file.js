@@ -357,44 +357,59 @@ export default class MatlabMatFile {
     _inspectV5(buffer, filename) {
         const reader = new Mat5Reader(buffer);
         const nodes = reader.read();
-        const entries = [];
-        const opaques = [];
+        // Walk the file in order, keeping opaque (MCOS) objects in the position
+        // they occupy among their struct/cell siblings so a datetime field like
+        // `t` lists next to the numeric fields it belongs with — not lumped at
+        // the end.
+        const items = [];
         const visit = node => {
-            if (node.opaque) { opaques.push(node); return; }
+            if (node.opaque) { items.push({ opaque: node }); return; }
             if (node.children?.length) node.children.forEach(visit);
-            if (node.data || node.text != null) entries.push(this._descriptor(node));
+            if (node.data || node.text != null) items.push({ entry: this._descriptor(node) });
         };
         nodes.forEach(visit);
-        // timetable/table objects (stored in the MCOS subsystem) are flattened
-        // into ordinary picker entries — their datetime row-times as a selectable
-        // time axis, their columns as numeric arrays — so they list alongside any
-        // plain arrays and share the same "Select MATLAB arrays" dialog.
-        if (reader.subsystem && opaques.length) {
-            for (const entry of this._mcosEntries(reader.subsystem, opaques)) entries.push(entry);
+
+        const subsystem = reader.subsystem;
+        const entries = [];
+        if (subsystem) {
+            // timetable/table row-times, table columns and standalone datetime
+            // fields (stored in the MCOS subsystem) become ordinary picker entries
+            // so they share the same "Select MATLAB arrays" dialog as plain arrays.
+            const opaqueNodes = items.filter(item => item.opaque).map(item => item.opaque);
+            const resolved = this._resolveMcosNodes(subsystem, opaqueNodes);
+            const multipleTables = [...resolved.values()].filter(info => info?.table).length > 1;
+            const used = new Set();
+            for (const item of items) {
+                if (item.entry) { used.add(item.entry.path); entries.push(item.entry); continue; }
+                const info = resolved.get(item.opaque);
+                if (!info) continue;
+                for (const entry of this._mcosNodeEntries(item.opaque, info, multipleTables, used)) entries.push(entry);
+            }
+        } else {
+            for (const item of items) if (item.entry) entries.push(item.entry);
         }
         if (!entries.length) throw new Error('The MATLAB Level 5 file contains no readable arrays.');
         return { version: '5-7', kind: 'general', filename, entries };
     }
 
-    _mcosEntries(subsystem, opaques) {
-        const tables = [];
-        const datetimes = [];
-        for (const node of opaques) {
+    _resolveMcosNodes(subsystem, nodes) {
+        const resolved = new Map();
+        for (const node of nodes) {
             const objectId = node.ref?.objectIds?.[0];
-            if (objectId == null) continue;
+            if (objectId == null) { resolved.set(node, null); continue; }
             let table = null;
             try { table = subsystem.interpretTable(objectId); } catch { table = null; }
-            if (table && table.columns.length) { tables.push({ node, table }); continue; }
+            if (table && table.columns.length) { resolved.set(node, { table }); continue; }
             // A datetime/duration object that is not part of a table — e.g. a
             // `t` field inside a struct/cell — still becomes a usable time axis.
             let object = null;
             try { object = subsystem.interpretDatetimeObject(objectId); } catch { object = null; }
-            if (object?.values?.length) datetimes.push({ node, object });
+            resolved.set(node, object?.values?.length ? { datetime: object } : null);
         }
-        if (!tables.length && !datetimes.length) return [];
+        return resolved;
+    }
 
-        const multiple = tables.length > 1;
-        const used = new Set();
+    _mcosNodeEntries(node, info, multipleTables, used) {
         const unique = path => {
             let candidate = path || 'var';
             let suffix = 2;
@@ -402,33 +417,33 @@ export default class MatlabMatFile {
             used.add(candidate);
             return candidate;
         };
-        const entries = [];
-        for (const { node, object } of datetimes) {
+        if (info.datetime) {
             const path = unique(this._safeName(node.path || node.name));
-            entries.push(this._mcosAxisEntry(path, node.name, object.values, object.kind === 'datetime', object.kind === 'datetime'));
+            const isDatetime = info.datetime.kind === 'datetime';
+            return [this._mcosAxisEntry(path, node.name, info.datetime.values, isDatetime, isDatetime)];
         }
-        for (const { node, table } of tables) {
-            const prefix = multiple ? `${this._safeName(node.name)}.` : '';
-            // The first datetime axis in a table — its row-times, or failing
-            // that its first datetime column — is pre-selected as the time axis.
-            let preferredAssigned = false;
-            if (table.time && table.time.kind !== 'index' && table.time.values?.length) {
-                const path = unique(`${prefix}${table.time.name || 'Time'}`);
-                entries.push(this._mcosAxisEntry(path, table.time.name, table.time.values, table.time.kind === 'datetime', true));
+        const table = info.table;
+        const entries = [];
+        const prefix = multipleTables ? `${this._safeName(node.name)}.` : '';
+        // The first datetime axis in a table — its row-times, or failing that its
+        // first datetime column — is pre-selected as the time axis.
+        let preferredAssigned = false;
+        if (table.time && table.time.kind !== 'index' && table.time.values?.length) {
+            const path = unique(`${prefix}${table.time.name || 'Time'}`);
+            entries.push(this._mcosAxisEntry(path, table.time.name, table.time.values, table.time.kind === 'datetime', true));
+            preferredAssigned = true;
+        }
+        for (const column of table.columns) {
+            const path = unique(`${prefix}${column.name}`);
+            if (column.kind === 'datetime') {
+                entries.push(this._mcosAxisEntry(path, column.name, column.data, true, !preferredAssigned));
                 preferredAssigned = true;
-            }
-            for (const column of table.columns) {
-                const path = unique(`${prefix}${column.name}`);
-                if (column.kind === 'datetime') {
-                    entries.push(this._mcosAxisEntry(path, column.name, column.data, true, !preferredAssigned));
-                    preferredAssigned = true;
-                } else {
-                    entries.push(this._descriptor({
-                        path, name: column.name, className: 'double', storageType: 'mcos-column',
-                        shape: [column.data.length, 1], data: Array.from(column.data, numericValue),
-                        layout: 'column-major',
-                    }));
-                }
+            } else {
+                entries.push(this._descriptor({
+                    path, name: column.name, className: 'double', storageType: 'mcos-column',
+                    shape: [column.data.length, 1], data: Array.from(column.data, numericValue),
+                    layout: 'column-major',
+                }));
             }
         }
         return entries;
