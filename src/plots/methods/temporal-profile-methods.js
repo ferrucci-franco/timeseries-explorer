@@ -15,6 +15,12 @@ const PROFILE_RECOMPUTE_DEBOUNCE_MS = 150;
 const PROFILE_BAR_OPACITY = 0.68;
 const PROFILE_RESOLUTION_PRESETS = [1440, 60, 30, 15, 5, 1];
 
+function resolutionPresetsForPeriod(period) {
+    return period === 'day'
+        ? PROFILE_RESOLUTION_PRESETS.filter(minutes => minutes < 1440)
+        : PROFILE_RESOLUTION_PRESETS;
+}
+
 const fallbackText = {
     temporalProfileMode: 'Temporal profile',
     temporalProfileModeLabel: 'Profile',
@@ -183,6 +189,11 @@ proto._normalizeTemporalProfileState = function(raw = {}) {
             ? number
             : defaults.resolutionByPeriod[period];
         customResolutionByPeriod[period] = raw.customResolutionByPeriod?.[period] === true;
+    }
+    // The former "1 day" preset collapses an intraday profile to one bin.
+    // Preserve 1440 only when it came from an explicit custom value.
+    if (!customResolutionByPeriod.day && resolutionByPeriod.day === 1440) {
+        resolutionByPeriod.day = defaults.resolutionByPeriod.day;
     }
     return {
         ...defaults,
@@ -470,7 +481,7 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
     const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot);
     plot._temporalProfileMinimumResolutionMinutes = minimumResolution;
     if (resolutionBelowStep(state.resolutionByPeriod[state.period], minimumResolution)) {
-        const matchingPreset = PROFILE_RESOLUTION_PRESETS.find(value => !resolutionBelowStep(value, minimumResolution)
+        const matchingPreset = resolutionPresetsForPeriod(state.period).find(value => !resolutionBelowStep(value, minimumResolution)
             && Math.abs(value - minimumResolution) <= Math.max(1e-9, minimumResolution * 1e-6));
         state.resolutionByPeriod[state.period] = matchingPreset ?? minimumResolution;
         state.customResolutionByPeriod[state.period] = matchingPreset == null;
@@ -1008,6 +1019,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
 
     section(text('temporalProfileResolution'));
     const currentResolution = state.resolutionByPeriod[state.period];
+    const presets = resolutionPresetsForPeriod(state.period);
     const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot);
     if (Number.isFinite(minimumResolution) && minimumResolution > 0) {
         const stepValue = document.createElement('span');
@@ -1017,7 +1029,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     }
     const select = document.createElement('select');
     select.className = 'fft-select';
-    for (const minutes of PROFILE_RESOLUTION_PRESETS) {
+    for (const minutes of presets) {
         const option = document.createElement('option');
         option.value = String(minutes);
         option.textContent = resolutionLabel(minutes);
@@ -1030,7 +1042,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     select.appendChild(customOption);
     select.value = state.customResolutionByPeriod[state.period]
         ? 'custom'
-        : (PROFILE_RESOLUTION_PRESETS.includes(currentResolution) ? String(currentResolution) : 'custom');
+        : (presets.includes(currentResolution) ? String(currentResolution) : 'custom');
     select.addEventListener('change', () => {
         state.customResolutionByPeriod[state.period] = select.value === 'custom';
         if (select.value !== 'custom') state.resolutionByPeriod[state.period] = Number(select.value);

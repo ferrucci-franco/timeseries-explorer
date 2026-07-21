@@ -236,6 +236,15 @@ vm.runInNewContext([
     assert.equal(liveState.renderMode, 'columns', 'Display control updates the live state');
     assert.equal(liveState.saturdays, false, 'Day-category controls update the live state');
     assert.equal(liveState.resolutionByPeriod.week, 15, 'Resolution control updates the live state');
+
+    const migrated = manager._ensureTemporalProfileState({
+        temporalProfile: {
+            period: 'day',
+            resolutionByPeriod: { day: 1440, week: 60, month: 1440 },
+            customResolutionByPeriod: { day: false, week: false, month: false },
+        },
+    });
+    assert.equal(migrated.resolutionByPeriod.day, 60, 'obsolete one-day preset migrates to the hourly Day default');
 }
 
 assert.doesNotMatch(temporalProfileMethodsSource, /legendgroup\s*:/, 'Temporal Profile legend entries use standard plot spacing');
@@ -257,6 +266,11 @@ assert.match(
     temporalProfileMethodsSource,
     /option\.disabled\s*=\s*resolutionBelowStep\(minutes, minimumResolution\)/,
     'Temporal Profile disables preset resolutions below the detected data timestep',
+);
+assert.match(
+    temporalProfileMethodsSource,
+    /period === 'day'[\s\S]*?PROFILE_RESOLUTION_PRESETS\.filter\(minutes => minutes < 1440\)/,
+    'Day profiles omit the one-day resolution preset',
 );
 assert.match(
     temporalMethodAssignment('_recomputeTemporalProfile'),
