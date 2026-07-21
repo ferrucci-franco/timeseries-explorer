@@ -28,6 +28,125 @@ class FileHarness {
 }
 installFileMethods(FileHarness);
 
+class ClassicWriter {
+    constructor() {
+        this.parts = [];
+        this.length = 0;
+    }
+
+    bytes(value) {
+        const data = value instanceof Uint8Array ? value : new Uint8Array(value);
+        this.parts.push(data);
+        this.length += data.length;
+    }
+
+    uint(value) {
+        const data = new Uint8Array(4);
+        new DataView(data.buffer).setUint32(0, value, false);
+        this.bytes(data);
+    }
+
+    name(value) {
+        const data = new TextEncoder().encode(value);
+        this.uint(data.length);
+        this.bytes(data);
+        this.pad();
+    }
+
+    pad() {
+        const remainder = this.length % 4;
+        if (remainder) this.bytes(new Uint8Array(4 - remainder));
+    }
+
+    finish() {
+        const output = new Uint8Array(this.length);
+        let offset = 0;
+        for (const part of this.parts) {
+            output.set(part, offset);
+            offset += part.length;
+        }
+        return output.buffer;
+    }
+}
+
+const TYPES = { char: 2, int: 4, float: 5 };
+const TYPE_BYTES = { char: 1, int: 4, float: 4 };
+
+function encodeValues(type, values) {
+    if (type === 'char') return new TextEncoder().encode(Array.isArray(values) ? values.join('') : String(values));
+    const data = new Uint8Array(values.length * TYPE_BYTES[type]);
+    const view = new DataView(data.buffer);
+    values.forEach((value, index) => {
+        const offset = index * TYPE_BYTES[type];
+        if (type === 'int') view.setInt32(offset, value, false);
+        else if (type === 'float') view.setFloat32(offset, value, false);
+    });
+    return data;
+}
+
+function writeAttributes(writer, attributes = []) {
+    if (!attributes.length) {
+        writer.uint(0);
+        writer.uint(0);
+        return;
+    }
+    writer.uint(12);
+    writer.uint(attributes.length);
+    for (const attribute of attributes) {
+        writer.name(attribute.name);
+        writer.uint(TYPES[attribute.type]);
+        const values = attribute.type === 'char' ? String(attribute.value) : [].concat(attribute.value);
+        writer.uint(values.length);
+        writer.bytes(encodeValues(attribute.type, values));
+        writer.pad();
+    }
+}
+
+function classicHeader(dimensions, variables, begins) {
+    const writer = new ClassicWriter();
+    writer.bytes(new Uint8Array([0x43, 0x44, 0x46, 0x01]));
+    writer.uint(0);
+    writer.uint(10);
+    writer.uint(dimensions.length);
+    for (const dimension of dimensions) {
+        writer.name(dimension.name);
+        writer.uint(dimension.size);
+    }
+    writeAttributes(writer);
+    writer.uint(11);
+    writer.uint(variables.length);
+    variables.forEach((variable, index) => {
+        writer.name(variable.name);
+        writer.uint(variable.dimensions.length);
+        variable.dimensions.forEach(id => writer.uint(id));
+        writeAttributes(writer, variable.attributes);
+        writer.uint(TYPES[variable.type]);
+        const valueBytes = encodeValues(variable.type, variable.values);
+        writer.uint(valueBytes.length + ((4 - valueBytes.length % 4) % 4));
+        writer.uint(begins?.[index] || 0);
+    });
+    return writer.finish();
+}
+
+function createClassicBuffer(dimensions, variables) {
+    const firstHeader = classicHeader(dimensions, variables);
+    const begins = [];
+    let offset = firstHeader.byteLength;
+    for (const variable of variables) {
+        begins.push(offset);
+        const byteLength = encodeValues(variable.type, variable.values).length;
+        offset += byteLength + ((4 - byteLength % 4) % 4);
+    }
+    const header = new Uint8Array(classicHeader(dimensions, variables, begins));
+    const writer = new ClassicWriter();
+    writer.bytes(header);
+    for (const variable of variables) {
+        writer.bytes(encodeValues(variable.type, variable.values));
+        writer.pad();
+    }
+    return writer.finish();
+}
+
 const classic = await parser.parse(arrayBuffer(fixtures.classic), fixtures.classic);
 assert.equal(classic.metadata.format, 'generic-netcdf');
 assert.equal(classic.metadata.source, 'netcdf');
@@ -45,6 +164,7 @@ assert.equal(classic.metadata.globalAttributes.title, 'Generic netCDF3 time-seri
 assert.equal(classic.metadata.skippedVariablesCount, 1);
 assert.equal(classic.metadata.skippedVariables[0].name, '/spectrum');
 assert.equal(classic.metadata.auxiliaryCoordinateCount, 2);
+assert.equal(classic.tree._variables.time.name, classic.metadata.timeName);
 assert(classic.tree._children.temperature._variables['station=101']);
 assert.deepEqual(classic.tree._children.Coordinates._variables['/station'].data, [101, 202]);
 assert.equal(classic.tree._children['File metadata']._variables.title.plottable, false);
@@ -83,6 +203,40 @@ assert.match(harness._fileTypeTooltip(null, 'generic', 'Generic netCDF dataset')
 const pypsa = await parser.parse(arrayBuffer(fixtures.pypsa), fixtures.pypsa);
 assert.equal(pypsa.metadata.format, 'pypsa-netcdf', 'PyPSA files must retain the specialized parser and tree');
 assert(pypsa.variables['pypsa:generators/PV1/p_max_pu']);
+
+const offsetTime = await parser.parse(createClassicBuffer(
+    [{ name: 'Time', size: 3 }],
+    [
+        {
+            name: 'base_time', dimensions: [], type: 'int', values: [1077114120],
+            attributes: [{ name: 'long_name', type: 'char', value: 'Seconds since Jan 1, 1970.' }],
+        },
+        {
+            name: 'time_offset', dimensions: [0], type: 'float', values: [0, 1, 2],
+            attributes: [{ name: 'long_name', type: 'char', value: 'Seconds since base_time.' }],
+        },
+        { name: 'signal', dimensions: [0], type: 'float', values: [4, 5, 6] },
+    ]
+), 'time-offset.nc');
+assert.equal(offsetTime.metadata.coordinateDataset, '/time_offset');
+assert.equal(offsetTime.metadata.timeKind, 'datetime');
+assert.equal(new Date(offsetTime.variables[offsetTime.metadata.timeName].data[0]).toISOString(), '2004-02-18T14:22:00.000Z');
+assert.deepEqual(Array.from(offsetTime.variables['netcdf:signal'].data), [4, 5, 6]);
+
+const wrfTimes = await parser.parse(createClassicBuffer(
+    [{ name: 'Time', size: 3 }, { name: 'DateStrLen', size: 19 }],
+    [
+        {
+            name: 'Times', dimensions: [0, 1], type: 'char',
+            values: ['2000-01-24_12:00:00', '2000-01-24_13:00:00', '2000-01-24_14:00:00'],
+        },
+        { name: 'T2', dimensions: [0], type: 'float', values: [280, 281, 282], attributes: [{ name: 'units', type: 'char', value: 'K' }] },
+    ]
+), 'wrf-times.nc');
+assert.equal(wrfTimes.metadata.coordinateDataset, '/Times');
+assert.equal(wrfTimes.metadata.timeKind, 'datetime');
+assert.equal(new Date(wrfTimes.variables[wrfTimes.metadata.timeName].data[2]).toISOString(), '2000-01-24T14:00:00.000Z');
+assert.deepEqual(Array.from(wrfTimes.variables['netcdf:T2'].data), [280, 281, 282]);
 
 await assert.rejects(
     () => parser.parse(new Uint8Array([0x43, 0x44, 0x46, 0x05, 0, 0, 0, 0]).buffer, 'cdf5.nc'),

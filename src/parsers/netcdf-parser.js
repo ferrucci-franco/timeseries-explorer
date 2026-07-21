@@ -20,6 +20,16 @@ const TECHNICAL_ATTRIBUTES = new Set([
 ]);
 const DESCRIPTION_KEYS = ['long_name', 'description', 'standard_name', 'title'];
 const UNIT_KEYS = ['units', 'unit', 'display_unit', 'displayUnit'];
+const TIME_LIKE_NAME = /^(time|times|date|datetime|timestamp|timestamps|time_?offset|time_?obs|observation_?time|time_?nominal|time_?valid)$/i;
+const TIME_UNIT_SCALES_MS = {
+    day: 86400000, days: 86400000,
+    hour: 3600000, hours: 3600000, hr: 3600000, hrs: 3600000,
+    minute: 60000, minutes: 60000, min: 60000, mins: 60000,
+    second: 1000, seconds: 1000, sec: 1000, secs: 1000, s: 1000,
+    millisecond: 1, milliseconds: 1, msec: 1, msecs: 1, ms: 1,
+    microsecond: 0.001, microseconds: 0.001, usec: 0.001, usecs: 0.001, us: 0.001, 'µs': 0.001,
+    nanosecond: 0.000001, nanoseconds: 0.000001, nsec: 0.000001, nsecs: 0.000001, ns: 0.000001,
+};
 
 function magic(buffer, length) {
     return [...new Uint8Array(buffer, 0, Math.min(length, buffer.byteLength))]
@@ -117,9 +127,9 @@ function attrText(attrs, names) {
 }
 
 function parseDate(value) {
-    const text = String(value ?? '').trim();
+    const text = String(value ?? '').replace(/\0/g, '').trim().replace(/^(\d{4}-\d{2}-\d{2})_(\d{2}:\d{2}:\d{2})/, '$1T$2');
     if (!text || /^[+-]?\d+(?:\.\d+)?$/.test(text)) return NaN;
-    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:\s*(Z|[+-]\d{2}:?\d{2}))?)?$/);
+    const match = text.match(/^(\d{1,4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?(?:\s*(Z|[+-]\d{2}:?\d{2}))?)?$/);
     if (!match) {
         const parsed = Date.parse(text);
         return Number.isFinite(parsed) ? parsed : NaN;
@@ -127,27 +137,25 @@ function parseDate(value) {
     const [, year, month, day, hour = '0', minute = '0', second = '0', fraction = '', zone = 'Z'] = match;
     const milliseconds = fraction ? Math.round(Number(`0.${fraction}`) * 1000) : 0;
     const normalizedZone = zone === 'Z' || zone.includes(':') ? zone : `${zone.slice(0, 3)}:${zone.slice(3)}`;
-    return Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}.${String(milliseconds).padStart(3, '0')}${normalizedZone}`);
+    const date = [year.padStart(4, '0'), month.padStart(2, '0'), day.padStart(2, '0')].join('-');
+    const time = [hour.padStart(2, '0'), minute.padStart(2, '0'), second.padStart(2, '0')].join(':');
+    return Date.parse(`${date}T${time}.${String(milliseconds).padStart(3, '0')}${normalizedZone}`);
 }
 
 function cfTimeUnits(units) {
     const match = String(units || '').trim().match(/^([A-Za-zµ]+)\s+since\s+(.+)$/i);
     if (!match) return null;
     const unit = match[1].toLowerCase();
-    const scales = {
-        day: 86400000, days: 86400000,
-        hour: 3600000, hours: 3600000, hr: 3600000, hrs: 3600000,
-        minute: 60000, minutes: 60000, min: 60000, mins: 60000,
-        second: 1000, seconds: 1000, sec: 1000, secs: 1000, s: 1000,
-        millisecond: 1, milliseconds: 1, msec: 1, msecs: 1, ms: 1,
-        microsecond: 0.001, microseconds: 0.001, usec: 0.001, usecs: 0.001, us: 0.001, µs: 0.001,
-        nanosecond: 0.000001, nanoseconds: 0.000001, nsec: 0.000001, nsecs: 0.000001, ns: 0.000001,
-    };
-    const scaleMs = scales[unit];
+    const scaleMs = TIME_UNIT_SCALES_MS[unit];
     const originMs = parseDate(match[2]);
     return Number.isFinite(scaleMs) && Number.isFinite(originMs)
         ? { scaleMs, originMs, originText: match[2] }
         : null;
+}
+
+function plainTimeUnitScaleMs(units) {
+    const unit = String(units || '').trim().toLowerCase().match(/^([a-zµ]+)/)?.[1];
+    return TIME_UNIT_SCALES_MS[unit] || null;
 }
 
 function isNumericValue(value) {
@@ -330,7 +338,7 @@ export default class NetcdfParser {
         const dimensionUsage = this._dimensionUsage(descriptors);
         const coordinate = this._selectCoordinate(descriptors, dimensionUsage, readFlat);
         const axis = coordinate
-            ? this._axisFromCoordinate(coordinate, readFlat(coordinate))
+            ? this._axisFromCoordinate(coordinate, this._coordinateValues(coordinate, readFlat), descriptors, readFlat)
             : this._syntheticAxis(descriptors, dimensionUsage);
         if (!axis) throw new Error('The netCDF file does not contain a usable one-dimensional coordinate or numeric array.');
 
@@ -354,7 +362,7 @@ export default class NetcdfParser {
             variables: { [axis.variable.name]: axis.variable },
             tree: this._rootNode(),
         };
-        result.tree._variables[axis.variable.name] = axis.variable;
+        result.tree._variables[axis.variable.displayName || axis.variable.name] = axis.variable;
         this._addGlobalMetadata(result.tree, globalAttrs);
 
         const coordinatePaths = new Set(descriptors
@@ -426,29 +434,73 @@ export default class NetcdfParser {
     }
 
     _selectCoordinate(descriptors, dimensionUsage, readFlat) {
-        const candidates = descriptors.filter(descriptor => descriptor.shape.length === 1 && descriptor.shape[0] > 1);
-        const scored = candidates.map(descriptor => {
+        const scored = descriptors.map(descriptor => {
+            const axisCandidate = this._coordinateAxisCandidate(descriptor, readFlat);
+            if (!axisCandidate) return null;
             const attrs = descriptor.userAttrs;
             const name = descriptor.name.toLowerCase();
             const units = attrText(attrs, UNIT_KEYS);
-            const values = readFlat(descriptor);
+            const values = this._coordinateValues(descriptor, readFlat);
             let score = 0;
             if (cfTimeUnits(units)) score += 1000;
             if (String(attrValue(attrs, ['axis']) || '').toUpperCase() === 'T') score += 900;
             if (String(attrValue(attrs, ['standard_name']) || '').toLowerCase() === 'time') score += 850;
-            if (/^(time|date|datetime|timestamp|timestamps)$/.test(name)) score += 800;
+            if (TIME_LIKE_NAME.test(name)) score += 800;
+            else if (name.includes('time')) score += 650;
             if (descriptor.dimensions[0] === descriptor.path) score += 300;
-            score += (dimensionUsage.get(descriptor.dimensions[0])?.count || 0) * 10;
+            const axisName = String(attrValue(attrs, ['axis']) || '').toUpperCase();
+            const standardName = String(attrValue(attrs, ['standard_name']) || '').toLowerCase();
+            if (axisName === 'Z') score -= 300;
+            else if (axisName === 'X' || axisName === 'Y') score -= 100;
+            if (['longitude', 'latitude', 'projection_x_coordinate', 'projection_y_coordinate'].includes(standardName)) score -= 50;
+            score += (dimensionUsage.get(axisCandidate.dimension)?.count || 0) * 10;
             if (values.every(value => isNumericValue(value)) || values.every(value => Number.isFinite(parseDate(value)))) score += 50;
             else score = -1;
-            return { descriptor, score };
-        }).filter(item => item.score >= 0);
-        candidates.length = 0;
+            return { descriptor, score, axisCandidate };
+        }).filter(item => item && item.score >= 0);
         scored.sort((a, b) => b.score - a.score || a.descriptor.path.localeCompare(b.descriptor.path));
-        return scored[0]?.descriptor || null;
+        if (!scored[0]) return null;
+        return {
+            ...scored[0].descriptor,
+            axisDimension: scored[0].axisCandidate.dimension,
+            axisLength: scored[0].axisCandidate.length,
+        };
     }
 
-    _axisFromCoordinate(descriptor, rawValues) {
+    _coordinateAxisCandidate(descriptor, readFlat) {
+        if (descriptor.shape.length === 1 && descriptor.shape[0] > 1) {
+            return { dimension: descriptor.dimensions[0] || descriptor.path, length: descriptor.shape[0] };
+        }
+        if (descriptor.shape.length === 2 && descriptor.shape[0] > 1) {
+            const values = this._coordinateValues(descriptor, readFlat);
+            if (values.length === descriptor.shape[0] && values.every(value => typeof value === 'string')) {
+                return { dimension: descriptor.dimensions[0] || descriptor.path, length: descriptor.shape[0] };
+            }
+        }
+        return null;
+    }
+
+    _coordinateValues(descriptor, readFlat) {
+        const values = readFlat(descriptor);
+        if (
+            descriptor.shape.length === 2
+            && descriptor.shape[0] > 1
+            && descriptor.shape[1] > 1
+            && values.length >= descriptor.shape[0] * descriptor.shape[1]
+            && values.every(value => typeof value === 'string')
+        ) {
+            const width = descriptor.shape[1];
+            const relevantValues = values.slice(0, descriptor.shape[0] * descriptor.shape[1]);
+            const rows = [];
+            for (let offset = 0; offset < relevantValues.length; offset += width) {
+                rows.push(relevantValues.slice(offset, offset + width).join('').replace(/\0/g, '').trim());
+            }
+            return rows;
+        }
+        return values;
+    }
+
+    _axisFromCoordinate(descriptor, rawValues, descriptors = [], readFlat = () => []) {
         const attrs = descriptor.userAttrs;
         const units = attrText(attrs, UNIT_KEYS);
         const calendar = String(attrValue(attrs, ['calendar']) || 'standard').toLowerCase();
@@ -463,8 +515,14 @@ export default class NetcdfParser {
             timeDisplayMode = 'calendar';
             timeSourceStrategy = 'netcdf-cf-time';
         } else {
-            const dates = rawValues.map(parseDate);
-            if (dates.length && dates.every(Number.isFinite)) {
+            const offsetOrigin = this._offsetTimeOrigin(descriptor, descriptors, readFlat);
+            if (offsetOrigin) {
+                values = Float64Array.from(numericArray(rawValues), value => offsetOrigin.originMs + value * offsetOrigin.scaleMs);
+                timeKind = 'datetime';
+                timeDisplayMode = 'calendar';
+                timeSourceStrategy = offsetOrigin.strategy;
+            } else if (rawValues.length && rawValues.every(value => Number.isFinite(parseDate(value)))) {
+                const dates = rawValues.map(parseDate);
                 values = Float64Array.from(dates);
                 timeKind = 'datetime';
                 timeDisplayMode = 'calendar';
@@ -476,7 +534,7 @@ export default class NetcdfParser {
         const name = `netcdf:@axis/${idSegment(descriptor.path)}`;
         return {
             length: values.length,
-            dimension: descriptor.dimensions[0] || descriptor.path,
+            dimension: descriptor.axisDimension || descriptor.dimensions[0] || descriptor.path,
             fallbackByLength: !descriptor.dimensions[0],
             variable: {
                 name,
@@ -497,6 +555,42 @@ export default class NetcdfParser {
                 netcdf: { dataset: descriptor.path, dimensions: descriptor.dimensions, attrs },
             },
         };
+    }
+
+    _offsetTimeOrigin(descriptor, descriptors, readFlat) {
+        if (!/time[_-]?offset/i.test(descriptor.name)) return null;
+        const scaleMs = plainTimeUnitScaleMs(attrText(descriptor.userAttrs, UNIT_KEYS) || attrText(descriptor.userAttrs, DESCRIPTION_KEYS));
+        if (!Number.isFinite(scaleMs)) return null;
+        const byName = new Map(descriptors.map(item => [item.name.toLowerCase(), item]));
+        const scalarValue = name => {
+            const found = byName.get(name.toLowerCase());
+            if (!found || found.shape.length > 0) return NaN;
+            const value = Number(readFlat(found)[0]);
+            return Number.isFinite(value) ? value : NaN;
+        };
+
+        const baseTime = scalarValue('base_time');
+        if (Number.isFinite(baseTime)) {
+            return { originMs: baseTime * 1000, scaleMs, strategy: 'netcdf-time-offset-base-time' };
+        }
+
+        const year = scalarValue('start_year');
+        const month = scalarValue('start_month');
+        const day = scalarValue('start_day');
+        if ([year, month, day].every(Number.isFinite)) {
+            const hour = scalarValue('start_hour');
+            const minute = scalarValue('start_minute');
+            const second = scalarValue('start_second');
+            const wholeSecond = Number.isFinite(second) ? Math.trunc(second) : 0;
+            const millisecond = Number.isFinite(second) ? Math.round((second - wholeSecond) * 1000) : 0;
+            return {
+                originMs: Date.UTC(year, month - 1, day, Number.isFinite(hour) ? hour : 0, Number.isFinite(minute) ? minute : 0, wholeSecond, millisecond),
+                scaleMs,
+                strategy: 'netcdf-time-offset-start-parts',
+            };
+        }
+
+        return null;
     }
 
     _syntheticAxis(descriptors, dimensionUsage) {
