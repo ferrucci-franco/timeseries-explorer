@@ -1152,10 +1152,18 @@ proto._lazyTimeseriesTarget = function() {
 proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 'timeseries') {
     const panelEl = plot?.div?.closest('.layout-panel');
     if (!panelEl) return;
-    let indicator = panelEl.querySelector('.lazy-detail-indicator');
+    // This indicator has a dedicated class: Missing/NaN and analysis modes use
+    // the same visual component but own independent lifecycles. A generic
+    // `.lazy-detail-indicator` lookup used to hijack and later remove the
+    // "Searching for missing data…" pill while its query was still running.
+    let indicator = panelEl.querySelector('.lazy-data-detail-indicator');
+    if (loading && panelEl.querySelector('.missing-dense-indicator')) {
+        indicator?.remove();
+        return;
+    }
     if (loading && !indicator) {
         indicator = document.createElement('div');
-        indicator.className = 'lazy-detail-indicator';
+        indicator.className = 'lazy-detail-indicator lazy-data-detail-indicator';
         indicator.setAttribute('aria-live', 'polite');
         indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text">Loading detail</span>';
         panelEl.appendChild(indicator);
