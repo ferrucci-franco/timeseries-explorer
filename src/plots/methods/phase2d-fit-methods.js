@@ -1198,4 +1198,169 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             }
         }
     };
+
+    // ── CSV export (fit summary / fit curve / displayed points) ─────
+    proto._exportPhase2dFitCsv = async function(panelId, plot = this.plots.get(panelId)) {
+        if (!plot || plot.mode !== 'phase2d') return;
+        const state = this._ensurePhase2dState(plot);
+        // A stale lazy fit must not be exported as if it were current.
+        if (state.dirty) {
+            Modal.alert(i18n.t('exportCsv'), i18n.t('phase2dFitCsvDirty'), { icon: false });
+            return;
+        }
+        const choice = await Modal.choice(i18n.t('phase2dFitCsvChooseMsg'), {
+            title: i18n.t('phase2dFitCsvChooseTitle'),
+            icon: false,
+            choices: [
+                { text: i18n.t('phase2dFitCsvSummary'), value: 'summary', className: 'modal-btn-confirm', autoFocus: true },
+                { text: i18n.t('phase2dFitCsvCurve'), value: 'curve', className: 'modal-btn-cancel' },
+                { text: i18n.t('phase2dFitCsvDisplayed'), value: 'displayed', className: 'modal-btn-cancel' },
+            ],
+        });
+        if (!choice) return;
+        let out;
+        if (choice === 'summary') out = this._phase2dFitSummaryCsv(plot);
+        else if (choice === 'curve') out = this._phase2dFitCurveCsv(plot);
+        else out = this._phase2dFitDisplayedCsv(plot);
+        if (out) this._downloadCsvColumns(out.headers, out.columns, out.filename);
+    };
+
+    proto._downloadCsvColumns = function(headers, columns, filename) {
+        if (!columns.length) return;
+        const nRows = Math.max(0, ...columns.map(c => c.length));
+        const rows = [headers.join(',')];
+        for (let i = 0; i < nRows; i++) rows.push(columns.map(c => (c[i] !== undefined ? c[i] : '')).join(','));
+        const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    // Shared CSV helpers.
+    proto._phase2dCsvEsc = function(value) {
+        const s = String(value ?? '');
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    proto._phase2dVarUnit = function(fileId, varName) {
+        const v = this.files.get(fileId)?.data?.variables?.[varName];
+        return v ? this._extractUnit(v.description) : '';
+    };
+    proto._phase2dDisplayedVisual = function(plot, pair) {
+        return (this._phase2dRangeLimitedVisual?.(plot, pair))
+            || this._phaseVisualDataForTrace(plot, pair)
+            || { x: [], y: [] };
+    };
+
+    // 1) Fit summary — one row per visible pair with the exact fit results.
+    proto._phase2dFitSummaryCsv = function(plot) {
+        const results = this._computePhase2dFits(plot);
+        if (!results.length) return null;
+        const state = this._ensurePhase2dState(plot);
+        const scope = state.rangeFull ? 'all' : 'selection';
+        const selStart = state.rangeFull ? '' : (state.x1 ?? '');
+        const selEnd = state.rangeFull ? '' : (state.x2 ?? '');
+        const esc = (v) => this._phase2dCsvEsc(v);
+        const num = (v) => (Number.isFinite(v) ? String(v) : '');
+        const fitOf = (r, key) => (r.fit && r.fit.status === 'ok' ? r.fit[key] : NaN);
+        const displayedCount = (r) => {
+            const vis = this._phase2dDisplayedVisual(plot, r.pair);
+            return Math.min(vis.x?.length || 0, vis.y?.length || 0);
+        };
+        const fields = [
+            ['pair_index', (r, i) => i + 1],
+            ['file', (r) => this.files.get(r.pair.fileId)?.name ?? r.pair.fileId ?? ''],
+            ['x', (r) => this._variableLabel(r.pair.x, r.pair.fileId)],
+            ['y', (r) => this._variableLabel(r.pair.y, r.pair.fileId)],
+            ['x_unit', (r) => this._phase2dVarUnit(r.pair.fileId, r.pair.x)],
+            ['y_unit', (r) => this._phase2dVarUnit(r.pair.fileId, r.pair.y)],
+            ['temporal_scope', () => scope],
+            ['selection_start', () => selStart],
+            ['selection_end', () => selEnd],
+            ['model', (r) => r.model],
+            ['n_scope', (r) => num(r.nScope)],
+            ['n_pair', (r) => num(fitOf(r, 'n'))],
+            ['n_excluded', (r) => num(fitOf(r, 'nExcluded'))],
+            ['n_displayed', (r) => num(displayedCount(r))],
+            ['min_x', (r) => num(fitOf(r, 'minX'))],
+            ['max_x', (r) => num(fitOf(r, 'maxX'))],
+            ['linear_intercept', (r) => (r.model === 'linear' ? num(fitOf(r, 'b0')) : '')],
+            ['linear_slope', (r) => (r.model === 'linear' ? num(fitOf(r, 'b1')) : '')],
+            ['quadratic_a', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'a')) : '')],
+            ['quadratic_b', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'b')) : '')],
+            ['quadratic_c', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'c')) : '')],
+            ['center_x', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'centerX')) : '')],
+            ['scale_x', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'scaleX')) : '')],
+            ['pearson_r', (r) => (r.model === 'linear' ? num(fitOf(r, 'r')) : '')],
+            ['r_squared', (r) => num(fitOf(r, 'r2'))],
+            ['rmse', (r) => num(fitOf(r, 'rmse'))],
+            ['status', (r) => (r.lazy ? 'lazy-unsupported' : (r.model === 'none' ? 'none' : (r.fit?.status ?? ''))),],
+            ['warning', (r) => (r.lazy ? 'lazy-pending' : (r.fit?.warning ?? ''))],
+        ];
+        const headers = [];
+        const columns = [];
+        for (const [header, fn] of fields) {
+            headers.push(header);
+            columns.push(results.map((r, i) => esc(fn(r, i))));
+        }
+        return { headers, columns, filename: 'phase2d_fit_summary.csv' };
+    };
+
+    // 2) Fit curve — long format, 200 points per fitted pair (no extrapolation).
+    proto._phase2dFitCurveCsv = function(plot) {
+        const results = this._computePhase2dFits(plot);
+        const esc = (v) => this._phase2dCsvEsc(v);
+        const pairIdx = [];
+        const pairCol = [];
+        const modelCol = [];
+        const xCol = [];
+        const yCol = [];
+        results.forEach((r, i) => {
+            if (!r.curve || !r.curve.x.length) return;
+            for (let k = 0; k < r.curve.x.length; k++) {
+                pairIdx.push(i + 1);
+                pairCol.push(esc(r.label));
+                modelCol.push(r.model);
+                xCol.push(r.curve.x[k]);
+                yCol.push(r.curve.y[k]);
+            }
+        });
+        if (!xCol.length) return null;
+        return {
+            headers: ['pair_index', 'pair', 'model', 'x', 'y_predicted'],
+            columns: [pairIdx, pairCol, modelCol, xCol, yCol],
+            filename: 'phase2d_fit_curve.csv',
+        };
+    };
+
+    // 3) Displayed points — the VISUAL sample actually drawn (may be downsampled;
+    // never the exact fitted rows). Long format, labelled as a visual sample.
+    proto._phase2dFitDisplayedCsv = function(plot) {
+        const pairs = (plot.phaseTraces || []).filter(p => p.visible !== false);
+        if (!pairs.length) return null;
+        const esc = (v) => this._phase2dCsvEsc(v);
+        const pairIdx = [];
+        const pairCol = [];
+        const xCol = [];
+        const yCol = [];
+        pairs.forEach((pair, i) => {
+            const vis = this._phase2dDisplayedVisual(plot, pair);
+            const n = Math.min(vis.x?.length || 0, vis.y?.length || 0);
+            const label = this._phase2dFitPairLabel(plot, pair);
+            for (let k = 0; k < n; k++) {
+                pairIdx.push(i + 1);
+                pairCol.push(esc(label));
+                xCol.push(vis.x[k]);
+                yCol.push(vis.y[k]);
+            }
+        });
+        if (!xCol.length) return null;
+        return {
+            headers: ['pair_index', 'pair', 'x_displayed_visual', 'y_displayed_visual'],
+            columns: [pairIdx, pairCol, xCol, yCol],
+            filename: 'phase2d_fit_displayed_visual_sample.csv',
+        };
+    };
 }

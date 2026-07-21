@@ -1799,6 +1799,13 @@ class PlotManager {
         const plot = this.plots.get(panelId);
         if (!plot || !this._hasContent(plot)) return;
 
+        // With the 2D Curve Fit workspace open, offer the fit-specific exports
+        // (summary / curve / displayed points) instead of the raw X/Y dump.
+        if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && this._exportPhase2dFitCsv) {
+            this._exportPhase2dFitCsv(panelId, plot);
+            return;
+        }
+
         const headers = [];
         const columns = [];
 
