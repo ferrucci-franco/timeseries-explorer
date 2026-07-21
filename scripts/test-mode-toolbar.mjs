@@ -225,6 +225,7 @@ vm.runInNewContext([
     const manager = new TemporalStateHarness();
     const plot = { temporalProfile: { period: 'day', renderMode: 'line-band' } };
     const controlState = manager._ensureTemporalProfileState(plot);
+    assert.equal(controlState.dayGrouping, 'all', 'All days is the default Day grouping');
     const recomputedState = manager._ensureTemporalProfileState(plot);
     assert.equal(recomputedState, controlState, 'Temporal Profile preserves state identity across recomputes');
     controlState.period = 'week';
