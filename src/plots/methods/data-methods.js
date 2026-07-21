@@ -762,6 +762,7 @@ proto._primaryTimeFileId = function(plot) {
     if (plot.mode === 'fft') return plot.traces?.[0]?.fileId || this.activeFileId;
     if (plot.mode === 'histogram') return plot.traces?.[0]?.fileId || this.activeFileId;
     if (plot.mode === 'heatmap') return plot.traces?.[0]?.fileId || this.activeFileId;
+    if (plot.mode === 'temporal-profile') return plot.traces?.[0]?.fileId || this.activeFileId;
     if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
         return plot.phaseTraces?.[0]?.fileId || this.activeFileId;
     }

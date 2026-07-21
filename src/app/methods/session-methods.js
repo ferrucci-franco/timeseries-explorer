@@ -274,6 +274,7 @@ proto._capturePlotSessions = function() {
             fft: this._cloneSerializable(plot.fft || this.plotManager._defaultFftState?.()),
             histogram: this._cloneSerializable(plot.histogram || this.plotManager._defaultHistogramState?.()),
             heatmap: this._cloneSerializable(plot.heatmap || this.plotManager._defaultCalendarHeatmapState?.()),
+            temporalProfile: this._cloneSerializable(plot.temporalProfile || this.plotManager._defaultTemporalProfileState?.()),
             correlation: this._cloneSerializable(plot.correlation || this.plotManager._defaultCorrelationState?.()),
             phase2d: this._cloneSerializable(plot.phase2d || this.plotManager._defaultPhase2dState?.()),
             projection: plot.projection || 'orthographic',
@@ -893,6 +894,9 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.heatmap = this.plotManager._normalizeCalendarHeatmapState
             ? this.plotManager._normalizeCalendarHeatmapState(saved.heatmap || plot.heatmap || {})
             : this._cloneSerializable(saved.heatmap || plot.heatmap);
+        plot.temporalProfile = this.plotManager._normalizeTemporalProfileState
+            ? this.plotManager._normalizeTemporalProfileState(saved.temporalProfile || plot.temporalProfile || {})
+            : this._cloneSerializable(saved.temporalProfile || plot.temporalProfile);
         plot.correlation = this.plotManager._normalizeCorrelationState
             ? this.plotManager._normalizeCorrelationState(saved.correlation || plot.correlation || {})
             : this._cloneSerializable(saved.correlation || plot.correlation);

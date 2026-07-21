@@ -39,6 +39,7 @@ class StateHarness {
             _defaultFftState() { return {}; },
             _defaultHistogramState() { return { binCount: 20, normalization: 'count' }; },
             _defaultCalendarHeatmapState() { return {}; },
+            _defaultTemporalProfileState() { return { period: 'day', renderMode: 'line-band' }; },
             _defaultCorrelationState() { return {}; },
             _defaultPhase2dState() { return {}; },
             _defaultLiveViewPolicy() { return {}; },
@@ -46,6 +47,7 @@ class StateHarness {
             _normalizeFftState(value) { return { ...value }; },
             _normalizeHistogramState(value) { return { ...this._defaultHistogramState(), ...value }; },
             _normalizeCalendarHeatmapState(value) { return { ...value }; },
+            _normalizeTemporalProfileState(value) { return { ...this._defaultTemporalProfileState(), ...value }; },
             _normalizeCorrelationState(value) { return { ...value }; },
             _normalizePhase2dState(value) { return { ...value }; },
             _stopAnim() {},
@@ -123,6 +125,7 @@ source.plotManager.plots.set('panel-1', {
     fft: {},
     histogram: { binCount: 77, normalization: 'percent', layout: 'horizontal' },
     heatmap: {},
+    temporalProfile: { period: 'month', renderMode: 'columns', discardIncomplete: true, resolutionByPeriod: { day: 5, week: 60, month: 1440 } },
     correlation: {},
     phase2d: {},
     liveView: {},
@@ -140,6 +143,8 @@ assert.equal(snapshot.settings.advancedSettings.panZoomRefreshMode, 'responsive'
 assert.equal(snapshot.settings.variableFilterText, 'temperature');
 assert.equal(snapshot.files[0].transformPanelExpanded, true);
 assert.equal(snapshot.plots[0].histogram.binCount, 77);
+assert.equal(snapshot.plots[0].temporalProfile.period, 'month');
+assert.equal(snapshot.plots[0].temporalProfile.discardIncomplete, true);
 assert.equal(snapshot.plots[0].showMissingData, true);
 assert.equal(snapshot.plots[0].animPlaying, true);
 assert.deepEqual(snapshot.plots[0].modeViews.fft.xRange, [10, 20]);
@@ -147,7 +152,7 @@ assert.deepEqual(snapshot.plots[0].modeViews.fft.xRange, [10, 20]);
 const restored = new StateHarness('f99');
 restored.plotManager.plots.set('panel-1', {
     mode: 'timeseries', traces: [], phaseTraces: [], phasePending: {}, stateSlots: {}, stateConfig: {},
-    histogram: {}, fft: {}, heatmap: {}, correlation: {}, phase2d: {},
+    histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {},
 });
 const fileMap = new Map([['f1', 'f99']]);
 restored._applySessionSettings(snapshot.settings);
@@ -156,6 +161,9 @@ await restored._applySessionPlots(snapshot.plots, fileMap);
 const restoredPlot = restored.plotManager.plots.get('panel-1');
 assert.equal(restoredPlot.histogram.binCount, 77);
 assert.equal(restoredPlot.histogram.normalization, 'percent');
+assert.equal(restoredPlot.temporalProfile.period, 'month');
+assert.equal(restoredPlot.temporalProfile.renderMode, 'columns');
+assert.equal(restoredPlot.temporalProfile.resolutionByPeriod.day, 5);
 assert.equal(restoredPlot.showMissingData, true);
 assert.equal(restoredPlot.autoPlayOnRender, true);
 assert.deepEqual(restoredPlot._modeViews.fft.fftSpectrum.xRange, [1, 5]);

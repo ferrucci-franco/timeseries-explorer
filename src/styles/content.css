@@ -2380,21 +2380,25 @@ body.fft-selection-dragging.fft-selection-moving {
    same selection mechanic, so its time pane gets the same rules. */
 .plotly-mode-fft-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-hist-time.fft-cursor-ew .nsewdrag,
+.plotly-mode-profile-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-correlation-time.fft-cursor-ew .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-fft-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-hist-time .nsewdrag,
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-profile-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-correlation-time .nsewdrag {
     cursor: ew-resize !important;
 }
 
 .plotly-mode-fft-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-hist-time.fft-cursor-grab .nsewdrag,
+.plotly-mode-profile-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-correlation-time.fft-cursor-grab .nsewdrag {
     cursor: grab !important;
 }
 
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-fft-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-hist-time .nsewdrag,
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-profile-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-correlation-time .nsewdrag {
     cursor: grabbing !important;
 }
@@ -2720,6 +2724,7 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 }
 .hist-summary { font-size: 0.71rem; color: var(--text-secondary); }
 .hist-summary-row { margin: 4px 0; line-height: 1.35; }
+.temporal-profile-summary { max-height: 180px; overflow: auto; }
 .hist-range-bound { margin: 2px 0 8px; }
 .hist-range-bound .fft-range-input { width: 100%; margin-top: 2px; }
 /* Calendar Start/End: the datetime picker (with hh:mm:ss) needs full width,

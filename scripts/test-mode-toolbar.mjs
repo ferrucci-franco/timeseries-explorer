@@ -22,6 +22,10 @@ const heatmapMethodsSource = readFileSync(
     new URL('../src/plots/methods/heatmap-methods.js', import.meta.url),
     'utf8',
 );
+const temporalProfileMethodsSource = readFileSync(
+    new URL('../src/plots/methods/temporal-profile-methods.js', import.meta.url),
+    'utf8',
+);
 const contentCss = readFileSync(
     new URL('../src/styles/content.css', import.meta.url),
     'utf8',
@@ -152,6 +156,7 @@ class ToolbarHarness {
             fft: { window: 'hann', zeroPadding: 4 },
             histogram: { binMode: 'width', binWidth: 0.25 },
             heatmap: { calendarMode: 'day-hour', aggregation: 'max' },
+            temporalProfile: { period: 'week', renderMode: 'line-band' },
             cursors: { enabled: false },
         };
         this.plots = new Map([['panel', this.plot]]);
@@ -219,7 +224,7 @@ assert.equal(globalAutoscaleIcon, '⛶', 'global autoscale uses the expected ico
 
 // Fourier, Histogram and Heatmap are contextual actions of the time-series family,
 // not primary plot types alongside 2D/3D/state animation.
-for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
+for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile']) {
     const { manager, toolbar } = renderToolbar(mode);
     const primaryModes = toolbar
         .querySelector('.mode-btn-group')
@@ -228,6 +233,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
     assert.ok(!primaryModes.includes('fft'), `${mode}: Fourier is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('histogram'), `${mode}: Histogram is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('heatmap'), `${mode}: Heatmap is absent from the primary plot-mode group`);
+    assert.ok(!primaryModes.includes('temporal-profile'), `${mode}: Temporal Profile is absent from the primary plot-mode group`);
 
     const timeseriesPrimary = findModeButton(toolbar, 'timeseries', 'mode-btn');
     assert.ok(timeseriesPrimary?.classList.contains('active'), `${mode}: time-series family keeps its primary mode pressed`);
@@ -254,8 +260,8 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
     const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
     assert.deepEqual(
         analysisButtons.map(button => button.dataset.mode).sort(),
-        ['fft', 'heatmap', 'histogram'],
-        `${mode}: Fourier, Histogram and Heatmap share the contextual group beside Stack/Y`,
+        ['fft', 'heatmap', 'histogram', 'temporal-profile'],
+        `${mode}: all time-series analyses share the contextual group beside Stack/Y`,
     );
     for (const button of [stackBtn, y2Btn, missingBtn, ...analysisButtons]) {
         assert.ok(
@@ -304,6 +310,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
     assert.equal(findModeButton(toolbar, 'fft'), undefined, 'non-time-series plots do not expose Fourier');
     assert.equal(findModeButton(toolbar, 'histogram'), undefined, 'non-time-series plots do not expose Histogram');
     assert.equal(findModeButton(toolbar, 'heatmap'), undefined, 'non-time-series plots do not expose Heatmap');
+    assert.equal(findModeButton(toolbar, 'temporal-profile'), undefined, 'non-time-series plots do not expose Temporal Profile');
 }
 
 // Phase/state views use the same contextual Autoscale action. In 2D it owns
@@ -367,7 +374,7 @@ for (const { mode, stateAnimDim = 2 } of [
     const refreshSource = plotManagerSource.slice(refreshStart, refreshEnd);
     assert.match(
         refreshSource,
-        /\['timeseries',\s*'fft',\s*'histogram',\s*'heatmap'\]\.includes\(plot\?\.mode\)/,
+        /\['timeseries',\s*'fft',\s*'histogram',\s*'heatmap',\s*'temporal-profile'\]\.includes\(plot\?\.mode\)/,
         'toolbar refresh recognizes every member of the time-series family',
     );
     assert.match(
@@ -403,20 +410,25 @@ for (const [from, clicked, expected] of [
     ['timeseries', 'fft', 'fft'],
     ['timeseries', 'histogram', 'histogram'],
     ['timeseries', 'heatmap', 'heatmap'],
+    ['timeseries', 'temporal-profile', 'temporal-profile'],
     ['fft', 'fft', 'timeseries'],
     ['histogram', 'histogram', 'timeseries'],
     ['heatmap', 'heatmap', 'timeseries'],
+    ['temporal-profile', 'temporal-profile', 'timeseries'],
     ['fft', 'histogram', 'histogram'],
     ['histogram', 'fft', 'fft'],
     ['fft', 'heatmap', 'heatmap'],
     ['histogram', 'heatmap', 'heatmap'],
     ['heatmap', 'fft', 'fft'],
     ['heatmap', 'histogram', 'histogram'],
+    ['histogram', 'temporal-profile', 'temporal-profile'],
+    ['temporal-profile', 'fft', 'fft'],
 ]) {
     const { manager, toolbar } = renderToolbar(from);
     const fftConfig = manager.plot.fft;
     const histogramConfig = manager.plot.histogram;
     const heatmapConfig = manager.plot.heatmap;
+    const temporalProfileConfig = manager.plot.temporalProfile;
     findModeButton(toolbar, clicked).click();
     assert.equal(manager.modeChanges.length, 1, `${from} -> ${clicked}: exactly one mode change is requested`);
     assert.equal(manager.modeChanges[0].mode, expected, `${from} -> ${clicked}: resolves to ${expected}`);
@@ -428,6 +440,7 @@ for (const [from, clicked, expected] of [
     assert.equal(manager.plot.fft, fftConfig, `${from} -> ${clicked}: Fourier config object is retained`);
     assert.equal(manager.plot.histogram, histogramConfig, `${from} -> ${clicked}: Histogram config object is retained`);
     assert.equal(manager.plot.heatmap, heatmapConfig, `${from} -> ${clicked}: Heatmap config object is retained`);
+    assert.equal(manager.plot.temporalProfile, temporalProfileConfig, `${from} -> ${clicked}: Temporal Profile config object is retained`);
     assert.equal(manager.warnings.length, 0, `${from} -> ${clicked}: family transition needs no destructive-change warning`);
 }
 
@@ -439,6 +452,7 @@ for (const [from, clicked, expected] of [
     assert.match(setModeSource, /plot\.fft\s*=\s*plot\.fft\s*\|\|/, 'family mode switches retain an existing Fourier configuration');
     assert.match(setModeSource, /plot\.histogram\s*=\s*plot\.histogram\s*\|\|/, 'family mode switches retain an existing Histogram configuration');
     assert.match(setModeSource, /plot\.heatmap\s*=\s*plot\.heatmap\s*\|\|/, 'family mode switches retain an existing Heatmap configuration');
+    assert.match(setModeSource, /plot\.temporalProfile\s*=\s*plot\.temporalProfile\s*\|\|/, 'family mode switches retain an existing Temporal Profile configuration');
 }
 
 // The common toolbar action must reach the correct autoscale implementation
@@ -464,6 +478,11 @@ for (const [from, clicked, expected] of [
         autoscaleSource,
         /plot\.mode === 'heatmap'[\s\S]*?return this\._autoScaleHeatmapPanel\(panelId, plot\)/,
         'central Autoscale dispatches Heatmap to its two-pane implementation',
+    );
+    assert.match(
+        autoscaleSource,
+        /plot\.mode === 'temporal-profile'[\s\S]*?return this\._autoScaleTemporalProfilePanel\(panelId, plot\)/,
+        'central Autoscale dispatches Temporal Profile to its two-pane implementation',
     );
     assert.doesNotMatch(
         autoscaleSource,
@@ -499,6 +518,13 @@ for (const [from, clicked, expected] of [
     const heatmapHelperSource = heatmapMethodsSource.slice(heatmapHelperStart, heatmapHelperEnd);
     assert.match(heatmapHelperSource, /this\._autoScalePlotTimeOnly\(plot\)/, 'Heatmap Autoscale resets the time-series pane');
     assert.match(heatmapHelperSource, /Plotly\.relayout\(plot\.heatmapDiv/, 'Heatmap Autoscale resets the calendar pane');
+
+    const profileHelperStart = temporalProfileMethodsSource.indexOf('proto._autoScaleTemporalProfilePanel = function');
+    const profileHelperEnd = temporalProfileMethodsSource.indexOf('\nproto.', profileHelperStart + 1);
+    assert.ok(profileHelperStart >= 0 && profileHelperEnd > profileHelperStart, 'Temporal Profile two-pane Autoscale helper is present');
+    const profileHelperSource = temporalProfileMethodsSource.slice(profileHelperStart, profileHelperEnd);
+    assert.match(profileHelperSource, /this\._autoScalePlotTimeOnly\(plot\)/, 'Temporal Profile Autoscale resets the time-series pane');
+    assert.match(profileHelperSource, /Plotly\.relayout\(plot\.temporalProfileDiv/, 'Temporal Profile Autoscale resets the folded profile pane');
 }
 
 // Moving a legend trace between Y axes must be an in-place Plotly update. A
