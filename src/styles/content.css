@@ -2533,7 +2533,9 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 /* "Missing data too dense — zoom in" hint: same pill, amber-tinted to match the
    missing-data bands, and no spinner. */
 .missing-dense-indicator {
-    background: rgba(255, 193, 7, 0.18);
+    /* Amber tint the user likes, but composited over the opaque panel bg so the
+       plot no longer shows through the pill. */
+    background: linear-gradient(rgba(255, 193, 7, 0.18), rgba(255, 193, 7, 0.18)), var(--bg-primary);
     border-color: rgba(230, 145, 0, 0.75);
 }
 
