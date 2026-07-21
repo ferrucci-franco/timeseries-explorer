@@ -1186,7 +1186,7 @@ class PlotManager {
                     document.addEventListener('mouseup', onUp);
                 }, { capture: true });
                 div.addEventListener('contextmenu', (e) => {
-                    if (plot.mode === 'timeseries' && this._handleTimeseriesLegendContextMenu(panelId, plot, e)) return;
+                    if (this._handlePlotLegendContextMenu(panelId, plot, div, e)) return;
                     e.preventDefault();
                 });
                 // Two-finger horizontal trackpad swipe pans; vertical keeps
@@ -1353,14 +1353,27 @@ class PlotManager {
         });
     }
 
-    _handleTimeseriesLegendContextMenu(panelId, plot, event) {
+    _legendFullTraceFromContextEvent(div, event) {
         const item = event.target?.closest?.('.legend .traces');
         if (!item) return false;
-        const items = [...plot.div.querySelectorAll('.legend .traces')];
+        const items = [...div.querySelectorAll('.legend .traces')];
         const legendIndex = items.indexOf(item);
-        if (legendIndex < 0) return false;
-        const legendTraces = (plot.div._fullData || []).filter(fd => fd.showlegend !== false && fd.name !== '__hover__');
-        const clickedName = legendTraces[legendIndex]?.name;
+        if (legendIndex < 0) return null;
+        const legendTraces = (div._fullData || []).filter(fd => fd.showlegend !== false && fd.name !== '__hover__');
+        return legendTraces[legendIndex] || null;
+    }
+
+    _handlePlotLegendContextMenu(panelId, plot, div, event) {
+        if (plot.mode === 'timeseries') return this._handleTimeseriesLegendContextMenu(panelId, plot, div, event);
+        if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
+            return this._handlePhaseLegendContextMenu(panelId, plot, div, event);
+        }
+        return false;
+    }
+
+    _handleTimeseriesLegendContextMenu(panelId, plot, div, event) {
+        const fullTrace = this._legendFullTraceFromContextEvent(div, event);
+        const clickedName = fullTrace?.name;
         const trace = plot.traces.find(t => this._traceName(t.varName, t.fileId) === clickedName);
         if (!trace) return false;
         event.preventDefault();
@@ -1369,11 +1382,26 @@ class PlotManager {
         return true;
     }
 
-    _showTimeseriesAxisMenu(panelId, plot, trace, event) {
+    _handlePhaseLegendContextMenu(panelId, plot, div, event) {
+        const fullTrace = this._legendFullTraceFromContextEvent(div, event);
+        const clickedName = fullTrace?.name;
+        const trace = (plot.phaseTraces || []).find(pt => this._phaseTraceName(plot, pt) === clickedName);
+        if (!trace) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        this._showLegendTraceMenu(event, trace, {
+            onShow: () => this._setPhaseLegendSelection(panelId, plot, trace, 'show'),
+            onHide: () => this._setPhaseLegendSelection(panelId, plot, trace, 'hide'),
+            onOnly: () => this._setPhaseLegendSelection(panelId, plot, trace, 'only'),
+            onRemove: () => this._removePhaseTraceFromLegend(panelId, plot, trace),
+        });
+        return true;
+    }
+
+    _showLegendTraceMenu(event, trace, actions, extraActions = []) {
         document.querySelector('.timeseries-axis-menu')?.remove();
         const menu = document.createElement('div');
         menu.className = 'timeseries-axis-menu';
-        const moveRight = this._traceYAxis(trace, plot) !== 'y2';
         const close = (closeEvent = null) => {
             if (closeEvent && menu.contains(closeEvent.target)) return;
             menu.remove();
@@ -1396,18 +1424,14 @@ class PlotManager {
             menu.appendChild(actionButton);
             return actionButton;
         };
-        const hideButton = addAction('legendMenuHideTrace', () =>
-            this._setTimeseriesLegendSelection(panelId, plot, trace, 'hide'));
-        hideButton.disabled = trace.visible === 'legendonly' || trace.visible === false;
+        const hidden = trace.visible === 'legendonly' || trace.visible === false;
+        addAction(hidden ? 'legendMenuShowTrace' : 'legendMenuHideTrace', () =>
+            hidden ? actions.onShow?.() : actions.onHide?.());
         addAction('legendMenuSelectOnlyTrace', () =>
-            this._setTimeseriesLegendSelection(panelId, plot, trace, 'only'));
+            actions.onOnly?.());
         addAction('legendMenuRemoveTrace', () =>
-            this._removeTimeseriesTraceFromLegend(panelId, plot, trace));
-        addAction(
-            moveRight ? 'timeseriesY2MoveRight' : 'timeseriesY2MoveLeft',
-            () => this._moveTimeseriesTraceToAxis(panelId, plot, trace, moveRight ? 'y2' : 'y'),
-            'timeseries-axis-menu-divider',
-        );
+            actions.onRemove?.());
+        for (const item of extraActions) addAction(item.labelKey, item.action, item.className || '');
         document.body.appendChild(menu);
         const x = Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8);
         const y = Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8);
@@ -1416,11 +1440,26 @@ class PlotManager {
         setTimeout(() => document.addEventListener('pointerdown', close, true), 0);
     }
 
+    _showTimeseriesAxisMenu(panelId, plot, trace, event) {
+        const moveRight = this._traceYAxis(trace, plot) !== 'y2';
+        this._showLegendTraceMenu(event, trace, {
+            onShow: () => this._setTimeseriesLegendSelection(panelId, plot, trace, 'show'),
+            onHide: () => this._setTimeseriesLegendSelection(panelId, plot, trace, 'hide'),
+            onOnly: () => this._setTimeseriesLegendSelection(panelId, plot, trace, 'only'),
+            onRemove: () => this._removeTimeseriesTraceFromLegend(panelId, plot, trace),
+        }, [{
+            labelKey: moveRight ? 'timeseriesY2MoveRight' : 'timeseriesY2MoveLeft',
+            action: () => this._moveTimeseriesTraceToAxis(panelId, plot, trace, moveRight ? 'y2' : 'y'),
+            className: 'timeseries-axis-menu-divider',
+        }]);
+    }
+
     async _setTimeseriesLegendSelection(panelId, plot, selectedTrace, action) {
         if (!plot?.div || plot.mode !== 'timeseries') return;
         const updates = [];
         for (const trace of plot.traces || []) {
             let visible = trace.visible === 'legendonly' || trace.visible === false ? 'legendonly' : true;
+            if (action === 'show' && trace === selectedTrace) visible = true;
             if (action === 'hide' && trace === selectedTrace) visible = 'legendonly';
             if (action === 'only') visible = trace === selectedTrace ? true : 'legendonly';
             trace.visible = visible;
@@ -1437,6 +1476,27 @@ class PlotManager {
         );
         this._syncCursorDisplay(panelId, plot);
         this._refreshPanelDomOverlays(plot);
+    }
+
+    async _setPhaseLegendSelection(panelId, plot, selectedTrace, action) {
+        if (!plot?.div || !(plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d')) return;
+        for (const trace of plot.phaseTraces || []) {
+            let visible = trace.visible === 'legendonly' || trace.visible === false ? 'legendonly' : true;
+            if (action === 'show' && trace === selectedTrace) visible = true;
+            if (action === 'hide' && trace === selectedTrace) visible = 'legendonly';
+            if (action === 'only') visible = trace === selectedTrace ? true : 'legendonly';
+            trace.visible = visible;
+        }
+        this._rebuildPanel(panelId, { preserveView: true });
+    }
+
+    async _removePhaseTraceFromLegend(panelId, plot, trace) {
+        if (!plot?.div || !(plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d')) return;
+        const index = (plot.phaseTraces || []).indexOf(trace);
+        if (index < 0) return;
+        plot.phaseTraces.splice(index, 1);
+        if (!plot.phaseTraces.length) this._clearPanel(panelId);
+        else this._rebuildPanel(panelId, { preserveView: true });
     }
 
     async _removeTimeseriesTraceFromLegend(panelId, plot, trace) {

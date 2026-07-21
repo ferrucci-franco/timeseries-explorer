@@ -262,6 +262,23 @@ export function installPlotCorrelationMethods(TargetClass) {
             Plotly.newPlot(resultDiv, [], this._buildCorrelationResultLayout(plot, []), config),
         ]).then(() => {
             this._refreshActionBtns(panelId);
+            let lastShift = false;
+            plot.div.addEventListener('mousedown', event => { lastShift = !!event.shiftKey; }, { capture: true });
+            plot.div.addEventListener('contextmenu', event => {
+                if (this._handleCorrelationLegendContextMenu(panelId, plot, plot.div, event)) return;
+                event.preventDefault();
+            });
+            plot.div.on('plotly_legendclick', eventData => {
+                if (eventData.event?.button !== undefined && eventData.event.button !== 0) {
+                    lastShift = false;
+                    return false;
+                }
+                const pairIndex = eventData.data?.[eventData.curveNumber]?.meta?.correlationPairIndex;
+                this._handleCorrelationLegendClick(panelId, plot, pairIndex, !!(eventData.event?.shiftKey || lastShift));
+                lastShift = false;
+                return false;
+            });
+            plot.div.on('plotly_legenddoubleclick', () => false);
             // Selection shapes are anchored in data-x, so Plotly repositions them
             // on zoom/pan automatically — no relayout listener needed (and one
             // would loop against our own shapes relayout).
@@ -328,7 +345,7 @@ export function installPlotCorrelationMethods(TargetClass) {
     proto._correlationTimeDescriptors = function(plot) {
         const out = [];
         (plot.phaseTraces || []).forEach((pair, idx) => {
-            if (pair.visible === false) return;
+            if (pair.visible === false || pair.visible === 'legendonly') return;
             out.push({ varName: pair.x, fileId: pair.fileId, color: pair.color, dash: 'solid', role: 'X', pairIndex: idx });
             // 5px dash / 1px gap (Y trace). Custom dash arrays only render on the
             // SVG renderer, so the traces are forced to 'scatter' below.
@@ -348,8 +365,60 @@ export function installPlotCorrelationMethods(TargetClass) {
             if (built.type === 'scattergl') built.type = 'scatter';
             built.line = { ...(built.line || {}), color: d.color, dash: d.dash };
             built.name = `P${d.pairIndex + 1}·${d.role}: ${this._traceName(d.varName, d.fileId)}`;
+            built.meta = { ...(built.meta || {}), correlationPairIndex: d.pairIndex };
             return built;
         }).filter(Boolean);
+    };
+
+    proto._handleCorrelationLegendClick = function(panelId, plot, pairIndex, shiftClick = false) {
+        const pair = (plot.phaseTraces || [])[Number(pairIndex)];
+        if (!pair) return;
+        if (shiftClick) {
+            plot.phaseTraces.splice(Number(pairIndex), 1);
+            if (!plot.phaseTraces.length) this._clearPanel(panelId);
+            else this._rebuildPanel(panelId, { preserveView: true });
+            return;
+        }
+        pair.visible = pair.visible === 'legendonly' || pair.visible === false ? true : 'legendonly';
+        this._refreshCorrelationTimePlot(panelId, plot, { preserveView: true, preserveY: false });
+        this._scheduleCorrelationRecompute(panelId, { immediate: true });
+        this._renderCorrelationOptionsPanel(panelId, plot);
+    };
+
+    proto._handleCorrelationLegendContextMenu = function(panelId, plot, div, event) {
+        const fullTrace = this._legendFullTraceFromContextEvent?.(div, event);
+        const pairIndex = Number(fullTrace?.meta?.correlationPairIndex);
+        const pair = (plot.phaseTraces || [])[pairIndex];
+        if (!pair) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        this._showLegendTraceMenu(event, pair, {
+            onShow: () => this._setCorrelationLegendSelection(panelId, plot, pair, 'show'),
+            onHide: () => this._setCorrelationLegendSelection(panelId, plot, pair, 'hide'),
+            onOnly: () => this._setCorrelationLegendSelection(panelId, plot, pair, 'only'),
+            onRemove: () => this._removeCorrelationPairFromLegend(panelId, plot, pair),
+        });
+        return true;
+    };
+
+    proto._setCorrelationLegendSelection = function(panelId, plot, selectedPair, action) {
+        for (const pair of plot.phaseTraces || []) {
+            let visible = pair.visible === 'legendonly' || pair.visible === false ? 'legendonly' : true;
+            if (action === 'show' && pair === selectedPair) visible = true;
+            if (action === 'hide' && pair === selectedPair) visible = 'legendonly';
+            if (action === 'only') visible = pair === selectedPair ? true : 'legendonly';
+            pair.visible = visible;
+        }
+        this._refreshCorrelationTimePlot(panelId, plot, { preserveView: true, preserveY: false });
+        this._scheduleCorrelationRecompute(panelId, { immediate: true });
+        this._renderCorrelationOptionsPanel(panelId, plot);
+    };
+
+    proto._removeCorrelationPairFromLegend = function(panelId, plot, pair) {
+        const index = (plot.phaseTraces || []).indexOf(pair);
+        if (index >= 0) plot.phaseTraces.splice(index, 1);
+        if (!plot.phaseTraces.length) this._clearPanel(panelId);
+        else this._rebuildPanel(panelId, { preserveView: true });
     };
 
     // Re-fit the downsampling to the visible x-window (restyle x/y only), like
@@ -584,7 +653,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         const token = (plot._correlationToken || 0) + 1;
         plot._correlationToken = token;
         const state = this._ensureCorrelationState(plot);
-        const pairs = (plot.phaseTraces || []).filter(p => p.visible !== false);
+        const pairs = (plot.phaseTraces || []).filter(p => p.visible !== false && p.visible !== 'legendonly');
         if (!pairs.length) {
             this._setCorrelationStatus(plot, i18n.t('correlationNoPairs'), 'muted');
             Plotly.react(plot.correlationDiv, [], this._buildCorrelationResultLayout(plot, []), this._getPlotlyConfig());
@@ -920,8 +989,8 @@ export function installPlotCorrelationMethods(TargetClass) {
         const segmented = document.createElement('div');
         segmented.className = 'fft-segmented';
         segmented.append(
-            makeSegment('fftRangeFull', 'fftRangeFullTooltip', true),
-            makeSegment('fftRangeSelection', 'fftRangeSelectionTooltip', false),
+            makeSegment('fftRangeFull', 'analysisRangeFullTooltip', true),
+            makeSegment('fftRangeSelection', 'analysisRangeSelectionTooltip', false),
         );
         panel.appendChild(makeRow(i18n.t('fftRange'), segmented));
 
@@ -937,8 +1006,8 @@ export function installPlotCorrelationMethods(TargetClass) {
             return wrap;
         };
         rangeGrid.append(
-            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('fftRangeStartTooltip')),
-            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('fftRangeEndTooltip')),
+            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('analysisRangeStartTooltip')),
+            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('analysisRangeEndTooltip')),
         );
         panel.appendChild(rangeGrid);
 
@@ -1094,7 +1163,7 @@ export function installPlotCorrelationMethods(TargetClass) {
     };
 
     proto._correlationUsesCalendarTime = function(plot) {
-        const pair = (plot?.phaseTraces || []).find(p => p.visible !== false) || plot?.phaseTraces?.[0];
+        const pair = (plot?.phaseTraces || []).find(p => p.visible !== false && p.visible !== 'legendonly') || plot?.phaseTraces?.[0];
         return pair ? this._fftTimeKind(pair.fileId) === 'datetime' : false;
     };
 

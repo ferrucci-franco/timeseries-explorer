@@ -1014,8 +1014,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const segmented = document.createElement('div');
         segmented.className = 'fft-segmented';
         segmented.append(
-            makeSegment('fftRangeFull', 'phase2dFitRangeFullTooltip', true),
-            makeSegment('fftRangeSelection', 'phase2dFitRangeSelectionTooltip', false),
+            makeSegment('fftRangeFull', 'analysisRangeFullTooltip', true),
+            makeSegment('fftRangeSelection', 'analysisRangeSelectionTooltip', false),
         );
         drawer.appendChild(makeRow(i18n.t('fftRange'), segmented));
 
@@ -1031,8 +1031,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             return wrap;
         };
         rangeGrid.append(
-            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('phase2dFitRangeStartTooltip')),
-            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('phase2dFitRangeEndTooltip')),
+            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('analysisRangeStartTooltip')),
+            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('analysisRangeEndTooltip')),
         );
         drawer.appendChild(rangeGrid);
 

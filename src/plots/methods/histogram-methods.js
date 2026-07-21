@@ -269,7 +269,15 @@ proto._installHistogramPlotHandlers = function(panelId, plot) {
     const bindLegend = (div, isBars) => {
         let lastShift = false;
         div.addEventListener('mousedown', event => { lastShift = !!event.shiftKey; }, { capture: true });
+        div.addEventListener('contextmenu', event => {
+            if (this._handleHistogramLegendContextMenu(panelId, plot, div, event)) return;
+            event.preventDefault();
+        });
         div.on('plotly_legendclick', (ed) => {
+            if (ed.event?.button !== undefined && ed.event.button !== 0) {
+                lastShift = false;
+                return false;
+            }
             const clickedName = ed.data?.[ed.curveNumber]?.name;
             const shiftClick = !!(ed.event?.shiftKey || lastShift);
             lastShift = false;
@@ -294,6 +302,22 @@ proto._installHistogramPlotHandlers = function(panelId, plot) {
     this._installLegendHoverHint(plot.histogramDiv);
 };
 
+proto._handleHistogramLegendContextMenu = function(panelId, plot, div, event) {
+    const fullTrace = this._legendFullTraceFromContextEvent?.(div, event);
+    const clickedName = fullTrace?.name;
+    const trace = (plot.traces || []).find(t => this._traceName(t.varName, t.fileId) === clickedName);
+    if (!trace) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    this._showLegendTraceMenu(event, trace, {
+        onShow: () => this._setHistogramLegendSelection(panelId, plot, trace, 'show'),
+        onHide: () => this._setHistogramLegendSelection(panelId, plot, trace, 'hide'),
+        onOnly: () => this._setHistogramLegendSelection(panelId, plot, trace, 'only'),
+        onRemove: () => this._removeHistogramTraceFromLegend(panelId, plot, trace),
+    });
+    return true;
+};
+
 proto._handleHistogramLegendClick = function(panelId, plot, clickedName, shiftClick = false) {
     if (!clickedName) return;
     const trace = (plot.traces || []).find(t => this._traceName(t.varName, t.fileId) === clickedName);
@@ -311,6 +335,26 @@ proto._handleHistogramLegendClick = function(panelId, plot, clickedName, shiftCl
     // enables/disables correctly.
     this._renderHistogramOptionsPanel(panelId, plot);
     this._scheduleHistogramRecompute(panelId, { immediate: true });
+};
+
+proto._setHistogramLegendSelection = function(panelId, plot, selectedTrace, action) {
+    for (const trace of plot.traces || []) {
+        let visible = trace.visible === 'legendonly' || trace.visible === false ? 'legendonly' : true;
+        if (action === 'show' && trace === selectedTrace) visible = true;
+        if (action === 'hide' && trace === selectedTrace) visible = 'legendonly';
+        if (action === 'only') visible = trace === selectedTrace ? true : 'legendonly';
+        trace.visible = visible;
+    }
+    this._refreshHistogramTimePlot(panelId, plot, { preserveView: true });
+    this._renderHistogramOptionsPanel(panelId, plot);
+    this._scheduleHistogramRecompute(panelId, { immediate: true });
+};
+
+proto._removeHistogramTraceFromLegend = function(panelId, plot, trace) {
+    const index = (plot.traces || []).indexOf(trace);
+    if (index >= 0) plot.traces.splice(index, 1);
+    if (!plot.traces.length) this._clearPanel(panelId);
+    else this._rebuildPanel(panelId, { preserveView: true });
 };
 
 // ─── Time plot (top/left pane) ─────────────────────────────────────
@@ -854,9 +898,9 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
         h.textContent = i18n.t(titleKey);
         options.appendChild(h);
     };
-    const row = (labelText, control, tooltip) => {
+    const row = (labelText, control, tooltip, className = 'fft-option-row hist-option-row') => {
         const label = document.createElement('label');
-        label.className = 'fft-option-row hist-option-row';
+        label.className = className;
         if (tooltip) label.title = tooltip;
         const span = document.createElement('span');
         span.textContent = labelText;
@@ -866,14 +910,15 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
     };
     // Segmented control that updates its own active button on click (so the
     // highlight follows the selection without a full drawer re-render).
-    const segmented = (items, current, onPick) => {
+    const segmented = (items, current, onPick, classes = {}) => {
+        const { wrapperClass = 'hist-segmented', buttonClass = 'hist-seg-btn' } = classes;
         const wrap = document.createElement('div');
-        wrap.className = 'hist-segmented';
+        wrap.className = wrapperClass;
         const btns = [];
         for (const item of items) {
             const btn = document.createElement('button');
             btn.type = 'button';
-            btn.className = 'hist-seg-btn';
+            if (buttonClass) btn.className = buttonClass;
             btn.textContent = item.label;
             if (item.title) btn.title = item.title;
             if (item.disabled) { btn.disabled = true; btn.classList.add('disabled'); }
@@ -903,12 +948,15 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
     };
 
     // Temporal scope — input + slider per bound, calendar-aware, exactly as FFT.
-    section('histogramTemporalScope');
-    options.appendChild(segmented(
-        [{ label: i18n.t('histogramScopeAll'), value: true }, { label: i18n.t('histogramScopeSelection'), value: false }],
+    options.appendChild(row(i18n.t('fftRange'), segmented(
+        [
+            { label: i18n.t('fftRangeFull'), value: true, title: i18n.t('analysisRangeFullTooltip') },
+            { label: i18n.t('fftRangeSelection'), value: false, title: i18n.t('analysisRangeSelectionTooltip') },
+        ],
         state.rangeFull,
         (full) => this._setHistogramRangeMode(panelId, full),
-    ));
+        { wrapperClass: 'fft-segmented', buttonClass: '' },
+    ), '', 'fft-option-row'));
     const domain = this._histogramDomain(plot);
     const isCal = this._histogramUsesCalendarTime(plot);
     const boundValue = (key) => this._activeHistogramRange(plot)[key === 'x1' ? 0 : 1];
@@ -952,17 +1000,23 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
     };
     const boundBlock = (labelText, key) => {
         const wrap = document.createElement('div');
-        wrap.className = 'hist-range-bound' + (isCal ? ' hist-range-bound-datetime' : '');
+        wrap.className = 'fft-range-bound' + (isCal ? ' fft-range-bound-datetime' : '');
         const label = document.createElement('label');
-        label.className = 'fft-option-row hist-option-row';
+        label.className = 'fft-option-row';
+        label.title = key === 'x1' ? i18n.t('analysisRangeStartTooltip') : i18n.t('analysisRangeEndTooltip');
         const span = document.createElement('span');
         span.textContent = labelText;
         label.append(span, makeBoundInput(key));
         wrap.append(label, makeBoundSlider(key));
-        options.appendChild(wrap);
+        return wrap;
     };
-    boundBlock(i18n.t('histogramSelStart'), 'x1');
-    boundBlock(i18n.t('histogramSelEnd'), 'x2');
+    const rangeGrid = document.createElement('div');
+    rangeGrid.className = 'fft-range-grid';
+    rangeGrid.append(
+        boundBlock(i18n.t('fftRangeStart'), 'x1'),
+        boundBlock(i18n.t('fftRangeEnd'), 'x2'),
+    );
+    options.appendChild(rangeGrid);
 
     // Bins.
     section('histogramBins');

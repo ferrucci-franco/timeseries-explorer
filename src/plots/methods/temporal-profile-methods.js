@@ -440,7 +440,15 @@ proto._installTemporalProfilePlotHandlers = function(panelId, plot) {
     const bindLegend = (div) => {
         let lastShift = false;
         div.addEventListener('mousedown', event => { lastShift = !!event.shiftKey; }, { capture: true });
+        div.addEventListener('contextmenu', event => {
+            if (this._handleTemporalProfileLegendContextMenu(panelId, plot, div, event)) return;
+            event.preventDefault();
+        });
         div.on('plotly_legendclick', eventData => {
+            if (eventData.event?.button !== undefined && eventData.event.button !== 0) {
+                lastShift = false;
+                return false;
+            }
             const data = eventData.data?.[eventData.curveNumber];
             const key = data?.meta?.temporalProfileTraceKey;
             const name = data?.name;
@@ -481,6 +489,44 @@ proto._handleTemporalProfileLegendClick = function(panelId, plot, key, name, shi
     trace.visible = trace.visible === 'legendonly' ? true : 'legendonly';
     this._refreshTemporalProfileTimePlot(panelId, plot, { preserveView: true });
     this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
+};
+
+proto._handleTemporalProfileLegendContextMenu = function(panelId, plot, div, event) {
+    const fullTrace = this._legendFullTraceFromContextEvent?.(div, event);
+    const key = fullTrace?.meta?.temporalProfileTraceKey;
+    const name = fullTrace?.name;
+    const trace = key
+        ? (plot.traces || []).find(candidate => profileTraceKey(candidate) === key)
+        : (plot.traces || []).find(candidate => this._traceName(candidate.varName, candidate.fileId) === name);
+    if (!trace) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    this._showLegendTraceMenu(event, trace, {
+        onShow: () => this._setTemporalProfileLegendSelection(panelId, plot, trace, 'show'),
+        onHide: () => this._setTemporalProfileLegendSelection(panelId, plot, trace, 'hide'),
+        onOnly: () => this._setTemporalProfileLegendSelection(panelId, plot, trace, 'only'),
+        onRemove: () => this._removeTemporalProfileTraceFromLegend(panelId, plot, trace),
+    });
+    return true;
+};
+
+proto._setTemporalProfileLegendSelection = function(panelId, plot, selectedTrace, action) {
+    for (const trace of plot.traces || []) {
+        let visible = trace.visible === 'legendonly' || trace.visible === false ? 'legendonly' : true;
+        if (action === 'show' && trace === selectedTrace) visible = true;
+        if (action === 'hide' && trace === selectedTrace) visible = 'legendonly';
+        if (action === 'only') visible = trace === selectedTrace ? true : 'legendonly';
+        trace.visible = visible;
+    }
+    this._refreshTemporalProfileTimePlot(panelId, plot, { preserveView: true });
+    this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
+};
+
+proto._removeTemporalProfileTraceFromLegend = function(panelId, plot, trace) {
+    const index = (plot.traces || []).indexOf(trace);
+    if (index >= 0) plot.traces.splice(index, 1);
+    if (!plot.traces.length) this._clearPanel(panelId);
+    else this._rebuildPanel(panelId, { preserveView: true });
 };
 
 proto._temporalProfileUnit = function(trace) {
@@ -737,10 +783,34 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
                 return;
             }
             if (state.renderMode === 'line-band') {
-                const lower = category.bins.map(bin => bin.mean == null || bin.std == null ? null : bin.mean - bin.std);
-                const upper = category.bins.map(bin => bin.mean == null || bin.std == null ? null : bin.mean + bin.std);
-                traces.push({ type: 'scatter', mode: 'lines', x, y: lower, line: { width: 0 }, hoverinfo: 'skip', showlegend: false, visible, meta });
-                traces.push({ type: 'scatter', mode: 'lines', x, y: upper, line: { width: 0 }, fill: 'tonexty', fillcolor: rgba(color, 0.18), hoverinfo: 'skip', showlegend: false, visible, meta });
+                let segmentX = [];
+                let lower = [];
+                let upper = [];
+                const flushBand = () => {
+                    if (segmentX.length < 2) {
+                        segmentX = [];
+                        lower = [];
+                        upper = [];
+                        return;
+                    }
+                    traces.push({ type: 'scatter', mode: 'lines', x: segmentX, y: lower, line: { width: 0 }, hoverinfo: 'skip', showlegend: false, visible, meta, connectgaps: false });
+                    traces.push({ type: 'scatter', mode: 'lines', x: segmentX, y: upper, line: { width: 0 }, fill: 'tonexty', fillcolor: rgba(color, 0.18), hoverinfo: 'skip', showlegend: false, visible, meta, connectgaps: false });
+                    segmentX = [];
+                    lower = [];
+                    upper = [];
+                };
+                category.bins.forEach((bin, index) => {
+                    const mean = Number(bin.mean);
+                    const std = Number(bin.std);
+                    if (!Number.isFinite(mean) || !Number.isFinite(std)) {
+                        flushBand();
+                        return;
+                    }
+                    segmentX.push(x[index]);
+                    lower.push(mean - std);
+                    upper.push(mean + std);
+                });
+                flushBand();
             }
             traces.push({
                 type: 'scatter', mode: 'lines', x, y,
@@ -1127,9 +1197,9 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         title.textContent = label;
         options.appendChild(title);
     };
-    const row = (labelText, control, tooltip = '') => {
+    const row = (labelText, control, tooltip = '', className = 'fft-option-row hist-option-row') => {
         const label = document.createElement('label');
-        label.className = 'fft-option-row hist-option-row';
+        label.className = className;
         if (tooltip) label.title = tooltip;
         const span = document.createElement('span');
         span.textContent = labelText;
@@ -1137,15 +1207,17 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         options.appendChild(label);
         return label;
     };
-    const segmented = (items, current, onPick) => {
+    const segmented = (items, current, onPick, classes = {}) => {
+        const { wrapperClass = 'hist-segmented', buttonClass = 'hist-seg-btn' } = classes;
         const wrap = document.createElement('div');
-        wrap.className = 'hist-segmented';
+        wrap.className = wrapperClass;
         const buttons = [];
         for (const item of items) {
             const button = document.createElement('button');
             button.type = 'button';
-            button.className = 'hist-seg-btn';
+            if (buttonClass) button.className = buttonClass;
             button.textContent = item.label;
+            if (item.title) button.title = item.title;
             const active = item.value === current;
             button.classList.toggle('active', active);
             button.setAttribute('aria-pressed', String(active));
@@ -1171,18 +1243,18 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         return input;
     };
 
-    section(text('temporalProfileTimeScope'));
-    options.appendChild(segmented([
-        { label: text('temporalProfileAll'), value: true },
-        { label: text('temporalProfileSelection'), value: false },
-    ], state.rangeFull, full => this._setTemporalProfileRangeMode(panelId, full)));
+    row(i18n.t('fftRange'), segmented([
+        { label: i18n.t('fftRangeFull'), value: true, title: i18n.t('analysisRangeFullTooltip') },
+        { label: i18n.t('fftRangeSelection'), value: false, title: i18n.t('analysisRangeSelectionTooltip') },
+    ], state.rangeFull, full => this._setTemporalProfileRangeMode(panelId, full), { wrapperClass: 'fft-segmented', buttonClass: '' }), '', 'fft-option-row');
     const domain = this._temporalProfileDomain(plot);
     const activeRange = this._activeTemporalProfileRange(plot);
     const boundBlock = (labelText, key, index) => {
         const wrap = document.createElement('div');
-        wrap.className = 'hist-range-bound hist-range-bound-datetime';
+        wrap.className = 'fft-range-bound fft-range-bound-datetime';
         const label = document.createElement('label');
-        label.className = 'fft-option-row hist-option-row';
+        label.className = 'fft-option-row';
+        label.title = key === 'x1' ? i18n.t('analysisRangeStartTooltip') : i18n.t('analysisRangeEndTooltip');
         const span = document.createElement('span');
         span.textContent = labelText;
         const input = document.createElement('input');
@@ -1204,6 +1276,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         const slider = document.createElement('input');
         slider.type = 'range';
         slider.className = 'fft-range-input';
+        slider.title = key === 'x1' ? i18n.t('analysisRangeStartTooltip') : i18n.t('analysisRangeEndTooltip');
         slider.dataset.profileKey = key;
         slider.dataset.profileRole = 'slider';
         slider.disabled = state.rangeFull;
@@ -1216,10 +1289,15 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         });
         slider.addEventListener('change', () => this._scheduleTemporalProfileRecompute(panelId));
         wrap.append(label, slider);
-        options.appendChild(wrap);
+        return wrap;
     };
-    boundBlock(text('temporalProfileStart'), 'x1', 0);
-    boundBlock(text('temporalProfileEnd'), 'x2', 1);
+    const rangeGrid = document.createElement('div');
+    rangeGrid.className = 'fft-range-grid';
+    rangeGrid.append(
+        boundBlock(i18n.t('fftRangeStart'), 'x1', 0),
+        boundBlock(i18n.t('fftRangeEnd'), 'x2', 1),
+    );
+    options.appendChild(rangeGrid);
 
     section(text('temporalProfilePeriod'));
     options.appendChild(segmented([
