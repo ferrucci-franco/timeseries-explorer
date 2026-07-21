@@ -3611,8 +3611,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     const toolbar = panelEl.querySelector('.layout-panel-toolbar');
     if (!toolbar) return;
 
-    // Remove existing mode buttons if any (re-render case)
-    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group, .phase2d-tools-group').forEach(el => el.remove());
+    // Remove existing mode buttons if any (re-render case). The analysis group
+    // wraps action buttons, so it must be removed too — otherwise its empty
+    // shell (with margin/border) accumulates on every toolbar rebuild.
+    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group, .phase2d-tools-group, .phase2d-analysis-group').forEach(el => el.remove());
     toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
 
     const plot = this.plots.get(panelId);
@@ -3824,11 +3826,17 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     toolbar.appendChild(viewGroup);
 
-    // 2D-only Display (Lines / Points / Lines+points) + marker controls (TODO 10),
-    // then the Correlation toggle last so the Display dropdown is not mistaken
-    // for a Correlation option.
+    // 2D-only Display (Lines / Points / Lines+points) + marker controls (TODO 10).
     this._injectPhase2dDisplayControls?.(panelId, toolbar, plot);
-    if (phase2dCorrelationBtn) toolbar.appendChild(phase2dCorrelationBtn);
+    // Analysis toggles (Correlation + Curve Fit) grouped behind their own
+    // coloured separator so they read as analyses, not Display options.
+    if (isPhase2dFamily) {
+        const analysisGroup = document.createElement('div');
+        analysisGroup.className = 'phase2d-analysis-group';
+        if (phase2dCorrelationBtn) analysisGroup.appendChild(phase2dCorrelationBtn);
+        this._injectPhase2dFitToggle?.(panelId, analysisGroup, plot);
+        if (analysisGroup.childElementCount) toolbar.appendChild(analysisGroup);
+    }
 
     // Compare (overlay traces from other files) — left of CSV
     const compareBtn = document.createElement('button');

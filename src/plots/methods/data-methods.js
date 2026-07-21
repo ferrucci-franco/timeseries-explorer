@@ -1572,7 +1572,11 @@ proto._buildPhase2DTraces = function(plot) {
     const mode = this._phase2dPlotlyMode ? this._phase2dPlotlyMode(state) : 'lines';
     const showMarkers = this._phase2dShowsMarkers ? this._phase2dShowsMarkers(state) : false;
     const traces = plot.phaseTraces.map(pt => {
-        const visual = this._phaseVisualDataForTrace(plot, pt);
+        // In an active Selección the scatter shows only the selected window
+        // (range-limited visual); otherwise the normal downsampled trajectory.
+        const visual = (this._phase2dRangeLimitedVisual
+            ? this._phase2dRangeLimitedVisual(plot, pt) : null)
+            || this._phaseVisualDataForTrace(plot, pt);
         if (!visual) return null;
         const len = Math.max(visual.x?.length || 0, visual.y?.length || 0);
         const useGL = this._phase2dUseGL(len, showMarkers);
@@ -1588,6 +1592,12 @@ proto._buildPhase2DTraces = function(plot) {
         }
         return trace;
     }).filter(Boolean);
+    // Fit curves (TODO 10): appended AFTER the data traces and BEFORE the origin
+    // cross, so the trace order is [data…, fit…, origin]. Callers that map a
+    // plot trace index back to a phaseTraces index must account for these.
+    if (state?.fitEnabled && this._buildPhase2dFitCurveTraces) {
+        for (const fitTrace of this._buildPhase2dFitCurveTraces(plot)) traces.push(fitTrace);
+    }
     traces.push(this._originCross2D());
     return traces;
 };

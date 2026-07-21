@@ -1084,6 +1084,15 @@ class PlotManager {
                 if (plot.mode === 'timeseries') this._refreshTimeseriesVisuals(panelId, plot);
                 else if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
                     this._refreshPhaseVisualsLazy?.(panelId, plot);
+                    // Build the FFT-like fit workspace for a phase2d panel that
+                    // loads with the workspace open (session restore, language
+                    // change, or switching in from Correlation). Test the live
+                    // DOM, not a possibly-stale container ref (a layout re-render
+                    // wipes the panel without calling _destroyChart).
+                    if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled
+                        && !plot.div.closest('.phase2d-fit-container')) {
+                        this._enterPhase2dFitShell?.(panelId, plot);
+                    }
                 }
                 finish3DSetup();
             });
@@ -1278,6 +1287,15 @@ class PlotManager {
 
     _updatePhaseChart(panelId, plot) {
         if (!plot.div) return;
+        // With the 2D fit workspace open, appending one trace would land it after
+        // the fit curves + origin (wrong order) and leave the time pane / pair
+        // dropdown stale. Do a full rebuild of both panes + the drawer instead.
+        if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && plot.phase2dFitContainer) {
+            this._rerenderPhase2dPlot?.(panelId, plot);
+            this._refreshPhase2dFitTimePlot?.(panelId, plot, { preserveView: true, preserveY: false });
+            this._renderPhase2dFitDrawer?.(panelId, plot);
+            return;
+        }
         // Add only the newest phase trace — never touches the camera/scene.
         // Note: _buildPhase2DTraces appends an __origin__ cross AFTER the phase traces,
         // so we index by phaseTraces.length-1 rather than allTraces.length-1.
@@ -1490,6 +1508,9 @@ class PlotManager {
             this._cleanupLazyDetailForPanel(panelId, plot);
         }
         this._abortFftWorkerJob?.(plot, 'FFT panel destroyed');
+        // The phase2d fit shell owns extra document listeners + a temporal div;
+        // clean them up before the plot.div removal below.
+        this._cleanupPhase2dFitDocListeners?.(plot);
         this._stopAnim(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
         // Reset dynamic trace indices
@@ -1505,6 +1526,10 @@ class PlotManager {
         delete plot._cursorHandlersDiv;
         if (plot.div) {
             const correlationContainer = plot.div.closest('.correlation-container');
+            // The 2D fit shell reuses the fft-container CSS but carries its own
+            // marker; check it before the generic fft-container branch so its
+            // refs are cleared (otherwise a stale container ref blocks rebuild).
+            const phase2dFitContainer = plot.div.closest('.phase2d-fit-container');
             const fftContainer = plot.div.closest('.fft-container');
             const histContainer = plot.div.closest('.hist-container');
             const heatmapContainer = plot.div.closest('.heatmap-container');
@@ -1540,6 +1565,18 @@ class PlotManager {
                 plot.div = null;
                 plot.histogramDiv = null;
                 plot.histogramContainer = null;
+            } else if (phase2dFitContainer) {
+                // 2D fitting shell (TODO 10): the 2D plot.div is reparented into
+                // the container next to a temporal div. Checked before the
+                // generic fft-container branch (it reuses that CSS) so the fit
+                // refs are cleared and the shell can be rebuilt later.
+                if (plot.phase2dFitTimeDiv) Plotly.purge(plot.phase2dFitTimeDiv);
+                Plotly.purge(plot.div);
+                phase2dFitContainer.remove();
+                plot.div = null;
+                plot.phase2dFitTimeDiv = null;
+                plot.phase2dFitContainer = null;
+                plot.phase2dFitOptions = null;
             } else if (fftContainer) {
                 if (plot.fftDiv) Plotly.purge(plot.fftDiv);
                 Plotly.purge(plot.div);

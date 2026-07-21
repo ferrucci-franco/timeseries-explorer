@@ -1316,6 +1316,172 @@
     opacity: 1;
 }
 
+/* Analysis toggles (Correlation + Curve Fit) group — its own coloured divider,
+   distinct from the green mode divider and the blue tools divider. */
+.phase2d-analysis-group {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 2px;
+    margin-left: 8px;
+    border-left: 3px solid color-mix(in srgb, #9c27b0 62%, var(--border-color));
+    padding-left: 8px;
+}
+
+/* Fit results/options drawer content — lives inside the shell's .fft-options
+   aside (which supplies width/scroll/hidden), so only the inner blocks below
+   need styling. */
+
+/* Pair / fit-type fields: label above, full-width control. */
+.phase2d-fit-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0 2px;
+}
+
+.phase2d-fit-field-label {
+    flex: 0 0 auto;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+
+.phase2d-fit-pair-select,
+.phase2d-fit-type-select {
+    flex: 1 1 auto;
+    min-width: 0;               /* allow the select to shrink + ellipsis */
+    max-width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    padding: 3px 4px;
+    cursor: pointer;
+    text-overflow: ellipsis;
+}
+
+.phase2d-fit-type-field .fft-help-btn {
+    flex: 0 0 auto;
+}
+
+.phase2d-fit-results-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 10px 0 4px;
+}
+
+.phase2d-fit-drawer-title {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.phase2d-fit-result {
+    border-top: 1px solid var(--border-color);
+    padding: 6px 0;
+}
+
+.phase2d-fit-result-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.phase2d-fit-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+}
+
+.phase2d-fit-result-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The generic model formula — slightly larger and emphasised. */
+.phase2d-fit-equation {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.92rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+    word-break: break-word;
+    color: var(--text-primary);
+}
+
+/* Resolved coefficient values under the formula. */
+.phase2d-fit-coeffs {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1px 8px;
+    margin-bottom: 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.74rem;
+}
+
+.phase2d-fit-coeff {
+    display: contents;
+}
+
+.phase2d-fit-coeff-k {
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.phase2d-fit-coeff-v {
+    font-variant-numeric: tabular-nums;
+}
+
+.phase2d-fit-stats {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1px 10px;
+    margin: 0;
+    font-size: 0.62rem;
+}
+
+.phase2d-fit-stats dt {
+    color: var(--text-secondary);
+}
+
+.phase2d-fit-stats dd {
+    margin: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.phase2d-fit-warning {
+    margin-top: 4px;
+    color: #e53935;
+    font-size: 0.66rem;
+}
+
+.phase2d-fit-empty {
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+}
+
+/* Help modal body (About this fit / metrics), matching the Correlation help. */
+.phase2d-fit-help-modal {
+    font-size: 0.85rem;
+    line-height: 1.5;
+    text-align: left;
+}
+
+.phase2d-fit-help-modal dt {
+    font-weight: 700;
+    margin-top: 8px;
+}
+
+.phase2d-fit-help-modal dd {
+    margin: 0 0 4px;
+    color: var(--text-secondary);
+}
+
 .layout-toolbar-btn:disabled {
     opacity: 0.35;
     cursor: not-allowed;
@@ -2382,24 +2548,28 @@ body.fft-selection-dragging.fft-selection-moving {
 .plotly-mode-hist-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-profile-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-correlation-time.fft-cursor-ew .nsewdrag,
+.plotly-mode-phase2d-fit-time.fft-cursor-ew .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-fft-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-hist-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-profile-time .nsewdrag,
-body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-correlation-time .nsewdrag {
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-correlation-time .nsewdrag,
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-phase2d-fit-time .nsewdrag {
     cursor: ew-resize !important;
 }
 
 .plotly-mode-fft-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-hist-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-profile-time.fft-cursor-grab .nsewdrag,
-.plotly-mode-correlation-time.fft-cursor-grab .nsewdrag {
+.plotly-mode-correlation-time.fft-cursor-grab .nsewdrag,
+.plotly-mode-phase2d-fit-time.fft-cursor-grab .nsewdrag {
     cursor: grab !important;
 }
 
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-fft-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-hist-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-profile-time .nsewdrag,
-body.fft-selection-dragging.fft-selection-moving .plotly-mode-correlation-time .nsewdrag {
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-correlation-time .nsewdrag,
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-phase2d-fit-time .nsewdrag {
     cursor: grabbing !important;
 }
 

@@ -12,16 +12,23 @@ const d = defaultPhase2dState();
 assert.equal(d.displayMode, 'lines', 'default display is lines (legacy behaviour)');
 assert.equal(d.markerSize, 4);
 assert.equal(d.markerOpacity, 0.65);
-assert.equal(d.fitModel, 'none');
+assert.equal(d.fitEnabled, false, 'fit workspace off by default');
+assert.equal(d.activePairIndex, 0, 'active pair defaults to 0');
+assert.equal(d.timeSeriesHidden, true, 'fit workspace hides the time series by default');
 assert.equal(d.rangeFull, true);
 
 // Enum validation falls back to defaults.
 assert.equal(normalizePhase2dState({ displayMode: 'bogus' }).displayMode, 'lines');
 assert.equal(normalizePhase2dState({ displayMode: 'markers' }).displayMode, 'markers');
 assert.equal(normalizePhase2dState({ displayMode: 'lines+markers' }).displayMode, 'lines+markers');
-assert.equal(normalizePhase2dState({ fitModel: 'cubic' }).fitModel, 'none');
-assert.equal(normalizePhase2dState({ fitModel: 'quadratic' }).fitModel, 'quadratic');
 assert.equal(normalizePhase2dState({ layout: 'diagonal' }).layout, 'vertical');
+
+// fitEnabled: explicit boolean, or migrated from a legacy global fitModel.
+assert.equal(normalizePhase2dState({ fitEnabled: true }).fitEnabled, true, 'fitEnabled honoured');
+assert.equal(normalizePhase2dState({ fitModel: 'linear' }).fitEnabled, true, 'legacy fitModel migrates to fitEnabled');
+assert.equal(normalizePhase2dState({ fitModel: 'none' }).fitEnabled, false, 'legacy fitModel none → disabled');
+assert.equal(normalizePhase2dState({ activePairIndex: -3 }).activePairIndex, 0, 'negative pair index clamps to 0');
+assert.equal(normalizePhase2dState({ activePairIndex: 2 }).activePairIndex, 2, 'valid pair index kept');
 
 // Marker size / opacity are clamped to their valid ranges.
 assert.equal(normalizePhase2dState({ markerSize: 999 }).markerSize, 20, 'size clamps to max 20');
