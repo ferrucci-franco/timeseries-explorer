@@ -293,6 +293,11 @@ assert.match(temporalProfileMethodsSource, /temporalProfileYear/, 'Temporal Prof
 assert.match(temporalProfileMethodsSource, /temporalProfileAllDays/, 'Day profiles expose the All days grouping');
 assert.match(temporalProfileMethodsSource, /temporalProfileSideBySide/, 'Column display exposes the side-by-side checkbox');
 assert.match(
+    temporalMethodAssignment('_renderTemporalProfileOptionsPanel'),
+    /!this\._temporalProfileHasCalendarTrace\(plot\)[\s\S]*?querySelectorAll\('button, input, select'\)[\s\S]*?control\.disabled = true/,
+    'Temporal Profile disables every analysis control when no trace has calendar time',
+);
+assert.match(
     temporalMethodAssignment('_recomputeTemporalProfile'),
     /resolutionUnit:\s*state\.period === 'year' && state\.yearResolution === 'month' \? 'month' : 'minute'/,
     'Year Month resolution is sent to the calendar-aware kernel',

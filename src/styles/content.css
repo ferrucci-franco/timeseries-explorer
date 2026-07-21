@@ -2725,6 +2725,14 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 .hist-summary { font-size: 0.71rem; color: var(--text-secondary); }
 .hist-summary-row { margin: 4px 0; line-height: 1.35; }
 .temporal-profile-summary { max-height: 180px; overflow: auto; }
+.temporal-profile-options.temporal-profile-controls-disabled {
+    opacity: 0.58;
+}
+.temporal-profile-options.temporal-profile-controls-disabled button:disabled,
+.temporal-profile-options.temporal-profile-controls-disabled input:disabled,
+.temporal-profile-options.temporal-profile-controls-disabled select:disabled {
+    cursor: not-allowed;
+}
 .hist-range-bound { margin: 2px 0 8px; }
 .hist-range-bound .fft-range-input { width: 100%; margin-top: 2px; }
 /* Calendar Start/End: the datetime picker (with hh:mm:ss) needs full width,

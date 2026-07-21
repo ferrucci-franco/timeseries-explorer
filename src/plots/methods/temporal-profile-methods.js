@@ -480,6 +480,10 @@ proto._temporalProfileCategoryEnabled = function(state, categoryId) {
     return true;
 };
 
+proto._temporalProfileHasCalendarTrace = function(plot) {
+    return (plot?.traces || []).some(trace => this._fftTimeKind(trace.fileId) === 'datetime');
+};
+
 proto._temporalProfileDataStepMinutes = function(plot) {
     let minimum = null;
     for (const trace of plot?.traces || []) {
@@ -1187,6 +1191,12 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     summary.className = 'hist-summary temporal-profile-summary';
     options.appendChild(summary);
     this._syncTemporalProfileSummary(plot);
+    const controlsDisabled = !this._temporalProfileHasCalendarTrace(plot);
+    options.classList.toggle('temporal-profile-controls-disabled', controlsDisabled);
+    options.setAttribute('aria-disabled', String(controlsDisabled));
+    if (controlsDisabled) {
+        options.querySelectorAll('button, input, select').forEach(control => { control.disabled = true; });
+    }
 };
 
 proto._syncTemporalProfileOptionsPanel = function(plot) {
