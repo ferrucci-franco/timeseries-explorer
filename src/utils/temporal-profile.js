@@ -81,6 +81,22 @@ function median(values) {
     return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+export function inferTemporalProfileStepMs(timestamps = []) {
+    const sorted = [];
+    for (let index = 0; index < (Number(timestamps.length) || 0); index++) {
+        const value = epochMs(timestamps[index]);
+        if (Number.isFinite(value)) sorted.push(value);
+    }
+    sorted.sort((a, b) => a - b);
+    const steps = [];
+    for (let index = 1; index < sorted.length && steps.length < STEP_SAMPLE_LIMIT; index++) {
+        const step = sorted[index] - sorted[index - 1];
+        if (step > 0) steps.push(step);
+    }
+    const result = median(steps);
+    return Number.isFinite(result) && result > 0 ? result : null;
+}
+
 function normalizeRange(start, end) {
     const hasStart = start !== null && start !== undefined && start !== '';
     const hasEnd = end !== null && end !== undefined && end !== '';
@@ -218,13 +234,7 @@ export function buildTemporalProfile(options = {}) {
         };
     }
 
-    const sortedTimestamps = validTimestamps.slice().sort((a, b) => a - b);
-    const steps = [];
-    for (let index = 1; index < sortedTimestamps.length && steps.length < STEP_SAMPLE_LIMIT; index++) {
-        const step = sortedTimestamps[index] - sortedTimestamps[index - 1];
-        if (step > 0) steps.push(step);
-    }
-    const medianStepMs = median(steps);
+    const medianStepMs = inferTemporalProfileStepMs(validTimestamps);
     const gapThresholdMs = Number.isFinite(medianStepMs) && medianStepMs > 0
         ? medianStepMs * TEMPORAL_PROFILE_GAP_FACTOR
         : null;

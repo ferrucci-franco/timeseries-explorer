@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
     buildTemporalProfile,
+    inferTemporalProfileStepMs,
     TEMPORAL_PROFILE_MAX_BINS,
 } from '../src/utils/temporal-profile.js';
 
@@ -8,6 +9,29 @@ const utc = value => Date.parse(value);
 const close = (actual, expected, epsilon = 1e-12, message = '') => {
     assert.ok(Math.abs(actual - expected) <= epsilon, `${message}: expected ${expected}, got ${actual}`);
 };
+
+// The UI uses the median positive timestamp step as its minimum useful bin
+// resolution. A bin may be wider without being an exact multiple of the step.
+{
+    const base = utc('2024-01-01T00:00:00Z');
+    const tenMinutes = 10 * 60 * 1000;
+    assert.equal(inferTemporalProfileStepMs([base, base + tenMinutes, base + 2 * tenMinutes]), tenMinutes);
+
+    const times = [];
+    const values = [];
+    for (let minute = 0; minute < 24 * 60; minute += 10) {
+        times.push(base + minute * 60 * 1000);
+        values.push(minute);
+    }
+    const fifteenMinuteBins = buildTemporalProfile({ times, values, period: 'day', resolutionMinutes: 15 });
+    assert.equal(fifteenMinuteBins.binCount, 96);
+    assert.ok(fifteenMinuteBins.categories[0].bins.every(bin => bin.mean != null), '15-minute bins work with a 10-minute timestep');
+    assert.deepEqual(
+        fifteenMinuteBins.categories[0].bins.slice(0, 4).map(bin => bin.mean),
+        [5, 20, 35, 50],
+        'non-multiple bins alternate between two and one samples without gaps',
+    );
+}
 
 // Daily defaults: 24 hourly bins and the three calendar categories.
 {

@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
 import {
     buildTemporalProfile,
+    inferTemporalProfileStepMs,
     TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES,
     TEMPORAL_PROFILE_MAX_BINS,
     TEMPORAL_PROFILE_PERIODS,
@@ -12,6 +13,7 @@ const PROFILE_RENDER_MODES = new Set(['columns', 'line', 'line-band']);
 const PROFILE_CATEGORIES = ['workday', 'saturday', 'sunday'];
 const PROFILE_RECOMPUTE_DEBOUNCE_MS = 150;
 const PROFILE_BAR_OPACITY = 0.68;
+const PROFILE_RESOLUTION_PRESETS = [1440, 60, 30, 15, 5, 1];
 
 const fallbackText = {
     temporalProfileMode: 'Temporal profile',
@@ -34,6 +36,7 @@ const fallbackText = {
     temporalProfileSaturdays: 'Saturdays',
     temporalProfileSundays: 'Sundays',
     temporalProfileResolution: 'Resolution',
+    temporalProfileDataStep: 'Data timestep',
     temporalProfileCustom: 'Custom',
     temporalProfileMinutes: 'minutes',
     temporalProfileTooManyBins: `Resolution produces too many bins (maximum ${TEMPORAL_PROFILE_MAX_BINS})`,
@@ -128,9 +131,16 @@ function localizedWeekdays() {
 }
 
 function resolutionLabel(minutes) {
-    if (minutes === 1440) return `1 ${text('temporalProfileDay').toLowerCase()}`;
-    if (minutes === 60) return '1 h';
-    return `${minutes} min`;
+    const rounded = Math.round(Number(minutes) * 1e6) / 1e6;
+    if (rounded === 1440) return `1 ${text('temporalProfileDay').toLowerCase()}`;
+    if (rounded === 60) return '1 h';
+    return `${rounded} min`;
+}
+
+function resolutionBelowStep(resolutionMinutes, stepMinutes) {
+    if (!Number.isFinite(stepMinutes) || stepMinutes <= 0) return false;
+    const tolerance = Math.max(1e-9, stepMinutes * 1e-6);
+    return Number(resolutionMinutes) < stepMinutes - tolerance;
 }
 
 function traceIsLazy(manager, trace) {
@@ -429,6 +439,19 @@ proto._temporalProfileCategoryEnabled = function(state, categoryId) {
     return true;
 };
 
+proto._temporalProfileMinimumResolutionMinutes = function(plot) {
+    let minimum = null;
+    for (const trace of plot?.traces || []) {
+        if (!this._isVisible(trace) || traceIsLazy(this, trace) || this._fftTimeKind(trace.fileId) !== 'datetime') continue;
+        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
+        const stepMs = inferTemporalProfileStepMs(times);
+        if (!Number.isFinite(stepMs) || stepMs <= 0) continue;
+        const stepMinutes = stepMs / 60_000;
+        minimum = minimum == null ? stepMinutes : Math.max(minimum, stepMinutes);
+    }
+    return minimum == null ? null : Math.round(minimum * 1e6) / 1e6;
+};
+
 proto._scheduleTemporalProfileRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.temporalProfileDiv || plot.mode !== 'temporal-profile') return;
@@ -444,6 +467,15 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
     plot._temporalProfileToken = token;
     const state = this._ensureTemporalProfileState(plot);
     const range = state.rangeFull ? null : this._activeTemporalProfileRange(plot);
+    const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot);
+    plot._temporalProfileMinimumResolutionMinutes = minimumResolution;
+    if (resolutionBelowStep(state.resolutionByPeriod[state.period], minimumResolution)) {
+        const matchingPreset = PROFILE_RESOLUTION_PRESETS.find(value => !resolutionBelowStep(value, minimumResolution)
+            && Math.abs(value - minimumResolution) <= Math.max(1e-9, minimumResolution * 1e-6));
+        state.resolutionByPeriod[state.period] = matchingPreset ?? minimumResolution;
+        state.customResolutionByPeriod[state.period] = matchingPreset == null;
+        this._renderTemporalProfileOptionsPanel(panelId, plot);
+    }
     const warnings = [];
     const models = [];
     const visibleDayCategories = PROFILE_CATEGORIES.filter(id => this._temporalProfileCategoryEnabled(state, id));
@@ -976,13 +1008,20 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
 
     section(text('temporalProfileResolution'));
     const currentResolution = state.resolutionByPeriod[state.period];
-    const presets = [1440, 60, 30, 15, 5, 1];
+    const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot);
+    if (Number.isFinite(minimumResolution) && minimumResolution > 0) {
+        const stepValue = document.createElement('span');
+        stepValue.className = 'hist-option-value';
+        stepValue.textContent = resolutionLabel(minimumResolution);
+        row(text('temporalProfileDataStep'), stepValue);
+    }
     const select = document.createElement('select');
     select.className = 'fft-select';
-    for (const minutes of presets) {
+    for (const minutes of PROFILE_RESOLUTION_PRESETS) {
         const option = document.createElement('option');
         option.value = String(minutes);
         option.textContent = resolutionLabel(minutes);
+        option.disabled = resolutionBelowStep(minutes, minimumResolution);
         select.appendChild(option);
     }
     const customOption = document.createElement('option');
@@ -991,7 +1030,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     select.appendChild(customOption);
     select.value = state.customResolutionByPeriod[state.period]
         ? 'custom'
-        : (presets.includes(currentResolution) ? String(currentResolution) : 'custom');
+        : (PROFILE_RESOLUTION_PRESETS.includes(currentResolution) ? String(currentResolution) : 'custom');
     select.addEventListener('change', () => {
         state.customResolutionByPeriod[state.period] = select.value === 'custom';
         if (select.value !== 'custom') state.resolutionByPeriod[state.period] = Number(select.value);
@@ -1003,13 +1042,15 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         const input = document.createElement('input');
         input.type = 'number';
         input.className = 'fft-number-input';
-        input.min = '0.000001';
+        input.min = String(Number.isFinite(minimumResolution) && minimumResolution > 0 ? minimumResolution : 0.000001);
         input.step = 'any';
         input.value = String(currentResolution);
         input.addEventListener('change', () => {
             const number = Number(input.value);
             if (Number.isFinite(number) && number > 0) {
-                state.resolutionByPeriod[state.period] = number;
+                const resolution = resolutionBelowStep(number, minimumResolution) ? minimumResolution : number;
+                state.resolutionByPeriod[state.period] = resolution;
+                input.value = String(resolution);
                 this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
             }
         });

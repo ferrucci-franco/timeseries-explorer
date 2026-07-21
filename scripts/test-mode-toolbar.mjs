@@ -253,6 +253,16 @@ assert.match(
     /period === 'day' \? 24 : period === 'week' \? 168 : 31 \* 24/,
     'Temporal Profile double-click restores the complete calendar domain',
 );
+assert.match(
+    temporalProfileMethodsSource,
+    /option\.disabled\s*=\s*resolutionBelowStep\(minutes, minimumResolution\)/,
+    'Temporal Profile disables preset resolutions below the detected data timestep',
+);
+assert.match(
+    temporalMethodAssignment('_recomputeTemporalProfile'),
+    /resolutionBelowStep\(state\.resolutionByPeriod\[state\.period\], minimumResolution\)[\s\S]*?state\.resolutionByPeriod\[state\.period\]/,
+    'Temporal Profile corrects an existing resolution that becomes too fine',
+);
 
 const renderToolbar = (mode, stateAnimDim = 2, plotState = {}) => {
     const manager = new ToolbarHarness(mode, stateAnimDim);
