@@ -26,6 +26,10 @@ const temporalProfileMethodsSource = readFileSync(
     new URL('../src/plots/methods/temporal-profile-methods.js', import.meta.url),
     'utf8',
 );
+const duckDbSource = readFileSync(
+    new URL('../src/data/duckdb-source.js', import.meta.url),
+    'utf8',
+);
 const contentCss = readFileSync(
     new URL('../src/styles/content.css', import.meta.url),
     'utf8',
@@ -44,8 +48,11 @@ const methodAssignment = (name) => {
 };
 
 const temporalMethodAssignment = (name) => {
-    const marker = `proto.${name} = function`;
-    const start = temporalProfileMethodsSource.indexOf(marker);
+    const plainMarker = `proto.${name} = function`;
+    const asyncMarker = `proto.${name} = async function`;
+    const asyncStart = temporalProfileMethodsSource.indexOf(asyncMarker);
+    const marker = asyncStart >= 0 ? asyncMarker : plainMarker;
+    const start = asyncStart >= 0 ? asyncStart : temporalProfileMethodsSource.indexOf(plainMarker);
     assert.ok(start >= 0, `${name} temporal-profile method is present`);
     const next = temporalProfileMethodsSource.indexOf('\nproto.', start + marker.length);
     return temporalProfileMethodsSource.slice(start, next >= 0 ? next : temporalProfileMethodsSource.length);
@@ -292,6 +299,16 @@ assert.match(
 assert.match(temporalProfileMethodsSource, /temporalProfileYear/, 'Temporal Profile exposes the Year period');
 assert.match(temporalProfileMethodsSource, /temporalProfileAllDays/, 'Day profiles expose the All days grouping');
 assert.match(temporalProfileMethodsSource, /temporalProfileSideBySide/, 'Column display exposes the side-by-side checkbox');
+assert.match(
+    temporalMethodAssignment('_recomputeTemporalProfile'),
+    /source\.getTemporalProfileAggregates\([\s\S]*?selectionRange:[\s\S]*?transforms/,
+    'Temporal Profile sends lazy traces to the exact DuckDB aggregation path',
+);
+assert.match(
+    duckDbSource,
+    /async getTemporalProfileAggregates\([\s\S]*?temporalProfilesFromAggregateRows/,
+    'DuckDB exposes the compact lazy temporal-profile query API',
+);
 assert.match(
     temporalMethodAssignment('_renderTemporalProfileOptionsPanel'),
     /!this\._temporalProfileHasCalendarTrace\(plot\)[\s\S]*?querySelectorAll\('button, input, select'\)[\s\S]*?control\.disabled = true/,

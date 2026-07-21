@@ -29,6 +29,11 @@ import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
 import { buildPairCorrelationSql, parsePairCorrelations } from './pair-correlation-sql.js';
 import { buildMissingBucketsSql } from './missing-buckets-sql.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
+import {
+    buildTemporalProfileAggregateSql,
+    buildTemporalProfileTimeStatsSql,
+    temporalProfilesFromAggregateRows,
+} from './temporal-profile-sql.js';
 
 const BUNDLES = {
     mvp: { mainModule: mvpWasmUrl, mainWorker: mvpWorkerUrl },
@@ -53,6 +58,7 @@ export default class DuckDbSource {
         this._rangeCache = new Map();
         this._phaseCache = new Map();
         this._heatmapCache = new Map();
+        this._temporalProfileCache = new Map();
         this._correlationCache = new Map();
         this._corrCapable = null; // cached "does DuckDB expose corr()" probe
         this._activeInteractiveQuery = null;
@@ -801,6 +807,11 @@ export default class DuckDbSource {
         if (this._phaseCache?.size) {
             for (const key of [...this._phaseCache.keys()]) {
                 if (String(key).startsWith(`${tableName}\u001e`)) this._phaseCache.delete(key);
+            }
+        }
+        if (this._temporalProfileCache?.size) {
+            for (const key of [...this._temporalProfileCache.keys()]) {
+                if (String(key).startsWith(`${tableName}\u001e`)) this._temporalProfileCache.delete(key);
             }
         }
     }
@@ -1575,6 +1586,149 @@ export default class DuckDbSource {
         }
 
         return { ok: true, calendarMode, blocked, traces };
+    }
+
+    /**
+     * Exact temporal-profile statistics for lazy files. Source rows are reduced
+     * to calendar-period/bin aggregates in DuckDB; only O(periods × bins)
+     * compact rows cross into JavaScript. Multiple variables share the scan.
+     */
+    async getTemporalProfileAggregates(legacyData, varNames, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getTemporalProfileAggregates: data is not DuckDB-backed (eager mode)');
+        if (legacyData?.metadata?.timeKind !== 'datetime' || meta.generatedTime) {
+            return { ok: false, reason: 'notDatetime', blocked: [], traces: [] };
+        }
+        const requested = [...new Set(varNames || [])]
+            .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
+            .filter(item => item.variable);
+        const usable = [];
+        const blocked = [];
+        for (const item of requested) {
+            if (item.variable._duckdbCol || item.variable._duckdbDataTool) usable.push(item);
+            else blocked.push(item.varName);
+        }
+        if (!usable.length) return { ok: true, blocked, traces: [], medianStepMs: null };
+
+        const period = ['day', 'week', 'month', 'year'].includes(options.period) ? options.period : 'day';
+        const resolutionUnit = period === 'year' && options.resolutionUnit === 'month' ? 'month' : 'minute';
+        const resolutionMinutes = resolutionUnit === 'month' ? null : Number(options.resolutionMinutes);
+        const shiftMs = Math.trunc(Number(options.timeShiftMs) || 0);
+        const rawCropRange = Array.isArray(options.cropRange) ? options.cropRange.map(Number) : null;
+        let cropRange = rawCropRange?.length >= 2
+            ? [Number.isFinite(rawCropRange[0]) ? rawCropRange[0] : null, Number.isFinite(rawCropRange[1]) ? rawCropRange[1] : null]
+            : null;
+        if (cropRange?.[0] != null && cropRange?.[1] != null && cropRange[0] > cropRange[1]) {
+            cropRange = [cropRange[1], cropRange[0]];
+        }
+        const selectionRange = this._normalizeMsRange(options.selectionRange);
+        const transforms = options.transforms || {};
+        const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
+        const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
+        const where = [`(${meta.timeExprSql}) IS NOT NULL`];
+        if (cropRange?.[0] != null) where.push(`${baseMsExpr} >= ${this._numericLiteral(cropRange[0])}`);
+        if (cropRange?.[1] != null) where.push(`${baseMsExpr} <= ${this._numericLiteral(cropRange[1])}`);
+        if (selectionRange) where.push(`${tExpr} BETWEEN ${this._numericLiteral(selectionRange[0])} AND ${this._numericLiteral(selectionRange[1])}`);
+        const whereSql = where.join(' AND ');
+        const valueExpressions = usable.map(({ variable, varName }) => {
+            const transform = transforms[varName] || {};
+            const gain = Number.isFinite(Number(transform.gain)) ? Number(transform.gain) : 1;
+            const yOffset = Number.isFinite(Number(transform.yOffset)) ? Number(transform.yOffset) : 0;
+            let expression = this._valueExpressionSql(variable, varName, { castDouble: true });
+            if (gain !== 1) expression = `(${expression}) * ${this._numericLiteral(gain)}`;
+            if (yOffset !== 0) expression = `(${expression}) + ${this._numericLiteral(yOffset)}`;
+            return expression;
+        });
+        const cacheKey = this._temporalProfileCacheKey(meta, usable, {
+            period, resolutionUnit, resolutionMinutes, shiftMs, cropRange, selectionRange,
+            transforms, dayGrouping: options.dayGrouping, discardIncomplete: options.discardIncomplete,
+        });
+        const cached = cacheKey ? this._temporalProfileCache.get(cacheKey) : null;
+        if (cached) return cached instanceof Promise ? cached : cached;
+
+        const promise = (async () => {
+            const statsArgs = { tableName: meta.tableName, timeExpression: tExpr, whereSql };
+            let statsRows = this._arrowRowsToObjects(await this._interactiveQuery(buildTemporalProfileTimeStatsSql(statsArgs)));
+            let stats = statsRows[0] || {};
+            let ordered = Number(stats.order_violations) > 0;
+            if (ordered) {
+                statsRows = this._arrowRowsToObjects(await this._interactiveQuery(buildTemporalProfileTimeStatsSql({ ...statsArgs, ordered: true })));
+                stats = statsRows[0] || {};
+            }
+            const medianStepMs = stats.median_step == null ? null : Number(stats.median_step);
+            const aggregate = buildTemporalProfileAggregateSql({
+                tableName: meta.tableName,
+                timeExpression: tExpr,
+                whereSql,
+                valueExpressions,
+                period,
+                resolutionUnit,
+                resolutionMinutes,
+                gapThresholdMs: Number.isFinite(medianStepMs) ? medianStepMs * 1.5 : null,
+                numericLiteral: value => this._numericLiteral(value),
+                ordered,
+            });
+            if (!aggregate.ok) return { ...aggregate, blocked, traces: [] };
+            const rows = this._arrowRowsToObjects(await this._interactiveQuery(aggregate.sql));
+            const reduced = temporalProfilesFromAggregateRows(rows, {
+                period,
+                resolutionUnit,
+                resolutionMinutes,
+                dayGrouping: options.dayGrouping,
+                discardIncomplete: options.discardIncomplete,
+                valueCount: usable.length,
+                medianStepMs,
+                scopeStart: selectionRange?.[0] ?? (stats.min_t == null ? null : Number(stats.min_t)),
+                scopeEnd: selectionRange?.[1] ?? (stats.max_t == null ? null : Number(stats.max_t)),
+                selectionActive: !!selectionRange,
+            });
+            if (!reduced.ok) return { ...reduced, blocked, traces: [] };
+            return {
+                ok: true,
+                blocked,
+                medianStepMs,
+                orderedInput: !ordered,
+                traces: usable.map((item, index) => ({ varName: item.varName, result: reduced.results[index] })),
+            };
+        })();
+        if (cacheKey) {
+            this._temporalProfileCache.set(cacheKey, promise);
+            while (this._temporalProfileCache.size > 12) {
+                const first = this._temporalProfileCache.keys().next().value;
+                this._temporalProfileCache.delete(first);
+            }
+        }
+        try {
+            const result = await promise;
+            if (cacheKey) this._temporalProfileCache.set(cacheKey, result);
+            return result;
+        } catch (error) {
+            if (cacheKey) this._temporalProfileCache.delete(cacheKey);
+            throw error;
+        }
+    }
+
+    _temporalProfileCacheKey(meta, usable, options) {
+        if (!meta?.tableName) return null;
+        const variables = usable.map(({ varName, variable }) => {
+            const transform = options.transforms?.[varName] || {};
+            return [varName, this._dataToolCacheToken(variable), Number(transform.gain ?? 1), Number(transform.yOffset ?? 0)].join('\u001d');
+        }).join('\u001f');
+        return [
+            meta.tableName,
+            'profile',
+            Number(meta.appendRows) || 0,
+            Number(meta.appendBytes) || 0,
+            options.period,
+            options.resolutionUnit,
+            options.resolutionMinutes ?? '',
+            options.shiftMs,
+            options.cropRange?.join('_') || '',
+            options.selectionRange?.join('_') || '',
+            options.dayGrouping || '',
+            options.discardIncomplete ? 1 : 0,
+            variables,
+        ].join('\u001e');
     }
 
     async getPhaseTrajectory(legacyData, varNames, options = {}) {

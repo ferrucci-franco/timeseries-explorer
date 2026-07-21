@@ -32,7 +32,8 @@ const fallbackText = {
     temporalProfileModeLabel: 'Profile',
     temporalProfileDrop: 'Drop one or more calendar signals for the temporal profile',
     temporalProfileCalendarRequired: 'Temporal Profile requires Calendar time mode.',
-    temporalProfileLazyUnsupported: 'large/lazy files are not supported yet',
+    temporalProfileLazyDerivedUnsupported: 'this derived lazy signal cannot be profiled exactly',
+    temporalProfileCalculating: 'Calculating exact profile…',
     temporalProfileNoFinite: 'no finite values in range',
     temporalProfileWarningSeePanel: 'Warning: see message in the Profile side panel',
     temporalProfileTimeScope: 'Range',
@@ -488,9 +489,10 @@ proto._temporalProfileHasCalendarTrace = function(plot) {
 proto._temporalProfileDataStepMinutes = function(plot) {
     let minimum = null;
     for (const trace of plot?.traces || []) {
-        if (!this._isVisible(trace) || traceIsLazy(this, trace) || this._fftTimeKind(trace.fileId) !== 'datetime') continue;
-        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
-        const stepMs = inferTemporalProfileStepMs(times);
+        if (!this._isVisible(trace) || this._fftTimeKind(trace.fileId) !== 'datetime') continue;
+        const stepMs = traceIsLazy(this, trace)
+            ? plot?._temporalProfileLazyStepMs?.get(trace.fileId)
+            : inferTemporalProfileStepMs(this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || []);
         if (!Number.isFinite(stepMs) || stepMs <= 0) continue;
         const stepMinutes = stepMs / 60_000;
         minimum = minimum == null ? stepMinutes : Math.max(minimum, stepMinutes);
@@ -514,7 +516,7 @@ proto._scheduleTemporalProfileRecompute = function(panelId, options = {}) {
     else plot._temporalProfileRecomputeTimer = setTimeout(run, PROFILE_RECOMPUTE_DEBOUNCE_MS);
 };
 
-proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelId)) {
+proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(panelId)) {
     if (!plot?.temporalProfileDiv || plot.mode !== 'temporal-profile') return;
     const token = (plot._temporalProfileToken || 0) + 1;
     plot._temporalProfileToken = token;
@@ -535,6 +537,7 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
     }
     const warnings = [];
     const models = [];
+    const lazyByFile = new Map();
     const visibleDayCategories = PROFILE_CATEGORIES.filter(id => this._temporalProfileCategoryEnabled(state, id));
     if (state.period === 'day' && state.dayGrouping === 'day-type' && !visibleDayCategories.length) warnings.push(text('temporalProfileNoCategories'));
 
@@ -546,7 +549,8 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
             continue;
         }
         if (traceIsLazy(this, trace)) {
-            if (this._isVisible(trace)) warnings.push(`${name}: ${text('temporalProfileLazyUnsupported')}`);
+            if (!lazyByFile.has(trace.fileId)) lazyByFile.set(trace.fileId, []);
+            lazyByFile.get(trace.fileId).push({ trace, traceIndex, name });
             continue;
         }
         const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
@@ -570,7 +574,97 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
         if (!result.stats.nFinite && this._isVisible(trace)) warnings.push(`${name}: ${text('temporalProfileNoFinite')}`);
         models.push({ trace, traceIndex, name, unit: this._temporalProfileUnit(trace), result });
     }
+    if (lazyByFile.size) {
+        this._setTemporalProfileStatus(plot, text('temporalProfileCalculating'), 'loading');
+        plot.temporalProfileContainer?.setAttribute('aria-busy', 'true');
+        const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
+            const data = this.files.get(fileId)?.data;
+            const source = data?._duckdb?.source;
+            if (!source?.getTemporalProfileAggregates) return { fileId, entries, unsupported: true };
+            const transform = this._fileTransform(fileId);
+            const timeShiftMs = this._parseTimeShift(fileId, transform.timeShift) || 0;
+            const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
+            const cropEnd = this._parseTimeBoundary(fileId, transform.cropEnd);
+            const cropRange = cropStart != null || cropEnd != null
+                ? [cropStart ?? -Infinity, cropEnd ?? Infinity]
+                : null;
+            const transforms = {};
+            for (const entry of entries) {
+                const sign = this.isVariableSignInverted?.(fileId, entry.trace.varName) ? -1 : 1;
+                transforms[entry.trace.varName] = { gain: transform.gain * sign, yOffset: transform.yOffset };
+            }
+            try {
+                const result = await source.getTemporalProfileAggregates(data, entries.map(entry => entry.trace.varName), {
+                    period: state.period,
+                    resolutionMinutes: state.period === 'year' ? 1440 : state.resolutionByPeriod[state.period],
+                    resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
+                    dayGrouping: state.dayGrouping,
+                    discardIncomplete: state.discardIncomplete,
+                    timeShiftMs,
+                    cropRange,
+                    selectionRange: state.rangeFull ? null : range,
+                    transforms,
+                });
+                return { fileId, entries, result };
+            } catch (error) {
+                console.warn('[temporal-profile] lazy query failed:', error);
+                return { fileId, entries, error };
+            }
+        });
+        const settled = await Promise.all(jobs);
+        if (plot._temporalProfileToken !== token || this.plots.get(panelId) !== plot || plot.mode !== 'temporal-profile') return;
+        if (!plot._temporalProfileLazyStepMs) plot._temporalProfileLazyStepMs = new Map();
+        for (const job of settled) {
+            if (job.unsupported) {
+                for (const entry of job.entries) if (this._isVisible(entry.trace)) warnings.push(`${entry.name}: ${text('temporalProfileLazyDerivedUnsupported')}`);
+                continue;
+            }
+            if (job.error || !job.result?.ok) {
+                const reason = job.error?.message || job.result?.reason || text('temporalProfileLazyDerivedUnsupported');
+                for (const entry of job.entries) if (this._isVisible(entry.trace)) warnings.push(`${entry.name}: ${reason}`);
+                continue;
+            }
+            if (Number.isFinite(job.result.medianStepMs) && job.result.medianStepMs > 0) {
+                plot._temporalProfileLazyStepMs.set(job.fileId, job.result.medianStepMs);
+            }
+            for (const blockedName of job.result.blocked || []) {
+                const entry = job.entries.find(candidate => candidate.trace.varName === blockedName);
+                if (entry && this._isVisible(entry.trace)) warnings.push(`${entry.name}: ${text('temporalProfileLazyDerivedUnsupported')}`);
+            }
+            const resultByVariable = new Map((job.result.traces || []).map(item => [item.varName, item.result]));
+            for (const entry of job.entries) {
+                const result = resultByVariable.get(entry.trace.varName);
+                if (!result) continue;
+                if (!result.stats.nFinite && this._isVisible(entry.trace)) warnings.push(`${entry.name}: ${text('temporalProfileNoFinite')}`);
+                models.push({ ...entry, unit: this._temporalProfileUnit(entry.trace), result });
+            }
+        }
+        // The true timestep is known only after the first exact lazy query.
+        // Normalize a restored/custom resolution once, then recompute using it.
+        const refreshedStep = this._temporalProfileDataStepMinutes(plot);
+        const refreshedMinimum = this._temporalProfileMinimumResolutionMinutes(plot, state.period);
+        let resolutionChanged = false;
+        if (state.period === 'year' && state.yearResolution === 'day' && resolutionBelowStep(1440, refreshedStep)) {
+            state.yearResolution = 'month';
+            resolutionChanged = true;
+        } else if (state.period !== 'year' && resolutionBelowStep(state.resolutionByPeriod[state.period], refreshedMinimum)) {
+            const matchingPreset = resolutionPresetsForPeriod(state.period).find(value => !resolutionBelowStep(value, refreshedMinimum)
+                && Math.abs(value - refreshedMinimum) <= Math.max(1e-9, refreshedMinimum * 1e-6));
+            state.resolutionByPeriod[state.period] = matchingPreset ?? refreshedMinimum;
+            state.customResolutionByPeriod[state.period] = matchingPreset == null;
+            resolutionChanged = true;
+        }
+        if (resolutionChanged) {
+            plot.temporalProfileContainer?.setAttribute('aria-busy', 'false');
+            this._renderTemporalProfileOptionsPanel(panelId, plot);
+            this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
+            return;
+        }
+        this._renderTemporalProfileOptionsPanel(panelId, plot);
+    }
     if (plot._temporalProfileToken !== token) return;
+    plot.temporalProfileContainer?.setAttribute('aria-busy', 'false');
+    models.sort((a, b) => a.traceIndex - b.traceIndex);
     const visibleUnits = new Set(models.filter(model => this._isVisible(model.trace)).map(model => model.unit).filter(Boolean));
     if (visibleUnits.size > 1) warnings.push(text('temporalProfileMixedUnits'));
     plot._temporalProfileModels = models;
