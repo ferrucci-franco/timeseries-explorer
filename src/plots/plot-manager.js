@@ -1084,11 +1084,11 @@ class PlotManager {
                 if (plot.mode === 'timeseries') this._refreshTimeseriesVisuals(panelId, plot);
                 else if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
                     this._refreshPhaseVisualsLazy?.(panelId, plot);
-                    // Restore the fit options/results drawer for a phase2d panel
-                    // that loads with an active fit (e.g. from a saved session).
-                    if (plot.mode === 'phase2d' && plot.phase2d?.fitModel && plot.phase2d.fitModel !== 'none') {
-                        this._ensurePhase2dFitDrawer?.(panelId, plot);
-                        this._renderPhase2dFitDrawer?.(panelId, plot);
+                    // Build the FFT-like fit workspace for a phase2d panel that
+                    // loads with an active fit (e.g. from a saved session).
+                    if (plot.mode === 'phase2d' && plot.phase2d?.fitModel && plot.phase2d.fitModel !== 'none'
+                        && !plot.phase2dFitContainer) {
+                        this._enterPhase2dFitShell?.(panelId, plot);
                     }
                 }
                 finish3DSetup();
@@ -1496,9 +1496,9 @@ class PlotManager {
             this._cleanupLazyDetailForPanel(panelId, plot);
         }
         this._abortFftWorkerJob?.(plot, 'FFT panel destroyed');
-        // The phase2d fit drawer is a sibling <aside> of plot.div, so it is not
-        // torn down by the plot.div removal below — drop it explicitly.
-        this._removePhase2dFitDrawer?.(plot);
+        // The phase2d fit shell owns extra document listeners + a temporal div;
+        // clean them up before the plot.div removal below.
+        this._cleanupPhase2dFitDocListeners?.(plot);
         this._stopAnim(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
         // Reset dynamic trace indices
@@ -1556,6 +1556,17 @@ class PlotManager {
                 plot.div = null;
                 plot.fftDiv = null;
                 plot.fftContainer = null;
+            } else if (plot.div.closest('.phase2d-fit-container')) {
+                // 2D fitting shell (TODO 10): the 2D plot.div is reparented into
+                // the container next to a temporal div; purge both and remove it.
+                const phase2dFitContainer = plot.div.closest('.phase2d-fit-container');
+                if (plot.phase2dFitTimeDiv) Plotly.purge(plot.phase2dFitTimeDiv);
+                Plotly.purge(plot.div);
+                phase2dFitContainer.remove();
+                plot.div = null;
+                plot.phase2dFitTimeDiv = null;
+                plot.phase2dFitContainer = null;
+                plot.phase2dFitOptions = null;
             } else {
                 // Remove state-anim container if present (wraps the plot div)
                 const saContainer = plot.div.closest('.state-anim-container');

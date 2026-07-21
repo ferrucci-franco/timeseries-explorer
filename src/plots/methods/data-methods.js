@@ -1572,7 +1572,11 @@ proto._buildPhase2DTraces = function(plot) {
     const mode = this._phase2dPlotlyMode ? this._phase2dPlotlyMode(state) : 'lines';
     const showMarkers = this._phase2dShowsMarkers ? this._phase2dShowsMarkers(state) : false;
     const traces = plot.phaseTraces.map(pt => {
-        const visual = this._phaseVisualDataForTrace(plot, pt);
+        // In an active Selección the scatter shows only the selected window
+        // (range-limited visual); otherwise the normal downsampled trajectory.
+        const visual = (this._phase2dRangeLimitedVisual
+            ? this._phase2dRangeLimitedVisual(plot, pt) : null)
+            || this._phaseVisualDataForTrace(plot, pt);
         if (!visual) return null;
         const len = Math.max(visual.x?.length || 0, visual.y?.length || 0);
         const useGL = this._phase2dUseGL(len, showMarkers);

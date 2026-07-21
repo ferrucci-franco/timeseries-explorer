@@ -1327,49 +1327,9 @@
     cursor: pointer;
 }
 
-.phase2d-fit-options-btn {
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-size: 0.7rem;
-    padding: 2px 8px;
-    cursor: pointer;
-}
-
-.phase2d-fit-options-btn.active {
-    background: var(--accent-color, #2196f3);
-    border-color: var(--accent-color, #2196f3);
-    color: #fff;
-}
-
-.phase2d-fit-options-btn[hidden] {
-    display: none;
-}
-
-/* Collapsible fit results/options drawer — the FFT-style side panel. */
-.phase2d-fit-drawer {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    bottom: 8px;
-    width: 260px;
-    max-width: 60%;
-    overflow-y: auto;
-    z-index: 5;
-    padding: 10px 12px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-    font-size: 0.72rem;
-    color: var(--text-primary);
-}
-
-.phase2d-fit-drawer[hidden] {
-    display: none;
-}
-
+/* Fit results/options drawer content — lives inside the shell's .fft-options
+   aside (which supplies width/scroll/hidden), so only the inner blocks below
+   need styling. */
 .phase2d-fit-drawer-title {
     margin: 0 0 6px;
     font-size: 0.8rem;
