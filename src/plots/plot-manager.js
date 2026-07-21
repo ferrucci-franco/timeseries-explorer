@@ -1544,6 +1544,16 @@ class PlotManager {
             this._refreshActionBtns(panelId);
         }
         trace.axis = axis;
+        const y2StillUsed = (plot.traces || []).some(candidate =>
+            candidate !== trace && candidate.axis === 'y2');
+        if (axis === 'y' && !y2StillUsed) {
+            plot.timeseriesY2Enabled = false;
+            const restoreView = view ? { ...view, y2Range: null } : null;
+            this._expandCapturedTimeseriesYForVariable(plot, restoreView, trace.fileId, trace.varName);
+            this._refreshActionBtns(panelId);
+            this._rebuildPanel(panelId, { restoreView });
+            return;
+        }
         await Plotly.restyle(plot.div, { yaxis: axis }, [curveIndex]);
 
         const layout = this._buildTimeLayout(plot);
