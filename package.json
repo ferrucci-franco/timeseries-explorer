@@ -61,6 +61,7 @@
     "test:missing-lazy": "node scripts/test-missing-lazy.mjs",
     "test:correlation": "node scripts/test-correlation.mjs",
     "test:correlation-lazy": "node scripts/test-correlation-lazy.mjs",
+    "test:regression": "node scripts/test-regression.mjs",
     "test:lazy-phase": "node scripts/test-lazy-phase-logic.mjs",
     "test:pickle": "node scripts/test-pickle-parser.mjs",
     "test:netcdf": "node scripts/test-generic-netcdf-parser.mjs",
