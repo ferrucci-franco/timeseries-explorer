@@ -125,7 +125,7 @@ source.plotManager.plots.set('panel-1', {
     fft: {},
     histogram: { binCount: 77, normalization: 'percent', layout: 'horizontal' },
     heatmap: {},
-    temporalProfile: { period: 'month', renderMode: 'columns', discardIncomplete: true, resolutionByPeriod: { day: 5, week: 60, month: 1440 } },
+    temporalProfile: { period: 'month', renderMode: 'columns', discardIncomplete: true, dayGrouping: 'all', yearResolution: 'month', resolutionByPeriod: { day: 5, week: 60, month: 1440, year: 1440 } },
     correlation: {},
     phase2d: {},
     liveView: {},
@@ -164,6 +164,8 @@ assert.equal(restoredPlot.histogram.normalization, 'percent');
 assert.equal(restoredPlot.temporalProfile.period, 'month');
 assert.equal(restoredPlot.temporalProfile.renderMode, 'columns');
 assert.equal(restoredPlot.temporalProfile.resolutionByPeriod.day, 5);
+assert.equal(restoredPlot.temporalProfile.dayGrouping, 'all');
+assert.equal(restoredPlot.temporalProfile.yearResolution, 'month');
 assert.equal(restoredPlot.showMissingData, true);
 assert.equal(restoredPlot.autoPlayOnRender, true);
 assert.deepEqual(restoredPlot._modeViews.fft.fftSpectrum.xRange, [1, 5]);

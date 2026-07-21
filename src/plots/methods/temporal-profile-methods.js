@@ -45,6 +45,9 @@ const fallbackText = {
     temporalProfileMonth: 'Month',
     temporalProfileYear: 'Year',
     temporalProfileCategories: 'Day categories',
+    temporalProfileDayGrouping: 'Day grouping',
+    temporalProfileAllDays: 'All days',
+    temporalProfileByDayType: 'By day type',
     temporalProfileWorkdays: 'Workdays',
     temporalProfileSaturdays: 'Saturdays',
     temporalProfileSundays: 'Sundays',
@@ -189,6 +192,8 @@ proto._defaultTemporalProfileState = function() {
         resolutionByPeriod: { ...TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES },
         customResolutionByPeriod: { day: false, week: false, month: false, year: false },
         renderMode: 'line-band',
+        dayGrouping: 'day-type',
+        yearResolution: 'day',
         workdays: true,
         saturdays: true,
         sundays: true,
@@ -229,6 +234,8 @@ proto._normalizeTemporalProfileState = function(raw = {}) {
         resolutionByPeriod,
         customResolutionByPeriod,
         renderMode: PROFILE_RENDER_MODES.has(raw.renderMode) ? raw.renderMode : defaults.renderMode,
+        dayGrouping: raw.dayGrouping === 'all' ? 'all' : 'day-type',
+        yearResolution: raw.yearResolution === 'month' ? 'month' : 'day',
         workdays: raw.workdays !== false,
         saturdays: raw.saturdays !== false,
         sundays: raw.sundays !== false,
@@ -505,9 +512,13 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
     plot._temporalProfileToken = token;
     const state = this._ensureTemporalProfileState(plot);
     const range = state.rangeFull ? null : this._activeTemporalProfileRange(plot);
+    const dataStep = this._temporalProfileDataStepMinutes(plot);
     const minimumResolution = this._temporalProfileMinimumResolutionMinutes(plot, state.period);
     plot._temporalProfileMinimumResolutionMinutes = minimumResolution;
-    if (resolutionBelowStep(state.resolutionByPeriod[state.period], minimumResolution)) {
+    if (state.period === 'year' && state.yearResolution === 'day' && resolutionBelowStep(1440, dataStep)) {
+        state.yearResolution = 'month';
+        this._renderTemporalProfileOptionsPanel(panelId, plot);
+    } else if (state.period !== 'year' && resolutionBelowStep(state.resolutionByPeriod[state.period], minimumResolution)) {
         const matchingPreset = resolutionPresetsForPeriod(state.period).find(value => !resolutionBelowStep(value, minimumResolution)
             && Math.abs(value - minimumResolution) <= Math.max(1e-9, minimumResolution * 1e-6));
         state.resolutionByPeriod[state.period] = matchingPreset ?? minimumResolution;
@@ -517,7 +528,7 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
     const warnings = [];
     const models = [];
     const visibleDayCategories = PROFILE_CATEGORIES.filter(id => this._temporalProfileCategoryEnabled(state, id));
-    if (state.period === 'day' && !visibleDayCategories.length) warnings.push(text('temporalProfileNoCategories'));
+    if (state.period === 'day' && state.dayGrouping === 'day-type' && !visibleDayCategories.length) warnings.push(text('temporalProfileNoCategories'));
 
     for (let traceIndex = 0; traceIndex < (plot.traces || []).length; traceIndex++) {
         const trace = plot.traces[traceIndex];
@@ -536,7 +547,9 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
             times,
             values,
             period: state.period,
-            resolutionMinutes: state.resolutionByPeriod[state.period],
+            resolutionMinutes: state.period === 'year' ? 1440 : state.resolutionByPeriod[state.period],
+            resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
+            dayGrouping: state.dayGrouping,
             rangeStart: range?.[0] ?? null,
             rangeEnd: range?.[1] ?? null,
             discardIncomplete: state.discardIncomplete,
@@ -565,7 +578,7 @@ proto._recomputeTemporalProfile = function(panelId, plot = this.plots.get(panelI
 };
 
 proto._temporalProfileSeriesColor = function(model, categoryIndex) {
-    if (model.result.period !== 'day') return model.trace.color;
+    if (model.result.period !== 'day' || categoryIndex < 0) return model.trace.color;
     return this._nextColor(model.traceIndex * 3 + categoryIndex);
 };
 
@@ -637,7 +650,7 @@ proto._buildTemporalProfileLayout = function(plot, units = {}) {
         margin: { l: 62, r: 18, t: 8, b: 52 },
         autosize: true,
         hovermode: 'closest',
-        uirevision: `temporal-profile-${state.period}-${state.resolutionByPeriod[state.period]}`,
+        uirevision: `temporal-profile-${state.period}-${state.period === 'year' ? state.yearResolution : state.resolutionByPeriod[state.period]}`,
     };
     if (state.period === 'day') {
         const ticks = Array.from({ length: 13 }, (_, index) => index * 2);
@@ -1049,10 +1062,21 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
     }));
     if (state.period === 'day') {
-        section(text('temporalProfileCategories'));
-        row(text('temporalProfileWorkdays'), checkbox(state.workdays, checked => { state.workdays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
-        row(text('temporalProfileSaturdays'), checkbox(state.saturdays, checked => { state.saturdays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
-        row(text('temporalProfileSundays'), checkbox(state.sundays, checked => { state.sundays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
+        section(text('temporalProfileDayGrouping'));
+        options.appendChild(segmented([
+            { label: text('temporalProfileAllDays'), value: 'all' },
+            { label: text('temporalProfileByDayType'), value: 'day-type' },
+        ], state.dayGrouping, grouping => {
+            state.dayGrouping = grouping;
+            this._renderTemporalProfileOptionsPanel(panelId, plot);
+            this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
+        }));
+        if (state.dayGrouping === 'day-type') {
+            section(text('temporalProfileCategories'));
+            row(text('temporalProfileWorkdays'), checkbox(state.workdays, checked => { state.workdays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
+            row(text('temporalProfileSaturdays'), checkbox(state.saturdays, checked => { state.saturdays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
+            row(text('temporalProfileSundays'), checkbox(state.sundays, checked => { state.sundays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
+        }
     }
 
     section(text('temporalProfileResolution'));
@@ -1068,6 +1092,22 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     }
     const select = document.createElement('select');
     select.className = 'fft-select';
+    if (state.period === 'year') {
+        const dayOption = document.createElement('option');
+        dayOption.value = 'day';
+        dayOption.textContent = text('temporalProfileDay');
+        dayOption.disabled = resolutionBelowStep(1440, dataStep);
+        const monthOption = document.createElement('option');
+        monthOption.value = 'month';
+        monthOption.textContent = text('temporalProfileMonth');
+        select.append(dayOption, monthOption);
+        select.value = state.yearResolution;
+        select.addEventListener('change', () => {
+            state.yearResolution = select.value === 'month' ? 'month' : 'day';
+            this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
+        });
+        row(text('temporalProfileResolution'), select);
+    } else {
     for (const minutes of presets) {
         const option = document.createElement('option');
         option.value = String(minutes);
@@ -1106,6 +1146,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
             }
         });
         row(text('temporalProfileMinutes'), input);
+    }
     }
 
     section(text('temporalProfileDisplay'));

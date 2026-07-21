@@ -48,6 +48,20 @@ const close = (actual, expected, epsilon = 1e-12, message = '') => {
     assert.equal(result.categories[2].bins[0].mean, 3);
 }
 
+// Daily profiles can combine every calendar day into one equally weighted
+// category instead of splitting workdays, Saturdays and Sundays.
+{
+    const result = buildTemporalProfile({
+        times: [utc('2024-01-01T00:00:00Z'), utc('2024-01-06T00:00:00Z'), utc('2024-01-07T00:00:00Z')],
+        values: [1, 3, 5],
+        period: 'day',
+        dayGrouping: 'all',
+    });
+    assert.deepEqual(result.categories.map(category => category.id), ['all']);
+    assert.equal(result.categories[0].bins[0].mean, 3);
+    assert.equal(result.categories[0].bins[0].nPeriods, 3);
+}
+
 // One-minute resolution is allowed for a full day.
 {
     const result = buildTemporalProfile({ times: [utc('2024-01-01T00:00:00Z')], values: [1], period: 'day', resolutionMinutes: 1 });
@@ -159,6 +173,25 @@ const close = (actual, expected, epsilon = 1e-12, message = '') => {
     assert.equal(bins[60].nExpectedPeriods, 2);
     assert.equal(bins[365].mean, 5.5, 'December 31 aligns across years');
     assert.equal(bins[365].nExpectedPeriods, 2);
+}
+
+// Calendar-month resolution uses twelve variable-duration bins and still
+// calculates dispersion across yearly period means.
+{
+    const result = buildTemporalProfile({
+        times: [
+            utc('2023-01-15T00:00:00Z'), utc('2023-02-15T00:00:00Z'),
+            utc('2024-01-15T00:00:00Z'), utc('2024-02-15T00:00:00Z'),
+        ],
+        values: [1, 2, 3, 4],
+        period: 'year',
+        resolutionUnit: 'month',
+    });
+    assert.equal(result.resolutionUnit, 'month');
+    assert.equal(result.binCount, 12);
+    assert.equal(result.categories[0].bins[0].mean, 2);
+    assert.equal(result.categories[0].bins[1].mean, 3);
+    close(result.categories[0].bins[0].std, Math.sqrt(2), 1e-12, 'monthly standard deviation across years');
 }
 
 // Selection boundaries produce partial periods; strict mode removes them.

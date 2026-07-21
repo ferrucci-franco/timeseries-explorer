@@ -19,6 +19,7 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const WEEK_MS = 7 * DAY_MS;
 const STEP_SAMPLE_LIMIT = 100_000;
+const YEAR_MONTH_START_DAYS = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366];
 
 function finiteNumber(value) {
     return typeof value === 'number' && Number.isFinite(value);
@@ -199,18 +200,27 @@ function onlinePush(acc, value) {
 
 export function buildTemporalProfile(options = {}) {
     const period = TEMPORAL_PROFILE_PERIODS.has(options.period) ? options.period : 'day';
-    const resolutionMinutes = options.resolutionMinutes == null
+    const resolutionUnit = period === 'year' && options.resolutionUnit === 'month' ? 'month' : 'minute';
+    const calendarMonthBins = resolutionUnit === 'month';
+    const resolutionMinutes = calendarMonthBins ? null : (options.resolutionMinutes == null
         ? TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES[period]
-        : Number(options.resolutionMinutes);
-    if (!Number.isFinite(resolutionMinutes) || resolutionMinutes <= 0) {
+        : Number(options.resolutionMinutes));
+    if (!calendarMonthBins && (!Number.isFinite(resolutionMinutes) || resolutionMinutes <= 0)) {
         return { ok: false, reason: 'invalidResolution' };
     }
-    const resolutionMs = resolutionMinutes * MINUTE_MS;
+    const resolutionMs = calendarMonthBins ? null : resolutionMinutes * MINUTE_MS;
     const durationMs = templateDurationMs(period);
-    const binCount = Math.ceil(durationMs / resolutionMs);
+    const binEdgesMs = calendarMonthBins
+        ? YEAR_MONTH_START_DAYS.map(day => day * DAY_MS)
+        : Array.from({ length: Math.ceil(durationMs / resolutionMs) + 1 }, (_, index) => Math.min(durationMs, index * resolutionMs));
+    const binCount = binEdgesMs.length - 1;
     if (!Number.isInteger(binCount) || binCount < 1 || binCount > TEMPORAL_PROFILE_MAX_BINS) {
         return { ok: false, reason: 'tooManyBins', binCount, maxBins: TEMPORAL_PROFILE_MAX_BINS };
     }
+    const binIndexForTimestamp = (timestampMs, info) => calendarMonthBins
+        ? new Date(timestampMs).getUTCMonth()
+        : Math.floor(profileOffsetMs(timestampMs, info, period) / resolutionMs);
+    const dayGrouping = period === 'day' && options.dayGrouping === 'all' ? 'all' : 'day-type';
 
     const range = normalizeRange(options.rangeStart, options.rangeEnd);
     if (!range.ok) return { ok: false, reason: range.reason };
@@ -238,8 +248,7 @@ export function buildTemporalProfile(options = {}) {
             continue;
         }
         const info = periodInfo(timestampMs, period);
-        const offsetMs = profileOffsetMs(timestampMs, info, period);
-        let binIndex = Math.floor(offsetMs / resolutionMs);
+        const binIndex = binIndexForTimestamp(timestampMs, info);
         if (binIndex < 0 || binIndex >= binCount) continue;
         if (!periods.has(info.startMs)) periods.set(info.startMs, createPeriod(info, binCount));
         const item = periods.get(info.startMs);
@@ -267,6 +276,8 @@ export function buildTemporalProfile(options = {}) {
             timeZone: 'UTC',
             resolutionMinutes,
             resolutionMs,
+            resolutionUnit,
+            dayGrouping,
             binCount,
             categories: [],
             stats: { nScope, nFinite, nInvalid, nInvalidTimestamps, nOutOfRange, nPeriods: 0, nDiscardedPeriods: 0 },
@@ -287,8 +298,8 @@ export function buildTemporalProfile(options = {}) {
         for (let index = 1; gapThresholdMs != null && index < item.timestamps.length; index++) {
             if (item.timestamps[index] - item.timestamps[index - 1] > gapThresholdMs) {
                 item.hasGap = true;
-                const firstBin = Math.max(0, Math.floor(profileOffsetMs(item.timestamps[index - 1], item, period) / resolutionMs));
-                const lastBin = Math.min(binCount - 1, Math.floor(profileOffsetMs(item.timestamps[index], item, period) / resolutionMs));
+                const firstBin = Math.max(0, binIndexForTimestamp(item.timestamps[index - 1], item));
+                const lastBin = Math.min(binCount - 1, binIndexForTimestamp(item.timestamps[index], item));
                 for (let binIndex = firstBin; binIndex <= lastBin; binIndex++) item.gapByBin[binIndex] = 1;
             }
         }
@@ -307,13 +318,14 @@ export function buildTemporalProfile(options = {}) {
             && (item.nInvalid > 0 || item.hasGap || item.partial);
     }
 
-    const categoryIds = period === 'day' ? ['workday', 'saturday', 'sunday'] : ['all'];
+    const categoryIds = period === 'day' && dayGrouping === 'day-type' ? ['workday', 'saturday', 'sunday'] : ['all'];
     const categoryAccumulators = new Map(categoryIds.map(id => [id, createAcrossPeriodsAccumulator(binCount)]));
     const categoryStats = new Map(categoryIds.map(id => [id, { total: 0, included: 0, discarded: 0, partial: 0, withGaps: 0, withInvalid: 0 }]));
 
     for (const item of [...periods.values()].sort((a, b) => a.startMs - b.startMs)) {
-        const stats = categoryStats.get(item.category);
-        const accumulators = categoryAccumulators.get(item.category);
+        const categoryId = period === 'day' && dayGrouping === 'all' ? 'all' : item.category;
+        const stats = categoryStats.get(categoryId);
+        const accumulators = categoryAccumulators.get(categoryId);
         stats.total++;
         if (item.partial) stats.partial++;
         if (item.hasGap) stats.withGaps++;
@@ -324,9 +336,9 @@ export function buildTemporalProfile(options = {}) {
         }
         stats.included++;
             for (let binIndex = 0; binIndex < binCount; binIndex++) {
-                const binStartMs = binIndex * resolutionMs;
-                const binEndMs = Math.min(durationMs, binStartMs + resolutionMs);
-                if (binIsStructural(item, period, binStartMs, binEndMs)) continue;
+                const binStartMs = binEdgesMs[binIndex];
+                const binEndMs = binEdgesMs[binIndex + 1];
+                if (!calendarMonthBins && binIsStructural(item, period, binStartMs, binEndMs)) continue;
                 const acc = accumulators[binIndex];
             acc.expected++;
             acc.invalidSamples += item.invalidByBin[binIndex];
@@ -340,8 +352,8 @@ export function buildTemporalProfile(options = {}) {
     const categories = categoryIds.map((id) => {
         const accumulators = categoryAccumulators.get(id);
         const bins = accumulators.map((acc, index) => {
-            const startMs = index * resolutionMs;
-            const endMs = Math.min(durationMs, startMs + resolutionMs);
+            const startMs = binEdgesMs[index];
+            const endMs = binEdgesMs[index + 1];
             return finalizeBin(acc, startMs, endMs);
         });
         return { id, bins, ...categoryStats.get(id) };
@@ -361,6 +373,8 @@ export function buildTemporalProfile(options = {}) {
         timeZone: 'UTC',
         resolutionMinutes,
         resolutionMs,
+        resolutionUnit,
+        dayGrouping,
         binCount,
         durationHours: durationMs / HOUR_MS,
         categories,

@@ -231,11 +231,15 @@ vm.runInNewContext([
     controlState.renderMode = 'columns';
     controlState.saturdays = false;
     controlState.resolutionByPeriod.week = 15;
+    controlState.dayGrouping = 'all';
+    controlState.yearResolution = 'month';
     const liveState = manager._ensureTemporalProfileState(plot);
     assert.equal(liveState.period, 'week', 'Period control updates the live state');
     assert.equal(liveState.renderMode, 'columns', 'Display control updates the live state');
     assert.equal(liveState.saturdays, false, 'Day-category controls update the live state');
     assert.equal(liveState.resolutionByPeriod.week, 15, 'Resolution control updates the live state');
+    assert.equal(liveState.dayGrouping, 'all', 'Day grouping control updates the live state');
+    assert.equal(liveState.yearResolution, 'month', 'Year resolution control updates the live state');
 
     const migrated = manager._ensureTemporalProfileState({
         temporalProfile: {
@@ -278,6 +282,12 @@ assert.match(
     'Temporal Profile corrects an existing resolution that becomes too fine',
 );
 assert.match(temporalProfileMethodsSource, /temporalProfileYear/, 'Temporal Profile exposes the Year period');
+assert.match(temporalProfileMethodsSource, /temporalProfileAllDays/, 'Day profiles expose the All days grouping');
+assert.match(
+    temporalMethodAssignment('_recomputeTemporalProfile'),
+    /resolutionUnit:\s*state\.period === 'year' && state\.yearResolution === 'month' \? 'month' : 'minute'/,
+    'Year Month resolution is sent to the calendar-aware kernel',
+);
 assert.match(
     temporalMethodAssignment('_temporalProfileMinimumResolutionMinutes'),
     /PROFILE_PERIOD_DURATION_MINUTES\[period\] \/ TEMPORAL_PROFILE_MAX_BINS/,
