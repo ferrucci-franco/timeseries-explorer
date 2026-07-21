@@ -239,6 +239,20 @@ vm.runInNewContext([
 }
 
 assert.doesNotMatch(temporalProfileMethodsSource, /legendgroup\s*:/, 'Temporal Profile legend entries use standard plot spacing');
+assert.match(temporalProfileMethodsSource, /barmode:\s*'overlay'/, 'Temporal Profile columns always overlay');
+assert.match(temporalProfileMethodsSource, /opacity:\s*PROFILE_BAR_OPACITY/, 'Temporal Profile overlay columns are translucent');
+assert.doesNotMatch(temporalProfileMethodsSource, /pattern:\s*\{/, 'Temporal Profile columns use one consistent fill style');
+assert.doesNotMatch(temporalProfileMethodsSource, /circle-open|lines\+markers/, 'Temporal Profile lines do not mix point marker styles');
+assert.match(
+    temporalMethodAssignment('_installTemporalProfilePlotHandlers'),
+    /plotly_doubleclick[\s\S]*?setTimeout[\s\S]*?_resetTemporalProfileAnalysisView/,
+    'Temporal Profile defers its double-click reset until Plotly finishes dispatching',
+);
+assert.match(
+    temporalMethodAssignment('_resetTemporalProfileAnalysisView'),
+    /period === 'day' \? 24 : period === 'week' \? 168 : 31 \* 24/,
+    'Temporal Profile double-click restores the complete calendar domain',
+);
 
 const renderToolbar = (mode, stateAnimDim = 2, plotState = {}) => {
     const manager = new ToolbarHarness(mode, stateAnimDim);
@@ -575,7 +589,7 @@ for (const [from, clicked, expected] of [
     assert.ok(profileHelperStart >= 0 && profileHelperEnd > profileHelperStart, 'Temporal Profile two-pane Autoscale helper is present');
     const profileHelperSource = temporalProfileMethodsSource.slice(profileHelperStart, profileHelperEnd);
     assert.match(profileHelperSource, /this\._autoScalePlotTimeOnly\(plot\)/, 'Temporal Profile Autoscale resets the time-series pane');
-    assert.match(profileHelperSource, /Plotly\.relayout\(plot\.temporalProfileDiv/, 'Temporal Profile Autoscale resets the folded profile pane');
+    assert.match(profileHelperSource, /this\._resetTemporalProfileAnalysisView\(plot\)/, 'Temporal Profile Autoscale safely resets the folded profile pane');
 }
 
 // Moving a legend trace between Y axes must be an in-place Plotly update. A

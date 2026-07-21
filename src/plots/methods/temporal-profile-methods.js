@@ -11,6 +11,7 @@ const PROFILE_LAYOUTS = new Set(['horizontal', 'vertical']);
 const PROFILE_RENDER_MODES = new Set(['columns', 'line', 'line-band']);
 const PROFILE_CATEGORIES = ['workday', 'saturday', 'sunday'];
 const PROFILE_RECOMPUTE_DEBOUNCE_MS = 150;
+const PROFILE_BAR_OPACITY = 0.68;
 
 const fallbackText = {
     temporalProfileMode: 'Temporal profile',
@@ -365,8 +366,11 @@ proto._refreshTemporalProfileTimePlot = function(panelId, plot = this.plots.get(
 };
 
 proto._installTemporalProfilePlotHandlers = function(panelId, plot) {
-    if (!plot?.div || !plot?.temporalProfileDiv || plot._temporalProfileHandlersInstalled) return;
-    plot._temporalProfileHandlersInstalled = true;
+    if (!plot?.div || !plot?.temporalProfileDiv) return;
+    if (plot._temporalProfileHandlerTimeDiv === plot.div
+        && plot._temporalProfileHandlerAnalysisDiv === plot.temporalProfileDiv) return;
+    plot._temporalProfileHandlerTimeDiv = plot.div;
+    plot._temporalProfileHandlerAnalysisDiv = plot.temporalProfileDiv;
     const bindLegend = (div) => {
         let lastShift = false;
         div.addEventListener('mousedown', event => { lastShift = !!event.shiftKey; }, { capture: true });
@@ -386,7 +390,12 @@ proto._installTemporalProfilePlotHandlers = function(panelId, plot) {
     plot.div.on('plotly_relayout', eventData => this._onRelayout(panelId, eventData));
     plot.div.on('plotly_doubleclick', () => { this._autoScalePlotTimeOnly(plot); return false; });
     plot.temporalProfileDiv.on('plotly_doubleclick', () => {
-        Plotly.relayout(plot.temporalProfileDiv, { 'xaxis.autorange': true, 'yaxis.autorange': true });
+        // Let Plotly finish dispatching its double-click before applying our
+        // fixed calendar-domain reset. Relayout inside this callback can race
+        // Plotly's own double-click autorange transaction.
+        setTimeout(() => {
+            if (this.plots.get(panelId) === plot) this._resetTemporalProfileAnalysisView(plot);
+        }, 0);
         return false;
     });
 };
@@ -515,8 +524,8 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
                     name, visible, meta,
                     marker: {
                         color,
+                        opacity: PROFILE_BAR_OPACITY,
                         line: { color, width: 1 },
-                        pattern: { shape: category.bins.map(bin => (bin.coverage != null && bin.coverage < 1) || bin.nInvalidSamples || bin.nGapPeriods ? '/' : '') },
                     },
                     customdata, hovertemplate,
                 });
@@ -529,14 +538,9 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
                 traces.push({ type: 'scatter', mode: 'lines', x, y: upper, line: { width: 0 }, fill: 'tonexty', fillcolor: rgba(color, 0.18), hoverinfo: 'skip', showlegend: false, visible, meta });
             }
             traces.push({
-                type: 'scatter', mode: 'lines+markers', x, y,
+                type: 'scatter', mode: 'lines', x, y,
                 name, visible, meta,
                 line: { color, width: 2 },
-                marker: {
-                    color,
-                    size: category.bins.map(bin => (bin.coverage != null && bin.coverage < 1) || bin.nInvalidSamples || bin.nGapPeriods ? 6 : 4),
-                    symbol: category.bins.map(bin => (bin.coverage != null && bin.coverage < 1) || bin.nInvalidSamples || bin.nGapPeriods ? 'circle-open' : 'circle'),
-                },
                 customdata, hovertemplate,
                 connectgaps: false,
             });
@@ -556,8 +560,8 @@ proto._buildTemporalProfileLayout = function(plot, units = {}) {
         font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
         showlegend: this.legendPosition !== 'hidden',
         legend: this._legendConfig(legendBg, gridColor),
-        barmode: 'group',
-        bargap: 0.08,
+        barmode: 'overlay',
+        bargap: 0,
         xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false },
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false, title: { text: `${text('temporalProfileMean')}${unitSuffix}`, font: { size: 10 } } },
         margin: { l: 62, r: 18, t: 8, b: 52 },
@@ -797,15 +801,26 @@ proto._resetTemporalProfileView = function(panelId) {
     this._updateTemporalProfileSelectionShapes(panelId, plot);
     this._renderTemporalProfileOptionsPanel(panelId, plot);
     this._autoScalePlotTimeOnly(plot);
-    if (plot.temporalProfileDiv) Plotly.relayout(plot.temporalProfileDiv, { 'xaxis.autorange': true, 'yaxis.autorange': true });
+    this._resetTemporalProfileAnalysisView(plot);
     this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
+};
+
+proto._resetTemporalProfileAnalysisView = function(plot) {
+    if (!plot?.temporalProfileDiv) return Promise.resolve();
+    const period = this._ensureTemporalProfileState(plot).period;
+    const xMax = period === 'day' ? 24 : period === 'week' ? 168 : 31 * 24;
+    return Plotly.relayout(plot.temporalProfileDiv, {
+        'xaxis.range': [0, xMax],
+        'xaxis.autorange': false,
+        'yaxis.autorange': true,
+    });
 };
 
 proto._autoScaleTemporalProfilePanel = function(panelId, plot = this.plots.get(panelId)) {
     if (!plot?.div) return Promise.resolve();
     return Promise.all([
         this._autoScalePlotTimeOnly(plot),
-        plot.temporalProfileDiv ? Plotly.relayout(plot.temporalProfileDiv, { 'xaxis.autorange': true, 'yaxis.autorange': true }) : Promise.resolve(),
+        this._resetTemporalProfileAnalysisView(plot),
     ]);
 };
 
