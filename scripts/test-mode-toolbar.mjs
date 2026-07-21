@@ -22,6 +22,10 @@ const heatmapMethodsSource = readFileSync(
     new URL('../src/plots/methods/heatmap-methods.js', import.meta.url),
     'utf8',
 );
+const temporalProfileMethodsSource = readFileSync(
+    new URL('../src/plots/methods/temporal-profile-methods.js', import.meta.url),
+    'utf8',
+);
 const contentCss = readFileSync(
     new URL('../src/styles/content.css', import.meta.url),
     'utf8',
@@ -37,6 +41,14 @@ const methodAssignment = (name) => {
     assert.ok(start >= 0, `${name} method is present`);
     const next = interactionSource.indexOf('\nproto.', start + marker.length);
     return interactionSource.slice(start, next >= 0 ? next : interactionSource.length);
+};
+
+const temporalMethodAssignment = (name) => {
+    const marker = `proto.${name} = function`;
+    const start = temporalProfileMethodsSource.indexOf(marker);
+    assert.ok(start >= 0, `${name} temporal-profile method is present`);
+    const next = temporalProfileMethodsSource.indexOf('\nproto.', start + marker.length);
+    return temporalProfileMethodsSource.slice(start, next >= 0 ? next : temporalProfileMethodsSource.length);
 };
 
 class FakeClassList {
@@ -152,6 +164,7 @@ class ToolbarHarness {
             fft: { window: 'hann', zeroPadding: 4 },
             histogram: { binMode: 'width', binWidth: 0.25 },
             heatmap: { calendarMode: 'day-hour', aggregation: 'max' },
+            temporalProfile: { period: 'week', renderMode: 'line-band' },
             cursors: { enabled: false },
         };
         this.plots = new Map([['panel', this.plot]]);
@@ -183,6 +196,127 @@ vm.runInNewContext([
     methodAssignment('_toggleTimeseriesAnalysisMode'),
     methodAssignment('_requestModeChange'),
 ].join('\n'), sandbox);
+
+class TemporalStateHarness {}
+
+vm.runInNewContext([
+    temporalMethodAssignment('_defaultTemporalProfileState'),
+    temporalMethodAssignment('_normalizeTemporalProfileState'),
+    temporalMethodAssignment('_ensureTemporalProfileState'),
+].join('\n'), {
+    proto: TemporalStateHarness.prototype,
+    TEMPORAL_PROFILE_DEFAULT_RESOLUTION_MINUTES: { day: 60, week: 60, month: 1440, year: 1440 },
+    TEMPORAL_PROFILE_PERIODS: new Set(['day', 'week', 'month', 'year']),
+    PROFILE_LAYOUTS: new Set(['horizontal', 'vertical']),
+    PROFILE_RENDER_MODES: new Set(['columns', 'line', 'line-band']),
+    finiteOrNull(value) {
+        if (value === '' || value === null || value === undefined) return null;
+        const number = Number(value);
+        return Number.isFinite(number) ? number : null;
+    },
+    hasFinite(value) {
+        return value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
+    },
+});
+
+// Option controls close over the state object that existed when their DOM was
+// rendered. A normalization/recompute cycle must not replace that object.
+{
+    const manager = new TemporalStateHarness();
+    const plot = { temporalProfile: { period: 'day', renderMode: 'line-band' } };
+    const controlState = manager._ensureTemporalProfileState(plot);
+    assert.equal(controlState.dayGrouping, 'all', 'All days is the default Day grouping');
+    const recomputedState = manager._ensureTemporalProfileState(plot);
+    assert.equal(recomputedState, controlState, 'Temporal Profile preserves state identity across recomputes');
+    controlState.period = 'week';
+    controlState.renderMode = 'columns';
+    controlState.groupedBars = true;
+    controlState.saturdays = false;
+    controlState.resolutionByPeriod.week = 15;
+    controlState.dayGrouping = 'all';
+    controlState.yearResolution = 'month';
+    const liveState = manager._ensureTemporalProfileState(plot);
+    assert.equal(liveState.period, 'week', 'Period control updates the live state');
+    assert.equal(liveState.renderMode, 'columns', 'Display control updates the live state');
+    assert.equal(liveState.groupedBars, true, 'Side-by-side bar control updates the live state');
+    assert.equal(liveState.saturdays, false, 'Day-category controls update the live state');
+    assert.equal(liveState.resolutionByPeriod.week, 15, 'Resolution control updates the live state');
+    assert.equal(liveState.dayGrouping, 'all', 'Day grouping control updates the live state');
+    assert.equal(liveState.yearResolution, 'month', 'Year resolution control updates the live state');
+
+    const migrated = manager._ensureTemporalProfileState({
+        temporalProfile: {
+            period: 'day',
+            resolutionByPeriod: { day: 1440, week: 60, month: 1440, year: 1440 },
+            customResolutionByPeriod: { day: false, week: false, month: false, year: false },
+        },
+    });
+    assert.equal(migrated.resolutionByPeriod.day, 60, 'obsolete one-day preset migrates to the hourly Day default');
+}
+
+assert.doesNotMatch(temporalProfileMethodsSource, /legendgroup\s*:/, 'Temporal Profile legend entries use standard plot spacing');
+assert.match(temporalProfileMethodsSource, /barmode:\s*state\.groupedBars \? 'group' : 'overlay'/, 'Temporal Profile columns switch between overlay and side-by-side groups');
+assert.match(
+    temporalProfileMethodsSource,
+    /if \(!state\.groupedBars\) barTrace\.width =/,
+    'Side-by-side bars delegate width and offsets to Plotly automatic grouping',
+);
+assert.match(temporalProfileMethodsSource, /opacity:\s*PROFILE_BAR_OPACITY/, 'Temporal Profile overlay columns are translucent');
+assert.doesNotMatch(temporalProfileMethodsSource, /pattern:\s*\{/, 'Temporal Profile columns use one consistent fill style');
+assert.doesNotMatch(temporalProfileMethodsSource, /circle-open|lines\+markers/, 'Temporal Profile lines do not mix point marker styles');
+assert.match(
+    temporalMethodAssignment('_installTemporalProfilePlotHandlers'),
+    /plotly_doubleclick[\s\S]*?setTimeout[\s\S]*?_resetTemporalProfileAnalysisView/,
+    'Temporal Profile defers its double-click reset until Plotly finishes dispatching',
+);
+assert.match(
+    temporalMethodAssignment('_resetTemporalProfileAnalysisView'),
+    /period === 'day' \? 24 : period === 'week' \? 168 : period === 'month' \? 31 \* 24 : 366 \* 24/,
+    'Temporal Profile double-click restores the complete calendar domain',
+);
+assert.match(
+    temporalProfileMethodsSource,
+    /option\.disabled\s*=\s*resolutionBelowStep\(minutes, minimumResolution\)/,
+    'Temporal Profile disables preset resolutions below the detected data timestep',
+);
+assert.match(
+    temporalProfileMethodsSource,
+    /period === 'day'[\s\S]*?PROFILE_RESOLUTION_PRESETS\.filter\(minutes => minutes < 1440\)/,
+    'Day profiles omit the one-day resolution preset',
+);
+assert.match(
+    temporalMethodAssignment('_recomputeTemporalProfile'),
+    /resolutionBelowStep\(state\.resolutionByPeriod\[state\.period\], minimumResolution\)[\s\S]*?state\.resolutionByPeriod\[state\.period\]/,
+    'Temporal Profile corrects an existing resolution that becomes too fine',
+);
+assert.match(temporalProfileMethodsSource, /temporalProfileYear/, 'Temporal Profile exposes the Year period');
+assert.match(temporalProfileMethodsSource, /temporalProfileAllDays/, 'Day profiles expose the All days grouping');
+assert.match(temporalProfileMethodsSource, /temporalProfileSideBySide/, 'Column display exposes the side-by-side checkbox');
+assert.match(
+    temporalMethodAssignment('_renderTemporalProfileOptionsPanel'),
+    /!this\._temporalProfileHasCalendarTrace\(plot\)[\s\S]*?querySelectorAll\('button, input, select'\)[\s\S]*?control\.disabled = true/,
+    'Temporal Profile disables every analysis control when no trace has calendar time',
+);
+assert.match(
+    temporalMethodAssignment('_setTemporalProfileStatus'),
+    /kind === 'warning'[\s\S]*?temporalProfileWarningSeePanel[\s\S]*?_syncTemporalProfileMessage/,
+    'Temporal Profile topbar points warning users to the side panel',
+);
+assert.match(
+    temporalMethodAssignment('_syncTemporalProfileMessage'),
+    /temporal-profile-message[\s\S]*?kind === 'warning'/,
+    'Temporal Profile side panel contains the full warning message',
+);
+assert.match(
+    temporalMethodAssignment('_recomputeTemporalProfile'),
+    /resolutionUnit:\s*state\.period === 'year' && state\.yearResolution === 'month' \? 'month' : 'minute'/,
+    'Year Month resolution is sent to the calendar-aware kernel',
+);
+assert.match(
+    temporalMethodAssignment('_temporalProfileMinimumResolutionMinutes'),
+    /PROFILE_PERIOD_DURATION_MINUTES\[period\] \/ TEMPORAL_PROFILE_MAX_BINS/,
+    'Temporal Profile disables resolutions that exceed the bin limit for a period',
+);
 
 const renderToolbar = (mode, stateAnimDim = 2, plotState = {}) => {
     const manager = new ToolbarHarness(mode, stateAnimDim);
@@ -219,7 +353,7 @@ assert.equal(globalAutoscaleIcon, '⛶', 'global autoscale uses the expected ico
 
 // Fourier, Histogram and Heatmap are contextual actions of the time-series family,
 // not primary plot types alongside 2D/3D/state animation.
-for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
+for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile']) {
     const { manager, toolbar } = renderToolbar(mode);
     const primaryModes = toolbar
         .querySelector('.mode-btn-group')
@@ -228,6 +362,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
     assert.ok(!primaryModes.includes('fft'), `${mode}: Fourier is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('histogram'), `${mode}: Histogram is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('heatmap'), `${mode}: Heatmap is absent from the primary plot-mode group`);
+    assert.ok(!primaryModes.includes('temporal-profile'), `${mode}: Temporal Profile is absent from the primary plot-mode group`);
 
     const timeseriesPrimary = findModeButton(toolbar, 'timeseries', 'mode-btn');
     assert.ok(timeseriesPrimary?.classList.contains('active'), `${mode}: time-series family keeps its primary mode pressed`);
@@ -254,8 +389,8 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
     const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
     assert.deepEqual(
         analysisButtons.map(button => button.dataset.mode).sort(),
-        ['fft', 'heatmap', 'histogram'],
-        `${mode}: Fourier, Histogram and Heatmap share the contextual group beside Stack/Y`,
+        ['fft', 'heatmap', 'histogram', 'temporal-profile'],
+        `${mode}: all time-series analyses share the contextual group beside Stack/Y`,
     );
     for (const button of [stackBtn, y2Btn, missingBtn, ...analysisButtons]) {
         assert.ok(
@@ -304,6 +439,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap']) {
     assert.equal(findModeButton(toolbar, 'fft'), undefined, 'non-time-series plots do not expose Fourier');
     assert.equal(findModeButton(toolbar, 'histogram'), undefined, 'non-time-series plots do not expose Histogram');
     assert.equal(findModeButton(toolbar, 'heatmap'), undefined, 'non-time-series plots do not expose Heatmap');
+    assert.equal(findModeButton(toolbar, 'temporal-profile'), undefined, 'non-time-series plots do not expose Temporal Profile');
 }
 
 // Phase/state views use the same contextual Autoscale action. In 2D it owns
@@ -367,7 +503,7 @@ for (const { mode, stateAnimDim = 2 } of [
     const refreshSource = plotManagerSource.slice(refreshStart, refreshEnd);
     assert.match(
         refreshSource,
-        /\['timeseries',\s*'fft',\s*'histogram',\s*'heatmap'\]\.includes\(plot\?\.mode\)/,
+        /\['timeseries',\s*'fft',\s*'histogram',\s*'heatmap',\s*'temporal-profile'\]\.includes\(plot\?\.mode\)/,
         'toolbar refresh recognizes every member of the time-series family',
     );
     assert.match(
@@ -403,20 +539,25 @@ for (const [from, clicked, expected] of [
     ['timeseries', 'fft', 'fft'],
     ['timeseries', 'histogram', 'histogram'],
     ['timeseries', 'heatmap', 'heatmap'],
+    ['timeseries', 'temporal-profile', 'temporal-profile'],
     ['fft', 'fft', 'timeseries'],
     ['histogram', 'histogram', 'timeseries'],
     ['heatmap', 'heatmap', 'timeseries'],
+    ['temporal-profile', 'temporal-profile', 'timeseries'],
     ['fft', 'histogram', 'histogram'],
     ['histogram', 'fft', 'fft'],
     ['fft', 'heatmap', 'heatmap'],
     ['histogram', 'heatmap', 'heatmap'],
     ['heatmap', 'fft', 'fft'],
     ['heatmap', 'histogram', 'histogram'],
+    ['histogram', 'temporal-profile', 'temporal-profile'],
+    ['temporal-profile', 'fft', 'fft'],
 ]) {
     const { manager, toolbar } = renderToolbar(from);
     const fftConfig = manager.plot.fft;
     const histogramConfig = manager.plot.histogram;
     const heatmapConfig = manager.plot.heatmap;
+    const temporalProfileConfig = manager.plot.temporalProfile;
     findModeButton(toolbar, clicked).click();
     assert.equal(manager.modeChanges.length, 1, `${from} -> ${clicked}: exactly one mode change is requested`);
     assert.equal(manager.modeChanges[0].mode, expected, `${from} -> ${clicked}: resolves to ${expected}`);
@@ -428,6 +569,7 @@ for (const [from, clicked, expected] of [
     assert.equal(manager.plot.fft, fftConfig, `${from} -> ${clicked}: Fourier config object is retained`);
     assert.equal(manager.plot.histogram, histogramConfig, `${from} -> ${clicked}: Histogram config object is retained`);
     assert.equal(manager.plot.heatmap, heatmapConfig, `${from} -> ${clicked}: Heatmap config object is retained`);
+    assert.equal(manager.plot.temporalProfile, temporalProfileConfig, `${from} -> ${clicked}: Temporal Profile config object is retained`);
     assert.equal(manager.warnings.length, 0, `${from} -> ${clicked}: family transition needs no destructive-change warning`);
 }
 
@@ -439,6 +581,7 @@ for (const [from, clicked, expected] of [
     assert.match(setModeSource, /plot\.fft\s*=\s*plot\.fft\s*\|\|/, 'family mode switches retain an existing Fourier configuration');
     assert.match(setModeSource, /plot\.histogram\s*=\s*plot\.histogram\s*\|\|/, 'family mode switches retain an existing Histogram configuration');
     assert.match(setModeSource, /plot\.heatmap\s*=\s*plot\.heatmap\s*\|\|/, 'family mode switches retain an existing Heatmap configuration');
+    assert.match(setModeSource, /plot\.temporalProfile\s*=\s*plot\.temporalProfile\s*\|\|/, 'family mode switches retain an existing Temporal Profile configuration');
 }
 
 // The common toolbar action must reach the correct autoscale implementation
@@ -464,6 +607,11 @@ for (const [from, clicked, expected] of [
         autoscaleSource,
         /plot\.mode === 'heatmap'[\s\S]*?return this\._autoScaleHeatmapPanel\(panelId, plot\)/,
         'central Autoscale dispatches Heatmap to its two-pane implementation',
+    );
+    assert.match(
+        autoscaleSource,
+        /plot\.mode === 'temporal-profile'[\s\S]*?return this\._autoScaleTemporalProfilePanel\(panelId, plot\)/,
+        'central Autoscale dispatches Temporal Profile to its two-pane implementation',
     );
     assert.doesNotMatch(
         autoscaleSource,
@@ -499,6 +647,13 @@ for (const [from, clicked, expected] of [
     const heatmapHelperSource = heatmapMethodsSource.slice(heatmapHelperStart, heatmapHelperEnd);
     assert.match(heatmapHelperSource, /this\._autoScalePlotTimeOnly\(plot\)/, 'Heatmap Autoscale resets the time-series pane');
     assert.match(heatmapHelperSource, /Plotly\.relayout\(plot\.heatmapDiv/, 'Heatmap Autoscale resets the calendar pane');
+
+    const profileHelperStart = temporalProfileMethodsSource.indexOf('proto._autoScaleTemporalProfilePanel = function');
+    const profileHelperEnd = temporalProfileMethodsSource.indexOf('\nproto.', profileHelperStart + 1);
+    assert.ok(profileHelperStart >= 0 && profileHelperEnd > profileHelperStart, 'Temporal Profile two-pane Autoscale helper is present');
+    const profileHelperSource = temporalProfileMethodsSource.slice(profileHelperStart, profileHelperEnd);
+    assert.match(profileHelperSource, /this\._autoScalePlotTimeOnly\(plot\)/, 'Temporal Profile Autoscale resets the time-series pane');
+    assert.match(profileHelperSource, /this\._resetTemporalProfileAnalysisView\(plot\)/, 'Temporal Profile Autoscale safely resets the folded profile pane');
 }
 
 // Moving a legend trace between Y axes must be an in-place Plotly update. A
