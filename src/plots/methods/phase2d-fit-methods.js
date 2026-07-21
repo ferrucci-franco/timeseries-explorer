@@ -413,7 +413,11 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const div = plot.div;
         const panelEl = div?.closest('.layout-panel')
             || document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-        if (!div || !panelEl || plot.phase2dFitContainer) return;
+        if (!div || !panelEl) return;
+        // Already built and live → nothing to do. A stale ref (its DOM was wiped
+        // by a layout re-render) is cleared so the shell rebuilds.
+        if (plot.phase2dFitContainer?.isConnected) return;
+        plot.phase2dFitContainer = null;
         const state = this._ensurePhase2dState(plot);
 
         const container = document.createElement('div');
@@ -1010,8 +1014,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const segmented = document.createElement('div');
         segmented.className = 'fft-segmented';
         segmented.append(
-            makeSegment('fftRangeFull', 'fftRangeFullTooltip', true),
-            makeSegment('fftRangeSelection', 'fftRangeSelectionTooltip', false),
+            makeSegment('fftRangeFull', 'phase2dFitRangeFullTooltip', true),
+            makeSegment('fftRangeSelection', 'phase2dFitRangeSelectionTooltip', false),
         );
         drawer.appendChild(makeRow(i18n.t('fftRange'), segmented));
 
@@ -1027,8 +1031,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             return wrap;
         };
         rangeGrid.append(
-            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('fftRangeStartTooltip')),
-            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('fftRangeEndTooltip')),
+            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('phase2dFitRangeStartTooltip')),
+            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('phase2dFitRangeEndTooltip')),
         );
         drawer.appendChild(rangeGrid);
 
