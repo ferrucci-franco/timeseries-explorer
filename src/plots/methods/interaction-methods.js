@@ -1169,11 +1169,9 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 
     // the same visual component but own independent lifecycles. A generic
     // `.lazy-detail-indicator` lookup used to hijack and later remove the
     // "Searching for missing data…" pill while its query was still running.
+    // The two pills now coexist (CSS stacks them so they don't overlap), so we
+    // no longer suppress "Loading detail" when the missing-data search is active.
     let indicator = panelEl.querySelector('.lazy-data-detail-indicator');
-    if (loading && panelEl.querySelector('.missing-dense-indicator')) {
-        indicator?.remove();
-        return;
-    }
     if (loading && !indicator) {
         indicator = document.createElement('div');
         indicator.className = 'lazy-detail-indicator lazy-data-detail-indicator';
