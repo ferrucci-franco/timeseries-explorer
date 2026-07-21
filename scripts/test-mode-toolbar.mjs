@@ -255,6 +255,11 @@ vm.runInNewContext([
 
 assert.doesNotMatch(temporalProfileMethodsSource, /legendgroup\s*:/, 'Temporal Profile legend entries use standard plot spacing');
 assert.match(temporalProfileMethodsSource, /barmode:\s*state\.groupedBars \? 'group' : 'overlay'/, 'Temporal Profile columns switch between overlay and side-by-side groups');
+assert.match(
+    temporalProfileMethodsSource,
+    /if \(!state\.groupedBars\) barTrace\.width =/,
+    'Side-by-side bars delegate width and offsets to Plotly automatic grouping',
+);
 assert.match(temporalProfileMethodsSource, /opacity:\s*PROFILE_BAR_OPACITY/, 'Temporal Profile overlay columns are translucent');
 assert.doesNotMatch(temporalProfileMethodsSource, /pattern:\s*\{/, 'Temporal Profile columns use one consistent fill style');
 assert.doesNotMatch(temporalProfileMethodsSource, /circle-open|lines\+markers/, 'Temporal Profile lines do not mix point marker styles');

@@ -604,9 +604,8 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
             const visible = model.trace.visible ?? true;
             const hovertemplate = `<b>%{fullData.name}</b><br>x = %{x:.4g}<br>${text('temporalProfileMean')} = %{y:.6g}<br>${text('temporalProfileStd')} = %{customdata[0]:.6g}<br>${text('temporalProfileCoverage')} = %{customdata[1]}/%{customdata[2]} (%{customdata[3]:.1%})<br>${text('temporalProfileInvalid')} = %{customdata[4]}<br>${text('temporalProfileGaps')} = %{customdata[5]}<extra></extra>`;
             if (state.renderMode === 'columns') {
-                traces.push({
+                const barTrace = {
                     type: 'bar', x, y,
-                    width: category.bins.map(bin => bin.endHours - bin.startHours),
                     name, visible, meta,
                     marker: {
                         color,
@@ -614,7 +613,12 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
                         line: { color, width: 1 },
                     },
                     customdata, hovertemplate,
-                });
+                };
+                // Overlay fills the complete calendar bin. In group mode the
+                // width must be omitted so Plotly can divide and offset the
+                // available bin width automatically between visible traces.
+                if (!state.groupedBars) barTrace.width = category.bins.map(bin => bin.endHours - bin.startHours);
+                traces.push(barTrace);
                 return;
             }
             if (state.renderMode === 'line-band') {
