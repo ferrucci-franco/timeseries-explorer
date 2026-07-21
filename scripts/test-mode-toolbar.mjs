@@ -306,8 +306,19 @@ assert.match(
 );
 assert.match(
     duckDbSource,
-    /async getTemporalProfileAggregates\([\s\S]*?temporalProfilesFromAggregateRows/,
+    /async getTemporalProfileAggregates\([\s\S]*?temporalProfilesFromFinalRows/,
     'DuckDB exposes the compact lazy temporal-profile query API',
+);
+assert.match(
+    temporalMethodAssignment('_setTemporalProfileComputing'),
+    /lazy-detail-indicator temporal-profile-computing-indicator/,
+    'Temporal Profile reuses the non-blocking FFT calculation pill',
+);
+assert.match(contentCss, /\.lazy-detail-indicator[\s\S]*?pointer-events:\s*none/, 'Calculation pills do not intercept plot pan/zoom');
+assert.match(
+    temporalMethodAssignment('_recomputeTemporalProfile'),
+    /_setTemporalProfileComputing\(plot, true\)[\s\S]*?await Promise\.all\(jobs\)[\s\S]*?_setTemporalProfileComputing\(plot, false\)/,
+    'Temporal Profile keeps the previous plot in place while the lazy query runs',
 );
 assert.match(
     temporalMethodAssignment('_renderTemporalProfileOptionsPanel'),

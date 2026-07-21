@@ -173,6 +173,250 @@ export function buildTemporalProfileAggregateSql(options = {}) {
     return { ...geometry, sql };
 }
 
+function periodEndSql(period) {
+    if (period === 'day') return `(period_start + ${DAY_MS})`;
+    if (period === 'week') return `(period_start + ${WEEK_MS})`;
+    if (period === 'month') return `epoch_ms(epoch_ms(CAST(period_start AS BIGINT)) + INTERVAL 1 MONTH)`;
+    return `epoch_ms(epoch_ms(CAST(period_start AS BIGINT)) + INTERVAL 1 YEAR)`;
+}
+
+function structuralPeriodBinSql(geometry) {
+    if (geometry.period === 'month') {
+        return `(bin_idx * ${geometry.resolutionMs}) < (period_end - period_start)`;
+    }
+    if (geometry.period === 'year' && !geometry.calendarMonthBins) {
+        const binStart = `(bin_idx * ${geometry.resolutionMs})`;
+        const binEnd = `LEAST(${geometry.durationMs}, (bin_idx + 1) * ${geometry.resolutionMs})`;
+        const leap = `(period_end - period_start = ${366 * DAY_MS})`;
+        return `(${leap} OR NOT (${binStart} >= ${59 * DAY_MS} AND ${binEnd} <= ${60 * DAY_MS}))`;
+    }
+    return 'TRUE';
+}
+
+// Fully compact lazy query. Unlike buildTemporalProfileAggregateSql (kept as
+// a diagnostic/parity primitive), this performs the across-period reduction in
+// DuckDB too. The browser receives only categories × final bins, never one row
+// per source period/bin, which keeps the UI responsive for multi-decade files.
+export function buildTemporalProfileFinalSql(options = {}) {
+    const geometry = profileGeometry(options);
+    if (!geometry.ok) return geometry;
+    const values = Array.isArray(options.valueExpressions) ? options.valueExpressions : [];
+    if (!values.length) return { ok: false, reason: 'noValues' };
+    const lit = options.numericLiteral;
+    const period = periodSql(geometry.period);
+    const valueSelect = values.map((expr, index) => `${expr} AS v${index}`).join(',\n                   ');
+    const finite = index => `(v${index} IS NOT NULL AND isfinite(v${index}))`;
+    const invalid = index => `(v${index} IS NULL OR NOT isfinite(v${index}))`;
+    const binAggregates = values.map((_, index) => `SUM(CASE WHEN ${finite(index)} THEN v${index} END)::DOUBLE AS s${index},
+                   COUNT(CASE WHEN ${finite(index)} THEN 1 END)::BIGINT AS nf${index},
+                   SUM(CASE WHEN ${invalid(index)} THEN 1 ELSE 0 END)::BIGINT AS ni${index}`).join(',\n                   ');
+    const periodInvalid = values.map((_, index) => `SUM(CASE WHEN ${invalid(index)} THEN 1 ELSE 0 END)::BIGINT AS nit${index}`).join(',\n                   ');
+    const order = options.ordered ? 'ORDER BY t_ms' : '';
+    const threshold = Number.isFinite(Number(options.gapThresholdMs)) ? Number(options.gapThresholdMs) : null;
+    const gapCondition = threshold == null
+        ? 'FALSE'
+        : `(prev_period_start = period_start AND prev_t IS NOT NULL AND t_ms - prev_t > ${lit(threshold)})`;
+    const scopeStart = Number.isFinite(Number(options.scopeStart)) ? Number(options.scopeStart) : 0;
+    const scopeEnd = Number.isFinite(Number(options.scopeEnd)) ? Number(options.scopeEnd) : scopeStart;
+    const tolerance = Number.isFinite(Number(options.boundaryToleranceMs)) ? Math.max(0, Number(options.boundaryToleranceMs)) : 0;
+    const cutByScope = options.selectionActive
+        ? `((${lit(scopeStart)} > period_start) OR (${lit(scopeEnd)} < period_end - ${lit(tolerance)}))`
+        : 'FALSE';
+    const partial = `(${cutByScope}
+                OR first_t > GREATEST(period_start, ${lit(scopeStart)}) + ${lit(tolerance)}
+                OR last_t < LEAST(period_end, ${lit(scopeEnd)}) - ${lit(tolerance)})`;
+    const discard = index => options.discardIncomplete
+        ? `(nit${index} > 0 OR has_gap = 1 OR partial)`
+        : 'FALSE';
+    const category = geometry.period === 'day' && options.dayGrouping !== 'all' ? 'category' : `'all'`;
+    const perPeriodProjection = values.map((_, index) => `CASE WHEN ${discard(index)} THEN 1 ELSE 0 END::BIGINT AS d${index}`).join(',\n                   ');
+    const binProjection = values.map((_, index) => `CASE WHEN p.d${index} = 0 AND COALESCE(b.nf${index}, 0) > 0 THEN b.s${index} / b.nf${index} END AS pm${index},
+                   CASE WHEN p.d${index} = 0 THEN COALESCE(b.ni${index}, 0) ELSE 0 END::BIGINT AS piv${index},
+                   CASE WHEN p.d${index} = 0 THEN COALESCE(g.gap, 0) ELSE 0 END::BIGINT AS pg${index},
+                   p.d${index}`).join(',\n                   ');
+    const profileAggregates = values.map((_, index) => `AVG(pm${index})::DOUBLE AS m${index},
+                   STDDEV_SAMP(pm${index})::DOUBLE AS sd${index},
+                   COUNT(pm${index})::BIGINT AS np${index},
+                   SUM(CASE WHEN d${index} = 0 THEN 1 ELSE 0 END)::BIGINT AS ne${index},
+                   SUM(piv${index})::BIGINT AS niv${index},
+                   SUM(pg${index})::BIGINT AS ng${index}`).join(',\n                   ');
+    const categoryAggregates = values.map((_, index) => `COUNT(*)::BIGINT AS ct${index},
+                   SUM(CASE WHEN d${index} = 0 THEN 1 ELSE 0 END)::BIGINT AS ci${index},
+                   SUM(d${index})::BIGINT AS cd${index},
+                   SUM(CASE WHEN partial THEN 1 ELSE 0 END)::BIGINT AS cp${index},
+                   SUM(CASE WHEN has_gap = 1 THEN 1 ELSE 0 END)::BIGINT AS cg${index},
+                   SUM(CASE WHEN nit${index} > 0 THEN 1 ELSE 0 END)::BIGINT AS cv${index}`).join(',\n                   ');
+    const globalAggregates = values.map((_, index) => `COUNT(CASE WHEN ${finite(index)} THEN 1 END)::BIGINT AS g_nf${index},
+                   SUM(CASE WHEN ${invalid(index)} THEN 1 ELSE 0 END)::BIGINT AS g_ni${index}`).join(',\n                   ');
+    const finalSelect = values.map((_, index) => `p.m${index}, p.sd${index}, p.np${index}, p.ne${index}, p.niv${index}, p.ng${index},
+               c.ct${index}, c.ci${index}, c.cd${index}, c.cp${index}, c.cg${index}, c.cv${index},
+               g.g_nf${index}, g.g_ni${index}`).join(',\n               ');
+    const sql = `
+        WITH base AS (
+            SELECT ${options.timeExpression} AS t_ms,
+                   ${valueSelect}
+            FROM ${options.tableName}
+            WHERE ${options.whereSql || 'TRUE'}
+        ), periods AS (
+            SELECT *, ${period.periodStart} AS period_start, ${period.category} AS category
+            FROM base
+        ), bucketed AS (
+            SELECT *, CAST(${binIndexSql(geometry)} AS BIGINT) AS bin_idx
+            FROM periods
+        ), sequenced AS (
+            SELECT *,
+                   LAG(t_ms) OVER (${order}) AS prev_t,
+                   LAG(period_start) OVER (${order}) AS prev_period_start,
+                   LAG(bin_idx) OVER (${order}) AS prev_bin_idx
+            FROM bucketed
+            WHERE bin_idx >= 0 AND bin_idx < ${geometry.binCount}
+        ), annotated AS (
+            SELECT *, ${gapCondition} AS is_gap
+            FROM sequenced
+        ), period_raw AS (
+            SELECT period_start, ANY_VALUE(category) AS category,
+                   ${periodEndSql(geometry.period)} AS period_end,
+                   MIN(t_ms)::DOUBLE AS first_t, MAX(t_ms)::DOUBLE AS last_t,
+                   MAX(CASE WHEN is_gap THEN 1 ELSE 0 END)::BIGINT AS has_gap,
+                   ${periodInvalid}
+            FROM annotated
+            GROUP BY period_start
+        ), period_status_base AS (
+            SELECT *, ${partial} AS partial
+            FROM period_raw
+        ), period_status AS (
+            SELECT *, ${category} AS profile_category,
+                   ${perPeriodProjection}
+            FROM period_status_base
+        ), bin_stats AS (
+            SELECT period_start, bin_idx, ${binAggregates}
+            FROM annotated
+            GROUP BY period_start, bin_idx
+        ), gap_bins AS (
+            SELECT period_start,
+                   UNNEST(RANGE(LEAST(prev_bin_idx, bin_idx), GREATEST(prev_bin_idx, bin_idx) + 1))::BIGINT AS bin_idx
+            FROM annotated
+            WHERE is_gap
+        ), gap_flags AS (
+            SELECT period_start, bin_idx, 1::BIGINT AS gap
+            FROM gap_bins
+            GROUP BY period_start, bin_idx
+        ), period_bins AS (
+            SELECT p.profile_category, p.period_start, p.bin_idx,
+                   ${binProjection}
+            FROM (
+                SELECT ps.*, bins.bin_idx
+                FROM period_status ps
+                CROSS JOIN RANGE(0, ${geometry.binCount}) AS bins(bin_idx)
+                WHERE ${structuralPeriodBinSql(geometry)}
+            ) p
+            LEFT JOIN bin_stats b USING (period_start, bin_idx)
+            LEFT JOIN gap_flags g USING (period_start, bin_idx)
+        ), profile_bins AS (
+            SELECT profile_category, bin_idx, ${profileAggregates}
+            FROM period_bins
+            GROUP BY profile_category, bin_idx
+        ), category_stats AS (
+            SELECT profile_category, ${categoryAggregates}
+            FROM period_status
+            GROUP BY profile_category
+        ), global_stats AS (
+            SELECT COUNT(*)::BIGINT AS g_scope, ${globalAggregates}
+            FROM base
+        ), period_count AS (
+            SELECT COUNT(*)::BIGINT AS g_periods FROM period_status
+        )
+        SELECT p.profile_category, p.bin_idx,
+               ${finalSelect},
+               g.g_scope, pc.g_periods
+        FROM profile_bins p
+        JOIN category_stats c USING (profile_category)
+        CROSS JOIN global_stats g
+        CROSS JOIN period_count pc
+        ORDER BY p.profile_category, p.bin_idx`;
+    return { ...geometry, sql };
+}
+
+export function temporalProfilesFromFinalRows(rows = [], options = {}) {
+    const geometry = profileGeometry(options);
+    if (!geometry.ok) return { ok: false, reason: geometry.reason, results: [] };
+    const valueCount = Math.max(0, Number(options.valueCount) || 0);
+    const dayGrouping = geometry.period === 'day' && options.dayGrouping === 'all' ? 'all' : 'day-type';
+    const medianStepMs = numberOrNull(options.medianStepMs);
+    const gapThresholdMs = medianStepMs == null ? null : medianStepMs * TEMPORAL_PROFILE_GAP_FACTOR;
+    const nScope = count(options.nScope ?? rows?.[0]?.g_scope);
+    if (!nScope || !rows.length) {
+        return temporalProfilesFromAggregateRows([], { ...options, valueCount, medianStepMs });
+    }
+    const rowMap = new Map();
+    for (const row of rows) rowMap.set(`${row.profile_category}\u0000${Number(row.bin_idx)}`, row);
+    const categoryIds = geometry.period === 'day' && dayGrouping === 'day-type'
+        ? ['workday', 'saturday', 'sunday']
+        : ['all'];
+    const firstRow = rows[0] || {};
+    const nPeriods = count(firstRow.g_periods);
+    const results = [];
+    for (let valueIndex = 0; valueIndex < valueCount; valueIndex++) {
+        const categories = categoryIds.map(id => {
+            const categoryRow = rows.find(row => row.profile_category === id);
+            const bins = Array.from({ length: geometry.binCount }, (_, binIndex) => {
+                const row = rowMap.get(`${id}\u0000${binIndex}`) || {};
+                const nPeriodsInBin = count(row[`np${valueIndex}`]);
+                const expected = count(row[`ne${valueIndex}`]);
+                return {
+                    startHours: geometry.binEdgesMs[binIndex] / HOUR_MS,
+                    endHours: geometry.binEdgesMs[binIndex + 1] / HOUR_MS,
+                    centerHours: (geometry.binEdgesMs[binIndex] + geometry.binEdgesMs[binIndex + 1]) / (2 * HOUR_MS),
+                    mean: nPeriodsInBin ? numberOrNull(row[`m${valueIndex}`]) : null,
+                    std: nPeriodsInBin > 1 ? numberOrNull(row[`sd${valueIndex}`]) : null,
+                    nPeriods: nPeriodsInBin,
+                    nExpectedPeriods: expected,
+                    coverage: expected ? nPeriodsInBin / expected : null,
+                    nInvalidSamples: count(row[`niv${valueIndex}`]),
+                    nGapPeriods: count(row[`ng${valueIndex}`]),
+                };
+            });
+            return {
+                id,
+                bins,
+                total: count(categoryRow?.[`ct${valueIndex}`]),
+                included: count(categoryRow?.[`ci${valueIndex}`]),
+                discarded: count(categoryRow?.[`cd${valueIndex}`]),
+                partial: count(categoryRow?.[`cp${valueIndex}`]),
+                withGaps: count(categoryRow?.[`cg${valueIndex}`]),
+                withInvalid: count(categoryRow?.[`cv${valueIndex}`]),
+            };
+        });
+        const nFinite = count(firstRow[`g_nf${valueIndex}`]);
+        const nInvalid = count(firstRow[`g_ni${valueIndex}`]);
+        const nDiscardedPeriods = categories.reduce((sum, category) => sum + category.discarded, 0);
+        const warnings = [];
+        if (nInvalid) warnings.push('invalidValues');
+        if (categories.some(category => category.withGaps)) warnings.push('dataGaps');
+        if (categories.some(category => category.partial)) warnings.push('partialPeriods');
+        if (nDiscardedPeriods) warnings.push('discardedPeriods');
+        results.push({
+            ok: true,
+            period: geometry.period,
+            timeZone: 'UTC',
+            resolutionMinutes: geometry.resolutionMinutes,
+            resolutionMs: geometry.resolutionMs,
+            resolutionUnit: geometry.resolutionUnit,
+            dayGrouping,
+            binCount: geometry.binCount,
+            durationHours: geometry.durationMs / HOUR_MS,
+            categories,
+            stats: {
+                nTime: nScope, nValues: nScope, nAligned: nScope, nScope, nFinite, nInvalid,
+                nInvalidTimestamps: 0, nOutOfRange: 0, nPeriods, nDiscardedPeriods,
+                medianStepMs, gapThresholdMs,
+            },
+            warnings,
+        });
+    }
+    return { ok: true, results, geometry };
+}
+
 function periodEnd(startMs, period) {
     if (period === 'day') return startMs + DAY_MS;
     if (period === 'week') return startMs + WEEK_MS;

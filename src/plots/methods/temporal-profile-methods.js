@@ -576,6 +576,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
     }
     if (lazyByFile.size) {
         this._setTemporalProfileStatus(plot, text('temporalProfileCalculating'), 'loading');
+        this._setTemporalProfileComputing(plot, true);
         plot.temporalProfileContainer?.setAttribute('aria-busy', 'true');
         const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
             const data = this.files.get(fileId)?.data;
@@ -655,6 +656,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
             resolutionChanged = true;
         }
         if (resolutionChanged) {
+            this._setTemporalProfileComputing(plot, false);
             plot.temporalProfileContainer?.setAttribute('aria-busy', 'false');
             this._renderTemporalProfileOptionsPanel(panelId, plot);
             this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
@@ -663,6 +665,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
         this._renderTemporalProfileOptionsPanel(panelId, plot);
     }
     if (plot._temporalProfileToken !== token) return;
+    this._setTemporalProfileComputing(plot, false);
     plot.temporalProfileContainer?.setAttribute('aria-busy', 'false');
     models.sort((a, b) => a.traceIndex - b.traceIndex);
     const visibleUnits = new Set(models.filter(model => this._isVisible(model.trace)).map(model => model.unit).filter(Boolean));
@@ -798,6 +801,32 @@ proto._setTemporalProfileStatus = function(plot, message, kind = 'muted') {
     plot._temporalProfileStatusMessage = message || '';
     plot._temporalProfileStatusKind = kind;
     this._syncTemporalProfileMessage(plot);
+};
+
+// Same non-blocking calculation pill as lazy FFT. It lives above the analysis
+// pane and has pointer-events:none, so the previous profile remains fully
+// pannable/zoomable until the replacement is ready.
+proto._setTemporalProfileComputing = function(plot, loading) {
+    const pane = plot?.temporalProfileDiv?.parentElement;
+    if (!pane) return;
+    let pill = pane.querySelector('.temporal-profile-computing-indicator');
+    if (loading) {
+        if (!pill) {
+            pill = document.createElement('div');
+            pill.className = 'lazy-detail-indicator temporal-profile-computing-indicator';
+            pill.setAttribute('aria-live', 'polite');
+            pill.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
+            pane.appendChild(pill);
+        }
+        const label = text('temporalProfileCalculating');
+        const labelElement = pill.querySelector('.lazy-detail-text');
+        if (labelElement) labelElement.textContent = label;
+        pill.setAttribute('aria-label', label);
+        pill.classList.add('active');
+    } else if (pill) {
+        pill.classList.remove('active');
+        pill.remove();
+    }
 };
 
 proto._syncTemporalProfileMessage = function(plot) {

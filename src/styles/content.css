@@ -2678,6 +2678,8 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     grid-column: 1;
     grid-row: 1;
 }
+.temporal-profile-container .hist-hist-pane { position: relative; }
+.temporal-profile-computing-indicator { top: 10px; }
 .hist-pane { min-width: 0; min-height: 0; display: flex; }
 .hist-splitter { background: color-mix(in srgb, var(--border-color) 72%, transparent); position: relative; z-index: 2; }
 .hist-layout-horizontal .hist-splitter { cursor: col-resize; }

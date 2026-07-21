@@ -30,9 +30,9 @@ import { buildPairCorrelationSql, parsePairCorrelations } from './pair-correlati
 import { buildMissingBucketsSql } from './missing-buckets-sql.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
 import {
-    buildTemporalProfileAggregateSql,
+    buildTemporalProfileFinalSql,
     buildTemporalProfileTimeStatsSql,
-    temporalProfilesFromAggregateRows,
+    temporalProfilesFromFinalRows,
 } from './temporal-profile-sql.js';
 
 const BUNDLES = {
@@ -1656,7 +1656,10 @@ export default class DuckDbSource {
                 stats = statsRows[0] || {};
             }
             const medianStepMs = stats.median_step == null ? null : Number(stats.median_step);
-            const aggregate = buildTemporalProfileAggregateSql({
+            const scopeStart = selectionRange?.[0] ?? (stats.min_t == null ? null : Number(stats.min_t));
+            const scopeEnd = selectionRange?.[1] ?? (stats.max_t == null ? null : Number(stats.max_t));
+            const boundaryToleranceMs = Number.isFinite(medianStepMs) ? medianStepMs * 1.5 : 0;
+            const aggregate = buildTemporalProfileFinalSql({
                 tableName: meta.tableName,
                 timeExpression: tExpr,
                 whereSql,
@@ -1665,12 +1668,18 @@ export default class DuckDbSource {
                 resolutionUnit,
                 resolutionMinutes,
                 gapThresholdMs: Number.isFinite(medianStepMs) ? medianStepMs * 1.5 : null,
+                boundaryToleranceMs,
+                scopeStart,
+                scopeEnd,
+                selectionActive: !!selectionRange,
+                dayGrouping: options.dayGrouping,
+                discardIncomplete: options.discardIncomplete,
                 numericLiteral: value => this._numericLiteral(value),
                 ordered,
             });
             if (!aggregate.ok) return { ...aggregate, blocked, traces: [] };
             const rows = this._arrowRowsToObjects(await this._interactiveQuery(aggregate.sql));
-            const reduced = temporalProfilesFromAggregateRows(rows, {
+            const reduced = temporalProfilesFromFinalRows(rows, {
                 period,
                 resolutionUnit,
                 resolutionMinutes,
@@ -1678,9 +1687,7 @@ export default class DuckDbSource {
                 discardIncomplete: options.discardIncomplete,
                 valueCount: usable.length,
                 medianStepMs,
-                scopeStart: selectionRange?.[0] ?? (stats.min_t == null ? null : Number(stats.min_t)),
-                scopeEnd: selectionRange?.[1] ?? (stats.max_t == null ? null : Number(stats.max_t)),
-                selectionActive: !!selectionRange,
+                nScope: Number(stats.n_scope) || 0,
             });
             if (!reduced.ok) return { ...reduced, blocked, traces: [] };
             return {

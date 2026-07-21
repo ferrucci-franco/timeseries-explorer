@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import duckdbPkg from 'duckdb';
 import { closeDuckDbConnection, closeDuckDbDatabase, runDuckDb } from '../src/data/csv-to-parquet-core.js';
 import {
-    buildTemporalProfileAggregateSql,
+    buildTemporalProfileFinalSql,
     buildTemporalProfileTimeStatsSql,
-    temporalProfilesFromAggregateRows,
+    temporalProfilesFromFinalRows,
 } from '../src/data/temporal-profile-sql.js';
 import { buildTemporalProfile } from '../src/utils/temporal-profile.js';
 
@@ -68,23 +68,27 @@ async function lazyProfile({ rows, config, expression = 'v', selectionRange = nu
     let ordered = Number(stats.order_violations) > 0;
     if (ordered) [stats] = await runDuckDb(connection, buildTemporalProfileTimeStatsSql({ ...base, ordered: true }));
     const medianStepMs = stats.median_step == null ? null : Number(stats.median_step);
-    const built = buildTemporalProfileAggregateSql({
+    const scopeStart = selectionRange?.[0] ?? Number(stats.min_t);
+    const scopeEnd = selectionRange?.[1] ?? Number(stats.max_t);
+    const built = buildTemporalProfileFinalSql({
         ...base,
         ...config,
         valueExpressions: [expression],
         gapThresholdMs: medianStepMs == null ? null : medianStepMs * 1.5,
+        boundaryToleranceMs: medianStepMs == null ? 0 : medianStepMs * 1.5,
+        scopeStart,
+        scopeEnd,
+        selectionActive: !!selectionRange,
         numericLiteral: literal,
         ordered,
     });
     assert.equal(built.ok, true, built.reason);
     const aggregateRows = await runDuckDb(connection, built.sql);
-    const reduced = temporalProfilesFromAggregateRows(aggregateRows, {
+    const reduced = temporalProfilesFromFinalRows(aggregateRows, {
         ...config,
         valueCount: 1,
         medianStepMs,
-        scopeStart: selectionRange?.[0] ?? Number(stats.min_t),
-        scopeEnd: selectionRange?.[1] ?? Number(stats.max_t),
-        selectionActive: !!selectionRange,
+        nScope: Number(stats.n_scope),
     });
     assert.equal(reduced.ok, true);
     return reduced.results[0];
@@ -162,21 +166,24 @@ try {
     let multiOrdered = Number(multiStats.order_violations) > 0;
     if (multiOrdered) [multiStats] = await runDuckDb(connection, buildTemporalProfileTimeStatsSql({ ...multiBase, ordered: true }));
     const multiStep = Number(multiStats.median_step);
-    const multiSql = buildTemporalProfileAggregateSql({
+    const multiSql = buildTemporalProfileFinalSql({
         ...multiBase,
         ...config,
         valueExpressions: ['v', '(v * 2 + 1)'],
         gapThresholdMs: multiStep * 1.5,
+        boundaryToleranceMs: multiStep * 1.5,
+        scopeStart: Number(multiStats.min_t),
+        scopeEnd: Number(multiStats.max_t),
         numericLiteral: literal,
         ordered: multiOrdered,
     });
     const multiRows = await runDuckDb(connection, multiSql.sql);
-    const multi = temporalProfilesFromAggregateRows(multiRows, {
+    assert.ok(multiRows.length <= 24, 'multi-decade/source-period rows stay inside DuckDB; only final bins are returned');
+    const multi = temporalProfilesFromFinalRows(multiRows, {
         ...config,
         valueCount: 2,
         medianStepMs: multiStep,
-        scopeStart: Number(multiStats.min_t),
-        scopeEnd: Number(multiStats.max_t),
+        nScope: Number(multiStats.n_scope),
     });
     const secondEager = buildTemporalProfile({
         times: unsorted.map(row => row.time),
