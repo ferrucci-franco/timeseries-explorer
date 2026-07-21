@@ -3611,8 +3611,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     const toolbar = panelEl.querySelector('.layout-panel-toolbar');
     if (!toolbar) return;
 
-    // Remove existing mode buttons if any (re-render case)
-    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group, .phase2d-tools-group').forEach(el => el.remove());
+    // Remove existing mode buttons if any (re-render case). The analysis group
+    // wraps action buttons, so it must be removed too — otherwise its empty
+    // shell (with margin/border) accumulates on every toolbar rebuild.
+    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group, .phase2d-tools-group, .phase2d-analysis-group').forEach(el => el.remove());
     toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
 
     const plot = this.plots.get(panelId);

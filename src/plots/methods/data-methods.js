@@ -1595,7 +1595,7 @@ proto._buildPhase2DTraces = function(plot) {
     // Fit curves (TODO 10): appended AFTER the data traces and BEFORE the origin
     // cross, so the trace order is [data…, fit…, origin]. Callers that map a
     // plot trace index back to a phaseTraces index must account for these.
-    if (state?.fitModel && state.fitModel !== 'none' && this._buildPhase2dFitCurveTraces) {
+    if (state?.fitEnabled && this._buildPhase2dFitCurveTraces) {
         for (const fitTrace of this._buildPhase2dFitCurveTraces(plot)) traces.push(fitTrace);
     }
     traces.push(this._originCross2D());

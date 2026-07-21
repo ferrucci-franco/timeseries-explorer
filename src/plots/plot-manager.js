@@ -1085,9 +1085,8 @@ class PlotManager {
                 else if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
                     this._refreshPhaseVisualsLazy?.(panelId, plot);
                     // Build the FFT-like fit workspace for a phase2d panel that
-                    // loads with an active fit (e.g. from a saved session).
-                    if (plot.mode === 'phase2d' && plot.phase2d?.fitModel && plot.phase2d.fitModel !== 'none'
-                        && !plot.phase2dFitContainer) {
+                    // loads with the workspace open (e.g. from a saved session).
+                    if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && !plot.phase2dFitContainer) {
                         this._enterPhase2dFitShell?.(panelId, plot);
                     }
                 }

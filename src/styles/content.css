@@ -1330,8 +1330,38 @@
 /* Fit results/options drawer content — lives inside the shell's .fft-options
    aside (which supplies width/scroll/hidden), so only the inner blocks below
    need styling. */
-.phase2d-fit-model-row .fft-help-btn {
-    margin-left: 4px;
+
+/* Pair / fit-type fields: label above, full-width control. */
+.phase2d-fit-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0 2px;
+}
+
+.phase2d-fit-field-label {
+    flex: 0 0 auto;
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+
+.phase2d-fit-pair-select,
+.phase2d-fit-type-select {
+    flex: 1 1 auto;
+    min-width: 0;               /* allow the select to shrink + ellipsis */
+    max-width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    padding: 3px 4px;
+    cursor: pointer;
+    text-overflow: ellipsis;
+}
+
+.phase2d-fit-type-field .fft-help-btn {
+    flex: 0 0 auto;
 }
 
 .phase2d-fit-results-head {

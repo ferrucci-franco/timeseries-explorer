@@ -27,8 +27,8 @@ export function defaultPhase2dState() {
         displayMode: 'lines',   // 'lines' | 'markers' | 'lines+markers'
         markerSize: 4,
         markerOpacity: 0.65,
-        fitModel: 'none',       // 'none' | 'linear' | 'quadratic' (active model)
-        lastFitModel: 'linear', // model to restore when Curve Fit is re-enabled
+        fitEnabled: false,      // Curve Fit workspace open (toolbar toggle)
+        activePairIndex: 0,     // which pair the drawer edits/shows
         layout: 'vertical',
         split: 0.5,
         optionsVisible: true,
@@ -36,7 +36,6 @@ export function defaultPhase2dState() {
         rangeFull: true,
         x1: null,
         x2: null,
-        showEquation: true,
         warnings: [],
         dirty: false,
     };
@@ -53,11 +52,10 @@ export function normalizePhase2dState(raw = {}) {
         displayMode: PHASE2D_DISPLAY_MODES.has(raw.displayMode) ? raw.displayMode : defaults.displayMode,
         markerSize: clampNumber(raw.markerSize, MARKER_SIZE_MIN, MARKER_SIZE_MAX, defaults.markerSize),
         markerOpacity: clampNumber(raw.markerOpacity, MARKER_OPACITY_MIN, MARKER_OPACITY_MAX, defaults.markerOpacity),
-        fitModel: PHASE2D_FIT_MODELS.has(raw.fitModel) ? raw.fitModel : defaults.fitModel,
-        // lastFitModel only ever holds a concrete model (never 'none').
-        lastFitModel: (raw.lastFitModel === 'linear' || raw.lastFitModel === 'quadratic')
-            ? raw.lastFitModel
-            : (raw.fitModel === 'quadratic' ? 'quadratic' : defaults.lastFitModel),
+        // Curve Fit workspace toggle. Migrate legacy sessions that stored a
+        // global fitModel: a non-'none' model means the workspace was open.
+        fitEnabled: raw.fitEnabled !== undefined ? !!raw.fitEnabled : (!!raw.fitModel && raw.fitModel !== 'none'),
+        activePairIndex: Number.isInteger(raw.activePairIndex) && raw.activePairIndex >= 0 ? raw.activePairIndex : 0,
         layout: PHASE2D_LAYOUTS.has(raw.layout) ? raw.layout : defaults.layout,
         split: Number.isFinite(split) ? Math.max(0.2, Math.min(0.8, split)) : defaults.split,
         optionsVisible: raw.optionsVisible !== false,
@@ -65,7 +63,6 @@ export function normalizePhase2dState(raw = {}) {
         rangeFull: raw.rangeFull !== undefined ? !!raw.rangeFull : !(x1 !== null || x2 !== null),
         x1,
         x2,
-        showEquation: raw.showEquation !== false,
         warnings: Array.isArray(raw.warnings) ? raw.warnings.slice(0, 20) : [],
         dirty: !!raw.dirty,
     };

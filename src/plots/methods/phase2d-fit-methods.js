@@ -138,12 +138,13 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
     // "Curve Fit" toolbar toggle (TODO 10) — a press/release button like the
     // Correlation toggle (blue when active), not a dropdown. Turning it on opens
-    // the FFT-like fit workspace with the last-used model (default linear); the
-    // linear/quadratic choice lives inside the drawer. phase2d only.
+    // the FFT-like fit workspace; the per-pair model lives inside the drawer.
+    // Shown across the phase2d family so it is always available: clicking it from
+    // Correlation switches back to 2D and opens the workspace.
     proto._injectPhase2dFitToggle = function(panelId, container, plot) {
-        if (!container || plot?.mode !== 'phase2d') return;
+        if (!container || (plot?.mode !== 'phase2d' && plot?.mode !== 'correlation')) return;
         const state = this._ensurePhase2dState(plot);
-        const active = state.fitModel !== 'none';
+        const active = plot.mode === 'phase2d' && state.fitEnabled;
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn phase2d-fit-toggle-btn' + (active ? ' active' : '');
@@ -152,7 +153,13 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         btn.setAttribute('aria-pressed', String(active));
         btn.addEventListener('click', (event) => {
             event.stopPropagation();
-            this._togglePhase2dFit(panelId);
+            if (plot.mode === 'correlation') {
+                // Leave Correlation and open the fit workspace in 2D.
+                this._ensurePhase2dState(plot).fitEnabled = true;
+                this._setMode(panelId, 'phase2d');
+            } else {
+                this._togglePhase2dFit(panelId);
+            }
         });
         container.appendChild(btn);
     };
@@ -248,19 +255,26 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     // yet — they are flagged so the drawer can say so without a wrong number.
     proto._computePhase2dFits = function(plot) {
         const state = this._ensurePhase2dState(plot);
-        if (state.fitModel === 'none') { plot._phase2dFits = []; return plot._phase2dFits; }
+        if (!state.fitEnabled) { plot._phase2dFits = []; return plot._phase2dFits; }
         const results = [];
         (plot.phaseTraces || []).forEach((pair, index) => {
             if (pair.visible === false) return;
+            const model = this._phase2dPairModel(pair);
             const label = this._phase2dFitPairLabel(plot, pair);
+            // Pairs with no model are still listed (so the drawer/dropdown can
+            // show them) but carry no fit/curve.
+            if (model === 'none') {
+                results.push({ pair, index, label, model, fit: null, curve: null, nScope: NaN, lazy: false });
+                return;
+            }
             if (this._isLazyFile?.(pair.fileId)) {
-                results.push({ pair, index, label, fit: null, curve: null, nScope: NaN, lazy: true });
+                results.push({ pair, index, label, model, fit: null, curve: null, nScope: NaN, lazy: true });
                 return;
             }
             const series = this._phase2dPairSeries(plot, pair);
-            const fit = fitPair(state.fitModel, series.x, series.y);
+            const fit = fitPair(model, series.x, series.y);
             const curve = fit && fit.status === 'ok' ? buildFitCurve(fit) : { x: [], y: [] };
-            results.push({ pair, index, label, fit, curve, nScope: series.nScope, lazy: false });
+            results.push({ pair, index, label, model, fit, curve, nScope: series.nScope, lazy: false });
         });
         plot._phase2dFits = results;
         return results;
@@ -268,16 +282,17 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
     // Plotly traces for the fit curves: same colour as the pair, thicker dashed
     // line, no legend duplication of markers. Appended after data traces and
-    // before the origin cross by _buildPhase2DTraces.
+    // before the origin cross by _buildPhase2DTraces. Each pair uses its own
+    // model, so different pairs can carry different fit curves.
     proto._buildPhase2dFitCurveTraces = function(plot) {
         const state = this._ensurePhase2dState(plot);
-        if (state.fitModel === 'none') return [];
+        if (!state.fitEnabled) return [];
         const results = this._computePhase2dFits(plot);
-        const modelWord = state.fitModel === 'quadratic'
-            ? i18n.t('phase2dFitQuadratic') : i18n.t('phase2dFitLinear');
         const traces = [];
         for (const r of results) {
             if (!r.curve || !r.curve.x.length) continue;
+            const modelWord = r.model === 'quadratic'
+                ? i18n.t('phase2dFitQuadratic') : i18n.t('phase2dFitLinear');
             traces.push({
                 x: r.curve.x,
                 y: r.curve.y,
@@ -307,7 +322,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     // rangeFull / lazy so callers fall back to _phaseVisualDataForTrace.
     proto._phase2dRangeLimitedVisual = function(plot, pt) {
         const state = this._ensurePhase2dState(plot);
-        if (state.fitModel === 'none' || state.rangeFull) return null;
+        if (!state.fitEnabled || state.rangeFull) return null;
         if (this._isLazyFile?.(pt.fileId)) return null;
         const times = this._getTransformedTimeDataForVariable(pt.fileId, pt.x);
         const xAll = this._getTransformedVariableData(pt.fileId, pt.x);
@@ -325,18 +340,33 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return { x, y };
     };
 
-    // Curve Fit toolbar toggle: on → restore the last-used model (default
-    // linear) and open the shell; off → keep the model in lastFitModel (config
-    // preserved) and tear the shell down.
+    // Per-pair model helper: the fit model for one pair (default 'none').
+    proto._phase2dPairModel = function(pair) {
+        return PHASE2D_FIT_MODELS.has(pair?.fitModel) ? pair.fitModel : 'none';
+    };
+
+    // The pair the drawer currently edits (clamped to the visible pairs).
+    proto._phase2dActivePair = function(plot) {
+        const pairs = (plot?.phaseTraces || []).filter(p => p.visible !== false);
+        if (!pairs.length) return null;
+        const state = this._ensurePhase2dState(plot);
+        const idx = Math.max(0, Math.min(pairs.length - 1, state.activePairIndex | 0));
+        return pairs[idx];
+    };
+
+    // Curve Fit toolbar toggle: open/close the fit workspace (fitEnabled). The
+    // per-pair models are preserved on the pairs, so re-opening restores them.
     proto._togglePhase2dFit = function(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot || plot.mode !== 'phase2d') return;
         const state = this._ensurePhase2dState(plot);
-        if (state.fitModel === 'none') {
-            this._setPhase2dFitModel(panelId, state.lastFitModel || 'linear');
+        state.fitEnabled = !state.fitEnabled;
+        this._syncPhase2dFitToggleBtn(panelId, plot);
+        if (state.fitEnabled) {
+            this._enterPhase2dFitShell(panelId, plot);
         } else {
-            state.lastFitModel = state.fitModel;
-            this._setPhase2dFitModel(panelId, 'none');
+            this._exitPhase2dFitShell(panelId, plot);
+            this._rerenderPhase2dPlot(panelId, plot);
         }
     };
 
@@ -345,33 +375,21 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         const btn = panelEl?.querySelector('.phase2d-fit-toggle-btn');
         if (!btn) return;
-        const active = this._ensurePhase2dState(plot).fitModel !== 'none';
+        const active = plot.mode === 'phase2d' && this._ensurePhase2dState(plot).fitEnabled;
         btn.classList.toggle('active', active);
         btn.setAttribute('aria-pressed', String(active));
     };
 
-    // ── Fit model change: enter / update / exit the FFT-like shell ──
+    // Set the fit model of the drawer's ACTIVE pair (None/Linear/Quadratic) and
+    // recompute in place — the workspace stays open.
     proto._setPhase2dFitModel = function(panelId, model) {
         const plot = this.plots.get(panelId);
         if (!plot || plot.mode !== 'phase2d') return;
-        const state = this._ensurePhase2dState(plot);
-        const prev = state.fitModel;
-        state.fitModel = PHASE2D_FIT_MODELS.has(model) ? model : 'none';
-        if (state.fitModel !== 'none') state.lastFitModel = state.fitModel;
-        const active = state.fitModel !== 'none';
-        const wasActive = prev !== 'none';
-        this._syncPhase2dFitToggleBtn(panelId, plot);
-
-        if (active && !wasActive) {
-            this._enterPhase2dFitShell(panelId, plot);
-        } else if (!active && wasActive) {
-            this._exitPhase2dFitShell(panelId, plot);
-            this._rerenderPhase2dPlot(panelId, plot);
-        } else if (active) {
-            // Only the model changed (linear <-> quadratic): recompute in place.
-            this._rerenderPhase2dPlot(panelId, plot);
-            this._renderPhase2dFitDrawer(panelId, plot);
-        }
+        const pair = this._phase2dActivePair(plot);
+        if (!pair) return;
+        pair.fitModel = PHASE2D_FIT_MODELS.has(model) ? model : 'none';
+        this._rerenderPhase2dPlot(panelId, plot);
+        this._renderPhase2dFitDrawer(panelId, plot);
     };
 
     // Re-render the 2D plot preserving the current view (a fit/range change must
@@ -900,9 +918,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return fit.warning ? (map[fit.warning] || fit.warning) : '';
     };
 
-    // Render the options/results drawer inside the shell: Todo/Selección range
-    // controls, model help + one block per pair with the equation, r/R², RMSE,
-    // N and any per-pair warning.
+    // Render the options/results drawer inside the shell. Order (per spec):
+    // 1) temporal range, 2) pair selector, 3) fit type (+ help), 4) the selected
+    // pair's equation / metrics. Each pair carries its own model, so switching
+    // the pair selector shows/edits that pair's fit.
     proto._renderPhase2dFitDrawer = function(panelId, plot = this.plots.get(panelId)) {
         const drawer = plot?.phase2dFitOptions;
         if (!drawer) return;
@@ -912,34 +931,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
         drawer.replaceChildren();
 
-        // ── Model: Linear / Quadratic (the Curve Fit toolbar toggle turns
-        // fitting on/off; the model is chosen here) + "About this fit" help ──
-        const modelRow = document.createElement('div');
-        modelRow.className = 'fft-option-row phase2d-fit-model-row';
-        const modelLabel = document.createElement('span');
-        modelLabel.textContent = i18n.t('phase2dFitLabel');
-        const modelSeg = document.createElement('div');
-        modelSeg.className = 'fft-segmented';
-        [['linear', 'phase2dFitLinear'], ['quadratic', 'phase2dFitQuadratic']].forEach(([m, key]) => {
-            const b = document.createElement('button');
-            b.type = 'button';
-            b.textContent = i18n.t(key);
-            b.classList.toggle('active', state.fitModel === m);
-            b.addEventListener('click', () => { if (state.fitModel !== m) this._setPhase2dFitModel(panelId, m); });
-            modelSeg.appendChild(b);
-        });
-        const aboutBtn = document.createElement('button');
-        aboutBtn.type = 'button';
-        aboutBtn.className = 'fft-help-btn';
-        aboutBtn.textContent = '?';
-        aboutBtn.title = i18n.t('phase2dFitAboutTitle');
-        aboutBtn.setAttribute('aria-label', i18n.t('phase2dFitAboutTitle'));
-        aboutBtn.addEventListener('click', () => this._showPhase2dFitHelp());
-        modelLabel.appendChild(aboutBtn);
-        modelRow.append(modelLabel, modelSeg);
-        drawer.appendChild(modelRow);
-
-        // ── Temporal range: Todo / Selección (mirrors FFT/Correlation) ──
+        // ── 1) Temporal range: Todo / Selección (mirrors FFT/Correlation) ──
         const domain = this._phase2dFitDomain(plot);
         const usesCalendar = this._phase2dFitUsesCalendarTime(plot);
         const makeRow = (labelText, control, tooltip = '') => {
@@ -1040,7 +1032,81 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         );
         drawer.appendChild(rangeGrid);
 
-        // Results header: title + round "?" that explains the metrics.
+        // ── 2) Pair selector — full width, ellipsis on overflow, full name in
+        // the tooltip. Lets the user fit different pairs independently. ──
+        const visiblePairs = (plot.phaseTraces || []).filter(p => p.visible !== false);
+        if (!visiblePairs.length) {
+            const empty = document.createElement('p');
+            empty.className = 'phase2d-fit-empty';
+            empty.textContent = i18n.t('phase2dFitNoPairs');
+            drawer.appendChild(empty);
+            return;
+        }
+        const activeIdx = Math.max(0, Math.min(visiblePairs.length - 1, state.activePairIndex | 0));
+        state.activePairIndex = activeIdx;
+        const activePair = visiblePairs[activeIdx];
+
+        const pairField = document.createElement('div');
+        pairField.className = 'phase2d-fit-field';
+        const pairLbl = document.createElement('span');
+        pairLbl.className = 'phase2d-fit-field-label';
+        pairLbl.textContent = i18n.t('phase2dFitPair');
+        const pairSelect = document.createElement('select');
+        pairSelect.className = 'phase2d-fit-pair-select';
+        visiblePairs.forEach((p, i) => {
+            const label = this._phase2dFitPairLabel(plot, p);
+            const opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = label;
+            opt.title = label;
+            if (i === activeIdx) opt.selected = true;
+            pairSelect.appendChild(opt);
+        });
+        pairSelect.title = this._phase2dFitPairLabel(plot, activePair);
+        pairSelect.addEventListener('change', () => {
+            state.activePairIndex = Number(pairSelect.value) || 0;
+            this._renderPhase2dFitDrawer(panelId, plot);
+        });
+        pairField.append(pairLbl, pairSelect);
+        drawer.appendChild(pairField);
+
+        // ── 3) Fit type dropdown (None / Linear / Quadratic) for the active pair
+        // + "About this fit" help. None disables the result block below. ──
+        const model = this._phase2dPairModel(activePair);
+        const typeField = document.createElement('div');
+        typeField.className = 'phase2d-fit-field phase2d-fit-type-field';
+        const typeLbl = document.createElement('span');
+        typeLbl.className = 'phase2d-fit-field-label';
+        typeLbl.textContent = i18n.t('phase2dFitType');
+        const typeSelect = document.createElement('select');
+        typeSelect.className = 'phase2d-fit-type-select';
+        [['none', 'phase2dFitOff'], ['linear', 'phase2dFitLinear'], ['quadratic', 'phase2dFitQuadratic']].forEach(([m, key]) => {
+            const opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = i18n.t(key);
+            if (m === model) opt.selected = true;
+            typeSelect.appendChild(opt);
+        });
+        typeSelect.addEventListener('change', () => this._setPhase2dFitModel(panelId, typeSelect.value));
+        const aboutBtn = document.createElement('button');
+        aboutBtn.type = 'button';
+        aboutBtn.className = 'fft-help-btn';
+        aboutBtn.textContent = '?';
+        aboutBtn.title = i18n.t('phase2dFitAboutTitle');
+        aboutBtn.setAttribute('aria-label', i18n.t('phase2dFitAboutTitle'));
+        aboutBtn.addEventListener('click', () => this._showPhase2dFitHelp());
+        typeField.append(typeLbl, typeSelect, aboutBtn);
+        drawer.appendChild(typeField);
+
+        // ── 4) Result of the selected pair (disabled when model is None) ──
+        if (model === 'none') {
+            const hint = document.createElement('p');
+            hint.className = 'phase2d-fit-empty';
+            hint.textContent = i18n.t('phase2dFitSelectModel');
+            drawer.appendChild(hint);
+            return;
+        }
+
         const resultsHead = document.createElement('div');
         resultsHead.className = 'phase2d-fit-results-head';
         const title = document.createElement('h3');
@@ -1056,82 +1122,57 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         resultsHead.append(title, metricsHelpBtn);
         drawer.appendChild(resultsHead);
 
-        if (!results.length) {
-            const empty = document.createElement('p');
-            empty.className = 'phase2d-fit-empty';
-            empty.textContent = i18n.t('phase2dFitNoPairs');
-            drawer.appendChild(empty);
-            return;
+        const r = results.find(res => res.pair === activePair) || {};
+        const block = document.createElement('div');
+        block.className = 'phase2d-fit-result';
+        const ok = r.fit && r.fit.status === 'ok';
+        if (ok) {
+            // Generic formula (a bit larger), then the resolved coefficients.
+            const parts = this._phase2dFitEquationParts(r.fit);
+            const eq = document.createElement('div');
+            eq.className = 'phase2d-fit-equation';
+            eq.textContent = parts.generic;
+            block.appendChild(eq);
+            const coeffs = document.createElement('div');
+            coeffs.className = 'phase2d-fit-coeffs';
+            for (const [k, v] of parts.coeffs) {
+                const row = document.createElement('div');
+                row.className = 'phase2d-fit-coeff';
+                const kEl = document.createElement('span');
+                kEl.className = 'phase2d-fit-coeff-k';
+                kEl.textContent = k;
+                const vEl = document.createElement('span');
+                vEl.className = 'phase2d-fit-coeff-v';
+                vEl.textContent = `= ${v}`;
+                row.append(kEl, vEl);
+                coeffs.appendChild(row);
+            }
+            block.appendChild(coeffs);
+
+            const stats = document.createElement('dl');
+            stats.className = 'phase2d-fit-stats';
+            const rows = [];
+            if (r.fit.model === 'linear') rows.push([i18n.t('phase2dFitPearsonR'), fmt(r.fit.r)]);
+            rows.push([i18n.t('phase2dFitRSquared'), fmt(r.fit.r2)]);
+            rows.push([i18n.t('phase2dFitRmse'), fmt(r.fit.rmse)]);
+            rows.push([i18n.t('phase2dFitN'), `${r.fit.n}${r.fit.nExcluded ? ` (−${r.fit.nExcluded})` : ''}`]);
+            for (const [k, v] of rows) {
+                const dt = document.createElement('dt'); dt.textContent = k;
+                const dd = document.createElement('dd'); dd.textContent = v;
+                stats.append(dt, dd);
+            }
+            block.appendChild(stats);
         }
 
-        for (const r of results) {
-            const block = document.createElement('div');
-            block.className = 'phase2d-fit-result';
-
-            const head = document.createElement('div');
-            head.className = 'phase2d-fit-result-head';
-            const swatch = document.createElement('span');
-            swatch.className = 'phase2d-fit-swatch';
-            swatch.style.background = r.pair.color;
-            const name = document.createElement('span');
-            name.className = 'phase2d-fit-result-name';
-            name.textContent = r.label;
-            head.append(swatch, name);
-            block.appendChild(head);
-
-            const ok = r.fit && r.fit.status === 'ok';
-            if (ok) {
-                // Generic formula (a bit larger), then the resolved coefficients.
-                const parts = this._phase2dFitEquationParts(r.fit);
-                const eq = document.createElement('div');
-                eq.className = 'phase2d-fit-equation';
-                eq.textContent = parts.generic;
-                block.appendChild(eq);
-                const coeffs = document.createElement('div');
-                coeffs.className = 'phase2d-fit-coeffs';
-                for (const [k, v] of parts.coeffs) {
-                    const row = document.createElement('div');
-                    row.className = 'phase2d-fit-coeff';
-                    const kEl = document.createElement('span');
-                    kEl.className = 'phase2d-fit-coeff-k';
-                    kEl.textContent = k;
-                    const vEl = document.createElement('span');
-                    vEl.className = 'phase2d-fit-coeff-v';
-                    vEl.textContent = `= ${v}`;
-                    row.append(kEl, vEl);
-                    coeffs.appendChild(row);
-                }
-                block.appendChild(coeffs);
-            }
-
-            if (ok) {
-                const stats = document.createElement('dl');
-                stats.className = 'phase2d-fit-stats';
-                const rows = [];
-                if (r.fit.model === 'linear') {
-                    rows.push([i18n.t('phase2dFitPearsonR'), fmt(r.fit.r)]);
-                }
-                rows.push([i18n.t('phase2dFitRSquared'), fmt(r.fit.r2)]);
-                rows.push([i18n.t('phase2dFitRmse'), fmt(r.fit.rmse)]);
-                rows.push([i18n.t('phase2dFitN'), `${r.fit.n}${r.fit.nExcluded ? ` (−${r.fit.nExcluded})` : ''}`]);
-                for (const [k, v] of rows) {
-                    const dt = document.createElement('dt'); dt.textContent = k;
-                    const dd = document.createElement('dd'); dd.textContent = v;
-                    stats.append(dt, dd);
-                }
-                block.appendChild(stats);
-            }
-
-            const warn = this._phase2dFitWarningText(r.fit, r.lazy);
-            if (warn) {
-                const w = document.createElement('div');
-                w.className = 'phase2d-fit-warning';
-                w.setAttribute('role', 'alert');
-                w.textContent = warn;
-                block.appendChild(w);
-            }
-            drawer.appendChild(block);
+        const warn = this._phase2dFitWarningText(r.fit, r.lazy);
+        if (warn) {
+            const w = document.createElement('div');
+            w.className = 'phase2d-fit-warning';
+            w.setAttribute('role', 'alert');
+            w.textContent = warn;
+            block.appendChild(w);
         }
+        drawer.appendChild(block);
     };
 
     // Refresh the Start/End inputs + sliders from state without stealing focus.
