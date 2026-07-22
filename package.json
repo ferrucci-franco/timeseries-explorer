@@ -72,6 +72,7 @@
     "test:pypsa-session": "node scripts/test-pypsa-session.mjs",
     "test:session-project": "node scripts/test-session-project-save.mjs",
     "test:session-state": "node scripts/test-session-state-roundtrip.mjs",
+    "test:feedback-form": "node scripts/test-feedback-form.mjs",
     "test:help-layout": "node scripts/test-help-layout.mjs",
     "test:settings-layout": "node scripts/test-settings-layout.mjs",
     "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs",

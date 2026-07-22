@@ -1527,6 +1527,10 @@ proto.showFeedbackForm = function() {
 
     const actions = document.createElement('div');
     actions.className = 'modal-buttons feedback-actions';
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'modal-btn modal-btn-cancel';
+    cancelButton.textContent = i18n.t('cancel');
     const emailButton = document.createElement('button');
     emailButton.type = 'button';
     emailButton.className = 'modal-btn modal-btn-cancel';
@@ -1535,7 +1539,7 @@ proto.showFeedbackForm = function() {
     issueButton.type = 'submit';
     issueButton.className = 'modal-btn modal-btn-confirm';
     issueButton.textContent = i18n.t('feedbackOpenIssue');
-    actions.append(emailButton, issueButton);
+    actions.append(cancelButton, emailButton, issueButton);
 
     form.append(header, fields, attachmentSection, nextSteps, actions);
     modal.appendChild(form);
@@ -1550,7 +1554,6 @@ proto.showFeedbackForm = function() {
         }
     };
     const finish = () => {
-        document.removeEventListener('keydown', escHandler);
         attachedFiles.forEach(releasePreview);
         Modal.close(overlay, previousActive);
     };
@@ -1722,13 +1725,7 @@ proto.showFeedbackForm = function() {
             });
     });
     closeButton.addEventListener('click', finish);
-    overlay.addEventListener('click', (event) => {
-        if (event.target === overlay) finish();
-    });
-    const escHandler = (event) => {
-        if (event.key === 'Escape') finish();
-    };
-    document.addEventListener('keydown', escHandler);
+    cancelButton.addEventListener('click', finish);
 
     requestAnimationFrame(() => overlay.classList.add('show'));
     setTimeout(() => summary.control.focus(), 100);
