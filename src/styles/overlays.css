@@ -1008,18 +1008,21 @@
 }
 
 .feedback-dialog {
-    width: min(760px, calc(100vw - 32px));
+    width: min(92vw, 1120px);
+    height: min(92vh, 920px);
     max-width: none;
-    max-height: 88vh;
+    max-height: calc(100vh - 24px);
 }
 
 .feedback-content {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
-    max-height: 88vh;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+    height: 100%;
+    max-height: min(92vh, 920px);
     overflow: auto;
-    padding: 1.25rem;
+    padding: 1.35rem;
     text-align: left;
 }
 
@@ -1057,6 +1060,13 @@
     line-height: 1.45;
 }
 
+.feedback-draft-note {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.4;
+}
+
 .feedback-fields {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1091,7 +1101,7 @@
 
 textarea.feedback-control {
     resize: vertical;
-    min-height: 5.5rem;
+    min-height: 7rem;
     line-height: 1.4;
 }
 
@@ -1105,6 +1115,8 @@ textarea.feedback-control {
 .feedback-attachments {
     display: grid;
     gap: 0.65rem;
+    align-content: start;
+    min-height: 0;
 }
 
 .feedback-paste-zone {
@@ -1258,7 +1270,22 @@ textarea.feedback-control {
     flex-wrap: wrap;
 }
 
+.feedback-clear-btn {
+    margin-right: auto;
+}
+
 @media (max-width: 700px) {
+    .feedback-dialog {
+        width: calc(100vw - 16px);
+        height: calc(100vh - 16px);
+        max-height: calc(100vh - 16px);
+    }
+
+    .feedback-content {
+        max-height: calc(100vh - 16px);
+        padding: 1rem;
+    }
+
     .feedback-fields {
         grid-template-columns: 1fr;
     }
@@ -1271,6 +1298,10 @@ textarea.feedback-control {
         grid-column: 2;
         grid-row: 1;
         justify-self: end;
+    }
+
+    .feedback-clear-btn {
+        margin-right: 0;
     }
 }
 

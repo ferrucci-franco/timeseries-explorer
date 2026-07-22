@@ -1441,7 +1441,10 @@ proto.showFeedbackForm = function() {
     const intro = document.createElement('p');
     intro.className = 'feedback-intro';
     intro.textContent = i18n.t('feedbackIntro');
-    titleWrap.append(title, intro);
+    const draftNote = document.createElement('p');
+    draftNote.className = 'feedback-draft-note';
+    draftNote.textContent = i18n.t('feedbackDraftNote');
+    titleWrap.append(title, intro, draftNote);
 
     const closeButton = document.createElement('button');
     closeButton.type = 'button';
@@ -1527,6 +1530,10 @@ proto.showFeedbackForm = function() {
 
     const actions = document.createElement('div');
     actions.className = 'modal-buttons feedback-actions';
+    const clearButton = document.createElement('button');
+    clearButton.type = 'button';
+    clearButton.className = 'modal-btn modal-btn-cancel feedback-clear-btn';
+    clearButton.textContent = i18n.t('feedbackClearForm');
     const cancelButton = document.createElement('button');
     cancelButton.type = 'button';
     cancelButton.className = 'modal-btn modal-btn-cancel';
@@ -1539,23 +1546,60 @@ proto.showFeedbackForm = function() {
     issueButton.type = 'submit';
     issueButton.className = 'modal-btn modal-btn-confirm';
     issueButton.textContent = i18n.t('feedbackOpenIssue');
-    actions.append(cancelButton, emailButton, issueButton);
+    actions.append(clearButton, cancelButton, emailButton, issueButton);
 
     form.append(header, fields, attachmentSection, nextSteps, actions);
     modal.appendChild(form);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
-    const attachedFiles = [];
+    const draft = this._feedbackDraft || {};
+    const attachedFiles = Array.isArray(draft.attachments)
+        ? draft.attachments
+            .filter(attachment => attachment?.file instanceof File)
+            .map(attachment => ({
+                file: attachment.file,
+                previewUrl: attachment.previewUrl
+                    || (attachment.file.type.startsWith('image/') ? URL.createObjectURL(attachment.file) : ''),
+            }))
+        : [];
+    contact.control.value = draft.contact || '';
+    category.control.value = draft.category || 'bug';
+    summary.control.value = draft.summary || '';
+    details.control.value = draft.details || '';
+    expected.control.value = draft.expected || '';
+
     const releasePreview = (attachment) => {
         if (attachment?.previewUrl) {
             URL.revokeObjectURL(attachment.previewUrl);
             attachment.previewUrl = '';
         }
     };
+    const saveDraft = () => {
+        this._feedbackDraft = {
+            contact: contact.control.value,
+            category: category.control.value,
+            summary: summary.control.value,
+            details: details.control.value,
+            expected: expected.control.value,
+            attachments: attachedFiles.map(attachment => ({ ...attachment })),
+        };
+    };
     const finish = () => {
-        attachedFiles.forEach(releasePreview);
+        saveDraft();
         Modal.close(overlay, previousActive);
+    };
+    const clearForm = () => {
+        attachedFiles.forEach(releasePreview);
+        attachedFiles.length = 0;
+        contact.control.value = '';
+        category.control.value = 'bug';
+        summary.control.value = '';
+        details.control.value = '';
+        expected.control.value = '';
+        this._feedbackDraft = null;
+        renderFiles();
+        summary.control.focus();
     };
     const renderFiles = () => {
         if (!attachedFiles.length) {
@@ -1726,6 +1770,8 @@ proto.showFeedbackForm = function() {
     });
     closeButton.addEventListener('click', finish);
     cancelButton.addEventListener('click', finish);
+    clearButton.addEventListener('click', clearForm);
+    renderFiles();
 
     requestAnimationFrame(() => overlay.classList.add('show'));
     setTimeout(() => summary.control.focus(), 100);

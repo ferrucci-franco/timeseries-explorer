@@ -2,16 +2,29 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const ui = readFileSync(new URL('../src/app/methods/ui-methods.js', import.meta.url), 'utf8');
+const css = readFileSync(new URL('../src/styles/overlays.css', import.meta.url), 'utf8');
+const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 const start = ui.indexOf('proto.showFeedbackForm = function() {');
 const end = ui.indexOf('proto._createFeedbackField', start);
 assert(start >= 0 && end > start, 'Feedback form implementation should be present');
 
 const feedbackForm = ui.slice(start, end);
+const finishBody = feedbackForm.match(/const finish = \(\) => \{([\s\S]*?)\n    \};/)?.[1] || '';
+assert.match(feedbackForm, /feedbackDraftNote/, 'Feedback form should explain that closing preserves the in-session draft');
+assert.match(feedbackForm, /const clearButton = document\.createElement\('button'\)/, 'Feedback form should create a Clear form button');
+assert.match(feedbackForm, /clearButton\.textContent = i18n\.t\('feedbackClearForm'\)/, 'Feedback clear button should use a dedicated translation');
 assert.match(feedbackForm, /const cancelButton = document\.createElement\('button'\)/, 'Feedback form should create an explicit cancel button');
 assert.match(feedbackForm, /cancelButton\.textContent = i18n\.t\('cancel'\)/, 'Feedback cancel button should use the shared Cancel translation');
-assert.match(feedbackForm, /actions\.append\(cancelButton, emailButton, issueButton\)/, 'Feedback actions should expose Cancel before send actions');
+assert.match(feedbackForm, /actions\.append\(clearButton, cancelButton, emailButton, issueButton\)/, 'Feedback actions should expose Clear, Cancel, and send actions');
 assert.match(feedbackForm, /cancelButton\.addEventListener\('click', finish\)/, 'Feedback cancel button should close the form explicitly');
+assert.match(feedbackForm, /this\._feedbackDraft = \{[\s\S]*?attachments: attachedFiles\.map/, 'Feedback close should preserve a draft in memory for this browser session');
+assert.match(feedbackForm, /const finish = \(\) => \{\s*saveDraft\(\);[\s\S]*?Modal\.close/, 'Feedback close should save the draft before closing');
+assert.match(feedbackForm, /const clearForm = \(\) => \{[\s\S]*?this\._feedbackDraft = null;[\s\S]*?renderFiles\(\);/, 'Feedback clear should discard the in-memory draft and rerender files');
+assert.doesNotMatch(finishBody, /attachedFiles\.forEach\(releasePreview\)/, 'Feedback close should not discard attachment previews');
 assert.doesNotMatch(feedbackForm, /overlay\.addEventListener\('click'[\s\S]*?finish\(\)/, 'Feedback form should not close on backdrop clicks');
 assert.doesNotMatch(feedbackForm, /key === 'Escape'[\s\S]*?finish\(\)/, 'Feedback form should not discard input through Escape');
+assert.equal([...translations.matchAll(/feedbackDraftNote:/g)].length, 4, 'Feedback draft note should be translated in every supported language');
+assert.equal([...translations.matchAll(/feedbackClearForm:/g)].length, 4, 'Feedback clear button should be translated in every supported language');
+assert.match(css, /\.feedback-dialog\s*\{[\s\S]*?width:\s*min\(92vw,\s*1120px\);[\s\S]*?height:\s*min\(92vh,\s*920px\);/, 'Feedback dialog should use more of the available width and height');
 
 console.log('Feedback form dismissal checks passed.');
