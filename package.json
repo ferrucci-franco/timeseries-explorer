@@ -97,6 +97,9 @@
     "plotly.js-locales": "3.5.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
+  "overrides": {
+    "tar": ">=7.5.21"
+  },
   "build": {
     "appId": "io.github.ferrucci-franco.timeseries-explorer",
     "productName": "Time Series Explorer",
