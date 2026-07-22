@@ -1528,6 +1528,10 @@ proto.showFeedbackForm = function() {
     emailStep.textContent = i18n.t('feedbackNextEmail');
     nextSteps.append(nextTitle, githubStep, emailStep);
 
+    const body = document.createElement('div');
+    body.className = 'feedback-body';
+    body.append(fields, attachmentSection, nextSteps);
+
     const actions = document.createElement('div');
     actions.className = 'modal-buttons feedback-actions';
     const clearButton = document.createElement('button');
@@ -1548,7 +1552,7 @@ proto.showFeedbackForm = function() {
     issueButton.textContent = i18n.t('feedbackOpenIssue');
     actions.append(clearButton, cancelButton, emailButton, issueButton);
 
-    form.append(header, fields, attachmentSection, nextSteps, actions);
+    form.append(header, body, actions);
     modal.appendChild(form);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);

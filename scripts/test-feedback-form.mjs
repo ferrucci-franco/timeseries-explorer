@@ -11,6 +11,10 @@ assert(start >= 0 && end > start, 'Feedback form implementation should be presen
 const feedbackForm = ui.slice(start, end);
 const finishBody = feedbackForm.match(/const finish = \(\) => \{([\s\S]*?)\n    \};/)?.[1] || '';
 assert.match(feedbackForm, /feedbackDraftNote/, 'Feedback form should explain that closing preserves the in-session draft');
+assert.match(feedbackForm, /const body = document\.createElement\('div'\)/, 'Feedback form should create a dedicated scroll body');
+assert.match(feedbackForm, /body\.className = 'feedback-body'/, 'Feedback form body should use its layout class');
+assert.match(feedbackForm, /body\.append\(fields, attachmentSection, nextSteps\)/, 'Feedback body should contain fields, attachments, and next steps');
+assert.match(feedbackForm, /form\.append\(header, body, actions\)/, 'Feedback actions should stay outside the scroll body');
 assert.match(feedbackForm, /const clearButton = document\.createElement\('button'\)/, 'Feedback form should create a Clear form button');
 assert.match(feedbackForm, /clearButton\.textContent = i18n\.t\('feedbackClearForm'\)/, 'Feedback clear button should use a dedicated translation');
 assert.match(feedbackForm, /const cancelButton = document\.createElement\('button'\)/, 'Feedback form should create an explicit cancel button');
@@ -26,5 +30,8 @@ assert.doesNotMatch(feedbackForm, /key === 'Escape'[\s\S]*?finish\(\)/, 'Feedbac
 assert.equal([...translations.matchAll(/feedbackDraftNote:/g)].length, 4, 'Feedback draft note should be translated in every supported language');
 assert.equal([...translations.matchAll(/feedbackClearForm:/g)].length, 4, 'Feedback clear button should be translated in every supported language');
 assert.match(css, /\.feedback-dialog\s*\{[\s\S]*?width:\s*min\(92vw,\s*1120px\);[\s\S]*?height:\s*min\(92vh,\s*920px\);/, 'Feedback dialog should use more of the available width and height');
+assert.match(css, /\.feedback-content\s*\{[\s\S]*?grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto;[\s\S]*?overflow:\s*hidden;/, 'Feedback form should keep header and actions outside the scrolling area');
+assert.match(css, /\.feedback-body\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?overflow:\s*auto;/, 'Feedback body should own scrolling');
+assert.match(css, /\.feedback-actions\s*\{[\s\S]*?border-top:\s*1px solid var\(--border-color\);[\s\S]*?background:\s*var\(--bg-primary\);/, 'Feedback actions should have their own non-overlapping footer surface');
 
 console.log('Feedback form dismissal checks passed.');
