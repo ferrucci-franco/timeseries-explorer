@@ -2015,6 +2015,10 @@ proto._showDesktopDownloadDialog = function(manifest, publishedAssets = null) {
     intro.className = 'desktop-download-intro';
     intro.textContent = i18n.t('desktopDownloadIntro');
 
+    const availabilityNote = document.createElement('p');
+    availabilityNote.className = 'desktop-download-intro desktop-download-availability-note';
+    availabilityNote.innerHTML = i18n.t('desktopDownloadBetaNote');
+
     const legacyWindowsAssets = [
         {
             kind: 'installer',
@@ -2153,12 +2157,20 @@ proto._showDesktopDownloadDialog = function(manifest, publishedAssets = null) {
     footer.className = 'desktop-download-footer';
     const notes = document.createElement('div');
     notes.className = 'desktop-download-notes';
-    const note = document.createElement('p');
-    note.textContent = i18n.t('desktopDownloadBetaNote');
-    const unsignedNote = document.createElement('p');
+    const unsignedNote = document.createElement('div');
     unsignedNote.className = 'desktop-download-unsigned-note';
-    unsignedNote.textContent = i18n.t('desktopDownloadUnsignedNote');
-    notes.append(note, unsignedNote);
+    const unsignedIntro = document.createElement('p');
+    unsignedIntro.className = 'desktop-download-unsigned-intro';
+    unsignedIntro.textContent = i18n.t('desktopDownloadUnsignedNote');
+    const unsignedList = document.createElement('ul');
+    unsignedList.className = 'desktop-download-unsigned-list';
+    for (const key of ['desktopDownloadUnsignedWindows', 'desktopDownloadUnsignedMacos', 'desktopDownloadUnsignedLinux']) {
+        const item = document.createElement('li');
+        item.innerHTML = i18n.t(key);
+        unsignedList.appendChild(item);
+    }
+    unsignedNote.append(unsignedIntro, unsignedList);
+    notes.append(unsignedNote);
 
     const footerActions = document.createElement('div');
     footerActions.className = 'desktop-download-footer-actions';
@@ -2178,7 +2190,7 @@ proto._showDesktopDownloadDialog = function(manifest, publishedAssets = null) {
     footerActions.appendChild(footerClose);
     footer.append(notes, footerActions);
 
-    content.append(header, intro, cards, footer);
+    content.append(header, availabilityNote, intro, cards, footer);
     modal.appendChild(content);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);

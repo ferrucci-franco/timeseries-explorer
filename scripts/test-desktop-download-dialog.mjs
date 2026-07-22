@@ -22,6 +22,9 @@ const translationKeys = [
     'desktopDownloadUnavailableHint',
     'desktopDownloadBetaNote',
     'desktopDownloadUnsignedNote',
+    'desktopDownloadUnsignedWindows',
+    'desktopDownloadUnsignedMacos',
+    'desktopDownloadUnsignedLinux',
     'desktopDownloadReleaseDetails',
     'extraOnlineVersion',
     'extraOnlineVersionTooltip',
@@ -36,7 +39,8 @@ assert.match(manifest.releaseApiUrl, /^https:\/\/api\.github\.com\/repos\//);
 assert.deepEqual(Object.keys(manifest.platforms), ['windows', 'macos', 'linux']);
 assert.equal(manifest.platforms.windows.status, 'available');
 assert.deepEqual(manifest.platforms.windows.assets.map(asset => asset.kind), ['installer', 'portable']);
-assert.deepEqual(manifest.platforms.macos.assets.map(asset => asset.format), ['DMG', 'ZIP']);
+assert.deepEqual(manifest.platforms.macos.assets.map(asset => asset.format), ['DMG', 'ZIP', 'DMG', 'ZIP']);
+assert.deepEqual(manifest.platforms.macos.assets.map(asset => asset.architecture), ['x64', 'x64', 'arm64', 'arm64']);
 assert.deepEqual(manifest.platforms.linux.assets.map(asset => asset.format), ['DEB', 'AppImage']);
 
 for (const platform of ['windows', 'apple', 'linux']) {

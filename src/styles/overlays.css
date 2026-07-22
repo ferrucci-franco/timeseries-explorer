@@ -2507,6 +2507,10 @@ textarea.feedback-control {
     line-height: 1.5;
 }
 
+.desktop-download-availability-note + .desktop-download-intro {
+    padding-top: 0.18rem;
+}
+
 .desktop-download-grid {
     display: grid;
     flex: 1 1 auto;
@@ -2722,13 +2726,41 @@ button.desktop-download-action:disabled {
 .desktop-download-notes p {
     margin: 0;
     color: var(--text-secondary);
-    font-size: 0.72rem;
-    line-height: 1.4;
+    font-size: 0.68rem;
+    line-height: 1.35;
 }
 
 .desktop-download-notes .desktop-download-unsigned-note {
     margin-top: 0.18rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid color-mix(in srgb, var(--warning-color) 55%, var(--border-color));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--warning-color) 9%, var(--bg-primary));
     color: color-mix(in srgb, var(--warning-color) 80%, var(--text-primary));
+    font-size: 0.68rem;
+    line-height: 1.35;
+}
+
+.desktop-download-unsigned-note p,
+.desktop-download-unsigned-list {
+    margin: 0;
+}
+
+.desktop-download-unsigned-note p {
+    color: inherit;
+}
+
+.desktop-download-unsigned-list {
+    display: grid;
+    gap: 0.18rem;
+    margin-top: 0.38rem;
+    padding-left: 1.15rem;
+    font-size: inherit;
+    line-height: inherit;
+}
+
+.desktop-download-unsigned-list li::marker {
+    color: var(--warning-color);
 }
 
 .desktop-download-footer-actions {
@@ -2796,6 +2828,10 @@ button.desktop-download-action:disabled {
 
     .desktop-download-intro {
         padding: 0.8rem 0.85rem 0;
+    }
+
+    .desktop-download-availability-note + .desktop-download-intro {
+        padding-top: 0.18rem;
     }
 
     .desktop-download-grid {
