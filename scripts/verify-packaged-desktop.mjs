@@ -13,7 +13,11 @@ async function findPackagedAsar(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const candidate = path.join(dir, entry.name);
-    if (entry.isFile() && entry.name === 'app.asar' && path.basename(path.dirname(candidate)) === 'resources') {
+    if (
+      entry.isFile()
+      && entry.name === 'app.asar'
+      && path.basename(path.dirname(candidate)).toLowerCase() === 'resources'
+    ) {
       return candidate;
     }
     if (entry.isDirectory() && !entry.name.startsWith('.')) {
