@@ -1062,9 +1062,14 @@
 
 .feedback-draft-note {
     margin: 0.35rem 0 0;
-    color: var(--text-secondary);
+    color: #2e7d32;
     font-size: 0.82rem;
+    font-weight: 700;
     line-height: 1.4;
+}
+
+.theme-dark .feedback-draft-note {
+    color: #81c784;
 }
 
 .feedback-fields {

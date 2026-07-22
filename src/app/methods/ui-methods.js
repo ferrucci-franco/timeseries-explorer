@@ -1538,10 +1538,10 @@ proto.showFeedbackForm = function() {
     clearButton.type = 'button';
     clearButton.className = 'modal-btn modal-btn-cancel feedback-clear-btn';
     clearButton.textContent = i18n.t('feedbackClearForm');
-    const cancelButton = document.createElement('button');
-    cancelButton.type = 'button';
-    cancelButton.className = 'modal-btn modal-btn-cancel';
-    cancelButton.textContent = i18n.t('cancel');
+    const minimizeButton = document.createElement('button');
+    minimizeButton.type = 'button';
+    minimizeButton.className = 'modal-btn modal-btn-cancel';
+    minimizeButton.textContent = i18n.t('feedbackMinimize');
     const emailButton = document.createElement('button');
     emailButton.type = 'button';
     emailButton.className = 'modal-btn modal-btn-cancel';
@@ -1550,7 +1550,7 @@ proto.showFeedbackForm = function() {
     issueButton.type = 'submit';
     issueButton.className = 'modal-btn modal-btn-confirm';
     issueButton.textContent = i18n.t('feedbackOpenIssue');
-    actions.append(clearButton, cancelButton, emailButton, issueButton);
+    actions.append(clearButton, minimizeButton, emailButton, issueButton);
 
     form.append(header, body, actions);
     modal.appendChild(form);
@@ -1773,7 +1773,7 @@ proto.showFeedbackForm = function() {
             });
     });
     closeButton.addEventListener('click', finish);
-    cancelButton.addEventListener('click', finish);
+    minimizeButton.addEventListener('click', finish);
     clearButton.addEventListener('click', clearForm);
     renderFiles();
 
