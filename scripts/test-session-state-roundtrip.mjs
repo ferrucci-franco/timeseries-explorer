@@ -53,6 +53,10 @@ class StateHarness {
             _normalizePhase2dState(value) { return { ...value }; },
             _stopAnim() {},
             _rebuildPanel() {},
+            toolbarInjections: [],
+            _injectModeButtons(panelId, panelEl, mode) {
+                this.toolbarInjections.push({ panelId, panelEl, mode });
+            },
         };
         this.layoutManager = {
             root: { type: 'panel', id: 'panel-1' },
@@ -178,6 +182,37 @@ assert.equal(restored.plotManager.mouseWheelZoom, false);
 assert.equal(restored.plotManager.relayoutRefreshMode, 'responsive');
 assert.deepEqual(restored.plotManager.liveViewDefaults.phase, { viewMode: 'autoscale' });
 assert.equal(restored._expandedFileTransforms.has('f99'), true);
+
+const phaseToolbarRestored = new StateHarness('f99');
+phaseToolbarRestored.plotManager.plots.set('panel-1', {
+    mode: 'timeseries', traces: [], phaseTraces: [], phasePending: {}, stateSlots: {}, stateConfig: {},
+    histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {},
+});
+const phasePanelEl = {};
+const originalDocument = globalThis.document;
+globalThis.document = {
+    querySelector(selector) {
+        return selector === '.layout-panel[data-id="panel-1"]' ? phasePanelEl : null;
+    },
+};
+try {
+    await phaseToolbarRestored._applySessionPlots([{
+        panelId: 'panel-1',
+        mode: 'phase2d',
+        traces: [],
+        phaseTraces: [{ fileId: 'f1', x: 'x', y: 'y', z: null, color: '#2196F3' }],
+        phasePending: { x: null, y: null, z: null, fileId: null },
+        stateSlots: { x: [], dx: [], fileId: null },
+    }], fileMap);
+} finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+}
+assert.deepEqual(
+    phaseToolbarRestored.plotManager.toolbarInjections.at(-1),
+    { panelId: 'panel-1', panelEl: phasePanelEl, mode: 'phase2d' },
+    'restoring a 2D project re-syncs the panel toolbar away from the default time-series button',
+);
 
 const preservedTheme = new StateHarness('f99');
 preservedTheme.theme = 'light';

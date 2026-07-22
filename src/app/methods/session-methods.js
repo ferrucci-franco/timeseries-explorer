@@ -935,6 +935,10 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.phasePending = this._mappedPhasePending(saved.phasePending, fileMap);
 
         if (saved.view) plot._pendingViewRestore = this._cloneSerializable(saved.view);
+        if (typeof document !== 'undefined' && typeof this.plotManager._injectModeButtons === 'function') {
+            const panelEl = document.querySelector(`.layout-panel[data-id="${saved.panelId}"]`);
+            if (panelEl) this.plotManager._injectModeButtons(saved.panelId, panelEl, plot.mode);
+        }
         this.plotManager._rebuildPanel(saved.panelId);
     }
 };
