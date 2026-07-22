@@ -22,8 +22,8 @@ const expectedArtifacts = {
     `${productName}-${pkg.version}-mac-${architecture}.zip`,
   ],
   linux: [
-    `${productName}-${pkg.version}-linux-${architecture}.deb`,
-    `${productName}-${pkg.version}-linux-${architecture}.AppImage`,
+    `${productName}-${pkg.version}-linux-amd64.deb`,
+    `${productName}-${pkg.version}-linux-x86_64.AppImage`,
   ],
 }[platform];
 

@@ -10,8 +10,8 @@ The tagged release workflow builds these Full Desktop artifacts:
 - `Time Series Explorer-<version>-mac-x64.zip`
 - `Time Series Explorer-<version>-mac-arm64.dmg`
 - `Time Series Explorer-<version>-mac-arm64.zip`
-- `Time Series Explorer-<version>-linux-x64.deb`
-- `Time Series Explorer-<version>-linux-x64.AppImage`
+- `Time Series Explorer-<version>-linux-amd64.deb`
+- `Time Series Explorer-<version>-linux-x86_64.AppImage`
 
 GitHub Releases is the distribution source. Generated binaries are never committed to Git.
 
