@@ -494,6 +494,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         plot.phase2dFitOptions = options;
 
         this._ensurePhase2dFitRange(plot);
+        const timeRestoreView = plot._phase2dFitPendingTimeView || null;
+        delete plot._phase2dFitPendingTimeView;
         Plotly.newPlot(timeDiv, this._buildPhase2dFitTimeTraces(plot), this._buildPhase2dFitTimeLayout(plot), this._getPlotlyConfig()).then(() => {
             timeDiv.on('plotly_doubleclick', () => { this._autoScalePhase2dFitTime(plot); return false; });
             timeDiv.on('plotly_relayout', (ed) => {
@@ -514,6 +516,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             this._installPhase2dFitSplitterHandlers(panelId, plot);
             this._installWheelPan?.(panelId, plot, timeDiv, {});
             this._installRightButtonPan?.(panelId, plot, timeDiv, {});
+            Promise.resolve(this._restore2DViewToDiv?.(timeDiv, timeRestoreView)).then(() => {
+                const range = timeDiv?._fullLayout?.xaxis?.range;
+                this._refreshPhase2dFitTimeVisuals(panelId, plot, Array.isArray(range) ? range : null);
+            });
             Plotly.Plots.resize(div);
         });
 

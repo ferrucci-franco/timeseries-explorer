@@ -115,6 +115,16 @@ function binIsStructural(item, period, binStartMs, binEndMs) {
     return (item.structuralRanges || []).some(([start, end]) => binStartMs >= start && binEndMs <= end);
 }
 
+function categoryIdsFor(period, dayGrouping, combineWeekends = false) {
+    if (period !== 'day' || dayGrouping !== 'day-type') return ['all'];
+    return combineWeekends ? ['workday', 'weekend'] : ['workday', 'saturday', 'sunday'];
+}
+
+function profileCategoryFor(category, period, dayGrouping, combineWeekends = false) {
+    if (period !== 'day' || dayGrouping !== 'day-type') return 'all';
+    return combineWeekends && (category === 'saturday' || category === 'sunday') ? 'weekend' : category;
+}
+
 function median(values) {
     if (!values.length) return NaN;
     const sorted = values.slice().sort((a, b) => a - b);
@@ -221,6 +231,7 @@ export function buildTemporalProfile(options = {}) {
         ? new Date(timestampMs).getUTCMonth()
         : Math.floor(profileOffsetMs(timestampMs, info, period) / resolutionMs);
     const dayGrouping = period === 'day' && options.dayGrouping === 'all' ? 'all' : 'day-type';
+    const combineWeekends = period === 'day' && dayGrouping === 'day-type' && options.combineWeekends === true;
 
     const range = normalizeRange(options.rangeStart, options.rangeEnd);
     if (!range.ok) return { ok: false, reason: range.reason };
@@ -318,12 +329,12 @@ export function buildTemporalProfile(options = {}) {
             && (item.nInvalid > 0 || item.hasGap || item.partial);
     }
 
-    const categoryIds = period === 'day' && dayGrouping === 'day-type' ? ['workday', 'saturday', 'sunday'] : ['all'];
+    const categoryIds = categoryIdsFor(period, dayGrouping, combineWeekends);
     const categoryAccumulators = new Map(categoryIds.map(id => [id, createAcrossPeriodsAccumulator(binCount)]));
     const categoryStats = new Map(categoryIds.map(id => [id, { total: 0, included: 0, discarded: 0, partial: 0, withGaps: 0, withInvalid: 0 }]));
 
     for (const item of [...periods.values()].sort((a, b) => a.startMs - b.startMs)) {
-        const categoryId = period === 'day' && dayGrouping === 'all' ? 'all' : item.category;
+        const categoryId = profileCategoryFor(item.category, period, dayGrouping, combineWeekends);
         const stats = categoryStats.get(categoryId);
         const accumulators = categoryAccumulators.get(categoryId);
         stats.total++;

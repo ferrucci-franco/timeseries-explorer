@@ -317,8 +317,13 @@ assert.match(
 assert.match(contentCss, /\.lazy-detail-indicator[\s\S]*?pointer-events:\s*none/, 'Calculation pills do not intercept plot pan/zoom');
 assert.match(
     interactionSource,
-    /querySelector\('\.lazy-data-detail-indicator'\)[\s\S]*?querySelector\('\.missing-dense-indicator'\)[\s\S]*?lazy-detail-indicator lazy-data-detail-indicator/,
-    'Lazy detail loading cannot hijack the independent Missing/NaN search pill',
+    /querySelector\('\.lazy-data-detail-indicator'\)[\s\S]*?lazy-detail-indicator lazy-data-detail-indicator/,
+    'Lazy detail loading uses its own non-blocking search pill',
+);
+assert.match(
+    interactionSource,
+    /querySelector\('\.missing-dense-indicator'\)[\s\S]*?lazy-detail-indicator missing-dense-indicator/,
+    'Missing/NaN search uses its own non-blocking search pill',
 );
 assert.match(
     plotManagerSource,
@@ -699,9 +704,9 @@ for (const [from, clicked, expected] of [
     assert.match(profileHelperSource, /this\._resetTemporalProfileAnalysisView\(plot\)/, 'Temporal Profile Autoscale safely resets the folded profile pane');
 }
 
-// Moving a legend trace between Y axes must be an in-place Plotly update. A
-// full panel rebuild from the context-menu callback can re-enter Plotly and
-// freeze the application, especially for lazy files.
+// Moving a legend trace between Y axes is normally an in-place Plotly update.
+// Turning off the last right-axis trace rebuilds once with a captured view so
+// Plotly's autoscale state is reset cleanly.
 {
     const contextMenuCss = cssRuleBody('.timeseries-axis-menu');
     assert.match(contextMenuCss, /grid-template-columns\s*:\s*max-content\b/,
@@ -729,8 +734,8 @@ for (const [from, clicked, expected] of [
         'legend Y-axis move restyles the existing trace');
     assert.match(moveSource, /_expandTimeseriesYAxisForAddedTrace\(plot, builtTrace, axis\)/,
         'legend Y-axis move expands only the destination Y range when needed');
-    assert.doesNotMatch(moveSource, /_rebuildPanel/,
-        'legend Y-axis move never rebuilds the panel from the menu callback');
+    assert.match(moveSource, /axis === 'y' && !y2StillUsed[\s\S]*?_rebuildPanel\(panelId, \{ restoreView \}\)/,
+        'moving the last right-axis trace back rebuilds once with a captured view');
     assert.doesNotMatch(moveSource, /xaxis\./,
         'legend Y-axis move never relayouts the X axis');
     assert.match(moveSource, /plot\.timeseriesY2Enabled = true/,

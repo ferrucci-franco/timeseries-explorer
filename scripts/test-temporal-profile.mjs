@@ -62,6 +62,22 @@ const close = (actual, expected, epsilon = 1e-12, message = '') => {
     assert.equal(result.categories[0].bins[0].nPeriods, 3);
 }
 
+// Saturday and Sunday can be combined into one weekend category while keeping
+// workdays separate.
+{
+    const result = buildTemporalProfile({
+        times: [utc('2024-01-01T00:00:00Z'), utc('2024-01-06T00:00:00Z'), utc('2024-01-07T00:00:00Z')],
+        values: [1, 3, 5],
+        period: 'day',
+        dayGrouping: 'day-type',
+        combineWeekends: true,
+    });
+    assert.deepEqual(result.categories.map(category => category.id), ['workday', 'weekend']);
+    assert.equal(result.categories[0].bins[0].mean, 1);
+    assert.equal(result.categories[1].bins[0].mean, 4);
+    assert.equal(result.categories[1].bins[0].nPeriods, 2);
+}
+
 // One-minute resolution is allowed for a full day.
 {
     const result = buildTemporalProfile({ times: [utc('2024-01-01T00:00:00Z')], values: [1], period: 'day', resolutionMinutes: 1 });

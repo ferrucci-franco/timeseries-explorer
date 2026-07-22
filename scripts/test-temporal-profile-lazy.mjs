@@ -114,6 +114,7 @@ try {
     const cases = [
         { period: 'day', resolutionMinutes: 60, dayGrouping: 'all' },
         { period: 'day', resolutionMinutes: 60, dayGrouping: 'day-type', discardIncomplete: true },
+        { period: 'day', resolutionMinutes: 60, dayGrouping: 'day-type', combineWeekends: true },
         { period: 'week', resolutionMinutes: 1440 },
         { period: 'month', resolutionMinutes: 1440 },
         { period: 'year', resolutionMinutes: 1440, resolutionUnit: 'minute' },

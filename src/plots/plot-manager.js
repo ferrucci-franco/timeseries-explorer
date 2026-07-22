@@ -131,6 +131,9 @@ class PlotManager {
             // the bands recompute against the new data instead of persisting.
             plot._missSig = null; plot._missCache = null;
             plot._fftGapsSig = null; plot._fftGapsCache = null;
+            if (plot.mode === 'temporal-profile') {
+                this._invalidateTemporalProfileForDataChange?.(plot, fileId);
+            }
             // A lazy Heatmap must not silently re-scan a multi-GB file on every
             // live poll: flag it dirty and let the user click Update. Eager
             // Heatmaps and every other mode recompute as before.
@@ -157,11 +160,13 @@ class PlotManager {
         }
     }
 
-    setFileTransform(fileId, transform) {
+    setFileTransform(fileId, transform, options = {}) {
         const entry = this.files.get(fileId);
         if (!entry) return;
         const previousTransform = this._normalizeFileTransform(entry.transform);
         const previousTimeMode = this._timeDisplayMode(fileId);
+        const autoscaleX = options.autoscaleX === true;
+        const mainTimePaneModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'correlation']);
         const pendingViews = new Map();
         for (const [panelId, plot] of this.plots) {
             const uses = plot.traces.some(t => t.fileId === fileId) ||
@@ -179,7 +184,12 @@ class PlotManager {
                          plot.stateSlots?.fileId === fileId;
             if (!uses) continue;
             const restoreView = pendingViews.get(panelId);
-            if (restoreView?.mode === '2d' && plot.mode === 'timeseries' && this._primaryTimeFileId(plot) === fileId) {
+            if (autoscaleX && restoreView?.mode === '2d' && this._primaryTimeFileId(plot) === fileId) {
+                if (mainTimePaneModes.has(plot.mode)) restoreView.xRange = null;
+                if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && restoreView.phase2dFitTime) {
+                    restoreView.phase2dFitTime.xRange = null;
+                }
+            } else if (restoreView?.mode === '2d' && plot.mode === 'timeseries' && this._primaryTimeFileId(plot) === fileId) {
                 restoreView.xRange = this._mapTimeRangeBetweenModes(fileId, restoreView.xRange, previousTimeMode, nextTimeMode, previousTransform, nextTransform);
             }
             this._rebuildPanel(panelId, { restoreView });
@@ -213,37 +223,69 @@ class PlotManager {
                 if (trace.fileId === fileId && trace.varName === varName) trace._lazyDetailCache = null;
             }
             const restoreView = this._capturePlotView(plot);
-            if (plot.mode === 'timeseries') {
-                this._expandCapturedTimeseriesYForVariable(plot, restoreView, fileId, varName);
-            }
+            this._expandCapturedTimeYForVariable(plot, restoreView, fileId, varName);
             this._rebuildPanel(panelId, { restoreView });
         }
     }
 
     _expandCapturedTimeseriesYForVariable(plot, view, fileId, varName) {
+        this._expandCapturedTimeYForVariable(plot, view, fileId, varName);
+    }
+
+    _timePlotDescriptorsForSignExpansion(plot) {
+        if (!plot) return [];
+        if (plot.mode === 'correlation' && typeof this._correlationTimeDescriptors === 'function') {
+            return this._correlationTimeDescriptors(plot);
+        }
+        if (plot.mode === 'phase2d'
+            && plot.phase2d?.fitEnabled
+            && typeof this._phase2dFitTimeDescriptors === 'function') {
+            return this._phase2dFitTimeDescriptors(plot);
+        }
+        if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile'].includes(plot.mode)) {
+            return plot.traces || [];
+        }
+        return [];
+    }
+
+    _capturedTimeViewForSignExpansion(plot, view) {
+        if (!plot || !view || view.mode !== '2d') return null;
+        if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled) {
+            return view.phase2dFitTime || null;
+        }
+        return view;
+    }
+
+    _expandCapturedTimeYForVariable(plot, view, fileId, varName) {
         if (!plot || !view || view.mode !== '2d') return;
-        const changedTrace = (plot.traces || []).find(trace =>
+        const timeView = this._capturedTimeViewForSignExpansion(plot, view);
+        if (!timeView) return;
+        const descriptors = this._timePlotDescriptorsForSignExpansion(plot);
+        const changedTrace = descriptors.find(trace =>
             trace.fileId === fileId && trace.varName === varName && this._isVisible(trace));
         if (!changedTrace) return;
-        const axis = this._traceYAxis(changedTrace, plot);
+        const plotLike = plot.mode === 'timeseries'
+            ? plot
+            : { ...plot, traces: descriptors, timeseriesStacked: false, timeseriesY2Enabled: false };
+        const axis = this._traceYAxis(changedTrace, plotLike);
         const rangeKey = axis === 'y2' ? 'y2Range' : 'yRange';
-        const currentRange = view[rangeKey];
+        const currentRange = timeView[rangeKey];
         if (!Array.isArray(currentRange)) return;
-        const traces = plot.timeseriesStacked
-            ? (plot.traces || []).filter(trace => this._isVisible(trace) && this._traceYAxis(trace, plot) === axis)
+        const traces = plotLike.timeseriesStacked
+            ? descriptors.filter(trace => this._isVisible(trace) && this._traceYAxis(trace, plotLike) === axis)
             : [changedTrace];
         const series = traces.map(trace => ({
             x: this._getTransformedTimeDataForVariable(trace.fileId, trace.varName),
             y: this._getTransformedVariableData(trace.fileId, trace.varName),
         }));
         const extent = this._timeseriesYExtentForSeries(
-            plot,
+            plotLike,
             series,
             series.map(item => item.y),
-            view.xRange,
+            timeView.xRange,
         );
         const expanded = expandedAxisRangeForExtent(currentRange, extent);
-        if (expanded) view[rangeKey] = expanded;
+        if (expanded) timeView[rangeKey] = expanded;
     }
 
     setExampleLayout(fileId, { tlId, trId, blId, brId }) {
@@ -1091,6 +1133,7 @@ class PlotManager {
                     // wipes the panel without calling _destroyChart).
                     if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled
                         && !plot.div.closest('.phase2d-fit-container')) {
+                        plot._phase2dFitPendingTimeView = restoreView?.phase2dFitTime || null;
                         this._enterPhase2dFitShell?.(panelId, plot);
                     }
                 }
@@ -1883,7 +1926,7 @@ class PlotManager {
                     : [];
                 const timeUnit = firstFid ? this._timeUnitLabel(firstFid) : (timeVar ? this._extractUnit(timeVar.description) : 's');
                 headers.push(this._isCalendarTime(firstFid) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
-                columns.push(times.map(value => this._formatTimeForExport(firstFid, value)));
+                columns.push(this._formatTimeColumnForExport(firstFid, times));
             }
             for (const t of plot.traces) {
                 const d = this.files.get(t.fileId)?.data;
@@ -1893,8 +1936,10 @@ class PlotManager {
                 const name = this._traceName(t.varName, t.fileId);
                 if (independentIndexes) {
                     headers.push(`${name} index`);
-                    columns.push(this._getTransformedTimeDataForVariable(t.fileId, t.varName)
-                        .map(value => this._formatTimeForExport(t.fileId, value)));
+                    columns.push(this._formatTimeColumnForExport(
+                        t.fileId,
+                        this._getTransformedTimeDataForVariable(t.fileId, t.varName)
+                    ));
                 }
                 headers.push(u ? `${name} [${u}]` : name);
                 columns.push(Array.from(this._getTransformedVariableData(t.fileId, t.varName)));
@@ -1919,7 +1964,7 @@ class PlotManager {
                 if (timeVar) {
                     const timeUnit = this._timeUnitLabel(slots.fileId) || 's';
                     headers.push(this._isCalendarTime(slots.fileId) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
-                    columns.push(this._getTransformedTimeData(slots.fileId).map(value => this._formatTimeForExport(slots.fileId, value)));
+                    columns.push(this._formatTimeColumnForExport(slots.fileId, this._getTransformedTimeData(slots.fileId)));
                 }
                 const dim = Math.min(slots.x.length, slots.x.length >= 3 ? 3 : 2);
                 // State variables first
@@ -2019,8 +2064,10 @@ class PlotManager {
         headers.push(this._isCalendarTime(phaseTrace.fileId)
             ? `${timeName} [datetime UTC]`
             : (timeUnit ? `${timeName} [${timeUnit}]` : timeName));
-        columns.push(this._getTransformedTimeDataForVariable(phaseTrace.fileId, phaseTrace.x)
-            .map(value => this._formatTimeForExport(phaseTrace.fileId, value)));
+        columns.push(this._formatTimeColumnForExport(
+            phaseTrace.fileId,
+            this._getTransformedTimeDataForVariable(phaseTrace.fileId, phaseTrace.x)
+        ));
 
         axes.forEach((axis, index) => {
             const varName = phaseTrace[axis];
@@ -3082,6 +3129,12 @@ class PlotManager {
                 xRange: manualAxisRange(pfl?.xaxis),
                 yRange: manualAxisRange(pfl?.yaxis),
             };
+        } else if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled) {
+            const tfl = plot.phase2dFitTimeDiv?._fullLayout;
+            view.phase2dFitTime = {
+                xRange: axisRange(tfl?.xaxis),
+                yRange: axisRange(tfl?.yaxis),
+            };
         }
         return view;
     }
@@ -3140,6 +3193,15 @@ class PlotManager {
         }
         if (!Object.keys(update).length) return Promise.resolve();
         return Plotly.relayout(plot.div, update).then(() => this._updateCameraOverlay(plot));
+    }
+
+    _restore2DViewToDiv(div, view) {
+        if (!div || !view) return Promise.resolve();
+        const update = {};
+        if (view.xRange) { update['xaxis.range'] = view.xRange; update['xaxis.autorange'] = false; }
+        if (view.yRange) { update['yaxis.range'] = view.yRange; update['yaxis.autorange'] = false; }
+        if (!Object.keys(update).length) return Promise.resolve();
+        return Plotly.relayout(div, update);
     }
 
     _varUnit(varName, fileId = this.activeFileId) {

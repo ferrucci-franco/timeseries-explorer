@@ -55,10 +55,10 @@ const plotManagerSource = await readFile(
 const signSetter = plotManagerSource.match(
     /setVariableSignInverted\(fileId, varName, inverted\)[\s\S]*?\n    setExampleLayout/,
 )?.[0] || '';
-assert.match(signSetter, /_expandCapturedTimeseriesYForVariable\(plot, restoreView, fileId, varName\)/,
-    'sign changes expand the captured time-series Y range before rebuilding');
+assert.match(signSetter, /_expandCapturedTimeYForVariable\(plot, restoreView, fileId, varName\)/,
+    'sign changes expand the captured time-pane Y range before rebuilding');
 assert.doesNotMatch(
-    plotManagerSource.match(/_expandCapturedTimeseriesYForVariable[\s\S]*?\n    setExampleLayout/)?.[0] || '',
+    plotManagerSource.match(/_expandCapturedTimeYForVariable[\s\S]*?\n    setExampleLayout/)?.[0] || '',
     /view\.xRange\s*=/,
     'sign-driven Y expansion never changes the captured X range',
 );

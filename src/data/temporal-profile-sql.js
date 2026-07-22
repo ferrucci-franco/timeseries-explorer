@@ -18,6 +18,16 @@ const YEAR_MONTH_START_DAYS = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305,
 const numberOrNull = value => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
 const count = value => Math.max(0, Number(value) || 0);
 
+function categoryIdsFor(period, dayGrouping, combineWeekends = false) {
+    if (period !== 'day' || dayGrouping !== 'day-type') return ['all'];
+    return combineWeekends ? ['workday', 'weekend'] : ['workday', 'saturday', 'sunday'];
+}
+
+function profileCategoryFor(category, period, dayGrouping, combineWeekends = false) {
+    if (period !== 'day' || dayGrouping !== 'day-type') return 'all';
+    return combineWeekends && (category === 'saturday' || category === 'sunday') ? 'weekend' : category;
+}
+
 function profileGeometry(options = {}) {
     const period = TEMPORAL_PROFILE_PERIODS.has(options.period) ? options.period : 'day';
     const resolutionUnit = period === 'year' && options.resolutionUnit === 'month' ? 'month' : 'minute';
@@ -228,7 +238,10 @@ export function buildTemporalProfileFinalSql(options = {}) {
     const discard = index => options.discardIncomplete
         ? `(nit${index} > 0 OR has_gap = 1 OR partial)`
         : 'FALSE';
-    const category = geometry.period === 'day' && options.dayGrouping !== 'all' ? 'category' : `'all'`;
+    const combineWeekends = geometry.period === 'day' && options.dayGrouping !== 'all' && options.combineWeekends === true;
+    const category = geometry.period === 'day' && options.dayGrouping !== 'all'
+        ? (combineWeekends ? `CASE WHEN category IN ('saturday', 'sunday') THEN 'weekend' ELSE category END` : 'category')
+        : `'all'`;
     const perPeriodProjection = values.map((_, index) => `CASE WHEN ${discard(index)} THEN 1 ELSE 0 END::BIGINT AS d${index}`).join(',\n                   ');
     const binProjection = values.map((_, index) => `CASE WHEN p.d${index} = 0 AND COALESCE(b.nf${index}, 0) > 0 THEN b.s${index} / b.nf${index} END AS pm${index},
                    CASE WHEN p.d${index} = 0 THEN COALESCE(b.ni${index}, 0) ELSE 0 END::BIGINT AS piv${index},
@@ -342,6 +355,7 @@ export function temporalProfilesFromFinalRows(rows = [], options = {}) {
     if (!geometry.ok) return { ok: false, reason: geometry.reason, results: [] };
     const valueCount = Math.max(0, Number(options.valueCount) || 0);
     const dayGrouping = geometry.period === 'day' && options.dayGrouping === 'all' ? 'all' : 'day-type';
+    const combineWeekends = geometry.period === 'day' && dayGrouping === 'day-type' && options.combineWeekends === true;
     const medianStepMs = numberOrNull(options.medianStepMs);
     const gapThresholdMs = medianStepMs == null ? null : medianStepMs * TEMPORAL_PROFILE_GAP_FACTOR;
     const nScope = count(options.nScope ?? rows?.[0]?.g_scope);
@@ -350,9 +364,7 @@ export function temporalProfilesFromFinalRows(rows = [], options = {}) {
     }
     const rowMap = new Map();
     for (const row of rows) rowMap.set(`${row.profile_category}\u0000${Number(row.bin_idx)}`, row);
-    const categoryIds = geometry.period === 'day' && dayGrouping === 'day-type'
-        ? ['workday', 'saturday', 'sunday']
-        : ['all'];
+    const categoryIds = categoryIdsFor(geometry.period, dayGrouping, combineWeekends);
     const firstRow = rows[0] || {};
     const nPeriods = count(firstRow.g_periods);
     const results = [];
@@ -446,6 +458,7 @@ export function temporalProfilesFromAggregateRows(rows = [], options = {}) {
     if (!geometry.ok) return { ok: false, reason: geometry.reason, results: [] };
     const valueCount = Math.max(0, Number(options.valueCount) || 0);
     const dayGrouping = geometry.period === 'day' && options.dayGrouping === 'all' ? 'all' : 'day-type';
+    const combineWeekends = geometry.period === 'day' && dayGrouping === 'day-type' && options.combineWeekends === true;
     const medianStepMs = numberOrNull(options.medianStepMs);
     const gapThresholdMs = medianStepMs == null ? null : medianStepMs * TEMPORAL_PROFILE_GAP_FACTOR;
     const scopeStart = numberOrNull(options.scopeStart);
@@ -486,9 +499,7 @@ export function temporalProfilesFromAggregateRows(rows = [], options = {}) {
     }
 
     const orderedPeriods = [...periods.values()].sort((a, b) => a.startMs - b.startMs);
-    const categoryIds = geometry.period === 'day' && dayGrouping === 'day-type'
-        ? ['workday', 'saturday', 'sunday']
-        : ['all'];
+    const categoryIds = categoryIdsFor(geometry.period, dayGrouping, combineWeekends);
     const results = [];
     if (!orderedPeriods.length) {
         for (let valueIndex = 0; valueIndex < valueCount; valueIndex++) {
@@ -533,7 +544,7 @@ export function temporalProfilesFromAggregateRows(rows = [], options = {}) {
             const uncoveredEnd = item.last != null && item.last < expectedEnd - boundaryTolerance;
             const partial = cutByScope || uncoveredStart || uncoveredEnd;
             const discarded = options.discardIncomplete === true && (invalidTotal > 0 || item.hasGap || partial);
-            const categoryId = geometry.period === 'day' && dayGrouping === 'all' ? 'all' : item.category;
+            const categoryId = profileCategoryFor(item.category, geometry.period, dayGrouping, combineWeekends);
             const stats = categoryStats.get(categoryId);
             const bins = accumulators.get(categoryId);
             if (!stats || !bins) continue;

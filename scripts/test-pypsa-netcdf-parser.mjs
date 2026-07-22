@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import h5wasm from 'h5wasm';
 import PypsaNetcdfParser from '../src/parsers/pypsa-netcdf-parser.js';
+import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
 
 const fixture = 'test-files/pypsa/vetea_example_01.nc';
 
@@ -14,6 +15,41 @@ const bytes = readFileSync(fixture);
 const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 const parser = new PypsaNetcdfParser();
 const data = await parser.parse(buffer, fixture);
+
+class PlotDataHarness {
+    constructor(parsedData) {
+        this.activeFileId = 'f1';
+        this.language = 'en';
+        this.files = new Map([['f1', {
+            data: parsedData,
+            transform: this._normalizeFileTransform(),
+        }]]);
+    }
+
+    _normalizeFileTransform(transform = null) {
+        return {
+            timeDisplayMode: null,
+            calendarTimeFormat: null,
+            timeShift: 0,
+            timeStepMode: null,
+            customTimeStep: '',
+            timeStepOriginMode: null,
+            gain: 1,
+            yOffset: 0,
+            cropStart: null,
+            cropEnd: null,
+            ...(transform || {}),
+        };
+    }
+
+    _getTimeVar(fileId = this.activeFileId) {
+        const parsedData = fileId ? this.files.get(fileId)?.data : null;
+        if (!parsedData) return null;
+        return Object.values(parsedData.variables).find(variable => variable.kind === 'abscissa') || null;
+    }
+}
+
+installPlotDataMethods(PlotDataHarness);
 
 async function makeGenericHdf5Buffer() {
     const module = await h5wasm.ready;
@@ -96,6 +132,16 @@ assert.equal(generatorPv.data.length, data.variables.snapshots.data.length);
 assert.equal(generatorPv.pypsa.indexDataset, 'generators_t_p_max_pu_i');
 assert.equal(generatorPv.pypsa.asset, 'PV1');
 assert.match(generatorPv.description, /carrier=PV/);
+
+const plotData = new PlotDataHarness(data);
+const exportTimes = plotData._formatTimeColumnForExport(
+    'f1',
+    plotData._getTransformedTimeDataForVariable('f1', 'pypsa:generators/PV1/p_max_pu')
+);
+assert(Array.isArray(exportTimes), 'CSV time export should use plain arrays, not typed arrays');
+assert.equal(exportTimes[0], '2020-07-01T00:00:00.000Z');
+assert.equal(exportTimes[1], '2020-07-01T00:10:00.000Z');
+assert(!exportTimes.some(value => Number.isNaN(value)), 'CSV datetime export must not coerce ISO strings to NaN');
 
 const load = data.variables['pypsa:loads/L1/p_set'];
 assert(load, 'load L1 p_set series should be exposed');

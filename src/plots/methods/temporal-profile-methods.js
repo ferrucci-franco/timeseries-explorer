@@ -11,6 +11,7 @@ import {
 const PROFILE_LAYOUTS = new Set(['horizontal', 'vertical']);
 const PROFILE_RENDER_MODES = new Set(['columns', 'line', 'line-band']);
 const PROFILE_CATEGORIES = ['workday', 'saturday', 'sunday'];
+const PROFILE_WEEKEND_CATEGORIES = ['workday', 'weekend'];
 const PROFILE_RECOMPUTE_DEBOUNCE_MS = 150;
 const PROFILE_BAR_OPACITY = 0.68;
 const PROFILE_RESOLUTION_PRESETS = [1440, 60, 30, 15, 5, 1];
@@ -51,6 +52,10 @@ const fallbackText = {
     temporalProfileAllDays: 'All days',
     temporalProfileByDayType: 'By day type',
     temporalProfileWorkdays: 'Workdays',
+    temporalProfileWeekends: 'Weekends',
+    temporalProfileWeekendHandling: 'Weekend handling',
+    temporalProfileWeekendSeparate: 'Separate Saturday / Sunday',
+    temporalProfileWeekendCombined: 'Combine weekend',
     temporalProfileSaturdays: 'Saturdays',
     temporalProfileSundays: 'Sundays',
     temporalProfileResolution: 'Resolution',
@@ -139,9 +144,15 @@ function profileTraceKey(trace) {
 
 function profileCategoryLabel(id) {
     if (id === 'workday') return text('temporalProfileWorkdays');
+    if (id === 'weekend') return text('temporalProfileWeekends');
     if (id === 'saturday') return text('temporalProfileSaturdays');
     if (id === 'sunday') return text('temporalProfileSundays');
     return '';
+}
+
+function temporalProfileCategoryIds(state) {
+    if (state?.dayGrouping !== 'day-type') return ['all'];
+    return state?.combineWeekends ? PROFILE_WEEKEND_CATEGORIES : PROFILE_CATEGORIES;
 }
 
 function localizedWeekdays() {
@@ -199,6 +210,8 @@ proto._defaultTemporalProfileState = function() {
         dayGrouping: 'all',
         yearResolution: 'day',
         workdays: true,
+        weekends: true,
+        combineWeekends: false,
         saturdays: true,
         sundays: true,
         discardIncomplete: false,
@@ -242,6 +255,8 @@ proto._normalizeTemporalProfileState = function(raw = {}) {
         dayGrouping: raw.dayGrouping === 'day-type' ? 'day-type' : defaults.dayGrouping,
         yearResolution: raw.yearResolution === 'month' ? 'month' : 'day',
         workdays: raw.workdays !== false,
+        weekends: raw.weekends !== false,
+        combineWeekends: raw.combineWeekends === true,
         saturdays: raw.saturdays !== false,
         sundays: raw.sundays !== false,
         discardIncomplete: raw.discardIncomplete === true,
@@ -261,6 +276,22 @@ proto._ensureTemporalProfileState = function(plot) {
     }
     plot.temporalProfile = normalized;
     return normalized;
+};
+
+proto._invalidateTemporalProfileForDataChange = function(plot, fileId = null) {
+    if (!plot || plot.mode !== 'temporal-profile') return;
+    clearTimeout(plot._temporalProfileRecomputeTimer);
+    plot._temporalProfileToken = (plot._temporalProfileToken || 0) + 1;
+    const state = this._ensureTemporalProfileState(plot);
+    state.warnings = [];
+    plot._temporalProfileModels = [];
+    if (fileId && plot._temporalProfileLazyStepMs instanceof Map) {
+        plot._temporalProfileLazyStepMs.delete(fileId);
+    } else {
+        plot._temporalProfileLazyStepMs = null;
+    }
+    this._setTemporalProfileComputing?.(plot, false);
+    this._setTemporalProfileStatus?.(plot, '', 'muted');
 };
 
 proto._addTemporalProfileTrace = function(panelId, varName, panelEl, plot) {
@@ -536,6 +567,7 @@ proto._temporalProfileUnit = function(trace) {
 
 proto._temporalProfileCategoryEnabled = function(state, categoryId) {
     if (categoryId === 'workday') return state.workdays;
+    if (categoryId === 'weekend') return state.weekends;
     if (categoryId === 'saturday') return state.saturdays;
     if (categoryId === 'sunday') return state.sundays;
     return true;
@@ -597,7 +629,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
     const warnings = [];
     const models = [];
     const lazyByFile = new Map();
-    const visibleDayCategories = PROFILE_CATEGORIES.filter(id => this._temporalProfileCategoryEnabled(state, id));
+    const visibleDayCategories = temporalProfileCategoryIds(state).filter(id => this._temporalProfileCategoryEnabled(state, id));
     if (state.period === 'day' && state.dayGrouping === 'day-type' && !visibleDayCategories.length) warnings.push(text('temporalProfileNoCategories'));
 
     for (let traceIndex = 0; traceIndex < (plot.traces || []).length; traceIndex++) {
@@ -621,6 +653,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
             resolutionMinutes: state.period === 'year' ? 1440 : state.resolutionByPeriod[state.period],
             resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
             dayGrouping: state.dayGrouping,
+            combineWeekends: state.combineWeekends,
             rangeStart: range?.[0] ?? null,
             rangeEnd: range?.[1] ?? null,
             discardIncomplete: state.discardIncomplete,
@@ -659,6 +692,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
                     resolutionMinutes: state.period === 'year' ? 1440 : state.resolutionByPeriod[state.period],
                     resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
                     dayGrouping: state.dayGrouping,
+                    combineWeekends: state.combineWeekends,
                     discardIncomplete: state.discardIncomplete,
                     timeShiftMs,
                     cropRange,
@@ -754,7 +788,7 @@ proto._buildTemporalProfileTraces = function(plot, models = []) {
     for (const model of models) {
         const categories = model.result.categories.filter(category => this._temporalProfileCategoryEnabled(state, category.id));
         categories.forEach((category) => {
-            const categoryIndex = state.period === 'day' ? PROFILE_CATEGORIES.indexOf(category.id) : 0;
+            const categoryIndex = state.period === 'day' ? temporalProfileCategoryIds(state).indexOf(category.id) : 0;
             const color = this._temporalProfileSeriesColor(model, categoryIndex);
             const categoryLabel = profileCategoryLabel(category.id);
             const name = categoryLabel ? `${model.name} · ${categoryLabel}` : model.name;
@@ -1321,10 +1355,35 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
             this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
         }));
         if (state.dayGrouping === 'day-type') {
+            const weekendSelect = document.createElement('select');
+            weekendSelect.className = 'fft-select';
+            weekendSelect.setAttribute('aria-label', text('temporalProfileWeekendHandling'));
+            [
+                ['separate', text('temporalProfileWeekendSeparate')],
+                ['combined', text('temporalProfileWeekendCombined')],
+            ].forEach(([value, label]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = label;
+                weekendSelect.appendChild(option);
+            });
+            weekendSelect.value = state.combineWeekends ? 'combined' : 'separate';
+            weekendSelect.addEventListener('change', () => {
+                const weekendMode = weekendSelect.value;
+                state.combineWeekends = weekendMode === 'combined';
+                if (state.combineWeekends) state.weekends = state.saturdays || state.sundays;
+                this._renderTemporalProfileOptionsPanel(panelId, plot);
+                this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
+            });
+            options.appendChild(weekendSelect);
             section(text('temporalProfileCategories'));
             row(text('temporalProfileWorkdays'), checkbox(state.workdays, checked => { state.workdays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
-            row(text('temporalProfileSaturdays'), checkbox(state.saturdays, checked => { state.saturdays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
-            row(text('temporalProfileSundays'), checkbox(state.sundays, checked => { state.sundays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
+            if (state.combineWeekends) {
+                row(text('temporalProfileWeekends'), checkbox(state.weekends, checked => { state.weekends = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
+            } else {
+                row(text('temporalProfileSaturdays'), checkbox(state.saturdays, checked => { state.saturdays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
+                row(text('temporalProfileSundays'), checkbox(state.sundays, checked => { state.sundays = checked; this._scheduleTemporalProfileRecompute(panelId, { immediate: true }); }));
+            }
         }
     }
 
