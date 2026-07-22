@@ -116,6 +116,7 @@ const fallbackText = {
     heatmapCalendarRequired: 'Heatmap requires Calendar time mode.',
     heatmapDatetimeRequired: 'Heatmap requires a DateTime index.',
     heatmapGeneratedTimeUnsupported: 'Heatmap cannot use a generated numeric time index.',
+    heatmapWarningSeePanel: 'Warning: see message in the Heatmap side panel',
     heatmapLazyUnsupported: 'Exact Heatmaps for lazy files are not available yet; the overview was not used.',
     heatmapLazyIntegralUnsupported: 'The Integral is not available for lazy files yet; use All/Selection with another aggregation.',
     heatmapLazyDerivedUnsupported: 'This overview-derived signal has no exact lazy aggregate.',
@@ -257,6 +258,8 @@ function gridCellCount(grid) {
 }
 
 function traceIsLazy(manager, trace) {
+    const timeVariable = manager._getTimeVar?.(trace.fileId);
+    if (manager._isGeneratedCalendarTime?.(trace.fileId, timeVariable)) return false;
     return !!manager.files.get(trace.fileId)?.data?._duckdb;
 }
 
@@ -347,11 +350,14 @@ proto._calendarHeatmapTraceEligibility = function(trace) {
         return { ok: false, reason: text('heatmapNoTraces') };
     }
     const timeVariable = this._getTimeVar(trace.fileId);
-    if (entry?.data?.metadata?.timeKind !== 'datetime' || timeVariable?.timeKind !== 'datetime') {
-        return { ok: false, reason: text('heatmapDatetimeRequired') };
-    }
-    if (this._isGeneratedIndexTime?.(trace.fileId, timeVariable)) {
+    const generatedCalendar = this._isGeneratedCalendarTime?.(trace.fileId, timeVariable);
+    if (this._isGeneratedIndexTime?.(trace.fileId, timeVariable) && !generatedCalendar) {
         return { ok: false, reason: text('heatmapGeneratedTimeUnsupported') };
+    }
+    const hasDatetimeIndex = this._timeKind?.(trace.fileId) === 'datetime'
+        || this._fftTimeKind?.(trace.fileId) === 'datetime';
+    if (!hasDatetimeIndex) {
+        return { ok: false, reason: text('heatmapDatetimeRequired') };
     }
     if (this._timeDisplayModeForVar(trace.fileId, timeVariable) !== 'calendar') {
         return { ok: false, reason: text('heatmapCalendarRequired') };
@@ -1436,9 +1442,28 @@ proto._renderCalendarHeatmapModels = function(panelId, plot = this.plots.get(pan
 
 proto._setCalendarHeatmapStatus = function(plot, message, kind = 'muted') {
     const status = plot?.heatmapContainer?.querySelector('.heatmap-status');
-    if (!status) return;
-    status.textContent = message || '';
-    status.className = `heatmap-status heatmap-status-${kind}`;
+    const displayKind = kind === 'blocked' ? 'warning' : kind;
+    if (status) {
+        status.textContent = (displayKind === 'warning' && message)
+            ? text('heatmapWarningSeePanel')
+            : (message || '');
+        status.className = `heatmap-status heatmap-status-${displayKind}`;
+        status.title = message || '';
+    }
+    plot._calendarHeatmapStatusMessage = message || '';
+    plot._calendarHeatmapStatusKind = displayKind;
+    this._syncCalendarHeatmapMessage(plot);
+};
+
+proto._syncCalendarHeatmapMessage = function(plot) {
+    const box = plot?.heatmapContainer?.querySelector('.heatmap-message');
+    if (!box) return;
+    const message = plot._calendarHeatmapStatusMessage || '';
+    const kind = plot._calendarHeatmapStatusKind || 'muted';
+    const show = !!message && kind === 'warning';
+    box.hidden = !show;
+    box.textContent = show ? message : '';
+    box.className = `fft-message heatmap-message fft-message-${kind}`;
 };
 
 proto._setCalendarHeatmapLayout = function(panelId, layout) {
@@ -1606,6 +1631,11 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
     const options = plot?.heatmapContainer?.querySelector('.heatmap-options');
     if (!options) return;
     options.innerHTML = '';
+    const message = document.createElement('div');
+    message.className = 'fft-message heatmap-message';
+    message.hidden = true;
+    options.appendChild(message);
+    this._syncCalendarHeatmapMessage(plot);
 
     const section = (label, tooltip = '') => {
         const heading = document.createElement('div');

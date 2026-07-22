@@ -58,6 +58,17 @@ const temporalMethodAssignment = (name) => {
     return temporalProfileMethodsSource.slice(start, next >= 0 ? next : temporalProfileMethodsSource.length);
 };
 
+const heatmapMethodAssignment = (name) => {
+    const plainMarker = `proto.${name} = function`;
+    const asyncMarker = `proto.${name} = async function`;
+    const asyncStart = heatmapMethodsSource.indexOf(asyncMarker);
+    const marker = asyncStart >= 0 ? asyncMarker : plainMarker;
+    const start = asyncStart >= 0 ? asyncStart : heatmapMethodsSource.indexOf(plainMarker);
+    assert.ok(start >= 0, `${name} heatmap method is present`);
+    const next = heatmapMethodsSource.indexOf('\nproto.', start + marker.length);
+    return heatmapMethodsSource.slice(start, next >= 0 ? next : heatmapMethodsSource.length);
+};
+
 class FakeClassList {
     constructor(element) {
         this.element = element;
@@ -354,6 +365,21 @@ assert.match(
     temporalMethodAssignment('_syncTemporalProfileMessage'),
     /temporal-profile-message[\s\S]*?kind === 'warning'/,
     'Temporal Profile side panel contains the full warning message',
+);
+assert.match(
+    heatmapMethodAssignment('_calendarHeatmapTraceEligibility'),
+    /_isGeneratedIndexTime[\s\S]*?!generatedCalendar[\s\S]*?_timeKind[\s\S]*?_fftTimeKind[\s\S]*?heatmapDatetimeRequired[\s\S]*?_timeDisplayModeForVar[\s\S]*?heatmapCalendarRequired/,
+    'Heatmap accepts generated calendar time while preserving DateTime vs Calendar validation',
+);
+assert.match(
+    heatmapMethodAssignment('_setCalendarHeatmapStatus'),
+    /kind === 'blocked' \? 'warning'[\s\S]*?heatmapWarningSeePanel[\s\S]*?_syncCalendarHeatmapMessage/,
+    'Heatmap topbar points warning users to the side panel',
+);
+assert.match(
+    heatmapMethodAssignment('_syncCalendarHeatmapMessage'),
+    /heatmap-message[\s\S]*?kind === 'warning'/,
+    'Heatmap side panel contains the full warning message',
 );
 assert.match(
     temporalMethodAssignment('_recomputeTemporalProfile'),

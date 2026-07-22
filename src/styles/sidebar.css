@@ -18,11 +18,34 @@
     flex-direction: column;
     overflow-x: hidden;
     overflow-y: auto;
+    scrollbar-width: auto;
+    scrollbar-color: color-mix(in srgb, var(--text-secondary) 45%, transparent) var(--sidebar-bg);
     transition: width 0.3s ease, min-width 0.3s ease;
     position: relative;
     min-width: 200px;
     max-width: 600px;
     flex-shrink: 0;
+}
+
+.sidebar::-webkit-scrollbar {
+    width: 18px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+    background: var(--sidebar-bg);
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
+    border: 3px solid var(--sidebar-bg);
+    border-radius: 999px;
+    background-clip: content-box;
+}
+
+.sidebar:hover::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--primary-color) 58%, var(--text-secondary));
+    border: 3px solid var(--sidebar-bg);
+    background-clip: content-box;
 }
 
 .sidebar.resizing {
