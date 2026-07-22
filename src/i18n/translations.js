@@ -1189,6 +1189,7 @@ const translations = {
             exampleLorenz: 'Lorenz Attractor',
             examplePowergridTimeseries: 'Power Grid Timeseries',
             exampleNoisyChirpFourierTransform: 'Noisy Chirp Fourier Transform',
+            exampleCorrelationCurveFitting: 'Correlation and Curve Fitting',
 
             // Panel modes
             modeTimeseries: 'Time series',
@@ -2448,6 +2449,7 @@ const translations = {
             exampleLorenz: 'Attracteur de Lorenz',
             examplePowergridTimeseries: 'Séries temporelles réseau électrique',
             exampleNoisyChirpFourierTransform: 'Transformée de Fourier d’un chirp bruité',
+            exampleCorrelationCurveFitting: 'Corrélation et ajustement de courbes',
 
             // Panel modes
             modeTimeseries: 'Série temporelle',
@@ -3684,6 +3686,7 @@ const translations = {
             exampleLorenz: 'Atractor de Lorenz',
             examplePowergridTimeseries: 'Series temporales de red eléctrica',
             exampleNoisyChirpFourierTransform: 'Transformada de Fourier de chirp con ruido',
+            exampleCorrelationCurveFitting: 'Correlación y ajuste de curvas',
             modeTimeseries: 'Serie temporal',
             modePhase2d: 'Gráfico de fase 2D',
             modePhase2dt: 'Gráfico de fase 2D + tiempo',
@@ -4912,6 +4915,7 @@ const translations = {
             exampleLorenz: 'Attrattore di Lorenz',
             examplePowergridTimeseries: 'Serie temporale rete elettrica',
             exampleNoisyChirpFourierTransform: 'Trasformata di Fourier di chirp rumoroso',
+            exampleCorrelationCurveFitting: 'Correlazione e fitting di curve',
             modeTimeseries: 'Serie temporale',
             modePhase2d: 'Grafico di fase 2D',
             modePhase2dt: 'Grafico di fase 2D + tempo',

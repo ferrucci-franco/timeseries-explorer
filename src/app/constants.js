@@ -37,6 +37,13 @@ const EXAMPLES = [
         projectFileName: 'noisy_chirp_fft.zip',
         getDataB64: () => null,
     },
+    {
+        id: 'correlation-curve-fitting',
+        nameKey: 'exampleCorrelationCurveFitting',
+        projectPath: `${PUBLIC_BASE}examples/correlated_signals_example.zip`,
+        projectFileName: 'correlated_signals_example.zip',
+        getDataB64: () => null,
+    },
 ];
 
 const DERIVED_FUNCTIONS = [
