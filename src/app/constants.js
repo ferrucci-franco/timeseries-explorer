@@ -62,7 +62,7 @@ const DERIVED_FUNCTION_ALIASES = new Map([
 ]);
 
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.netcdf', '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods'];
-const APP_VERSION = '0.1.0-beta.7';
+const APP_VERSION = '0.1.0-beta.8';
 // Injected at build time by Vite (see vite.config.js). Fall back to placeholders
 // when running outside a Vite build (e.g. Node test scripts), where the globals
 // are undeclared; `typeof` avoids a ReferenceError in that case.

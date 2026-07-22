@@ -1,7 +1,7 @@
 {
   "name": "timeseries-explorer",
   "private": true,
-  "version": "0.1.0-beta.7",
+  "version": "0.1.0-beta.8",
   "description": "Desktop and web time-series explorer for MATLAB, Modelica, tabular, and netCDF data.",
   "author": "Franco Ferrucci",
   "license": "MIT",
