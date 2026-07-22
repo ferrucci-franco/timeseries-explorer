@@ -136,7 +136,7 @@ proto.openSessionOrProjectFromUser = function() {
     });
 };
 
-proto.loadSessionOrProjectFile = async function(file) {
+proto.loadSessionOrProjectFile = async function(file, options = {}) {
     const extension = this._fileExtension(file.name);
     if (extension === '.json') {
         const text = await file.text();
@@ -161,9 +161,14 @@ proto.loadSessionOrProjectFile = async function(file) {
         const sessionBytes = entries['session.json'];
         if (!sessionBytes) throw new Error(i18n.t('sessionZipMissing'));
         const session = this._parseSessionJson(strFromU8(sessionBytes));
-        const transaction = await this._loadProjectDataFromZip(session, entries);
+        const transaction = await this._loadProjectDataFromZip(session, entries, options);
         try {
-            const applied = await this._applySessionSnapshot(session, { source: 'project', fileMap: transaction.fileMap });
+            const applied = await this._applySessionSnapshot(session, {
+                source: 'project',
+                fileMap: transaction.fileMap,
+                silent: !!options.silent,
+                preserveTheme: !!options.preserveTheme,
+            });
             if (!applied) {
                 await this._rollbackProjectTransaction(transaction);
                 return false;
@@ -310,13 +315,13 @@ proto._parseSessionJson = function(text) {
     return session;
 };
 
-proto._loadProjectDataFromZip = async function(session, entries) {
+proto._loadProjectDataFromZip = async function(session, entries, options = {}) {
     for (const fileMeta of session.files || []) {
         if (!fileMeta.archivePath) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || 'file'));
         if (!entries[fileMeta.archivePath]) throw new Error(i18n.t('sessionMissingProjectData').replace('{file}', fileMeta.displayName || fileMeta.name || fileMeta.archivePath));
     }
 
-    if (this.files.size || this.plotManager.hasAnyTraces()) {
+    if (!options.replaceConfirmed && (this.files.size || this.plotManager.hasAnyTraces())) {
         const ok = await Modal.confirm(i18n.t('sessionProjectReplaceWarning'), { icon: 'ZIP' });
         if (!ok) {
             const err = new Error('Project load cancelled');
@@ -443,7 +448,10 @@ proto._applySessionSnapshot = async function(session, options = {}) {
         return false;
     }
 
-    this._applySessionSettings(session.settings || {});
+    const settings = options.preserveTheme
+        ? { ...(session.settings || {}), theme: this.theme }
+        : (session.settings || {});
+    this._applySessionSettings(settings);
     this._clearGeneratedVariablesForSession(fileMap);
     await this._applySessionFileMetadata(session, fileMap, { projectData: options.source === 'project' });
     this._applySessionDerivedVariables(session, fileMap, { defer: true });

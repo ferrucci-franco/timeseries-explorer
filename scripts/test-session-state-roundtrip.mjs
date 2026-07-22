@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { strToU8, zipSync } from 'fflate';
 import { installSessionMethods } from '../src/app/methods/session-methods.js';
 import Modal from '../src/ui/modal.js';
 
@@ -177,6 +178,38 @@ assert.equal(restored.plotManager.mouseWheelZoom, false);
 assert.equal(restored.plotManager.relayoutRefreshMode, 'responsive');
 assert.deepEqual(restored.plotManager.liveViewDefaults.phase, { viewMode: 'autoscale' });
 assert.equal(restored._expandedFileTransforms.has('f99'), true);
+
+const preservedTheme = new StateHarness('f99');
+preservedTheme.theme = 'light';
+preservedTheme.plotManager.plots.set('panel-1', {
+    mode: 'timeseries', traces: [], phaseTraces: [], phasePending: {}, stateSlots: {}, stateConfig: {},
+    histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {},
+});
+await preservedTheme._applySessionSnapshot(snapshot, {
+    source: 'project',
+    fileMap,
+    silent: true,
+    preserveTheme: true,
+});
+assert.equal(preservedTheme.theme, 'light', 'project examples can preserve the user theme');
+
+const loadZipPreservedTheme = new StateHarness('f99');
+let appliedOptions = null;
+loadZipPreservedTheme._loadProjectDataFromZip = async () => ({ fileMap });
+loadZipPreservedTheme._applySessionSnapshot = async (_session, options) => {
+    appliedOptions = options;
+    return true;
+};
+loadZipPreservedTheme._finalizeProjectTransaction = async () => {};
+loadZipPreservedTheme._rollbackProjectTransaction = async () => {};
+const projectZip = zipSync({
+    'session.json': strToU8(`${JSON.stringify({ ...snapshot, kind: 'project' })}\n`),
+});
+await loadZipPreservedTheme.loadSessionOrProjectFile(
+    new File([projectZip], 'example-project.zip'),
+    { silent: true, preserveTheme: true },
+);
+assert.equal(appliedOptions?.preserveTheme, true, 'zip project loading passes preserveTheme through to session apply');
 
 // A complete project must restore a custom CSV profile from the archived File
 // directly. Chromium must never ask the user to locate the original source.

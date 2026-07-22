@@ -23,7 +23,20 @@ const EXAMPLES = [
         getDataB64: () => (typeof LORENZ_DATA_B64 !== 'undefined' ? LORENZ_DATA_B64 : null),
         applyLayout: (pm, fileId, panels) => pm.setLorenzExampleLayout(fileId, panels),
     },
-    { id: 'placeholder2', nameKey: 'examplePlaceholder2', getDataB64: () => null },
+    {
+        id: 'powergrid-timeseries',
+        nameKey: 'examplePowergridTimeseries',
+        projectPath: `${PUBLIC_BASE}examples/Powergrid-timeseries-example.zip`,
+        projectFileName: 'Powergrid-timeseries-example.zip',
+        getDataB64: () => null,
+    },
+    {
+        id: 'noisy-chirp-fourier-transform',
+        nameKey: 'exampleNoisyChirpFourierTransform',
+        projectPath: `${PUBLIC_BASE}examples/noisy_chirp_fft.zip`,
+        projectFileName: 'noisy_chirp_fft.zip',
+        getDataB64: () => null,
+    },
 ];
 
 const DERIVED_FUNCTIONS = [

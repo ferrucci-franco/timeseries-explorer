@@ -594,7 +594,7 @@ proto._renderExampleMenu = function() {
     const menu = document.getElementById('example-menu');
     menu.innerHTML = '';
     for (const ex of EXAMPLES) {
-        const available = ex.getDataB64() != null || !!ex.script;
+        const available = ex.getDataB64() != null || !!ex.script || !!ex.projectPath;
         const item = document.createElement('div');
         item.className = `example-menu-item example-menu-item-row${available ? '' : ' disabled'}`;
         item.setAttribute('role', 'group');
@@ -2190,6 +2190,12 @@ proto.loadExample = async function(exampleId = 'pendulum') {
         await this._waitForExampleCancelWindow(token);
         if (isCancelled()) return;
 
+        if (ex.projectPath) {
+            token.committed = true;
+            await this._loadProjectExample(ex, { replaceConfirmed: true, silent: true, preserveTheme: true });
+            return;
+        }
+
         await this._ensureExampleData(ex);
         if (isCancelled()) return;
 
@@ -2253,6 +2259,15 @@ proto.loadExample = async function(exampleId = 'pendulum') {
     } finally {
         if (this._exampleLoadToken === token) this._setExampleLoading(false);
     }
+};
+
+proto._loadProjectExample = async function(example, options = {}) {
+    const response = await fetch(example.projectPath, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Cannot load example project: ${response.status}`);
+    const bytes = await response.arrayBuffer();
+    const name = example.projectFileName || example.projectPath.split('/').pop() || `${example.id}.zip`;
+    const file = new File([bytes], name, { type: 'application/zip' });
+    return this.loadSessionOrProjectFile(file, options);
 };
 
 proto._setExampleLoading = function(loading, exampleName = '') {

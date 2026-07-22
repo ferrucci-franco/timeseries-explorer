@@ -1187,7 +1187,8 @@ const translations = {
             // Examples
             examplePendulum: 'Simple Pendulum',
             exampleLorenz: 'Lorenz Attractor',
-            examplePlaceholder2: 'Example 2',
+            examplePowergridTimeseries: 'Power Grid Timeseries',
+            exampleNoisyChirpFourierTransform: 'Noisy Chirp Fourier Transform',
 
             // Panel modes
             modeTimeseries: 'Time series',
@@ -2445,7 +2446,8 @@ const translations = {
 
             examplePendulum: 'Pendule simple',
             exampleLorenz: 'Attracteur de Lorenz',
-            examplePlaceholder2: 'Exemple 2',
+            examplePowergridTimeseries: 'Séries temporelles réseau électrique',
+            exampleNoisyChirpFourierTransform: 'Transformée de Fourier d’un chirp bruité',
 
             // Panel modes
             modeTimeseries: 'Série temporelle',
@@ -3680,7 +3682,8 @@ const translations = {
             sessionProjectLoadedBody: 'El proyecto completo se cargo.',
 
             exampleLorenz: 'Atractor de Lorenz',
-            examplePlaceholder2: 'Ejemplo 2',
+            examplePowergridTimeseries: 'Series temporales de red eléctrica',
+            exampleNoisyChirpFourierTransform: 'Transformada de Fourier de chirp con ruido',
             modeTimeseries: 'Serie temporal',
             modePhase2d: 'Gráfico de fase 2D',
             modePhase2dt: 'Gráfico de fase 2D + tiempo',
@@ -4907,7 +4910,8 @@ const translations = {
             sessionProjectLoadedBody: 'Il progetto completo e stato caricato.',
 
             exampleLorenz: 'Attrattore di Lorenz',
-            examplePlaceholder2: 'Esempio 2',
+            examplePowergridTimeseries: 'Serie temporale rete elettrica',
+            exampleNoisyChirpFourierTransform: 'Trasformata di Fourier di chirp rumoroso',
             modeTimeseries: 'Serie temporale',
             modePhase2d: 'Grafico di fase 2D',
             modePhase2dt: 'Grafico di fase 2D + tempo',
