@@ -412,6 +412,10 @@
     </div>
     <script>
         window.__OMV_PUBLIC_BASE__ = window.location.protocol === 'file:' ? './public/' : './';
+        // Set this at deploy time to enable the optional page-view measurement.
+        window.__OMV_ANALYTICS_CONFIG__ = window.__OMV_ANALYTICS_CONFIG__ || {
+            measurementId: 'G-VXMHXYN30K'
+        };
     </script>
     <script type="module" src="app.js"></script>
 </body>

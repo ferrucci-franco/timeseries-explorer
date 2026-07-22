@@ -1,0 +1,76 @@
+.analytics-consent {
+    position: fixed;
+    inset: auto 18px 18px;
+    z-index: 10000;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.analytics-consent[hidden] { display: none; }
+
+.analytics-consent-card {
+    width: min(760px, 100%);
+    padding: 20px 22px;
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    box-shadow: 0 16px 45px rgb(0 0 0 / 22%);
+    pointer-events: auto;
+}
+
+.analytics-consent-main h2 { margin: 0 0 8px; font-size: 1.05rem; }
+
+.analytics-consent-main p,
+.analytics-consent-detail,
+.analytics-consent-setting p,
+.analytics-consent-provider-note {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.analytics-consent-detail { margin-top: 10px; }
+
+.analytics-consent-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 16px;
+}
+
+.analytics-consent-btn {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px 13px;
+    font: inherit;
+    cursor: pointer;
+}
+
+.analytics-consent-btn-primary { border-color: var(--primary-color); background: var(--primary-color); color: #fff; }
+.analytics-consent-btn-secondary { background: var(--bg-secondary); color: var(--text-primary); }
+
+.analytics-consent-settings { margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 14px; }
+
+.analytics-consent-setting {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 0;
+}
+
+.analytics-consent-setting strong { display: block; margin-bottom: 2px; }
+.analytics-consent-status { flex: none; color: var(--text-secondary); font-size: 0.82rem; white-space: nowrap; }
+.analytics-consent-toggle-wrap { display: flex; align-items: center; gap: 10px; }
+.analytics-consent-provider-note { margin: 8px 0 14px; font-size: 0.8rem; }
+
+@media (max-width: 600px) {
+    .analytics-consent { inset: auto 10px 10px; }
+    .analytics-consent-card { padding: 16px; }
+    .analytics-consent-actions { justify-content: stretch; }
+    .analytics-consent-btn { flex: 1 1 auto; }
+}
