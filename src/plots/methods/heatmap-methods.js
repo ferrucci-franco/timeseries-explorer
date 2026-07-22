@@ -584,7 +584,15 @@ proto._installCalendarHeatmapPlotHandlers = function(panelId, plot) {
     plot._calendarHeatmapHandlersInstalled = true;
     let lastShift = false;
     plot.div.addEventListener('mousedown', event => { lastShift = !!event.shiftKey; }, { capture: true });
+    plot.div.addEventListener('contextmenu', event => {
+        if (this._handleCalendarHeatmapLegendContextMenu(panelId, plot, plot.div, event)) return;
+        event.preventDefault();
+    });
     plot.div.on('plotly_legendclick', (eventData) => {
+        if (eventData.event?.button !== undefined && eventData.event.button !== 0) {
+            lastShift = false;
+            return false;
+        }
         const name = eventData.data?.[eventData.curveNumber]?.name;
         const shift = !!(eventData.event?.shiftKey || lastShift);
         lastShift = false;
@@ -631,6 +639,42 @@ proto._handleCalendarHeatmapLegendClick = function(panelId, plot, clickedName, s
     this._refreshCalendarHeatmapTimePlot(panelId, plot, { preserveView: true });
     this._renderCalendarHeatmapModels(panelId, plot, { preserveView: true });
     this._renderCalendarHeatmapOptionsPanel(panelId, plot);
+};
+
+proto._handleCalendarHeatmapLegendContextMenu = function(panelId, plot, div, event) {
+    const fullTrace = this._legendFullTraceFromContextEvent?.(div, event);
+    const clickedName = fullTrace?.name;
+    const trace = (plot.traces || []).find(item => this._traceName(item.varName, item.fileId) === clickedName);
+    if (!trace) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    this._showLegendTraceMenu(event, trace, {
+        onShow: () => this._setCalendarHeatmapLegendSelection(panelId, plot, trace, 'show'),
+        onHide: () => this._setCalendarHeatmapLegendSelection(panelId, plot, trace, 'hide'),
+        onOnly: () => this._setCalendarHeatmapLegendSelection(panelId, plot, trace, 'only'),
+        onRemove: () => this._removeCalendarHeatmapTraceFromLegend(panelId, plot, trace),
+    });
+    return true;
+};
+
+proto._setCalendarHeatmapLegendSelection = function(panelId, plot, selectedTrace, action) {
+    for (const trace of plot.traces || []) {
+        let visible = trace.visible === 'legendonly' || trace.visible === false ? 'legendonly' : true;
+        if (action === 'show' && trace === selectedTrace) visible = true;
+        if (action === 'hide' && trace === selectedTrace) visible = 'legendonly';
+        if (action === 'only') visible = trace === selectedTrace ? true : 'legendonly';
+        trace.visible = visible;
+    }
+    this._refreshCalendarHeatmapTimePlot(panelId, plot, { preserveView: true });
+    this._renderCalendarHeatmapModels(panelId, plot, { preserveView: true });
+    this._renderCalendarHeatmapOptionsPanel(panelId, plot);
+};
+
+proto._removeCalendarHeatmapTraceFromLegend = function(panelId, plot, trace) {
+    const index = (plot.traces || []).indexOf(trace);
+    if (index >= 0) plot.traces.splice(index, 1);
+    if (!plot.traces.length) this._clearPanel(panelId);
+    else this._rebuildPanel(panelId, { preserveView: true });
 };
 
 proto._calendarHeatmapDomain = function(plot) {
@@ -1580,14 +1624,25 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         options.appendChild(label);
         return label;
     };
-    const segmented = (items, current, onPick) => {
+    const rangeRow = (labelText, control, tooltip = '') => {
+        const label = document.createElement('label');
+        label.className = 'fft-option-row';
+        if (tooltip) label.title = tooltip;
+        const span = document.createElement('span');
+        span.textContent = labelText;
+        label.append(span, control);
+        options.appendChild(label);
+        return label;
+    };
+    const segmented = (items, current, onPick, classes = {}) => {
+        const { wrapperClass = 'heatmap-segmented', buttonClass = 'heatmap-segmented-btn' } = classes;
         const wrapper = document.createElement('div');
-        wrapper.className = 'heatmap-segmented';
+        wrapper.className = wrapperClass;
         const buttons = [];
         for (const item of items) {
             const button = document.createElement('button');
             button.type = 'button';
-            button.className = 'heatmap-segmented-btn';
+            if (buttonClass) button.className = buttonClass;
             button.textContent = item.label;
             if (item.title) button.title = item.title;
             const active = item.value === current;
@@ -1638,21 +1693,20 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         return element;
     };
 
-    section(text('heatmapTemporalScope'), text('heatmapTemporalScopeTooltip'));
-    options.appendChild(segmented([
-        { value: true, label: text('heatmapScopeAll'), title: text('heatmapScopeAllTooltip') },
-        { value: false, label: text('heatmapScopeSelection'), title: text('heatmapScopeSelectionTooltip') },
-    ], state.rangeFull, full => this._setCalendarHeatmapRangeMode(panelId, full)));
+    rangeRow(i18n.t('fftRange'), segmented([
+        { value: true, label: i18n.t('fftRangeFull'), title: i18n.t('analysisRangeFullTooltip') },
+        { value: false, label: i18n.t('fftRangeSelection'), title: i18n.t('analysisRangeSelectionTooltip') },
+    ], state.rangeFull, full => this._setCalendarHeatmapRangeMode(panelId, full), { wrapperClass: 'fft-segmented', buttonClass: '' }));
 
     const domain = this._calendarHeatmapDomain(plot);
     const makeBound = (key, labelText, index, tooltip = '') => {
         const wrapper = document.createElement('div');
-        wrapper.className = 'heatmap-range-bound';
+        wrapper.className = 'fft-range-bound fft-range-bound-datetime';
         if (tooltip) wrapper.title = tooltip;
         const input = document.createElement('input');
         input.type = 'datetime-local';
         input.step = '1';
-        input.className = 'heatmap-datetime-input';
+        input.className = 'fft-number-input';
         input.dataset.heatmapKey = key;
         input.dataset.heatmapRole = 'input';
         input.disabled = state.rangeFull;
@@ -1665,7 +1719,8 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         });
         const slider = document.createElement('input');
         slider.type = 'range';
-        slider.className = 'heatmap-range-input';
+        slider.className = 'fft-range-input';
+        if (tooltip) slider.title = tooltip;
         slider.dataset.heatmapKey = key;
         slider.dataset.heatmapRole = 'slider';
         slider.disabled = state.rangeFull;
@@ -1682,15 +1737,21 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         });
         slider.addEventListener('change', () => this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true }));
         const label = document.createElement('label');
-        label.className = 'heatmap-option-row';
+        label.className = 'fft-option-row';
+        if (tooltip) label.title = tooltip;
         const span = document.createElement('span');
         span.textContent = labelText;
         label.append(span, input);
         wrapper.append(label, slider);
-        options.appendChild(wrapper);
+        return wrapper;
     };
-    makeBound('x1', text('heatmapSelectionStart'), 0, text('heatmapSelectionStartTooltip'));
-    makeBound('x2', text('heatmapSelectionEnd'), 1, text('heatmapSelectionEndTooltip'));
+    const rangeGrid = document.createElement('div');
+    rangeGrid.className = 'fft-range-grid';
+    rangeGrid.append(
+        makeBound('x1', i18n.t('fftRangeStart'), 0, i18n.t('analysisRangeStartTooltip')),
+        makeBound('x2', i18n.t('fftRangeEnd'), 1, i18n.t('analysisRangeEndTooltip')),
+    );
+    options.appendChild(rangeGrid);
 
     section(text('heatmapGeometry'), text('heatmapGeometryTooltip'));
     options.appendChild(segmented([

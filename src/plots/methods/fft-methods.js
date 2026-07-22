@@ -278,7 +278,15 @@ proto._installFftPlotHandlers = function(panelId, plot) {
         div.addEventListener('mousedown', event => {
             lastMouseDownHadShift = !!event.shiftKey;
         }, { capture: true });
+        div.addEventListener('contextmenu', event => {
+            if (this._handleFftLegendContextMenu(panelId, plot, div, event)) return;
+            event.preventDefault();
+        });
         div.on('plotly_legendclick', (ed) => {
+            if (ed.event?.button !== undefined && ed.event.button !== 0) {
+                lastMouseDownHadShift = false;
+                return false;
+            }
             const clickedName = ed.data?.[ed.curveNumber]?.name;
             const shiftClick = !!(ed.event?.shiftKey || lastMouseDownHadShift);
             lastMouseDownHadShift = false;
@@ -345,6 +353,22 @@ proto._installFftPlotHandlers = function(panelId, plot) {
     this._installLegendHoverHint(plot.fftDiv);
 };
 
+proto._handleFftLegendContextMenu = function(panelId, plot, div, event) {
+    const fullTrace = this._legendFullTraceFromContextEvent?.(div, event);
+    const clickedName = fullTrace?.name;
+    const trace = (plot.traces || []).find(t => this._traceName(t.varName, t.fileId) === clickedName);
+    if (!trace) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    this._showLegendTraceMenu(event, trace, {
+        onShow: () => this._setFftLegendSelection(panelId, plot, trace, 'show'),
+        onHide: () => this._setFftLegendSelection(panelId, plot, trace, 'hide'),
+        onOnly: () => this._setFftLegendSelection(panelId, plot, trace, 'only'),
+        onRemove: () => this._removeFftTraceFromLegend(panelId, plot, trace),
+    });
+    return true;
+};
+
 proto._handleFftLegendClick = function(panelId, plot, clickedName, shiftClick = false) {
     if (!clickedName) return;
     const trace = (plot.traces || []).find(t => this._traceName(t.varName, t.fileId) === clickedName);
@@ -359,6 +383,25 @@ proto._handleFftLegendClick = function(panelId, plot, clickedName, shiftClick = 
     trace.visible = trace.visible === 'legendonly' ? true : 'legendonly';
     this._refreshFftTimePlot(panelId, plot, { preserveView: true });
     this._scheduleFftRecompute(panelId, { immediate: true });
+};
+
+proto._setFftLegendSelection = function(panelId, plot, selectedTrace, action) {
+    for (const trace of plot.traces || []) {
+        let visible = trace.visible === 'legendonly' || trace.visible === false ? 'legendonly' : true;
+        if (action === 'show' && trace === selectedTrace) visible = true;
+        if (action === 'hide' && trace === selectedTrace) visible = 'legendonly';
+        if (action === 'only') visible = trace === selectedTrace ? true : 'legendonly';
+        trace.visible = visible;
+    }
+    this._refreshFftTimePlot(panelId, plot, { preserveView: true });
+    this._scheduleFftRecompute(panelId, { immediate: true });
+};
+
+proto._removeFftTraceFromLegend = function(panelId, plot, trace) {
+    const index = (plot.traces || []).indexOf(trace);
+    if (index >= 0) plot.traces.splice(index, 1);
+    if (!plot.traces.length) this._clearPanel(panelId);
+    else this._rebuildPanel(panelId, { preserveView: true });
 };
 
 proto._buildFftTimeTraces = function(plot) {
@@ -1814,11 +1857,6 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     };
 
     options.innerHTML = '';
-    const title = document.createElement('div');
-    title.className = 'fft-options-title';
-    title.textContent = i18n.t('fftOptions');
-    options.appendChild(title);
-
     const message = document.createElement('div');
     message.className = 'fft-message';
     message.hidden = true;
@@ -1867,8 +1905,8 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         return btn;
     };
     segmented.append(
-        makeSegment('fftRangeFull', 'fftRangeFullTooltip', true),
-        makeSegment('fftRangeSelection', 'fftRangeSelectionTooltip', false),
+        makeSegment('fftRangeFull', 'analysisRangeFullTooltip', true),
+        makeSegment('fftRangeSelection', 'analysisRangeSelectionTooltip', false),
     );
     options.appendChild(makeRow(i18n.t('fftRange'), segmented));
 
@@ -1884,8 +1922,8 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         return wrap;
     };
     rangeGrid.append(
-        makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('fftRangeStartTooltip')),
-        makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('fftRangeEndTooltip')),
+        makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('analysisRangeStartTooltip')),
+        makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('analysisRangeEndTooltip')),
     );
     options.appendChild(rangeGrid);
 

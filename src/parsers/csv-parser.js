@@ -341,7 +341,19 @@ export default class CsvParser {
             : (hasHeader
                 ? headerRow
                 : headerRow.map((_, index) => `column_${index + 1}`));
-        if (rawHeaders.length < 2) {
+        const timeSource = profile.timeSource || {
+            ok: true,
+            kind: 'index',
+            mode: 'generated-index',
+            strategy: 'generated-index',
+            sourceIndexes: [],
+            name: 'index',
+            description: '[index]',
+        };
+        if (rawHeaders.length < 1) {
+            throw new Error('CSV must contain at least one column.');
+        }
+        if (rawHeaders.length < 2 && timeSource.strategy !== 'generated-index') {
             throw new Error('CSV must contain at least two columns.');
         }
 
@@ -357,15 +369,6 @@ export default class CsvParser {
             throw new Error(rowFilter ? 'CSV row filter excludes all data rows.' : 'CSV must contain at least one data row.');
         }
 
-        const timeSource = profile.timeSource || {
-            ok: true,
-            kind: 'index',
-            mode: 'generated-index',
-            strategy: 'generated-index',
-            sourceIndexes: [],
-            name: 'index',
-            description: '[index]',
-        };
         const timeIndexes = new Set(Array.isArray(timeSource.sourceIndexes) ? timeSource.sourceIndexes : []);
         const ignoredIndexes = new Set(Array.isArray(profile.ignoredColumns) ? profile.ignoredColumns : []);
         const variableHeaders = headers
@@ -950,7 +953,9 @@ export default class CsvParser {
             if (header && typeof header === 'object') {
                 return {
                     name: String(header.name || fallback[index]?.name || `column_${index + 1}`),
-                    description: String(header.description || ''),
+                    description: header.description === undefined
+                        ? (fallback[index]?.description || '')
+                        : String(header.description || ''),
                 };
             }
             if (typeof header === 'string' && header.trim()) {

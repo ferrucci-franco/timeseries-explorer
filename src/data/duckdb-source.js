@@ -1240,7 +1240,7 @@ export default class DuckDbSource {
             0,
             totalRows,
             timeInfo,
-            { format, pandasPaths },
+            { format, pandasPaths, csvProfile },
         );
 
         if (viewMode) {
@@ -2385,6 +2385,7 @@ export default class DuckDbSource {
                 );
             return {
                 name,
+                description: String(header.description || ''),
                 ...inferred,
             };
         });
@@ -2866,6 +2867,10 @@ export default class DuckDbSource {
 
         const usedNames = new Set();
         const variablePaths = new Map();
+        const csvDescriptionsByColumn = sourceInfo.format === 'csv'
+            ? new Map((this._csvColumnSpecs(sourceInfo.csvProfile) || [])
+                .map(spec => [spec.name, String(spec.description || '')]))
+            : new Map();
         const sanitize = (raw) => {
             const base = String(raw ?? '').trim() || `column`;
             return base;
@@ -2912,7 +2917,7 @@ export default class DuckDbSource {
             result.variables[uniqueName] = {
                 name: uniqueName,
                 data,
-                description: '',
+                description: csvDescriptionsByColumn.get(columnNames[i]) || '',
                 kind: 'variable',
                 dataType: isNumeric ? 'real' : 'string',
                 isConstant,

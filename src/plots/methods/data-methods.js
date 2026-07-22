@@ -1,5 +1,7 @@
 import { getCalendarDateTickFormat } from '../plotly-locale.js';
 
+const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
+
 export function getCalendarTimeFormats(mode = '24h', language = 'en') {
     const useAmPm = mode === 'ampm' || mode === 'calendar-ampm';
     const tickformat = useAmPm ? '%-I:%M %p' : '%H:%M';
@@ -31,6 +33,26 @@ function finiteAxisExtent(input) {
     };
     visit(input ?? []);
     return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+}
+
+function parseGeneratedTimeOriginMs(value) {
+    const raw = String(value || '').trim();
+    const text = (raw || DEFAULT_GENERATED_TIME_ORIGIN).replace(' ', 'T');
+    const match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})T(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!match) return Date.UTC(2026, 0, 1, 0, 0, 0);
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = Number(match[4]);
+    const minute = Number(match[5]);
+    const second = Number(match[6] || 0);
+    const ms = Date.UTC(year, month - 1, day, hour, minute, second);
+    const d = new Date(ms);
+    if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day
+        || d.getUTCHours() !== hour || d.getUTCMinutes() !== minute || d.getUTCSeconds() !== second) {
+        return Date.UTC(2026, 0, 1, 0, 0, 0);
+    }
+    return ms;
 }
 
 export function expandedAxisRangeForExtent(currentRange, extent, padding = 0.05) {
@@ -100,6 +122,7 @@ proto._normalizeFileTransform = function(transform = null) {
         timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
         timeStepOriginMode: ['elapsed', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
+        timeStepOriginDate: t.timeStepOriginDate === null || t.timeStepOriginDate === undefined ? '' : String(t.timeStepOriginDate),
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
@@ -112,7 +135,7 @@ proto._normalizeFileTransform = function(transform = null) {
 
 proto._isFileTransformActive = function(transform) {
     const t = this._normalizeFileTransform(transform);
-    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || (t.timeStepOriginMode === 'calendar' && t.timeStepOriginDate !== '') || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
 };
 
 proto._fileTransform = function(fileId) {
@@ -127,6 +150,7 @@ proto._transformCache = function(fileId) {
 };
 
 proto._timeKind = function(fileId) {
+    if (this._isGeneratedCalendarTime(fileId)) return 'datetime';
     return this._getTimeVar(fileId)?.timeKind === 'datetime' ? 'datetime' : 'numeric';
 };
 
@@ -158,7 +182,6 @@ proto._isGeneratedCalendarTime = function(fileId, timeVar = null) {
     const t = timeVar || this._getTimeVar(fileId);
     const stepSeconds = this._indexTimeStepSeconds(fileId);
     return this._isGeneratedDurationTime(fileId, t)
-        && t?.timeKind === 'datetime'
         && Number.isFinite(stepSeconds)
         && stepSeconds > 0
         && this._fileTransform(fileId).timeStepOriginMode === 'calendar';
@@ -269,6 +292,10 @@ proto._isCalendarTimeForVar = function(fileId, timeVar = null) {
 proto._timeOriginMsForVar = function(fileId, timeVar = null) {
     const entry = this.files.get(fileId);
     const t = timeVar || this._getTimeVar(fileId);
+    const transform = this._fileTransform(fileId);
+    if (this._isGeneratedDurationTime(fileId, t) && transform.timeStepOriginMode === 'calendar') {
+        return parseGeneratedTimeOriginMs(transform.timeStepOriginDate);
+    }
     const candidates = [
         t?.timeOriginMs,
         entry?.data?.metadata?.timeOriginMs,
@@ -733,6 +760,10 @@ proto._formatTimeForExport = function(fileId, value) {
     if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return this._formatElapsedDateTime(value);
     if (!this._isCalendarTime(fileId)) return value;
     return new Date(value).toISOString();
+};
+
+proto._formatTimeColumnForExport = function(fileId, values) {
+    return Array.from(values || [], value => this._formatTimeForExport(fileId, value));
 };
 
 proto._formatDuration = function(value, unit = 's') {
@@ -1557,12 +1588,13 @@ proto._buildTimeLayout = function(plot) {
 };
 
 // ── Phase 2D ──
-// Whether a 2D pair trace of `len` points should render with WebGL. Displays
-// that show markers cross to WebGL far earlier (GL_MARKER_THRESHOLD) because in
-// SVG each marker is its own DOM node, whereas a Lines display is one <path>.
+// Whether a 2D pair trace of `len` points should render with WebGL. Marker
+// displays use WebGL for any non-empty trace because SVG creates one DOM node
+// per point; line-only displays stay SVG until the usual large-trace threshold.
 proto._phase2dUseGL = function(len, showMarkers) {
-    const threshold = showMarkers ? PlotManager.GL_MARKER_THRESHOLD : PlotManager.GL_POINT_THRESHOLD;
-    return (len || 0) >= threshold;
+    const pointCount = len || 0;
+    if (showMarkers) return pointCount > 0;
+    return pointCount >= PlotManager.GL_POINT_THRESHOLD;
 };
 
 proto._buildPhase2DTraces = function(plot) {

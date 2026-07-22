@@ -2446,7 +2446,7 @@ body.cursor-box-dragging {
    existing plots visible and deliberately excludes all initial welcome copy. */
 .drop-zone.subsequent-drop {
     border: 0;
-    background: color-mix(in srgb, var(--bg-primary) 28%, transparent);
+    background: var(--drop-zone-drag-overlay);
     box-shadow: none;
     backdrop-filter: blur(2px);
     -webkit-backdrop-filter: blur(2px);
@@ -2463,9 +2463,9 @@ body.cursor-box-dragging {
     text-align: center;
     width: min(420px, calc(100vw - 3rem));
     padding: 2rem 2.5rem;
-    border: 2px dashed color-mix(in srgb, var(--primary-color) 78%, var(--border-color));
+    border: 2px dashed var(--drop-zone-drag-card-border);
     border-radius: 18px;
-    background: color-mix(in srgb, var(--bg-primary) 94%, transparent);
+    background: var(--drop-zone-drag-card-bg);
     box-shadow: 0 18px 55px rgba(0, 0, 0, 0.2), 0 0 0 5px color-mix(in srgb, var(--primary-color) 12%, transparent);
 }
 
@@ -2493,7 +2493,7 @@ body.cursor-box-dragging {
 }
 
 .drop-zone.subsequent-drop.initial-file-drop .drop-zone-drag-card {
-    background: var(--bg-primary);
+    background: var(--drop-zone-drag-card-bg);
 }
 
 .file-transform-step-row select {

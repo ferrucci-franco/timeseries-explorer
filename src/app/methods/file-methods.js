@@ -20,6 +20,7 @@ import {
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
+const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
 let duckDbSourceClassPromise = null;
 let netcdfParserClassPromise = null;
 let pickleParserClassPromise = null;
@@ -2381,7 +2382,7 @@ proto._fileTypeTooltip = function(_entry, fileId = null, fallback = '') {
 };
 
 proto._defaultFileTransform = function() {
-    return { timeDisplayMode: null, calendarTimeFormat: null, timeShift: 0, timeStepMode: null, customTimeStep: '', timeStepOriginMode: null, gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
+    return { timeDisplayMode: null, calendarTimeFormat: null, timeShift: 0, timeStepMode: null, customTimeStep: '', timeStepOriginMode: null, timeStepOriginDate: '', gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
 };
 
 proto._openCsvParsingPreviewForFileObject = async function(file, options = {}) {
@@ -2521,6 +2522,7 @@ proto._normalizeFileTransform = function(transform = null) {
         timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
         timeStepOriginMode: ['elapsed', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
+        timeStepOriginDate: t.timeStepOriginDate === null || t.timeStepOriginDate === undefined ? '' : String(t.timeStepOriginDate),
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
@@ -2533,7 +2535,7 @@ proto._normalizeFileTransform = function(transform = null) {
 
 proto._isFileTransformActive = function(transform) {
     const t = this._normalizeFileTransform(transform);
-    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || (t.timeStepOriginMode === 'calendar' && t.timeStepOriginDate !== '') || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
 };
 
 proto._toggleFileTransformPanel = function(fileId) {
@@ -2554,8 +2556,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         : 'numeric';
     const isIndexAxis = isIndexTime || timeDisplayMode === 'index';
     const indexStepMode = isIndexAxis ? (transform.timeStepMode || timeVar.timeStepMode || 'index') : null;
-    let isGeneratedCalendarAxis = isDateTime
-        && timeDisplayMode === 'index'
+    let isGeneratedCalendarAxis = isIndexAxis
         && indexStepMode !== 'index'
         && transform.timeStepOriginMode === 'calendar';
     const calendarTimeFormat = transform.calendarTimeFormat || timeVar?.calendarTimeFormat || '24h';
@@ -2656,11 +2657,27 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             if (options.onCommit) options.onCommit(input.value, input);
             else this._updateFileTransform(fileId, { [key]: input.value });
         };
+        let skipNextBlurCommit = false;
         if (options.updateOnChange !== false) input.addEventListener('change', commitValue);
+        if (options.commitOnBlur) {
+            input.addEventListener('blur', () => {
+                if (skipNextBlurCommit) {
+                    skipNextBlurCommit = false;
+                    return;
+                }
+                commitValue();
+            });
+        }
         if (options.onInput) input.addEventListener('input', () => options.onInput(input));
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
-                if (options.updateOnChange === false) commitValue();
+                if (options.updateOnChange === false) {
+                    commitValue();
+                    if (options.commitOnBlur) {
+                        skipNextBlurCommit = true;
+                        input.blur();
+                    }
+                }
                 else input.blur();
             }
         });
@@ -2730,7 +2747,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         const commit = () => {
             const value = String(input.value || '').trim();
             const customTimeStep = value ? `${value} ${select.value}` : '';
-            this._updateFileTransform(fileId, { customTimeStep });
+            this._updateFileTransform(fileId, { customTimeStep }, { autoscaleX: true });
         };
         input.addEventListener('change', commit);
         input.addEventListener('keydown', (e) => {
@@ -2744,6 +2761,38 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         wrap.append(span, row);
         wrap.input = input;
         return wrap;
+    };
+
+    const normalizeGeneratedOriginValue = (value) => {
+        const raw = String(value || '').trim();
+        const text = (raw || DEFAULT_GENERATED_TIME_ORIGIN).replace(' ', 'T');
+        const match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})T(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+        if (!match) return { ok: false };
+        const year = Number(match[1]);
+        const month = Number(match[2]);
+        const day = Number(match[3]);
+        const hour = Number(match[4]);
+        const minute = Number(match[5]);
+        const second = Number(match[6] || 0);
+        if (month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute > 59 || second > 59) {
+            return { ok: false };
+        }
+        const d = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+        if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day
+            || d.getUTCHours() !== hour || d.getUTCMinutes() !== minute || d.getUTCSeconds() !== second) {
+            return { ok: false };
+        }
+        return {
+            ok: true,
+            year,
+            value: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`,
+        };
+    };
+    const isLeapYear = year => year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const leapYearText = (value) => {
+        const parsed = normalizeGeneratedOriginValue(value);
+        if (!parsed.ok) return `${i18n.t('indexTimeLeapYearLabel')}: -`;
+        return `${i18n.t('indexTimeLeapYearLabel')}: ${isLeapYear(parsed.year) ? i18n.t('indexTimeLeapYearYes') : i18n.t('indexTimeLeapYearNo')}`;
     };
 
     if (isDateTime) {
@@ -2830,7 +2879,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             this._updateFileTransform(fileId, {
                 timeStepMode: nextStepMode,
                 timeStepOriginMode: nextStepMode === 'index' ? null : transform.timeStepOriginMode,
-            }, { rerender: true });
+            }, { rerender: true, autoscaleX: true });
         });
         stepWrap.append(stepLabel, stepSelect);
         panel.append(timeTitle, stepWrap);
@@ -2839,7 +2888,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             panel.append(makeCustomStepField());
         }
 
-        if (isDateTime && stepMode !== 'index') {
+        if (stepMode !== 'index') {
             const originWrap = document.createElement('label');
             originWrap.className = 'file-transform-field file-transform-field-wide';
             const originLabel = document.createElement('span');
@@ -2851,15 +2900,64 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                 <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>${i18n.t('indexTimeOriginCalendar')}</option>
             `;
             originSelect.addEventListener('change', () => {
-                this._updateFileTransform(fileId, {
-                    timeStepOriginMode: originSelect.value,
+                const nextOriginMode = originSelect.value;
+                const patch = {
+                    timeStepOriginMode: nextOriginMode,
                     cropStart: null,
                     cropEnd: null,
                     timeShift: 0,
-                }, { rerender: true });
+                };
+                if (nextOriginMode === 'calendar' && !String(transform.timeStepOriginDate || '').trim()) {
+                    patch.timeStepOriginDate = DEFAULT_GENERATED_TIME_ORIGIN;
+                }
+                this._updateFileTransform(fileId, {
+                    ...patch,
+                }, { rerender: true, autoscaleX: true });
             });
             originWrap.append(originLabel, originSelect);
             panel.append(originWrap);
+
+            if (originMode === 'calendar') {
+                const originDateField = makeInput(
+                    'timeStepOriginDate',
+                    i18n.t('indexTimeOriginStartLabel'),
+                    transform.timeStepOriginDate || DEFAULT_GENERATED_TIME_ORIGIN,
+                    DEFAULT_GENERATED_TIME_ORIGIN,
+                    {
+                        type: 'datetime-local',
+                        step: '1',
+                        className: 'file-transform-field-wide',
+                        updateOnChange: false,
+                        commitOnBlur: true,
+                        onInput: input => {
+                            input.classList.remove('invalid');
+                            const hint = originDateField.nextSibling;
+                            if (hint?.classList?.contains('file-transform-leap-year')) {
+                                hint.textContent = leapYearText(input.value);
+                            }
+                        },
+                        onCommit: (value, input) => {
+                            const parsed = normalizeGeneratedOriginValue(value);
+                            input.classList.toggle('invalid', !parsed.ok);
+                            if (!parsed.ok) return;
+                            input.value = parsed.value;
+                            const currentTransform = this.files.get(fileId)?.transform || {};
+                            const current = normalizeGeneratedOriginValue(currentTransform.timeStepOriginDate || DEFAULT_GENERATED_TIME_ORIGIN);
+                            if (current.ok && current.value === parsed.value) return;
+                            this._updateFileTransform(fileId, {
+                                timeStepOriginDate: parsed.value,
+                                cropStart: null,
+                                cropEnd: null,
+                            }, { autoscaleX: true });
+                        },
+                    },
+                );
+                originDateField.input.value = normalizeGeneratedOriginValue(transform.timeStepOriginDate || DEFAULT_GENERATED_TIME_ORIGIN).value || DEFAULT_GENERATED_TIME_ORIGIN;
+                const leapHint = document.createElement('div');
+                leapHint.className = 'file-transform-hint file-transform-leap-year';
+                leapHint.textContent = leapYearText(originDateField.input.value);
+                panel.append(originDateField, leapHint);
+            }
         }
     }
 
@@ -3157,7 +3255,7 @@ proto._updateFileTransform = function(fileId, patch, options = {}) {
     const entry = this.files.get(fileId);
     if (!entry) return;
     entry.transform = this._normalizeFileTransform({ ...entry.transform, ...patch });
-    this.plotManager.setFileTransform(fileId, entry.transform);
+    this.plotManager.setFileTransform(fileId, entry.transform, { autoscaleX: options.autoscaleX === true });
     if (options.rerender) this._renderFilesList();
     else {
         const isActive = this._isFileTransformActive(entry.transform);

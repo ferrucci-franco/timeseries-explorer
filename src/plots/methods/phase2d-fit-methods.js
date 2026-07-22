@@ -209,8 +209,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             markers.push(showMarkers
                 ? { color, size: state.markerSize, opacity: state.markerOpacity }
                 : { color });
-            // Toggling markers on/off can cross the WebGL point threshold, so a
-            // Points display doesn't crawl in SVG. Only send `type` when it
+            // Toggling markers on/off can switch the trace into/out of WebGL, so
+            // a Points display doesn't crawl in SVG. Only send `type` when it
             // actually changes — restyling `type` forces a replot, and marker
             // size/opacity tweaks must stay cheap.
             const len = Math.max(tr.x?.length || 0, tr.y?.length || 0);
@@ -604,6 +604,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         plot.phase2dFitOptions = options;
 
         this._ensurePhase2dFitRange(plot);
+        const timeRestoreView = plot._phase2dFitPendingTimeView || null;
+        delete plot._phase2dFitPendingTimeView;
         Plotly.newPlot(timeDiv, this._buildPhase2dFitTimeTraces(plot), this._buildPhase2dFitTimeLayout(plot), this._getPlotlyConfig()).then(() => {
             timeDiv.on('plotly_doubleclick', () => { this._autoScalePhase2dFitTime(plot); return false; });
             timeDiv.on('plotly_relayout', (ed) => {
@@ -624,6 +626,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             this._installPhase2dFitSplitterHandlers(panelId, plot);
             this._installWheelPan?.(panelId, plot, timeDiv, {});
             this._installRightButtonPan?.(panelId, plot, timeDiv, {});
+            Promise.resolve(this._restore2DViewToDiv?.(timeDiv, timeRestoreView)).then(() => {
+                const range = timeDiv?._fullLayout?.xaxis?.range;
+                this._refreshPhase2dFitTimeVisuals(panelId, plot, Array.isArray(range) ? range : null);
+            });
             Plotly.Plots.resize(div);
         });
 
@@ -1163,8 +1169,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const segmented = document.createElement('div');
         segmented.className = 'fft-segmented';
         segmented.append(
-            makeSegment('fftRangeFull', 'phase2dFitRangeFullTooltip', true),
-            makeSegment('fftRangeSelection', 'phase2dFitRangeSelectionTooltip', false),
+            makeSegment('fftRangeFull', 'analysisRangeFullTooltip', true),
+            makeSegment('fftRangeSelection', 'analysisRangeSelectionTooltip', false),
         );
         drawer.appendChild(makeRow(i18n.t('fftRange'), segmented));
 
@@ -1180,8 +1186,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             return wrap;
         };
         rangeGrid.append(
-            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('phase2dFitRangeStartTooltip')),
-            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('phase2dFitRangeEndTooltip')),
+            makeBound(i18n.t('fftRangeStart'), 'x1', i18n.t('analysisRangeStartTooltip')),
+            makeBound(i18n.t('fftRangeEnd'), 'x2', i18n.t('analysisRangeEndTooltip')),
         );
         drawer.appendChild(rangeGrid);
 
