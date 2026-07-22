@@ -16,12 +16,14 @@
 
 # Track project source and metadata.
 !/.gitignore
+!/.gitattributes
 !/.github/
 !/.github/**
 !/*.js
 !/*.html
 !/*.css
 !/*.bat
+!/*.sh
 !/package.json
 !/package-lock.json
 !/README.md

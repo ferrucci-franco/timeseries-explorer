@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import { strToU8, zipSync } from '../../../node_modules/fflate/esm/browser.js';
 import {
     APP_VERSION,
     BUILD_SHA,
@@ -8,9 +9,13 @@ import {
     DESKTOP_PLATFORM_ICON_PATHS,
     DYMOLA_LOGO_ICON_PATH,
     EXAMPLES,
+    FEEDBACK_ISSUES_URL,
+    ONLINE_VERSION_URL,
     OPENMODELICA_MODELING_ICON_PATH,
     RESET_LAYOUT_ICON_SVG,
 } from '../constants.js';
+
+const FEEDBACK_MAX_PACKAGE_BYTES = 25 * 1024 * 1024;
 
 const HELP_TOPICS = [
     { section: '1', icon: 'compass', color: '#3b82f6' },
@@ -1295,8 +1300,8 @@ proto._renderExtraMenu = function() {
     };
 
     const feedbackItem = makeAction('💬', 'extraFeedback', () => {
-        Modal.alert(i18n.t('extraFeedback'), i18n.t('extraFeedbackSoonBody'), { icon: '💬' });
-    }, { badgeKey: 'exampleComingSoon' });
+        this.showFeedbackForm();
+    });
 
     const saveViewItem = makeAction('💾', 'extraSaveViewJson', () => {
         this.saveViewSession().catch(err => {
@@ -1334,9 +1339,13 @@ proto._renderExtraMenu = function() {
         this.showHelp();
     });
 
-    const desktopDownloadItem = makeAction('📦', 'extraStandalone', () => {
-        this._downloadDesktopPackage();
-    });
+    const desktopDownloadItem = this.capabilities?.isDesktop
+        ? makeAction('🌐', 'extraOnlineVersion', () => {
+            window.open(ONLINE_VERSION_URL, '_blank', 'noopener');
+        }, { titleKey: 'extraOnlineVersionTooltip' })
+        : makeAction('📦', 'extraStandalone', () => {
+            this._downloadDesktopPackage();
+        });
 
     const openTempItem = makeAction(
         `<img src="${OPENMODELICA_MODELING_ICON_PATH}" alt="">`,
@@ -1399,6 +1408,446 @@ proto._renderExtraMenu = function() {
     }
     items.push(desktopDownloadItem, feedbackItem, versionRow, helpItem);
     menu.append(...items);
+};
+
+proto.showFeedbackForm = function() {
+    const previousActive = document.activeElement;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay feedback-overlay';
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-dialog feedback-dialog';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'feedback-title');
+
+    const form = document.createElement('form');
+    form.className = 'modal-content feedback-content';
+
+    const header = document.createElement('div');
+    header.className = 'feedback-header';
+
+    const icon = document.createElement('div');
+    icon.className = 'modal-icon feedback-icon';
+    icon.textContent = '💬';
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'feedback-title-wrap';
+    const title = document.createElement('h2');
+    title.id = 'feedback-title';
+    title.className = 'modal-title';
+    title.textContent = i18n.t('feedbackTitle');
+    const intro = document.createElement('p');
+    intro.className = 'feedback-intro';
+    intro.textContent = i18n.t('feedbackIntro');
+    titleWrap.append(title, intro);
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'desktop-download-close feedback-close';
+    closeButton.setAttribute('aria-label', i18n.t('helpClose'));
+    closeButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+
+    header.append(icon, titleWrap, closeButton);
+
+    const fields = document.createElement('div');
+    fields.className = 'feedback-fields';
+
+    const contact = this._createFeedbackField('feedbackContactLabel', 'input', {
+        type: 'email',
+        autocomplete: 'email',
+        placeholder: i18n.t('feedbackContactPlaceholder'),
+    });
+    const category = this._createFeedbackField('feedbackCategoryLabel', 'select');
+    [
+        ['bug', i18n.t('feedbackCategoryBug')],
+        ['idea', i18n.t('feedbackCategoryIdea')],
+        ['question', i18n.t('feedbackCategoryQuestion')],
+    ].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        category.control.appendChild(option);
+    });
+    const summary = this._createFeedbackField('feedbackSummaryLabel', 'input', {
+        type: 'text',
+        required: true,
+        maxlength: '140',
+        placeholder: i18n.t('feedbackSummaryPlaceholder'),
+    });
+    const details = this._createFeedbackField('feedbackDetailsLabel', 'textarea', {
+        required: true,
+        rows: '5',
+        placeholder: i18n.t('feedbackDetailsPlaceholder'),
+    });
+    const expected = this._createFeedbackField('feedbackExpectedLabel', 'textarea', {
+        rows: '3',
+        placeholder: i18n.t('feedbackExpectedPlaceholder'),
+    });
+    fields.append(contact.wrap, category.wrap, summary.wrap, details.wrap, expected.wrap);
+
+    const attachmentSection = document.createElement('div');
+    attachmentSection.className = 'feedback-attachments';
+
+    const pasteZone = document.createElement('div');
+    pasteZone.className = 'feedback-paste-zone';
+    pasteZone.tabIndex = 0;
+    pasteZone.textContent = i18n.t('feedbackPasteZone');
+
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.multiple = true;
+    fileInput.className = 'feedback-file-input';
+
+    const fileButton = document.createElement('button');
+    fileButton.type = 'button';
+    fileButton.className = 'modal-btn modal-btn-cancel feedback-file-button';
+    fileButton.textContent = i18n.t('feedbackChooseFiles');
+
+    const fileList = document.createElement('div');
+    fileList.className = 'feedback-file-list';
+    fileList.textContent = i18n.t('feedbackNoFiles');
+
+    const safety = document.createElement('p');
+    safety.className = 'feedback-safety';
+    safety.textContent = i18n.t('feedbackSafetyNote');
+
+    attachmentSection.append(pasteZone, fileInput, fileButton, fileList, safety);
+
+    const actions = document.createElement('div');
+    actions.className = 'modal-buttons feedback-actions';
+    const packageButton = document.createElement('button');
+    packageButton.type = 'button';
+    packageButton.className = 'modal-btn modal-btn-cancel';
+    packageButton.textContent = i18n.t('feedbackDownloadPackage');
+    const issueButton = document.createElement('button');
+    issueButton.type = 'submit';
+    issueButton.className = 'modal-btn modal-btn-confirm';
+    issueButton.textContent = i18n.t('feedbackOpenIssue');
+    actions.append(packageButton, issueButton);
+
+    form.append(header, fields, attachmentSection, actions);
+    modal.appendChild(form);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const attachedFiles = [];
+    const releasePreview = (attachment) => {
+        if (attachment?.previewUrl) {
+            URL.revokeObjectURL(attachment.previewUrl);
+            attachment.previewUrl = '';
+        }
+    };
+    const finish = () => {
+        document.removeEventListener('keydown', escHandler);
+        attachedFiles.forEach(releasePreview);
+        Modal.close(overlay, previousActive);
+    };
+    const renderFiles = () => {
+        if (!attachedFiles.length) {
+            fileList.textContent = i18n.t('feedbackNoFiles');
+            return;
+        }
+        const total = attachedFiles.reduce((sum, attachment) => sum + attachment.file.size, 0);
+        fileList.innerHTML = '';
+        const list = document.createElement('ul');
+        attachedFiles.forEach((attachment, index) => {
+            const file = attachment.file;
+            const row = document.createElement('li');
+            if (attachment.previewUrl) {
+                const preview = document.createElement('img');
+                preview.className = 'feedback-file-preview';
+                preview.src = attachment.previewUrl;
+                preview.alt = file.name || `attachment-${index + 1}`;
+                row.appendChild(preview);
+            } else {
+                const icon = document.createElement('span');
+                icon.className = 'feedback-file-generic';
+                icon.textContent = 'FILE';
+                row.appendChild(icon);
+            }
+
+            const meta = document.createElement('span');
+            meta.className = 'feedback-file-meta';
+            const name = document.createElement('span');
+            name.className = 'feedback-file-name';
+            name.textContent = file.name || `attachment-${index + 1}`;
+            const size = document.createElement('span');
+            size.className = 'feedback-file-size';
+            size.textContent = this._formatFeedbackBytes(file.size);
+            meta.append(name, size);
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.textContent = i18n.t('feedbackRemoveFile');
+            remove.addEventListener('click', () => {
+                const [removed] = attachedFiles.splice(index, 1);
+                releasePreview(removed);
+                renderFiles();
+            });
+            row.append(meta, remove);
+            list.appendChild(row);
+        });
+        fileList.appendChild(list);
+        const totalLine = document.createElement('div');
+        totalLine.className = total > FEEDBACK_MAX_PACKAGE_BYTES ? 'feedback-total is-too-large' : 'feedback-total';
+        totalLine.textContent = i18n.t('feedbackTotalSize').replace('{size}', this._formatFeedbackBytes(total));
+        fileList.appendChild(totalLine);
+    };
+    const addFiles = (files, source = 'file') => {
+        Array.from(files || []).forEach((file, index) => {
+            if (!file) return;
+            const name = this._feedbackAttachmentName(file, attachedFiles, { source, index });
+            const wrappedFile = new File([file], name, { type: file.type || 'application/octet-stream', lastModified: file.lastModified || Date.now() });
+            attachedFiles.push({
+                file: wrappedFile,
+                previewUrl: wrappedFile.type.startsWith('image/') ? URL.createObjectURL(wrappedFile) : '',
+            });
+        });
+        renderFiles();
+    };
+    const collectFeedback = () => ({
+        contact: contact.control.value.trim(),
+        category: category.control.value,
+        summary: summary.control.value.trim(),
+        details: details.control.value.trim(),
+        expected: expected.control.value.trim(),
+        appVersion: APP_VERSION,
+        buildSha: BUILD_SHA,
+        buildDate: BUILD_DATE,
+        pageUrl: window.location.href,
+        userAgent: navigator.userAgent,
+        createdAt: new Date().toISOString(),
+        attachmentNames: attachedFiles.map(attachment => attachment.file.name),
+    });
+    const ensureValid = () => {
+        if (!form.reportValidity()) return false;
+        const total = attachedFiles.reduce((sum, attachment) => sum + attachment.file.size, 0);
+        if (total > FEEDBACK_MAX_PACKAGE_BYTES) {
+            Modal.alert(i18n.t('feedbackPackageTooLargeTitle'), i18n.t('feedbackPackageTooLargeBody'), { icon: 'ZIP' });
+            return false;
+        }
+        return true;
+    };
+    const downloadPackage = async () => {
+        if (!ensureValid()) return null;
+        const feedback = collectFeedback();
+        const zipEntries = {
+            'feedback.json': strToU8(`${JSON.stringify(feedback, null, 2)}\n`),
+            'feedback.txt': strToU8(this._formatFeedbackIssueBody(feedback, true)),
+        };
+        const used = new Set(Object.keys(zipEntries).map(name => name.toLowerCase()));
+        for (const attachment of attachedFiles) {
+            const file = attachment.file;
+            const path = `attachments/${this._uniqueFeedbackArchiveName(file.name, used)}`;
+            zipEntries[path] = new Uint8Array(await file.arrayBuffer());
+        }
+        const zip = zipSync(zipEntries, { level: 6 });
+        const filename = this._feedbackPackageFileName(feedback);
+        if (typeof this._downloadBlob === 'function') {
+            this._downloadBlob(new Blob([zip], { type: 'application/zip' }), filename);
+        } else {
+            this._downloadFeedbackBlob(new Blob([zip], { type: 'application/zip' }), filename);
+        }
+        return { feedback, filename };
+    };
+    const openIssue = (feedback, filename) => {
+        const subject = `[Time Series Explorer] ${feedback.summary || i18n.t('extraFeedback')}`;
+        const body = this._formatFeedbackIssueBody(feedback, false, filename);
+        const params = new URLSearchParams({
+            title: subject,
+            body,
+            labels: 'feedback',
+        });
+        window.open(`${FEEDBACK_ISSUES_URL}?${params.toString()}`, '_blank', 'noopener');
+    };
+
+    fileButton.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+        addFiles(fileInput.files);
+        fileInput.value = '';
+    });
+    pasteZone.addEventListener('paste', (event) => {
+        addFiles(event.clipboardData?.files || [], 'paste');
+    });
+    pasteZone.addEventListener('dragover', (event) => {
+        event.preventDefault();
+        pasteZone.classList.add('is-dragover');
+    });
+    pasteZone.addEventListener('dragleave', () => pasteZone.classList.remove('is-dragover'));
+    pasteZone.addEventListener('drop', (event) => {
+        event.preventDefault();
+        pasteZone.classList.remove('is-dragover');
+        addFiles(event.dataTransfer?.files || []);
+    });
+    packageButton.addEventListener('click', () => {
+        downloadPackage().catch(err => {
+            console.error('Feedback package failed:', err);
+            Modal.alert(i18n.t('feedbackPackageFailedTitle'), err?.message || String(err), { icon: 'ZIP' });
+        });
+    });
+    form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        if (!ensureValid()) return;
+        if (!attachedFiles.length) {
+            openIssue(collectFeedback(), '');
+            return;
+        }
+        downloadPackage()
+            .then(result => {
+                if (result) openIssue(result.feedback, result.filename);
+            })
+            .catch(err => {
+                console.error('Feedback submit failed:', err);
+                Modal.alert(i18n.t('feedbackPackageFailedTitle'), err?.message || String(err), { icon: 'ZIP' });
+            });
+    });
+    closeButton.addEventListener('click', finish);
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) finish();
+    });
+    const escHandler = (event) => {
+        if (event.key === 'Escape') finish();
+    };
+    document.addEventListener('keydown', escHandler);
+
+    requestAnimationFrame(() => overlay.classList.add('show'));
+    setTimeout(() => summary.control.focus(), 100);
+};
+
+proto._createFeedbackField = function(labelKey, tagName, attributes = {}) {
+    const wrap = document.createElement('label');
+    wrap.className = 'feedback-field';
+    const label = document.createElement('span');
+    label.textContent = i18n.t(labelKey);
+    const control = document.createElement(tagName);
+    control.className = 'feedback-control';
+    Object.entries(attributes).forEach(([key, value]) => {
+        if (value === true) control.setAttribute(key, '');
+        else if (value !== false && value != null) control.setAttribute(key, value);
+    });
+    wrap.append(label, control);
+    return { wrap, control };
+};
+
+proto._formatFeedbackIssueBody = function(feedback, includeAttachmentList = false, packageFilename = '') {
+    const lines = [
+        'Time Series Explorer feedback',
+        '',
+        `Category: ${feedback.category}`,
+        `Contact: ${feedback.contact || 'not provided'}`,
+        `Summary: ${feedback.summary}`,
+        '',
+        'Details:',
+        feedback.details || '-',
+        '',
+        'Expected / useful context:',
+        feedback.expected || '-',
+        '',
+        'Build:',
+        `Version: ${feedback.appVersion}`,
+        `Commit: ${feedback.buildSha}`,
+        `Build date: ${feedback.buildDate || '-'}`,
+        `URL: ${feedback.pageUrl}`,
+        `User agent: ${feedback.userAgent}`,
+    ];
+    if (packageFilename) {
+        lines.push('', `Attach the downloaded package to the GitHub issue if it is safe to share: ${packageFilename}`);
+    }
+    if (includeAttachmentList) {
+        lines.push('', 'Attachments:', ...(feedback.attachmentNames.length ? feedback.attachmentNames : ['none']));
+    }
+    return `${lines.join('\n')}\n`;
+};
+
+proto._formatFeedbackBytes = function(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+proto._feedbackAttachmentName = function(file, attachments, options = {}) {
+    const source = options.source || 'file';
+    const original = String(file?.name || '').trim();
+    const type = String(file?.type || '');
+    const extensionFromType = type.includes('/') ? type.split('/').pop().replace('jpeg', 'jpg').replace(/[^a-z0-9]/gi, '') : '';
+    const originalExtensionMatch = /\.([A-Za-z0-9]{1,8})$/.exec(original);
+    const originalExtension = originalExtensionMatch ? originalExtensionMatch[1] : '';
+    const extension = (originalExtension || extensionFromType || 'bin').toLowerCase();
+    const isGenericClipboardImage = source === 'paste'
+        && type.startsWith('image/')
+        && (!original || /^image\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(original));
+
+    const base = isGenericClipboardImage
+        ? `screenshot-${this._nextFeedbackScreenshotNumber(attachments)}`
+        : this._safeFeedbackFileName(original || `attachment-${(options.index || 0) + 1}`);
+
+    const withExtension = /\.[A-Za-z0-9]{1,8}$/.test(base) ? base : `${base}.${extension}`;
+    return this._uniqueFeedbackDisplayName(withExtension, attachments);
+};
+
+proto._nextFeedbackScreenshotNumber = function(attachments) {
+    let highest = 0;
+    for (const attachment of attachments || []) {
+        const match = /^screenshot-(\d+)\./i.exec(attachment?.file?.name || '');
+        if (match) highest = Math.max(highest, Number(match[1]) || 0);
+    }
+    return highest + 1;
+};
+
+proto._uniqueFeedbackDisplayName = function(filename, attachments) {
+    const safe = this._safeFeedbackFileName(filename);
+    const used = new Set((attachments || []).map(attachment => String(attachment?.file?.name || '').toLowerCase()));
+    let candidate = safe;
+    let index = 2;
+    while (used.has(candidate.toLowerCase())) {
+        const dot = safe.lastIndexOf('.');
+        candidate = dot > 0
+            ? `${safe.slice(0, dot)}-${index}${safe.slice(dot)}`
+            : `${safe}-${index}`;
+        index += 1;
+    }
+    return candidate;
+};
+
+proto._feedbackPackageFileName = function(feedback) {
+    const stamp = feedback.createdAt.slice(0, 19).replace(/[T:]/g, '-');
+    const summary = this._safeFeedbackFileName(feedback.summary || 'feedback').slice(0, 48) || 'feedback';
+    return `timeseries-explorer-feedback-${stamp}-${summary}.zip`;
+};
+
+proto._safeFeedbackFileName = function(name) {
+    return String(name || 'attachment')
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '') || 'attachment';
+};
+
+proto._uniqueFeedbackArchiveName = function(filename, used) {
+    const safe = this._safeFeedbackFileName(filename);
+    let candidate = safe;
+    let index = 2;
+    while (used.has(`attachments/${candidate}`.toLowerCase())) {
+        const dot = safe.lastIndexOf('.');
+        candidate = dot > 0
+            ? `${safe.slice(0, dot)}-${index}${safe.slice(dot)}`
+            : `${safe}-${index}`;
+        index += 1;
+    }
+    used.add(`attachments/${candidate}`.toLowerCase());
+    return candidate;
+};
+
+proto._downloadFeedbackBlob = function(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
 proto._downloadDesktopPackage = async function() {

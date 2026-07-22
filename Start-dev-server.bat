@@ -6,6 +6,19 @@ title Timeseries Explorer - Development Server
 
 if /i "%~1"=="--help" goto :help
 
+set "PORT=%~1"
+if "%PORT%"=="" (
+  call :find_free_port
+  if errorlevel 1 (
+    echo.
+    echo [ERROR] No free port found between 8000 and 8010.
+    echo         Try manually with: %~nx0 8080
+    echo.
+    pause
+    exit /b 1
+  )
+)
+
 echo ============================================================
 echo    Timeseries Explorer - Development Server
 echo ============================================================
@@ -46,25 +59,36 @@ if not exist "node_modules\" (
   echo.
 )
 
-echo Starting http://127.0.0.1:8000/
+echo Starting http://127.0.0.1:%PORT%/
 echo The browser will open when the server is ready.
 echo.
 echo Keep this window open while using the app.
 echo Press Ctrl+C or close this window to stop the server.
 echo.
 
-call npm.cmd run dev -- --host 127.0.0.1 --port 8000 --strictPort --open
+call npm.cmd run dev -- --host 127.0.0.1 --port %PORT% --strictPort --open
 
 echo.
 echo The development server has stopped.
 pause
 exit /b 0
 
+:find_free_port
+for %%P in (8000 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010) do (
+    netstat -ano | findstr /R /C:":%%P " >nul 2>nul
+    if errorlevel 1 (
+        set "PORT=%%P"
+        exit /b 0
+    )
+)
+exit /b 1
+
 :help
-echo Usage: %~nx0
+echo Usage: %~nx0 [PORT]
 echo.
 echo Starts the development server for the branch currently checked out
 echo in this working directory. It does not switch Git branches.
+echo If PORT is omitted, the first free port between 8000 and 8010 is used.
 echo.
 echo To use another branch, stop the server, run:
 echo   git switch BRANCH_NAME

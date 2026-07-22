@@ -20,6 +20,18 @@ Use the local server helper for Web Preview:
 .\serve.bat
 ```
 
+On Linux or macOS:
+
+```sh
+./serve.sh
+```
+
+If you downloaded a source ZIP on Linux and the scripts are not executable yet, run:
+
+```sh
+sh setup-linux.sh
+```
+
 Then open the URL shown in the terminal, usually:
 
 ```text
@@ -45,6 +57,7 @@ It builds the web app into `dist/`, starts an Electron-local localhost server, a
 The packaged Desktop app works offline: application assets and data processing stay local. Web links open in the
 operating system's default browser, and the Electron renderer does not make external network requests.
 On Windows, you can also double-click `start-full-desktop.bat`. The first run installs missing npm dependencies if needed.
+On Linux or macOS, run `./start-full-desktop.sh` from a terminal.
 
 To build Windows desktop artifacts:
 
@@ -81,6 +94,9 @@ output path.
 - `app.js`: browser entrypoint
 - `electron`: Electron wrapper for the Full Desktop runtime
 - `serve.bat`: local HTTP server launcher for development/testing
+- `serve.sh`: Linux/macOS local HTTP server launcher for development/testing
+- `start-dev-server.sh`: Linux/macOS Vite development server helper
+- `setup-linux.sh`: marks the POSIX helper scripts executable after Linux ZIP extraction
 - `package.json`: npm scripts and frontend tooling
 - `vite.config.js`: dev/build server configuration
 - `public`: files copied as-is into the final build
@@ -101,6 +117,15 @@ output path.
 - App methods are split by responsibility to reduce context size when editing.
 
 More detail: [docs/architecture.md](docs/architecture.md)
+
+## Feedback
+
+The in-app Feedback command opens a form for text, screenshots pasted from the
+clipboard, and optional files. It does not upload files automatically. Instead,
+it downloads a local zip package and opens a prefilled GitHub Issue; attach the
+zip only when the contents are safe to share publicly.
+
+More detail: [docs/feedback.md](docs/feedback.md)
 
 ## netCDF support
 

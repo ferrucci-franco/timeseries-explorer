@@ -23,6 +23,8 @@ const translationKeys = [
     'desktopDownloadBetaNote',
     'desktopDownloadUnsignedNote',
     'desktopDownloadReleaseDetails',
+    'extraOnlineVersion',
+    'extraOnlineVersionTooltip',
 ];
 for (const locale of ['en', 'fr', 'es', 'it']) {
     for (const key of translationKeys) {
@@ -43,6 +45,7 @@ for (const platform of ['windows', 'apple', 'linux']) {
 }
 
 assert.match(ui, /_showDesktopDownloadDialog/, 'Menu action should open a selector instead of downloading immediately');
+assert.match(ui, /capabilities\?\.isDesktop[\s\S]*extraOnlineVersion[\s\S]*ONLINE_VERSION_URL/s, 'Desktop runtime should offer the online version instead of the desktop download selector');
 assert.match(ui, /releaseApiUrl[\s\S]*publishedAssets = new Map/s, 'Published GitHub assets should be verified before enabling downloads');
 assert.match(ui, /replaceAll\(' ', '\.'\)/, 'GitHub-normalized asset names should still be recognized');
 assert.match(ui, /releaseResponse\.status === 404[\s\S]*new Map\(\)/s, 'An unpublished release should produce a safe disabled state');
