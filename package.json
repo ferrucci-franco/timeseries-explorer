@@ -20,8 +20,12 @@
     "serve:local": "node scripts/portable-server.mjs",
     "desktop": "npm run build:web && node scripts/start-electron.mjs",
     "desktop:pack": "npm run build:web && node scripts/run-electron-builder.mjs --dir",
-    "desktop:dist": "npm run build:web && node scripts/run-electron-builder.mjs --win nsis portable",
-    "desktop:dist:x64": "npm run build:web && node scripts/run-electron-builder.mjs --win nsis portable --x64",
+    "desktop:dist": "npm run desktop:dist:windows:x64",
+    "desktop:dist:windows:x64": "npm run build:web && node scripts/run-electron-builder.mjs --win nsis portable --x64",
+    "desktop:dist:x64": "npm run desktop:dist:windows:x64",
+    "desktop:dist:macos:x64": "npm run build:web && node scripts/run-electron-builder.mjs --mac dmg zip --x64",
+    "desktop:dist:macos:arm64": "npm run build:web && node scripts/run-electron-builder.mjs --mac dmg zip --arm64",
+    "desktop:dist:linux:x64": "npm run build:web && node scripts/run-electron-builder.mjs --linux deb AppImage --x64",
     "desktop:checksums": "node scripts/create-desktop-checksums.mjs",
     "desktop:verify-package": "node scripts/verify-packaged-desktop.mjs",
     "desktop:icon": "node scripts/render-desktop-icon.mjs",
@@ -149,6 +153,32 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": [
+        "deb",
+        "AppImage"
+      ],
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+      "category": "Utility",
+      "synopsis": "Explore time-series data",
+      "description": "Offline desktop application for exploring time-series data.",
+      "maintainer": "Franco Ferrucci"
+    },
+    "deb": {
+      "packageCategory": "utils",
+      "priority": "optional"
+    },
+    "appImage": {
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
     },
     "npmRebuild": false
   }

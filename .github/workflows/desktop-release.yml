@@ -13,8 +13,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate-build-release:
-    runs-on: windows-latest
+  validate:
+    name: Validate release source
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - name: Checkout tagged source
@@ -28,62 +29,141 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm.cmd ci
+        run: npm ci
 
       - name: Verify tag matches package version
-        shell: pwsh
         run: |
-          $packageVersion = node -p "require('./package.json').version"
-          $expectedTag = "v$packageVersion"
-          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
-            throw "Tag $env:GITHUB_REF_NAME does not match package version $packageVersion"
-          }
+          package_version=$(node -p "require('./package.json').version")
+          expected_tag="v${package_version}"
+          if [ "$GITHUB_REF_NAME" != "$expected_tag" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $package_version"
+            exit 1
+          fi
 
       - name: Run release test suite
-        run: npm.cmd run test:release
+        run: npm run test:release
 
       - name: Audit production dependencies for critical vulnerabilities
-        run: npm.cmd audit --omit=dev --audit-level=critical
+        run: npm audit --omit=dev --audit-level=critical
 
-      - name: Build Windows x64 installer and portable app
-        run: npm.cmd run desktop:dist:x64
+  build:
+    name: Build ${{ matrix.label }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            runner: windows-latest
+            npm: npm.cmd
+            platform: windows
+            architecture: x64
+            build_script: desktop:dist:windows:x64
+            artifact_suffix: windows-x64
+          - label: macOS Intel
+            runner: macos-13
+            npm: npm
+            platform: macos
+            architecture: x64
+            build_script: desktop:dist:macos:x64
+            artifact_suffix: macos-x64
+          - label: macOS Apple silicon
+            runner: macos-14
+            npm: npm
+            platform: macos
+            architecture: arm64
+            build_script: desktop:dist:macos:arm64
+            artifact_suffix: macos-arm64
+          - label: Linux x86_64
+            runner: ubuntu-24.04
+            npm: npm
+            platform: linux
+            architecture: x64
+            build_script: desktop:dist:linux:x64
+            artifact_suffix: linux-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: ${{ matrix.npm }} ci
+
+      - name: Build desktop artifacts
+        run: ${{ matrix.npm }} run ${{ matrix.build_script }}
 
       - name: Inspect packaged runtime
-        run: npm.cmd run desktop:verify-package
+        env:
+          OMV_RELEASE_PLATFORM: ${{ matrix.platform }}
+          OMV_RELEASE_ARCH: ${{ matrix.architecture }}
+        run: ${{ matrix.npm }} run desktop:verify-package
 
       - name: Generate SHA-256 checksums
-        run: npm.cmd run desktop:checksums
+        env:
+          OMV_RELEASE_PLATFORM: ${{ matrix.platform }}
+          OMV_RELEASE_ARCH: ${{ matrix.architecture }}
+          OMV_CHECKSUMS_FILE: SHA256SUMS-${{ matrix.artifact_suffix }}.txt
+        run: ${{ matrix.npm }} run desktop:checksums
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: time-series-explorer-${{ github.ref_name }}-windows-x64
+          name: time-series-explorer-${{ github.ref_name }}-${{ matrix.artifact_suffix }}
           path: |
             desktop-dist/*.exe
-            desktop-dist/SHA256SUMS.txt
+            desktop-dist/*.dmg
+            desktop-dist/*.zip
+            desktop-dist/*.deb
+            desktop-dist/*.AppImage
+            desktop-dist/SHA256SUMS-${{ matrix.artifact_suffix }}.txt
           if-no-files-found: error
 
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: time-series-explorer-${{ github.ref_name }}-*
+          path: release-assets
+          merge-multiple: true
+
       - name: Create GitHub Release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $assets = Get-ChildItem -LiteralPath desktop-dist -File |
-            Where-Object { $_.Extension -eq '.exe' -or $_.Name -eq 'SHA256SUMS.txt' } |
-            ForEach-Object { $_.FullName }
-          if ($assets.Count -ne 3) {
-            throw "Expected two executables and SHA256SUMS.txt; found $($assets.Count) files"
-          }
-          $notesPath = "docs/releases/$($env:GITHUB_REF_NAME).md"
-          if (-not (Test-Path -LiteralPath $notesPath)) {
-            throw "Missing release notes: $notesPath"
-          }
-          $arguments = @(
-            'release', 'create', $env:GITHUB_REF_NAME,
-            '--verify-tag',
-            '--title', "Time Series Explorer $env:GITHUB_REF_NAME",
-            '--notes-file', $notesPath
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f \( \
+            -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.deb' -o \
+            -name '*.AppImage' -o -name 'SHA256SUMS-*.txt' \) -print | sort)
+          if [ "${#assets[@]}" -ne 12 ]; then
+            echo "Expected 12 desktop release assets; found ${#assets[@]}"
+            printf '%s\n' "${assets[@]}"
+            exit 1
+          fi
+          notes_path="docs/releases/${GITHUB_REF_NAME}.md"
+          if [ ! -f "$notes_path" ]; then
+            echo "Missing release notes: $notes_path"
+            exit 1
+          fi
+          release_args=(
+            release create "$GITHUB_REF_NAME"
+            --verify-tag
+            --title "Time Series Explorer $GITHUB_REF_NAME"
+            --notes-file "$notes_path"
           )
-          if ($env:GITHUB_REF_NAME -match '-') { $arguments += '--prerelease' }
-          $arguments += $assets
-          & gh @arguments
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then release_args+=(--prerelease); fi
+          gh "${release_args[@]}" "${assets[@]}"
