@@ -100,10 +100,16 @@ jobs:
       - name: Build desktop artifacts
         run: ${{ matrix.npm }} run ${{ matrix.build_script }}
 
+      - name: Build unpacked runtime for inspection
+        env:
+          OMV_DIST_OUTPUT: desktop-dist/inspection
+        run: ${{ matrix.npm }} run desktop:pack
+
       - name: Inspect packaged runtime
         env:
           OMV_RELEASE_PLATFORM: ${{ matrix.platform }}
           OMV_RELEASE_ARCH: ${{ matrix.architecture }}
+          OMV_DIST_OUTPUT: desktop-dist/inspection
         run: ${{ matrix.npm }} run desktop:verify-package
 
       - name: Generate SHA-256 checksums
