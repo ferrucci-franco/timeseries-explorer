@@ -2,6 +2,8 @@ import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import {
     APP_VERSION,
+    BUILD_SHA,
+    BUILD_DATE,
     DESKTOP_MANIFEST_PATH,
     DESKTOP_PLATFORM_ICON_PATHS,
     DYMOLA_LOGO_ICON_PATH,
@@ -1361,7 +1363,7 @@ proto._renderExtraMenu = function() {
     );
 
     const versionRow = document.createElement('div');
-    versionRow.className = 'example-menu-item extra-menu-static';
+    versionRow.className = 'example-menu-item extra-menu-static extra-version-row';
 
     const versionIcon = document.createElement('span');
     versionIcon.className = 'extra-menu-icon';
@@ -1375,7 +1377,21 @@ proto._renderExtraMenu = function() {
     versionValue.className = 'example-badge extra-version-badge';
     versionValue.textContent = `v${APP_VERSION}`;
 
+    // Build provenance (commit + date) injected by Vite; helps testers report
+    // exactly which build they are running on the rolling web version.
+    const buildParts = [];
+    if (BUILD_SHA) buildParts.push(`#${BUILD_SHA}`);
+    if (BUILD_DATE) buildParts.push(BUILD_DATE.slice(0, 10));
+    const buildText = buildParts.join(' · ');
+
+    const versionBuild = document.createElement('span');
+    versionBuild.className = 'extra-version-build';
+    versionBuild.textContent = buildText;
+
+    versionRow.title = buildText ? `v${APP_VERSION} — ${buildText}` : `v${APP_VERSION}`;
+
     versionRow.append(versionIcon, versionLabel, versionValue);
+    if (buildText) versionRow.append(versionBuild);
 
     const items = [saveViewItem, saveProjectItem, loadSessionItem, displaySettingsItem];
     if (this.capabilities?.canUseLocalPath) {

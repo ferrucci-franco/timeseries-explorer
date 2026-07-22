@@ -42,7 +42,12 @@ const DERIVED_FUNCTION_ALIASES = new Map([
 ]);
 
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.netcdf', '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods'];
-const APP_VERSION = '0.1.0-beta.2';
+const APP_VERSION = '0.1.0-beta.3';
+// Injected at build time by Vite (see vite.config.js). Fall back to placeholders
+// when running outside a Vite build (e.g. Node test scripts), where the globals
+// are undeclared; `typeof` avoids a ReferenceError in that case.
+const BUILD_SHA = typeof __GIT_SHA__ !== 'undefined' ? __GIT_SHA__ : 'dev';
+const BUILD_DATE = typeof __BUILD_DATE__ !== 'undefined' ? __BUILD_DATE__ : '';
 const DESKTOP_MANIFEST_PATH = './downloads/desktop.json';
 const DESKTOP_PLATFORM_ICON_PATHS = {
     windows: `${PUBLIC_BASE}images/platforms/windows.svg`,
@@ -57,4 +62,4 @@ const RESET_LAYOUT_ICON_SVG = `<svg class="reset-layout-glyph" viewBox="0 0 64 6
     <path fill="none" stroke="#ef8b78" stroke-width="2" d="M6 6h52v52H6zM6 58 58 6M32 6v52M6 32h52"/>
 </svg>`;
 
-export { APP_VERSION, DESKTOP_MANIFEST_PATH, DESKTOP_PLATFORM_ICON_PATHS, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, OPENMODELICA_MODELING_ICON_PATH, RESET_LAYOUT_ICON_SVG, RESULT_FILE_EXTENSIONS };
+export { APP_VERSION, BUILD_SHA, BUILD_DATE, DESKTOP_MANIFEST_PATH, DESKTOP_PLATFORM_ICON_PATHS, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, OPENMODELICA_MODELING_ICON_PATH, RESET_LAYOUT_ICON_SVG, RESULT_FILE_EXTENSIONS };

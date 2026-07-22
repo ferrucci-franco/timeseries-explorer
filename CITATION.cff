@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: "Ferrucci"
     given-names: "Franco"
-version: 0.1.0
+version: 0.1.0-beta.3
 repository-code: "https://github.com/ferrucci-franco/timeseries-explorer"
 url: "https://ferrucci-franco.github.io/timeseries-explorer/"
 license: MIT

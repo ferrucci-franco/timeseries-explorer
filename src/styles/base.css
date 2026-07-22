@@ -1067,3 +1067,15 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     border-color: color-mix(in srgb, var(--primary-color) 30%, var(--border-color));
     font-weight: 600;
 }
+
+.extra-version-row {
+    flex-wrap: wrap;
+}
+
+.extra-version-build {
+    flex-basis: 100%;
+    margin-left: 2.15rem;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
