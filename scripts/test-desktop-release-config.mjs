@@ -7,10 +7,10 @@ const constants = await readFile(new URL('src/app/constants.js', root), 'utf8');
 const workflow = await readFile(new URL('.github/workflows/desktop-release.yml', root), 'utf8');
 const builderRunner = await readFile(new URL('scripts/run-electron-builder.mjs', root), 'utf8');
 const manifest = JSON.parse(await readFile(new URL('public/downloads/desktop.json', root), 'utf8'));
-const releaseNotes = await readFile(new URL('docs/releases/v0.1.0-beta.3.md', root), 'utf8');
+const releaseNotes = await readFile(new URL('docs/releases/v0.1.0-beta.4.md', root), 'utf8');
 
-assert.equal(pkg.version, '0.1.0-beta.3');
-assert.match(constants, /APP_VERSION = '0\.1\.0-beta\.3'/);
+assert.equal(pkg.version, '0.1.0-beta.4');
+assert.match(constants, /APP_VERSION = '0\.1\.0-beta\.4'/);
 assert.deepEqual(pkg.build.win.target, ['nsis', 'portable']);
 assert.equal(pkg.build.nsis.oneClick, false);
 assert.equal(pkg.build.nsis.allowToChangeInstallationDirectory, true);
@@ -25,8 +25,8 @@ for (const excluded of ['node-gyp', 'cacache', 'make-fetch-happen', 'tar']) {
 assert.equal(manifest.version, pkg.version);
 assert.equal(manifest.platform, 'windows');
 assert.equal(manifest.architecture, 'x64');
-assert.match(manifest.downloadUrl, /v0\.1\.0-beta\.3\/Time\.Series\.Explorer-0\.1\.0-beta\.3-setup-x64\.exe$/);
-assert.match(manifest.portableUrl, /v0\.1\.0-beta\.3\/Time\.Series\.Explorer-0\.1\.0-beta\.3-portable-x64\.exe$/);
+assert.match(manifest.downloadUrl, /v0\.1\.0-beta\.4\/Time\.Series\.Explorer-0\.1\.0-beta\.4-setup-x64\.exe$/);
+assert.match(manifest.portableUrl, /v0\.1\.0-beta\.4\/Time\.Series\.Explorer-0\.1\.0-beta\.4-portable-x64\.exe$/);
 
 assert.match(workflow, /tags:\s*\n\s*- ['"]v\*['"]/);
 assert.match(workflow, /node-version:\s*22/);
