@@ -59,7 +59,7 @@ operating system's default browser, and the Electron renderer does not make exte
 On Windows, you can also double-click `start-full-desktop.bat`. The first run installs missing npm dependencies if needed.
 On Linux or macOS, run `./start-full-desktop.sh` from a terminal.
 
-To build Windows desktop artifacts:
+To build the Windows desktop artifacts locally:
 
 ```powershell
 npm run desktop:dist
@@ -69,6 +69,16 @@ The generated files are written to `desktop-dist/`:
 
 - `Time Series Explorer-<version>-setup-x64.exe`: Windows installer.
 - `Time Series Explorer-<version>-portable-x64.exe`: portable executable.
+
+The tagged release workflow also builds the Full Desktop edition for Linux and macOS:
+
+- macOS Intel: DMG installer and ZIP portable archive.
+- macOS Apple silicon: DMG installer and ZIP portable archive.
+- Linux x86_64: DEB installer and AppImage portable executable.
+
+Those targets must be built on their native GitHub Actions runners. The explicit
+commands are `npm run desktop:dist:macos:x64`, `npm run desktop:dist:macos:arm64`
+and `npm run desktop:dist:linux:x64`; all artifacts are written to `desktop-dist/`.
 
 Public Desktop releases are built from version tags and distributed through
 [GitHub Releases](https://github.com/ferrucci-franco/timeseries-explorer/releases).

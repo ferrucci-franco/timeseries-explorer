@@ -3,40 +3,40 @@ const GA_SCRIPT_ID = 'omv-analytics-script';
 
 const COPY = {
     en: {
-        title: 'Privacy and cookies',
-        body: 'We use optional analytics cookies to understand how the website is used. They are not needed for the site to work.',
-        detail: 'Analytics helps us measure visits, pages viewed, approximate visit duration, browser and device information, and traffic sources. No names, email addresses, files, or file contents are sent.',
+        title: 'Privacy choices',
+        body: 'The app works normally without sharing usage information. If you allow it, the app sends limited information so we can estimate how many people use the web app.',
+        detail: 'This information may include visits, pages opened, approximate visit duration, browser/device type and traffic source. It does not include your name, email address, uploaded files or file contents. You can say no without losing any functionality.',
         required: 'Necessary', requiredBody: 'Stores your privacy choice and keeps the site working.',
-        analytics: 'Analytics', analyticsBody: 'Optional measurement of website visits and usage.',
-        accept: 'Accept analytics', reject: 'Reject', configure: 'Configure', save: 'Save preferences',
-        on: 'On', off: 'Off', provider: 'The analytics provider is identified in the privacy policy.'
+        analytics: 'Usage information', analyticsBody: 'Optional measurement of general web app usage.',
+        accept: 'Allow usage information', reject: 'Reject', configure: 'Configure', save: 'Save preferences',
+        on: 'On', off: 'Off', provider: 'Details about this optional service are available in the privacy policy.'
     },
     fr: {
-        title: 'Confidentialité et cookies',
-        body: 'Nous utilisons des cookies d’analyse facultatifs pour comprendre l’utilisation du site. Ils ne sont pas nécessaires à son fonctionnement.',
-        detail: 'L’analyse nous aide à mesurer les visites, les pages consultées, la durée approximative des visites, le navigateur, l’appareil et les sources de trafic. Aucun nom, e-mail, fichier ou contenu de fichier n’est envoyé.',
+        title: 'Choix de confidentialité',
+        body: 'L’application fonctionne normalement sans partager d’informations sur son utilisation. Si vous l’acceptez, elle envoie des informations limitées sur son utilisation afin de nous aider à estimer combien de personnes utilisent l’application web.',
+        detail: 'Ces informations peuvent inclure les visites, les pages ouvertes, la durée approximative des visites, le type de navigateur et d’appareil, ainsi que la source du trafic. Elles ne contiennent ni votre nom, ni votre adresse e-mail, ni les fichiers téléchargés, ni leur contenu. Vous pouvez refuser sans perdre de fonctionnalité.',
         required: 'Nécessaires', requiredBody: 'Enregistrent votre choix de confidentialité et assurent le fonctionnement du site.',
-        analytics: 'Analyse', analyticsBody: 'Mesure facultative des visites et de l’utilisation du site.',
-        accept: 'Accepter l’analyse', reject: 'Refuser', configure: 'Configurer', save: 'Enregistrer les choix',
-        on: 'Activée', off: 'Désactivée', provider: 'Le fournisseur d’analyse est indiqué dans la politique de confidentialité.'
+        analytics: 'Informations d’utilisation', analyticsBody: 'Mesure facultative de l’utilisation générale de l’application web.',
+        accept: 'Autoriser les informations d’utilisation', reject: 'Refuser', configure: 'Configurer', save: 'Enregistrer les choix',
+        on: 'Activée', off: 'Désactivée', provider: 'Les détails de ce service facultatif sont disponibles dans la politique de confidentialité.'
     },
     es: {
-        title: 'Privacidad y cookies',
-        body: 'Usamos cookies opcionales de analítica para entender cómo se utiliza el sitio. No son necesarias para que funcione.',
-        detail: 'La analítica nos ayuda a medir visitas, páginas consultadas, duración aproximada, navegador, dispositivo y fuentes de tráfico. No enviamos nombres, correos, archivos ni contenido de archivos.',
+        title: 'Opciones de privacidad',
+        body: 'La aplicación funciona normalmente sin compartir información sobre su uso. Si lo aceptas, envía información limitada sobre su uso para ayudarnos a estimar cuántas personas utilizan la aplicación web.',
+        detail: 'Esta información puede incluir visitas, páginas abiertas, duración aproximada de las visitas, tipo de navegador y dispositivo, y origen del tráfico. No incluye tu nombre, correo electrónico, archivos subidos ni el contenido de los archivos. Puedes rechazarla sin perder ninguna función.',
         required: 'Necesarias', requiredBody: 'Guardan tu preferencia de privacidad y permiten que el sitio funcione.',
-        analytics: 'Analítica', analyticsBody: 'Medición opcional de las visitas y del uso del sitio.',
-        accept: 'Aceptar analítica', reject: 'Rechazar', configure: 'Configurar', save: 'Guardar preferencias',
-        on: 'Activada', off: 'Desactivada', provider: 'El proveedor de analítica se identifica en la política de privacidad.'
+        analytics: 'Información de uso', analyticsBody: 'Medición opcional del uso general de la aplicación web.',
+        accept: 'Permitir información de uso', reject: 'Rechazar', configure: 'Configurar', save: 'Guardar preferencias',
+        on: 'Activada', off: 'Desactivada', provider: 'Los detalles de este servicio opcional están disponibles en la política de privacidad.'
     },
     it: {
-        title: 'Privacy e cookie',
-        body: 'Usiamo cookie analitici opzionali per capire come viene usato il sito. Non sono necessari per il suo funzionamento.',
-        detail: 'L’analisi ci aiuta a misurare visite, pagine consultate, durata approssimativa, browser, dispositivo e fonti di traffico. Non inviamo nomi, e-mail, file o contenuti dei file.',
+        title: 'Scelte sulla privacy',
+        body: 'L’app funziona normalmente senza condividere informazioni sul suo utilizzo. Se lo consenti, invia informazioni limitate sull’uso per aiutarci a stimare quante persone utilizzano l’app web.',
+        detail: 'Queste informazioni possono includere visite, pagine aperte, durata approssimativa delle visite, tipo di browser e dispositivo e fonte del traffico. Non includono il tuo nome, indirizzo e-mail, file caricati o contenuti dei file. Puoi rifiutare senza perdere alcuna funzionalità.',
         required: 'Necessari', requiredBody: 'Memorizzano la scelta sulla privacy e mantengono il sito funzionante.',
-        analytics: 'Analisi', analyticsBody: 'Misurazione opzionale delle visite e dell’uso del sito.',
-        accept: 'Accetta analisi', reject: 'Rifiuta', configure: 'Configura', save: 'Salva preferenze',
-        on: 'Attivata', off: 'Disattivata', provider: 'Il fornitore dell’analisi è indicato nella privacy policy.'
+        analytics: 'Informazioni sull’uso', analyticsBody: 'Misurazione facoltativa dell’uso generale dell’app web.',
+        accept: 'Consenti informazioni sull’uso', reject: 'Rifiuta', configure: 'Configura', save: 'Salva preferenze',
+        on: 'Attivata', off: 'Disattivata', provider: 'I dettagli di questo servizio facoltativo sono disponibili nella privacy policy.'
     }
 };
 

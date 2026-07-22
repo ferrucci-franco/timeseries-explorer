@@ -6,19 +6,39 @@ import path from 'node:path';
 const outputDir = path.resolve(process.env.OMV_DIST_OUTPUT?.trim() || 'desktop-dist');
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const productName = pkg.build?.productName || pkg.productName || pkg.name;
-const expectedExecutables = [
-  `${productName}-${pkg.version}-portable-x64.exe`,
-  `${productName}-${pkg.version}-setup-x64.exe`,
-].sort((a, b) => a.localeCompare(b));
+const platform = process.env.OMV_RELEASE_PLATFORM?.trim() || {
+  win32: 'windows',
+  darwin: 'macos',
+  linux: 'linux',
+}[process.platform] || 'windows';
+const architecture = process.env.OMV_RELEASE_ARCH?.trim() || process.arch;
+const expectedArtifacts = {
+  windows: [
+    `${productName}-${pkg.version}-portable-${architecture}.exe`,
+    `${productName}-${pkg.version}-setup-${architecture}.exe`,
+  ],
+  macos: [
+    `${productName}-${pkg.version}-mac-${architecture}.dmg`,
+    `${productName}-${pkg.version}-mac-${architecture}.zip`,
+  ],
+  linux: [
+    `${productName}-${pkg.version}-linux-${architecture}.deb`,
+    `${productName}-${pkg.version}-linux-${architecture}.AppImage`,
+  ],
+}[platform];
+
+if (!expectedArtifacts) throw new Error(`Unsupported release platform: ${platform}`);
+
+const expectedArtifactNames = expectedArtifacts.sort((a, b) => a.localeCompare(b));
 const entries = await readdir(outputDir, { withFileTypes: true });
-const executables = entries
-  .filter(entry => entry.isFile() && expectedExecutables.includes(entry.name))
+const artifacts = entries
+  .filter(entry => entry.isFile() && expectedArtifactNames.includes(entry.name))
   .map(entry => entry.name)
   .sort((a, b) => a.localeCompare(b));
 
-if (executables.length !== expectedExecutables.length) {
+if (artifacts.length !== expectedArtifactNames.length) {
   throw new Error(
-    `Expected release executables ${expectedExecutables.join(', ')} in ${outputDir}; found: ${executables.join(', ') || 'none'}`,
+    `Expected release artifacts ${expectedArtifactNames.join(', ')} in ${outputDir}; found: ${artifacts.join(', ') || 'none'}`,
   );
 }
 
@@ -29,11 +49,12 @@ async function sha256(filePath) {
 }
 
 const lines = [];
-for (const name of executables) {
+for (const name of artifacts) {
   lines.push(`${await sha256(path.join(outputDir, name))}  ${name}`);
 }
 
-const checksumPath = path.join(outputDir, 'SHA256SUMS.txt');
+const checksumName = process.env.OMV_CHECKSUMS_FILE?.trim() || 'SHA256SUMS.txt';
+const checksumPath = path.join(outputDir, checksumName);
 await writeFile(checksumPath, `${lines.join('\n')}\n`, 'utf8');
 console.log(`Wrote ${checksumPath}`);
 for (const line of lines) console.log(line);
