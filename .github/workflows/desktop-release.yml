@@ -61,7 +61,7 @@ jobs:
             build_script: desktop:dist:windows:x64
             artifact_suffix: windows-x64
           - label: macOS Intel
-            runner: macos-13
+            runner: macos-15-intel
             npm: npm
             platform: macos
             architecture: x64

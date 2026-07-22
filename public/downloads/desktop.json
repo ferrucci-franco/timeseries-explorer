@@ -1,14 +1,14 @@
 {
-  "version": "0.1.0-beta.8",
+  "version": "0.1.0-beta.9",
   "channel": "beta",
   "platform": "windows",
   "architecture": "x64",
-  "fileName": "Time Series Explorer-0.1.0-beta.8-setup-x64.exe",
-  "downloadUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-setup-x64.exe",
-  "portableFileName": "Time Series Explorer-0.1.0-beta.8-portable-x64.exe",
-  "portableUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-portable-x64.exe",
-  "releaseUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/tag/v0.1.0-beta.8",
-  "releaseApiUrl": "https://api.github.com/repos/ferrucci-franco/timeseries-explorer/releases/tags/v0.1.0-beta.8",
+  "fileName": "Time Series Explorer-0.1.0-beta.9-setup-x64.exe",
+  "downloadUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-setup-x64.exe",
+  "portableFileName": "Time Series Explorer-0.1.0-beta.9-portable-x64.exe",
+  "portableUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-portable-x64.exe",
+  "releaseUrl": "https://github.com/ferrucci-franco/timeseries-explorer/releases/tag/v0.1.0-beta.9",
+  "releaseApiUrl": "https://api.github.com/repos/ferrucci-franco/timeseries-explorer/releases/tags/v0.1.0-beta.9",
   "platforms": {
     "windows": {
       "status": "available",
@@ -18,15 +18,15 @@
           "kind": "installer",
           "format": "EXE",
           "architecture": "x64",
-          "fileName": "Time Series Explorer-0.1.0-beta.8-setup-x64.exe",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-setup-x64.exe"
+          "fileName": "Time Series Explorer-0.1.0-beta.9-setup-x64.exe",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-setup-x64.exe"
         },
         {
           "kind": "portable",
           "format": "EXE",
           "architecture": "x64",
-          "fileName": "Time Series Explorer-0.1.0-beta.8-portable-x64.exe",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-portable-x64.exe"
+          "fileName": "Time Series Explorer-0.1.0-beta.9-portable-x64.exe",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-portable-x64.exe"
         }
       ]
     },
@@ -38,29 +38,29 @@
           "kind": "installer",
           "format": "DMG",
           "architecture": "x64",
-          "fileName": "Time Series Explorer-0.1.0-beta.8-mac-x64.dmg",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-mac-x64.dmg"
+          "fileName": "Time Series Explorer-0.1.0-beta.9-mac-x64.dmg",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-mac-x64.dmg"
         },
         {
           "kind": "portable",
           "format": "ZIP",
           "architecture": "x64",
-          "fileName": "Time Series Explorer-0.1.0-beta.8-mac-x64.zip",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-mac-x64.zip"
+          "fileName": "Time Series Explorer-0.1.0-beta.9-mac-x64.zip",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-mac-x64.zip"
         },
         {
           "kind": "installer",
           "format": "DMG",
           "architecture": "arm64",
-          "fileName": "Time Series Explorer-0.1.0-beta.8-mac-arm64.dmg",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-mac-arm64.dmg"
+          "fileName": "Time Series Explorer-0.1.0-beta.9-mac-arm64.dmg",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-mac-arm64.dmg"
         },
         {
           "kind": "portable",
           "format": "ZIP",
           "architecture": "arm64",
-          "fileName": "Time Series Explorer-0.1.0-beta.8-mac-arm64.zip",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-mac-arm64.zip"
+          "fileName": "Time Series Explorer-0.1.0-beta.9-mac-arm64.zip",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-mac-arm64.zip"
         }
       ]
     },
@@ -72,15 +72,15 @@
           "kind": "installer",
           "format": "DEB",
           "architecture": "x64",
-          "fileName": "Time Series Explorer-0.1.0-beta.8-linux-amd64.deb",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-linux-amd64.deb"
+          "fileName": "Time Series Explorer-0.1.0-beta.9-linux-amd64.deb",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-linux-amd64.deb"
         },
         {
           "kind": "portable",
           "format": "AppImage",
           "architecture": "x64",
-          "fileName": "Time Series Explorer-0.1.0-beta.8-linux-x86_64.AppImage",
-          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.8/Time%20Series%20Explorer-0.1.0-beta.8-linux-x86_64.AppImage"
+          "fileName": "Time Series Explorer-0.1.0-beta.9-linux-x86_64.AppImage",
+          "url": "https://github.com/ferrucci-franco/timeseries-explorer/releases/download/v0.1.0-beta.9/Time%20Series%20Explorer-0.1.0-beta.9-linux-x86_64.AppImage"
         }
       ]
     }
