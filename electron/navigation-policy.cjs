@@ -1,6 +1,7 @@
 'use strict';
 
 const EXTERNAL_WEB_PROTOCOLS = new Set(['http:', 'https:']);
+const EXTERNAL_OPEN_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const LOCAL_RENDERER_PROTOCOLS = new Set(['data:', 'about:']);
 
 function parseUrl(value) {
@@ -17,9 +18,16 @@ function appOriginFromUrl(appUrl) {
 }
 
 function isExternalWebUrl(targetUrl, appOrigin) {
+    const parsed = parseUrl(targetUrl);
+    if (!parsed || !EXTERNAL_WEB_PROTOCOLS.has(parsed.protocol)) return false;
+    return parsed.origin !== appOrigin;
+}
+
+function isExternalOpenUrl(targetUrl, appOrigin) {
   const parsed = parseUrl(targetUrl);
-  if (!parsed || !EXTERNAL_WEB_PROTOCOLS.has(parsed.protocol)) return false;
-  return parsed.origin !== appOrigin;
+  if (!parsed || !EXTERNAL_OPEN_PROTOCOLS.has(parsed.protocol)) return false;
+  if (EXTERNAL_WEB_PROTOCOLS.has(parsed.protocol)) return parsed.origin !== appOrigin;
+  return true;
 }
 
 function isAllowedRendererUrl(targetUrl, appOrigin) {
@@ -40,5 +48,6 @@ function isAllowedRendererUrl(targetUrl, appOrigin) {
 module.exports = {
   appOriginFromUrl,
   isAllowedRendererUrl,
+  isExternalOpenUrl,
   isExternalWebUrl,
 };

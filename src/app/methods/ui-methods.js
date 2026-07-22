@@ -9,6 +9,7 @@ import {
     DESKTOP_PLATFORM_ICON_PATHS,
     DYMOLA_LOGO_ICON_PATH,
     EXAMPLES,
+    FEEDBACK_EMAIL,
     FEEDBACK_ISSUES_URL,
     ONLINE_VERSION_URL,
     OPENMODELICA_MODELING_ICON_PATH,
@@ -1514,19 +1515,29 @@ proto.showFeedbackForm = function() {
 
     attachmentSection.append(pasteZone, fileInput, fileButton, fileList, safety);
 
+    const nextSteps = document.createElement('div');
+    nextSteps.className = 'feedback-next-steps';
+    const nextTitle = document.createElement('h3');
+    nextTitle.textContent = i18n.t('feedbackNextTitle');
+    const githubStep = document.createElement('p');
+    githubStep.textContent = i18n.t('feedbackNextGithub');
+    const emailStep = document.createElement('p');
+    emailStep.textContent = i18n.t('feedbackNextEmail');
+    nextSteps.append(nextTitle, githubStep, emailStep);
+
     const actions = document.createElement('div');
     actions.className = 'modal-buttons feedback-actions';
-    const packageButton = document.createElement('button');
-    packageButton.type = 'button';
-    packageButton.className = 'modal-btn modal-btn-cancel';
-    packageButton.textContent = i18n.t('feedbackDownloadPackage');
+    const emailButton = document.createElement('button');
+    emailButton.type = 'button';
+    emailButton.className = 'modal-btn modal-btn-cancel';
+    emailButton.textContent = i18n.t('feedbackEmailInstead');
     const issueButton = document.createElement('button');
     issueButton.type = 'submit';
     issueButton.className = 'modal-btn modal-btn-confirm';
     issueButton.textContent = i18n.t('feedbackOpenIssue');
-    actions.append(packageButton, issueButton);
+    actions.append(emailButton, issueButton);
 
-    form.append(header, fields, attachmentSection, actions);
+    form.append(header, fields, attachmentSection, nextSteps, actions);
     modal.appendChild(form);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
@@ -1661,6 +1672,17 @@ proto.showFeedbackForm = function() {
         });
         window.open(`${FEEDBACK_ISSUES_URL}?${params.toString()}`, '_blank', 'noopener');
     };
+    const openEmail = (feedback, filename) => {
+        const subject = `[Time Series Explorer feedback] ${feedback.summary || i18n.t('extraFeedback')}`;
+        const body = this._formatFeedbackEmailBody(feedback, filename);
+        const params = new URLSearchParams({ subject, body });
+        window.open(`mailto:${encodeURIComponent(FEEDBACK_EMAIL)}?${params.toString()}`, '_blank', 'noopener');
+    };
+    const prepareForExternalSend = async () => {
+        if (!ensureValid()) return null;
+        if (!attachedFiles.length) return { feedback: collectFeedback(), filename: '' };
+        return await downloadPackage();
+    };
 
     fileButton.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', () => {
@@ -1680,20 +1702,17 @@ proto.showFeedbackForm = function() {
         pasteZone.classList.remove('is-dragover');
         addFiles(event.dataTransfer?.files || []);
     });
-    packageButton.addEventListener('click', () => {
-        downloadPackage().catch(err => {
-            console.error('Feedback package failed:', err);
+    emailButton.addEventListener('click', () => {
+        prepareForExternalSend().then(result => {
+            if (result) openEmail(result.feedback, result.filename);
+        }).catch(err => {
+            console.error('Feedback email failed:', err);
             Modal.alert(i18n.t('feedbackPackageFailedTitle'), err?.message || String(err), { icon: 'ZIP' });
         });
     });
     form.addEventListener('submit', (event) => {
         event.preventDefault();
-        if (!ensureValid()) return;
-        if (!attachedFiles.length) {
-            openIssue(collectFeedback(), '');
-            return;
-        }
-        downloadPackage()
+        prepareForExternalSend()
             .then(result => {
                 if (result) openIssue(result.feedback, result.filename);
             })
@@ -1756,6 +1775,18 @@ proto._formatFeedbackIssueBody = function(feedback, includeAttachmentList = fals
     }
     if (includeAttachmentList) {
         lines.push('', 'Attachments:', ...(feedback.attachmentNames.length ? feedback.attachmentNames : ['none']));
+    }
+    return `${lines.join('\n')}\n`;
+};
+
+proto._formatFeedbackEmailBody = function(feedback, packageFilename = '') {
+    const lines = [
+        this._formatFeedbackIssueBody(feedback, false, ''),
+        'No GitHub account:',
+        'Please send this email to the maintainer. The maintainer can create the GitHub issue from this report.',
+    ];
+    if (packageFilename) {
+        lines.push('', `Please attach the downloaded zip file to this email: ${packageFilename}`);
     }
     return `${lines.join('\n')}\n`;
 };

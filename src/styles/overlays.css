@@ -1228,8 +1228,34 @@ textarea.feedback-control {
     line-height: 1.4;
 }
 
+.feedback-next-steps {
+    display: grid;
+    gap: 0.45rem;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid color-mix(in srgb, var(--primary-color) 28%, var(--border-color));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--primary-color) 5%, var(--bg-primary));
+}
+
+.feedback-next-steps h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    font-weight: 800;
+}
+
+.feedback-next-steps p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    line-height: 1.42;
+}
+
 .feedback-actions {
     margin-top: 0;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    flex-wrap: wrap;
 }
 
 @media (max-width: 700px) {

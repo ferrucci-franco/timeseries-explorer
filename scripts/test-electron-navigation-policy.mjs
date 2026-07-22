@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const {
   appOriginFromUrl,
   isAllowedRendererUrl,
+  isExternalOpenUrl,
   isExternalWebUrl,
 } = require('../electron/navigation-policy.cjs');
 
@@ -39,6 +40,10 @@ assert.equal(isExternalWebUrl('https://github.com/ferrucci-franco', origin), tru
 assert.equal(isExternalWebUrl('http://127.0.0.1:8876/help', origin), false);
 assert.equal(isExternalWebUrl('mailto:test@example.com', origin), false);
 assert.equal(isExternalWebUrl('javascript:alert(1)', origin), false);
+assert.equal(isExternalOpenUrl('mailto:test@example.com', origin), true);
+assert.equal(isExternalOpenUrl('https://github.com/ferrucci-franco', origin), true);
+assert.equal(isExternalOpenUrl('http://127.0.0.1:8876/help', origin), false);
+assert.equal(isExternalOpenUrl('javascript:alert(1)', origin), false);
 assert.equal(appOriginFromUrl('not a URL'), '');
 
 const mainSource = await readFile(new URL('../electron/main.cjs', import.meta.url), 'utf8');

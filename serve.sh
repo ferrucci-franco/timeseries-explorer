@@ -75,6 +75,14 @@ fi
 SERVER_URL="http://localhost:${PORT}/index.html"
 
 if command -v npm >/dev/null 2>&1 && [ -f package.json ]; then
+    if [ ! -x node_modules/.bin/vite ]; then
+        echo
+        echo "Preparing Time Series Explorer dependencies..."
+        echo "This may take a few minutes the first time."
+        echo
+        npm install
+    fi
+
     echo
     echo "Starting Time Series Explorer Light Web with Vite:"
     echo "  $SERVER_URL"
@@ -82,8 +90,7 @@ if command -v npm >/dev/null 2>&1 && [ -f package.json ]; then
     echo "This mode matches the web version: no local API and no Live Update."
     echo "Press Ctrl+C to stop the server."
     echo
-    open_url "$SERVER_URL"
-    exec npm run dev -- --host 127.0.0.1 --port "$PORT" --strictPort
+    exec npm run dev -- --host 127.0.0.1 --port "$PORT" --strictPort --open /index.html
 fi
 
 if command -v node >/dev/null 2>&1 && [ -f scripts/portable-server.mjs ]; then

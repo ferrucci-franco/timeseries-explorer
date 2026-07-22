@@ -14,7 +14,7 @@ const {
 const {
   appOriginFromUrl,
   isAllowedRendererUrl,
-  isExternalWebUrl,
+  isExternalOpenUrl,
 } = require('./navigation-policy.cjs');
 
 const projectRoot = path.resolve(__dirname, '..');
@@ -330,7 +330,7 @@ async function createWindow(url) {
   );
 
   const openInSystemBrowser = targetUrl => {
-    if (!isExternalWebUrl(targetUrl, appOrigin)) return;
+    if (!isExternalOpenUrl(targetUrl, appOrigin)) return;
     shell.openExternal(targetUrl).catch(err => {
       console.error('[desktop] could not open external URL', {
         url: targetUrl,
