@@ -2747,7 +2747,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         const commit = () => {
             const value = String(input.value || '').trim();
             const customTimeStep = value ? `${value} ${select.value}` : '';
-            this._updateFileTransform(fileId, { customTimeStep });
+            this._updateFileTransform(fileId, { customTimeStep }, { autoscaleX: true });
         };
         input.addEventListener('change', commit);
         input.addEventListener('keydown', (e) => {
@@ -2879,7 +2879,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             this._updateFileTransform(fileId, {
                 timeStepMode: nextStepMode,
                 timeStepOriginMode: nextStepMode === 'index' ? null : transform.timeStepOriginMode,
-            }, { rerender: true });
+            }, { rerender: true, autoscaleX: true });
         });
         stepWrap.append(stepLabel, stepSelect);
         panel.append(timeTitle, stepWrap);

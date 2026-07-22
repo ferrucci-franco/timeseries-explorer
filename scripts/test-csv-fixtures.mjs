@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import duckdbPkg from 'duckdb';
 import CsvParser from '../src/parsers/csv-parser.js';
+import MatParser from '../src/parsers/mat-parser.js';
 import { parseCsvTimeValue } from '../src/parsers/csv-time-detection.js';
 import CsvParsingPreviewDialog from '../src/ui/csv-parsing-preview-dialog.js';
 import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
@@ -20,6 +21,7 @@ import {
 } from '../src/data/csv-to-parquet-core.js';
 
 const parser = new CsvParser();
+const structureParser = new MatParser();
 const { Database } = duckdbPkg;
 
 function arrayBufferFromNodeBuffer(buffer) {
@@ -423,6 +425,68 @@ function testCsvPreviewHeaderlessProfileStaysHeaderless() {
     assert(dialog.resultProfile.hasHeader === false, 'CSV preview should not allow a generated-header file to become headered');
     assert(dialog.resultProfile.rawHeaders[0] === 'column_1', 'CSV preview should keep generated column names');
     assert(dialog.resultProfile.dataStartIndex === 0, 'CSV preview should keep the first row as data');
+    assert(dialog.resultProfile.headerlessLocked === true, 'Generated-header profile should persist the headerless lock');
+
+    const reopenedDialog = new CsvParsingPreviewDialog({
+        parser,
+        sampleBuffer: ab,
+        csvProfile: dialog.resultProfile,
+        title: 'Campbell_Total_10minutes.txt',
+    });
+    assert(reopenedDialog.headerlessProfileLocked, 'Generated-header profile should remain locked when reopened');
+}
+
+function testUserNoHeaderProfileCanBeReopenedEditable() {
+    const csv = [
+        'time,value',
+        '0,10',
+        '1,11',
+        '2,12',
+    ].join('\n');
+    const buffer = arrayBufferFromNodeBuffer(Buffer.from(csv));
+    const autoProfile = parser.inspectSample(buffer, { maxRows: 20 });
+    const dialog = new CsvParsingPreviewDialog({
+        parser,
+        sampleBuffer: buffer,
+        csvProfile: autoProfile,
+        title: 'user-no-header.csv',
+    });
+    dialog.preview = parser.inspectPreview(buffer, {
+        maxRows: 10,
+        delimiter: dialog.state.delimiter,
+        encoding: dialog.state.encoding,
+    });
+    dialog.state.hasHeader = false;
+    dialog.state.timeMode = 'index';
+    dialog.state.dataStartIndex = 0;
+    dialog._rebuildProfile();
+
+    assert(dialog.validation.ok, 'User-selected No header row should validate');
+    assert(dialog.resultProfile.hasHeader === false, 'User-selected profile should keep No header row');
+    assert(dialog.resultProfile.headerlessLocked === false, 'User-selected No header row should not be locked');
+
+    const reopenedDialog = new CsvParsingPreviewDialog({
+        parser,
+        sampleBuffer: buffer,
+        csvProfile: dialog.resultProfile,
+        title: 'user-no-header.csv',
+    });
+    assert(!reopenedDialog.headerlessProfileLocked, 'User-selected No header row should reopen with an editable checkbox');
+    assert(reopenedDialog.state.hasHeader === false, 'User-selected No header row should reopen checked');
+
+    reopenedDialog.preview = parser.inspectPreview(buffer, {
+        maxRows: 10,
+        delimiter: reopenedDialog.state.delimiter,
+        encoding: reopenedDialog.state.encoding,
+    });
+    reopenedDialog.state.hasHeader = true;
+    reopenedDialog.state.headerIndex = 0;
+    reopenedDialog.state.dataStartIndex = 1;
+    reopenedDialog.state.timeMode = 'manual';
+    reopenedDialog.state.timeColumn = 0;
+    reopenedDialog._rebuildProfile();
+    assert(reopenedDialog.validation.ok, 'Reopened user No header profile should allow restoring the header row');
+    assert(reopenedDialog.resultProfile.hasHeader === true, 'Reopened user No header profile should apply as headered');
 }
 
 async function testUsMdySlashDatetimeWithAmPm() {
@@ -522,6 +586,34 @@ async function testExistingIndexColumnRenameDrivesAxisName() {
     assert(Object.keys(dialog.state.columnOverrides).length === 0, 'Column reset should restore detected names');
 }
 
+async function testSingleColumnGeneratedIndexAdjustParsing() {
+    const csv = [
+        'value [MW]',
+        '10',
+        '11',
+        '12',
+    ].join('\n');
+    const buffer = arrayBufferFromNodeBuffer(Buffer.from(csv));
+    const profile = parser.inspectSample(buffer, { maxRows: 20 });
+    const dialog = new CsvParsingPreviewDialog({ parser, sampleBuffer: buffer, csvProfile: profile, title: 'single-column.csv' });
+    dialog.preview = parser.inspectPreview(buffer, {
+        maxRows: 10,
+        delimiter: dialog.state.delimiter,
+        encoding: dialog.state.encoding,
+    });
+    dialog.state.timeMode = 'index';
+    dialog._rebuildProfile();
+
+    assert(dialog.validation.ok, 'Adjust CSV parsing should allow one-column files with generated index time');
+    assert(dialog.resultProfile.rawHeaders.length === 1, 'Single-column profile should keep one raw header');
+    assert(dialog.resultProfile.timeSource.strategy === 'generated-index', 'Single-column profile should use generated index time');
+
+    const data = await parser.parseWithProfile(buffer, dialog.resultProfile);
+    assert(data.metadata.timeName === 'index', 'Single-column adjusted profile should parse with generated index time');
+    assert(data.variables.value?.description === '[MW]', 'Single-column adjusted profile should preserve units');
+    assert(data.variables.value?.data?.length === 3, 'Single-column adjusted profile should keep all values');
+}
+
 async function testEco2mixSparseRowsKeepRealHeader() {
     const path = 'test-files/csv/eco2mix-national-cons-def.csv';
     const buffer = readFileSync(path);
@@ -539,6 +631,43 @@ async function testEco2mixSparseRowsKeepRealHeader() {
     const data = await parser.parse(ab);
     assert(data.metadata.timeName === 'Date Heure', 'eco2mix parsed time variable should use Date Heure name');
     assert(data.variables['Consommation']?.description === '[MW]', 'eco2mix parsed variables should use real headers and units');
+}
+
+async function testCsvProfilePreservesUnitsAfterColumnRename() {
+    const csv = [
+        'time,Power [MW],Voltage (kV)',
+        '2026-01-01 00:00:00,10,220',
+        '2026-01-01 01:00:00,11,221',
+    ].join('\n');
+    const buffer = arrayBufferFromNodeBuffer(Buffer.from(csv));
+    const profile = parser.inspectSample(buffer, { maxRows: 20 });
+    const dialog = new CsvParsingPreviewDialog({ parser, sampleBuffer: buffer, csvProfile: profile, title: 'units.csv' });
+    dialog.preview = parser.inspectPreview(buffer, {
+        maxRows: 10,
+        delimiter: dialog.state.delimiter,
+        encoding: dialog.state.encoding,
+    });
+    dialog.state.columnOverrides = { 1: { name: 'P' } };
+    dialog._rebuildProfile();
+
+    assert(dialog.resultProfile.headers[1]?.name === 'P', 'CSV preview should keep the renamed value column');
+    assert(dialog.resultProfile.headers[1]?.description === '[MW]', 'CSV preview should keep inline units after renaming a column');
+    assert(dialog.resultProfile.headers[2]?.description === '[kV]', 'CSV preview should keep parenthesized units');
+
+    const data = await parser.parseWithProfile(buffer, dialog.resultProfile);
+    assert(data.variables.P?.description === '[MW]', 'CSV profile parser should preserve renamed column units');
+    assert(data.variables.Voltage?.description === '[kV]', 'CSV profile parser should preserve detected column units');
+    assert(structureParser.getVariableInfo(data.variables.P).includes('MW'), 'CSV variable info should expose units in the variable list');
+
+    const specs = csvColumnSpecs(dialog.resultProfile);
+    assert(specs.find(spec => spec.name === 'P')?.description === '[MW]', 'DuckDB CSV specs should preserve renamed column units');
+    assert(specs.find(spec => spec.name === 'Voltage')?.description === '[kV]', 'DuckDB CSV specs should preserve detected column units');
+
+    const duckDbSource = readFileSync('src/data/duckdb-source.js', 'utf8');
+    assert(/description:\s*String\(header\.description \|\| ''\)/.test(duckDbSource),
+        'DuckDBSource CSV specs should carry profile descriptions');
+    assert(/csvDescriptionsByColumn[\s\S]*?description:\s*csvDescriptionsByColumn\.get\(columnNames\[i\]\) \|\| ''/.test(duckDbSource),
+        'DuckDBSource legacy variables should receive CSV profile units');
 }
 
 const rows = [];
@@ -585,9 +714,12 @@ await testCsvPreviewDirtyPreambleCustomDatePattern();
 await testCsvNumericColumnsTolerateInvalidCells();
 await testCsvMixedMinorityNumericColumnsStayString();
 testCsvPreviewHeaderlessProfileStaysHeaderless();
+testUserNoHeaderProfileCanBeReopenedEditable();
 await testUsMdySlashDatetimeWithAmPm();
 testCsvPreviewCustomExcelMatlabAliases();
 await testExistingIndexColumnRenameDrivesAxisName();
+await testSingleColumnGeneratedIndexAdjustParsing();
 await testEco2mixSparseRowsKeepRealHeader();
+await testCsvProfilePreservesUnitsAfterColumnRename();
 
 console.log(`CSV fixtures OK: ${rows.length} files`);

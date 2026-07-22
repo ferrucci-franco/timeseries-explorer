@@ -77,6 +77,7 @@ export function csvColumnSpecs(profile) {
             : inferDuckDbCsvType(sampleRowsWithValidTime(sampleRows, profile), index, profile.delimiter, profile.decimalSeparator);
         return {
             name,
+            description: String(header.description || ''),
             ...inferred,
         };
     });
