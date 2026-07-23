@@ -32,6 +32,31 @@ function originalFftKind(h, fileId) {
     return 'numeric';
 }
 
+// Reference copies of the PRE-INVERSION _timeKind / _timeDisplayMode /
+// _timeUnitLabel logic, computed straight from the primitives, so they stay
+// independent of the now-wrapper implementations under test.
+function refTimeKind(h, id) {
+    if (h._isGeneratedCalendarTime(id)) return 'datetime';
+    return h._getTimeVar(id)?.timeKind === 'datetime' ? 'datetime' : 'numeric';
+}
+function refDisplayMode(h, id) {
+    const transform = h._fileTransform(id);
+    const timeVar = h._getTimeVar(id);
+    if (h._isGeneratedIndexTime(id, timeVar)) return h._isGeneratedCalendarTime(id, timeVar) ? 'calendar' : 'index';
+    if (timeVar?.timeKind !== 'datetime') return 'numeric';
+    return transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
+}
+function refUnit(h, id) {
+    if (h._isGeneratedCalendarTime(id)) return 'datetime';
+    if (h._isGeneratedIndexTime(id)) return h._indexTimeStepMode(id) === 'index' ? 'index' : 'duration';
+    const dm = refDisplayMode(h, id);
+    if (dm === 'calendar') return 'datetime';
+    if (dm === 'elapsedDateTime') return 'duration';
+    if (dm === 'elapsedSeconds') return 's';
+    const timeVar = h._getTimeVar(id);
+    return timeVar ? h._extractUnit(timeVar.description) : 's';
+}
+
 function makeFile({ timeVar, transform = {} }) {
     return { data: { variables: { [timeVar.name]: { kind: 'abscissa', ...timeVar } } }, transform };
 }
@@ -58,6 +83,15 @@ for (const id of Object.keys(fixtures)) {
         originalFftKind(h, id),
         `${id}: _canonicalFftKind must match the original _fftTimeKind logic`,
     );
+}
+
+// 1b) Core inversion equivalence: the now-wrapper readers reproduce the original
+//     primitive logic exactly (the proof that deriving them from _timeAxisModel
+//     changed nothing).
+for (const id of Object.keys(fixtures)) {
+    assert.equal(h._timeKind(id), refTimeKind(h, id), `${id}: _timeKind (inverted)`);
+    assert.equal(h._timeDisplayMode(id), refDisplayMode(h, id), `${id}: _timeDisplayMode (inverted)`);
+    assert.equal(h._timeUnitLabel(id), refUnit(h, id), `${id}: _timeUnitLabel (inverted)`);
 }
 
 // 2) Anchor a few expected values so a shared regression in both can't hide.

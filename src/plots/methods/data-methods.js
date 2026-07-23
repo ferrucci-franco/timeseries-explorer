@@ -150,8 +150,7 @@ proto._transformCache = function(fileId) {
 };
 
 proto._timeKind = function(fileId) {
-    if (this._isGeneratedCalendarTime(fileId)) return 'datetime';
-    return this._getTimeVar(fileId)?.timeKind === 'datetime' ? 'datetime' : 'numeric';
+    return this._timeAxisModel(fileId).legacyKind;
 };
 
 proto._isGeneratedIndexTime = function(fileId, timeVar = null) {
@@ -234,11 +233,7 @@ proto._indexTimeStepLabel = function(fileId) {
 };
 
 proto._timeDisplayMode = function(fileId) {
-    const transform = this._fileTransform(fileId);
-    const timeVar = this._getTimeVar(fileId);
-    if (this._isGeneratedIndexTime(fileId, timeVar)) return this._isGeneratedCalendarTime(fileId, timeVar) ? 'calendar' : 'index';
-    if (timeVar?.timeKind !== 'datetime') return 'numeric';
-    return transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
+    return this._timeAxisModel(fileId).legacyDisplayMode;
 };
 
 proto._timeDisplayModeForVar = function(fileId, timeVar = null) {
@@ -248,18 +243,39 @@ proto._timeDisplayModeForVar = function(fileId, timeVar = null) {
     return transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
 };
 
-// ── Canonical time-axis model (Phase 0 foundation) ──────────────────────────
-// A read-only descriptor that reduces every file's time axis to a single
-// {semantic, storageEncoding, display, unit} shape, DERIVED from the existing
-// legacy helpers. It is additive and intentionally NOT wired into the overlay
-// guard, transform menu, or renderers yet, so it introduces no behavior change.
-// Later phases consume it; see docs/time-axis-unification-design.md (v4).
+// ── Canonical time-axis model (single source of truth) ──────────────────────
+// Computed directly from the raw primitives (the abscissa variable, the file
+// transform, and the generated-index/-calendar detectors) WITHOUT calling
+// _timeKind / _timeDisplayMode / _timeUnitLabel — those are now thin wrappers
+// over this function (`legacyKind` / `legacyDisplayMode` / `unit`). It reduces
+// every axis to {semantic, storageEncoding, display, unit}. The NEW canonical
+// fields (semantic, renderSignature) are not yet consumed by the overlay guard
+// or transform menu; see docs/time-axis-unification-design.md (v4).
 proto._timeAxisModel = function(fileId) {
     const timeVar = this._getTimeVar(fileId);
-    const kind = this._timeKind(fileId);                    // 'datetime' | 'numeric'
-    const displayMode = this._timeDisplayMode(fileId);      // calendar|elapsedDateTime|elapsedSeconds|index|numeric
+    const transform = this._fileTransform(fileId);
     const isGeneratedIndex = this._isGeneratedIndexTime(fileId, timeVar);
     const isGeneratedCalendar = this._isGeneratedCalendarTime(fileId, timeVar);
+    const indexStepMode = this._indexTimeStepMode(fileId);
+    const highResGeneratedCalendar = this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
+
+    // Legacy time kind (inlined from the former _timeKind).
+    const kind = (isGeneratedCalendar || timeVar?.timeKind === 'datetime') ? 'datetime' : 'numeric';
+
+    // Legacy display mode (inlined from the former _timeDisplayMode).
+    let displayMode;
+    if (isGeneratedIndex) displayMode = isGeneratedCalendar ? 'calendar' : 'index';
+    else if (timeVar?.timeKind !== 'datetime') displayMode = 'numeric';
+    else displayMode = transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
+
+    // Axis unit label (inlined from the former _timeUnitLabel, using local state).
+    let unit;
+    if (isGeneratedCalendar) unit = 'datetime';
+    else if (isGeneratedIndex) unit = indexStepMode === 'index' ? 'index' : 'duration';
+    else if (displayMode === 'calendar') unit = 'datetime';
+    else if (displayMode === 'elapsedDateTime') unit = 'duration';
+    else if (displayMode === 'elapsedSeconds') unit = 's';
+    else unit = timeVar ? this._extractUnit(timeVar.description) : 's';
 
     let semantic;
     let storageEncoding;
@@ -268,8 +284,7 @@ proto._timeAxisModel = function(fileId) {
     } else if (isGeneratedIndex) {
         // A generated index — including a real datetime forced to Index display —
         // is driven by row numbers with the stored values discarded, so it is a
-        // count axis regardless of the underlying timeKind. This must be checked
-        // before the datetime case.
+        // count axis regardless of the underlying timeKind. Checked before datetime.
         semantic = 'count'; storageEncoding = 'row-count';
     } else if (kind === 'datetime') {
         semantic = 'absolute'; storageEncoding = 'epoch-ms';
@@ -291,11 +306,11 @@ proto._timeAxisModel = function(fileId) {
         semantic,
         storageEncoding,
         display,
-        unit: this._timeUnitLabel(fileId),
+        unit,
         calendarId: semantic === 'absolute' ? 'gregorian' : 'none',
-        indexStepMode: this._indexTimeStepMode(fileId),
-        highResGeneratedCalendar: this._isHighResolutionGeneratedCalendarTime(fileId, timeVar),
-        // Legacy shadow — for verification/migration only; not authoritative.
+        indexStepMode,
+        highResGeneratedCalendar,
+        // Legacy shadow — consumed by the _timeKind/_timeDisplayMode wrappers.
         legacyKind: kind,
         legacyDisplayMode: displayMode,
     };
@@ -736,13 +751,7 @@ proto._timeAxisTitleForVar = function(fileId, timeVar = null, fallback = 'Time')
 };
 
 proto._timeUnitLabel = function(fileId) {
-    if (this._isGeneratedCalendarTime(fileId)) return 'datetime';
-    if (this._isGeneratedIndexTime(fileId)) return this._indexTimeStepMode(fileId) === 'index' ? 'index' : 'duration';
-    if (this._isCalendarTime(fileId)) return 'datetime';
-    if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return 'duration';
-    if (this._timeDisplayMode(fileId) === 'elapsedSeconds') return 's';
-    const timeVar = this._getTimeVar(fileId);
-    return timeVar ? this._extractUnit(timeVar.description) : 's';
+    return this._timeAxisModel(fileId).unit;
 };
 
 proto._calendarFractionDigits = function(fileId) {
