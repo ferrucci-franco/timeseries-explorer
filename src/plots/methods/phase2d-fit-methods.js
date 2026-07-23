@@ -292,14 +292,14 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
     // ── Lazy (DuckDB) exact fitting — mirrors the correlation lazy path ──
     proto._phase2dPairId = function(pair) {
-        return `${pair?.x} ${pair?.y} ${pair?.fileId}`;
+        return `${pair?.x}\u0000${pair?.y}\u0000${pair?.fileId}`;
     };
     // Identity of a lazy fit result: recompute when pair, model or range change.
     proto._phase2dLazyFitKey = function(plot, pair) {
         const state = this._ensurePhase2dState(plot);
         const model = this._phase2dPairModel(pair);
         const range = state.rangeFull ? 'full' : `${state.x1}_${state.x2}`;
-        return `${this._phase2dPairId(pair)} ${model} ${range}`;
+        return `${this._phase2dPairId(pair)}\u0000${model}\u0000${range}`;
     };
 
     proto._hasLazyPhase2dPairs = function(plot) {

@@ -1283,7 +1283,7 @@ proto._coalesceGapItems = function(items, pxPerUnit) {
     const minGapData = Number.isFinite(pxPerUnit) && pxPerUnit > 0 ? 1 / pxPerUnit : 0;
     const byFile = new Map(); // one x-mapping per file+timeVar
     for (const it of items) {
-        const key = `${it.fileId} ${it.timeVar ?? ''}`;
+        const key = `${it.fileId}\u0000${it.timeVar ?? ''}`;
         let group = byFile.get(key);
         if (!group) { group = []; byFile.set(key, group); }
         group.push(it);
@@ -1487,7 +1487,7 @@ proto._hasTruthfulGapSeries = function(fileId) {
 };
 
 proto._missTraceKey = function(t) {
-    return `${t.fileId} ${t.varName}`;
+    return `${t.fileId}\u0000${t.varName}`;
 };
 
 // Union of time gaps (per file) and NaN runs (per visible trace), memoized by
@@ -1500,7 +1500,7 @@ proto._missingDataInfo = function(plot) {
     const sig = visible.map(t => {
         const times = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
         const n = times?.length || 0;
-        return `${t.fileId} ${t.varName}:${n}:${n ? times[0] : ''}:${n ? times[n - 1] : ''}`;
+        return `${t.fileId}\u0000${t.varName}:${n}:${n ? times[0] : ''}:${n ? times[n - 1] : ''}`;
     }).join('|');
     if (plot._missSig === sig && plot._missCache) return plot._missCache;
 
