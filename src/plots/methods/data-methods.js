@@ -350,6 +350,38 @@ proto._operationCapabilities = function(fileId) {
     return { hasGregorianCalendar, hasElapsed, hasPhysicalTimeUnit: hasElapsed };
 };
 
+// Panel-level time-axis resolution (Phase 1). Given the fileIds of a panel's
+// visible time traces, decide the single axis the panel must render. Pure and
+// order-independent (works on the SET of trace signatures/displays, never their
+// insertion order). Not yet wired into the guard/renderers — that is Phase 1
+// steps 2-3. See docs/time-axis-unification-design.md (v4 §5).
+proto._resolvePanelTimeAxis = function(fileIds = []) {
+    const ids = (fileIds || []).filter(Boolean);
+    const base = { alignmentPolicy: 'per-series-zero', referenceOriginMs: null };
+    if (!ids.length) {
+        return { compatible: true, effectiveDisplay: null, effectiveUnit: null, ...base };
+    }
+    const signatures = new Set(ids.map(id => this._renderSignature(id)));
+    if (signatures.size !== 1) {
+        return { compatible: false, effectiveDisplay: null, effectiveUnit: null, ...base };
+    }
+    const signature = [...signatures][0];
+    if (signature === 'date') {
+        return { compatible: true, effectiveDisplay: 'calendar', effectiveUnit: null, ...base };
+    }
+    if (signature === 'linear:elapsed-seconds') {
+        // duration only if EVERY trace prefers duration; any seconds ⇒ seconds
+        // (plain linear, negative-safe, scientific default). Order-independent.
+        const allDuration = ids.every(id => this._timeAxisModel(id).display === 'duration');
+        return { compatible: true, effectiveDisplay: allDuration ? 'duration' : 'seconds', effectiveUnit: 's', ...base };
+    }
+    if (signature === 'linear:count') {
+        return { compatible: true, effectiveDisplay: 'index', effectiveUnit: 'count', ...base };
+    }
+    // linear:raw:<unit> — identical unit across traces is guaranteed by the single signature.
+    return { compatible: true, effectiveDisplay: 'raw', effectiveUnit: this._timeAxisModel(ids[0]).unit, ...base };
+};
+
 proto._calendarTimeFormat = function(fileId, timeVar = null) {
     const transform = this._fileTransform(fileId);
     return transform.calendarTimeFormat || timeVar?.calendarTimeFormat || '24h';
