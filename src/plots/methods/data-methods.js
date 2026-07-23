@@ -265,10 +265,14 @@ proto._timeAxisModel = function(fileId) {
     let storageEncoding;
     if (isGeneratedCalendar) {
         semantic = 'absolute'; storageEncoding = 'row-count';
+    } else if (isGeneratedIndex) {
+        // A generated index — including a real datetime forced to Index display —
+        // is driven by row numbers with the stored values discarded, so it is a
+        // count axis regardless of the underlying timeKind. This must be checked
+        // before the datetime case.
+        semantic = 'count'; storageEncoding = 'row-count';
     } else if (kind === 'datetime') {
         semantic = 'absolute'; storageEncoding = 'epoch-ms';
-    } else if (isGeneratedIndex) {
-        semantic = 'count'; storageEncoding = 'row-count';
     } else {
         // Conservative: a bare numeric axis is unknown until the user or a parser
         // asserts its meaning. It never auto-becomes elapsed seconds (v4 C1/§2.2).
@@ -289,10 +293,23 @@ proto._timeAxisModel = function(fileId) {
         display,
         unit: this._timeUnitLabel(fileId),
         calendarId: semantic === 'absolute' ? 'gregorian' : 'none',
+        indexStepMode: this._indexTimeStepMode(fileId),
+        highResGeneratedCalendar: this._isHighResolutionGeneratedCalendarTime(fileId, timeVar),
         // Legacy shadow — for verification/migration only; not authoritative.
         legacyKind: kind,
         legacyDisplayMode: displayMode,
     };
+};
+
+// FFT/analysis-mode time classifier ('index' | 'datetime' | 'numeric'), expressed
+// through the canonical model. This is the single implementation that _fftTimeKind
+// delegates to; it reproduces the original fft-methods.js logic exactly (proven by
+// scripts/test-time-axis-readers.mjs), so analysis-mode gating is unchanged.
+proto._canonicalFftKind = function(fileId) {
+    const model = this._timeAxisModel(fileId);
+    if (model.storageEncoding === 'row-count' && model.indexStepMode === 'index') return 'index';
+    if (model.display === 'calendar' && !model.highResGeneratedCalendar) return 'datetime';
+    return 'numeric';
 };
 
 // Coordinate-sharing signature: two traces can share one Plotly x-axis iff their

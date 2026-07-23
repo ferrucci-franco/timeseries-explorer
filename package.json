@@ -53,6 +53,7 @@
     "test:variable-sign": "node scripts/test-variable-sign-toggle.mjs",
     "test:file-transform": "node scripts/test-file-transform-reset.mjs",
     "test:time-axis-model": "node scripts/test-time-axis-model.mjs",
+    "test:time-axis-readers": "node scripts/test-time-axis-readers.mjs",
     "test:calendar-axis": "node scripts/test-calendar-axis.mjs",
     "test:calendar-heatmap": "node scripts/test-calendar-heatmap.mjs",
     "test:fft": "node scripts/test-fft.mjs",

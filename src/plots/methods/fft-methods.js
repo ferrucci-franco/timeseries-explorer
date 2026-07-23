@@ -1057,11 +1057,9 @@ proto._fftMaxRawRowsForState = function(state = this._defaultFftState()) {
 };
 
 proto._fftTimeKind = function(fileId) {
-    const timeVar = this._getTimeVar(fileId);
-    if (this._isGeneratedIndexTime(fileId, timeVar) && this._indexTimeStepMode(fileId) === 'index') return 'index';
-    if (this._timeDisplayModeForVar(fileId, timeVar) === 'calendar'
-        && !this._isHighResolutionGeneratedCalendarTime(fileId, timeVar)) return 'datetime';
-    return 'numeric';
+    // Delegates to the canonical model (data-methods.js). Behavior-identical to the
+    // former inline logic; see scripts/test-time-axis-readers.mjs for the proof.
+    return this._canonicalFftKind(fileId);
 };
 
 proto._fftUsesCalendarTime = function(plot) {
