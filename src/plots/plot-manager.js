@@ -2145,7 +2145,7 @@ class PlotManager {
                 if (!this._canAddTraceWithFileTime(plot, fid, { silent: true })) {
                     Modal.alert(
                         'Incompatible time axes',
-                        'This overlay would mix calendar, elapsed, or numeric time axes. Use matching time-axis modes first; a future compare option will let you choose timestamp vs elapsed matching.'
+                        'This overlay would mix traces that render on different time axes. Set the files to the same time display — e.g. all to Elapsed (seconds), or all to a calendar — before overlaying.'
                     );
                     return;
                 }
@@ -2183,7 +2183,7 @@ class PlotManager {
                 if (!this._canAddTraceWithFileTime(plot, fid, { silent: true })) {
                     Modal.alert(
                         'Incompatible time axes',
-                        'This overlay would mix calendar, elapsed, or numeric time axes. Use matching time-axis modes first; a future compare option will let you choose timestamp vs elapsed matching.'
+                        'This overlay would mix traces that render on different time axes. Set the files to the same time display — e.g. all to Elapsed (seconds), or all to a calendar — before overlaying.'
                     );
                     return;
                 }
@@ -2457,13 +2457,16 @@ class PlotManager {
         if (!this._plotModeRequiresCompatibleTime(plot.mode)) return true;
         const primaryFileId = this._primaryTimeFileId(plot);
         if (!primaryFileId || primaryFileId === fileId) return true;
-        const sameKind = this._timeKind(primaryFileId) === this._timeKind(fileId);
-        const sameMode = this._timeDisplayMode(primaryFileId) === this._timeDisplayMode(fileId);
-        if (sameKind && sameMode) return true;
+        // Compatible iff both files render on the same effective x-axis (v4 §4.1):
+        // a calendar date, elapsed seconds (duration and seconds share this), an
+        // index count, or an identical raw unit. This lets a datetime shown as
+        // Elapsed (seconds) mix with another elapsed-seconds trace, while still
+        // rejecting genuinely different axes (a calendar date vs raw seconds).
+        if (this._renderSignature(primaryFileId) === this._renderSignature(fileId)) return true;
         if (!options.silent) {
             Modal.alert(
                 'Incompatible time axes',
-                'This panel already uses a different time-axis mode. Switch files to the same Calendar/Elapsed mode before mixing traces.'
+                'These traces render on different time axes (for example a calendar date vs elapsed seconds). Set both files to the same time display — e.g. both to Elapsed (seconds), or assign a start date so both show a calendar — before mixing them.'
             );
         }
         return false;
