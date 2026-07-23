@@ -248,6 +248,76 @@ proto._timeDisplayModeForVar = function(fileId, timeVar = null) {
     return transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
 };
 
+// ── Canonical time-axis model (Phase 0 foundation) ──────────────────────────
+// A read-only descriptor that reduces every file's time axis to a single
+// {semantic, storageEncoding, display, unit} shape, DERIVED from the existing
+// legacy helpers. It is additive and intentionally NOT wired into the overlay
+// guard, transform menu, or renderers yet, so it introduces no behavior change.
+// Later phases consume it; see docs/time-axis-unification-design.md (v4).
+proto._timeAxisModel = function(fileId) {
+    const timeVar = this._getTimeVar(fileId);
+    const kind = this._timeKind(fileId);                    // 'datetime' | 'numeric'
+    const displayMode = this._timeDisplayMode(fileId);      // calendar|elapsedDateTime|elapsedSeconds|index|numeric
+    const isGeneratedIndex = this._isGeneratedIndexTime(fileId, timeVar);
+    const isGeneratedCalendar = this._isGeneratedCalendarTime(fileId, timeVar);
+
+    let semantic;
+    let storageEncoding;
+    if (isGeneratedCalendar) {
+        semantic = 'absolute'; storageEncoding = 'row-count';
+    } else if (kind === 'datetime') {
+        semantic = 'absolute'; storageEncoding = 'epoch-ms';
+    } else if (isGeneratedIndex) {
+        semantic = 'count'; storageEncoding = 'row-count';
+    } else {
+        // Conservative: a bare numeric axis is unknown until the user or a parser
+        // asserts its meaning. It never auto-becomes elapsed seconds (v4 C1/§2.2).
+        semantic = 'unknown'; storageEncoding = 'raw-number';
+    }
+
+    const display = ({
+        calendar: 'calendar',
+        elapsedDateTime: 'duration',
+        elapsedSeconds: 'seconds',
+        index: 'index',
+        numeric: 'raw',
+    })[displayMode] || 'raw';
+
+    return {
+        semantic,
+        storageEncoding,
+        display,
+        unit: this._timeUnitLabel(fileId),
+        calendarId: semantic === 'absolute' ? 'gregorian' : 'none',
+        // Legacy shadow — for verification/migration only; not authoritative.
+        legacyKind: kind,
+        legacyDisplayMode: displayMode,
+    };
+};
+
+// Coordinate-sharing signature: two traces can share one Plotly x-axis iff their
+// renderSignature is identical. `raw` compares by unit token (unitless = ''), so
+// two generic-numeric axes with the same unit stay overlay-compatible (v4 §4.1).
+proto._renderSignature = function(fileId) {
+    const model = this._timeAxisModel(fileId);
+    switch (model.display) {
+        case 'calendar': return 'date';
+        case 'duration':
+        case 'seconds':  return 'linear:elapsed-seconds';
+        case 'index':    return 'linear:count';
+        default:         return `linear:raw:${model.unit || ''}`;
+    }
+};
+
+// Per-operation capability predicates, independent of renderSignature (v4 §4.2).
+// Sampling-based capabilities (monotonic/uniform/Hz) are added in later phases.
+proto._operationCapabilities = function(fileId) {
+    const model = this._timeAxisModel(fileId);
+    const hasGregorianCalendar = model.semantic === 'absolute' && model.calendarId === 'gregorian';
+    const hasElapsed = model.semantic === 'absolute' || model.semantic === 'elapsed';
+    return { hasGregorianCalendar, hasElapsed, hasPhysicalTimeUnit: hasElapsed };
+};
+
 proto._calendarTimeFormat = function(fileId, timeVar = null) {
     const transform = this._fileTransform(fileId);
     return transform.calendarTimeFormat || timeVar?.calendarTimeFormat || '24h';
