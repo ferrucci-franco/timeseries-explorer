@@ -427,11 +427,13 @@ proto._timeSamplingRegularity = function(fileId) {
     return { isMonotonic: monotonic, isUniform };
 };
 
-// Panel-level time-axis resolution (Phase 1). Given the fileIds of a panel's
-// visible time traces, decide the single axis the panel must render. Pure and
-// order-independent (works on the SET of trace signatures/displays, never their
-// insertion order). Not yet wired into the guard/renderers — that is Phase 1
-// steps 2-3. See docs/time-axis-unification-design.md (v4 §5).
+// Panel-level time-axis resolution. Given the fileIds of a panel's visible time
+// traces, decide the single axis the panel must render. Pure and order-
+// independent (works on the SET of trace signatures/displays, never their
+// insertion order). Wired into the renderers (_buildTimeLayout / _buildTimeTrace
+// / _buildPhase3DLayout / _timeAxisTitleForVar) so duration-vs-seconds is a panel
+// consensus; the overlay guard itself compares _renderSignature directly.
+// See docs/time-axis-unification-design.md (v4 §5).
 proto._resolvePanelTimeAxis = function(fileIds = []) {
     const ids = (fileIds || []).filter(Boolean);
     const base = { alignmentPolicy: 'per-series-zero', referenceOriginMs: null };

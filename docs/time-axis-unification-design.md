@@ -1,6 +1,6 @@
 # Time-axis unification — design & implementation plan (v4, post-review-3)
 
-> Status: **design proposal, analysis only — no product code changed.**
+> Status: **partially implemented — Phases 0–1 shipped, Phase 2 menu shipped; see §14 for the live status and what is deferred.**
 > Branch: `worktree-feature+mixed-xaxis-plot`. Base commit: `2f5239d`.
 > v4 incorporates the third (self) review of v3. Every code claim is anchored to `file:line`; **(v)** marks claims re-verified against the code.
 > Iteration history in-repo: `time-axis-unification-review.md` (v1), `-review-2.md` (v2), `-review-3.md` (v3). Self-contained.
@@ -242,16 +242,16 @@ Today crop/shift are parsed/applied in the **active display units** (`data-metho
 
 > **Re-scoped from Phase 0 → Phase 2/4 (deliberate):** extending the two transform normalizers (`data-methods.js:99-133`, `file-methods.js:2499-2533`) and the session v1→v2 migrator (`session-methods.js:312-314`, incl. tagged crop/shift) are moved to **Phase 2**, where the new persisted fields first exist — adding them empty now would break exact-shape tests for zero behavior gain and cannot be validated here (session round-trip is unrunnable until the worktree `fflate` dep is restored). The direct `metadata.timeKind` reads in **data-tools** (delta-scaling) and **live-update** (change detection) stay in **Phase 2/4** because they read parser metadata, not display state, so rerouting them changes semantics. `interpretationOverride` has no field yet (Phase 2/3 menu), so the resolver has nothing to apply.
 
-**Phase 1 — renderSignature guard + `resolvePanelTimeAxis` + mixed-overlay correctness (timeseries/phase2dt).**
+**Phase 1 — renderSignature guard + `resolvePanelTimeAxis` + mixed-overlay correctness (timeseries/phase2dt). — DONE (see §14).**
 Replace the guard; broaden for `elapsed`/`absolute`/identical-`raw`; distinct semantics stay incompatible. Implement `PanelTimeAxisState` and apply to layout/ticks/title **and hover and export in the same phase**: cross-file hover no longer returns NaN for numeric↔elapsed (`data-methods.js:804-823` **(v)**, gate at `:816`); CSV export emits **per-trace** time columns (`plot-manager.js:1938-1965`). Revalidate mixed traces on transform change (`setFileTransform` rebuilds without re-checking, `plot-manager.js:175-207` **(v)**). Actionable alerts.
 
-**Phase 2 — Unified menu + unit conversion + value-preserving numeric→(duration|calendar) + data-tools.**
+**Phase 2 — Unified menu + unit conversion + value-preserving numeric→(duration|calendar) + data-tools. — MENU + numeric→duration DONE; rest DEFERRED (see §14).**
 Capability-driven menu; `availableSources`/`selectedSource`; full unit selector; `userOriginDate`; `interpretationOverride` for all formats. Lazy filters translate raw↔canonical both ways (`duckdb-source.js:513-525`). Data-tools derivative/integral use canonical seconds, not raw deltas (`data-tools-methods.js:1035-1043` **(v)**).
 
 **Phase 3 — Parse dialog: explicit encodings.**
 Add Format entries `Numeric elapsed (unit)`, `Unix epoch (s/ms)`, `Excel serial`, `MATLAB datenum`; numeric/absolute branch in `buildManualTimeSource` (`csv-parsing-preview-dialog.js:337-445`); offer an elapsed/duration parse so `s.SSS`-style columns bypass the 2001 clock parser.
 
-**Phase 4 — Per-mode operation contracts + Live Update.**
+**Phase 4 — Per-mode operation contracts + Live Update. — FOUNDATION added; wiring DEFERRED (see §14).**
 Wire heatmap/fft/temporal-profile/correlation to `operationCapabilities`. Live Update stops comparing only `metadata.timeKind` (`live-update-methods.js:726` **(v)**): compare the canonical signature or block canonical-field files from live append until handled.
 
 **Phase 5 — Hardening / precision / docs.**
@@ -313,3 +313,34 @@ Eager vs lazy axis equivalence; CF non-gregorian fixed-unit elapsed; sub-ms/us/n
 ## 13. Summary
 
 v4 keeps the architecture and fixes review-3's concrete defects: `raw`/`unknown` axes stay overlay-compatible by unit token (**no numeric↔numeric regression**), `absoluteMs` covers **row-count→absolute**, `resolvePanelTimeAxis` is **provably order-independent** with a deterministic shared origin, the **full reader surface** (incl. `_fftTimeKind`) is migrated in Phase 0, crop/shift is canonicalized across **all four domains**, and CF non-gregorian elapsed is scoped to **fixed units**. The design is now internally consistent; a future external review pass is still advisable before merging product code.
+
+---
+
+## 14. Implementation status (live)
+
+The implementation took a **pragmatic path**: rather than persist the full `TimeAxisModel` (semantic/storageEncoding/interpretationOverride/tagged-crop) as new session fields, it kept the existing legacy transform fields and added the minimum needed (`numericTimeDisplay`) so `_timeAxisModel` derives the canonical view from primitives. Everything below is on branch `worktree-feature+mixed-xaxis-plot`.
+
+### Shipped
+
+| Area | What | Key commits |
+|---|---|---|
+| **Phase 0** | Canonical `_timeAxisModel` + `_renderSignature` + `_operationCapabilities`; core inversion (legacy readers derive from the model); `_fftTimeKind` routed through it | `4ad46af`, `919d4b2`, `d04fd84` |
+| **Phase 1** | Overlay guard uses `_renderSignature` (full check: stepped reindex = elapsed-seconds allowed; pure Index/count or calendar over elapsed-seconds blocked); `_resolvePanelTimeAxis`; transform-change revalidation (`_transformBreaksOverlay`); cross-file hover follows the panel axis; **CSV export per-trace time columns** | `0098878`, `d72b412`, `0c9cfcd`, `0b1f6b0`, `5afe603` |
+| **Phase 2 (menu)** | Unified Source × Format menu for **all** formats incl. numeric `.mat` (Seconds/Duration); **value-preserving numeric→duration** (`numericTimeDisplay`, no /1000); reindex works for numeric/non-detected axes (real row `i`); Δt dropped from the shared axis title; **duration-vs-seconds = order-independent panel consensus** (all-duration ⇒ duration, any seconds ⇒ seconds) across ticks/hover/title/3D; ⚠ "Reindexing assumptions" popover | `af1bdd6`, `0c9cfcd`, `0b1f6b0` |
+| **Phase 4 (foundation)** | `_operationCapabilities` sampling predicates `isMonotonic`/`isUniform`/`supportsFrequencyHz` (additive, no production consumer yet) | `cac20a2` |
+
+### Deferred (and why)
+
+These are the remaining design items; each is either a **user-facing UI feature that needs visual verification on localhost** or a **core refactor with real regression risk**, so they were intentionally not done in an autonomous no-confirmation pass:
+
+- **Value-preserving numeric→Calendar** (assign an origin date to a `.mat`'s seconds → `origin + rawSeconds·1000`). Requires flipping `_timeKind` to `datetime` for these files, which ripples into every analysis-mode gate (heatmap/temporal-profile) and needs calendar-format/UTC/origin-parse verification. **Partial workaround already exists:** reindex → "Create a row index vector" → Show as *Calendar* provides a calendar-from-date axis (row×Δt based; the equidistant caveat is now covered by the ⚠ popover).
+- **Phase 3 — parse-dialog encodings / S4** (`Numeric elapsed`, `Unix epoch`, `Excel serial`, `MATLAB datenum`, and an elapsed parse so `s.SSS` columns bypass the year-2001 clock parser at `csv-time-detection.js:1250-1272`). Import-dialog UI needing preview verification.
+- **`interpretationOverride`** (reclassify an unknown numeric column post-load) — no persisted field yet; entangled with the full model.
+- **Full unit selector** (s/ms/min/h/d) and **`userOriginDate`/alignmentPolicy/shared-absolute-origin**.
+- **Tagged crop/shift domains** (§8) and the **session v1→v2 migrator** (§13-item) — the pragmatic path avoided new persisted shapes, so no migrator is needed yet; `numericTimeDisplay` round-trips through the existing normalizer.
+- **Phase 4 wiring** — gating heatmap/fft/temporal-profile/correlation on `_operationCapabilities` (behavior-changing; risks regressing analysis-mode availability). Live-update's `metadata.timeKind` compare is **correct as-is** (it compares parsed provenance, not display state — rerouting it to `renderSignature` would be wrong).
+- **Phase 5** — hardening / eager-vs-lazy axis equivalence / sub-ms precision matrix.
+
+### Tests added
+
+`test-time-axis-model`, `test-time-axis-readers`, `test-panel-time-axis`, `test-operation-capabilities`, `test-csv-export-time-columns`, plus extensions to `test-file-transform-reset`. Full time/session/phase/analysis suites green.
