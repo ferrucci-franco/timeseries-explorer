@@ -2423,11 +2423,19 @@ body.cursor-box-dragging {
     border-color: #a2861f;
 }
 
-/* Amber "⚠" warning variant of the round popover button (reindex assumptions). */
+/* Amber "⚠" warning variant of the round popover button (reindex assumptions).
+   Sits inline right after the radio label text; flex-centred so the triangular
+   glyph is optically centred inside the circle. */
 .file-transform-warning-btn {
-    width: 15px;
-    height: 15px;
-    font-size: 0.62rem;
+    width: 18px;
+    height: 18px;
+    font-size: 0.72rem;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+    margin-left: 6px;
     background-color: #ffe0b0;
     border-color: #e39a5a;
     color: #7a3d00;

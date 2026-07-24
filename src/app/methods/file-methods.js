@@ -2898,7 +2898,10 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                 cropStart: null, cropEnd: null, timeShift: 0,
             }, { rerender: true, autoscaleX: false });
         });
-        indexSrc.wrap.append(makeReindexWarning());
+        // Append the ⚠ INSIDE the label's text span (not the flex wrap) so it sits
+        // right after "Create a row index vector" instead of being pushed to the
+        // far right, making clear the warning belongs to that option.
+        (indexSrc.wrap.querySelector('span') || indexSrc.wrap).append(makeReindexWarning());
         sourceRow.append(fileSrc.wrap, indexSrc.wrap);
         sourceWrap.append(sourceLabel, sourceRow);
         panel.append(sourceWrap);
@@ -3014,7 +3017,10 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                 cropStart: null, cropEnd: null, timeShift: 0,
             }, { rerender: true, autoscaleX: false });
         });
-        indexSrc.wrap.append(makeReindexWarning());
+        // Append the ⚠ INSIDE the label's text span (not the flex wrap) so it sits
+        // right after "Create a row index vector" instead of being pushed to the
+        // far right, making clear the warning belongs to that option.
+        (indexSrc.wrap.querySelector('span') || indexSrc.wrap).append(makeReindexWarning());
         sourceRow.append(fileSrc.wrap, indexSrc.wrap);
         sourceWrap.append(sourceLabel, sourceRow);
         panel.append(sourceWrap);
