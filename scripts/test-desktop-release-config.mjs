@@ -7,10 +7,10 @@ const constants = await readFile(new URL('src/app/constants.js', root), 'utf8');
 const workflow = await readFile(new URL('.github/workflows/desktop-release.yml', root), 'utf8');
 const builderRunner = await readFile(new URL('scripts/run-electron-builder.mjs', root), 'utf8');
 const manifest = JSON.parse(await readFile(new URL('public/downloads/desktop.json', root), 'utf8'));
-const releaseNotes = await readFile(new URL('docs/releases/v0.1.0-beta.9.md', root), 'utf8');
+const releaseNotes = await readFile(new URL('docs/releases/v0.1.0-beta.10.md', root), 'utf8');
 
-assert.equal(pkg.version, '0.1.0-beta.9');
-assert.match(constants, /APP_VERSION = '0\.1\.0-beta\.9'/);
+assert.equal(pkg.version, '0.1.0-beta.10');
+assert.match(constants, /APP_VERSION = '0\.1\.0-beta\.10'/);
 assert.deepEqual(pkg.build.win.target, ['nsis', 'portable']);
 assert.equal(pkg.build.nsis.oneClick, false);
 assert.equal(pkg.build.nsis.allowToChangeInstallationDirectory, true);
@@ -30,24 +30,24 @@ for (const excluded of ['node-gyp', 'cacache', 'make-fetch-happen', 'tar']) {
 assert.equal(manifest.version, pkg.version);
 assert.equal(manifest.platform, 'windows');
 assert.equal(manifest.architecture, 'x64');
-assert.match(manifest.downloadUrl, /v0\.1\.0-beta\.9\/Time\.Series\.Explorer-0\.1\.0-beta\.9-setup-x64\.exe$/);
-assert.match(manifest.portableUrl, /v0\.1\.0-beta\.9\/Time\.Series\.Explorer-0\.1\.0-beta\.9-portable-x64\.exe$/);
+assert.match(manifest.downloadUrl, /v0\.1\.0-beta\.10\/Time\.Series\.Explorer-0\.1\.0-beta\.10-setup-x64\.exe$/);
+assert.match(manifest.portableUrl, /v0\.1\.0-beta\.10\/Time\.Series\.Explorer-0\.1\.0-beta\.10-portable-x64\.exe$/);
 assert.equal(manifest.platforms.macos.status, 'available');
 assert.deepEqual(
   manifest.platforms.macos.assets.map(asset => asset.fileName),
   [
-    'Time.Series.Explorer-0.1.0-beta.9-mac-x64.dmg',
-    'Time.Series.Explorer-0.1.0-beta.9-mac-x64.zip',
-    'Time.Series.Explorer-0.1.0-beta.9-mac-arm64.dmg',
-    'Time.Series.Explorer-0.1.0-beta.9-mac-arm64.zip'
+    'Time.Series.Explorer-0.1.0-beta.10-mac-x64.dmg',
+    'Time.Series.Explorer-0.1.0-beta.10-mac-x64.zip',
+    'Time.Series.Explorer-0.1.0-beta.10-mac-arm64.dmg',
+    'Time.Series.Explorer-0.1.0-beta.10-mac-arm64.zip'
   ]
 );
 assert.equal(manifest.platforms.linux.status, 'available');
 assert.deepEqual(
   manifest.platforms.linux.assets.map(asset => asset.fileName),
   [
-    'Time.Series.Explorer-0.1.0-beta.9-linux-amd64.deb',
-    'Time.Series.Explorer-0.1.0-beta.9-linux-x86_64.AppImage'
+    'Time.Series.Explorer-0.1.0-beta.10-linux-amd64.deb',
+    'Time.Series.Explorer-0.1.0-beta.10-linux-x86_64.AppImage'
   ]
 );
 
