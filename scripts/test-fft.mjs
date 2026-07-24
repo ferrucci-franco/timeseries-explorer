@@ -104,6 +104,47 @@ assert.equal(nextPowerOfTwo(513), 1024);
 }
 
 {
+    // Near-duplicate event timestamps: solvers (OpenModelica/Dymola .mat) emit a
+    // pre/post-event pair at the "same" instant, but the two copies are not always
+    // bit-identical -- they can differ by 1 ULP up to a tiny event epsilon (e.g.
+    // ~4e-10 s on a 0.01 s grid). These must collapse like exact duplicates; before
+    // the fix their near-zero dt tripped the uniformity gate ("not uniform enough").
+    const n = 1024;
+    const fs = 1024;          // bin-centered so the recovered peak is exact
+    const frequency = 64;
+    const amplitude = 1.5;
+    const base = sine({ n, fs, frequency, amplitude });
+    // step = 1/1024 s; the merge threshold is step * 1e-6 ~= 9.5e-10 s, so both
+    // offsets below (an event epsilon and ~1 ULP) collapse as the same instant.
+    const times = [];
+    const values = [];
+    for (let i = 0; i < n; i++) {
+        times.push(base.times[i]);
+        values.push(base.values[i]);
+        if (i === 300) { times.push(base.times[i] + 4e-10); values.push(base.values[i]); } // event epsilon
+        if (i === 700) { times.push(base.times[i] + 1e-12); values.push(base.values[i]); } // ~1 ULP
+    }
+    const spectrum = computeAmplitudeSpectrum({ times: Float64Array.from(times), values: Float64Array.from(values) });
+    assert.equal(spectrum.ok, true, 'near-duplicate event timestamps do not block the FFT');
+    assert.equal(spectrum.n, n, 'near-duplicate timestamps are collapsed before FFT');
+    assert.equal(spectrum.duplicateTimeCount, 2, 'both near-duplicate timestamps are collapsed');
+    close(spectrum.sampling.sampleRate, fs, fs * 1e-6, 'near-duplicate sample rate recovered');
+    const p = peak(spectrum);
+    close(p.frequency, frequency, 1e-12, 'near-duplicate sine frequency');
+    close(p.amplitude, amplitude, amplitude * 0.01, 'near-duplicate sine amplitude');
+}
+
+{
+    // Genuinely irregular spacing must still fail (the tiny-jitter tolerance is
+    // only for near-zero duplicate steps, never for real non-uniform sampling).
+    const times = Float64Array.from([0, 0.01, 0.03, 0.04, 0.05]); // 0.02 step in the middle
+    const values = Float64Array.from([0, 1, 0, 1, 0]);
+    const spectrum = computeAmplitudeSpectrum({ times, values });
+    assert.equal(spectrum.ok, false, 'real non-uniform spacing is still rejected');
+    assert.equal(spectrum.reason, 'nonUniform', 'non-uniform spacing reports nonUniform');
+}
+
+{
     // detectSamplingGaps: uniform 10-min series (in ms) with two dropped runs.
     const step = 600_000; // 10 min in ms, mimicking datetime timeKind
     const times = [];

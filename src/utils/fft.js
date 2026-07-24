@@ -1,4 +1,14 @@
 export const FFT_UNIFORM_REL_TOLERANCE = 1e-3;
+// Adjacent samples whose times differ by no more than this fraction of the
+// typical step are treated as duplicates of the same instant. Solvers emit
+// event samples as a repeated timestamp (a pre- and a post-event value), but
+// the two copies are not always bit-identical: OpenModelica/Dymola can write
+// them 1 ULP up to a tiny event epsilon apart (e.g. ~4e-10 s on a 0.01 s grid).
+// Collapsing only exact ties left those micro-steps in place, and their near-
+// zero dt (relative error ~1.0 vs the median step) tripped the uniformity gate,
+// blocking FFT with "sampling is not uniform enough". 1e-6 of the step is ~6
+// orders of magnitude below a real sample interval, so no genuine step merges.
+export const FFT_DUPLICATE_REL_TOLERANCE = 1e-6;
 export const FFT_DB_FLOOR = -200;
 export const FFT_LIVE_MAX_POINTS = 2 ** 22;
 export const FFT_MAX_POINTS_WEB = 2 ** 24;
@@ -536,22 +546,35 @@ function invalidSpectrum(reason, extra = {}) {
 
 function collapseAdjacentDuplicateTimes(times, values, timeKind) {
     if (timeKind === 'index') return { times, values, duplicateCount: 0 };
+    const n = times.length;
+    if (n < 2) return { times, values, duplicateCount: 0 };
+
+    // Merge threshold: a fraction of the typical (median) positive step, so the
+    // test tracks the data's own scale (seconds, ms, x-units) and absorbs the
+    // sub-ULP-to-event-epsilon jitter in repeated event timestamps. Falls back
+    // to exact equality (epsilon 0) when there is no usable step.
+    const scale = medianPositiveStep(times);
+    const epsilon = Number.isFinite(scale) && scale > 0
+        ? scale * FFT_DUPLICATE_REL_TOLERANCE
+        : 0;
+
     let hasDuplicate = false;
-    for (let i = 1; i < times.length; i++) {
-        if (times[i] === times[i - 1]) {
+    for (let i = 1; i < n; i++) {
+        if (Math.abs(times[i] - times[i - 1]) <= epsilon) {
             hasDuplicate = true;
             break;
         }
     }
     if (!hasDuplicate) return { times, values, duplicateCount: 0 };
 
-    const outTimes = new Float64Array(times.length);
+    const outTimes = new Float64Array(n);
     const outValues = new Float64Array(values.length);
     let write = 0;
     let duplicateCount = 0;
-    for (let i = 0; i < times.length; i++) {
+    for (let i = 0; i < n; i++) {
         const t = times[i];
-        if (write > 0 && t === outTimes[write - 1]) {
+        if (write > 0 && Math.abs(t - outTimes[write - 1]) <= epsilon) {
+            // Same instant: keep the later timestamp and post-event value.
             outTimes[write - 1] = t;
             outValues[write - 1] = values[i];
             duplicateCount++;
@@ -566,6 +589,18 @@ function collapseAdjacentDuplicateTimes(times, values, timeKind) {
         values: outValues.slice(0, write),
         duplicateCount,
     };
+}
+
+// Median of the strictly-positive first differences of `times`, or NaN when
+// there is none. Robust to a handful of near-zero event steps, so it yields the
+// true sample interval even when duplicate timestamps are present.
+function medianPositiveStep(times) {
+    const deltas = [];
+    for (let i = 1; i < times.length; i++) {
+        const d = times[i] - times[i - 1];
+        if (Number.isFinite(d) && d > 0) deltas.push(d);
+    }
+    return median(deltas);
 }
 
 function median(values) {

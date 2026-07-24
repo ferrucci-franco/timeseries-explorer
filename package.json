@@ -37,6 +37,7 @@
     "test:csv": "node scripts/test-csv-fixtures.mjs",
     "test:excel": "node scripts/test-excel-parser.mjs",
     "test:matlab": "node scripts/test-matlab-parser.mjs",
+    "test:modelica-units": "node scripts/test-modelica-units.mjs",
     "test:capabilities": "node scripts/test-runtime-capabilities.mjs",
     "test:live-update": "node scripts/test-live-update-logic.mjs",
     "test:local-file-http": "node scripts/test-local-file-http.mjs",

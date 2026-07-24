@@ -499,7 +499,11 @@ export default class MatParser {
         if (!description) return '';
         const match = description.match(/\[([^\]]+)\]/);
         if (match) {
-            const parts = match[1].split('|');
+            // Dymola encodes the unit plus its own metadata inside the bracket as
+            // "unit:#(type=…):#(clock=…)"; the real unit is everything before the
+            // first ":#" (e.g. "rad/s:#(clock=…)" -> "rad/s", ":#(type=Boolean)" -> "").
+            const content = match[1].split(':#')[0];
+            const parts = content.split('|');
             // Prefer displayUnit (after |) over the SI base unit expression (before |)
             const unit = (parts[1] ?? parts[0]).trim();
             if (unit && !unit.startsWith('#')) {
