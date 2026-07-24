@@ -2017,7 +2017,7 @@ class PlotManager {
             btn.classList.toggle('active', active);
             btn.setAttribute('aria-pressed', String(active));
         });
-        panelEl.querySelectorAll('.panel-autoscale-btn').forEach(btn => {
+        panelEl.querySelectorAll('.panel-autoscale-btn, .panel-autoscale-axis-btn').forEach(btn => {
             btn.disabled = !has;
         });
         // Show view-btn-group for 3D modes, state-anim (2D or 3D), and the
