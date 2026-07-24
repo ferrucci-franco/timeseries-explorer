@@ -41,6 +41,30 @@
     max-width: calc(100vw - 32px);
 }
 
+/* Time-axis / alignment warnings: at least ~half the window, left-aligned body
+   with readable bullet lists (the default alert is a narrow centred box). */
+.modal-dialog-wide {
+    width: min(calc(100vw - 32px), max(52vw, 480px));
+    max-width: none;
+}
+.modal-dialog-wide .modal-content {
+    text-align: left;
+}
+.modal-dialog-wide .modal-message {
+    text-align: left;
+    color: var(--text-secondary);
+}
+.modal-dialog-wide .modal-message p {
+    margin: 0 0 8px;
+}
+.modal-dialog-wide .modal-message ul {
+    margin: 4px 0 12px;
+    padding-left: 1.2em;
+}
+.modal-dialog-wide .modal-message li {
+    margin: 2px 0;
+}
+
 .modal-dialog.correlation-help-dialog {
     width: min(880px, calc(100vw - 32px));
     max-width: none;

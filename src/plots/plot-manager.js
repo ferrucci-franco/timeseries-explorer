@@ -210,7 +210,7 @@ class PlotManager {
             if (breakReason) {
                 entry.transform = previousTransform;
                 entry._transformCache = null;
-                Modal.alert('Incompatible time axes', breakReason);
+                this._alertIncompatibleTimeAxes(breakReason);
                 return false;
             }
         }
@@ -263,7 +263,7 @@ class PlotManager {
                 // pure Index (0,1,2 counts) or a Calendar date against elapsed
                 // seconds, either of which would misplace the overlaid traces.
                 if (this._renderSignature(other) !== sig) {
-                    return 'This change would put this file on a time axis that no longer matches the traces overlaid with it (for example an index/count axis, or a calendar date, vs elapsed seconds). Set the overlaid files to a matching display, or remove them from this panel, first.';
+                    return 'Changing this file\'s time display would no longer match the traces it is overlaid with, so the change was undone.';
                 }
             }
         }
@@ -2278,10 +2278,7 @@ class PlotManager {
                 if (!candidates.length) continue;
                 candidateCount++;
                 if (!this._canAddTraceWithFileTime(plot, fid, { silent: true })) {
-                    Modal.alert(
-                        'Incompatible time axes',
-                        'This overlay would mix traces that render on different time axes. Set the files to the same time display — e.g. all to Elapsed (seconds), or all to a calendar — before overlaying.'
-                    );
+                    this._alertIncompatibleTimeAxes('This overlay would mix traces measured on different time axes.');
                     return;
                 }
                 const missing = [];
@@ -2316,10 +2313,7 @@ class PlotManager {
                 if (!candidates.length) continue;
                 candidateCount++;
                 if (!this._canAddTraceWithFileTime(plot, fid, { silent: true })) {
-                    Modal.alert(
-                        'Incompatible time axes',
-                        'This overlay would mix traces that render on different time axes. Set the files to the same time display — e.g. all to Elapsed (seconds), or all to a calendar — before overlaying.'
-                    );
+                    this._alertIncompatibleTimeAxes('This overlay would mix traces measured on different time axes.');
                     return;
                 }
                 const missing = new Set();
@@ -2587,6 +2581,29 @@ class PlotManager {
         return !!traceState && traceState.visible !== false && traceState.visible !== 'legendonly';
     }
 
+    // Shared, pedagogical alert for time-axis / overlay-alignment mismatches.
+    // `intro` is the one-line context; the body explains what the axis kinds are
+    // and how to make the files match. Shown in a wide, left-aligned modal.
+    _alertIncompatibleTimeAxes(intro) {
+        const body =
+            `<p>${intro}</p>`
+            + `<p>Two traces can share one plot only when their time axes mean the same thing. `
+            + `Here they are measured in different ways, so the points would be drawn in the wrong place.</p>`
+            + `<p><b>The kinds of time axis are:</b></p>`
+            + `<ul>`
+            + `<li><b>Calendar date</b> — real dates and clock times (e.g. 2024-03-01 14:30).</li>`
+            + `<li><b>Seconds / Duration</b> — time counted from a start: 0, 1.5, 3600 s, or 00:00:03. These two mix freely.</li>`
+            + `<li><b>Row index</b> — a plain count 0, 1, 2, … with no physical time.</li>`
+            + `</ul>`
+            + `<p><b>To mix them, open each file's Time axis panel and either:</b></p>`
+            + `<ul>`
+            + `<li>set them all to <b>Seconds (numeric)</b> or <b>Duration</b>; or</li>`
+            + `<li>give the numeric file a start date with <b>Calendar (from date)</b> so both show a calendar; or</li>`
+            + `<li>remove the mismatched trace from this panel.</li>`
+            + `</ul>`;
+        Modal.alert('Incompatible time axes', body, { html: true, className: 'modal-dialog-wide' });
+    }
+
     _canAddTraceWithFileTime(plot, fileId, options = {}) {
         if (!plot || !fileId) return true;
         if (!this._plotModeRequiresCompatibleTime(plot.mode)) return true;
@@ -2599,10 +2616,7 @@ class PlotManager {
         // rejecting genuinely different axes (a calendar date vs raw seconds).
         if (this._renderSignature(primaryFileId) === this._renderSignature(fileId)) return true;
         if (!options.silent) {
-            Modal.alert(
-                'Incompatible time axes',
-                'These traces render on different time axes (for example a calendar date vs elapsed seconds). Set both files to the same time display — e.g. both to Elapsed (seconds), or assign a start date so both show a calendar — before mixing them.'
-            );
+            this._alertIncompatibleTimeAxes('These traces are measured on different time axes.');
         }
         return false;
     }
