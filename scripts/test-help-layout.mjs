@@ -11,10 +11,11 @@ const thirdPartyLicenses = readFileSync(new URL('../THIRD_PARTY_LICENSES.md', im
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 const topicSections = [...ui.matchAll(/\{ section: '(\d+)', icon: '(\w+)', color: '#[0-9a-f]+' \}/gi)];
-assert.equal(topicSections.length, 14, 'Help should expose all fourteen topics in its navigation');
-assert.deepEqual(topicSections.map(match => Number(match[1])), Array.from({ length: 14 }, (_, index) => index + 1), 'Help topics should follow the user workflow');
-assert.equal(new Set(topicSections.map(match => match[1])).size, 14, 'Help topic ids must be unique');
-assert.equal(new Set(topicSections.map(match => match[2])).size, 14, 'Each Help topic should have a distinct icon');
+assert.equal(topicSections.length, 15, 'Help should expose all fifteen topics in its navigation');
+// Section 15 (Align and reindex files) sits right after Time-series plots (5).
+assert.deepEqual(topicSections.map(match => Number(match[1])), [1, 2, 3, 4, 5, 15, 6, 7, 8, 9, 10, 11, 12, 13, 14], 'Help topics should follow the user workflow');
+assert.equal(new Set(topicSections.map(match => match[1])).size, 15, 'Help topic ids must be unique');
+assert.equal(new Set(topicSections.map(match => match[2])).size, 15, 'Each Help topic should have a distinct icon');
 
 for (const section of topicSections.map(match => match[1])) {
     assert.equal(
@@ -30,10 +31,9 @@ for (const section of topicSections.map(match => match[1])) {
 }
 
 for (const locale of ['en', 'fr', 'es', 'it']) {
-    const guide = Array.from({ length: 14 }, (_, index) => {
-        const section = index + 1;
-        return `${translations[locale][`helpSec${section}Title`]} ${translations[locale][`helpSec${section}Body`]}`;
-    }).join(' ');
+    const guide = topicSections.map(match => match[1]).map(section =>
+        `${translations[locale][`helpSec${section}Title`]} ${translations[locale][`helpSec${section}Body`]}`
+    ).join(' ');
     assert.ok(guide.length > 7000, `${locale} Help should be a substantial product guide`);
     for (const capability of [
         /MATLAB MAT/i,
