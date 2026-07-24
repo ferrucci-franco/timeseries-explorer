@@ -2563,7 +2563,8 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         && transform.timeStepOriginMode === 'calendar';
     const calendarTimeFormat = transform.calendarTimeFormat || timeVar?.calendarTimeFormat || '24h';
     const panel = document.createElement('div');
-    panel.className = 'file-transform-panel';
+    panel.className = 'file-transform-panel'
+        + (fileId === this.activeFileId ? ' file-transform-panel-active' : '');
     panel.addEventListener('click', e => e.stopPropagation());
 
     // Yellow "?" help button that opens a FLOATING popup (not an in-flow box):

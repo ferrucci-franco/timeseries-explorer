@@ -594,6 +594,17 @@
     background: var(--bg-secondary);
 }
 
+/* The time-axis menu of the ACTIVE file (the one whose variables are shown) gets
+   a washed-blue tint so it stands out from other files' menus (which stay grey). */
+.file-transform-panel-active {
+    background: #e9f1fc;
+    border-color: #b7d0ef;
+}
+.theme-dark .file-transform-panel-active {
+    background: #223247;
+    border-color: #3a5170;
+}
+
 .file-transform-title {
     grid-column: 1 / -1;
     margin-top: 2px;
@@ -2436,6 +2447,9 @@ body.cursor-box-dragging {
     justify-content: center;
     vertical-align: middle;
     margin-left: 6px;
+    /* The ⚠ glyph sits high in its line-box; nudge it down so the triangle is
+       optically centred inside the circle (box-sizing: border-box keeps the size). */
+    padding: 2px 0 0;
     background-color: #ffe0b0;
     border-color: #e39a5a;
     color: #7a3d00;
