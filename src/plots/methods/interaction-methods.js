@@ -3716,8 +3716,11 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         timeseriesToolsGroup.className = 'timeseries-tools-group';
 
         timeseriesToolsGroup.appendChild(createAutoscaleButton());
-        if (currentMode === 'timeseries') {
-            timeseriesToolsGroup.appendChild(createAutoscaleAxisButton('x'));
+        // Per-axis auto-fit for the whole timeseries family (fits the analysis
+        // pane in the analysis modes). Heatmap's vertical axis is a fixed
+        // categorical axis, so it gets the horizontal button only.
+        timeseriesToolsGroup.appendChild(createAutoscaleAxisButton('x'));
+        if (currentMode !== 'heatmap') {
             timeseriesToolsGroup.appendChild(createAutoscaleAxisButton('y'));
         }
 
@@ -3790,7 +3793,9 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     if (!isTimeseriesFamily) {
         viewGroup.appendChild(createAutoscaleButton());
-        if (currentMode === 'phase2d') {
+        // phase2d (incl. Curve fit) and Correlation share the 2D pair view, so
+        // both get the per-axis auto-fit buttons.
+        if (currentMode === 'phase2d' || currentMode === 'correlation') {
             viewGroup.appendChild(createAutoscaleAxisButton('x'));
             viewGroup.appendChild(createAutoscaleAxisButton('y'));
         }

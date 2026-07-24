@@ -448,17 +448,20 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.ok(autoscaleBtn, `${mode}: Autoscale shares the contextual group`);
     assert.equal(toolbar.querySelectorAll('.panel-autoscale-btn').length, 1, `${mode}: toolbar has one Autoscale action`);
     assert.equal(tools.children[0], autoscaleBtn, `${mode}: Autoscale is the first contextual action`);
-    // Only plain time-series adds the per-axis Fit X / Fit Y buttons, right after
-    // the fit-both Autoscale; the other family modes go straight to Stack.
+    // The whole time-series family adds per-axis Fit X / Fit Y right after the
+    // fit-both Autoscale (the analysis modes fit their analysis pane). Heatmap is
+    // the exception: its vertical axis is a fixed categorical axis, so it gets
+    // Fit X only.
     const axisFitBtns = tools.querySelectorAll('.panel-autoscale-axis-btn');
-    if (mode === 'timeseries') {
+    if (mode === 'heatmap') {
+        assert.equal(axisFitBtns.length, 1, `${mode}: heatmap gets Fit X only (fixed categorical Y)`);
+        assert.equal(tools.children[1], axisFitBtns[0], `${mode}: Fit X follows Autoscale`);
+        assert.equal(tools.children[2], stackBtn, `${mode}: Stack follows the single per-axis fit`);
+    } else {
         assert.equal(axisFitBtns.length, 2, `${mode}: Fit X and Fit Y sit next to Autoscale`);
         assert.equal(tools.children[1], axisFitBtns[0], `${mode}: Fit X follows Autoscale`);
         assert.equal(tools.children[2], axisFitBtns[1], `${mode}: Fit Y follows Fit X`);
         assert.equal(tools.children[3], stackBtn, `${mode}: Stack follows the per-axis fits`);
-    } else {
-        assert.equal(axisFitBtns.length, 0, `${mode}: no per-axis Fit buttons outside plain time-series`);
-        assert.equal(tools.children[1], stackBtn, `${mode}: Stack appears immediately to the right of Autoscale`);
     }
     assert.equal(autoscaleBtn.textContent, globalAutoscaleIcon, `${mode}: contextual Autoscale reuses the global icon`);
     autoscaleBtn.click();

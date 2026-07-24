@@ -1988,6 +1988,14 @@ proto._autoScaleHeatmapPanel = function(panelId, plot = this.plots.get(panelId))
         : Promise.resolve();
     return Promise.all([timePromise, heatmapPromise]);
 };
+
+// Per-axis auto-fit for the heatmap pane. Only the horizontal (time) axis is
+// fittable; the vertical axis is a fixed reversed categorical axis (weekday /
+// hour) that always shows every row, so 'y' is a no-op (its button is hidden).
+proto._autoScaleHeatmapAxis = function(plot, axis) {
+    if (axis !== 'x' || !plot?.heatmapDiv) return Promise.resolve();
+    return Plotly.relayout(plot.heatmapDiv, { 'xaxis.autorange': true });
+};
 proto._cleanupHeatmapChart = function(panelId, plot = this.plots.get(panelId)) {
     return this._cleanupCalendarHeatmapChart(panelId, plot);
 };

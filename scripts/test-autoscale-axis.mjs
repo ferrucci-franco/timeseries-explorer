@@ -94,4 +94,31 @@ h._y = { A: [100, 20, 5, 30, 15], B: [-50, -5, 8, 2, 1], C: [1000, 200, 300, 400
     assert.deepEqual(u['yaxis2.range'], [200, 400], 'Y2 from C in window [1,3]');
 }
 
+// ── Per-axis auto-fit is wired for the split analysis modes (source checks) ───
+// The update-builder above only covers timeseries/phase2d; the analysis modes
+// dispatch to their own pane-specific methods and each renders its own buttons.
+{
+    const pm = source; // plot-manager.js already read above
+    assert.match(pm, /if \(plot\.mode === 'fft'\) return this\._autoScaleFftAxis/, 'dispatch: fft');
+    assert.match(pm, /if \(plot\.mode === 'histogram'\) return this\._autoScaleHistogramAxis/, 'dispatch: histogram');
+    assert.match(pm, /if \(plot\.mode === 'heatmap'\) return this\._autoScaleHeatmapAxis/, 'dispatch: heatmap');
+    assert.match(pm, /if \(plot\.mode === 'temporal-profile'\) return this\._autoScaleTemporalProfileAxis/, 'dispatch: temporal-profile');
+    assert.match(pm, /if \(plot\.mode === 'correlation'\) return this\._autoScaleCorrelationAxis/, 'dispatch: correlation');
+
+    const read = rel => readFileSync(new URL(`../src/${rel}`, import.meta.url), 'utf8');
+    // Heatmap's per-axis method fits X only (vertical axis is fixed categorical).
+    assert.match(read('plots/methods/heatmap-methods.js'), /_autoScaleHeatmapAxis = function\(plot, axis\) \{\s*\n\s*if \(axis !== 'x'/,
+        'heatmap per-axis fits X only');
+    assert.match(read('plots/methods/fft-methods.js'), /_autoScaleFftAxis = function/, 'fft per-axis method exists');
+    assert.match(read('plots/methods/temporal-profile-methods.js'), /_autoScaleTemporalProfileAxis = function/, 'profile per-axis method exists');
+
+    // Button visibility: the whole timeseries family gets the X button; every
+    // mode but heatmap also gets Y; correlation joins phase2d for the 2D group.
+    const inter = read('plots/methods/interaction-methods.js');
+    assert.match(inter, /timeseriesToolsGroup\.appendChild\(createAutoscaleAxisButton\('x'\)\);\s*\n\s*if \(currentMode !== 'heatmap'\)/,
+        'timeseries family: X always, Y unless heatmap');
+    assert.match(inter, /if \(currentMode === 'phase2d' \|\| currentMode === 'correlation'\) \{\s*\n\s*viewGroup\.appendChild\(createAutoscaleAxisButton\('x'\)\)/,
+        '2D group: phase2d and correlation get per-axis buttons');
+}
+
 console.log('Per-axis auto-scale tests passed.');

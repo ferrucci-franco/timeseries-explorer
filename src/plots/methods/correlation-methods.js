@@ -869,6 +869,15 @@ export function installPlotCorrelationMethods(TargetClass) {
         Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
     };
 
+    // Per-axis auto-fit for the correlation time/scatter view (plot.div). The
+    // results pane (r values) keeps its fixed [-1,1] range, so it is untouched.
+    proto._autoScaleCorrelationAxis = function(plot, axis) {
+        if (!plot?.div) return Promise.resolve();
+        return Plotly.relayout(plot.div, axis === 'x'
+            ? { 'xaxis.autorange': true }
+            : { 'yaxis.autorange': true });
+    };
+
     proto._setCorrelationStatus = function(plot, message, type = 'muted') {
         const el = plot?.correlationContainer?.querySelector('.fft-status');
         if (!el) return;

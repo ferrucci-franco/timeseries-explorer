@@ -2812,10 +2812,21 @@ class PlotManager {
 
     _autoScalePlotAxis(panelId, plot = this.plots.get(panelId), axis = 'y') {
         if (!plot?.div) return Promise.resolve();
-        if (plot.mode !== 'timeseries' && plot.mode !== 'phase2d') return Promise.resolve();
-        const update = this._autoScaleAxisUpdate(plot, axis);
-        return Plotly.relayout(plot.div, update)
-            .then(() => { if (plot.mode === 'timeseries') this._refreshElapsedDateTimeAxisTicks(plot); });
+        if (plot.mode === 'timeseries' || plot.mode === 'phase2d') {
+            const update = this._autoScaleAxisUpdate(plot, axis);
+            return Plotly.relayout(plot.div, update)
+                .then(() => { if (plot.mode === 'timeseries') this._refreshElapsedDateTimeAxisTicks(plot); });
+        }
+        // Split analysis modes: the per-axis buttons fit the analysis output pane
+        // (spectrum / histogram / heatmap / profile / correlation view), each with
+        // its own axis conventions. Heatmap has no vertical fit (fixed categorical
+        // Y), so its 'y' path is a no-op and the button is not shown.
+        if (plot.mode === 'fft') return this._autoScaleFftAxis(plot, axis);
+        if (plot.mode === 'histogram') return this._autoScaleHistogramAxis(plot, axis);
+        if (plot.mode === 'heatmap') return this._autoScaleHeatmapAxis(plot, axis);
+        if (plot.mode === 'temporal-profile') return this._autoScaleTemporalProfileAxis(plot, axis);
+        if (plot.mode === 'correlation') return this._autoScaleCorrelationAxis(plot, axis);
+        return Promise.resolve();
     }
 
     _autoScalePlot(panelId, plot = this.plots.get(panelId)) {
