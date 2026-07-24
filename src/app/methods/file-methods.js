@@ -2797,7 +2797,11 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
 
     // Option B UI prototype is gated to CSV for now so the visual can be reviewed
     // before rolling it out to every format (mat/parquet/nc/pickle).
-    const csvFile = String(this.files.get(fileId)?.extension || '').toLowerCase() === '.csv';
+    // Option B unified time-axis UI now applies to every format (was CSV-gated).
+    // The old i18n Mode/Step/Origin branches below are kept but unreachable; they
+    // are a follow-up cleanup. Numeric axes still show no time controls until the
+    // value-preserving numeric menu (Part B) lands.
+    const csvFile = true;
 
     if (isDateTime && csvFile) {
         // ── Option B: Source (File time / Row index) × Format ──────────────────
@@ -3401,8 +3405,16 @@ proto._resetFileCropAndOffsets = function(fileId) {
 proto._updateFileTransform = function(fileId, patch, options = {}) {
     const entry = this.files.get(fileId);
     if (!entry) return;
+    const previousTransform = entry.transform;
     entry.transform = this._normalizeFileTransform({ ...entry.transform, ...patch });
-    this.plotManager.setFileTransform(fileId, entry.transform, { autoscaleX: options.autoscaleX === true });
+    const applied = this.plotManager.setFileTransform(fileId, entry.transform, { autoscaleX: options.autoscaleX === true, force: options.force });
+    if (applied === false) {
+        // Rejected (would break an overlay): keep the app copy in sync with the
+        // reverted plot state and re-render so the controls snap back.
+        entry.transform = previousTransform;
+        this._renderFilesList();
+        return;
+    }
     if (options.rerender) this._renderFilesList();
     else {
         const isActive = this._isFileTransformActive(entry.transform);

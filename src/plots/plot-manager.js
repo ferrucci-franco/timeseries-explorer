@@ -200,8 +200,21 @@ class PlotManager {
             }
         }
         entry.transform = nextTransform;
-        const nextTimeMode = this._timeDisplayMode(fileId);
         entry._transformCache = null;
+        // Changing a file's time axis must not silently make it render-incompatible
+        // with the traces it is already overlaid with (that would draw them at the
+        // wrong place, e.g. elapsed seconds interpreted as epoch-ms → 1970). If it
+        // would, revert and warn instead. Pass { force: true } to override.
+        if (!options.force) {
+            const breakReason = this._transformBreaksOverlay(fileId);
+            if (breakReason) {
+                entry.transform = previousTransform;
+                entry._transformCache = null;
+                Modal.alert('Incompatible time axes', breakReason);
+                return false;
+            }
+        }
+        const nextTimeMode = this._timeDisplayMode(fileId);
         for (const [panelId, plot] of this.plots) {
             const uses = plot.traces.some(t => t.fileId === fileId) ||
                          plot.phaseTraces.some(t => t.fileId === fileId) ||
@@ -226,6 +239,36 @@ class PlotManager {
             }
             this._rebuildPanel(panelId, { restoreView });
         }
+    }
+
+    // If fileId's CURRENT render signature no longer matches another file it shares
+    // a time panel with, return a user-facing reason; otherwise null. Used to block
+    // a transform change that would break an existing overlay.
+    _transformBreaksOverlay(fileId) {
+        const sig = this._renderSignature(fileId);
+        for (const [, plot] of this.plots) {
+            if (!this._plotModeRequiresCompatibleTime(plot.mode)) continue;
+            const others = new Set();
+            let usesFile = false;
+            for (const t of [...(plot.traces || []), ...(plot.phaseTraces || [])]) {
+                if (!t.fileId) continue;
+                if (t.fileId === fileId) usesFile = true;
+                else others.add(t.fileId);
+            }
+            if (!usesFile) continue;
+            for (const other of others) {
+                const otherSig = this._renderSignature(other);
+                // Only block the date <-> linear boundary: that is the change that
+                // makes one set of traces render as epoch-ms garbage (e.g. elapsed
+                // seconds drawn on a calendar axis → 1970). Different LINEAR axes
+                // (elapsed seconds vs index counts) just misalign, which is a
+                // deliberate, recoverable action, so those are allowed.
+                if (otherSig !== sig && (otherSig === 'date') !== (sig === 'date')) {
+                    return 'This file would show a calendar date while the traces overlaid with it are on an elapsed/numeric axis (or vice versa), which would misplace them (elapsed seconds would read as 1970). Put the overlaid files on the same kind of axis, or remove them from this panel, first.';
+                }
+            }
+        }
+        return null;
     }
 
     // Data-index (row) indices at a view range's edges, from the primary file's

@@ -313,9 +313,12 @@ proto._timeAxisModel = function(fileId) {
     } else if (kind === 'datetime') {
         semantic = 'absolute'; storageEncoding = 'epoch-ms';
     } else {
-        // Conservative: a bare numeric axis is unknown until the user or a parser
-        // asserts its meaning. It never auto-becomes elapsed seconds (v4 C1/§2.2).
-        semantic = 'unknown'; storageEncoding = 'raw-number';
+        // Product decision ("float time = seconds"): a numeric time axis is taken
+        // as elapsed seconds, so it shares a render signature with a datetime shown
+        // as Elapsed (seconds) and the two can overlay. (Diverges from the v4 doc's
+        // conservative 'unknown'; a Unix-epoch/coordinate column would need an
+        // explicit interpretation override to opt out — a follow-up.)
+        semantic = 'elapsed'; storageEncoding = 'raw-number';
     }
 
     const display = ({
@@ -323,8 +326,8 @@ proto._timeAxisModel = function(fileId) {
         elapsedDateTime: 'duration',
         elapsedSeconds: 'seconds',
         index: 'index',
-        numeric: 'raw',
-    })[displayMode] || 'raw';
+        numeric: 'seconds',
+    })[displayMode] || 'seconds';
 
     return {
         semantic,
@@ -1571,24 +1574,28 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     const timeVar  = this._getTimeVar(t.fileId);
     const timeData = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
     const values   = this._getTransformedVariableData(t.fileId, t.varName);
-    const timeMode = this._timeDisplayModeForVar(t.fileId, timeVar);
-    const generatedIndexAxis = this._isGeneratedIndexTime(t.fileId, timeVar);
-    const generatedCalendarAxis = this._isGeneratedCalendarTime(t.fileId, timeVar);
-    const highResolutionCalendarAxis = this._isHighResolutionGeneratedCalendarTime(t.fileId, timeVar);
+    // The hover's TIME format follows the panel axis (the primary trace's file), so
+    // a secondary trace sharing that axis — e.g. a numeric seconds trace under a
+    // Duration axis — reads in the axis format, not its own file's default. The
+    // plotted x values (timeData/plotX below) stay the trace's own.
+    const primaryTimeTrace = plot?.traces?.[0] || t;
+    const primaryTimeVar = this._getTimeVar(primaryTimeTrace.fileId);
+    const timeMode = this._timeDisplayModeForVar(primaryTimeTrace.fileId, primaryTimeVar);
+    const generatedIndexAxis = this._isGeneratedIndexTime(primaryTimeTrace.fileId, primaryTimeVar);
+    const generatedCalendarAxis = this._isGeneratedCalendarTime(primaryTimeTrace.fileId, primaryTimeVar);
+    const highResolutionCalendarAxis = this._isHighResolutionGeneratedCalendarTime(primaryTimeTrace.fileId, primaryTimeVar);
     const durationAxis = timeMode === 'elapsedDateTime'
-        || (this._isGeneratedDurationTime(t.fileId, timeVar) && !generatedCalendarAxis);
+        || (this._isGeneratedDurationTime(primaryTimeTrace.fileId, primaryTimeVar) && !generatedCalendarAxis);
     const timeUnit = generatedIndexAxis
         ? (generatedCalendarAxis ? 'datetime' : (durationAxis ? 'duration' : 'index'))
         : (timeMode === 'calendar'
             ? 'datetime'
-            : (durationAxis ? 'duration' : (timeMode === 'elapsedSeconds' ? 's' : (timeVar ? this._extractUnit(timeVar.description) : 's'))));
+            : (durationAxis ? 'duration' : (timeMode === 'elapsedSeconds' ? 's' : (primaryTimeVar ? this._extractUnit(primaryTimeVar.description) : 's'))));
     const unit     = this._extractUnit(variable.description);
     const name     = this._traceName(t.varName, t.fileId);
     const hoverName = this._escapeHTML(name);
     const hoverTimeUnit = this._escapeHTML(timeUnit);
     const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
-    const primaryTimeTrace = plot?.traces?.[0] || t;
-    const primaryTimeVar = this._getTimeVar(primaryTimeTrace.fileId);
     const primaryCalendarTimeFormat = this._calendarTimeFormat(primaryTimeTrace.fileId, primaryTimeVar);
     const calendarHoverFormat = this._calendarTickFormat(primaryTimeTrace.fileId, primaryTimeVar);
     const durationFractionDigits = this._durationFractionDigits(t.fileId);

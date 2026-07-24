@@ -41,7 +41,7 @@ const cases = [
     ['datetime-cal',      { semantic: 'absolute', storageEncoding: 'epoch-ms',   display: 'calendar', sig: 'date' }],
     ['datetime-elapsed',  { semantic: 'absolute', storageEncoding: 'epoch-ms',   display: 'seconds',  sig: 'linear:elapsed-seconds' }],
     ['datetime-duration', { semantic: 'absolute', storageEncoding: 'epoch-ms',   display: 'duration', sig: 'linear:elapsed-seconds' }],
-    ['numeric-seconds',   { semantic: 'unknown',  storageEncoding: 'raw-number', display: 'raw',      sig: 'linear:raw:s' }],
+    ['numeric-seconds',   { semantic: 'elapsed',  storageEncoding: 'raw-number', display: 'seconds',  sig: 'linear:elapsed-seconds' }],
     ['index',             { semantic: 'count',    storageEncoding: 'row-count',  display: 'index',    sig: 'linear:count' }],
 ];
 for (const [id, want] of cases) {
@@ -69,7 +69,7 @@ assert.equal(
 // ── operation capabilities ──────────────────────────────────────────────────
 assert.equal(h._operationCapabilities('datetime-cal').hasGregorianCalendar, true);
 assert.equal(h._operationCapabilities('numeric-seconds').hasGregorianCalendar, false);
-assert.equal(h._operationCapabilities('numeric-seconds').hasElapsed, false);
+assert.equal(h._operationCapabilities('numeric-seconds').hasElapsed, true);
 assert.equal(h._operationCapabilities('datetime-elapsed').hasElapsed, true);
 
 // ── No behavior change: legacy readers still return their original values ─────

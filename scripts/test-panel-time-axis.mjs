@@ -49,14 +49,17 @@ assert.equal(r('elapsed-dt', 'elapsed-dt2').effectiveDisplay, 'duration');
 
 // C1 non-regression: two generic-numeric [s] files overlay
 assert.equal(r('num-s', 'num-s2').compatible, true);
-assert.equal(r('num-s', 'num-s2').effectiveDisplay, 'raw');
+assert.equal(r('num-s', 'num-s2').effectiveDisplay, 'seconds');
 assert.equal(r('num-s', 'num-s2').effectiveUnit, 's');
 
-// different raw units are incompatible
-assert.equal(r('num-s', 'num-m').compatible, false);
+// "float time = seconds": numeric axes are elapsed-seconds regardless of the unit
+// label, so any two numeric axes overlay.
+assert.equal(r('num-s', 'num-m').compatible, true);
 
-// datetime-elapsed vs generic-numeric are DIFFERENT signatures (needs assertion later)
-assert.equal(r('elapsed-s', 'num-s').compatible, false);
+// The key case: a datetime shown as Elapsed (seconds) now overlays a numeric
+// (.mat-style) seconds axis — both are linear:elapsed-seconds.
+assert.equal(r('elapsed-s', 'num-s').compatible, true);
+assert.equal(r('elapsed-s', 'num-s').effectiveDisplay, 'seconds');
 
 // index panel
 assert.equal(r('idx', 'idx2').effectiveDisplay, 'index');
