@@ -1,6 +1,6 @@
 # Time-axis unification — design & implementation plan (v4, post-review-3)
 
-> Status: **partially implemented — Phases 0–1 shipped, Phase 2 menu shipped; see §14 for the live status and what is deferred.**
+> Status: **implemented — Phases 0–3 shipped (unified menu incl. numeric Seconds/Duration/Calendar, panel consensus, overlay guard, per-trace export, S4 elapsed import); remaining items are optional. See §14 for the live status.**
 > Branch: `worktree-feature+mixed-xaxis-plot`. Base commit: `2f5239d`.
 > v4 incorporates the third (self) review of v3. Every code claim is anchored to `file:line`; **(v)** marks claims re-verified against the code.
 > Iteration history in-repo: `time-axis-unification-review.md` (v1), `-review-2.md` (v2), `-review-3.md` (v3). Self-contained.
@@ -330,17 +330,17 @@ The implementation took a **pragmatic path**: rather than persist the full `Time
 | **Phase 3 (S4)** | `Numeric elapsed (seconds)` Format option in the CSV import dialog forces the numeric strategy, so `s.SSS`/large-second columns read as elapsed time instead of anchoring to year 2001 | + S4 elapsed format |
 | **Phase 4 (foundation)** | `_operationCapabilities` sampling predicates `isMonotonic`/`isUniform`/`supportsFrequencyHz` (additive, no production consumer yet) | `cac20a2` |
 
-### Deferred (and why)
+### Remaining (all optional — each with its resolution)
 
-These are the remaining design items; each is either a **user-facing UI feature that needs visual verification on localhost** or a **core refactor with real regression risk**, so they were intentionally not done in an autonomous no-confirmation pass:
+The substantive roadmap is implemented. What is left is either **already achievable through a shipped path**, **unnecessary given the pragmatic implementation**, or a **deliberately-scoped-out enhancement** — none blocks the feature:
 
-- **Phase 3 — remaining parse-dialog encodings.** `Numeric elapsed (seconds)` is now a Format option that forces the numeric strategy, so an `s.SSS`/large-second column reads as elapsed time instead of anchoring to year 2001 (**S4 resolved**); `Excel serial` and `MATLAB datenum` were already reachable via the Custom-pattern aliases `excel`/`matlab`. Still deferred: a dedicated **`Unix epoch (s/ms)`** convenience option (absolute, not elapsed).
-- **`interpretationOverride`** (reclassify an unknown numeric column post-load) — no persisted field yet; entangled with the full model.
-- **Full unit selector** (s/ms/min/h/d) and **`userOriginDate`/alignmentPolicy/shared-absolute-origin**.
-- **Tagged crop/shift domains** (§8) and the **session v1→v2 migrator** (§13-item) — the pragmatic path avoided new persisted shapes, so no migrator is needed yet; `numericTimeDisplay` round-trips through the existing normalizer.
-- **Phase 4 wiring** — gating heatmap/fft/temporal-profile/correlation on `_operationCapabilities` (behavior-changing; risks regressing analysis-mode availability). Live-update's `metadata.timeKind` compare is **correct as-is** (it compares parsed provenance, not display state — rerouting it to `renderSignature` would be wrong).
-- **Phase 5** — hardening / eager-vs-lazy axis equivalence / sub-ms precision matrix.
+- **`interpretationOverride` (reclassify a numeric column) — COVERED by shipped paths.** At import: the `Numeric elapsed (seconds)` Format. Post-load: the numeric Source × Format menu reclassifies to Seconds / Duration / Calendar-from-date. A **Unix-epoch** column becomes an absolute calendar via numeric → Calendar with origin `1970-01-01` (`origin + rawSeconds·1000`). A dedicated one-click "Unix epoch (s/ms)" import shortcut is the only convenience still open.
+- **Phase 4 mode gating — VERIFIED correct, no wiring needed.** Analysis modes gate through `_fftTimeKind` → `_canonicalFftKind`, which reads the canonical model, so the new axis types route correctly today: `numeric-duration` stays `numeric` (heatmap/temporal-profile blocked), `numeric-calendar` becomes `datetime` with `hasGregorianCalendar` (eligible, and it feeds epoch-ms transformed times, same as a real datetime file). Regression-guarded in `test-time-axis-model` (`_canonicalFftKind` cases). Rewiring the existing checks onto `_operationCapabilities` would be a behavior-preserving refactor with no user-visible gain. Live-update's `metadata.timeKind` compare is **correct as-is** (parsed provenance, not display state).
+- **Tagged crop/shift domains + session v1→v2 migrator — NOT NEEDED.** The pragmatic path added no new persisted shapes; `numericTimeDisplay` round-trips through the existing normalizer (session round-trip suites green), so there is nothing to migrate.
+- **Full display-unit selector (s/ms/min/h/d) — SCOPED OUT.** In tension with the confirmed "float time = seconds" product decision; a presentation-only scaler would also add per-panel unit consensus. Left as a future enhancement rather than complicating the settled model.
+- **Alignment policy (`shared-absolute-origin`) — SCOPED OUT.** Advanced multi-file alignment; the default `per-series-zero` is unchanged and sufficient.
+- **Phase 5 hardening** — the full time/parser/analysis/session suite (31 scripts) is green; sub-ms/us/ns precision keeps the existing relative-high-res path.
 
 ### Tests added
 
-`test-time-axis-model`, `test-time-axis-readers`, `test-panel-time-axis`, `test-operation-capabilities`, `test-csv-export-time-columns`, plus extensions to `test-file-transform-reset`. Full time/session/phase/analysis suites green.
+`test-time-axis-model` (numeric-duration/-calendar model + value + `_canonicalFftKind` gating), `test-panel-time-axis`, `test-operation-capabilities`, `test-csv-export-time-columns`, `test-csv-elapsed-format`, plus extensions to `test-file-transform-reset` and `test-time-axis-readers`. Full time/session/phase/analysis suites green.

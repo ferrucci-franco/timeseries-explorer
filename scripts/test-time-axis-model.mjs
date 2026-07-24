@@ -84,6 +84,15 @@ assert.equal(h._operationCapabilities('datetime-elapsed').hasElapsed, true);
 // numeric→calendar promotion: gains a gregorian calendar, and the transformed
 // times are value-preserving epoch-ms (origin + rawSeconds·1000), NOT reindexed.
 assert.equal(h._operationCapabilities('numeric-calendar').hasGregorianCalendar, true);
+
+// Analysis-mode gating routes through the canonical model (_canonicalFftKind is
+// what _fftTimeKind delegates to). A numeric axis shown as duration stays
+// 'numeric' (blocked from heatmap/temporal-profile); promoting it to a calendar
+// makes it 'datetime' (eligible), matching the gregorian-calendar capability.
+assert.equal(h._canonicalFftKind('numeric-seconds'), 'numeric');
+assert.equal(h._canonicalFftKind('numeric-duration'), 'numeric');
+assert.equal(h._canonicalFftKind('numeric-calendar'), 'datetime');
+assert.equal(h._canonicalFftKind('datetime-cal'), 'datetime');
 const originMs = Date.UTC(2020, 0, 1);
 assert.deepEqual(
     Array.from(h._getTransformedTimeData('numeric-calendar')),
