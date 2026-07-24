@@ -448,7 +448,18 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.ok(autoscaleBtn, `${mode}: Autoscale shares the contextual group`);
     assert.equal(toolbar.querySelectorAll('.panel-autoscale-btn').length, 1, `${mode}: toolbar has one Autoscale action`);
     assert.equal(tools.children[0], autoscaleBtn, `${mode}: Autoscale is the first contextual action`);
-    assert.equal(tools.children[1], stackBtn, `${mode}: Stack appears immediately to the right of Autoscale`);
+    // Only plain time-series adds the per-axis Fit X / Fit Y buttons, right after
+    // the fit-both Autoscale; the other family modes go straight to Stack.
+    const axisFitBtns = tools.querySelectorAll('.panel-autoscale-axis-btn');
+    if (mode === 'timeseries') {
+        assert.equal(axisFitBtns.length, 2, `${mode}: Fit X and Fit Y sit next to Autoscale`);
+        assert.equal(tools.children[1], axisFitBtns[0], `${mode}: Fit X follows Autoscale`);
+        assert.equal(tools.children[2], axisFitBtns[1], `${mode}: Fit Y follows Fit X`);
+        assert.equal(tools.children[3], stackBtn, `${mode}: Stack follows the per-axis fits`);
+    } else {
+        assert.equal(axisFitBtns.length, 0, `${mode}: no per-axis Fit buttons outside plain time-series`);
+        assert.equal(tools.children[1], stackBtn, `${mode}: Stack appears immediately to the right of Autoscale`);
+    }
     assert.equal(autoscaleBtn.textContent, globalAutoscaleIcon, `${mode}: contextual Autoscale reuses the global icon`);
     autoscaleBtn.click();
     assert.equal(manager.autoscaleCalls.length, 1, `${mode}: contextual Autoscale triggers one autoscale`);
@@ -541,9 +552,19 @@ for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
     assert.notEqual(autoscaleBtn.textContent, '⌂', `${label}: legacy home glyph is not used`);
 
     const equalAspectBtn = viewGroup.querySelector('.equal-aspect-btn');
+    // Only 2D scatter (phase2d) gets the per-axis Fit X / Fit Y buttons, right
+    // after Autoscale, so 1:1 shifts two slots over there.
+    const viewAxisFitBtns = viewGroup.querySelectorAll('.panel-autoscale-axis-btn');
+    if (mode === 'phase2d') {
+        assert.equal(viewAxisFitBtns.length, 2, `${label}: 2D scatter adds Fit X / Fit Y after Autoscale`);
+        assert.equal(viewGroup.children[1], viewAxisFitBtns[0], `${label}: Fit X follows Autoscale`);
+        assert.equal(viewGroup.children[2], viewAxisFitBtns[1], `${label}: Fit Y follows Fit X`);
+    } else {
+        assert.equal(viewAxisFitBtns.length, 0, `${label}: per-axis Fit buttons are 2D-scatter only`);
+    }
     if (expectsEqualAspect) {
         assert.ok(equalAspectBtn, `${label}: 1:1 is available for the 2D view`);
-        assert.equal(viewGroup.children[1], equalAspectBtn, `${label}: 1:1 sits immediately to the right of Autoscale`);
+        assert.equal(viewGroup.children[mode === 'phase2d' ? 3 : 1], equalAspectBtn, `${label}: 1:1 sits after Autoscale (and the per-axis fits in 2D scatter)`);
         assert.equal(equalAspectBtn.textContent, '1:1', `${label}: equal-aspect label remains unchanged`);
         assert.ok(equalAspectBtn.classList.contains('panel-toggle-btn'), `${label}: 1:1 uses the common toggle treatment`);
         assert.equal(equalAspectBtn.classList.contains('active'), false, `${label}: disabled 1:1 renders released`);

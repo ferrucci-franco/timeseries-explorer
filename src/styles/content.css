@@ -1279,6 +1279,18 @@
     transition: background-color 0.15s, border-color 0.15s;
 }
 
+/* Per-axis auto-scale buttons carry an SVG icon (fit X / fit Y) instead of text. */
+.panel-autoscale-axis-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.panel-autoscale-axis-btn svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+}
+
 .layout-toolbar-btn:hover:not(:disabled) {
     background-color: var(--primary-color);
     border-color: var(--primary-color);

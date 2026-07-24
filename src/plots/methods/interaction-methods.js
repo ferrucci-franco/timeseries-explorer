@@ -3647,6 +3647,24 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         });
         return button;
     };
+    // Per-axis auto-scale (timeseries + 2D): fit X to all data, or fit Y to the
+    // data visible in the current X window. SVG icon = two end-bars + a double
+    // arrow along the axis (currentColor, so it follows the theme).
+    const createAutoscaleAxisButton = (axis) => {
+        const button = document.createElement('button');
+        button.className = 'layout-toolbar-btn panel-action-btn view-btn panel-autoscale-axis-btn';
+        button.innerHTML = axis === 'x'
+            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5v14M20 5v14"/><path d="M8 12h8M8 12l3-3M8 12l3 3M16 12l-3-3M16 12l-3 3"/></svg>'
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14M5 20h14"/><path d="M12 8v8M12 8l-3 3M12 8l3 3M12 16l-3-3M12 16l3-3"/></svg>';
+        button.title = i18n.t(axis === 'x' ? 'autoScaleXTitle' : 'autoScaleYTitle');
+        button.setAttribute('aria-label', button.title);
+        button.disabled = !this._hasContent(plot);
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this._autoScalePlotAxis(panelId, this.plots.get(panelId), axis);
+        });
+        return button;
+    };
 
     // Mode toggle group
     const modeGroup = document.createElement('div');
@@ -3681,6 +3699,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         timeseriesToolsGroup.className = 'timeseries-tools-group';
 
         timeseriesToolsGroup.appendChild(createAutoscaleButton());
+        if (currentMode === 'timeseries') {
+            timeseriesToolsGroup.appendChild(createAutoscaleAxisButton('x'));
+            timeseriesToolsGroup.appendChild(createAutoscaleAxisButton('y'));
+        }
 
         const stackBtn = document.createElement('button');
         stackBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-stack-btn' + (plot?.timeseriesStacked ? ' active' : '');
@@ -3751,6 +3773,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     if (!isTimeseriesFamily) {
         viewGroup.appendChild(createAutoscaleButton());
+        if (currentMode === 'phase2d') {
+            viewGroup.appendChild(createAutoscaleAxisButton('x'));
+            viewGroup.appendChild(createAutoscaleAxisButton('y'));
+        }
     }
 
     if (supportsEqualAspect2D) {

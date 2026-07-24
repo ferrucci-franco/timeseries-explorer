@@ -1235,6 +1235,8 @@ const translations = {
 
             // 3D views / projection
             viewHome: 'Auto-fit / home view',
+            autoScaleXTitle: 'Fit X axis to all data',
+            autoScaleYTitle: 'Fit Y axis to the visible X range',
             viewTop: 'Top view',
             viewFront: 'Front view',
             viewSide: 'Side view',
@@ -2530,6 +2532,8 @@ const translations = {
 
             // 3D views / projection
             viewHome: 'Vue d’ensemble / auto-ajustement',
+            autoScaleXTitle: 'Ajuster l’axe X à toutes les données',
+            autoScaleYTitle: 'Ajuster l’axe Y à la plage X visible',
             viewTop: 'Vue du dessus',
             viewFront: 'Vue de face',
             viewSide: 'Vue latérale',
@@ -3798,6 +3802,8 @@ const translations = {
             modeStateAnim2d: 'Animación de estado 2D',
             modeStateAnim3d: 'Animación de estado 3D',
             viewHome: 'Vista general / autoajuste',
+            autoScaleXTitle: 'Ajustar el eje X a todos los datos',
+            autoScaleYTitle: 'Ajustar el eje Y al rango X visible',
             viewTop: 'Vista superior',
             viewFront: 'Vista frontal',
             viewSide: 'Vista lateral',
@@ -5062,6 +5068,8 @@ const translations = {
             modeStateAnim2d: 'Animazione di stato 2D',
             modeStateAnim3d: 'Animazione di stato 3D',
             viewHome: 'Vista iniziale / auto-fit',
+            autoScaleXTitle: 'Adatta l’asse X a tutti i dati',
+            autoScaleYTitle: 'Adatta l’asse Y all’intervallo X visibile',
             viewTop: 'Vista dall’alto',
             viewFront: 'Vista frontale',
             viewSide: 'Vista laterale',

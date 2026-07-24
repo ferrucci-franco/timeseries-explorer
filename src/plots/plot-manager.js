@@ -2699,6 +2699,77 @@ class PlotManager {
         return found ? { min, max } : null;
     }
 
+    // Build the Plotly relayout update for a SINGLE axis, leaving the other axis
+    // untouched (timeseries and 2D only):
+    //   axis 'x' → fit X to the full data extent ("show all X").
+    //   axis 'y' → fit Y (and Y2) to the data visible in the CURRENT X window.
+    // Kept pure (no Plotly call) so it can be unit-tested.
+    _autoScaleAxisUpdate(plot, axis) {
+        const fl = plot?.div?._fullLayout || {};
+        const series = [];
+        const seriesY2 = [];
+        const xArrays = [];
+        const yArrays = [];
+        const y2Arrays = [];
+        let primaryFileId = null;
+
+        if (plot.mode === 'timeseries') {
+            for (const t of plot.traces.filter(tr => this._isVisible(tr))) {
+                const v = this.files.get(t.fileId)?.data?.variables?.[t.varName];
+                if (!v) continue;
+                if (primaryFileId === null) primaryFileId = t.fileId;
+                const x = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
+                const y = this._getTransformedVariableData(t.fileId, t.varName);
+                xArrays.push(x);
+                if (this._traceYAxis(t, plot) === 'y2') { seriesY2.push({ x, y }); y2Arrays.push(y); }
+                else { series.push({ x, y }); yArrays.push(y); }
+            }
+        } else {
+            for (const pt of plot.phaseTraces.filter(p => this._isVisible(p))) {
+                const visual = this._phaseVisualDataForTrace(plot, pt);
+                if (!visual) continue;
+                series.push({ x: visual.x, y: visual.y });
+                xArrays.push(visual.x);
+                yArrays.push(visual.y);
+            }
+        }
+
+        const update = {};
+        if (axis === 'x') {
+            const xExtent = this._finiteExtent(xArrays);
+            if (!xExtent) { update['xaxis.autorange'] = true; return update; }
+            if (plot.mode === 'timeseries') {
+                const timeVar = this._getTimeVar(primaryFileId);
+                const isCalendar = this._timeDisplayModeForVar(primaryFileId, timeVar) === 'calendar';
+                const xRange = this._exactRange(xExtent.min, xExtent.max);
+                update['xaxis.range'] = isCalendar ? this._plotlyTimeArray(primaryFileId, xRange, timeVar) : xRange;
+            } else {
+                update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+            }
+            update['xaxis.autorange'] = false;
+            return update;
+        }
+
+        const xRange = Array.isArray(fl.xaxis?.range) ? fl.xaxis.range : null;
+        const yExtent = this._timeseriesYExtentForSeries(plot, series, yArrays, xRange);
+        if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+        else update['yaxis.autorange'] = true;
+        if (plot.mode === 'timeseries' && plot.timeseriesY2Enabled) {
+            const y2Extent = this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, seriesY2, y2Arrays, xRange);
+            if (y2Extent) update['yaxis2.range'] = this._padRange(y2Extent.min, y2Extent.max);
+            else update['yaxis2.autorange'] = true;
+        }
+        return update;
+    }
+
+    _autoScalePlotAxis(panelId, plot = this.plots.get(panelId), axis = 'y') {
+        if (!plot?.div) return Promise.resolve();
+        if (plot.mode !== 'timeseries' && plot.mode !== 'phase2d') return Promise.resolve();
+        const update = this._autoScaleAxisUpdate(plot, axis);
+        return Plotly.relayout(plot.div, update)
+            .then(() => { if (plot.mode === 'timeseries') this._refreshElapsedDateTimeAxisTicks(plot); });
+    }
+
     _autoScalePlot(panelId, plot = this.plots.get(panelId)) {
         if (!plot?.div) return Promise.resolve();
 
