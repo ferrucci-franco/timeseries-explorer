@@ -163,6 +163,12 @@ assert.match(sessionSrc, /entry\.timeAxisIndex\s*\n?\s*\?\s*\[\]/, 'session reap
     assert.equal(timeSuggestion.kind, 'time', 'the time axis is tagged as a time operand');
     assert.ok(h._getDerivedSuggestions('dif').some(s => s.type === 'function' && s.name === 'diff'),
         'diff() is offered as a formula function');
+
+    // The drag warning points users to a derived `y = time` for the raw values,
+    // filling {time} with the actual time-axis name.
+    assert.ok(i18n.t('timeAxisDragWarnBody').includes('{time}'), 'the warning body references a {time} placeholder');
+    assert.match(readSrc('app/methods/derived-methods.js'), /replaceAll\('\{time\}', timeVarName\)/,
+        'the handler fills {time} with the actual time-axis name');
 }
 
 // ── Legend "stairs vs linear" per-trace line shape (helps read the index) ─────

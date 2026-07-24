@@ -430,7 +430,7 @@ proto._handleTimeAxisIndexDrop = async function(timeVarName) {
     // First time for this file: explain what we are about to do, then create it.
     const plannedName = this._timeAxisIndexName(fileId, data);
     const proceed = await Modal.confirm(
-        i18n.t('timeAxisDragWarnBody').replace('{name}', plannedName),
+        i18n.t('timeAxisDragWarnBody').replace('{name}', plannedName).replaceAll('{time}', timeVarName),
         {
             title: i18n.t('timeAxisDragWarnTitle'),
             icon: '🕐',
