@@ -2519,9 +2519,9 @@ proto._normalizeFileTransform = function(transform = null) {
             ? 'ampm'
             : (t.calendarTimeFormat === '24h' ? '24h' : null),
         timeShift: t.timeShift === '' || t.timeShift === null || t.timeShift === undefined ? 0 : t.timeShift,
-        timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
+        timeStepMode: ['index', 'seconds', '1minute', '10minutes', '15minutes', '30minutes', '1hour', '1day', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
-        timeStepOriginMode: ['elapsed', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
+        timeStepOriginMode: ['elapsed', 'elapsed-seconds', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
         timeStepOriginDate: t.timeStepOriginDate === null || t.timeStepOriginDate === undefined ? '' : String(t.timeStepOriginDate),
         gain: (() => {
             const n = Number(t.gain);
@@ -2747,7 +2747,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         const commit = () => {
             const value = String(input.value || '').trim();
             const customTimeStep = value ? `${value} ${select.value}` : '';
-            this._updateFileTransform(fileId, { customTimeStep }, { autoscaleX: true });
+            this._updateFileTransform(fileId, { customTimeStep }, { autoscaleX: !csvFile });
         };
         input.addEventListener('change', commit);
         input.addEventListener('keydown', (e) => {
@@ -2795,7 +2795,125 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         return `${i18n.t('indexTimeLeapYearLabel')}: ${isLeapYear(parsed.year) ? i18n.t('indexTimeLeapYearYes') : i18n.t('indexTimeLeapYearNo')}`;
     };
 
-    if (isDateTime) {
+    // Option B UI prototype is gated to CSV for now so the visual can be reviewed
+    // before rolling it out to every format (mat/parquet/nc/pickle).
+    const csvFile = String(this.files.get(fileId)?.extension || '').toLowerCase() === '.csv';
+
+    if (isDateTime && csvFile) {
+        // ── Option B: Source (File time / Row index) × Format ──────────────────
+        const timeTitle = document.createElement('div');
+        timeTitle.className = 'file-transform-title';
+        timeTitle.textContent = 'Time axis';
+        panel.append(timeTitle);
+
+        const isRowIndex = timeDisplayMode === 'index';
+
+        // Source: what drives the axis — the file's real time, or a row index.
+        const sourceWrap = document.createElement('div');
+        sourceWrap.className = 'file-transform-field file-transform-field-wide';
+        sourceWrap.style.alignItems = 'stretch';
+        sourceWrap.style.gap = '4px';
+        sourceWrap.style.minWidth = '0';
+        const sourceLabel = document.createElement('span');
+        sourceLabel.textContent = 'Source';
+        const sourceRow = document.createElement('div');
+        sourceRow.style.display = 'flex';
+        sourceRow.style.flexDirection = 'column';
+        sourceRow.style.gap = '7px';
+        sourceRow.style.alignItems = 'stretch';
+        sourceRow.style.width = '100%';
+        const makeSourceRadio = (value, labelText, checked) => {
+            const wrap = document.createElement('label');
+            wrap.style.display = 'flex';
+            wrap.style.alignItems = 'center';
+            wrap.style.gap = '7px';
+            wrap.style.width = '100%';
+            wrap.style.cursor = 'pointer';
+            const input = document.createElement('input');
+            input.type = 'radio';
+            input.name = `time-source-${fileId}`;
+            input.value = value;
+            input.checked = checked;
+            // Override the panel's `.file-transform-field input { width:100% }` rule,
+            // which otherwise stretches the radio into a full-width bordered box.
+            input.style.width = 'auto';
+            input.style.minWidth = '0';
+            input.style.margin = '0';
+            input.style.padding = '0';
+            input.style.border = 'none';
+            input.style.background = 'none';
+            input.style.flexShrink = '0';
+            const span = document.createElement('span');
+            span.textContent = labelText;
+            span.style.flex = '1';
+            span.style.minWidth = '0';
+            span.style.lineHeight = '1.25';
+            wrap.append(input, span);
+            return { wrap, input };
+        };
+        const fileSrc = makeSourceRadio('values', 'Use time vector from file', !isRowIndex);
+        const indexSrc = makeSourceRadio('index', 'Create a row index vector', isRowIndex);
+        fileSrc.input.addEventListener('change', () => {
+            if (!fileSrc.input.checked) return;
+            this._updateFileTransform(fileId, {
+                timeDisplayMode: 'calendar', calendarTimeFormat: '24h',
+                timeStepMode: null, customTimeStep: '', timeStepOriginMode: null,
+                cropStart: null, cropEnd: null, timeShift: 0,
+            }, { rerender: true, autoscaleX: false });
+        });
+        indexSrc.input.addEventListener('change', () => {
+            if (!indexSrc.input.checked) return;
+            this._updateFileTransform(fileId, {
+                timeDisplayMode: 'index', calendarTimeFormat: null,
+                cropStart: null, cropEnd: null, timeShift: 0,
+            }, { rerender: true, autoscaleX: false });
+        });
+        sourceRow.append(fileSrc.wrap, indexSrc.wrap);
+        sourceWrap.append(sourceLabel, sourceRow);
+        panel.append(sourceWrap);
+
+        // Format: pure display of the real time (only when Source = File time).
+        // When Source = Row index, the Step ΔT + Show-as controls below (the
+        // existing isIndexAxis block) take over.
+        if (!isRowIndex) {
+            const fmtWrap = document.createElement('label');
+            fmtWrap.className = 'file-transform-field file-transform-field-wide';
+            const fmtLabel = document.createElement('span');
+            fmtLabel.textContent = 'Format';
+            const fmtSelect = document.createElement('select');
+            const selectedCalendarMode = timeDisplayMode === 'calendar'
+                ? (calendarTimeFormat === 'ampm' ? 'calendar-ampm' : 'calendar-24h')
+                : timeDisplayMode;
+            fmtSelect.innerHTML = `
+                <option value="calendar-24h"${selectedCalendarMode === 'calendar-24h' ? ' selected' : ''}>Calendar (24h)</option>
+                <option value="calendar-ampm"${selectedCalendarMode === 'calendar-ampm' ? ' selected' : ''}>Calendar (AM/PM)</option>
+                <option value="elapsedDateTime"${timeDisplayMode === 'elapsedDateTime' ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
+                <option value="elapsedSeconds"${timeDisplayMode === 'elapsedSeconds' ? ' selected' : ''}>Seconds (numeric)</option>
+            `;
+            fmtSelect.addEventListener('change', () => {
+                const selected = fmtSelect.value;
+                const nextIsCalendar = selected === 'calendar-24h' || selected === 'calendar-ampm';
+                const patch = {
+                    timeDisplayMode: nextIsCalendar ? 'calendar' : selected,
+                    calendarTimeFormat: nextIsCalendar ? (selected === 'calendar-ampm' ? 'ampm' : '24h') : null,
+                    timeStepMode: null, customTimeStep: '', timeStepOriginMode: null,
+                };
+                if (!(timeDisplayMode === 'calendar' && nextIsCalendar)) {
+                    patch.cropStart = null; patch.cropEnd = null; patch.timeShift = 0;
+                }
+                this._updateFileTransform(fileId, patch, { rerender: true });
+            });
+            fmtWrap.append(fmtLabel, fmtSelect);
+            panel.append(fmtWrap);
+        }
+
+        if (datetimeAxisStalled) {
+            const stalledHint = document.createElement('div');
+            stalledHint.className = 'file-transform-hint datetime-axis-warning-hint';
+            stalledHint.textContent = i18n.t('datetimeAxisStalledHint');
+            panel.appendChild(stalledHint);
+        }
+    } else if (isDateTime) {
         const timeTitle = document.createElement('div');
         timeTitle.className = 'file-transform-title';
         timeTitle.textContent = 'Time axis';
@@ -2864,22 +2982,37 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         const stepWrap = document.createElement('label');
         stepWrap.className = 'file-transform-field';
         const stepLabel = document.createElement('span');
-        stepLabel.textContent = i18n.t('indexTimeStepLabel');
+        stepLabel.textContent = csvFile ? 'New step' : i18n.t('indexTimeStepLabel');
         const stepSelect = document.createElement('select');
         const stepMode = transform.timeStepMode || timeVar.timeStepMode || 'index';
-        stepSelect.innerHTML = `
-            <option value="index"${stepMode === 'index' ? ' selected' : ''}>${i18n.t('indexTimeStepIndex')}</option>
-            <option value="seconds"${stepMode === 'seconds' ? ' selected' : ''}>${i18n.t('indexTimeStepSeconds')}</option>
-            <option value="10minutes"${stepMode === '10minutes' ? ' selected' : ''}>${i18n.t('indexTimeStep10Minutes')}</option>
-            <option value="1hour"${stepMode === '1hour' ? ' selected' : ''}>${i18n.t('indexTimeStep1Hour')}</option>
-            <option value="custom"${stepMode === 'custom' ? ' selected' : ''}>${i18n.t('indexTimeStepCustom')}</option>
-        `;
+        if (csvFile) {
+            const opt = (val, text) => `<option value="${val}"${stepMode === val ? ' selected' : ''}>${text}</option>`;
+            stepSelect.innerHTML = [
+                opt('index', 'Index (0, 1, 2…)'),
+                opt('seconds', '1 second'),
+                opt('1minute', '1 minute'),
+                opt('10minutes', '10 minutes'),
+                opt('15minutes', '15 minutes'),
+                opt('30minutes', '30 minutes'),
+                opt('1hour', '1 hour'),
+                opt('1day', '1 day'),
+                opt('custom', 'Custom'),
+            ].join('');
+        } else {
+            stepSelect.innerHTML = `
+                <option value="index"${stepMode === 'index' ? ' selected' : ''}>${i18n.t('indexTimeStepIndex')}</option>
+                <option value="seconds"${stepMode === 'seconds' ? ' selected' : ''}>${i18n.t('indexTimeStepSeconds')}</option>
+                <option value="10minutes"${stepMode === '10minutes' ? ' selected' : ''}>${i18n.t('indexTimeStep10Minutes')}</option>
+                <option value="1hour"${stepMode === '1hour' ? ' selected' : ''}>${i18n.t('indexTimeStep1Hour')}</option>
+                <option value="custom"${stepMode === 'custom' ? ' selected' : ''}>${i18n.t('indexTimeStepCustom')}</option>
+            `;
+        }
         stepSelect.addEventListener('change', () => {
             const nextStepMode = stepSelect.value;
             this._updateFileTransform(fileId, {
                 timeStepMode: nextStepMode,
                 timeStepOriginMode: nextStepMode === 'index' ? null : transform.timeStepOriginMode,
-            }, { rerender: true, autoscaleX: true });
+            }, { rerender: true, autoscaleX: !csvFile });
         });
         stepWrap.append(stepLabel, stepSelect);
         panel.append(timeTitle, stepWrap);
@@ -2892,13 +3025,26 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             const originWrap = document.createElement('label');
             originWrap.className = 'file-transform-field file-transform-field-wide';
             const originLabel = document.createElement('span');
-            originLabel.textContent = i18n.t('indexTimeOriginLabel');
             const originSelect = document.createElement('select');
-            const originMode = transform.timeStepOriginMode === 'calendar' ? 'calendar' : 'elapsed';
-            originSelect.innerHTML = `
-                <option value="elapsed"${originMode === 'elapsed' ? ' selected' : ''}>${i18n.t('indexTimeOriginElapsed')}</option>
-                <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>${i18n.t('indexTimeOriginCalendar')}</option>
-            `;
+            const rawOrigin = transform.timeStepOriginMode;
+            const originMode = rawOrigin === 'calendar' ? 'calendar'
+                : (rawOrigin === 'elapsed-seconds' ? 'elapsed-seconds' : 'elapsed');
+            if (csvFile) {
+                // Option B: the reindexed axis is shown as Duration, Seconds
+                // (numeric), or a Calendar from an origin date.
+                originLabel.textContent = 'Show as';
+                originSelect.innerHTML = `
+                    <option value="elapsed"${originMode === 'elapsed' ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
+                    <option value="elapsed-seconds"${originMode === 'elapsed-seconds' ? ' selected' : ''}>Seconds (numeric)</option>
+                    <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>Calendar</option>
+                `;
+            } else {
+                originLabel.textContent = i18n.t('indexTimeOriginLabel');
+                originSelect.innerHTML = `
+                    <option value="elapsed"${originMode === 'elapsed' ? ' selected' : ''}>${i18n.t('indexTimeOriginElapsed')}</option>
+                    <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>${i18n.t('indexTimeOriginCalendar')}</option>
+                `;
+            }
             originSelect.addEventListener('change', () => {
                 const nextOriginMode = originSelect.value;
                 const patch = {
@@ -2910,9 +3056,14 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                 if (nextOriginMode === 'calendar' && !String(transform.timeStepOriginDate || '').trim()) {
                     patch.timeStepOriginDate = DEFAULT_GENERATED_TIME_ORIGIN;
                 }
-                this._updateFileTransform(fileId, {
-                    ...patch,
-                }, { rerender: true, autoscaleX: true });
+                // Duration <-> Seconds (numeric) is a pure relabel of the same
+                // elapsed values, so keep the view instead of autoscaling (#3).
+                // Calendar changes the x domain, so it still refits.
+                // CSV row-index: never autoscale — setFileTransform remaps the view
+                // through the source time so the data window stays put (#3).
+                const isElapsedFamily = (m) => m === 'elapsed' || m === 'elapsed-seconds';
+                const pureRelabel = isElapsedFamily(originMode) && isElapsedFamily(nextOriginMode);
+                this._updateFileTransform(fileId, { ...patch }, { rerender: true, autoscaleX: csvFile ? false : !pureRelabel });
             });
             originWrap.append(originLabel, originSelect);
             panel.append(originWrap);
@@ -2948,7 +3099,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                                 timeStepOriginDate: parsed.value,
                                 cropStart: null,
                                 cropEnd: null,
-                            }, { autoscaleX: true });
+                            }, { autoscaleX: !csvFile });
                         },
                     },
                 );
@@ -3170,41 +3321,36 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         onCommit: applyCropAndOffset,
     };
 
+    // Crop + Offset are grouped in one bordered box so it reads as one unit.
+    const cropOffsetBox = document.createElement('div');
+    cropOffsetBox.className = 'file-transform-box';
+
     const cropTitle = document.createElement('div');
     cropTitle.className = 'file-transform-title';
     cropTitle.textContent = i18n.t('fileCropTitle');
     const cropHint = document.createElement('div');
     cropHint.className = 'file-transform-hint';
     cropHint.textContent = i18n.t('cropUnitsHint');
-    panel.append(cropTitle, cropHint);
     cropStartField = makeInput('cropStart', i18n.t('cropStartLabel'), transform.cropStart, cropPlaceholders.start, cropInputOptions);
     cropEndField = makeInput('cropEnd', i18n.t('cropEndLabel'), transform.cropEnd, cropPlaceholders.end, cropInputOptions);
-    panel.append(
-        cropStartField,
-        cropEndField,
-    );
     const offsetTitle = document.createElement('div');
     offsetTitle.className = 'file-transform-title';
     offsetTitle.textContent = i18n.t('fileOffsetTitle');
     timeShiftField = makeInput('timeShift', '\u0394t', transform.timeShift, durationShift ? '0 h' : '0', shiftInputOptions);
     yOffsetField = makeInput('yOffset', '\u0394y', transform.yOffset, '0', yOffsetInputOptions);
-    panel.append(
-        offsetTitle,
-        timeShiftField,
-        yOffsetField,
-    );
 
+    // Error sits on its own full-width row ABOVE the buttons (not beside them).
+    applyErrorLabel = document.createElement('div');
+    applyErrorLabel.className = 'file-transform-error';
     const applyActions = document.createElement('div');
     applyActions.className = 'file-transform-actions file-transform-crop-actions';
-    applyErrorLabel = document.createElement('span');
-    applyErrorLabel.className = 'file-transform-error';
     const applyBtn = document.createElement('button');
     applyBtn.type = 'button';
-    applyBtn.textContent = i18n.t('applyCropOffset');
+    applyBtn.textContent = 'Apply';
     applyBtn.addEventListener('click', applyCropAndOffset);
     const resetCropBtn = document.createElement('button');
     resetCropBtn.type = 'button';
-    resetCropBtn.textContent = i18n.t('resetCropOffset');
+    resetCropBtn.textContent = 'Reset';
     resetCropBtn.addEventListener('click', () => {
         cropStartField.input.value = '';
         cropEndField.input.value = '';
@@ -3217,22 +3363,23 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         setApplyError('');
         this._resetFileCropAndOffsets(fileId);
     });
-    applyActions.append(applyErrorLabel, applyBtn, resetCropBtn);
-    panel.appendChild(applyActions);
+    applyActions.append(applyBtn, resetCropBtn);
+    cropOffsetBox.append(cropTitle, cropHint, cropStartField, cropEndField, offsetTitle, timeShiftField, yOffsetField, applyErrorLabel, applyActions);
+    panel.appendChild(cropOffsetBox);
 
     const gainTitle = document.createElement('div');
     gainTitle.className = 'file-transform-title';
     gainTitle.textContent = i18n.t('fileGainTitle');
     panel.append(
         gainTitle,
-        makeInput('gain', i18n.t('gainLabel'), transform.gain, '1', { step: '0.1' }),
+        makeInput('gain', 'Gain applied to all time-series', transform.gain, '1', { step: '0.1' }),
     );
 
     const actions = document.createElement('div');
     actions.className = 'file-transform-actions';
     const resetBtn = document.createElement('button');
     resetBtn.type = 'button';
-    resetBtn.textContent = i18n.t('resetTransform');
+    resetBtn.textContent = 'Reset all';
     resetBtn.addEventListener('click', () => {
         this._updateFileTransform(fileId, this._defaultFileTransform(), { rerender: true });
     });

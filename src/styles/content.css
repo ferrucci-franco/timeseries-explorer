@@ -740,11 +740,25 @@
 }
 
 .file-transform-error {
+    grid-column: 1 / -1;
     min-width: 0;
-    margin-right: auto;
     color: #d32f2f;
     font-size: 0.68rem;
     line-height: 1.2;
+}
+
+.file-transform-box {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    padding: 7px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+.file-transform-crop-actions button {
+    flex: 1;
 }
 
 .file-transform-actions button {

@@ -177,17 +177,29 @@ class PlotManager {
         if (!entry) return;
         const previousTransform = this._normalizeFileTransform(entry.transform);
         const previousTimeMode = this._timeDisplayMode(fileId);
+        const nextTransform = this._normalizeFileTransform(transform);
         const autoscaleX = options.autoscaleX === true;
+        // GATE: only reindex (Row index) transitions use the row-preserving remap.
+        // Every other change (incl. all "Use time vector from file" formats) keeps
+        // the original view handling untouched, so it can never be regressed here.
+        const rowIndexInvolved = previousTransform.timeDisplayMode === 'index'
+            || nextTransform.timeDisplayMode === 'index';
         const mainTimePaneModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'correlation']);
         const pendingViews = new Map();
+        const pendingRowRanges = new Map();
         for (const [panelId, plot] of this.plots) {
             const uses = plot.traces.some(t => t.fileId === fileId) ||
                          plot.phaseTraces.some(t => t.fileId === fileId) ||
                          plot.stateSlots?.fileId === fileId;
-            if (uses) pendingViews.set(panelId, this._capturePlotView(plot));
+            if (!uses) continue;
+            const view = this._capturePlotView(plot);
+            pendingViews.set(panelId, view);
+            if (rowIndexInvolved && view?.mode === '2d' && Array.isArray(view.xRange)
+                && plot.mode === 'timeseries' && this._primaryTimeFileId(plot) === fileId) {
+                pendingRowRanges.set(panelId, this._viewRangeToRowIndices(fileId, plot, view.xRange));
+            }
         }
-        entry.transform = this._normalizeFileTransform(transform);
-        const nextTransform = entry.transform;
+        entry.transform = nextTransform;
         const nextTimeMode = this._timeDisplayMode(fileId);
         entry._transformCache = null;
         for (const [panelId, plot] of this.plots) {
@@ -202,10 +214,71 @@ class PlotManager {
                     restoreView.phase2dFitTime.xRange = null;
                 }
             } else if (restoreView?.mode === '2d' && plot.mode === 'timeseries' && this._primaryTimeFileId(plot) === fileId) {
-                restoreView.xRange = this._mapTimeRangeBetweenModes(fileId, restoreView.xRange, previousTimeMode, nextTimeMode, previousTransform, nextTransform);
+                if (rowIndexInvolved) {
+                    const rows = pendingRowRanges.get(panelId);
+                    const mapped = rows ? this._rowIndicesToViewRange(fileId, plot, rows) : null;
+                    // Keep the same rows in view; if that fails, fit to data (null)
+                    // rather than leave a stale/wrong range.
+                    restoreView.xRange = (mapped && mapped.every(v => v != null && (typeof v === 'string' || Number.isFinite(v)))) ? mapped : null;
+                } else {
+                    restoreView.xRange = this._mapTimeRangeBetweenModes(fileId, restoreView.xRange, previousTimeMode, nextTimeMode, previousTransform, nextTransform);
+                }
             }
             this._rebuildPanel(panelId, { restoreView });
         }
+    }
+
+    // Data-index (row) indices at a view range's edges, from the primary file's
+    // transformed time series (index i === row i). Used only for reindex changes.
+    _viewRangeToRowIndices(fileId, plot, xRange) {
+        const trace = plot?.traces?.find(t => t.fileId === fileId);
+        if (!trace) return null;
+        const x = this._getTransformedTimeDataForVariable(fileId, trace.varName);
+        if (!x || x.length < 2 || !Array.isArray(xRange)) return null;
+        const target = xRange.map(v => this._coerceAxisValue(v));
+        if (!target.every(Number.isFinite)) return null;
+        // Fractional row positions (may be < 0 or > n-1) so empty margins on either
+        // side of the data are preserved, not snapped to the first/last point.
+        return [this._fractionalIndexInSeries(x, target[0]), this._fractionalIndexInSeries(x, target[1])];
+    }
+
+    // Convert captured fractional row positions into an axis range under the
+    // CURRENT (already updated) transform, formatted for the new axis (ISO for
+    // calendar). Interpolates/extrapolates so the exact window is reproduced.
+    _rowIndicesToViewRange(fileId, plot, rows) {
+        if (!Array.isArray(rows)) return null;
+        const trace = plot?.traces?.find(t => t.fileId === fileId);
+        if (!trace) return null;
+        const x = this._getTransformedTimeDataForVariable(fileId, trace.varName);
+        if (!x || x.length < 2) return null;
+        const timeVar = this._getTimeVar(fileId);
+        const a = this._valueAtFractionalIndex(x, rows[0]);
+        const b = this._valueAtFractionalIndex(x, rows[1]);
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+        return [this._plotlyTimeValue(fileId, a, timeVar), this._plotlyTimeValue(fileId, b, timeVar)];
+    }
+
+    // Fractional index r such that x[r] === target (linear interp; extrapolates
+    // beyond the ends using the first/last segment slope). Assumes x monotonic.
+    _fractionalIndexInSeries(x, target) {
+        const n = x.length;
+        const xv = (i) => Number(x[i]);
+        if (target <= xv(0)) { const dx = xv(1) - xv(0); return dx !== 0 ? (target - xv(0)) / dx : 0; }
+        if (target >= xv(n - 1)) { const dx = xv(n - 1) - xv(n - 2); return dx !== 0 ? (n - 1) + (target - xv(n - 1)) / dx : n - 1; }
+        let lo = 0, hi = n - 1;
+        while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (xv(mid) <= target) lo = mid; else hi = mid; }
+        const xa = xv(lo), xb = xv(hi);
+        return xb !== xa ? lo + (target - xa) / (xb - xa) : lo;
+    }
+
+    // Inverse of the above: value of series x at fractional index r (extrapolates).
+    _valueAtFractionalIndex(x, r) {
+        const n = x.length;
+        const xv = (i) => Number(x[i]);
+        if (r <= 0) return xv(0) + r * (xv(1) - xv(0));
+        if (r >= n - 1) return xv(n - 1) + (r - (n - 1)) * (xv(n - 1) - xv(n - 2));
+        const lo = Math.floor(r);
+        return xv(lo) + (r - lo) * (xv(lo + 1) - xv(lo));
     }
 
     getFileTransform(fileId) {

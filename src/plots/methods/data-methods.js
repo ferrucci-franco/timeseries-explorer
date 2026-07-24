@@ -119,9 +119,9 @@ proto._normalizeFileTransform = function(transform = null) {
             ? 'ampm'
             : (t.calendarTimeFormat === '24h' ? '24h' : null),
         timeShift: t.timeShift === '' || t.timeShift === null || t.timeShift === undefined ? 0 : t.timeShift,
-        timeStepMode: ['index', 'seconds', '10minutes', '1hour', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
+        timeStepMode: ['index', 'seconds', '1minute', '10minutes', '15minutes', '30minutes', '1hour', '1day', 'custom'].includes(t.timeStepMode) ? t.timeStepMode : null,
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
-        timeStepOriginMode: ['elapsed', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
+        timeStepOriginMode: ['elapsed', 'elapsed-seconds', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
         timeStepOriginDate: t.timeStepOriginDate === null || t.timeStepOriginDate === undefined ? '' : String(t.timeStepOriginDate),
         gain: (() => {
             const n = Number(t.gain);
@@ -165,7 +165,13 @@ proto._isGeneratedIndexTime = function(fileId, timeVar = null) {
 };
 
 proto._isGeneratedDurationTime = function(fileId, timeVar = null) {
-    return this._isGeneratedIndexTime(fileId, timeVar) && this._indexTimeStepMode(fileId) !== 'index';
+    // The "Seconds (numeric)" show-as (originMode 'elapsed-seconds') is a stepped
+    // index too, but is rendered as a plain linear number of seconds rather than
+    // hh:mm:ss, so it is deliberately excluded from the duration path here — this
+    // one exclusion turns off duration formatting everywhere that gates on it.
+    return this._isGeneratedIndexTime(fileId, timeVar)
+        && this._indexTimeStepMode(fileId) !== 'index'
+        && this._fileTransform(fileId).timeStepOriginMode !== 'elapsed-seconds';
 };
 
 proto._isGeneratedFromDetectedTime = function(fileId, timeVar = null) {
@@ -184,6 +190,15 @@ proto._isGeneratedCalendarTime = function(fileId, timeVar = null) {
         && Number.isFinite(stepSeconds)
         && stepSeconds > 0
         && this._fileTransform(fileId).timeStepOriginMode === 'calendar';
+};
+
+// A generated (reindexed) axis stepped by a real Δt, but shown as a plain linear
+// number of seconds (row × Δt) rather than hh:mm:ss — the value-preserving
+// "Seconds (numeric)" show-as, and the native format of a .mat time vector.
+proto._isGeneratedSecondsTime = function(fileId, timeVar = null) {
+    return this._isGeneratedIndexTime(fileId, timeVar)
+        && this._indexTimeStepMode(fileId) !== 'index'
+        && this._fileTransform(fileId).timeStepOriginMode === 'elapsed-seconds';
 };
 
 proto._isHighResolutionGeneratedCalendarTime = function(fileId, timeVar = null) {
@@ -210,8 +225,12 @@ proto._indexTimeStepMode = function(fileId) {
 proto._indexTimeStepSeconds = function(fileId) {
     const mode = this._indexTimeStepMode(fileId);
     if (mode === 'seconds') return 1;
+    if (mode === '1minute') return 60;
     if (mode === '10minutes') return 600;
+    if (mode === '15minutes') return 900;
+    if (mode === '30minutes') return 1800;
     if (mode === '1hour') return 3600;
+    if (mode === '1day') return 86400;
     if (mode === 'custom') {
         const seconds = this._parseDurationMs(this._fileTransform(fileId).customTimeStep) / 1000;
         return Number.isFinite(seconds) && seconds > 0 ? seconds : 1;
@@ -223,8 +242,12 @@ proto._indexTimeStepLabel = function(fileId) {
     const mode = this._indexTimeStepMode(fileId);
     if (mode === 'index') return 'index';
     if (mode === 'seconds') return '1 s';
+    if (mode === '1minute') return '1 min';
     if (mode === '10minutes') return '10 min';
+    if (mode === '15minutes') return '15 min';
+    if (mode === '30minutes') return '30 min';
     if (mode === '1hour') return '1 h';
+    if (mode === '1day') return '1 d';
     if (mode === 'custom') {
         const raw = String(this._fileTransform(fileId).customTimeStep || '').trim();
         return raw || 'custom';
@@ -258,6 +281,7 @@ proto._timeAxisModel = function(fileId) {
     const isGeneratedCalendar = this._isGeneratedCalendarTime(fileId, timeVar);
     const indexStepMode = this._indexTimeStepMode(fileId);
     const highResGeneratedCalendar = this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
+    const isGeneratedSeconds = isGeneratedIndex && indexStepMode !== 'index' && transform.timeStepOriginMode === 'elapsed-seconds';
 
     // Legacy time kind (inlined from the former _timeKind).
     const kind = (isGeneratedCalendar || timeVar?.timeKind === 'datetime') ? 'datetime' : 'numeric';
@@ -271,7 +295,7 @@ proto._timeAxisModel = function(fileId) {
     // Axis unit label (inlined from the former _timeUnitLabel, using local state).
     let unit;
     if (isGeneratedCalendar) unit = 'datetime';
-    else if (isGeneratedIndex) unit = indexStepMode === 'index' ? 'index' : 'duration';
+    else if (isGeneratedIndex) unit = indexStepMode === 'index' ? 'index' : (isGeneratedSeconds ? 's' : 'duration');
     else if (displayMode === 'calendar') unit = 'datetime';
     else if (displayMode === 'elapsedDateTime') unit = 'duration';
     else if (displayMode === 'elapsedSeconds') unit = 's';
@@ -767,6 +791,9 @@ proto._timeAxisTitleForVar = function(fileId, timeVar = null, fallback = 'Time')
         const mode = this._indexTimeStepMode(fileId);
         if (mode !== 'index' && this._isGeneratedCalendarTime(fileId, timeVar)) {
             return `datetime [step ${this._indexTimeStepLabel(fileId)}]`;
+        }
+        if (mode !== 'index' && this._isGeneratedSecondsTime(fileId, timeVar)) {
+            return `seconds [step ${this._indexTimeStepLabel(fileId)}]`;
         }
         return mode === 'index' ? 'index' : `duration [hh:mm:ss, step ${this._indexTimeStepLabel(fileId)}]`;
     }
@@ -1645,7 +1672,8 @@ proto._buildTimeLayout = function(plot) {
     const firstTimeVar = firstFileId ? this._getTimeVar(firstFileId) : this._getTimeVar();
     const firstTimeMode = this._timeDisplayModeForVar(firstFileId, firstTimeVar);
     const generatedCalendarAxis = this._isGeneratedCalendarTime(firstFileId, firstTimeVar);
-    const generatedElapsedDurationAxis = this._isGeneratedDurationTime(firstFileId, firstTimeVar) && !generatedCalendarAxis;
+    const generatedSecondsAxis = this._isGeneratedSecondsTime(firstFileId, firstTimeVar);
+    const generatedElapsedDurationAxis = this._isGeneratedDurationTime(firstFileId, firstTimeVar) && !generatedCalendarAxis && !generatedSecondsAxis;
     const timeTitle = this._timeAxisTitleForVar(firstFileId, firstTimeVar);
     const xAxisMode = firstTimeMode === 'calendar' || generatedCalendarAxis
         ? this._calendarAxisConfig(firstFileId, firstTimeVar, plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)))
