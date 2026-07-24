@@ -2051,34 +2051,7 @@ class PlotManager {
         const columns = [];
 
         if (plot.mode === 'timeseries' || plot.mode === 'fft') {
-            const independentIndexes = plot.traces.some(trace =>
-                this.files.get(trace.fileId)?.data?.variables?.[trace.varName]?.independentIndex);
-            const firstFid = plot.traces[0]?.fileId;
-            if (!independentIndexes) {
-                const timeVar = this._getTimeVar(firstFid);
-                const times = firstFid
-                    ? this._getTransformedTimeDataForVariable(firstFid, plot.traces[0]?.varName)
-                    : [];
-                const timeUnit = firstFid ? this._timeUnitLabel(firstFid) : (timeVar ? this._extractUnit(timeVar.description) : 's');
-                headers.push(this._isCalendarTime(firstFid) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
-                columns.push(this._formatTimeColumnForExport(firstFid, times));
-            }
-            for (const t of plot.traces) {
-                const d = this.files.get(t.fileId)?.data;
-                const v = d?.variables[t.varName];
-                if (!v) continue;
-                const u    = this._extractUnit(v.description);
-                const name = this._traceName(t.varName, t.fileId);
-                if (independentIndexes) {
-                    headers.push(`${name} index`);
-                    columns.push(this._formatTimeColumnForExport(
-                        t.fileId,
-                        this._getTransformedTimeDataForVariable(t.fileId, t.varName)
-                    ));
-                }
-                headers.push(u ? `${name} [${u}]` : name);
-                columns.push(Array.from(this._getTransformedVariableData(t.fileId, t.varName)));
-            }
+            this._appendTimeseriesExportColumns(plot, headers, columns);
         } else if (plot.mode === 'phase2dt') {
             for (const pt of plot.phaseTraces) {
                 this._appendPhaseCSVTrace(headers, columns, pt, ['x', 'y']);
@@ -2183,6 +2156,53 @@ class PlotManager {
         a.download = `${plot.mode}_export.csv`;
         a.click();
         URL.revokeObjectURL(url);
+    }
+
+    // Build the time-series / FFT export columns. A single shared time column is
+    // emitted only when every trace is drawn against one time vector (all from the
+    // same file, none using its own independent index). Once traces span multiple
+    // files (now overlay-compatible) or use their own independent index, each
+    // trace gets its OWN time column so rows line up with the right values instead
+    // of being stretched against the first file's clock.
+    _appendTimeseriesExportColumns(plot, headers, columns) {
+        const independentIndexes = plot.traces.some(trace =>
+            this.files.get(trace.fileId)?.data?.variables?.[trace.varName]?.independentIndex);
+        const fileIds = new Set(plot.traces.map(t => t.fileId));
+        const perTraceTime = independentIndexes || fileIds.size > 1;
+
+        if (!perTraceTime) {
+            const firstFid = plot.traces[0]?.fileId;
+            const timeVar = this._getTimeVar(firstFid);
+            const times = firstFid
+                ? this._getTransformedTimeDataForVariable(firstFid, plot.traces[0]?.varName)
+                : [];
+            const timeUnit = firstFid ? this._timeUnitLabel(firstFid) : (timeVar ? this._extractUnit(timeVar.description) : 's');
+            headers.push(this._isCalendarTime(firstFid) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
+            columns.push(this._formatTimeColumnForExport(firstFid, times));
+        }
+        for (const t of plot.traces) {
+            const d = this.files.get(t.fileId)?.data;
+            const v = d?.variables[t.varName];
+            if (!v) continue;
+            const u    = this._extractUnit(v.description);
+            const name = this._traceName(t.varName, t.fileId);
+            if (perTraceTime) {
+                // Independent-index variables keep their row-index column; a
+                // cross-file overlay exports each trace's real time column.
+                const header = independentIndexes
+                    ? `${name} index`
+                    : (this._isCalendarTime(t.fileId)
+                        ? `${name} time [datetime UTC]`
+                        : `${name} time [${this._timeUnitLabel(t.fileId) || 's'}]`);
+                headers.push(header);
+                columns.push(this._formatTimeColumnForExport(
+                    t.fileId,
+                    this._getTransformedTimeDataForVariable(t.fileId, t.varName)
+                ));
+            }
+            headers.push(u ? `${name} [${u}]` : name);
+            columns.push(Array.from(this._getTransformedVariableData(t.fileId, t.varName)));
+        }
     }
 
     _appendPhaseCSVTrace(headers, columns, phaseTrace, axes) {
