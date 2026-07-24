@@ -2390,8 +2390,16 @@ proto._cursorOverlayGeometry = function(view, trace, x, options = {}) {
     if (!div || !trace || !Number.isFinite(x)) return null;
     const fl = div._fullLayout;
     const xa = fl?.xaxis;
-    const ya = fl?.yaxis;
-    if (!xa?.range || !ya?.range || !xa._length || !ya._length) return null;
+    const yaPrimary = fl?.yaxis;
+    if (!xa?.range || !yaPrimary?.range || !xa._length || !yaPrimary._length) return null;
+    // Map the y-value through the axis the trace actually lives on. A trace on the
+    // secondary axis (Y2) has its own range, so mapping it against Y1 would place
+    // the dot off the curve (it would follow the Y1 scale). For an overlaying Y2
+    // the plot-area offset/length match Y1; only the range differs.
+    const yAxisKey = this._traceYAxis(trace, view.plot);
+    const ya = (yAxisKey === 'y2' && fl.yaxis2?.range && fl.yaxis2._length)
+        ? fl.yaxis2
+        : yaPrimary;
 
     const range = Array.isArray(options.range) && options.range.length >= 2
         ? options.range
