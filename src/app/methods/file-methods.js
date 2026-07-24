@@ -2773,7 +2773,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         const commit = () => {
             const value = String(input.value || '').trim();
             const customTimeStep = value ? `${value} ${select.value}` : '';
-            this._updateFileTransform(fileId, { customTimeStep }, { autoscaleX: !csvFile });
+            this._updateFileTransform(fileId, { customTimeStep }, { autoscaleX: false });
         };
         input.addEventListener('change', commit);
         input.addEventListener('keydown', (e) => {
@@ -2821,15 +2821,8 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         return `${i18n.t('indexTimeLeapYearLabel')}: ${isLeapYear(parsed.year) ? i18n.t('indexTimeLeapYearYes') : i18n.t('indexTimeLeapYearNo')}`;
     };
 
-    // Option B UI prototype is gated to CSV for now so the visual can be reviewed
-    // before rolling it out to every format (mat/parquet/nc/pickle).
-    // Option B unified time-axis UI now applies to every format (was CSV-gated).
-    // The old i18n Mode/Step/Origin branches below are kept but unreachable; they
-    // are a follow-up cleanup. Numeric axes still show no time controls until the
-    // value-preserving numeric menu (Part B) lands.
-    const csvFile = true;
-
-    if (isDateTime && csvFile) {
+    // Unified Option B time-axis UI (Source × Format), for every file format.
+    if (isDateTime) {
         // ── Option B: Source (File time / Row index) × Format ──────────────────
         const timeTitle = document.createElement('div');
         timeTitle.className = 'file-transform-title';
@@ -2947,7 +2940,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             stalledHint.textContent = i18n.t('datetimeAxisStalledHint');
             panel.appendChild(stalledHint);
         }
-    } else if (isNumericTime && csvFile) {
+    } else if (isNumericTime) {
         // ── Option B for a numeric (float) time vector: Source × Format ────────
         // The file already carries its own seconds. Source = File time shows those
         // seconds either as a plain number or as a duration (hh:mm:ss); Source =
@@ -3097,65 +3090,6 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                 panel.append(originDateField, leapHint);
             }
         }
-    } else if (isDateTime) {
-        const timeTitle = document.createElement('div');
-        timeTitle.className = 'file-transform-title';
-        timeTitle.textContent = 'Time axis';
-
-        const modeWrap = document.createElement('label');
-        modeWrap.className = 'file-transform-field file-transform-field-wide';
-        const modeLabel = document.createElement('span');
-        modeLabel.textContent = 'Mode';
-        const modeSelect = document.createElement('select');
-        const selectedCalendarMode = timeDisplayMode === 'calendar'
-            ? (calendarTimeFormat === 'ampm' ? 'calendar-ampm' : 'calendar-24h')
-            : timeDisplayMode;
-        modeSelect.innerHTML = `
-            <option value="calendar-24h"${selectedCalendarMode === 'calendar-24h' ? ' selected' : ''}>Calendar (24h format)</option>
-            <option value="calendar-ampm"${selectedCalendarMode === 'calendar-ampm' ? ' selected' : ''}>Calendar (AM/PM format)</option>
-            <option value="elapsedDateTime"${timeDisplayMode === 'elapsedDateTime' ? ' selected' : ''}>Elapsed (hh:mm:ss)</option>
-            <option value="elapsedSeconds"${timeDisplayMode === 'elapsedSeconds' ? ' selected' : ''}>Elapsed (seconds)</option>
-            <option value="index"${timeDisplayMode === 'index' ? ' selected' : ''}>Index</option>
-        `;
-        const updateTimeMode = () => {
-            const selected = modeSelect.value;
-            const nextIsCalendar = selected === 'calendar-24h' || selected === 'calendar-ampm';
-            const nextIsIndex = selected === 'index';
-            const patch = {
-                timeDisplayMode: nextIsCalendar ? 'calendar' : selected,
-                calendarTimeFormat: nextIsCalendar
-                    ? (selected === 'calendar-ampm' ? 'ampm' : '24h')
-                    : null,
-            };
-            if (!nextIsIndex) {
-                patch.timeStepMode = null;
-                patch.customTimeStep = '';
-                patch.timeStepOriginMode = null;
-            }
-            if (!(timeDisplayMode === 'calendar' && nextIsCalendar)) {
-                patch.cropStart = null;
-                patch.cropEnd = null;
-                patch.timeShift = 0;
-            }
-            this._updateFileTransform(fileId, patch, { rerender: true });
-        };
-        modeSelect.addEventListener('change', updateTimeMode);
-        modeWrap.append(modeLabel, modeSelect);
-        panel.append(timeTitle, modeWrap);
-
-        if (datetimeAxisStalled) {
-            const stalledHint = document.createElement('div');
-            stalledHint.className = 'file-transform-hint datetime-axis-warning-hint';
-            stalledHint.textContent = i18n.t('datetimeAxisStalledHint');
-            panel.appendChild(stalledHint);
-        }
-
-        if (timeDisplayMode === 'index') {
-            const indexHint = document.createElement('div');
-            indexHint.className = 'file-transform-hint';
-            indexHint.textContent = i18n.t('indexIgnoreDetectedHint');
-            panel.appendChild(indexHint);
-        }
     }
 
     if (isIndexAxis) {
@@ -3166,37 +3100,27 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         const stepWrap = document.createElement('label');
         stepWrap.className = 'file-transform-field';
         const stepLabel = document.createElement('span');
-        stepLabel.textContent = csvFile ? 'New step' : i18n.t('indexTimeStepLabel');
+        stepLabel.textContent = 'New step';
         const stepSelect = document.createElement('select');
         const stepMode = transform.timeStepMode || timeVar.timeStepMode || 'index';
-        if (csvFile) {
-            const opt = (val, text) => `<option value="${val}"${stepMode === val ? ' selected' : ''}>${text}</option>`;
-            stepSelect.innerHTML = [
-                opt('index', 'Index (0, 1, 2…)'),
-                opt('seconds', '1 second'),
-                opt('1minute', '1 minute'),
-                opt('10minutes', '10 minutes'),
-                opt('15minutes', '15 minutes'),
-                opt('30minutes', '30 minutes'),
-                opt('1hour', '1 hour'),
-                opt('1day', '1 day'),
-                opt('custom', 'Custom'),
-            ].join('');
-        } else {
-            stepSelect.innerHTML = `
-                <option value="index"${stepMode === 'index' ? ' selected' : ''}>${i18n.t('indexTimeStepIndex')}</option>
-                <option value="seconds"${stepMode === 'seconds' ? ' selected' : ''}>${i18n.t('indexTimeStepSeconds')}</option>
-                <option value="10minutes"${stepMode === '10minutes' ? ' selected' : ''}>${i18n.t('indexTimeStep10Minutes')}</option>
-                <option value="1hour"${stepMode === '1hour' ? ' selected' : ''}>${i18n.t('indexTimeStep1Hour')}</option>
-                <option value="custom"${stepMode === 'custom' ? ' selected' : ''}>${i18n.t('indexTimeStepCustom')}</option>
-            `;
-        }
+        const opt = (val, text) => `<option value="${val}"${stepMode === val ? ' selected' : ''}>${text}</option>`;
+        stepSelect.innerHTML = [
+            opt('index', 'Index (0, 1, 2…)'),
+            opt('seconds', '1 second'),
+            opt('1minute', '1 minute'),
+            opt('10minutes', '10 minutes'),
+            opt('15minutes', '15 minutes'),
+            opt('30minutes', '30 minutes'),
+            opt('1hour', '1 hour'),
+            opt('1day', '1 day'),
+            opt('custom', 'Custom'),
+        ].join('');
         stepSelect.addEventListener('change', () => {
             const nextStepMode = stepSelect.value;
             this._updateFileTransform(fileId, {
                 timeStepMode: nextStepMode,
                 timeStepOriginMode: nextStepMode === 'index' ? null : transform.timeStepOriginMode,
-            }, { rerender: true, autoscaleX: !csvFile });
+            }, { rerender: true, autoscaleX: false });
         });
         stepWrap.append(stepLabel, stepSelect);
         panel.append(timeTitle, stepWrap);
@@ -3213,22 +3137,14 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             const rawOrigin = transform.timeStepOriginMode;
             const originMode = rawOrigin === 'calendar' ? 'calendar'
                 : (rawOrigin === 'elapsed-seconds' ? 'elapsed-seconds' : 'elapsed');
-            if (csvFile) {
-                // Option B: the reindexed axis is shown as Duration, Seconds
-                // (numeric), or a Calendar from an origin date.
-                originLabel.textContent = 'Show as';
-                originSelect.innerHTML = `
-                    <option value="elapsed"${originMode === 'elapsed' ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
-                    <option value="elapsed-seconds"${originMode === 'elapsed-seconds' ? ' selected' : ''}>Seconds (numeric)</option>
-                    <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>Calendar</option>
-                `;
-            } else {
-                originLabel.textContent = i18n.t('indexTimeOriginLabel');
-                originSelect.innerHTML = `
-                    <option value="elapsed"${originMode === 'elapsed' ? ' selected' : ''}>${i18n.t('indexTimeOriginElapsed')}</option>
-                    <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>${i18n.t('indexTimeOriginCalendar')}</option>
-                `;
-            }
+            // The reindexed axis is shown as Duration, Seconds (numeric), or a
+            // Calendar from an origin date.
+            originLabel.textContent = 'Show as';
+            originSelect.innerHTML = `
+                <option value="elapsed"${originMode === 'elapsed' ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
+                <option value="elapsed-seconds"${originMode === 'elapsed-seconds' ? ' selected' : ''}>Seconds (numeric)</option>
+                <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>Calendar</option>
+            `;
             originSelect.addEventListener('change', () => {
                 const nextOriginMode = originSelect.value;
                 const patch = {
@@ -3240,14 +3156,9 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                 if (nextOriginMode === 'calendar' && !String(transform.timeStepOriginDate || '').trim()) {
                     patch.timeStepOriginDate = DEFAULT_GENERATED_TIME_ORIGIN;
                 }
-                // Duration <-> Seconds (numeric) is a pure relabel of the same
-                // elapsed values, so keep the view instead of autoscaling (#3).
-                // Calendar changes the x domain, so it still refits.
-                // CSV row-index: never autoscale — setFileTransform remaps the view
+                // Row-index: never autoscale — setFileTransform remaps the view
                 // through the source time so the data window stays put (#3).
-                const isElapsedFamily = (m) => m === 'elapsed' || m === 'elapsed-seconds';
-                const pureRelabel = isElapsedFamily(originMode) && isElapsedFamily(nextOriginMode);
-                this._updateFileTransform(fileId, { ...patch }, { rerender: true, autoscaleX: csvFile ? false : !pureRelabel });
+                this._updateFileTransform(fileId, { ...patch }, { rerender: true, autoscaleX: false });
             });
             originWrap.append(originLabel, originSelect);
             panel.append(originWrap);
@@ -3283,7 +3194,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                                 timeStepOriginDate: parsed.value,
                                 cropStart: null,
                                 cropEnd: null,
-                            }, { autoscaleX: !csvFile });
+                            }, { autoscaleX: false });
                         },
                     },
                 );
