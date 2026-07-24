@@ -54,6 +54,7 @@
     "test:file-transform": "node scripts/test-file-transform-reset.mjs",
     "test:csv-export": "node scripts/test-csv-export-time-columns.mjs",
     "test:time-axis-model": "node scripts/test-time-axis-model.mjs",
+    "test:operation-capabilities": "node scripts/test-operation-capabilities.mjs",
     "test:time-axis-readers": "node scripts/test-time-axis-readers.mjs",
     "test:panel-time-axis": "node scripts/test-panel-time-axis.mjs",
     "test:calendar-axis": "node scripts/test-calendar-axis.mjs",

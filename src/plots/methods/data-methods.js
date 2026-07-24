@@ -389,7 +389,42 @@ proto._operationCapabilities = function(fileId) {
     const model = this._timeAxisModel(fileId);
     const hasGregorianCalendar = model.semantic === 'absolute' && model.calendarId === 'gregorian';
     const hasElapsed = model.semantic === 'absolute' || model.semantic === 'elapsed';
-    return { hasGregorianCalendar, hasElapsed, hasPhysicalTimeUnit: hasElapsed };
+    const hasPhysicalTimeUnit = hasElapsed;
+    // Sampling shape (design §4.2, Phase-4 mode contracts). Computed from the
+    // transformed time vector; FFT needs monotonic+uniform, and Hz additionally
+    // needs a physical unit. null = unknown (a lazy reservoir-sampled overview has
+    // no truthful spacing, so we do NOT claim uniformity for it).
+    const { isMonotonic, isUniform } = this._timeSamplingRegularity(fileId);
+    const supportsFrequencyHz = hasPhysicalTimeUnit && isMonotonic === true && isUniform === true;
+    return { hasGregorianCalendar, hasElapsed, hasPhysicalTimeUnit, isMonotonic, isUniform, supportsFrequencyHz };
+};
+
+// Monotonicity + uniformity of the (transformed) time vector. Returns booleans,
+// or null when there is no truthful series to measure (a lazy overview sample,
+// or fewer than 3 points). Uniform = every positive step is within 0.1% of the
+// median step; monotonic = every step is strictly positive.
+proto._timeSamplingRegularity = function(fileId) {
+    const truthful = typeof this._hasTruthfulGapSeries === 'function'
+        ? this._hasTruthfulGapSeries(fileId)
+        : true;
+    if (!truthful) return { isMonotonic: null, isUniform: null };
+    const times = this._getTransformedTimeData(fileId);
+    const n = times?.length || 0;
+    if (n < 3) return { isMonotonic: n >= 2 ? times[1] > times[0] : null, isUniform: null };
+    let monotonic = true;
+    const deltas = [];
+    for (let i = 1; i < n; i++) {
+        const dt = times[i] - times[i - 1];
+        if (!(dt > 0)) monotonic = false;
+        if (Number.isFinite(dt) && dt > 0) deltas.push(dt);
+    }
+    if (deltas.length < 2) return { isMonotonic: monotonic, isUniform: null };
+    deltas.sort((a, b) => a - b);
+    const mid = deltas.length >> 1;
+    const medianDt = deltas.length % 2 ? deltas[mid] : (deltas[mid - 1] + deltas[mid]) / 2;
+    const tol = Math.abs(medianDt) * 1e-3;
+    const isUniform = monotonic && (deltas[deltas.length - 1] - deltas[0]) <= tol;
+    return { isMonotonic: monotonic, isUniform };
 };
 
 // Panel-level time-axis resolution (Phase 1). Given the fileIds of a panel's
