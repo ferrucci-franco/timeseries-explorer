@@ -3506,7 +3506,10 @@ class PlotManager {
         if (!description) return '';
         const match = description.match(/\[([^\]]+)\]/);
         if (!match) return '';
-        const parts = match[1].split('|');
+        // Strip Dymola's "unit:#(type=…):#(clock=…)" metadata; the real unit is
+        // everything before the first ":#" (see MatParser._extractUnit).
+        const content = match[1].split(':#')[0];
+        const parts = content.split('|');
         return (parts[1] ?? parts[0]).trim();
     }
 
