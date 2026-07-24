@@ -2642,10 +2642,10 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     const makeReindexWarning = () => makeTransformPopover({
         glyph: '⚠',
         btnClass: 'fft-help-btn file-transform-warning-btn',
-        title: 'Reindexing assumptions',
+        title: i18n.t('reindexWarnTitle'),
         bodyHtml: '<ul>'
-            + '<li>All points are spaced evenly, whatever the real time between them.</li>'
-            + '<li>Gaps from missing rows disappear — the points around a gap become adjacent, so the gap is hidden.</li>'
+            + `<li>${i18n.t('reindexWarnEquidistant')}</li>`
+            + `<li>${i18n.t('reindexWarnGaps')}</li>`
             + '</ul>',
     }).btn;
 
@@ -2826,7 +2826,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         // ── Option B: Source (File time / Row index) × Format ──────────────────
         const timeTitle = document.createElement('div');
         timeTitle.className = 'file-transform-title';
-        timeTitle.textContent = 'Time axis';
+        timeTitle.textContent = i18n.t('timeAxisTitle');
         panel.append(timeTitle);
 
         const isRowIndex = timeDisplayMode === 'index';
@@ -2838,7 +2838,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         sourceWrap.style.gap = '4px';
         sourceWrap.style.minWidth = '0';
         const sourceLabel = document.createElement('span');
-        sourceLabel.textContent = 'Source';
+        sourceLabel.textContent = i18n.t('timeAxisSource');
         const sourceRow = document.createElement('div');
         sourceRow.style.display = 'flex';
         sourceRow.style.flexDirection = 'column';
@@ -2874,8 +2874,8 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             wrap.append(input, span);
             return { wrap, input };
         };
-        const fileSrc = makeSourceRadio('values', 'Use time vector from file', !isRowIndex);
-        const indexSrc = makeSourceRadio('index', 'Create a row index vector', isRowIndex);
+        const fileSrc = makeSourceRadio('values', i18n.t('timeAxisSourceFile'), !isRowIndex);
+        const indexSrc = makeSourceRadio('index', i18n.t('timeAxisSourceIndex'), isRowIndex);
         fileSrc.input.addEventListener('change', () => {
             if (!fileSrc.input.checked) return;
             this._updateFileTransform(fileId, {
@@ -2906,16 +2906,16 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             const fmtWrap = document.createElement('label');
             fmtWrap.className = 'file-transform-field file-transform-field-wide';
             const fmtLabel = document.createElement('span');
-            fmtLabel.textContent = 'Format';
+            fmtLabel.textContent = i18n.t('timeAxisFormat');
             const fmtSelect = document.createElement('select');
             const selectedCalendarMode = timeDisplayMode === 'calendar'
                 ? (calendarTimeFormat === 'ampm' ? 'calendar-ampm' : 'calendar-24h')
                 : timeDisplayMode;
             fmtSelect.innerHTML = `
-                <option value="calendar-24h"${selectedCalendarMode === 'calendar-24h' ? ' selected' : ''}>Calendar (24h)</option>
-                <option value="calendar-ampm"${selectedCalendarMode === 'calendar-ampm' ? ' selected' : ''}>Calendar (AM/PM)</option>
-                <option value="elapsedDateTime"${timeDisplayMode === 'elapsedDateTime' ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
-                <option value="elapsedSeconds"${timeDisplayMode === 'elapsedSeconds' ? ' selected' : ''}>Seconds (numeric)</option>
+                <option value="calendar-24h"${selectedCalendarMode === 'calendar-24h' ? ' selected' : ''}>${i18n.t('timeAxisFormatCalendar24h')}</option>
+                <option value="calendar-ampm"${selectedCalendarMode === 'calendar-ampm' ? ' selected' : ''}>${i18n.t('timeAxisFormatCalendarAmPm')}</option>
+                <option value="elapsedDateTime"${timeDisplayMode === 'elapsedDateTime' ? ' selected' : ''}>${i18n.t('timeAxisFormatDuration')}</option>
+                <option value="elapsedSeconds"${timeDisplayMode === 'elapsedSeconds' ? ' selected' : ''}>${i18n.t('timeAxisFormatSecondsNumeric')}</option>
             `;
             fmtSelect.addEventListener('change', () => {
                 const selected = fmtSelect.value;
@@ -2948,7 +2948,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         // Show-as controls in the isIndexAxis block below take over).
         const timeTitle = document.createElement('div');
         timeTitle.className = 'file-transform-title';
-        timeTitle.textContent = 'Time axis';
+        timeTitle.textContent = i18n.t('timeAxisTitle');
         panel.append(timeTitle);
 
         const isRowIndex = timeDisplayMode === 'index';
@@ -2959,7 +2959,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         sourceWrap.style.gap = '4px';
         sourceWrap.style.minWidth = '0';
         const sourceLabel = document.createElement('span');
-        sourceLabel.textContent = 'Source';
+        sourceLabel.textContent = i18n.t('timeAxisSource');
         const sourceRow = document.createElement('div');
         sourceRow.style.display = 'flex';
         sourceRow.style.flexDirection = 'column';
@@ -2993,8 +2993,8 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             wrap.append(input, span);
             return { wrap, input };
         };
-        const fileSrc = makeSourceRadio('values', 'Use time vector from file', !isRowIndex);
-        const indexSrc = makeSourceRadio('index', 'Create a row index vector', isRowIndex);
+        const fileSrc = makeSourceRadio('values', i18n.t('timeAxisSourceFile'), !isRowIndex);
+        const indexSrc = makeSourceRadio('index', i18n.t('timeAxisSourceIndex'), isRowIndex);
         fileSrc.input.addEventListener('change', () => {
             if (!fileSrc.input.checked) return;
             this._updateFileTransform(fileId, {
@@ -3023,14 +3023,14 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             const fmtWrap = document.createElement('label');
             fmtWrap.className = 'file-transform-field file-transform-field-wide';
             const fmtLabel = document.createElement('span');
-            fmtLabel.textContent = 'Format';
+            fmtLabel.textContent = i18n.t('timeAxisFormat');
             const fmtSelect = document.createElement('select');
             const numericDisplay = transform.numericTimeDisplay === 'duration' ? 'duration'
                 : (transform.numericTimeDisplay === 'calendar' ? 'calendar' : 'seconds');
             fmtSelect.innerHTML = `
-                <option value="seconds"${numericDisplay === 'seconds' ? ' selected' : ''}>Seconds (numeric)</option>
-                <option value="duration"${numericDisplay === 'duration' ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
-                <option value="calendar"${numericDisplay === 'calendar' ? ' selected' : ''}>Calendar (from date)</option>
+                <option value="seconds"${numericDisplay === 'seconds' ? ' selected' : ''}>${i18n.t('timeAxisFormatSecondsNumeric')}</option>
+                <option value="duration"${numericDisplay === 'duration' ? ' selected' : ''}>${i18n.t('timeAxisFormatDuration')}</option>
+                <option value="calendar"${numericDisplay === 'calendar' ? ' selected' : ''}>${i18n.t('timeAxisFormatCalendarFromDate')}</option>
             `;
             fmtSelect.addEventListener('change', () => {
                 const selected = fmtSelect.value;
@@ -3100,20 +3100,20 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         const stepWrap = document.createElement('label');
         stepWrap.className = 'file-transform-field';
         const stepLabel = document.createElement('span');
-        stepLabel.textContent = 'New step';
+        stepLabel.textContent = i18n.t('timeAxisNewStep');
         const stepSelect = document.createElement('select');
         const stepMode = transform.timeStepMode || timeVar.timeStepMode || 'index';
         const opt = (val, text) => `<option value="${val}"${stepMode === val ? ' selected' : ''}>${text}</option>`;
         stepSelect.innerHTML = [
-            opt('index', 'Index (0, 1, 2…)'),
-            opt('seconds', '1 second'),
-            opt('1minute', '1 minute'),
-            opt('10minutes', '10 minutes'),
-            opt('15minutes', '15 minutes'),
-            opt('30minutes', '30 minutes'),
-            opt('1hour', '1 hour'),
-            opt('1day', '1 day'),
-            opt('custom', 'Custom'),
+            opt('index', i18n.t('timeStepIndex')),
+            opt('seconds', i18n.t('timeStep1Second')),
+            opt('1minute', i18n.t('timeStep1Minute')),
+            opt('10minutes', i18n.t('timeStep10Minutes')),
+            opt('15minutes', i18n.t('timeStep15Minutes')),
+            opt('30minutes', i18n.t('timeStep30Minutes')),
+            opt('1hour', i18n.t('timeStep1Hour')),
+            opt('1day', i18n.t('timeStep1Day')),
+            opt('custom', i18n.t('timeStepCustom')),
         ].join('');
         stepSelect.addEventListener('change', () => {
             const nextStepMode = stepSelect.value;
@@ -3139,11 +3139,11 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                 : (rawOrigin === 'elapsed-seconds' ? 'elapsed-seconds' : 'elapsed');
             // The reindexed axis is shown as Duration, Seconds (numeric), or a
             // Calendar from an origin date.
-            originLabel.textContent = 'Show as';
+            originLabel.textContent = i18n.t('timeAxisShowAs');
             originSelect.innerHTML = `
-                <option value="elapsed"${originMode === 'elapsed' ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
-                <option value="elapsed-seconds"${originMode === 'elapsed-seconds' ? ' selected' : ''}>Seconds (numeric)</option>
-                <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>Calendar</option>
+                <option value="elapsed"${originMode === 'elapsed' ? ' selected' : ''}>${i18n.t('timeAxisFormatDuration')}</option>
+                <option value="elapsed-seconds"${originMode === 'elapsed-seconds' ? ' selected' : ''}>${i18n.t('timeAxisFormatSecondsNumeric')}</option>
+                <option value="calendar"${originMode === 'calendar' ? ' selected' : ''}>${i18n.t('timeAxisShowCalendar')}</option>
             `;
             originSelect.addEventListener('change', () => {
                 const nextOriginMode = originSelect.value;

@@ -263,7 +263,7 @@ class PlotManager {
                 // pure Index (0,1,2 counts) or a Calendar date against elapsed
                 // seconds, either of which would misplace the overlaid traces.
                 if (this._renderSignature(other) !== sig) {
-                    return 'Changing this file\'s time display would no longer match the traces it is overlaid with, so the change was undone.';
+                    return i18n.t('incompatTimeIntroTransform');
                 }
             }
         }
@@ -2278,7 +2278,7 @@ class PlotManager {
                 if (!candidates.length) continue;
                 candidateCount++;
                 if (!this._canAddTraceWithFileTime(plot, fid, { silent: true })) {
-                    this._alertIncompatibleTimeAxes('This overlay would mix traces measured on different time axes.');
+                    this._alertIncompatibleTimeAxes(i18n.t('incompatTimeIntroOverlay'));
                     return;
                 }
                 const missing = [];
@@ -2313,7 +2313,7 @@ class PlotManager {
                 if (!candidates.length) continue;
                 candidateCount++;
                 if (!this._canAddTraceWithFileTime(plot, fid, { silent: true })) {
-                    this._alertIncompatibleTimeAxes('This overlay would mix traces measured on different time axes.');
+                    this._alertIncompatibleTimeAxes(i18n.t('incompatTimeIntroOverlay'));
                     return;
                 }
                 const missing = new Set();
@@ -2585,23 +2585,23 @@ class PlotManager {
     // `intro` is the one-line context; the body explains what the axis kinds are
     // and how to make the files match. Shown in a wide, left-aligned modal.
     _alertIncompatibleTimeAxes(intro) {
+        const t = (k) => i18n.t(k);
         const body =
             `<p>${intro}</p>`
-            + `<p>Two traces can share one plot only when their time axes mean the same thing. `
-            + `Here they are measured in different ways, so the points would be drawn in the wrong place.</p>`
-            + `<p><b>The kinds of time axis are:</b></p>`
+            + `<p>${t('incompatTimeBodyLead')}</p>`
+            + `<p><b>${t('incompatTimeKindsTitle')}</b></p>`
             + `<ul>`
-            + `<li><b>Calendar date</b> — real dates and clock times (e.g. 2024-03-01 14:30).</li>`
-            + `<li><b>Seconds / Duration</b> — time counted from a start: 0, 1.5, 3600 s, or 00:00:03. These two mix freely.</li>`
-            + `<li><b>Row index</b> — a plain count 0, 1, 2, … with no physical time.</li>`
+            + `<li>${t('incompatTimeKindCalendar')}</li>`
+            + `<li>${t('incompatTimeKindSeconds')}</li>`
+            + `<li>${t('incompatTimeKindIndex')}</li>`
             + `</ul>`
-            + `<p><b>To mix them, open each file's Time axis panel and either:</b></p>`
+            + `<p><b>${t('incompatTimeFixTitle')}</b></p>`
             + `<ul>`
-            + `<li>set them all to <b>Seconds (numeric)</b> or <b>Duration</b>; or</li>`
-            + `<li>give the numeric file a start date with <b>Calendar (from date)</b> so both show a calendar; or</li>`
-            + `<li>remove the mismatched trace from this panel.</li>`
+            + `<li>${t('incompatTimeFixSeconds')}</li>`
+            + `<li>${t('incompatTimeFixCalendar')}</li>`
+            + `<li>${t('incompatTimeFixRemove')}</li>`
             + `</ul>`;
-        Modal.alert('Incompatible time axes', body, { html: true, className: 'modal-dialog-wide' });
+        Modal.alert(i18n.t('incompatTimeTitle'), body, { html: true, className: 'modal-dialog-wide' });
     }
 
     _canAddTraceWithFileTime(plot, fileId, options = {}) {
@@ -2616,7 +2616,7 @@ class PlotManager {
         // rejecting genuinely different axes (a calendar date vs raw seconds).
         if (this._renderSignature(primaryFileId) === this._renderSignature(fileId)) return true;
         if (!options.silent) {
-            this._alertIncompatibleTimeAxes('These traces are measured on different time axes.');
+            this._alertIncompatibleTimeAxes(i18n.t('incompatTimeIntroTraces'));
         }
         return false;
     }
