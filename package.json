@@ -59,6 +59,7 @@
     "test:autoscale-axis": "node scripts/test-autoscale-axis.mjs",
     "test:i18n-consistency": "node scripts/test-i18n-consistency.mjs",
     "test:time-axis-model": "node scripts/test-time-axis-model.mjs",
+    "test:time-axis-index": "node scripts/test-time-axis-index.mjs",
     "test:operation-capabilities": "node scripts/test-operation-capabilities.mjs",
     "test:time-axis-readers": "node scripts/test-time-axis-readers.mjs",
     "test:panel-time-axis": "node scripts/test-panel-time-axis.mjs",

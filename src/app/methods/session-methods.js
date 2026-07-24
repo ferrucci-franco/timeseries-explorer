@@ -199,7 +199,9 @@ proto._createSessionSnapshot = function(options = {}) {
             ? this._cloneSerializable(data.metadata.csvProfile)
             : null;
         const derived = [...(this.derivedByFile.get(fileId) || new Map()).values()]
-            .map(item => ({ name: item.name, formula: item.formula }));
+            .map(item => item.timeAxisIndex
+                ? { name: item.name, timeAxisIndex: true }
+                : { name: item.name, formula: item.formula });
         const dataTools = typeof this._serializeDataToolDefinitions === 'function'
             ? this._serializeDataToolDefinitions(fileId)
             : [];
@@ -770,7 +772,7 @@ proto._applySessionDerivedVariables = function(session, fileMap, options = {}) {
         if (!fileId || !data) continue;
         const definitions = new Map();
         for (const item of meta.derived || []) {
-            definitions.set(item.name, { name: item.name, formula: item.formula, variable: null });
+            definitions.set(item.name, { name: item.name, formula: item.formula, timeAxisIndex: item.timeAxisIndex, variable: null });
         }
         if (definitions.size) {
             this.derivedByFile.set(fileId, definitions);
@@ -832,7 +834,10 @@ proto._reapplySessionGeneratedVariables = function(session, fileMap) {
                 }
             }
             for (const [name, entry] of [...pendingDerived]) {
-                const references = this._derivedFormulaReferences?.(entry.formula, knownVariableNames) || [];
+                // The time-axis index has no formula, hence no variable references.
+                const references = entry.timeAxisIndex
+                    ? []
+                    : (this._derivedFormulaReferences?.(entry.formula, knownVariableNames) || []);
                 const waitsForModifier = [...pendingTools.values()].some(definition => (
                     (definition.targetMode || 'create') === 'modify'
                     && references.includes(definition.sourceName)

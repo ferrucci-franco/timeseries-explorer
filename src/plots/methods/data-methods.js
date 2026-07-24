@@ -1724,7 +1724,9 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
                     : {}),
         };
     }
-    const isStep = variable.dataType === 'boolean';
+    // Per-trace line shape overrides the default (booleans step, others linear),
+    // set from the legend context menu for discrete-looking real variables.
+    const isStep = t.lineShape ? t.lineShape === 'hv' : variable.dataType === 'boolean';
     const useGL = !isStep && values.length >= PlotManager.GL_POINT_THRESHOLD;
     const visual = this._applyTimeseriesStackZeroPadding(
         plot,

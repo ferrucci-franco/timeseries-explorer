@@ -53,6 +53,7 @@ const DERIVED_FUNCTIONS = [
     { name: 'log10', arity: 1 },
     { name: 'power', arity: 2 },
     { name: 'root', arity: 2 },
+    { name: 'diff', arity: 1 },
 ];
 
 const DERIVED_FUNCTION_ALIASES = new Map([

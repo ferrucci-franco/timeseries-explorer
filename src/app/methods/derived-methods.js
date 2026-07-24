@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import Modal from '../../ui/modal.js';
 import { DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES } from '../constants.js';
 
 export function installDerivedMethods(TargetClass) {
@@ -255,6 +256,24 @@ proto._evalDerivedFunction = function(node, data, n) {
         requireArity(1, name);
         return mapUnary(v => v * v);
     }
+    if (name === 'diff') {
+        // Discrete difference (no division by Δt, so no divide-by-zero at
+        // duplicate timestamps). diff(time) = Δt; diff(diff(time)) = ΔΔt (zero
+        // for uniform sampling). Neighbour op, not elementwise: the first sample
+        // uses the forward difference so length and the uniform baseline hold.
+        requireArity(1, name);
+        const a = args[0];
+        if (a.kind === 'scalar') return { kind: 'series', values: new Array(n).fill(0) };
+        const src = a.values;
+        const out = new Array(n);
+        for (let i = 0; i < n; i++) {
+            if (n < 2) { out[i] = 0; continue; }
+            out[i] = i === 0
+                ? Number(src[1]) - Number(src[0])   // forward difference at the first sample
+                : Number(src[i]) - Number(src[i - 1]);
+        }
+        return { kind: 'series', values: out };
+    }
     if (name === 'root') {
         requireArity(2, name);
         return mapBinary((v, degree) => this._nthRoot(v, degree));
@@ -291,6 +310,140 @@ proto._getActiveTimeVar = function(data) {
     return Object.values(data.variables).find(v => v.kind === 'abscissa') || null;
 };
 
+// ─── Time-axis "sample index" derived variable ────────────────────────────
+// Dragging the time axis onto a plot creates this: a derived signal whose value
+// is the sample ordinal (0, 1, 2, …). Plotted against the time axis it advances
+// by 1 per sample, and where several samples share a timestamp (events) it jumps
+// by that count — a direct visualization of the time vector's shape. It reuses
+// the derived-variable machinery (tree row, remove button, Data Tools, session,
+// live-update reapplication) and works for every format, including lazy files
+// (there it is computed over the loaded overview, never a full-resolution scan).
+
+// Build the index variable object for the current time vector. dataType is
+// forced to 'real' so a 2-sample [0,1] index is not misdetected as boolean.
+proto._buildTimeAxisIndexVariable = function(name, timeVar) {
+    const n = timeVar?.data?.length || 0;
+    const values = new Float64Array(n);
+    for (let i = 0; i < n; i++) values[i] = i;
+    return {
+        name,
+        data: values,
+        description: i18n.t('timeAxisIndexDescription'),
+        kind: 'variable',
+        dataType: 'real',
+        isConstant: n <= 1,
+        interpolation: 'linear',
+        derived: true,
+        timeAxisIndex: true,
+    };
+};
+
+// The existing time-axis-index derived entry for a file, if any.
+proto._findTimeAxisIndexEntry = function(fileId) {
+    const derived = this.derivedByFile.get(fileId);
+    if (!derived) return null;
+    for (const entry of derived.values()) if (entry.timeAxisIndex) return entry;
+    return null;
+};
+
+// A collision-free identifier derived from the time variable name (e.g.
+// "time" → "time_index"). An existing time-axis-index of ours is not a
+// collision (we reuse its name); any other variable is.
+proto._timeAxisIndexName = function(fileId, data) {
+    const timeVar = this._getActiveTimeVar(data);
+    const base = String(timeVar?.name || 'time').replace(/[^A-Za-z0-9_]/g, '_').replace(/^(\d)/, '_$1');
+    const derived = this.derivedByFile.get(fileId);
+    const taken = (candidate) => {
+        const variable = data.variables[candidate];
+        if (!variable) return false;
+        const entry = derived?.get(candidate);
+        return !(entry && entry.timeAxisIndex);
+    };
+    let candidate = `${base}_index`;
+    for (let suffix = 2; taken(candidate); suffix++) candidate = `${base}_index_${suffix}`;
+    return candidate;
+};
+
+// Create (or, with { regenerate: true }, overwrite) the derived index variable
+// and wire it into the tree and any plots already using it.
+proto._createOrUpdateTimeAxisIndexVariable = function(fileId, options = {}) {
+    const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+    if (!data) return null;
+    const timeVar = this._getActiveTimeVar(data);
+    if (!timeVar?.data?.length) return null;
+
+    const existing = this._findTimeAxisIndexEntry(fileId);
+    const name = existing?.name || this._timeAxisIndexName(fileId, data);
+
+    // Regenerate discards any Data Tools modification of this index.
+    if (options.regenerate) {
+        const toolDefs = this.dataToolVariablesByFile?.get(fileId);
+        if (toolDefs?.has(name)) {
+            toolDefs.delete(name);
+            if (!toolDefs.size) this.dataToolVariablesByFile.delete(fileId);
+        }
+    }
+
+    const variable = this._buildTimeAxisIndexVariable(name, timeVar);
+    data.variables[name] = variable;
+    if (!this.derivedByFile.has(fileId)) this.derivedByFile.set(fileId, new Map());
+    this.derivedByFile.get(fileId).set(name, { name, timeAxisIndex: true, variable });
+
+    this._renderFilteredTree();
+    this._rebuildPlotsUsingVariable(fileId, name);
+    return variable;
+};
+
+// Drop handler for the time axis. Returns the name of the derived variable to
+// plot (as if the user had dragged it), or null when the user cancels.
+proto._handleTimeAxisIndexDrop = async function(timeVarName) {
+    const fileId = this.activeFileId;
+    const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+    if (!fileId || !data) return null;
+    const timeVar = data.variables?.[timeVarName];
+    if (!timeVar || timeVar.kind !== 'abscissa' || !(timeVar.data?.length)) return null;
+
+    const existing = this._findTimeAxisIndexEntry(fileId);
+    if (existing) {
+        const name = existing.name;
+        // Untouched by Data Tools → reuse silently (also covers plotting it on a
+        // second panel). Edited → let the user choose before losing their work.
+        if (!data.variables[name]?.dataToolModified) return name;
+        const choice = await Modal.choice(
+            i18n.t('timeAxisIndexModifiedBody').replace('{name}', name),
+            {
+                title: i18n.t('timeAxisIndexModifiedTitle'),
+                icon: '⚠️',
+                className: 'modal-dialog-wide',
+                choices: [
+                    { value: 'reuse', text: i18n.t('timeAxisIndexReuse'), className: 'modal-btn-confirm', autoFocus: true },
+                    { value: 'regenerate', text: i18n.t('timeAxisIndexRegenerate'), className: 'modal-btn-cancel' },
+                    { value: 'cancel', text: i18n.t('cancel'), className: 'modal-btn-cancel' },
+                ],
+            },
+        );
+        if (choice === 'reuse') return name;
+        if (choice === 'regenerate') return this._createOrUpdateTimeAxisIndexVariable(fileId, { regenerate: true })?.name || null;
+        return null;
+    }
+
+    // First time for this file: explain what we are about to do, then create it.
+    const plannedName = this._timeAxisIndexName(fileId, data);
+    const proceed = await Modal.confirm(
+        i18n.t('timeAxisDragWarnBody').replace('{name}', plannedName),
+        {
+            title: i18n.t('timeAxisDragWarnTitle'),
+            icon: '🕐',
+            className: 'modal-dialog-wide',
+            html: true,
+            confirmText: i18n.t('timeAxisDragWarnContinue'),
+            cancelText: i18n.t('cancel'),
+        },
+    );
+    if (!proceed) return null;
+    return this._createOrUpdateTimeAxisIndexVariable(fileId)?.name || null;
+};
+
 proto._reapplyDerivedVariables = function(fileId, data) {
     const derived = this.derivedByFile.get(fileId);
     if (!derived) return;
@@ -308,6 +461,18 @@ proto._derivedFormulaReferences = function(formula, variableNames = []) {
 
 proto._reapplyDerivedVariable = function(fileId, data, name, entry) {
     try {
+        // The time-axis "sample index" is generated from the time vector's shape
+        // (no formula). Rebuild it at the current length so it survives reloads
+        // and grows with live-update. Any Data Tools edit is re-applied on top of
+        // this fresh index afterwards, exactly like a formula-derived variable.
+        if (entry.timeAxisIndex) {
+            const timeVar = this._getActiveTimeVar(data);
+            if (!timeVar?.data?.length) return false;
+            const variable = this._buildTimeAxisIndexVariable(name, timeVar);
+            data.variables[name] = variable;
+            entry.variable = variable;
+            return true;
+        }
         const result = this._evaluateDerivedFormula(entry.formula, data);
         const variable = {
             name,
@@ -395,7 +560,9 @@ proto._getDerivedSuggestions = function(prefix) {
     const variableSuggestions = Object.entries(data.variables)
         .map(([name, variable]) => ({ name: variable.name || name, variable }))
         .filter(({ name, variable }) => {
-            if (variable.plottable === false || variable.kind === 'abscissa') return false;
+            // The time axis (abscissa) is a valid operand — expose it so formulas
+            // like diff(time) or time/period are discoverable, not just typeable.
+            if (variable.plottable === false) return false;
             const displayName = variable.displayName || '';
             return name.toLowerCase().includes(needle) || displayName.toLowerCase().includes(needle);
         })
@@ -404,7 +571,7 @@ proto._getDerivedSuggestions = function(prefix) {
         .map(({ name, variable }) => ({
             type: 'variable',
             name,
-            kind: variable.kind === 'parameter' ? 'param' : 'var',
+            kind: variable.kind === 'parameter' ? 'param' : (variable.kind === 'abscissa' ? 'time' : 'var'),
         }));
     return [...functionSuggestions, ...variableSuggestions];
 };

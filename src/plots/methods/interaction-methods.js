@@ -426,6 +426,18 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             if (perf) perf.eagerTraces++;
             return;
         }
+        // Generated series computed in JS (the time-axis "sample index" or a
+        // formula-derived variable) have no DuckDB column to range-query, so
+        // render them eagerly from their in-memory (overview-length) data. Lazy
+        // Data Tools variables are also `derived` but carry a real `_duckdbCol`
+        // and must keep using the DuckDB path — hence the column check.
+        const droppedVar = data?.variables?.[t.varName];
+        if (droppedVar?.derived && !droppedVar._duckdbCol) {
+            const built = this._buildTimeTrace(t, range, plot, idx);
+            if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
+            if (perf) perf.eagerTraces++;
+            return;
+        }
         if (perf) perf.lazyTraces++;
         const timeVar = this._getTimeVar(t.fileId);
         const sourceViewportRange = this._sourceRangeForDisplayRange(t.fileId, [t0, t1], timeVar);
@@ -2116,6 +2128,11 @@ proto._cursorNumericTimes = function(values) {
 
 proto._traceInterpolationMode = function(trace) {
     if (!trace) return 'linear';
+    // A per-trace line-shape override (legend menu) must drive the cursor
+    // interpolation too, so the A|B intersection dot lands on the drawn step
+    // ('hv' holds the left value, exactly what 'step' interpolation returns)
+    // instead of floating on a linear chord.
+    if (trace.lineShape) return trace.lineShape === 'hv' ? 'step' : 'linear';
     const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
     if (!variable) return 'linear';
     if (variable.dataType === 'boolean') return 'step';

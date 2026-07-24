@@ -22,6 +22,9 @@ const Modal = {
             // Create modal
             const modal = document.createElement('div');
             modal.className = 'modal-dialog';
+            if (options.className) {
+                modal.classList.add(...String(options.className).split(/\s+/).filter(Boolean));
+            }
 
             // Modal content
             const content = document.createElement('div');
@@ -43,7 +46,8 @@ const Modal = {
                 titleDiv.textContent = options.title;
                 content.appendChild(titleDiv);
             }
-            messageDiv.textContent = message;
+            if (options.html) messageDiv.innerHTML = message;
+            else              messageDiv.textContent = message;
             content.appendChild(messageDiv);
 
             // Buttons
