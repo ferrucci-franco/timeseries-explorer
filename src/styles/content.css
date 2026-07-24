@@ -2440,19 +2440,29 @@ body.cursor-box-dragging {
 .file-transform-warning-btn {
     width: 18px;
     height: 18px;
-    font-size: 0.72rem;
-    line-height: 1;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     vertical-align: middle;
     margin-left: 6px;
-    /* The ⚠ glyph sits high in its line-box; nudge it down so the triangle is
-       optically centred inside the circle (box-sizing: border-box keeps the size). */
-    padding: 2px 0 0;
+    padding: 0;
+    /* The text ⚠ glyph has uneven vertical metrics; use an SVG icon instead so it
+       is pixel-centred. font-size:0 hides the fallback glyph set in JS. */
+    font-size: 0;
     background-color: #ffe0b0;
     border-color: #e39a5a;
     color: #7a3d00;
+}
+
+/* Warning triangle drawn as a mask so it takes the button's colour (currentColor,
+   theme-aware) and centres exactly regardless of any font. */
+.file-transform-warning-btn::before {
+    content: "";
+    width: 12px;
+    height: 12px;
+    background-color: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M1%2021h22L12%202%201%2021zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M1%2021h22L12%202%201%2021zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .file-transform-warning-btn:hover,
