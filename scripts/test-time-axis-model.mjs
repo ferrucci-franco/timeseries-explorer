@@ -35,6 +35,7 @@ h.files.set('datetime-duration', makeFile({ timeVar: { name: 't', timeKind: 'dat
 h.files.set('numeric-seconds', makeFile({ timeVar: { name: 't', timeKind: 'numeric', description: 'time [s]' } }));
 h.files.set('numeric-seconds-b', makeFile({ timeVar: { name: 'x', timeKind: 'numeric', description: 'sim time [s]' } }));
 h.files.set('numeric-duration', makeFile({ timeVar: { name: 't', timeKind: 'numeric', description: 'time [s]' }, transform: { numericTimeDisplay: 'duration' } }));
+h.files.set('numeric-calendar', makeFile({ timeVar: { name: 't', timeKind: 'numeric', description: 'time [s]', data: [0, 10, 20] }, transform: { numericTimeDisplay: 'calendar', timeStepOriginDate: '2020-01-01 00:00' } }));
 h.files.set('index', makeFile({ timeVar: { name: 'i', timeKind: 'index', timeDisplayMode: 'index', timeStepMode: 'index' } }));
 
 // ── Canonical descriptor ────────────────────────────────────────────────────
@@ -47,6 +48,9 @@ const cases = [
     // value/encoding/signature as numeric-seconds (overlay preserved), only the
     // display differs (hh:mm:ss ticks). This is the .mat "Duration" format.
     ['numeric-duration',  { semantic: 'elapsed',  storageEncoding: 'raw-number', display: 'duration', sig: 'linear:elapsed-seconds' }],
+    // Numeric seconds PROMOTED to an absolute calendar via an origin date: kind
+    // becomes datetime, so it renders as (and overlays) a real calendar axis.
+    ['numeric-calendar',  { semantic: 'absolute', storageEncoding: 'epoch-ms',   display: 'calendar', sig: 'date' }],
     ['index',             { semantic: 'count',    storageEncoding: 'row-count',  display: 'index',    sig: 'linear:count' }],
 ];
 for (const [id, want] of cases) {
@@ -76,6 +80,16 @@ assert.equal(h._operationCapabilities('datetime-cal').hasGregorianCalendar, true
 assert.equal(h._operationCapabilities('numeric-seconds').hasGregorianCalendar, false);
 assert.equal(h._operationCapabilities('numeric-seconds').hasElapsed, true);
 assert.equal(h._operationCapabilities('datetime-elapsed').hasElapsed, true);
+
+// numeric→calendar promotion: gains a gregorian calendar, and the transformed
+// times are value-preserving epoch-ms (origin + rawSeconds·1000), NOT reindexed.
+assert.equal(h._operationCapabilities('numeric-calendar').hasGregorianCalendar, true);
+const originMs = Date.UTC(2020, 0, 1);
+assert.deepEqual(
+    Array.from(h._getTransformedTimeData('numeric-calendar')),
+    [originMs, originMs + 10000, originMs + 20000],
+    'numeric calendar time = origin + rawSeconds*1000',
+);
 
 // ── No behavior change: legacy readers still return their original values ─────
 assert.equal(h._timeKind('datetime-cal'), 'datetime');

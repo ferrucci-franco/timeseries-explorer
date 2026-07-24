@@ -2523,7 +2523,7 @@ proto._normalizeFileTransform = function(transform = null) {
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
         timeStepOriginMode: ['elapsed', 'elapsed-seconds', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
         timeStepOriginDate: t.timeStepOriginDate === null || t.timeStepOriginDate === undefined ? '' : String(t.timeStepOriginDate),
-        numericTimeDisplay: ['seconds', 'duration'].includes(t.numericTimeDisplay) ? t.numericTimeDisplay : null,
+        numericTimeDisplay: ['seconds', 'duration', 'calendar'].includes(t.numericTimeDisplay) ? t.numericTimeDisplay : null,
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
@@ -3026,18 +3026,70 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             const fmtLabel = document.createElement('span');
             fmtLabel.textContent = 'Format';
             const fmtSelect = document.createElement('select');
-            const isDuration = transform.numericTimeDisplay === 'duration';
+            const numericDisplay = transform.numericTimeDisplay === 'duration' ? 'duration'
+                : (transform.numericTimeDisplay === 'calendar' ? 'calendar' : 'seconds');
             fmtSelect.innerHTML = `
-                <option value="seconds"${!isDuration ? ' selected' : ''}>Seconds (numeric)</option>
-                <option value="duration"${isDuration ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
+                <option value="seconds"${numericDisplay === 'seconds' ? ' selected' : ''}>Seconds (numeric)</option>
+                <option value="duration"${numericDisplay === 'duration' ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
+                <option value="calendar"${numericDisplay === 'calendar' ? ' selected' : ''}>Calendar (from date)</option>
             `;
             fmtSelect.addEventListener('change', () => {
-                this._updateFileTransform(fileId, {
-                    numericTimeDisplay: fmtSelect.value === 'duration' ? 'duration' : null,
-                }, { rerender: true });
+                const selected = fmtSelect.value;
+                const patch = { numericTimeDisplay: selected === 'seconds' ? null : selected };
+                // Promoting to a calendar needs a valid origin; seed one if the
+                // shared origin-date field is empty so the axis never lands on 1970.
+                if (selected === 'calendar' && !String(transform.timeStepOriginDate || '').trim()) {
+                    patch.timeStepOriginDate = DEFAULT_GENERATED_TIME_ORIGIN;
+                }
+                this._updateFileTransform(fileId, patch, { rerender: true });
             });
             fmtWrap.append(fmtLabel, fmtSelect);
             panel.append(fmtWrap);
+
+            // Origin date for the value-preserving numeric → calendar promotion
+            // (absolute time = origin + rawSeconds). Reuses the reindex origin-date
+            // field and its validation.
+            if (numericDisplay === 'calendar') {
+                const originDateField = makeInput(
+                    'timeStepOriginDate',
+                    i18n.t('indexTimeOriginStartLabel'),
+                    transform.timeStepOriginDate || DEFAULT_GENERATED_TIME_ORIGIN,
+                    DEFAULT_GENERATED_TIME_ORIGIN,
+                    {
+                        type: 'datetime-local',
+                        step: '1',
+                        className: 'file-transform-field-wide',
+                        updateOnChange: false,
+                        commitOnBlur: true,
+                        onInput: input => {
+                            input.classList.remove('invalid');
+                            const hint = originDateField.nextSibling;
+                            if (hint?.classList?.contains('file-transform-leap-year')) {
+                                hint.textContent = leapYearText(input.value);
+                            }
+                        },
+                        onCommit: (value, input) => {
+                            const parsed = normalizeGeneratedOriginValue(value);
+                            input.classList.toggle('invalid', !parsed.ok);
+                            if (!parsed.ok) return;
+                            input.value = parsed.value;
+                            const currentTransform = this.files.get(fileId)?.transform || {};
+                            const current = normalizeGeneratedOriginValue(currentTransform.timeStepOriginDate || DEFAULT_GENERATED_TIME_ORIGIN);
+                            if (current.ok && current.value === parsed.value) return;
+                            this._updateFileTransform(fileId, {
+                                timeStepOriginDate: parsed.value,
+                                cropStart: null,
+                                cropEnd: null,
+                            }, { rerender: true });
+                        },
+                    },
+                );
+                originDateField.input.value = normalizeGeneratedOriginValue(transform.timeStepOriginDate || DEFAULT_GENERATED_TIME_ORIGIN).value || DEFAULT_GENERATED_TIME_ORIGIN;
+                const leapHint = document.createElement('div');
+                leapHint.className = 'file-transform-hint file-transform-leap-year';
+                leapHint.textContent = leapYearText(originDateField.input.value);
+                panel.append(originDateField, leapHint);
+            }
         }
     } else if (isDateTime) {
         const timeTitle = document.createElement('div');

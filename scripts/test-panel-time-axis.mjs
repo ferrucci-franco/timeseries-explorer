@@ -77,6 +77,14 @@ assert.equal(h._renderSignature('num-dur'), 'linear:elapsed-seconds');
 assert.equal(r('num-dur', 'num-s').compatible, true);
 assert.equal(r('num-dur', 'elapsed-s').compatible, true);
 
+// A numeric axis PROMOTED to a calendar (origin date) renders as 'date', so it
+// overlays a real calendar file but is NOT compatible with a plain seconds axis.
+h.files.set('num-cal', makeFile({ timeVar: { name: 't', timeKind: 'numeric', description: 'time [s]' }, transform: { numericTimeDisplay: 'calendar', timeStepOriginDate: '2020-01-01 00:00' } }));
+assert.equal(h._renderSignature('num-cal'), 'date');
+assert.equal(r('num-cal', 'cal-a').compatible, true);
+assert.equal(r('num-cal', 'num-s').compatible, false);
+assert.equal(r('num-cal', 'cal-a').effectiveDisplay, 'calendar');
+
 // index panel
 assert.equal(r('idx', 'idx2').effectiveDisplay, 'index');
 assert.equal(r('idx', 'idx2').effectiveUnit, 'count');

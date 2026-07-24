@@ -123,7 +123,7 @@ proto._normalizeFileTransform = function(transform = null) {
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
         timeStepOriginMode: ['elapsed', 'elapsed-seconds', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
         timeStepOriginDate: t.timeStepOriginDate === null || t.timeStepOriginDate === undefined ? '' : String(t.timeStepOriginDate),
-        numericTimeDisplay: ['seconds', 'duration'].includes(t.numericTimeDisplay) ? t.numericTimeDisplay : null,
+        numericTimeDisplay: ['seconds', 'duration', 'calendar'].includes(t.numericTimeDisplay) ? t.numericTimeDisplay : null,
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
@@ -210,6 +210,15 @@ proto._isNumericDurationAxis = function(fileId, timeVar = null) {
     return this._fileTransform(fileId).numericTimeDisplay === 'duration';
 };
 
+// A real numeric (seconds) time vector the user promoted to an absolute calendar
+// by assigning an origin date D: absolute time = D + rawSeconds·1000. Unlike the
+// reindex→Calendar path (row×Δt from D), this preserves the file's own seconds.
+proto._isNumericCalendarAxis = function(fileId, timeVar = null) {
+    const t = timeVar || this._getTimeVar(fileId);
+    if (this._isGeneratedIndexTime(fileId, t) || t?.timeKind === 'datetime') return false;
+    return this._fileTransform(fileId).numericTimeDisplay === 'calendar';
+};
+
 proto._isHighResolutionGeneratedCalendarTime = function(fileId, timeVar = null) {
     return this._isGeneratedCalendarTime(fileId, timeVar)
         && this._indexTimeStepSeconds(fileId) < 0.001;
@@ -270,7 +279,7 @@ proto._timeDisplayMode = function(fileId) {
 
 proto._timeDisplayModeForVar = function(fileId, timeVar = null) {
     if (this._isGeneratedIndexTime(fileId, timeVar)) return this._isGeneratedCalendarTime(fileId, timeVar) ? 'calendar' : 'index';
-    if (timeVar?.timeKind !== 'datetime') return 'numeric';
+    if (timeVar?.timeKind !== 'datetime') return this._isNumericCalendarAxis(fileId, timeVar) ? 'calendar' : 'numeric';
     const transform = this._fileTransform(fileId);
     return transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
 };
@@ -294,14 +303,17 @@ proto._timeAxisModel = function(fileId) {
     // A real numeric time vector (its own seconds) that the user chose to show as a
     // duration (hh:mm:ss) instead of a plain number — value-preserving, no /1000.
     const isNumericDuration = !isGeneratedIndex && timeVar?.timeKind !== 'datetime' && transform.numericTimeDisplay === 'duration';
+    // The same numeric seconds promoted to an ABSOLUTE calendar via an origin date
+    // (value-preserving: epoch-ms = originMs + rawSeconds·1000).
+    const isNumericCalendar = !isGeneratedIndex && timeVar?.timeKind !== 'datetime' && transform.numericTimeDisplay === 'calendar';
 
     // Legacy time kind (inlined from the former _timeKind).
-    const kind = (isGeneratedCalendar || timeVar?.timeKind === 'datetime') ? 'datetime' : 'numeric';
+    const kind = (isGeneratedCalendar || timeVar?.timeKind === 'datetime' || isNumericCalendar) ? 'datetime' : 'numeric';
 
     // Legacy display mode (inlined from the former _timeDisplayMode).
     let displayMode;
     if (isGeneratedIndex) displayMode = isGeneratedCalendar ? 'calendar' : 'index';
-    else if (timeVar?.timeKind !== 'datetime') displayMode = 'numeric';
+    else if (timeVar?.timeKind !== 'datetime') displayMode = isNumericCalendar ? 'calendar' : 'numeric';
     else displayMode = transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar';
 
     // Axis unit label (inlined from the former _timeUnitLabel, using local state).
@@ -509,6 +521,10 @@ proto._timeOriginMsForVar = function(fileId, timeVar = null) {
     if (this._isGeneratedDurationTime(fileId, t) && transform.timeStepOriginMode === 'calendar') {
         return parseGeneratedTimeOriginMs(transform.timeStepOriginDate);
     }
+    // Numeric axis promoted to a calendar shares the reindex origin-date field.
+    if (this._isNumericCalendarAxis(fileId, t)) {
+        return parseGeneratedTimeOriginMs(transform.timeStepOriginDate);
+    }
     const candidates = [
         t?.timeOriginMs,
         entry?.data?.metadata?.timeOriginMs,
@@ -536,6 +552,10 @@ proto._timeDisplayValue = function(fileId, rawTime) {
 proto._timeDisplayValueForVar = function(fileId, rawTime, timeVar = null) {
     if (this._isGeneratedIndexTime(fileId, timeVar)) {
         return this._generatedIndexDisplayTime(fileId, rawTime, timeVar);
+    }
+    if (this._isNumericCalendarAxis(fileId, timeVar)) {
+        // Value-preserving promotion: the raw value is seconds from the origin.
+        return this._timeOriginMsForVar(fileId, timeVar) + Number(rawTime) * 1000;
     }
     if (this._isElapsedTimeForVar(fileId, timeVar)) {
         const originMs = this._timeOriginMsForVar(fileId, timeVar);
@@ -1049,6 +1069,7 @@ proto._getTransformIndexData = function(fileId) {
     const transform = this._fileTransform(fileId);
     const generatedIndex = this._isGeneratedIndexTime(fileId, timeVar);
     const generatedFromDetectedTime = this._isGeneratedFromDetectedTime(fileId, timeVar);
+    const numericCalendar = this._isNumericCalendarAxis(fileId, timeVar);
     const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
     const cropEnd = this._parseTimeBoundary(fileId, transform.cropEnd);
     const timeShift = this._parseTimeShift(fileId, transform.timeShift);
@@ -1057,7 +1078,7 @@ proto._getTransformIndexData = function(fileId) {
     let result;
     if (!rawTimes.length) {
         result = { indexes: null, times: [] };
-    } else if (timeShift === 0 && !cropped && !this._isElapsedTimeForVar(fileId, timeVar) && !generatedIndex) {
+    } else if (timeShift === 0 && !cropped && !this._isElapsedTimeForVar(fileId, timeVar) && !generatedIndex && !numericCalendar) {
         result = { indexes: null, times: rawTimes };
     } else {
         let lo = cropStart ?? -Infinity;
