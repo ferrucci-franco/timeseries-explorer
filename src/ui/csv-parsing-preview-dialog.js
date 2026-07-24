@@ -38,6 +38,7 @@ const DECIMAL_SEPARATORS = [
 ];
 const TIME_FORMATS = [
     { value: 'auto', label: 'Auto' },
+    { value: 'elapsed', label: 'Numeric elapsed (seconds)' },
     { value: 'custom', label: 'Custom' },
 ];
 const ROW_FILTER_OPERATORS = [
@@ -410,6 +411,36 @@ function buildManualTimeSource(parser, rawHeaders, dataRows, delimiter, columnIn
         }
         source.confidence = validRatio;
         return source;
+    }
+
+    if (options.timeFormat === 'elapsed') {
+        // Force the column to be read as plain elapsed numbers (e.g. seconds),
+        // bypassing the datetime clock parser entirely. This is what lets an
+        // `s.SSS` / large-second column work as elapsed time instead of anchoring
+        // to year 2001 and rejecting seconds > 59 (design S4).
+        const values = dataRows
+            .map(row => String(row?.[columnIndex] ?? '').trim())
+            .filter(Boolean)
+            .slice(0, 80);
+        const name = headerName(parser, rawHeaders[columnIndex], columnIndex);
+        if (!values.length) return { ok: false, reason: 'Selected time column is empty.' };
+        const numericRatio = values.filter(value => Number.isFinite(parseCsvNumber(value, delimiter, decimalSeparator))).length / values.length;
+        if (numericRatio < 0.8) {
+            return { ok: false, reason: 'Selected column is not numeric; cannot read it as elapsed numbers.' };
+        }
+        return {
+            ok: true,
+            kind: 'numeric',
+            mode: 'single',
+            strategy: 'numeric',
+            sourceIndexes: [columnIndex],
+            sourceHeaders: [rawHeaders[columnIndex] || name],
+            name,
+            description: `Numeric elapsed time from column "${name}"`,
+            confidence: numericRatio,
+            format: {},
+            warnings: [],
+        };
     }
 
     const detected = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter, preferredDateOrder: dateOrder });
