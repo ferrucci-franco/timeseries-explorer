@@ -2423,6 +2423,35 @@ body.cursor-box-dragging {
     border-color: #a2861f;
 }
 
+/* Amber "⚠" warning variant of the round popover button (reindex assumptions). */
+.file-transform-warning-btn {
+    width: 15px;
+    height: 15px;
+    font-size: 0.62rem;
+    background-color: #ffe0b0;
+    border-color: #e39a5a;
+    color: #7a3d00;
+}
+
+.file-transform-warning-btn:hover,
+.file-transform-warning-btn[aria-expanded="true"] {
+    background-color: #ffd08a;
+    border-color: #d3822f;
+    color: #5a2d00;
+}
+
+.theme-dark .file-transform-warning-btn {
+    background-color: #6a3d0d;
+    border-color: #8a5a1b;
+    color: #ffcfa3;
+}
+
+.theme-dark .file-transform-warning-btn:hover,
+.theme-dark .file-transform-warning-btn[aria-expanded="true"] {
+    background-color: #7d4712;
+    border-color: #a26a1f;
+}
+
 /* Floating popup (lives on <body> while open, positioned near the button). */
 .file-transform-help-popover {
     position: fixed;
@@ -2436,6 +2465,15 @@ body.cursor-box-dragging {
     font-weight: 700;
     color: var(--text-primary);
     margin-bottom: 4px;
+}
+
+.file-transform-help-popover ul {
+    margin: 4px 0 0;
+    padding-left: 1.1em;
+}
+
+.file-transform-help-popover li + li {
+    margin-top: 3px;
 }
 
 /* Custom step: value input + unit dropdown share one line. */

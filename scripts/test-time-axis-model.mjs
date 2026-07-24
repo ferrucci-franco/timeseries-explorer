@@ -34,6 +34,7 @@ h.files.set('datetime-elapsed', makeFile({ timeVar: { name: 't', timeKind: 'date
 h.files.set('datetime-duration', makeFile({ timeVar: { name: 't', timeKind: 'datetime' }, transform: { timeDisplayMode: 'elapsedDateTime' } }));
 h.files.set('numeric-seconds', makeFile({ timeVar: { name: 't', timeKind: 'numeric', description: 'time [s]' } }));
 h.files.set('numeric-seconds-b', makeFile({ timeVar: { name: 'x', timeKind: 'numeric', description: 'sim time [s]' } }));
+h.files.set('numeric-duration', makeFile({ timeVar: { name: 't', timeKind: 'numeric', description: 'time [s]' }, transform: { numericTimeDisplay: 'duration' } }));
 h.files.set('index', makeFile({ timeVar: { name: 'i', timeKind: 'index', timeDisplayMode: 'index', timeStepMode: 'index' } }));
 
 // ── Canonical descriptor ────────────────────────────────────────────────────
@@ -42,6 +43,10 @@ const cases = [
     ['datetime-elapsed',  { semantic: 'absolute', storageEncoding: 'epoch-ms',   display: 'seconds',  sig: 'linear:elapsed-seconds' }],
     ['datetime-duration', { semantic: 'absolute', storageEncoding: 'epoch-ms',   display: 'duration', sig: 'linear:elapsed-seconds' }],
     ['numeric-seconds',   { semantic: 'elapsed',  storageEncoding: 'raw-number', display: 'seconds',  sig: 'linear:elapsed-seconds' }],
+    // A numeric (float-seconds) axis the user chose to SHOW as a duration: same
+    // value/encoding/signature as numeric-seconds (overlay preserved), only the
+    // display differs (hh:mm:ss ticks). This is the .mat "Duration" format.
+    ['numeric-duration',  { semantic: 'elapsed',  storageEncoding: 'raw-number', display: 'duration', sig: 'linear:elapsed-seconds' }],
     ['index',             { semantic: 'count',    storageEncoding: 'row-count',  display: 'index',    sig: 'linear:count' }],
 ];
 for (const [id, want] of cases) {

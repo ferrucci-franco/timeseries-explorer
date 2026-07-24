@@ -257,14 +257,13 @@ class PlotManager {
             }
             if (!usesFile) continue;
             for (const other of others) {
-                const otherSig = this._renderSignature(other);
-                // Only block the date <-> linear boundary: that is the change that
-                // makes one set of traces render as epoch-ms garbage (e.g. elapsed
-                // seconds drawn on a calendar axis → 1970). Different LINEAR axes
-                // (elapsed seconds vs index counts) just misalign, which is a
-                // deliberate, recoverable action, so those are allowed.
-                if (otherSig !== sig && (otherSig === 'date') !== (sig === 'date')) {
-                    return 'This file would show a calendar date while the traces overlaid with it are on an elapsed/numeric axis (or vice versa), which would misplace them (elapsed seconds would read as 1970). Put the overlaid files on the same kind of axis, or remove them from this panel, first.';
+                // Full render-signature check: now that a stepped reindex is
+                // correctly elapsed-seconds (not count), this allows compatible
+                // reindexes (step = seconds/min/hour/custom) while still blocking a
+                // pure Index (0,1,2 counts) or a Calendar date against elapsed
+                // seconds, either of which would misplace the overlaid traces.
+                if (this._renderSignature(other) !== sig) {
+                    return 'This change would put this file on a time axis that no longer matches the traces overlaid with it (for example an index/count axis, or a calendar date, vs elapsed seconds). Set the overlaid files to a matching display, or remove them from this panel, first.';
                 }
             }
         }

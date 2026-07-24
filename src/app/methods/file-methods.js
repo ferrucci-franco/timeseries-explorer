@@ -2382,7 +2382,7 @@ proto._fileTypeTooltip = function(_entry, fileId = null, fallback = '') {
 };
 
 proto._defaultFileTransform = function() {
-    return { timeDisplayMode: null, calendarTimeFormat: null, timeShift: 0, timeStepMode: null, customTimeStep: '', timeStepOriginMode: null, timeStepOriginDate: '', gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
+    return { timeDisplayMode: null, calendarTimeFormat: null, timeShift: 0, timeStepMode: null, customTimeStep: '', timeStepOriginMode: null, timeStepOriginDate: '', numericTimeDisplay: null, gain: 1, yOffset: 0, cropStart: null, cropEnd: null };
 };
 
 proto._openCsvParsingPreviewForFileObject = async function(file, options = {}) {
@@ -2523,6 +2523,7 @@ proto._normalizeFileTransform = function(transform = null) {
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
         timeStepOriginMode: ['elapsed', 'elapsed-seconds', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
         timeStepOriginDate: t.timeStepOriginDate === null || t.timeStepOriginDate === undefined ? '' : String(t.timeStepOriginDate),
+        numericTimeDisplay: ['seconds', 'duration'].includes(t.numericTimeDisplay) ? t.numericTimeDisplay : null,
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
@@ -2535,7 +2536,7 @@ proto._normalizeFileTransform = function(transform = null) {
 
 proto._isFileTransformActive = function(transform) {
     const t = this._normalizeFileTransform(transform);
-    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || (t.timeStepOriginMode === 'calendar' && t.timeStepOriginDate !== '') || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || (t.timeStepOriginMode === 'calendar' && t.timeStepOriginDate !== '') || t.numericTimeDisplay !== null || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
 };
 
 proto._toggleFileTransformPanel = function(fileId) {
@@ -2551,9 +2552,10 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     const timeVar = this.plotManager?._getTimeVar?.(fileId);
     const isDateTime = timeVar?.timeKind === 'datetime';
     const isIndexTime = timeVar?.timeKind === 'index';
+    const isNumericTime = !isDateTime && !isIndexTime;
     const timeDisplayMode = isDateTime
         ? (transform.timeDisplayMode || timeVar.timeDisplayMode || 'calendar')
-        : 'numeric';
+        : (isNumericTime && transform.timeDisplayMode === 'index' ? 'index' : 'numeric');
     const isIndexAxis = isIndexTime || timeDisplayMode === 'index';
     const indexStepMode = isIndexAxis ? (transform.timeStepMode || timeVar.timeStepMode || 'index') : null;
     let isGeneratedCalendarAxis = isIndexAxis
@@ -2567,61 +2569,85 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     // Yellow "?" help button that opens a FLOATING popup (not an in-flow box):
     // the popover is fixed-positioned and lives on <body> only while open, so it
     // overlays the UI near the button instead of pushing the menu around.
-    const makeTransformHelp = (titleKey, bodyKey) => {
-        const helpBtn = document.createElement('button');
-        helpBtn.type = 'button';
-        helpBtn.className = 'fft-help-btn file-transform-help-btn';
-        helpBtn.textContent = '?';
-        helpBtn.title = i18n.t(titleKey);
-        helpBtn.setAttribute('aria-label', i18n.t(titleKey));
-        helpBtn.setAttribute('aria-expanded', 'false');
+    // Shared factory for the small round popover buttons — the yellow "?" help and
+    // the amber "⚠" warning both use it. The button toggles a FLOATING popover
+    // (fixed-positioned, appended to <body> only while open, so it overlays the UI
+    // near the button instead of pushing the menu around).
+    const makeTransformPopover = ({ glyph, btnClass, title, bodyHtml }) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = btnClass;
+        btn.textContent = glyph;
+        btn.title = title;
+        btn.setAttribute('aria-label', title);
+        btn.setAttribute('aria-expanded', 'false');
 
-        const helpPopover = document.createElement('div');
-        helpPopover.className = 'fft-help-popover file-transform-help-popover';
-        helpPopover.hidden = true;
-        helpPopover.innerHTML = `<div class="file-transform-help-title">${i18n.t(titleKey)}</div>${i18n.t(bodyKey)}`;
+        const popover = document.createElement('div');
+        popover.className = 'fft-help-popover file-transform-help-popover';
+        popover.hidden = true;
+        popover.innerHTML = `<div class="file-transform-help-title">${title}</div>${bodyHtml}`;
 
         const positionPopover = () => {
-            const rect = helpBtn.getBoundingClientRect();
+            const rect = btn.getBoundingClientRect();
             const margin = 8;
-            const w = helpPopover.offsetWidth;
-            const h = helpPopover.offsetHeight;
+            const w = popover.offsetWidth;
+            const h = popover.offsetHeight;
             let left = Math.min(rect.left, window.innerWidth - w - margin);
             left = Math.max(margin, left);
             let top = rect.bottom + 6;
             if (top + h > window.innerHeight - margin) top = Math.max(margin, rect.top - h - 6);
-            helpPopover.style.left = `${left}px`;
-            helpPopover.style.top = `${top}px`;
+            popover.style.left = `${left}px`;
+            popover.style.top = `${top}px`;
         };
         const onDocMouseDown = (event) => {
-            if (!helpPopover.contains(event.target) && event.target !== helpBtn) closeHelp();
+            if (!popover.contains(event.target) && event.target !== btn) close();
         };
-        function closeHelp() {
-            helpPopover.hidden = true;
-            helpPopover.remove();
-            helpBtn.setAttribute('aria-expanded', 'false');
+        function close() {
+            popover.hidden = true;
+            popover.remove();
+            btn.setAttribute('aria-expanded', 'false');
             document.removeEventListener('mousedown', onDocMouseDown, true);
-            window.removeEventListener('resize', closeHelp);
-            window.removeEventListener('scroll', closeHelp, true);
+            window.removeEventListener('resize', close);
+            window.removeEventListener('scroll', close, true);
         }
         // Stop the wrapping <label> from redirecting the click to the input.
-        helpBtn.addEventListener('mousedown', (event) => { event.preventDefault(); event.stopPropagation(); });
-        helpBtn.addEventListener('click', (event) => {
+        btn.addEventListener('mousedown', (event) => { event.preventDefault(); event.stopPropagation(); });
+        btn.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
-            if (!helpPopover.hidden) { closeHelp(); return; }
-            document.body.appendChild(helpPopover);
-            helpPopover.hidden = false;
-            helpBtn.setAttribute('aria-expanded', 'true');
+            if (!popover.hidden) { close(); return; }
+            document.body.appendChild(popover);
+            popover.hidden = false;
+            btn.setAttribute('aria-expanded', 'true');
             positionPopover();
             setTimeout(() => {
                 document.addEventListener('mousedown', onDocMouseDown, true);
-                window.addEventListener('resize', closeHelp);
-                window.addEventListener('scroll', closeHelp, true);
+                window.addEventListener('resize', close);
+                window.addEventListener('scroll', close, true);
             }, 0);
         });
-        return { helpBtn, helpPopover };
+        return { btn, popover };
     };
+    const makeTransformHelp = (titleKey, bodyKey) => {
+        const { btn, popover } = makeTransformPopover({
+            glyph: '?',
+            btnClass: 'fft-help-btn file-transform-help-btn',
+            title: i18n.t(titleKey),
+            bodyHtml: i18n.t(bodyKey),
+        });
+        return { helpBtn: btn, helpPopover: popover };
+    };
+    // Amber "⚠" next to "Create a row index vector": a static, general caption
+    // (no per-file gap detection) spelling out the two assumptions of reindexing.
+    const makeReindexWarning = () => makeTransformPopover({
+        glyph: '⚠',
+        btnClass: 'fft-help-btn file-transform-warning-btn',
+        title: 'Reindexing assumptions',
+        bodyHtml: '<ul>'
+            + '<li>All points are spaced evenly, whatever the real time between them.</li>'
+            + '<li>Gaps from missing rows disappear — the points around a gap become adjacent, so the gap is hidden.</li>'
+            + '</ul>',
+    }).btn;
 
     const makeInput = (key, label, value, placeholder = '0', options = {}) => {
         const wrap = document.createElement('label');
@@ -2872,6 +2898,7 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
                 cropStart: null, cropEnd: null, timeShift: 0,
             }, { rerender: true, autoscaleX: false });
         });
+        indexSrc.wrap.append(makeReindexWarning());
         sourceRow.append(fileSrc.wrap, indexSrc.wrap);
         sourceWrap.append(sourceLabel, sourceRow);
         panel.append(sourceWrap);
@@ -2916,6 +2943,101 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             stalledHint.className = 'file-transform-hint datetime-axis-warning-hint';
             stalledHint.textContent = i18n.t('datetimeAxisStalledHint');
             panel.appendChild(stalledHint);
+        }
+    } else if (isNumericTime && csvFile) {
+        // ── Option B for a numeric (float) time vector: Source × Format ────────
+        // The file already carries its own seconds. Source = File time shows those
+        // seconds either as a plain number or as a duration (hh:mm:ss); Source =
+        // Row index discards them and generates a row-driven axis (shared Step +
+        // Show-as controls in the isIndexAxis block below take over).
+        const timeTitle = document.createElement('div');
+        timeTitle.className = 'file-transform-title';
+        timeTitle.textContent = 'Time axis';
+        panel.append(timeTitle);
+
+        const isRowIndex = timeDisplayMode === 'index';
+
+        const sourceWrap = document.createElement('div');
+        sourceWrap.className = 'file-transform-field file-transform-field-wide';
+        sourceWrap.style.alignItems = 'stretch';
+        sourceWrap.style.gap = '4px';
+        sourceWrap.style.minWidth = '0';
+        const sourceLabel = document.createElement('span');
+        sourceLabel.textContent = 'Source';
+        const sourceRow = document.createElement('div');
+        sourceRow.style.display = 'flex';
+        sourceRow.style.flexDirection = 'column';
+        sourceRow.style.gap = '7px';
+        sourceRow.style.alignItems = 'stretch';
+        sourceRow.style.width = '100%';
+        const makeSourceRadio = (value, labelText, checked) => {
+            const wrap = document.createElement('label');
+            wrap.style.display = 'flex';
+            wrap.style.alignItems = 'center';
+            wrap.style.gap = '7px';
+            wrap.style.width = '100%';
+            wrap.style.cursor = 'pointer';
+            const input = document.createElement('input');
+            input.type = 'radio';
+            input.name = `time-source-${fileId}`;
+            input.value = value;
+            input.checked = checked;
+            input.style.width = 'auto';
+            input.style.minWidth = '0';
+            input.style.margin = '0';
+            input.style.padding = '0';
+            input.style.border = 'none';
+            input.style.background = 'none';
+            input.style.flexShrink = '0';
+            const span = document.createElement('span');
+            span.textContent = labelText;
+            span.style.flex = '1';
+            span.style.minWidth = '0';
+            span.style.lineHeight = '1.25';
+            wrap.append(input, span);
+            return { wrap, input };
+        };
+        const fileSrc = makeSourceRadio('values', 'Use time vector from file', !isRowIndex);
+        const indexSrc = makeSourceRadio('index', 'Create a row index vector', isRowIndex);
+        fileSrc.input.addEventListener('change', () => {
+            if (!fileSrc.input.checked) return;
+            this._updateFileTransform(fileId, {
+                timeDisplayMode: null,
+                timeStepMode: null, customTimeStep: '', timeStepOriginMode: null,
+                cropStart: null, cropEnd: null, timeShift: 0,
+            }, { rerender: true, autoscaleX: false });
+        });
+        indexSrc.input.addEventListener('change', () => {
+            if (!indexSrc.input.checked) return;
+            this._updateFileTransform(fileId, {
+                timeDisplayMode: 'index',
+                cropStart: null, cropEnd: null, timeShift: 0,
+            }, { rerender: true, autoscaleX: false });
+        });
+        indexSrc.wrap.append(makeReindexWarning());
+        sourceRow.append(fileSrc.wrap, indexSrc.wrap);
+        sourceWrap.append(sourceLabel, sourceRow);
+        panel.append(sourceWrap);
+
+        // Format: value-preserving display of the file's own seconds.
+        if (!isRowIndex) {
+            const fmtWrap = document.createElement('label');
+            fmtWrap.className = 'file-transform-field file-transform-field-wide';
+            const fmtLabel = document.createElement('span');
+            fmtLabel.textContent = 'Format';
+            const fmtSelect = document.createElement('select');
+            const isDuration = transform.numericTimeDisplay === 'duration';
+            fmtSelect.innerHTML = `
+                <option value="seconds"${!isDuration ? ' selected' : ''}>Seconds (numeric)</option>
+                <option value="duration"${isDuration ? ' selected' : ''}>Duration (day/hour/min/sec)</option>
+            `;
+            fmtSelect.addEventListener('change', () => {
+                this._updateFileTransform(fileId, {
+                    numericTimeDisplay: fmtSelect.value === 'duration' ? 'duration' : null,
+                }, { rerender: true });
+            });
+            fmtWrap.append(fmtLabel, fmtSelect);
+            panel.append(fmtWrap);
         }
     } else if (isDateTime) {
         const timeTitle = document.createElement('div');

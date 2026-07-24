@@ -123,6 +123,7 @@ proto._normalizeFileTransform = function(transform = null) {
         customTimeStep: t.customTimeStep === null || t.customTimeStep === undefined ? '' : String(t.customTimeStep),
         timeStepOriginMode: ['elapsed', 'elapsed-seconds', 'calendar'].includes(t.timeStepOriginMode) ? t.timeStepOriginMode : null,
         timeStepOriginDate: t.timeStepOriginDate === null || t.timeStepOriginDate === undefined ? '' : String(t.timeStepOriginDate),
+        numericTimeDisplay: ['seconds', 'duration'].includes(t.numericTimeDisplay) ? t.numericTimeDisplay : null,
         gain: (() => {
             const n = Number(t.gain);
             return Number.isFinite(n) ? n : 1;
@@ -135,7 +136,7 @@ proto._normalizeFileTransform = function(transform = null) {
 
 proto._isFileTransformActive = function(transform) {
     const t = this._normalizeFileTransform(transform);
-    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || (t.timeStepOriginMode === 'calendar' && t.timeStepOriginDate !== '') || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
+    return t.timeDisplayMode !== null || t.calendarTimeFormat !== null || t.timeShift !== 0 || t.timeStepMode !== null || t.customTimeStep !== '' || t.timeStepOriginMode !== null || (t.timeStepOriginMode === 'calendar' && t.timeStepOriginDate !== '') || t.numericTimeDisplay !== null || t.gain !== 1 || t.yOffset !== 0 || t.cropStart !== null || t.cropEnd !== null;
 };
 
 proto._fileTransform = function(fileId) {
@@ -199,6 +200,14 @@ proto._isGeneratedSecondsTime = function(fileId, timeVar = null) {
     return this._isGeneratedIndexTime(fileId, timeVar)
         && this._indexTimeStepMode(fileId) !== 'index'
         && this._fileTransform(fileId).timeStepOriginMode === 'elapsed-seconds';
+};
+
+// A real numeric time vector shown as a duration (hh:mm:ss) instead of a plain
+// number of seconds. Value-preserving: the axis just formats the same seconds.
+proto._isNumericDurationAxis = function(fileId, timeVar = null) {
+    const t = timeVar || this._getTimeVar(fileId);
+    if (this._isGeneratedIndexTime(fileId, t) || t?.timeKind === 'datetime') return false;
+    return this._fileTransform(fileId).numericTimeDisplay === 'duration';
 };
 
 proto._isHighResolutionGeneratedCalendarTime = function(fileId, timeVar = null) {
@@ -282,6 +291,9 @@ proto._timeAxisModel = function(fileId) {
     const indexStepMode = this._indexTimeStepMode(fileId);
     const highResGeneratedCalendar = this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
     const isGeneratedSeconds = isGeneratedIndex && indexStepMode !== 'index' && transform.timeStepOriginMode === 'elapsed-seconds';
+    // A real numeric time vector (its own seconds) that the user chose to show as a
+    // duration (hh:mm:ss) instead of a plain number — value-preserving, no /1000.
+    const isNumericDuration = !isGeneratedIndex && timeVar?.timeKind !== 'datetime' && transform.numericTimeDisplay === 'duration';
 
     // Legacy time kind (inlined from the former _timeKind).
     const kind = (isGeneratedCalendar || timeVar?.timeKind === 'datetime') ? 'datetime' : 'numeric';
@@ -299,6 +311,7 @@ proto._timeAxisModel = function(fileId) {
     else if (displayMode === 'calendar') unit = 'datetime';
     else if (displayMode === 'elapsedDateTime') unit = 'duration';
     else if (displayMode === 'elapsedSeconds') unit = 's';
+    else if (isNumericDuration) unit = 'duration';
     else unit = timeVar ? this._extractUnit(timeVar.description) : 's';
 
     let semantic;
@@ -306,10 +319,11 @@ proto._timeAxisModel = function(fileId) {
     if (isGeneratedCalendar) {
         semantic = 'absolute'; storageEncoding = 'row-count';
     } else if (isGeneratedIndex) {
-        // A generated index — including a real datetime forced to Index display —
-        // is driven by row numbers with the stored values discarded, so it is a
-        // count axis regardless of the underlying timeKind. Checked before datetime.
-        semantic = 'count'; storageEncoding = 'row-count';
+        // A generated index is row-driven (stored values discarded). A PURE index
+        // (0,1,2…) is a count axis; a stepped index (row × Δt) is elapsed seconds
+        // shown as seconds/duration. Checked before the datetime case.
+        semantic = indexStepMode === 'index' ? 'count' : 'elapsed';
+        storageEncoding = 'row-count';
     } else if (kind === 'datetime') {
         semantic = 'absolute'; storageEncoding = 'epoch-ms';
     } else {
@@ -321,13 +335,14 @@ proto._timeAxisModel = function(fileId) {
         semantic = 'elapsed'; storageEncoding = 'raw-number';
     }
 
-    const display = ({
-        calendar: 'calendar',
-        elapsedDateTime: 'duration',
-        elapsedSeconds: 'seconds',
-        index: 'index',
-        numeric: 'seconds',
-    })[displayMode] || 'seconds';
+    // Canonical display reflects the RENDERED axis (so overlay compatibility is
+    // correct): a stepped generated index shows seconds/duration (both are
+    // elapsed-seconds); only a PURE index (0,1,2…) is a count axis.
+    let display;
+    if (isGeneratedCalendar) display = 'calendar';
+    else if (isGeneratedIndex) display = indexStepMode === 'index' ? 'index' : (isGeneratedSeconds ? 'seconds' : 'duration');
+    else if (isNumericDuration) display = 'duration';
+    else display = ({ calendar: 'calendar', elapsedDateTime: 'duration', elapsedSeconds: 'seconds', numeric: 'seconds' })[displayMode] || 'seconds';
 
     return {
         semantic,
@@ -787,28 +802,36 @@ proto._timeAxisTitle = function(fileId, fallback = 'Time') {
     return this._timeAxisTitleForVar(fileId, timeVar, fallback);
 };
 
-proto._timeAxisTitleForVar = function(fileId, timeVar = null, fallback = 'Time') {
+proto._timeAxisTitleForVar = function(fileId, timeVar = null, fallback = 'Time', effectiveDisplay = null) {
     const name = timeVar?.name || fallback;
     if (timeVar?.timeSourceStrategy === 'index-column') return name;
+    // A mixed panel resolves duration + seconds ⇒ seconds (consensus). When the
+    // shared axis is downgraded to seconds the title must drop the primary's
+    // duration (hh:mm:ss) caption so title, ticks and hover stay in agreement.
+    const forceSeconds = effectiveDisplay === 'seconds';
     if (this._isGeneratedIndexTime(fileId, timeVar)) {
+        // The per-file Δt (the "step") is deliberately left OUT of the axis title:
+        // the title labels a shared axis, and overlaying two reindexed traces with
+        // different steps would make any single Δt caption misleading.
         const mode = this._indexTimeStepMode(fileId);
         if (mode !== 'index' && this._isGeneratedCalendarTime(fileId, timeVar)) {
-            return `datetime [step ${this._indexTimeStepLabel(fileId)}]`;
+            return 'datetime';
         }
-        if (mode !== 'index' && this._isGeneratedSecondsTime(fileId, timeVar)) {
-            return `seconds [step ${this._indexTimeStepLabel(fileId)}]`;
+        if (mode !== 'index' && (forceSeconds || this._isGeneratedSecondsTime(fileId, timeVar))) {
+            return 'seconds';
         }
-        return mode === 'index' ? 'index' : `duration [hh:mm:ss, step ${this._indexTimeStepLabel(fileId)}]`;
+        return mode === 'index' ? 'index' : 'duration [hh:mm:ss]';
     }
     const mode = this._timeDisplayModeForVar(fileId, timeVar);
     if (mode === 'calendar') return `${name} [datetime, ${this._calendarTimeFormat(fileId, timeVar) === 'ampm' ? 'AM/PM' : '24h'}]`;
     if (mode === 'elapsedDateTime' && timeVar?.timeKind === 'datetime') {
-        return `${name} elapsed [d hh:mm:ss]`;
+        return forceSeconds ? `${name} elapsed [s]` : `${name} elapsed [d hh:mm:ss]`;
     }
     if (mode === 'elapsedSeconds' && timeVar?.timeKind === 'datetime') {
         return `${name} elapsed [s]`;
     }
-    const unit = mode === 'elapsedSeconds' ? 's' : (timeVar ? this._extractUnit(timeVar.description) : 's');
+    if (!forceSeconds && this._isNumericDurationAxis(fileId, timeVar)) return `${name} [d hh:mm:ss]`;
+    const unit = (mode === 'elapsedSeconds' || forceSeconds) ? 's' : (timeVar ? this._extractUnit(timeVar.description) : 's');
     return unit ? `${name} [${unit}]` : name;
 };
 
@@ -1006,22 +1029,28 @@ proto._getTransformIndexData = function(fileId) {
 
         const indexes = [];
         const times = [];
-        const generatedCalendar = generatedFromDetectedTime && this._isGeneratedCalendarTime(fileId, timeVar);
+        const generatedCalendar = generatedIndex && this._isGeneratedCalendarTime(fileId, timeVar);
         const highResolutionCalendar = generatedCalendar && this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
         const generatedCalendarOrigin = generatedCalendar ? this._timeOriginMsForVar(fileId, timeVar) : 0;
+        const generatedStepMode = generatedIndex ? this._indexTimeStepMode(fileId) : null;
+        const generatedStepSeconds = generatedIndex ? this._indexTimeStepSeconds(fileId) : 0;
         for (let i = 0; i < rawTimes.length; i++) {
             const rawTime = rawTimes[i];
+            // Row that drives a generated index: a DETECTED datetime axis can be
+            // irregular/downsampled, so map source time → approximate row; a numeric
+            // or native-index axis uses the loop counter directly (its raw value is
+            // seconds, not a row, so it must NOT be fed to the index formatter).
             const generatedRow = generatedFromDetectedTime && timeVar?.timeKind === 'datetime'
                 ? this._approxRowIndexFromSourceTime(fileId, rawTime, i)
                 : i;
-            const displayTime = generatedFromDetectedTime
-                ? (this._indexTimeStepMode(fileId) === 'index'
+            const displayTime = generatedIndex
+                ? (generatedStepMode === 'index'
                     ? generatedRow
                     : generatedCalendar
                         ? (highResolutionCalendar
-                            ? generatedRow * this._indexTimeStepSeconds(fileId)
-                            : generatedCalendarOrigin + generatedRow * this._indexTimeStepSeconds(fileId) * 1000)
-                        : generatedRow * this._indexTimeStepSeconds(fileId))
+                            ? generatedRow * generatedStepSeconds
+                            : generatedCalendarOrigin + generatedRow * generatedStepSeconds * 1000)
+                        : generatedRow * generatedStepSeconds)
                 : this._timeDisplayValueForVar(fileId, rawTime, timeVar);
             if (!cropped || (displayTime >= lo && displayTime <= hi)) {
                 indexes.push(i);
@@ -1584,8 +1613,12 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     const generatedIndexAxis = this._isGeneratedIndexTime(primaryTimeTrace.fileId, primaryTimeVar);
     const generatedCalendarAxis = this._isGeneratedCalendarTime(primaryTimeTrace.fileId, primaryTimeVar);
     const highResolutionCalendarAxis = this._isHighResolutionGeneratedCalendarTime(primaryTimeTrace.fileId, primaryTimeVar);
-    const durationAxis = timeMode === 'elapsedDateTime'
-        || (this._isGeneratedDurationTime(primaryTimeTrace.fileId, primaryTimeVar) && !generatedCalendarAxis);
+    // Duration vs seconds is a PANEL consensus (order-independent), so the hover's
+    // time format matches the shared axis: duration only when every overlaid trace
+    // is duration; any seconds trace ⇒ this hover reads in plain seconds too.
+    const durationAxis = this._resolvePanelTimeAxis(
+        (plot?.traces || [t]).map(tr => tr.fileId),
+    ).effectiveDisplay === 'duration';
     const timeUnit = generatedIndexAxis
         ? (generatedCalendarAxis ? 'datetime' : (durationAxis ? 'duration' : 'index'))
         : (timeMode === 'calendar'
@@ -1679,12 +1712,17 @@ proto._buildTimeLayout = function(plot) {
     const firstTimeVar = firstFileId ? this._getTimeVar(firstFileId) : this._getTimeVar();
     const firstTimeMode = this._timeDisplayModeForVar(firstFileId, firstTimeVar);
     const generatedCalendarAxis = this._isGeneratedCalendarTime(firstFileId, firstTimeVar);
-    const generatedSecondsAxis = this._isGeneratedSecondsTime(firstFileId, firstTimeVar);
-    const generatedElapsedDurationAxis = this._isGeneratedDurationTime(firstFileId, firstTimeVar) && !generatedCalendarAxis && !generatedSecondsAxis;
-    const timeTitle = this._timeAxisTitleForVar(firstFileId, firstTimeVar);
+    // Duration vs seconds is a PANEL consensus (order-independent): the shared axis
+    // renders as duration (hh:mm:ss) only when EVERY overlaid trace is duration; any
+    // seconds trace ⇒ plain linear seconds. Replaces the old "primary trace wins".
+    const visibleFileIds = plot.traces.filter(t => this._isVisible(t)).map(t => t.fileId);
+    const panelDisplay = this._resolvePanelTimeAxis(
+        visibleFileIds.length ? visibleFileIds : plot.traces.map(t => t.fileId),
+    ).effectiveDisplay;
+    const timeTitle = this._timeAxisTitleForVar(firstFileId, firstTimeVar, 'Time', panelDisplay);
     const xAxisMode = firstTimeMode === 'calendar' || generatedCalendarAxis
         ? this._calendarAxisConfig(firstFileId, firstTimeVar, plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)))
-        : (firstTimeMode === 'elapsedDateTime' || generatedElapsedDurationAxis
+        : (panelDisplay === 'duration'
             ? this._elapsedDateTimeAxisConfig(plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)), firstFileId)
             : { type: 'linear' });
     const xExtent = this._finiteExtent(plot.traces
@@ -1914,7 +1952,13 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
     const first = plot.phaseTraces[0] || {};
     const firstTimeVar = this._getTimeVar(first.fileId);
     const firstTimeMode = this._timeDisplayModeForVar(first.fileId, firstTimeVar);
-    const timeTitle = this._timeAxisTitleForVar(first.fileId, firstTimeVar);
+    // Duration vs seconds on the time axis is a PANEL consensus (order-independent),
+    // matching the 2D timeseries path: duration only if every overlaid trace is.
+    const phaseTimeFileIds = plot.phaseTraces.filter(pt => this._isVisible(pt)).map(pt => pt.fileId);
+    const timePanelDisplay = isTimez
+        ? this._resolvePanelTimeAxis(phaseTimeFileIds.length ? phaseTimeFileIds : plot.phaseTraces.map(pt => pt.fileId)).effectiveDisplay
+        : null;
+    const timeTitle = this._timeAxisTitleForVar(first.fileId, firstTimeVar, 'Time', timePanelDisplay);
 
     // phase2dt: plotly X=time,  Y=var x, Z=var y
     // phase3d:  plotly X=var x, Y=var y, Z=var z
@@ -1961,8 +2005,7 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
     }
     const generatedCalendarAxis = this._isGeneratedCalendarTime(first.fileId, firstTimeVar);
     const calendarTimeAxis = isTimez && (firstTimeMode === 'calendar' || generatedCalendarAxis);
-    const elapsedDateTimeAxis = isTimez && (firstTimeMode === 'elapsedDateTime'
-        || (this._isGeneratedDurationTime(first.fileId, firstTimeVar) && !generatedCalendarAxis));
+    const elapsedDateTimeAxis = isTimez && !calendarTimeAxis && timePanelDisplay === 'duration';
     const xExtent = calendarTimeAxis ? this._finiteExtent(xArrays) : null;
     let xRange = xExtent ? this._exactRange(xExtent.min, xExtent.max) : this._rangeIncluding0(xArrays);
     if (calendarTimeAxis && Array.isArray(xRange)) {

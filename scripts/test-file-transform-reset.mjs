@@ -35,6 +35,7 @@ try {
             customTimeStep: '',
             timeStepOriginMode: null,
             timeStepOriginDate: '',
+            numericTimeDisplay: null,
             gain: 2,
             yOffset: 0,
             cropStart: null,

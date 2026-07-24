@@ -61,6 +61,22 @@ assert.equal(r('num-s', 'num-m').compatible, true);
 assert.equal(r('elapsed-s', 'num-s').compatible, true);
 assert.equal(r('elapsed-s', 'num-s').effectiveDisplay, 'seconds');
 
+// A stepped reindex (row x dt = seconds) is elapsed-seconds and overlays a numeric
+// seconds trace; a PURE Index (0,1,2 counts) does not.
+h.files.set('reidx-sec', makeFile({ timeVar: { name: 'm', timeKind: 'index' }, transform: { timeStepMode: 'seconds' } }));
+assert.equal(h._renderSignature('reidx-sec'), 'linear:elapsed-seconds');
+assert.equal(h._renderSignature('idx'), 'linear:count');
+assert.equal(r('num-s', 'reidx-sec').compatible, true);
+assert.equal(r('num-s', 'idx').compatible, false);
+
+// A numeric axis SHOWN as duration keeps the elapsed-seconds signature, so it
+// overlays a plain numeric-seconds trace and a datetime shown as Elapsed(seconds).
+// This is the .mat "Duration" format resolving bug (b): modelica set to Duration.
+h.files.set('num-dur', makeFile({ timeVar: { name: 't', timeKind: 'numeric', description: 'time [s]' }, transform: { numericTimeDisplay: 'duration' } }));
+assert.equal(h._renderSignature('num-dur'), 'linear:elapsed-seconds');
+assert.equal(r('num-dur', 'num-s').compatible, true);
+assert.equal(r('num-dur', 'elapsed-s').compatible, true);
+
 // index panel
 assert.equal(r('idx', 'idx2').effectiveDisplay, 'index');
 assert.equal(r('idx', 'idx2').effectiveUnit, 'count');
