@@ -54,6 +54,10 @@ class PlotManager {
 
         this.onPanelMount   = (id, el) => this._mountPanel(id, el);
         this.onPanelUnmount = (id)     => this._unmountPanel(id);
+        // Optional app hook: resolves a dragged time axis (abscissa) into the
+        // derived "sample index" variable to plot, or null if the user cancels.
+        // Set by the viewer; when absent, time-axis drops are simply ignored.
+        this.onTimeAxisVariableDrop = null;
     }
 
     // ─── Public API ────────────────────────────────────────────────
@@ -867,12 +871,35 @@ class PlotManager {
             const varNames = this._getDroppedVariableNames(e.dataTransfer);
             if (!varNames.length || !this.data) return;
             const axis = this._timeseriesDropAxis(panelId, panelEl, e);
-            if (varNames.length > 1) {
-                this._addDroppedVariables(panelId, varNames, panelEl, { axis });
-            } else {
-                this.addTrace(panelId, varNames[0], panelEl, { axis });
-            }
+            this._handleVariableDrop(panelId, varNames, panelEl, { axis });
         });
+    }
+
+    // Dispatch a set of dropped variable names to the panel. A dragged time axis
+    // (abscissa) is first resolved to its derived "sample index" via the app
+    // hook (which may warn and create it); other names pass through unchanged.
+    async _handleVariableDrop(panelId, varNames, panelEl, options = {}) {
+        let resolved = varNames;
+        if (this.onTimeAxisVariableDrop) {
+            const out = [];
+            for (const name of varNames) {
+                if (this.data?.variables?.[name]?.kind === 'abscissa') {
+                    const derivedName = await this.onTimeAxisVariableDrop(name);
+                    if (derivedName) out.push(derivedName);
+                } else {
+                    out.push(name);
+                }
+            }
+            resolved = out;
+        } else {
+            resolved = varNames.filter(name => this.data?.variables?.[name]?.kind !== 'abscissa');
+        }
+        if (!resolved.length) return;
+        if (resolved.length > 1) {
+            this._addDroppedVariables(panelId, resolved, panelEl, { axis: options.axis });
+        } else {
+            this.addTrace(panelId, resolved[0], panelEl, { axis: options.axis });
+        }
     }
 
     _timeseriesDropAxis(panelId, panelEl, event = null) {
@@ -1613,6 +1640,7 @@ class PlotManager {
 
     _showTimeseriesAxisMenu(panelId, plot, trace, event) {
         const moveRight = this._traceYAxis(trace, plot) !== 'y2';
+        const stepped = this._traceIsStepped(trace);
         this._showLegendTraceMenu(event, trace, {
             onShow: () => this._setTimeseriesLegendSelection(panelId, plot, trace, 'show'),
             onHide: () => this._setTimeseriesLegendSelection(panelId, plot, trace, 'hide'),
@@ -1622,7 +1650,27 @@ class PlotManager {
             labelKey: moveRight ? 'timeseriesY2MoveRight' : 'timeseriesY2MoveLeft',
             action: () => this._moveTimeseriesTraceToAxis(panelId, plot, trace, moveRight ? 'y2' : 'y'),
             className: 'timeseries-axis-menu-divider',
+        }, {
+            // Stairs vs straight line: helps read discrete/sampled variables.
+            labelKey: stepped ? 'legendMenuLineLinear' : 'legendMenuLineStairs',
+            action: () => this._setTimeseriesTraceLineShape(panelId, plot, trace, stepped ? 'linear' : 'hv'),
         }]);
+    }
+
+    // Effective line shape of a trace: an explicit per-trace override wins,
+    // otherwise booleans default to steps and everything else to a straight line.
+    _traceIsStepped(trace) {
+        if (trace.lineShape) return trace.lineShape === 'hv';
+        const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+        return variable?.dataType === 'boolean';
+    }
+
+    _setTimeseriesTraceLineShape(panelId, plot, trace, shape) {
+        if (!plot?.div || plot.mode !== 'timeseries') return;
+        trace.lineShape = shape === 'hv' ? 'hv' : 'linear';
+        // Rebuild the panel (view preserved): switching to/from steps can also
+        // flip scattergl↔scatter, which a plain restyle cannot do.
+        this._rebuildPanel(panelId, { preserveView: true });
     }
 
     async _setTimeseriesLegendSelection(panelId, plot, selectedTrace, action) {
@@ -2764,10 +2812,21 @@ class PlotManager {
 
     _autoScalePlotAxis(panelId, plot = this.plots.get(panelId), axis = 'y') {
         if (!plot?.div) return Promise.resolve();
-        if (plot.mode !== 'timeseries' && plot.mode !== 'phase2d') return Promise.resolve();
-        const update = this._autoScaleAxisUpdate(plot, axis);
-        return Plotly.relayout(plot.div, update)
-            .then(() => { if (plot.mode === 'timeseries') this._refreshElapsedDateTimeAxisTicks(plot); });
+        if (plot.mode === 'timeseries' || plot.mode === 'phase2d') {
+            const update = this._autoScaleAxisUpdate(plot, axis);
+            return Plotly.relayout(plot.div, update)
+                .then(() => { if (plot.mode === 'timeseries') this._refreshElapsedDateTimeAxisTicks(plot); });
+        }
+        // Split analysis modes: the per-axis buttons fit the analysis output pane
+        // (spectrum / histogram / heatmap / profile / correlation view), each with
+        // its own axis conventions. Heatmap has no vertical fit (fixed categorical
+        // Y), so its 'y' path is a no-op and the button is not shown.
+        if (plot.mode === 'fft') return this._autoScaleFftAxis(plot, axis);
+        if (plot.mode === 'histogram') return this._autoScaleHistogramAxis(plot, axis);
+        if (plot.mode === 'heatmap') return this._autoScaleHeatmapAxis(plot, axis);
+        if (plot.mode === 'temporal-profile') return this._autoScaleTemporalProfileAxis(plot, axis);
+        if (plot.mode === 'correlation') return this._autoScaleCorrelationAxis(plot, axis);
+        return Promise.resolve();
     }
 
     _autoScalePlot(panelId, plot = this.plots.get(panelId)) {

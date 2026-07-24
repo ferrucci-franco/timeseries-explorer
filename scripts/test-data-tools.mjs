@@ -106,6 +106,21 @@ closeArray(
     'derivative propagates NaN on touched interval',
 );
 
+// Pure difference: y[i]-y[i-1] with NO division by Δt (first sample forward).
+// Applied to the time vector it yields Δt — flat for uniform sampling, 0 at a
+// duplicate timestamp, and a spike at a gap — without any divide-by-zero.
+closeArray(
+    h._computeDerivativeValues([0, 1, 1, 2, 4], numericData([0, 1, 1, 2, 4]), { method: 'difference' }).values,
+    [1, 1, 0, 1, 2],
+    'difference of the time vector gives Δt (0 at a duplicate, spike at a gap)',
+);
+// Where the derivative would return NaN (Δt=0), the difference stays finite.
+closeArray(
+    h._computeDerivativeValues([10, 20, 45], numericData([0, 1, 1]), { method: 'difference' }).values,
+    [10, 10, 25],
+    'difference never divides by Δt, so a duplicate timestamp does not force NaN',
+);
+
 const integral = h._computeIntegralValues([2, 4, 6], numericData([0, 1, 3]), { method: 'trapezoidal' });
 closeArray(integral.values, [0, 3, 13], 'trapezoidal integral nonuniform numeric time');
 assert.equal(integral.negativeDtCount, 0);

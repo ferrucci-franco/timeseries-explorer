@@ -386,9 +386,12 @@ proto._copyOpenModelicaTempPathToClipboard = async function() {
 
     let messageKey = 'openModelicaTempPathCopyFailed';
     if (copied) {
-        messageKey = usedFallback
-            ? 'openModelicaTempPathCopiedUsernameUnknown'
-            : 'openModelicaTempPathCopied';
+        // Desktop resolves an exact path and uses the native OS dialog, so it
+        // skips both the USERNAME caveat and the browser (Firefox/address-bar)
+        // guidance.
+        messageKey = (typeof window !== 'undefined' && window.omvDesktop)
+            ? 'openModelicaTempPathCopiedDesktop'
+            : (usedFallback ? 'openModelicaTempPathCopiedUsernameUnknown' : 'openModelicaTempPathCopied');
     }
 
     const titleKey = copied
@@ -411,9 +414,9 @@ proto._copyDymolaDirectoryPathToClipboard = async function() {
 
     let messageKey = 'dymolaDirectoryPathCopyFailed';
     if (copied) {
-        messageKey = usedFallback
-            ? 'dymolaDirectoryPathCopiedUsernameUnknown'
-            : 'dymolaDirectoryPathCopied';
+        messageKey = (typeof window !== 'undefined' && window.omvDesktop)
+            ? 'dymolaDirectoryPathCopiedDesktop'
+            : (usedFallback ? 'dymolaDirectoryPathCopiedUsernameUnknown' : 'dymolaDirectoryPathCopied');
     }
 
     const titleKey = copied
@@ -477,6 +480,22 @@ proto._copyTextToClipboard = async function(text) {
 };
 
 proto._getOpenModelicaTempCandidates = function() {
+    // Desktop (Electron): use the real OS temp dir + username, per platform.
+    const desktop = (typeof window !== 'undefined') ? window.omvDesktop : null;
+    if (desktop) {
+        if (desktop.platform === 'win32') {
+            const tmp = String(desktop.tmpdir || `${desktop.homedir}\\AppData\\Local\\Temp`).replace(/[\\/]+$/, '');
+            return [`${tmp}\\OpenModelica\\OMEdit`, `${tmp}\\OpenModelica`];
+        }
+        if (desktop.platform === 'linux') {
+            const user = desktop.username || '';
+            return [`/tmp/OpenModelica${user}/OMEdit`, `/tmp/OpenModelica${user}`];
+        }
+        // macOS / other: the per-user temp dir already isolates by user.
+        const tmp = String(desktop.tmpdir || '/tmp').replace(/\/+$/, '');
+        return [`${tmp}/OpenModelica/OMEdit`, `${tmp}/OpenModelica`];
+    }
+
     const userHome = this._inferWindowsUserHomeFromLocation();
     if (userHome) {
         return [
@@ -504,6 +523,15 @@ proto._getOpenModelicaTempFallbackPaths = function() {
 };
 
 proto._getDymolaDirectoryCandidates = function() {
+    // Desktop (Electron): real home dir, per platform (Dymola's working dir
+    // defaults to <home>/Documents/Dymola).
+    const desktop = (typeof window !== 'undefined') ? window.omvDesktop : null;
+    if (desktop?.homedir) {
+        const sep = desktop.platform === 'win32' ? '\\' : '/';
+        const home = String(desktop.homedir).replace(/[\\/]+$/, '');
+        return [`${home}${sep}Documents${sep}Dymola${sep}`];
+    }
+
     const userHome = this._inferWindowsUserHomeFromLocation();
     if (userHome) {
         return [`${userHome}\\Documents\\Dymola\\`];
@@ -2239,8 +2267,20 @@ proto.loadExample = async function(exampleId = 'pendulum') {
     const ex = EXAMPLES.find(e => e.id === exampleId);
     if (!ex) throw new Error(`Unknown example: ${exampleId}`);
 
-    if (this.plotManager.hasAnyTraces()) {
-        const ok = await Modal.confirm(i18n.t('loadExampleWarning'), { icon: '🎓' });
+    // A project example restores a whole saved session, which REPLACES the
+    // workspace (all loaded files + plots), so confirm whenever anything is
+    // loaded — not only when something is plotted — and say so plainly. A
+    // single-file example only resets the plots, so its lighter warning (and
+    // trace-only trigger) is kept.
+    const isProjectExample = !!ex.projectPath;
+    const needsConfirm = isProjectExample
+        ? (this.files.size > 0 || this.plotManager.hasAnyTraces())
+        : this.plotManager.hasAnyTraces();
+    if (needsConfirm) {
+        const ok = await Modal.confirm(
+            i18n.t(isProjectExample ? 'loadProjectExampleWarning' : 'loadExampleWarning'),
+            { icon: '🎓' },
+        );
         if (!ok) return;
     }
 

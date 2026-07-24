@@ -3,7 +3,7 @@ import i18n from '../../i18n/index.js';
 const DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage']);
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
-const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward']);
+const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
 const INTEGRAL_METHODS = new Set(['trapezoidal', 'rectangular']);
 
 export function installDataToolsMethods(TargetClass) {
@@ -918,7 +918,9 @@ proto._dataToolDescription = function(config) {
         return `Data tool: ${labels} of ${config.sourceName}`;
     }
     if (config.tool === 'derivative') {
-        return `Data tool: derivative of ${config.sourceName}; ${config.params.method}`;
+        return config.params.method === 'difference'
+            ? `Data tool: difference of ${config.sourceName}`
+            : `Data tool: derivative of ${config.sourceName}; ${config.params.method}`;
     }
     if (config.tool === 'integrate') {
         return `Data tool: integral of ${config.sourceName}; ${config.params.method}`;
@@ -930,7 +932,7 @@ proto._dataToolDescription = function(config) {
 };
 
 proto._dataToolStepLabel = function(step) {
-    if (step.tool === 'derivative') return `derivative (${step.params.method})`;
+    if (step.tool === 'derivative') return step.params.method === 'difference' ? 'difference' : `derivative (${step.params.method})`;
     if (step.tool === 'integrate') return `integral (${step.params.method})`;
     if (step.tool === 'movingAverage') return `moving average (window ${step.params.window})`;
     return `remove outliers (${this._outlierDetectorDescription(step)}; ${step.replacement})`;
@@ -943,6 +945,19 @@ proto._computeDerivativeValues = function(sourceValues, data, params = {}) {
     if (n < 2) return { values: out };
     const time = this._getDataToolTimeContext(data, n);
     const method = DERIVATIVE_METHODS.has(params.method) ? params.method : 'centered';
+    // Pure difference: y[i]-y[i-1] with NO division by Δt, so duplicate
+    // timestamps (Δt=0) don't blow up. diff(time) reveals the sampling shape
+    // (flat = uniform, 0 = duplicate, spike = gap). First sample uses the
+    // forward difference to keep the length and the uniform baseline.
+    if (method === 'difference') {
+        const delta = (a, b) => {
+            const y0 = Number(values[a]);
+            const y1 = Number(values[b]);
+            return (Number.isFinite(y0) && Number.isFinite(y1)) ? y1 - y0 : NaN;
+        };
+        for (let i = 0; i < n; i++) out[i] = i === 0 ? delta(0, 1) : delta(i - 1, i);
+        return { values: out };
+    }
     const diff = (a, b) => {
         const y0 = Number(values[a]);
         const y1 = Number(values[b]);

@@ -39,6 +39,8 @@ const branchKeys = [
     'incompatTimeIntroTraces', 'incompatTimeBodyLead', 'incompatTimeKindsTitle',
     'incompatTimeKindCalendar', 'incompatTimeKindSeconds', 'incompatTimeKindIndex',
     'incompatTimeFixTitle', 'incompatTimeFixSeconds', 'incompatTimeFixCalendar', 'incompatTimeFixRemove',
+    'timeAxisDragWarnTitle', 'timeAxisDragWarnBody', 'timeAxisDragWarnContinue', 'timeAxisIndexDescription',
+    'timeAxisIndexModifiedTitle', 'timeAxisIndexModifiedBody', 'timeAxisIndexReuse', 'timeAxisIndexRegenerate',
 ];
 for (const lang of langs) {
     for (const key of branchKeys) {

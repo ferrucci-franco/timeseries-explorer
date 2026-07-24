@@ -856,6 +856,14 @@ proto._autoScaleHistogramPanel = function(panelId, plot = this.plots.get(panelId
     return Promise.all([timePromise, histogramPromise]);
 };
 
+// Per-axis auto-fit for the histogram pane (X = values, Y = counts/density).
+proto._autoScaleHistogramAxis = function(plot, axis) {
+    if (!plot?.histogramDiv) return Promise.resolve();
+    return Plotly.relayout(plot.histogramDiv, axis === 'x'
+        ? { 'xaxis.autorange': true }
+        : { 'yaxis.autorange': true });
+};
+
 proto._installHistogramSplitterHandlers = function(panelId, plot) {
     const splitter = plot?.histogramContainer?.querySelector('.hist-splitter');
     if (!splitter || splitter._histBound) return;

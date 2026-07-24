@@ -1188,6 +1188,16 @@ proto._autoScaleTemporalProfilePanel = function(panelId, plot = this.plots.get(p
     ]);
 };
 
+// Per-axis auto-fit for the profile pane. X resets to the natural period window
+// (0…24h / 168h / …); Y fits the aggregated values in view.
+proto._autoScaleTemporalProfileAxis = function(plot, axis) {
+    if (!plot?.temporalProfileDiv) return Promise.resolve();
+    if (axis !== 'x') return Plotly.relayout(plot.temporalProfileDiv, { 'yaxis.autorange': true });
+    const period = this._ensureTemporalProfileState(plot).period;
+    const xMax = period === 'day' ? 24 : period === 'week' ? 168 : period === 'month' ? 31 * 24 : 366 * 24;
+    return Plotly.relayout(plot.temporalProfileDiv, { 'xaxis.range': [0, xMax], 'xaxis.autorange': false });
+};
+
 proto._installTemporalProfileSplitterHandlers = function(panelId, plot) {
     const splitter = plot?.temporalProfileContainer?.querySelector('.hist-splitter');
     if (!splitter || splitter._temporalProfileBound) return;

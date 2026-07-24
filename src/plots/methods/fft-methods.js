@@ -2164,32 +2164,45 @@ proto._fftWarningText = function(trace, reason, extra = {}) {
     return prefix + i18n.t('fftWarningInvalid');
 };
 
+// Relayout patch that fits ONE spectrum axis: honour a manual limit (fMin/fMax
+// for x, yMin/yMax for y), else reset to the FULL spectrum extent. The drawn
+// trace is windowed for display, so Plotly's own autorange would fit only the
+// visible slice — hence the explicit full-span extent from each trace's
+// _fftExtent, matching the pre-windowing "zoom all the way out" behaviour.
+proto._fftAxisLimitUpdate = function(plot, axis) {
+    const isX = axis === 'x';
+    const axisKey = isX ? 'xaxis' : 'yaxis';
+    const manualRange = isX
+        ? this._fftResolvedAxisLimitRange(plot, 'fMin', 'fMax')
+        : this._fftResolvedAxisLimitRange(plot, 'yMin', 'yMax');
+    const update = {};
+    if (manualRange) {
+        update[`${axisKey}.range`] = manualRange;
+        update[`${axisKey}.autorange`] = false;
+        return update;
+    }
+    const ext = this._fftSpectrumExtent(plot, axis);
+    if (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max) {
+        update[`${axisKey}.range`] = [ext.min, ext.max];
+        update[`${axisKey}.autorange`] = false;
+    } else {
+        update[`${axisKey}.autorange`] = true;
+    }
+    return update;
+};
+
 proto._applyFftAxisLimits = function(plot) {
     if (!plot?.fftDiv) return Promise.resolve();
-    const xRange = this._fftResolvedAxisLimitRange(plot, 'fMin', 'fMax');
-    const yRange = this._fftResolvedAxisLimitRange(plot, 'yMin', 'yMax');
-    const update = {};
-    // The drawn trace is windowed for display, so Plotly's own autorange would
-    // fit only the visible slice. Reset to the FULL spectrum extent explicitly
-    // (from each trace's full-span _fftExtent) so a double-click really zooms
-    // all the way out — matching the pre-windowing behaviour.
-    const applyAxis = (axisKey, manualRange, extentAxis) => {
-        if (manualRange) {
-            update[`${axisKey}.range`] = manualRange;
-            update[`${axisKey}.autorange`] = false;
-            return;
-        }
-        const ext = this._fftSpectrumExtent(plot, extentAxis);
-        if (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max) {
-            update[`${axisKey}.range`] = [ext.min, ext.max];
-            update[`${axisKey}.autorange`] = false;
-        } else {
-            update[`${axisKey}.autorange`] = true;
-        }
-    };
-    applyAxis('xaxis', xRange, 'x');
-    applyAxis('yaxis', yRange, 'y');
-    return Plotly.relayout(plot.fftDiv, update);
+    return Plotly.relayout(plot.fftDiv, {
+        ...this._fftAxisLimitUpdate(plot, 'x'),
+        ...this._fftAxisLimitUpdate(plot, 'y'),
+    });
+};
+
+// Per-axis auto-fit for the spectrum pane (legend/toolbar buttons).
+proto._autoScaleFftAxis = function(plot, axis) {
+    if (!plot?.fftDiv) return Promise.resolve();
+    return Plotly.relayout(plot.fftDiv, this._fftAxisLimitUpdate(plot, axis));
 };
 
 // Plotly performs its native double-click autorange in the same event cycle as
