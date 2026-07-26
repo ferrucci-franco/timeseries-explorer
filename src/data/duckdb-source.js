@@ -35,6 +35,7 @@ import {
 } from './pair-regression-sql.js';
 import { linearFromMoments, quadraticFromMoments } from '../utils/regression.js';
 import { buildMissingBucketsSql } from './missing-buckets-sql.js';
+import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
 import {
     buildTemporalProfileFinalSql,
@@ -479,12 +480,7 @@ export default class DuckDbSource {
         if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { buckets: [] };
         if (lo > hi) [lo, hi] = [hi, lo];
 
-        const timeKind = legacyData?.metadata?.timeKind;
-        const escTime = (meta.timeColumn || '').replace(/"/g, '""');
-        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
-            ? `epoch_ms("${escTime}")::DOUBLE`
-            : `"${escTime}"::DOUBLE`);
-        const baseTime = meta.generatedTime ? '(ROW_NUMBER() OVER () - 1)::DOUBLE' : tExpr;
+        const baseTime = this._timeExpressionSql(legacyData, meta);
         const valueExprs = requested.map(({ variable, varName }) =>
             this._valueExpressionSql(variable, varName, { castDouble: true }));
 
@@ -508,6 +504,57 @@ export default class DuckDbSource {
             };
         }
         return { buckets };
+    }
+
+    // The time expression used by the diagnostics queries — identical to the one
+    // the viewport queries read, so the numbers describe the plotted axis.
+    _timeExpressionSql(legacyData, meta) {
+        const timeKind = legacyData?.metadata?.timeKind;
+        const escTime = (meta.timeColumn || '').replace(/"/g, '""');
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`);
+        return meta.generatedTime ? '(ROW_NUMBER() OVER () - 1)::DOUBLE' : tExpr;
+    }
+
+    /**
+     * Time-axis diagnostics, phase 1: sample count, bounds and repeated
+     * timestamps. A plain streaming aggregate — no sort, no window — so it stays
+     * cheap on very large files and already answers most of the question.
+     * Returns the raw accumulator from time-axis-diagnostics.js.
+     */
+    async getTimeAxisSummary(legacyData, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getTimeAxisSummary: data is not DuckDB-backed (eager mode)');
+        const sql = buildTimeAxisSummarySql(this._timeExpressionSql(legacyData, meta), meta.tableName);
+        const result = await this._interactiveQuery(sql, { signal: options?.signal });
+        const read = index => this._extractColumnAsFloat64(result, index, 'DOUBLE')[0];
+        return rawFromTimeAxisSummary({
+            n: read(0),
+            tMin: read(1),
+            tMax: read(2),
+            nDistinct: read(3),
+        });
+    }
+
+    /**
+     * Time-axis diagnostics, phase 2: min/max Δt and the gap count. Needs
+     * consecutive steps, hence ORDER BY — the expensive half, split out so the
+     * caller can show phase 1 immediately and let the user cancel this one.
+     * `gapThreshold` comes from phase 1 (gap factor × mean Δt).
+     */
+    async getTimeAxisSteps(legacyData, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getTimeAxisSteps: data is not DuckDB-backed (eager mode)');
+        const sql = buildTimeAxisStepsSql(
+            this._timeExpressionSql(legacyData, meta),
+            meta.tableName,
+            options?.gapThreshold,
+            value => this._numericLiteral(value),
+        );
+        const result = await this._interactiveQuery(sql, { signal: options?.signal });
+        const read = index => this._extractColumnAsFloat64(result, index, 'DOUBLE')[0];
+        return { dtMin: read(0), dtMax: read(1), gaps: read(2) };
     }
 
     async _queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints = 4000) {

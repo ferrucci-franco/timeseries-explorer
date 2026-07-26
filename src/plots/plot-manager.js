@@ -54,9 +54,10 @@ class PlotManager {
 
         this.onPanelMount   = (id, el) => this._mountPanel(id, el);
         this.onPanelUnmount = (id)     => this._unmountPanel(id);
-        // Optional app hook: resolves a dragged time axis (abscissa) into the
-        // derived "sample index" variable to plot, or null if the user cancels.
-        // Set by the viewer; when absent, time-axis drops are simply ignored.
+        // Optional app hook for a dragged time axis (abscissa). The viewer opens
+        // the time-axis inspector and resolves to nothing — a time axis is never
+        // plotted as a trace. Kept as a hook (rather than a plain filter) so the
+        // drop still has a chance to react. When absent, drops are ignored.
         this.onTimeAxisVariableDrop = null;
     }
 
@@ -876,8 +877,8 @@ class PlotManager {
     }
 
     // Dispatch a set of dropped variable names to the panel. A dragged time axis
-    // (abscissa) is first resolved to its derived "sample index" via the app
-    // hook (which may warn and create it); other names pass through unchanged.
+    // (abscissa) goes to the app hook, which opens the time-axis inspector and
+    // resolves to nothing; other names pass through unchanged.
     async _handleVariableDrop(panelId, varNames, panelEl, options = {}) {
         let resolved = varNames;
         if (this.onTimeAxisVariableDrop) {
@@ -1658,11 +1659,11 @@ class PlotManager {
     }
 
     // Effective line shape of a trace: an explicit per-trace override wins,
-    // otherwise booleans default to steps and everything else to a straight line.
+    // otherwise the variable decides (see _variableDefaultsToStairs).
     _traceIsStepped(trace) {
         if (trace.lineShape) return trace.lineShape === 'hv';
         const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
-        return variable?.dataType === 'boolean';
+        return this._variableDefaultsToStairs(variable);
     }
 
     _setTimeseriesTraceLineShape(panelId, plot, trace, shape) {

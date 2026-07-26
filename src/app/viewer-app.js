@@ -7,6 +7,7 @@ import PlotManager from '../plots/plot-manager.js';
 import { installFileMethods } from './methods/file-methods.js';
 import { installUiMethods } from './methods/ui-methods.js';
 import { installDerivedMethods } from './methods/derived-methods.js';
+import { installTimeAxisInspectorMethods } from './methods/time-axis-inspector-methods.js';
 import { installDataToolsMethods } from './methods/data-tools-methods.js';
 import { installTreeMethods } from './methods/tree-methods.js';
 import { installSessionMethods } from './methods/session-methods.js';
@@ -47,7 +48,7 @@ class OpenModelicaViewer {
 
         this.layoutManager.onPanelMount   = (id, el) => this.plotManager.onPanelMount(id, el);
         this.layoutManager.onPanelUnmount = (id)     => this.plotManager.onPanelUnmount(id);
-        this.plotManager.onTimeAxisVariableDrop = (timeVarName) => this._handleTimeAxisIndexDrop(timeVarName);
+        this.plotManager.onTimeAxisVariableDrop = (timeVarName) => this._handleTimeAxisDrop(timeVarName);
 
         this.applyTheme(this.theme);
         this.initEventListeners();
@@ -261,6 +262,7 @@ class OpenModelicaViewer {
 installFileMethods(OpenModelicaViewer);
 installUiMethods(OpenModelicaViewer);
 installDerivedMethods(OpenModelicaViewer);
+installTimeAxisInspectorMethods(OpenModelicaViewer);
 installDataToolsMethods(OpenModelicaViewer);
 installTreeMethods(OpenModelicaViewer);
 installSessionMethods(OpenModelicaViewer);
