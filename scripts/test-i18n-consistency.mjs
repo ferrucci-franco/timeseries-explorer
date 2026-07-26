@@ -39,9 +39,45 @@ const branchKeys = [
     'incompatTimeIntroTraces', 'incompatTimeBodyLead', 'incompatTimeKindsTitle',
     'incompatTimeKindCalendar', 'incompatTimeKindSeconds', 'incompatTimeKindIndex',
     'incompatTimeFixTitle', 'incompatTimeFixSeconds', 'incompatTimeFixCalendar', 'incompatTimeFixRemove',
-    'timeAxisDragWarnTitle', 'timeAxisDragWarnBody', 'timeAxisDragWarnContinue', 'timeAxisIndexDescription',
+    'timeAxisIndexDescription', 'timeAxisDeltaDescription',
     'timeAxisIndexModifiedTitle', 'timeAxisIndexModifiedBody', 'timeAxisIndexReuse', 'timeAxisIndexRegenerate',
+    'timeAxisOptionExists', 'timeAxisOptionIndexLabel', 'timeAxisOptionIndexHelp',
+    'timeAxisOptionDeltaLabel', 'timeAxisOptionDeltaHelp',
+    // Time-axis inspector (button, dialog, diagnostics).
+    'timeAxisInspectButton', 'timeAxisInspectTitle', 'timeAxisInspectBody', 'timeAxisInspectLazyNote',
+    'timeAxisInspectCreate', 'timeAxisInspectHint',
+    'timeAxisDiagHeading', 'timeAxisSignalsHeading', 'timeAxisSignalsLead',
+    'timeAxisSummaryComputing', 'timeAxisSummaryEquidistant', 'timeAxisSummaryAnomalies',
+    'timeAxisSummaryPartial', 'timeAxisSummaryEmpty',
+    'timeAxisCountRepeatedOne', 'timeAxisCountRepeatedMany', 'timeAxisCountGapsOne',
+    'timeAxisCountGapsMany', 'timeAxisCountBackwardsOne', 'timeAxisCountBackwardsMany',
+    'timeAxisDiagSamples', 'timeAxisDiagSpan', 'timeAxisDiagStep', 'timeAxisDiagStepConstant',
+    'timeAxisDiagRepeated', 'timeAxisDiagGaps', 'timeAxisDiagBackwards', 'timeAxisDiagNotChecked',
+    'timeAxisDiagExcludesRepeated', 'timeAxisDiagVerdictEquidistant',
+    'timeAxisDiagVerdictEquidistantRepeats', 'timeAxisDiagVerdictIrregular', 'timeAxisDiagVerdictUnknown',
+    'timeAxisDiagCancelled', 'timeAxisDiagFailed', 'timeAxisDiagRetry',
 ];
+
+// Singular/plural pairs must differ, and only the plural takes a count.
+for (const lang of langs) {
+    for (const base of ['timeAxisCountRepeated', 'timeAxisCountGaps', 'timeAxisCountBackwards']) {
+        const one = translations[lang][`${base}One`];
+        const many = translations[lang][`${base}Many`];
+        assert.notEqual(one, many, `${lang}.${base} must distinguish singular from plural`);
+        assert.ok(!one.includes('{n}'), `${lang}.${base}One is the singular, so it needs no {n}`);
+        assert.ok(many.includes('{n}'), `${lang}.${base}Many must interpolate {n}`);
+    }
+}
+
+// The drag-warning keys were replaced by the inspector dialog.
+const replacedKeys = ['timeAxisDragWarnTitle', 'timeAxisDragWarnBody', 'timeAxisDragWarnContinue',
+    'timeAxisOptionValueLabel', 'timeAxisOptionValueHelp', 'timeAxisValueDescription',
+    'timeAxisSummaryIrregular'];
+for (const lang of langs) {
+    for (const key of replacedKeys) {
+        assert.ok(!keySets[lang].has(key), `${lang} should no longer define replaced key ${key}`);
+    }
+}
 for (const lang of langs) {
     for (const key of branchKeys) {
         assert.ok(keySets[lang].has(key), `${lang} must define ${key}`);

@@ -1653,6 +1653,17 @@ proto._applyTimeseriesStackZeroPadding = function(plot, traceState, visual) {
     return { x: outX, y: outY };
 };
 
+// Which variables are drawn as stairs unless the trace overrides it. Booleans,
+// because a level holds until it flips; and the time-axis sample index, because
+// between two samples there is no fractional sample — a ramp would invent one,
+// while a step shows a repeated timestamp as the vertical jump it really is.
+// Shared with _traceIsStepped so the drawing and the legend menu cannot disagree.
+proto._variableDefaultsToStairs = function(variable) {
+    if (!variable) return false;
+    if (variable.dataType === 'boolean') return true;
+    return variable.timeAxisIndex === true && (variable.timeAxisKind || 'index') === 'index';
+};
+
 proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex = 0, options = {}) {
     const fileData = this.files.get(t.fileId)?.data;
     if (!fileData) return null;
@@ -1724,9 +1735,9 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
                     : {}),
         };
     }
-    // Per-trace line shape overrides the default (booleans step, others linear),
-    // set from the legend context menu for discrete-looking real variables.
-    const isStep = t.lineShape ? t.lineShape === 'hv' : variable.dataType === 'boolean';
+    // Per-trace line shape overrides the default, set from the legend context
+    // menu for discrete-looking real variables.
+    const isStep = t.lineShape ? t.lineShape === 'hv' : this._variableDefaultsToStairs(variable);
     const useGL = !isStep && values.length >= PlotManager.GL_POINT_THRESHOLD;
     const visual = this._applyTimeseriesStackZeroPadding(
         plot,

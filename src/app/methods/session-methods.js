@@ -200,7 +200,7 @@ proto._createSessionSnapshot = function(options = {}) {
             : null;
         const derived = [...(this.derivedByFile.get(fileId) || new Map()).values()]
             .map(item => item.timeAxisIndex
-                ? { name: item.name, timeAxisIndex: true }
+                ? { name: item.name, timeAxisIndex: true, timeAxisKind: item.timeAxisKind || 'index' }
                 : { name: item.name, formula: item.formula });
         const dataTools = typeof this._serializeDataToolDefinitions === 'function'
             ? this._serializeDataToolDefinitions(fileId)
@@ -772,7 +772,15 @@ proto._applySessionDerivedVariables = function(session, fileMap, options = {}) {
         if (!fileId || !data) continue;
         const definitions = new Map();
         for (const item of meta.derived || []) {
-            definitions.set(item.name, { name: item.name, formula: item.formula, timeAxisIndex: item.timeAxisIndex, variable: null });
+            // Sessions written before the three time-axis signals existed carry
+            // no kind; those entries are the sample index.
+            definitions.set(item.name, {
+                name: item.name,
+                formula: item.formula,
+                timeAxisIndex: item.timeAxisIndex,
+                ...(item.timeAxisIndex ? { timeAxisKind: item.timeAxisKind || 'index' } : {}),
+                variable: null,
+            });
         }
         if (definitions.size) {
             this.derivedByFile.set(fileId, definitions);

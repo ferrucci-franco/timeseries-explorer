@@ -402,6 +402,28 @@
     color: #fff;
 }
 
+/* Shortcut to the time-axis inspector, on the abscissa row only. Same footprint
+   as the sign toggle so the rows stay aligned. */
+.tree-time-axis-inspect {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.78rem;
+    line-height: 1;
+    opacity: 0.65;
+}
+
+.tree-time-axis-inspect:hover {
+    border-color: var(--border-color);
+    background: var(--hover-bg);
+    opacity: 1;
+}
+
 .tree-children {
     margin-left: 1.25rem;
     border-left: 1px solid var(--border-color);

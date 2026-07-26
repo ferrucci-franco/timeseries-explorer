@@ -3208,6 +3208,29 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         }
     }
 
+    // Time-axis inspector. Placed after all three axis-kind branches so it is one
+    // call site for every format, and it closes the "Time axis" section: is this
+    // series equidistant, and do I want the sample-index / Δt signals out of it?
+    // The verdict line below the button is filled from the diagnostics cache —
+    // eager files compute it inline, lazy files only after the dialog has run
+    // once, because a full-column scan must never start from a sidebar render.
+    {
+        const inspectBtn = document.createElement('button');
+        inspectBtn.type = 'button';
+        inspectBtn.className = 'file-transform-wide-action';
+        inspectBtn.textContent = `🕐 ${i18n.t('timeAxisInspectButton')}`;
+        inspectBtn.addEventListener('click', () => { void this._openTimeAxisInspector(fileId); });
+        panel.append(inspectBtn);
+
+        const summary = this._timeAxisSummaryLine?.(this._timeAxisDiagnosticsForPanel?.(fileId));
+        if (summary) {
+            const summaryHint = document.createElement('div');
+            summaryHint.className = 'file-transform-hint file-transform-time-axis-summary';
+            summaryHint.textContent = summary;
+            panel.append(summaryHint);
+        }
+    }
+
     const pad2 = n => String(n).padStart(2, '0');
     const dateInputValue = (value) => {
         if (value === null || value === undefined || value === '') return '';

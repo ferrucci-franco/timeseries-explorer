@@ -471,6 +471,24 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             signToggle.addEventListener('dragstart', event => event.preventDefault());
             itemDiv.appendChild(signToggle);
         }
+        if (variable.kind === 'abscissa') {
+            // The time-axis row is the one place a user looks when thinking about
+            // time, so it carries the shortcut to the inspector — same dialog the
+            // file's "Time axis" panel opens.
+            const inspect = document.createElement('button');
+            inspect.type = 'button';
+            inspect.className = 'tree-time-axis-inspect';
+            inspect.textContent = '🕐';
+            inspect.title = i18n.t('timeAxisInspectButton');
+            inspect.setAttribute('aria-label', i18n.t('timeAxisInspectButton'));
+            inspect.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void this._openTimeAxisInspector(this.activeFileId);
+            });
+            inspect.addEventListener('dragstart', event => event.preventDefault());
+            itemDiv.appendChild(inspect);
+        }
         if (options.derivedActions) {
             const remove = document.createElement('button');
             remove.className = 'tree-derived-remove';
