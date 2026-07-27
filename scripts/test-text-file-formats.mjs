@@ -94,4 +94,25 @@ check(() => {
     assert.ok(titles.every(t => !/\bCSV\b/.test(t)), `titles still say CSV: ${titles.join(' | ')}`);
 });
 
+check(() => {
+    const source = readFileSync(new URL('../src/app/methods/file-methods.js', import.meta.url), 'utf8');
+    const canParse = source.slice(source.indexOf('proto._canParseFromFile'));
+    // KNOWN text only for streaming. An unknown extension has to be read so
+    // _parseResultBuffer can sniff it; skipping the read leaves nothing to
+    // sniff, and the file would be reported as unrecognised.
+    assert.match(canParse.slice(0, 500), /isTextTableExtension\(extension\)/, 'streaming covers known text extensions');
+    assert.doesNotMatch(canParse.slice(0, 500), /mayBeTextTable/, 'unknown extensions are NOT streamed');
+});
+
+check(() => {
+    const source = readFileSync(new URL('../src/app/methods/file-methods.js', import.meta.url), 'utf8');
+    const dispatch = source.slice(source.indexOf('proto._parseResultBuffer'), source.indexOf('proto._matlabEagerLimitBytes'));
+    // Known text is routed by extension. It may have been left unread on
+    // purpose, so a sniff-first dispatch would see a null buffer and fail.
+    const byExtension = dispatch.indexOf('isTextTableExtension(extension)');
+    const bySniff = dispatch.indexOf('_looksLikeTextBuffer(buffer)');
+    assert.ok(byExtension > 0 && bySniff > 0, 'both dispatch paths exist');
+    assert.ok(byExtension < bySniff, 'extension routing comes before byte sniffing');
+});
+
 console.log(`text file formats: ${checks} checks passed`);

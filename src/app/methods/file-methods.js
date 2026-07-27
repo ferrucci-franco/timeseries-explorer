@@ -21,7 +21,7 @@ import {
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
 import { checkFullLoadLimit } from '../file-size-limits.js';
 import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
-import { mayBeTextTable } from '../text-file-formats.js';
+import { isTextTableExtension, mayBeTextTable } from '../text-file-formats.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -1448,8 +1448,11 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
     if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer, options);
     if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer, options);
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
-    if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file, options);
     if (extension === '.mat') return this._parseMatlabResultBuffer(filename, buffer, options);
+    // Routed by extension, not by sniffing the bytes: a known text file may
+    // have been left unread on purpose (see _canParseFromFile) so DuckDB can
+    // stream it, and there would be no buffer here to sniff.
+    if (isTextTableExtension(extension)) return this._parseCsvResultBuffer(filename, buffer, file, options);
     if (this._looksLikePickleBuffer(buffer)) throw new Error(i18n.t('pickleLooksLikeUnsupportedExtension'));
     if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file, options);
     throw new Error(i18n.t('invalidFile'));
@@ -1677,9 +1680,20 @@ proto._csvCompactHintBytes = function() {
     return this._advancedSettingBytes('csvCompactHintMb', PARQUET_HINT_THRESHOLD_BYTES);
 };
 
+// Can this file be handed to the reader as a file, instead of being read into
+// an ArrayBuffer first?
+//
+// This gated on `.csv` alone, so every other text file was fully buffered
+// before parsing: a 600 MB `.txt` reserved 600 MB of memory before DuckDB —
+// which can stream it — ever saw it. That undid most of the benefit of the
+// memory-saving path for exactly the files that need it.
+//
+// KNOWN text extensions only, deliberately. An unrecognised extension still
+// has to be read so _parseResultBuffer can sniff its bytes and decide what it
+// is; skipping the read would leave nothing to sniff.
 proto._canParseFromFile = function(file, extension = this._fileExtension(file?.name || '')) {
     return !!file
-        && (extension === '.csv' || extension === '.parquet')
+        && (isTextTableExtension(extension) || extension === '.parquet')
         && this._canUseDuckDb();
 };
 
