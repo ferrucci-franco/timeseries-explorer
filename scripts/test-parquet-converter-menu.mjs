@@ -116,45 +116,66 @@ check(() => {
 });
 
 check(() => {
-    const deliver = from(fileMethods, 'proto._deliverConvertedFromMenu', 2600);
+    const deliver = from(fileMethods, 'proto._deliverConvertedParquet', 4200);
     assert.match(deliver, /convertToParquetSaveAndOpen/, 'save and open');
     assert.match(deliver, /convertToParquetSaveOnly/, 'or just save');
     assert.match(deliver, /convertToParquetDiscard/, 'or keep nothing');
     // The save runs on the answer, so the picker still has its activation.
     const ask = deliver.indexOf('Modal.choice');
-    const save = deliver.indexOf('_saveConvertedParquet');
-    const open = deliver.indexOf('this.loadFiles(');
+    const save = deliver.indexOf('_saveBytesToDisk');
     assert.ok(ask > 0 && ask < save, 'the save is started by the answer to the dialog');
-    assert.ok(save < open, 'and the file is only opened once it has been written');
     assert.match(deliver, /if \(outcome === 'cancelled'\) continue;/, 'cancelling the save returns to the choices');
+    // Only a confirmed write may lead to opening the file.
+    assert.match(deliver, /return choice === 'saveOpen';/, 'and opening follows a save that succeeded');
+    const menu = from(fileMethods, 'proto._deliverConvertedFromMenu', 400);
+    assert.match(menu, /if \(await this\._deliverConvertedParquet\(result, 'menu'\)\)[\s\S]{0,120}loadFiles/,
+        'the menu opens the file only when the dialog says so');
+});
+
+check(() => {
+    // Firefox and Safari give pages no save dialog at all, so the only way to
+    // hand a file over is a download — whose outcome this page is never told.
+    // Offering "Save and open" there kept half a promise: the download was
+    // cancelled and the file opened anyway, from memory, never written.
+    const deliver = from(fileMethods, 'proto._deliverConvertedParquet', 4200);
+    assert.match(deliver, /const canSave = this\._canUseSaveFilePicker\(\)/, 'what the browser can do is checked first');
+    assert.match(deliver, /convertToParquetDownloadReadyBody/, 'and said plainly when it cannot save');
+    assert.match(deliver, /value: 'download'/, 'downloading is its own button');
+    // Nothing may be chained onto a download.
+    const download = deliver.slice(deliver.indexOf("if (choice === 'download')"));
+    assert.ok(!/loadFiles|return true/.test(download.slice(0, 400)), 'a download never leads to opening the file');
+    assert.match(download.slice(0, 400), /note = /, 'the dialog stays up and says what was done');
 });
 
 check(() => {
     // The conversion on the way to opening a file has the same problem, and
     // there opening is not in doubt — only whether the file is kept.
-    const deliver = from(fileMethods, 'proto._deliverConvertedBeforeLoad', 2200);
+    const deliver = from(fileMethods, 'proto._deliverConvertedParquet', 4200);
     assert.match(deliver, /convertToParquetOpenWithoutSaving/, 'it can be opened without keeping it');
     const offer = from(fileMethods, 'proto._offerLargeTextConversion', 5400);
     assert.match(offer, /result\.needsSaving && !\(await this\._deliverConvertedBeforeLoad\(result\)\)/,
         'the load-time route asks too');
     const sheet = from(fileMethods, 'proto._convertSpreadsheetEntryToParquet', 2500);
     assert.match(sheet, /_deliverConvertedBeforeLoad\(result\)/, 'and so does the sheet route');
+    const notice = from(fileMethods, 'proto._convertLargeCsvNoticeToParquet', 3000);
+    assert.match(notice, /_deliverConvertedBeforeLoad\(/, 'and so does the one offered from the notice');
 });
 
 check(() => {
-    const save = from(fileMethods, 'proto._saveBytesToDisk', 1800);
-    // A download leaves the page's sight: it may land in the downloads folder,
-    // it may open a dialog the user cancels, and nothing reports back. Saying
-    // "saved" on the strength of that is what announced a file as written to
-    // disk when it never was.
+    // Bounded at the next function on purpose: the point is that THIS one has
+    // no download in it.
+    const save = from(fileMethods, 'proto._saveBytesToDisk =', 1280);
     assert.match(save, /return 'saved'/, 'a real write is a save');
     assert.match(save, /return 'cancelled'/, 'a cancelled dialog is a cancellation');
-    assert.match(save, /return 'downloaded'/, 'and a download is only a download');
+    assert.match(save, /return 'failed'/, 'and a refusal is a failure');
+    // Silently downloading instead is what hid two bugs in a row.
+    assert.ok(!/link\.download/.test(save), 'it does not quietly turn into a download');
     assert.ok(!/return true/.test(save), 'no outcome is claimed that cannot be known');
-    const report = from(fileMethods, 'proto._saveConvertedParquet', 900);
-    assert.match(report, /parquetDownloadingBody/, 'and the user is told when that is what happened');
+    const download = from(fileMethods, 'proto._downloadBytes', 800);
+    assert.match(download, /return 'downloaded'/, 'a download reports only that it was handed over');
     for (const lang of LANGS) {
-        assert.match(translations[lang].parquetDownloadingBody, /\{file\}/, `${lang} names the file`);
+        assert.match(translations[lang].convertToParquetDownloadedNote, /\{file\}/, `${lang} names the file`);
+        assert.match(translations[lang].parquetSaveFailedBody, /\{file\}/, `${lang} names it when the save fails`);
     }
 });
 
@@ -239,7 +260,8 @@ check(() => {
         'convertToParquetDoneBody', 'convertToParquetOpenNow', 'convertToParquetClose',
         'convertToParquetReadyBody', 'convertToParquetSaveAndOpen', 'convertToParquetSaveOnly',
         'convertToParquetOpenWithoutSaving', 'convertToParquetDiscard',
-        'parquetDownloadingTitle', 'parquetDownloadingBody',
+        'convertToParquetDownloadReadyBody', 'convertToParquetDownload',
+        'convertToParquetDownloadedNote', 'parquetSaveFailedTitle', 'parquetSaveFailedBody',
     ];
     for (const lang of LANGS) {
         for (const key of keys) {

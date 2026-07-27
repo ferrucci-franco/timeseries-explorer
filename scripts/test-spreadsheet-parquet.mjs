@@ -92,8 +92,8 @@ check(() => {
     // the save runs on its answer.
     const convert = fileMethods.slice(fileMethods.indexOf('proto._convertSpreadsheetEntryToParquet'));
     assert.match(convert.slice(0, 2600), /_deliverConvertedBeforeLoad/, 'the browser result is offered for keeping');
-    const deliver = fileMethods.slice(fileMethods.indexOf('proto._saveConvertedParquet'));
-    assert.match(deliver.slice(0, 900), /_saveBytesToDisk/, 'and that offer is what writes it');
+    const deliver = fileMethods.slice(fileMethods.indexOf('proto._deliverConvertedParquet'));
+    assert.match(deliver.slice(0, 4200), /_saveBytesToDisk/, 'and that offer is what writes it');
     const save = fileMethods.slice(fileMethods.indexOf('proto._saveBytesToDisk'), fileMethods.indexOf('proto._saveBytesToDisk') + 1900);
     assert.match(save, /showSaveFilePicker/, 'a real save dialog when the browser has one');
     assert.match(save, /AbortError/, 'cancelling the save is not treated as a failure');
@@ -264,7 +264,10 @@ check(() => {
     const convert = fileMethods.slice(fileMethods.indexOf('proto._convertLargeCsvNoticeToParquet'));
     const body = convert.slice(0, 3000);
     assert.match(body, /_convertTextFileToParquetBytes/, 'the browser route converts through the engine');
-    assert.match(body, /_saveBytesToDisk/, 'and offers the result for keeping');
+    // Offered for keeping, not saved unasked. This route saved without asking,
+    // which in a browser with no save dialog meant a silent download, and then
+    // opened the file as though it had been written.
+    assert.match(body, /_deliverConvertedBeforeLoad\(/, 'and offers the result for keeping');
     // A missing localPath used to throw before anything else could happen.
     assert.doesNotMatch(body.slice(0, 400), /if \(!file\?\.localPath\) throw/, 'a missing path is no longer fatal');
 });
