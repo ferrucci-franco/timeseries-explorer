@@ -1,6 +1,6 @@
 # Performance optimization — measured results
 
-Work item 1 of 4 from [optimization-blueprint.md](optimization-blueprint.md), one
+Work items 1–4 from [optimization-blueprint.md](optimization-blueprint.md), one
 commit each. Every number below was produced by a script in this repo and can
 be reproduced.
 
@@ -20,6 +20,10 @@ python scripts/gen-perf-fixtures.py
 npm run bench:data-tools -- --json bench/results/point1-data-tools.json
 ```
 
+```bash
+npm run bench:zoom -- --json bench/results/point2-zoom.json
+```
+
 Correctness is verified separately and must be read alongside the timings — a
 faster kernel that returns different numbers is worthless:
 
@@ -27,9 +31,13 @@ faster kernel that returns different numbers is worthless:
 npm run test:compute-kernels
 ```
 
-It compares against a frozen verbatim copy of the pre-rewrite code
-(`bench/legacy-data-tools.mjs`) and asserts **bit-for-bit** equality, not
-approximate agreement.
+```bash
+npm run test:resample-kernel
+```
+
+Both compare against frozen verbatim copies of the pre-rewrite code
+(`bench/legacy-*.mjs`) and assert **bit-for-bit** equality, not approximate
+agreement.
 
 ### A note on measurement method
 
@@ -116,3 +124,55 @@ dropping the boxed-array entry conversion and the per-element closures buys.
    does not appear as user CPU at all. **The table reports the slower steady
    state**, so the 25× is a lower bound; `kernelFirstMs` in the JSON carries the
    cold number alongside it.
+
+---
+
+## Point 2 — the zoom path stops copying the viewport
+
+**What changed**
+
+`_buildTimeseriesVisualData` used to do this on every relayout event, for every
+trace:
+
+```js
+const sliceX = timeData.slice(start, end);
+const sliceY = values.slice(start, end);
+```
+
+Zoomed to 80 % of a 5 M-point trace that is two 4 M-element copies — made only
+to throw away all but 2 000 of the elements. `src/compute/kernels/resample.js`
+decimates over the `[start, end)` range in place instead. The output arrays are
+still freshly allocated at their exact final size (~2 000 elements), because
+Plotly keeps a reference to whatever it is handed and reusing a buffer under it
+would corrupt hover; only the index scratch is shared, and it never leaves the
+module.
+
+X is deliberately not assumed numeric — `_renderedTracePreview` feeds raw Plotly
+x values through this path, which on a calendar axis are strings or Dates. So
+decimation reads only Y and returns indexes the caller materializes, preserving
+the source type.
+
+**Measured** (`bench/results/point2-zoom.json`) — a 15-step zoom sweep from
+fully-zoomed-out to 1/1000th of the trace, on a 4-trace panel, 2 000-point
+budget:
+
+| Metric | Tier (points) | Before | After | Speedup |
+| :--- | ---: | ---: | ---: | ---: |
+| zoom sweep (15 steps × 4 traces) | small (150,000) | 21 ms | 9.48 ms | 2.24× |
+| per zoom event | small (150,000) | 0.35 ms | 0.16 ms | 2.24× |
+| worst single event | small (150,000) | 1.96 ms | 0.71 ms | 2.77× |
+| zoom sweep (15 steps × 4 traces) | medium (1,500,000) | 124 ms | 63 ms | 1.98× |
+| per zoom event | medium (1,500,000) | 2.07 ms | 1.05 ms | 1.98× |
+| worst single event | medium (1,500,000) | 8.26 ms | 3.59 ms | 2.30× |
+| zoom sweep (15 steps × 4 traces) | large (7,500,000) | 673 ms | 253 ms | 2.66× |
+| per zoom event | large (7,500,000) | 11 ms | 4.21 ms | 2.66× |
+| **worst single event** | large (7,500,000) | **255 ms** | **18 ms** | **14.3×** |
+
+The number that matters is the last row. On a 7.5 M-point trace the widest
+viewport — what you get when you hit "reset axes" — cost **255 ms per trace**,
+about 4 fps. It now costs 18 ms, which fits inside a 30 fps frame budget and is
+close to 60. Below ~1.5 M points the old path was already inside a frame, so
+the gain there is real but not something a user would notice.
+
+This confirms the audit's finding that the zoom cost was CPU-side data
+marshalling, not rendering. No GPU work was involved in any of it.

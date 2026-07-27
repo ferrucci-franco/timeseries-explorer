@@ -1,4 +1,5 @@
 import { getCalendarDateTickFormat } from '../plotly-locale.js';
+import { visualPairForRange } from '../../compute/kernels/resample.js';
 
 const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
 
@@ -1206,42 +1207,10 @@ proto._downsampleStrideIndexes = function(length, target) {
 
 proto._downsampleTimeseries = function(xValues, yValues, target = PlotManager.VISUAL_MAX_POINTS_TIMESERIES) {
     const n = Math.min(xValues?.length || 0, yValues?.length || 0);
+    // Returning the originals (not copies) when nothing needs dropping is the
+    // pre-existing contract; callers rely on it to avoid a pointless copy.
     if (n <= target || n <= 2) return { x: xValues, y: yValues };
-
-    const bucketCount = Math.max(1, Math.floor((target - 2) / 2));
-    const bucketSize = Math.max(1, Math.ceil((n - 2) / bucketCount));
-    const indexes = [0];
-
-    for (let start = 1; start < n - 1; start += bucketSize) {
-        const end = Math.min(n - 1, start + bucketSize);
-        let minIdx = start;
-        let maxIdx = start;
-        let minVal = yValues[start];
-        let maxVal = yValues[start];
-
-        for (let i = start + 1; i < end; i++) {
-            const value = yValues[i];
-            if (!Number.isFinite(value)) continue;
-            if (!Number.isFinite(minVal) || value < minVal) { minVal = value; minIdx = i; }
-            if (!Number.isFinite(maxVal) || value > maxVal) { maxVal = value; maxIdx = i; }
-        }
-
-        if (minIdx === maxIdx) {
-            if (minIdx > indexes[indexes.length - 1]) indexes.push(minIdx);
-        } else if (minIdx < maxIdx) {
-            if (minIdx > indexes[indexes.length - 1]) indexes.push(minIdx);
-            if (maxIdx > indexes[indexes.length - 1]) indexes.push(maxIdx);
-        } else {
-            if (maxIdx > indexes[indexes.length - 1]) indexes.push(maxIdx);
-            if (minIdx > indexes[indexes.length - 1]) indexes.push(minIdx);
-        }
-    }
-
-    if (indexes[indexes.length - 1] !== n - 1) indexes.push(n - 1);
-    return {
-        x: this._pickIndexed(xValues, indexes),
-        y: this._pickIndexed(yValues, indexes),
-    };
+    return visualPairForRange(xValues, yValues, 0, n, target);
 };
 
 proto._lowerBound = function(sortedValues, target) {
@@ -1297,12 +1266,10 @@ proto._buildTimeseriesVisualData = function(timeData, values, visibleRange = nul
     end = Math.min(n, end + 1);
     if (end - start <= 0) return { x: timeData, y: values };
 
-    const sliceX = timeData.slice(start, end);
-    const sliceY = values.slice(start, end);
-    if (sliceX.length <= target) {
-        return { x: sliceX, y: sliceY };
-    }
-    return this._downsampleTimeseries(sliceX, sliceY, target);
+    // Decimate straight out of the source over [start, end). This used to slice
+    // both arrays first, which on a zoomed-in multi-million-point trace copied
+    // millions of elements per relayout event just to keep 2000 of them.
+    return visualPairForRange(timeData, values, start, end, target);
 };
 
 proto._buildPhaseVisualSeries = function(seriesList) {
