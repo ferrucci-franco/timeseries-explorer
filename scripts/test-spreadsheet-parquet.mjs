@@ -72,9 +72,11 @@ check(() => {
     // disagreeing about what the data meant.
     const duckdb = readFileSync(new URL('../src/data/duckdb-source.js', import.meta.url), 'utf8');
     assert.match(duckdb, /async convertCsvBufferToParquet/, 'the engine can convert a CSV buffer');
-    const method = duckdb.slice(duckdb.indexOf('async convertCsvBufferToParquet'));
+    assert.match(duckdb, /registerFileBuffer/, 'a buffer is registered as a virtual file');
+    // Both entry points share one implementation, so a buffer and a File
+    // cannot end up converted by subtly different SQL.
+    const method = duckdb.slice(duckdb.indexOf('async _convertToParquet'));
     const body = method.slice(0, 1600);
-    assert.match(body, /registerFileBuffer/, 'the CSV is registered as a virtual file');
     assert.match(body, /FORMAT PARQUET/, 'and copied out as Parquet');
     assert.match(body, /copyFileToBuffer/, 'then read back as bytes');
     assert.match(body, /this\._csvReadExpr\(/, 'using the same profile-aware reader as every other path');
@@ -199,11 +201,15 @@ check(() => {
     // misparsed file is worse than no conversion, because the result looks
     // authoritative and the mistake is baked into it.
     const notice = fileMethods.slice(fileMethods.indexOf('proto._convertLargeCsvNoticeToParquet'));
-    const body = notice.slice(0, 1800);
+    const body = notice.slice(0, 3200);
     const preview = body.indexOf('_openCsvParsingPreviewForFileObject');
-    const convert = body.indexOf('await converter(');
+    // Whichever route runs — native converter or in-browser engine — the
+    // preview has to come first.
+    const inBrowser = body.indexOf('convertCsvFileToParquet');
+    const native = body.indexOf('await converter(');
+    const convert = Math.min(...[inBrowser, native].filter(i => i > 0));
     assert.ok(preview > 0, 'the notice route opens the parsing preview');
-    assert.ok(convert > 0, 'and then converts');
+    assert.ok(inBrowser > 0 && native > 0, 'both conversion routes are present');
     assert.ok(preview < convert, 'the preview comes first');
     assert.match(body.slice(preview, convert), /if \(!reviewed\) return;/, 'backing out of the preview cancels the conversion');
 });
@@ -213,6 +219,40 @@ check(() => {
     const labels = [...translations.matchAll(/convertToParquetAndLoad:\s*'([^']*)'/g)].map(m => m[1]);
     assert.equal(labels.length, 4, 'the notice button is labelled in all four languages');
     assert.ok(labels.every(l => l.length > 8), 'and the labels are real sentences');
+});
+
+
+
+// ─── Text files convert in the browser too ────────────────────────────────
+
+check(() => {
+    // The notice used to show only a command line in the browser, because the
+    // button was gated on the native converter AND a real file path. Neither is
+    // needed: DuckDB reads a File handle in slices and writes Parquet from it.
+    const duckdb = readFileSync(new URL('../src/data/duckdb-source.js', import.meta.url), 'utf8');
+    assert.match(duckdb, /async convertCsvFileToParquet/, 'a File can be converted without reading it into memory');
+    const method = duckdb.slice(duckdb.indexOf('async convertCsvFileToParquet'));
+    assert.match(method.slice(0, 500), /this\.registerFile\(name, file\)/, 'the File is registered as a handle, not buffered');
+});
+
+check(() => {
+    const hint = fileMethods.slice(fileMethods.indexOf('proto._showLargeCsvParquetHint'));
+    const body = hint.slice(0, 1600);
+    assert.match(body, /canConvertNatively \|\| \(!!file && this\._canUseDuckDb\(\)\)/,
+        'the button appears for the native converter OR the in-browser engine');
+    // Showing a terminal command next to a button that does the same thing
+    // reads as though the button were the lesser option.
+    assert.match(hint, /if \(!canConvertInApp\)[\s\S]{0,260}dismissible-notice-code/,
+        'the command line is only shown when the app cannot do it itself');
+});
+
+check(() => {
+    const convert = fileMethods.slice(fileMethods.indexOf('proto._convertLargeCsvNoticeToParquet'));
+    const body = convert.slice(0, 3000);
+    assert.match(body, /convertCsvFileToParquet/, 'the browser route converts through the engine');
+    assert.match(body, /_saveBytesToDisk/, 'and offers the result for keeping');
+    // A missing localPath used to throw before anything else could happen.
+    assert.doesNotMatch(body.slice(0, 400), /if \(!file\?\.localPath\) throw/, 'a missing path is no longer fatal');
 });
 
 console.log(`spreadsheet to parquet: ${checks} checks passed`);

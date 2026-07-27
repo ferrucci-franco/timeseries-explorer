@@ -2234,9 +2234,14 @@ proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvPr
     if (this._largeCsvParquetHintsShown.has(key)) return;
     this._largeCsvParquetHintsShown.add(key);
 
-    const canConvertInApp = typeof globalThis.omvDesktop?.convertToParquet === 'function'
-        && file?.localPath
-        && this.capabilities?.isDesktop;
+    // Two ways to convert: the native converter, which needs a real path, and
+    // the in-browser engine, which does not. Requiring the first meant the
+    // browser only ever got a command to copy into a terminal — for a feature
+    // it is perfectly capable of performing.
+    const canConvertNatively = typeof globalThis.omvDesktop?.convertToParquet === 'function'
+        && !!file?.localPath
+        && !!this.capabilities?.isDesktop;
+    const canConvertInApp = canConvertNatively || (!!file && this._canUseDuckDb());
     const commandPath = file?.localPath || filename;
     const command = `node bench/csv-to-parquet.mjs ${this._quoteCommandPath(commandPath)}`;
     const mb = Number.isFinite(fileSize) ? (fileSize / (1024 * 1024)).toFixed(0) : '?';
@@ -2266,11 +2271,17 @@ proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvPr
         .replace('{file}', filename)
         .replace('{size}', `${mb} MB`);
 
-    const code = document.createElement('code');
-    code.className = 'dismissible-notice-code';
-    code.textContent = command;
+    content.append(title, body);
 
-    content.append(title, body, code);
+    // The command line is the fallback for when the app cannot do it itself.
+    // Showing it next to a button that does the same thing is noise, and it
+    // reads as though the button were somehow the lesser option.
+    if (!canConvertInApp) {
+        const code = document.createElement('code');
+        code.className = 'dismissible-notice-code';
+        code.textContent = command;
+        content.append(code);
+    }
 
     if (canConvertInApp) {
         const actions = document.createElement('div');
@@ -2320,9 +2331,9 @@ proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvPr
 };
 
 proto._convertLargeCsvNoticeToParquet = async function({ filename, file, csvProfile, button, status, notice }) {
-    if (!file?.localPath) throw new Error(i18n.t('parquetConversionDesktopOnly'));
     const converter = globalThis.omvDesktop?.convertToParquet;
-    if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
+    const nativePath = typeof converter === 'function' && file?.localPath && this.capabilities?.isDesktop;
+    if (!nativePath && !this._canUseDuckDb()) throw new Error(i18n.t('parquetConversionUnavailable'));
 
     // Show the parsing before committing to it. This was the one route that
     // converted blind: the blocking dialog leads with "Review structure", but
@@ -2349,6 +2360,23 @@ proto._convertLargeCsvNoticeToParquet = async function({ filename, file, csvProf
     tick();
     const timer = setInterval(tick, 1000);
     try {
+        if (!nativePath) {
+            // In-browser conversion. DuckDB reads the File in slices, so a
+            // 500 MB CSV never has to exist as one 500 MB buffer.
+            const source = await this._getDuckDbSource();
+            const parquetBytes = await source.convertCsvFileToParquet(file, {
+                csvProfile,
+                compression: 'zstd',
+            });
+            status.classList.add('success');
+            status.textContent = i18n.t('parquetConversionComplete');
+            const name = `${this._fileBaseName(filename || file.name || 'data')}.parquet`;
+            await this._saveBytesToDisk(parquetBytes, name);
+            await this.loadFile(new File([parquetBytes], name, { type: 'application/octet-stream' }));
+            notice?.remove();
+            return;
+        }
+
         const result = await converter({
             path: file.localPath,
             csvProfile: cloneCsvProfileForIpc(csvProfile),

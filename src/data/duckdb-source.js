@@ -181,17 +181,41 @@ export default class DuckDbSource {
      * @returns {Promise<Uint8Array>} the Parquet file
      */
     async convertCsvBufferToParquet(bytes, { csvProfile = null, compression = 'zstd' } = {}) {
+        const payload = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        return this._convertToParquet(
+            (name) => this._db.registerFileBuffer(name, payload),
+            { csvProfile, compression, extension: 'csv' },
+        );
+    }
+
+    /**
+     * The same conversion for a File the browser holds, without reading it into
+     * memory first: DuckDB reads the handle in slices, so a 500 MB CSV is
+     * converted without ever existing as one 500 MB buffer.
+     *
+     * @param {File} file
+     * @returns {Promise<Uint8Array>} the Parquet file
+     */
+    async convertCsvFileToParquet(file, { csvProfile = null, compression = 'zstd' } = {}) {
+        return this._convertToParquet(
+            (name) => this.registerFile(name, file),
+            { csvProfile, compression, extension: 'csv' },
+        );
+    }
+
+    async _convertToParquet(registerInput, { csvProfile, compression, extension }) {
         await this.init();
         // Unique per call: a failed conversion must not leave a name behind
         // that the next one would silently read instead of its own input.
         const stamp = `${Date.now()}_${++this._nextTableId}`;
-        const inputName = `omv_conv_${stamp}.csv`;
+        const inputName = `omv_conv_${stamp}.${extension}`;
         const outputName = `omv_conv_${stamp}.parquet`;
-        const payload = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 
-        await this._db.registerFileBuffer(inputName, payload);
+        await registerInput(inputName);
         try {
             const readExpr = this._csvReadExpr(inputName, csvProfile, { skip: 0 });
+            // Compression reaches SQL unquoted, so it is never allowed to be
+            // anything but a bare identifier.
             const safeCompression = /^[a-z]+$/i.test(String(compression)) ? String(compression) : 'zstd';
             await this.query(
                 `COPY (SELECT * FROM ${readExpr}) TO '${outputName}' (FORMAT PARQUET, COMPRESSION ${safeCompression})`,
