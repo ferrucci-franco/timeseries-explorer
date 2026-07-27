@@ -22,8 +22,36 @@ const bodies = Object.fromEntries(LANGS.map(l => [l, translations[l].helpSec11Bo
 check(() => {
     for (const lang of LANGS) {
         assert.ok(bodies[lang].length > 2000, `${lang} help is substantial`);
-        assert.equal((bodies[lang].match(/<h4>/g) || []).length, 7, `${lang} has all seven sections`);
+        assert.equal((bodies[lang].match(/<h4>/g) || []).length, 8, `${lang} has all eight sections`);
         assert.match(bodies[lang], /<table/, `${lang} includes the limits table`);
+    }
+});
+
+check(() => {
+    // It has to open by saying what a limit IS. Starting from the table left
+    // the reader to work out the concept from a list of settings.
+    const opener = { en: /why it exists/i, fr: /pourquoi elle existe/i, es: /por que existe/i, it: /perche esiste/i };
+    for (const lang of LANGS) {
+        const firstHeading = bodies[lang].slice(bodies[lang].indexOf('<h4>'), bodies[lang].indexOf('</h4>'));
+        assert.match(firstHeading, opener[lang], `${lang} opens by explaining what a limit is`);
+    }
+});
+
+check(() => {
+    // The single most important sentence: over the limit is not a refusal.
+    const notRefused = { en: /does not mean the file is rejected/i, fr: /ne veut pas dire que le fichier est refuse/i, es: /no significa que el archivo sea rechazado/i, it: /non significa che il file venga rifiutato/i };
+    for (const lang of LANGS) {
+        assert.match(bodies[lang], notRefused[lang], `${lang} states plainly that a limit is not a refusal`);
+    }
+});
+
+check(() => {
+    // Jargon that a non-technical reader cannot act on. The facts these stood
+    // for are still present, in the technical note, in plain words.
+    for (const lang of LANGS) {
+        for (const jargon of ['file://', 'WebAssembly', 'Web Worker', 'DuckDB', 'columnar', 'address']) {
+            assert.ok(!bodies[lang].includes(jargon), `${lang} should not need "${jargon}" to make its point`);
+        }
     }
 });
 
@@ -50,7 +78,12 @@ check(() => {
 check(() => {
     // Data Tools being cut down to one operation in memory-saving mode was
     // documented nowhere at all.
-    const expected = { en: /outliers by bounds/i, fr: /valeurs aberrantes par bornes/i, es: /valores atipicos por limites/i, it: /outlier per soglie/i };
+    const expected = {
+        en: /outliers by upper and lower bounds/i,
+        fr: /valeurs aberrantes par bornes haute et basse/i,
+        es: /valores atipicos por limites superior e inferior/i,
+        it: /outlier per soglie superiore e inferiore/i,
+    };
     for (const lang of LANGS) {
         assert.match(bodies[lang], expected[lang], `${lang} states the Data Tools restriction`);
     }
@@ -64,9 +97,11 @@ check(() => {
 });
 
 check(() => {
-    // Memory-saving mode is NOT desktop-only, which the old text left ambiguous.
+    // Reading a file in pieces is NOT desktop-only, which the old text left
+    // ambiguous. The section answers the question a reader would actually ask.
+    const sameBoth = { en: /same in the browser and in the Full Desktop version/i, fr: /pareil dans le navigateur et dans la version Full Desktop/i, es: /igual en el navegador y en la version Full Desktop/i, it: /stesso modo nel browser e nella versione Full Desktop/i };
     for (const lang of LANGS) {
-        assert.match(bodies[lang], /file:\/\//, `${lang} names the condition that actually disables it`);
+        assert.match(bodies[lang], sameBoth[lang], `${lang} says it behaves the same in both versions`);
     }
 });
 
