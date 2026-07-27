@@ -15,6 +15,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import translations from '../src/i18n/translations.js';
+
 let checks = 0;
 const check = (fn) => { fn(); checks++; };
 
@@ -128,6 +130,34 @@ check(() => {
     for (const key of ['spreadsheetParquetHintTitle', 'spreadsheetParquetHintBody', 'spreadsheetParquetHintConvert']) {
         const count = [...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length;
         assert.equal(count, 4, `${key} is translated in all four languages`);
+    }
+});
+
+check(() => {
+    // Both texts around the conversion threshold used to describe the feature
+    // as CSV-only, so a reader had no way to learn spreadsheets are covered.
+    const spreadsheet = { en: /spreadsheet/i, fr: /feuilles de calcul/i, es: /hojas de calculo/i, it: /fogli di calcolo/i };
+    for (const lang of ['en', 'fr', 'es', 'it']) {
+        assert.match(translations[lang].compactFormatHelpBody, spreadsheet[lang],
+            `${lang}.compactFormatHelpBody says the conversion covers spreadsheets`);
+        assert.match(translations[lang].csvCompactHintLimitHelp, spreadsheet[lang],
+            `${lang}.csvCompactHintLimitHelp mentions spreadsheets`);
+    }
+});
+
+check(() => {
+    // And the asymmetry has to be stated, not glossed: this setting governs
+    // text files. Spreadsheets are offered after loading, at a fixed floor,
+    // with no setting of their own — SPREADSHEET_PARQUET_HINT_BYTES.
+    const notThisSetting = {
+        en: /do not use this setting/i,
+        fr: /n utilisent pas ce reglage/i,
+        es: /no usan este ajuste/i,
+        it: /non usano questa impostazione/i,
+    };
+    for (const lang of ['en', 'fr', 'es', 'it']) {
+        assert.match(translations[lang].csvCompactHintLimitHelp, notThisSetting[lang],
+            `${lang} says the threshold does not apply to spreadsheets`);
     }
 });
 
