@@ -146,16 +146,25 @@ check(() => {
 });
 
 check(() => {
-    // Whether the browser can convert was genuinely ambiguous: the old text
-    // said what the desktop version does and left the reader to infer the rest.
-    const onlyDesktop = {
-        en: /Only the Full Desktop version can convert files for you/i,
-        fr: /Seule la version Full Desktop peut convertir des fichiers/i,
-        es: /Solo la version Full Desktop puede convertir archivos/i,
-        it: /Solo la versione Full Desktop puo convertire i file/i,
+    // Who can convert what was genuinely ambiguous, and then genuinely
+    // asymmetric: spreadsheets convert in both runtimes, text files only in
+    // the desktop one. Saying "conversion is desktop-only" would now be wrong,
+    // and saying nothing sends people back to the question they started with.
+    const spreadsheetsBoth = {
+        en: /Spreadsheets can be converted in either version/i,
+        fr: /Les feuilles de calcul peuvent etre converties dans les deux versions/i,
+        es: /Las hojas de calculo se pueden convertir en cualquiera de las dos versiones/i,
+        it: /I fogli di calcolo si possono convertire in entrambe le versioni/i,
+    };
+    const textDesktopOnly = {
+        en: /Text files are offered the conversion before opening, and only in the Full Desktop version/i,
+        fr: /Les fichiers texte recoivent la proposition avant l ouverture, et seulement dans la version Full Desktop/i,
+        es: /Los archivos de texto reciben la oferta antes de abrirlos, y solo en la version Full Desktop/i,
+        it: /I file di testo ricevono la proposta prima dell apertura, e solo nella versione Full Desktop/i,
     };
     for (const lang of LANGS) {
-        assert.match(bodies[lang], onlyDesktop[lang], `${lang} says outright that conversion is desktop-only`);
+        assert.match(bodies[lang], spreadsheetsBoth[lang], `${lang} says spreadsheets convert in both versions`);
+        assert.match(bodies[lang], textDesktopOnly[lang], `${lang} says the text-file offer is desktop-only, and why`);
     }
 });
 

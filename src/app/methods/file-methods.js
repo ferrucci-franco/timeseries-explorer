@@ -2006,12 +2006,16 @@ proto._quoteCommandPath = function(path) {
 // an 18 MB one is about fourteen, and a 126 MB one about sixty-eight.
 const SPREADSHEET_PARQUET_HINT_BYTES = 4 * 1024 * 1024;
 
+// Writing Parquet never actually needed the desktop build. The native
+// converter is used when it is there because it also writes the file to a real
+// path; in the browser DuckDB-WASM does the same conversion in memory and the
+// result is handed to the user through the save dialog instead. Gating this on
+// isDesktop meant the one runtime with the LOWER spreadsheet limit — the
+// browser — was also the one with no way out of it.
 proto._canConvertSpreadsheetToParquet = function(entry) {
-    return !!entry
-        && this._isExcelExtension(entry.extension)
-        && !!this.capabilities?.isDesktop
-        && Number(entry.file?.size || 0) >= SPREADSHEET_PARQUET_HINT_BYTES
-        && typeof globalThis.omvDesktop?.convertToParquet === 'function';
+    if (!entry || !this._isExcelExtension(entry.extension)) return false;
+    if (Number(entry.file?.size || 0) < SPREADSHEET_PARQUET_HINT_BYTES) return false;
+    return typeof globalThis.omvDesktop?.convertToParquet === 'function' || this._canUseDuckDb();
 };
 
 // The CSV form of the sheet: from the load-time cache when it is still valid,
@@ -2101,9 +2105,50 @@ proto._showSpreadsheetParquetHint = function(entry) {
     requestAnimationFrame(() => notice.classList.add('show'));
 };
 
+// "microgrid-demo.xlsx" + sheet "Registro" -> "microgrid-demo - Registro.parquet".
+// The sheet name is part of it because one workbook can produce several.
+proto._spreadsheetParquetName = function(entry, sheetName) {
+    const base = this._fileBaseName(entry.file?.name || entry.name || 'spreadsheet');
+    const suffix = sheetName && sheetName !== base ? ` - ${sheetName}` : '';
+    return `${base}${suffix}`.replace(/[\\/:*?"<>|]/g, '_') + '.parquet';
+};
+
+// Hand bytes to the user. showSaveFilePicker lets them choose where it lands
+// and is the only way the file survives usefully; without it (Firefox, Safari)
+// a download is the best the browser allows.
+proto._saveBytesToDisk = async function(bytes, filename) {
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const picker = globalThis.showSaveFilePicker;
+    if (typeof picker === 'function') {
+        try {
+            const handle = await picker({
+                suggestedName: filename,
+                types: [{ description: 'Parquet', accept: { 'application/octet-stream': ['.parquet'] } }],
+            });
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            return true;
+        } catch (err) {
+            // Cancelling the dialog is a normal answer, not a failure: the
+            // caller still gets the converted file to open right now.
+            if (err?.name === 'AbortError') return false;
+            console.warn('[parquet] save picker failed; falling back to download', err);
+        }
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    return true;
+};
+
 proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = false } = {}) {
     const converter = globalThis.omvDesktop?.convertToParquet;
-    if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
+    const inBrowser = typeof converter !== 'function';
+    if (inBrowser && !this._canUseDuckDb()) throw new Error(i18n.t('parquetConversionUnavailable'));
 
     const csvBuffer = await this._spreadsheetCsvBytes(entry);
     const sheetName = entry.excelCsvSheetName || entry.excel?.sheetName || 'sheet';
@@ -2119,6 +2164,29 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
         title: entry.file?.name || entry.name || sheetName,
     });
     if (!reviewed) return null;   // backed out of the preview
+
+    const parquetName = this._spreadsheetParquetName(entry, sheetName);
+
+    if (inBrowser) {
+        const started = Date.now();
+        this._showParquetConversionOverlay(entry.file?.name || entry.name || '');
+        const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+        try {
+            const source = await this._getDuckDbSource();
+            const parquetBytes = await source.convertCsvBufferToParquet(csvBuffer, {
+                csvProfile: reviewed,
+                compression: 'zstd',
+            });
+            this._setParquetConversionOverlayLoading();
+            // Offer to keep it. Converting only in memory would make this open
+            // faster and every future one exactly as slow as before, which is
+            // the opposite of the point.
+            await this._saveBytesToDisk(parquetBytes, parquetName);
+            return new File([parquetBytes], parquetName, { type: 'application/octet-stream' });
+        } finally {
+            clearInterval(timer);
+        }
+    }
 
     let outputPath = '';
     if (!temporary) {

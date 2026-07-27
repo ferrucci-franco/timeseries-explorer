@@ -163,6 +163,47 @@ export default class DuckDbSource {
         return this._parseFile(file, displayName, { ...opts, format: 'parquet' });
     }
 
+    /**
+     * CSV bytes in, Parquet bytes out, entirely inside the browser.
+     *
+     * The desktop build converts through native DuckDB over IPC because it has
+     * a real path to read and write. Nothing about writing Parquet actually
+     * needs that: DuckDB-WASM can register a buffer as a virtual file, COPY it
+     * out, and hand back the result. This is what lets a spreadsheet be
+     * converted in the browser too, where a file path does not exist at all —
+     * the sheet only ever exists as CSV text in memory.
+     *
+     * Reuses _csvReadExpr, so a profile the user confirmed produces the same
+     * SQL here as everywhere else and the two builds cannot disagree about
+     * what the data meant.
+     *
+     * @param {ArrayBuffer|Uint8Array} bytes
+     * @returns {Promise<Uint8Array>} the Parquet file
+     */
+    async convertCsvBufferToParquet(bytes, { csvProfile = null, compression = 'zstd' } = {}) {
+        await this.init();
+        // Unique per call: a failed conversion must not leave a name behind
+        // that the next one would silently read instead of its own input.
+        const stamp = `${Date.now()}_${++this._nextTableId}`;
+        const inputName = `omv_conv_${stamp}.csv`;
+        const outputName = `omv_conv_${stamp}.parquet`;
+        const payload = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+
+        await this._db.registerFileBuffer(inputName, payload);
+        try {
+            const readExpr = this._csvReadExpr(inputName, csvProfile, { skip: 0 });
+            const safeCompression = /^[a-z]+$/i.test(String(compression)) ? String(compression) : 'zstd';
+            await this.query(
+                `COPY (SELECT * FROM ${readExpr}) TO '${outputName}' (FORMAT PARQUET, COMPRESSION ${safeCompression})`,
+            );
+            return await this._db.copyFileToBuffer(outputName);
+        } finally {
+            for (const name of [inputName, outputName]) {
+                try { await this._db.dropFile(name); } catch (_) { /* already gone */ }
+            }
+        }
+    }
+
     async _parseFile(file, displayName, opts) {
         const { lazy = false, overviewPoints = 10000, format = 'csv', csvProfile = null } = opts;
         await this.init();

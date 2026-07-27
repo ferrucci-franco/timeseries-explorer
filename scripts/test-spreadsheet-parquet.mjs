@@ -57,14 +57,44 @@ check(() => {
 check(() => {
     assert.match(fileMethods, /_canConvertSpreadsheetToParquet/, 'there is a single gate for the offer');
     const gate = fileMethods.slice(fileMethods.indexOf('proto._canConvertSpreadsheetToParquet'));
-    assert.match(gate.slice(0, 400), /_isExcelExtension\(entry\.extension\)/, 'only spreadsheets');
-    assert.match(gate.slice(0, 400), /capabilities\?\.isDesktop/, 'desktop only: the browser has no converter');
-    assert.match(gate.slice(0, 400), /omvDesktop\?\.convertToParquet/, 'and only when the bridge is present');
+    const body = gate.slice(0, 700);
+    assert.match(body, /_isExcelExtension\(entry\.extension\)/, 'only spreadsheets');
+    // NOT gated on isDesktop. Writing Parquet never needed the desktop build,
+    // and gating on it meant the runtime with the LOWER spreadsheet limit —
+    // the browser — was also the one with no way out of it.
+    assert.doesNotMatch(body, /capabilities\?\.isDesktop/, 'the offer is not restricted to the desktop build');
+    assert.match(body, /omvDesktop\?\.convertToParquet[\s\S]{0,80}_canUseDuckDb\(\)/, 'native converter OR the in-browser engine');
+});
+
+check(() => {
+    // The in-browser conversion: bytes in, bytes out, through the engine the
+    // app already ships. Reusing _csvReadExpr is what keeps the two builds from
+    // disagreeing about what the data meant.
+    const duckdb = readFileSync(new URL('../src/data/duckdb-source.js', import.meta.url), 'utf8');
+    assert.match(duckdb, /async convertCsvBufferToParquet/, 'the engine can convert a CSV buffer');
+    const method = duckdb.slice(duckdb.indexOf('async convertCsvBufferToParquet'));
+    const body = method.slice(0, 1600);
+    assert.match(body, /registerFileBuffer/, 'the CSV is registered as a virtual file');
+    assert.match(body, /FORMAT PARQUET/, 'and copied out as Parquet');
+    assert.match(body, /copyFileToBuffer/, 'then read back as bytes');
+    assert.match(body, /this\._csvReadExpr\(/, 'using the same profile-aware reader as every other path');
+    assert.match(body, /finally[\s\S]{0,200}dropFile/, 'both virtual files are dropped whatever happens');
+});
+
+check(() => {
+    // Converting only in memory would make this open faster and every future
+    // one exactly as slow as before, which is the opposite of the point.
+    const convert = fileMethods.slice(fileMethods.indexOf('proto._convertSpreadsheetEntryToParquet'));
+    assert.match(convert.slice(0, 2600), /_saveBytesToDisk/, 'the browser result is offered for keeping');
+    const save = fileMethods.slice(fileMethods.indexOf('proto._saveBytesToDisk'));
+    assert.match(save.slice(0, 1200), /showSaveFilePicker/, 'a real save dialog when the browser has one');
+    assert.match(save.slice(0, 1200), /AbortError/, 'cancelling the save is not treated as a failure');
+    assert.match(save.slice(0, 1200), /link\.download/, 'and a download where it does not');
 });
 
 check(() => {
     const convert = fileMethods.slice(fileMethods.indexOf('proto._convertSpreadsheetEntryToParquet'));
-    const body = convert.slice(0, 3400);
+    const body = convert.slice(0, 6000);
     assert.match(body, /bytes: new Uint8Array\(csvBuffer\)/, 'the sheet is sent as bytes, not as a path');
     assert.match(body, /sourceName:/, 'a name is supplied so the staged file is recognisable');
     // Without a source path there is nowhere sensible to put the output "next
@@ -79,7 +109,7 @@ check(() => {
     // this point, so the questions are identical — which row is the header,
     // which column is time, how numbers are written.
     const convert = fileMethods.slice(fileMethods.indexOf('proto._convertSpreadsheetEntryToParquet'));
-    const body = convert.slice(0, 3400);
+    const body = convert.slice(0, 6000);
     const preview = body.indexOf('_openCsvParsingPreviewForFileObject');
     const picker = body.indexOf('selectParquetOutputPath');
     const converted = body.indexOf('await converter(');
