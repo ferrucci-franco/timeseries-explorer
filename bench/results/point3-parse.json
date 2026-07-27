@@ -1,0 +1,153 @@
+{
+  "point": 3,
+  "title": "Parsing: main-thread blocking, inline vs worker",
+  "node": "v24.14.1",
+  "generatedAt": "2026-07-27T00:38:13.591Z",
+  "frameMs": 16.7,
+  "records": [
+    {
+      "tier": "small",
+      "format": "mat",
+      "sizeMb": 11.44488525390625,
+      "parseMs": 272.0836,
+      "mainThreadBlockBeforeMs": 272.1789,
+      "mainThreadBlockAfterMs": 29.142300000000034,
+      "droppedFramesBefore": 16,
+      "droppedFramesAfter": 2
+    },
+    {
+      "tier": "small",
+      "format": "pkl",
+      "sizeMb": 11.444840431213379,
+      "parseMs": 231.63440000000003,
+      "mainThreadBlockBeforeMs": 231.7111,
+      "mainThreadBlockAfterMs": 16.442699999999945,
+      "droppedFramesBefore": 13,
+      "droppedFramesAfter": 0
+    },
+    {
+      "tier": "small",
+      "format": "nc",
+      "sizeMb": 11.455866813659668,
+      "parseMs": 319.50059999999985,
+      "mainThreadBlockBeforeMs": 319.53819999999996,
+      "mainThreadBlockAfterMs": 22.10719999999992,
+      "droppedFramesBefore": 19,
+      "droppedFramesAfter": 2
+    },
+    {
+      "tier": "small",
+      "format": "csv",
+      "sizeMb": 11.175065994262695,
+      "parseMs": 590.4146999999998,
+      "mainThreadBlockBeforeMs": 590.4512999999997,
+      "mainThreadBlockAfterMs": 69.9997999999996,
+      "droppedFramesBefore": 35,
+      "droppedFramesAfter": 46
+    },
+    {
+      "tier": "small",
+      "format": "xlsx",
+      "sizeMb": 17.998746871948242,
+      "parseMs": 16585.157799999997,
+      "mainThreadBlockBeforeMs": 16586.3624,
+      "mainThreadBlockAfterMs": 186.19120000000112,
+      "droppedFramesBefore": 993,
+      "droppedFramesAfter": 324
+    },
+    {
+      "tier": "medium",
+      "format": "mat",
+      "sizeMb": 114.44171142578125,
+      "parseMs": 4000.407800000001,
+      "mainThreadBlockBeforeMs": 4000.7041000000027,
+      "mainThreadBlockAfterMs": 85.40280000000348,
+      "droppedFramesBefore": 239,
+      "droppedFramesAfter": 95
+    },
+    {
+      "tier": "medium",
+      "format": "pkl",
+      "sizeMb": 114.44166660308838,
+      "parseMs": 12635.937400000003,
+      "mainThreadBlockBeforeMs": 12636.268500000006,
+      "mainThreadBlockAfterMs": 150.13260000000446,
+      "droppedFramesBefore": 756,
+      "droppedFramesAfter": 393
+    },
+    {
+      "tier": "medium",
+      "format": "nc",
+      "sizeMb": 114.45269298553467,
+      "parseMs": 12947.951799999995,
+      "mainThreadBlockBeforeMs": 12948.287100000001,
+      "mainThreadBlockAfterMs": 129.99770000000717,
+      "droppedFramesBefore": 775,
+      "droppedFramesAfter": 299
+    },
+    {
+      "tier": "medium",
+      "format": "csv",
+      "sizeMb": 112.65757274627686,
+      "parseMs": 29111.3428,
+      "mainThreadBlockBeforeMs": 29111.655499999993,
+      "mainThreadBlockAfterMs": 4355.258700000006,
+      "droppedFramesBefore": 1743,
+      "droppedFramesAfter": 1071
+    },
+    {
+      "tier": "medium",
+      "format": "xlsx",
+      "sizeMb": 126.09306812286377,
+      "parseMs": 112734.91570000001,
+      "mainThreadBlockBeforeMs": 112735.23160000003,
+      "mainThreadBlockAfterMs": 644.1886999999988,
+      "droppedFramesBefore": 6750,
+      "droppedFramesAfter": 2713
+    },
+    {
+      "tier": "large",
+      "format": "mat",
+      "sizeMb": 572.2109375,
+      "parseMs": 30835.607900000003,
+      "mainThreadBlockBeforeMs": 30835.891400000022,
+      "mainThreadBlockAfterMs": 1901.1861999999965,
+      "droppedFramesBefore": 1846,
+      "droppedFramesAfter": 661
+    },
+    {
+      "tier": "large",
+      "format": "pkl",
+      "sizeMb": 572.2053384780884,
+      "failed": "inline",
+      "message": "Unsupported ndarray size 67500000."
+    },
+    {
+      "tier": "large",
+      "format": "nc",
+      "sizeMb": 572.2163648605347,
+      "parseMs": 104987.2084,
+      "mainThreadBlockBeforeMs": 104987.31120000005,
+      "mainThreadBlockAfterMs": 1019.0993999999482,
+      "droppedFramesBefore": 6286,
+      "droppedFramesAfter": 509
+    },
+    {
+      "tier": "large",
+      "format": "csv",
+      "sizeMb": 563.2419557571411,
+      "failed": "inline",
+      "message": "Cannot create a string longer than 0x1fffffe8 characters"
+    },
+    {
+      "tier": "large",
+      "format": "xlsx",
+      "sizeMb": 126.09319877624512,
+      "parseMs": 40414.22459999996,
+      "mainThreadBlockBeforeMs": 40414.27210000006,
+      "mainThreadBlockAfterMs": 90.7094999999972,
+      "droppedFramesBefore": 2420,
+      "droppedFramesAfter": 242
+    }
+  ]
+}

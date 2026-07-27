@@ -1,0 +1,206 @@
+{
+  "point": 4,
+  "title": "Derived variables: AST interpreter vs compiled kernel",
+  "node": "v24.14.1",
+  "generatedAt": "2026-07-27T00:39:04.093Z",
+  "records": [
+    {
+      "tier": "small",
+      "rows": 150000,
+      "formula": "sqrt(x^2 + y^2)",
+      "interpreterMs": 6.433500000000009,
+      "compiledMs": 0.3621999999999943,
+      "compileMs": 0.954899999999995,
+      "speedup": 17.762286029818085,
+      "interpreterHeapMb": 36.62476348876953,
+      "compiledHeapMb": 5.689888000488281
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "formula": "x * gain + offset",
+      "interpreterMs": 1.9904999999999973,
+      "compiledMs": 0.30579999999999785,
+      "compileMs": 0.8444999999999965,
+      "speedup": 6.509156311314621,
+      "interpreterHeapMb": 9.214553833007812,
+      "compiledHeapMb": 5.763397216796875
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "formula": "(x + y) * (x - y) / (abs(z) + 1)",
+      "interpreterMs": 7.966300000000004,
+      "compiledMs": 0.7383000000000024,
+      "compileMs": 1.0474999999999994,
+      "speedup": 10.790058241907055,
+      "interpreterHeapMb": 28.385231018066406,
+      "compiledHeapMb": 5.7609710693359375
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "formula": "diff(x)",
+      "interpreterMs": 0.9231999999999942,
+      "compiledMs": 0.5989000000000004,
+      "compileMs": 0.8522999999999996,
+      "speedup": 1.5414927366839097,
+      "interpreterHeapMb": 10.686233520507812,
+      "compiledHeapMb": 5.582237243652344
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "formula": "diff(x) / diff(time)",
+      "interpreterMs": 2.201100000000004,
+      "compiledMs": 1.295899999999996,
+      "compileMs": 1.0852000000000004,
+      "speedup": 1.69851068755306,
+      "interpreterHeapMb": 13.86199951171875,
+      "compiledHeapMb": 5.4217071533203125
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "formula": "sqrt(square(x) + square(y) + square(z))",
+      "interpreterMs": 10.988399999999999,
+      "compiledMs": 0.37950000000000017,
+      "compileMs": 0.9166999999999987,
+      "speedup": 28.954940711462434,
+      "interpreterHeapMb": 35.434715270996094,
+      "compiledHeapMb": 5.442497253417969
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "formula": "sqrt(x^2 + y^2)",
+      "interpreterMs": 83.30179999999996,
+      "compiledMs": 3.6185999999999865,
+      "compileMs": 0.9209999999999923,
+      "speedup": 23.020449897750584,
+      "interpreterHeapMb": 189.28809356689453,
+      "compiledHeapMb": 5.048042297363281
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "formula": "x * gain + offset",
+      "interpreterMs": 24.68889999999999,
+      "compiledMs": 3.026299999999992,
+      "compileMs": 2.8160000000000025,
+      "speedup": 8.158113868420202,
+      "interpreterHeapMb": 73.30277252197266,
+      "compiledHeapMb": 4.706024169921875
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "formula": "(x + y) * (x - y) / (abs(z) + 1)",
+      "interpreterMs": 83.11020000000002,
+      "compiledMs": 3.9132999999999925,
+      "compileMs": 2.444999999999993,
+      "speedup": 21.237881072240867,
+      "interpreterHeapMb": 155.9944305419922,
+      "compiledHeapMb": 4.900627136230469
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "formula": "diff(x)",
+      "interpreterMs": 11.848800000000011,
+      "compiledMs": 3.430199999999985,
+      "compileMs": 0.7711000000000041,
+      "speedup": 3.4542592268672565,
+      "interpreterHeapMb": 73.29751586914062,
+      "compiledHeapMb": 5.184852600097656
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "formula": "diff(x) / diff(time)",
+      "interpreterMs": 20.972500000000025,
+      "compiledMs": 10.499799999999993,
+      "compileMs": 2.0659999999999883,
+      "speedup": 1.9974189984571171,
+      "interpreterHeapMb": 125.172607421875,
+      "compiledHeapMb": 4.686302185058594
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "formula": "sqrt(square(x) + square(y) + square(z))",
+      "interpreterMs": 133.3899,
+      "compiledMs": 4.029300000000006,
+      "compileMs": 1.6185000000000116,
+      "speedup": 33.104981014071875,
+      "interpreterHeapMb": 77.1661376953125,
+      "compiledHeapMb": 4.8798675537109375
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "formula": "sqrt(x^2 + y^2)",
+      "interpreterMs": 869.8607,
+      "compiledMs": 25.568399999999997,
+      "compileMs": 1.3839999999999009,
+      "speedup": 34.02092817696845,
+      "interpreterHeapMb": 305.5736541748047,
+      "compiledHeapMb": 5.5063629150390625
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "formula": "x * gain + offset",
+      "interpreterMs": 124.85619999999994,
+      "compiledMs": 19.32269999999994,
+      "compileMs": 1.213899999999967,
+      "speedup": 6.46163320860958,
+      "interpreterHeapMb": 347.9549102783203,
+      "compiledHeapMb": 5.457206726074219
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "formula": "(x + y) * (x - y) / (abs(z) + 1)",
+      "interpreterMs": 615.7156,
+      "compiledMs": 29.869199999999978,
+      "compileMs": 1.4139000000000124,
+      "speedup": 20.613729192613143,
+      "interpreterHeapMb": 225.96617126464844,
+      "compiledHeapMb": 4.702301025390625
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "formula": "diff(x)",
+      "interpreterMs": 76.29169999999999,
+      "compiledMs": 23.954500000000053,
+      "compileMs": 1.101799999999912,
+      "speedup": 3.1848587947984646,
+      "interpreterHeapMb": 61.84248352050781,
+      "compiledHeapMb": 4.686279296875
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "formula": "diff(x) / diff(time)",
+      "interpreterMs": 277.31780000000003,
+      "compiledMs": 68.32450000000006,
+      "compileMs": 3.8704999999999927,
+      "speedup": 4.05883394682727,
+      "interpreterHeapMb": 296.3428955078125,
+      "compiledHeapMb": 3.8155593872070312
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "formula": "sqrt(square(x) + square(y) + square(z))",
+      "interpreterMs": 932.5607,
+      "compiledMs": 32.42010000000005,
+      "compileMs": 1.553199999999947,
+      "speedup": 28.76489276714133,
+      "interpreterHeapMb": 347.5552062988281,
+      "compiledHeapMb": 4.980857849121094
+    }
+  ]
+}

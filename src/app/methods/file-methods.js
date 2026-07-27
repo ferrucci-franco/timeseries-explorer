@@ -18,9 +18,49 @@ import {
     MATLAB_MAT_WEB_EAGER_LIMIT_BYTES,
 } from '../../parsers/matlab-mat-limits.js';
 
+import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
+
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
+
+// Size 1 on purpose. Parsing is memory-bound, not CPU-bound: two workers each
+// decoding a 500 MB .mat would double the peak footprint against a browser tab
+// ceiling of ~4 GB. Concurrent file drops queue instead.
+let parsePool = null;
+function getParsePool() {
+    if (!canUseWorkers()) return null;
+    if (!parsePool) {
+        parsePool = new WorkerPool(
+            () => new Worker(new URL('../../workers/parse-worker.js', import.meta.url), { type: 'module' }),
+            { name: 'parse', size: 1 },
+        );
+    }
+    return parsePool;
+}
+
+// Every parser call goes through here: try the worker, fall back in-thread on
+// anything that means "no worker available". A parse error from the worker is a
+// real error and propagates — only transport failures fall back, otherwise a
+// malformed file would be decoded twice before reporting.
+async function parseOffThread(op, payload, transfer, inlineFallback) {
+    const pool = getParsePool();
+    if (!pool?.available) return inlineFallback();
+    try {
+        return await pool.run(op, payload, { transfer });
+    } catch (err) {
+        if (err?.workerUnavailable) return inlineFallback();
+        throw err;
+    }
+}
+
+// The worker receives its own copy: the app keeps entry.buffer alive for
+// reloads, adjust-parsing and session save, so the original cannot be given
+// away. postMessage would clone it anyway; slicing first and transferring makes
+// the single copy explicit and lets the worker own its half outright.
+function detachedCopy(buffer) {
+    return buffer instanceof ArrayBuffer ? buffer.slice(0) : new Uint8Array(buffer).slice().buffer;
+}
 let duckDbSourceClassPromise = null;
 let netcdfParserClassPromise = null;
 let pickleParserClassPromise = null;
@@ -1355,41 +1395,71 @@ proto._preflightMatlabFile = function(file, extension = this._fileExtension(file
 };
 
 proto._parseMatlabResultBuffer = async function(filename, buffer, options = {}) {
-    const Parser = await loadMatlabMatFileClass();
-    const parser = new Parser(this.parser);
-    return parser.parse(buffer, filename, {
-        inspection: options.matInspection || null,
-        selection: options.matSelection || null,
-    });
+    const inspection = options.matInspection || null;
+    const selection = options.matSelection || null;
+    const workerBuffer = detachedCopy(buffer);
+    return parseOffThread(
+        'parse:mat',
+        { filename, buffer: workerBuffer, inspection, selection },
+        [workerBuffer],
+        async () => {
+            const Parser = await loadMatlabMatFileClass();
+            const parser = new Parser(this.parser);
+            return parser.parse(buffer, filename, { inspection, selection });
+        },
+    );
 };
 
 proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer) {
-    const Parser = await loadPypsaNetcdfParserClass();
-    const parser = new Parser(this.parser);
-    return parser.parse(buffer, filename, { maxFileBytes: this._pypsaNetcdfEagerLimitBytes() });
+    const maxFileBytes = this._pypsaNetcdfEagerLimitBytes();
+    const workerBuffer = detachedCopy(buffer);
+    return parseOffThread(
+        'parse:netcdf',
+        { filename, buffer: workerBuffer, maxFileBytes },
+        [workerBuffer],
+        async () => {
+            const Parser = await loadPypsaNetcdfParserClass();
+            const parser = new Parser(this.parser);
+            return parser.parse(buffer, filename, { maxFileBytes });
+        },
+    );
 };
 
 // Spreadsheets are not parsed directly: the selected sheet is serialized to
 // deterministic CSV text and fed to the CSV pipeline, so header/time
 // detection, profiles and the parsing-preview dialog all apply unchanged.
 proto._parseExcelResultBuffer = async function(filename, buffer, options = {}) {
-    const excel = await loadExcelWorkbookModule();
-    const workbook = options.excelWorkbook
-        || excel.readWorkbook(await excel.loadXlsxModule(), buffer);
-    const sheetName = resolveExcelSheetName(excel, workbook, options.excelSheetName || null);
+    // Decoding the workbook and serializing the sheet is the expensive half —
+    // the code below used to note "tens of seconds of blocked main thread" — so
+    // both happen in the worker. The one exception is when the sheet-picker
+    // dialog already holds a decoded workbook: that object cannot be posted to
+    // a worker, and re-decoding to avoid a stall the user has already paid for
+    // would be slower overall.
+    const converted = options.excelWorkbook
+        ? null
+        : await this._convertExcelBufferToCsv(buffer, options.excelSheetName || null);
+
+    let csvBuffer;
+    let sheetName;
+    let sheetNames;
+    if (converted) {
+        ({ csvBuffer, sheetName, sheetNames } = converted);
+    } else {
+        const excel = await loadExcelWorkbookModule();
+        const workbook = options.excelWorkbook;
+        sheetName = resolveExcelSheetName(excel, workbook, options.excelSheetName || null);
+        if (sheetName) csvBuffer = excel.csvTextToBuffer(excel.sheetToCsvText(workbook, sheetName));
+        sheetNames = excel.listSheets(workbook).map(sheet => sheet.name);
+    }
     if (!sheetName) {
         throw new Error(i18n.t('excelNoDataSheets').replace('{file}', filename));
     }
-    const csvBuffer = excel.csvTextToBuffer(excel.sheetToCsvText(workbook, sheetName));
     // file = null on purpose: it keeps the converted buffer out of the DuckDB
     // lazy path and the Parquet hints, while still using the parser worker.
     const data = await this._parseCsvResultBuffer(filename, csvBuffer, null, {
         csvProfile: options.csvProfile || null,
     });
-    data.metadata.excel = {
-        sheetName,
-        sheetNames: excel.listSheets(workbook).map(sheet => sheet.name),
-    };
+    data.metadata.excel = { sheetName, sheetNames };
     // Non-enumerable so it never leaks into session snapshots; the caller
     // moves it onto the file entry via _adoptExcelCsvCache.
     Object.defineProperty(data, '_excelCsvBuffer', {
@@ -1418,21 +1488,18 @@ proto._convertExcelEntryToCsvBuffer = async function(entry, { sheetName = null }
             sheetNames: entry.excel?.sheetNames || null,
         };
     }
-    const excel = await loadExcelWorkbookModule();
-    const workbook = excel.readWorkbook(await excel.loadXlsxModule(), rawBuffer);
-    const resolvedName = resolveExcelSheetName(excel, workbook, preferredName);
-    if (!resolvedName) {
+    const converted = await this._convertExcelBufferToCsv(rawBuffer, preferredName);
+    if (!converted?.sheetName) {
         throw new Error(i18n.t('excelNoDataSheets').replace('{file}', this._fileDisplayName(entry)));
     }
-    const csvBuffer = excel.csvTextToBuffer(excel.sheetToCsvText(workbook, resolvedName));
-    entry.excelCsvBuffer = csvBuffer;
-    entry.excelCsvSheetName = resolvedName;
+    entry.excelCsvBuffer = converted.csvBuffer;
+    entry.excelCsvSheetName = converted.sheetName;
     entry.excelCsvSourceBuffer = rawBuffer;
     return {
-        csvBuffer,
+        csvBuffer: converted.csvBuffer,
         rawBuffer,
-        sheetName: resolvedName,
-        sheetNames: excel.listSheets(workbook).map(sheet => sheet.name),
+        sheetName: converted.sheetName,
+        sheetNames: converted.sheetNames,
     };
 };
 
@@ -1440,6 +1507,28 @@ proto._hasExcelCsvCache = function(entry, rawBuffer = entry?.buffer, preferredNa
     return !!(entry?.excelCsvBuffer
         && entry.excelCsvSourceBuffer === rawBuffer
         && (!preferredName || entry.excelCsvSheetName === preferredName));
+};
+
+// Workbook bytes -> { csvBuffer, sheetName, sheetNames }, off-thread when a
+// worker is available. Returns null only when the workbook has no usable sheet.
+proto._convertExcelBufferToCsv = async function(buffer, preferredSheet = null) {
+    const workerBuffer = detachedCopy(buffer);
+    const converted = await parseOffThread(
+        'parse:excelToCsv',
+        { buffer: workerBuffer, preferredSheet },
+        [workerBuffer],
+        async () => {
+            const excel = await loadExcelWorkbookModule();
+            const workbook = excel.readWorkbook(await excel.loadXlsxModule(), buffer);
+            const sheetName = resolveExcelSheetName(excel, workbook, preferredSheet);
+            return {
+                csvBuffer: sheetName ? excel.csvTextToBuffer(excel.sheetToCsvText(workbook, sheetName)) : null,
+                sheetName: sheetName || '',
+                sheetNames: excel.listSheets(workbook).map(sheet => sheet.name),
+            };
+        },
+    );
+    return converted?.sheetName ? converted : { ...converted, sheetName: '' };
 };
 
 // _parseExcelResultBuffer stashes the converted CSV on the parsed data so
@@ -1453,10 +1542,19 @@ proto._adoptExcelCsvCache = function(entry, data) {
 };
 
 proto._parsePickleResultBuffer = async function(filename, buffer) {
-    const Parser = await loadPickleParserClass();
-    const parser = new Parser(this.parser);
+    const maxFileBytes = this._pickleEagerLimitBytes();
+    const workerBuffer = detachedCopy(buffer);
     try {
-        return await parser.parse(buffer, filename, { maxFileBytes: this._pickleEagerLimitBytes() });
+        return await parseOffThread(
+            'parse:pickle',
+            { filename, buffer: workerBuffer, maxFileBytes },
+            [workerBuffer],
+            async () => {
+                const Parser = await loadPickleParserClass();
+                const parser = new Parser(this.parser);
+                return parser.parse(buffer, filename, { maxFileBytes });
+            },
+        );
     } catch (err) {
         if (err?.code === 'PICKLE_COMPRESSED_UNSUPPORTED') {
             throw new Error(i18n.t('pickleCompressedUnsupported')
@@ -2026,56 +2124,21 @@ proto._getDuckDbSource = async function() {
     return this._duckdbSource;
 };
 
-proto._getParserWorker = function() {
-    if (this._parserWorker) return this._parserWorker;
-    if (!this._parserWorkerPending) this._parserWorkerPending = new Map();
-    try {
-        this._parserWorker = new Worker(new URL('../../workers/result-parser-worker.js', import.meta.url), { type: 'module' });
-    } catch (err) {
-        const unavailable = new Error(err?.message || 'Parser worker unavailable');
-        unavailable.workerUnavailable = true;
-        throw unavailable;
-    }
-
-    this._parserWorker.addEventListener('message', (event) => {
-        const { id, ok, data, error } = event.data || {};
-        const pending = this._parserWorkerPending?.get(id);
-        if (!pending) return;
-        this._parserWorkerPending.delete(id);
-        if (ok) {
-            pending.resolve(data);
-            return;
-        }
-        const err = new Error(error?.message || 'CSV parse failed');
-        err.name = error?.name || 'Error';
-        err.stack = error?.stack || err.stack;
-        pending.reject(err);
-    });
-
-    this._parserWorker.addEventListener('error', (event) => {
-        const err = new Error(event?.message || 'Parser worker failed');
-        for (const [, pending] of this._parserWorkerPending || []) pending.reject(err);
-        this._parserWorkerPending?.clear();
-        this._parserWorker?.terminate();
-        this._parserWorker = null;
-    });
-
-    return this._parserWorker;
-};
-
+// CSV now goes through the same pool as every other format. The bespoke
+// worker lifecycle this replaced (spawn, pending map, error teardown, manual
+// fallback detection) lives in src/core/worker-pool.js.
 proto._parseCsvInWorker = function(filename, buffer, csvProfile = null) {
-    const worker = this._getParserWorker();
-    const id = `parse-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const workerBuffer = buffer.slice(0);
-    return new Promise((resolve, reject) => {
-        this._parserWorkerPending.set(id, { resolve, reject });
-        try {
-            worker.postMessage({ id, filename, buffer: workerBuffer, csvProfile: cloneCsvProfileForIpc(csvProfile) }, [workerBuffer]);
-        } catch (err) {
-            this._parserWorkerPending.delete(id);
-            reject(err);
-        }
-    });
+    const workerBuffer = detachedCopy(buffer);
+    return parseOffThread(
+        'parse:csv',
+        { filename, buffer: workerBuffer, csvProfile: cloneCsvProfileForIpc(csvProfile) },
+        [workerBuffer],
+        () => {
+            const unavailable = new Error('Parser worker unavailable');
+            unavailable.workerUnavailable = true;
+            throw unavailable;
+        },
+    );
 };
 
 proto._looksLikeTextBuffer = function(buffer) {

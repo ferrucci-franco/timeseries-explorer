@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
 import { formatSpectrumPeriod, spectrumCursorMeasurements } from '../../utils/fft.js';
 import { missingBucketsToIntervals } from '../../data/missing-buckets-sql.js';
+import { visualPairForRange } from '../../compute/kernels/resample.js';
 
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -949,12 +950,12 @@ proto._visualFromSeriesRange = function(xValues, yValues, minX, maxX, target) {
     start = Math.max(0, start - 1);
     end = Math.min(n, end + 1);
     if (end - start <= 0) return { x: new Float64Array(0), y: new Float64Array(0) };
-    const sliceX = xValues.slice(start, end);
-    const sliceY = yValues.slice(start, end);
-    if (!Number.isFinite(target) || target <= 0 || sliceX.length <= target) {
-        return { x: sliceX, y: sliceY };
+    // Same change as _buildTimeseriesVisualData: decimate over the range rather
+    // than slicing the window out of the source first.
+    if (!Number.isFinite(target) || target <= 0) {
+        return { x: xValues.slice(start, end), y: yValues.slice(start, end) };
     }
-    return this._downsampleTimeseries(sliceX, sliceY, target);
+    return visualPairForRange(xValues, yValues, start, end, target);
 };
 
 proto._lazyExpandedRange = function(data, t0, t1) {

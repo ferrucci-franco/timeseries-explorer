@@ -1,0 +1,82 @@
+{
+  "point": 2,
+  "title": "Timeseries zoom path: slice+decimate vs in-place decimation",
+  "node": "v24.14.1",
+  "generatedAt": "2026-07-26T23:47:20.220Z",
+  "target": 2000,
+  "tracesPerPanel": 4,
+  "records": [
+    {
+      "tier": "small",
+      "rows": 150000,
+      "metric": "zoom sweep (15 steps x 4 traces)",
+      "legacyMs": 21.245599999999996,
+      "kernelMs": 9.476299999999995,
+      "speedup": 2.2419720777096552
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "metric": "per zoom event",
+      "legacyMs": 0.35409333333333326,
+      "kernelMs": 0.15793833333333324,
+      "speedup": 2.2419720777096557
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "metric": "worst single event",
+      "legacyMs": 1.9565999999999946,
+      "kernelMs": 0.7063249999999996,
+      "speedup": 2.7701129083637075
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "metric": "zoom sweep (15 steps x 4 traces)",
+      "legacyMs": 124.42849999999999,
+      "kernelMs": 62.88669999999999,
+      "speedup": 1.978613919954458
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "metric": "per zoom event",
+      "legacyMs": 2.073808333333333,
+      "kernelMs": 1.0481116666666666,
+      "speedup": 1.9786139199544577
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "metric": "worst single event",
+      "legacyMs": 8.261849999999981,
+      "kernelMs": 3.5924249999999915,
+      "speedup": 2.299797490553039
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "metric": "zoom sweep (15 steps x 4 traces)",
+      "legacyMs": 673.3462999999999,
+      "kernelMs": 252.77390000000003,
+      "speedup": 2.663828425323975
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "metric": "per zoom event",
+      "legacyMs": 11.222438333333333,
+      "kernelMs": 4.212898333333333,
+      "speedup": 2.6638284253239752
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "metric": "worst single event",
+      "legacyMs": 254.92982499999994,
+      "kernelMs": 17.772774999999967,
+      "speedup": 14.343839102222383
+    }
+  ]
+}

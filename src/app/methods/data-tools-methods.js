@@ -1,10 +1,48 @@
 import i18n from '../../i18n/index.js';
+import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
+import {
+    computeDerivative,
+    computeIntegral,
+    computeMovingAverage,
+    detectOutlierIndexes,
+    interpolateOutliers,
+    replaceOutliersWithNaN,
+    runDataToolPipeline,
+} from '../../compute/kernels/index.js';
+import * as kernelShared from '../../compute/kernels/shared.js';
 
 const DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage']);
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
 const INTEGRAL_METHODS = new Set(['trapezoidal', 'rectangular']);
+
+// One pool for the whole app. Created lazily so importing this module in a Node
+// test harness (which has no Worker) costs nothing.
+let computePool = null;
+function getComputePool() {
+    if (!canUseWorkers()) return null;
+    if (!computePool) {
+        computePool = new WorkerPool(
+            // The `new URL(..., import.meta.url)` form is what lets Vite find
+            // and emit the worker chunk; it must stay literal and inline.
+            () => new Worker(new URL('../../workers/compute-worker.js', import.meta.url), { type: 'module' }),
+            { name: 'compute', size: 2 },
+        );
+    }
+    return computePool;
+}
+
+// Kernels throw DataToolError with a stable code so they can run in a worker
+// without dragging the translation table along. Re-translate on the way out.
+function translateKernelError(err) {
+    const code = err?.code;
+    if (!code) return err;
+    const message = i18n.t(code);
+    const translated = new Error(message && message !== code ? message : err.message);
+    translated.code = code;
+    return translated;
+}
 
 export function installDataToolsMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -333,6 +371,9 @@ proto._autoApplyOutlierTool = function() {
         }
         this._syncDataTools();
     }).catch(err => {
+        // A superseded run is the normal outcome of dragging a slider, not a
+        // failure: a newer apply is already in flight and will report for it.
+        if (err?.cancelled) return;
         this._setOutlierMessage(err?.message || String(err), 'error');
         this._syncDataTools();
     });
@@ -392,7 +433,7 @@ proto.applyOutlierTool = function(options = {}) {
         : this._applyDataToolModifyMode(context, config, options);
 };
 
-proto._applyDataToolCreateMode = function(context, config, options = {}) {
+proto._applyDataToolCreateMode = async function(context, config, options = {}) {
     if (context.lazy) return this._applyLazyDataToolCreateMode(context, config, options);
 
     const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
@@ -409,7 +450,7 @@ proto._applyDataToolCreateMode = function(context, config, options = {}) {
             definitions?.delete(previousName);
         }
 
-        const result = this._buildDataToolResult(sourceVariable.data, sourceVariable, {
+        const result = await this._buildDataToolResultOffThread(sourceVariable.data, sourceVariable, {
             ...config,
             sourceName,
             targetName: outputName,
@@ -439,7 +480,7 @@ proto._applyDataToolCreateMode = function(context, config, options = {}) {
     }
 };
 
-proto._applyDataToolModifyMode = function(context, config, options = {}) {
+proto._applyDataToolModifyMode = async function(context, config, options = {}) {
     if (context.lazy) return this._applyLazyDataToolModifyMode(context, config, options);
 
     const { fileId, data, sourceName, sourceVariable, tool } = context;
@@ -452,7 +493,7 @@ proto._applyDataToolModifyMode = function(context, config, options = {}) {
         : Array.from(sourceVariable.data);
 
     try {
-        const result = this._buildDataToolResult(originalData, sourceVariable, {
+        const result = await this._buildDataToolResultOffThread(originalData, sourceVariable, {
             ...config,
             sourceName,
             targetName: sourceName,
@@ -489,7 +530,7 @@ proto._applyDataToolModifyMode = function(context, config, options = {}) {
     }
 };
 
-proto._applyDataToolAppendToCreatedVariable = function(context, config, existingDefinition, options = {}) {
+proto._applyDataToolAppendToCreatedVariable = async function(context, config, existingDefinition, options = {}) {
     const { fileId, data, sourceName, tool } = context;
     const normalized = this._normalizeDataToolDefinition(existingDefinition);
     const baseSourceName = normalized.sourceName;
@@ -507,7 +548,7 @@ proto._applyDataToolAppendToCreatedVariable = function(context, config, existing
             ? currentSteps.slice(0, -1).concat(nextStep)
             : currentSteps.concat(nextStep);
         const last = steps[steps.length - 1];
-        const result = this._buildDataToolResult(baseVariable.data, baseVariable, {
+        const result = await this._buildDataToolResultOffThread(baseVariable.data, baseVariable, {
             sourceName: baseSourceName,
             targetName: sourceName,
             targetMode: 'create',
@@ -774,32 +815,87 @@ proto._resetOutlierCreatedVariable = function(fileId, data, name, options = {}) 
     return true;
 };
 
-proto._buildDataToolResult = function(sourceValues, sourceVariable, config, data) {
-    if (Array.isArray(config.steps) && config.steps.length) {
-        return this._buildDataToolPipelineResult(sourceValues, sourceVariable, config, data);
+// Run the tool in the compute worker when one is available, then assemble the
+// result through the exact same code the synchronous path uses. Falls back to
+// running in-thread whenever workers are unavailable (file://, Node harnesses,
+// a crashed pool), so behaviour never depends on the transport.
+proto._buildDataToolResultOffThread = async function(sourceValues, sourceVariable, config, data) {
+    const pool = getComputePool();
+    const runInline = () => this._buildDataToolResult(sourceValues, sourceVariable, config, data);
+    if (!pool?.available) return runInline();
+
+    const steps = (Array.isArray(config.steps) && config.steps.length)
+        ? config.steps.map(step => this._normalizeDataToolStep(step))
+        : [{
+            tool: config.tool,
+            method: config.method,
+            params: config.params,
+            replacement: config.replacement,
+        }];
+
+    // Copies, because posting with a transfer list neuters the buffers on this
+    // side and the caller still owns the originals.
+    const values = kernelShared.copyFloat64(sourceValues);
+    const timeContext = this._getDataToolTimeContext(data, values.length);
+    const time = {
+        values: timeContext.values ? kernelShared.copyFloat64(timeContext.values) : null,
+        kind: timeContext.kind,
+    };
+    const transfer = [values.buffer];
+    if (time.values) transfer.push(time.values.buffer);
+
+    try {
+        const precomputed = await pool.run('dataTool:pipeline', { values, time, steps }, {
+            transfer,
+            // Last-one-wins per output variable: dragging the sensitivity slider
+            // supersedes the run already in flight instead of queueing behind it.
+            key: `dataTool:${config.targetName || config.sourceName || ''}`,
+        });
+        return this._buildDataToolResult(sourceValues, sourceVariable, config, data, precomputed);
+    } catch (err) {
+        if (err?.cancelled) throw err;
+        if (err?.workerUnavailable) return runInline();
+        throw translateKernelError(err);
     }
-    return this._buildSingleDataToolResult(sourceValues, sourceVariable, config, data);
 };
 
-proto._buildSingleDataToolResult = function(sourceValues, sourceVariable, config, data) {
-    if (config.tool === 'derivative') return this._buildDerivativeResult(sourceValues, sourceVariable, config, data);
-    if (config.tool === 'integrate') return this._buildIntegralResult(sourceValues, sourceVariable, config, data);
-    if (config.tool === 'movingAverage') return this._buildMovingAverageResult(sourceValues, sourceVariable, config);
-    return this._buildOutlierResult(sourceValues, sourceVariable, config);
+// `precomputed`, when supplied, carries values the compute worker already
+// produced: { stepValues: Float64Array[], stepMeta: object[] }. The assembly
+// below is then identical to the synchronous path — which is the point, so the
+// worker cannot drift from the fallback.
+proto._buildDataToolResult = function(sourceValues, sourceVariable, config, data, precomputed = null) {
+    if (Array.isArray(config.steps) && config.steps.length) {
+        return this._buildDataToolPipelineResult(sourceValues, sourceVariable, config, data, precomputed);
+    }
+    const pre = precomputed
+        ? { values: precomputed.stepValues[0], meta: precomputed.stepMeta[0] }
+        : null;
+    return this._buildSingleDataToolResult(sourceValues, sourceVariable, config, data, pre);
 };
 
-proto._buildDataToolPipelineResult = function(sourceValues, sourceVariable, config, data) {
+proto._buildSingleDataToolResult = function(sourceValues, sourceVariable, config, data, pre = null) {
+    if (config.tool === 'derivative') return this._buildDerivativeResult(sourceValues, sourceVariable, config, data, pre);
+    if (config.tool === 'integrate') return this._buildIntegralResult(sourceValues, sourceVariable, config, data, pre);
+    if (config.tool === 'movingAverage') return this._buildMovingAverageResult(sourceValues, sourceVariable, config, pre);
+    return this._buildOutlierResult(sourceValues, sourceVariable, config, pre);
+};
+
+proto._buildDataToolPipelineResult = function(sourceValues, sourceVariable, config, data, precomputed = null) {
     const steps = config.steps.map(step => this._normalizeDataToolStep(step));
     let currentValues = sourceValues;
     let currentVariable = sourceVariable;
     let result = null;
-    for (const step of steps) {
+    for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
+        const pre = precomputed
+            ? { values: precomputed.stepValues[i], meta: precomputed.stepMeta[i] }
+            : null;
         result = this._buildSingleDataToolResult(currentValues, currentVariable, {
             ...step,
             sourceName: config.sourceName,
             targetName: config.targetName,
             targetMode: config.targetMode,
-        }, data);
+        }, data, pre);
         currentValues = result.variable.data;
         currentVariable = result.variable;
     }
@@ -861,12 +957,14 @@ proto._baseDataToolVariable = function(sourceValues, sourceVariable, config, val
     return variable;
 };
 
-proto._buildOutlierResult = function(sourceValues, sourceVariable, config) {
-    const values = Array.from(sourceValues || []);
-    const outlierIndexes = this._detectOutlierIndexes(values, config.method, config.params);
-    const cleaned = config.replacement === 'interpolate'
-        ? this._interpolateOutliers(values, outlierIndexes)
-        : this._replaceOutliersWithNaN(values, outlierIndexes);
+proto._buildOutlierResult = function(sourceValues, sourceVariable, config, pre = null) {
+    const values = kernelShared.asFloat64(sourceValues);
+    const outlierIndexes = pre ? pre.meta.outlierIndexes : this._detectOutlierIndexes(values, config.method, config.params);
+    const cleaned = pre
+        ? pre.values
+        : (config.replacement === 'interpolate'
+            ? this._interpolateOutliers(values, outlierIndexes)
+            : this._replaceOutliersWithNaN(values, outlierIndexes));
     const variable = this._baseDataToolVariable(values, sourceVariable, {
         ...config,
         tool: 'removeOutliers',
@@ -879,8 +977,8 @@ proto._buildOutlierResult = function(sourceValues, sourceVariable, config) {
     return { variable, count: outlierIndexes.length, tool: 'removeOutliers', name: config.targetName };
 };
 
-proto._buildDerivativeResult = function(sourceValues, sourceVariable, config, data) {
-    const result = this._computeDerivativeValues(sourceValues, data, config.params);
+proto._buildDerivativeResult = function(sourceValues, sourceVariable, config, data, pre = null) {
+    const result = pre ? { values: pre.values } : this._computeDerivativeValues(sourceValues, data, config.params);
     const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
         ...config,
         tool: 'derivative',
@@ -888,8 +986,10 @@ proto._buildDerivativeResult = function(sourceValues, sourceVariable, config, da
     return { variable, count: result.values.length, tool: 'derivative', name: config.targetName };
 };
 
-proto._buildIntegralResult = function(sourceValues, sourceVariable, config, data) {
-    const result = this._computeIntegralValues(sourceValues, data, config.params);
+proto._buildIntegralResult = function(sourceValues, sourceVariable, config, data, pre = null) {
+    const result = pre
+        ? { values: pre.values, negativeDtCount: pre.meta.negativeDtCount }
+        : this._computeIntegralValues(sourceValues, data, config.params);
     const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
         ...config,
         tool: 'integrate',
@@ -903,8 +1003,8 @@ proto._buildIntegralResult = function(sourceValues, sourceVariable, config, data
     return { variable, count: result.values.length, tool: 'integrate', name: config.targetName, warning };
 };
 
-proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config) {
-    const values = this._computeMovingAverageValues(sourceValues, config.params);
+proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config, pre = null) {
+    const values = pre ? pre.values : this._computeMovingAverageValues(sourceValues, config.params);
     const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
         ...config,
         tool: 'movingAverage',
@@ -938,98 +1038,27 @@ proto._dataToolStepLabel = function(step) {
     return `remove outliers (${this._outlierDetectorDescription(step)}; ${step.replacement})`;
 };
 
+// ─── Data Tools math ──────────────────────────────────────────────────────
+// The algorithms themselves live in src/compute/kernels/, which is pure,
+// DOM-free and importable from a worker. What stays here is the app-facing
+// surface: reading the time context off the parsed file and turning a kernel
+// error code back into a translated message.
+//
+// These synchronous entry points are still the fallback (and what
+// scripts/test-data-tools.mjs exercises); applyDataTool prefers the worker.
+
 proto._computeDerivativeValues = function(sourceValues, data, params = {}) {
-    const values = Array.from(sourceValues || [], Number);
-    const n = values.length;
-    const out = new Array(n).fill(NaN);
-    if (n < 2) return { values: out };
-    const time = this._getDataToolTimeContext(data, n);
-    const method = DERIVATIVE_METHODS.has(params.method) ? params.method : 'centered';
-    // Pure difference: y[i]-y[i-1] with NO division by Δt, so duplicate
-    // timestamps (Δt=0) don't blow up. diff(time) reveals the sampling shape
-    // (flat = uniform, 0 = duplicate, spike = gap). First sample uses the
-    // forward difference to keep the length and the uniform baseline.
-    if (method === 'difference') {
-        const delta = (a, b) => {
-            const y0 = Number(values[a]);
-            const y1 = Number(values[b]);
-            return (Number.isFinite(y0) && Number.isFinite(y1)) ? y1 - y0 : NaN;
-        };
-        for (let i = 0; i < n; i++) out[i] = i === 0 ? delta(0, 1) : delta(i - 1, i);
-        return { values: out };
-    }
-    const diff = (a, b) => {
-        const y0 = Number(values[a]);
-        const y1 = Number(values[b]);
-        const dt = this._dataToolDelta(time, a, b);
-        if (!Number.isFinite(y0) || !Number.isFinite(y1) || !Number.isFinite(dt) || dt === 0) return NaN;
-        return (y1 - y0) / dt;
-    };
-    for (let i = 0; i < n; i++) {
-        if (method === 'forward') out[i] = i < n - 1 ? diff(i, i + 1) : diff(i - 1, i);
-        else if (method === 'backward') out[i] = i > 0 ? diff(i - 1, i) : diff(i, i + 1);
-        else out[i] = i === 0 ? diff(0, 1) : (i === n - 1 ? diff(n - 2, n - 1) : diff(i - 1, i + 1));
-    }
-    return { values: out };
+    const time = this._getDataToolTimeContext(data, sourceValues?.length || 0);
+    return computeDerivative(sourceValues, time, params);
 };
 
 proto._computeIntegralValues = function(sourceValues, data, params = {}) {
-    const values = Array.from(sourceValues || [], Number);
-    const n = values.length;
-    const out = new Array(n).fill(0);
-    if (!n) return { values: out, negativeDtCount: 0 };
-    const time = this._getDataToolTimeContext(data, n);
-    const method = INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
-    let acc = 0;
-    let negativeDtCount = 0;
-    for (let i = 1; i < n; i++) {
-        const dt = this._dataToolDelta(time, i - 1, i);
-        if (Number.isFinite(dt)) {
-            if (dt < 0) negativeDtCount++;
-            const y0 = Number(values[i - 1]);
-            const y1 = Number(values[i]);
-            if (method === 'rectangular') {
-                if (Number.isFinite(y0)) acc += y0 * dt;
-            } else if (Number.isFinite(y0) && Number.isFinite(y1)) {
-                acc += 0.5 * (y0 + y1) * dt;
-            }
-        }
-        out[i] = acc;
-    }
-    return { values: out, negativeDtCount };
+    const time = this._getDataToolTimeContext(data, sourceValues?.length || 0);
+    return computeIntegral(sourceValues, time, params);
 };
 
 proto._computeMovingAverageValues = function(sourceValues, params = {}) {
-    const values = Array.from(sourceValues || [], Number);
-    const n = values.length;
-    const window = this._normalizeMovingAverageWindow(params.window, n);
-    const left = Math.floor((window - 1) / 2);
-    const right = window - left - 1;
-    const out = new Array(n).fill(NaN);
-    let start = 0;
-    let end = -1;
-    let sum = 0;
-    let count = 0;
-    const add = index => {
-        const value = Number(values[index]);
-        if (!Number.isFinite(value)) return;
-        sum += value;
-        count++;
-    };
-    const remove = index => {
-        const value = Number(values[index]);
-        if (!Number.isFinite(value)) return;
-        sum -= value;
-        count--;
-    };
-    for (let i = 0; i < n; i++) {
-        const nextStart = Math.max(0, i - left);
-        const nextEnd = Math.min(n - 1, i + right);
-        while (end < nextEnd) add(++end);
-        while (start < nextStart) remove(start++);
-        out[i] = count ? sum / count : NaN;
-    }
-    return out;
+    return computeMovingAverage(sourceValues, params);
 };
 
 proto._getDataToolTimeContext = function(data, expectedLength) {
@@ -1048,197 +1077,23 @@ proto._getDataToolTimeContext = function(data, expectedLength) {
 };
 
 proto._dataToolDelta = function(time, a, b) {
-    if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0) return NaN;
-    if (time.kind === 'index' || !time.values) return b - a;
-    const t0 = Number(time.values[a]);
-    const t1 = Number(time.values[b]);
-    if (!Number.isFinite(t0) || !Number.isFinite(t1)) return NaN;
-    const delta = t1 - t0;
-    return time.kind === 'datetime' ? delta / 1000 : delta;
+    return kernelShared.timeDelta(kernelShared.normalizeTimeContext(time), a, b);
 };
 
 proto._detectOutlierIndexes = function(values, method, params = {}) {
-    if (method === 'bounds') return this._detectBoundsOutliers(values, params);
-    if (method === 'iqr') return this._detectIqrOutliers(values, params);
-    return this._detectSpikeOutliers(values, params);
-};
-
-proto._detectSpikeOutliers = function(values, params = {}) {
-    const spike = this._spikeParamsFromSensitivity(params.sensitivity);
-    const window = spike.window;
-    const threshold = spike.threshold;
-    const maxRun = spike.maxRun;
-    const half = Math.floor(window / 2);
-    const indexes = [];
-    const n = Number(values?.length) || 0;
-
-    for (let i = 0; i < n; i++) {
-        const value = Number(values[i]);
-        if (!Number.isFinite(value)) continue;
-        const start = Math.max(0, i - half);
-        const end = Math.min(n - 1, i + half);
-        const local = [];
-        for (let j = start; j <= end; j++) {
-            const neighbor = Number(values[j]);
-            if (Number.isFinite(neighbor)) local.push(neighbor);
-        }
-        if (local.length < 3) continue;
-        local.sort((a, b) => a - b);
-        const median = this._quantileSorted(local, 0.5);
-        const deviations = local.map(v => Math.abs(v - median)).sort((a, b) => a - b);
-        const mad = this._quantileSorted(deviations, 0.5);
-        const scale = mad > 0
-            ? 1.4826 * mad
-            : this._zeroMadTolerance(median);
-        if (Math.abs(value - median) > threshold * scale) indexes.push(i);
+    try {
+        return detectOutlierIndexes(values, method, params);
+    } catch (err) {
+        throw translateKernelError(err);
     }
-
-    return this._keepReturningOutlierRuns(indexes, values, maxRun, half, threshold);
-};
-
-proto._detectBoundsOutliers = function(values, params = {}) {
-    const hasLower = Number.isFinite(Number(params.lower));
-    const hasUpper = Number.isFinite(Number(params.upper));
-    if (!hasLower && !hasUpper) throw new Error(i18n.t('outlierBoundsMissing'));
-    const lower = hasLower ? Number(params.lower) : -Infinity;
-    const upper = hasUpper ? Number(params.upper) : Infinity;
-    if (lower > upper) throw new Error(i18n.t('outlierBoundsInvalid'));
-
-    const indexes = [];
-    for (let i = 0; i < (values?.length || 0); i++) {
-        const value = Number(values[i]);
-        if (Number.isFinite(value) && (value < lower || value > upper)) indexes.push(i);
-    }
-    return indexes;
-};
-
-proto._detectIqrOutliers = function(values, params = {}) {
-    const finite = Array.from(values || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
-    if (finite.length < 4) throw new Error(i18n.t('outlierNotEnoughData'));
-    const factor = this._positiveNumber(params.factor ?? params.iqrFactor, 1.5);
-    const q1 = this._quantileSorted(finite, 0.25);
-    const q3 = this._quantileSorted(finite, 0.75);
-    const iqr = q3 - q1;
-    const low = iqr > 0 ? q1 - factor * iqr : q1;
-    const high = iqr > 0 ? q3 + factor * iqr : q3;
-
-    const indexes = [];
-    for (let i = 0; i < (values?.length || 0); i++) {
-        const value = Number(values[i]);
-        if (Number.isFinite(value) && (value < low || value > high)) indexes.push(i);
-    }
-    return indexes;
-};
-
-proto._keepReturningOutlierRuns = function(indexes, values, maxRun, halfWindow, threshold) {
-    if (!indexes.length) return indexes;
-    const kept = [];
-    let run = [indexes[0]];
-    const flush = () => {
-        if (run.length <= maxRun && this._outlierRunReturns(run, values, halfWindow, threshold, maxRun)) kept.push(...run);
-    };
-    for (let i = 1; i < indexes.length; i++) {
-        if (indexes[i] === indexes[i - 1] + 1) {
-            run.push(indexes[i]);
-        } else {
-            flush();
-            run = [indexes[i]];
-        }
-    }
-    flush();
-    return kept;
-};
-
-proto._outlierRunReturns = function(run, values, halfWindow, threshold, maxRun) {
-    const start = run[0];
-    const end = run[run.length - 1];
-    const left = this._finiteValuesInRange(values, Math.max(0, start - halfWindow), start - 1);
-    const right = this._finiteValuesInRange(values, end + 1, Math.min((values?.length || 0) - 1, end + halfWindow));
-    if (!left.length || !right.length) return false;
-
-    const leftMedian = this._median(left);
-    const rightMedian = this._median(right);
-    const surroundings = left.concat(right).sort((a, b) => a - b);
-    const surroundingMedian = this._quantileSorted(surroundings, 0.5);
-    const deviations = surroundings.map(v => Math.abs(v - surroundingMedian)).sort((a, b) => a - b);
-    const mad = this._quantileSorted(deviations, 0.5);
-    const scale = mad > 0 ? 1.4826 * mad : this._zeroMadTolerance(surroundingMedian);
-    if (Math.abs(leftMedian - rightMedian) > threshold * scale) return false;
-
-    const runValues = run
-        .map(index => Number(values[index]))
-        .filter(Number.isFinite)
-        .sort((a, b) => a - b);
-    if (!runValues.length) return false;
-    const runMedian = this._quantileSorted(runValues, 0.5);
-    const runTolerance = Math.max(threshold * scale, this._zeroMadTolerance(runMedian));
-    let expandedStart = start;
-    while (expandedStart > 0) {
-        const value = Number(values[expandedStart - 1]);
-        if (!Number.isFinite(value) || Math.abs(value - runMedian) > runTolerance) break;
-        expandedStart--;
-    }
-    let expandedEnd = end;
-    while (expandedEnd + 1 < (values?.length || 0)) {
-        const value = Number(values[expandedEnd + 1]);
-        if (!Number.isFinite(value) || Math.abs(value - runMedian) > runTolerance) break;
-        expandedEnd++;
-    }
-    if (expandedEnd - expandedStart + 1 > maxRun) return false;
-    return Math.abs(runMedian - surroundingMedian) > threshold * scale;
-};
-
-proto._finiteValuesInRange = function(values, start, end) {
-    const out = [];
-    for (let i = start; i <= end; i++) {
-        const value = Number(values?.[i]);
-        if (Number.isFinite(value)) out.push(value);
-    }
-    return out;
-};
-
-proto._median = function(values) {
-    return this._quantileSorted(values.slice().sort((a, b) => a - b), 0.5);
 };
 
 proto._replaceOutliersWithNaN = function(values, outlierIndexes) {
-    const cleaned = Array.from(values || []);
-    outlierIndexes.forEach(index => { cleaned[index] = NaN; });
-    return cleaned;
+    return replaceOutliersWithNaN(values, outlierIndexes);
 };
 
 proto._interpolateOutliers = function(values, outlierIndexes) {
-    const n = values?.length || 0;
-    const cleaned = Array.from(values || []);
-    if (!n || !outlierIndexes?.length) return cleaned;
-
-    // O(n) instead of O(n²): precompute, in two passes, the nearest VALID
-    // (non-outlier and finite) neighbour to each index. The old per-outlier
-    // left/right walk was quadratic when most points are outliers (e.g. a
-    // bound that removes the whole signal), which froze the app.
-    const outlierSet = new Set(outlierIndexes);
-    const valid = new Array(n);
-    for (let i = 0; i < n; i++) valid[i] = !outlierSet.has(i) && Number.isFinite(Number(values[i]));
-
-    const prevValid = new Array(n);
-    let last = -1;
-    for (let i = 0; i < n; i++) { if (valid[i]) last = i; prevValid[i] = last; }
-    const nextValid = new Array(n);
-    let next = -1;
-    for (let i = n - 1; i >= 0; i--) { if (valid[i]) next = i; nextValid[i] = next; }
-
-    for (const index of outlierIndexes) {
-        const left = prevValid[index];   // nearest valid < index (index is invalid)
-        const right = nextValid[index];  // nearest valid > index
-        if (left >= 0 && right >= 0) {
-            const l = Number(values[left]);
-            const r = Number(values[right]);
-            cleaned[index] = l + ((index - left) / (right - left)) * (r - l);
-        } else {
-            cleaned[index] = NaN;
-        }
-    }
-    return cleaned;
+    return interpolateOutliers(values, outlierIndexes);
 };
 
 proto._getOutlierContext = function(options = {}) {
@@ -1804,44 +1659,31 @@ proto._outlierDetectorDescription = function(config) {
     return `spike/dropout sensitivity ${config.params.sensitivity}`;
 };
 
+// Numeric helpers shared with the kernels. The definitions moved to
+// src/compute/kernels/shared.js so the worker can use them; these stay as
+// aliases because the UI code above calls them on `this` in a dozen places.
 proto._quantileSorted = function(sorted, p) {
-    if (!sorted.length) return NaN;
-    const pos = (sorted.length - 1) * p;
-    const base = Math.floor(pos);
-    const rest = pos - base;
-    const next = sorted[base + 1];
-    return next === undefined ? sorted[base] : sorted[base] + rest * (next - sorted[base]);
+    return kernelShared.quantileSorted(sorted, p);
 };
 
 proto._zeroMadTolerance = function(median) {
-    return Math.max(Number.EPSILON * 32 * Math.max(1, Math.abs(Number(median) || 0)), 1e-12);
+    return kernelShared.zeroMadTolerance(median);
 };
 
 proto._positiveNumber = function(value, fallback) {
-    const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? n : fallback;
+    return kernelShared.positiveNumber(value, fallback);
 };
 
 proto._normalizeSensitivity = function(value) {
-    const n = Number(value);
-    return Number.isFinite(n) ? Math.max(1, Math.min(10, Math.round(n))) : 6;
+    return kernelShared.normalizeSensitivity(value);
 };
 
 proto._normalizeMovingAverageWindow = function(value, maxLength = Infinity) {
-    let n = Math.round(Number(value));
-    if (!Number.isFinite(n)) n = 21;
-    const max = Number.isFinite(maxLength) ? Math.max(2, Math.round(maxLength)) : Number.MAX_SAFE_INTEGER;
-    return Math.max(2, Math.min(max, n));
+    return kernelShared.normalizeMovingAverageWindow(value, maxLength);
 };
 
 proto._spikeParamsFromSensitivity = function(sensitivity) {
-    const level = this._normalizeSensitivity(sensitivity);
-    const maxRuns = [1, 2, 3, 4, 5, 6, 8, 10, 13, 16];
-    return {
-        window: 51,
-        threshold: Math.max(4, 12 - level),
-        maxRun: maxRuns[level - 1],
-    };
+    return kernelShared.spikeParamsFromSensitivity(sensitivity);
 };
 
 proto._sensitivityFromLegacyThreshold = function(threshold) {
