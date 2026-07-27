@@ -1,9 +1,12 @@
 // Off-thread host for the Data Tools kernels and the FFT.
 //
-// This replaces the bespoke fft-worker.js lifecycle with the shared envelope
-// from src/core/worker-pool.js. Everything it imports is pure compute — no DOM,
-// no i18n, no Plotly — which is what keeps the worker chunk small enough that
-// spawning it is not itself a stall.
+// Everything it imports is pure compute — no DOM, no i18n, no Plotly — which is
+// what keeps the worker chunk small enough that spawning it is not itself a
+// stall.
+//
+// The `fft:spectrum` op is here so fft-methods.js can eventually drop its own
+// worker (src/workers/fft-worker.js) and its hand-rolled lifecycle. That
+// migration has not happened yet; both exist today.
 
 import { runDataToolPipeline } from '../compute/kernels/index.js';
 import { computeAmplitudeSpectrum } from '../utils/fft.js';
@@ -54,6 +57,10 @@ self.addEventListener('message', (event) => {
                 // into a raw English string.
                 code: err?.code || '',
                 stack: err?.stack || '',
+                // Parsers attach their own fields (pickle reports .format and
+                // .type) and the UI turns them into translated messages, so a
+                // fixed name/message pair would lose the diagnosis.
+                details: ownProps(err),
             },
         });
     }
@@ -66,4 +73,16 @@ function collectBuffers(views) {
         if (buffer instanceof ArrayBuffer && buffer.byteLength > 0) buffers.add(buffer);
     }
     return [...buffers];
+}
+
+// Own enumerable properties of an Error, minus the ones already sent above.
+function ownProps(err) {
+    if (!err || typeof err !== 'object') return {};
+    const out = {};
+    for (const key of Object.keys(err)) {
+        if (key === 'code' || key === 'stack' || key === 'message' || key === 'name') continue;
+        const value = err[key];
+        if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) out[key] = value;
+    }
+    return out;
 }

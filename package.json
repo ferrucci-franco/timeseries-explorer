@@ -54,6 +54,7 @@
     "test:data-tools": "node scripts/test-data-tools.mjs",
     "test:compute-kernels": "node scripts/test-compute-kernels.mjs",
     "test:resample-kernel": "node scripts/test-resample-kernel.mjs",
+    "test:parse-worker": "node scripts/test-parse-worker.mjs",
     "test:variable-sign": "node scripts/test-variable-sign-toggle.mjs",
     "test:file-transform": "node scripts/test-file-transform-reset.mjs",
     "test:csv-export": "node scripts/test-csv-export-time-columns.mjs",
@@ -99,6 +100,7 @@
     "test:release": "node scripts/run-release-tests.mjs",
     "bench:data-tools": "node scripts/bench-data-tools.mjs",
     "bench:zoom": "node scripts/bench-zoom.mjs",
+    "bench:parse": "node --max-old-space-size=8192 scripts/bench-parse.mjs",
     "bench:fixtures": "python scripts/gen-perf-fixtures.py"
   },
   "devDependencies": {

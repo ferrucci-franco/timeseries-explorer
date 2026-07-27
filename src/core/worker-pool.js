@@ -149,6 +149,8 @@ export default class WorkerPool {
         err.name = error?.name || 'Error';
         if (error?.code) err.code = error.code;
         if (error?.stack) err.stack = error.stack;
+        // Parser-specific fields the UI needs to build a translated message.
+        if (error?.details) Object.assign(err, error.details);
         this._settle(id, 'reject', err);
     }
 

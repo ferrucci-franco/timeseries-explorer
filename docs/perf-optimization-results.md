@@ -24,6 +24,14 @@ npm run bench:data-tools -- --json bench/results/point1-data-tools.json
 npm run bench:zoom -- --json bench/results/point2-zoom.json
 ```
 
+```bash
+npm run bench:parse -- --json bench/results/point3-parse.json
+```
+
+```bash
+npm run bench:derived -- --json bench/results/point4-derived.json
+```
+
 Correctness is verified separately and must be read alongside the timings — a
 faster kernel that returns different numbers is worthless:
 
@@ -33,6 +41,14 @@ npm run test:compute-kernels
 
 ```bash
 npm run test:resample-kernel
+```
+
+```bash
+npm run test:parse-worker
+```
+
+```bash
+npm run test:expr-compiler
 ```
 
 Both compare against frozen verbatim copies of the pre-rewrite code
@@ -176,3 +192,89 @@ the gain there is real but not something a user would notice.
 
 This confirms the audit's finding that the zoom cost was CPU-side data
 marshalling, not rendering. No GPU work was involved in any of it.
+
+---
+
+## Point 3 — every format parses off the main thread
+
+**What changed**
+
+Only CSV had a worker. `.mat`, `.pkl`, `.nc` and spreadsheets all decoded
+synchronously on the UI thread; the Excel path in `file-methods.js` documented
+"tens of seconds of blocked main thread" in its own comment and was right.
+
+`src/workers/parse-handlers.js` now holds one handler per format, each importing
+its parser dynamically so opening a CSV does not pull h5wasm (4.4 MB) and the
+xlsx bundle (500 KB) into the worker. `src/workers/parse-worker.js` is the
+browser shell over it; `scripts/helpers/parse-worker-node.mjs` is the same shell
+over `node:worker_threads`, which is what lets the test run the real handler
+code across a real thread boundary rather than a second copy written for the
+test.
+
+Two things had to survive the move: parsed columns come back by **transfer**
+rather than structured clone (~60 MB per file at the large tier that would
+otherwise be duplicated and discarded), and parser-specific error fields — the
+pickle parser reports `.format` and `.type`, which the UI turns into translated
+messages — are serialized alongside `code` and reattached by the pool.
+
+`src/workers/result-parser-worker.js` and its hand-rolled lifecycle are gone;
+CSV goes through the same pool as everything else.
+
+**Measured** (`bench/results/point3-parse.json`)
+
+This benchmark does **not** measure throughput. Moving a parser to a worker does
+not make it faster — a `.mat` v7.3 or an `.xlsx` has to decompress its whole
+container either way. What changes is whether the interface can draw a frame
+meanwhile. So the metric is event-loop lag: a timer set for every 2 ms, worst
+overshoot recorded. That overshoot *is* the freeze the user sees; 16.7 ms is one
+frame at 60 fps.
+
+| Format | Tier | Size | Parse work | Blocked before | Blocked after |
+| :--- | :--- | ---: | ---: | ---: | ---: |
+| mat | small | 11 MB | 272 ms | **272 ms** | **29 ms** |
+| pkl | small | 11 MB | 232 ms | **232 ms** | **16 ms** |
+| nc | small | 11 MB | 320 ms | **320 ms** | **22 ms** |
+| csv | small | 11 MB | 590 ms | **590 ms** | **70 ms** |
+| xlsx | small | 18 MB | 16.6 s | **16.6 s** | **186 ms** |
+| mat | medium | 114 MB | 4.00 s | **4.00 s** | **85 ms** |
+| pkl | medium | 114 MB | 12.6 s | **12.6 s** | **150 ms** |
+| nc | medium | 114 MB | 12.9 s | **12.9 s** | **130 ms** |
+| csv | medium | 113 MB | 29.1 s | **29.1 s** | **4.36 s** |
+| xlsx | medium | 126 MB | 112.7 s | **112.7 s** | **644 ms** |
+| mat | large | 572 MB | 30.8 s | **30.8 s** | **1.90 s** |
+| nc | large | 572 MB | 105.0 s | **105.0 s** | **1.02 s** |
+| xlsx | large | 126 MB | 40.4 s | **40.4 s** | **91 ms** |
+
+A 126 MB spreadsheet froze the interface for **112 seconds**. It now freezes it
+for 0.6 s. That is the whole point of this item.
+
+**What did not go well, stated plainly**
+
+- **CSV at the medium tier still blocks for 4.36 s** on the way back. The legacy
+  CSV parser stores columns as plain JS arrays, which have no `ArrayBuffer` to
+  transfer, so the result is structured-cloned instead. Mitigating factor: in
+  the real app a 113 MB CSV goes through DuckDB, not this parser, and DuckDB
+  already returns typed columns from its own worker. Making the legacy parser
+  emit `Float64Array` would fix it and is worth doing separately.
+- **Two large-tier fixtures could not be parsed at all**, by either path. These
+  are pre-existing limits, not regressions, and both are reported by the
+  benchmark rather than skipped:
+  - `perf-large.pkl` (572 MB): `Unsupported ndarray size 67500000` — a limit in
+    the pickle parser.
+  - `perf-large.csv` (563 MB): `Cannot create a string longer than 0x1fffffe8
+    characters` — the ~512 MB `TextDecoder` ceiling already documented in
+    `bench/baseline.md` and `docs/large-files.md`. The app routes files this
+    size to DuckDB precisely because of it.
+- The residual blocking in the worker column (16–190 ms at small/medium) is the
+  result crossing back plus GC on the main thread. Real, but two to three orders
+  of magnitude below what it replaced.
+
+---
+
+## Build note
+
+`vite.config.js` gained `worker: { format: 'es' }`. The parse worker loads each
+format's parser with a dynamic `import()`, making it a code-splitting build,
+which Vite's default `iife` worker format cannot do. The workers were already
+created with `{ type: 'module' }`, so this only makes the bundle match the
+runtime.
