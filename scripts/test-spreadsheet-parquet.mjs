@@ -86,12 +86,18 @@ check(() => {
 check(() => {
     // Converting only in memory would make this open faster and every future
     // one exactly as slow as before, which is the opposite of the point.
-    const convert = fileMethods.slice(fileMethods.indexOf('proto._runSpreadsheetParquetConversion'));
-    assert.match(convert.slice(0, 2600), /_saveBytesToDisk/, 'the browser result is offered for keeping');
-    const save = fileMethods.slice(fileMethods.indexOf('proto._saveBytesToDisk'));
-    assert.match(save.slice(0, 1200), /showSaveFilePicker/, 'a real save dialog when the browser has one');
-    assert.match(save.slice(0, 1200), /AbortError/, 'cancelling the save is not treated as a failure');
-    assert.match(save.slice(0, 1200), /link\.download/, 'and a download where it does not');
+    // Offered for keeping, but not written behind the user's back: a save
+    // dialog only opens right after a click, and by the time a conversion
+    // finishes that click is long gone. The offer is a dialog of its own, and
+    // the save runs on its answer.
+    const convert = fileMethods.slice(fileMethods.indexOf('proto._convertSpreadsheetEntryToParquet'));
+    assert.match(convert.slice(0, 2600), /_deliverConvertedBeforeLoad/, 'the browser result is offered for keeping');
+    const deliver = fileMethods.slice(fileMethods.indexOf('proto._saveConvertedParquet'));
+    assert.match(deliver.slice(0, 900), /_saveBytesToDisk/, 'and that offer is what writes it');
+    const save = fileMethods.slice(fileMethods.indexOf('proto._saveBytesToDisk'), fileMethods.indexOf('proto._saveBytesToDisk') + 1900);
+    assert.match(save, /showSaveFilePicker/, 'a real save dialog when the browser has one');
+    assert.match(save, /AbortError/, 'cancelling the save is not treated as a failure');
+    assert.match(save, /link\.download/, 'and a download where it does not');
 });
 
 check(() => {

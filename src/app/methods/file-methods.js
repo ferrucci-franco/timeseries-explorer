@@ -2011,11 +2011,17 @@ proto._offerLargeTextConversion = async function(file, options = {}) {
         }
         return RETRY_CONVERSION_OFFER;
     }
+    // Nothing is on disk yet in the browser, and the save dialog needs a fresh
+    // click to open at all. Backing out of that question puts the original
+    // choices back rather than opening a file the user just declined to keep.
+    if (result.needsSaving && !(await this._deliverConvertedBeforeLoad(result))) {
+        return RETRY_CONVERSION_OFFER;
+    }
     return {
         file: result.file,
         localPath: result.localPath,
         temporaryParquetPath: result.temporary ? result.localPath : '',
-        keepOverlayUntilLoaded: true,
+        keepOverlayUntilLoaded: !result.needsSaving,
     };
 };
 
@@ -2052,13 +2058,18 @@ proto._runTextFileParquetConversion = async function(file, options = {}) {
             return { cancelled: true, at: 'conversion', stillRunning: false };
         }
         const name = `${this._fileBaseName(file.name || 'data')}.parquet`;
-        const saved = await this._saveBytesToDisk(parquetBytes, name);
-        if (!keepOverlayUntilLoaded) this._hideFileLoadingOverlay();
+        // Not saved here. A save dialog only opens right after a click, and by
+        // now the click that started this is tens of seconds old — the browser
+        // refuses, the code fell back to a download, and the user was told the
+        // file had been saved when nothing had been written. The caller asks,
+        // and saves from that answer, while the click is still fresh.
+        this._hideFileLoadingOverlay();
         return {
             file: new File([parquetBytes], name, { type: 'application/octet-stream' }),
+            bytes: parquetBytes,
             localPath: '',
             temporary: false,
-            saved,
+            needsSaving: true,
         };
     }
 
@@ -2086,7 +2097,7 @@ proto._runTextFileParquetConversion = async function(file, options = {}) {
         file: parquetFile,
         localPath: parquetFile.localPath || '',
         temporary,
-        saved: true,
+        needsSaving: false,
     };
 };
 
@@ -2465,9 +2476,12 @@ proto._conversionWasCancelled = async function(result) {
 // the parsing has proven itself, so the answer is an informed one. It also
 // costs nothing to say no — the file is already written either way.
 proto._offerToOpenConverted = async function(result) {
-    const name = result.file?.name || '';
-    const body = (result.saved ? i18n.t('convertToParquetDoneBody') : i18n.t('convertToParquetDoneUnsavedBody'))
-        .replace('{file}', result.localPath || name)
+    // In the browser nothing is written yet, and writing it is a question of
+    // its own — one that has to be asked before this one can mean anything.
+    if (result.needsSaving) return this._deliverConvertedFromMenu(result);
+
+    const body = i18n.t('convertToParquetDoneBody')
+        .replace('{file}', result.localPath || result.file?.name || '')
         .replace('{size}', this._formatBytes(Number(result.file?.size) || 0));
     const choice = await Modal.choice(body, {
         title: i18n.t('convertToParquetDoneTitle'),
@@ -2488,6 +2502,119 @@ proto._offerToOpenConverted = async function(result) {
     });
     if (choice !== 'open') return;
     await this.loadFiles([{ file: result.file, fileHandle: null, localPath: result.localPath || '' }]);
+};
+
+/**
+ * A converted file that exists only in this tab's memory, and what to do with
+ * it. One dialog, and the save runs on the answer.
+ *
+ * The order matters and used to be wrong. Saving happened first, unasked, and
+ * failed silently: showSaveFilePicker only opens right after a click, the
+ * click that started the conversion was tens of seconds old, so the browser
+ * refused and the code quietly downloaded the file instead. The "open it now?"
+ * question then arrived BEFORE the download's own dialog, said the file had
+ * been saved, and opening it showed the copy in memory — while cancelling that
+ * dialog wrote nothing at all.
+ *
+ * Now the click on one of these buttons is what opens the save dialog, so the
+ * browser allows it, and the file is only opened once it has been written.
+ */
+proto._deliverConvertedFromMenu = async function(result) {
+    for (;;) {
+        const body = i18n.t('convertToParquetReadyBody')
+            .replace('{file}', result.file?.name || '')
+            .replace('{size}', this._formatBytes(Number(result.file?.size) || 0));
+        const choice = await Modal.choice(body, {
+            title: i18n.t('convertToParquetDoneTitle'),
+            icon: '✅',
+            choices: [
+                {
+                    value: 'saveOpen',
+                    text: i18n.t('convertToParquetSaveAndOpen'),
+                    className: 'modal-btn-confirm',
+                    autoFocus: true,
+                },
+                {
+                    value: 'save',
+                    text: i18n.t('convertToParquetSaveOnly'),
+                    className: 'modal-btn-confirm modal-btn-secondary-confirm',
+                },
+                {
+                    value: 'discard',
+                    text: i18n.t('convertToParquetDiscard'),
+                    className: 'modal-btn-cancel',
+                },
+            ],
+        });
+        if (choice !== 'saveOpen' && choice !== 'save') return;
+
+        const outcome = await this._saveConvertedParquet(result);
+        // Cancelling the save dialog is a change of mind about where, not
+        // about whether: the same three choices come back.
+        if (outcome === 'cancelled') continue;
+        if (choice === 'saveOpen') {
+            await this.loadFiles([{ file: result.file, fileHandle: null, localPath: '' }]);
+        }
+        return;
+    }
+};
+
+/**
+ * The same question for a conversion that happened on the way to opening a
+ * file. Opening is what the user came for, so it is not in doubt; only whether
+ * the converted file is kept is.
+ *
+ * @returns {Promise<boolean>} false when the user backs out entirely
+ */
+proto._deliverConvertedBeforeLoad = async function(result) {
+    for (;;) {
+        const body = i18n.t('convertToParquetReadyBody')
+            .replace('{file}', result.file?.name || '')
+            .replace('{size}', this._formatBytes(Number(result.file?.size) || 0));
+        const choice = await Modal.choice(body, {
+            title: i18n.t('convertToParquetDoneTitle'),
+            icon: '✅',
+            choices: [
+                {
+                    value: 'saveOpen',
+                    text: i18n.t('convertToParquetSaveAndOpen'),
+                    className: 'modal-btn-confirm',
+                    autoFocus: true,
+                },
+                {
+                    value: 'open',
+                    text: i18n.t('convertToParquetOpenWithoutSaving'),
+                    className: 'modal-btn-confirm modal-btn-secondary-confirm',
+                },
+                {
+                    value: 'discard',
+                    text: i18n.t('convertToParquetDiscard'),
+                    className: 'modal-btn-cancel',
+                },
+            ],
+        });
+        if (choice === 'open') return true;
+        if (choice !== 'saveOpen') return false;
+        const outcome = await this._saveConvertedParquet(result);
+        if (outcome === 'cancelled') continue;
+        return true;
+    }
+};
+
+// Called straight from a dialog answer, so the save picker still has the
+// activation it requires. A download is reported as a download: where it ends
+// up is between the browser and the user, and this page never finds out.
+proto._saveConvertedParquet = async function(result) {
+    const name = result.file?.name || 'data.parquet';
+    const outcome = await this._saveBytesToDisk(result.bytes || result.file, name);
+    if (outcome === 'downloaded') {
+        await Modal.alert(
+            i18n.t('parquetDownloadingTitle'),
+            i18n.t('parquetDownloadingBody').replace('{file}', name),
+            { icon: '⬇' },
+        );
+    }
+    return outcome;
 };
 
 // ─── Spreadsheet → Parquet ────────────────────────────────────────────────
@@ -2618,6 +2745,17 @@ proto._spreadsheetParquetName = function(entry, sheetName) {
 // Hand bytes to the user. showSaveFilePicker lets them choose where it lands
 // and is the only way the file survives usefully; without it (Firefox, Safari)
 // a download is the best the browser allows.
+/**
+ * Write bytes where the user wants them, and say what actually happened.
+ *
+ * This used to return true for a download, which is a claim it cannot make. A
+ * download is handed to the browser and then leaves the page's sight: it may
+ * land in the downloads folder, it may open a dialog the user cancels, and
+ * nothing reports back either way. Saying "saved" on the strength of that is
+ * how a converted file got announced as written to disk when it never was.
+ *
+ * @returns {Promise<'saved'|'downloaded'|'cancelled'>}
+ */
 proto._saveBytesToDisk = async function(bytes, filename) {
     const blob = new Blob([bytes], { type: 'application/octet-stream' });
     const picker = globalThis.showSaveFilePicker;
@@ -2630,11 +2768,13 @@ proto._saveBytesToDisk = async function(bytes, filename) {
             const writable = await handle.createWritable();
             await writable.write(blob);
             await writable.close();
-            return true;
+            return 'saved';
         } catch (err) {
-            // Cancelling the dialog is a normal answer, not a failure: the
-            // caller still gets the converted file to open right now.
-            if (err?.name === 'AbortError') return false;
+            // Cancelling the dialog is a normal answer, not a failure.
+            if (err?.name === 'AbortError') return 'cancelled';
+            // Anything else — most often a SecurityError because the click
+            // that led here is too old to still count as a gesture — leaves
+            // the download as the only way to hand the file over.
             console.warn('[parquet] save picker failed; falling back to download', err);
         }
     }
@@ -2644,7 +2784,7 @@ proto._saveBytesToDisk = async function(bytes, filename) {
     link.download = filename;
     link.click();
     URL.revokeObjectURL(url);
-    return true;
+    return 'downloaded';
 };
 
 proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = false } = {}) {
@@ -2675,7 +2815,11 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
         temporary,
         keepOverlayUntilLoaded: true,
     });
-    return result.cancelled ? null : result.file;
+    if (result.cancelled) return null;
+    // Same as the text route: in the browser the file is still only in memory,
+    // and saving it needs a click of its own.
+    if (result.needsSaving && !(await this._deliverConvertedBeforeLoad(result))) return null;
+    return result.file;
 };
 
 /**
@@ -2718,16 +2862,16 @@ proto._runSpreadsheetParquetConversion = async function(csvBuffer, options = {})
                 signal: controller.signal,
             });
             this._setParquetConversionOverlayLoading();
-            // Offer to keep it. Converting only in memory would make this open
-            // faster and every future one exactly as slow as before, which is
-            // the opposite of the point.
-            const saved = await this._saveBytesToDisk(parquetBytes, parquetName);
-            if (!keepOverlay) this._hideFileLoadingOverlay();
+            // Not saved here, for the same reason as the text route: a save
+            // dialog only opens right after a click, and this one is long
+            // over. The caller asks and saves from that answer.
+            this._hideFileLoadingOverlay();
             return {
                 file: new File([parquetBytes], parquetName, { type: 'application/octet-stream' }),
+                bytes: parquetBytes,
                 localPath: '',
                 temporary: false,
-                saved,
+                needsSaving: true,
             };
         } catch (err) {
             if (!err?.cancelled) throw err;
@@ -2770,7 +2914,7 @@ proto._runSpreadsheetParquetConversion = async function(csvBuffer, options = {})
         this._setParquetConversionOverlayLoading();
         const file = await this._readLocalResultPath(result.outputPath);
         if (!keepOverlay) this._hideFileLoadingOverlay();
-        return { file, localPath: file?.localPath || result.outputPath, temporary, saved: true };
+        return { file, localPath: file?.localPath || result.outputPath, temporary, needsSaving: false };
     } finally {
         clearInterval(timer);
     }

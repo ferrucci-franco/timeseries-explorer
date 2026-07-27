@@ -93,8 +93,69 @@ check(() => {
     const offer = from(fileMethods, 'proto._offerToOpenConverted', 1800);
     assert.match(offer, /convertToParquetOpenNow/, 'one button opens it');
     assert.match(offer, /convertToParquetClose/, 'the other just closes');
-    assert.match(offer, /convertToParquetDoneUnsavedBody/, 'and a cancelled save is not reported as a save');
     assert.match(offer, /this\.loadFiles\(/, 'opening goes through the normal load');
+    // In the browser nothing has been written yet, and that question comes
+    // first — this dialog would otherwise announce a save that never happened.
+    assert.match(offer, /if \(result\.needsSaving\) return this\._deliverConvertedFromMenu\(result\)/,
+        'a file still in memory goes to the dialog that saves it');
+});
+
+// ─── Saving happens on a click, and says what really happened ─────────────
+
+check(() => {
+    // showSaveFilePicker only opens right after a click. The conversion takes
+    // tens of seconds, so saving straight after it was refused by the browser,
+    // silently fell back to a download, and the "open it now?" question then
+    // arrived BEFORE the download's own dialog claiming the file was saved.
+    for (const marker of ['proto._runTextFileParquetConversion', 'proto._runSpreadsheetParquetConversion']) {
+        const run = from(fileMethods, marker, 3200);
+        const browserBranch = run.slice(0, run.indexOf('let outputPath'));
+        assert.ok(!/_saveBytesToDisk/.test(browserBranch), `${marker} does not save behind the user's back`);
+        assert.match(browserBranch, /needsSaving: true/, `${marker} says the file is still only in memory`);
+    }
+});
+
+check(() => {
+    const deliver = from(fileMethods, 'proto._deliverConvertedFromMenu', 2600);
+    assert.match(deliver, /convertToParquetSaveAndOpen/, 'save and open');
+    assert.match(deliver, /convertToParquetSaveOnly/, 'or just save');
+    assert.match(deliver, /convertToParquetDiscard/, 'or keep nothing');
+    // The save runs on the answer, so the picker still has its activation.
+    const ask = deliver.indexOf('Modal.choice');
+    const save = deliver.indexOf('_saveConvertedParquet');
+    const open = deliver.indexOf('this.loadFiles(');
+    assert.ok(ask > 0 && ask < save, 'the save is started by the answer to the dialog');
+    assert.ok(save < open, 'and the file is only opened once it has been written');
+    assert.match(deliver, /if \(outcome === 'cancelled'\) continue;/, 'cancelling the save returns to the choices');
+});
+
+check(() => {
+    // The conversion on the way to opening a file has the same problem, and
+    // there opening is not in doubt — only whether the file is kept.
+    const deliver = from(fileMethods, 'proto._deliverConvertedBeforeLoad', 2200);
+    assert.match(deliver, /convertToParquetOpenWithoutSaving/, 'it can be opened without keeping it');
+    const offer = from(fileMethods, 'proto._offerLargeTextConversion', 5400);
+    assert.match(offer, /result\.needsSaving && !\(await this\._deliverConvertedBeforeLoad\(result\)\)/,
+        'the load-time route asks too');
+    const sheet = from(fileMethods, 'proto._convertSpreadsheetEntryToParquet', 2500);
+    assert.match(sheet, /_deliverConvertedBeforeLoad\(result\)/, 'and so does the sheet route');
+});
+
+check(() => {
+    const save = from(fileMethods, 'proto._saveBytesToDisk', 1800);
+    // A download leaves the page's sight: it may land in the downloads folder,
+    // it may open a dialog the user cancels, and nothing reports back. Saying
+    // "saved" on the strength of that is what announced a file as written to
+    // disk when it never was.
+    assert.match(save, /return 'saved'/, 'a real write is a save');
+    assert.match(save, /return 'cancelled'/, 'a cancelled dialog is a cancellation');
+    assert.match(save, /return 'downloaded'/, 'and a download is only a download');
+    assert.ok(!/return true/.test(save), 'no outcome is claimed that cannot be known');
+    const report = from(fileMethods, 'proto._saveConvertedParquet', 900);
+    assert.match(report, /parquetDownloadingBody/, 'and the user is told when that is what happened');
+    for (const lang of LANGS) {
+        assert.match(translations[lang].parquetDownloadingBody, /\{file\}/, `${lang} names the file`);
+    }
 });
 
 // ─── One file, and only the ones it can actually convert ──────────────────
@@ -175,8 +236,10 @@ check(() => {
         'extraConvertToParquet', 'extraConvertToParquetTooltip', 'convertToParquetTitle',
         'convertToParquetPickTitle', 'convertToParquetBody', 'convertToParquetReviewedBody',
         'convertToParquetRun', 'convertToParquetUnsupported', 'convertToParquetDoneTitle',
-        'convertToParquetDoneBody', 'convertToParquetDoneUnsavedBody', 'convertToParquetOpenNow',
-        'convertToParquetClose',
+        'convertToParquetDoneBody', 'convertToParquetOpenNow', 'convertToParquetClose',
+        'convertToParquetReadyBody', 'convertToParquetSaveAndOpen', 'convertToParquetSaveOnly',
+        'convertToParquetOpenWithoutSaving', 'convertToParquetDiscard',
+        'parquetDownloadingTitle', 'parquetDownloadingBody',
     ];
     for (const lang of LANGS) {
         for (const key of keys) {
