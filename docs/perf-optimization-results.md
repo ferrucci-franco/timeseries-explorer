@@ -271,6 +271,134 @@ for 0.6 s. That is the whole point of this item.
 
 ---
 
+## Point 4 — derived-variable formulas are compiled, not interpreted
+
+**What changed**
+
+The evaluator walked the AST once per formula and every node materialized a
+whole array: each binary op allocated `new Array(n)`, each function did
+`.map(fn)` with a closure. For `sqrt(x^2 + y^2)` over 5 M samples that is five
+intermediate 5 M-element arrays and a megamorphic call per element per node.
+
+`src/expr/compile.js` emits one function per formula — one loop, locals for
+intermediates, one `Float64Array` out. `src/expr/parse.js` holds the grammar,
+moved verbatim so existing formulas and saved sessions behave identically.
+
+Per the decision to keep this to JS codegen, there is no WebAssembly here. The
+generated code goes through `new Function`, which needs `unsafe-eval`; the app
+ships no CSP today so that is fine, and `docs/optimization-blueprint.md` §2.4
+records what would have to move if one is ever added.
+
+Two corners needed care:
+
+- `diff()` is a neighbour op, not elementwise, so it gets its own pass. The
+  first version materialized its operand into a temporary first, which made
+  `diff(x)` — the commonest formula of that shape — **0.62× the speed of the
+  interpreter**. Reading a bare column directly, and returning the temp when the
+  whole formula is one `diff`, turned that into 1.5–3.5×.
+- Compiled kernels are cached by formula **plus the scalar/series shape of every
+  operand**. Whether `gain` is a parameter or a full column changes the emitted
+  code, and the same formula text gets reapplied against different files.
+
+**Measured** (`bench/results/point4-derived.json`)
+
+| Formula | Tier (samples) | Interpreter | Compiled | Speedup | Compile |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| `sqrt(x^2 + y^2)` | small (150,000) | 6.43 ms | 0.36 ms | 17.8× | 0.95 ms |
+| `x * gain + offset` | small (150,000) | 1.99 ms | 0.31 ms | 6.51× | 0.84 ms |
+| `(x + y) * (x - y) / (abs(z) + 1)` | small (150,000) | 7.97 ms | 0.74 ms | 10.8× | 1.05 ms |
+| `diff(x)` | small (150,000) | 0.92 ms | 0.60 ms | 1.54× | 0.85 ms |
+| `diff(x) / diff(time)` | small (150,000) | 2.20 ms | 1.30 ms | 1.70× | 1.09 ms |
+| `sqrt(square(x) + square(y) + square(z))` | small (150,000) | 11 ms | 0.38 ms | 29.0× | 0.92 ms |
+| `sqrt(x^2 + y^2)` | medium (1,500,000) | 83 ms | 3.62 ms | 23.0× | 0.92 ms |
+| `x * gain + offset` | medium (1,500,000) | 25 ms | 3.03 ms | 8.16× | 2.82 ms |
+| `(x + y) * (x - y) / (abs(z) + 1)` | medium (1,500,000) | 83 ms | 3.91 ms | 21.2× | 2.44 ms |
+| `diff(x)` | medium (1,500,000) | 12 ms | 3.43 ms | 3.45× | 0.77 ms |
+| `diff(x) / diff(time)` | medium (1,500,000) | 21 ms | 10 ms | 2.00× | 2.07 ms |
+| `sqrt(square(x) + square(y) + square(z))` | medium (1,500,000) | 133 ms | 4.03 ms | 33.1× | 1.62 ms |
+| **`sqrt(x^2 + y^2)`** | large (7,500,000) | **870 ms** | **26 ms** | **34.0×** | 1.38 ms |
+| `x * gain + offset` | large (7,500,000) | 125 ms | 19 ms | 6.46× | 1.21 ms |
+| `(x + y) * (x - y) / (abs(z) + 1)` | large (7,500,000) | 616 ms | 30 ms | 20.6× | 1.41 ms |
+| `diff(x)` | large (7,500,000) | 76 ms | 24 ms | 3.18× | 1.10 ms |
+| `diff(x) / diff(time)` | large (7,500,000) | 277 ms | 68 ms | 4.06× | 3.87 ms |
+| `sqrt(square(x) + square(y) + square(z))` | large (7,500,000) | 933 ms | 32 ms | 28.8× | 1.55 ms |
+
+The brief's own example, `sqrt(x^2 + y^2)` over 7.5 M samples: **870 ms → 26 ms**.
+Compilation costs 1–4 ms, paid once and cached — and derived variables are
+re-evaluated on every reload and every live-update append, so it is amortized
+immediately.
+
+The elementwise formulas are where the win is (16–34×), because that is where
+the intermediates were. `diff`-shaped formulas gain 1.5–4×: they were already
+close to a single pass in the interpreter, so there was less to remove.
+
+Correctness: `scripts/test-expr-compiler.mjs` checks 188 comparisons against a
+frozen copy of the interpreter — 29 formulas × 6 sizes, plus error-message
+equality (they are shown verbatim in the UI), the single-sample-operand quirk
+that clamps `n` to 1, and the cache-key-must-include-operand-shape case.
+
+---
+
+## End-to-end check in the real app
+
+The benchmarks above measure the changed code in isolation. This section is the
+other half: the actual application, in Chromium, driven through
+`window.app.loadFile()` with the generated fixtures served over the dev server.
+Same 2 ms event-loop probe as the parse benchmark, so "blocked" means the same
+thing here as there.
+
+**Loading — 1.5 M rows × 10 variables, every accepted format**
+
+| Format | Size | Wall | Main thread blocked | Columns | Notes |
+| :--- | ---: | ---: | ---: | :--- | :--- |
+| `.mat` | 114 MB | 8.7 s | **282 ms** | Float64Array | v5 |
+| `.pkl` | 114 MB | 138 s | **43 ms** | Float64Array | over the 80 MB web guardrail; loaded after confirming |
+| `.nc` | 115 MB | 15.7 s | **282 ms** | Float64Array | netCDF-4 |
+| `.parquet` | 101 MB | 21.0 s | **107 ms** | Float64Array | DuckDB lazy path, 10 k-row overview |
+| `.csv` | 113 MB | 17.4 s | **1.60 s** | Float64Array | DuckDB path |
+| `.xlsx` | 126 MB | 68.2 s | **33 ms** | Float64Array | 1 048 575 rows (format maximum) |
+
+The spreadsheet is the clearest result: 68 seconds of decoding, 33 milliseconds
+of frozen interface. Before this work every one of those 68 seconds was a
+freeze.
+
+**Interactive paths — on the loaded 1.5 M-row file**
+
+| Action | Wall | Main thread blocked | Result |
+| :--- | ---: | ---: | :--- |
+| Derived variable `sqrt(square(a) + square(b))` | 13 ms | **13 ms** | 1 500 000 values, Float64Array |
+| Outlier removal (spike, sensitivity 6) | 5.0 s | **22 ms** | 372 outliers, Float64Array |
+| Zoom sweep, 6 steps, in-memory | 61 ms | **61 ms** | decimated to 1 878 points |
+
+The outlier run is the one to read twice: five seconds of work, twenty-two
+milliseconds of blocked interface. That number is the entire point of item 1.
+(The 5 s includes first-use worker spawn and module load; the kernel itself
+measures ~500 ms at this size.)
+
+**Rendering and zoom, through Plotly**
+
+Three traces added to a panel from the 1.5 M-row file render as `scattergl`,
+each decimated to exactly 2 000 points. Seven successive zoom steps from full
+range down to 1 % of the trace each cost 48–110 ms of blocked main thread and
+re-decimate correctly (2 000 → 1 936 points as the window narrows past the
+budget).
+
+Worth being precise about what that residual is: at this size the decimation
+itself measures ~1 ms per trace, so essentially all of the 48–110 ms is Plotly's
+own restyle and WebGL repaint of three traces. The data marshalling is no longer
+the bottleneck in this path — which is exactly what item 2 set out to achieve,
+and why item 5 of the audit (WebGPU) was left out. Reducing what remains means
+changing the renderer, not the data path.
+
+**Pre-existing limits confirmed, not regressions**
+
+- The 114 MB pickle trips the app's own 80 MB web-mode guardrail before parsing
+  (`Settings → File loading → Pickle full load limit`), by design.
+- `perf-large.pkl` (572 MB) and `perf-large.csv` (563 MB) still cannot be parsed
+  by the eager path at all — see the point 3 section for the specific limits.
+
+---
+
 ## Build note
 
 `vite.config.js` gained `worker: { format: 'es' }`. The parse worker loads each
