@@ -120,6 +120,46 @@
     line-height: 1.5;
     color: var(--text-primary);
     margin-bottom: 1.5rem;
+    /* Explanations are written as paragraphs separated by blank lines and are
+       inserted as text, so the newlines have to survive as line breaks. */
+    white-space: pre-line;
+}
+
+/* Collapsed technical detail under an error message. Exists so the original
+   browser or library text stays reachable for a bug report once the dialog
+   shows a translated explanation in its place. Closed by default: it is
+   reference material, not part of the message. */
+.modal-details {
+    text-align: left;
+    margin: -0.75rem 0 1.25rem;
+    font-size: 0.85rem;
+}
+
+.modal-details > summary {
+    cursor: pointer;
+    color: var(--text-secondary, #888);
+    user-select: none;
+}
+
+.modal-details > summary:hover {
+    color: var(--text-primary);
+}
+
+.modal-details-text {
+    margin: 0.5rem 0 0;
+    padding: 0.6rem 0.75rem;
+    max-height: 9rem;
+    overflow: auto;
+    background: var(--bg-secondary, rgba(127, 127, 127, 0.12));
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    /* Technical text is often one very long line; wrap it instead of forcing a
+       horizontal scrollbar inside the dialog. */
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-secondary, #888);
 }
 
 /* Checkbox list (Modal.checklist): one row per option, left aligned, with an

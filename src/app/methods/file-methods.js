@@ -20,6 +20,7 @@ import {
 
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
 import { checkFullLoadLimit } from '../file-size-limits.js';
+import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -269,11 +270,37 @@ proto.loadFile = async function(file, options = {}) {
         }
         console.error('Error loading file:', err);
         if (options.throwOnError) throw err;
-        // A formatted dialog (not the browser's native alert) so limit/parse
-        // errors read as an in-app warning, with the actionable message intact.
-        await Modal.alert(i18n.t('errorLoading'), err?.message || String(err));
+        await this._showLoadError(err, currentFileNameForError(currentFile, file));
         return null;
     }
+};
+
+function currentFileNameForError(currentFile, originalFile) {
+    return currentFile?.name || originalFile?.name || '';
+}
+
+// One dialog for every way a load can end badly.
+//
+// The catch above always produced an app dialog, but its body was whatever the
+// error happened to say — often a raw V8 string like "Cannot create a string
+// longer than 0x1fffffe8 characters". describeLoadError maps the failures we
+// can actually explain onto translated text and leaves the rest alone, and the
+// original always stays available under "Technical details" so a bug report
+// still carries the real message.
+proto._showLoadError = async function(error, filename = '') {
+    const described = describeLoadError(error);
+    // The user's own cancellation is not a failure and gets no dialog.
+    if (described.cancelled) return;
+
+    const body = described.key
+        ? formatLoadErrorMessage(i18n.t(described.key), { ...described.params, file: filename })
+        : described.raw;
+
+    await Modal.alert(i18n.t('errorLoading'), body, {
+        // Only worth showing when it is not already the message.
+        details: described.key ? described.raw : '',
+        detailsLabel: i18n.t('errorDetailsLabel'),
+    });
 };
 
 proto.loadFiles = async function(items = []) {

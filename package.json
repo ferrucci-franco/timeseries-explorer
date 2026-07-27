@@ -59,6 +59,7 @@
     "test:variable-sign": "node scripts/test-variable-sign-toggle.mjs",
     "test:file-transform": "node scripts/test-file-transform-reset.mjs",
     "test:file-size-limits": "node scripts/test-file-size-limits.mjs",
+    "test:load-error-messages": "node scripts/test-load-error-messages.mjs",
     "test:csv-export": "node scripts/test-csv-export-time-columns.mjs",
     "test:csv-elapsed": "node scripts/test-csv-elapsed-format.mjs",
     "test:cursor-y2": "node scripts/test-cursor-y2.mjs",

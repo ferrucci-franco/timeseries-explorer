@@ -403,6 +403,23 @@ const Modal = {
             else              messageDiv.textContent = body;
             content.appendChild(messageDiv);
 
+            // Collapsed technical detail. When a raw browser error is replaced
+            // by a translated explanation, the original still has to be
+            // reachable — otherwise a bug report loses the one string that
+            // identifies the failure. textContent, never innerHTML: this can
+            // carry arbitrary text out of a file or a third-party library.
+            if (options.details) {
+                const details = document.createElement('details');
+                details.className = 'modal-details';
+                const summary = document.createElement('summary');
+                summary.textContent = options.detailsLabel || 'Details';
+                const pre = document.createElement('pre');
+                pre.className = 'modal-details-text';
+                pre.textContent = String(options.details);
+                details.append(summary, pre);
+                content.appendChild(details);
+            }
+
             const buttons = document.createElement('div');
             buttons.className = 'modal-buttons';
 
