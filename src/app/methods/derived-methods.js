@@ -1,6 +1,8 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
-import { DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES } from '../constants.js';
+import { DERIVED_FUNCTIONS } from '../constants.js';
+import { getCompiledFormula } from '../../expr/compile.js';
+import { normalizeFunctionName, parse as parseExpression, tokenize as tokenizeExpression } from '../../expr/parse.js';
 
 // The derived signals the time-axis inspector can materialize (see the
 // "Time-axis derived variables" section below), in dialog order.
@@ -58,261 +60,62 @@ proto.createDerivedVariable = function() {
     }
 };
 
+// A name is a scalar operand if it is a parameter or holds a single sample —
+// same rule the tree-walking evaluator applied per node. It also decides the
+// generated code, so it is part of the compile cache key.
+function classifyOperand(variables, name) {
+    const variable = variables[name];
+    if (!variable) throw new Error(`Unknown variable "${name}".`);
+    return (variable.kind === 'parameter' || variable.data.length === 1) ? 'scalar' : 'series';
+}
+
 proto._evaluateDerivedFormula = function(formula, data) {
     const timeVar = this._getActiveTimeVar(data);
     if (!timeVar?.data?.length) throw new Error('No time vector found.');
-    const tokens = this._tokenizeDerivedFormula(formula, data.variables);
-    const ast = this._parseDerivedExpression(tokens);
-    const referenced = tokens
-        .filter(token => token.type === 'name')
-        .map(token => data.variables[token.value])
+
+    const variables = data.variables;
+    const classify = (name) => classifyOperand(variables, name);
+    const compiled = getCompiledFormula(formula, variables, classify);
+
+    // Unchanged from the interpreter, quirks included: a length-1 non-parameter
+    // operand still clamps n to 1. Parameters are excluded, so they never do.
+    const referenced = compiled.names
+        .map(name => variables[name])
         .filter(variable => variable && variable.kind !== 'parameter');
     const independentIndex = referenced.some(variable => variable.independentIndex);
     const lengths = referenced.map(variable => variable.data?.length || 0).filter(Boolean);
     const n = lengths.length ? Math.min(timeVar.data.length, ...lengths) : timeVar.data.length;
-    const evaluated = this._evalDerivedNode(ast, data, n);
-    const values = evaluated.kind === 'series' ? evaluated.values : Array.from({ length: n }, () => evaluated.value);
-    return { values, independentIndex };
-};
 
-proto._tokenizeDerivedFormula = function(formula, variables) {
-    const tokens = [];
-    let i = 0;
-    while (i < formula.length) {
-        const ch = formula[i];
-        if (/\s/.test(ch)) { i++; continue; }
-        if ('+-*/^(),'.includes(ch)) { tokens.push({ type: ch, value: ch }); i++; continue; }
-        if (ch === '`') {
-            const end = formula.indexOf('`', i + 1);
-            if (end < 0) throw new Error('Missing closing backtick.');
-            const name = formula.slice(i + 1, end);
-            if (!variables[name]) throw new Error(`Unknown variable "${name}".`);
-            tokens.push({ type: 'name', value: name });
-            i = end + 1;
+    const columns = {};
+    const scalars = {};
+    for (const name of compiled.names) {
+        const variable = variables[name];
+        if (classify(name) === 'scalar') {
+            scalars[name] = Number(variable.data[0]);
             continue;
         }
-        if (/\d|\./.test(ch)) {
-            const match = formula.slice(i).match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/);
-            if (!match) throw new Error(`Unexpected "." at position ${i + 1}.`);
-            tokens.push({ type: 'number', value: Number(match[0]) });
-            i += match[0].length;
-            continue;
+        if (variable.data.length !== n) {
+            throw new Error(`"${name}" has ${variable.data.length} points, but time has ${n}.`);
         }
-        if (/[A-Za-z_]/.test(ch)) {
-            let j = i + 1;
-            while (j < formula.length && /[A-Za-z0-9_.\[\]]/.test(formula[j])) j++;
-            const name = formula.slice(i, j);
-            const nextNonSpace = this._nextNonSpaceChar(formula, j);
-            const functionName = this._normalizeDerivedFunctionName(name);
-            if (nextNonSpace === '(' && functionName) {
-                tokens.push({ type: 'func', value: functionName });
-                i = j;
-                continue;
-            }
-            if (!variables[name]) throw new Error(`Unknown variable "${name}".`);
-            tokens.push({ type: 'name', value: name });
-            i = j;
-            continue;
-        }
-        throw new Error(`Unexpected "${ch}" at position ${i + 1}.`);
+        columns[name] = variable.data;
     }
-    return tokens;
+
+    return { values: compiled.run(columns, scalars, n), independentIndex };
 };
 
-proto._nextNonSpaceChar = function(text, start) {
-    let i = start;
-    while (i < text.length && /\s/.test(text[i])) i++;
-    return text[i] || '';
-};
-
-proto._normalizeDerivedFunctionName = function(name) {
-    const lower = String(name).toLowerCase();
-    if (DERIVED_FUNCTIONS.some(fn => fn.name === lower)) return lower;
-    return DERIVED_FUNCTION_ALIASES.get(lower) || '';
+// The grammar moved to src/expr/parse.js so the compiler and the app share one
+// front end. These stay as aliases: _derivedFormulaReferences and the
+// autocomplete both call them on `this`.
+proto._tokenizeDerivedFormula = function(formula, variables) {
+    return tokenizeExpression(formula, variables);
 };
 
 proto._parseDerivedExpression = function(tokens) {
-    let pos = 0;
-    const peek = () => tokens[pos];
-    const take = (type) => (peek()?.type === type ? tokens[pos++] : null);
-    const parsePrimary = () => {
-        const token = peek();
-        if (!token) throw new Error('Unexpected end of formula.');
-        if (take('number')) return { type: 'number', value: token.value };
-        if (take('name')) return { type: 'name', value: token.value };
-        if (take('func')) {
-            const name = token.value;
-            if (!take('(')) throw new Error(`Missing opening parenthesis after "${name}".`);
-            const args = [];
-            if (!take(')')) {
-                do {
-                    args.push(parseAddSub());
-                } while (take(','));
-                if (!take(')')) throw new Error(`Missing closing parenthesis for "${name}".`);
-            }
-            return { type: 'func', name, args };
-        }
-        if (take('(')) {
-            const expr = parseAddSub();
-            if (!take(')')) throw new Error('Missing closing parenthesis.');
-            return expr;
-        }
-        throw new Error(`Unexpected "${token.value}".`);
-    };
-    const parsePower = () => {
-        let node = parsePrimary();
-        if (take('^')) {
-            node = { type: 'binary', op: '^', left: node, right: parseUnary() };
-        }
-        return node;
-    };
-    const parseUnary = () => {
-        if (take('+')) return parseUnary();
-        if (take('-')) return { type: 'unary', op: '-', expr: parseUnary() };
-        return parsePower();
-    };
-    const parseMulDiv = () => {
-        let node = parseUnary();
-        while (peek()?.type === '*' || peek()?.type === '/') {
-            const op = tokens[pos++].type;
-            node = { type: 'binary', op, left: node, right: parseUnary() };
-        }
-        return node;
-    };
-    const parseAddSub = () => {
-        let node = parseMulDiv();
-        while (peek()?.type === '+' || peek()?.type === '-') {
-            const op = tokens[pos++].type;
-            node = { type: 'binary', op, left: node, right: parseMulDiv() };
-        }
-        return node;
-    };
-    const ast = parseAddSub();
-    if (pos < tokens.length) throw new Error(`Unexpected "${tokens[pos].value}".`);
-    return ast;
+    return parseExpression(tokens);
 };
 
-proto._evalDerivedNode = function(node, data, n) {
-    if (node.type === 'number') return { kind: 'scalar', value: node.value };
-    if (node.type === 'name') {
-        const variable = data.variables[node.value];
-        if (!variable) throw new Error(`Unknown variable "${node.value}".`);
-        if (variable.kind === 'parameter' || variable.data.length === 1) return { kind: 'scalar', value: Number(variable.data[0]) };
-        if (variable.data.length !== n) throw new Error(`"${node.value}" has ${variable.data.length} points, but time has ${n}.`);
-        return { kind: 'series', values: variable.data };
-    }
-    if (node.type === 'unary') {
-        const v = this._evalDerivedNode(node.expr, data, n);
-        return v.kind === 'scalar' ? { kind: 'scalar', value: -v.value } : { kind: 'series', values: v.values.map(x => -x) };
-    }
-    if (node.type === 'func') return this._evalDerivedFunction(node, data, n);
-    const left = this._evalDerivedNode(node.left, data, n);
-    const right = this._evalDerivedNode(node.right, data, n);
-    const apply = (a, b) => {
-        switch (node.op) {
-            case '+': return a + b;
-            case '-': return a - b;
-            case '*': return a * b;
-            case '/': return a / b;
-            case '^': return Math.pow(a, b);
-            default: throw new Error(`Unknown operator "${node.op}".`);
-        }
-    };
-    if (left.kind === 'scalar' && right.kind === 'scalar') return { kind: 'scalar', value: apply(left.value, right.value) };
-    const values = new Array(n);
-    for (let i = 0; i < n; i++) values[i] = apply(left.kind === 'series' ? left.values[i] : left.value, right.kind === 'series' ? right.values[i] : right.value);
-    return { kind: 'series', values };
-};
-
-proto._evalDerivedFunction = function(node, data, n) {
-    const name = node.name;
-    const args = node.args.map(arg => this._evalDerivedNode(arg, data, n));
-    const arity = args.length;
-    const requireArity = (expected, label = name) => {
-        if (arity !== expected) throw new Error(`${label}() expects ${expected} argument${expected === 1 ? '' : 's'}.`);
-    };
-    const valueAt = (arg, i) => arg.kind === 'series' ? arg.values[i] : arg.value;
-    const mapUnary = (fn) => {
-        const a = args[0];
-        if (a.kind === 'scalar') return { kind: 'scalar', value: fn(a.value) };
-        return { kind: 'series', values: a.values.map(fn) };
-    };
-    const mapBinary = (fn) => {
-        const [a, b] = args;
-        if (a.kind === 'scalar' && b.kind === 'scalar') return { kind: 'scalar', value: fn(a.value, b.value) };
-        const values = new Array(n);
-        for (let i = 0; i < n; i++) values[i] = fn(valueAt(a, i), valueAt(b, i));
-        return { kind: 'series', values };
-    };
-
-    if (name === 'sqrt') {
-        requireArity(1, name);
-        return mapUnary(v => Math.sqrt(v));
-    }
-    if (name === 'abs') {
-        requireArity(1, name);
-        return mapUnary(v => Math.abs(v));
-    }
-    if (name === 'log') {
-        requireArity(1, name);
-        return mapUnary(v => Math.log(v));
-    }
-    if (name === 'log10') {
-        requireArity(1, name);
-        return mapUnary(v => Math.log10(v));
-    }
-    if (name === 'square') {
-        requireArity(1, name);
-        return mapUnary(v => v * v);
-    }
-    if (name === 'diff') {
-        // Discrete difference (no division by Δt, so no divide-by-zero at
-        // duplicate timestamps). diff(time) = Δt; diff(diff(time)) = ΔΔt (zero
-        // for uniform sampling). Neighbour op, not elementwise: the first sample
-        // uses the forward difference so length and the uniform baseline hold.
-        requireArity(1, name);
-        const a = args[0];
-        if (a.kind === 'scalar') return { kind: 'series', values: new Array(n).fill(0) };
-        const src = a.values;
-        const out = new Array(n);
-        for (let i = 0; i < n; i++) {
-            if (n < 2) { out[i] = 0; continue; }
-            out[i] = i === 0
-                ? Number(src[1]) - Number(src[0])   // forward difference at the first sample
-                : Number(src[i]) - Number(src[i - 1]);
-        }
-        return { kind: 'series', values: out };
-    }
-    if (name === 'root') {
-        requireArity(2, name);
-        return mapBinary((v, degree) => this._nthRoot(v, degree));
-    }
-    if (name === 'power') {
-        requireArity(2, name);
-        return mapBinary((v, exponent) => Math.pow(v, exponent));
-    }
-    throw new Error(`Unknown function "${name}".`);
-};
-
-proto._nthRoot = function(value, degree) {
-    const d = Number(degree);
-    if (!Number.isFinite(d) || d === 0) return NaN;
-    const rounded = Math.round(d);
-    const isIntegerDegree = Math.abs(d - rounded) <= 1e-12;
-    let result;
-    if (value < 0 && isIntegerDegree && rounded % 2 !== 0) {
-        result = -Math.pow(Math.abs(value), 1 / rounded);
-    } else {
-        result = Math.pow(value, 1 / d);
-    }
-    return this._cleanDerivedNumber(result);
-};
-
-proto._cleanDerivedNumber = function(value) {
-    if (!Number.isFinite(value)) return value;
-    const rounded = Math.round(value);
-    const tolerance = Math.max(1, Math.abs(value)) * 1e-12;
-    return Math.abs(value - rounded) <= tolerance ? rounded : value;
+proto._normalizeDerivedFunctionName = function(name) {
+    return normalizeFunctionName(name);
 };
 
 proto._getActiveTimeVar = function(data) {
