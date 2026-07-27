@@ -2221,6 +2221,19 @@ proto._convertLargeCsvNoticeToParquet = async function({ filename, file, csvProf
     const converter = globalThis.omvDesktop?.convertToParquet;
     if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
 
+    // Show the parsing before committing to it. This was the one route that
+    // converted blind: the blocking dialog leads with "Review structure", but
+    // this button — the easiest one to click — went straight to the converter
+    // with whatever the auto-detection had guessed. A conversion of a
+    // misparsed file is worse than no conversion, because the result looks
+    // authoritative and the mistake is baked in.
+    const reviewed = await this._openCsvParsingPreviewForFileObject(file, {
+        csvProfile,
+        title: filename || file.name || '',
+    });
+    if (!reviewed) return;   // backed out of the preview
+    csvProfile = reviewed;
+
     button.disabled = true;
     button.textContent = i18n.t('convertingToParquet');
     status.hidden = false;

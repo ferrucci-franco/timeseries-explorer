@@ -99,4 +99,28 @@ check(() => {
     }
 });
 
+// ─── No route converts without showing the parsing first ──────────────────
+
+check(() => {
+    // The blocking dialog always led with "Review structure". The notice
+    // button did not, and it is the easiest one to click — a conversion of a
+    // misparsed file is worse than no conversion, because the result looks
+    // authoritative and the mistake is baked into it.
+    const notice = fileMethods.slice(fileMethods.indexOf('proto._convertLargeCsvNoticeToParquet'));
+    const body = notice.slice(0, 1800);
+    const preview = body.indexOf('_openCsvParsingPreviewForFileObject');
+    const convert = body.indexOf('await converter(');
+    assert.ok(preview > 0, 'the notice route opens the parsing preview');
+    assert.ok(convert > 0, 'and then converts');
+    assert.ok(preview < convert, 'the preview comes first');
+    assert.match(body.slice(preview, convert), /if \(!reviewed\) return;/, 'backing out of the preview cancels the conversion');
+});
+
+check(() => {
+    const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
+    const labels = [...translations.matchAll(/convertToParquetAndLoad:\s*'([^']*)'/g)].map(m => m[1]);
+    assert.equal(labels.length, 4, 'the notice button is labelled in all four languages');
+    assert.ok(labels.every(l => l.length > 8), 'and the labels are real sentences');
+});
+
 console.log(`spreadsheet to parquet: ${checks} checks passed`);
