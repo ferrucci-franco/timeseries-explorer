@@ -22,7 +22,7 @@ const bodies = Object.fromEntries(LANGS.map(l => [l, translations[l].helpSec11Bo
 check(() => {
     for (const lang of LANGS) {
         assert.ok(bodies[lang].length > 2000, `${lang} help is substantial`);
-        assert.equal((bodies[lang].match(/<h4>/g) || []).length, 8, `${lang} has all eight sections`);
+        assert.equal((bodies[lang].match(/<h4>/g) || []).length, 9, `${lang} has all nine sections`);
         assert.match(bodies[lang], /<table/, `${lang} includes the limits table`);
     }
 });
@@ -142,6 +142,42 @@ check(() => {
     // The conversion threshold is documented as advisory only.
     for (const lang of LANGS) {
         assert.match(bodies[lang], /500 MB/, `${lang} names the conversion-suggestion threshold`);
+    }
+});
+
+check(() => {
+    // Whether the browser can convert was genuinely ambiguous: the old text
+    // said what the desktop version does and left the reader to infer the rest.
+    const onlyDesktop = {
+        en: /Only the Full Desktop version can convert files for you/i,
+        fr: /Seule la version Full Desktop peut convertir des fichiers/i,
+        es: /Solo la version Full Desktop puede convertir archivos/i,
+        it: /Solo la versione Full Desktop puo convertire i file/i,
+    };
+    for (const lang of LANGS) {
+        assert.match(bodies[lang], onlyDesktop[lang], `${lang} says outright that conversion is desktop-only`);
+    }
+});
+
+check(() => {
+    // The "check the parsing first" step had its own heading added because a
+    // reader looking for it could not find it inside a subordinate clause.
+    const heading = {
+        en: /<h4>You always check the parsing first<\/h4>/,
+        fr: /<h4>Vous verifiez toujours l analyse d abord<\/h4>/,
+        es: /<h4>Siempre revisas el parseo primero<\/h4>/,
+        it: /<h4>Controlli sempre prima il parsing<\/h4>/,
+    };
+    for (const lang of LANGS) {
+        assert.match(bodies[lang], heading[lang], `${lang} gives the parsing check its own section`);
+    }
+});
+
+check(() => {
+    // And it must say WHAT you get to check, not just that you check something.
+    const decimal = { en: /decimal mark/i, fr: /marque decimale/i, es: /marca decimal/i, it: /segno decimale/i };
+    for (const lang of LANGS) {
+        assert.match(bodies[lang], decimal[lang], `${lang} names a concrete thing the preview lets you fix`);
     }
 });
 

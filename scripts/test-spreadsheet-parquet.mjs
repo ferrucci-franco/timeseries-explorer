@@ -62,13 +62,45 @@ check(() => {
 
 check(() => {
     const convert = fileMethods.slice(fileMethods.indexOf('proto._convertSpreadsheetEntryToParquet'));
-    const body = convert.slice(0, 2200);
+    const body = convert.slice(0, 3400);
     assert.match(body, /bytes: new Uint8Array\(csvBuffer\)/, 'the sheet is sent as bytes, not as a path');
     assert.match(body, /sourceName:/, 'a name is supplied so the staged file is recognisable');
     // Without a source path there is nowhere sensible to put the output "next
     // to", so one of these must always be decided before converting.
     assert.match(body, /outputPath/, 'an explicit destination is chosen');
     assert.match(body, /temporary/, 'or the file is marked temporary');
+});
+
+check(() => {
+    // Spreadsheets get the same treatment as text files: see how the data was
+    // interpreted BEFORE the conversion, not after. The sheet is already CSV by
+    // this point, so the questions are identical — which row is the header,
+    // which column is time, how numbers are written.
+    const convert = fileMethods.slice(fileMethods.indexOf('proto._convertSpreadsheetEntryToParquet'));
+    const body = convert.slice(0, 3400);
+    const preview = body.indexOf('_openCsvParsingPreviewForFileObject');
+    const picker = body.indexOf('selectParquetOutputPath');
+    const converted = body.indexOf('await converter(');
+    assert.ok(preview > 0, 'the spreadsheet route opens the parsing preview');
+    assert.ok(preview < picker, 'the preview comes before choosing a destination');
+    assert.ok(preview < converted, 'and before converting');
+    assert.match(body.slice(preview, converted), /if \(!reviewed\) return null;/, 'backing out cancels the conversion');
+    assert.match(body, /csvProfile: cloneCsvProfileForIpc\(reviewed\)/, 'the reviewed profile is what gets converted');
+});
+
+check(() => {
+    // The preview is fed a bounded sample cut at a line boundary, so a
+    // million-row sheet does not push its whole CSV form through the dialog.
+    assert.match(fileMethods, /function spreadsheetPreviewSample/, 'the sample is bounded');
+    const sample = fileMethods.slice(fileMethods.indexOf('function spreadsheetPreviewSample'));
+    assert.match(sample.slice(0, 500), /0x0a/, 'and cut at a newline, never mid-row');
+});
+
+check(() => {
+    // Offering this on a small sheet costs more attention than it saves.
+    assert.match(fileMethods, /SPREADSHEET_PARQUET_HINT_BYTES/, 'there is a size floor for the offer');
+    const gate = fileMethods.slice(fileMethods.indexOf('proto._canConvertSpreadsheetToParquet'));
+    assert.match(gate.slice(0, 500), /SPREADSHEET_PARQUET_HINT_BYTES/, 'and the gate applies it');
 });
 
 check(() => {

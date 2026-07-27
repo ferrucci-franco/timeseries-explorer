@@ -64,6 +64,22 @@ async function parseOffThread(op, payload, transfer, inlineFallback) {
 function detachedCopy(buffer) {
     return buffer instanceof ArrayBuffer ? buffer.slice(0) : new Uint8Array(buffer).slice().buffer;
 }
+
+// A sample of a converted sheet for the parsing preview. Cut at the last
+// newline so the preview never has to reason about a half row, and bounded so
+// a million-row sheet does not push its whole CSV form through the dialog.
+//
+// Its own constant rather than CSV_PREVIEW_SEGMENT_BYTES: that one is declared
+// inside installFileMethods and is not visible from module scope out here.
+const SPREADSHEET_PREVIEW_SAMPLE_BYTES = 2 * 1024 * 1024;
+
+function spreadsheetPreviewSample(csvBuffer, maxBytes = SPREADSHEET_PREVIEW_SAMPLE_BYTES) {
+    const bytes = new Uint8Array(csvBuffer);
+    if (bytes.byteLength <= maxBytes) return csvBuffer;
+    let end = maxBytes;
+    while (end > 0 && bytes[end - 1] !== 0x0a) end--;
+    return csvBuffer.slice(0, end || maxBytes);
+}
 let duckDbSourceClassPromise = null;
 let netcdfParserClassPromise = null;
 let pickleParserClassPromise = null;
@@ -1985,10 +2001,16 @@ proto._quoteCommandPath = function(path) {
 // have nothing to convert yet (the workbook has to be decoded first), and the
 // user would be answering a question about a file they have not seen.
 
+// Below this the decode is quick enough that interrupting to offer a
+// conversion costs more attention than it saves: a 4 MB sheet is a few seconds,
+// an 18 MB one is about fourteen, and a 126 MB one about sixty-eight.
+const SPREADSHEET_PARQUET_HINT_BYTES = 4 * 1024 * 1024;
+
 proto._canConvertSpreadsheetToParquet = function(entry) {
     return !!entry
         && this._isExcelExtension(entry.extension)
         && !!this.capabilities?.isDesktop
+        && Number(entry.file?.size || 0) >= SPREADSHEET_PARQUET_HINT_BYTES
         && typeof globalThis.omvDesktop?.convertToParquet === 'function';
 };
 
@@ -2083,6 +2105,21 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
     const converter = globalThis.omvDesktop?.convertToParquet;
     if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
 
+    const csvBuffer = await this._spreadsheetCsvBytes(entry);
+    const sheetName = entry.excelCsvSheetName || entry.excel?.sheetName || 'sheet';
+
+    // Show the parsing before committing to it, exactly as the text-file route
+    // does. The sheet has already been turned into CSV, so the questions are
+    // the same ones: which row is the header, which column is time, how numbers
+    // are written. Converting without asking would bake a wrong answer into a
+    // file that then looks authoritative.
+    const reviewed = await this._openCsvParsingPreviewForFileObject(null, {
+        sampleBuffer: spreadsheetPreviewSample(csvBuffer),
+        csvProfile: entry.data?.metadata?.csvProfile || null,
+        title: entry.file?.name || entry.name || sheetName,
+    });
+    if (!reviewed) return null;   // backed out of the preview
+
     let outputPath = '';
     if (!temporary) {
         const picker = globalThis.omvDesktop?.selectParquetOutputPath;
@@ -2097,9 +2134,6 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
         if (!outputPath) return null;
     }
 
-    const csvBuffer = await this._spreadsheetCsvBytes(entry);
-    const sheetName = entry.excelCsvSheetName || entry.excel?.sheetName || 'sheet';
-
     const started = Date.now();
     this._showParquetConversionOverlay(entry.file?.name || entry.name || '');
     const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
@@ -2111,6 +2145,7 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
         const result = await converter({
             bytes: new Uint8Array(csvBuffer),
             sourceName: `${sheetName}.csv`,
+            csvProfile: cloneCsvProfileForIpc(reviewed),
             outputPath,
             temporary,
             compression: 'zstd',
