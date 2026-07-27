@@ -19,6 +19,7 @@ import {
 } from '../../parsers/matlab-mat-limits.js';
 
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
+import { checkFullLoadLimit } from '../file-size-limits.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -159,10 +160,16 @@ proto.loadFile = async function(file, options = {}) {
                 }
                 if (!currentFile) throw new Error(i18n.t('invalidFile'));
                 extension = this._fileExtension(currentFile.name);
-                this._preflightPypsaNetcdfFile(currentFile, extension);
-                this._preflightPickleFile(currentFile, extension);
-                this._preflightExcelFile(currentFile, extension);
-                this._preflightMatlabFile(currentFile, extension);
+                // Formats with no memory-saving path warn above their limit and
+                // let the user decide. `allowOversized` then has to travel with
+                // the request: the pickle and netCDF readers enforce the same
+                // ceiling internally, so overriding here without telling them
+                // would just fail again a moment later with a worse message.
+                const overLimit = this._checkFullLoadLimit(currentFile, extension);
+                if (overLimit && !options.allowOversized) {
+                    if (!(await this._confirmOversizedFile(overLimit))) return null;
+                    options = { ...options, allowOversized: true };
+                }
                 const preflight = await this._maybeConvertLargeCsvBeforeLoad(currentFile, { ...options, extension });
                 if (preflight?.cancelled) return null;
                 if (preflight?.csvProfile) {
@@ -194,6 +201,7 @@ proto.loadFile = async function(file, options = {}) {
                     excelWorkbook: options.excelWorkbook || null,
                     matInspection: options.matInspection || null,
                     matSelection: options.matSelection || null,
+                    allowOversized: options.allowOversized === true,
                 });
                 if (isCancelled()) {
                     await data?._duckdb?.source?.release?.(data);
@@ -357,7 +365,7 @@ proto._expandExcelEntries = async function(entries) {
         try {
             if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
             if (!file) continue;
-            this._preflightExcelFile(file, extension);
+            if (!(await this._confirmOversizedFile(this._checkFullLoadLimit(file, extension)))) continue;
             await showBusy(file);
             const excel = await loadExcelWorkbookModule();
             const rawBuffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
@@ -419,7 +427,7 @@ proto._expandMatEntries = async function(entries) {
         try {
             if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
             if (!file) continue;
-            this._preflightMatlabFile(file, '.mat');
+            if (!(await this._confirmOversizedFile(this._checkFullLoadLimit(file, '.mat')))) continue;
             this._showFileLoadingOverlay(1);
             this._updateFileLoadingOverlay(1, 1, file.name || '', file.size);
             await this._waitForNextPaint();
@@ -449,9 +457,12 @@ proto._expandMatEntries = async function(entries) {
         } catch (err) {
             this._hideFileLoadingOverlay();
             console.error('Error inspecting MAT file:', err);
+            // MAT_FILE_TOO_LARGE is gone — an oversized file is a question now,
+            // not an error — but the wider dialog is still the right shape for
+            // the long messages the MAT reader can produce.
             await Modal.alert(i18n.t('errorLoading'), err?.message || String(err), {
                 icon: 'MAT',
-                className: err?.code === 'MAT_FILE_TOO_LARGE' ? 'modal-dialog-mat-too-large' : '',
+                className: 'modal-dialog-mat-too-large',
             });
         }
     }
@@ -863,9 +874,6 @@ proto._readLatestFileForStreamableReload = async function(entry) {
 proto._readLatestBuffer = async function(entry) {
     if (entry.localPath) {
         const file = await this._readLocalResultPath(entry.localPath);
-        this._preflightPypsaNetcdfFile(file, this._fileExtension(file.name));
-        this._preflightPickleFile(file, this._fileExtension(file.name));
-        this._preflightExcelFile(file, this._fileExtension(file.name));
         const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
         entry.file = file;
         entry.extension = this._fileExtension(file.name);
@@ -880,9 +888,16 @@ proto._readLatestBuffer = async function(entry) {
             console.warn('Could not read latest file handle; falling back to stored file snapshot.', err);
         }
         if (file) {
-            this._preflightPypsaNetcdfFile(file, this._fileExtension(file.name));
-            this._preflightPickleFile(file, this._fileExtension(file.name));
-            this._preflightExcelFile(file, this._fileExtension(file.name));
+            // A reload re-reads whatever is on disk now. If the file has grown
+            // past its format's limit since it was opened, that is a new
+            // decision — the memo key includes size and mtime, so an unchanged
+            // file never asks twice.
+            const overLimit = this._checkFullLoadLimit(file, this._fileExtension(file.name));
+            if (overLimit && !(await this._confirmOversizedFile(overLimit, file))) {
+                const err = new Error('File load cancelled');
+                err.name = 'AbortError';
+                throw err;
+            }
             try {
                 const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
                 entry.file = file;
@@ -905,9 +920,6 @@ proto._readLatestBuffer = async function(entry) {
         entry.file = file;
         entry.fileHandle = null;
         entry.extension = this._fileExtension(file.name);
-        this._preflightPypsaNetcdfFile(file, entry.extension);
-        this._preflightPickleFile(file, entry.extension);
-        this._preflightExcelFile(file, entry.extension);
         return file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file);
     }
 
@@ -915,9 +927,6 @@ proto._readLatestBuffer = async function(entry) {
     // be a snapshot, so the FileSystemFileHandle path above is preferred.
     let buffer;
     if (entry.file?.arrayBuffer) {
-        this._preflightPypsaNetcdfFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
-        this._preflightPickleFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
-        this._preflightExcelFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
         try {
             buffer = await entry.file.arrayBuffer();
         } catch (_) {}
@@ -1095,15 +1104,69 @@ proto._pypsaNetcdfEagerLimitBytes = function() {
     return this._advancedSettingBytes('pypsaNetcdfFullLoadMb', fallback);
 };
 
-proto._preflightPypsaNetcdfFile = function(file, extension = this._fileExtension(file?.name || '')) {
-    if (!this._isPypsaNetcdfExtension(extension)) return;
-    const size = Number(file?.size || 0);
-    const limit = this._pypsaNetcdfEagerLimitBytes();
-    if (!Number.isFinite(size) || size <= limit) return;
-    throw new Error(i18n.t('pypsaNetcdfTooLarge')
-        .replace('{file}', file?.name || 'network.nc')
-        .replace('{size}', this._formatFileSize(size))
-        .replace('{limit}', this._formatFileSize(limit)));
+// Resolves the configured limit for one of the eager-only formats. Kept as the
+// single place that knows about desktop/web defaults, so file-size-limits.js
+// can stay free of capabilities and Settings.
+proto._fullLoadLimitBytesFor = function(limitKey) {
+    switch (limitKey) {
+        case 'matlabFullLoadMb': return this._matlabEagerLimitBytes();
+        case 'excelFullLoadMb': return this._excelEagerLimitBytes();
+        case 'pickleFullLoadMb': return this._pickleEagerLimitBytes();
+        case 'pypsaNetcdfFullLoadMb': return this._pypsaNetcdfEagerLimitBytes();
+        default: return 0;
+    }
+};
+
+// Verdict only — no dialog, no throw. Null means "nothing to warn about".
+proto._checkFullLoadLimit = function(file, extension = this._fileExtension(file?.name || '')) {
+    return checkFullLoadLimit(file, extension, key => this._fullLoadLimitBytesFor(key));
+};
+
+// Identity of one decision: this file, at this size, as of this timestamp. A
+// file that changed on disk is a new decision.
+proto._oversizedDecisionKey = function(file) {
+    return [file?.name || '', Number(file?.size) || 0, Number(file?.lastModified) || 0].join(' ');
+};
+
+// Ask before loading a file bigger than its format's limit.
+//
+// This used to be a hard refusal. It is a warning now because the only failure
+// it can actually prevent — a renderer out-of-memory crash — is largely
+// contained since parsing moved into a worker: the worker dies, the tab
+// survives, and the error surfaces normally. Refusing outright took a decision
+// away from the user that the machine in front of them may well be able to make.
+//
+// The answer is remembered per file for the session, because this question is
+// asked from two places: here, and again before the desktop reader pulls the
+// bytes in. Asking twice for one file would read as a bug. This is NOT a "don't
+// ask again" affordance — there is deliberately no way to silence the warning
+// for a format or for future files, because a dialog people learn to dismiss
+// has stopped being a safety signal.
+proto._confirmOversizedFile = async function(verdict, file = null) {
+    if (!verdict) return true;
+    this._oversizedApproved ||= new Set();
+    const key = this._oversizedDecisionKey(file || { name: verdict.name, size: verdict.sizeBytes });
+    if (this._oversizedApproved.has(key)) return true;
+
+    const body = i18n.t('fileOverLimitBody')
+        .replace('{file}', verdict.name)
+        .replace('{size}', this._formatFileSize(verdict.sizeBytes))
+        .replace('{limit}', this._formatFileSize(verdict.limitBytes))
+        .replace('{format}', i18n.t(verdict.formatLabelKey))
+        .replace('{setting}', i18n.t(verdict.settingLabelKey));
+
+    const choice = await Modal.choice(body, {
+        title: i18n.t('fileOverLimitTitle'),
+        icon: '⚠️',
+        className: 'modal-dialog-wide',
+        choices: [
+            { value: 'cancel', text: i18n.t('cancel'), className: 'modal-btn-cancel', autoFocus: true },
+            { value: 'load', text: i18n.t('fileOverLimitLoadAnyway'), className: 'modal-btn-confirm' },
+        ],
+    });
+    if (choice !== 'load') return false;
+    this._oversizedApproved.add(key);
+    return true;
 };
 
 proto._pickleEagerLimitBytes = function() {
@@ -1111,17 +1174,6 @@ proto._pickleEagerLimitBytes = function() {
         ? PICKLE_DESKTOP_EAGER_LIMIT_BYTES
         : PICKLE_WEB_EAGER_LIMIT_BYTES;
     return this._advancedSettingBytes('pickleFullLoadMb', fallback);
-};
-
-proto._preflightPickleFile = function(file, extension = this._fileExtension(file?.name || '')) {
-    if (!this._isPickleExtension(extension)) return;
-    const size = Number(file?.size || 0);
-    const limit = this._pickleEagerLimitBytes();
-    if (!Number.isFinite(size) || size <= limit) return;
-    throw new Error(i18n.t('pickleTooLarge')
-        .replace('{file}', file?.name || 'data.pkl')
-        .replace('{size}', this._formatFileSize(size))
-        .replace('{limit}', this._formatFileSize(limit)));
 };
 
 proto._isExcelExtension = function(extension) {
@@ -1136,17 +1188,6 @@ proto._excelEagerLimitBytes = function() {
         ? EXCEL_DESKTOP_EAGER_LIMIT_BYTES
         : EXCEL_WEB_EAGER_LIMIT_BYTES;
     return this._advancedSettingBytes('excelFullLoadMb', fallback);
-};
-
-proto._preflightExcelFile = function(file, extension = this._fileExtension(file?.name || '')) {
-    if (!this._isExcelExtension(extension)) return;
-    const size = Number(file?.size || 0);
-    const limit = this._excelEagerLimitBytes();
-    if (!Number.isFinite(size) || size <= limit) return;
-    throw new Error(i18n.t('excelTooLarge')
-        .replace('{file}', file?.name || 'data.xlsx')
-        .replace('{size}', this._formatFileSize(size))
-        .replace('{limit}', this._formatFileSize(limit)));
 };
 
 proto._createDesktopLocalHttpFile = function(filePath, info) {
@@ -1235,9 +1276,16 @@ proto._readLocalResultPath = async function(filePath) {
                     err.code = statResult.code || '';
                     throw err;
                 }
-                this._preflightPypsaNetcdfFile(statResult, this._fileExtension(filePath));
-                this._preflightPickleFile(statResult, this._fileExtension(filePath));
-                this._preflightExcelFile(statResult, this._fileExtension(filePath));
+                // Ask BEFORE pulling the bytes in. loadFile warns too, but by
+                // then the whole file is already in memory — which on the file
+                // sizes this warning exists for is the crash we are trying to
+                // avoid. The answer is memoized, so only one of the two asks.
+                const overLimit = this._checkFullLoadLimit(statResult, this._fileExtension(filePath));
+                if (overLimit && !(await this._confirmOversizedFile(overLimit, statResult))) {
+                    const err = new Error('File load cancelled');
+                    err.name = 'AbortError';
+                    throw err;
+                }
             }
             const result = await desktopReader({ path: filePath });
             if (result?.ok === false) {
@@ -1274,9 +1322,14 @@ proto._readLocalResultPath = async function(filePath) {
         if (headResponse?.ok) {
             const size = Number(headResponse.headers.get('content-length') || 0);
             const statLike = { name, size };
-            this._preflightPypsaNetcdfFile(statLike, extension);
-            this._preflightPickleFile(statLike, extension);
-            this._preflightExcelFile(statLike, extension);
+            // Same reason as the desktop reader above: the fetch that follows
+            // materializes the whole file, so the question has to come first.
+            const overLimit = this._checkFullLoadLimit(statLike, extension);
+            if (overLimit && !(await this._confirmOversizedFile(overLimit, statLike))) {
+                const err = new Error('File load cancelled');
+                err.name = 'AbortError';
+                throw err;
+            }
         }
     }
 
@@ -1364,8 +1417,8 @@ proto._fileDisplayName = function(entry) {
 proto._parseResultBuffer = async function(filename, buffer, file = null, options = {}) {
     const extension = this._fileExtension(filename);
     if (extension === '.parquet') return this._parseParquetResult(filename, file);
-    if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer);
-    if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer);
+    if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer, options);
+    if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer, options);
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
     if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file, options);
     if (extension === '.mat') return this._parseMatlabResultBuffer(filename, buffer, options);
@@ -1379,19 +1432,6 @@ proto._matlabEagerLimitBytes = function() {
         ? MATLAB_MAT_DESKTOP_EAGER_LIMIT_BYTES
         : MATLAB_MAT_WEB_EAGER_LIMIT_BYTES;
     return this._advancedSettingBytes('matlabFullLoadMb', fallback);
-};
-
-proto._preflightMatlabFile = function(file, extension = this._fileExtension(file?.name || '')) {
-    if (extension !== '.mat') return;
-    const size = Number(file?.size || 0);
-    const limit = this._matlabEagerLimitBytes();
-    if (!Number.isFinite(size) || size <= limit) return;
-    const error = new Error(i18n.t('matTooLarge')
-        .replace('{file}', file?.name || 'data.mat')
-        .replace('{size}', this._formatFileSize(size))
-        .replace('{limit}', this._formatFileSize(limit)));
-    error.code = 'MAT_FILE_TOO_LARGE';
-    throw error;
 };
 
 proto._parseMatlabResultBuffer = async function(filename, buffer, options = {}) {
@@ -1410,8 +1450,11 @@ proto._parseMatlabResultBuffer = async function(filename, buffer, options = {}) 
     );
 };
 
-proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer) {
-    const maxFileBytes = this._pypsaNetcdfEagerLimitBytes();
+proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer, options = {}) {
+    // Infinity disables the reader's own ceiling: the user already saw the
+    // warning and chose to proceed, so refusing here would be a second veto on
+    // a decision they have made.
+    const maxFileBytes = options.allowOversized ? Infinity : this._pypsaNetcdfEagerLimitBytes();
     const workerBuffer = detachedCopy(buffer);
     return parseOffThread(
         'parse:netcdf',
@@ -1541,8 +1584,10 @@ proto._adoptExcelCsvCache = function(entry, data) {
     delete data._excelCsvBuffer;
 };
 
-proto._parsePickleResultBuffer = async function(filename, buffer) {
-    const maxFileBytes = this._pickleEagerLimitBytes();
+proto._parsePickleResultBuffer = async function(filename, buffer, options = {}) {
+    // See _parsePypsaNetcdfResultBuffer: the reader enforces the same ceiling,
+    // so an override has to reach it too.
+    const maxFileBytes = options.allowOversized ? Infinity : this._pickleEagerLimitBytes();
     const workerBuffer = detachedCopy(buffer);
     try {
         return await parseOffThread(

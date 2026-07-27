@@ -110,57 +110,54 @@ try {
     assert.equal(await registerDuckDbFile(db, duckdbModule, 'web.csv', webFile), 'browser-filereader');
     assert.deepEqual(calls[1], ['handle', 'web.csv', webFile, 'BROWSER_FILEREADER', true]);
 
-    assert.doesNotThrow(() => harness._preflightPypsaNetcdfFile({
+    // Size limits used to throw here. They report a verdict now and the caller
+    // asks the user, so what this pins is that the DEFAULTS still differ
+    // between desktop and web, and still trip at the right byte.
+    assert.equal(harness._checkFullLoadLimit({
         name: 'desktop-medium-network.nc',
         size: PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES - 1024,
-    }, '.nc'));
+    }, '.nc'), null, 'a netCDF under the desktop limit raises nothing');
 
-    assert.throws(
-        () => harness._preflightPypsaNetcdfFile({
-            name: 'huge-network.nc',
-            size: PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES + 1024,
-        }, '.nc'),
-        /netCDF support currently uses eager loading/
-    );
+    const desktopNetcdf = harness._checkFullLoadLimit({
+        name: 'huge-network.nc',
+        size: PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES + 1024,
+    }, '.nc');
+    assert.ok(desktopNetcdf, 'a netCDF over the desktop limit is flagged');
+    assert.equal(desktopNetcdf.format, 'netcdf');
+    assert.equal(desktopNetcdf.limitBytes, PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES);
+    assert.equal(desktopNetcdf.settingLabelKey, 'pypsaNetcdfFullLoadLimit');
 
     const webHarness = new Harness();
     webHarness.capabilities = { isDesktop: false, canUseLiveUpdate: false };
-    assert.doesNotThrow(() => webHarness._preflightPypsaNetcdfFile({
+    assert.equal(webHarness._checkFullLoadLimit({
         name: 'web-medium-network.nc',
         size: PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES,
-    }, '.nc'));
-    assert.throws(
-        () => webHarness._preflightPypsaNetcdfFile({
-            name: 'web-too-large-network.nc',
-            size: PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES + 1024,
-        }, '.nc'),
-        /netCDF support currently uses eager loading/
-    );
+    }, '.nc'), null, 'exactly at the limit is still allowed');
+    assert.ok(webHarness._checkFullLoadLimit({
+        name: 'web-too-large-network.nc',
+        size: PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES + 1024,
+    }, '.nc'), 'the web default is lower than the desktop one');
 
-    assert.doesNotThrow(() => harness._preflightPickleFile({
+    assert.equal(harness._checkFullLoadLimit({
         name: 'desktop-medium-results.pkl',
         size: PICKLE_DESKTOP_EAGER_LIMIT_BYTES - 1024,
-    }, '.pkl'));
+    }, '.pkl'), null);
 
-    assert.throws(
-        () => harness._preflightPickleFile({
-            name: 'huge-results.pkl',
-            size: PICKLE_DESKTOP_EAGER_LIMIT_BYTES + 1024,
-        }, '.pkl'),
-        /exceeds the pickle size limit/
-    );
+    const desktopPickle = harness._checkFullLoadLimit({
+        name: 'huge-results.pkl',
+        size: PICKLE_DESKTOP_EAGER_LIMIT_BYTES + 1024,
+    }, '.pkl');
+    assert.ok(desktopPickle, 'a pickle over the desktop limit is flagged');
+    assert.equal(desktopPickle.format, 'pickle');
 
-    assert.doesNotThrow(() => webHarness._preflightPickleFile({
+    assert.equal(webHarness._checkFullLoadLimit({
         name: 'web-medium-results.pkl',
         size: PICKLE_WEB_EAGER_LIMIT_BYTES,
+    }, '.pkl'), null);
+    assert.ok(webHarness._checkFullLoadLimit({
+        name: 'web-too-large-results.pkl',
+        size: PICKLE_WEB_EAGER_LIMIT_BYTES + 1024,
     }, '.pkl'));
-    assert.throws(
-        () => webHarness._preflightPickleFile({
-            name: 'web-too-large-results.pkl',
-            size: PICKLE_WEB_EAGER_LIMIT_BYTES + 1024,
-        }, '.pkl'),
-        /exceeds the pickle size limit/
-    );
 
     let readFileCalls = 0;
     globalThis.omvDesktop = {
@@ -176,11 +173,24 @@ try {
             throw new Error('readFile should not be called for oversized PyPSA files');
         },
     };
+    // The bytes must not be pulled in until the user has answered: by the time
+    // loadFile could warn, the whole file is already in memory.
+    harness._confirmOversizedFile = async () => false;
     await assert.rejects(
         () => harness._readLocalResultPath('C:\\temp\\huge-network.nc'),
-        /netCDF support currently uses eager loading/
+        (err) => err.name === 'AbortError',
     );
-    assert.equal(readFileCalls, 0, 'oversized PyPSA netCDF should be rejected before Desktop readFile');
+    assert.equal(readFileCalls, 0, 'declining an oversized netCDF stops it before Desktop readFile');
+
+    // Accepting lets the read proceed — the whole point of the change.
+    harness._confirmOversizedFile = async () => true;
+    await assert.rejects(
+        () => harness._readLocalResultPath('C:\\temp\\huge-network.nc'),
+        /readFile should not be called/,
+        'accepting reaches the reader instead of being refused up front',
+    );
+    assert.equal(readFileCalls, 1, 'the reader runs once the user accepts');
+    harness._confirmOversizedFile = async () => false;
 
     let pickleReadFileCalls = 0;
     globalThis.omvDesktop = {
@@ -198,9 +208,9 @@ try {
     };
     await assert.rejects(
         () => harness._readLocalResultPath('C:\\temp\\huge-results.pkl'),
-        /exceeds the pickle size limit/
+        (err) => err.name === 'AbortError',
     );
-    assert.equal(pickleReadFileCalls, 0, 'oversized pandas pickle should be rejected before Desktop readFile');
+    assert.equal(pickleReadFileCalls, 0, 'declining an oversized pickle stops it before Desktop readFile');
 
     const staleBuffer = new ArrayBuffer(8);
     await assert.rejects(
@@ -218,7 +228,7 @@ try {
             extension: '.pkl',
             buffer: staleBuffer,
         }),
-        /exceeds the pickle size limit/
+        (err) => err.name === 'AbortError'
     );
 
     const httpMethods = [];
@@ -239,7 +249,7 @@ try {
     };
     await assert.rejects(
         () => harness._readLocalResultPath('C:\\temp\\huge-results.pkl'),
-        /exceeds the pickle size limit/
+        (err) => err.name === 'AbortError'
     );
     assert.deepEqual(httpMethods, ['HEAD'], 'local HTTP fallback should reject oversized pickle before GET');
 
