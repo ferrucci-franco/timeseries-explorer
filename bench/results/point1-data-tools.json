@@ -1,0 +1,273 @@
+{
+  "point": 1,
+  "title": "Data Tools math: legacy vs compute kernels",
+  "node": "v24.14.1",
+  "generatedAt": "2026-07-26T23:54:22.600Z",
+  "isolation": "one child process per measurement",
+  "records": [
+    {
+      "tier": "small",
+      "rows": 150000,
+      "op": "derivative/centered",
+      "legacyMs": 6.916299999999993,
+      "legacyFirstMs": 10.442300000000003,
+      "kernelMs": 3.971499999999992,
+      "kernelFirstMs": 5.536699999999996,
+      "speedup": 1.7414830668513173,
+      "note": ""
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "op": "derivative/difference",
+      "legacyMs": 6.1702999999999975,
+      "legacyFirstMs": 8.652499999999996,
+      "kernelMs": 0.5743000000000009,
+      "kernelFirstMs": 2.4931000000000054,
+      "speedup": 10.744036218004506,
+      "note": ""
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "op": "integral/trapezoidal",
+      "legacyMs": 6.448599999999999,
+      "legacyFirstMs": 14.2988,
+      "kernelMs": 1.5367999999999995,
+      "kernelFirstMs": 4.571100000000001,
+      "speedup": 4.196121811556481,
+      "note": ""
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "op": "movingAverage/w=21",
+      "legacyMs": 6.2196,
+      "legacyFirstMs": 10.8412,
+      "kernelMs": 1.8567999999999998,
+      "kernelFirstMs": 4.701300000000003,
+      "speedup": 3.3496337785437316,
+      "note": ""
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "op": "movingAverage/w=501",
+      "legacyMs": 6.289500000000004,
+      "legacyFirstMs": 11.144799999999996,
+      "kernelMs": 1.8658999999999963,
+      "kernelFirstMs": 3.8977000000000004,
+      "speedup": 3.3707594190471175,
+      "note": ""
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "op": "outliers/iqr",
+      "legacyMs": 50.19370000000001,
+      "legacyFirstMs": 61.989799999999995,
+      "kernelMs": 15.4251,
+      "kernelFirstMs": 16.519299999999994,
+      "speedup": 3.2540275265638474,
+      "note": ""
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "op": "interpolateOutliers",
+      "legacyMs": 7.5186999999999955,
+      "legacyFirstMs": 9.875200000000007,
+      "kernelMs": 1.2138999999999953,
+      "kernelFirstMs": 7.753600000000006,
+      "speedup": 6.1938380426723985,
+      "note": ""
+    },
+    {
+      "tier": "small",
+      "rows": 150000,
+      "op": "outliers/spike",
+      "legacyMs": 930.9948000000002,
+      "legacyFirstMs": 982.9295000000001,
+      "kernelMs": 53.178,
+      "kernelFirstMs": 73.07639999999999,
+      "speedup": 17.507142051224193,
+      "note": ""
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "op": "derivative/centered",
+      "legacyMs": 53.78449999999998,
+      "legacyFirstMs": 72.87089999999999,
+      "kernelMs": 14.501999999999981,
+      "kernelFirstMs": 18.885000000000005,
+      "speedup": 3.7087643083712627,
+      "note": ""
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "op": "derivative/difference",
+      "legacyMs": 49.926000000000045,
+      "legacyFirstMs": 64.97720000000001,
+      "kernelMs": 4.766399999999976,
+      "kernelFirstMs": 11.2196,
+      "speedup": 10.474572004028259,
+      "note": ""
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "op": "integral/trapezoidal",
+      "legacyMs": 67.04480000000001,
+      "legacyFirstMs": 89.85800000000002,
+      "kernelMs": 17.529500000000013,
+      "kernelFirstMs": 20.87729999999999,
+      "speedup": 3.824684103939072,
+      "note": ""
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "op": "movingAverage/w=21",
+      "legacyMs": 66.22739999999999,
+      "legacyFirstMs": 97.78899999999999,
+      "kernelMs": 18.74860000000001,
+      "kernelFirstMs": 23.95360000000001,
+      "speedup": 3.532391751917474,
+      "note": ""
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "op": "movingAverage/w=501",
+      "legacyMs": 61.9314,
+      "legacyFirstMs": 108.3075,
+      "kernelMs": 18.33620000000002,
+      "kernelFirstMs": 24.151700000000005,
+      "speedup": 3.377548237911886,
+      "note": ""
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "op": "outliers/iqr",
+      "legacyMs": 615.1421999999998,
+      "legacyFirstMs": 640.3452,
+      "kernelMs": 162.04820000000007,
+      "kernelFirstMs": 186.25000000000003,
+      "speedup": 3.7960446336336937,
+      "note": ""
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "op": "interpolateOutliers",
+      "legacyMs": 78.53139999999985,
+      "legacyFirstMs": 81.45040000000006,
+      "kernelMs": 10.63900000000001,
+      "kernelFirstMs": 21.151400000000024,
+      "speedup": 7.381464423348038,
+      "note": ""
+    },
+    {
+      "tier": "medium",
+      "rows": 1500000,
+      "op": "outliers/spike",
+      "legacyMs": 48096.8975,
+      "legacyFirstMs": 39084.9427,
+      "kernelMs": 497.0652,
+      "kernelFirstMs": 560.9029999999999,
+      "speedup": 96.76174775462052,
+      "note": ""
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "op": "derivative/centered",
+      "legacyMs": 298.3035,
+      "legacyFirstMs": 383.6879,
+      "kernelMs": 82.41060000000004,
+      "kernelFirstMs": 61.602900000000034,
+      "speedup": 3.6197224628870535,
+      "note": ""
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "op": "derivative/difference",
+      "legacyMs": 257.8770000000002,
+      "legacyFirstMs": 336.47040000000004,
+      "kernelMs": 24.621600000000058,
+      "kernelFirstMs": 29.230700000000013,
+      "speedup": 10.473608538843925,
+      "note": ""
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "op": "integral/trapezoidal",
+      "legacyMs": 324.2287,
+      "legacyFirstMs": 368.36119999999994,
+      "kernelMs": 78.50960000000009,
+      "kernelFirstMs": 81.01429999999999,
+      "speedup": 4.12979686560624,
+      "note": ""
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "op": "movingAverage/w=21",
+      "legacyMs": 336.7078,
+      "legacyFirstMs": 395.2647,
+      "kernelMs": 94.08879999999999,
+      "kernelFirstMs": 110.55960000000005,
+      "speedup": 3.5786172211782916,
+      "note": ""
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "op": "movingAverage/w=501",
+      "legacyMs": 418.3075,
+      "legacyFirstMs": 450.6319,
+      "kernelMs": 111.32010000000002,
+      "kernelFirstMs": 130.83100000000002,
+      "speedup": 3.757699642741966,
+      "note": ""
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "op": "outliers/iqr",
+      "legacyMs": 17629.6759,
+      "legacyFirstMs": 9147.640800000001,
+      "kernelMs": 1197.1074999999998,
+      "kernelFirstMs": 1179.6186,
+      "speedup": 14.726894535369631,
+      "note": ""
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "op": "interpolateOutliers",
+      "legacyMs": 2071.5707999999995,
+      "legacyFirstMs": 2178.3318,
+      "kernelMs": 59.61999999999989,
+      "kernelFirstMs": 83.20580000000018,
+      "speedup": 34.746239516940676,
+      "note": ""
+    },
+    {
+      "tier": "large",
+      "rows": 7500000,
+      "op": "outliers/spike",
+      "legacyMs": 311641.5745,
+      "legacyFirstMs": 231432.24749999997,
+      "kernelMs": 12644.685599999997,
+      "kernelFirstMs": 5555.33,
+      "speedup": 24.646051658255548,
+      "note": "legacy extrapolated from 1,500,000 rows; kernel cold 5.56 s vs steady 12.6 s"
+    }
+  ]
+}

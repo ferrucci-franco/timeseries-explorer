@@ -200,7 +200,7 @@ app._renderFilteredTree = () => {};
 app._syncDataTools = () => {};
 app._setOutlierMessage = () => {};
 
-const appended = app._applyDataToolModifyMode({
+const appended = await app._applyDataToolModifyMode({
     fileId: 'file',
     data: chainData,
     sourceName: 'x avg',
