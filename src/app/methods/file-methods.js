@@ -1986,22 +1986,77 @@ proto._offerLargeTextConversion = async function(file, options = {}) {
         return csvProfile?.profileSource === 'user' ? { csvProfile } : null;
     }
 
+    const result = await this._runTextFileParquetConversion(file, {
+        csvProfile,
+        temporary: choice === 'temporary',
+        keepOverlayUntilLoaded: true,
+    });
+    if (result.cancelled) {
+        // Backing out of the destination dialog is a decision about the whole
+        // load; cancelling the conversion only undoes the conversion, and the
+        // choices come back.
+        if (result.at === 'destination') return { cancelled: true };
+        if (result.stillRunning) {
+            await Modal.alert(
+                i18n.t('parquetConversionCancelledTitle'),
+                i18n.t('parquetConversionCancelledBody'),
+                { icon: 'ℹ️' },
+            );
+        }
+        return RETRY_CONVERSION_OFFER;
+    }
+    return {
+        file: result.file,
+        localPath: result.localPath,
+        temporaryParquetPath: result.temporary ? result.localPath : '',
+        keepOverlayUntilLoaded: true,
+    };
+};
+
+/**
+ * Convert one text file to Parquet, and hand back what came out.
+ *
+ * Everything above this is about deciding WHETHER to convert; this is the
+ * conversion itself, and it is deliberately the only copy. The offer shown
+ * before a large file loads and the converter in the menu are two ways of
+ * arriving at the same work, and a second copy of it would drift — which is
+ * exactly what happened to the "temporary" button, whose runtime check existed
+ * in one dialog and had been lost from the other.
+ *
+ * @returns {Promise<
+ *     {file: File, localPath: string, temporary: boolean, saved: boolean}
+ *   | {cancelled: true, at: 'destination'|'conversion', stillRunning?: boolean}
+ * >}
+ */
+proto._runTextFileParquetConversion = async function(file, options = {}) {
+    const csvProfile = options.csvProfile || null;
+    const temporary = options.temporary === true;
+    const keepOverlayUntilLoaded = options.keepOverlayUntilLoaded === true;
+
     // In the browser there is no path to write to and no temp store to manage,
     // so the conversion happens in memory and the result is handed back through
-    // the save dialog. The file that then gets loaded is the Parquet either way.
+    // the save dialog.
     if (!this._canConvertTextFileNatively(file)) {
         const parquetBytes = await this._convertTextFileToParquetBytes(file, csvProfile);
-        if (!parquetBytes) return RETRY_CONVERSION_OFFER;   // cancelled
+        if (!parquetBytes) {
+            // Genuinely cancelled: the engine was stopped and nothing was read
+            // back. The overlay has to go with it — it was left standing behind
+            // whatever dialog came next.
+            this._hideFileLoadingOverlay();
+            return { cancelled: true, at: 'conversion', stillRunning: false };
+        }
         const name = `${this._fileBaseName(file.name || 'data')}.parquet`;
-        await this._saveBytesToDisk(parquetBytes, name);
+        const saved = await this._saveBytesToDisk(parquetBytes, name);
+        if (!keepOverlayUntilLoaded) this._hideFileLoadingOverlay();
         return {
             file: new File([parquetBytes], name, { type: 'application/octet-stream' }),
-            keepOverlayUntilLoaded: true,
+            localPath: '',
+            temporary: false,
+            saved,
         };
     }
 
     let outputPath = '';
-    const temporary = choice === 'temporary';
     if (!temporary) {
         const picker = globalThis.omvDesktop?.selectParquetOutputPath;
         if (typeof picker !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
@@ -2009,31 +2064,23 @@ proto._offerLargeTextConversion = async function(file, options = {}) {
             title: i18n.t('largeCsvPreflightSaveDialogTitle'),
             defaultPath: this._defaultParquetOutputPath(file),
         });
-        if (!outputPath) return { cancelled: true };
+        if (!outputPath) return { cancelled: true, at: 'destination' };
     }
 
     const parquetFile = await this._convertCsvFileToParquetFile(file, {
         csvProfile,
         outputPath,
         temporary,
-        keepOverlayUntilLoaded: true,
+        keepOverlayUntilLoaded,
     });
-    if (!parquetFile) {
-        // Cancelled. The work is still finishing on its own, so say that rather
-        // than let the user believe it was undone — then offer the choices
-        // again, which is where they were before they asked for this.
-        await Modal.alert(
-            i18n.t('parquetConversionCancelledTitle'),
-            i18n.t('parquetConversionCancelledBody'),
-            { icon: 'ℹ️' },
-        );
-        return RETRY_CONVERSION_OFFER;
-    }
+    // The native conversion cannot be interrupted, only stopped waiting for, so
+    // the work is still finishing somewhere.
+    if (!parquetFile) return { cancelled: true, at: 'conversion', stillRunning: true };
     return {
         file: parquetFile,
-        localPath: parquetFile.localPath,
-        temporaryParquetPath: temporary ? parquetFile.localPath : '',
-        keepOverlayUntilLoaded: true,
+        localPath: parquetFile.localPath || '',
+        temporary,
+        saved: true,
     };
 };
 
