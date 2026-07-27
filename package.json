@@ -63,6 +63,7 @@
     "test:crash-reporting": "node scripts/test-crash-reporting.mjs",
     "test:text-file-formats": "node scripts/test-text-file-formats.mjs",
     "test:spreadsheet-parquet": "node scripts/test-spreadsheet-parquet.mjs",
+    "test:large-files-help": "node scripts/test-large-files-help.mjs",
     "test:csv-export": "node scripts/test-csv-export-time-columns.mjs",
     "test:csv-elapsed": "node scripts/test-csv-elapsed-format.mjs",
     "test:cursor-y2": "node scripts/test-cursor-y2.mjs",
