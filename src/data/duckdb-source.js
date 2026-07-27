@@ -290,18 +290,35 @@ export default class DuckDbSource {
             return `SELECT ${this._conversionColumnsSql(columnNames, csvProfile)} FROM (${raw})`;
         }
         const projection = this._projectionSql(columnNames, timeInfo, csvProfile);
-        return `SELECT * FROM (SELECT ${projection} FROM (${raw})) WHERE "__omv_time" IS NOT NULL`;
+        // __omv_time is this application's internal name for the time column,
+        // and it has no business being in a file the user keeps. The name the
+        // CSV used is the one they will look for.
+        const timeName = this._conversionTimeColumnName(timeInfo, columnNames, csvProfile);
+        return `SELECT "__omv_time" AS ${this._quoteIdent(timeName)}, * EXCLUDE ("__omv_time")`
+            + ` FROM (SELECT ${projection} FROM (${raw})) WHERE "__omv_time" IS NOT NULL`;
     }
 
-    _conversionColumnsSql(columnNames, csvProfile = null) {
-        const specsByName = new Map((this._csvColumnSpecs(csvProfile) || []).map(spec => [spec.name, spec]));
-        const exclude = new Set();
+    _conversionKeptColumns(columnNames, timeInfo = null, csvProfile = null) {
+        const exclude = new Set(timeInfo?.sourceNames || []);
         for (const index of csvProfile?.ignoredColumns || []) {
             const name = columnNames[Number(index)];
             if (name != null) exclude.add(name);
         }
-        const columns = columnNames
-            .filter(name => !exclude.has(name))
+        return columnNames.filter(name => !exclude.has(name));
+    }
+
+    _conversionTimeColumnName(timeInfo, columnNames, csvProfile = null) {
+        const candidate = String(timeInfo?.name ?? '').trim();
+        if (!candidate) return '__omv_time';
+        // Two columns of the same name would be a file nobody can query
+        // unambiguously. The internal name is ugly, but it is never taken.
+        const taken = new Set(this._conversionKeptColumns(columnNames, timeInfo, csvProfile));
+        return taken.has(candidate) ? '__omv_time' : candidate;
+    }
+
+    _conversionColumnsSql(columnNames, csvProfile = null) {
+        const specsByName = new Map((this._csvColumnSpecs(csvProfile) || []).map(spec => [spec.name, spec]));
+        const columns = this._conversionKeptColumns(columnNames, null, csvProfile)
             .map(name => this._projectionColumnSql(name, specsByName.get(name), csvProfile));
         return columns.join(', ') || '*';
     }

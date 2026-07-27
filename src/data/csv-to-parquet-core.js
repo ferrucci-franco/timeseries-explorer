@@ -267,6 +267,28 @@ export function projectionSql(profile, timeInfo) {
     ].join(', ');
 }
 
+/**
+ * What to call the time column in the file the user keeps.
+ *
+ * __omv_time is this application's internal name for it, and it was leaking
+ * into every converted file: a CSV whose column said "time" produced a Parquet
+ * whose column said "__omv_time". The name the source used is the one to write,
+ * unless a column that survived the projection already has it — two columns of
+ * the same name would be a file nobody can query unambiguously.
+ */
+export function timeColumnName(profile, timeInfo) {
+    const candidate = String(timeInfo?.name ?? '').trim();
+    if (!candidate) return '__omv_time';
+    const exclude = new Set(timeInfo?.sourceNames || []);
+    const specs = csvColumnSpecs(profile);
+    for (const index of profile?.ignoredColumns || []) {
+        const name = specs[Number(index)]?.name;
+        if (name) exclude.add(name);
+    }
+    const taken = specs.map(spec => spec.name).filter(name => !exclude.has(name));
+    return taken.includes(candidate) ? '__omv_time' : candidate;
+}
+
 function projectionColumnSql(spec, profile = null) {
     const name = spec?.name;
     const ident = quoteIdent(name);
@@ -371,10 +393,10 @@ export async function convertCsvToParquet(options = {}) {
                     SELECT ${projection}
                     FROM raw
                 )
-                SELECT *
+                SELECT "__omv_time" AS ${quoteIdent(timeColumnName(profile, timeInfo))}, * EXCLUDE ("__omv_time")
                 FROM projected
                 WHERE "__omv_time" IS NOT NULL
-                ORDER BY "__omv_time"
+                ORDER BY 1
             )
             TO '${sqlPath(outputPath)}' (FORMAT PARQUET${compress})
         `);

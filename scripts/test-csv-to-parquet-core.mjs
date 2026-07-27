@@ -43,13 +43,20 @@ try {
     const db = new Database(':memory:');
     const conn = db.connect();
     try {
+        const readParquet = `read_parquet('${parquetPath.replace(/\\/g, '/').replace(/'/g, "''")}')`;
         const rows = await runDuckDb(conn, `
-            SELECT COUNT(*) AS n, MIN("__omv_time") AS t0, MAX("__omv_time") AS t1
-            FROM read_parquet('${parquetPath.replace(/\\/g, '/').replace(/'/g, "''")}')
+            SELECT COUNT(*) AS n, MIN("time") AS t0, MAX("time") AS t1
+            FROM ${readParquet}
         `);
         assert.equal(Number(rows[0].n), 3);
         assert.equal(Number(rows[0].t0), 0);
         assert.equal(Number(rows[0].t1), 1);
+
+        // The time column keeps the name the CSV gave it. __omv_time is this
+        // application's internal name for it, and it used to leak into every
+        // converted file.
+        const schema = await runDuckDb(conn, `DESCRIBE SELECT * FROM ${readParquet}`);
+        assert.deepEqual(schema.map(row => row.column_name), ['time', 'voltage', 'current']);
     } finally {
         await closeDuckDbConnection(conn);
         await closeDuckDbDatabase(db);

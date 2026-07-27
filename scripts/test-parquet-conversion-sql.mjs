@@ -113,6 +113,43 @@ await check('a time column is built and empty times are dropped', async () => {
     assert.match(sql, /WHERE "__omv_time" IS NOT NULL/, 'rows without a time are not written');
 });
 
+await check('the time column keeps the name the CSV gave it', async () => {
+    const source = makeSource({ describeColumns: VARCHAR_COLUMNS });
+    await convert(source, profile());
+    const sql = source.copySql();
+    // __omv_time is the internal name the projection works with. It was
+    // reaching the file, so a CSV column called "time" became "__omv_time".
+    assert.match(sql, /SELECT "__omv_time" AS "time", \* EXCLUDE \("__omv_time"\)/,
+        'the internal name is renamed on the way out');
+});
+
+await check('a time built from several columns is named too', async () => {
+    const source = makeSource({
+        describeColumns: [['date', 'VARCHAR'], ['hour', 'VARCHAR'], ['v1', 'VARCHAR']],
+    });
+    await convert(source, profile({
+        rawHeaders: ['date', 'hour', 'v1'],
+        headers: [{ name: 'date' }, { name: 'hour' }, { name: 'v1' }],
+        numericColumnIndexes: [2],
+        timeSource: {
+            ok: true, kind: 'datetime', mode: 'split', strategy: 'slash-date',
+            sourceIndexes: [0, 1], name: 'date hour', format: { dateOrder: 'DMY' },
+        },
+    }));
+    assert.match(source.copySql(), /AS "date hour"/, 'the name the app shows is the name written');
+});
+
+await check('a name already taken falls back to the internal one', async () => {
+    const source = makeSource({ describeColumns: VARCHAR_COLUMNS });
+    // The time is built from column 0, but the profile calls it "v1" — which
+    // is also a column that survives. Two columns of one name would be a file
+    // nobody can query unambiguously.
+    await convert(source, profile({
+        timeSource: { ok: true, kind: 'numeric', strategy: 'index-column', sourceIndexes: [0], name: 'v1' },
+    }));
+    assert.match(source.copySql(), /"__omv_time" AS "__omv_time"/, 'the unambiguous name wins over the pretty one');
+});
+
 await check('a text column stays text', async () => {
     const source = makeSource({ describeColumns: VARCHAR_COLUMNS });
     await convert(source, profile());
