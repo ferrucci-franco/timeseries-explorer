@@ -260,6 +260,7 @@ proto.loadFile = async function(file, options = {}) {
         }
         if (!options.deferUi) {
             await this._showDatetimeAxisWarningIfNeeded(fileId, data);
+            this._showSpreadsheetParquetHint(this.files.get(fileId));
         }
 
         console.log('Loaded:', currentFile.name, '- variables:', Object.keys(data.variables).length);
@@ -1969,6 +1970,158 @@ proto._convertCsvFileToParquetFile = async function(file, options = {}) {
 
 proto._quoteCommandPath = function(path) {
     return `"${String(path || '').replace(/"/g, '\\"')}"`;
+};
+
+// ─── Spreadsheet → Parquet ────────────────────────────────────────────────
+//
+// A spreadsheet is decoded from scratch on every open, and that decode is the
+// single most expensive thing the app does: a 126 MB .xlsx measures ~68 s, every
+// time. The app already turns the chosen sheet into CSV text on load, so the
+// expensive half of a Parquet conversion has been paid for by the time the file
+// is on screen — converting from there costs seconds and makes every later open
+// near-instant.
+//
+// Offered after the load rather than before it, deliberately. Before, we would
+// have nothing to convert yet (the workbook has to be decoded first), and the
+// user would be answering a question about a file they have not seen.
+
+proto._canConvertSpreadsheetToParquet = function(entry) {
+    return !!entry
+        && this._isExcelExtension(entry.extension)
+        && !!this.capabilities?.isDesktop
+        && typeof globalThis.omvDesktop?.convertToParquet === 'function';
+};
+
+// The CSV form of the sheet: from the load-time cache when it is still valid,
+// re-derived from the workbook otherwise.
+proto._spreadsheetCsvBytes = async function(entry) {
+    if (this._hasExcelCsvCache(entry)) return entry.excelCsvBuffer;
+    const converted = await this._convertExcelEntryToCsvBuffer(entry);
+    return converted.csvBuffer;
+};
+
+// Non-blocking offer after a spreadsheet loads. Shown once per file per
+// session; dismissing it is a normal outcome, so it never returns.
+proto._showSpreadsheetParquetHint = function(entry) {
+    if (!this._canConvertSpreadsheetToParquet(entry)) return;
+    if (typeof document === 'undefined') return;
+
+    const key = this._oversizedDecisionKey(entry.file || {});
+    this._spreadsheetHintsShown ||= new Set();
+    if (this._spreadsheetHintsShown.has(key)) return;
+    this._spreadsheetHintsShown.add(key);
+
+    document.getElementById('spreadsheet-parquet-hint')?.remove();
+    const filename = entry.file?.name || entry.name || '';
+
+    const notice = document.createElement('div');
+    notice.id = 'spreadsheet-parquet-hint';
+    notice.className = 'dismissible-notice large-csv-parquet-hint';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+
+    const content = document.createElement('div');
+    content.className = 'dismissible-notice-content';
+
+    const title = document.createElement('div');
+    title.className = 'dismissible-notice-title';
+    title.textContent = i18n.t('spreadsheetParquetHintTitle');
+
+    const body = document.createElement('div');
+    body.className = 'dismissible-notice-body';
+    body.textContent = i18n.t('spreadsheetParquetHintBody').replace('{file}', filename);
+
+    const actions = document.createElement('div');
+    actions.className = 'dismissible-notice-actions';
+
+    const convert = document.createElement('button');
+    convert.type = 'button';
+    convert.className = 'dismissible-notice-action primary';
+    convert.textContent = i18n.t('spreadsheetParquetHintConvert');
+
+    const status = document.createElement('div');
+    status.className = 'dismissible-notice-status';
+    status.hidden = true;
+
+    convert.addEventListener('click', async () => {
+        convert.disabled = true;
+        status.hidden = false;
+        status.classList.remove('error', 'success');
+        status.textContent = i18n.t('convertingToParquet');
+        try {
+            const parquetFile = await this._convertSpreadsheetEntryToParquet(entry, { temporary: false });
+            if (!parquetFile) { convert.disabled = false; status.hidden = true; return; }
+            status.classList.add('success');
+            status.textContent = i18n.t('parquetConversionComplete');
+            await this.loadFile(parquetFile, { localPath: parquetFile.localPath });
+            notice.remove();
+        } catch (err) {
+            this._hideFileLoadingOverlay();
+            convert.disabled = false;
+            status.classList.add('error');
+            status.textContent = err?.message || String(err);
+        }
+    });
+
+    actions.append(convert, status);
+    content.append(title, body, actions);
+
+    const close = document.createElement('button');
+    close.className = 'dismissible-notice-close';
+    close.type = 'button';
+    close.title = i18n.t('dismiss');
+    close.setAttribute('aria-label', i18n.t('dismiss'));
+    close.textContent = '×';
+    close.addEventListener('click', () => notice.remove());
+
+    notice.append(content, close);
+    document.body.appendChild(notice);
+    requestAnimationFrame(() => notice.classList.add('show'));
+};
+
+proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = false } = {}) {
+    const converter = globalThis.omvDesktop?.convertToParquet;
+    if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
+
+    let outputPath = '';
+    if (!temporary) {
+        const picker = globalThis.omvDesktop?.selectParquetOutputPath;
+        if (typeof picker !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
+        outputPath = await picker({
+            title: i18n.t('largeCsvPreflightSaveDialogTitle'),
+            defaultPath: this._defaultParquetOutputPath({
+                localPath: entry.localPath,
+                name: entry.file?.name || `${entry.name || 'sheet'}.xlsx`,
+            }),
+        });
+        if (!outputPath) return null;
+    }
+
+    const csvBuffer = await this._spreadsheetCsvBytes(entry);
+    const sheetName = entry.excelCsvSheetName || entry.excel?.sheetName || 'sheet';
+
+    const started = Date.now();
+    this._showParquetConversionOverlay(entry.file?.name || entry.name || '');
+    const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+    try {
+        // `bytes` rather than `path`: the sheet only exists as CSV text in
+        // memory. The main process stages it, converts, and removes the stage.
+        // An explicit outputPath or `temporary` is required — without a real
+        // source path there is no sensible place to put the result next to.
+        const result = await converter({
+            bytes: new Uint8Array(csvBuffer),
+            sourceName: `${sheetName}.csv`,
+            outputPath,
+            temporary,
+            compression: 'zstd',
+        });
+        if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
+        if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
+        this._setParquetConversionOverlayLoading();
+        return await this._readLocalResultPath(result.outputPath);
+    } finally {
+        clearInterval(timer);
+    }
 };
 
 proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvProfile = null) {

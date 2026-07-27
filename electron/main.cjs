@@ -539,16 +539,34 @@ ipcMain.handle('omv:read-file-slice', async (_event, options = {}) => {
   }
 });
 
+// Spreadsheets have no path the converter can read: the app turns the chosen
+// sheet into CSV text in a worker, so what it holds is bytes, not a file. Those
+// are staged into a temp file here — in the main process, where the cleanup
+// already lives — converted, and removed again. Staging in the renderer would
+// mean a second IPC and a temp file nobody owns if the window closes mid-way.
+async function stageBytesForConversion(bytes, suggestedName = 'sheet.csv') {
+  const dir = path.join(temporaryParquetSessionRoot(), 'staged');
+  await fsp.mkdir(dir, { recursive: true });
+  const safe = String(suggestedName).replace(/[^A-Za-z0-9._-]/g, '_') || 'sheet.csv';
+  const staged = path.join(dir, `${Date.now()}-${safe}`);
+  await fsp.writeFile(staged, Buffer.from(bytes));
+  return staged;
+}
+
 ipcMain.handle('omv:convert-to-parquet', async (_event, options = {}) => {
+  let stagedInput = '';
   try {
     const rawPath = typeof options.path === 'string' ? options.path : '';
-    if (!rawPath.trim()) {
+    if (!rawPath.trim() && !options.bytes) {
       const err = new Error('Missing path');
       err.code = 'EINVAL';
       throw err;
     }
+    if (!rawPath.trim()) {
+      stagedInput = await stageBytesForConversion(options.bytes, options.sourceName || 'sheet.csv');
+    }
 
-    const filePath = path.resolve(rawPath);
+    const filePath = path.resolve(stagedInput || rawPath);
     const stat = await fsp.stat(filePath);
     if (!stat.isFile()) {
       const err = new Error('Path is not a file');
@@ -602,6 +620,12 @@ ipcMain.handle('omv:convert-to-parquet', async (_event, options = {}) => {
       code: err?.code || '',
       message: err?.message || 'CSV-to-Parquet conversion failed',
     };
+  } finally {
+    // The staged CSV is an implementation detail of this call and must not
+    // outlive it, whether the conversion succeeded or not.
+    if (stagedInput) {
+      try { await fsp.rm(stagedInput, { force: true }); } catch (_) { /* best effort */ }
+    }
   }
 });
 
