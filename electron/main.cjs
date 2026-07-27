@@ -320,6 +320,44 @@ async function createWindow(url) {
   mainWindow = win;
   win.removeMenu();
 
+  // The one failure the renderer cannot report on its own.
+  //
+  // Everywhere else a failed load ends in an in-app dialog. If the renderer
+  // process itself is killed — almost always for memory, on a file too large to
+  // hold — no JavaScript runs, so there is nothing left to draw a dialog with
+  // and the window simply goes blank. Only the main process is still alive to
+  // say what happened. The browser build has no equivalent: this is one of the
+  // few things that is genuinely desktop-only.
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[desktop] renderer gone', details);
+    // 'clean-exit' is a normal shutdown and 'killed' is usually the user or the
+    // OS doing it deliberately. Neither deserves an alarming popup.
+    if (details?.reason === 'clean-exit' || details?.reason === 'killed') return;
+
+    const outOfMemory = details?.reason === 'oom';
+    dialog.showMessageBox(win, {
+      type: 'error',
+      title: 'Time Series Explorer',
+      message: outOfMemory
+        ? 'The application ran out of memory and had to restart the view.'
+        : 'The application view stopped unexpectedly and was restarted.',
+      detail: outOfMemory
+        ? 'This normally happens with a file too large to hold in memory all at once.\n\n'
+          + 'Converting it to Parquet lets the app read it in pieces instead. You can also lower the '
+          + 'full-load limit for that format in Settings → File loading, so the warning comes earlier.'
+        : `Reason reported by the system: ${details?.reason || 'unknown'}.\n\n`
+          + 'Loaded files were not saved. If this repeats with the same file it is worth reporting.',
+      buttons: ['Reload', 'Close'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    }).then(({ response }) => {
+      if (response === 0 && !win.isDestroyed()) win.reload();
+    }).catch(err => {
+      console.error('[desktop] could not show the renderer-gone dialog', err);
+    });
+  });
+
   // Full Desktop is intentionally offline-first. The packaged renderer may
   // request only its own loopback origin; external network traffic is denied.
   win.webContents.session.webRequest.onBeforeRequest(
