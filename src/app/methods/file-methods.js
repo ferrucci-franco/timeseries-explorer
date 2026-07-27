@@ -1468,6 +1468,29 @@ proto._fileDisplayName = function(entry) {
     return `${entry?.name || ''}${entry?.extension ?? '.mat'}`;
 };
 
+/**
+ * What hovering a file in the list says.
+ *
+ * The name alone repeated what was already on screen. Two files called
+ * results.csv from different folders were indistinguishable, and the size —
+ * the thing that decides whether a file opens whole or in memory-saving mode —
+ * was nowhere in the list at all.
+ *
+ * The path is only known when the desktop version opened the file. A browser
+ * is not allowed to see where a file came from, so there the tooltip is the
+ * name and the size, and claiming otherwise would be inventing a path.
+ */
+proto._fileEntryTooltip = function(entry) {
+    const name = this._fileDisplayName(entry);
+    const size = Number(entry?.file?.size);
+    const lines = [Number.isFinite(size) && size > 0
+        ? `${name} (${this._formatBytes(size)})`
+        : name];
+    const path = String(entry?.localPath || '').trim();
+    if (path) lines.push(path);
+    return lines.join('\n');
+};
+
 proto._parseResultBuffer = async function(filename, buffer, file = null, options = {}) {
     const extension = this._fileExtension(filename);
     if (extension === '.parquet') return this._parseParquetResult(filename, file);
@@ -1933,11 +1956,15 @@ proto._offerLargeTextConversion = async function(file, options = {}) {
                         className: 'modal-btn-confirm',
                         autoFocus: true,
                     },
-                    {
+                    // Same condition as the first dialog. The browser has
+                    // nowhere to put a temporary file, and this copy of the
+                    // offer had lost the check: the button appeared, and then
+                    // quietly asked where to save instead.
+                    ...(this._canConvertTextFileNatively(file) ? [{
                         value: 'temporary',
                         text: i18n.t('largeCsvPreflightTemporary'),
                         className: 'modal-btn-confirm modal-btn-secondary-confirm',
-                    },
+                    }] : []),
                     {
                         value: 'raw',
                         text: i18n.t('largeCsvPreflightRaw'),
@@ -2831,7 +2858,7 @@ proto._renderFilesList = function() {
         const nameSpan = document.createElement('span');
         nameSpan.className = 'file-entry-name';
         nameSpan.textContent = this._fileDisplayName(entryData);
-        nameSpan.title = this._fileDisplayName(entryData);
+        nameSpan.title = this._fileEntryTooltip(entryData);
         nameSpan.addEventListener('click', () => this.setActiveFile(fileId));
 
         const typeLabel = this._fileTypeLabel(entryData, fileId);

@@ -168,8 +168,24 @@ export function timeInfoFromProfile(profile) {
         name: timeSource.name || sourceNames.join(' '),
         sourceNames,
         sql: datetimeSqlFromProfile(timeSource, sourceNames, profile),
+        timeKind: 'datetime',
         generated: false,
     };
+}
+
+/**
+ * The time column as it is written to the file.
+ *
+ * The projection computes time as milliseconds since the epoch, which is what
+ * the plot needs but not what the file should say: a Parquet holding a plain
+ * number has forgotten that its time was a date, and reopening it gave a
+ * numeric axis where the CSV had a calendar. Written back as a TIMESTAMP, the
+ * file carries that fact itself, and it is a date again on the next open.
+ */
+export function timeOutputSql(timeInfo, expression = '"__omv_time"') {
+    return timeInfo?.timeKind === 'datetime'
+        ? `epoch_ms(CAST(${expression} AS BIGINT))`
+        : expression;
 }
 
 export function datetimeSqlFromProfile(timeSource, sourceNames, profile = null) {
@@ -393,7 +409,7 @@ export async function convertCsvToParquet(options = {}) {
                     SELECT ${projection}
                     FROM raw
                 )
-                SELECT "__omv_time" AS ${quoteIdent(timeColumnName(profile, timeInfo))}, * EXCLUDE ("__omv_time")
+                SELECT ${timeOutputSql(timeInfo)} AS ${quoteIdent(timeColumnName(profile, timeInfo))}, * EXCLUDE ("__omv_time")
                 FROM projected
                 WHERE "__omv_time" IS NOT NULL
                 ORDER BY 1

@@ -294,8 +294,23 @@ export default class DuckDbSource {
         // and it has no business being in a file the user keeps. The name the
         // CSV used is the one they will look for.
         const timeName = this._conversionTimeColumnName(timeInfo, columnNames, csvProfile);
-        return `SELECT "__omv_time" AS ${this._quoteIdent(timeName)}, * EXCLUDE ("__omv_time")`
+        return `SELECT ${this._conversionTimeSql(timeInfo)} AS ${this._quoteIdent(timeName)}, * EXCLUDE ("__omv_time")`
             + ` FROM (SELECT ${projection} FROM (${raw})) WHERE "__omv_time" IS NOT NULL`;
+    }
+
+    /**
+     * The time column as it is written to the file.
+     *
+     * The projection computes time as milliseconds since the epoch, which is
+     * what the plot needs but not what the file should say: a Parquet holding a
+     * plain number has forgotten that its time was a date, and reopening it
+     * gave a numeric axis where the CSV had a calendar. Written back as a
+     * TIMESTAMP, the file carries that fact itself.
+     */
+    _conversionTimeSql(timeInfo, expression = '"__omv_time"') {
+        return timeInfo?.timeKind === 'datetime'
+            ? `epoch_ms(CAST(${expression} AS BIGINT))`
+            : expression;
     }
 
     _conversionKeptColumns(columnNames, timeInfo = null, csvProfile = null) {

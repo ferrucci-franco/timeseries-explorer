@@ -157,14 +157,27 @@ await check('a text column stays text', async () => {
     assert.ok(!/try_cast\("label" AS DOUBLE\)/.test(source.copySql()), 'label is not cast to a number');
 });
 
-await check('a datetime time source becomes epoch milliseconds', async () => {
+await check('a datetime is written back as a date, not a number', async () => {
     const source = makeSource({ describeColumns: VARCHAR_COLUMNS });
     await convert(source, profile({
         timeSource: {
             ok: true, kind: 'datetime', strategy: 'iso-datetime', sourceIndexes: [0], name: 'time',
         },
     }));
-    assert.match(source.copySql(), /epoch_ms\(/, 'the datetime is converted to a number the app can plot');
+    const sql = source.copySql();
+    // The projection works in milliseconds because that is what the plot needs.
+    assert.match(sql, /epoch_ms\(CAST\("time" AS TIMESTAMP\)\)::DOUBLE AS "__omv_time"/, 'time is computed as a number');
+    // But a file holding a plain number has forgotten its time was a date, and
+    // reopening it gave a numeric axis where the CSV had a calendar.
+    assert.match(sql, /SELECT epoch_ms\(CAST\("__omv_time" AS BIGINT\)\) AS "time"/, 'and written back as a TIMESTAMP');
+});
+
+await check('a numeric time stays a number', async () => {
+    const source = makeSource({ describeColumns: VARCHAR_COLUMNS });
+    await convert(source, profile());
+    // Seconds since the start of a test are not a calendar date, and turning
+    // them into 1970 timestamps would be a lie the file cannot walk back.
+    assert.match(source.copySql(), /SELECT "__omv_time" AS "time"/, 'no timestamp is invented');
 });
 
 await check('a decimal comma is repaired before the cast', async () => {

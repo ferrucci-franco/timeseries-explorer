@@ -57,9 +57,48 @@ try {
         // converted file.
         const schema = await runDuckDb(conn, `DESCRIBE SELECT * FROM ${readParquet}`);
         assert.deepEqual(schema.map(row => row.column_name), ['time', 'voltage', 'current']);
+        // A numeric time is a number. Elapsed seconds are not a calendar date.
+        assert.match(String(schema[0].column_type), /DOUBLE|BIGINT|INT/);
     } finally {
         await closeDuckDbConnection(conn);
         await closeDuckDbDatabase(db);
+    }
+
+    // A CSV whose time is a date must come back as a date. Written as a plain
+    // number, the file forgets it ever was one, and reopening it produced a
+    // numeric axis where the CSV had a calendar.
+    const datedCsv = join(dir, 'dated.csv');
+    const datedParquet = join(dir, 'dated.parquet');
+    writeFileSync(datedCsv, [
+        'timestamp;voltage',
+        '2024-01-01 00:00:00;220.0',
+        '2024-01-01 01:00:00;221.5',
+        '2024-01-01 02:00:00;222.0',
+        '',
+    ].join('\n'));
+
+    await convertCsvToParquet({
+        inputPath: datedCsv,
+        outputPath: datedParquet,
+        csvProfile: inspectCsvForParquet(datedCsv),
+        overwrite: true,
+    });
+
+    const datedDb = new Database(':memory:');
+    const datedConn = datedDb.connect();
+    try {
+        const read = `read_parquet('${datedParquet.replace(/\\/g, '/').replace(/'/g, "''")}')`;
+        const schema = await runDuckDb(datedConn, `DESCRIBE SELECT * FROM ${read}`);
+        assert.deepEqual(schema.map(row => row.column_name), ['timestamp', 'voltage']);
+        assert.match(String(schema[0].column_type), /TIMESTAMP/, 'the date is still a date');
+
+        const rows = await runDuckDb(datedConn, `SELECT CAST("timestamp" AS VARCHAR) AS t FROM ${read} ORDER BY 1`);
+        assert.equal(rows.length, 3);
+        assert.equal(String(rows[0].t), '2024-01-01 00:00:00', 'and it is the same instant it was');
+        assert.equal(String(rows[2].t), '2024-01-01 02:00:00');
+    } finally {
+        await closeDuckDbConnection(datedConn);
+        await closeDuckDbDatabase(datedDb);
     }
 
     console.log('CSV-to-Parquet core checks passed.');
