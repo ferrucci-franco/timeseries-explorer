@@ -1823,21 +1823,47 @@ proto._defaultParquetOutputPath = function(file) {
 // desktop route uses. Blocking on purpose: a conversion of a 563 MB file takes
 // tens of seconds, and showing that as a dismissible corner notice raises a
 // question the interface then refuses to answer — does closing it cancel?
+//
+// Returns null when the user cancels. Cancellation is genuine here: the engine
+// is told to stop and the output is never read back, so nothing is written.
 proto._convertTextFileToParquetBytes = async function(file, csvProfile) {
+    const controller = new AbortController();
     const started = Date.now();
-    this._showParquetConversionOverlay(file?.name || '');
+    this._showParquetConversionOverlay(file?.name || '', { onCancel: () => controller.abort() });
     const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
     try {
         const source = await this._getDuckDbSource();
-        const bytes = await source.convertCsvFileToParquet(file, { csvProfile, compression: 'zstd' });
+        const bytes = await source.convertCsvFileToParquet(file, {
+            csvProfile,
+            compression: 'zstd',
+            signal: controller.signal,
+        });
         this._setParquetConversionOverlayLoading();
         return bytes;
+    } catch (err) {
+        if (err?.cancelled) return null;
+        throw err;
     } finally {
         clearInterval(timer);
     }
 };
 
+// Loops on purpose. Cancelling a conversion undoes the conversion, not the
+// decision that led to it: the user lands back on the same choices and can
+// pick a different one — including opening the file as it is. Dropping them
+// straight into the slow load they were trying to avoid, or into an empty
+// workspace after a 30-second wait, would both be answers nobody asked for.
 proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
+    for (;;) {
+        const outcome = await this._offerLargeTextConversion(file, options);
+        if (outcome !== RETRY_CONVERSION_OFFER) return outcome;
+    }
+};
+
+const RETRY_CONVERSION_OFFER = Symbol('retry-conversion-offer');
+const CANCELLED = Symbol('conversion-cancelled');
+
+proto._offerLargeTextConversion = async function(file, options = {}) {
     if (!this._shouldOfferLargeCsvPreflight(file, options)) return null;
 
     let csvProfile = null;
@@ -1933,6 +1959,7 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
     // the save dialog. The file that then gets loaded is the Parquet either way.
     if (!this._canConvertTextFileNatively(file)) {
         const parquetBytes = await this._convertTextFileToParquetBytes(file, csvProfile);
+        if (!parquetBytes) return RETRY_CONVERSION_OFFER;   // cancelled
         const name = `${this._fileBaseName(file.name || 'data')}.parquet`;
         await this._saveBytesToDisk(parquetBytes, name);
         return {
@@ -1959,6 +1986,17 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
         temporary,
         keepOverlayUntilLoaded: true,
     });
+    if (!parquetFile) {
+        // Cancelled. The work is still finishing on its own, so say that rather
+        // than let the user believe it was undone — then offer the choices
+        // again, which is where they were before they asked for this.
+        await Modal.alert(
+            i18n.t('parquetConversionCancelledTitle'),
+            i18n.t('parquetConversionCancelledBody'),
+            { icon: 'ℹ️' },
+        );
+        return RETRY_CONVERSION_OFFER;
+    }
     return {
         file: parquetFile,
         localPath: parquetFile.localPath,
@@ -1967,7 +2005,7 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
     };
 };
 
-proto._showParquetConversionOverlay = function(filename) {
+proto._showParquetConversionOverlay = function(filename, { onCancel = null } = {}) {
     document.getElementById('file-loading-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.id = 'file-loading-overlay';
@@ -1992,6 +2030,29 @@ proto._showParquetConversionOverlay = function(filename) {
     hint.dataset.filename = filename || '';
 
     dialog.append(spinner, title, hint);
+
+    // A visible way out. Work that runs for tens of seconds behind a modal with
+    // no exit reads as a hang, and Escape alone is not discoverable — the user
+    // has no reason to guess it applies here.
+    if (typeof onCancel === 'function') {
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.id = 'file-loading-cancel';
+        cancel.className = 'modal-btn modal-btn-cancel example-loading-cancel';
+        cancel.textContent = i18n.t('cancel');
+        const finish = () => {
+            cancel.disabled = true;
+            cancel.textContent = i18n.t('cancellingConversion');
+            document.removeEventListener('keydown', onKey);
+            onCancel();
+        };
+        const onKey = (event) => { if (event.key === 'Escape') finish(); };
+        cancel.addEventListener('click', finish);
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('omv:overlay-removed', () => document.removeEventListener('keydown', onKey), { once: true });
+        dialog.append(cancel);
+    }
+
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add('show'));
@@ -2014,19 +2075,36 @@ proto._convertCsvFileToParquetFile = async function(file, options = {}) {
     const converter = globalThis.omvDesktop?.convertToParquet;
     if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
 
+    // Cancelling the native conversion means stopping waiting for it. There is
+    // no channel to interrupt the process doing the work, and the file it is
+    // writing was explicitly asked for at a path the user chose, so deleting it
+    // afterwards would be worse than leaving it: we cannot tell a half-written
+    // file from a finished one. The overlay says so rather than implying the
+    // work vanished.
+    const cancelController = new AbortController();
     const started = Date.now();
-    this._showParquetConversionOverlay(file.name);
+    this._showParquetConversionOverlay(file.name, { onCancel: () => cancelController.abort() });
     this._updateParquetConversionOverlay(started);
     let timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
     let handedOffToLoad = false;
     try {
-        const result = await converter({
+        const conversion = converter({
             path: file.localPath,
             outputPath: options.outputPath || '',
             temporary: options.temporary === true,
             csvProfile: cloneCsvProfileForIpc(options.csvProfile),
             compression: 'zstd',
         });
+        const cancelled = new Promise((resolve) => {
+            cancelController.signal.addEventListener('abort', () => resolve(CANCELLED), { once: true });
+        });
+        const result = await Promise.race([conversion, cancelled]);
+        if (result === CANCELLED) {
+            // The work continues in the background; say so rather than let the
+            // user assume it was undone.
+            conversion.catch(() => null);
+            return null;
+        }
         if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
         if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
         clearInterval(timer);

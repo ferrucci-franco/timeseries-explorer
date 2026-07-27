@@ -180,11 +180,11 @@ export default class DuckDbSource {
      * @param {ArrayBuffer|Uint8Array} bytes
      * @returns {Promise<Uint8Array>} the Parquet file
      */
-    async convertCsvBufferToParquet(bytes, { csvProfile = null, compression = 'zstd' } = {}) {
+    async convertCsvBufferToParquet(bytes, { csvProfile = null, compression = 'zstd', signal = null } = {}) {
         const payload = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
         return this._convertToParquet(
             (name) => this._db.registerFileBuffer(name, payload),
-            { csvProfile, compression, extension: 'csv' },
+            { csvProfile, compression, extension: 'csv', signal },
         );
     }
 
@@ -196,14 +196,14 @@ export default class DuckDbSource {
      * @param {File} file
      * @returns {Promise<Uint8Array>} the Parquet file
      */
-    async convertCsvFileToParquet(file, { csvProfile = null, compression = 'zstd' } = {}) {
+    async convertCsvFileToParquet(file, { csvProfile = null, compression = 'zstd', signal = null } = {}) {
         return this._convertToParquet(
             (name) => this.registerFile(name, file),
-            { csvProfile, compression, extension: 'csv' },
+            { csvProfile, compression, extension: 'csv', signal },
         );
     }
 
-    async _convertToParquet(registerInput, { csvProfile, compression, extension }) {
+    async _convertToParquet(registerInput, { csvProfile, compression, extension, signal = null }) {
         await this.init();
         // Unique per call: a failed conversion must not leave a name behind
         // that the next one would silently read instead of its own input.
@@ -211,8 +211,22 @@ export default class DuckDbSource {
         const inputName = `omv_conv_${stamp}.${extension}`;
         const outputName = `omv_conv_${stamp}.parquet`;
 
+        const state = { cancelled: false };
+        const onAbort = () => {
+            state.cancelled = true;
+            // Best effort, and honestly so: DuckDB stops at the next point it
+            // checks, which on a large COPY is not instant. What IS immediate
+            // is that we stop waiting and never materialize the output.
+            Promise.resolve().then(() => this._conn?.cancelSent?.()).catch(() => null);
+        };
+        if (signal) {
+            if (signal.aborted) onAbort();
+            else signal.addEventListener('abort', onAbort, { once: true });
+        }
+
         await registerInput(inputName);
         try {
+            if (state.cancelled) throw conversionCancelled();
             const readExpr = this._csvReadExpr(inputName, csvProfile, { skip: 0 });
             // Compression reaches SQL unquoted, so it is never allowed to be
             // anything but a bare identifier.
@@ -220,8 +234,12 @@ export default class DuckDbSource {
             await this.query(
                 `COPY (SELECT * FROM ${readExpr}) TO '${outputName}' (FORMAT PARQUET, COMPRESSION ${safeCompression})`,
             );
+            // A cancelled COPY may still have finished. Reading the result back
+            // would hand the user a file they asked us not to make.
+            if (state.cancelled) throw conversionCancelled();
             return await this._db.copyFileToBuffer(outputName);
         } finally {
+            signal?.removeEventListener?.('abort', onAbort);
             for (const name of [inputName, outputName]) {
                 try { await this._db.dropFile(name); } catch (_) { /* already gone */ }
             }
@@ -3229,4 +3247,13 @@ export default class DuckDbSource {
         this._db = null;
         this._initPromise = null;
     }
+}
+
+// A cancelled conversion is the user's decision, not a failure: the `cancelled`
+// flag is what stops the UI turning it into an error dialog.
+function conversionCancelled() {
+    const err = new Error('Parquet conversion cancelled');
+    err.name = 'ConversionCancelledError';
+    err.cancelled = true;
+    return err;
 }

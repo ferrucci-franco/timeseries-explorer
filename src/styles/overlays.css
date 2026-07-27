@@ -3359,3 +3359,11 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
         font-size: 0.66rem;
     }
 }
+
+/* Cancel inside the conversion overlay. Work that runs for tens of seconds
+   behind a modal with no exit reads as a hang, so the way out has to be
+   visible — Escape alone is not something a user has any reason to try here. */
+.example-loading-cancel {
+    margin-top: 1.1rem;
+    min-width: 8rem;
+}
