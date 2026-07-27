@@ -44,8 +44,16 @@ export const BINARY_EXTENSIONS = Object.freeze([
     '.json', '.xml',
 ]);
 
+// Spreadsheets are binary, but unlike the rest of that list the app can turn
+// one into a table — the chosen sheet becomes CSV text on the way in. Anything
+// that offers to convert a file has to tell those two groups apart.
+export const SPREADSHEET_EXTENSIONS = Object.freeze([
+    '.xlsx', '.xlsm', '.xlsb', '.xls', '.ods',
+]);
+
 const TEXT = new Set(TEXT_TABLE_EXTENSIONS);
 const BINARY = new Set(BINARY_EXTENSIONS);
+const SPREADSHEET = new Set(SPREADSHEET_EXTENSIONS);
 
 const normalize = (extension) => String(extension || '').toLowerCase();
 
@@ -74,4 +82,9 @@ export function isTextTableExtension(extension) {
  */
 export function mayBeTextTable(extension) {
     return classifyExtension(extension) !== 'binary';
+}
+
+/** A workbook the app can read a sheet out of. */
+export function isSpreadsheetExtension(extension) {
+    return SPREADSHEET.has(normalize(extension));
 }

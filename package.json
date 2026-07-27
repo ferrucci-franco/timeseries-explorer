@@ -64,6 +64,7 @@
     "test:text-file-formats": "node scripts/test-text-file-formats.mjs",
     "test:spreadsheet-parquet": "node scripts/test-spreadsheet-parquet.mjs",
     "test:parquet-conversion-sql": "node scripts/test-parquet-conversion-sql.mjs",
+    "test:parquet-converter-menu": "node scripts/test-parquet-converter-menu.mjs",
     "test:large-files-help": "node scripts/test-large-files-help.mjs",
     "test:csv-export": "node scripts/test-csv-export-time-columns.mjs",
     "test:csv-elapsed": "node scripts/test-csv-elapsed-format.mjs",

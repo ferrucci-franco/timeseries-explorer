@@ -86,7 +86,7 @@ check(() => {
 check(() => {
     // Converting only in memory would make this open faster and every future
     // one exactly as slow as before, which is the opposite of the point.
-    const convert = fileMethods.slice(fileMethods.indexOf('proto._convertSpreadsheetEntryToParquet'));
+    const convert = fileMethods.slice(fileMethods.indexOf('proto._runSpreadsheetParquetConversion'));
     assert.match(convert.slice(0, 2600), /_saveBytesToDisk/, 'the browser result is offered for keeping');
     const save = fileMethods.slice(fileMethods.indexOf('proto._saveBytesToDisk'));
     assert.match(save.slice(0, 1200), /showSaveFilePicker/, 'a real save dialog when the browser has one');
@@ -95,7 +95,7 @@ check(() => {
 });
 
 check(() => {
-    const convert = fileMethods.slice(fileMethods.indexOf('proto._convertSpreadsheetEntryToParquet'));
+    const convert = fileMethods.slice(fileMethods.indexOf('proto._runSpreadsheetParquetConversion'));
     const body = convert.slice(0, 6000);
     assert.match(body, /bytes: new Uint8Array\(csvBuffer\)/, 'the sheet is sent as bytes, not as a path');
     assert.match(body, /sourceName:/, 'a name is supplied so the staged file is recognisable');
@@ -119,7 +119,12 @@ check(() => {
     assert.ok(preview < picker, 'the preview comes before choosing a destination');
     assert.ok(preview < converted, 'and before converting');
     assert.match(body.slice(preview, converted), /if \(!reviewed\) return null;/, 'backing out cancels the conversion');
-    assert.match(body, /csvProfile: cloneCsvProfileForIpc\(reviewed\)/, 'the reviewed profile is what gets converted');
+    // The conversion itself lives in _runSpreadsheetParquetConversion, shared
+    // with the converter in the menu, so the reviewed profile is what this
+    // hands over and what that sends on.
+    assert.match(body.slice(preview, converted), /csvProfile: reviewed/, 'the reviewed profile is what gets converted');
+    const runner = fileMethods.slice(fileMethods.indexOf('proto._runSpreadsheetParquetConversion'));
+    assert.match(runner.slice(0, 6000), /csvProfile: cloneCsvProfileForIpc\(csvProfile\)/, 'and it survives the trip to the main process');
 });
 
 check(() => {

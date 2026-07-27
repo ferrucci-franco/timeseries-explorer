@@ -21,7 +21,13 @@ import {
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
 import { checkFullLoadLimit } from '../file-size-limits.js';
 import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
-import { isTextTableExtension, mayBeTextTable } from '../text-file-formats.js';
+import {
+    SPREADSHEET_EXTENSIONS,
+    TEXT_TABLE_EXTENSIONS,
+    isSpreadsheetExtension,
+    isTextTableExtension,
+    mayBeTextTable,
+} from '../text-file-formats.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -2204,6 +2210,286 @@ proto._quoteCommandPath = function(path) {
     return `"${String(path || '').replace(/"/g, '\\"')}"`;
 };
 
+// ─── Convert to Parquet, without opening anything ─────────────────────────
+//
+// Until now the conversion existed only as an offer that appears when a large
+// file is about to be opened. Nobody could find it, try it on something small,
+// or use it on a file they were not about to open — the feature was invisible
+// until the moment it was least convenient to learn about.
+//
+// Same steps and same dialogs, reached from the menu instead. What is missing
+// is the way out: "open it as it is" makes no sense to somebody who came here
+// to convert. So does "convert to a temporary file", which exists to make one
+// open faster and is deleted on exit — the opposite of what this is for.
+
+const CONVERTIBLE_EXTENSIONS = Object.freeze([
+    ...TEXT_TABLE_EXTENSIONS,
+    ...SPREADSHEET_EXTENSIONS,
+]);
+
+proto.convertFileToParquet = async function() {
+    let file = null;
+    try {
+        file = await this._pickFileToConvert();
+    } catch (err) {
+        if (err?.name === 'AbortError') return;
+        console.error('Could not pick a file to convert:', err);
+        this._showLoadError(err, '');
+        return;
+    }
+    if (!file) return;
+
+    const extension = this._fileExtension(file.name || '');
+    const spreadsheet = isSpreadsheetExtension(extension);
+    // .mat, .pkl and .nc have no converter. Saying so is the point — a menu
+    // entry that quietly does nothing is worse than one that explains itself.
+    if (!spreadsheet && !mayBeTextTable(extension)) {
+        await Modal.alert(
+            i18n.t('convertToParquetTitle'),
+            i18n.t('convertToParquetUnsupported').replace('{file}', file.name || ''),
+            { icon: 'CSV' },
+        );
+        return;
+    }
+    if (!this._canConvertTextFileToParquet(file)) {
+        await Modal.alert(i18n.t('convertToParquetTitle'), i18n.t('parquetConversionUnavailable'), { icon: 'CSV' });
+        return;
+    }
+
+    try {
+        if (spreadsheet) await this._convertSpreadsheetFromMenu(file);
+        else await this._convertTextFileFromMenu(file);
+    } catch (err) {
+        console.error('Convert to Parquet failed:', err);
+        this._hideFileLoadingOverlay();
+        this._showLoadError(err, file.name || '');
+    }
+};
+
+// One file. Converting several would mean either asking about the parsing of
+// each one, or applying one answer to files that do not share a structure.
+// Opening files for reading stays multi-select; this is a different question.
+proto._pickFileToConvert = async function() {
+    const bare = CONVERTIBLE_EXTENSIONS.map(extension => extension.replace(/^\./, ''));
+    const desktopPicker = globalThis.omvDesktop?.selectFilePath;
+    if (this.capabilities?.isDesktop && typeof desktopPicker === 'function') {
+        const path = await desktopPicker({
+            title: i18n.t('convertToParquetPickTitle'),
+            filters: [
+                { name: 'Convertible files', extensions: bare },
+                { name: 'All files', extensions: ['*'] },
+            ],
+        });
+        return path ? await this._readLocalResultPath(path) : null;
+    }
+
+    if (typeof globalThis.showOpenFilePicker === 'function') {
+        try {
+            const [handle] = await globalThis.showOpenFilePicker({
+                multiple: false,
+                types: [{
+                    description: 'Convertible files',
+                    accept: { '*/*': CONVERTIBLE_EXTENSIONS.slice() },
+                }],
+            });
+            return handle ? await this._getFileHandleSnapshot(handle) : null;
+        } catch (err) {
+            if (err?.name === 'AbortError') return null;
+            console.warn('Convert picker failed; using the file input fallback.', err);
+        }
+    }
+
+    return new Promise((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = CONVERTIBLE_EXTENSIONS.join(',');
+        input.style.display = 'none';
+        const finish = (value) => { input.remove(); resolve(value); };
+        input.addEventListener('change', () => finish(input.files?.[0] || null), { once: true });
+        input.addEventListener('cancel', () => finish(null), { once: true });
+        document.body.appendChild(input);
+        input.click();
+    });
+};
+
+proto._convertTextFileFromMenu = async function(file) {
+    let csvProfile = null;
+    try {
+        csvProfile = await this._inspectCsvSample(file);
+    } catch (err) {
+        console.warn('[csv] could not inspect sample before converting:', err?.message || err);
+    }
+
+    for (;;) {
+        const choice = await this._askHowToConvert(file.name || '', file.size, csvProfile);
+        if (choice !== 'review' && choice !== 'convert') return;
+        if (choice === 'review') {
+            const reviewed = await this._openCsvParsingPreviewForFileObject(file, {
+                csvProfile,
+                title: file.name || '',
+            });
+            // Backing out of the preview is not backing out of converting.
+            if (!reviewed) continue;
+            csvProfile = reviewed;
+        }
+        const result = await this._runTextFileParquetConversion(file, { csvProfile });
+        if (await this._conversionWasCancelled(result)) continue;
+        await this._offerToOpenConverted(result);
+        return;
+    }
+};
+
+proto._convertSpreadsheetFromMenu = async function(file) {
+    // Decoding the workbook is the expensive half — tens of seconds for a large
+    // one — and it happens before any question can be asked, because the
+    // questions are about the sheet's contents.
+    const rawBuffer = await this._withDecodingOverlay(file, () => (
+        file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file)
+    ));
+    let converted = await this._withDecodingOverlay(file, () => this._convertExcelBufferToCsv(rawBuffer, null));
+    if (!converted?.sheetName) {
+        await Modal.alert(
+            i18n.t('excelSheetPickerTitle'),
+            i18n.t('excelNoDataSheets').replace('{file}', file.name || ''),
+            { icon: 'XLS' },
+        );
+        return;
+    }
+
+    const sheetNames = converted.sheetNames || [];
+    if (sheetNames.length > 1) {
+        const { default: ExcelSheetPickerDialog } = await import('../../ui/excel-sheet-picker-dialog.js');
+        const picked = await ExcelSheetPickerDialog.open({
+            fileName: file.name || '',
+            sheets: sheetNames.map(name => ({ name })),
+            single: true,
+            confirmLabel: 'convertToParquetRun',
+        });
+        if (!picked?.length) return;
+        if (picked[0] !== converted.sheetName) {
+            converted = await this._withDecodingOverlay(file, () => this._convertExcelBufferToCsv(rawBuffer, picked[0]));
+        }
+    }
+
+    const csvBuffer = converted.csvBuffer;
+    const sheetName = converted.sheetName;
+    let csvProfile = null;
+    try {
+        csvProfile = await this._inspectCsvSample(null, spreadsheetPreviewSample(csvBuffer));
+    } catch (err) {
+        console.warn('[csv] could not inspect the sheet before converting:', err?.message || err);
+    }
+
+    for (;;) {
+        const choice = await this._askHowToConvert(file.name || '', file.size, csvProfile, sheetName);
+        if (choice !== 'review' && choice !== 'convert') return;
+        if (choice === 'review') {
+            const reviewed = await this._openCsvParsingPreviewForFileObject(null, {
+                sampleBuffer: spreadsheetPreviewSample(csvBuffer),
+                csvProfile,
+                title: file.name || sheetName,
+            });
+            if (!reviewed) continue;
+            csvProfile = reviewed;
+        }
+        const result = await this._runSpreadsheetParquetConversion(csvBuffer, {
+            csvProfile,
+            sheetName,
+            parquetName: this._spreadsheetParquetName({ file }, sheetName),
+            displayName: file.name || '',
+            defaultOutputPath: this._defaultParquetOutputPath({ localPath: file.localPath, name: file.name }),
+        });
+        if (await this._conversionWasCancelled(result)) continue;
+        await this._offerToOpenConverted(result);
+        return;
+    }
+};
+
+proto._withDecodingOverlay = async function(file, work) {
+    this._showParquetConversionOverlay(file?.name || '');
+    try {
+        return await work();
+    } finally {
+        this._hideFileLoadingOverlay();
+    }
+};
+
+proto._askHowToConvert = function(filename, size, csvProfile = null, sheetName = '') {
+    const reviewed = csvProfile?.profileSource === 'user';
+    const body = (reviewed ? i18n.t('convertToParquetReviewedBody') : i18n.t('convertToParquetBody'))
+        .replace('{file}', filename)
+        .replace('{size}', this._formatBytes(Number(size) || 0))
+        .replace('{sheet}', sheetName || '');
+    return Modal.choice(body, {
+        title: i18n.t('convertToParquetTitle'),
+        icon: 'CSV',
+        className: 'modal-dialog-large-csv',
+        choices: [
+            {
+                value: 'review',
+                text: i18n.t('csvPreviewReviewStructure'),
+                className: 'modal-btn-confirm',
+                autoFocus: true,
+            },
+            {
+                value: 'convert',
+                text: i18n.t('convertToParquetRun'),
+                className: 'modal-btn-confirm modal-btn-secondary-confirm',
+            },
+            {
+                value: 'cancel',
+                text: i18n.t('cancel'),
+                className: 'modal-btn-cancel',
+            },
+        ],
+    });
+};
+
+// Cancelling the conversion undoes the conversion, not the decision to
+// convert: the caller loops back to the choices. Says so first when the work
+// is still finishing in the background, which is the case the desktop
+// converter cannot interrupt.
+proto._conversionWasCancelled = async function(result) {
+    if (!result?.cancelled) return false;
+    if (result.stillRunning) {
+        await Modal.alert(
+            i18n.t('parquetConversionCancelledTitle'),
+            i18n.t('parquetConversionCancelledBody'),
+            { icon: 'ℹ️' },
+        );
+    }
+    return true;
+};
+
+// Asked at the end, not at the start: by now the conversion has succeeded and
+// the parsing has proven itself, so the answer is an informed one. It also
+// costs nothing to say no — the file is already written either way.
+proto._offerToOpenConverted = async function(result) {
+    const name = result.file?.name || '';
+    const body = (result.saved ? i18n.t('convertToParquetDoneBody') : i18n.t('convertToParquetDoneUnsavedBody'))
+        .replace('{file}', result.localPath || name)
+        .replace('{size}', this._formatBytes(Number(result.file?.size) || 0));
+    const choice = await Modal.choice(body, {
+        title: i18n.t('convertToParquetDoneTitle'),
+        icon: '✅',
+        choices: [
+            {
+                value: 'open',
+                text: i18n.t('convertToParquetOpenNow'),
+                className: 'modal-btn-confirm',
+                autoFocus: true,
+            },
+            {
+                value: 'done',
+                text: i18n.t('convertToParquetClose'),
+                className: 'modal-btn-cancel',
+            },
+        ],
+    });
+    if (choice !== 'open') return;
+    await this.loadFiles([{ file: result.file, fileHandle: null, localPath: result.localPath || '' }]);
+};
+
 // ─── Spreadsheet → Parquet ────────────────────────────────────────────────
 //
 // A spreadsheet is decoded from scratch on every open, and that decode is the
@@ -2362,10 +2648,6 @@ proto._saveBytesToDisk = async function(bytes, filename) {
 };
 
 proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = false } = {}) {
-    const converter = globalThis.omvDesktop?.convertToParquet;
-    const inBrowser = typeof converter !== 'function';
-    if (inBrowser && !this._canUseDuckDb()) throw new Error(i18n.t('parquetConversionUnavailable'));
-
     const csvBuffer = await this._spreadsheetCsvBytes(entry);
     const sheetName = entry.excelCsvSheetName || entry.excel?.sheetName || 'sheet';
 
@@ -2381,24 +2663,76 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
     });
     if (!reviewed) return null;   // backed out of the preview
 
-    const parquetName = this._spreadsheetParquetName(entry, sheetName);
+    const result = await this._runSpreadsheetParquetConversion(csvBuffer, {
+        csvProfile: reviewed,
+        sheetName,
+        parquetName: this._spreadsheetParquetName(entry, sheetName),
+        displayName: entry.file?.name || entry.name || '',
+        defaultOutputPath: this._defaultParquetOutputPath({
+            localPath: entry.localPath,
+            name: entry.file?.name || `${entry.name || 'sheet'}.xlsx`,
+        }),
+        temporary,
+        keepOverlayUntilLoaded: true,
+    });
+    return result.cancelled ? null : result.file;
+};
+
+/**
+ * Convert a sheet — already turned into CSV text — to Parquet.
+ *
+ * The counterpart of _runTextFileParquetConversion, and the only copy for the
+ * same reason. A sheet has no path on disk of its own: it exists as bytes, so
+ * the desktop route hands the bytes over to be staged rather than pointing at
+ * a file.
+ *
+ * @returns {Promise<
+ *     {file: File, localPath: string, temporary: boolean, saved: boolean}
+ *   | {cancelled: true, at: 'destination'|'conversion', stillRunning?: boolean}
+ * >}
+ */
+proto._runSpreadsheetParquetConversion = async function(csvBuffer, options = {}) {
+    const converter = globalThis.omvDesktop?.convertToParquet;
+    const inBrowser = typeof converter !== 'function';
+    if (inBrowser && !this._canUseDuckDb()) throw new Error(i18n.t('parquetConversionUnavailable'));
+
+    const csvProfile = options.csvProfile || null;
+    const sheetName = options.sheetName || 'sheet';
+    const parquetName = options.parquetName || 'sheet.parquet';
+    const displayName = options.displayName || '';
+    const temporary = options.temporary === true;
+    const keepOverlay = options.keepOverlayUntilLoaded === true;
 
     if (inBrowser) {
+        // Cancellable, like the text route. A sheet of the same size takes the
+        // same tens of seconds, and there was no way out of this one.
+        const controller = new AbortController();
         const started = Date.now();
-        this._showParquetConversionOverlay(entry.file?.name || entry.name || '');
+        this._showParquetConversionOverlay(displayName, { onCancel: () => controller.abort() });
         const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
         try {
             const source = await this._getDuckDbSource();
             const parquetBytes = await source.convertCsvBufferToParquet(csvBuffer, {
-                csvProfile: reviewed,
+                csvProfile,
                 compression: 'zstd',
+                signal: controller.signal,
             });
             this._setParquetConversionOverlayLoading();
             // Offer to keep it. Converting only in memory would make this open
             // faster and every future one exactly as slow as before, which is
             // the opposite of the point.
-            await this._saveBytesToDisk(parquetBytes, parquetName);
-            return new File([parquetBytes], parquetName, { type: 'application/octet-stream' });
+            const saved = await this._saveBytesToDisk(parquetBytes, parquetName);
+            if (!keepOverlay) this._hideFileLoadingOverlay();
+            return {
+                file: new File([parquetBytes], parquetName, { type: 'application/octet-stream' }),
+                localPath: '',
+                temporary: false,
+                saved,
+            };
+        } catch (err) {
+            if (!err?.cancelled) throw err;
+            this._hideFileLoadingOverlay();
+            return { cancelled: true, at: 'conversion', stillRunning: false };
         } finally {
             clearInterval(timer);
         }
@@ -2410,16 +2744,13 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
         if (typeof picker !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
         outputPath = await picker({
             title: i18n.t('largeCsvPreflightSaveDialogTitle'),
-            defaultPath: this._defaultParquetOutputPath({
-                localPath: entry.localPath,
-                name: entry.file?.name || `${entry.name || 'sheet'}.xlsx`,
-            }),
+            defaultPath: options.defaultOutputPath || '',
         });
-        if (!outputPath) return null;
+        if (!outputPath) return { cancelled: true, at: 'destination' };
     }
 
     const started = Date.now();
-    this._showParquetConversionOverlay(entry.file?.name || entry.name || '');
+    this._showParquetConversionOverlay(displayName);
     const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
     try {
         // `bytes` rather than `path`: the sheet only exists as CSV text in
@@ -2429,7 +2760,7 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
         const result = await converter({
             bytes: new Uint8Array(csvBuffer),
             sourceName: `${sheetName}.csv`,
-            csvProfile: cloneCsvProfileForIpc(reviewed),
+            csvProfile: cloneCsvProfileForIpc(csvProfile),
             outputPath,
             temporary,
             compression: 'zstd',
@@ -2437,7 +2768,9 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
         if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
         if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
         this._setParquetConversionOverlayLoading();
-        return await this._readLocalResultPath(result.outputPath);
+        const file = await this._readLocalResultPath(result.outputPath);
+        if (!keepOverlay) this._hideFileLoadingOverlay();
+        return { file, localPath: file?.localPath || result.outputPath, temporary, saved: true };
     } finally {
         clearInterval(timer);
     }

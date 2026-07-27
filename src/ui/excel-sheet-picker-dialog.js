@@ -7,7 +7,15 @@ import Modal from './modal.js';
  * or null when the user cancels.
  */
 export default class ExcelSheetPickerDialog {
-    static open({ fileName = '', sheets = [] } = {}) {
+    /**
+     * @param {object} options
+     * @param {boolean} [options.single] one sheet only — the converter writes
+     *   one file, so letting three sheets be ticked would promise something it
+     *   is not going to do.
+     * @param {string} [options.confirmLabel] i18n key for the confirm button,
+     *   because "Load" is the wrong verb when nothing is being loaded.
+     */
+    static open({ fileName = '', sheets = [], single = false, confirmLabel = 'excelSheetPickerLoad' } = {}) {
         return new Promise((resolve) => {
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
@@ -42,7 +50,8 @@ export default class ExcelSheetPickerDialog {
                 row.className = 'excel-sheet-row';
 
                 const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
+                checkbox.type = single ? 'radio' : 'checkbox';
+                if (single) checkbox.name = 'omv-excel-sheet';
                 checkbox.value = sheet.name;
                 checkbox.disabled = !!sheet.empty;
                 if (!sheet.empty && !firstSelectableChecked) {
@@ -62,7 +71,9 @@ export default class ExcelSheetPickerDialog {
                 const notes = [];
                 if (sheet.empty) {
                     notes.push(i18n.t('excelSheetEmpty'));
-                } else {
+                } else if (Number.isFinite(sheet.rowCount) && Number.isFinite(sheet.colCount)) {
+                    // A caller that only knows the sheet names says nothing
+                    // rather than "undefined × undefined".
                     notes.push(`${sheet.rowCount} × ${sheet.colCount}`);
                 }
                 if (sheet.hidden) notes.push(i18n.t('excelSheetHidden'));
@@ -83,7 +94,7 @@ export default class ExcelSheetPickerDialog {
 
             const confirmBtn = document.createElement('button');
             confirmBtn.className = 'modal-btn modal-btn-confirm';
-            confirmBtn.textContent = i18n.t('excelSheetPickerLoad');
+            confirmBtn.textContent = i18n.t(confirmLabel);
 
             buttons.append(cancelBtn, confirmBtn);
             content.appendChild(buttons);

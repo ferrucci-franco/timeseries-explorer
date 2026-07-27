@@ -403,7 +403,10 @@ async function selectResultFilePaths(options = {}, multiple = false) {
     title: typeof options.title === 'string' ? options.title : 'Select result file',
     defaultPath: typeof options.defaultPath === 'string' && options.defaultPath ? options.defaultPath : undefined,
     properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
-    filters: [
+    // A caller that can only handle some of these says so. The Parquet
+    // converter has no reader for .mat or .pkl, and offering them in its own
+    // dialog would only let the user pick a file it then has to refuse.
+    filters: Array.isArray(options.filters) && options.filters.length ? options.filters : [
       { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', 'nc', 'netcdf', 'pkl', 'pickle', 'xlsx', 'xlsm', 'xls', 'ods'] },
       { name: 'Spreadsheets', extensions: ['xlsx', 'xlsm', 'xls', 'ods'] },
       { name: 'All files', extensions: ['*'] },

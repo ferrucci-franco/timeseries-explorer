@@ -1356,6 +1356,13 @@ proto._renderExtraMenu = function() {
         });
     }, { titleKey: 'extraLoadSessionProjectTooltip' });
 
+    const convertParquetItem = makeAction('🗜', 'extraConvertToParquet', () => {
+        this.convertFileToParquet().catch(err => {
+            console.error('Convert to Parquet failed:', err);
+            Modal.alert(i18n.t('convertToParquetTitle'), err?.message || String(err), { icon: 'CSV' });
+        });
+    }, { titleKey: 'extraConvertToParquetTooltip' });
+
     const displaySettingsItem = makeAction(
         '⛭',
         'extraDisplaySettings',
@@ -1433,7 +1440,7 @@ proto._renderExtraMenu = function() {
     versionRow.append(versionIcon, versionLabel, versionValue);
     if (buildText) versionRow.append(versionBuild);
 
-    const items = [saveViewItem, saveProjectItem, loadSessionItem, displaySettingsItem];
+    const items = [saveViewItem, saveProjectItem, loadSessionItem, convertParquetItem, displaySettingsItem];
     if (this.capabilities?.canUseLocalPath) {
         items.push(openTempItem, dymolaDirItem);
     }
