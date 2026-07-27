@@ -1476,9 +1476,14 @@ proto._fileDisplayName = function(entry) {
  * the thing that decides whether a file opens whole or in memory-saving mode —
  * was nowhere in the list at all.
  *
- * The path is only known when the desktop version opened the file. A browser
- * is not allowed to see where a file came from, so there the tooltip is the
- * name and the size, and claiming otherwise would be inventing a path.
+ * The full path is only known when the desktop version opened the file. A
+ * browser is never told where a file came from — if it were, any web page
+ * could read your folder layout by asking for one file — so claiming a path
+ * there would be inventing it.
+ *
+ * The one thing a browser does hand over is a path RELATIVE to a folder the
+ * user picked as a whole, and only for that kind of selection. It is shown
+ * when it is there, which is better than a name repeated twice.
  */
 proto._fileEntryTooltip = function(entry) {
     const name = this._fileDisplayName(entry);
@@ -1486,8 +1491,8 @@ proto._fileEntryTooltip = function(entry) {
     const lines = [Number.isFinite(size) && size > 0
         ? `${name} (${this._formatBytes(size)})`
         : name];
-    const path = String(entry?.localPath || '').trim();
-    if (path) lines.push(path);
+    const path = String(entry?.localPath || entry?.file?.webkitRelativePath || '').trim();
+    if (path && path !== name) lines.push(path);
     return lines.join('\n');
 };
 
