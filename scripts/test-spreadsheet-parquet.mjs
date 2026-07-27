@@ -205,11 +205,14 @@ check(() => {
     const preview = body.indexOf('_openCsvParsingPreviewForFileObject');
     // Whichever route runs — native converter or in-browser engine — the
     // preview has to come first.
-    const inBrowser = body.indexOf('convertCsvFileToParquet');
+    const inBrowser = body.indexOf('_convertTextFileToParquetBytes');
     const native = body.indexOf('await converter(');
     const convert = Math.min(...[inBrowser, native].filter(i => i > 0));
     assert.ok(preview > 0, 'the notice route opens the parsing preview');
     assert.ok(inBrowser > 0 && native > 0, 'both conversion routes are present');
+    // The corner card must be gone before work starts: a close button beside a
+    // running conversion asks a question the interface cannot answer.
+    assert.match(body.slice(preview, convert), /notice\?\.remove\(\)/, 'the notice is dismissed before converting');
     assert.ok(preview < convert, 'the preview comes first');
     assert.match(body.slice(preview, convert), /if \(!reviewed\) return;/, 'backing out of the preview cancels the conversion');
 });
@@ -249,7 +252,7 @@ check(() => {
 check(() => {
     const convert = fileMethods.slice(fileMethods.indexOf('proto._convertLargeCsvNoticeToParquet'));
     const body = convert.slice(0, 3000);
-    assert.match(body, /convertCsvFileToParquet/, 'the browser route converts through the engine');
+    assert.match(body, /_convertTextFileToParquetBytes/, 'the browser route converts through the engine');
     assert.match(body, /_saveBytesToDisk/, 'and offers the result for keeping');
     // A missing localPath used to throw before anything else could happen.
     assert.doesNotMatch(body.slice(0, 400), /if \(!file\?\.localPath\) throw/, 'a missing path is no longer fatal');

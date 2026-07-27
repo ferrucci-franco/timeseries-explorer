@@ -711,15 +711,24 @@ proto._showLazyFileNotice = function(fileId) {
     body.textContent = i18n.t('lazyFileNoticeBody').replace('{file}', this._fileDisplayName(entry));
     const actions = document.createElement('div');
     actions.className = 'dismissible-notice-actions';
+    // Dismiss first, and styled as the primary action. With "Open Settings"
+    // alone the notice reads as a demand: nothing here needs changing, and the
+    // × in the corner is not an obvious answer to a message about a limit.
+    const understood = document.createElement('button');
+    understood.type = 'button';
+    understood.className = 'dismissible-notice-action primary';
+    understood.textContent = i18n.t('lazyFileNoticeUnderstood');
+    understood.addEventListener('click', () => notice.remove());
+
     const settings = document.createElement('button');
     settings.type = 'button';
-    settings.className = 'dismissible-notice-action primary';
+    settings.className = 'dismissible-notice-action';
     settings.textContent = i18n.t('lazyFileNoticeSettings');
     settings.addEventListener('click', () => {
         notice.remove();
         this.showDisplaySettings();
     });
-    actions.appendChild(settings);
+    actions.append(understood, settings);
     content.append(title, body, actions);
 
     const close = document.createElement('button');
@@ -1782,17 +1791,50 @@ proto._shouldOfferLargeCsvPreflight = function(file, options = {}) {
     // `mayBeTextTable` also lets unknown extensions through, since refusing
     // them is exactly what made people rename files to get here.
     if (!mayBeTextTable(extension)) return false;
-    if (!this.capabilities?.isDesktop) return false;
-    if (!file?.localPath) return false;
+    if (!file) return false;
     if (Number(file.size || 0) < this._csvCompactHintBytes()) return false;
-    if (typeof globalThis.omvDesktop?.convertToParquet !== 'function') return false;
+    // Asking BEFORE the load is the whole point: afterwards the user has
+    // already waited for the slow path they were being offered a way out of.
+    // This used to require the desktop build, so in the browser the offer
+    // arrived only once the file was open — too late to be an offer.
+    if (!this._canConvertTextFileToParquet(file)) return false;
     const key = this._largeCsvDecisionKey(file);
     return !this._largeCsvRawApproved?.has(key);
+};
+
+// The native converter writes to a real path, so it needs one.
+proto._canConvertTextFileNatively = function(file) {
+    return typeof globalThis.omvDesktop?.convertToParquet === 'function'
+        && !!file?.localPath
+        && !!this.capabilities?.isDesktop;
+};
+
+// Either converter: native, or the in-browser engine.
+proto._canConvertTextFileToParquet = function(file) {
+    return this._canConvertTextFileNatively(file) || (!!file && this._canUseDuckDb());
 };
 
 proto._defaultParquetOutputPath = function(file) {
     const source = file?.localPath || file?.name || 'results.csv';
     return String(source).replace(/\.[^.\\/]+$/i, '') + '.parquet';
+};
+
+// In-browser conversion of a text file, behind the same blocking overlay the
+// desktop route uses. Blocking on purpose: a conversion of a 563 MB file takes
+// tens of seconds, and showing that as a dismissible corner notice raises a
+// question the interface then refuses to answer — does closing it cancel?
+proto._convertTextFileToParquetBytes = async function(file, csvProfile) {
+    const started = Date.now();
+    this._showParquetConversionOverlay(file?.name || '');
+    const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+    try {
+        const source = await this._getDuckDbSource();
+        const bytes = await source.convertCsvFileToParquet(file, { csvProfile, compression: 'zstd' });
+        this._setParquetConversionOverlayLoading();
+        return bytes;
+    } finally {
+        clearInterval(timer);
+    }
 };
 
 proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
@@ -1826,11 +1868,15 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
                     text: i18n.t('largeCsvPreflightSave'),
                     className: 'modal-btn-confirm modal-btn-secondary-confirm',
                 },
-                {
+                // A temporary Parquet is a file the desktop build creates,
+                // tracks and deletes on exit. The browser has nowhere to put
+                // one, so offering it there would be a button that cannot
+                // keep its promise.
+                ...(this._canConvertTextFileNatively(file) ? [{
                     value: 'temporary',
                     text: i18n.t('largeCsvPreflightTemporary'),
                     className: 'modal-btn-confirm modal-btn-secondary-confirm',
-                },
+                }] : []),
                 {
                     value: 'raw',
                     text: i18n.t('largeCsvPreflightRaw'),
@@ -1880,6 +1926,19 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
         this._largeCsvRawApproved ||= new Set();
         this._largeCsvRawApproved.add(this._largeCsvDecisionKey(file));
         return csvProfile?.profileSource === 'user' ? { csvProfile } : null;
+    }
+
+    // In the browser there is no path to write to and no temp store to manage,
+    // so the conversion happens in memory and the result is handed back through
+    // the save dialog. The file that then gets loaded is the Parquet either way.
+    if (!this._canConvertTextFileNatively(file)) {
+        const parquetBytes = await this._convertTextFileToParquetBytes(file, csvProfile);
+        const name = `${this._fileBaseName(file.name || 'data')}.parquet`;
+        await this._saveBytesToDisk(parquetBytes, name);
+        return {
+            file: new File([parquetBytes], name, { type: 'application/octet-stream' }),
+            keepOverlayUntilLoaded: true,
+        };
     }
 
     let outputPath = '';
@@ -2348,52 +2407,46 @@ proto._convertLargeCsvNoticeToParquet = async function({ filename, file, csvProf
     if (!reviewed) return;   // backed out of the preview
     csvProfile = reviewed;
 
+    // The notice goes away the moment work starts. Leaving a corner card with
+    // a close button next to a running conversion asks the user a question the
+    // interface cannot answer — closing it cancelled nothing, and there was no
+    // way to tell. The blocking overlay is the honest shape for work that takes
+    // tens of seconds.
     button.disabled = true;
-    button.textContent = i18n.t('convertingToParquet');
-    status.hidden = false;
-    status.classList.remove('error', 'success');
-    const started = Date.now();
-    const tick = () => {
-        const seconds = Math.max(1, Math.round((Date.now() - started) / 1000));
-        status.textContent = i18n.t('parquetConversionInProgress').replace('{seconds}', String(seconds));
-    };
-    tick();
-    const timer = setInterval(tick, 1000);
+    status.hidden = true;
+    notice?.remove();
+
     try {
         if (!nativePath) {
-            // In-browser conversion. DuckDB reads the File in slices, so a
-            // 500 MB CSV never has to exist as one 500 MB buffer.
-            const source = await this._getDuckDbSource();
-            const parquetBytes = await source.convertCsvFileToParquet(file, {
-                csvProfile,
-                compression: 'zstd',
-            });
-            status.classList.add('success');
-            status.textContent = i18n.t('parquetConversionComplete');
+            // DuckDB reads the File in slices, so a 500 MB CSV never has to
+            // exist as one 500 MB buffer.
+            const parquetBytes = await this._convertTextFileToParquetBytes(file, csvProfile);
             const name = `${this._fileBaseName(filename || file.name || 'data')}.parquet`;
             await this._saveBytesToDisk(parquetBytes, name);
             await this.loadFile(new File([parquetBytes], name, { type: 'application/octet-stream' }));
-            notice?.remove();
             return;
         }
 
-        const result = await converter({
-            path: file.localPath,
-            csvProfile: cloneCsvProfileForIpc(csvProfile),
-            compression: 'zstd',
-        });
-        if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
-        if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
+        const started = Date.now();
+        this._showParquetConversionOverlay(filename || file.name || '');
+        const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+        try {
+            const result = await converter({
+                path: file.localPath,
+                csvProfile: cloneCsvProfileForIpc(csvProfile),
+                compression: 'zstd',
+            });
+            if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
+            if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
 
-        status.classList.add('success');
-        status.textContent = result.cached
-            ? i18n.t('parquetConversionUsingExisting')
-            : i18n.t('parquetConversionComplete');
-        const parquetFile = await this._readLocalResultPath(result.outputPath);
-        await this.loadFile(parquetFile, { localPath: result.outputPath });
-        notice?.remove();
+            this._setParquetConversionOverlayLoading();
+            const parquetFile = await this._readLocalResultPath(result.outputPath);
+            await this.loadFile(parquetFile, { localPath: result.outputPath });
+        } finally {
+            clearInterval(timer);
+        }
     } finally {
-        clearInterval(timer);
+        this._hideFileLoadingOverlay();
     }
 };
 

@@ -488,6 +488,7 @@ const translations = {
             lazyFileNoticeTitle: 'Memory-saving mode',
             lazyFileNoticeBody: '"{file}" was loaded in memory-saving mode. The app reads data from the file as needed, allowing large files to be explored without filling memory. You can change the full-load limit in Settings.',
             lazyFileNoticeSettings: 'Open Settings',
+            lazyFileNoticeUnderstood: "Got it",
             lazyFileIndicatorTooltip: 'Memory-saving mode: data is read from the file as needed instead of being fully loaded into memory.',
 
             // Tree
@@ -1746,6 +1747,7 @@ const translations = {
             lazyFileNoticeTitle: 'Mode economie de memoire',
             lazyFileNoticeBody: '"{file}" a ete charge en mode economie de memoire. L application lit les donnees depuis le fichier selon les besoins, ce qui permet d explorer de grands fichiers sans saturer la memoire. Vous pouvez modifier la limite de chargement complet dans Reglages.',
             lazyFileNoticeSettings: 'Ouvrir Reglages',
+            lazyFileNoticeUnderstood: "J ai compris",
             lazyFileIndicatorTooltip: 'Mode economie de memoire : les donnees sont lues depuis le fichier selon les besoins au lieu d etre chargees entierement en memoire.',
 
             // Tree
@@ -3103,6 +3105,7 @@ const translations = {
             lazyFileNoticeTitle: 'Modo de ahorro de memoria',
             lazyFileNoticeBody: '"{file}" se cargo en modo de ahorro de memoria. La aplicacion lee los datos desde el archivo cuando los necesita, lo que permite explorar archivos grandes sin saturar la memoria. Puedes cambiar el limite de carga completa en Ajustes.',
             lazyFileNoticeSettings: 'Abrir Ajustes',
+            lazyFileNoticeUnderstood: "Entendido",
             lazyFileIndicatorTooltip: 'Modo de ahorro de memoria: los datos se leen desde el archivo cuando se necesitan en lugar de cargarse completamente en memoria.',
             component: 'Componente',
             variable: 'Variable',
@@ -4436,6 +4439,7 @@ const translations = {
             lazyFileNoticeTitle: 'Modalita risparmio memoria',
             lazyFileNoticeBody: '"{file}" e stato caricato in modalita risparmio memoria. L applicazione legge i dati dal file quando servono, permettendo di esplorare file grandi senza saturare la memoria. Puoi modificare il limite di caricamento completo nelle Impostazioni.',
             lazyFileNoticeSettings: 'Apri Impostazioni',
+            lazyFileNoticeUnderstood: "Ho capito",
             lazyFileIndicatorTooltip: 'Modalita risparmio memoria: i dati vengono letti dal file quando servono invece di essere caricati interamente in memoria.',
             component: 'Componente',
             variable: 'Variabile',
