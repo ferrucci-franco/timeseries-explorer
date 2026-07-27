@@ -21,6 +21,7 @@ import {
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
 import { checkFullLoadLimit } from '../file-size-limits.js';
 import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
+import { mayBeTextTable } from '../text-file-formats.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -1744,7 +1745,12 @@ proto._largeCsvDecisionKey = function(file, filename = '') {
 proto._shouldOfferLargeCsvPreflight = function(file, options = {}) {
     if (options.skipLargeCsvPreflight) return false;
     const extension = options.extension || this._fileExtension(file?.name || '');
-    if (extension !== '.csv') return false;
+    // Any delimited text, not just `.csv`. The reader never checked the
+    // extension — it parses whatever sniffs as text — but this offer did, so a
+    // 900 MB `.txt` measurement log was left with no way to convert it.
+    // `mayBeTextTable` also lets unknown extensions through, since refusing
+    // them is exactly what made people rename files to get here.
+    if (!mayBeTextTable(extension)) return false;
     if (!this.capabilities?.isDesktop) return false;
     if (!file?.localPath) return false;
     if (Number(file.size || 0) < this._csvCompactHintBytes()) return false;

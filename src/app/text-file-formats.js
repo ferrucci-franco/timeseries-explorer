@@ -1,0 +1,77 @@
+// Which files are delimited text tables.
+//
+// The app has always treated `.csv` as the one text format worth special
+// handling — the Parquet conversion offer required exactly that extension —
+// even though the CSV reader itself never checked the extension and happily
+// parsed `.txt` and anything else that sniffed as text. Measurement logs,
+// Modelica CombiTimeTable files and instrument exports routinely use `.txt`,
+// `.dat` or `.asc`, and DuckDB's read_csv does not care what the file is
+// called either.
+//
+// Three answers rather than two, because the right behaviour differs:
+//   'text'    known delimited-text extension — treat as a text table
+//   'binary'  known container we must never feed to the text path
+//   'unknown' no opinion; the caller may sniff the bytes or offer anyway
+//
+// Keeping 'unknown' separate from 'binary' is the point. A file called
+// `measurements.log` should be allowed through; `results.mat` must not be.
+
+export const TEXT_TABLE_EXTENSIONS = Object.freeze([
+    '.csv',
+    '.txt',
+    '.text',
+    '.tsv',
+    '.tab',
+    '.dat',
+    '.asc',
+    '.prn',
+    '.log',
+    '.out',
+]);
+
+// Formats the app reads through a dedicated reader, plus common archives and
+// media that would only ever be a mistake here. Parquet is on this list
+// because it is binary and already has its own path.
+export const BINARY_EXTENSIONS = Object.freeze([
+    '.mat',
+    '.parquet',
+    '.pkl', '.pickle',
+    '.nc', '.netcdf', '.cdf', '.h5', '.hdf5',
+    '.xlsx', '.xlsm', '.xlsb', '.xls', '.ods',
+    '.zip', '.gz', '.bz2', '.xz', '.7z', '.rar', '.tar',
+    '.png', '.jpg', '.jpeg', '.gif', '.pdf',
+    '.exe', '.dll', '.so', '.dylib',
+    '.json', '.xml',
+]);
+
+const TEXT = new Set(TEXT_TABLE_EXTENSIONS);
+const BINARY = new Set(BINARY_EXTENSIONS);
+
+const normalize = (extension) => String(extension || '').toLowerCase();
+
+/** @returns {'text'|'binary'|'unknown'} */
+export function classifyExtension(extension) {
+    const ext = normalize(extension);
+    // No extension at all is common for exported logs; it is not evidence of
+    // a binary container.
+    if (!ext) return 'unknown';
+    if (TEXT.has(ext)) return 'text';
+    if (BINARY.has(ext)) return 'binary';
+    return 'unknown';
+}
+
+/** Known-good delimited text. */
+export function isTextTableExtension(extension) {
+    return classifyExtension(extension) === 'text';
+}
+
+/**
+ * May this file be handled as a text table?
+ *
+ * True for known text extensions and for unrecognised ones — the latter because
+ * refusing them is what forced people to rename files. False only for formats
+ * we know are something else.
+ */
+export function mayBeTextTable(extension) {
+    return classifyExtension(extension) !== 'binary';
+}
