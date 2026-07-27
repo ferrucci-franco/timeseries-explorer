@@ -181,7 +181,12 @@ export default class DuckDbSource {
      * @returns {Promise<Uint8Array>} the Parquet file
      */
     async convertCsvBufferToParquet(bytes, { csvProfile = null, compression = 'zstd', signal = null } = {}) {
-        const payload = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        // A copy, always. registerFileBuffer TRANSFERS the buffer to the DuckDB
+        // worker, which leaves the caller holding a detached array — and the
+        // caller here is a spreadsheet entry whose CSV text is cached and reused
+        // (to re-open the sheet, or to convert it a second time). Detaching that
+        // cache turns the next use into an unexplainable failure.
+        const payload = bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes);
         return this._convertToParquet(
             (name) => this._db.registerFileBuffer(name, payload),
             { csvProfile, compression, extension: 'csv', signal },
@@ -227,12 +232,14 @@ export default class DuckDbSource {
         await registerInput(inputName);
         try {
             if (state.cancelled) throw conversionCancelled();
-            const readExpr = this._csvReadExpr(inputName, csvProfile, { skip: 0 });
+            const readExpr = this._csvReadExpr(inputName, csvProfile);
+            const select = await this._conversionSelectSql(readExpr, csvProfile);
+            if (state.cancelled) throw conversionCancelled();
             // Compression reaches SQL unquoted, so it is never allowed to be
             // anything but a bare identifier.
             const safeCompression = /^[a-z]+$/i.test(String(compression)) ? String(compression) : 'zstd';
             await this.query(
-                `COPY (SELECT * FROM ${readExpr}) TO '${outputName}' (FORMAT PARQUET, COMPRESSION ${safeCompression})`,
+                `COPY (${select}) TO '${outputName}' (FORMAT PARQUET, COMPRESSION ${safeCompression})`,
             );
             // A cancelled COPY may still have finished. Reading the result back
             // would hand the user a file they asked us not to make.
@@ -244,6 +251,59 @@ export default class DuckDbSource {
                 try { await this._db.dropFile(name); } catch (_) { /* already gone */ }
             }
         }
+    }
+
+    /**
+     * The body of the COPY that writes the Parquet.
+     *
+     * This is the part that makes the output usable, and it is not optional.
+     * _csvReadExpr deliberately reads every column as VARCHAR — the profile
+     * carries the real type in `type` and the read type in `readType`, because
+     * a number written as "1,5" only becomes a number after the decimal mark is
+     * fixed. The loader never sees raw columns: it always wraps them in
+     * _projectionSql, which casts each column to its real type, builds the time
+     * column, and drops the ones the user unticked in the parsing preview.
+     *
+     * Writing `SELECT *` here skipped all of that, so the Parquet came out with
+     * every series typed String — nothing could be plotted — and with every
+     * column present regardless of what the preview had selected.
+     *
+     * No ORDER BY, unlike the desktop converter: sorting the whole dataset is a
+     * blocking in-memory sort, and this runs inside a 4 GB WebAssembly heap on
+     * exactly the files that are too big for it. The app orders by time when it
+     * reads, so the Parquet does not have to arrive sorted.
+     */
+    async _conversionSelectSql(readExpr, csvProfile = null) {
+        const schema = this._arrowRowsToObjects(await this.query(`DESCRIBE SELECT * FROM ${readExpr}`));
+        const columnNames = schema.map(s => s.column_name);
+        const columnTypes = schema.map(s => String(s.column_type || '').toUpperCase());
+
+        const filterWhere = this._csvRowFilterSql(csvProfile);
+        const raw = `SELECT * FROM ${readExpr}${filterWhere ? ` WHERE ${filterWhere}` : ''}`;
+
+        const timeInfo = this._timeInfoFromProfile(columnNames, columnTypes, csvProfile)
+            || this._timeInfoFromDuckDbSchema(columnNames, columnTypes);
+        if (!timeInfo) {
+            // No time column to be found. Refusing would be worse than writing
+            // a Parquet the app can still open: the types and the column
+            // selection are what the user asked for either way.
+            return `SELECT ${this._conversionColumnsSql(columnNames, csvProfile)} FROM (${raw})`;
+        }
+        const projection = this._projectionSql(columnNames, timeInfo, csvProfile);
+        return `SELECT * FROM (SELECT ${projection} FROM (${raw})) WHERE "__omv_time" IS NOT NULL`;
+    }
+
+    _conversionColumnsSql(columnNames, csvProfile = null) {
+        const specsByName = new Map((this._csvColumnSpecs(csvProfile) || []).map(spec => [spec.name, spec]));
+        const exclude = new Set();
+        for (const index of csvProfile?.ignoredColumns || []) {
+            const name = columnNames[Number(index)];
+            if (name != null) exclude.add(name);
+        }
+        const columns = columnNames
+            .filter(name => !exclude.has(name))
+            .map(name => this._projectionColumnSql(name, specsByName.get(name), csvProfile));
+        return columns.join(', ') || '*';
     }
 
     async _parseFile(file, displayName, opts) {
