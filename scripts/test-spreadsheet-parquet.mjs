@@ -76,7 +76,7 @@ check(() => {
     // Both entry points share one implementation, so a buffer and a File
     // cannot end up converted by subtly different SQL.
     const method = duckdb.slice(duckdb.indexOf('async _convertToParquet'));
-    const body = method.slice(0, 2600);
+    const body = method.slice(0, 3200);
     assert.match(body, /FORMAT PARQUET/, 'and copied out as Parquet');
     assert.match(body, /copyFileToBuffer/, 'then read back as bytes');
     assert.match(body, /this\._csvReadExpr\(/, 'using the same profile-aware reader as every other path');

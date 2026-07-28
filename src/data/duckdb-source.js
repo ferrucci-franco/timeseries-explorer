@@ -217,13 +217,10 @@ export default class DuckDbSource {
         const outputName = `omv_conv_${stamp}.parquet`;
 
         const state = { cancelled: false };
-        const onAbort = () => {
-            state.cancelled = true;
-            // Best effort, and honestly so: DuckDB stops at the next point it
-            // checks, which on a large COPY is not instant. What IS immediate
-            // is that we stop waiting and never materialize the output.
-            Promise.resolve().then(() => this._conn?.cancelSent?.()).catch(() => null);
-        };
+        // The interrupt itself is _interactiveQuery's job — see the COPY below.
+        // This only records that it happened, so the steps around the query
+        // stop as well.
+        const onAbort = () => { state.cancelled = true; };
         if (signal) {
             if (signal.aborted) onAbort();
             else signal.addEventListener('abort', onAbort, { once: true });
@@ -238,9 +235,21 @@ export default class DuckDbSource {
             // Compression reaches SQL unquoted, so it is never allowed to be
             // anything but a bare identifier.
             const safeCompression = /^[a-z]+$/i.test(String(compression)) ? String(compression) : 'zstd';
-            await this.query(
-                `COPY (${select}) TO '${outputName}' (FORMAT PARQUET, COMPRESSION ${safeCompression})`,
-            );
+            // Sent, not queried. conn.query() blocks until DuckDB is done and
+            // cancelSent() has nothing to act on, so the Cancel button fired an
+            // interrupt at a query that was not interruptible — it sat on
+            // "Cancelling…" until the COPY finished on its own. _interactiveQuery
+            // sends it as a stream, which is what makes the interrupt land, and
+            // is the same path every other long query in the app already uses.
+            try {
+                await this._interactiveQuery(
+                    `COPY (${select}) TO '${outputName}' (FORMAT PARQUET, COMPRESSION ${safeCompression})`,
+                    { signal },
+                );
+            } catch (err) {
+                if (state.cancelled || signal?.aborted || err?.name === 'AbortError') throw conversionCancelled();
+                throw err;
+            }
             // A cancelled COPY may still have finished. Reading the result back
             // would hand the user a file they asked us not to make.
             if (state.cancelled) throw conversionCancelled();

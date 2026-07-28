@@ -47,14 +47,24 @@ function makeSource({ describeColumns }) {
     const statements = [];
     source._nextTableId = 0;
     source.init = async () => {};
-    source._conn = { cancelSent: () => {} };
+    // The COPY goes out through send(), not query(): that is what makes the
+    // Cancel button able to interrupt it.
+    source._conn = {
+        cancelSent: () => {},
+        send: async (sql) => {
+            statements.push(sql);
+            return { readAll: async () => [], cancel: () => {} };
+        },
+    };
     source._db = {
         registerFileBuffer: () => {},
         copyFileToBuffer: async () => new Uint8Array([80, 65, 82, 49]),
         dropFile: async () => {},
     };
+    source.blocking = [];
     source.query = async (sql) => {
         statements.push(sql);
+        source.blocking.push(sql);
         return /^\s*DESCRIBE/i.test(sql) ? describeTable(describeColumns) : null;
     };
     source.statements = statements;
@@ -267,6 +277,22 @@ await check('converting does not detach the buffer it was given', async () => {
 });
 
 // ─── Cancelling still cancels ─────────────────────────────────────────────
+
+await check('the COPY is sent so that it can be interrupted', async () => {
+    // conn.query() blocks until DuckDB is done, and cancelSent() has nothing to
+    // act on, so the Cancel button used to fire an interrupt at a query that
+    // could not receive one — it sat on "Cancelling…" until the COPY finished.
+    const source = makeSource({ describeColumns: VARCHAR_COLUMNS });
+    let sentThroughSend = false;
+    const realSend = source._conn.send;
+    source._conn.send = async (sql) => {
+        if (/^\s*COPY/i.test(sql)) sentThroughSend = true;
+        return realSend(sql);
+    };
+    await convert(source, profile());
+    assert.ok(sentThroughSend, 'the COPY goes out on the streaming path');
+    assert.ok(!source.blocking.some(sql => /^\s*COPY/i.test(sql)), 'and never as a blocking query');
+});
 
 await check('an already-aborted signal produces no file', async () => {
     const source = makeSource({ describeColumns: VARCHAR_COLUMNS });
