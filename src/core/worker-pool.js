@@ -30,6 +30,23 @@ export class TaskCancelledError extends Error {
     }
 }
 
+// A worker that dies mid-task. Overwhelmingly this means it ran out of memory
+// on a large file and the browser terminated it — in which case the `error`
+// event carries no message at all, which is why the previous generic "Worker
+// crashed" told nobody anything. The `workerCrashed` flag is what the
+// load-error mapper keys on, because the wording here comes partly from the
+// browser and is not ours to depend on.
+export class WorkerDiedError extends Error {
+    constructor({ op = '', poolName = '', detail = '' } = {}) {
+        const doing = op ? `while running "${op}"` : 'while idle';
+        super(`The ${poolName || 'background'} worker stopped ${doing}${detail ? `: ${detail}` : ''}`);
+        this.name = 'WorkerDiedError';
+        this.workerCrashed = true;
+        this.op = op;
+        this.poolName = poolName;
+    }
+}
+
 // Workers are unavailable under file:// on most browsers, and in any non-DOM
 // context (the Node test harnesses import these modules directly).
 export function canUseWorkers() {
@@ -92,7 +109,10 @@ export default class WorkerPool {
         }
 
         return new Promise((resolve, reject) => {
-            this._pending.set(id, { resolve, reject, worker, key });
+            // `op` is retained so a crash can name what the worker was doing.
+            // "The parse worker stopped while running parse:mat" is a report;
+            // "Worker crashed" is not.
+            this._pending.set(id, { resolve, reject, worker, key, op });
 
             if (signal) {
                 if (signal.aborted) {
@@ -155,9 +175,15 @@ export default class WorkerPool {
     }
 
     _onWorkerError(worker, event) {
-        const err = new Error(event?.message || 'Worker crashed');
+        // Each pending task gets its own error naming its own op, rather than
+        // one shared message that is accurate for at most one of them.
         for (const [id, entry] of [...this._pending]) {
-            if (entry.worker === worker) this._settle(id, 'reject', err);
+            if (entry.worker !== worker) continue;
+            this._settle(id, 'reject', new WorkerDiedError({
+                op: entry.op,
+                poolName: this._name,
+                detail: event?.message || '',
+            }));
         }
         this._workers = this._workers.filter(w => w !== worker);
         try { worker.terminate(); } catch { /* already gone */ }

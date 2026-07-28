@@ -1356,6 +1356,13 @@ proto._renderExtraMenu = function() {
         });
     }, { titleKey: 'extraLoadSessionProjectTooltip' });
 
+    const convertParquetItem = makeAction('🗜', 'extraConvertToParquet', () => {
+        this.convertFileToParquet().catch(err => {
+            console.error('Convert to Parquet failed:', err);
+            Modal.alert(i18n.t('convertToParquetTitle'), err?.message || String(err), { icon: 'CSV' });
+        });
+    }, { titleKey: 'extraConvertToParquetTooltip' });
+
     const displaySettingsItem = makeAction(
         '⛭',
         'extraDisplaySettings',
@@ -1433,7 +1440,7 @@ proto._renderExtraMenu = function() {
     versionRow.append(versionIcon, versionLabel, versionValue);
     if (buildText) versionRow.append(versionBuild);
 
-    const items = [saveViewItem, saveProjectItem, loadSessionItem, displaySettingsItem];
+    const items = [saveViewItem, saveProjectItem, loadSessionItem, convertParquetItem, displaySettingsItem];
     if (this.capabilities?.canUseLocalPath) {
         items.push(openTempItem, dymolaDirItem);
     }
@@ -1666,7 +1673,7 @@ proto.showFeedbackForm = function() {
             name.textContent = file.name || `attachment-${index + 1}`;
             const size = document.createElement('span');
             size.className = 'feedback-file-size';
-            size.textContent = this._formatFeedbackBytes(file.size);
+            size.textContent = this._formatBytes(file.size);
             meta.append(name, size);
 
             const remove = document.createElement('button');
@@ -1683,7 +1690,7 @@ proto.showFeedbackForm = function() {
         fileList.appendChild(list);
         const totalLine = document.createElement('div');
         totalLine.className = total > FEEDBACK_MAX_PACKAGE_BYTES ? 'feedback-total is-too-large' : 'feedback-total';
-        totalLine.textContent = i18n.t('feedbackTotalSize').replace('{size}', this._formatFeedbackBytes(total));
+        totalLine.textContent = i18n.t('feedbackTotalSize').replace('{size}', this._formatBytes(total));
         fileList.appendChild(totalLine);
     };
     const addFiles = (files, source = 'file') => {
@@ -1868,7 +1875,7 @@ proto._formatFeedbackEmailBody = function(feedback, packageFilename = '') {
     return `${lines.join('\n')}\n`;
 };
 
-proto._formatFeedbackBytes = function(bytes) {
+proto._formatBytes = function(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;

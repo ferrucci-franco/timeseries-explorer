@@ -79,6 +79,19 @@ function sheetVisibility(workbook, sheetName) {
     return Number(sheetInfo?.Hidden || 0) !== 0;
 }
 
+/**
+ * Sheets the workbook lists but did not produce.
+ *
+ * Not the same as an empty sheet, and the difference is the whole point: an
+ * empty sheet has no data, while one of these has data the reader could not
+ * build — on a workbook at Excel's row limit, because it ran out of memory.
+ * Told apart nowhere, a 126 MB workbook full of numbers was announced as
+ * having "no sheets with data".
+ */
+export function unreadableSheetNames(workbook) {
+    return (workbook?.SheetNames || []).filter(name => !workbook?.Sheets?.[name]);
+}
+
 export function listSheets(workbook) {
     return (workbook?.SheetNames || []).map(name => {
         const worksheet = workbook.Sheets?.[name];
@@ -143,7 +156,18 @@ function cellToCsvField(cell) {
 
 export function sheetToCsvText(workbook, sheetName) {
     const worksheet = workbook?.Sheets?.[sheetName];
-    if (!worksheet) throw new Error(`Sheet not found: ${sheetName}`);
+    if (!worksheet) {
+        // A sheet the workbook lists but did not produce is not a missing
+        // sheet — it is one the reader could not build. On a workbook at
+        // Excel's row limit that is memory, and "Sheet not found" sent the
+        // reader looking for a naming problem that does not exist.
+        if ((workbook?.SheetNames || []).includes(sheetName)) {
+            const err = new Error(`Sheet "${sheetName}" could not be built: out of memory`);
+            err.code = 'EXCEL_SHEET_UNREADABLE';
+            throw err;
+        }
+        throw new Error(`Sheet not found: ${sheetName}`);
+    }
     const range = decodeRange(worksheet['!ref']);
     if (!range) return '';
     const getCell = makeCellGetter(worksheet);

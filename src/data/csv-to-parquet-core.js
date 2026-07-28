@@ -168,8 +168,24 @@ export function timeInfoFromProfile(profile) {
         name: timeSource.name || sourceNames.join(' '),
         sourceNames,
         sql: datetimeSqlFromProfile(timeSource, sourceNames, profile),
+        timeKind: 'datetime',
         generated: false,
     };
+}
+
+/**
+ * The time column as it is written to the file.
+ *
+ * The projection computes time as milliseconds since the epoch, which is what
+ * the plot needs but not what the file should say: a Parquet holding a plain
+ * number has forgotten that its time was a date, and reopening it gave a
+ * numeric axis where the CSV had a calendar. Written back as a TIMESTAMP, the
+ * file carries that fact itself, and it is a date again on the next open.
+ */
+export function timeOutputSql(timeInfo, expression = '"__omv_time"') {
+    return timeInfo?.timeKind === 'datetime'
+        ? `epoch_ms(CAST(${expression} AS BIGINT))`
+        : expression;
 }
 
 export function datetimeSqlFromProfile(timeSource, sourceNames, profile = null) {
@@ -265,6 +281,28 @@ export function projectionSql(profile, timeInfo) {
         `${timeInfo.sql} AS "__omv_time"`,
         ...columns,
     ].join(', ');
+}
+
+/**
+ * What to call the time column in the file the user keeps.
+ *
+ * __omv_time is this application's internal name for it, and it was leaking
+ * into every converted file: a CSV whose column said "time" produced a Parquet
+ * whose column said "__omv_time". The name the source used is the one to write,
+ * unless a column that survived the projection already has it — two columns of
+ * the same name would be a file nobody can query unambiguously.
+ */
+export function timeColumnName(profile, timeInfo) {
+    const candidate = String(timeInfo?.name ?? '').trim();
+    if (!candidate) return '__omv_time';
+    const exclude = new Set(timeInfo?.sourceNames || []);
+    const specs = csvColumnSpecs(profile);
+    for (const index of profile?.ignoredColumns || []) {
+        const name = specs[Number(index)]?.name;
+        if (name) exclude.add(name);
+    }
+    const taken = specs.map(spec => spec.name).filter(name => !exclude.has(name));
+    return taken.includes(candidate) ? '__omv_time' : candidate;
 }
 
 function projectionColumnSql(spec, profile = null) {
@@ -371,10 +409,10 @@ export async function convertCsvToParquet(options = {}) {
                     SELECT ${projection}
                     FROM raw
                 )
-                SELECT *
+                SELECT ${timeOutputSql(timeInfo)} AS ${quoteIdent(timeColumnName(profile, timeInfo))}, * EXCLUDE ("__omv_time")
                 FROM projected
                 WHERE "__omv_time" IS NOT NULL
-                ORDER BY "__omv_time"
+                ORDER BY 1
             )
             TO '${sqlPath(outputPath)}' (FORMAT PARQUET${compress})
         `);

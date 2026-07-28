@@ -310,12 +310,18 @@ const sessionSource = readFileSync(new URL('../src/app/methods/session-methods.j
 assert.match(sessionSource, /matlab: entry\.matlab/, 'project sessions serialize MATLAB import choices');
 assert.match(sessionSource, /matSelection: fileMeta\.matlab/, 'project sessions restore MATLAB import choices without reopening the picker');
 const translationsSource = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
-for (const key of ['matPickerTitle', 'matSelectArraysAction', 'matPickerBody', 'matPickerOverview', 'matPickerTime', 'matPickerTimeIndex', 'matPickerSampleDimension', 'matPickerTranspose', 'matPickerTransposeBlocked', 'matPickerIncompatibleLengths', 'matlabMatrixTranspose', 'matlabMatrixTransposeConfirm', 'matPickerImport', 'fileTypeMatlab', 'matTooLarge', 'matlabFullLoadLimit', 'matlabFullLoadLimitHelp']) {
+for (const key of ['matPickerTitle', 'matSelectArraysAction', 'matPickerBody', 'matPickerOverview', 'matPickerTime', 'matPickerTimeIndex', 'matPickerSampleDimension', 'matPickerTranspose', 'matPickerTransposeBlocked', 'matPickerIncompatibleLengths', 'matlabMatrixTranspose', 'matlabMatrixTransposeConfirm', 'matPickerImport', 'fileTypeMatlab', 'fileFormatMatlab', 'matlabFullLoadLimit', 'matlabFullLoadLimitHelp']) {
     assert.equal([...translationsSource.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} is translated in all languages`);
 }
-const matTooLargeMessages = [...translationsSource.matchAll(/\bmatTooLarge:\s*'([^\n]+)'/g)].map((match) => match[1]);
-assert.equal(matTooLargeMessages.length, 4, 'all locales define the MAT size-limit message');
-assert.ok(matTooLargeMessages.every((message) => !/\beager\b/i.test(message)), 'MAT size-limit messages avoid implementation jargon');
-assert.match(fileMethodsSource, /MAT_FILE_TOO_LARGE[\s\S]*modal-dialog-mat-too-large/, 'oversized MAT files use the wider alert');
+// The per-format refusal messages were replaced by one shared over-limit
+// warning, so the "no implementation jargon" rule follows it to its new home.
+const overLimitMessages = [...translationsSource.matchAll(/\bfileOverLimitBody:\s*"((?:[^"\\]|\\.)*)"/g)].map((match) => match[1]);
+assert.equal(overLimitMessages.length, 4, 'all locales define the over-limit warning');
+assert.ok(overLimitMessages.every((message) => !/\beager\b/i.test(message)), 'over-limit warnings avoid implementation jargon');
+assert.ok(
+    overLimitMessages.every((message) => message.includes('{format}') && message.includes('{setting}')),
+    'the shared warning names both the format and the setting that governs it',
+);
+assert.match(fileMethodsSource, /modal-dialog-mat-too-large/, 'the MAT reader still uses the wider alert for long messages');
 
 console.log('MATLAB MAT parser tests passed.');

@@ -63,11 +63,18 @@ export const PARSE_HANDLERS = {
         const excel = await import('../parsers/excel-workbook.js');
         const workbook = excel.readWorkbook(await excel.loadXlsxModule(), buffer);
         const sheets = excel.listSheets(workbook);
+        // What the picker needs, and how a sheet too large to build is told
+        // apart from an empty one — both of which the caller used to work out
+        // by decoding the workbook itself, on the main thread.
+        const unreadable = excel.unreadableSheetNames(workbook);
+        const inventory = { sheets, unreadable, sheetNames: sheets.map(s => s.name) };
         const sheetName = resolveSheetName(sheets, preferredSheet);
-        if (!sheetName) return { result: { csvBuffer: null, sheetName: '', sheetNames: sheets.map(s => s.name) } };
+        if (!sheetName || unreadable.includes(sheetName)) {
+            return { result: { csvBuffer: null, sheetName: '', ...inventory } };
+        }
         const csvBuffer = excel.csvTextToBuffer(excel.sheetToCsvText(workbook, sheetName));
         return {
-            result: { csvBuffer, sheetName, sheetNames: sheets.map(s => s.name) },
+            result: { csvBuffer, sheetName, ...inventory },
             transfer: [csvBuffer],
         };
     },

@@ -163,6 +163,190 @@ export default class DuckDbSource {
         return this._parseFile(file, displayName, { ...opts, format: 'parquet' });
     }
 
+    /**
+     * CSV bytes in, Parquet bytes out, entirely inside the browser.
+     *
+     * The desktop build converts through native DuckDB over IPC because it has
+     * a real path to read and write. Nothing about writing Parquet actually
+     * needs that: DuckDB-WASM can register a buffer as a virtual file, COPY it
+     * out, and hand back the result. This is what lets a spreadsheet be
+     * converted in the browser too, where a file path does not exist at all —
+     * the sheet only ever exists as CSV text in memory.
+     *
+     * Reuses _csvReadExpr, so a profile the user confirmed produces the same
+     * SQL here as everywhere else and the two builds cannot disagree about
+     * what the data meant.
+     *
+     * @param {ArrayBuffer|Uint8Array} bytes
+     * @returns {Promise<Uint8Array>} the Parquet file
+     */
+    async convertCsvBufferToParquet(bytes, { csvProfile = null, compression = 'zstd', signal = null } = {}) {
+        // A copy, always. registerFileBuffer TRANSFERS the buffer to the DuckDB
+        // worker, which leaves the caller holding a detached array — and the
+        // caller here is a spreadsheet entry whose CSV text is cached and reused
+        // (to re-open the sheet, or to convert it a second time). Detaching that
+        // cache turns the next use into an unexplainable failure.
+        const payload = bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes);
+        return this._convertToParquet(
+            (name) => this._db.registerFileBuffer(name, payload),
+            { csvProfile, compression, extension: 'csv', signal },
+        );
+    }
+
+    /**
+     * The same conversion for a File the browser holds, without reading it into
+     * memory first: DuckDB reads the handle in slices, so a 500 MB CSV is
+     * converted without ever existing as one 500 MB buffer.
+     *
+     * @param {File} file
+     * @returns {Promise<Uint8Array>} the Parquet file
+     */
+    async convertCsvFileToParquet(file, { csvProfile = null, compression = 'zstd', signal = null } = {}) {
+        return this._convertToParquet(
+            (name) => this.registerFile(name, file),
+            { csvProfile, compression, extension: 'csv', signal },
+        );
+    }
+
+    async _convertToParquet(registerInput, { csvProfile, compression, extension, signal = null }) {
+        await this.init();
+        // Unique per call: a failed conversion must not leave a name behind
+        // that the next one would silently read instead of its own input.
+        const stamp = `${Date.now()}_${++this._nextTableId}`;
+        const inputName = `omv_conv_${stamp}.${extension}`;
+        const outputName = `omv_conv_${stamp}.parquet`;
+
+        const state = { cancelled: false };
+        // The interrupt itself is _interactiveQuery's job — see the COPY below.
+        // This only records that it happened, so the steps around the query
+        // stop as well.
+        const onAbort = () => { state.cancelled = true; };
+        if (signal) {
+            if (signal.aborted) onAbort();
+            else signal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        await registerInput(inputName);
+        try {
+            if (state.cancelled) throw conversionCancelled();
+            const readExpr = this._csvReadExpr(inputName, csvProfile);
+            const select = await this._conversionSelectSql(readExpr, csvProfile);
+            if (state.cancelled) throw conversionCancelled();
+            // Compression reaches SQL unquoted, so it is never allowed to be
+            // anything but a bare identifier.
+            const safeCompression = /^[a-z]+$/i.test(String(compression)) ? String(compression) : 'zstd';
+            // Sent, not queried. conn.query() blocks until DuckDB is done and
+            // cancelSent() has nothing to act on, so the Cancel button fired an
+            // interrupt at a query that was not interruptible — it sat on
+            // "Cancelling…" until the COPY finished on its own. _interactiveQuery
+            // sends it as a stream, which is what makes the interrupt land, and
+            // is the same path every other long query in the app already uses.
+            try {
+                await this._interactiveQuery(
+                    `COPY (${select}) TO '${outputName}' (FORMAT PARQUET, COMPRESSION ${safeCompression})`,
+                    { signal },
+                );
+            } catch (err) {
+                if (state.cancelled || signal?.aborted || err?.name === 'AbortError') throw conversionCancelled();
+                throw err;
+            }
+            // A cancelled COPY may still have finished. Reading the result back
+            // would hand the user a file they asked us not to make.
+            if (state.cancelled) throw conversionCancelled();
+            return await this._db.copyFileToBuffer(outputName);
+        } finally {
+            signal?.removeEventListener?.('abort', onAbort);
+            for (const name of [inputName, outputName]) {
+                try { await this._db.dropFile(name); } catch (_) { /* already gone */ }
+            }
+        }
+    }
+
+    /**
+     * The body of the COPY that writes the Parquet.
+     *
+     * This is the part that makes the output usable, and it is not optional.
+     * _csvReadExpr deliberately reads every column as VARCHAR — the profile
+     * carries the real type in `type` and the read type in `readType`, because
+     * a number written as "1,5" only becomes a number after the decimal mark is
+     * fixed. The loader never sees raw columns: it always wraps them in
+     * _projectionSql, which casts each column to its real type, builds the time
+     * column, and drops the ones the user unticked in the parsing preview.
+     *
+     * Writing `SELECT *` here skipped all of that, so the Parquet came out with
+     * every series typed String — nothing could be plotted — and with every
+     * column present regardless of what the preview had selected.
+     *
+     * No ORDER BY, unlike the desktop converter: sorting the whole dataset is a
+     * blocking in-memory sort, and this runs inside a 4 GB WebAssembly heap on
+     * exactly the files that are too big for it. The app orders by time when it
+     * reads, so the Parquet does not have to arrive sorted.
+     */
+    async _conversionSelectSql(readExpr, csvProfile = null) {
+        const schema = this._arrowRowsToObjects(await this.query(`DESCRIBE SELECT * FROM ${readExpr}`));
+        const columnNames = schema.map(s => s.column_name);
+        const columnTypes = schema.map(s => String(s.column_type || '').toUpperCase());
+
+        const filterWhere = this._csvRowFilterSql(csvProfile);
+        const raw = `SELECT * FROM ${readExpr}${filterWhere ? ` WHERE ${filterWhere}` : ''}`;
+
+        const timeInfo = this._timeInfoFromProfile(columnNames, columnTypes, csvProfile)
+            || this._timeInfoFromDuckDbSchema(columnNames, columnTypes);
+        if (!timeInfo) {
+            // No time column to be found. Refusing would be worse than writing
+            // a Parquet the app can still open: the types and the column
+            // selection are what the user asked for either way.
+            return `SELECT ${this._conversionColumnsSql(columnNames, csvProfile)} FROM (${raw})`;
+        }
+        const projection = this._projectionSql(columnNames, timeInfo, csvProfile);
+        // __omv_time is this application's internal name for the time column,
+        // and it has no business being in a file the user keeps. The name the
+        // CSV used is the one they will look for.
+        const timeName = this._conversionTimeColumnName(timeInfo, columnNames, csvProfile);
+        return `SELECT ${this._conversionTimeSql(timeInfo)} AS ${this._quoteIdent(timeName)}, * EXCLUDE ("__omv_time")`
+            + ` FROM (SELECT ${projection} FROM (${raw})) WHERE "__omv_time" IS NOT NULL`;
+    }
+
+    /**
+     * The time column as it is written to the file.
+     *
+     * The projection computes time as milliseconds since the epoch, which is
+     * what the plot needs but not what the file should say: a Parquet holding a
+     * plain number has forgotten that its time was a date, and reopening it
+     * gave a numeric axis where the CSV had a calendar. Written back as a
+     * TIMESTAMP, the file carries that fact itself.
+     */
+    _conversionTimeSql(timeInfo, expression = '"__omv_time"') {
+        return timeInfo?.timeKind === 'datetime'
+            ? `epoch_ms(CAST(${expression} AS BIGINT))`
+            : expression;
+    }
+
+    _conversionKeptColumns(columnNames, timeInfo = null, csvProfile = null) {
+        const exclude = new Set(timeInfo?.sourceNames || []);
+        for (const index of csvProfile?.ignoredColumns || []) {
+            const name = columnNames[Number(index)];
+            if (name != null) exclude.add(name);
+        }
+        return columnNames.filter(name => !exclude.has(name));
+    }
+
+    _conversionTimeColumnName(timeInfo, columnNames, csvProfile = null) {
+        const candidate = String(timeInfo?.name ?? '').trim();
+        if (!candidate) return '__omv_time';
+        // Two columns of the same name would be a file nobody can query
+        // unambiguously. The internal name is ugly, but it is never taken.
+        const taken = new Set(this._conversionKeptColumns(columnNames, timeInfo, csvProfile));
+        return taken.has(candidate) ? '__omv_time' : candidate;
+    }
+
+    _conversionColumnsSql(columnNames, csvProfile = null) {
+        const specsByName = new Map((this._csvColumnSpecs(csvProfile) || []).map(spec => [spec.name, spec]));
+        const columns = this._conversionKeptColumns(columnNames, null, csvProfile)
+            .map(name => this._projectionColumnSql(name, specsByName.get(name), csvProfile));
+        return columns.join(', ') || '*';
+    }
+
     async _parseFile(file, displayName, opts) {
         const { lazy = false, overviewPoints = 10000, format = 'csv', csvProfile = null } = opts;
         await this.init();
@@ -3164,4 +3348,13 @@ export default class DuckDbSource {
         this._db = null;
         this._initPromise = null;
     }
+}
+
+// A cancelled conversion is the user's decision, not a failure: the `cancelled`
+// flag is what stops the UI turning it into an error dialog.
+function conversionCancelled() {
+    const err = new Error('Parquet conversion cancelled');
+    err.name = 'ConversionCancelledError';
+    err.cancelled = true;
+    return err;
 }

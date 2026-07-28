@@ -924,8 +924,32 @@
     display: flex;
     flex-direction: column;
     gap: 0.32rem;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border-color) transparent;
+    /* Wide rather than thin: this list is taller than the dialog, and a
+       hairline scrollbar left people unaware there were more topics below the
+       fold. Same treatment the scrollable plots area already uses. */
+    scrollbar-width: auto;
+    scrollbar-color: color-mix(in srgb, var(--text-secondary) 45%, transparent) transparent;
+}
+
+.help-topic-sidebar::-webkit-scrollbar {
+    width: 16px;
+}
+
+.help-topic-sidebar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.help-topic-sidebar::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-secondary) 42%, transparent);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+}
+
+.help-topic-sidebar:hover::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--primary-color) 58%, var(--text-secondary));
+    border: 3px solid transparent;
+    background-clip: content-box;
 }
 
 .help-topic-button {

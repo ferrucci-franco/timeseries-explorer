@@ -19,6 +19,15 @@ import {
 } from '../../parsers/matlab-mat-limits.js';
 
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
+import { checkFullLoadLimit } from '../file-size-limits.js';
+import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
+import {
+    SPREADSHEET_EXTENSIONS,
+    TEXT_TABLE_EXTENSIONS,
+    isSpreadsheetExtension,
+    isTextTableExtension,
+    mayBeTextTable,
+} from '../text-file-formats.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -60,6 +69,22 @@ async function parseOffThread(op, payload, transfer, inlineFallback) {
 // the single copy explicit and lets the worker own its half outright.
 function detachedCopy(buffer) {
     return buffer instanceof ArrayBuffer ? buffer.slice(0) : new Uint8Array(buffer).slice().buffer;
+}
+
+// A sample of a converted sheet for the parsing preview. Cut at the last
+// newline so the preview never has to reason about a half row, and bounded so
+// a million-row sheet does not push its whole CSV form through the dialog.
+//
+// Its own constant rather than CSV_PREVIEW_SEGMENT_BYTES: that one is declared
+// inside installFileMethods and is not visible from module scope out here.
+const SPREADSHEET_PREVIEW_SAMPLE_BYTES = 2 * 1024 * 1024;
+
+function spreadsheetPreviewSample(csvBuffer, maxBytes = SPREADSHEET_PREVIEW_SAMPLE_BYTES) {
+    const bytes = new Uint8Array(csvBuffer);
+    if (bytes.byteLength <= maxBytes) return csvBuffer;
+    let end = maxBytes;
+    while (end > 0 && bytes[end - 1] !== 0x0a) end--;
+    return csvBuffer.slice(0, end || maxBytes);
 }
 let duckDbSourceClassPromise = null;
 let netcdfParserClassPromise = null;
@@ -159,10 +184,16 @@ proto.loadFile = async function(file, options = {}) {
                 }
                 if (!currentFile) throw new Error(i18n.t('invalidFile'));
                 extension = this._fileExtension(currentFile.name);
-                this._preflightPypsaNetcdfFile(currentFile, extension);
-                this._preflightPickleFile(currentFile, extension);
-                this._preflightExcelFile(currentFile, extension);
-                this._preflightMatlabFile(currentFile, extension);
+                // Formats with no memory-saving path warn above their limit and
+                // let the user decide. `allowOversized` then has to travel with
+                // the request: the pickle and netCDF readers enforce the same
+                // ceiling internally, so overriding here without telling them
+                // would just fail again a moment later with a worse message.
+                const overLimit = this._checkFullLoadLimit(currentFile, extension);
+                if (overLimit && !options.allowOversized) {
+                    if (!(await this._confirmOversizedFile(overLimit))) return null;
+                    options = { ...options, allowOversized: true };
+                }
                 const preflight = await this._maybeConvertLargeCsvBeforeLoad(currentFile, { ...options, extension });
                 if (preflight?.cancelled) return null;
                 if (preflight?.csvProfile) {
@@ -191,9 +222,11 @@ proto.loadFile = async function(file, options = {}) {
                 data = await this._parseResultBuffer(currentFile.name, buffer, currentFile, {
                     csvProfile: options.csvProfile || null,
                     excelSheetName: options.excelSheetName || null,
-                    excelWorkbook: options.excelWorkbook || null,
+                    excelCsvBuffer: options.excelCsvBuffer || null,
+                    excelSheetNames: options.excelSheetNames || null,
                     matInspection: options.matInspection || null,
                     matSelection: options.matSelection || null,
+                    allowOversized: options.allowOversized === true,
                 });
                 if (isCancelled()) {
                     await data?._duckdb?.source?.release?.(data);
@@ -250,6 +283,7 @@ proto.loadFile = async function(file, options = {}) {
         }
         if (!options.deferUi) {
             await this._showDatetimeAxisWarningIfNeeded(fileId, data);
+            this._showSpreadsheetParquetHint(this.files.get(fileId));
         }
 
         console.log('Loaded:', currentFile.name, '- variables:', Object.keys(data.variables).length);
@@ -261,11 +295,37 @@ proto.loadFile = async function(file, options = {}) {
         }
         console.error('Error loading file:', err);
         if (options.throwOnError) throw err;
-        // A formatted dialog (not the browser's native alert) so limit/parse
-        // errors read as an in-app warning, with the actionable message intact.
-        await Modal.alert(i18n.t('errorLoading'), err?.message || String(err));
+        await this._showLoadError(err, currentFileNameForError(currentFile, file));
         return null;
     }
+};
+
+function currentFileNameForError(currentFile, originalFile) {
+    return currentFile?.name || originalFile?.name || '';
+}
+
+// One dialog for every way a load can end badly.
+//
+// The catch above always produced an app dialog, but its body was whatever the
+// error happened to say — often a raw V8 string like "Cannot create a string
+// longer than 0x1fffffe8 characters". describeLoadError maps the failures we
+// can actually explain onto translated text and leaves the rest alone, and the
+// original always stays available under "Technical details" so a bug report
+// still carries the real message.
+proto._showLoadError = async function(error, filename = '') {
+    const described = describeLoadError(error);
+    // The user's own cancellation is not a failure and gets no dialog.
+    if (described.cancelled) return;
+
+    const body = described.key
+        ? formatLoadErrorMessage(i18n.t(described.key), { ...described.params, file: filename })
+        : described.raw;
+
+    await Modal.alert(i18n.t('errorLoading'), body, {
+        // Only worth showing when it is not already the message.
+        details: described.key ? described.raw : '',
+        detailsLabel: i18n.t('errorDetailsLabel'),
+    });
 };
 
 proto.loadFiles = async function(items = []) {
@@ -293,7 +353,8 @@ proto.loadFiles = async function(items = []) {
                 localPath,
                 deferUi: true,
                 excelSheetName: item?.excelSheetName || null,
-                excelWorkbook: item?.excelWorkbook || null,
+                excelCsvBuffer: item?.excelCsvBuffer || null,
+                excelSheetNames: item?.excelSheetNames || null,
                 excelAppendSheetName: item?.excelAppendSheetName === true,
                 matBuffer: item?.matBuffer || null,
                 matInspection: item?.matInspection || null,
@@ -333,9 +394,15 @@ proto._expandExcelEntries = async function(entries) {
     const expanded = [];
     // The loading overlay covers the read + SheetJS decode (synchronous and
     // potentially seconds long) but must be hidden while a modal is open.
+    // Preparing a spreadsheet is a minute of waiting on a large one, and it ran
+    // under the same overlay as the load with the cancel hint hidden — so
+    // Escape did nothing and did not claim to, and the hint only appeared once
+    // this phase was over. It gets its own token: the same key, working from
+    // the first second rather than the last.
+    const prepToken = { cancelled: false };
     let overlayShown = false;
     const showBusy = async (file) => {
-        this._showFileLoadingOverlay(1);
+        this._showFileLoadingOverlay(1, prepToken);
         this._updateFileLoadingOverlay(1, 1, file?.name || '', file?.size);
         overlayShown = true;
         await this._waitForNextPaint();
@@ -357,15 +424,33 @@ proto._expandExcelEntries = async function(entries) {
         try {
             if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
             if (!file) continue;
-            this._preflightExcelFile(file, extension);
+            if (!(await this._confirmOversizedFile(this._checkFullLoadLimit(file, extension)))) continue;
             await showBusy(file);
-            const excel = await loadExcelWorkbookModule();
             const rawBuffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
-            const workbook = excel.readWorkbook(await excel.loadXlsxModule(), rawBuffer);
-            const sheets = excel.listSheets(workbook);
+            // Decoded in the worker, not here. This used to read the workbook
+            // on the main thread purely to find out what its sheets were —
+            // about a minute of a frozen tab for a 126 MB file, and Firefox
+            // offering to stop the page. The same call brings back the first
+            // data sheet already serialized, so the common one-sheet workbook
+            // is decoded once in total.
+            if (prepToken.cancelled) break;
+            const converted = await this._convertExcelBufferToCsv(rawBuffer, null);
+            if (prepToken.cancelled) break;
+            const sheets = converted?.sheets || [];
             const nonEmpty = sheets.filter(sheet => !sheet.empty);
             if (!nonEmpty.length) {
                 hideBusy();
+                // A sheet the reader could not build looks exactly like an
+                // empty one from here — no range, no cells — so a 126 MB
+                // workbook full of numbers was announced as having no data in
+                // it. It has data; this runtime could not hold it.
+                const unreadable = converted?.unreadable || [];
+                if (unreadable.length) {
+                    const err = new Error(`Sheet "${unreadable[0]}" could not be built: out of memory`);
+                    err.code = 'EXCEL_SHEET_UNREADABLE';
+                    this._showLoadError(err, file.name);
+                    continue;
+                }
                 await Modal.alert(
                     i18n.t('excelSheetPickerTitle'),
                     i18n.t('excelNoDataSheets').replace('{file}', file.name),
@@ -373,7 +458,7 @@ proto._expandExcelEntries = async function(entries) {
                 );
                 continue;
             }
-            let selected = [nonEmpty[0].name];
+            let selected = [converted.sheetName || nonEmpty[0].name];
             if (nonEmpty.length > 1) {
                 hideBusy();
                 const { default: ExcelSheetPickerDialog } = await import('../../ui/excel-sheet-picker-dialog.js');
@@ -387,7 +472,12 @@ proto._expandExcelEntries = async function(entries) {
                     fileHandle,
                     localPath: item?.localPath || '',
                     excelSheetName: sheetName,
-                    excelWorkbook: workbook,
+                    // The sheet that came back with the inventory is already
+                    // serialized; carrying it forward is what keeps the usual
+                    // workbook down to one decode. Any other sheet the user
+                    // picks is decoded again, in the worker.
+                    excelCsvBuffer: sheetName === converted.sheetName ? converted.csvBuffer : null,
+                    excelSheetNames: sheets.map(sheet => sheet.name),
                     excelAppendSheetName: selected.length > 1,
                 });
             }
@@ -419,7 +509,7 @@ proto._expandMatEntries = async function(entries) {
         try {
             if (!file && fileHandle?.getFile) file = await fileHandle.getFile();
             if (!file) continue;
-            this._preflightMatlabFile(file, '.mat');
+            if (!(await this._confirmOversizedFile(this._checkFullLoadLimit(file, '.mat')))) continue;
             this._showFileLoadingOverlay(1);
             this._updateFileLoadingOverlay(1, 1, file.name || '', file.size);
             await this._waitForNextPaint();
@@ -449,9 +539,12 @@ proto._expandMatEntries = async function(entries) {
         } catch (err) {
             this._hideFileLoadingOverlay();
             console.error('Error inspecting MAT file:', err);
+            // MAT_FILE_TOO_LARGE is gone — an oversized file is a question now,
+            // not an error — but the wider dialog is still the right shape for
+            // the long messages the MAT reader can produce.
             await Modal.alert(i18n.t('errorLoading'), err?.message || String(err), {
                 icon: 'MAT',
-                className: err?.code === 'MAT_FILE_TOO_LARGE' ? 'modal-dialog-mat-too-large' : '',
+                className: 'modal-dialog-mat-too-large',
             });
         }
     }
@@ -655,15 +748,24 @@ proto._showLazyFileNotice = function(fileId) {
     body.textContent = i18n.t('lazyFileNoticeBody').replace('{file}', this._fileDisplayName(entry));
     const actions = document.createElement('div');
     actions.className = 'dismissible-notice-actions';
+    // Dismiss first, and styled as the primary action. With "Open Settings"
+    // alone the notice reads as a demand: nothing here needs changing, and the
+    // × in the corner is not an obvious answer to a message about a limit.
+    const understood = document.createElement('button');
+    understood.type = 'button';
+    understood.className = 'dismissible-notice-action primary';
+    understood.textContent = i18n.t('lazyFileNoticeUnderstood');
+    understood.addEventListener('click', () => notice.remove());
+
     const settings = document.createElement('button');
     settings.type = 'button';
-    settings.className = 'dismissible-notice-action primary';
+    settings.className = 'dismissible-notice-action';
     settings.textContent = i18n.t('lazyFileNoticeSettings');
     settings.addEventListener('click', () => {
         notice.remove();
         this.showDisplaySettings();
     });
-    actions.appendChild(settings);
+    actions.append(understood, settings);
     content.append(title, body, actions);
 
     const close = document.createElement('button');
@@ -863,9 +965,6 @@ proto._readLatestFileForStreamableReload = async function(entry) {
 proto._readLatestBuffer = async function(entry) {
     if (entry.localPath) {
         const file = await this._readLocalResultPath(entry.localPath);
-        this._preflightPypsaNetcdfFile(file, this._fileExtension(file.name));
-        this._preflightPickleFile(file, this._fileExtension(file.name));
-        this._preflightExcelFile(file, this._fileExtension(file.name));
         const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
         entry.file = file;
         entry.extension = this._fileExtension(file.name);
@@ -880,9 +979,16 @@ proto._readLatestBuffer = async function(entry) {
             console.warn('Could not read latest file handle; falling back to stored file snapshot.', err);
         }
         if (file) {
-            this._preflightPypsaNetcdfFile(file, this._fileExtension(file.name));
-            this._preflightPickleFile(file, this._fileExtension(file.name));
-            this._preflightExcelFile(file, this._fileExtension(file.name));
+            // A reload re-reads whatever is on disk now. If the file has grown
+            // past its format's limit since it was opened, that is a new
+            // decision — the memo key includes size and mtime, so an unchanged
+            // file never asks twice.
+            const overLimit = this._checkFullLoadLimit(file, this._fileExtension(file.name));
+            if (overLimit && !(await this._confirmOversizedFile(overLimit, file))) {
+                const err = new Error('File load cancelled');
+                err.name = 'AbortError';
+                throw err;
+            }
             try {
                 const buffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
                 entry.file = file;
@@ -905,9 +1011,6 @@ proto._readLatestBuffer = async function(entry) {
         entry.file = file;
         entry.fileHandle = null;
         entry.extension = this._fileExtension(file.name);
-        this._preflightPypsaNetcdfFile(file, entry.extension);
-        this._preflightPickleFile(file, entry.extension);
-        this._preflightExcelFile(file, entry.extension);
         return file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file);
     }
 
@@ -915,9 +1018,6 @@ proto._readLatestBuffer = async function(entry) {
     // be a snapshot, so the FileSystemFileHandle path above is preferred.
     let buffer;
     if (entry.file?.arrayBuffer) {
-        this._preflightPypsaNetcdfFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
-        this._preflightPickleFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
-        this._preflightExcelFile(entry.file, entry.extension || this._fileExtension(entry.file.name));
         try {
             buffer = await entry.file.arrayBuffer();
         } catch (_) {}
@@ -1095,15 +1195,69 @@ proto._pypsaNetcdfEagerLimitBytes = function() {
     return this._advancedSettingBytes('pypsaNetcdfFullLoadMb', fallback);
 };
 
-proto._preflightPypsaNetcdfFile = function(file, extension = this._fileExtension(file?.name || '')) {
-    if (!this._isPypsaNetcdfExtension(extension)) return;
-    const size = Number(file?.size || 0);
-    const limit = this._pypsaNetcdfEagerLimitBytes();
-    if (!Number.isFinite(size) || size <= limit) return;
-    throw new Error(i18n.t('pypsaNetcdfTooLarge')
-        .replace('{file}', file?.name || 'network.nc')
-        .replace('{size}', this._formatFileSize(size))
-        .replace('{limit}', this._formatFileSize(limit)));
+// Resolves the configured limit for one of the eager-only formats. Kept as the
+// single place that knows about desktop/web defaults, so file-size-limits.js
+// can stay free of capabilities and Settings.
+proto._fullLoadLimitBytesFor = function(limitKey) {
+    switch (limitKey) {
+        case 'matlabFullLoadMb': return this._matlabEagerLimitBytes();
+        case 'excelFullLoadMb': return this._excelEagerLimitBytes();
+        case 'pickleFullLoadMb': return this._pickleEagerLimitBytes();
+        case 'pypsaNetcdfFullLoadMb': return this._pypsaNetcdfEagerLimitBytes();
+        default: return 0;
+    }
+};
+
+// Verdict only — no dialog, no throw. Null means "nothing to warn about".
+proto._checkFullLoadLimit = function(file, extension = this._fileExtension(file?.name || '')) {
+    return checkFullLoadLimit(file, extension, key => this._fullLoadLimitBytesFor(key));
+};
+
+// Identity of one decision: this file, at this size, as of this timestamp. A
+// file that changed on disk is a new decision.
+proto._oversizedDecisionKey = function(file) {
+    return [file?.name || '', Number(file?.size) || 0, Number(file?.lastModified) || 0].join(' ');
+};
+
+// Ask before loading a file bigger than its format's limit.
+//
+// This used to be a hard refusal. It is a warning now because the only failure
+// it can actually prevent — a renderer out-of-memory crash — is largely
+// contained since parsing moved into a worker: the worker dies, the tab
+// survives, and the error surfaces normally. Refusing outright took a decision
+// away from the user that the machine in front of them may well be able to make.
+//
+// The answer is remembered per file for the session, because this question is
+// asked from two places: here, and again before the desktop reader pulls the
+// bytes in. Asking twice for one file would read as a bug. This is NOT a "don't
+// ask again" affordance — there is deliberately no way to silence the warning
+// for a format or for future files, because a dialog people learn to dismiss
+// has stopped being a safety signal.
+proto._confirmOversizedFile = async function(verdict, file = null) {
+    if (!verdict) return true;
+    this._oversizedApproved ||= new Set();
+    const key = this._oversizedDecisionKey(file || { name: verdict.name, size: verdict.sizeBytes });
+    if (this._oversizedApproved.has(key)) return true;
+
+    const body = i18n.t('fileOverLimitBody')
+        .replace('{file}', verdict.name)
+        .replace('{size}', this._formatFileSize(verdict.sizeBytes))
+        .replace('{limit}', this._formatFileSize(verdict.limitBytes))
+        .replace('{format}', i18n.t(verdict.formatLabelKey))
+        .replace('{setting}', i18n.t(verdict.settingLabelKey));
+
+    const choice = await Modal.choice(body, {
+        title: i18n.t('fileOverLimitTitle'),
+        icon: '⚠️',
+        className: 'modal-dialog-wide',
+        choices: [
+            { value: 'cancel', text: i18n.t('cancel'), className: 'modal-btn-cancel', autoFocus: true },
+            { value: 'load', text: i18n.t('fileOverLimitLoadAnyway'), className: 'modal-btn-confirm' },
+        ],
+    });
+    if (choice !== 'load') return false;
+    this._oversizedApproved.add(key);
+    return true;
 };
 
 proto._pickleEagerLimitBytes = function() {
@@ -1111,17 +1265,6 @@ proto._pickleEagerLimitBytes = function() {
         ? PICKLE_DESKTOP_EAGER_LIMIT_BYTES
         : PICKLE_WEB_EAGER_LIMIT_BYTES;
     return this._advancedSettingBytes('pickleFullLoadMb', fallback);
-};
-
-proto._preflightPickleFile = function(file, extension = this._fileExtension(file?.name || '')) {
-    if (!this._isPickleExtension(extension)) return;
-    const size = Number(file?.size || 0);
-    const limit = this._pickleEagerLimitBytes();
-    if (!Number.isFinite(size) || size <= limit) return;
-    throw new Error(i18n.t('pickleTooLarge')
-        .replace('{file}', file?.name || 'data.pkl')
-        .replace('{size}', this._formatFileSize(size))
-        .replace('{limit}', this._formatFileSize(limit)));
 };
 
 proto._isExcelExtension = function(extension) {
@@ -1136,17 +1279,6 @@ proto._excelEagerLimitBytes = function() {
         ? EXCEL_DESKTOP_EAGER_LIMIT_BYTES
         : EXCEL_WEB_EAGER_LIMIT_BYTES;
     return this._advancedSettingBytes('excelFullLoadMb', fallback);
-};
-
-proto._preflightExcelFile = function(file, extension = this._fileExtension(file?.name || '')) {
-    if (!this._isExcelExtension(extension)) return;
-    const size = Number(file?.size || 0);
-    const limit = this._excelEagerLimitBytes();
-    if (!Number.isFinite(size) || size <= limit) return;
-    throw new Error(i18n.t('excelTooLarge')
-        .replace('{file}', file?.name || 'data.xlsx')
-        .replace('{size}', this._formatFileSize(size))
-        .replace('{limit}', this._formatFileSize(limit)));
 };
 
 proto._createDesktopLocalHttpFile = function(filePath, info) {
@@ -1235,9 +1367,16 @@ proto._readLocalResultPath = async function(filePath) {
                     err.code = statResult.code || '';
                     throw err;
                 }
-                this._preflightPypsaNetcdfFile(statResult, this._fileExtension(filePath));
-                this._preflightPickleFile(statResult, this._fileExtension(filePath));
-                this._preflightExcelFile(statResult, this._fileExtension(filePath));
+                // Ask BEFORE pulling the bytes in. loadFile warns too, but by
+                // then the whole file is already in memory — which on the file
+                // sizes this warning exists for is the crash we are trying to
+                // avoid. The answer is memoized, so only one of the two asks.
+                const overLimit = this._checkFullLoadLimit(statResult, this._fileExtension(filePath));
+                if (overLimit && !(await this._confirmOversizedFile(overLimit, statResult))) {
+                    const err = new Error('File load cancelled');
+                    err.name = 'AbortError';
+                    throw err;
+                }
             }
             const result = await desktopReader({ path: filePath });
             if (result?.ok === false) {
@@ -1274,9 +1413,14 @@ proto._readLocalResultPath = async function(filePath) {
         if (headResponse?.ok) {
             const size = Number(headResponse.headers.get('content-length') || 0);
             const statLike = { name, size };
-            this._preflightPypsaNetcdfFile(statLike, extension);
-            this._preflightPickleFile(statLike, extension);
-            this._preflightExcelFile(statLike, extension);
+            // Same reason as the desktop reader above: the fetch that follows
+            // materializes the whole file, so the question has to come first.
+            const overLimit = this._checkFullLoadLimit(statLike, extension);
+            if (overLimit && !(await this._confirmOversizedFile(overLimit, statLike))) {
+                const err = new Error('File load cancelled');
+                err.name = 'AbortError';
+                throw err;
+            }
         }
     }
 
@@ -1361,14 +1505,45 @@ proto._fileDisplayName = function(entry) {
     return `${entry?.name || ''}${entry?.extension ?? '.mat'}`;
 };
 
+/**
+ * What hovering a file in the list says.
+ *
+ * The name alone repeated what was already on screen. Two files called
+ * results.csv from different folders were indistinguishable, and the size —
+ * the thing that decides whether a file opens whole or in memory-saving mode —
+ * was nowhere in the list at all.
+ *
+ * The full path is only known when the desktop version opened the file. A
+ * browser is never told where a file came from — if it were, any web page
+ * could read your folder layout by asking for one file — so claiming a path
+ * there would be inventing it.
+ *
+ * The one thing a browser does hand over is a path RELATIVE to a folder the
+ * user picked as a whole, and only for that kind of selection. It is shown
+ * when it is there, which is better than a name repeated twice.
+ */
+proto._fileEntryTooltip = function(entry) {
+    const name = this._fileDisplayName(entry);
+    const size = Number(entry?.file?.size);
+    const lines = [Number.isFinite(size) && size > 0
+        ? `${name} (${this._formatBytes(size)})`
+        : name];
+    const path = String(entry?.localPath || entry?.file?.webkitRelativePath || '').trim();
+    if (path && path !== name) lines.push(path);
+    return lines.join('\n');
+};
+
 proto._parseResultBuffer = async function(filename, buffer, file = null, options = {}) {
     const extension = this._fileExtension(filename);
     if (extension === '.parquet') return this._parseParquetResult(filename, file);
-    if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer);
-    if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer);
+    if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer, options);
+    if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer, options);
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
-    if (extension === '.csv') return this._parseCsvResultBuffer(filename, buffer, file, options);
     if (extension === '.mat') return this._parseMatlabResultBuffer(filename, buffer, options);
+    // Routed by extension, not by sniffing the bytes: a known text file may
+    // have been left unread on purpose (see _canParseFromFile) so DuckDB can
+    // stream it, and there would be no buffer here to sniff.
+    if (isTextTableExtension(extension)) return this._parseCsvResultBuffer(filename, buffer, file, options);
     if (this._looksLikePickleBuffer(buffer)) throw new Error(i18n.t('pickleLooksLikeUnsupportedExtension'));
     if (this._looksLikeTextBuffer(buffer)) return this._parseCsvResultBuffer(filename, buffer, file, options);
     throw new Error(i18n.t('invalidFile'));
@@ -1379,19 +1554,6 @@ proto._matlabEagerLimitBytes = function() {
         ? MATLAB_MAT_DESKTOP_EAGER_LIMIT_BYTES
         : MATLAB_MAT_WEB_EAGER_LIMIT_BYTES;
     return this._advancedSettingBytes('matlabFullLoadMb', fallback);
-};
-
-proto._preflightMatlabFile = function(file, extension = this._fileExtension(file?.name || '')) {
-    if (extension !== '.mat') return;
-    const size = Number(file?.size || 0);
-    const limit = this._matlabEagerLimitBytes();
-    if (!Number.isFinite(size) || size <= limit) return;
-    const error = new Error(i18n.t('matTooLarge')
-        .replace('{file}', file?.name || 'data.mat')
-        .replace('{size}', this._formatFileSize(size))
-        .replace('{limit}', this._formatFileSize(limit)));
-    error.code = 'MAT_FILE_TOO_LARGE';
-    throw error;
 };
 
 proto._parseMatlabResultBuffer = async function(filename, buffer, options = {}) {
@@ -1410,8 +1572,11 @@ proto._parseMatlabResultBuffer = async function(filename, buffer, options = {}) 
     );
 };
 
-proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer) {
-    const maxFileBytes = this._pypsaNetcdfEagerLimitBytes();
+proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer, options = {}) {
+    // Infinity disables the reader's own ceiling: the user already saw the
+    // warning and chose to proceed, so refusing here would be a second veto on
+    // a decision they have made.
+    const maxFileBytes = options.allowOversized ? Infinity : this._pypsaNetcdfEagerLimitBytes();
     const workerBuffer = detachedCopy(buffer);
     return parseOffThread(
         'parse:netcdf',
@@ -1429,15 +1594,13 @@ proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer) {
 // deterministic CSV text and fed to the CSV pipeline, so header/time
 // detection, profiles and the parsing-preview dialog all apply unchanged.
 proto._parseExcelResultBuffer = async function(filename, buffer, options = {}) {
-    // Decoding the workbook and serializing the sheet is the expensive half —
-    // the code below used to note "tens of seconds of blocked main thread" — so
-    // both happen in the worker. The one exception is when the sheet-picker
-    // dialog already holds a decoded workbook: that object cannot be posted to
-    // a worker, and re-decoding to avoid a stall the user has already paid for
-    // would be slower overall.
-    const converted = options.excelWorkbook
-        ? null
-        : await this._convertExcelBufferToCsv(buffer, options.excelSheetName || null);
+    // Decoding the workbook and serializing the sheet is the expensive half, so
+    // both happen in the worker. The sheet-picker step usually did the work
+    // already — it has to decode to know what the sheets are — and hands the
+    // serialized sheet over rather than making this decode the same workbook a
+    // second time.
+    const ready = options.excelCsvBuffer;
+    const converted = ready ? null : await this._convertExcelBufferToCsv(buffer, options.excelSheetName || null);
 
     let csvBuffer;
     let sheetName;
@@ -1445,11 +1608,9 @@ proto._parseExcelResultBuffer = async function(filename, buffer, options = {}) {
     if (converted) {
         ({ csvBuffer, sheetName, sheetNames } = converted);
     } else {
-        const excel = await loadExcelWorkbookModule();
-        const workbook = options.excelWorkbook;
-        sheetName = resolveExcelSheetName(excel, workbook, options.excelSheetName || null);
-        if (sheetName) csvBuffer = excel.csvTextToBuffer(excel.sheetToCsvText(workbook, sheetName));
-        sheetNames = excel.listSheets(workbook).map(sheet => sheet.name);
+        csvBuffer = ready;
+        sheetName = options.excelSheetName || '';
+        sheetNames = options.excelSheetNames || (sheetName ? [sheetName] : []);
     }
     if (!sheetName) {
         throw new Error(i18n.t('excelNoDataSheets').replace('{file}', filename));
@@ -1520,10 +1681,14 @@ proto._convertExcelBufferToCsv = async function(buffer, preferredSheet = null) {
         async () => {
             const excel = await loadExcelWorkbookModule();
             const workbook = excel.readWorkbook(await excel.loadXlsxModule(), buffer);
-            const sheetName = resolveExcelSheetName(excel, workbook, preferredSheet);
+            const unreadable = excel.unreadableSheetNames(workbook);
+            const resolved = resolveExcelSheetName(excel, workbook, preferredSheet);
+            const sheetName = resolved && !unreadable.includes(resolved) ? resolved : '';
             return {
                 csvBuffer: sheetName ? excel.csvTextToBuffer(excel.sheetToCsvText(workbook, sheetName)) : null,
-                sheetName: sheetName || '',
+                sheetName,
+                sheets: excel.listSheets(workbook),
+                unreadable,
                 sheetNames: excel.listSheets(workbook).map(sheet => sheet.name),
             };
         },
@@ -1541,8 +1706,10 @@ proto._adoptExcelCsvCache = function(entry, data) {
     delete data._excelCsvBuffer;
 };
 
-proto._parsePickleResultBuffer = async function(filename, buffer) {
-    const maxFileBytes = this._pickleEagerLimitBytes();
+proto._parsePickleResultBuffer = async function(filename, buffer, options = {}) {
+    // See _parsePypsaNetcdfResultBuffer: the reader enforces the same ceiling,
+    // so an override has to reach it too.
+    const maxFileBytes = options.allowOversized ? Infinity : this._pickleEagerLimitBytes();
     const workerBuffer = detachedCopy(buffer);
     try {
         return await parseOffThread(
@@ -1604,9 +1771,20 @@ proto._csvCompactHintBytes = function() {
     return this._advancedSettingBytes('csvCompactHintMb', PARQUET_HINT_THRESHOLD_BYTES);
 };
 
+// Can this file be handed to the reader as a file, instead of being read into
+// an ArrayBuffer first?
+//
+// This gated on `.csv` alone, so every other text file was fully buffered
+// before parsing: a 600 MB `.txt` reserved 600 MB of memory before DuckDB —
+// which can stream it — ever saw it. That undid most of the benefit of the
+// memory-saving path for exactly the files that need it.
+//
+// KNOWN text extensions only, deliberately. An unrecognised extension still
+// has to be read so _parseResultBuffer can sniff its bytes and decide what it
+// is; skipping the read would leave nothing to sniff.
 proto._canParseFromFile = function(file, extension = this._fileExtension(file?.name || '')) {
     return !!file
-        && (extension === '.csv' || extension === '.parquet')
+        && (isTextTableExtension(extension) || extension === '.parquet')
         && this._canUseDuckDb();
 };
 
@@ -1672,13 +1850,33 @@ proto._largeCsvDecisionKey = function(file, filename = '') {
 proto._shouldOfferLargeCsvPreflight = function(file, options = {}) {
     if (options.skipLargeCsvPreflight) return false;
     const extension = options.extension || this._fileExtension(file?.name || '');
-    if (extension !== '.csv') return false;
-    if (!this.capabilities?.isDesktop) return false;
-    if (!file?.localPath) return false;
+    // Any delimited text, not just `.csv`. The reader never checked the
+    // extension — it parses whatever sniffs as text — but this offer did, so a
+    // 900 MB `.txt` measurement log was left with no way to convert it.
+    // `mayBeTextTable` also lets unknown extensions through, since refusing
+    // them is exactly what made people rename files to get here.
+    if (!mayBeTextTable(extension)) return false;
+    if (!file) return false;
     if (Number(file.size || 0) < this._csvCompactHintBytes()) return false;
-    if (typeof globalThis.omvDesktop?.convertToParquet !== 'function') return false;
+    // Asking BEFORE the load is the whole point: afterwards the user has
+    // already waited for the slow path they were being offered a way out of.
+    // This used to require the desktop build, so in the browser the offer
+    // arrived only once the file was open — too late to be an offer.
+    if (!this._canConvertTextFileToParquet(file)) return false;
     const key = this._largeCsvDecisionKey(file);
     return !this._largeCsvRawApproved?.has(key);
+};
+
+// The native converter writes to a real path, so it needs one.
+proto._canConvertTextFileNatively = function(file) {
+    return typeof globalThis.omvDesktop?.convertToParquet === 'function'
+        && !!file?.localPath
+        && !!this.capabilities?.isDesktop;
+};
+
+// Either converter: native, or the in-browser engine.
+proto._canConvertTextFileToParquet = function(file) {
+    return this._canConvertTextFileNatively(file) || (!!file && this._canUseDuckDb());
 };
 
 proto._defaultParquetOutputPath = function(file) {
@@ -1686,7 +1884,51 @@ proto._defaultParquetOutputPath = function(file) {
     return String(source).replace(/\.[^.\\/]+$/i, '') + '.parquet';
 };
 
+// In-browser conversion of a text file, behind the same blocking overlay the
+// desktop route uses. Blocking on purpose: a conversion of a 563 MB file takes
+// tens of seconds, and showing that as a dismissible corner notice raises a
+// question the interface then refuses to answer — does closing it cancel?
+//
+// Returns null when the user cancels. Cancellation is genuine here: the engine
+// is told to stop and the output is never read back, so nothing is written.
+proto._convertTextFileToParquetBytes = async function(file, csvProfile) {
+    const controller = new AbortController();
+    const started = Date.now();
+    this._showParquetConversionOverlay(file?.name || '', { onCancel: () => controller.abort() });
+    const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+    try {
+        const source = await this._getDuckDbSource();
+        const bytes = await source.convertCsvFileToParquet(file, {
+            csvProfile,
+            compression: 'zstd',
+            signal: controller.signal,
+        });
+        this._setParquetConversionOverlayLoading();
+        return bytes;
+    } catch (err) {
+        if (err?.cancelled) return null;
+        throw err;
+    } finally {
+        clearInterval(timer);
+    }
+};
+
+// Loops on purpose. Cancelling a conversion undoes the conversion, not the
+// decision that led to it: the user lands back on the same choices and can
+// pick a different one — including opening the file as it is. Dropping them
+// straight into the slow load they were trying to avoid, or into an empty
+// workspace after a 30-second wait, would both be answers nobody asked for.
 proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
+    for (;;) {
+        const outcome = await this._offerLargeTextConversion(file, options);
+        if (outcome !== RETRY_CONVERSION_OFFER) return outcome;
+    }
+};
+
+const RETRY_CONVERSION_OFFER = Symbol('retry-conversion-offer');
+const CANCELLED = Symbol('conversion-cancelled');
+
+proto._offerLargeTextConversion = async function(file, options = {}) {
     if (!this._shouldOfferLargeCsvPreflight(file, options)) return null;
 
     let csvProfile = null;
@@ -1717,21 +1959,35 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
                     text: i18n.t('largeCsvPreflightSave'),
                     className: 'modal-btn-confirm modal-btn-secondary-confirm',
                 },
-                {
+                // A temporary Parquet is a file the desktop build creates,
+                // tracks and deletes on exit. The browser has nowhere to put
+                // one, so offering it there would be a button that cannot
+                // keep its promise.
+                ...(this._canConvertTextFileNatively(file) ? [{
                     value: 'temporary',
                     text: i18n.t('largeCsvPreflightTemporary'),
                     className: 'modal-btn-confirm modal-btn-secondary-confirm',
-                },
+                }] : []),
                 {
                     value: 'raw',
                     text: i18n.t('largeCsvPreflightRaw'),
                     className: 'modal-btn-cancel',
                 },
+                // Opening the file as it is and not opening it at all are two
+                // different answers, and only one of them had a button. The
+                // other was reachable by clicking beside the dialog, which is
+                // not a way to ask for anything.
+                {
+                    value: 'cancel',
+                    text: i18n.t('cancel'),
+                    className: 'modal-btn-cancel',
+                },
             ],
+            requireChoice: true,
         }
     );
 
-    if (!choice) return { cancelled: true };
+    if (!choice || choice === 'cancel') return { cancelled: true };
     if (choice === 'review') {
         const reviewedProfile = await this._openCsvParsingPreviewForFileObject(file, {
             csvProfile,
@@ -1752,20 +2008,30 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
                         className: 'modal-btn-confirm',
                         autoFocus: true,
                     },
-                    {
+                    // Same condition as the first dialog. The browser has
+                    // nowhere to put a temporary file, and this copy of the
+                    // offer had lost the check: the button appeared, and then
+                    // quietly asked where to save instead.
+                    ...(this._canConvertTextFileNatively(file) ? [{
                         value: 'temporary',
                         text: i18n.t('largeCsvPreflightTemporary'),
                         className: 'modal-btn-confirm modal-btn-secondary-confirm',
-                    },
+                    }] : []),
                     {
                         value: 'raw',
                         text: i18n.t('largeCsvPreflightRaw'),
                         className: 'modal-btn-cancel',
                     },
+                    {
+                        value: 'cancel',
+                        text: i18n.t('cancel'),
+                        className: 'modal-btn-cancel',
+                    },
                 ],
+                requireChoice: true,
             }
         );
-        if (!choice) return { cancelled: true };
+        if (!choice || choice === 'cancel') return { cancelled: true };
     }
     if (choice === 'raw') {
         this._largeCsvRawApproved ||= new Set();
@@ -1773,8 +2039,101 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
         return csvProfile?.profileSource === 'user' ? { csvProfile } : null;
     }
 
+    const result = await this._runTextFileParquetConversion(file, {
+        csvProfile,
+        temporary: choice === 'temporary',
+        keepOverlayUntilLoaded: true,
+        confirmDownload: true,
+    });
+    if (result.cancelled) {
+        // Backing out of the destination dialog is a decision about the whole
+        // load; cancelling the conversion only undoes the conversion, and the
+        // choices come back.
+        if (result.at === 'destination') {
+            // Said out loud. Silence after a cancelled save dialog looks the
+            // same as a file that failed to open for some other reason.
+            await Modal.alert(
+                i18n.t('parquetDestinationCancelledTitle'),
+                i18n.t('parquetDestinationCancelledBody'),
+                { icon: 'ℹ️' },
+            );
+            return { cancelled: true };
+        }
+        if (result.stillRunning) {
+            await Modal.alert(
+                i18n.t('parquetConversionCancelledTitle'),
+                i18n.t('parquetConversionCancelledBody'),
+                { icon: 'ℹ️' },
+            );
+        }
+        return RETRY_CONVERSION_OFFER;
+    }
+    return {
+        file: result.file,
+        localPath: result.localPath,
+        temporaryParquetPath: result.temporary ? result.localPath : '',
+        keepOverlayUntilLoaded: true,
+    };
+};
+
+/**
+ * Convert one text file to Parquet, and hand back what came out.
+ *
+ * Everything above this is about deciding WHETHER to convert; this is the
+ * conversion itself, and it is deliberately the only copy. The offer shown
+ * before a large file loads and the converter in the menu are two ways of
+ * arriving at the same work, and a second copy of it would drift — which is
+ * exactly what happened to the "temporary" button, whose runtime check existed
+ * in one dialog and had been lost from the other.
+ *
+ * @returns {Promise<
+ *     {file: File, localPath: string, temporary: boolean, saved: boolean}
+ *   | {cancelled: true, at: 'destination'|'conversion', stillRunning?: boolean}
+ * >}
+ */
+proto._runTextFileParquetConversion = async function(file, options = {}) {
+    const csvProfile = options.csvProfile || null;
+    const temporary = options.temporary === true;
+    const keepOverlayUntilLoaded = options.keepOverlayUntilLoaded === true;
+    // Set by the routes that go on to open the file. There, a browser with no
+    // save dialog would otherwise show nothing until its own download prompt,
+    // long after the decision was made and the waiting was done.
+    const confirmDownload = options.confirmDownload === true;
+
+    // In the browser there is no path to write to and no temp store to manage,
+    // so the conversion happens in memory and the result is handed back through
+    // the save dialog.
+    if (!this._canConvertTextFileNatively(file)) {
+        const name = `${this._fileBaseName(file.name || 'data')}.parquet`;
+        // Destination first, exactly as the desktop route does, and for a
+        // reason the desktop route never had to think about: a save dialog only
+        // opens right after a click. Asked here it works, because the click
+        // that chose to convert is a moment old. Asked after a conversion that
+        // takes tens of seconds it is refused — and everything that grew out of
+        // working around that refusal is gone with it.
+        const destination = await this._pickBrowserParquetDestination(name, { confirmDownload });
+        if (destination === null) return { cancelled: true, at: 'destination' };
+
+        const parquetBytes = await this._convertTextFileToParquetBytes(file, csvProfile);
+        if (!parquetBytes) {
+            // Genuinely cancelled: the engine was stopped and nothing was read
+            // back. The overlay has to go with it — it was left standing behind
+            // whatever dialog came next.
+            this._hideFileLoadingOverlay();
+            await this._abandonBrowserDestination(destination);
+            return { cancelled: true, at: 'conversion', stillRunning: false };
+        }
+        const saved = await this._writeToBrowserDestination(destination, parquetBytes, name);
+        if (!keepOverlayUntilLoaded) this._hideFileLoadingOverlay();
+        return {
+            file: new File([parquetBytes], name, { type: 'application/octet-stream' }),
+            localPath: '',
+            temporary: false,
+            saved,
+        };
+    }
+
     let outputPath = '';
-    const temporary = choice === 'temporary';
     if (!temporary) {
         const picker = globalThis.omvDesktop?.selectParquetOutputPath;
         if (typeof picker !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
@@ -1782,24 +2141,90 @@ proto._maybeConvertLargeCsvBeforeLoad = async function(file, options = {}) {
             title: i18n.t('largeCsvPreflightSaveDialogTitle'),
             defaultPath: this._defaultParquetOutputPath(file),
         });
-        if (!outputPath) return { cancelled: true };
+        if (!outputPath) return { cancelled: true, at: 'destination' };
     }
 
     const parquetFile = await this._convertCsvFileToParquetFile(file, {
         csvProfile,
         outputPath,
         temporary,
-        keepOverlayUntilLoaded: true,
+        keepOverlayUntilLoaded,
     });
+    // The native conversion cannot be interrupted, only stopped waiting for, so
+    // the work is still finishing somewhere.
+    if (!parquetFile) return { cancelled: true, at: 'conversion', stillRunning: true };
     return {
         file: parquetFile,
-        localPath: parquetFile.localPath,
-        temporaryParquetPath: temporary ? parquetFile.localPath : '',
-        keepOverlayUntilLoaded: true,
+        localPath: parquetFile.localPath || '',
+        temporary,
+        saved: 'saved',
     };
 };
 
-proto._showParquetConversionOverlay = function(filename) {
+/**
+ * Where the browser should put a converted file, decided before converting.
+ *
+ * Returns a handle to write to, the string 'download' when this browser gives
+ * pages no save dialog at all — Firefox, Safari — or null when the user backs
+ * out. The distinction is settled here, once, so that nothing downstream has
+ * to reason about what the browser can or cannot confirm.
+ */
+proto._pickBrowserParquetDestination = async function(filename, { confirmDownload = false } = {}) {
+    const picker = globalThis.showSaveFilePicker;
+    if (typeof picker !== 'function') {
+        // Firefox and Safari give a page no save dialog, so "choose where this
+        // goes" shows nothing at all and the conversion starts unannounced —
+        // the first dialog the user sees is Firefox's own download prompt,
+        // after the wait, and cancelling it is something this page is never
+        // told about. Where the conversion leads to opening a file, say all of
+        // that up front instead, so there is something to cancel while
+        // cancelling still means anything.
+        if (!confirmDownload) return 'download';
+        const go = await Modal.confirm(
+            i18n.t('parquetNoSaveDialogBody').replace('{file}', filename),
+            {
+                title: i18n.t('parquetNoSaveDialogTitle'),
+                icon: '⬇',
+                confirmText: i18n.t('parquetNoSaveDialogConfirm'),
+                cancelText: i18n.t('cancel'),
+            },
+        );
+        return go ? 'download' : null;
+    }
+    try {
+        return await picker({
+            suggestedName: filename,
+            types: [{ description: 'Parquet', accept: { 'application/octet-stream': ['.parquet'] } }],
+        });
+    } catch (err) {
+        if (err?.name === 'AbortError') return null;
+        // No dialog, no chosen destination: the download is what is left.
+        console.warn('[parquet] save dialog unavailable; the file will be downloaded', err);
+        return 'download';
+    }
+};
+
+/** @returns {Promise<'saved'|'downloaded'>} */
+proto._writeToBrowserDestination = async function(destination, bytes, filename) {
+    if (destination && destination !== 'download') {
+        const writable = await destination.createWritable();
+        await writable.write(new Blob([bytes], { type: 'application/octet-stream' }));
+        await writable.close();
+        return 'saved';
+    }
+    return this._downloadBytes(bytes, filename);
+};
+
+// Accepting the save dialog creates the file, so a conversion cancelled after
+// that point leaves an empty one behind under a name the user chose. Removing
+// it is best effort: not every browser allows it, and a stray empty file is a
+// smaller problem than refusing to let the conversion be cancelled.
+proto._abandonBrowserDestination = async function(destination) {
+    if (!destination || destination === 'download') return;
+    try { await destination.remove?.(); } catch (_) { /* left behind, and empty */ }
+};
+
+proto._showParquetConversionOverlay = function(filename, { onCancel = null } = {}) {
     document.getElementById('file-loading-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.id = 'file-loading-overlay';
@@ -1824,6 +2249,29 @@ proto._showParquetConversionOverlay = function(filename) {
     hint.dataset.filename = filename || '';
 
     dialog.append(spinner, title, hint);
+
+    // A visible way out. Work that runs for tens of seconds behind a modal with
+    // no exit reads as a hang, and Escape alone is not discoverable — the user
+    // has no reason to guess it applies here.
+    if (typeof onCancel === 'function') {
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.id = 'file-loading-cancel';
+        cancel.className = 'modal-btn modal-btn-cancel example-loading-cancel';
+        cancel.textContent = i18n.t('cancel');
+        const finish = () => {
+            cancel.disabled = true;
+            cancel.textContent = i18n.t('cancellingConversion');
+            document.removeEventListener('keydown', onKey);
+            onCancel();
+        };
+        const onKey = (event) => { if (event.key === 'Escape') finish(); };
+        cancel.addEventListener('click', finish);
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('omv:overlay-removed', () => document.removeEventListener('keydown', onKey), { once: true });
+        dialog.append(cancel);
+    }
+
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add('show'));
@@ -1846,19 +2294,36 @@ proto._convertCsvFileToParquetFile = async function(file, options = {}) {
     const converter = globalThis.omvDesktop?.convertToParquet;
     if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
 
+    // Cancelling the native conversion means stopping waiting for it. There is
+    // no channel to interrupt the process doing the work, and the file it is
+    // writing was explicitly asked for at a path the user chose, so deleting it
+    // afterwards would be worse than leaving it: we cannot tell a half-written
+    // file from a finished one. The overlay says so rather than implying the
+    // work vanished.
+    const cancelController = new AbortController();
     const started = Date.now();
-    this._showParquetConversionOverlay(file.name);
+    this._showParquetConversionOverlay(file.name, { onCancel: () => cancelController.abort() });
     this._updateParquetConversionOverlay(started);
     let timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
     let handedOffToLoad = false;
     try {
-        const result = await converter({
+        const conversion = converter({
             path: file.localPath,
             outputPath: options.outputPath || '',
             temporary: options.temporary === true,
             csvProfile: cloneCsvProfileForIpc(options.csvProfile),
             compression: 'zstd',
         });
+        const cancelled = new Promise((resolve) => {
+            cancelController.signal.addEventListener('abort', () => resolve(CANCELLED), { once: true });
+        });
+        const result = await Promise.race([conversion, cancelled]);
+        if (result === CANCELLED) {
+            // The work continues in the background; say so rather than let the
+            // user assume it was undone.
+            conversion.catch(() => null);
+            return null;
+        }
         if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
         if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
         clearInterval(timer);
@@ -1879,6 +2344,586 @@ proto._quoteCommandPath = function(path) {
     return `"${String(path || '').replace(/"/g, '\\"')}"`;
 };
 
+// ─── Convert to Parquet, without opening anything ─────────────────────────
+//
+// Until now the conversion existed only as an offer that appears when a large
+// file is about to be opened. Nobody could find it, try it on something small,
+// or use it on a file they were not about to open — the feature was invisible
+// until the moment it was least convenient to learn about.
+//
+// Same steps and same dialogs, reached from the menu instead. What is missing
+// is the way out: "open it as it is" makes no sense to somebody who came here
+// to convert. So does "convert to a temporary file", which exists to make one
+// open faster and is deleted on exit — the opposite of what this is for.
+
+const CONVERTIBLE_EXTENSIONS = Object.freeze([
+    ...TEXT_TABLE_EXTENSIONS,
+    ...SPREADSHEET_EXTENSIONS,
+]);
+
+proto.convertFileToParquet = async function() {
+    let file = null;
+    try {
+        file = await this._pickFileToConvert();
+    } catch (err) {
+        if (err?.name === 'AbortError') return;
+        console.error('Could not pick a file to convert:', err);
+        this._showLoadError(err, '');
+        return;
+    }
+    if (!file) return;
+
+    const extension = this._fileExtension(file.name || '');
+    const spreadsheet = isSpreadsheetExtension(extension);
+    // .mat, .pkl and .nc have no converter. Saying so is the point — a menu
+    // entry that quietly does nothing is worse than one that explains itself.
+    if (!spreadsheet && !mayBeTextTable(extension)) {
+        await Modal.alert(
+            i18n.t('convertToParquetTitle'),
+            i18n.t('convertToParquetUnsupported').replace('{file}', file.name || ''),
+            { icon: 'CSV' },
+        );
+        return;
+    }
+    if (!this._canConvertTextFileToParquet(file)) {
+        await Modal.alert(i18n.t('convertToParquetTitle'), i18n.t('parquetConversionUnavailable'), { icon: 'CSV' });
+        return;
+    }
+
+    try {
+        if (spreadsheet) await this._convertSpreadsheetFromMenu(file);
+        else await this._convertTextFileFromMenu(file);
+    } catch (err) {
+        // Backing out is not a failure and has nothing to report.
+        if (err?.cancelled) {
+            this._hideFileLoadingOverlay();
+            return;
+        }
+        console.error('Convert to Parquet failed:', err);
+        this._hideFileLoadingOverlay();
+        this._showLoadError(err, file.name || '');
+    }
+};
+
+// One file. Converting several would mean either asking about the parsing of
+// each one, or applying one answer to files that do not share a structure.
+// Opening files for reading stays multi-select; this is a different question.
+proto._pickFileToConvert = async function() {
+    const bare = CONVERTIBLE_EXTENSIONS.map(extension => extension.replace(/^\./, ''));
+    const desktopPicker = globalThis.omvDesktop?.selectFilePath;
+    if (this.capabilities?.isDesktop && typeof desktopPicker === 'function') {
+        const path = await desktopPicker({
+            title: i18n.t('convertToParquetPickTitle'),
+            filters: [
+                { name: 'Convertible files', extensions: bare },
+                { name: 'All files', extensions: ['*'] },
+            ],
+        });
+        return path ? await this._readLocalResultPath(path) : null;
+    }
+
+    if (typeof globalThis.showOpenFilePicker === 'function') {
+        try {
+            const [handle] = await globalThis.showOpenFilePicker({
+                multiple: false,
+                types: [{
+                    description: 'Convertible files',
+                    accept: { '*/*': CONVERTIBLE_EXTENSIONS.slice() },
+                }],
+            });
+            return handle ? await this._getFileHandleSnapshot(handle) : null;
+        } catch (err) {
+            if (err?.name === 'AbortError') return null;
+            console.warn('Convert picker failed; using the file input fallback.', err);
+        }
+    }
+
+    return new Promise((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = CONVERTIBLE_EXTENSIONS.join(',');
+        input.style.display = 'none';
+        const finish = (value) => { input.remove(); resolve(value); };
+        input.addEventListener('change', () => finish(input.files?.[0] || null), { once: true });
+        input.addEventListener('cancel', () => finish(null), { once: true });
+        document.body.appendChild(input);
+        input.click();
+    });
+};
+
+proto._convertTextFileFromMenu = async function(file) {
+    let csvProfile = null;
+    try {
+        csvProfile = await this._inspectCsvSample(file);
+    } catch (err) {
+        console.warn('[csv] could not inspect sample before converting:', err?.message || err);
+    }
+
+    for (;;) {
+        const choice = await this._askHowToConvert(file.name || '', file.size, csvProfile);
+        if (choice !== 'review' && choice !== 'convert') return;
+        if (choice === 'review') {
+            const reviewed = await this._openCsvParsingPreviewForFileObject(file, {
+                csvProfile,
+                title: file.name || '',
+            });
+            // Backing out of the preview is not backing out of converting.
+            if (!reviewed) continue;
+            csvProfile = reviewed;
+        }
+        const result = await this._runTextFileParquetConversion(file, { csvProfile });
+        if (await this._conversionWasCancelled(result)) continue;
+        await this._reportConversionDone(result);
+        return;
+    }
+};
+
+proto._convertSpreadsheetFromMenu = async function(file) {
+    // Decoding the workbook is the expensive half — tens of seconds for a large
+    // one — and it happens before any question can be asked, because the
+    // questions are about the sheet's contents.
+    const rawBuffer = await this._withDecodingOverlay(file, () => (
+        file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file)
+    ));
+    let converted = await this._withDecodingOverlay(file, () => this._convertExcelBufferToCsv(rawBuffer, null));
+    if (!converted?.sheetName) {
+        await Modal.alert(
+            i18n.t('excelSheetPickerTitle'),
+            i18n.t('excelNoDataSheets').replace('{file}', file.name || ''),
+            { icon: 'XLS' },
+        );
+        return;
+    }
+
+    const sheetNames = converted.sheetNames || [];
+    if (sheetNames.length > 1) {
+        const { default: ExcelSheetPickerDialog } = await import('../../ui/excel-sheet-picker-dialog.js');
+        const picked = await ExcelSheetPickerDialog.open({
+            fileName: file.name || '',
+            sheets: sheetNames.map(name => ({ name })),
+            single: true,
+            confirmLabel: 'convertToParquetRun',
+        });
+        if (!picked?.length) return;
+        if (picked[0] !== converted.sheetName) {
+            converted = await this._withDecodingOverlay(file, () => this._convertExcelBufferToCsv(rawBuffer, picked[0]));
+        }
+    }
+
+    const csvBuffer = converted.csvBuffer;
+    const sheetName = converted.sheetName;
+    let csvProfile = null;
+    try {
+        csvProfile = await this._inspectCsvSample(null, spreadsheetPreviewSample(csvBuffer));
+    } catch (err) {
+        console.warn('[csv] could not inspect the sheet before converting:', err?.message || err);
+    }
+
+    for (;;) {
+        const choice = await this._askHowToConvert(file.name || '', file.size, csvProfile, sheetName);
+        if (choice !== 'review' && choice !== 'convert') return;
+        if (choice === 'review') {
+            const reviewed = await this._openCsvParsingPreviewForFileObject(null, {
+                sampleBuffer: spreadsheetPreviewSample(csvBuffer),
+                csvProfile,
+                title: file.name || sheetName,
+            });
+            if (!reviewed) continue;
+            csvProfile = reviewed;
+        }
+        const result = await this._runSpreadsheetParquetConversion(csvBuffer, {
+            csvProfile,
+            sheetName,
+            parquetName: this._spreadsheetParquetName({ file }, sheetName),
+            displayName: file.name || '',
+            defaultOutputPath: this._defaultParquetOutputPath({ localPath: file.localPath, name: file.name }),
+        });
+        if (await this._conversionWasCancelled(result)) continue;
+        await this._reportConversionDone(result);
+        return;
+    }
+};
+
+// Decoding a workbook is the long, silent half of converting a spreadsheet —
+// a 126 MB .xlsx takes about a minute — and it ran behind an overlay with no
+// way out at all. It cannot be interrupted mid-decode: the worker has no check
+// points to stop at. What the button does is stop waiting and drop the result,
+// which is the difference between a minute of your time and a minute of a
+// background thread's.
+proto._withDecodingOverlay = async function(file, work) {
+    const controller = new AbortController();
+    this._showParquetConversionOverlay(file?.name || '', { onCancel: () => controller.abort() });
+    const abandoned = new Promise((_, reject) => {
+        controller.signal.addEventListener('abort', () => {
+            const err = new Error('Decoding cancelled');
+            err.cancelled = true;
+            reject(err);
+        }, { once: true });
+    });
+    try {
+        return await Promise.race([work(controller.signal), abandoned]);
+    } finally {
+        this._hideFileLoadingOverlay();
+    }
+};
+
+proto._askHowToConvert = function(filename, size, csvProfile = null, sheetName = '') {
+    const reviewed = csvProfile?.profileSource === 'user';
+    const body = (reviewed ? i18n.t('convertToParquetReviewedBody') : i18n.t('convertToParquetBody'))
+        .replace('{file}', filename)
+        .replace('{size}', this._formatBytes(Number(size) || 0))
+        .replace('{sheet}', sheetName || '');
+    return Modal.choice(body, {
+        title: i18n.t('convertToParquetTitle'),
+        icon: 'CSV',
+        className: 'modal-dialog-large-csv',
+        choices: [
+            {
+                value: 'review',
+                text: i18n.t('csvPreviewReviewStructure'),
+                className: 'modal-btn-confirm',
+                autoFocus: true,
+            },
+            {
+                value: 'convert',
+                text: i18n.t('convertToParquetRun'),
+                className: 'modal-btn-confirm modal-btn-secondary-confirm',
+            },
+            {
+                value: 'cancel',
+                text: i18n.t('cancel'),
+                className: 'modal-btn-cancel',
+            },
+        ],
+    });
+};
+
+// Cancelling the conversion undoes the conversion, not the decision to
+// convert: the caller loops back to the choices. Says so first when the work
+// is still finishing in the background, which is the case the desktop
+// converter cannot interrupt.
+proto._conversionWasCancelled = async function(result) {
+    if (!result?.cancelled) return false;
+    if (result.stillRunning) {
+        await Modal.alert(
+            i18n.t('parquetConversionCancelledTitle'),
+            i18n.t('parquetConversionCancelledBody'),
+            { icon: 'ℹ️' },
+        );
+    }
+    return true;
+};
+
+/**
+ * Say what was produced, and stop there.
+ *
+ * The converter used to end by offering to open the result, which sounds
+ * helpful and was the source of every problem this feature had. Opening the
+ * file was the one thing that worked whether or not it had been written, so
+ * the offer papered over a save that had failed, been cancelled, or been
+ * handed to a download nobody could vouch for.
+ *
+ * Nothing is opened now. Somebody who wanted the file will open it the normal
+ * way; somebody who cancelled gets nothing, which is what cancelling means.
+ * The copy in memory is dropped either way.
+ */
+proto._reportConversionDone = async function(result) {
+    const body = (result.saved === 'downloaded'
+        ? i18n.t('convertToParquetDownloadedBody')
+        : i18n.t('convertToParquetDoneBody'))
+        .replace('{file}', result.localPath || result.file?.name || '')
+        .replace('{size}', this._formatBytes(Number(result.file?.size) || 0));
+    await Modal.alert(i18n.t('convertToParquetDoneTitle'), body, { icon: '✅' });
+};
+
+// ─── Spreadsheet → Parquet ────────────────────────────────────────────────
+//
+// A spreadsheet is decoded from scratch on every open, and that decode is the
+// single most expensive thing the app does: a 126 MB .xlsx measures ~68 s, every
+// time. The app already turns the chosen sheet into CSV text on load, so the
+// expensive half of a Parquet conversion has been paid for by the time the file
+// is on screen — converting from there costs seconds and makes every later open
+// near-instant.
+//
+// Offered after the load rather than before it, deliberately. Before, we would
+// have nothing to convert yet (the workbook has to be decoded first), and the
+// user would be answering a question about a file they have not seen.
+
+// Below this the decode is quick enough that interrupting to offer a
+// conversion costs more attention than it saves: a 4 MB sheet is a few seconds,
+// an 18 MB one is about fourteen, and a 126 MB one about sixty-eight.
+const SPREADSHEET_PARQUET_HINT_BYTES = 4 * 1024 * 1024;
+
+// Writing Parquet never actually needed the desktop build. The native
+// converter is used when it is there because it also writes the file to a real
+// path; in the browser DuckDB-WASM does the same conversion in memory and the
+// result is handed to the user through the save dialog instead. Gating this on
+// isDesktop meant the one runtime with the LOWER spreadsheet limit — the
+// browser — was also the one with no way out of it.
+proto._canConvertSpreadsheetToParquet = function(entry) {
+    if (!entry || !this._isExcelExtension(entry.extension)) return false;
+    if (Number(entry.file?.size || 0) < SPREADSHEET_PARQUET_HINT_BYTES) return false;
+    return typeof globalThis.omvDesktop?.convertToParquet === 'function' || this._canUseDuckDb();
+};
+
+// The CSV form of the sheet: from the load-time cache when it is still valid,
+// re-derived from the workbook otherwise.
+proto._spreadsheetCsvBytes = async function(entry) {
+    if (this._hasExcelCsvCache(entry)) return entry.excelCsvBuffer;
+    const converted = await this._convertExcelEntryToCsvBuffer(entry);
+    return converted.csvBuffer;
+};
+
+// Non-blocking offer after a spreadsheet loads. Shown once per file per
+// session; dismissing it is a normal outcome, so it never returns.
+proto._showSpreadsheetParquetHint = function(entry) {
+    if (!this._canConvertSpreadsheetToParquet(entry)) return;
+    if (typeof document === 'undefined') return;
+
+    const key = this._oversizedDecisionKey(entry.file || {});
+    this._spreadsheetHintsShown ||= new Set();
+    if (this._spreadsheetHintsShown.has(key)) return;
+    this._spreadsheetHintsShown.add(key);
+
+    document.getElementById('spreadsheet-parquet-hint')?.remove();
+    const filename = entry.file?.name || entry.name || '';
+
+    const notice = document.createElement('div');
+    notice.id = 'spreadsheet-parquet-hint';
+    notice.className = 'dismissible-notice large-csv-parquet-hint';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+
+    const content = document.createElement('div');
+    content.className = 'dismissible-notice-content';
+
+    const title = document.createElement('div');
+    title.className = 'dismissible-notice-title';
+    title.textContent = i18n.t('spreadsheetParquetHintTitle');
+
+    const body = document.createElement('div');
+    body.className = 'dismissible-notice-body';
+    body.textContent = i18n.t('spreadsheetParquetHintBody').replace('{file}', filename);
+
+    const actions = document.createElement('div');
+    actions.className = 'dismissible-notice-actions';
+
+    const convert = document.createElement('button');
+    convert.type = 'button';
+    convert.className = 'dismissible-notice-action primary';
+    convert.textContent = i18n.t('spreadsheetParquetHintConvert');
+
+    const status = document.createElement('div');
+    status.className = 'dismissible-notice-status';
+    status.hidden = true;
+
+    convert.addEventListener('click', async () => {
+        convert.disabled = true;
+        status.hidden = false;
+        status.classList.remove('error', 'success');
+        status.textContent = i18n.t('convertingToParquet');
+        try {
+            const parquetFile = await this._convertSpreadsheetEntryToParquet(entry, { temporary: false });
+            if (!parquetFile) { convert.disabled = false; status.hidden = true; return; }
+            status.classList.add('success');
+            status.textContent = i18n.t('parquetConversionComplete');
+            await this.loadFile(parquetFile, { localPath: parquetFile.localPath });
+            notice.remove();
+        } catch (err) {
+            this._hideFileLoadingOverlay();
+            convert.disabled = false;
+            status.classList.add('error');
+            status.textContent = err?.message || String(err);
+        }
+    });
+
+    actions.append(convert, status);
+    content.append(title, body, actions);
+
+    const close = document.createElement('button');
+    close.className = 'dismissible-notice-close';
+    close.type = 'button';
+    close.title = i18n.t('dismiss');
+    close.setAttribute('aria-label', i18n.t('dismiss'));
+    close.textContent = '×';
+    close.addEventListener('click', () => notice.remove());
+
+    notice.append(content, close);
+    document.body.appendChild(notice);
+    requestAnimationFrame(() => notice.classList.add('show'));
+};
+
+// "microgrid-demo.xlsx" + sheet "Registro" -> "microgrid-demo - Registro.parquet".
+// The sheet name is part of it because one workbook can produce several.
+proto._spreadsheetParquetName = function(entry, sheetName) {
+    const base = this._fileBaseName(entry.file?.name || entry.name || 'spreadsheet');
+    const suffix = sheetName && sheetName !== base ? ` - ${sheetName}` : '';
+    return `${base}${suffix}`.replace(/[\\/:*?"<>|]/g, '_') + '.parquet';
+};
+
+/**
+ * Hand bytes to the browser as a download.
+ *
+ * Always 'downloaded', and that word is the whole point: what happens next is
+ * between the browser and the user. It may land in the downloads folder, it
+ * may open a dialog they cancel, and this page is never told. Nothing that
+ * depends on the file existing may be chained onto this.
+ *
+ * @returns {'downloaded'}
+ */
+proto._downloadBytes = function(bytes, filename) {
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    return 'downloaded';
+};
+
+proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = false } = {}) {
+    const csvBuffer = await this._spreadsheetCsvBytes(entry);
+    const sheetName = entry.excelCsvSheetName || entry.excel?.sheetName || 'sheet';
+
+    // Show the parsing before committing to it, exactly as the text-file route
+    // does. The sheet has already been turned into CSV, so the questions are
+    // the same ones: which row is the header, which column is time, how numbers
+    // are written. Converting without asking would bake a wrong answer into a
+    // file that then looks authoritative.
+    const reviewed = await this._openCsvParsingPreviewForFileObject(null, {
+        sampleBuffer: spreadsheetPreviewSample(csvBuffer),
+        csvProfile: entry.data?.metadata?.csvProfile || null,
+        title: entry.file?.name || entry.name || sheetName,
+    });
+    if (!reviewed) return null;   // backed out of the preview
+
+    const result = await this._runSpreadsheetParquetConversion(csvBuffer, {
+        csvProfile: reviewed,
+        sheetName,
+        parquetName: this._spreadsheetParquetName(entry, sheetName),
+        displayName: entry.file?.name || entry.name || '',
+        defaultOutputPath: this._defaultParquetOutputPath({
+            localPath: entry.localPath,
+            name: entry.file?.name || `${entry.name || 'sheet'}.xlsx`,
+        }),
+        temporary,
+        keepOverlayUntilLoaded: true,
+        confirmDownload: true,
+    });
+    if (result.cancelled && result.at === 'destination') {
+        await Modal.alert(
+            i18n.t('parquetDestinationCancelledTitle'),
+            i18n.t('parquetDestinationCancelledBody'),
+            { icon: 'ℹ️' },
+        );
+    }
+    return result.cancelled ? null : result.file;
+};
+
+/**
+ * Convert a sheet — already turned into CSV text — to Parquet.
+ *
+ * The counterpart of _runTextFileParquetConversion, and the only copy for the
+ * same reason. A sheet has no path on disk of its own: it exists as bytes, so
+ * the desktop route hands the bytes over to be staged rather than pointing at
+ * a file.
+ *
+ * @returns {Promise<
+ *     {file: File, localPath: string, temporary: boolean, saved: boolean}
+ *   | {cancelled: true, at: 'destination'|'conversion', stillRunning?: boolean}
+ * >}
+ */
+proto._runSpreadsheetParquetConversion = async function(csvBuffer, options = {}) {
+    const converter = globalThis.omvDesktop?.convertToParquet;
+    const inBrowser = typeof converter !== 'function';
+    if (inBrowser && !this._canUseDuckDb()) throw new Error(i18n.t('parquetConversionUnavailable'));
+
+    const csvProfile = options.csvProfile || null;
+    const sheetName = options.sheetName || 'sheet';
+    const parquetName = options.parquetName || 'sheet.parquet';
+    const displayName = options.displayName || '';
+    const temporary = options.temporary === true;
+    const keepOverlay = options.keepOverlayUntilLoaded === true;
+
+    if (inBrowser) {
+        // Destination first, for the same reason as the text route: the save
+        // dialog only opens while the click that led here is fresh.
+        const destination = await this._pickBrowserParquetDestination(parquetName, {
+            confirmDownload: options.confirmDownload === true,
+        });
+        if (destination === null) return { cancelled: true, at: 'destination' };
+
+        // Cancellable, like the text route. A sheet of the same size takes the
+        // same tens of seconds, and there was no way out of this one.
+        const controller = new AbortController();
+        const started = Date.now();
+        this._showParquetConversionOverlay(displayName, { onCancel: () => controller.abort() });
+        const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+        try {
+            const source = await this._getDuckDbSource();
+            const parquetBytes = await source.convertCsvBufferToParquet(csvBuffer, {
+                csvProfile,
+                compression: 'zstd',
+                signal: controller.signal,
+            });
+            this._setParquetConversionOverlayLoading();
+            const saved = await this._writeToBrowserDestination(destination, parquetBytes, parquetName);
+            if (!keepOverlay) this._hideFileLoadingOverlay();
+            return {
+                file: new File([parquetBytes], parquetName, { type: 'application/octet-stream' }),
+                localPath: '',
+                temporary: false,
+                saved,
+            };
+        } catch (err) {
+            if (!err?.cancelled) throw err;
+            this._hideFileLoadingOverlay();
+            await this._abandonBrowserDestination(destination);
+            return { cancelled: true, at: 'conversion', stillRunning: false };
+        } finally {
+            clearInterval(timer);
+        }
+    }
+
+    let outputPath = '';
+    if (!temporary) {
+        const picker = globalThis.omvDesktop?.selectParquetOutputPath;
+        if (typeof picker !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
+        outputPath = await picker({
+            title: i18n.t('largeCsvPreflightSaveDialogTitle'),
+            defaultPath: options.defaultOutputPath || '',
+        });
+        if (!outputPath) return { cancelled: true, at: 'destination' };
+    }
+
+    const started = Date.now();
+    this._showParquetConversionOverlay(displayName);
+    const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+    try {
+        // `bytes` rather than `path`: the sheet only exists as CSV text in
+        // memory. The main process stages it, converts, and removes the stage.
+        // An explicit outputPath or `temporary` is required — without a real
+        // source path there is no sensible place to put the result next to.
+        const result = await converter({
+            bytes: new Uint8Array(csvBuffer),
+            sourceName: `${sheetName}.csv`,
+            csvProfile: cloneCsvProfileForIpc(csvProfile),
+            outputPath,
+            temporary,
+            compression: 'zstd',
+        });
+        if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
+        if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
+        this._setParquetConversionOverlayLoading();
+        const file = await this._readLocalResultPath(result.outputPath);
+        if (!keepOverlay) this._hideFileLoadingOverlay();
+        return { file, localPath: file?.localPath || result.outputPath, temporary, saved: 'saved' };
+    } finally {
+        clearInterval(timer);
+    }
+};
+
 proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvProfile = null) {
     const key = this._largeCsvDecisionKey(file, filename);
     if (this._largeCsvRawApproved?.has(key)) return;
@@ -1886,9 +2931,14 @@ proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvPr
     if (this._largeCsvParquetHintsShown.has(key)) return;
     this._largeCsvParquetHintsShown.add(key);
 
-    const canConvertInApp = typeof globalThis.omvDesktop?.convertToParquet === 'function'
-        && file?.localPath
-        && this.capabilities?.isDesktop;
+    // Two ways to convert: the native converter, which needs a real path, and
+    // the in-browser engine, which does not. Requiring the first meant the
+    // browser only ever got a command to copy into a terminal — for a feature
+    // it is perfectly capable of performing.
+    const canConvertNatively = typeof globalThis.omvDesktop?.convertToParquet === 'function'
+        && !!file?.localPath
+        && !!this.capabilities?.isDesktop;
+    const canConvertInApp = canConvertNatively || (!!file && this._canUseDuckDb());
     const commandPath = file?.localPath || filename;
     const command = `node bench/csv-to-parquet.mjs ${this._quoteCommandPath(commandPath)}`;
     const mb = Number.isFinite(fileSize) ? (fileSize / (1024 * 1024)).toFixed(0) : '?';
@@ -1918,11 +2968,17 @@ proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvPr
         .replace('{file}', filename)
         .replace('{size}', `${mb} MB`);
 
-    const code = document.createElement('code');
-    code.className = 'dismissible-notice-code';
-    code.textContent = command;
+    content.append(title, body);
 
-    content.append(title, body, code);
+    // The command line is the fallback for when the app cannot do it itself.
+    // Showing it next to a button that does the same thing is noise, and it
+    // reads as though the button were somehow the lesser option.
+    if (!canConvertInApp) {
+        const code = document.createElement('code');
+        code.className = 'dismissible-notice-code';
+        code.textContent = command;
+        content.append(code);
+    }
 
     if (canConvertInApp) {
         const actions = document.createElement('div');
@@ -1972,39 +3028,78 @@ proto._showLargeCsvParquetHint = function(filename, fileSize, file = null, csvPr
 };
 
 proto._convertLargeCsvNoticeToParquet = async function({ filename, file, csvProfile, button, status, notice }) {
-    if (!file?.localPath) throw new Error(i18n.t('parquetConversionDesktopOnly'));
     const converter = globalThis.omvDesktop?.convertToParquet;
-    if (typeof converter !== 'function') throw new Error(i18n.t('parquetConversionUnavailable'));
+    const nativePath = typeof converter === 'function' && file?.localPath && this.capabilities?.isDesktop;
+    if (!nativePath && !this._canUseDuckDb()) throw new Error(i18n.t('parquetConversionUnavailable'));
 
+    // Show the parsing before committing to it. This was the one route that
+    // converted blind: the blocking dialog leads with "Review structure", but
+    // this button — the easiest one to click — went straight to the converter
+    // with whatever the auto-detection had guessed. A conversion of a
+    // misparsed file is worse than no conversion, because the result looks
+    // authoritative and the mistake is baked in.
+    const reviewed = await this._openCsvParsingPreviewForFileObject(file, {
+        csvProfile,
+        title: filename || file.name || '',
+    });
+    if (!reviewed) return;   // backed out of the preview
+    csvProfile = reviewed;
+
+    // The notice goes away the moment work starts. Leaving a corner card with
+    // a close button next to a running conversion asks the user a question the
+    // interface cannot answer — closing it cancelled nothing, and there was no
+    // way to tell. The blocking overlay is the honest shape for work that takes
+    // tens of seconds.
     button.disabled = true;
-    button.textContent = i18n.t('convertingToParquet');
-    status.hidden = false;
-    status.classList.remove('error', 'success');
-    const started = Date.now();
-    const tick = () => {
-        const seconds = Math.max(1, Math.round((Date.now() - started) / 1000));
-        status.textContent = i18n.t('parquetConversionInProgress').replace('{seconds}', String(seconds));
-    };
-    tick();
-    const timer = setInterval(tick, 1000);
-    try {
-        const result = await converter({
-            path: file.localPath,
-            csvProfile: cloneCsvProfileForIpc(csvProfile),
-            compression: 'zstd',
-        });
-        if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
-        if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
+    status.hidden = true;
+    notice?.remove();
 
-        status.classList.add('success');
-        status.textContent = result.cached
-            ? i18n.t('parquetConversionUsingExisting')
-            : i18n.t('parquetConversionComplete');
-        const parquetFile = await this._readLocalResultPath(result.outputPath);
-        await this.loadFile(parquetFile, { localPath: result.outputPath });
-        notice?.remove();
+    try {
+        if (!nativePath) {
+            // Destination first, so the save dialog opens while the click that
+            // led here still counts. DuckDB then reads the File in slices, so a
+            // 500 MB CSV never has to exist as one 500 MB buffer.
+            const name = `${this._fileBaseName(filename || file.name || 'data')}.parquet`;
+            const destination = await this._pickBrowserParquetDestination(name, { confirmDownload: true });
+            if (destination === null) {
+                await Modal.alert(
+                    i18n.t('parquetDestinationCancelledTitle'),
+                    i18n.t('parquetDestinationCancelledBody'),
+                    { icon: 'ℹ️' },
+                );
+                return;
+            }
+            const parquetBytes = await this._convertTextFileToParquetBytes(file, csvProfile);
+            if (!parquetBytes) {   // cancelled
+                this._hideFileLoadingOverlay();
+                await this._abandonBrowserDestination(destination);
+                return;
+            }
+            await this._writeToBrowserDestination(destination, parquetBytes, name);
+            await this.loadFile(new File([parquetBytes], name, { type: 'application/octet-stream' }));
+            return;
+        }
+
+        const started = Date.now();
+        this._showParquetConversionOverlay(filename || file.name || '');
+        const timer = setInterval(() => this._updateParquetConversionOverlay(started), 1000);
+        try {
+            const result = await converter({
+                path: file.localPath,
+                csvProfile: cloneCsvProfileForIpc(csvProfile),
+                compression: 'zstd',
+            });
+            if (result?.ok === false) throw new Error(result.message || i18n.t('parquetConversionFailed'));
+            if (!result?.outputPath) throw new Error(i18n.t('parquetConversionFailed'));
+
+            this._setParquetConversionOverlayLoading();
+            const parquetFile = await this._readLocalResultPath(result.outputPath);
+            await this.loadFile(parquetFile, { localPath: result.outputPath });
+        } finally {
+            clearInterval(timer);
+        }
     } finally {
-        clearInterval(timer);
+        this._hideFileLoadingOverlay();
     }
 };
 
@@ -2264,6 +3359,32 @@ proto.removeFile = async function(fileId) {
     this._updateTopBar();
     this._renderFilesList();
     this._updateActionButtons();
+    await this._releaseQueryEngineIfIdle();
+};
+
+/**
+ * Give the query engine's memory back once nothing is using it.
+ *
+ * DuckDB runs on WebAssembly, and a WebAssembly memory can only ever grow.
+ * Once it has stretched to hold a large file it stays that size for the life
+ * of the page: dropping the tables frees space *inside* it, and returns none
+ * of it to the browser. Closing every file and then finding that the next one
+ * will not open is what that looks like from the outside.
+ *
+ * Nothing was calling shutdown(), so the only way to get that memory back was
+ * to reload the page. With no files left there is nothing to lose by tearing
+ * the engine down; the next file that needs it pays about a second to start it
+ * again, which is what opening the first file already costs.
+ */
+proto._releaseQueryEngineIfIdle = async function() {
+    if (this.files.size > 0 || !this._duckdbSource) return;
+    const source = this._duckdbSource;
+    this._duckdbSource = null;
+    try {
+        await source.shutdown();
+    } catch (err) {
+        console.warn('[duckdb] could not shut the query engine down:', err?.message || err);
+    }
 };
 
 proto.setActiveFile = function(fileId) {
@@ -2311,7 +3432,7 @@ proto._renderFilesList = function() {
         const nameSpan = document.createElement('span');
         nameSpan.className = 'file-entry-name';
         nameSpan.textContent = this._fileDisplayName(entryData);
-        nameSpan.title = this._fileDisplayName(entryData);
+        nameSpan.title = this._fileEntryTooltip(entryData);
         nameSpan.addEventListener('click', () => this.setActiveFile(fileId));
 
         const typeLabel = this._fileTypeLabel(entryData, fileId);

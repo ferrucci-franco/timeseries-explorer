@@ -178,9 +178,14 @@ const Modal = {
 
             setTimeout(() => focusTarget?.focus?.(), 100);
 
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) finish(null);
-            });
+            // A dialog where every option matters should not be answerable by
+            // missing it. Clicking beside the buttons is not a decision, and
+            // what it silently chose was never one of them.
+            if (!options.requireChoice) {
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) finish(null);
+                });
+            }
 
             const escHandler = (e) => {
                 if (e.key === 'Escape') finish(null);
@@ -402,6 +407,23 @@ const Modal = {
             if (options.html) messageDiv.innerHTML = body;
             else              messageDiv.textContent = body;
             content.appendChild(messageDiv);
+
+            // Collapsed technical detail. When a raw browser error is replaced
+            // by a translated explanation, the original still has to be
+            // reachable — otherwise a bug report loses the one string that
+            // identifies the failure. textContent, never innerHTML: this can
+            // carry arbitrary text out of a file or a third-party library.
+            if (options.details) {
+                const details = document.createElement('details');
+                details.className = 'modal-details';
+                const summary = document.createElement('summary');
+                summary.textContent = options.detailsLabel || 'Details';
+                const pre = document.createElement('pre');
+                pre.className = 'modal-details-text';
+                pre.textContent = String(options.details);
+                details.append(summary, pre);
+                content.appendChild(details);
+            }
 
             const buttons = document.createElement('div');
             buttons.className = 'modal-buttons';

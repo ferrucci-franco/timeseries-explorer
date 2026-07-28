@@ -320,6 +320,44 @@ async function createWindow(url) {
   mainWindow = win;
   win.removeMenu();
 
+  // The one failure the renderer cannot report on its own.
+  //
+  // Everywhere else a failed load ends in an in-app dialog. If the renderer
+  // process itself is killed — almost always for memory, on a file too large to
+  // hold — no JavaScript runs, so there is nothing left to draw a dialog with
+  // and the window simply goes blank. Only the main process is still alive to
+  // say what happened. The browser build has no equivalent: this is one of the
+  // few things that is genuinely desktop-only.
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[desktop] renderer gone', details);
+    // 'clean-exit' is a normal shutdown and 'killed' is usually the user or the
+    // OS doing it deliberately. Neither deserves an alarming popup.
+    if (details?.reason === 'clean-exit' || details?.reason === 'killed') return;
+
+    const outOfMemory = details?.reason === 'oom';
+    dialog.showMessageBox(win, {
+      type: 'error',
+      title: 'Time Series Explorer',
+      message: outOfMemory
+        ? 'The application ran out of memory and had to restart the view.'
+        : 'The application view stopped unexpectedly and was restarted.',
+      detail: outOfMemory
+        ? 'This normally happens with a file too large to hold in memory all at once.\n\n'
+          + 'Converting it to Parquet lets the app read it in pieces instead. You can also lower the '
+          + 'full-load limit for that format in Settings → File loading, so the warning comes earlier.'
+        : `Reason reported by the system: ${details?.reason || 'unknown'}.\n\n`
+          + 'Loaded files were not saved. If this repeats with the same file it is worth reporting.',
+      buttons: ['Reload', 'Close'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    }).then(({ response }) => {
+      if (response === 0 && !win.isDestroyed()) win.reload();
+    }).catch(err => {
+      console.error('[desktop] could not show the renderer-gone dialog', err);
+    });
+  });
+
   // Full Desktop is intentionally offline-first. The packaged renderer may
   // request only its own loopback origin; external network traffic is denied.
   win.webContents.session.webRequest.onBeforeRequest(
@@ -365,7 +403,10 @@ async function selectResultFilePaths(options = {}, multiple = false) {
     title: typeof options.title === 'string' ? options.title : 'Select result file',
     defaultPath: typeof options.defaultPath === 'string' && options.defaultPath ? options.defaultPath : undefined,
     properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
-    filters: [
+    // A caller that can only handle some of these says so. The Parquet
+    // converter has no reader for .mat or .pkl, and offering them in its own
+    // dialog would only let the user pick a file it then has to refuse.
+    filters: Array.isArray(options.filters) && options.filters.length ? options.filters : [
       { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', 'nc', 'netcdf', 'pkl', 'pickle', 'xlsx', 'xlsm', 'xls', 'ods'] },
       { name: 'Spreadsheets', extensions: ['xlsx', 'xlsm', 'xls', 'ods'] },
       { name: 'All files', extensions: ['*'] },
@@ -501,16 +542,34 @@ ipcMain.handle('omv:read-file-slice', async (_event, options = {}) => {
   }
 });
 
+// Spreadsheets have no path the converter can read: the app turns the chosen
+// sheet into CSV text in a worker, so what it holds is bytes, not a file. Those
+// are staged into a temp file here — in the main process, where the cleanup
+// already lives — converted, and removed again. Staging in the renderer would
+// mean a second IPC and a temp file nobody owns if the window closes mid-way.
+async function stageBytesForConversion(bytes, suggestedName = 'sheet.csv') {
+  const dir = path.join(temporaryParquetSessionRoot(), 'staged');
+  await fsp.mkdir(dir, { recursive: true });
+  const safe = String(suggestedName).replace(/[^A-Za-z0-9._-]/g, '_') || 'sheet.csv';
+  const staged = path.join(dir, `${Date.now()}-${safe}`);
+  await fsp.writeFile(staged, Buffer.from(bytes));
+  return staged;
+}
+
 ipcMain.handle('omv:convert-to-parquet', async (_event, options = {}) => {
+  let stagedInput = '';
   try {
     const rawPath = typeof options.path === 'string' ? options.path : '';
-    if (!rawPath.trim()) {
+    if (!rawPath.trim() && !options.bytes) {
       const err = new Error('Missing path');
       err.code = 'EINVAL';
       throw err;
     }
+    if (!rawPath.trim()) {
+      stagedInput = await stageBytesForConversion(options.bytes, options.sourceName || 'sheet.csv');
+    }
 
-    const filePath = path.resolve(rawPath);
+    const filePath = path.resolve(stagedInput || rawPath);
     const stat = await fsp.stat(filePath);
     if (!stat.isFile()) {
       const err = new Error('Path is not a file');
@@ -564,6 +623,12 @@ ipcMain.handle('omv:convert-to-parquet', async (_event, options = {}) => {
       code: err?.code || '',
       message: err?.message || 'CSV-to-Parquet conversion failed',
     };
+  } finally {
+    // The staged CSV is an implementation detail of this call and must not
+    // outlive it, whether the conversion succeeded or not.
+    if (stagedInput) {
+      try { await fsp.rm(stagedInput, { force: true }); } catch (_) { /* best effort */ }
+    }
   }
 });
 
