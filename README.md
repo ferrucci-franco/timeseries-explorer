@@ -180,6 +180,19 @@ The portable web package supports two offline modes:
 
 The local browser mode bundles the Node runtime from the platform that built the zip, starts a localhost-only server, and opens the browser without requiring users to install Python, Node, npm, or internet access. Live Update belongs to the Full Desktop app.
 
+## Privacy
+
+Time-series files are never uploaded: parsing and plotting happen in your
+browser or on your computer.
+
+The web version counts page views with [GoatCounter](https://www.goatcounter.com)
+to estimate how many people use the app. It stores nothing in the browser — no
+cookies, no `localStorage`, no cache — and keeps no IP addresses or tracker IDs,
+so there is no consent banner and nothing to opt out of. The Desktop and
+portable builds never load it. Deployments that want no measurement at all can
+clear `window.__OMV_ANALYTICS_CONFIG__` in [index.html](index.html); the app
+behaves identically without it.
+
 ## License
 
 Time Series Explorer's own source code is licensed under the permissive

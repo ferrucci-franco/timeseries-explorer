@@ -289,8 +289,8 @@ src/
 
 Risk: `require-corp` breaks any cross-origin subresource. The app is
 offline-first with everything under `public/` and `src/vendor/`, so the blast
-radius is limited to the analytics consent path — check
-`src/analytics/analytics-consent.js` before flipping it.
+radius is limited to the analytics path — check `src/analytics/analytics.js`
+before flipping it, since it loads `count.js` from `gc.zgo.at`.
 
 **Step 1.2 — `src/core/worker-pool.js` + `task-client.js`.**
 

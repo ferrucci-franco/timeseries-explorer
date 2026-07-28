@@ -161,6 +161,11 @@ class OpenModelicaViewer {
         const title = i18n.t(`runtimeNotice${noticeMode}Title`);
         const body = i18n.t(`runtimeNotice${noticeMode}Body`);
         const privacy = i18n.t('runtimeNoticePrivacy');
+        // Page-view measurement replaced its consent banner with this line, so
+        // it is the only place the app discloses it. Say nothing when no
+        // endpoint is configured, because then nothing is being counted.
+        const measures = !caps.isDesktop && Boolean(globalThis.__OMV_ANALYTICS_CONFIG__?.endpoint);
+        const analytics = measures ? i18n.t('runtimeNoticeAnalytics') : '';
         const desktop = caps.isDesktop ? '' : i18n.t('runtimeNoticeDesktopDownload');
         const desktopTitle = this._escapeHtml(i18n.t('runtimeNoticeDesktopTitle'));
         const escapedDesktop = this._escapeHtml(desktop);
@@ -178,6 +183,7 @@ class OpenModelicaViewer {
             <h3>${title}</h3>
             <p>${this._escapeHtml(body)}</p>
             <p class="light-notice-privacy">${this._escapeHtml(privacy)}</p>
+            ${analytics ? `<p>${this._escapeHtml(analytics)}</p>` : ''}
             ${desktop ? `<p>${desktopHtml}</p>` : ''}
             ${features ? `<ul>${features}</ul>` : ''}
         `;

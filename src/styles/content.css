@@ -139,6 +139,7 @@
 }
 
 .light-version-notice .light-notice-privacy {
+    color: var(--notice-privacy-color);
     font-weight: 700;
 }
 

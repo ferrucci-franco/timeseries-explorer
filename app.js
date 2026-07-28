@@ -1,8 +1,8 @@
 import OpenModelicaViewer from './src/app/viewer-app.js';
-import { initializeAnalyticsConsent } from './src/analytics/analytics-consent.js';
+import { initializeAnalytics } from './src/analytics/analytics.js';
 
 function startApplication() {
-    initializeAnalyticsConsent();
+    initializeAnalytics();
     window.app = new OpenModelicaViewer();
 }
 
