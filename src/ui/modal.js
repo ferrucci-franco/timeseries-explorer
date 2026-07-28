@@ -178,9 +178,14 @@ const Modal = {
 
             setTimeout(() => focusTarget?.focus?.(), 100);
 
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) finish(null);
-            });
+            // A dialog where every option matters should not be answerable by
+            // missing it. Clicking beside the buttons is not a decision, and
+            // what it silently chose was never one of them.
+            if (!options.requireChoice) {
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) finish(null);
+                });
+            }
 
             const escHandler = (e) => {
                 if (e.key === 'Escape') finish(null);

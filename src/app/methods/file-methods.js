@@ -1942,11 +1942,21 @@ proto._offerLargeTextConversion = async function(file, options = {}) {
                     text: i18n.t('largeCsvPreflightRaw'),
                     className: 'modal-btn-cancel',
                 },
+                // Opening the file as it is and not opening it at all are two
+                // different answers, and only one of them had a button. The
+                // other was reachable by clicking beside the dialog, which is
+                // not a way to ask for anything.
+                {
+                    value: 'cancel',
+                    text: i18n.t('cancel'),
+                    className: 'modal-btn-cancel',
+                },
             ],
+            requireChoice: true,
         }
     );
 
-    if (!choice) return { cancelled: true };
+    if (!choice || choice === 'cancel') return { cancelled: true };
     if (choice === 'review') {
         const reviewedProfile = await this._openCsvParsingPreviewForFileObject(file, {
             csvProfile,
@@ -1981,10 +1991,16 @@ proto._offerLargeTextConversion = async function(file, options = {}) {
                         text: i18n.t('largeCsvPreflightRaw'),
                         className: 'modal-btn-cancel',
                     },
+                    {
+                        value: 'cancel',
+                        text: i18n.t('cancel'),
+                        className: 'modal-btn-cancel',
+                    },
                 ],
+                requireChoice: true,
             }
         );
-        if (!choice) return { cancelled: true };
+        if (!choice || choice === 'cancel') return { cancelled: true };
     }
     if (choice === 'raw') {
         this._largeCsvRawApproved ||= new Set();
@@ -2347,6 +2363,11 @@ proto.convertFileToParquet = async function() {
         if (spreadsheet) await this._convertSpreadsheetFromMenu(file);
         else await this._convertTextFileFromMenu(file);
     } catch (err) {
+        // Backing out is not a failure and has nothing to report.
+        if (err?.cancelled) {
+            this._hideFileLoadingOverlay();
+            return;
+        }
         console.error('Convert to Parquet failed:', err);
         this._hideFileLoadingOverlay();
         this._showLoadError(err, file.name || '');
@@ -2492,10 +2513,24 @@ proto._convertSpreadsheetFromMenu = async function(file) {
     }
 };
 
+// Decoding a workbook is the long, silent half of converting a spreadsheet —
+// a 126 MB .xlsx takes about a minute — and it ran behind an overlay with no
+// way out at all. It cannot be interrupted mid-decode: the worker has no check
+// points to stop at. What the button does is stop waiting and drop the result,
+// which is the difference between a minute of your time and a minute of a
+// background thread's.
 proto._withDecodingOverlay = async function(file, work) {
-    this._showParquetConversionOverlay(file?.name || '');
+    const controller = new AbortController();
+    this._showParquetConversionOverlay(file?.name || '', { onCancel: () => controller.abort() });
+    const abandoned = new Promise((_, reject) => {
+        controller.signal.addEventListener('abort', () => {
+            const err = new Error('Decoding cancelled');
+            err.cancelled = true;
+            reject(err);
+        }, { once: true });
+    });
     try {
-        return await work();
+        return await Promise.race([work(controller.signal), abandoned]);
     } finally {
         this._hideFileLoadingOverlay();
     }

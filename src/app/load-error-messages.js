@@ -32,6 +32,14 @@ const RULES = [
         params: err => ({ count: Number(err.message.match(/Unsupported ndarray size\s+(\d+)/i)[1]).toLocaleString() }),
     },
     {
+        // A worksheet the workbook lists but the reader could not build. It
+        // surfaced as "Sheet not found: data", which reads like a naming
+        // problem and is not one: the sheet is there, it is just larger than
+        // this runtime can hold.
+        key: 'loadErrorOutOfMemory',
+        test: err => err.code === 'EXCEL_SHEET_UNREADABLE',
+    },
+    {
         key: 'loadErrorReaderCrashed',
         // A worker that runs out of memory is terminated by the browser; the
         // tab survives, which is why this is a message and not a blank page.

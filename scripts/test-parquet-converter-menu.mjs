@@ -48,7 +48,7 @@ check(() => {
 // ─── One copy of the conversion, not one per caller ───────────────────────
 
 check(() => {
-    const offer = from(fileMethods, 'proto._offerLargeTextConversion', 4600);
+    const offer = from(fileMethods, 'proto._offerLargeTextConversion', 5200);
     const menu = from(fileMethods, 'proto._convertTextFileFromMenu', 3000);
     assert.match(offer, /_runTextFileParquetConversion\(/, 'the load-time offer runs the shared conversion');
     assert.match(menu, /_runTextFileParquetConversion\(/, 'and so does the menu');
@@ -144,6 +144,34 @@ check(() => {
     // no promise to break and no warning to give.
     const menu = from(fileMethods, 'proto._convertTextFileFromMenu', 3000);
     assert.ok(!/confirmDownload/.test(menu), 'the menu is left alone');
+});
+
+check(() => {
+    // The offer shown when a large file is opened had no way to say "none of
+    // these". Not opening the file at all and opening it as text are different
+    // answers, and only the second had a button; the first was reachable by
+    // clicking beside the dialog, which is not a way to ask for anything.
+    const offer = from(fileMethods, 'proto._offerLargeTextConversion', 6000);
+    assert.equal((offer.match(/value: 'cancel'/g) || []).length, 2, 'both copies of the offer can be declined');
+    assert.equal((offer.match(/requireChoice: true/g) || []).length, 2, 'and neither is answered by a stray click');
+    assert.match(offer, /if \(!choice \|\| choice === 'cancel'\) return \{ cancelled: true \};/, 'declining opens nothing');
+    const modal = readFileSync(new URL('../src/ui/modal.js', import.meta.url), 'utf8');
+    assert.match(modal, /if \(!options\.requireChoice\) \{/, 'the dialog honours it');
+});
+
+check(() => {
+    // Decoding a workbook is the long, silent half of converting a spreadsheet
+    // — about a minute for 126 MB — and it ran behind an overlay with no way
+    // out at all.
+    const overlay = from(fileMethods, 'proto._withDecodingOverlay', 1200);
+    assert.match(overlay, /onCancel: \(\) => controller\.abort\(\)/, 'the decode can be abandoned');
+    assert.match(overlay, /Promise\.race/, 'and abandoning it does not wait for the decode to finish');
+    // _showParquetConversionOverlay binds Escape to the same button, so the
+    // keyboard way out comes with it.
+    const shown = from(fileMethods, 'proto._showParquetConversionOverlay', 2200);
+    assert.match(shown, /event\.key === 'Escape'/, 'Escape does what the button does');
+    const convert = from(fileMethods, 'proto.convertFileToParquet', 2600);
+    assert.match(convert, /if \(err\?\.cancelled\)/, 'and backing out is not reported as an error');
 });
 
 // ─── Translations ─────────────────────────────────────────────────────────
