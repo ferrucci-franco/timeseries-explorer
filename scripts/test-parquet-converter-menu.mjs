@@ -116,13 +116,34 @@ check(() => {
 });
 
 check(() => {
-    const pick = from(fileMethods, 'proto._pickBrowserParquetDestination', 1200);
+    const pick = from(fileMethods, 'proto._pickBrowserParquetDestination', 2200);
     assert.match(pick, /return 'download'/, 'a browser with no save dialog downloads instead');
     assert.match(pick, /if \(err\?\.name === 'AbortError'\) return null;/, 'and backing out is backing out');
+    // Firefox and Safari open no save dialog at all, so on the routes that go
+    // on to open the file the first thing the user would see is Firefox's own
+    // download prompt, after the wait — and cancelling that is something this
+    // page is never told about. Those routes say it up front instead.
+    assert.match(pick, /if \(!confirmDownload\) return 'download';/, 'the warning is only for routes that open the file');
+    assert.match(pick, /parquetNoSaveDialogBody/, 'and it names what will happen');
+    assert.match(pick, /go \? 'download' : null/, 'declining it converts nothing');
     // Accepting the dialog creates the file, so a conversion cancelled after
     // that leaves an empty one under a name the user chose.
     const abandon = from(fileMethods, 'proto._abandonBrowserDestination', 500);
     assert.match(abandon, /destination\.remove\?\.\(\)/, 'a cancelled conversion tries to take its empty file with it');
+});
+
+check(() => {
+    // Cancelling the save dialog used to end in silence, which looks the same
+    // as a file that failed to open for some other reason.
+    for (const marker of ['proto._offerLargeTextConversion', 'proto._convertSpreadsheetEntryToParquet', 'proto._convertLargeCsvNoticeToParquet']) {
+        const body = from(fileMethods, marker, 6000);
+        assert.match(body, /parquetDestinationCancelledBody/, `${marker} says when nothing happened`);
+        assert.match(body, /confirmDownload: true/, `${marker} warns first where no save dialog exists`);
+    }
+    // The menu is a different question: nothing is opened there, so there is
+    // no promise to break and no warning to give.
+    const menu = from(fileMethods, 'proto._convertTextFileFromMenu', 3000);
+    assert.ok(!/confirmDownload/.test(menu), 'the menu is left alone');
 });
 
 // ─── Translations ─────────────────────────────────────────────────────────

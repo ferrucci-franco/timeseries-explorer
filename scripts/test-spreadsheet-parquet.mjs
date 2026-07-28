@@ -96,8 +96,8 @@ check(() => {
     assert.ok(chosen.indexOf('_pickBrowserParquetDestination') < chosen.indexOf('convertCsvBufferToParquet'),
         'and asked for before the conversion starts');
     const pick = fileMethods.slice(fileMethods.indexOf('proto._pickBrowserParquetDestination'));
-    assert.match(pick.slice(0, 1200), /showSaveFilePicker/, 'a real save dialog when the browser has one');
-    assert.match(pick.slice(0, 1200), /AbortError/, 'cancelling the save is not treated as a failure');
+    assert.match(pick.slice(0, 2200), /showSaveFilePicker/, 'a real save dialog when the browser has one');
+    assert.match(pick.slice(0, 2200), /AbortError/, 'cancelling the save is not treated as a failure');
     const download = fileMethods.slice(fileMethods.indexOf('proto._downloadBytes'));
     assert.match(download.slice(0, 800), /link\.download/, 'and a download where it does not');
 });

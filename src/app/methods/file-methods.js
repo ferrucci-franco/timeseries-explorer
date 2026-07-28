@@ -1996,12 +1996,22 @@ proto._offerLargeTextConversion = async function(file, options = {}) {
         csvProfile,
         temporary: choice === 'temporary',
         keepOverlayUntilLoaded: true,
+        confirmDownload: true,
     });
     if (result.cancelled) {
         // Backing out of the destination dialog is a decision about the whole
         // load; cancelling the conversion only undoes the conversion, and the
         // choices come back.
-        if (result.at === 'destination') return { cancelled: true };
+        if (result.at === 'destination') {
+            // Said out loud. Silence after a cancelled save dialog looks the
+            // same as a file that failed to open for some other reason.
+            await Modal.alert(
+                i18n.t('parquetDestinationCancelledTitle'),
+                i18n.t('parquetDestinationCancelledBody'),
+                { icon: 'ℹ️' },
+            );
+            return { cancelled: true };
+        }
         if (result.stillRunning) {
             await Modal.alert(
                 i18n.t('parquetConversionCancelledTitle'),
@@ -2038,6 +2048,10 @@ proto._runTextFileParquetConversion = async function(file, options = {}) {
     const csvProfile = options.csvProfile || null;
     const temporary = options.temporary === true;
     const keepOverlayUntilLoaded = options.keepOverlayUntilLoaded === true;
+    // Set by the routes that go on to open the file. There, a browser with no
+    // save dialog would otherwise show nothing until its own download prompt,
+    // long after the decision was made and the waiting was done.
+    const confirmDownload = options.confirmDownload === true;
 
     // In the browser there is no path to write to and no temp store to manage,
     // so the conversion happens in memory and the result is handed back through
@@ -2050,7 +2064,7 @@ proto._runTextFileParquetConversion = async function(file, options = {}) {
         // that chose to convert is a moment old. Asked after a conversion that
         // takes tens of seconds it is refused — and everything that grew out of
         // working around that refusal is gone with it.
-        const destination = await this._pickBrowserParquetDestination(name);
+        const destination = await this._pickBrowserParquetDestination(name, { confirmDownload });
         if (destination === null) return { cancelled: true, at: 'destination' };
 
         const parquetBytes = await this._convertTextFileToParquetBytes(file, csvProfile);
@@ -2108,9 +2122,28 @@ proto._runTextFileParquetConversion = async function(file, options = {}) {
  * out. The distinction is settled here, once, so that nothing downstream has
  * to reason about what the browser can or cannot confirm.
  */
-proto._pickBrowserParquetDestination = async function(filename) {
+proto._pickBrowserParquetDestination = async function(filename, { confirmDownload = false } = {}) {
     const picker = globalThis.showSaveFilePicker;
-    if (typeof picker !== 'function') return 'download';
+    if (typeof picker !== 'function') {
+        // Firefox and Safari give a page no save dialog, so "choose where this
+        // goes" shows nothing at all and the conversion starts unannounced —
+        // the first dialog the user sees is Firefox's own download prompt,
+        // after the wait, and cancelling it is something this page is never
+        // told about. Where the conversion leads to opening a file, say all of
+        // that up front instead, so there is something to cancel while
+        // cancelling still means anything.
+        if (!confirmDownload) return 'download';
+        const go = await Modal.confirm(
+            i18n.t('parquetNoSaveDialogBody').replace('{file}', filename),
+            {
+                title: i18n.t('parquetNoSaveDialogTitle'),
+                icon: '⬇',
+                confirmText: i18n.t('parquetNoSaveDialogConfirm'),
+                cancelText: i18n.t('cancel'),
+            },
+        );
+        return go ? 'download' : null;
+    }
     try {
         return await picker({
             suggestedName: filename,
@@ -2710,7 +2743,15 @@ proto._convertSpreadsheetEntryToParquet = async function(entry, { temporary = fa
         }),
         temporary,
         keepOverlayUntilLoaded: true,
+        confirmDownload: true,
     });
+    if (result.cancelled && result.at === 'destination') {
+        await Modal.alert(
+            i18n.t('parquetDestinationCancelledTitle'),
+            i18n.t('parquetDestinationCancelledBody'),
+            { icon: 'ℹ️' },
+        );
+    }
     return result.cancelled ? null : result.file;
 };
 
@@ -2742,7 +2783,9 @@ proto._runSpreadsheetParquetConversion = async function(csvBuffer, options = {})
     if (inBrowser) {
         // Destination first, for the same reason as the text route: the save
         // dialog only opens while the click that led here is fresh.
-        const destination = await this._pickBrowserParquetDestination(parquetName);
+        const destination = await this._pickBrowserParquetDestination(parquetName, {
+            confirmDownload: options.confirmDownload === true,
+        });
         if (destination === null) return { cancelled: true, at: 'destination' };
 
         // Cancellable, like the text route. A sheet of the same size takes the
@@ -2951,8 +2994,15 @@ proto._convertLargeCsvNoticeToParquet = async function({ filename, file, csvProf
             // led here still counts. DuckDB then reads the File in slices, so a
             // 500 MB CSV never has to exist as one 500 MB buffer.
             const name = `${this._fileBaseName(filename || file.name || 'data')}.parquet`;
-            const destination = await this._pickBrowserParquetDestination(name);
-            if (destination === null) return;
+            const destination = await this._pickBrowserParquetDestination(name, { confirmDownload: true });
+            if (destination === null) {
+                await Modal.alert(
+                    i18n.t('parquetDestinationCancelledTitle'),
+                    i18n.t('parquetDestinationCancelledBody'),
+                    { icon: 'ℹ️' },
+                );
+                return;
+            }
             const parquetBytes = await this._convertTextFileToParquetBytes(file, csvProfile);
             if (!parquetBytes) {   // cancelled
                 this._hideFileLoadingOverlay();
