@@ -2036,6 +2036,25 @@ proto._showDesktopDownloadDialog = function(manifest, publishedAssets = null) {
     const version = document.createElement('span');
     version.className = 'desktop-download-version';
     version.textContent = `v${manifest.version || APP_VERSION}`;
+    // Beside the version, because that is where the question it answers gets
+    // asked: which build is this, and what went into it. It used to sit at the
+    // foot of the dialog next to Close, where the eye reads it as decoration on
+    // the button that ends the conversation.
+    if (manifest.releaseUrl) {
+        const releaseLink = document.createElement('a');
+        releaseLink.className = 'desktop-download-release-link';
+        releaseLink.href = manifest.releaseUrl;
+        releaseLink.target = '_blank';
+        releaseLink.rel = 'noopener noreferrer';
+        releaseLink.textContent = i18n.t('desktopDownloadReleaseDetails');
+        // The separator belongs to the link, not to the version: with no link
+        // there is no dot left hanging after the number.
+        const separator = document.createElement('span');
+        separator.className = 'desktop-download-version-separator';
+        separator.setAttribute('aria-hidden', 'true');
+        separator.textContent = '·';
+        version.append(separator, releaseLink);
+    }
     headingCopy.append(title, version);
     heading.append(headingIcon, headingCopy);
 
@@ -2211,15 +2230,8 @@ proto._showDesktopDownloadDialog = function(manifest, publishedAssets = null) {
 
     const footerActions = document.createElement('div');
     footerActions.className = 'desktop-download-footer-actions';
-    if (manifest.releaseUrl) {
-        const releaseLink = document.createElement('a');
-        releaseLink.className = 'desktop-download-release-link';
-        releaseLink.href = manifest.releaseUrl;
-        releaseLink.target = '_blank';
-        releaseLink.rel = 'noopener noreferrer';
-        releaseLink.textContent = i18n.t('desktopDownloadReleaseDetails');
-        footerActions.appendChild(releaseLink);
-    }
+    // Release details moved up beside the version. The foot is left with the
+    // one thing that belongs there.
     const footerClose = document.createElement('button');
     footerClose.type = 'button';
     footerClose.className = 'modal-btn modal-btn-confirm desktop-download-footer-close';
