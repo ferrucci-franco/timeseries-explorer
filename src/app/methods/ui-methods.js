@@ -2035,7 +2035,7 @@ proto._showDesktopDownloadDialog = function(manifest, publishedAssets = null) {
     title.textContent = i18n.t('desktopDownloadTitle');
     const version = document.createElement('span');
     version.className = 'desktop-download-version';
-    version.textContent = `v${manifest.version || APP_VERSION} · ${i18n.t('desktopDownloadBeta')}`;
+    version.textContent = `v${manifest.version || APP_VERSION}`;
     headingCopy.append(title, version);
     heading.append(headingIcon, headingCopy);
 

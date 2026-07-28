@@ -9,7 +9,6 @@ const manifest = JSON.parse(readFileSync(new URL('../public/downloads/desktop.js
 const translationKeys = [
     'desktopDownloadTitle',
     'desktopDownloadIntro',
-    'desktopDownloadBeta',
     'desktopDownloadWindows',
     'desktopDownloadMacos',
     'desktopDownloadLinux',
