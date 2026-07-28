@@ -425,6 +425,17 @@ proto._expandExcelEntries = async function(entries) {
             const nonEmpty = sheets.filter(sheet => !sheet.empty);
             if (!nonEmpty.length) {
                 hideBusy();
+                // A sheet the reader could not build looks exactly like an
+                // empty one from here — no range, no cells — so a 126 MB
+                // workbook full of numbers was announced as having no data in
+                // it. It has data; this runtime could not hold it.
+                const unreadable = excel.unreadableSheetNames(workbook);
+                if (unreadable.length) {
+                    const err = new Error(`Sheet "${unreadable[0]}" could not be built: out of memory`);
+                    err.code = 'EXCEL_SHEET_UNREADABLE';
+                    this._showLoadError(err, file.name);
+                    continue;
+                }
                 await Modal.alert(
                     i18n.t('excelSheetPickerTitle'),
                     i18n.t('excelNoDataSheets').replace('{file}', file.name),

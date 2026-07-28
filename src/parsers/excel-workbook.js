@@ -79,6 +79,19 @@ function sheetVisibility(workbook, sheetName) {
     return Number(sheetInfo?.Hidden || 0) !== 0;
 }
 
+/**
+ * Sheets the workbook lists but did not produce.
+ *
+ * Not the same as an empty sheet, and the difference is the whole point: an
+ * empty sheet has no data, while one of these has data the reader could not
+ * build — on a workbook at Excel's row limit, because it ran out of memory.
+ * Told apart nowhere, a 126 MB workbook full of numbers was announced as
+ * having "no sheets with data".
+ */
+export function unreadableSheetNames(workbook) {
+    return (workbook?.SheetNames || []).filter(name => !workbook?.Sheets?.[name]);
+}
+
 export function listSheets(workbook) {
     return (workbook?.SheetNames || []).map(name => {
         const worksheet = workbook.Sheets?.[name];
