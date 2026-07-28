@@ -16,6 +16,7 @@ const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
 const INTEGRAL_METHODS = new Set(['trapezoidal', 'rectangular']);
+const INTEGRAL_GAP_POLICIES = kernelShared.INTEGRAL_GAP_POLICIES;
 
 // One pool for the whole app. Created lazily so importing this module in a Node
 // test harness (which has no Worker) costs nothing.
@@ -79,6 +80,7 @@ proto.initDataTools = function() {
     methodSelect.addEventListener('change', () => this._handleOutlierMethodChange());
     document.getElementById('derivative-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
     document.getElementById('integral-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
+    document.getElementById('integral-gap-policy')?.addEventListener('change', () => this._handleDataToolOptionChange());
 
     document.getElementById('moving-average-window-slider')?.addEventListener('input', (event) => {
         const numeric = document.getElementById('moving-average-window');
@@ -222,6 +224,7 @@ proto._syncDataTools = function() {
     this._dataToolParameterInputs().forEach(input => { input.disabled = !hasSource || (lazy && input.id !== 'outlier-lower-bound' && input.id !== 'outlier-upper-bound'); });
     document.getElementById('derivative-method')?.toggleAttribute('disabled', !hasSource || tool !== 'derivative');
     document.getElementById('integral-method')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
+    document.getElementById('integral-gap-policy')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
     document.getElementById('moving-average-window-slider')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.getElementById('moving-average-window')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
@@ -987,20 +990,48 @@ proto._buildDerivativeResult = function(sourceValues, sourceVariable, config, da
 };
 
 proto._buildIntegralResult = function(sourceValues, sourceVariable, config, data, pre = null) {
-    const result = pre
-        ? { values: pre.values, negativeDtCount: pre.meta.negativeDtCount }
-        : this._computeIntegralValues(sourceValues, data, config.params);
+    const result = pre ? { ...pre.meta, values: pre.values } : this._computeIntegralValues(sourceValues, data, config.params);
     const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
         ...config,
         tool: 'integrate',
     }, result.values, {
         method: config.params.method,
+        gapPolicy: config.params.gapPolicy,
         negativeDtCount: result.negativeDtCount,
+        gapCount: result.gapCount,
+        nanSegmentCount: result.nanSegmentCount,
+        uncoveredTime: result.uncoveredTime,
+        hasNominalStep: result.hasNominalStep,
     });
-    const warning = result.negativeDtCount > 0
-        ? i18n.t('dataToolNegativeDtWarning').replace('{count}', String(result.negativeDtCount))
-        : '';
-    return { variable, count: result.values.length, tool: 'integrate', name: config.targetName, warning };
+    return {
+        variable,
+        count: result.values.length,
+        tool: 'integrate',
+        name: config.targetName,
+        warning: this._integralWarning(result, config.params),
+    };
+};
+
+// A gap changes the answer, so it cannot stay silent — that silence is the bug
+// this tool had. The message names the policy that was applied, because the
+// number only means something together with the claim behind it.
+proto._integralWarning = function(result, params = {}) {
+    const parts = [];
+    if (result.negativeDtCount > 0) {
+        parts.push(i18n.t('dataToolNegativeDtWarning').replace('{count}', String(result.negativeDtCount)));
+    }
+    const holes = (result.gapCount || 0) + (result.nanSegmentCount || 0);
+    if (holes > 0) {
+        const key = params.gapPolicy === 'interpolate'
+            ? 'dataToolIntegralGapWarningInterpolate'
+            : (params.gapPolicy === 'propagate'
+                ? 'dataToolIntegralGapWarningPropagate'
+                : 'dataToolIntegralGapWarningZero');
+        parts.push(i18n.t(key)
+            .replace('{gaps}', String(result.gapCount || 0))
+            .replace('{nan}', String(result.nanSegmentCount || 0)));
+    }
+    return parts.join(' ');
 };
 
 proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config, pre = null) {
@@ -1023,7 +1054,7 @@ proto._dataToolDescription = function(config) {
             : `Data tool: derivative of ${config.sourceName}; ${config.params.method}`;
     }
     if (config.tool === 'integrate') {
-        return `Data tool: integral of ${config.sourceName}; ${config.params.method}`;
+        return `Data tool: integral of ${config.sourceName}; ${config.params.method}; missing data: ${config.params.gapPolicy}`;
     }
     if (config.tool === 'movingAverage') {
         return `Data tool: moving average of ${config.sourceName}; window ${config.params.window}`;
@@ -1033,7 +1064,7 @@ proto._dataToolDescription = function(config) {
 
 proto._dataToolStepLabel = function(step) {
     if (step.tool === 'derivative') return step.params.method === 'difference' ? 'difference' : `derivative (${step.params.method})`;
-    if (step.tool === 'integrate') return `integral (${step.params.method})`;
+    if (step.tool === 'integrate') return `integral (${step.params.method}, gaps: ${step.params.gapPolicy})`;
     if (step.tool === 'movingAverage') return `moving average (window ${step.params.window})`;
     return `remove outliers (${this._outlierDetectorDescription(step)}; ${step.replacement})`;
 };
@@ -1137,7 +1168,14 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     }
     if (tool === 'integrate') {
         const method = document.getElementById('integral-method')?.value || 'trapezoidal';
-        return { tool, params: { method: INTEGRAL_METHODS.has(method) ? method : 'trapezoidal' } };
+        const gapPolicy = document.getElementById('integral-gap-policy')?.value || 'zero';
+        return {
+            tool,
+            params: {
+                method: INTEGRAL_METHODS.has(method) ? method : 'trapezoidal',
+                gapPolicy: INTEGRAL_GAP_POLICIES.has(gapPolicy) ? gapPolicy : 'zero',
+            },
+        };
     }
     if (tool === 'movingAverage') {
         const max = context?.sourceVariable?.data?.length
@@ -1567,7 +1605,12 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
     }
     if (tool === 'integrate') {
         const method = INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
-        return { method };
+        // Sessions saved before the gap policy existed carry no `gapPolicy`, so
+        // they land on the default like everything else. That is deliberate: the
+        // old value was a bug, and silently reproducing it on reload would keep
+        // exactly the results this change exists to correct.
+        const gapPolicy = INTEGRAL_GAP_POLICIES.has(params.gapPolicy) ? params.gapPolicy : 'zero';
+        return { method, gapPolicy };
     }
     if (tool === 'movingAverage') {
         return { window: this._normalizeMovingAverageWindow(params.window, Number(params.maxLength) || Infinity) };

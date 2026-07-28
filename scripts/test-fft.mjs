@@ -5,8 +5,6 @@ import {
     computeAmplitudeSpectrum,
     downsampleSpectrumForDisplay,
     windowSpectrumForDisplay,
-    detectSamplingGaps,
-    detectNaNRuns,
     fftRadix2,
     fftWindowCoefficients,
     formatNaturalDuration,
@@ -142,43 +140,6 @@ assert.equal(nextPowerOfTwo(513), 1024);
     const spectrum = computeAmplitudeSpectrum({ times, values });
     assert.equal(spectrum.ok, false, 'real non-uniform spacing is still rejected');
     assert.equal(spectrum.reason, 'nonUniform', 'non-uniform spacing reports nonUniform');
-}
-
-{
-    // detectSamplingGaps: uniform 10-min series (in ms) with two dropped runs.
-    const step = 600_000; // 10 min in ms, mimicking datetime timeKind
-    const times = [];
-    let t = 0;
-    for (let i = 0; i < 20; i++) { times.push(t); t += step; }
-    t += step * 3;                       // 3 missing samples (single gap)
-    for (let i = 0; i < 20; i++) { times.push(t); t += step; }
-    t += step;                           // 1 missing sample
-    for (let i = 0; i < 20; i++) { times.push(t); t += step; }
-    const info = detectSamplingGaps(times);
-    assert.equal(info.medianDt, step, 'gap detector uses the median step');
-    assert.equal(info.count, 2, 'both gaps are detected');
-    assert.equal(info.totalMissing, 4, 'missing-sample count sums across gaps');
-    assert.equal(info.largest.missing, 3, 'largest gap reports its missing run');
-    assert.ok(info.gaps[0].t1 > info.gaps[0].t0, 'gap interval is ordered');
-
-    const perfect = detectSamplingGaps(Float64Array.from({ length: 50 }, (_, i) => i * step));
-    assert.equal(perfect.count, 0, 'a perfectly uniform series has no gaps');
-}
-
-{
-    // detectNaNRuns: intervals span from the last good sample before a NaN run
-    // to the first good sample after it, so a band covers the real hole.
-    const times = [0, 1, 2, 3, 4, 5, 6, 7];
-    const values = [10, NaN, NaN, 40, 50, 60, NaN, 80];
-    const runs = detectNaNRuns(times, values);
-    assert.equal(runs.length, 2, 'both NaN runs are detected');
-    assert.equal(runs[0].t0, 0, 'run starts at the last good sample before it');
-    assert.equal(runs[0].t1, 3, 'run ends at the first good sample after it');
-    assert.equal(runs[0].count, 2, 'run reports how many samples are NaN');
-    assert.equal(runs[1].t0, 5, 'second run brackets its hole');
-    assert.equal(runs[1].t1, 7, 'second run brackets its hole');
-
-    assert.equal(detectNaNRuns(times, [10, 20, 30, 40, 50, 60, 70, 80]).length, 0, 'all-finite series has no NaN runs');
 }
 
 for (const windowType of ['hann', 'hamming', 'blackman']) {

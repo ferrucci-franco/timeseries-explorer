@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { detectSamplingGaps, detectNaNRuns } from '../src/utils/fft.js';
+import { detectSamplingGaps, detectNaNRuns } from '../src/utils/sampling-gaps.js';
 
 const fftMethodsSource = readFileSync(
     new URL('../src/plots/methods/fft-methods.js', import.meta.url),
@@ -52,11 +52,17 @@ class Harness {
     _gapBandStroke() { return this.theme === 'dark' ? 'rgba(255, 179, 51, 1)' : 'rgba(184, 96, 0, 1)'; }
 }
 
-const sandbox = { proto: Harness.prototype, detectSamplingGaps, detectNaNRuns };
+// The notice builder is the only method here that speaks to the user, so it
+// needs i18n. Echo the key plus its arguments instead of loading the table:
+// the assertions are about WHICH message is chosen and what it interpolates.
+const i18n = { t: (key) => `«${key}:{percent}»` };
+
+const sandbox = { proto: Harness.prototype, detectSamplingGaps, detectNaNRuns, i18n };
 vm.runInNewContext([
     methodSource('_applyLineBreaks'),
     methodSource('_missTraceKey'),
     methodSource('_missingDataInfo'),
+    methodSource('_missingStepNotice'),
     methodSource('_coalesceGapItems'),
     methodSource('_missingViewIsDense'),
     methodSource('_adaptiveGapBandShapes'),
@@ -142,6 +148,53 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
         { fileId: 'f1', varName: 'b', visible: false },
     ] });
     assert.equal(info2.bandItems.length, 0, 'hidden traces are ignored');
+
+    // A series with a nominal step raises no step issue and shows no notice.
+    assert.deepEqual(plain(info.stepIssues), [], 'a uniform series reports no step issue');
+    assert.equal(h._missingStepNotice(info.stepIssues), null, 'and gets no notice');
+}
+
+// ── No nominal step: NaN bands survive, gap bands do not, and the notice says why ──
+{
+    // Aperiodic sampling with a NaN run. Nothing is "missing" in the time axis —
+    // every row is a real measurement — so no sampling-gap band may be drawn,
+    // but the NaN run is a fact about the values and must still be marked.
+    const times = [0, 300, 900, 1500, 1800, 1830, 1860, 2100, 2400, 2700, 3000, 3300, 4200, 5400, 7200];
+    const values = [1, 2, 3, NaN, NaN, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    const h = new Harness({ times: { f1: times }, values: { 'f1|a': values } });
+    const plot = { traces: [{ fileId: 'f1', varName: 'a' }] };
+    const info = h._missingDataInfo(plot);
+
+    assert.deepEqual(plain(info.fileGaps.get('f1').gaps), [], 'irregular sampling claims no gaps');
+    assert.equal(info.bandItems.length, 1, 'only the NaN run is banded');
+    assert.deepEqual(
+        plain(info.bandItems).map(b => [b.t0, b.t1]),
+        [[900, 1830]],
+        'the NaN band still spans last-good to first-good',
+    );
+
+    assert.equal(info.stepIssues.length, 1, 'the file is reported as having no nominal step');
+    assert.equal(info.stepIssues[0].reason, 'irregularStep', 'with the irregular-step reason');
+    const notice = h._missingStepNotice(info.stepIssues);
+    assert.equal(notice.mode, 'irregular', 'the notice is the irregular-step one');
+    assert.match(notice.label, /^«timeseriesMissingIrregular:\d+»$/, 'it interpolates the measured agreement');
+    assert.ok(!notice.label.includes('{percent}'), 'the placeholder is filled in');
+}
+
+// Out-of-order timestamps produce their own notice, which outranks irregularity.
+{
+    const h = new Harness({
+        times: { f1: [0, 60, 120, 300, 240, 180, 360, 420, 480] },
+        values: { 'f1|a': [1, 2, 3, 4, 5, 6, 7, 8, 9] },
+    });
+    const info = h._missingDataInfo({ traces: [{ fileId: 'f1', varName: 'a' }] });
+    assert.equal(info.stepIssues[0].reason, 'nonMonotonic', 'disorder is reported as its own reason');
+    assert.deepEqual(plain(info.bandItems), [], 'and no bands are invented from the forward jumps');
+    assert.equal(h._missingStepNotice(info.stepIssues).mode, 'unsorted', 'the notice names the disorder');
+
+    // Precedence: disorder wins over an irregular-step issue from another file.
+    const mixed = [{ reason: 'irregularStep', stepAgreement: 0.4 }, { reason: 'nonMonotonic' }];
+    assert.equal(h._missingStepNotice(mixed).mode, 'unsorted', 'disorder outranks irregularity');
 }
 
 // A perfectly clean series yields no missing-data intervals.
@@ -323,6 +376,20 @@ assert.match(
     interactionMethodsSource,
     /if \(showMissing && plot\.div\) \{\s*Plotly\.relayout\(plot\.div, \{ shapes: this\._missingDataBandShapes\(plot\) \}\);/,
     'restyle re-applies bands (adaptive width) only when the flag is on',
+);
+
+// The notice must outrank the density hint at BOTH paint sites: without a
+// nominal step there are no gap bands to resolve, so "zoom in for detail" would
+// send the user looking for something that will never appear.
+assert.match(
+    interactionMethodsSource,
+    /this\._setMissingDensityNotice\(plot, this\._missingStepNotice\(missInfo\.stepIssues\) \|\| missDense\)/,
+    'the eager restyle path prefers the no-nominal-step notice over the density hint',
+);
+assert.match(
+    interactionMethodsSource,
+    /this\._setMissingDensityNotice\(plot, this\._missingStepNotice\(eagerInfo\.stepIssues\) \|\| dense\)/,
+    'the lazy render path prefers it too',
 );
 
 console.log('Missing-data tests passed');

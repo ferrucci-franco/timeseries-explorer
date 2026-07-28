@@ -83,6 +83,22 @@ export function spikeParamsFromSensitivity(sensitivity) {
 export const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
 export const INTEGRAL_METHODS = new Set(['trapezoidal', 'rectangular']);
 
+// What the integral does with a hole — a run of non-finite values, or a stretch
+// of time the file has no rows for. Each policy states a different CLAIM about
+// the missing span, and the arithmetic follows from the claim:
+//
+//   zero        "the signal was absent, it contributed nothing" — the segment
+//               adds 0, so the cumulative curve plateaus (visible) and every
+//               later value is short by the true area.
+//   interpolate "the signal varied linearly across the hole" — values are
+//               bridged and integrated normally. The only policy with no
+//               visual tell, which is how the original behaviour hid.
+//   propagate   "unknown" — and if the increment is unknown then so is every
+//               cumulative value after it, so the output is NaN from the hole
+//               to the end. Marking only the hole would claim ignorance for the
+//               span and knowledge for the offset, which is not consistent.
+export const INTEGRAL_GAP_POLICIES = new Set(['zero', 'interpolate', 'propagate']);
+
 // Time context as the kernels want it: a Float64Array (or null) plus the kind
 // flag that decides whether a delta is seconds, milliseconds or a step count.
 export function normalizeTimeContext(time) {

@@ -10,6 +10,10 @@
 // query, O(nBuckets) output. MIN/MAX timestamps distinguish real gaps from
 // intentionally empty screen-pixel buckets.
 
+// The nominal-step gate is shared with the eager detector so the same file is
+// judged the same way whether it is loaded in memory or scanned in DuckDB.
+import { GAP_STEP_MIN_AGREEMENT, GAP_STEP_MIN_SAMPLES, GAP_STEP_TOLERANCE } from '../utils/sampling-gaps.js';
+
 // `valueExprs` are DOUBLE SQL value expressions (try_cast, transforms already
 // applied). A row is "missing" if ANY of them is non-finite — the band layer is
 // the union across the visible variables, mirroring the eager band semantics.
@@ -159,12 +163,35 @@ export function missingBucketsToIntervals(buckets, {
         ? stepCandidates[Math.floor(stepCandidates.length / 2)]
         : NaN;
 
+    // Same gate as detectSamplingGaps: a sampling gap only means something
+    // relative to a nominal step, so require most candidate steps to agree with
+    // the median before claiming any. Without this an aperiodic series reports
+    // gaps everywhere, and the lazy path would contradict the eager one on the
+    // same file. Weaker here by construction: within-bucket candidates are
+    // AVERAGE spacings, which smooth away irregularity when many samples share a
+    // pixel, so a zoomed-out irregular series can still pass. The cross-bucket
+    // candidates are what carry the signal.
+    let agreeing = 0;
+    if (Number.isFinite(nominalStep) && nominalStep > 0) {
+        const band = nominalStep * GAP_STEP_TOLERANCE;
+        for (const candidate of stepCandidates) {
+            if (Math.abs(candidate - nominalStep) <= band) agreeing++;
+        }
+    }
+    const stepAgreement = stepCandidates.length ? agreeing / stepCandidates.length : NaN;
+    // Only the sampling-gap branches below are gated. NaN extents keep using
+    // `nominalStep` for their one-sample expansion: those bands mark values the
+    // file actually contains, so they stand on their own.
+    const hasNominalStep = Number.isFinite(nominalStep)
+        && nominalStep > 0
+        && (stepCandidates.length < GAP_STEP_MIN_SAMPLES || stepAgreement >= GAP_STEP_MIN_AGREEMENT);
+
     const samplingGaps = [];
     const fullMissingExtents = [];
     previousPopulated = -1;
     for (let i = first; i <= last; i++) {
         if (!(total[i] > 0) || !Number.isFinite(timeMin[i]) || !Number.isFinite(timeMax[i])) continue;
-        if (previousPopulated >= 0 && Number.isFinite(nominalStep)) {
+        if (previousPopulated >= 0 && hasNominalStep) {
             const dt = timeMin[i] - timeMax[previousPopulated];
             if (dt > nominalStep * 1.5) {
                 const gap = mappedInterval(timeMax[previousPopulated], timeMin[i]);
@@ -174,7 +201,7 @@ export function missingBucketsToIntervals(buckets, {
         // If several samples share this pixel bucket, MIN/MAX/count can still
         // reveal omitted timestamps inside it. The bucket is the narrowest
         // truthful location available at this zoom, so mark that pixel region.
-        if (total[i] > 1 && Number.isFinite(nominalStep)) {
+        if (total[i] > 1 && hasNominalStep) {
             const observedSpan = timeMax[i] - timeMin[i];
             if (observedSpan > (total[i] - 0.5) * nominalStep) {
                 const gap = mappedInterval(bucketLo(i), bucketLo(i + 1));
@@ -240,5 +267,7 @@ export function missingBucketsToIntervals(buckets, {
         coverage,
         dense,
         missingBuckets,
+        hasNominalStep,
+        stepAgreement,
     };
 }

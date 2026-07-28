@@ -236,4 +236,67 @@ closeArray(modifyData.variables.y.data, [0, 1, 3], 'modify reapply uses original
 app._reapplyDataToolVariables('modify', modifyData);
 closeArray(modifyData.variables.y.data, [0, 1, 3], 'modify reapply does not compound');
 
+// ── Integral gap policy: normalization, persistence, warning ──
+{
+    // The default is the corrected behaviour, not the historical one.
+    assert.deepEqual(
+        h._normalizeDataToolParams('integrate', {}),
+        { method: 'trapezoidal', gapPolicy: 'zero' },
+        'integral params default to the zero policy',
+    );
+    assert.equal(
+        h._normalizeDataToolParams('integrate', { gapPolicy: 'nonsense' }).gapPolicy,
+        'zero',
+        'an unknown policy falls back to the default',
+    );
+    // A session saved before the policy existed carries no gapPolicy. It must
+    // land on the default rather than silently reproducing the old result —
+    // that result is the bug this change corrects.
+    assert.equal(
+        h._normalizeDataToolParams('integrate', { method: 'rectangular' }).gapPolicy,
+        'zero',
+        'a pre-policy session reloads with the corrected default',
+    );
+    assert.equal(
+        h._normalizeDataToolParams('integrate', { gapPolicy: 'propagate' }).gapPolicy,
+        'propagate',
+        'an explicit policy survives normalization',
+    );
+
+    // Params are serialized with a generic deep clone, so the new field has to
+    // survive a session round-trip without any extra plumbing.
+    assert.equal(
+        h._cloneDataToolParams({ method: 'trapezoidal', gapPolicy: 'interpolate' }).gapPolicy,
+        'interpolate',
+        'the policy survives session serialization',
+    );
+
+    // The warning is the thing that stops a gap from being silent, so a result
+    // WITH holes must never come back with an empty message.
+    const holes = { negativeDtCount: 0, gapCount: 1, nanSegmentCount: 22, uncoveredTime: 1320 };
+    const messages = new Set();
+    for (const gapPolicy of ['zero', 'interpolate', 'propagate']) {
+        const text = h._integralWarning(holes, { gapPolicy });
+        assert.ok(text, `${gapPolicy}: a hole always produces a warning`);
+        assert.ok(text.includes('1'), `${gapPolicy}: the gap count is named`);
+        assert.ok(text.includes('22'), `${gapPolicy}: the invalid-segment count is named`);
+        messages.add(text);
+    }
+    assert.equal(messages.size, 3, 'each policy explains its own claim');
+
+    // Clean data stays quiet.
+    assert.equal(
+        h._integralWarning({ negativeDtCount: 0, gapCount: 0, nanSegmentCount: 0 }, { gapPolicy: 'zero' }),
+        '',
+        'no holes means no warning',
+    );
+    // The pre-existing negative-dt warning still fires, and coexists.
+    const both = h._integralWarning(
+        { negativeDtCount: 6, gapCount: 1, nanSegmentCount: 0 },
+        { gapPolicy: 'zero' },
+    );
+    assert.ok(both.includes('6'), 'the negative-dt warning survives');
+    assert.ok(both.length > 40, 'and is joined with the gap warning rather than replacing it');
+}
+
 console.log('data tools logic tests passed');

@@ -2,8 +2,6 @@ import i18n from '../../i18n/index.js';
 import {
     computeAmplitudeSpectrum,
     windowSpectrumForDisplay,
-    detectSamplingGaps,
-    detectNaNRuns,
     fftWindowCoefficients,
     formatNaturalDuration,
     frequencyPeriod,
@@ -17,6 +15,7 @@ import {
     FFT_MAX_POINTS_WEB,
     FFT_WORKER_THRESHOLD_POINTS,
 } from '../../utils/fft.js';
+import { detectNaNRuns, detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import Plotly from '../../vendor/plotly.js';
 
 const FFT_LAYOUTS = new Set(['horizontal', 'vertical']);
@@ -1505,14 +1504,27 @@ proto._missingDataInfo = function(plot) {
     const fileGaps = new Map();       // fileId -> { timeVar, gaps: [{t0,t1}] }
     const traceIntervals = new Map(); // missTraceKey -> sorted [{t0,t1}]
     const bandItems = [];
+    // Files whose time vector has no nominal step (irregular or out of order).
+    // Their `gaps` come back empty by construction; the reason travels with them
+    // so the overlay can say WHY no sampling gaps are marked instead of letting
+    // the user read the absence of bands as "nothing is missing".
+    const stepIssues = [];
     for (const t of visible) {
         // A reservoir-sampled overview has no truthful time spacing or NaN runs.
         if (!this._hasTruthfulGapSeries(t.fileId)) continue;
         if (!fileGaps.has(t.fileId)) {
             const times = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
             const timeVar = this._getTimeVar(t.fileId);
-            const gaps = detectSamplingGaps(times).gaps.map(g => ({ t0: g.t0, t1: g.t1 }));
+            const info = detectSamplingGaps(times);
+            const gaps = info.gaps.map(g => ({ t0: g.t0, t1: g.t1 }));
             fileGaps.set(t.fileId, { timeVar, gaps });
+            if (!info.hasNominalStep && info.reason && info.reason !== 'tooFewSamples') {
+                stepIssues.push({
+                    fileId: t.fileId,
+                    reason: info.reason,
+                    stepAgreement: info.stepAgreement,
+                });
+            }
             for (const g of gaps) bandItems.push({ fileId: t.fileId, timeVar, t0: g.t0, t1: g.t1 });
         }
         const entry = fileGaps.get(t.fileId);
@@ -1524,10 +1536,28 @@ proto._missingDataInfo = function(plot) {
             .sort((p, q) => p.t0 - q.t0);
         traceIntervals.set(this._missTraceKey(t), merged);
     }
-    const result = { fileGaps, traceIntervals, bandItems };
+    const result = { fileGaps, traceIntervals, bandItems, stepIssues };
     plot._missSig = sig;
     plot._missCache = result;
     return result;
+};
+
+// The notice to show instead of the "zoom in" hint when a visible file has no
+// nominal step. Out-of-order timestamps outrank an irregular step: they are the
+// more fundamental defect, and fixing them may well make the step regular.
+proto._missingStepNotice = function(stepIssues) {
+    if (!stepIssues?.length) return null;
+    const unsorted = stepIssues.find(issue => issue.reason === 'nonMonotonic');
+    if (unsorted) return { mode: 'unsorted', label: i18n.t('timeseriesMissingUnsorted') };
+    const irregular = stepIssues.find(issue => issue.reason === 'irregularStep');
+    if (!irregular) return null;
+    const percent = Number.isFinite(irregular.stepAgreement)
+        ? Math.round(irregular.stepAgreement * 100)
+        : 0;
+    return {
+        mode: 'irregular',
+        label: i18n.t('timeseriesMissingIrregular').replace('{percent}', String(percent)),
+    };
 };
 
 proto._missingDataBandShapes = function(plot) {

@@ -3,7 +3,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import duckdbPkg from 'duckdb';
+import { closeDuckDbConnection, closeDuckDbDatabase, runDuckDb } from '../src/data/csv-to-parquet-core.js';
 import { buildMissingBucketsSql, missingBucketsToIntervals } from '../src/data/missing-buckets-sql.js';
+import { detectNaNRuns, detectSamplingGaps } from '../src/utils/sampling-gaps.js';
 
 const lit = (v) => (Number.isFinite(v) ? String(v) : 'NULL');
 
@@ -151,6 +154,29 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
     assert.deepEqual(r.solidIntervals.map(i => [i.t0, i.t1]), [[200, 400]], 'a time gap is a solid interval');
 }
 
+// The nominal-step gate, mirrored from the eager detector so the same file is
+// judged the same way in memory and in DuckDB. Aperiodic sample distances make
+// the median meaningless, so no sampling gap may be claimed from it.
+{
+    const times = [0, 30, 33, 36, 90, 200, 210, 400, 405, 500, 700, 705, 900, 902, 903];
+    const buckets = times.map((t, i) => ({ b: i, nTotal: 1, nMissing: 0, tMin: t, tMax: t }));
+    const r = missingBucketsToIntervals(buckets, { t0: 0, t1: 1000, nBuckets: times.length });
+    assert.equal(r.hasNominalStep, false, 'aperiodic distances yield no nominal step');
+    assert.ok(r.stepAgreement < 0.8, 'the agreement statistic is what rejects it');
+    assert.deepEqual(r.intervals, [], 'and no sampling gaps are invented from it');
+}
+
+// NaN blocks are a fact about the VALUES, so they stay banded even when the
+// time axis has no nominal step.
+{
+    const times = [0, 30, 33, 36, 90, 200, 210, 400, 405, 500, 700, 705, 900, 902, 903];
+    const buckets = times.map((t, i) => ({ b: i, nTotal: 1, nMissing: i === 6 ? 1 : 0, tMin: t, tMax: t }));
+    const r = missingBucketsToIntervals(buckets, { t0: 0, t1: 1000, nBuckets: times.length });
+    assert.equal(r.hasNominalStep, false, 'still no nominal step');
+    assert.equal(r.missingBuckets, 1, 'the invalid bucket is counted');
+    assert.ok(r.solidIntervals.length >= 1, 'and it is still painted as missing data');
+}
+
 // Oversampled view: consecutive invalid samples can occupy separated pixel
 // buckets. Timestamp extents must join them into the same NaN run.
 {
@@ -256,8 +282,9 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
         _zoomTokens: new Map([['p', 1]]),
         _isVisible: () => true,
         _getTimeVar: () => ({ timeKind: 'datetime' }),
-        _missingDataInfo: () => ({ bandItems: [] }),
+        _missingDataInfo: () => ({ bandItems: [], stepIssues: [] }),
         _missingViewIsDense: () => false,
+        _missingStepNotice: () => null,
         _sourceRangeForDisplayRange: (_fid, range) => range,
         _lazyMissingBucketCount: () => 10,
         _displayTimeForFetchedSourceTime: (_fid, value) => value,
@@ -280,6 +307,208 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
     })) });
     await Promise.all([first, second]);
     assert.equal(manager._lazyMissingRequests.size, 0, 'latest request cleans up its ownership');
+}
+
+// ── Parity against the eager detector, over REAL DuckDB ──────────────────────
+// Everything above feeds the reducer hand-written bucket rows, so the SQL that
+// produces them in production was never executed. Here it is: same builder, a
+// real in-memory DuckDB, and the rows it returns go into the same reducer the
+// app uses. The assertions are that the lazy verdict matches the eager one —
+// the two paths estimate the nominal step DIFFERENTLY (median of consecutive
+// deltas vs median of within/cross-bucket distances), so agreement between them
+// is a claim that has to be tested, not assumed.
+{
+    const { Database } = duckdbPkg;
+    const db = new Database(':memory:');
+    const connection = db.connect();
+    const iso = (ms) => new Date(ms).toISOString().replace('T', ' ').replace('Z', '');
+
+    // One bucket per sample (times 4) keeps the comparison meaningful: with
+    // several samples sharing a bucket the reducer only sees their AVERAGE
+    // spacing, which is a different measurement — see the divergence cases.
+    const BUCKET_FACTOR = 4;
+
+    async function lazyMissing(times, values, { bucketFactor = BUCKET_FACTOR } = {}) {
+        await runDuckDb(connection, 'DROP TABLE IF EXISTS missing_data');
+        await runDuckDb(connection, 'CREATE TABLE missing_data(ts TIMESTAMP, v DOUBLE)');
+        const tuples = times.map((t, i) => {
+            const value = Number.isNaN(values[i]) ? `'NaN'::DOUBLE` : String(values[i]);
+            return `(TIMESTAMP '${iso(t)}', ${value})`;
+        });
+        await runDuckDb(connection, `INSERT INTO missing_data VALUES ${tuples.join(',')}`);
+
+        const lo = Math.min(...times);
+        const hi = Math.max(...times);
+        const nBuckets = times.length * bucketFactor;
+        const sql = buildMissingBucketsSql(
+            'epoch_ms("ts")::DOUBLE',
+            'missing_data',
+            ['try_cast("v" AS DOUBLE)'],
+            lit,
+            lo,
+            hi,
+            nBuckets,
+        );
+        const rows = await runDuckDb(connection, sql);
+        // The app reads these columns POSITIONALLY (duckdb-source.js extracts
+        // index 0..4), so the order is part of the contract, not a detail.
+        assert.deepEqual(
+            Object.keys(rows[0]),
+            ['b', 'n_total', 'n_missing', 't_min', 't_max'],
+            'the SQL keeps the column order the app extracts by index',
+        );
+        const buckets = rows.map(r => ({
+            b: Number(r.b),
+            nTotal: Number(r.n_total),
+            nMissing: Number(r.n_missing),
+            tMin: Number(r.t_min),
+            tMax: Number(r.t_max),
+        }));
+        return missingBucketsToIntervals(buckets, { t0: lo, t1: hi, nBuckets });
+    }
+
+    const covers = (intervals, t0, t1) =>
+        intervals.some(i => i.t0 <= t0 + 1 && i.t1 >= t1 - 1);
+
+    const minute = 60_000;
+    const start = Date.parse('2024-06-01T00:00:00Z');
+    const clean = (n) => Array.from({ length: n }, () => 1);
+
+    try {
+        // 1. Regular series with one dropped run: both paths find the same gap.
+        {
+            const times = [];
+            for (let i = 0; i < 60; i++) {
+                if (i >= 30 && i <= 38) continue; // 9 samples dropped
+                times.push(start + i * minute);
+            }
+            const values = clean(times.length);
+            const eager = detectSamplingGaps(times);
+            const lazy = await lazyMissing(times, values);
+            assert.equal(eager.hasNominalStep, true, 'eager: a dropped run keeps the nominal step');
+            assert.equal(lazy.hasNominalStep, true, 'lazy: same verdict');
+            assert.equal(eager.count, 1, 'eager finds exactly one gap');
+            const gap = [start + 29 * minute, start + 39 * minute];
+            assert.deepEqual([eager.gaps[0].t0, eager.gaps[0].t1], gap, 'eager bounds the gap by its real neighbours');
+            assert.ok(covers(lazy.intervals, gap[0], gap[1]), 'lazy marks the same span');
+        }
+
+        // 2. Genuinely irregular sampling: neither path may claim a gap.
+        {
+            const offsets = [0, 300, 900, 1500, 1800, 1830, 1860, 2100, 2400, 2700,
+                3000, 3300, 3540, 3600, 3900, 4200, 5400, 6600, 7200];
+            const times = offsets.map(s => start + s * 1000);
+            const eager = detectSamplingGaps(times);
+            const lazy = await lazyMissing(times, clean(times.length));
+            assert.equal(eager.hasNominalStep, false, 'eager: no nominal step');
+            assert.equal(lazy.hasNominalStep, false, 'lazy: no nominal step either');
+            assert.deepEqual(eager.gaps, [], 'eager claims no gaps');
+            assert.deepEqual(lazy.intervals, [], 'and neither does lazy');
+        }
+
+        // 3. NaN block on a regular axis: banded by both, and not as a gap.
+        {
+            const times = Array.from({ length: 60 }, (_, i) => start + i * minute);
+            const values = times.map((_, i) => (i >= 20 && i <= 28 ? NaN : 1));
+            const eager = detectSamplingGaps(times);
+            const runs = detectNaNRuns(times, values);
+            const lazy = await lazyMissing(times, values);
+            assert.equal(eager.count, 0, 'a NaN block does not disturb the time axis');
+            assert.equal(runs.length, 1, 'eager finds the NaN run');
+            assert.ok(covers(lazy.intervals, runs[0].t0, runs[0].t1), 'lazy covers the same NaN span');
+        }
+
+        // 4. THE case the gate exists for: an irregular axis carrying a NaN
+        // block. No sampling-gap band may appear, but the NaN block must — it
+        // is a fact about the values, independent of the time axis.
+        {
+            const offsets = [0, 300, 900, 1500, 1800, 1830, 1860, 2100, 2400, 2700,
+                3000, 3300, 3540, 3600, 3900, 4200, 5400, 6600, 7200];
+            const times = offsets.map(s => start + s * 1000);
+            const values = times.map((_, i) => (i >= 8 && i <= 10 ? NaN : 1));
+            const runs = detectNaNRuns(times, values);
+            const lazy = await lazyMissing(times, values);
+            assert.equal(lazy.hasNominalStep, false, 'still no nominal step');
+            assert.equal(runs.length, 1, 'eager finds the NaN run');
+            assert.ok(lazy.missingBuckets >= 3, 'lazy counts the invalid buckets');
+            assert.ok(covers(lazy.solidIntervals, runs[0].t0, runs[0].t1), 'lazy still paints the NaN block');
+        }
+
+        // 5. Rate change with balanced counts: both paths refuse to call the
+        // coarse stretch a gap.
+        {
+            const offsets = [
+                ...Array.from({ length: 6 }, (_, i) => i * 300),
+                ...Array.from({ length: 31 }, (_, i) => 1800 + i * 60),
+                ...Array.from({ length: 12 }, (_, i) => 3900 + i * 300),
+            ];
+            const times = offsets.map(s => start + s * 1000);
+            const eager = detectSamplingGaps(times);
+            const lazy = await lazyMissing(times, clean(times.length));
+            assert.equal(eager.hasNominalStep, false, 'eager: a rate change voids the step');
+            assert.equal(lazy.hasNominalStep, false, 'lazy agrees');
+            assert.deepEqual(lazy.intervals, [], 'so no bands are drawn');
+        }
+
+        // ── Documented divergences ──
+        // These are NOT parity failures to be tuned away: they are the price of
+        // measuring bucket aggregates instead of samples. Pinning them keeps the
+        // limitation visible instead of letting a future change hide it.
+
+        // 6a. Parity SURVIVES the bucket aggregation at production shapes. This
+        // is the reassuring half of the divergence story and the reason the
+        // ported gate is worth having: even with many samples per bucket — a
+        // large file zoomed out, where within-bucket candidates are AVERAGE
+        // spacings that look regular — the cross-bucket candidates keep
+        // agreement around 50%, well under the gate.
+        {
+            const steps = [30, 300, 45, 600, 90, 150, 900, 60, 240, 30, 480, 120];
+            const offsets = [0];
+            for (let i = 1; i < 600; i++) offsets.push(offsets[i - 1] + steps[i % steps.length]);
+            const times = offsets.map(s => start + s * 1000);
+            const values = clean(times.length);
+            const eager = detectSamplingGaps(times);
+            assert.equal(eager.hasNominalStep, false, 'eager sees the irregular spacing');
+            for (const bucketFactor of [1, 1 / 5, 1 / 15, 1 / 40]) {
+                const lazy = await lazyMissing(times, values, { bucketFactor });
+                assert.equal(lazy.hasNominalStep, false,
+                    `lazy agrees at ~${Math.round(1 / bucketFactor)} samples per bucket`);
+                assert.ok(lazy.stepAgreement < 0.8, 'and for the same reason: agreement below the gate');
+                assert.deepEqual(lazy.intervals, [], 'so no bands are invented at any zoom');
+            }
+        }
+
+        // 6b. Where they DO diverge: with very few buckets there are not enough
+        // candidate steps for the agreement statistic to have power, so the gate
+        // stands down — the same GAP_STEP_MIN_SAMPLES escape the eager path has,
+        // reached at a different point because the candidates are bucket
+        // distances, not sample deltas.
+        {
+            const steps = [30, 300, 45, 600, 90, 150, 900, 60, 240, 30, 480, 120];
+            const offsets = [0];
+            for (let i = 1; i < 120; i++) offsets.push(offsets[i - 1] + steps[i % steps.length]);
+            const times = offsets.map(s => start + s * 1000);
+            const lazy = await lazyMissing(times, clean(times.length), { bucketFactor: 3 / 120 });
+            assert.equal(lazy.hasNominalStep, true, 'too few bucket candidates to judge');
+            assert.ok(lazy.stepAgreement < 0.8, 'even though the candidates that exist disagree');
+        }
+
+        // 6b. Row order is invisible to the bucket query: it aggregates BY TIME
+        // VALUE, so an out-of-order file looks perfectly sorted to the lazy
+        // path. The eager path reports nonMonotonic; the lazy one cannot, and
+        // a large unsorted file therefore gets no disorder notice.
+        {
+            const offsets = [0, 60, 120, 300, 240, 180, 360, 420, 480, 540, 600, 660];
+            const times = offsets.map(s => start + s * 1000);
+            const eager = detectSamplingGaps(times);
+            const lazy = await lazyMissing(times, clean(times.length));
+            assert.equal(eager.reason, 'nonMonotonic', 'eager reports the disorder');
+            assert.equal(lazy.hasNominalStep, true, 'lazy cannot see it: buckets are keyed by time');
+        }
+    } finally {
+        await closeDuckDbConnection(connection);
+        await closeDuckDbDatabase(db);
+    }
 }
 
 console.log('Lazy missing-data (buckets) tests passed');

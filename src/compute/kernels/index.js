@@ -26,8 +26,20 @@ export function runDataToolStep(values, time, step) {
             return { values: out, meta: { method: params.method } };
         }
         case 'integrate': {
-            const { values: out, negativeDtCount } = computeIntegral(values, time, params);
-            return { values: out, meta: { method: params.method, negativeDtCount } };
+            const { values: out, negativeDtCount, gapCount, nanSegmentCount, uncoveredTime, hasNominalStep }
+                = computeIntegral(values, time, params);
+            return {
+                values: out,
+                meta: {
+                    method: params.method,
+                    gapPolicy: params.gapPolicy,
+                    negativeDtCount,
+                    gapCount,
+                    nanSegmentCount,
+                    uncoveredTime,
+                    hasNominalStep,
+                },
+            };
         }
         case 'movingAverage': {
             const out = computeMovingAverage(values, params);
