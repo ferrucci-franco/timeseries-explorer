@@ -8,6 +8,7 @@
 // silently, and one byte over must ask.
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { checkFullLoadLimit, eagerOnlyFormatFor, EAGER_ONLY_FORMATS } from '../src/app/file-size-limits.js';
 
@@ -132,3 +133,20 @@ check('every limit key is a real advanced setting', async () => {
 });
 
 console.log(`file size limits: ${checks} checks passed`);
+
+// ─── A decision lasts one load, not the session ───────────────────────────
+{
+    // Both memos exist so one file is not asked about twice inside a single
+    // load: the over-limit question is put from two places, and the conversion
+    // offer would otherwise come back mid-batch. Neither is a preference.
+    // Kept for the session they became one — open a file whole, change your
+    // mind, and the app would not ask again, so there was no way back to
+    // memory-saving mode short of reloading the page.
+    const fileMethods = readFileSync(new URL('../src/app/methods/file-methods.js', import.meta.url), 'utf8');
+    const load = fileMethods.slice(fileMethods.indexOf('proto.loadFiles ='), fileMethods.indexOf('proto._expandExcelEntries'));
+    assert.match(load, /_oversizedApproved\?\.clear\(\)/, 'the over-limit answer is forgotten when the load ends');
+    assert.match(load, /_largeCsvRawApproved\?\.clear\(\)/, 'and so is declining the conversion');
+    const finallyBlock = load.slice(load.lastIndexOf('} finally {'));
+    assert.match(finallyBlock, /clear\(\)/, 'cleared however the load ends, including a failure');
+    console.log('file size limits: decisions do not outlive their load');
+}

@@ -377,6 +377,14 @@ proto.loadFiles = async function(items = []) {
         }
     } finally {
         this._hideFileLoadingOverlay(loadToken);
+        // Both of these exist so that one file is not asked about twice inside
+        // a single load — the over-limit question is put from two places, and
+        // the conversion offer would otherwise come back mid-batch. Neither is
+        // a preference. Kept for the session they became one: open a file whole,
+        // change your mind, and the app would not ask again, so there was no way
+        // back to memory-saving mode short of reloading the page.
+        this._oversizedApproved?.clear();
+        this._largeCsvRawApproved?.clear();
     }
 
     for (const result of loaded) {
@@ -1227,9 +1235,12 @@ proto._oversizedDecisionKey = function(file) {
 // survives, and the error surfaces normally. Refusing outright took a decision
 // away from the user that the machine in front of them may well be able to make.
 //
-// The answer is remembered per file for the session, because this question is
-// asked from two places: here, and again before the desktop reader pulls the
-// bytes in. Asking twice for one file would read as a bug. This is NOT a "don't
+// The answer is remembered per file for the length of one load, because this
+// question is asked from two places: here, and again before the desktop reader
+// pulls the bytes in. Asking twice for one file would read as a bug. It is
+// forgotten as soon as that load ends — remembered for the session, it became
+// a preference nobody chose: open a file whole, change your mind, and there was
+// no way back to memory-saving mode short of reloading the page. This is NOT a "don't
 // ask again" affordance — there is deliberately no way to silence the warning
 // for a format or for future files, because a dialog people learn to dismiss
 // has stopped being a safety signal.

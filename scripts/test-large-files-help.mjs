@@ -156,15 +156,27 @@ check(() => {
         es: /Las hojas de calculo se pueden convertir en cualquiera de las dos versiones/i,
         it: /I fogli di calcolo si possono convertire in entrambe le versioni/i,
     };
-    const textDesktopOnly = {
-        en: /Text files are offered the conversion before opening, and only in the Full Desktop version/i,
-        fr: /Les fichiers texte recoivent la proposition avant l ouverture, et seulement dans la version Full Desktop/i,
-        es: /Los archivos de texto reciben la oferta antes de abrirlos, y solo en la version Full Desktop/i,
-        it: /I file di testo ricevono la proposta prima dell apertura, e solo nella versione Full Desktop/i,
+    // The old text said text files could only be converted in the Full Desktop
+    // version. The browser converts them too, and had done for a while.
+    const textBothVersions = {
+        en: 'Both versions can do it',
+        fr: 'Les deux versions savent le faire',
+        es: 'Las dos versiones pueden hacerlo',
+        it: 'Entrambe le versioni possono farlo',
+    };
+    // And converting a file without opening it, which the help never mentioned.
+    const fromTheMenu = {
+        en: 'Convert a file to Parquet',
+        fr: 'Convertir un fichier en Parquet',
+        es: 'Convertir un archivo a Parquet',
+        it: 'Converti un file in Parquet',
     };
     for (const lang of LANGS) {
         assert.match(bodies[lang], spreadsheetsBoth[lang], `${lang} says spreadsheets convert in both versions`);
-        assert.match(bodies[lang], textDesktopOnly[lang], `${lang} says the text-file offer is desktop-only, and why`);
+        assert.ok(bodies[lang].includes(textBothVersions[lang]), `${lang} says text files convert in both versions`);
+        assert.ok(!/only in the Full Desktop|seulement dans la version Full Desktop|solo en la version Full Desktop|solo nella versione Full Desktop/.test(bodies[lang]),
+            `${lang} no longer calls text conversion desktop-only`);
+        assert.ok(bodies[lang].includes(fromTheMenu[lang]), `${lang} names the menu entry that converts without opening`);
     }
 });
 

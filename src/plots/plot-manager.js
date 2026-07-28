@@ -1153,6 +1153,12 @@ class PlotManager {
                 this._syncTimeseriesMarkerColors(plot);
                 this._installLegendHoverHint(plot.div);
                 this._expandTimeseriesYAxisForAddedTrace(plot, builtTrace, axis);
+                // A trace is built from the overview, which is everything a
+                // zoomed-out panel needs. Dropped onto a panel that is zoomed
+                // in, it stayed at that resolution while every trace beside it
+                // showed detail: only a zoom or a pan ever asked for the
+                // viewport to be filled in. This is the call they make.
+                this._refreshTimeseriesVisuals(panelId, plot);
             });
             // Update Y axis title: clear when 2+ traces (X/time label always stays)
             const layout = this._buildTimeLayout(plot);
