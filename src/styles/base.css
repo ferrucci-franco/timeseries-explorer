@@ -24,6 +24,9 @@
     --drop-zone-drag-overlay: rgba(219, 238, 255, 0.68);
     --drop-zone-drag-card-bg: #eaf5ff;
     --drop-zone-drag-card-border: #3b9cff;
+    /* Green stays readable on the notice's tinted background rather than being
+       one shade shared by both themes: dark enough here, light enough there. */
+    --notice-privacy-color: #2e7d32;
 }
 
 .theme-dark {
@@ -40,6 +43,7 @@
     --drop-zone-drag-overlay: rgba(12, 41, 68, 0.72);
     --drop-zone-drag-card-bg: #132f4a;
     --drop-zone-drag-card-border: #4aa3ff;
+    --notice-privacy-color: #81c784;
 }
 
 /* ============================================
