@@ -20,6 +20,10 @@ const interactionMethodsSource = readFileSync(
     new URL('../src/plots/methods/interaction-methods.js', import.meta.url),
     'utf8',
 );
+const plotManagerSource = readFileSync(
+    new URL('../src/plots/plot-manager.js', import.meta.url),
+    'utf8',
+);
 
 const methodSource = (name) => {
     const marker = `proto.${name} = function`;
@@ -390,6 +394,28 @@ assert.match(
     interactionMethodsSource,
     /this\._setMissingDensityNotice\(plot, this\._missingStepNotice\(eagerInfo\.stepIssues\) \|\| dense\)/,
     'the lazy render path prefers it too',
+);
+
+// Hiding a trace changes WHICH bands belong on screen, but the bands are layout
+// shapes that Plotly's own show/hide never touches — so both legend paths have
+// to ask for a repaint. Without this the band of a hidden trace stayed painted
+// until an unrelated pan or zoom happened to refresh it.
+assert.match(
+    plotManagerSource,
+    /toggleVisByName\(clickedName\);[\s\S]{0,220}?_refreshMissingOverlayForVisibility\(panelId, plot\)/,
+    'a legend click repaints the missing-data overlay',
+);
+assert.match(
+    plotManagerSource,
+    /plotly_legenddoubleclick[\s\S]{0,700}?_refreshMissingOverlayForVisibility\(panelId, plot\)/,
+    'legend double-click (isolate / restore) repaints it too',
+);
+// And it costs nothing when the overlay is off: with no bands on screen, no
+// rebuild is warranted on every legend click.
+assert.match(
+    interactionMethodsSource,
+    /_refreshMissingOverlayForVisibility = function[\s\S]{0,240}?if \(plot\?\.mode !== 'timeseries' \|\| !plot\.showMissingData/,
+    'the repaint is gated behind the opt-in flag',
 );
 
 console.log('Missing-data tests passed');

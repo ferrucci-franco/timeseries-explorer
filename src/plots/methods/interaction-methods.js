@@ -394,6 +394,23 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     this._refreshElapsedDateTimeAxisTicks(plot, range);
 };
 
+// Repaint the Missing/NaN overlay after a legend visibility change.
+//
+// The amber bands are layout SHAPES, not trace data, so Plotly's own show/hide
+// leaves them exactly as they were: hiding the trace that owned a NaN run left
+// its band on screen until some later pan or zoom happened to repaint. The
+// overlay is the union over VISIBLE traces (and _missingDataInfo keys its cache
+// on them), so a visibility change is a content change and has to go through the
+// authoritative refresh — which also covers the lazy path and the notice.
+//
+// Gated on the opt-in flag: with the overlay off there is nothing on screen that
+// depends on which traces are visible, and rebuilding every trace on each legend
+// click would be pure cost.
+proto._refreshMissingOverlayForVisibility = function(panelId, plot) {
+    if (plot?.mode !== 'timeseries' || !plot.showMissingData || !plot.div) return;
+    this._refreshTimeseriesVisuals(panelId, plot);
+};
+
 proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     if (!this._zoomTokens) this._zoomTokens = new Map();
     const token = (this._zoomTokens.get(panelId) || 0) + 1;
