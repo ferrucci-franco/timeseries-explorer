@@ -13,11 +13,24 @@ function resolveGitSha() {
   }
 }
 
+// The date the code was written, not the date it happened to be compiled.
+// Those two are shown side by side as one fact -- "#18e881e · 2026-07-28" --
+// and taking the date from the wall clock made it a different fact from the
+// commit beside it: build a week-old commit today and the line described a
+// version that never existed. Falls back the same way the sha does.
+function resolveCommitDate() {
+  try {
+    return execSync('git show -s --format=%cI HEAD').toString().trim();
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
 export default defineConfig({
   base: './',
   define: {
     __GIT_SHA__: JSON.stringify(resolveGitSha()),
-    __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
+    __BUILD_DATE__: JSON.stringify(resolveCommitDate()),
   },
   // The parse worker loads each format's parser with a dynamic import(), so it
   // is a code-splitting build. Vite's default worker format (iife) cannot do
