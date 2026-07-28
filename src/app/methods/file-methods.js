@@ -222,7 +222,8 @@ proto.loadFile = async function(file, options = {}) {
                 data = await this._parseResultBuffer(currentFile.name, buffer, currentFile, {
                     csvProfile: options.csvProfile || null,
                     excelSheetName: options.excelSheetName || null,
-                    excelWorkbook: options.excelWorkbook || null,
+                    excelCsvBuffer: options.excelCsvBuffer || null,
+                    excelSheetNames: options.excelSheetNames || null,
                     matInspection: options.matInspection || null,
                     matSelection: options.matSelection || null,
                     allowOversized: options.allowOversized === true,
@@ -352,7 +353,8 @@ proto.loadFiles = async function(items = []) {
                 localPath,
                 deferUi: true,
                 excelSheetName: item?.excelSheetName || null,
-                excelWorkbook: item?.excelWorkbook || null,
+                excelCsvBuffer: item?.excelCsvBuffer || null,
+                excelSheetNames: item?.excelSheetNames || null,
                 excelAppendSheetName: item?.excelAppendSheetName === true,
                 matBuffer: item?.matBuffer || null,
                 matInspection: item?.matInspection || null,
@@ -418,10 +420,15 @@ proto._expandExcelEntries = async function(entries) {
             if (!file) continue;
             if (!(await this._confirmOversizedFile(this._checkFullLoadLimit(file, extension)))) continue;
             await showBusy(file);
-            const excel = await loadExcelWorkbookModule();
             const rawBuffer = await (file.arrayBuffer ? file.arrayBuffer() : this._readAsArrayBuffer(file));
-            const workbook = excel.readWorkbook(await excel.loadXlsxModule(), rawBuffer);
-            const sheets = excel.listSheets(workbook);
+            // Decoded in the worker, not here. This used to read the workbook
+            // on the main thread purely to find out what its sheets were —
+            // about a minute of a frozen tab for a 126 MB file, and Firefox
+            // offering to stop the page. The same call brings back the first
+            // data sheet already serialized, so the common one-sheet workbook
+            // is decoded once in total.
+            const converted = await this._convertExcelBufferToCsv(rawBuffer, null);
+            const sheets = converted?.sheets || [];
             const nonEmpty = sheets.filter(sheet => !sheet.empty);
             if (!nonEmpty.length) {
                 hideBusy();
@@ -429,7 +436,7 @@ proto._expandExcelEntries = async function(entries) {
                 // empty one from here — no range, no cells — so a 126 MB
                 // workbook full of numbers was announced as having no data in
                 // it. It has data; this runtime could not hold it.
-                const unreadable = excel.unreadableSheetNames(workbook);
+                const unreadable = converted?.unreadable || [];
                 if (unreadable.length) {
                     const err = new Error(`Sheet "${unreadable[0]}" could not be built: out of memory`);
                     err.code = 'EXCEL_SHEET_UNREADABLE';
@@ -443,7 +450,7 @@ proto._expandExcelEntries = async function(entries) {
                 );
                 continue;
             }
-            let selected = [nonEmpty[0].name];
+            let selected = [converted.sheetName || nonEmpty[0].name];
             if (nonEmpty.length > 1) {
                 hideBusy();
                 const { default: ExcelSheetPickerDialog } = await import('../../ui/excel-sheet-picker-dialog.js');
@@ -457,7 +464,12 @@ proto._expandExcelEntries = async function(entries) {
                     fileHandle,
                     localPath: item?.localPath || '',
                     excelSheetName: sheetName,
-                    excelWorkbook: workbook,
+                    // The sheet that came back with the inventory is already
+                    // serialized; carrying it forward is what keeps the usual
+                    // workbook down to one decode. Any other sheet the user
+                    // picks is decoded again, in the worker.
+                    excelCsvBuffer: sheetName === converted.sheetName ? converted.csvBuffer : null,
+                    excelSheetNames: sheets.map(sheet => sheet.name),
                     excelAppendSheetName: selected.length > 1,
                 });
             }
@@ -1574,15 +1586,13 @@ proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer, options =
 // deterministic CSV text and fed to the CSV pipeline, so header/time
 // detection, profiles and the parsing-preview dialog all apply unchanged.
 proto._parseExcelResultBuffer = async function(filename, buffer, options = {}) {
-    // Decoding the workbook and serializing the sheet is the expensive half —
-    // the code below used to note "tens of seconds of blocked main thread" — so
-    // both happen in the worker. The one exception is when the sheet-picker
-    // dialog already holds a decoded workbook: that object cannot be posted to
-    // a worker, and re-decoding to avoid a stall the user has already paid for
-    // would be slower overall.
-    const converted = options.excelWorkbook
-        ? null
-        : await this._convertExcelBufferToCsv(buffer, options.excelSheetName || null);
+    // Decoding the workbook and serializing the sheet is the expensive half, so
+    // both happen in the worker. The sheet-picker step usually did the work
+    // already — it has to decode to know what the sheets are — and hands the
+    // serialized sheet over rather than making this decode the same workbook a
+    // second time.
+    const ready = options.excelCsvBuffer;
+    const converted = ready ? null : await this._convertExcelBufferToCsv(buffer, options.excelSheetName || null);
 
     let csvBuffer;
     let sheetName;
@@ -1590,11 +1600,9 @@ proto._parseExcelResultBuffer = async function(filename, buffer, options = {}) {
     if (converted) {
         ({ csvBuffer, sheetName, sheetNames } = converted);
     } else {
-        const excel = await loadExcelWorkbookModule();
-        const workbook = options.excelWorkbook;
-        sheetName = resolveExcelSheetName(excel, workbook, options.excelSheetName || null);
-        if (sheetName) csvBuffer = excel.csvTextToBuffer(excel.sheetToCsvText(workbook, sheetName));
-        sheetNames = excel.listSheets(workbook).map(sheet => sheet.name);
+        csvBuffer = ready;
+        sheetName = options.excelSheetName || '';
+        sheetNames = options.excelSheetNames || (sheetName ? [sheetName] : []);
     }
     if (!sheetName) {
         throw new Error(i18n.t('excelNoDataSheets').replace('{file}', filename));
@@ -1665,10 +1673,14 @@ proto._convertExcelBufferToCsv = async function(buffer, preferredSheet = null) {
         async () => {
             const excel = await loadExcelWorkbookModule();
             const workbook = excel.readWorkbook(await excel.loadXlsxModule(), buffer);
-            const sheetName = resolveExcelSheetName(excel, workbook, preferredSheet);
+            const unreadable = excel.unreadableSheetNames(workbook);
+            const resolved = resolveExcelSheetName(excel, workbook, preferredSheet);
+            const sheetName = resolved && !unreadable.includes(resolved) ? resolved : '';
             return {
                 csvBuffer: sheetName ? excel.csvTextToBuffer(excel.sheetToCsvText(workbook, sheetName)) : null,
-                sheetName: sheetName || '',
+                sheetName,
+                sheets: excel.listSheets(workbook),
+                unreadable,
                 sheetNames: excel.listSheets(workbook).map(sheet => sheet.name),
             };
         },

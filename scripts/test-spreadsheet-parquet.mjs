@@ -136,6 +136,28 @@ check(() => {
 });
 
 check(() => {
+    // Opening a workbook used to decode it on the main thread purely to find
+    // out what its sheets were — about a minute of a frozen tab for a 126 MB
+    // file, with Firefox offering to stop the page. The worker returns the
+    // inventory along with the first data sheet, so the usual one-sheet
+    // workbook is decoded once in total and never here.
+    const prepare = fileMethods.slice(fileMethods.indexOf('proto._expandExcelEntries'), fileMethods.indexOf('proto._expandExcelEntries') + 6000);
+    assert.match(prepare, /_convertExcelBufferToCsv\(rawBuffer, null\)/, 'the sheets are listed off the main thread');
+    assert.ok(!/readWorkbook\(/.test(prepare), 'and the workbook is not decoded here');
+    assert.match(prepare, /excelCsvBuffer: sheetName === converted\.sheetName/, 'the sheet already serialized is carried forward');
+
+    const handlers = readFileSync(new URL('../src/workers/parse-handlers.js', import.meta.url), 'utf8');
+    const op = handlers.slice(handlers.indexOf("'parse:excelToCsv'"), handlers.indexOf("'parse:excelToCsv'") + 1200);
+    assert.match(op, /unreadableSheetNames\(workbook\)/, 'the worker reports sheets it could not build');
+    assert.match(op, /sheets, unreadable, sheetNames/, 'and hands back the full inventory');
+
+    // A second decode only when the user picks a sheet other than that one.
+    const parse = fileMethods.slice(fileMethods.indexOf('proto._parseExcelResultBuffer'), fileMethods.indexOf('proto._parseExcelResultBuffer') + 1600);
+    assert.match(parse, /const ready = options\.excelCsvBuffer;/, 'a serialized sheet is used as it is');
+    assert.match(parse, /ready \? null : await this\._convertExcelBufferToCsv/, 'and only a different one is decoded again');
+});
+
+check(() => {
     // The preview is fed a bounded sample cut at a line boundary, so a
     // million-row sheet does not push its whole CSV form through the dialog.
     assert.match(fileMethods, /function spreadsheetPreviewSample/, 'the sample is bounded');
