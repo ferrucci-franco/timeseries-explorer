@@ -3359,6 +3359,32 @@ proto.removeFile = async function(fileId) {
     this._updateTopBar();
     this._renderFilesList();
     this._updateActionButtons();
+    await this._releaseQueryEngineIfIdle();
+};
+
+/**
+ * Give the query engine's memory back once nothing is using it.
+ *
+ * DuckDB runs on WebAssembly, and a WebAssembly memory can only ever grow.
+ * Once it has stretched to hold a large file it stays that size for the life
+ * of the page: dropping the tables frees space *inside* it, and returns none
+ * of it to the browser. Closing every file and then finding that the next one
+ * will not open is what that looks like from the outside.
+ *
+ * Nothing was calling shutdown(), so the only way to get that memory back was
+ * to reload the page. With no files left there is nothing to lose by tearing
+ * the engine down; the next file that needs it pays about a second to start it
+ * again, which is what opening the first file already costs.
+ */
+proto._releaseQueryEngineIfIdle = async function() {
+    if (this.files.size > 0 || !this._duckdbSource) return;
+    const source = this._duckdbSource;
+    this._duckdbSource = null;
+    try {
+        await source.shutdown();
+    } catch (err) {
+        console.warn('[duckdb] could not shut the query engine down:', err?.message || err);
+    }
 };
 
 proto.setActiveFile = function(fileId) {
