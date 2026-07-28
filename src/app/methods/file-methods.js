@@ -394,9 +394,15 @@ proto._expandExcelEntries = async function(entries) {
     const expanded = [];
     // The loading overlay covers the read + SheetJS decode (synchronous and
     // potentially seconds long) but must be hidden while a modal is open.
+    // Preparing a spreadsheet is a minute of waiting on a large one, and it ran
+    // under the same overlay as the load with the cancel hint hidden — so
+    // Escape did nothing and did not claim to, and the hint only appeared once
+    // this phase was over. It gets its own token: the same key, working from
+    // the first second rather than the last.
+    const prepToken = { cancelled: false };
     let overlayShown = false;
     const showBusy = async (file) => {
-        this._showFileLoadingOverlay(1);
+        this._showFileLoadingOverlay(1, prepToken);
         this._updateFileLoadingOverlay(1, 1, file?.name || '', file?.size);
         overlayShown = true;
         await this._waitForNextPaint();
@@ -427,7 +433,9 @@ proto._expandExcelEntries = async function(entries) {
             // offering to stop the page. The same call brings back the first
             // data sheet already serialized, so the common one-sheet workbook
             // is decoded once in total.
+            if (prepToken.cancelled) break;
             const converted = await this._convertExcelBufferToCsv(rawBuffer, null);
+            if (prepToken.cancelled) break;
             const sheets = converted?.sheets || [];
             const nonEmpty = sheets.filter(sheet => !sheet.empty);
             if (!nonEmpty.length) {
