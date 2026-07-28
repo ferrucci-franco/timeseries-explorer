@@ -2759,6 +2759,20 @@ textarea.feedback-control {
     font-weight: 650;
 }
 
+.desktop-download-version-separator {
+    margin: 0 0.4rem;
+    opacity: 0.55;
+}
+
+/* Underlined here, unlike at the foot of the dialog it came from: beside a
+   version number, a coloured word with no other mark reads as a label rather
+   than as something to click. */
+.desktop-download-version .desktop-download-release-link {
+    font-size: inherit;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+}
+
 .desktop-download-close {
     display: grid;
     place-items: center;
