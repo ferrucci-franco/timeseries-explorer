@@ -26,6 +26,7 @@ import {
     sniffAudioFormat,
 } from '../src/parsers/audio-decode.js';
 import AudioParser, { channelNames } from '../src/parsers/audio-parser.js';
+import MatParser from '../src/parsers/mat-parser.js';
 import { decodedAudioBytes } from '../src/parsers/audio-limits.js';
 import { AUDIO_EXTENSIONS } from '../src/app/text-file-formats.js';
 import { RESULT_FILE_EXTENSIONS } from '../src/app/constants.js';
@@ -463,6 +464,22 @@ check('a stereo recording becomes a time axis and two signals', () => {
     assert.equal(result.metadata.audio.duration, 400 / sampleRate);
 });
 
+check('the time axis carries its unit where the app looks for it', () => {
+    // Units travel inside the description, in brackets — there is no `units`
+    // property anywhere in this app. Setting one instead of writing "[s]" left
+    // the FFT frequency axis reading "Frequency [1/x-unit]" and dropped the
+    // "[s]" from the time axis title whenever the panel had not already
+    // resolved itself to seconds. _extractUnit is the reader, so it is the one
+    // that has to agree.
+    const structure = new MatParser();
+    const result = new AudioParser(structure).parse({ sampleRate: 8000, frames: 8, channels: [new Float32Array(8)] });
+    assert.equal(structure._extractUnit(result.variables.time.description).trim(), '[s]');
+    assert.equal(result.variables.time.units, undefined, 'a `units` property would be read by nothing');
+    // A normalised waveform is dimensionless; a bracket here would end up on
+    // the Y axis title as a unit that does not exist.
+    assert.equal(structure._extractUnit(result.variables.Mono.description), '');
+});
+
 check('the time axis is exact seconds, not an accumulated step', () => {
     // Accumulating a step drifts over the tens of millions of samples an
     // ordinary recording holds, which would put the end of a long file
@@ -510,6 +527,9 @@ check('the recording details are in the tree and cannot be plotted', () => {
         assert.equal(info._variables[label].dataType, 'string');
     }
     assert.equal(info._variables['Sample rate'].data[0], '48,000 Hz');
+    // Not a bare "1": the sidebar pushes a parameter's value through Number()
+    // and renders anything numeric as "1.00000".
+    assert.equal(info._variables.Channels.data[0], '1 (mono)');
     assert.equal(info._variables.Duration.data[0], '0:02.00');
     assert.equal(info._variables.Format.data[0], 'MP4 / M4A · mp4a');
     // These are notes, not signals: they must not appear among the variables

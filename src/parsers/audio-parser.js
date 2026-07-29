@@ -109,8 +109,13 @@ export default class AudioParser {
         return {
             name: 'time',
             data: values,
-            description: 'Elapsed time from the start of the recording',
-            units: 's',
+            // The unit lives INSIDE the description, in brackets. That is the
+            // app's only channel for it — PlotManager._extractUnit reads
+            // `[...]` out of this string, and nothing anywhere reads a `units`
+            // property. Without it the axis title loses its "[s]" whenever the
+            // panel has not already resolved to seconds, and the FFT frequency
+            // axis falls back to "1/x-unit" instead of saying Hz.
+            description: 'Elapsed time from the start of the recording [s]',
             kind: 'abscissa',
             dataType: 'real',
             isConstant: false,
@@ -128,10 +133,11 @@ export default class AudioParser {
         return {
             name,
             data,
+            // No unit in brackets, deliberately: a normalised waveform is
+            // dimensionless, and inventing one would put it on the Y axis title.
             description: channelCount > 1
                 ? `Audio channel ${index + 1} of ${channelCount}, amplitude normalised to -1…1`
                 : 'Audio waveform, amplitude normalised to -1…1',
-            units: undefined,
             kind: 'variable',
             // Detection is skipped on purpose: a waveform is real-valued by
             // definition, and _detectDataType would walk tens of millions of
@@ -151,7 +157,9 @@ export default class AudioParser {
     _addRecordingInfo(root, audio, filename) {
         const entries = [
             ['Sample rate', `${formatNumber(audio.sampleRate)} Hz`],
-            ['Channels', String(audio.channelCount)],
+            // Never a bare number: the sidebar runs a parameter's value through
+            // Number() and a plain "1" comes back rendered as "1.00000".
+            ['Channels', channelCountLabel(audio.channelCount)],
             ['Duration', formatDuration(audio.duration)],
             ['Samples per channel', formatNumber(audio.frames)],
             ['Format', [audio.containerLabel, audio.codec].filter(Boolean).join(' · ') || 'unknown'],
@@ -195,6 +203,12 @@ export function channelNames(count) {
     if (count === 1) return ['Mono'];
     if (count === 2) return ['Left', 'Right'];
     return Array.from({ length: count }, (_, i) => `Ch${i + 1}`);
+}
+
+function channelCountLabel(count) {
+    if (count === 1) return '1 (mono)';
+    if (count === 2) return '2 (stereo)';
+    return `${count} (multichannel)`;
 }
 
 function rootNode() {
