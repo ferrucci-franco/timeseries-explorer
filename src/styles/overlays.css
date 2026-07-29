@@ -1200,8 +1200,16 @@
     text-align: left;
 }
 
+/* Wider than the other alerts because its content is a three-column table, and
+ * the Notes column is prose. At 860px every row wrapped to three or four lines
+ * and the list scrolled vertically on any laptop-height window; the extra width
+ * buys back about a fifth of the table's height. Matches the Settings dialog,
+ * which is the app's other wide one. Past ~1180px the wrapping stops improving.
+ *
+ * The scrollbars are deliberately left alone: on a short window the list still
+ * scrolls, which is correct. */
 .modal-dialog-supported-formats {
-    width: min(860px, 94vw);
+    width: min(1180px, 94vw);
     max-width: none;
     max-height: 88vh;
 }

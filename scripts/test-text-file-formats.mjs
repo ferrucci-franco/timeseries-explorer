@@ -14,8 +14,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import {
+    AUDIO_EXTENSIONS,
     BINARY_EXTENSIONS,
     classifyExtension,
+    isAudioExtension,
     isTextTableExtension,
     mayBeTextTable,
     TEXT_TABLE_EXTENSIONS,
@@ -45,6 +47,30 @@ check(() => {
     // conversion offer would appear over a file it cannot convert.
     for (const extension of ['.mat', '.pkl', '.pickle', '.nc', '.netcdf', '.xlsx', '.xlsm', '.xls', '.ods', '.parquet']) {
         assert.equal(mayBeTextTable(extension), false, `${extension} has a dedicated reader`);
+    }
+});
+
+check(() => {
+    // Audio has its own reader, so it must never be offered the Parquet
+    // conversion and must never be sniffed as text. Before it was on the binary
+    // list, an .mp3 was an unrecognised extension: mayBeTextTable let it
+    // through and a 6 MB recording was offered as a table to convert.
+    for (const extension of AUDIO_EXTENSIONS) {
+        assert.equal(isAudioExtension(extension), true, extension);
+        assert.equal(classifyExtension(extension), 'binary', extension);
+        assert.equal(mayBeTextTable(extension), false, extension);
+        assert.ok(BINARY_EXTENSIONS.includes(extension), `${extension} is on the binary list`);
+    }
+    assert.equal(isAudioExtension('.MP3'), true, 'extensions are matched case-insensitively');
+    assert.equal(isAudioExtension('.csv'), false);
+    assert.equal(isAudioExtension(''), false);
+});
+
+check(() => {
+    // The formats people actually arrive with. Phone voice memos are the case
+    // this list exists for.
+    for (const extension of ['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.opus', '.3gp', '.amr', '.webm']) {
+        assert.ok(AUDIO_EXTENSIONS.includes(extension), `${extension} is accepted`);
     }
 });
 
