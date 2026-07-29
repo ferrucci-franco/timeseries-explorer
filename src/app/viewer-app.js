@@ -38,6 +38,7 @@ class OpenModelicaViewer {
         this.reloadAsNewVersionMode = false;
         this.scrollablePlotArea = false;
         this.mouseWheelZoom = true;
+        this.legendUnits = false;
         this.capabilities = initialCapabilities();
         this.advancedSettings = this._loadAdvancedSettings();
 

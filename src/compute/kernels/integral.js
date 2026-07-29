@@ -11,7 +11,7 @@ import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 // Interpolation is in TIME, not index, so an irregular axis is handled right.
 // A run with no finite sample on one side (leading or trailing NaN) cannot be
 // bridged and stays non-finite; the caller then treats it as a hole.
-function bridgeNonFinite(values, ctx) {
+export function bridgeNonFinite(values, ctx) {
     const n = values.length;
     const out = new Float64Array(n);
     out.set(values);
