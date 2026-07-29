@@ -653,6 +653,8 @@
 .data-tool-controls.collapsed,
 #outlier-method-wrap.collapsed,
 #outlier-replacement-wrap.collapsed,
+#interpolate-window-wrap.collapsed,
+.resample-grid-controls.collapsed,
 .outlier-method-controls.collapsed {
     display: none;
 }
@@ -904,6 +906,34 @@
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
+}
+
+.resample-grid-controls,
+#interpolate-window-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+/* What the chosen grid actually works out to: the resulting Δt, the sample
+   count, and whether that is up or down from the file's own rate. Shown before
+   committing because "factor 2.5" says nothing until it is a number of samples. */
+.data-tool-resample-info {
+    color: var(--text-secondary);
+    font-size: 0.73rem;
+    line-height: 1.35;
+    padding: 0.35rem 0.5rem;
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+}
+
+.data-tool-resample-info:empty {
+    display: none;
+}
+
+.data-tool-resample-info.invalid {
+    color: #8b1e1e;
+    border-style: solid;
 }
 
 .data-tool-input-grid {

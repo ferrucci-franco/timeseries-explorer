@@ -5,16 +5,34 @@ import {
     computeIntegral,
     computeMovingAverage,
     detectOutlierIndexes,
+    fillMissingValues,
     interpolateOutliers,
     replaceOutliersWithNaN,
     runDataToolPipeline,
 } from '../../compute/kernels/index.js';
 import * as kernelShared from '../../compute/kernels/shared.js';
+import {
+    INTERPOLATE_MAX_GAP_UNLIMITED,
+    normalizeInterpolateMaxGap,
+    normalizeInterpolateParams,
+    normalizeInterpolateWindow,
+} from '../../compute/kernels/interpolate.js';
 // Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
 // the two features spell a duration the same way.
 import { formatNaturalDuration } from '../../utils/fft.js';
 
-const DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage']);
+// Tools whose result is a VARIABLE of the current file: same length, same time
+// axis, so it can be stored next to its source and edited in place.
+const DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage', 'interpolate']);
+// Tools whose result is a FILE. Resampling moves the samples onto a new time
+// axis, and a file owns exactly one of those, so the result cannot live inside
+// the source file — see resample-methods.js. These are selectable in the picker
+// and share the form, but never enter the definition registry, the
+// transformations table, the editing state or the preview.
+const FILE_DATA_TOOLS = new Set(['resample']);
+// The resample source picker's "every variable" entry. Deliberately not a legal
+// variable name, so it can never collide with a real one.
+export const RESAMPLE_ALL_VARIABLES = '__all_variables__';
 // The reserved slot the dashed draft preview occupies in data.variables. Every
 // consumer of the variable map skips entries flagged `previewOnly`.
 export const DATA_TOOL_PREVIEW_NAME = '__dataToolPreview__';
@@ -27,7 +45,7 @@ const INTEGRAL_GAP_POLICIES = kernelShared.INTEGRAL_GAP_POLICIES;
 // One pool for the whole app. Created lazily so importing this module in a Node
 // test harness (which has no Worker) costs nothing.
 let computePool = null;
-function getComputePool() {
+export function getComputePool() {
     if (!canUseWorkers()) return null;
     if (!computePool) {
         computePool = new WorkerPool(
@@ -42,7 +60,7 @@ function getComputePool() {
 
 // Kernels throw DataToolError with a stable code so they can run in a worker
 // without dragging the translation table along. Re-translate on the way out.
-function translateKernelError(err) {
+export function translateKernelError(err) {
     const code = err?.code;
     if (!code) return err;
     const message = i18n.t(code);
@@ -109,6 +127,34 @@ proto.initDataTools = function() {
         this._syncDataTools();
         this._handleDataToolPreviewChange({ immediate: true });
     });
+
+    document.getElementById('interpolate-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
+    document.getElementById('interpolate-edges')?.addEventListener('change', () => this._handleDataToolOptionChange());
+    // The slider and the box are two views of one number, and the box is the one
+    // that may exceed the slider's range — that is the point of having both, so a
+    // gap limit of 5000 samples is reachable without a 5000-wide slider.
+    for (const [sliderId, inputId] of [
+        ['interpolate-max-gap-slider', 'interpolate-max-gap'],
+        ['interpolate-window-slider', 'interpolate-window'],
+    ]) {
+        document.getElementById(sliderId)?.addEventListener('input', (event) => {
+            const numeric = document.getElementById(inputId);
+            if (numeric) numeric.value = event.target.value;
+            this._syncDataTools();
+            this._handleDataToolPreviewChange({ immediate: true });
+        });
+        document.getElementById(inputId)?.addEventListener('input', () => {
+            this._syncInterpolateControls();
+            this._syncDataTools();
+            this._handleDataToolPreviewChange({ immediate: true });
+        });
+    }
+    document.getElementById('interpolate-help-toggle')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._toggleInterpolateHelpPopover();
+    });
+
+    this.initResampleTool?.();
 
     this._dataToolParameterInputs().forEach(input => {
         const isBound = input.id === 'outlier-lower-bound' || input.id === 'outlier-upper-bound';
@@ -193,7 +239,10 @@ proto._syncDataTools = function() {
     this._syncOutlierMethodOptions(lazy && tool === 'removeOutliers');
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
+    this._syncInterpolateControls();
+    this._syncResampleControls?.();
 
+    const fileTool = this._isFileDataTool(tool);
     const previous = sourceSelect.value;
     const entries = hasTool && allowed ? this._getDataToolSourceEntries(data, tool, editing?.name) : [];
 
@@ -214,10 +263,20 @@ proto._syncDataTools = function() {
         option.textContent = i18n.t('outlierNoVariables');
         sourceSelect.appendChild(option);
     } else {
-        const option = document.createElement('option');
-        option.value = '';
-        option.textContent = i18n.t('outlierSelectVariable');
-        sourceSelect.appendChild(option);
+        // Resampling rebuilds the whole dataset onto one grid, so "every
+        // variable" is its natural default: a file with one column on the new
+        // axis and the rest left behind is not a dataset anyone asked for.
+        if (fileTool) {
+            const option = document.createElement('option');
+            option.value = RESAMPLE_ALL_VARIABLES;
+            option.textContent = i18n.t('dataToolResampleAllVariables').replace('{count}', String(entries.length));
+            sourceSelect.appendChild(option);
+        } else {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = i18n.t('outlierSelectVariable');
+            sourceSelect.appendChild(option);
+        }
         for (const [name, variable] of entries) {
             const option = document.createElement('option');
             option.value = name;
@@ -227,9 +286,10 @@ proto._syncDataTools = function() {
         }
     }
 
-    const keptPrevious = entries.some(([name]) => name === previous);
+    const keptPrevious = entries.some(([name]) => name === previous)
+        || (fileTool && previous === RESAMPLE_ALL_VARIABLES);
     if (keptPrevious) sourceSelect.value = previous;
-    if (!sourceSelect.value) outputInput.value = '';
+    if (!fileTool && !sourceSelect.value) outputInput.value = '';
     // The suggestion is written once, when the source is picked (see the change
     // handler). Re-suggesting here would refill the field the moment the user
     // cleared it to type their own name.
@@ -238,7 +298,9 @@ proto._syncDataTools = function() {
     }
 
     const sourceVariable = sourceSelect.value ? data?.variables?.[sourceSelect.value] : null;
-    const hasSource = hasTool && allowed && !!sourceSelect.value && !!sourceVariable;
+    const hasSource = fileTool
+        ? (hasTool && allowed && entries.length > 0)
+        : (hasTool && allowed && !!sourceSelect.value && !!sourceVariable);
     const hasValidConfig = !hasSource || !!this._tryReadDataToolConfig();
 
     sourceSelect.disabled = !hasTool || !allowed || !entries.length;
@@ -251,10 +313,23 @@ proto._syncDataTools = function() {
     document.getElementById('integral-initial')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
     document.getElementById('moving-average-window-slider')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.getElementById('moving-average-window')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
+    for (const id of ['interpolate-method', 'interpolate-edges', 'interpolate-max-gap-slider',
+        'interpolate-max-gap', 'interpolate-window-slider', 'interpolate-window']) {
+        document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'interpolate');
+    }
+    for (const id of ['resample-grid-mode', 'resample-method', 'resample-step', 'resample-factor', 'resample-count']) {
+        document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'resample');
+    }
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
         input.disabled = !hasSource || tool !== 'removeOutliers' || lazy;
         if (lazy && input.value === 'nan') input.checked = true;
     });
+
+    // The output field names a variable for every tool but one; for resampling it
+    // names the file the resampled dataset lands in, and saying "Output name"
+    // there would describe the wrong thing.
+    const outputLabel = document.getElementById('data-tool-output-label');
+    if (outputLabel) outputLabel.textContent = i18n.t(fileTool ? 'dataToolResampleFileName' : 'outlierOutputName');
 
     const blocker = this._dataToolCommitBlocker({ hasSource, hasValidConfig, editing, fileId, data });
     form.classList.toggle('data-tool-invalid', hasSource && !!blocker);
@@ -275,6 +350,15 @@ proto._syncDataTools = function() {
 // ready. The panel shows the same reason as text, so the user never has to guess
 // which field is at fault.
 proto._dataToolCommitBlocker = function({ hasSource, hasValidConfig, editing, fileId, data }) {
+    const tool = this._getSelectedDataTool();
+    if (this._isFileDataTool(tool)) {
+        if (!hasSource) return 'outlierNoVariables';
+        const name = (document.getElementById('outlier-output-name')?.value || '').trim();
+        if (!name) return 'dataToolResampleFileNameRequired';
+        // A grid that does not resolve to a usable Δt and sample count is the one
+        // way this tool can be misconfigured, and the summary already says which.
+        return this._resamplePlan(data).ok ? '' : 'dataToolFixParameters';
+    }
     if (!hasSource) return 'dataToolChooseVariable';
     if (!hasValidConfig) return 'dataToolFixParameters';
     const outputName = (document.getElementById('outlier-output-name')?.value || '').trim();
@@ -399,6 +483,50 @@ proto._syncMovingAverageControls = function() {
     if (value) value.textContent = String(windowSize);
 };
 
+// The gap limit and the smoothing window are each a slider plus a number box.
+// The number box is authoritative and deliberately UNBOUNDED above: a gap limit
+// of 5000 samples is a legitimate thing to want, and it does not deserve a
+// 5000-wide slider that no one can aim. The slider clamps to its own range and
+// the read-out always shows the real value, so a typed 5000 reads 5000 with the
+// slider parked at its maximum.
+proto._syncInterpolateControls = function() {
+    const method = document.getElementById('interpolate-method')?.value || 'linear';
+    // The window belongs to one method only; showing it under the others would
+    // offer a setting that changes nothing.
+    document.getElementById('interpolate-window-wrap')?.classList.toggle('collapsed', method !== 'smooth');
+
+    const pairs = [
+        ['interpolate-max-gap', 'interpolate-max-gap-slider', 'interpolate-max-gap-value', normalizeInterpolateMaxGap],
+        ['interpolate-window', 'interpolate-window-slider', 'interpolate-window-value', normalizeInterpolateWindow],
+    ];
+    for (const [inputId, sliderId, valueId, normalize] of pairs) {
+        const input = document.getElementById(inputId);
+        const slider = document.getElementById(sliderId);
+        const value = document.getElementById(valueId);
+        if (!input || !slider) continue;
+        const normalized = normalize(input.value === '' ? slider.value : input.value);
+        // Never written back into the box while the user is typing in it — that
+        // is what would turn a half-typed "50" into a clamped "5".
+        if (input.value === '') input.value = String(normalized);
+        slider.value = String(Math.max(Number(slider.min), Math.min(Number(slider.max), normalized)));
+        if (value) {
+            value.textContent = inputId === 'interpolate-max-gap' && normalized >= INTERPOLATE_MAX_GAP_UNLIMITED
+                ? i18n.t('dataToolInterpolateNoLimit')
+                : String(normalized);
+        }
+    }
+};
+
+proto._toggleInterpolateHelpPopover = function(show) {
+    const popover = document.getElementById('interpolate-help-popover');
+    const button = document.getElementById('interpolate-help-toggle');
+    if (!popover || !button) return;
+    const willShow = typeof show === 'boolean' ? show : popover.hidden;
+    popover.hidden = !willShow;
+    button.classList.toggle('active', willShow);
+    button.setAttribute('aria-expanded', String(willShow));
+};
+
 proto._syncMovingAverageSliderFromInput = function() {
     const input = document.getElementById('moving-average-window');
     const slider = document.getElementById('moving-average-window-slider');
@@ -466,19 +594,43 @@ proto._suggestOutlierOutputName = function(sourceName) {
 };
 
 proto._suggestDataToolOutputName = function(sourceName, tool = this._getSelectedDataTool()) {
+    if (this._isFileDataTool(tool)) return this._suggestResampleFileName();
     if (!sourceName) return '';
     const suffix = {
         removeOutliers: 'no_outliers',
         derivative: 'ddt',
         integrate: 'int',
         movingAverage: 'avg',
+        interpolate: 'filled',
     }[tool] || 'tool';
     return this._uniqueDataToolVariableName(`${sourceName} ${suffix}`);
+};
+
+// The name of the file a resample lands in. Built from the source file, not from
+// a variable, because the whole dataset moves onto the new grid.
+proto._suggestResampleFileName = function() {
+    const base = this.files.get(this.activeFileId)?.name || 'data';
+    const candidate = `${base} ${i18n.t('dataToolResampleFileSuffix')}`;
+    const taken = name => [...this.files.values()].some(entry => entry?.name === name);
+    if (!taken(candidate)) return candidate;
+    let index = 2;
+    while (taken(`${candidate} ${index}`)) index++;
+    return `${candidate} ${index}`;
 };
 
 // The single entry point the buttons use. Nothing else in the panel writes a
 // variable: until this runs, the form is a draft.
 proto.commitDataTool = async function(options = {}) {
+    // A preview scheduled but not yet started would post AFTER this commit under
+    // the same last-one-wins key and cancel it — the commit would report "task
+    // superseded" and write nothing. Committing IS the answer to the draft the
+    // preview was going to draw, so the draft run is dropped rather than raced.
+    this._cancelPendingDataToolPreview();
+
+    // Resampling writes a file, not a variable, so it does not pass through the
+    // create/update/definition machinery below at all.
+    if (this._isFileDataTool()) return this.commitResampleTool(options);
+
     const editing = this._dataToolEditing;
     const context = this._getOutlierContext();
     if (!context) return null;
@@ -721,9 +873,13 @@ proto._refreshLazyDataToolOverview = async function(data) {
 
 proto._setDataToolApplyMessage = function(result, action, name, dependentCount = 0) {
     const tool = result?.tool || 'removeOutliers';
+    // Both tools that COUNT something say how much; the rest just name the
+    // variable, because "created X" is the whole story for a derivative.
     const keyByAction = tool === 'removeOutliers'
         ? { created: 'outlierCreated', updated: 'outlierUpdated' }
-        : { created: 'dataToolCreated', updated: 'dataToolUpdated' };
+        : tool === 'interpolate'
+            ? { created: 'dataToolInterpolateCreated', updated: 'dataToolInterpolateUpdated' }
+            : { created: 'dataToolCreated', updated: 'dataToolUpdated' };
     const warning = result?.warning;
     this._setOutlierMessage(() => {
         const base = i18n.t(keyByAction[action] || 'dataToolUpdated')
@@ -776,6 +932,17 @@ const DATA_TOOL_PARAMETER_IDS = [
     'integral-initial',
     'moving-average-window',
     'moving-average-window-slider',
+    'interpolate-method',
+    'interpolate-max-gap',
+    'interpolate-max-gap-slider',
+    'interpolate-edges',
+    'interpolate-window',
+    'interpolate-window-slider',
+    'resample-grid-mode',
+    'resample-method',
+    'resample-step',
+    'resample-factor',
+    'resample-count',
 ];
 
 // A new transformation starts from the tool's defaults. Carrying the last run's
@@ -797,8 +964,11 @@ proto._resetDataToolParameters = function() {
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
         input.checked = input.defaultChecked;
     });
+    this._seedResampleDefaults?.();
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
+    this._syncInterpolateControls();
+    this._syncResampleControls?.();
 };
 
 proto._enterDataToolEditing = function(fileId, name) {
@@ -863,6 +1033,13 @@ proto._writeDataToolForm = function(definition, name) {
     } else if (definition.tool === 'movingAverage') {
         set('moving-average-window', params.window);
         set('moving-average-window-slider', params.window);
+    } else if (definition.tool === 'interpolate') {
+        set('interpolate-method', params.method);
+        set('interpolate-max-gap', params.maxGap);
+        set('interpolate-max-gap-slider', params.maxGap);
+        set('interpolate-edges', params.edges);
+        set('interpolate-window', params.window);
+        set('interpolate-window-slider', params.window);
     }
 };
 
@@ -908,6 +1085,15 @@ proto._dataToolNameHint = function() {
     const name = (document.getElementById('outlier-output-name')?.value || '').trim();
     const sourceName = document.getElementById('outlier-variable')?.value || '';
     const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
+    if (this._isFileDataTool(this._getSelectedDataTool())) {
+        if (!name) return 'dataToolNameEmpty';
+        // Re-using the name of an earlier resample is how you REPLACE it, so that
+        // is not a clash. Re-using the name of a file loaded from disk is.
+        for (const [, entry] of this.files) {
+            if (entry?.name === name && entry?.resampledFrom === undefined) return 'dataToolResampleFileNameTaken';
+        }
+        return '';
+    }
     if (!name) return 'dataToolNameEmpty';
     if (name === sourceName) return 'outlierOutputSameAsSource';
     if (data?.variables?.[name] && name !== this._dataToolEditing?.name) return 'dataToolNameTaken';
@@ -1097,6 +1283,8 @@ proto._dataToolLabel = function(tool) {
         derivative: 'dataToolDerivative',
         integrate: 'dataToolIntegrate',
         movingAverage: 'dataToolMovingAverage',
+        interpolate: 'dataToolInterpolate',
+        resample: 'dataToolResample',
     }[tool] || 'dataTools');
 };
 
@@ -1203,6 +1391,7 @@ proto._buildSingleDataToolResult = function(sourceValues, sourceVariable, config
     if (config.tool === 'derivative') return this._buildDerivativeResult(sourceValues, sourceVariable, config, data, pre);
     if (config.tool === 'integrate') return this._buildIntegralResult(sourceValues, sourceVariable, config, data, pre);
     if (config.tool === 'movingAverage') return this._buildMovingAverageResult(sourceValues, sourceVariable, config, pre);
+    if (config.tool === 'interpolate') return this._buildInterpolateResult(sourceValues, sourceVariable, config, data, pre);
     return this._buildOutlierResult(sourceValues, sourceVariable, config, pre);
 };
 
@@ -1380,6 +1569,55 @@ proto._formatUncoveredTime = function(result) {
     return String(Number(amount.toPrecision(6)));
 };
 
+proto._buildInterpolateResult = function(sourceValues, sourceVariable, config, data, pre = null) {
+    const result = pre
+        ? { ...pre.meta, values: pre.values }
+        : this._computeInterpolatedValues(sourceValues, data, config.params);
+    const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
+        ...config,
+        tool: 'interpolate',
+    }, result.values, {
+        method: config.params.method,
+        maxGap: config.params.maxGap,
+        edges: config.params.edges,
+        window: config.params.window,
+        filledCount: result.filledCount,
+        filledRuns: result.filledRuns,
+        skippedCount: result.skippedCount,
+        skippedRuns: result.skippedRuns,
+        missingCount: result.missingCount,
+    });
+    const warning = () => this._interpolateWarning(result);
+    return {
+        variable,
+        // The headline number is what the tool DID, not how long the series is:
+        // "filled 412 samples" is the fact the user is checking.
+        count: result.filledCount,
+        tool: 'interpolate',
+        name: config.targetName,
+        warning: warning() ? warning : '',
+    };
+};
+
+// What was deliberately left missing, and why. A gap limit that quietly refuses
+// to fill anything is worse than no limit at all, so the panel says so.
+proto._interpolateWarning = function(result) {
+    const parts = [];
+    if (result.skippedRuns > 0) {
+        parts.push(i18n.t(result.skippedRuns === 1 ? 'dataToolInterpolateSkippedOne' : 'dataToolInterpolateSkipped')
+            .replace('{runs}', String(result.skippedRuns))
+            .replace('{count}', String(result.skippedCount))
+            .replace('{longest}', String(result.longestSkipped)));
+    }
+    // Row numbers and time coincide only on a regular axis; where they do not,
+    // saying which one was used is the difference between a bridge that lands
+    // where it should and one that merely looks plausible.
+    if (result.filledCount > 0 && result.usedTimeAxis === false) {
+        parts.push(i18n.t('dataToolInterpolateIndexAxis'));
+    }
+    return parts.join(' ');
+};
+
 proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config, pre = null) {
     const values = pre ? pre.values : this._computeMovingAverageValues(sourceValues, config.params);
     const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
@@ -1407,13 +1645,24 @@ proto._dataToolDescription = function(config) {
     if (config.tool === 'movingAverage') {
         return `Data tool: moving average of ${config.sourceName}; window ${config.params.window}`;
     }
+    if (config.tool === 'interpolate') {
+        return `Data tool: fill missing data in ${config.sourceName}; ${this._interpolateDescription(config.params)}`;
+    }
     return `Data tool: remove outliers from ${config.sourceName}; ${this._outlierDetectorDescription(config)}; ${config.replacement}`;
+};
+
+proto._interpolateDescription = function(params = {}) {
+    const limit = params.maxGap >= INTERPOLATE_MAX_GAP_UNLIMITED ? 'any length' : `up to ${params.maxGap} samples`;
+    const window = params.method === 'smooth' ? `, window ${params.window}` : '';
+    const edges = params.edges === 'hold' ? ', ends held' : '';
+    return `${params.method}${window}; gaps ${limit}${edges}`;
 };
 
 proto._dataToolStepLabel = function(step) {
     if (step.tool === 'derivative') return step.params.method === 'difference' ? 'difference' : `derivative (${step.params.method})`;
     if (step.tool === 'integrate') return `integral (${step.params.method}, gaps: ${step.params.gapPolicy})`;
     if (step.tool === 'movingAverage') return `moving average (window ${step.params.window})`;
+    if (step.tool === 'interpolate') return `fill missing (${this._interpolateDescription(step.params)})`;
     return `remove outliers (${this._outlierDetectorDescription(step)}; ${step.replacement})`;
 };
 
@@ -1438,6 +1687,11 @@ proto._computeIntegralValues = function(sourceValues, data, params = {}) {
 
 proto._computeMovingAverageValues = function(sourceValues, params = {}) {
     return computeMovingAverage(sourceValues, params);
+};
+
+proto._computeInterpolatedValues = function(sourceValues, data, params = {}) {
+    const time = this._getDataToolTimeContext(data, sourceValues?.length || 0);
+    return fillMissingValues(sourceValues, time, params);
 };
 
 proto._getDataToolTimeContext = function(data, expectedLength) {
@@ -1530,6 +1784,18 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
             || 201;
         return { tool, params: { window: this._normalizeMovingAverageWindow(document.getElementById('moving-average-window')?.value, max) } };
     }
+    if (tool === 'interpolate') {
+        return {
+            tool,
+            params: normalizeInterpolateParams({
+                method: document.getElementById('interpolate-method')?.value,
+                maxGap: document.getElementById('interpolate-max-gap')?.value,
+                edges: document.getElementById('interpolate-edges')?.value,
+                window: document.getElementById('interpolate-window')?.value,
+            }),
+        };
+    }
+    if (tool === 'resample') return this._getResampleConfig();
 
     const method = this._getOutlierDetectorMethod();
     if (lazy && method !== 'bounds') throw new Error(i18n.t('dataToolLazyBoundsOnly'));
@@ -1552,11 +1818,18 @@ proto._tryReadDataToolConfig = function() {
 
 proto._getSelectedDataTool = function() {
     const value = document.getElementById('data-tool-select')?.value;
-    return DATA_TOOLS.has(value) ? value : '';
+    return DATA_TOOLS.has(value) || FILE_DATA_TOOLS.has(value) ? value : '';
+};
+
+proto._isFileDataTool = function(tool = this._getSelectedDataTool()) {
+    return FILE_DATA_TOOLS.has(tool);
 };
 
 proto._isDataToolAvailableForData = function(tool, data) {
-    if (!this._isDataToolLazyData(data)) return DATA_TOOLS.has(tool);
+    if (!this._isDataToolLazyData(data)) return DATA_TOOLS.has(tool) || FILE_DATA_TOOLS.has(tool);
+    // A lazy file's variables are DuckDB column references, not arrays: nothing
+    // in here can read a series out of one, so only the bounds filter — which the
+    // lazy path implements in SQL — survives.
     return tool === 'removeOutliers';
 };
 
@@ -1917,6 +2190,7 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
     if (tool === 'movingAverage') {
         return { window: this._normalizeMovingAverageWindow(params.window, Number(params.maxLength) || Infinity) };
     }
+    if (tool === 'interpolate') return normalizeInterpolateParams(params);
     return this._normalizeOutlierParams(params.method || 'spike', params);
 };
 
@@ -1969,6 +2243,8 @@ proto._resetDataToolPicker = function() {
     const toolSelect = document.getElementById('data-tool-select');
     if (toolSelect) toolSelect.value = '';
     this._toggleOutlierHelpPopover?.(false);
+    this._toggleInterpolateHelpPopover?.(false);
+    this._toggleResampleHelpPopover?.(false);
     this._setOutlierMessage('', '');
     this._syncDataTools?.();
 };
@@ -1978,6 +2254,15 @@ proto._resetDataToolPicker = function() {
 // old auto-apply. What changed is that the effect is drawn, not stored: while
 // drafting it is a dashed throwaway trace, and while editing it is the real
 // curve, restored on Cancel.
+
+// Drop a scheduled preview without touching the one already on the plot.
+// _clearDataToolPreview also does this, but it tears the trace down and rebuilds
+// the panel with it, which is the wrong thing to do mid-commit.
+proto._cancelPendingDataToolPreview = function() {
+    if (!this._dataToolPreviewTimer) return;
+    clearTimeout(this._dataToolPreviewTimer);
+    this._dataToolPreviewTimer = null;
+};
 
 proto._handleDataToolPreviewChange = function(options = {}) {
     if (this._dataToolPreviewTimer) clearTimeout(this._dataToolPreviewTimer);
@@ -1989,6 +2274,12 @@ proto._handleDataToolPreviewChange = function(options = {}) {
 };
 
 proto._runDataToolPreview = function() {
+    // Resampling has no preview: its result does not share this file's time axis,
+    // so there is no trace it could be drawn as next to the source.
+    if (this._isFileDataTool()) {
+        this._clearDataToolPreview();
+        return;
+    }
     const context = this._getOutlierContext({ quiet: true });
     // A lazy file holds column references, not arrays: previewing would compute
     // over the overview and show a curve the commit would not reproduce.

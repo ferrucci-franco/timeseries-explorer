@@ -8,10 +8,33 @@
 import { computeDerivative } from './derivative.js';
 import { computeIntegral } from './integral.js';
 import { computeMovingAverage } from './moving-average.js';
+import { fillMissingValues } from './interpolate.js';
 import { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN } from './outliers.js';
+import { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep } from './regrid.js';
 
-export { computeDerivative, computeIntegral, computeMovingAverage };
+export { computeDerivative, computeIntegral, computeMovingAverage, fillMissingValues };
 export { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN };
+export { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep };
+
+/**
+ * Resample a whole set of columns onto one grid. Batched rather than called
+ * per column because the grid and the source-axis validation are shared, and
+ * because off the main thread this is what turns a 20-variable file into one
+ * round-trip instead of twenty.
+ */
+export function runResample({ columns, time, params }) {
+    const length = columns?.[0]?.length || 0;
+    const { x } = resampleSourceAxis(time, length);
+    const { grid, step, sourceStep } = buildResampleGrid(x, params);
+    const outputs = [];
+    const emptyCounts = [];
+    for (const column of columns || []) {
+        const { values, emptyCount } = resampleValues(column, x, grid, params);
+        outputs.push(values);
+        emptyCounts.push(emptyCount);
+    }
+    return { grid, step, sourceStep, columns: outputs, emptyCounts };
+}
 
 /**
  * Run one Data Tools step.
@@ -45,6 +68,19 @@ export function runDataToolStep(values, time, step) {
         case 'movingAverage': {
             const out = computeMovingAverage(values, params);
             return { values: out, meta: { window: params.window } };
+        }
+        case 'interpolate': {
+            const { values: out, ...counts } = fillMissingValues(values, time, params);
+            return {
+                values: out,
+                meta: {
+                    method: params.method,
+                    maxGap: params.maxGap,
+                    edges: params.edges,
+                    window: params.window,
+                    ...counts,
+                },
+            };
         }
         case 'removeOutliers':
         default: {

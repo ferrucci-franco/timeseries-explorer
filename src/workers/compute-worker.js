@@ -8,7 +8,7 @@
 // worker (src/workers/fft-worker.js) and its hand-rolled lifecycle. That
 // migration has not happened yet; both exist today.
 
-import { runDataToolPipeline } from '../compute/kernels/index.js';
+import { runDataToolPipeline, runResample } from '../compute/kernels/index.js';
 import { computeAmplitudeSpectrum } from '../utils/fft.js';
 
 const HANDLERS = {
@@ -20,6 +20,13 @@ const HANDLERS = {
             // Set dedupe is what stops it being listed as transferable twice
             // (which throws DataCloneError).
             transfer: collectBuffers([result.values, ...result.stepValues]),
+        };
+    },
+    'dataTool:resample': (payload) => {
+        const result = runResample(payload || {});
+        return {
+            result,
+            transfer: collectBuffers([result.grid, ...result.columns]),
         };
     },
     'fft:spectrum': (input) => {
