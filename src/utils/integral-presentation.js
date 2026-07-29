@@ -173,6 +173,26 @@ export function formatIntegralNumber(value, digits = 4, locale = 'en') {
     return Number(value.toPrecision(digits)).toLocaleString(locale);
 }
 
+/**
+ * A duration the kernel counted in abscissa units, converted to the unit the
+ * formatter should render it in.
+ *
+ * The kernel counts in x-units, so a signal sampled in seconds reported "20"
+ * while the same 20 seconds on a datetime axis read "20 s": the number was right
+ * and said nothing. Converting through the axis unit first lets both axes use
+ * the one seconds ladder. An axis whose unit was only ASSUMED converts anyway —
+ * it is the same assumption that already gave the total its MW·h, and the panel
+ * announces it — while an index axis has no unit at all and keeps its samples.
+ *
+ * @returns {{ seconds: number, kind: 'datetime'|'index' }}
+ */
+export function axisDuration(base, timeKind, rawTime) {
+    if (timeKind === 'index') return { seconds: rawTime, kind: 'index' };
+    const secondsPerUnit = Number(base?.secondsPerUnit);
+    const factor = timeKind === 'datetime' || !Number.isFinite(secondsPerUnit) ? 1 : secondsPerUnit;
+    return { seconds: rawTime * factor, kind: 'datetime' };
+}
+
 // Durations are reported in the abscissa's own unit. On a calendar axis that is
 // seconds and reads naturally as hours or days; on a numeric axis it is
 // x-units, and calling those hours would invent a calendar.

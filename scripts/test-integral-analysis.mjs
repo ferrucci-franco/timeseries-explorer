@@ -14,9 +14,11 @@ import { readFileSync } from 'node:fs';
 import { computeDefiniteIntegral } from '../src/compute/kernels/definite-integral.js';
 import { INTEGRAL_MISSING_POLICIES } from '../src/compute/kernels/definite-integral.js';
 import {
+    axisDuration,
     buildIntegralExportTable,
     buildIntegralPresentation,
     defaultIntegralState,
+    formatIntegralDuration,
     integralPieAllowed,
     integralQuantityUnit,
     integralResultUnit,
@@ -116,6 +118,33 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(timeBaseForAxis('numeric', 'furlong').assumed,
         'an unrecognised axis unit is flagged as assumed rather than silently taken as seconds');
     eq(timeBaseForAxis('numeric', 'furlong').secondsPerUnit, 1, 'while still producing a number to show');
+}
+
+// ─── 3b. Durations read the same on every axis ────────────────────────────
+// The kernel counts in abscissa units, so a signal sampled in seconds used to
+// report a bare "20" where the same 20 seconds on a calendar axis read "20 s".
+{
+    const labels = { samples: 'samples' };
+    const secondsAxis = timeBaseForAxis('numeric', 's');
+    eq(axisDuration(secondsAxis, 'numeric', 20), { seconds: 20, kind: 'datetime' },
+        'a seconds axis needs no conversion but does need the seconds ladder');
+    eq(formatIntegralDuration(axisDuration(secondsAxis, 'numeric', 20).seconds, 'datetime', labels), '20 s',
+        'so 20 on a numeric axis prints the unit, like a calendar one');
+
+    // An axis in hours must be converted, not read as seconds.
+    const hoursAxis = timeBaseForAxis('numeric', 'h');
+    eq(axisDuration(hoursAxis, 'numeric', 49).seconds, 49 * 3600, 'an hours axis converts');
+    eq(formatIntegralDuration(axisDuration(hoursAxis, 'numeric', 49).seconds, 'datetime', labels), '2.04 d',
+        'and 49 h reads as just over two days');
+
+    // A calendar axis is already in seconds; converting again would square it.
+    eq(axisDuration(timeBaseForAxis('datetime', 'datetime'), 'datetime', 3600).seconds, 3600,
+        'a calendar axis is left alone');
+
+    // An index axis has no unit at all, and keeps saying so.
+    eq(axisDuration(timeBaseForAxis('index'), 'index', 42), { seconds: 42, kind: 'index' },
+        'row counts are not durations');
+    eq(formatIntegralDuration(42, 'index', labels), '42 samples', 'and print as samples');
 }
 
 // ─── 4. The per-hour conversion and the shared scale ──────────────────────
@@ -400,9 +429,17 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(/\.integral-summary \{[^}]*scrollbar-gutter: stable/.test(css), 'its track is reserved so the table does not reflow');
     ok(/\.integral-summary \{[^}]*margin-bottom/.test(css), 'and the table is not flush against the panel edge');
 
+    // The checkbox belongs to the Legend group, after its radio buttons — it is a
+    // legend setting, so it sits with the other legend settings.
     ok(html.includes('id="legend-units"'), 'the sidebar carries the legend-units checkbox');
-    ok(html.indexOf('id="legend-units"') > html.indexOf('id="mouse-wheel-zoom"'),
-        'placed under Mouse wheel zoom, as specified');
+    const legendGroup = html.slice(
+        html.indexOf('data-i18n="legendPosition"'),
+        html.indexOf('<!-- Layout Configuration -->'),
+    );
+    ok(legendGroup.includes('id="legend-units"'), 'inside the Legend options group');
+    ok(legendGroup.indexOf('id="legend-units"') > legendGroup.lastIndexOf('name="legend-pos"'),
+        'and below the position radio buttons');
+    ok(methods.includes('formatAxisDuration('), 'durations go through the axis-aware formatter');
     ok(session.includes('legendUnits: !!this.legendUnits,'), 'the setting is saved with the session');
     ok(session.includes('plot.integral = this.plotManager._normalizeIntegralState'), 'and so is the panel state');
 

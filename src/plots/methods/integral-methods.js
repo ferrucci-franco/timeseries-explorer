@@ -7,6 +7,7 @@ import {
     reduceDailyIntegral,
 } from '../../compute/kernels/definite-integral.js';
 import {
+    axisDuration,
     buildIntegralExportTable,
     buildIntegralPresentation,
     defaultIntegralState,
@@ -152,6 +153,13 @@ function formatDuration(seconds, timeKind) {
         locale: i18n.currentLang || 'en',
         samples: text('integralSamples'),
     });
+}
+
+// Formats what axisDuration() converted: the pure layer decides the unit, this
+// side only renders it in the user's language.
+function formatAxisDuration(model, rawTime) {
+    const { seconds, kind } = axisDuration(model?.base, model?.result?.timeKind, rawTime);
+    return formatDuration(seconds, kind);
 }
 
 function traceIsLazy(manager, trace) {
@@ -922,10 +930,13 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
         warnings.push(text(view.mixedUnits ? 'integralPieMixedUnits' : 'integralPieMixedSigns'));
     }
 
-    const missing = ready.reduce((sum, model) => sum + (model.result.uncoveredTime || 0), 0);
+    // Summed across signals, so each term has to be in the same unit first:
+    // raw x-units from two axes are not addable.
+    const missing = ready.reduce((sum, model) => sum
+        + axisDuration(model.base, model.result.timeKind, model.result.uncoveredTime || 0).seconds, 0);
     if (missing > 0) {
-        const timeKind = ready[0]?.result.timeKind;
         const key = state.missingPolicy === 'interpolate' ? 'integralUncoveredInterpolated' : 'integralUncovered';
+        const timeKind = ready[0]?.result.timeKind === 'index' ? 'index' : 'datetime';
         warnings.push(text(key).replace('{time}', formatDuration(missing, timeKind)));
     }
 
@@ -952,7 +963,7 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             ? text('integralStatusMixed').replace('{count}', String(ready.length))
             : text(ready.length === 1 ? 'integralStatusOne' : 'integralStatusMany')
                 .replace('{count}', String(ready.length))
-                .replace('{time}', formatDuration(ready[0].result.coveredTime, ready[0].result.timeKind));
+                .replace('{time}', formatAxisDuration(ready[0], ready[0].result.coveredTime));
     this._setIntegralStatus(plot, summary, warnings, 'ready');
 };
 
@@ -1106,7 +1117,7 @@ proto._buildIntegralTraces = function(plot, models = []) {
         withUnit(row.value, view.resultUnit),
         withUnit(row.perDay, view.perDayUnit),
         withUnit(row.mean, view.meanUnit),
-        formatDuration(row.model.result.coveredTime, row.model.result.timeKind),
+        formatAxisDuration(row.model, row.model.result.coveredTime),
         row.model.result.discardedDayCount,
         row.model.result.sampleCount,
         // The name travels in customdata rather than as %{x}: the category axis
@@ -1299,7 +1310,7 @@ proto._renderIntegralSummary = function(plot, models = []) {
         const result = model.result;
         const coverage = result.timeKind === 'datetime' && result.dayCount
             ? `${result.dayCount - result.discardedDayCount}/${result.dayCount} ${escapeHtml(text('integralDays'))}`
-            : formatDuration(result.coveredTime, result.timeKind);
+            : formatAxisDuration(model, result.coveredTime);
         const totalUnit = this._integralResultUnit(model.unit, view.state, result.timeKind);
         return `<tr>
             <td><span class="integral-swatch" style="background:${escapeHtml(model.trace.color)}"></span>${escapeHtml(model.name)}</td>

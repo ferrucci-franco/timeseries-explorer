@@ -150,7 +150,7 @@ La lectura usada viaja en el resultado y sale en la exportación (`sample_readin
 
 ### 8.1 Checkbox global "Add units to the legends"
 
-- Debajo de `Mouse wheel zoom` — [`index.html:363`](../index.html:363), `id="legend-units"`, **default off**.
+- Dentro del grupo **Legend**, debajo de los radio buttons de posición — `id="legend-units"`, **default off**. Es un ajuste de leyenda, así que va con los otros ajustes de leyenda.
 - Se aplica en `_traceName(label, fileId, options)` ([`plot-manager.js:3606`](../src/plots/plot-manager.js:3606)), el único constructor de nombres de leyenda.
 - Los llamadores que ya agregaban la unidad por su cuenta (headers del CSV, tabla de estadísticas, hovers) pasan `{ units: false }`, así no aparece dos veces.
 - Cambiarlo **reconstruye** los paneles: varios modos usan el nombre de traza como identidad para el click en la leyenda, y un `restyle` los desincronizaría.
@@ -242,7 +242,8 @@ El botón CSV de la toolbar exporta la **tabla de resultados**, no la serie: una
 
 - Estado del panel completo en la sesión, con `_normalizeIntegralState` tolerante a sesiones viejas; los warnings guardados se descartan al restaurar porque describen un cálculo que todavía no corrió.
 - 74 claves × 4 idiomas; `test:i18n-consistency` pasa (1394 claves × 4).
-- Tests nuevos: `test:definite-integral` (80 checks, valores analíticos) y `test:integral-analysis` (143 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
+- Las **duraciones se leen igual en todo eje**: el kernel cuenta en unidades de abscisa, así que una señal muestreada en segundos reportaba un `20` pelado donde los mismos 20 s en un eje calendario decían `20 s`. `axisDuration()` convierte primero por la unidad del eje (un eje en horas se convierte, no se lee como segundos) y después las dos usan la misma escalera s/min/h/d. Un eje de índice no tiene unidad y sigue diciendo `samples`.
+- Tests nuevos: `test:definite-integral` (80 checks, valores analíticos) y `test:integral-analysis` (152 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
 
 Verificado además en la app real (Vite + Plotly + DuckDB-WASM):
 
