@@ -3383,3 +3383,185 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
     margin-top: 1.1rem;
     min-width: 8rem;
 }
+
+/* ── Panel export dialog ─────────────────────────────────────────────────
+   One dialog for the three ways out of a panel: the data as CSV, the plot as
+   a PNG image, the plot as an SVG drawing. Options that do not apply to the
+   chosen format are hidden rather than disabled, so the dialog stays as short
+   as the decision in front of the user. */
+.modal-dialog-plot-export {
+    width: min(560px, calc(100vw - 32px));
+    max-width: none;
+}
+
+/* Five short sections stack up: a little less padding than the default dialog
+   keeps the whole decision on screen on a laptop, and the content scrolls
+   rather than being clipped on anything shorter. */
+.modal-dialog-plot-export .modal-content {
+    text-align: left;
+    padding: 1.5rem 1.75rem;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+}
+
+.modal-dialog-plot-export .modal-icon,
+.modal-dialog-plot-export .modal-title {
+    text-align: center;
+}
+
+.plot-export-icon {
+    margin-bottom: 0.5rem;
+}
+
+.plot-export-icon svg {
+    display: block;
+    width: 2rem;
+    height: 2rem;
+    margin: 0 auto;
+    color: var(--primary-color);
+}
+
+.modal-dialog-plot-export .modal-message {
+    text-align: center;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.9rem;
+}
+
+.export-section {
+    margin-bottom: 0.9rem;
+}
+
+.export-section[hidden] {
+    display: none;
+}
+
+.export-option-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+/* Short labels (which chart, which background) read better side by side. */
+.export-option-grid-compact {
+    flex-direction: row;
+    flex-wrap: wrap;
+}
+
+.export-option-grid-compact .export-option {
+    flex: 1 1 8rem;
+    align-items: center;
+}
+
+.export-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    cursor: pointer;
+}
+
+.export-option:hover {
+    background: var(--hover-bg);
+}
+
+.export-option:has(input:checked) {
+    border-color: var(--primary-color);
+}
+
+.export-option-disabled,
+.export-option-disabled:hover {
+    cursor: not-allowed;
+    opacity: 0.6;
+    background: var(--bg-secondary);
+}
+
+.export-option input {
+    margin-top: 0.15rem;
+    flex: 0 0 auto;
+    cursor: inherit;
+}
+
+.export-option-grid-compact .export-option input {
+    margin-top: 0;
+}
+
+.export-option-text {
+    min-width: 0;
+}
+
+.export-option-label {
+    font-weight: 600;
+    font-size: 0.92rem;
+    color: var(--text-primary);
+}
+
+.export-option-hint {
+    margin-top: 0.15rem;
+    font-size: 0.82rem;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+.export-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.export-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.export-chip:has(input:checked) {
+    border-color: var(--primary-color);
+    background: var(--hover-bg);
+}
+
+.export-hint-line {
+    margin-top: 0.4rem;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.export-name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.export-name-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.export-name-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.export-name-ext {
+    flex: 0 0 auto;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}

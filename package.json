@@ -66,6 +66,7 @@
     "test:parquet-conversion-sql": "node scripts/test-parquet-conversion-sql.mjs",
     "test:parquet-converter-menu": "node scripts/test-parquet-converter-menu.mjs",
     "test:large-files-help": "node scripts/test-large-files-help.mjs",
+    "test:export-dialog": "node scripts/test-export-dialog.mjs",
     "test:csv-export": "node scripts/test-csv-export-time-columns.mjs",
     "test:csv-elapsed": "node scripts/test-csv-elapsed-format.mjs",
     "test:cursor-y2": "node scripts/test-cursor-y2.mjs",
