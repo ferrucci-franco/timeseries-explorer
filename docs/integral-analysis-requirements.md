@@ -170,9 +170,20 @@ Las tres salen del **mismo par de números** — el área y la duración realmen
 
 **Las tres se muestran siempre** en el resumen, en el hover y en la exportación, sea cual sea la dibujada: un total sin su media esconde sobre cuánto tiempo está repartido, y una media sin su cobertura esconde de cuántos datos sale. `Per day` solo existe con eje calendario; en un eje numérico no hay día por el que dividir y no se inventa uno.
 
-### 9.2 Torta
+### 9.2 Torta — plot propio
 
-Checkbox **default off**. Solo se dibuja si todas las señales comparten **una unidad** y **un signo**. Si no, se oculta **y se dice por qué** (`integralPieMixedSigns` / `integralPieMixedUnits`): una torta no puede representar una suma con cancelaciones, y en redes eléctricas eso pasa siempre (un almacenamiento carga y descarga). Comparte el div con las barras vía `xaxis.domain` + `pie.domain`.
+Checkbox **default off**. Solo se dibuja si todas las señales comparten **una unidad** y **un signo**. Si no, se oculta **y se dice por qué** (`integralPieMixedSigns` / `integralPieMixedUnits`): una torta no puede representar una suma con cancelaciones, y en redes eléctricas eso pasa siempre (un almacenamiento carga y descarga).
+
+Va en **su propio pane, con su propio splitter arrastrable**, no comprimida en un rincón del gráfico de barras. El corte interno corre **perpendicular al externo**, así ningún pane queda como una astilla:
+
+| Layout externo (botón V/H) | Corte interno |
+|---|---|
+| Vertical (dos filas) | dos columnas: barras a la izquierda, torta a la derecha |
+| Horizontal (dos columnas) | dos filas: torta debajo de las barras |
+
+Sin torta la grilla interna colapsa a una sola celda y las barras recuperan el pane completo. El cursor del splitter sigue el eje (`col-resize` / `row-resize`) y la fracción (`pieSplit`, default 0.62) persiste en la sesión.
+
+Las barras van **sin alpha**: una barra translúcida sobre una línea de grilla se lee como un color distinto del mismo color en la porción de torta de al lado.
 
 ---
 
@@ -188,7 +199,9 @@ La tabla `Summary` lista **Signal · Integral · Per day · Mean value · Covera
 
 ## 11. Resumen y warnings
 
-Tabla `Summary` con Signal (chip de color) · Integral · unidad · Coverage (`días incluidos / días del rango`). La línea de estado muestra `<n> · <duración efectiva>` o los warnings concatenados.
+Tabla `Summary` con Signal (chip de color) · Integral · Per day · Mean value · Coverage (`días incluidos / días del rango`). Es más ancha que el panel, así que scrollea horizontal con una barra **de tamaño real y siempre dibujada** — una overlay que aparece solo al pasar el mouse no deja ninguna señal de que hay columnas a la derecha — y deja aire debajo para que la última fila no quede pegada al borde.
+
+**La barra superior lleva el resumen, no el texto de los warnings.** Dice qué es: `3 signals totalled over 9.96 d`. Si las señales no cubrieron la misma duración, nombrar una sería afirmar algo falso sobre las otras, así que usa `integralStatusMixed` y apunta al resumen. Cuando hay warnings solo se agrega un puntero corto (`Warning: see the message in the Integral side panel`); el texto completo va en el panel lateral y en el tooltip — es el mismo reparto que ya hacen FFT y Profile.
 
 Warnings implementados: `integralNoData`, `integralAllDiscarded`, `integralUnsorted`, `integralIndexAxis`, `integralAssumedSeconds`, `integralMixedUnits`, `integralUnknownUnits`, `integralUnequalCoverage`, `integralUncovered`, `integralUncoveredInterpolated`, `integralLazyUnsupported`, `integralPieMixedSigns`, `integralPieMixedUnits` — los cuatro idiomas.
 
@@ -205,8 +218,8 @@ El botón CSV de la toolbar exporta la **tabla de resultados**, no la serie: una
 ## 13. Persistencia, i18n, tests
 
 - Estado del panel completo en la sesión, con `_normalizeIntegralState` tolerante a sesiones viejas; los warnings guardados se descartan al restaurar porque describen un cálculo que todavía no corrió.
-- 68 claves × 4 idiomas; `test:i18n-consistency` pasa (1388 claves × 4).
-- Tests nuevos: `test:definite-integral` (64 checks, valores analíticos) y `test:integral-analysis` (123 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
+- 72 claves × 4 idiomas; `test:i18n-consistency` pasa (1392 claves × 4).
+- Tests nuevos: `test:definite-integral` (64 checks, valores analíticos) y `test:integral-analysis` (137 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
 
 Verificado además en la app real (Vite + Plotly + DuckDB-WASM):
 
@@ -264,6 +277,7 @@ Mientras la consulta corre, el panel muestra la misma píldora de progreso no bl
 | D12 | Dónde van la media y el total por día | En el resumen, el hover y la exportación **siempre**, más un dropdown `Show` que elige cuál dibujan las barras | Pedías "en alguna parte"; separarlas del gráfico las escondería, y ponerlas solo en el gráfico obligaría a elegir |
 | D13 | Qué es el "valor medio llano" | El total dividido por la duración integrada, en la unidad propia de la señal | Es el nivel constante que daría la misma área; cualquier otra media (aritmética sobre muestras) daría un número distinto con muestreo irregular |
 | D14 | Desorden de filas en lazy | Reportar "no se sabe", no negarse | El chequeo de orden físico da falsos positivos en DuckDB (§15) |
+| D15 | Estado con coberturas distintas | `integralStatusMixed`, que apunta al resumen | Afirmar una duración sola sería falso para las otras señales |
 
 ---
 

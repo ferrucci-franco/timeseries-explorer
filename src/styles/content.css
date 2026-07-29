@@ -3042,11 +3042,73 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 }
 /* Integral: the result pane is a bar chart, so the shell is Histogram's with a
    summary table under the options instead of a stats block. */
-.integral-container .hist-hist-pane { position: relative; }
+/* The result pane splits again for the pie, on the axis PERPENDICULAR to the
+   outer one: rows outside ⇒ columns inside, columns outside ⇒ rows inside. With
+   no pie the grid collapses to one cell so the bars get the whole pane back. */
+.integral-result-area {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    overflow: hidden;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+.integral-pane { min-width: 0; min-height: 0; display: flex; }
+.integral-pie-pane,
+.integral-splitter { display: none; }
+.integral-pie-visible .integral-pie-pane { display: flex; }
+.integral-pie-visible .integral-splitter { display: block; }
+.integral-pie-visible.hist-layout-vertical .integral-result-area {
+    grid-template-columns: minmax(0, var(--integral-pie-split)) 7px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+.integral-pie-visible.hist-layout-horizontal .integral-result-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, var(--integral-pie-split)) 7px minmax(0, 1fr);
+}
+.integral-splitter {
+    background: color-mix(in srgb, var(--border-color) 72%, transparent);
+    position: relative;
+    z-index: 2;
+}
+.integral-splitter:hover { background: color-mix(in srgb, var(--primary-color) 42%, var(--border-color)); }
+.integral-pie-visible.hist-layout-vertical .integral-splitter { cursor: col-resize; }
+.integral-pie-visible.hist-layout-horizontal .integral-splitter { cursor: row-resize; }
+.integral-container .integral-bars-pane { position: relative; }
 .integral-computing-indicator { top: 10px; }
 /* Total / per-day / mean sit side by side, so the table is wider than the
-   sidebar and scrolls horizontally rather than wrapping into illegibility. */
-.integral-summary { max-height: 240px; overflow: auto; }
+   sidebar and scrolls horizontally rather than wrapping into illegibility.
+   The scrollbar is deliberately chunky and ALWAYS drawn: an overlay bar that
+   only fades in on hover leaves no sign that there are columns to the right. */
+.integral-summary {
+    max-height: 240px;
+    overflow: auto;
+    /* Reserves the track, so the table does not reflow when the bar appears. */
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    scrollbar-color: color-mix(in srgb, var(--text-secondary) 55%, transparent) transparent;
+    /* Keeps the last row clear of the panel's bottom edge — the table used to
+       sit flush against it with the scrollbar on top of the final row. */
+    padding-bottom: 6px;
+    margin-bottom: 14px;
+}
+.integral-summary::-webkit-scrollbar { height: 14px; width: 14px; }
+.integral-summary::-webkit-scrollbar-track {
+    background: color-mix(in srgb, var(--border-color) 40%, transparent);
+    border-radius: 999px;
+}
+.integral-summary::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-secondary) 55%, transparent);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+}
+.integral-summary::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--primary-color) 70%, var(--text-secondary));
+    border: 3px solid transparent;
+    background-clip: content-box;
+}
 .integral-summary-table {
     width: 100%;
     border-collapse: collapse;

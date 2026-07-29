@@ -589,6 +589,7 @@ class PlotManager {
             this._applyMouseWheelZoomConfig(plot?.heatmapDiv, next);
             this._applyMouseWheelZoomConfig(plot?.temporalProfileDiv, next);
             this._applyMouseWheelZoomConfig(plot?.integralDiv, next);
+            this._applyMouseWheelZoomConfig(plot?.integralPieDiv, next);
         }
     }
 
@@ -647,6 +648,7 @@ class PlotManager {
             if (plot.heatmapDiv) Plotly.Plots.resize(plot.heatmapDiv);
             if (plot.temporalProfileDiv) Plotly.Plots.resize(plot.temporalProfileDiv);
             if (plot.integralDiv) Plotly.Plots.resize(plot.integralDiv);
+            if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
         }
     }
 
@@ -1882,11 +1884,14 @@ class PlotManager {
                 plot.correlationContainer = null;
             } else if (integralContainer) {
                 if (plot.integralDiv) Plotly.purge(plot.integralDiv);
+                if (plot.integralPieDiv) Plotly.purge(plot.integralPieDiv);
                 Plotly.purge(plot.div);
                 integralContainer.remove();
                 plot.div = null;
                 plot.integralDiv = null;
+                plot.integralPieDiv = null;
                 plot.integralContainer = null;
+                plot._integralPieVisible = undefined;
             } else if (temporalProfileContainer) {
                 if (plot.temporalProfileDiv) Plotly.purge(plot.temporalProfileDiv);
                 Plotly.purge(plot.div);
@@ -1988,6 +1993,11 @@ class PlotManager {
             document.removeEventListener('mousemove', plot._integralSplitterDocListeners.move);
             document.removeEventListener('mouseup', plot._integralSplitterDocListeners.up);
             plot._integralSplitterDocListeners = null;
+        }
+        if (plot._integralPieSplitterDocListeners) {
+            document.removeEventListener('mousemove', plot._integralPieSplitterDocListeners.move);
+            document.removeEventListener('mouseup', plot._integralPieSplitterDocListeners.up);
+            plot._integralPieSplitterDocListeners = null;
         }
         clearTimeout(plot._integralRecomputeTimer);
         plot._integralSelectionDiv = null;
@@ -2606,6 +2616,7 @@ class PlotManager {
             if (plot.histogramDiv) Plotly.relayout(plot.histogramDiv, this._themeRelayoutUpdate(plot));
             if (plot.temporalProfileDiv) Plotly.relayout(plot.temporalProfileDiv, this._themeRelayoutUpdate(plot));
             if (plot.integralDiv) Plotly.relayout(plot.integralDiv, this._themeRelayoutUpdate(plot));
+            if (plot.integralPieDiv) Plotly.relayout(plot.integralPieDiv, this._themeRelayoutUpdate(plot));
             if (plot.heatmapDiv) {
                 // Rebuild only the cached Plotly traces/layout so every
                 // small-multiple y-axis picks up the theme. Source data and
@@ -3139,6 +3150,7 @@ class PlotManager {
             if (plot.heatmapDiv) Plotly.relayout(plot.heatmapDiv, { ...update, showlegend: false });
             if (plot.temporalProfileDiv) Plotly.relayout(plot.temporalProfileDiv, update);
             if (plot.integralDiv) Plotly.relayout(plot.integralDiv, { ...update, showlegend: false });
+            if (plot.integralPieDiv) Plotly.relayout(plot.integralPieDiv, { ...update, showlegend: false });
         }
     }
 
@@ -3172,6 +3184,7 @@ class PlotManager {
             temporalProfileContainer: null,
             temporalProfile: this._defaultTemporalProfileState?.() || null,
             integralDiv: null,
+            integralPieDiv: null,
             integralContainer: null,
             integral: this._defaultIntegralState?.() || null,
             correlationDiv: null,

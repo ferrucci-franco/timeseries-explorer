@@ -358,6 +358,36 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
         'the discard-day-all union spans lazy signals too, or the bars stop being comparable');
     ok(methods.includes('_setIntegralComputing'), 'a lazy query shows the non-blocking progress pill');
 
+    // The pie lives in its own pane behind its own splitter, and the inner split
+    // runs perpendicular to the outer one so neither pane becomes a sliver.
+    ok(methods.includes('integralPieDiv'), 'the pie has its own Plotly div');
+    ok(methods.includes('_installIntegralPieSplitterHandlers'), 'and its own draggable splitter');
+    ok(methods.includes('_applyIntegralPieVisibility'), 'the pane collapses when there is no pie');
+    ok(/hist-layout-vertical .integral-result-area\s*\{[^}]*grid-template-columns/.test(css),
+        'rows outside means columns inside');
+    ok(/hist-layout-horizontal .integral-result-area\s*\{[^}]*grid-template-rows/.test(css),
+        'and columns outside means rows inside');
+    ok(/\.integral-pie-visible \.integral-splitter \{ display: block; \}/.test(css),
+        'the inner splitter only exists while there is a pie');
+    ok(!methods.includes('domain: pie ?'), 'the bars no longer give up axis domain to the pie');
+
+    // Bars are opaque: a translucent bar reads as a different colour than the
+    // same colour in the pie slice beside it.
+    ok(!methods.includes('INTEGRAL_BAR_OPACITY'), 'the bar alpha is gone');
+
+    // Warning TEXT belongs in the side panel; the topbar carries the summary and
+    // at most a pointer, the way FFT and Profile already split it.
+    ok(/_setIntegralStatus = function\(plot, summary, warnings/.test(methods),
+        'the status takes the summary and the warnings separately');
+    ok(methods.includes("text('integralWarningSeePanel')"), 'so a warning only leaves a pointer in the topbar');
+    ok(methods.includes("text('integralStatusMixed')"),
+        'and unequal coverage does not let the topbar claim one duration for every signal');
+
+    // The summary scrollbar is laid out, not an overlay that fades in on hover.
+    ok(/\.integral-summary::-webkit-scrollbar \{ height: \d+px/.test(css), 'the summary scrollbar has a real height');
+    ok(/\.integral-summary \{[^}]*scrollbar-gutter: stable/.test(css), 'its track is reserved so the table does not reflow');
+    ok(/\.integral-summary \{[^}]*margin-bottom/.test(css), 'and the table is not flush against the panel edge');
+
     ok(html.includes('id="legend-units"'), 'the sidebar carries the legend-units checkbox');
     ok(html.indexOf('id="legend-units"') > html.indexOf('id="mouse-wheel-zoom"'),
         'placed under Mouse wheel zoom, as specified');

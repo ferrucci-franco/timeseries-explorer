@@ -38,6 +38,7 @@ export function defaultIntegralState() {
     return {
         layout: 'vertical',
         split: 0.5,
+        pieSplit: 0.62,
         timeSeriesHidden: false,
         optionsVisible: true,
         rangeFull: true,
@@ -72,12 +73,14 @@ function hasFinite(value) {
 export function normalizeIntegralState(raw = {}, missingPolicies) {
     const defaults = defaultIntegralState();
     const split = Number(raw.split);
+    const pieSplit = Number(raw.pieSplit);
     const policyOk = missingPolicies ? missingPolicies.has(raw.missingPolicy) : false;
     return {
         ...defaults,
         ...raw,
         layout: INTEGRAL_LAYOUTS.has(raw.layout) ? raw.layout : defaults.layout,
         split: Number.isFinite(split) ? Math.max(0.2, Math.min(0.8, split)) : defaults.split,
+        pieSplit: Number.isFinite(pieSplit) ? Math.max(0.2, Math.min(0.85, pieSplit)) : defaults.pieSplit,
         timeSeriesHidden: raw.timeSeriesHidden === true,
         optionsVisible: raw.optionsVisible !== false,
         // A session predating rangeFull that carries an explicit window keeps it.

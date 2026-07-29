@@ -29,7 +29,6 @@ import {
 
 const INTEGRAL_LAYOUTS = new Set(['horizontal', 'vertical']);
 const INTEGRAL_RECOMPUTE_DEBOUNCE_MS = 150;
-const INTEGRAL_BAR_OPACITY = 0.78;
 
 const fallbackText = {
     integralMode: 'Integral (totals per signal)',
@@ -90,6 +89,10 @@ const fallbackText = {
     integralSamples: 'samples',
     integralValue: 'Integral',
     integralSignal: 'Signal',
+    integralStatusOne: '1 signal totalled over {time}',
+    integralStatusMany: '{count} signals totalled over {time}',
+    integralStatusMixed: '{count} signals totalled, each over a different duration — see the summary',
+    integralWarningSeePanel: 'Warning: see the message in the Integral side panel',
     integralQuantity: 'Show',
     integralQuantityTotal: 'Total',
     integralQuantityPerDay: 'Per day',
@@ -185,7 +188,7 @@ proto._invalidateIntegralForDataChange = function(plot) {
     const state = this._ensureIntegralState(plot);
     state.warnings = [];
     plot._integralModels = [];
-    this._setIntegralStatus?.(plot, '', 'muted');
+    this._setIntegralStatus?.(plot, '', [], 'muted');
 };
 
 // ─── Time base and units ──────────────────────────────────────────────────
@@ -297,10 +300,31 @@ proto._createIntegralChart = function(panelId, panelEl) {
     splitter.setAttribute('role', 'separator');
     const timeDiv = document.createElement('div');
     timeDiv.className = 'plotly-container plotly-mode-integral-time';
+    // The pie gets its own Plotly div in its own pane behind its own splitter,
+    // rather than sharing the bars' axes through domain juggling: a pie squeezed
+    // into a corner of the bar chart cannot be resized, and the user already
+    // knows how to drag a splitter from the time-series one above.
+    //
+    // The inner split runs PERPENDICULAR to the outer one, so each pane stays as
+    // close to square as the shell allows: rows outside ⇒ columns inside.
+    const resultArea = document.createElement('div');
+    resultArea.className = 'integral-result-area';
+    const barsPane = document.createElement('div');
+    barsPane.className = 'integral-pane integral-bars-pane';
+    const piePane = document.createElement('div');
+    piePane.className = 'integral-pane integral-pie-pane';
+    const pieSplitter = document.createElement('div');
+    pieSplitter.className = 'integral-splitter';
+    pieSplitter.setAttribute('role', 'separator');
     const integralDiv = document.createElement('div');
     integralDiv.className = 'plotly-container plotly-mode-integral-analysis';
+    const pieDiv = document.createElement('div');
+    pieDiv.className = 'plotly-container plotly-mode-integral-pie';
     timePane.appendChild(timeDiv);
-    analysisPane.appendChild(integralDiv);
+    barsPane.appendChild(integralDiv);
+    piePane.appendChild(pieDiv);
+    resultArea.append(barsPane, pieSplitter, piePane);
+    analysisPane.appendChild(resultArea);
     plotArea.append(timePane, splitter, analysisPane);
     const options = document.createElement('aside');
     options.className = 'hist-options fft-options integral-options';
@@ -311,13 +335,17 @@ proto._createIntegralChart = function(panelId, panelEl) {
 
     plot.integralContainer = container;
     plot.integralDiv = integralDiv;
+    plot.integralPieDiv = pieDiv;
     plot.div = timeDiv;
+    container.style.setProperty('--integral-pie-split', `${Math.round(state.pieSplit * 1000) / 10}%`);
+    this._applyIntegralPieVisibility(plot, false);
     this._renderIntegralOptionsPanel(panelId, plot);
 
     const config = this._getPlotlyConfig();
     Promise.all([
         Plotly.newPlot(timeDiv, this._buildIntegralTimeTraces(plot), this._buildIntegralTimeLayout(plot), config),
         Plotly.newPlot(integralDiv, [], this._buildIntegralLayout(plot, { models: [] }), config),
+        Plotly.newPlot(pieDiv, [], this._buildIntegralPieLayout(plot), config),
     ]).then(() => {
         this._refreshActionBtns(panelId);
         const viewPromise = restoreView ? this._restorePlotView(plot, restoreView) : Promise.resolve();
@@ -326,6 +354,7 @@ proto._createIntegralChart = function(panelId, panelEl) {
         this._installCursorHandlers?.(panelId, plot);
         this._installIntegralSelectionHandlers(panelId, plot);
         this._installIntegralSplitterHandlers(panelId, plot);
+        this._installIntegralPieSplitterHandlers(panelId, plot);
         this._installWheelPan(panelId, plot, timeDiv, { finalize: xRange => this._onRelayout(panelId, { 'xaxis.range': xRange }) });
         this._installRightButtonPan(panelId, plot, timeDiv, { finalize: xRange => this._onRelayout(panelId, { 'xaxis.range': xRange }) });
         this._syncCursorDisplay?.(panelId, plot);
@@ -333,7 +362,11 @@ proto._createIntegralChart = function(panelId, panelEl) {
         let timer;
         const observer = new ResizeObserver(() => {
             clearTimeout(timer);
-            timer = setTimeout(() => { Plotly.Plots.resize(timeDiv); Plotly.Plots.resize(integralDiv); }, 50);
+            timer = setTimeout(() => {
+                Plotly.Plots.resize(timeDiv);
+                Plotly.Plots.resize(integralDiv);
+                Plotly.Plots.resize(pieDiv);
+            }, 50);
         });
         observer.observe(panelEl);
         plot.resizeObserver = observer;
@@ -608,6 +641,7 @@ proto._setIntegralLayout = function(panelId, layout) {
     plot.integralContainer.classList.toggle('hist-layout-vertical', layout === 'vertical');
     Plotly.Plots.resize(plot.div);
     Plotly.Plots.resize(plot.integralDiv);
+    if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
 };
 
 proto._toggleIntegralTimeSeries = function(panelId) {
@@ -628,6 +662,7 @@ proto._toggleIntegralTimeSeries = function(panelId) {
         this._refreshPanelDomOverlays(plot);
     }
     if (plot.integralDiv) Plotly.Plots.resize(plot.integralDiv);
+    if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
 };
 
 proto._toggleIntegralOptions = function(panelId) {
@@ -644,6 +679,7 @@ proto._toggleIntegralOptions = function(panelId) {
     }
     Plotly.Plots.resize(plot.div);
     Plotly.Plots.resize(plot.integralDiv);
+    if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
 };
 
 proto._resetIntegralView = function(panelId) {
@@ -696,6 +732,7 @@ proto._installIntegralSplitterHandlers = function(panelId, plot) {
         plot.integralContainer.style.setProperty('--hist-split', `${Math.round(state.split * 1000) / 10}%`);
         Plotly.Plots.resize(plot.div);
         Plotly.Plots.resize(plot.integralDiv);
+        if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
     };
     splitter.addEventListener('mousedown', event => { dragging = true; event.preventDefault(); document.body.classList.add('fft-split-dragging'); });
     const onMove = event => { if (dragging) apply(event); };
@@ -703,6 +740,37 @@ proto._installIntegralSplitterHandlers = function(panelId, plot) {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     plot._integralSplitterDocListeners = { move: onMove, up: onUp };
+    void panelId;
+};
+
+// The bars|pie splitter. Same mechanic as the one above it, on the PERPENDICULAR
+// axis: with rows outside the split runs left-right, with columns outside it
+// runs top-bottom, so neither pane is ever squeezed into a sliver.
+proto._installIntegralPieSplitterHandlers = function(panelId, plot) {
+    const splitter = plot?.integralContainer?.querySelector('.integral-splitter');
+    if (!splitter || splitter._integralPieBound) return;
+    splitter._integralPieBound = true;
+    let dragging = false;
+    const apply = (event) => {
+        if (!plot.integralContainer) return;
+        const state = this._ensureIntegralState(plot);
+        const area = plot.integralContainer.querySelector('.integral-result-area');
+        const rect = area?.getBoundingClientRect();
+        if (!rect?.width || !rect?.height) return;
+        const fraction = state.layout === 'vertical'
+            ? (event.clientX - rect.left) / rect.width
+            : (event.clientY - rect.top) / rect.height;
+        state.pieSplit = Math.max(0.2, Math.min(0.85, fraction));
+        plot.integralContainer.style.setProperty('--integral-pie-split', `${Math.round(state.pieSplit * 1000) / 10}%`);
+        Plotly.Plots.resize(plot.integralDiv);
+        if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
+    };
+    splitter.addEventListener('mousedown', event => { dragging = true; event.preventDefault(); document.body.classList.add('fft-split-dragging'); });
+    const onMove = event => { if (dragging) apply(event); };
+    const onUp = () => { dragging = false; document.body.classList.remove('fft-split-dragging'); };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    plot._integralPieSplitterDocListeners = { move: onMove, up: onUp };
     void panelId;
 };
 
@@ -834,10 +902,12 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
 
     // Different integrated durations are what makes bars silently incomparable,
     // so the panel says it out loud rather than leaving it to be noticed.
+    let unequalCoverage = false;
     if (ready.length > 1) {
         const covered = ready.map(model => model.result.coveredTime);
         const spread = Math.max(...covered) - Math.min(...covered);
         const reference = Math.max(...covered) || 1;
+        unequalCoverage = spread > reference * 1e-6;
         if (spread > reference * 1e-6) warnings.push(text('integralUnequalCoverage'));
     }
 
@@ -857,14 +927,29 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
 
     state.warnings = warnings;
     const built = this._buildIntegralTraces(plot, models);
-    Plotly.react(plot.integralDiv, built.traces, built.layout, this._getPlotlyConfig()).then(() => {
+    // The pane must appear before Plotly measures it, or the pie is drawn into a
+    // zero-height box and stays invisible until the next resize.
+    this._applyIntegralPieVisibility(plot, built.pieVisible);
+    const config = this._getPlotlyConfig();
+    Plotly.react(plot.integralDiv, built.traces, built.layout, config).then(() => {
         this._installLegendHoverHint(plot.integralDiv);
     });
+    if (plot.integralPieDiv) {
+        Plotly.react(plot.integralPieDiv, built.pieTraces, built.pieLayout, config);
+    }
     this._renderIntegralSummary(plot, models);
-    const summary = ready.length
-        ? `${ready.length} · ${formatDuration(ready[0].result.coveredTime, ready[0].result.timeKind)}`
-        : '';
-    this._setIntegralStatus(plot, warnings.length ? warnings.join(' | ') : summary, warnings.length ? 'warning' : 'ready');
+    // Says what it is, not just two numbers with a dot between them: how many
+    // signals were totalled and over how much time they were integrated. When
+    // the signals did NOT cover the same duration, naming one of them would
+    // state something false about the other two, so it points at the summary.
+    const summary = !ready.length
+        ? ''
+        : unequalCoverage
+            ? text('integralStatusMixed').replace('{count}', String(ready.length))
+            : text(ready.length === 1 ? 'integralStatusOne' : 'integralStatusMany')
+                .replace('{count}', String(ready.length))
+                .replace('{time}', formatDuration(ready[0].result.coveredTime, ready[0].result.timeKind));
+    this._setIntegralStatus(plot, summary, warnings, 'ready');
 };
 
 // Per-day integral partials for the lazy traces, one query per file. The SQL
@@ -994,7 +1079,15 @@ proto._buildIntegralTraces = function(plot, models = []) {
     const view = this._integralPresentation(plot, models);
     const state = view.state;
     const traces = [];
-    if (!view.rows.length) return { traces, layout: this._buildIntegralLayout(plot, { models, view }) };
+    if (!view.rows.length) {
+        return {
+            traces,
+            layout: this._buildIntegralLayout(plot, { models, view }),
+            pieTraces: [],
+            pieLayout: this._buildIntegralPieLayout(plot),
+            pieVisible: false,
+        };
+    }
 
     const names = view.rows.map(row => row.model.name);
     const values = view.rows.map(row => row.scaled);
@@ -1031,7 +1124,6 @@ proto._buildIntegralTraces = function(plot, models = []) {
         y: horizontal ? names : values,
         marker: {
             color: colors,
-            opacity: INTEGRAL_BAR_OPACITY,
             line: { color: colors, width: 1 },
         },
         text: state.showValues ? values.map(value => `${formatNumber(value, 4)}${unitSuffix}`) : undefined,
@@ -1044,28 +1136,64 @@ proto._buildIntegralTraces = function(plot, models = []) {
         yaxis: 'y',
     });
 
-    if (this._integralPieAllowed(view)) {
-        traces.push({
-            type: 'pie',
-            labels: names,
-            // A pie shows shares of a whole; with one sign throughout, the
-            // magnitudes ARE the shares. The sign check upstream is what makes
-            // this legitimate.
-            values: view.rows.map(row => Math.abs(row.scaled)),
-            marker: { colors },
-            textinfo: 'percent',
-            hovertemplate: `<b>%{label}</b><br>%{value:.4g} ${escapeHtml(view.axisUnit)}<br>%{percent}<extra></extra>`,
-            domain: { x: [0.72, 1], y: [0.05, 0.95] },
-            sort: false,
-            showlegend: false,
-        });
-    }
+    const pieVisible = this._integralPieAllowed(view);
+    const pieTraces = pieVisible ? [{
+        type: 'pie',
+        labels: names,
+        // A pie shows shares of a whole; with one sign throughout, the
+        // magnitudes ARE the shares. The sign check upstream is what makes
+        // this legitimate.
+        values: view.rows.map(row => Math.abs(row.scaled)),
+        marker: { colors },
+        textinfo: 'percent',
+        hovertemplate: `<b>%{label}</b><br>%{value:.4g} ${escapeHtml(view.axisUnit)}<br>%{percent}<extra></extra>`,
+        // Its own pane now, so it takes the whole plotting area rather than a
+        // reserved slice of the bar chart's.
+        domain: { x: [0, 1], y: [0, 1] },
+        sort: false,
+        showlegend: false,
+    }] : [];
 
-    return { traces, layout: this._buildIntegralLayout(plot, { models, view }) };
+    return {
+        traces,
+        layout: this._buildIntegralLayout(plot, { models, view }),
+        pieTraces,
+        pieLayout: this._buildIntegralPieLayout(plot),
+        pieVisible,
+    };
 };
 
 proto._integralPieAllowed = function(view) {
     return integralPieAllowed(view);
+};
+
+// The pie pane and its splitter only exist while there IS a pie. Hiding them
+// collapses the inner grid to a single cell, so the bars get the whole pane
+// back rather than sitting next to a blank rectangle.
+proto._applyIntegralPieVisibility = function(plot, visible) {
+    const container = plot?.integralContainer;
+    if (!container) return;
+    const next = !!visible;
+    if (plot._integralPieVisible === next) return;
+    plot._integralPieVisible = next;
+    container.classList.toggle('integral-pie-visible', next);
+    Plotly.Plots.resize(plot.integralDiv);
+    if (next && plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
+};
+
+proto._buildIntegralPieLayout = function(plot) {
+    const { bg, fontColor, legendBg, gridColor } = this._colors();
+    void plot;
+    return {
+        paper_bgcolor: bg,
+        plot_bgcolor: bg,
+        font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
+        showlegend: false,
+        legend: this._legendConfig(legendBg, gridColor),
+        margin: { l: 8, r: 8, t: 8, b: 8 },
+        autosize: true,
+        uirevision: 'integral-pie',
+    };
 };
 
 proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
@@ -1073,7 +1201,6 @@ proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
     const state = this._ensureIntegralState(plot);
     const resolved = view || this._integralPresentation(plot, models);
     const horizontal = state.orientation === 'horizontal';
-    const pie = this._integralPieAllowed(resolved);
     const unitSuffix = resolved.axisUnit ? ` [${resolved.axisUnit}]` : '';
     const valueAxis = {
         gridcolor: gridColor,
@@ -1106,7 +1233,7 @@ proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
         showlegend: false,
         legend: this._legendConfig(legendBg, gridColor),
         bargap: 0.32,
-        xaxis: { ...(horizontal ? valueAxis : categoryAxis), domain: pie ? [0, 0.64] : [0, 1] },
+        xaxis: horizontal ? valueAxis : categoryAxis,
         yaxis: horizontal ? categoryAxis : valueAxis,
         margin: { l: 62, r: 18, t: 12, b: 52 },
         autosize: true,
@@ -1119,13 +1246,21 @@ proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
 
 // ─── Status and summary ───────────────────────────────────────────────────
 
-proto._setIntegralStatus = function(plot, message, kind = 'muted') {
-    plot._integralStatusMessage = message;
-    plot._integralStatusKind = kind;
+// The topbar carries the SUMMARY; warning text belongs in the side panel, the
+// way FFT and Profile already split it. A warning only leaves a short pointer
+// here (the panel can be closed) plus the full text in the tooltip — a topbar
+// that reads like a log of concatenated sentences tells the user nothing.
+proto._setIntegralStatus = function(plot, summary, warnings = [], kind = 'muted') {
+    const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+    const full = list.join(' | ');
+    plot._integralStatusMessage = full;
+    plot._integralStatusKind = list.length ? 'warning' : kind;
     const status = plot?.integralContainer?.querySelector('.hist-status');
     if (status) {
-        status.textContent = message || '';
-        status.className = `hist-status hist-status-${kind}`;
+        const pointer = list.length ? text('integralWarningSeePanel') : '';
+        status.textContent = [summary, pointer].filter(Boolean).join(' · ');
+        status.className = `hist-status hist-status-${list.length ? 'warning' : kind}`;
+        status.title = full || summary || '';
     }
     this._syncIntegralMessage(plot);
 };
