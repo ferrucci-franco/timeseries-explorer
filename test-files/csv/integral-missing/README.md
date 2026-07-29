@@ -39,7 +39,7 @@ i.e. 435600 kW*s.
 | `05_jitter_no_gaps.csv` | (c) | Nominal 60 s step with +/-2 s jitter; nothing is missing. |
 | `06_jitter_with_missing_rows.csv` | (d) | Jitter *and* the 2040..3360 s gap. |
 | `07_duplicate_timestamps.csv` | extra | Repeated timestamps (dt = 0). |
-| `08_unsorted_timestamps.csv` | extra | A block of rows out of chronological order (dt < 0). |
+| `08_unsorted_timestamps.csv` | extra | A block of rows out of chronological order (dt < 0). **Reaches the app already sorted** — see below. |
 | `09_dst_spring_forward.csv` | extra | Local wall-clock timestamps across Europe/Madrid 2024-03-31 02:00 -> 03:00. The 1 h jump is *not* missing data. |
 | `10_gap_hides_pulse.csv` | extra | The gap spans a whole event and both endpoints read 0 kW. |
 | `11_elapsed_seconds_missing_rows.csv` | extra | Same gap as `03` with a numeric elapsed-seconds abscissa. |
@@ -90,14 +90,29 @@ gaps. `agreement` is the fraction of steps within 10 % of the median.
 | `13` | 60 s | 63 % | **no** | `irregularStep` | 0 | 0 |
 | `14` | 60 s | 91 % | yes | — | **6 (false)** | 0 |
 
-`02`, `08` and `13` show no gap bands and raise a notice explaining why; their
-NaN regions, if any, are still banded.
+`02` and `13` show no gap bands and raise a notice explaining why; their NaN
+regions, if any, are still banded.
+
+**`08` is a kernel-only fixture.** The table above is what `detectSamplingGaps`
+reports when handed the file's rows in file order — which is what the tests do.
+It is NOT what the app shows: every CSV reader sorts by time on import, so by
+the time the app sees this file the disorder is gone and it reads as a clean,
+equidistant series. The time-axis inspector says so, in the "rows reordered on
+import" row. Sources that do NOT sort (`.mat`, NetCDF, Excel, PyPSA) are where
+the `nonMonotonic` path is reachable end to end; there is no fixture for those
+here because generating them costs more than it adds — the logic is covered
+directly in `scripts/test-sampling-gaps.mjs`.
 
 Two false positives remain, both by construction rather than by oversight:
 
 - `09` — the DST jump is indistinguishable from a real hour of missing samples
   using the time vector alone.
-- `14` — when a rate change leaves the fine rate dominant in COUNT, agreement
+- `14` — the coarse stretch after 01:00 is banded as missing data and reported
+  as 6 sampling gaps, but nothing is missing there: the rate simply changes from
+  60 s to 600 s and every one of those rows is a real measurement. The six gaps
+  are adjacent, so they coalesce into ONE band on screen. No notice appears,
+  because the gate passed (91 % agreement) — that is the whole point of the
+  case. When a rate change leaves the fine rate dominant in COUNT, agreement
   stays above the gate and each coarse step is reported as a gap (9 phantom
   missing samples each). An agreement statistic cannot separate this from real
   dropouts; the structural difference is that a rate change produces a
