@@ -838,6 +838,32 @@
     padding: 0.1rem 0.3rem;
     font-size: 0.75rem;
     line-height: 1.2;
+    width: auto;
+    min-width: 24px;
+}
+
+/* Armed for deletion: the question replaces the row's own second line, so the
+   confirmation sits on the thing it is about instead of in a dialog. */
+.data-tool-row.confirming {
+    border-color: var(--error-color, #c62828);
+}
+
+.data-tool-row-question {
+    font-size: 0.74rem;
+    color: var(--error-color, #c62828);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.data-tool-row-yes {
+    border-color: var(--error-color, #c62828);
+    color: var(--error-color, #c62828);
+}
+
+.data-tool-row-yes:hover {
+    background-color: var(--error-color, #c62828);
+    color: #fff;
 }
 
 .data-tool-actions button:disabled,

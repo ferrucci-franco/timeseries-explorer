@@ -137,6 +137,12 @@ proto.initDataTools = function() {
     renameBtn?.addEventListener('click', () => this._toggleDataToolRename());
     liveChain?.addEventListener('change', () => this._handleDataToolPreviewChange({ immediate: true }));
     tableEl?.addEventListener('click', (event) => this._handleDataToolTableClick(event));
+    tableEl?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !this._dataToolPendingDelete) return;
+        event.preventDefault();
+        this._dataToolPendingDelete = '';
+        this._renderDataToolTable();
+    });
 
     this._syncDataTools();
 };
@@ -947,17 +953,12 @@ proto._dataToolDependents = function(fileId, name) {
     return found;
 };
 
-proto._deleteDataToolVariable = function(fileId, name, options = {}) {
+// Deletes without asking: the table arms the row and asks there, in place, so
+// this runs only once the answer is yes.
+proto._deleteDataToolVariable = function(fileId, name) {
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
     if (!data) return false;
     const dependents = this._dataToolDependents(fileId, name);
-    if (dependents.length && !options.cascade) {
-        const message = i18n.t(dependents.length === 1 ? 'dataToolDeleteCascadeOne' : 'dataToolDeleteCascade')
-            .replace('{name}', name)
-            .replace('{count}', String(dependents.length))
-            .replace('{names}', dependents.join(', '));
-        if (typeof confirm === 'function' && !confirm(message)) return false;
-    }
 
     // Deepest first, so nothing is briefly left pointing at a missing source.
     for (const dependent of [...dependents].reverse()) this._removeDataToolVariable(fileId, data, dependent);
@@ -1004,10 +1005,18 @@ proto._renderDataToolTable = function() {
     }
 
     const editingName = this._dataToolEditing?.name || '';
+    // A pending confirmation for a row that no longer exists would strand the
+    // table in a state nothing can dismiss.
+    if (this._dataToolPendingDelete && !rows.some(([name]) => name === this._dataToolPendingDelete)) {
+        this._dataToolPendingDelete = '';
+    }
     table.innerHTML = '';
     for (const [name, definition] of rows) {
+        const confirming = name === this._dataToolPendingDelete;
         const row = document.createElement('div');
-        row.className = 'data-tool-row' + (name === editingName ? ' editing' : '');
+        row.className = 'data-tool-row'
+            + (name === editingName ? ' editing' : '')
+            + (confirming ? ' confirming' : '');
         row.dataset.name = name;
 
         const flow = document.createElement('div');
@@ -1015,22 +1024,61 @@ proto._renderDataToolTable = function() {
         flow.textContent = `${definition.sourceName} → ${name}`;
         flow.title = flow.textContent;
 
-        const bottom = document.createElement('div');
-        bottom.className = 'data-tool-row-bottom';
-        const label = document.createElement('span');
-        label.className = 'data-tool-row-tool';
-        label.textContent = this._dataToolLabel(definition.tool);
-        const actions = document.createElement('span');
-        actions.className = 'data-tool-row-actions';
-        actions.appendChild(this._dataToolRowButton('edit', '✎', 'dataToolEditTitle'));
-        actions.appendChild(this._dataToolRowButton('delete', '🗑', 'dataToolDeleteTitle'));
-        bottom.appendChild(label);
-        bottom.appendChild(actions);
-
         row.appendChild(flow);
-        row.appendChild(bottom);
+        row.appendChild(confirming
+            ? this._dataToolRowConfirm(fileId, name)
+            : this._dataToolRowActions(definition));
         table.appendChild(row);
     }
+};
+
+proto._dataToolRowActions = function(definition) {
+    const bottom = document.createElement('div');
+    bottom.className = 'data-tool-row-bottom';
+    const label = document.createElement('span');
+    label.className = 'data-tool-row-tool';
+    label.textContent = this._dataToolLabel(definition.tool);
+    const actions = document.createElement('span');
+    actions.className = 'data-tool-row-actions';
+    actions.appendChild(this._dataToolRowButton('edit', '✎', 'dataToolEditTitle'));
+    actions.appendChild(this._dataToolRowButton('delete', '🗑', 'dataToolDeleteTitle'));
+    bottom.appendChild(label);
+    bottom.appendChild(actions);
+    return bottom;
+};
+
+// The confirmation takes over the row's second line rather than opening a modal:
+// the question belongs next to the thing being deleted, and a full dialog for one
+// derived variable is heavier than the action deserves.
+proto._dataToolRowConfirm = function(fileId, name) {
+    const dependents = this._dataToolDependents(fileId, name);
+    const bottom = document.createElement('div');
+    bottom.className = 'data-tool-row-bottom';
+
+    const question = document.createElement('span');
+    question.className = 'data-tool-row-question';
+    question.textContent = dependents.length
+        ? i18n.t('dataToolDeleteConfirmChain').replace('{count}', String(dependents.length))
+        : i18n.t('dataToolDeleteConfirm');
+    // The chain is named in full on hover; the inline line only has room for a count.
+    if (dependents.length) {
+        question.title = i18n.t(dependents.length === 1 ? 'dataToolDeleteCascadeOne' : 'dataToolDeleteCascade')
+            .replace('{name}', name)
+            .replace('{count}', String(dependents.length))
+            .replace('{names}', dependents.join(', '));
+    }
+
+    const actions = document.createElement('span');
+    actions.className = 'data-tool-row-actions';
+    const yes = this._dataToolRowButton('confirm-delete', i18n.t('dataToolYes'), 'dataToolDeleteTitle');
+    yes.classList.add('data-tool-row-yes');
+    const no = this._dataToolRowButton('cancel-delete', i18n.t('dataToolNo'), 'dataToolCancel');
+    actions.appendChild(yes);
+    actions.appendChild(no);
+
+    bottom.appendChild(question);
+    bottom.appendChild(actions);
+    return bottom;
 };
 
 proto._dataToolRowButton = function(action, glyph, titleKey) {
@@ -1059,8 +1107,21 @@ proto._handleDataToolTableClick = function(event) {
     const name = row.dataset.name;
     const fileId = this.activeFileId;
     if (!name || !fileId) return;
-    if (button.dataset.action === 'edit') this._enterDataToolEditing(fileId, name);
-    else if (button.dataset.action === 'delete') this._deleteDataToolVariable(fileId, name);
+    const action = button.dataset.action;
+    if (action === 'edit') {
+        this._dataToolPendingDelete = '';
+        this._enterDataToolEditing(fileId, name);
+    } else if (action === 'delete') {
+        // Arm the row instead of deleting; only one row is ever armed.
+        this._dataToolPendingDelete = name;
+        this._renderDataToolTable();
+    } else if (action === 'cancel-delete') {
+        this._dataToolPendingDelete = '';
+        this._renderDataToolTable();
+    } else if (action === 'confirm-delete') {
+        this._dataToolPendingDelete = '';
+        this._deleteDataToolVariable(fileId, name);
+    }
 };
 
 // "Create and plot": prefer a panel that already shows the source variable, so

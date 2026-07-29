@@ -154,9 +154,12 @@ label (`Moving average`, `Derivative`, `Integral`, `Remove outliers`) with no
 parameters (D3).
 
 - **✎** loads the definition into the panel and switches it to editing.
-- **🗑** deletes the variable and its definition. If other variables were built
-  from it, a confirmation names them and offers to delete the chain; cancelling
-  changes nothing.
+- **🗑** arms the row: its second line becomes `Delete?` with `Yes` / `No`,
+  in place. No modal — the question belongs on the thing being deleted, and a
+  full dialog for one derived variable is heavier than the action deserves. When
+  a chain hangs off the row the question carries `+N in chain` and the tooltip
+  names them. Only one row is ever armed; Escape, or arming another row, disarms
+  it.
 
 The table is empty-stated with a one-line hint when the file has no
 transformations, and hidden entirely when no file is active.
@@ -258,7 +261,7 @@ All of it is in [data-tools-methods.js](../src/app/methods/data-tools-methods.js
 | Chain walk | `_dataToolDependents` (over the existing topological `_orderedDataToolDefinitions`) |
 | Rename | `_toggleDataToolRename` / `_confirmDataToolRename` / `_cancelDataToolRename` → `_renameDataToolVariable` |
 | Name validation | `_dataToolNameHint`, `_syncDataToolNameHint` |
-| Delete with cascade | `_deleteDataToolVariable` |
+| Delete with cascade | `_dataToolRowConfirm` (the in-row question) → `_deleteDataToolVariable` |
 | Preview | `_runDataToolPreview`, `_drawDataToolPreviewTrace`, `_previewEditedVariable`, `_clearDataToolPreview` |
 
 The preview's placeholder variable is `DATA_TOOL_PREVIEW_NAME`, flagged
