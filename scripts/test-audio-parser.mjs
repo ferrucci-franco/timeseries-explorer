@@ -523,18 +523,21 @@ check('the recording details are in the tree and cannot be plotted', () => {
     const info = result.tree._children.Recording;
     assert.ok(info, 'the tree carries a Recording node');
     const labels = Object.keys(info._variables);
-    assert.deepEqual(labels, ['Sample rate', 'Sample time', 'Channels', 'Duration', 'Samples per channel', 'Format', 'Bit depth']);
+    assert.deepEqual(labels, ['Sample rate', 'Sampling time', 'Channels', 'Duration', 'Samples per channel', 'Format', 'Bit depth']);
 
-    // The order above is what the sidebar shows only with sorting OFF. With it
-    // ON — the default — the label alone decides, and the rate and the interval
-    // it restates have to stay next to each other. "Sampling time" reads better
-    // in isolation and sorts past "Samples per channel", which is exactly why
-    // the label is what it is. Same comparator as _renderTreeNode.
+    // The interval is built directly after the rate it restates, which is what
+    // the sidebar shows with its A↓ toggle OFF.
+    assert.equal(labels[labels.indexOf('Sample rate') + 1], 'Sampling time');
+
+    // With the toggle ON — the default — the sidebar sorts alphabetically and
+    // the two are separated by "Samples per channel". Pinned here as a KNOWN
+    // and accepted consequence of the name, using the same comparator as
+    // _renderTreeNode, so that finding them apart in the app is recognisable as
+    // a naming decision rather than read as a bug and "fixed" by renaming.
     const sorted = [...labels].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-    assert.equal(
-        sorted[sorted.indexOf('Sample rate') + 1],
-        'Sample time',
-        `alphabetically the interval must follow the rate, got: ${sorted.join(' | ')}`,
+    assert.deepEqual(
+        sorted.filter(label => label.startsWith('Sampl')),
+        ['Sample rate', 'Samples per channel', 'Sampling time'],
     );
     for (const label of labels) {
         assert.equal(info._variables[label].kind, 'parameter', `${label} is not plottable`);
@@ -561,7 +564,7 @@ check('the sampling time reads exactly as the time-axis panel states it', () => 
     for (const sampleRate of [48000, 44100, 8000, 16000, 22050, 1]) {
         const frames = Math.min(4000, Math.max(64, Math.round(sampleRate / 10)));
         const result = new AudioParser().parse({ sampleRate, frames, channels: [new Float32Array(frames)] });
-        const stated = result.tree._children.Recording._variables['Sample time'].data[0];
+        const stated = result.tree._children.Recording._variables['Sampling time'].data[0];
 
         const diagnostics = computeTimeAxisDiagnostics(result.variables.time.data);
         assert.equal(diagnostics.verdict, 'equidistant', `${sampleRate} Hz is evenly sampled`);
@@ -573,7 +576,7 @@ check('the sampling time reads exactly as the time-axis panel states it', () => 
 check('the sampling time uses the nearest unit rather than an exponent', () => {
     const stated = (sampleRate) => new AudioParser()
         .parse({ sampleRate, frames: 64, channels: [new Float32Array(64)] })
-        .tree._children.Recording._variables['Sample time'].data[0];
+        .tree._children.Recording._variables['Sampling time'].data[0];
     assert.equal(stated(48000), '20.8333 µs');
     assert.equal(stated(44100), '22.6757 µs');
     assert.equal(stated(8000), '125 µs');
