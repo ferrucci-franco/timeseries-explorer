@@ -7,6 +7,7 @@ import {
     finalizeTimeAxisDiagnostics,
     mergeTimeAxisSteps,
 } from '../../data/time-axis-diagnostics.js';
+import { formatTimeValue, pickTimeUnit } from '../../utils/time-unit-format.js';
 
 // ─── Time-axis inspector ──────────────────────────────────────────────────────
 // One dialog, three doors: the button in the file's "Time axis" panel, the clock
@@ -144,36 +145,17 @@ proto._computeLazyTimeAxisDiagnostics = async function(fileId, { signal, onParti
 // and so translators are handed plain sentences without markup to preserve.
 const TIME_AXIS_FOOTNOTE_MARK = '*';
 
-// Seconds ladder. A sampling step reads as "1 ms", never as "1.000e-3 s".
-const TIME_AXIS_UNITS = [
-    { factor: 86400, suffix: 'd' },
-    { factor: 3600, suffix: 'h' },
-    { factor: 60, suffix: 'min' },
-    { factor: 1, suffix: 's' },
-    { factor: 1e-3, suffix: 'ms' },
-    { factor: 1e-6, suffix: 'µs' },
-    { factor: 1e-9, suffix: 'ns' },
-];
-
-// One unit for a whole group of values, picked from the largest of them. Choosing
-// per value is what used to print "0 s / 1.000e-3 s / 0.001 s" — three notations
-// in one row for numbers that straddle a threshold.
+// The seconds ladder and the six-significant-digit rule moved to
+// src/utils/time-unit-format.js when a second caller appeared: the Recording
+// details of an audio file quote the same sampling step, and the two have to
+// agree to the digit. These stay as methods because the panel code and the
+// tests reach them through `this`.
 proto._timeAxisUnit = function(values, unitless = false) {
-    if (unitless) return { factor: 1, suffix: '' };
-    const magnitudes = values.filter(Number.isFinite).map(Math.abs).filter(value => value > 0);
-    if (!magnitudes.length) return { factor: 1, suffix: 's' };
-    const largest = Math.max(...magnitudes);
-    return TIME_AXIS_UNITS.find(unit => largest >= unit.factor)
-        || TIME_AXIS_UNITS[TIME_AXIS_UNITS.length - 1];
+    return pickTimeUnit(values, unitless);
 };
 
-// Six significant digits, trailing zeros trimmed: enough to tell 1 ms from
-// 0.99995 ms without rounding the difference away.
 proto._formatTimeAxisValue = function(value, unit) {
-    if (!Number.isFinite(value)) return '—';
-    const scaled = value / unit.factor;
-    const text = scaled === 0 ? '0' : String(Number(scaled.toPrecision(6)));
-    return unit.suffix ? `${text} ${unit.suffix}` : text;
+    return formatTimeValue(value, unit);
 };
 
 // A span is a duration, not a magnitude: nobody reads "70.9896 d". Past a minute

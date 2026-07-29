@@ -27,6 +27,8 @@ import {
 } from '../src/parsers/audio-decode.js';
 import AudioParser, { channelNames } from '../src/parsers/audio-parser.js';
 import MatParser from '../src/parsers/mat-parser.js';
+import { formatTimeValue, pickTimeUnit } from '../src/utils/time-unit-format.js';
+import { computeTimeAxisDiagnostics } from '../src/data/time-axis-diagnostics.js';
 import { decodedAudioBytes } from '../src/parsers/audio-limits.js';
 import { AUDIO_EXTENSIONS } from '../src/app/text-file-formats.js';
 import { RESULT_FILE_EXTENSIONS } from '../src/app/constants.js';
@@ -521,7 +523,7 @@ check('the recording details are in the tree and cannot be plotted', () => {
     const info = result.tree._children.Recording;
     assert.ok(info, 'the tree carries a Recording node');
     const labels = Object.keys(info._variables);
-    assert.deepEqual(labels, ['Sample rate', 'Channels', 'Duration', 'Samples per channel', 'Format', 'Bit depth']);
+    assert.deepEqual(labels, ['Sample rate', 'Sampling time', 'Channels', 'Duration', 'Samples per channel', 'Format', 'Bit depth']);
     for (const label of labels) {
         assert.equal(info._variables[label].kind, 'parameter', `${label} is not plottable`);
         assert.equal(info._variables[label].dataType, 'string');
@@ -535,6 +537,36 @@ check('the recording details are in the tree and cannot be plotted', () => {
     // These are notes, not signals: they must not appear among the variables
     // the rest of the app can select and plot.
     assert.deepEqual(Object.keys(result.variables), ['time', 'Mono']);
+});
+
+check('the sampling time reads exactly as the time-axis panel states it', () => {
+    // Two places print this number: the Recording details, and the "Sampling
+    // of time" panel behind the clock icon, which measures Δt off the parser's
+    // own time vector. Seeing "20.8333 µs" in one and "2.08333e-5 s" in the
+    // other would give the reader no way to tell they are the same
+    // measurement, so the check runs the real diagnostics over the real vector
+    // and demands the same string.
+    for (const sampleRate of [48000, 44100, 8000, 16000, 22050, 1]) {
+        const frames = Math.min(4000, Math.max(64, Math.round(sampleRate / 10)));
+        const result = new AudioParser().parse({ sampleRate, frames, channels: [new Float32Array(frames)] });
+        const stated = result.tree._children.Recording._variables['Sampling time'].data[0];
+
+        const diagnostics = computeTimeAxisDiagnostics(result.variables.time.data);
+        assert.equal(diagnostics.verdict, 'equidistant', `${sampleRate} Hz is evenly sampled`);
+        const asThePanelPrintsIt = formatTimeValue(diagnostics.dtMean, pickTimeUnit([diagnostics.dtMean]));
+        assert.equal(stated, asThePanelPrintsIt, `${sampleRate} Hz`);
+    }
+});
+
+check('the sampling time uses the nearest unit rather than an exponent', () => {
+    const stated = (sampleRate) => new AudioParser()
+        .parse({ sampleRate, frames: 64, channels: [new Float32Array(64)] })
+        .tree._children.Recording._variables['Sampling time'].data[0];
+    assert.equal(stated(48000), '20.8333 µs');
+    assert.equal(stated(44100), '22.6757 µs');
+    assert.equal(stated(8000), '125 µs');
+    assert.equal(stated(1000), '1 ms');
+    assert.equal(stated(1), '1 s');
 });
 
 check('resampling is disclosed when it happened', () => {

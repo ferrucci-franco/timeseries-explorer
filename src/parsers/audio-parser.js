@@ -14,6 +14,7 @@
 // app has no notion of an implied uniform axis.
 
 import MatParser from './mat-parser.js';
+import { formatTimeMagnitude } from '../utils/time-unit-format.js';
 
 const FILE_INFO_NODE = 'Recording';
 
@@ -157,6 +158,13 @@ export default class AudioParser {
     _addRecordingInfo(root, audio, filename) {
         const entries = [
             ['Sample rate', `${formatNumber(audio.sampleRate)} Hz`],
+            // The same fact as the sample rate, the way the time axis states it.
+            // Printed through the shared seconds ladder so it reads exactly as
+            // the "Sampling of time" panel behind the clock icon does — that
+            // panel measures Δt off this very vector, and a reader who saw
+            // "20.8333 µs" there and "2.08333e-5 s" here would have no way to
+            // tell they are the same number.
+            ['Sampling time', formatTimeMagnitude(1 / audio.sampleRate)],
             // Never a bare number: the sidebar runs a parameter's value through
             // Number() and a plain "1" comes back rendered as "1.00000".
             ['Channels', channelCountLabel(audio.channelCount)],
