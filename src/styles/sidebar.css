@@ -967,6 +967,51 @@
     color: color-mix(in srgb, var(--text-primary) 78%, #d97706);
 }
 
+/* An overflow marker the page draws itself, on whichever side actually holds
+   hidden text. `text-overflow: ellipsis` cannot do this job: Chromium refuses to
+   ellipsize a focused editable field, so the moment that matters most — you have
+   just typed eight coefficients and want to know whether they all landed — is
+   exactly the moment it stays silent. It also only ever marks the right, while a
+   field scrolled to its end is hiding text on the LEFT.
+
+   The marker fades the text out beneath itself so the two never collide, and is
+   click-through so it cannot get in the way of editing. */
+.data-tool-input-overflow {
+    position: relative;
+}
+
+.data-tool-input-overflow::before,
+.data-tool-input-overflow::after {
+    content: '…';
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    display: none;
+    align-items: center;
+    pointer-events: none;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.data-tool-input-overflow.overflow-left::before,
+.data-tool-input-overflow.overflow-right::after {
+    display: flex;
+}
+
+.data-tool-input-overflow::before {
+    left: 1px;
+    padding: 0 0.5rem 0 0.3rem;
+    border-radius: 5px 0 0 5px;
+    background: linear-gradient(to left, transparent, var(--bg-primary) 55%);
+}
+
+.data-tool-input-overflow::after {
+    right: 1px;
+    padding: 0 0.3rem 0 0.5rem;
+    border-radius: 0 5px 5px 0;
+    background: linear-gradient(to right, transparent, var(--bg-primary) 55%);
+}
+
 /* Coefficient lists are pasted from MATLAB or scipy far more often than they are
    typed, so the field is monospaced and left-aligned: the reader is checking a
    sequence of numbers against another window, not reading prose. */

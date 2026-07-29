@@ -215,10 +215,21 @@ proto.initDataTools = function() {
     // every field nobody is typing in, so a value that arrived by any other route
     // (a definition loaded for editing, a tool switch, a suggested name) also
     // reads from its beginning.
-    document.querySelector('.data-tools-section')?.addEventListener('focusout', (event) => {
+    const section = document.querySelector('.data-tools-section');
+    section?.addEventListener('focusout', (event) => {
         const input = event.target;
         if (input?.tagName === 'INPUT' && input.type === 'text') input.scrollLeft = 0;
+        this._syncDataToolOverflowMarks();
     });
+    // The overflow markers have to follow the caret and the field's own scrolling,
+    // not just the panel's syncs: typing past the right edge, or dragging the text
+    // back to the start, both change which side is hiding something.
+    for (const eventName of ['input', 'scroll', 'focus', 'keyup', 'click']) {
+        section?.addEventListener(eventName, (event) => {
+            if (!event.target?.classList?.contains('data-tool-coefficients')) return;
+            this._syncDataToolOverflowMarks();
+        }, eventName === 'scroll' ? { capture: true } : undefined);
+    }
 
     createBtn?.addEventListener('click', () => this.commitDataTool({ plot: false }));
     createPlotBtn?.addEventListener('click', () => this.commitDataTool({ plot: true }));
@@ -237,15 +248,34 @@ proto.initDataTools = function() {
 };
 
 // Scroll every text field nobody is typing in back to its first character, so a
-// value too long for the sidebar ends in an ellipsis rather than showing its tail
-// with no sign that a beginning exists. The field being edited is left alone —
-// rewinding under the caret would be maddening.
+// value too long for the sidebar reads from its beginning rather than showing its
+// tail with no sign that a beginning exists. The field being edited is left alone
+// — rewinding under the caret would be maddening.
 proto._rewindDataToolInputs = function() {
     const section = document.querySelector('.data-tools-section');
     if (!section) return;
     for (const input of section.querySelectorAll('input[type="text"]')) {
         if (input === document.activeElement) continue;
         if (input.scrollLeft) input.scrollLeft = 0;
+    }
+};
+
+// Mark which SIDE of a field is hiding text, so a coefficient list too long for
+// the sidebar says so — while it is being typed in as much as afterwards, which
+// is where `text-overflow: ellipsis` gives up (Chromium will not ellipsize a
+// focused editable field, and only ever marks the right-hand end anyway).
+proto._syncDataToolOverflowMarks = function() {
+    const section = document.querySelector('.data-tools-section');
+    if (!section) return;
+    for (const input of section.querySelectorAll('.data-tool-coefficients')) {
+        const wrap = input.parentElement;
+        if (!wrap?.classList.contains('data-tool-input-overflow')) continue;
+        // A pixel of slack: sub-pixel text metrics otherwise report an overflow
+        // on a value that fits exactly, and the marker would flicker as you type.
+        const hidesLeft = input.scrollLeft > 1;
+        const hidesRight = input.scrollWidth - input.clientWidth - input.scrollLeft > 1;
+        wrap.classList.toggle('overflow-left', hidesLeft);
+        wrap.classList.toggle('overflow-right', hidesRight);
     }
 };
 
@@ -406,6 +436,7 @@ proto._syncDataTools = function() {
     const blocker = this._dataToolCommitBlocker({ hasSource, hasValidConfig, editing, fileId, data });
     form.classList.toggle('data-tool-invalid', hasSource && !!blocker);
     this._rewindDataToolInputs();
+    this._syncDataToolOverflowMarks();
     this._syncDataToolNameHint();
     this._syncDataToolActions(editing, blocker);
     this._syncDataToolLiveChainToggle(editing, fileId);

@@ -90,23 +90,62 @@ assert.equal(
     'only the first group skips the separator above it',
 );
 
-// The ellipsis needs both halves: the CSS, and the rewind that makes it paint.
-// Chromium only draws it while the field is scrolled to its start, and typing
-// leaves it scrolled to the end — the CSS alone did nothing visible.
-assert.match(css, /\.derived-input\s*\{[^}]*text-overflow:\s*ellipsis/s, 'inputs must be able to show an ellipsis');
-assert.match(dataTools, /_rewindDataToolInputs/, 'there must be a rewind, or the ellipsis never paints');
+// ── Overflowing coefficient lists say so ──────────────────────────────────
+//
+// `text-overflow: ellipsis` was tried first and is not sufficient: Chromium
+// refuses to ellipsize a FOCUSED editable field, which is the moment that
+// matters most (you have just typed eight coefficients and want to know whether
+// they all landed), and it only ever marks the right-hand end while a field
+// scrolled to its end hides text on the left. So the marker is drawn here.
+assert.match(css, /\.derived-input\s*\{[^}]*text-overflow:\s*ellipsis/s, 'the native ellipsis is still worth having');
+assert.match(dataTools, /_rewindDataToolInputs/, 'an unfocused field should read from its beginning');
 assert.match(
     dataTools,
     /_rewindDataToolInputs = function\(\)[\s\S]*?document\.activeElement[\s\S]*?scrollLeft = 0/,
     'the rewind must skip the field being typed in',
 );
-// A blur is the obvious trigger, but not the only one a value can arrive by.
-assert.match(dataTools, /addEventListener\('focusout'/, 'losing focus should rewind immediately');
+
+// Each side is marked independently, because either side can be the one hiding
+// something — and both can be at once.
+for (const side of ['left', 'right']) {
+    assert.match(
+        css,
+        new RegExp(`\\.data-tool-input-overflow\\.overflow-${side}::${side === 'left' ? 'before' : 'after'}`),
+        `an overflow on the ${side} must have its own marker`,
+    );
+}
+assert.match(css, /\.data-tool-input-overflow::before,\s*\r?\n\.data-tool-input-overflow::after\s*\{[^}]*content:\s*'…'/s,
+    'the marker is an ellipsis character');
+assert.match(css, /\.data-tool-input-overflow::before,[\s\S]*?pointer-events:\s*none/s,
+    'the marker must never intercept a click meant for the field');
+assert.match(css, /\.data-tool-input-overflow\s*\{[^}]*position:\s*relative/s,
+    'the wrapper must be a positioning context');
+
+assert.match(dataTools, /_syncDataToolOverflowMarks/, 'the markers need a driver');
 assert.match(
     dataTools,
-    /this\._rewindDataToolInputs\(\);/,
-    'and a panel sync should rewind too, for values that arrive without any focus at all',
+    /overflow-left['"],\s*hidesLeft\)/,
+    'the left marker must key off the field being scrolled away from its start',
 );
+assert.match(
+    dataTools,
+    /scrollWidth - input\.clientWidth - input\.scrollLeft/,
+    'the right marker must key off text remaining beyond the visible end',
+);
+// Panel syncs alone are not enough: the caret and the field's own scrolling both
+// change which side is hidden without the panel being touched.
+for (const eventName of ['input', 'scroll']) {
+    assert.match(dataTools, new RegExp(`'${eventName}'`), `${eventName} must refresh the markers`);
+}
+
+// Every field long enough to need a marker has to be wrapped for one.
+for (const id of ['filter-b', 'filter-a', 'filter-init-level', 'filter-init-x', 'filter-init-y']) {
+    assert.match(
+        html,
+        new RegExp(`<div class="data-tool-input-overflow">\\s*\\r?\\n\\s*<input id="${id}"`),
+        `#${id} must sit inside an overflow wrapper`,
+    );
+}
 
 // An invalid configuration must take the preview down, in both of its forms.
 assert.match(dataTools, /_abandonDataToolPreview/, 'there must be one way to take a preview down');

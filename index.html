@@ -407,9 +407,13 @@
                                 </button>
                             </div>
                             <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-b" data-i18n="dataToolFilterB">b (numerator)</label>
-                            <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="0.25" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">
+                            <div class="data-tool-input-overflow">
+                                <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="0.25" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">
+                            </div>
                             <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-a" data-i18n="dataToolFilterA">a (denominator)</label>
-                            <input id="filter-a" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1, -0.5" placeholder="1, -0.5" data-i18n-placeholder="dataToolFilterAPlaceholder">
+                            <div class="data-tool-input-overflow">
+                                <input id="filter-a" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1, -0.5" placeholder="1, -0.5" data-i18n-placeholder="dataToolFilterAPlaceholder">
+                            </div>
 
                             <div class="data-tool-label-row data-tool-group-row">
                                 <label class="options-subgroup-label" for="filter-mode" data-i18n="dataToolFilterMode">Direction</label>
@@ -449,7 +453,9 @@
                             </select>
 
                             <div id="filter-init-level-wrap" class="collapsed">
-                                <input id="filter-init-level" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="level before the start" data-i18n-placeholder="dataToolFilterInitLevelPlaceholder">
+                                <div class="data-tool-input-overflow">
+                                    <input id="filter-init-level" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="level before the start" data-i18n-placeholder="dataToolFilterInitLevelPlaceholder">
+                                </div>
                                 <div id="filter-init-level-hint" class="data-tool-name-hint" hidden></div>
                             </div>
 
@@ -459,9 +465,13 @@
                                  Each placeholder names its own values, newest first. -->
                             <div id="filter-init-past-wrap" class="collapsed">
                                 <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-init-x" data-i18n="dataToolFilterInitPastInputs">Past inputs — newest first</label>
-                                <input id="filter-init-x" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="x[−1]">
+                                <div class="data-tool-input-overflow">
+                                    <input id="filter-init-x" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="x[−1]">
+                                </div>
                                 <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-init-y" data-i18n="dataToolFilterInitPastOutputs">Past outputs — newest first</label>
-                                <input id="filter-init-y" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="y[−1]">
+                                <div class="data-tool-input-overflow">
+                                    <input id="filter-init-y" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="y[−1]">
+                                </div>
                                 <div id="filter-init-past-hint" class="data-tool-name-hint" hidden></div>
                             </div>
 
