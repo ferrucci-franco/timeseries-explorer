@@ -26,8 +26,8 @@ parameters, and it is made in the tool that owns them.
 ## 2. Filling: `src/compute/kernels/interpolate.js`
 
 Seven methods, all local, all evaluated in **time** rather than row number
-whenever the axis allows it (finite and strictly ascending — otherwise the row
-number *is* the honest coordinate and the panel says so afterwards).
+whenever the axis allows it (finite and non-decreasing — see §6; otherwise the
+row number *is* the honest coordinate and the panel says so afterwards).
 
 | Method | What it is | When |
 |---|---|---|
@@ -124,6 +124,34 @@ an operation the user asked to do for an unrelated reason, which is exactly the
 defect the integral's gap policy exists to correct. *Fill missing data* is the
 tool that makes that decision, with the parameters that decision needs.
 
+## 4b. Repeated timestamps
+
+A Modelica result writes **two rows at every event** — the value before it and
+the value after it — and one more at the end of the simulation. The bundled
+Simple Pendulum example ends `[…, 19.999, 20, 20]`, and a file with a state
+machine in it has such a pair at every switch.
+
+Both tools therefore accept a **non-decreasing** axis; only a step *backwards*
+is refused, because no reading of one puts a value in the right place. The
+first cut of this feature demanded strictly increasing timestamps and refused
+the app's own example, which is how the rule was found.
+
+What a tie means, concretely:
+
+- **Bin methods** never cared: a bin aggregates whatever falls inside it, so one
+  straddling an event averages both sides of the discontinuity.
+- **Point methods** resolve a target time landing exactly on a repeat to the
+  value **after** the event (the search takes the last source sample at or
+  before *t*). A signal read at the instant it switches has already switched.
+- **Cubic slopes** never build a secant across the zero-width interval a repeat
+  creates — that is a divide by zero wearing the costume of a slope. Both
+  kernels prune their local point list outwards from the interval being fitted,
+  keeping the two samples that actually frame it and admitting a neighbour only
+  when it sits at a strictly different time.
+- **Filling** keeps interpolating in time. Before the fix, one repeated
+  timestamp anywhere in a 20 000-sample file sent the whole fill down the
+  row-number path — and then announced that the file's time axis was unusable.
+
 ## 5. Why a resample is a file
 
 `PlotManager._getTimeVar` ([plot-manager.js:3354](../src/plots/plot-manager.js:3354))
@@ -189,8 +217,9 @@ away.
 - `scripts/test-interpolate-regrid.mjs` — the kernels: time-vs-row coordinates,
   the gap limit, edge runs, exactness on a straight line for every method that
   claims it, pchip's no-overshoot, the smoothed fill beating linear on noise,
-  grid construction including a non-commensurate Δt, bin edges, aliasing, and the
-  refusal of a non-ascending axis.
+  grid construction including a non-commensurate Δt, bin edges, aliasing,
+  repeated timestamps (a Modelica event step, and the pendulum's repeated final
+  sample), and the refusal of a backwards axis.
 - `scripts/test-data-tools-sampling.mjs` — the panel: the tool taxonomy, reading
   both forms, the box-past-the-slider behaviour, the seconds↔milliseconds
   conversion on a calendar axis, the summary's numbers, the shape of the file a

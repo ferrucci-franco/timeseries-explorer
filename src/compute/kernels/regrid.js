@@ -59,7 +59,15 @@ export function normalizeResampleParams(params = {}) {
     };
 }
 
-/** Ascending, all-finite source abscissa, or a DataToolError saying why not. */
+/**
+ * Ascending, all-finite source abscissa, or a DataToolError saying why not.
+ *
+ * REPEATED timestamps are accepted. They are not a defect: a Modelica result
+ * emits two rows at every event (the value before it and the value after it)
+ * and one more at the end of the simulation, so the app's home format has them
+ * in every single file — refusing them refused OpenModelica. What is refused is
+ * an axis that goes BACKWARDS, which no resampling convention can make sense of.
+ */
 export function resampleSourceAxis(time, length) {
     const values = time?.values ? asFloat64(time.values) : null;
     if (!values || values.length !== length) {
@@ -71,7 +79,7 @@ export function resampleSourceAxis(time, length) {
     }
     for (let i = 0; i < values.length; i++) {
         if (!Number.isFinite(values[i])) throw new DataToolError('dataToolResampleTimeInvalid');
-        if (i > 0 && values[i] <= values[i - 1]) throw new DataToolError('dataToolResampleTimeNotAscending');
+        if (i > 0 && values[i] < values[i - 1]) throw new DataToolError('dataToolResampleTimeNotAscending');
     }
     return { x: values, synthetic: false };
 }
@@ -167,32 +175,39 @@ function resampleByPoint(values, x, grid, settings) {
     const m = grid.length;
     const out = new Float64Array(m).fill(NaN);
     let emptyCount = 0;
-    let k = 0;   // source interval [k, k+1] containing the current target time
+    let k = 0;   // last source index at or before the current target time
 
-    const slopeAt = (index) => {
-        // Slopes need the neighbours of the bracketing pair. Where a neighbour is
-        // missing or non-finite the estimator simply sees fewer points and falls
-        // back to the secant, which is the same graceful degradation the
-        // interpolation kernel applies at the ends of a series.
-        const indexes = [];
-        for (let i = index - 1; i <= index + 2; i++) {
-            if (i < 0 || i >= n) continue;
-            if (!Number.isFinite(values[i])) continue;
-            indexes.push(i);
-        }
+    // The four points a cubic slope wants, grown OUTWARDS from the bracketing
+    // pair so that pair is always in the list, and admitting a neighbour only
+    // when it sits at a strictly different time. A repeated timestamp is a
+    // zero-width interval, and a secant across one is a divide by zero wearing
+    // the costume of a slope. Where a neighbour is missing, non-finite or
+    // repeated, the estimator simply sees fewer points and degrades to the
+    // secant — the same graceful fallback it uses at the ends of a series.
+    const slopePoints = (iL, iR) => {
+        const indexes = [iL, iR];
+        if (iL - 1 >= 0 && Number.isFinite(values[iL - 1]) && x[iL - 1] < x[iL]) indexes.unshift(iL - 1);
+        if (iR + 1 < n && Number.isFinite(values[iR + 1]) && x[iR + 1] > x[iR]) indexes.push(iR + 1);
         return indexes;
     };
 
     for (let g = 0; g < m; g++) {
         const t = grid[g];
-        while (k + 2 < n && x[k + 1] < t) k++;
+        // `<=` and not `<`: this lands on the LAST source sample at or before t,
+        // so a repeated timestamp resolves to the value AFTER the event. That is
+        // the right-continuous reading of a Modelica event, and it is also what
+        // leaves x[iL] < x[iR] strictly whenever the pair is actually used.
+        while (k + 1 < n && x[k + 1] <= t) k++;
         const iL = k;
         const iR = Math.min(n - 1, k + 1);
         const yL = values[iL];
         const yR = values[iR];
 
-        if (t === x[iL] && Number.isFinite(yL)) { out[g] = yL; continue; }
-        if (t === x[iR] && Number.isFinite(yR)) { out[g] = yR; continue; }
+        if (t === x[iL]) {
+            if (Number.isFinite(yL)) out[g] = yL;
+            else emptyCount++;
+            continue;
+        }
         if (!Number.isFinite(yL) || !Number.isFinite(yR) || iL === iR) { emptyCount++; continue; }
 
         const xL = x[iL];
@@ -204,7 +219,7 @@ function resampleByPoint(values, x, grid, settings) {
             continue;
         }
 
-        const indexes = slopeAt(iL);
+        const indexes = slopePoints(iL, iR);
         const xs = indexes.map(i => x[i]);
         const ys = indexes.map(i => values[i]);
         const nodeL = indexes.indexOf(iL);

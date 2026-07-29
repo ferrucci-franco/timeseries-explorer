@@ -63,6 +63,27 @@ const N = NaN;
 }
 
 {
+    // A REPEATED timestamp is not a broken axis. Every Modelica result has one at
+    // the end of the simulation and two at every event, so rejecting ties sent
+    // the app's own example down the row-number path and then blamed its clock.
+    const time = [0, 1, 2, 2, 3, 4, 4];
+    const r = fillMissingValues([0, 10, N, 20, 30, 40, 40], numericTime(time), { method: 'linear' });
+    assert.equal(r.usedTimeAxis, true, 'a repeated timestamp keeps the time axis');
+    assert.equal(r.filledCount, 1);
+    assert.ok(Number.isFinite(r.values[2]), 'the hole beside the repeat is still filled');
+
+    // And the cubic estimators must not build a secant across the zero-width
+    // interval the repeat creates.
+    for (const method of ['pchip', 'akima']) {
+        const line = time.map(t => 3 * t + 1);
+        line[2] = NaN;
+        const filled = fillMissingValues(line, numericTime(time), { method });
+        assert.ok(Math.abs(filled.values[2] - 7) < 1e-6,
+            `${method} still reproduces a line across a repeated timestamp (got ${filled.values[2]})`);
+    }
+}
+
+{
     const r = fillMissingValues([1, N, N, N, 5], numericTime([0, 1, 2, 3, 4]), { method: 'linear', maxGap: 2 });
     close(r.values, [1, N, N, N, 5], 'a run longer than maxGap is left alone');
     assert.equal(r.filledCount, 0);
@@ -300,14 +321,54 @@ const N = NaN;
 }
 
 {
-    const bad = Float64Array.from([0, 1, 1, 2]);
-    assert.throws(() => resampleSourceAxis({ values: bad, kind: 'numeric' }, 4), err =>
-        err.code === 'dataToolResampleTimeNotAscending', 'a duplicated timestamp is refused');
+    // A repeated timestamp is accepted; only a backwards one is refused. Every
+    // Modelica result repeats its final timestamp, and two more at every event,
+    // so this is the difference between supporting the app's home format and not.
+    const repeated = Float64Array.from([0, 1, 1, 2]);
+    assert.equal(resampleSourceAxis({ values: repeated, kind: 'numeric' }, 4).x, repeated,
+        'a repeated timestamp is accepted');
+    assert.throws(() => resampleSourceAxis({ values: Float64Array.from([0, 2, 1]), kind: 'numeric' }, 3), err =>
+        err.code === 'dataToolResampleTimeNotAscending', 'a backwards timestamp is refused');
     assert.throws(() => resampleSourceAxis({ values: Float64Array.from([0, NaN, 2]), kind: 'numeric' }, 3), err =>
         err.code === 'dataToolResampleTimeInvalid', 'a non-numeric timestamp is refused');
     const synthetic = resampleSourceAxis({ values: null, kind: 'index' }, 4);
     close(synthetic.x, [0, 1, 2, 3], 'no axis means row numbers');
     assert.equal(synthetic.synthetic, true);
+}
+
+{
+    // The shape a Modelica event writes: a step, sampled twice at the same
+    // instant with the value before it and the value after it.
+    const x = Float64Array.from([0, 1, 2, 2, 3, 4]);
+    const y = Float64Array.from([0, 0, 0, 10, 10, 10]);
+    const grid = Float64Array.from([0, 1, 2, 3, 4]);
+    // At t = 2 the post-event value applies: a signal read at the instant it
+    // switches has already switched.
+    close(resampleValues(y, x, grid, { method: 'linear' }).values, [0, 0, 10, 10, 10],
+        'a point method reads the value after the event');
+    close(resampleValues(y, x, grid, { method: 'previous' }).values, [0, 0, 10, 10, 10],
+        'hold previous agrees at the event');
+    // Bin methods never had a problem: they just aggregate whatever is in range.
+    assert.equal(resampleValues(y, x, grid, { method: 'mean' }).values[2], 5,
+        'a bin straddling the event averages both sides of it');
+    for (const method of ['pchip', 'akima']) {
+        const r = resampleValues(y, x, grid, { method });
+        assert.ok(r.values.every(Number.isFinite), `${method} survives a repeated timestamp`);
+        assert.equal(r.emptyCount, 0);
+    }
+}
+
+{
+    // The pendulum's exact shape: a clean grid whose FINAL timestamp is repeated.
+    const n = 201;
+    const x = Float64Array.from([...Array.from({ length: n }, (_, i) => i * 0.1), 20]);
+    const y = Float64Array.from([...Array.from({ length: n }, (_, i) => i), n - 1]);
+    const { grid } = buildResampleGrid(x, { gridMode: 'step', step: 0.25 });
+    const r = resampleValues(y, x, grid, { method: 'linear' });
+    assert.equal(grid.length, 81);
+    assert.equal(r.emptyCount, 0, 'a repeated final timestamp leaves no holes');
+    assert.equal(r.values[0], 0);
+    assert.equal(r.values[grid.length - 1], n - 1, 'the last grid point lands on the last sample');
 }
 
 {

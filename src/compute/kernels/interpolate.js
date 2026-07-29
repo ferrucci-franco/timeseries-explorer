@@ -72,6 +72,14 @@ export function normalizeInterpolateParams(params = {}) {
 // The x used for interpolation. A datetime axis is milliseconds and a numeric
 // one is whatever the column carried; neither is converted, because every
 // formula below is a RATIO of x differences and so is scale-free.
+//
+// REPEATED timestamps are fine. A Modelica result carries two rows at every
+// event and one more at the end of the simulation, so treating a tie as a
+// broken axis would send every OpenModelica file down the row-number path —
+// and then announce that its time axis was unusable. A tie only ever produces
+// a zero-width interval, which every formula below already guards against.
+// A step BACKWARDS is different: no reading of it puts a bridge in the right
+// place, so there the row number really is the honest coordinate.
 function interpolationCoordinates(values, time) {
     const context = normalizeTimeContext(time);
     const x = context.values;
@@ -79,7 +87,7 @@ function interpolationCoordinates(values, time) {
     if (context.kind === 'index' || !x || x.length !== n) return null;
     for (let i = 0; i < n; i++) {
         if (!Number.isFinite(x[i])) return null;
-        if (i > 0 && x[i] <= x[i - 1]) return null;   // duplicated or backwards: rows are the honest axis
+        if (i > 0 && x[i] < x[i - 1]) return null;
     }
     return x;
 }
@@ -130,6 +138,27 @@ function akimaSlope(xs, ys, k) {
     const total = wLeft + wRight;
     if (!(total > 0)) return (dm1 + d0) / 2;
     return (wLeft * dm1 + wRight * d0) / total;
+}
+
+// Keep only samples whose x strictly advances, walking AWAY from the hole so
+// the sample nearest it is the one that survives a tie. `side` says which end of
+// the ascending list is nearest: 'left' lists end at the hole, 'right' ones
+// start there.
+function strictlyIncreasingFrom(indexes, xAt, side) {
+    const kept = [];
+    if (side === 'left') {
+        for (let i = indexes.length - 1; i >= 0; i--) {
+            const index = indexes[i];
+            if (kept.length && !(xAt(index) < xAt(kept[0]))) continue;
+            kept.unshift(index);
+        }
+        return kept;
+    }
+    for (const index of indexes) {
+        if (kept.length && !(xAt(index) > xAt(kept[kept.length - 1]))) continue;
+        kept.push(index);
+    }
+    return kept;
 }
 
 function hermite(xL, yL, mL, xR, yR, mR, x) {
@@ -281,8 +310,12 @@ function fillRun(out, values, xAt, start, end, left, right, settings, helpers) {
         // Three samples each side is what Akima's slope needs; pchip uses two and
         // ignores the rest. Fewer are available at the ends of the series, and
         // both estimators degrade to the secant slope there on their own.
-        const leftIndexes = helpers.neighboursLeft(left, 3);
-        const rightIndexes = helpers.neighboursRight(right, 3);
+        //
+        // Pruned outwards from the hole so that a repeated timestamp — the pair a
+        // Modelica event writes — never contributes a zero-width secant, while
+        // the two samples that actually frame the hole are always kept.
+        const leftIndexes = strictlyIncreasingFrom(helpers.neighboursLeft(left, 3), xAt, 'left');
+        const rightIndexes = strictlyIncreasingFrom(helpers.neighboursRight(right, 3), xAt, 'right');
         const indexes = [...leftIndexes, ...rightIndexes];
         const xs = indexes.map(xAt);
         const ys = indexes.map(index => values[index]);
