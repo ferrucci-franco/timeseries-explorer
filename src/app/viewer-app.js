@@ -210,6 +210,9 @@ class OpenModelicaViewer {
             excelFullLoadMb: desktop ? 150 : 50,
             pickleFullLoadMb: desktop ? 200 : 80,
             pypsaNetcdfFullLoadMb: desktop ? 1024 : 250,
+            // Unlike its neighbours this one is measured on the DECODED audio,
+            // not on the file: see AUDIO_DECODED_FORMAT in file-size-limits.js.
+            audioFullLoadMb: desktop ? 1024 : 400,
             csvCompactHintMb: 500,
             panZoomRefreshMode: 'auto',
         };
@@ -235,6 +238,7 @@ class OpenModelicaViewer {
             excelFullLoadMb: [10, 500],
             pickleFullLoadMb: [10, 1000],
             pypsaNetcdfFullLoadMb: [50, 2048],
+            audioFullLoadMb: [50, 4096],
             csvCompactHintMb: [100, 4096],
         };
         const next = {};

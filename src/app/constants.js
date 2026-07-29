@@ -1,3 +1,5 @@
+import { AUDIO_EXTENSIONS } from './text-file-formats.js';
+
 const IS_FILE_PROTOCOL = typeof window !== 'undefined' && window.location?.protocol === 'file:';
 const PUBLIC_BASE = globalThis.__OMV_PUBLIC_BASE__ || (IS_FILE_PROTOCOL ? './public/' : './');
 
@@ -62,7 +64,7 @@ const DERIVED_FUNCTION_ALIASES = new Map([
     ['sqr', 'square'],
 ]);
 
-const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.netcdf', '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods'];
+const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.netcdf', '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods', ...AUDIO_EXTENSIONS];
 const APP_VERSION = '0.1.1';
 // Injected at build time by Vite (see vite.config.js). Fall back to placeholders
 // when running outside a Vite build (e.g. Node test scripts), where the globals

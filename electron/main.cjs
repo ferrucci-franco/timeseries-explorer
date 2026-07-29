@@ -6,6 +6,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const {
+  AUDIO_FILE_EXTENSIONS,
   fileInfoPayload,
   mimeTypes,
   mimeTypeForPath,
@@ -407,8 +408,9 @@ async function selectResultFilePaths(options = {}, multiple = false) {
     // converter has no reader for .mat or .pkl, and offering them in its own
     // dialog would only let the user pick a file it then has to refuse.
     filters: Array.isArray(options.filters) && options.filters.length ? options.filters : [
-      { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', 'nc', 'netcdf', 'pkl', 'pickle', 'xlsx', 'xlsm', 'xls', 'ods'] },
+      { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', 'nc', 'netcdf', 'pkl', 'pickle', 'xlsx', 'xlsm', 'xls', 'ods', ...AUDIO_FILE_EXTENSIONS] },
       { name: 'Spreadsheets', extensions: ['xlsx', 'xlsm', 'xls', 'ods'] },
+      { name: 'Audio recordings', extensions: [...AUDIO_FILE_EXTENSIONS] },
       { name: 'All files', extensions: ['*'] },
     ],
   });
