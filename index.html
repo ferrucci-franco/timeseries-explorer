@@ -400,18 +400,18 @@
                         </div>
 
                         <div class="data-tool-controls collapsed" data-tool-kind="filter">
-                            <div class="data-tool-label-row">
+                            <div class="data-tool-label-row data-tool-group-row first">
                                 <span class="options-subgroup-label" data-i18n="dataToolFilterCoefficients">Coefficients</span>
                                 <button id="filter-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Digital filter help" data-i18n-title="dataToolFilterHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-help-popover">
                                     <span>?</span>
                                 </button>
                             </div>
-                            <label class="options-subgroup-label filter-coefficient-label" for="filter-b" data-i18n="dataToolFilterB">b (numerator)</label>
+                            <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-b" data-i18n="dataToolFilterB">b (numerator)</label>
                             <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="0.25" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">
-                            <label class="options-subgroup-label filter-coefficient-label" for="filter-a" data-i18n="dataToolFilterA">a (denominator)</label>
+                            <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-a" data-i18n="dataToolFilterA">a (denominator)</label>
                             <input id="filter-a" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1, -0.5" placeholder="1, -0.5" data-i18n-placeholder="dataToolFilterAPlaceholder">
 
-                            <div class="data-tool-label-row">
+                            <div class="data-tool-label-row data-tool-group-row">
                                 <label class="options-subgroup-label" for="filter-mode" data-i18n="dataToolFilterMode">Direction</label>
                                 <button id="filter-direction-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Direction help" data-i18n-title="dataToolFilterDirectionHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-direction-help-popover">
                                     <span>?</span>
@@ -435,7 +435,7 @@
                                 </div>
                             </div>
 
-                            <div class="data-tool-label-row">
+                            <div class="data-tool-label-row data-tool-group-row">
                                 <label class="options-subgroup-label" for="filter-init" data-i18n="dataToolFilterInit">Initial conditions</label>
                                 <button id="filter-init-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Initial conditions help" data-i18n-title="dataToolFilterInitHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-init-help-popover">
                                     <span>?</span>
@@ -458,9 +458,9 @@
                                  the user had to be told rather than something they could see.
                                  Each placeholder names its own values, newest first. -->
                             <div id="filter-init-past-wrap" class="collapsed">
-                                <label class="options-subgroup-label filter-coefficient-label" for="filter-init-x" data-i18n="dataToolFilterInitPastInputs">Past inputs — newest first</label>
+                                <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-init-x" data-i18n="dataToolFilterInitPastInputs">Past inputs — newest first</label>
                                 <input id="filter-init-x" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="x[−1]">
-                                <label class="options-subgroup-label filter-coefficient-label" for="filter-init-y" data-i18n="dataToolFilterInitPastOutputs">Past outputs — newest first</label>
+                                <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-init-y" data-i18n="dataToolFilterInitPastOutputs">Past outputs — newest first</label>
                                 <input id="filter-init-y" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="y[−1]">
                                 <div id="filter-init-past-hint" class="data-tool-name-hint" hidden></div>
                             </div>
@@ -493,13 +493,13 @@
                                 </div>
                             </div>
 
-                            <div class="data-tool-label-row">
+                            <div class="data-tool-label-row data-tool-group-row">
                                 <span class="options-subgroup-label" data-i18n="dataToolFilterMissingGroup">Missing values / NaN</span>
                                 <button id="filter-gap-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Missing values help" data-i18n-title="dataToolFilterGapHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-gap-help-popover">
                                     <span>?</span>
                                 </button>
                             </div>
-                            <label class="options-subgroup-label filter-coefficient-label" for="filter-restart-gap" data-i18n="dataToolFilterRestartGap">Restart after a gap longer than</label>
+                            <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-restart-gap" data-i18n="dataToolFilterRestartGap">Restart after a gap longer than</label>
                             <div class="data-tool-slider-row unit-row">
                                 <input id="filter-restart-gap" class="derived-input data-tool-number-input" type="number" min="0" step="1" value="0">
                                 <span class="data-tool-unit-suffix" data-i18n="dataToolFilterRestartGapUnit">samples</span>

@@ -681,7 +681,8 @@
 #outlier-method-wrap.collapsed,
 #outlier-replacement-wrap.collapsed,
 #interpolate-window-wrap.collapsed,
-#filter-init-state-wrap.collapsed,
+#filter-init-level-wrap.collapsed,
+#filter-init-past-wrap.collapsed,
 #detrend-order-wrap.collapsed,
 #detrend-window-wrap.collapsed,
 .resample-grid-controls.collapsed,
@@ -779,6 +780,15 @@
     font-size: 0.72rem;
     color: var(--error-color, #c62828);
     margin-top: -0.25rem;
+}
+
+/* The negative margin above pulls the hint tight under the output-name row,
+   where a label follows it. Inside the filter's initial-condition groups the
+   hint sits directly under its own field, and the same pull made it collide
+   with the box's bottom border. */
+#filter-init-level-hint,
+#filter-init-past-hint {
+    margin-top: 0;
 }
 
 .data-tool-input-invalid {
@@ -940,7 +950,8 @@
 
 .resample-grid-controls,
 #interpolate-window-wrap,
-#filter-init-state-wrap,
+#filter-init-level-wrap,
+#filter-init-past-wrap,
 #detrend-order-wrap,
 #detrend-window-wrap {
     display: flex;
@@ -1262,6 +1273,31 @@
     font-weight: 600;
     color: var(--text-primary);
     margin: 0.15rem 0 0.25rem 0;
+}
+
+/* A tool's controls come in groups, and with every label at the same weight
+   there was nothing to say which control belonged under which heading. Group
+   headings keep the bold and gain a hairline above them; the labels of the
+   individual fields step down to a lighter, quieter style. The rule is a
+   hairline rather than a section divider on purpose — the reader must still see
+   one tool, not several. */
+.data-tool-group-row {
+    border-top: 1px solid var(--border-color);
+    margin-top: 0.55rem;
+    padding-top: 0.6rem;
+}
+
+.data-tool-controls > .data-tool-group-row:first-child,
+.data-tool-group-row.first {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0;
+}
+
+.data-tool-sublabel {
+    font-size: 0.74rem;
+    font-weight: 500;
+    color: var(--text-secondary);
 }
 
 .options-help-toggle {

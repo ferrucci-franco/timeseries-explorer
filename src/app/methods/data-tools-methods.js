@@ -208,6 +208,18 @@ proto.initDataTools = function() {
         this._toggleOutlierHelpPopover();
     });
 
+    // `text-overflow: ellipsis` on an input only paints while the field is
+    // scrolled to its start — and typing leaves it scrolled to the END, which is
+    // why the ellipsis never appeared. Rewinding is what makes the CSS visible.
+    // Losing focus is the obvious moment for it; _syncDataTools does it again for
+    // every field nobody is typing in, so a value that arrived by any other route
+    // (a definition loaded for editing, a tool switch, a suggested name) also
+    // reads from its beginning.
+    document.querySelector('.data-tools-section')?.addEventListener('focusout', (event) => {
+        const input = event.target;
+        if (input?.tagName === 'INPUT' && input.type === 'text') input.scrollLeft = 0;
+    });
+
     createBtn?.addEventListener('click', () => this.commitDataTool({ plot: false }));
     createPlotBtn?.addEventListener('click', () => this.commitDataTool({ plot: true }));
     clearBtn?.addEventListener('click', () => this.clearDataToolForm());
@@ -222,6 +234,19 @@ proto.initDataTools = function() {
     });
 
     this._syncDataTools();
+};
+
+// Scroll every text field nobody is typing in back to its first character, so a
+// value too long for the sidebar ends in an ellipsis rather than showing its tail
+// with no sign that a beginning exists. The field being edited is left alone —
+// rewinding under the caret would be maddening.
+proto._rewindDataToolInputs = function() {
+    const section = document.querySelector('.data-tools-section');
+    if (!section) return;
+    for (const input of section.querySelectorAll('input[type="text"]')) {
+        if (input === document.activeElement) continue;
+        if (input.scrollLeft) input.scrollLeft = 0;
+    }
 };
 
 proto._dataToolParameterInputs = function() {
@@ -380,6 +405,7 @@ proto._syncDataTools = function() {
 
     const blocker = this._dataToolCommitBlocker({ hasSource, hasValidConfig, editing, fileId, data });
     form.classList.toggle('data-tool-invalid', hasSource && !!blocker);
+    this._rewindDataToolInputs();
     this._syncDataToolNameHint();
     this._syncDataToolActions(editing, blocker);
     this._syncDataToolLiveChainToggle(editing, fileId);

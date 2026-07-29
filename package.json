@@ -57,6 +57,7 @@
     "test:interpolate-regrid": "node scripts/test-interpolate-regrid.mjs",
     "test:detrend-filter": "node scripts/test-detrend-filter.mjs",
     "test:data-tools-sampling": "node scripts/test-data-tools-sampling.mjs",
+    "test:data-tool-panel-layout": "node scripts/test-data-tool-panel-layout.mjs",
     "test:parse-worker": "node scripts/test-parse-worker.mjs",
     "test:expr-compiler": "node scripts/test-expr-compiler.mjs",
     "test:variable-sign": "node scripts/test-variable-sign-toggle.mjs",
