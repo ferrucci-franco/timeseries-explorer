@@ -185,6 +185,9 @@ proto.loadSessionOrProjectFile = async function(file, options = {}) {
 };
 
 proto._createSessionSnapshot = function(options = {}) {
+    // A draft preview is a transient drawing. Taking it down before the snapshot
+    // is what keeps its placeholder trace out of the saved panels.
+    this._clearDataToolPreview?.();
     const includeData = !!options.includeData;
     const files = [];
     const usedArchiveNames = new Set();
@@ -217,7 +220,11 @@ proto._createSessionSnapshot = function(options = {}) {
             csvProfile,
             excel: entry.excel ? this._cloneSerializable(entry.excel) : null,
             matlab: entry.matlab ? this._cloneSerializable(entry.matlab) : null,
-            variableNames: data ? Object.keys(data.variables || {}) : [],
+            // The data-tool preview placeholder is a drawing, not a variable: it
+            // must never be written into a saved session.
+            variableNames: data
+                ? Object.entries(data.variables || {}).filter(([, v]) => !v?.previewOnly).map(([name]) => name)
+                : [],
             derived,
             dataTools,
             invertedVariables,

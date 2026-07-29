@@ -79,7 +79,7 @@ proto._renderDerivedTreeSection = function(parentElement, filter, autoExpand) {
     const fileId = this.activeFileId;
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
     const entries = Object.entries(data?.variables || {})
-        .filter(([, variable]) => variable.derived)
+        .filter(([, variable]) => variable.derived && !variable.previewOnly)
         .filter(([, variable]) => !filter || variable.name.toLowerCase().includes(filter));
     if (!entries.length) return;
     entries.sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));

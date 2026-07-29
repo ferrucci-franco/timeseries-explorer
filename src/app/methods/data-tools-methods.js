@@ -15,6 +15,9 @@ import * as kernelShared from '../../compute/kernels/shared.js';
 import { formatNaturalDuration } from '../../utils/fft.js';
 
 const DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage']);
+// The reserved slot the dashed draft preview occupies in data.variables. Every
+// consumer of the variable map skips entries flagged `previewOnly`.
+export const DATA_TOOL_PREVIEW_NAME = '__dataToolPreview__';
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
@@ -57,30 +60,32 @@ proto.initDataTools = function() {
     const outputInput = document.getElementById('outlier-output-name');
     const methodSelect = document.getElementById('outlier-method');
     const helpBtn = document.getElementById('outlier-help-toggle');
-    const resetBtn = document.getElementById('outlier-reset');
+    const createBtn = document.getElementById('data-tool-create');
+    const createPlotBtn = document.getElementById('data-tool-create-plot');
+    const clearBtn = document.getElementById('data-tool-clear');
+    const renameBtn = document.getElementById('data-tool-rename');
+    const liveChain = document.getElementById('data-tool-live-chain');
+    const tableEl = document.getElementById('data-tool-table');
     if (!toolSelect || !sourceSelect || !outputInput || !methodSelect) return;
 
     toolSelect.value = '';
-    this._clearDataToolTargetMode();
     toolSelect.addEventListener('change', () => {
-        sourceSelect.value = '';
-        outputInput.value = '';
-        this._clearDataToolTargetMode();
-        this._setOutlierMessage('', '');
+        // Switching tools abandons the draft, so the preview it was drawing has
+        // to come down with it — _clearDataToolDraft is what takes it off the plot.
+        this._exitDataToolEditing({ keepTool: true });
+        this._clearDataToolDraft({ keepTool: true });
         this._syncDataTools();
     });
     sourceSelect.addEventListener('change', () => {
         outputInput.value = this._suggestDataToolOutputName(sourceSelect.value);
-        this._clearDataToolTargetMode();
         this._setOutlierMessage('', '');
         this._syncDataTools();
-        this._scheduleDataToolAutoApply({ immediate: true });
+        this._handleDataToolPreviewChange({ immediate: true });
     });
-    outputInput.addEventListener('input', () => {
-        this._syncDataTools();
-        this._scheduleDataToolAutoApply();
-    });
-    methodSelect.addEventListener('change', () => this._handleOutlierMethodChange());
+    // The name never computes anything. Typing here used to commit a variable
+    // under a half-typed name, which is the defect this panel was rebuilt for.
+    outputInput.addEventListener('input', () => this._syncDataTools());
+    methodSelect.addEventListener('change', () => this._handleDataToolOptionChange());
     document.getElementById('derivative-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
     document.getElementById('integral-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
     document.getElementById('integral-gap-policy')?.addEventListener('change', () => this._handleDataToolOptionChange());
@@ -89,35 +94,42 @@ proto.initDataTools = function() {
         const numeric = document.getElementById('moving-average-window');
         if (numeric) numeric.value = event.target.value;
         this._syncDataTools();
-        this._scheduleDataToolAutoApply({ immediate: true });
+        this._handleDataToolPreviewChange({ immediate: true });
     });
     document.getElementById('moving-average-window')?.addEventListener('input', () => {
         this._syncMovingAverageSliderFromInput();
         this._syncDataTools();
-        this._scheduleDataToolAutoApply({ immediate: true });
+        this._handleDataToolPreviewChange({ immediate: true });
     });
 
     this._dataToolParameterInputs().forEach(input => {
         const isBound = input.id === 'outlier-lower-bound' || input.id === 'outlier-upper-bound';
         if (isBound) {
-            // Number inputs commit on blur/Enter only. Auto-applying every
-            // keystroke would run the tool on partial values (e.g. the "1" of
-            // "10"), which can cut most of the signal and freeze the app.
+            // Number inputs commit on blur/Enter only. Previewing every keystroke
+            // would run the tool on partial values (e.g. the "1" of "10"), which
+            // can cut most of the signal and freeze the app.
             input.addEventListener('input', () => this._syncOutlierMethodControls());
-            input.addEventListener('change', () => this._scheduleDataToolAutoApply({ immediate: true }));
+            input.addEventListener('change', () => this._handleDataToolPreviewChange({ immediate: true }));
         } else {
             input.addEventListener('input', () => this._handleOutlierLiveChange({ immediate: true }));
-            input.addEventListener('change', () => this._scheduleDataToolAutoApply({ immediate: true }));
+            input.addEventListener('change', () => this._handleDataToolPreviewChange({ immediate: true }));
         }
     });
-    document.querySelectorAll('input[name="outlier-replacement"], input[name="outlier-target"]').forEach(input => {
+    document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
         input.addEventListener('change', () => this._handleDataToolOptionChange());
     });
     helpBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
         this._toggleOutlierHelpPopover();
     });
-    resetBtn?.addEventListener('click', () => this.resetOutlierTool());
+
+    createBtn?.addEventListener('click', () => this.commitDataTool({ plot: false }));
+    createPlotBtn?.addEventListener('click', () => this.commitDataTool({ plot: true }));
+    clearBtn?.addEventListener('click', () => this.clearDataToolForm());
+    renameBtn?.addEventListener('click', () => this._unlockDataToolRename());
+    liveChain?.addEventListener('change', () => this._handleDataToolPreviewChange({ immediate: true }));
+    tableEl?.addEventListener('click', (event) => this._handleDataToolTableClick(event));
+
     this._syncDataTools();
 };
 
@@ -139,26 +151,26 @@ proto._syncDataTools = function() {
     const toolSelect = document.getElementById('data-tool-select');
     const form = document.getElementById('remove-outliers-tool');
     const sourceSelect = document.getElementById('outlier-variable');
-    const outputWrap = document.getElementById('outlier-output-wrap');
     const outputInput = document.getElementById('outlier-output-name');
     const methodSelect = document.getElementById('outlier-method');
-    const resetBtn = document.getElementById('outlier-reset');
     if (!toolSelect || !form || !sourceSelect || !outputInput || !methodSelect) return;
 
     const fileId = this.activeFileId;
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
     const lazy = this._isDataToolLazyData(data);
+    // An edit and its preview belong to the file they were started from; switching
+    // files abandons both. Without this the placeholder variable would be stranded
+    // in the file the user just left.
+    if (this._dataToolPreview && this._dataToolPreview.fileId !== fileId) this._clearDataToolPreview();
+    if (this._dataToolEditing && this._dataToolEditing.fileId !== fileId) this._exitDataToolEditing({ keepMessage: true });
+    const editing = this._dataToolEditing || null;
     this._syncDataToolPickerOptions(lazy);
 
     const tool = this._getSelectedDataTool();
     const hasTool = !!tool;
-    const targetMode = this._getOutlierTargetMode();
-    const hasTargetMode = targetMode === 'modify' || targetMode === 'create';
-    const createsVariable = targetMode === 'create';
     const allowed = hasTool && this._isDataToolAvailableForData(tool, data);
 
     form.classList.toggle('collapsed', !hasTool);
-    outputWrap?.classList.toggle('collapsed', !createsVariable);
     document.getElementById('outlier-method-wrap')?.classList.toggle('collapsed', tool !== 'removeOutliers');
     document.getElementById('outlier-replacement-wrap')?.classList.toggle('collapsed', tool !== 'removeOutliers');
     document.querySelectorAll('.data-tool-controls').forEach(el => {
@@ -169,7 +181,7 @@ proto._syncDataTools = function() {
     this._syncMovingAverageControls();
 
     const previous = sourceSelect.value;
-    const entries = hasTool && allowed ? this._getDataToolSourceEntries(data, tool) : [];
+    const entries = hasTool && allowed ? this._getDataToolSourceEntries(data, tool, editing?.name) : [];
 
     sourceSelect.innerHTML = '';
     if (!hasTool) {
@@ -204,25 +216,19 @@ proto._syncDataTools = function() {
     const keptPrevious = entries.some(([name]) => name === previous);
     if (keptPrevious) sourceSelect.value = previous;
     if (!sourceSelect.value) outputInput.value = '';
-    if ((!keptPrevious || !outputInput.value.trim()) && sourceSelect.value) {
+    // The suggestion is written once, when the source is picked (see the change
+    // handler). Re-suggesting here would refill the field the moment the user
+    // cleared it to type their own name.
+    if (!editing && !keptPrevious && sourceSelect.value) {
         outputInput.value = this._suggestDataToolOutputName(sourceSelect.value);
     }
 
     const sourceVariable = sourceSelect.value ? data?.variables?.[sourceSelect.value] : null;
     const hasSource = hasTool && allowed && !!sourceSelect.value && !!sourceVariable;
-    const hasOutput = !createsVariable || !!outputInput.value.trim();
     const hasValidConfig = !hasSource || !!this._tryReadDataToolConfig();
-    const resetTarget = hasSource
-        ? this._findOutlierResetDefinition(fileId, {
-            sourceName: sourceSelect.value,
-            outputName: outputInput.value.trim(),
-            targetMode,
-            tool,
-        })
-        : null;
 
     sourceSelect.disabled = !hasTool || !allowed || !entries.length;
-    outputInput.disabled = !hasSource || !createsVariable;
+    outputInput.disabled = !hasSource || (!!editing && !this._dataToolRenameUnlocked);
     methodSelect.disabled = !hasSource || tool !== 'removeOutliers' || lazy;
     this._dataToolParameterInputs().forEach(input => { input.disabled = !hasSource || (lazy && input.id !== 'outlier-lower-bound' && input.id !== 'outlier-upper-bound'); });
     document.getElementById('derivative-method')?.toggleAttribute('disabled', !hasSource || tool !== 'derivative');
@@ -234,18 +240,74 @@ proto._syncDataTools = function() {
         input.disabled = !hasSource || tool !== 'removeOutliers' || lazy;
         if (lazy && input.value === 'nan') input.checked = true;
     });
-    document.querySelectorAll('input[name="outlier-target"]').forEach(input => { input.disabled = !hasSource; });
-    if (resetBtn) resetBtn.disabled = !resetTarget;
-    form.classList.toggle('data-tool-invalid', hasSource && (!hasTargetMode || !hasOutput || !hasValidConfig));
+
+    const blocker = this._dataToolCommitBlocker({ hasSource, hasValidConfig, editing, fileId, data });
+    form.classList.toggle('data-tool-invalid', hasSource && !!blocker);
+    this._syncDataToolActions(editing, blocker);
+    this._syncDataToolLiveChainToggle(editing, fileId);
+    this._renderDataToolTable();
 
     if (hasTool && lazy && !allowed) {
         this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
-    } else if (hasSource && !hasTargetMode) {
-        const messageEl = document.getElementById('outlier-message');
-        if (!messageEl?.textContent) this._setOutlierMessage(() => i18n.t('dataToolChooseTargetMode'), '');
     } else if (hasTool && lazy && tool === 'removeOutliers') {
         const messageEl = document.getElementById('outlier-message');
         if (!messageEl?.textContent) this._setOutlierMessage(() => i18n.t('dataToolLazyBoundsOnly'), '');
+    }
+};
+
+// Why the commit buttons are disabled, as an i18n key — or '' when the draft is
+// ready. The panel shows the same reason as text, so the user never has to guess
+// which field is at fault.
+proto._dataToolCommitBlocker = function({ hasSource, hasValidConfig, editing, fileId, data }) {
+    if (!hasSource) return 'dataToolChooseVariable';
+    if (!hasValidConfig) return 'dataToolFixParameters';
+    const outputName = (document.getElementById('outlier-output-name')?.value || '').trim();
+    if (!outputName) return 'dataToolOutputNameRequired';
+    const sourceName = document.getElementById('outlier-variable')?.value || '';
+    if (outputName === sourceName) return 'outlierOutputSameAsSource';
+    // A name already in use is only free when it is the row being edited.
+    const taken = !!data?.variables?.[outputName] && outputName !== editing?.name;
+    if (taken) return 'dataToolNameTaken';
+    if (editing && !this.dataToolVariablesByFile?.get(fileId)?.has(editing.name)) return 'dataToolEditingGone';
+    return '';
+};
+
+proto._syncDataToolActions = function(editing, blocker) {
+    const createBtn = document.getElementById('data-tool-create');
+    const createPlotBtn = document.getElementById('data-tool-create-plot');
+    const clearBtn = document.getElementById('data-tool-clear');
+    const renameBtn = document.getElementById('data-tool-rename');
+    const banner = document.getElementById('data-tool-editing-banner');
+    if (createBtn) {
+        createBtn.disabled = !!blocker;
+        createBtn.textContent = i18n.t(editing ? 'dataToolUpdate' : 'dataToolCreate');
+    }
+    if (createPlotBtn) {
+        createPlotBtn.disabled = !!blocker;
+        createPlotBtn.textContent = i18n.t(editing ? 'dataToolUpdateAndPlot' : 'dataToolCreateAndPlot');
+    }
+    if (clearBtn) clearBtn.textContent = i18n.t(editing ? 'dataToolCancel' : 'dataToolClear');
+    if (renameBtn) {
+        renameBtn.hidden = !editing;
+        renameBtn.classList.toggle('active', !!this._dataToolRenameUnlocked);
+    }
+    if (banner) {
+        banner.hidden = !editing;
+        banner.textContent = editing ? i18n.t('dataToolEditing').replace('{name}', editing.name) : '';
+    }
+};
+
+// Only meaningful while editing something other variables were built from; with
+// no chain the checkbox would be a control over nothing.
+proto._syncDataToolLiveChainToggle = function(editing, fileId) {
+    const wrap = document.getElementById('data-tool-live-chain-wrap');
+    const label = document.getElementById('data-tool-live-chain-label');
+    if (!wrap) return;
+    const count = editing ? this._dataToolDependents(fileId, editing.name).length : 0;
+    wrap.hidden = count === 0;
+    if (label && count > 0) {
+        label.textContent = i18n.t(count === 1 ? 'dataToolLiveChainOne' : 'dataToolLiveChain')
+            .replace('{count}', String(count));
     }
 };
 
@@ -314,9 +376,7 @@ proto._syncMovingAverageSliderFromInput = function() {
 };
 
 proto._handleOutlierMethodChange = function() {
-    this._setOutlierMessage('', '');
-    this._syncDataTools();
-    this._scheduleDataToolAutoApply({ immediate: true });
+    this._handleDataToolOptionChange();
 };
 
 proto._handleOutlierOptionChange = function() {
@@ -326,70 +386,25 @@ proto._handleOutlierOptionChange = function() {
 proto._handleDataToolOptionChange = function() {
     this._setOutlierMessage('', '');
     this._syncDataTools();
-    this._scheduleDataToolAutoApply({ immediate: true });
+    this._handleDataToolPreviewChange({ immediate: true });
 };
 
 proto._handleOutlierLiveChange = function(options = {}) {
     this._syncOutlierMethodControls();
-    this._scheduleDataToolAutoApply(options);
+    this._handleDataToolPreviewChange(options);
 };
 
-proto._scheduleOutlierAutoApply = function(options = {}) {
-    this._scheduleDataToolAutoApply(options);
-};
-
-proto._scheduleDataToolAutoApply = function(options = {}) {
-    if (this._outlierAutoApplyTimer) clearTimeout(this._outlierAutoApplyTimer);
-    const delay = options.immediate ? 0 : 350;
-    this._outlierAutoApplyTimer = setTimeout(() => {
-        this._outlierAutoApplyTimer = null;
-        this._autoApplyOutlierTool();
-    }, delay);
-};
-
-proto._autoApplyOutlierTool = function() {
-    const tool = this._getSelectedDataTool();
-    if (!tool) return;
-    const context = this._getOutlierContext({ quiet: true });
-    if (!context) {
-        this._syncDataTools();
-        return;
-    }
-
-    try {
-        this._getDataToolConfig(tool, context);
-    } catch (err) {
-        this._setOutlierMessage(err?.message || String(err), 'error');
-        this._syncDataTools();
-        return;
-    }
-
-    Promise.resolve(this.applyOutlierTool({ silent: true })).then(result => {
-        if (result) {
-            const key = result.tool === 'removeOutliers' ? 'outlierAutoApplied' : 'dataToolAutoApplied';
-            const warning = result.warning;
-            this._setOutlierMessage(
-                () => i18n.t(key)
-                    .replace('{count}', String(result.count ?? 0))
-                    .replace('{name}', result.name || context.outputName || context.sourceName),
-                warning ? 'error' : (result.count ? 'ok' : '')
-            );
-            if (warning) this._setOutlierMessage(warning, 'error');
-        }
-        this._syncDataTools();
-    }).catch(err => {
-        // A superseded run is the normal outcome of dragging a slider, not a
-        // failure: a newer apply is already in flight and will report for it.
-        if (err?.cancelled) return;
-        this._setOutlierMessage(err?.message || String(err), 'error');
-        this._syncDataTools();
-    });
-};
-
-proto._getDataToolSourceEntries = function(data, tool = this._getSelectedDataTool()) {
+// `excludeName`, when editing, drops the edited variable and everything built
+// from it: picking either as the new source would make the definition feed
+// itself.
+proto._getDataToolSourceEntries = function(data, tool = this._getSelectedDataTool(), excludeName = '') {
     const lazy = this._isDataToolLazyData(data);
+    const excluded = excludeName
+        ? new Set([excludeName, ...this._dataToolDependents(this.activeFileId, excludeName)])
+        : null;
     return Object.entries(data?.variables || {})
-        .filter(([, variable]) => {
+        .filter(([name, variable]) => {
+            if (excluded?.has(name) || variable?.previewOnly) return false;
             if (!variable || variable.kind === 'abscissa' || variable.kind === 'parameter') return false;
             if (variable.plottable === false) return false;
             if (variable.dataType === 'string' || variable.dataType === 'boolean') return false;
@@ -414,8 +429,6 @@ proto._suggestOutlierOutputName = function(sourceName) {
 
 proto._suggestDataToolOutputName = function(sourceName, tool = this._getSelectedDataTool()) {
     if (!sourceName) return '';
-    const existing = this._findDataToolCreateDefinitionName(this.activeFileId, sourceName, '', tool);
-    if (existing) return existing;
     const suffix = {
         removeOutliers: 'no_outliers',
         derivative: 'ddt',
@@ -425,37 +438,44 @@ proto._suggestDataToolOutputName = function(sourceName, tool = this._getSelected
     return this._uniqueDataToolVariableName(`${sourceName} ${suffix}`);
 };
 
-proto.applyOutlierTool = function(options = {}) {
-    const context = this._getOutlierContext({ quiet: options.silent });
+// The single entry point the buttons use. Nothing else in the panel writes a
+// variable: until this runs, the form is a draft.
+proto.commitDataTool = async function(options = {}) {
+    const editing = this._dataToolEditing;
+    const context = this._getOutlierContext();
     if (!context) return null;
     let config;
     try {
         config = this._getDataToolConfig(context.tool, context);
     } catch (err) {
-        if (!options.silent) this._setOutlierMessage(err?.message || String(err), 'error');
+        this._setOutlierMessage(err?.message || String(err), 'error');
         return null;
     }
-    return context.targetMode === 'create'
-        ? this._applyDataToolCreateMode(context, config, options)
-        : this._applyDataToolModifyMode(context, config, options);
+
+    const result = editing
+        ? await this._updateDataToolVariable(context, config, editing)
+        : await this._createDataToolVariable(context, config);
+    if (!result) return null;
+
+    this._clearDataToolPreview();
+    if (options.plot) this._plotDataToolVariable(context.fileId, result.name);
+    // The edit was committed, so the pre-edit values must NOT be put back: drop
+    // the backup before leaving the editing state, which would otherwise restore
+    // them over the result that was just written.
+    this._dataToolEditBackup = null;
+    if (editing) this._exitDataToolEditing({ keepMessage: true });
+    else this._clearDataToolDraft({ keepTool: true, keepMessage: true });
+    this._syncDataTools();
+    return result;
 };
 
-proto._applyDataToolCreateMode = async function(context, config, options = {}) {
-    if (context.lazy) return this._applyLazyDataToolCreateMode(context, config, options);
+proto._createDataToolVariable = async function(context, config) {
+    if (context.lazy) return this._applyLazyDataToolCreateMode(context, config, {});
 
     const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
-    const definitions = this.dataToolVariablesByFile?.get(fileId);
-    const previousName = this._findDataToolCreateDefinitionName(fileId, sourceName, outputName, tool);
-    const existing = data.variables[outputName];
-    const existingDefinition = definitions?.get(outputName);
-
     try {
-        if (existing && !existingDefinition) throw new Error(i18n.t('outlierOutputExists').replace('{name}', outputName));
+        if (data.variables[outputName]) throw new Error(i18n.t('outlierOutputExists').replace('{name}', outputName));
         if (outputName === sourceName) throw new Error(i18n.t('outlierOutputSameAsSource'));
-        if (previousName && previousName !== outputName) {
-            delete data.variables[previousName];
-            definitions?.delete(previousName);
-        }
 
         const result = await this._buildDataToolResultOffThread(sourceVariable.data, sourceVariable, {
             ...config,
@@ -474,144 +494,119 @@ proto._applyDataToolCreateMode = async function(context, config, options = {}) {
             replacement: config.replacement,
             variable: result.variable,
         });
-        this._reapplyDataToolDependents(fileId, data, outputName);
 
         this.plotManager.updateFileData(fileId, data);
         this._renderFilteredTree();
-        this._syncDataTools();
-        if (!options.silent) this._setDataToolApplyMessage(result, existingDefinition ? 'updated' : 'created', outputName);
+        this._setDataToolApplyMessage(result, 'created', outputName);
         return result;
     } catch (err) {
-        if (!options.silent) this._setOutlierMessage(err?.message || String(err), 'error');
+        this._setOutlierMessage(err?.message || String(err), 'error');
         return null;
     }
 };
 
-proto._applyDataToolModifyMode = async function(context, config, options = {}) {
-    if (context.lazy) return this._applyLazyDataToolModifyMode(context, config, options);
-
-    const { fileId, data, sourceName, sourceVariable, tool } = context;
-    const existingDefinition = this.dataToolVariablesByFile?.get(fileId)?.get(sourceName);
-    if (existingDefinition?.targetMode === 'create') {
-        return this._applyDataToolAppendToCreatedVariable(context, config, existingDefinition, options);
+// Recompute an existing row in place, optionally under a new name, then refresh
+// whatever was built on top of it.
+proto._updateDataToolVariable = async function(context, config, editing) {
+    const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
+    const oldName = editing.name;
+    const definitions = this.dataToolVariablesByFile?.get(fileId);
+    if (!definitions?.has(oldName)) {
+        this._setOutlierMessage(() => i18n.t('dataToolEditingGone'), 'error');
+        return null;
     }
-    const originalData = existingDefinition?.targetMode === 'modify' && existingDefinition.originalData
-        ? Array.from(existingDefinition.originalData)
-        : Array.from(sourceVariable.data);
 
     try {
-        const result = await this._buildDataToolResultOffThread(originalData, sourceVariable, {
+        if (outputName !== oldName && data.variables[outputName]) {
+            throw new Error(i18n.t('dataToolNameTaken').replace('{name}', outputName));
+        }
+        if (outputName === sourceName) throw new Error(i18n.t('outlierOutputSameAsSource'));
+
+        // A lazy file's variable is a DuckDB column reference, not an array. It
+        // has to be rebuilt by the lazy path or it loses that binding.
+        if (context.lazy) {
+            if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName);
+            return await this._applyLazyDataToolCreateMode(context, config, {});
+        }
+
+        const result = await this._buildDataToolResultOffThread(sourceVariable.data, sourceVariable, {
             ...config,
             sourceName,
-            targetName: sourceName,
-            targetMode: 'modify',
+            targetName: outputName,
+            targetMode: 'create',
         }, data);
-        const variable = data.variables[sourceName];
-        variable.data = result.variable.data;
-        variable.dataType = result.variable.dataType;
-        variable.isConstant = result.variable.isConstant;
-        variable.dataToolModified = true;
-        variable.dataTool = result.variable.dataTool;
-
-        this._storeDataToolDefinition(fileId, sourceName, {
-            name: sourceName,
+        // Renamed only once the new values are in hand, so a recompute that
+        // throws leaves the row exactly as it was.
+        if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName);
+        data.variables[outputName] = result.variable;
+        this._storeDataToolDefinition(fileId, outputName, {
+            name: outputName,
             tool,
-            targetMode: 'modify',
+            targetMode: 'create',
             sourceName,
             method: config.method,
             params: this._cloneDataToolParams(config.params),
             replacement: config.replacement,
-            originalData: Array.from(originalData),
-            variable,
-        });
-        this._reapplyDataToolDependents(fileId, data, sourceName);
-
-        this.plotManager.updateFileData(fileId, data);
-        this._renderFilteredTree();
-        this._syncDataTools();
-        if (!options.silent) this._setDataToolApplyMessage(result, existingDefinition ? 'modifiedUpdated' : 'modified', sourceName);
-        return result;
-    } catch (err) {
-        if (!options.silent) this._setOutlierMessage(err?.message || String(err), 'error');
-        return null;
-    }
-};
-
-proto._applyDataToolAppendToCreatedVariable = async function(context, config, existingDefinition, options = {}) {
-    const { fileId, data, sourceName, tool } = context;
-    const normalized = this._normalizeDataToolDefinition(existingDefinition);
-    const baseSourceName = normalized.sourceName;
-    const baseVariable = data.variables?.[baseSourceName];
-    if (!baseSourceName || baseSourceName === sourceName || !baseVariable) {
-        if (!options.silent) this._setOutlierMessage(() => i18n.t('outlierOutputSameAsSource'), 'error');
-        return null;
-    }
-
-    try {
-        const currentSteps = this._dataToolStepsFromDefinition(normalized);
-        const nextStep = this._dataToolStepFromConfig({ ...config, tool });
-        const replaceLast = currentSteps.length > 0 && currentSteps[currentSteps.length - 1].tool === nextStep.tool;
-        const steps = replaceLast
-            ? currentSteps.slice(0, -1).concat(nextStep)
-            : currentSteps.concat(nextStep);
-        const last = steps[steps.length - 1];
-        const result = await this._buildDataToolResultOffThread(baseVariable.data, baseVariable, {
-            sourceName: baseSourceName,
-            targetName: sourceName,
-            targetMode: 'create',
-            tool: last.tool,
-            method: last.method,
-            params: this._cloneDataToolParams(last.params),
-            replacement: last.replacement,
-            steps,
-        }, data);
-        data.variables[sourceName] = result.variable;
-        this._storeDataToolDefinition(fileId, sourceName, {
-            name: sourceName,
-            tool: last.tool,
-            targetMode: 'create',
-            sourceName: baseSourceName,
-            method: last.method,
-            params: this._cloneDataToolParams(last.params),
-            replacement: last.replacement,
-            steps,
             variable: result.variable,
         });
-        this._reapplyDataToolDependents(fileId, data, sourceName);
+        const dependents = this._dataToolDependents(fileId, outputName);
+        this._reapplyDataToolDependents(fileId, data, outputName);
 
         this.plotManager.updateFileData(fileId, data);
+        this._rebuildPlotsUsingVariable?.(fileId, outputName);
+        for (const name of dependents) this._rebuildPlotsUsingVariable?.(fileId, name);
         this._renderFilteredTree();
-        this._syncDataTools();
-        if (!options.silent) this._setDataToolApplyMessage(result, 'updated', sourceName);
+        this._setDataToolApplyMessage(result, 'updated', outputName, dependents.length);
         return result;
     } catch (err) {
-        if (!options.silent) this._setOutlierMessage(err?.message || String(err), 'error');
+        this._setOutlierMessage(err?.message || String(err), 'error');
         return null;
     }
 };
 
-proto._applyOutlierCreateMode = function(context, config, options = {}) {
-    return this._applyDataToolCreateMode(context, { ...config, tool: 'removeOutliers' }, options);
-};
-
-proto._applyOutlierModifyMode = function(context, config, options = {}) {
-    return this._applyDataToolModifyMode(context, { ...config, tool: 'removeOutliers' }, options);
+// Moving the key: the variable map, the definition registry, every definition
+// that names it as a source, and any trace already drawing it.
+proto._renameDataToolVariable = function(fileId, data, oldName, newName) {
+    const definitions = this.dataToolVariablesByFile?.get(fileId);
+    const variable = data.variables[oldName];
+    if (variable) {
+        variable.name = newName;
+        data.variables[newName] = variable;
+        delete data.variables[oldName];
+    }
+    if (definitions?.has(oldName)) {
+        const definition = definitions.get(oldName);
+        definition.name = newName;
+        definitions.delete(oldName);
+        definitions.set(newName, definition);
+        for (const other of definitions.values()) {
+            if (other.sourceName === oldName) other.sourceName = newName;
+        }
+    }
+    for (const [panelId, plot] of this.plotManager.plots) {
+        let touched = false;
+        for (const trace of plot.traces) {
+            if (trace.fileId === fileId && trace.varName === oldName) { trace.varName = newName; touched = true; }
+        }
+        for (const trace of plot.phaseTraces) {
+            if (trace.fileId !== fileId) continue;
+            for (const axis of ['x', 'y', 'z']) {
+                if (trace[axis] === oldName) { trace[axis] = newName; touched = true; }
+            }
+        }
+        if (touched) this.plotManager._rebuildPanel(panelId);
+    }
 };
 
 proto._applyLazyDataToolCreateMode = async function(context, config, options = {}) {
     const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
     if (!this._isLazyBoundsConfig(config)) throw new Error(i18n.t('dataToolLazyDisabled'));
     const definitions = this.dataToolVariablesByFile?.get(fileId);
-    const previousName = this._findDataToolCreateDefinitionName(fileId, sourceName, outputName, tool);
     const existing = data.variables[outputName];
     const existingDefinition = definitions?.get(outputName);
 
     if (existing && !existingDefinition) throw new Error(i18n.t('outlierOutputExists').replace('{name}', outputName));
     if (outputName === sourceName) throw new Error(i18n.t('outlierOutputSameAsSource'));
-    if (previousName && previousName !== outputName) {
-        delete data.variables[previousName];
-        definitions?.delete(previousName);
-    }
 
     const definition = this._lazyDataToolDefinition(outputName, config, sourceName, 'create');
     const variable = {
@@ -641,36 +636,6 @@ proto._applyLazyDataToolCreateMode = async function(context, config, options = {
     this._syncDataTools();
     const result = { variable, count, tool, name: outputName };
     if (!options.silent) this._setDataToolApplyMessage(result, existingDefinition ? 'updated' : 'created', outputName);
-    return result;
-};
-
-proto._applyLazyDataToolModifyMode = async function(context, config, options = {}) {
-    const { fileId, data, sourceName, sourceVariable, tool } = context;
-    if (!this._isLazyBoundsConfig(config)) throw new Error(i18n.t('dataToolLazyDisabled'));
-    const existingDefinition = this.dataToolVariablesByFile?.get(fileId)?.get(sourceName);
-    const originalData = existingDefinition?.targetMode === 'modify' && existingDefinition.originalData
-        ? Array.from(existingDefinition.originalData)
-        : Array.from(sourceVariable.data || []);
-    const definition = this._lazyDataToolDefinition(sourceName, config, sourceName, 'modify');
-    const variable = data.variables[sourceName];
-    variable.data = this._replaceOutliersWithNaN(originalData, this._detectBoundsOutliers(originalData, config.params));
-    variable.dataToolModified = true;
-    variable.dataTool = { ...definition, outlierCount: null };
-    variable._duckdbDataTool = definition;
-    const count = await this._countLazyBoundsOutliers(data, sourceName, config.params);
-    variable.dataTool.outlierCount = count;
-    this._storeDataToolDefinition(fileId, sourceName, {
-        ...definition,
-        originalData,
-        variable,
-    });
-    await this._refreshLazyDataToolOverview(data);
-
-    this.plotManager.updateFileData(fileId, data);
-    this._renderFilteredTree();
-    this._syncDataTools();
-    const result = { variable, count, tool, name: sourceName };
-    if (!options.silent) this._setDataToolApplyMessage(result, existingDefinition ? 'modifiedUpdated' : 'modified', sourceName);
     return result;
 };
 
@@ -711,118 +676,263 @@ proto._refreshLazyDataToolOverview = async function(data) {
     }
 };
 
-proto._setDataToolApplyMessage = function(result, action, name) {
+proto._setDataToolApplyMessage = function(result, action, name, dependentCount = 0) {
     const tool = result?.tool || 'removeOutliers';
     const keyByAction = tool === 'removeOutliers'
-        ? {
-            created: 'outlierCreated',
-            updated: 'outlierUpdated',
-            modified: 'outlierModified',
-            modifiedUpdated: 'outlierModifiedUpdated',
-        }
-        : {
-            created: 'dataToolCreated',
-            updated: 'dataToolUpdated',
-            modified: 'dataToolModified',
-            modifiedUpdated: 'dataToolModifiedUpdated',
-        };
+        ? { created: 'outlierCreated', updated: 'outlierUpdated' }
+        : { created: 'dataToolCreated', updated: 'dataToolUpdated' };
     const warning = result?.warning;
     this._setOutlierMessage(() => {
         const base = i18n.t(keyByAction[action] || 'dataToolUpdated')
             .replace('{count}', String(result?.count ?? 0))
             .replace('{name}', name || result?.name || '');
+        const chain = dependentCount > 0
+            ? i18n.t(dependentCount === 1 ? 'dataToolChainRefreshedOne' : 'dataToolChainRefreshed')
+                .replace('{count}', String(dependentCount))
+            : '';
         const note = typeof warning === 'function' ? warning() : (warning || '');
-        return note ? `${base} ${note}` : base;
+        return [base, chain, note].filter(Boolean).join(' ');
     }, warning ? 'error' : 'ok');
 };
 
-proto.resetOutlierTool = function(options = {}) {
-    if (this._outlierAutoApplyTimer) {
-        clearTimeout(this._outlierAutoApplyTimer);
-        this._outlierAutoApplyTimer = null;
-    }
+// ─── Draft, editing and the transformations table ─────────────────────────
 
-    const fileId = this.activeFileId;
-    const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
-    const sourceName = document.getElementById('outlier-variable')?.value || '';
-    const outputName = (document.getElementById('outlier-output-name')?.value || '').trim();
-    const targetMode = this._getOutlierTargetMode();
-    const resetTarget = this._findOutlierResetDefinition(fileId, {
-        sourceName,
-        outputName,
-        targetMode,
-        tool: this._getSelectedDataTool(),
-    });
-
-    if (!fileId || !data || !resetTarget) {
-        if (!options.silent) this._setOutlierMessage(() => i18n.t('outlierResetNothing'), '');
-        this._syncDataTools();
-        return false;
-    }
-
-    const { name, definition } = resetTarget;
-    if (definition.targetMode === 'modify') {
-        return this._resetOutlierModifiedVariable(fileId, data, name, definition, options);
-    }
-    return this._resetOutlierCreatedVariable(fileId, data, name, options);
-};
-
-proto._resetOutlierModifiedVariable = function(fileId, data, name, definition, options = {}) {
-    const variable = data.variables?.[name];
-    const originalData = Array.from(definition.originalData || []);
-    if (!variable || !originalData.length) {
-        if (!options.silent) this._setOutlierMessage(() => i18n.t('outlierResetNothing'), '');
-        this._syncDataTools();
-        return false;
-    }
-
-    variable.data = originalData;
-    variable.dataType = this.parser._detectDataType(originalData, 'variable');
-    variable.isConstant = this.parser._isConstantValues(originalData);
-    delete variable.dataToolModified;
-    delete variable.dataTool;
-    delete variable._duckdbDataTool;
-    this._deleteDataToolDefinition(fileId, name);
-
-    if (data?._duckdb?.source?.refreshOverview) {
-        data._duckdb.source.refreshOverview(data).catch(err =>
-            console.warn('[duckdb] could not refresh overview after data-tool reset:', err?.message || err)
-        );
-    }
-    this.plotManager.updateFileData(fileId, data);
-    this._renderFilteredTree();
-    this._rebuildPlotsUsingVariable?.(fileId, name);
-    if (!options.silent) {
-        this._setOutlierMessage(() => i18n.t('outlierResetModified').replace('{name}', name), 'ok');
-    }
+// `Clear` on a draft, `Cancel` on an edit. Neither ever deletes a variable —
+// that is the row's trash button, and conflating the two is what made the old
+// Reset button unpredictable.
+proto.clearDataToolForm = function() {
+    if (this._dataToolEditing) this._exitDataToolEditing();
+    else this._clearDataToolDraft();
     this._syncDataTools();
-    return true;
 };
 
-proto._resetOutlierCreatedVariable = function(fileId, data, name, options = {}) {
-    if (!data.variables?.[name]) {
-        this._deleteDataToolDefinition(fileId, name);
-        this._syncDataTools();
-        return false;
+proto._clearDataToolDraft = function(options = {}) {
+    this._clearDataToolPreview();
+    const sourceSelect = document.getElementById('outlier-variable');
+    const outputInput = document.getElementById('outlier-output-name');
+    if (sourceSelect) sourceSelect.value = '';
+    if (outputInput) outputInput.value = '';
+    if (!options.keepTool) {
+        const toolSelect = document.getElementById('data-tool-select');
+        if (toolSelect) toolSelect.value = '';
+    }
+    if (!options.keepMessage) this._setOutlierMessage('', '');
+};
+
+proto._enterDataToolEditing = function(fileId, name) {
+    const data = this.plotManager.files.get(fileId)?.data;
+    const definition = this.dataToolVariablesByFile?.get(fileId)?.get(name);
+    if (!data || !definition) return;
+    const normalized = this._normalizeDataToolDefinition(definition);
+
+    this._clearDataToolPreview();
+    this._dataToolEditing = { fileId, name };
+    this._dataToolRenameUnlocked = false;
+    this._setOutlierMessage('', '');
+    // Two passes on purpose: the first sync repopulates the source picker for the
+    // selected tool, and only then does writing `sourceName` into it stick.
+    const toolSelect = document.getElementById('data-tool-select');
+    if (toolSelect) toolSelect.value = normalized.tool;
+    this._syncDataTools();
+    this._writeDataToolForm(normalized, name);
+    this._syncDataTools();
+};
+
+proto._exitDataToolEditing = function(options = {}) {
+    if (!this._dataToolEditing) return;
+    this._restoreEditedTraceValues();
+    this._dataToolEditing = null;
+    this._dataToolRenameUnlocked = false;
+    this._clearDataToolDraft({ keepMessage: options.keepMessage, keepTool: options.keepTool });
+};
+
+// Push a stored definition back into the controls. Values the tool does not use
+// are left alone; they are hidden anyway.
+proto._writeDataToolForm = function(definition, name) {
+    const set = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && value !== undefined && value !== null) el.value = String(value);
+    };
+    set('data-tool-select', definition.tool);
+    set('outlier-variable', definition.sourceName);
+    set('outlier-output-name', name);
+    const params = definition.params || {};
+    if (definition.tool === 'removeOutliers') {
+        set('outlier-method', definition.method);
+        if (definition.method === 'bounds') {
+            set('outlier-lower-bound', params.lower ?? '');
+            set('outlier-upper-bound', params.upper ?? '');
+        } else {
+            set('outlier-spike-sensitivity', params.sensitivity);
+        }
+        document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
+            input.checked = input.value === (definition.replacement || 'nan');
+        });
+    } else if (definition.tool === 'derivative') {
+        set('derivative-method', params.method);
+    } else if (definition.tool === 'integrate') {
+        set('integral-method', params.method);
+        set('integral-gap-policy', params.gapPolicy);
+    } else if (definition.tool === 'movingAverage') {
+        set('moving-average-window', params.window);
+        set('moving-average-window-slider', params.window);
+    }
+};
+
+proto._unlockDataToolRename = function() {
+    if (!this._dataToolEditing) return;
+    this._dataToolRenameUnlocked = !this._dataToolRenameUnlocked;
+    this._syncDataTools();
+    if (this._dataToolRenameUnlocked) document.getElementById('outlier-output-name')?.focus();
+};
+
+// Names of every transformation built, directly or not, on top of `name`.
+proto._dataToolDependents = function(fileId, name) {
+    const definitions = this.dataToolVariablesByFile?.get(fileId);
+    if (!definitions?.size || !name) return [];
+    const found = [];
+    const seeds = new Set([name]);
+    // _orderedDataToolDefinitions is topological, so one pass reaches the whole
+    // subtree: a definition is always visited after its source.
+    for (const [candidate, definition] of this._orderedDataToolDefinitions(fileId)) {
+        if (candidate === name || !seeds.has(definition.sourceName)) continue;
+        seeds.add(candidate);
+        found.push(candidate);
+    }
+    return found;
+};
+
+proto._deleteDataToolVariable = function(fileId, name, options = {}) {
+    const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+    if (!data) return false;
+    const dependents = this._dataToolDependents(fileId, name);
+    if (dependents.length && !options.cascade) {
+        const message = i18n.t(dependents.length === 1 ? 'dataToolDeleteCascadeOne' : 'dataToolDeleteCascade')
+            .replace('{name}', name)
+            .replace('{count}', String(dependents.length))
+            .replace('{names}', dependents.join(', '));
+        if (typeof confirm === 'function' && !confirm(message)) return false;
     }
 
-    delete data.variables[name];
-    this.derivedByFile?.get(fileId)?.delete(name);
-    this._deleteDataToolDefinition(fileId, name);
-    this._removeDataToolVariableFromPlots(fileId, name);
+    // Deepest first, so nothing is briefly left pointing at a missing source.
+    for (const dependent of [...dependents].reverse()) this._removeDataToolVariable(fileId, data, dependent);
+    this._removeDataToolVariable(fileId, data, name);
+
     if (data?._duckdb?.source?.refreshOverview) {
         data._duckdb.source.refreshOverview(data).catch(err =>
-            console.warn('[duckdb] could not refresh overview after data-tool reset:', err?.message || err)
+            console.warn('[duckdb] could not refresh overview after data-tool delete:', err?.message || err)
         );
     }
     this.plotManager.updateFileData(fileId, data);
     this._clearVariableSelection?.();
     this._renderFilteredTree();
-    if (!options.silent) {
-        this._setOutlierMessage(() => i18n.t('outlierResetCreated').replace('{name}', name), 'ok');
-    }
+    // The count names the variables that came DOWN WITH it, not including it.
+    this._setOutlierMessage(() => (dependents.length
+        ? i18n.t(dependents.length === 1 ? 'dataToolDeletedWithChainOne' : 'dataToolDeletedWithChain')
+            .replace('{name}', name)
+            .replace('{count}', String(dependents.length))
+        : i18n.t('dataToolDeleted').replace('{name}', name)), 'ok');
     this._syncDataTools();
     return true;
+};
+
+proto._removeDataToolVariable = function(fileId, data, name) {
+    delete data.variables[name];
+    this.derivedByFile?.get(fileId)?.delete(name);
+    this._deleteDataToolDefinition(fileId, name);
+    this._removeDataToolVariableFromPlots(fileId, name);
+};
+
+proto._renderDataToolTable = function() {
+    const wrap = document.getElementById('data-tool-table-wrap');
+    const table = document.getElementById('data-tool-table');
+    if (!wrap || !table) return;
+    const fileId = this.activeFileId;
+    // Topological order, so a chain reads top to bottom: a variable never appears
+    // above the one it was built from. Insertion order would not survive a rename,
+    // which re-inserts the row at the end.
+    const rows = fileId ? this._orderedDataToolDefinitions(fileId) : [];
+    wrap.hidden = !fileId || rows.length === 0;
+    if (wrap.hidden) {
+        table.innerHTML = '';
+        return;
+    }
+
+    const editingName = this._dataToolEditing?.name || '';
+    table.innerHTML = '';
+    for (const [name, definition] of rows) {
+        const row = document.createElement('div');
+        row.className = 'data-tool-row' + (name === editingName ? ' editing' : '');
+        row.dataset.name = name;
+
+        const flow = document.createElement('div');
+        flow.className = 'data-tool-row-flow';
+        flow.textContent = `${definition.sourceName} → ${name}`;
+        flow.title = flow.textContent;
+
+        const bottom = document.createElement('div');
+        bottom.className = 'data-tool-row-bottom';
+        const label = document.createElement('span');
+        label.className = 'data-tool-row-tool';
+        label.textContent = this._dataToolLabel(definition.tool);
+        const actions = document.createElement('span');
+        actions.className = 'data-tool-row-actions';
+        actions.appendChild(this._dataToolRowButton('edit', '✎', 'dataToolEditTitle'));
+        actions.appendChild(this._dataToolRowButton('delete', '🗑', 'dataToolDeleteTitle'));
+        bottom.appendChild(label);
+        bottom.appendChild(actions);
+
+        row.appendChild(flow);
+        row.appendChild(bottom);
+        table.appendChild(row);
+    }
+};
+
+proto._dataToolRowButton = function(action, glyph, titleKey) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `tree-control-btn data-tool-row-btn data-tool-row-${action}`;
+    button.dataset.action = action;
+    button.title = i18n.t(titleKey);
+    button.textContent = glyph;
+    return button;
+};
+
+proto._dataToolLabel = function(tool) {
+    return i18n.t({
+        removeOutliers: 'removeOutliers',
+        derivative: 'dataToolDerivative',
+        integrate: 'dataToolIntegrate',
+        movingAverage: 'dataToolMovingAverage',
+    }[tool] || 'dataTools');
+};
+
+proto._handleDataToolTableClick = function(event) {
+    const button = event.target.closest('.data-tool-row-btn');
+    const row = event.target.closest('.data-tool-row');
+    if (!button || !row) return;
+    const name = row.dataset.name;
+    const fileId = this.activeFileId;
+    if (!name || !fileId) return;
+    if (button.dataset.action === 'edit') this._enterDataToolEditing(fileId, name);
+    else if (button.dataset.action === 'delete') this._deleteDataToolVariable(fileId, name);
+};
+
+// "Create and plot": prefer a panel that already shows the source variable, so
+// the new curve lands next to what it was made from.
+proto._plotDataToolVariable = function(fileId, name) {
+    const sourceName = document.getElementById('outlier-variable')?.value || '';
+    let panelId = null;
+    for (const [id, plot] of this.plotManager.plots) {
+        if (plot.mode !== 'timeseries') continue;
+        if (plot.traces.some(trace => trace.fileId === fileId && trace.varName === sourceName)) { panelId = id; break; }
+        if (panelId === null && plot.traces.length) panelId = id;
+    }
+    if (panelId === null) panelId = document.querySelector('.layout-panel')?.dataset.id || null;
+    if (panelId === null) return;
+    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+    if (!panelEl) return;
+    this.plotManager.addTrace(panelId, name, panelEl);
 };
 
 // Run the tool in the compute worker when one is available, then assemble the
@@ -1162,18 +1272,13 @@ proto._getOutlierContext = function(options = {}) {
     const tool = this._getSelectedDataTool();
     const sourceName = document.getElementById('outlier-variable')?.value || '';
     const outputName = (document.getElementById('outlier-output-name')?.value || '').trim();
-    const targetMode = this._getOutlierTargetMode();
     const sourceVariable = data?.variables?.[sourceName];
     const lazy = this._isDataToolLazyData(data);
     if (!tool || !fileId || !data || !sourceVariable) {
         if (!options.quiet) this._setOutlierMessage(() => i18n.t('outlierLoadFileFirst'), 'error');
         return null;
     }
-    if (!targetMode) {
-        if (!options.quiet) this._setOutlierMessage(() => i18n.t('dataToolChooseTargetMode'), '');
-        return null;
-    }
-    if (targetMode === 'create' && !outputName) {
+    if (!outputName) {
         if (!options.quiet) this._setOutlierMessage(() => i18n.t('dataToolOutputNameRequired'), 'error');
         return null;
     }
@@ -1181,7 +1286,7 @@ proto._getOutlierContext = function(options = {}) {
         if (!options.quiet) this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
         return null;
     }
-    return { fileId, data, sourceName, sourceVariable, outputName, targetMode, tool, lazy };
+    return { fileId, data, sourceName, sourceVariable, outputName, targetMode: 'create', tool, lazy };
 };
 
 proto._getOutlierConfig = function() {
@@ -1283,18 +1388,6 @@ proto._getOutlierReplacementMethod = function() {
     return OUTLIER_REPLACEMENTS.has(value) ? value : 'nan';
 };
 
-proto._clearDataToolTargetMode = function() {
-    if (typeof document === 'undefined') return;
-    document.querySelectorAll('input[name="outlier-target"]').forEach(input => {
-        input.checked = false;
-    });
-};
-
-proto._getOutlierTargetMode = function() {
-    const value = document.querySelector('input[name="outlier-target"]:checked')?.value;
-    return value === 'modify' || value === 'create' ? value : '';
-};
-
 proto._uniqueDataToolVariableName = function(baseName, fileId = this.activeFileId) {
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
     const base = String(baseName || 'tool').trim() || 'tool';
@@ -1333,40 +1426,6 @@ proto._deleteDataToolDefinition = function(fileId, name) {
     if (!definitions) return;
     definitions.delete(name);
     if (!definitions.size) this.dataToolVariablesByFile.delete(fileId);
-};
-
-proto._findOutlierResetDefinition = function(fileId, options = {}) {
-    const definitions = this.dataToolVariablesByFile?.get(fileId);
-    if (!definitions?.size) return null;
-    const sourceName = options.sourceName || '';
-    const outputName = options.outputName || '';
-    const targetMode = options.targetMode || 'modify';
-    const tool = options.tool || this._getSelectedDataTool();
-    const normalizeEntry = (name, rawDefinition) => {
-        if (!rawDefinition) return null;
-        const definition = this._normalizeDataToolDefinition(rawDefinition);
-        if (tool && definition.tool !== tool) return null;
-        return { name, definition };
-    };
-
-    if (targetMode === 'modify') {
-        const modified = normalizeEntry(sourceName, definitions.get(sourceName));
-        if (modified?.definition.targetMode === 'modify') return modified;
-    }
-
-    if (targetMode === 'create') {
-        const createdFromOutput = normalizeEntry(outputName, definitions.get(outputName));
-        if (createdFromOutput?.definition.targetMode === 'create') return createdFromOutput;
-    }
-
-    const direct = normalizeEntry(sourceName, definitions.get(sourceName));
-    if (direct) return direct;
-
-    for (const [name, rawDefinition] of definitions) {
-        const entry = normalizeEntry(name, rawDefinition);
-        if (entry?.definition.targetMode === 'create' && entry.definition.sourceName === sourceName) return entry;
-    }
-    return null;
 };
 
 proto._removeDataToolVariableFromPlots = function(fileId, name) {
@@ -1690,16 +1749,176 @@ proto._serializeDataToolDefinitions = function(fileId) {
 };
 
 proto._resetDataToolPicker = function() {
-    if (this._outlierAutoApplyTimer) {
-        clearTimeout(this._outlierAutoApplyTimer);
-        this._outlierAutoApplyTimer = null;
-    }
+    this._dataToolEditing = null;
+    this._dataToolRenameUnlocked = false;
+    this._clearDataToolPreview();
     const toolSelect = document.getElementById('data-tool-select');
     if (toolSelect) toolSelect.value = '';
-    this._clearDataToolTargetMode();
     this._toggleOutlierHelpPopover?.(false);
     this._setOutlierMessage('', '');
     this._syncDataTools?.();
+};
+
+// ─── Preview ──────────────────────────────────────────────────────────────
+// Dragging a slider must still show its effect — that was the one virtue of the
+// old auto-apply. What changed is that the effect is drawn, not stored: while
+// drafting it is a dashed throwaway trace, and while editing it is the real
+// curve, restored on Cancel.
+
+proto._handleDataToolPreviewChange = function(options = {}) {
+    if (this._dataToolPreviewTimer) clearTimeout(this._dataToolPreviewTimer);
+    const delay = options.immediate ? 0 : 350;
+    this._dataToolPreviewTimer = setTimeout(() => {
+        this._dataToolPreviewTimer = null;
+        this._runDataToolPreview();
+    }, delay);
+};
+
+proto._runDataToolPreview = function() {
+    const context = this._getOutlierContext({ quiet: true });
+    // A lazy file holds column references, not arrays: previewing would compute
+    // over the overview and show a curve the commit would not reproduce.
+    if (!context || context.lazy) {
+        this._clearDataToolPreview();
+        return;
+    }
+    let config;
+    try {
+        config = this._getDataToolConfig(context.tool, context);
+    } catch {
+        return;
+    }
+
+    const editing = this._dataToolEditing;
+    this._buildDataToolResultOffThread(context.sourceVariable.data, context.sourceVariable, {
+        ...config,
+        sourceName: context.sourceName,
+        targetName: editing ? editing.name : `${context.outputName} (preview)`,
+        targetMode: 'create',
+    }, context.data).then(result => {
+        if (editing) this._previewEditedVariable(context, editing, result);
+        else this._drawDataToolPreviewTrace(context, result);
+    }).catch(err => {
+        // A superseded run is the normal outcome of dragging a slider: a newer
+        // preview is already in flight and will report for it.
+        if (err?.cancelled) return;
+        this._setOutlierMessage(err?.message || String(err), 'error');
+    });
+};
+
+// Editing writes the recomputed values straight into the live variable so every
+// panel showing it redraws. The pre-edit values are kept once, so Cancel can put
+// them back.
+proto._previewEditedVariable = function(context, editing, result) {
+    const { fileId, data } = context;
+    const variable = data.variables?.[editing.name];
+    if (!variable) return;
+    if (!this._dataToolEditBackup) {
+        this._dataToolEditBackup = { fileId, name: editing.name, data: variable.data, dataTool: variable.dataTool };
+    }
+    variable.data = result.variable.data;
+    variable.dataType = result.variable.dataType;
+    variable.isConstant = result.variable.isConstant;
+    variable.dataTool = result.variable.dataTool;
+
+    const dependents = document.getElementById('data-tool-live-chain')?.checked === false
+        ? []
+        : this._dataToolDependents(fileId, editing.name);
+    if (dependents.length) this._reapplyDataToolDependents(fileId, data, editing.name);
+
+    this.plotManager.updateFileData(fileId, data);
+    this._rebuildPlotsUsingVariable?.(fileId, editing.name);
+    for (const name of dependents) this._rebuildPlotsUsingVariable?.(fileId, name);
+};
+
+proto._restoreEditedTraceValues = function() {
+    const backup = this._dataToolEditBackup;
+    this._dataToolEditBackup = null;
+    if (!backup) return;
+    const data = this.plotManager.files.get(backup.fileId)?.data;
+    const variable = data?.variables?.[backup.name];
+    if (!variable) return;
+    variable.data = backup.data;
+    variable.dataType = this.parser._detectDataType(backup.data, 'variable');
+    variable.isConstant = this.parser._isConstantValues(backup.data);
+    variable.dataTool = backup.dataTool;
+    this._reapplyDataToolDependents(backup.fileId, data, backup.name);
+    this.plotManager.updateFileData(backup.fileId, data);
+    this._rebuildPlotsUsingVariable?.(backup.fileId, backup.name);
+};
+
+// The draft preview goes through the ordinary trace machinery, under a reserved
+// name flagged `previewOnly`. Hand-drawing it onto Plotly instead would mean
+// re-deriving the x axis (file transform, calendar vs elapsed, decimation) and
+// getting it subtly wrong — a preview that misleads is worse than none. The flag
+// is what keeps the placeholder out of the tree, the pickers and saved sessions;
+// `_clearDataToolPreview` is what keeps it from outliving the draft.
+proto._drawDataToolPreviewTrace = function(context, result) {
+    const panelId = this._dataToolPreviewPanelId(context);
+    if (panelId === null) {
+        this._clearDataToolPreview();
+        return;
+    }
+    const { fileId, data } = context;
+    const name = DATA_TOOL_PREVIEW_NAME;
+    data.variables[name] = {
+        ...result.variable,
+        name,
+        displayName: context.outputName,
+        description: '',
+        previewOnly: true,
+    };
+
+    const plot = this.plotManager.plots.get(panelId);
+    const existing = plot?.traces.find(trace => trace.fileId === fileId && trace.varName === name);
+    this.plotManager.updateFileData(fileId, data);
+    if (existing) {
+        this._rebuildPlotsUsingVariable?.(fileId, name);
+    } else {
+        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        if (!panelEl) return;
+        this.plotManager.addTrace(panelId, name, panelEl);
+        const added = plot?.traces.find(trace => trace.fileId === fileId && trace.varName === name);
+        if (added) {
+            added.dash = 'dot';
+            this.plotManager._rebuildPanel(panelId, { preserveView: true });
+        }
+    }
+    this._dataToolPreview = { fileId, panelId };
+};
+
+// Only preview against a panel that already draws the source, so the dashed
+// curve appears next to what it was computed from.
+proto._dataToolPreviewPanelId = function(context) {
+    for (const [id, plot] of this.plotManager.plots) {
+        if (plot.mode !== 'timeseries' || !plot.div) continue;
+        if (plot.traces.some(trace => trace.fileId === context.fileId
+            && (trace.varName === context.sourceName || trace.varName === DATA_TOOL_PREVIEW_NAME))) return id;
+    }
+    return null;
+};
+
+proto._clearDataToolPreview = function() {
+    if (this._dataToolPreviewTimer) {
+        clearTimeout(this._dataToolPreviewTimer);
+        this._dataToolPreviewTimer = null;
+    }
+    const preview = this._dataToolPreview;
+    this._dataToolPreview = null;
+    if (!preview || this._clearingDataToolPreview) return;
+    // Taking the trace down rebuilds the panel, which re-enters _syncDataTools;
+    // the guard keeps that from recursing back into this teardown.
+    this._clearingDataToolPreview = true;
+    try {
+        const data = this.plotManager?.files.get(preview.fileId)?.data;
+        this._removeDataToolVariableFromPlots(preview.fileId, DATA_TOOL_PREVIEW_NAME);
+        if (data?.variables?.[DATA_TOOL_PREVIEW_NAME]) {
+            delete data.variables[DATA_TOOL_PREVIEW_NAME];
+            this.plotManager.updateFileData(preview.fileId, data);
+        }
+    } finally {
+        this._clearingDataToolPreview = false;
+    }
 };
 
 proto._toggleOutlierHelpPopover = function(show) {
@@ -1773,21 +1992,6 @@ proto._spikeParamsFromSensitivity = function(sensitivity) {
 
 proto._sensitivityFromLegacyThreshold = function(threshold) {
     return this._normalizeSensitivity(12 - this._positiveNumber(threshold, 6));
-};
-
-proto._findDataToolCreateDefinitionName = function(fileId, sourceName, exceptName = '', tool = this._getSelectedDataTool()) {
-    const definitions = this.dataToolVariablesByFile?.get(fileId);
-    if (!definitions || !sourceName) return '';
-    for (const [name, definition] of definitions) {
-        const normalized = this._normalizeDataToolDefinition(definition);
-        if (normalized.tool === tool
-            && normalized.targetMode === 'create'
-            && normalized.sourceName === sourceName
-            && name !== exceptName) {
-            return name;
-        }
-    }
-    return '';
 };
 
 proto._formatOutlierNumber = function(value, digits = 2) {

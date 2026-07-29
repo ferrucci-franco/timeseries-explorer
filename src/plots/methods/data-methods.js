@@ -1725,6 +1725,9 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     const line = useGL
         ? { color: t.color, width: 1.5 }
         : { color: t.color, width: 1.5, shape: isStep ? 'hv' : 'linear' };
+    // Set only by the data-tool preview, which draws a curve that does not exist
+    // yet and must not read as a real trace.
+    if (t.dash) line.dash = t.dash;
     return {
         x: plotX, y: visual.y,
         name, type: plot?.timeseriesStacked ? 'scatter' : (useGL ? 'scattergl' : 'scatter'), mode: 'lines',

@@ -46,36 +46,6 @@ const withDocument = (mockDocument, fn) => {
     }
 };
 
-withDocument({
-    querySelector: () => null,
-    querySelectorAll: () => [],
-}, () => {
-    assert.equal(h._getOutlierTargetMode(), '', 'data tool target mode starts unselected');
-});
-
-withDocument({
-    querySelector: () => ({ value: 'modify' }),
-    querySelectorAll: () => [],
-}, () => {
-    assert.equal(h._getOutlierTargetMode(), 'modify', 'modify target mode is explicit');
-});
-
-withDocument({
-    querySelector: () => ({ value: 'create' }),
-    querySelectorAll: () => [],
-}, () => {
-    assert.equal(h._getOutlierTargetMode(), 'create', 'create target mode is explicit');
-});
-
-const targetModeRadios = [{ checked: true }, { checked: true }];
-withDocument({
-    querySelector: () => null,
-    querySelectorAll: () => targetModeRadios,
-}, () => {
-    h._clearDataToolTargetMode();
-    assert.deepEqual(targetModeRadios.map(input => input.checked), [false, false], 'target mode clear unchecks all radios');
-});
-
 closeArray(
     h._computeDerivativeValues([0, 1, 5, 11], numericData([0, 1, 3, 6]), { method: 'centered' }).values,
     [1, 5 / 3, 2, 2],
@@ -200,26 +170,92 @@ app._renderFilteredTree = () => {};
 app._syncDataTools = () => {};
 app._setOutlierMessage = () => {};
 
-const appended = await app._applyDataToolModifyMode({
-    fileId: 'file',
-    data: chainData,
+// Chaining is now one row per step: a tool-created variable is simply picked as
+// the source of the next one. The dependency walk has to see through the chain,
+// because editing or deleting a link has to reach everything below it.
+app.dataToolVariablesByFile.get('file').set('x avg int', {
+    name: 'x avg int',
+    tool: 'integrate',
+    targetMode: 'create',
     sourceName: 'x avg',
-    sourceVariable: chainData.variables['x avg'],
-    tool: 'integrate',
-}, {
-    tool: 'integrate',
     params: { method: 'rectangular' },
-}, { silent: true });
-assert.ok(appended, 'append tool to created variable succeeds');
-closeArray(chainData.variables['x avg'].data, [0, 3, 8], 'modify created variable appends pipeline step');
-const chainedDefinition = app.dataToolVariablesByFile.get('file').get('x avg');
-assert.equal(chainedDefinition.targetMode, 'create');
-assert.equal(chainedDefinition.sourceName, 'x');
-assert.deepEqual(chainedDefinition.steps.map(step => step.tool), ['movingAverage', 'integrate']);
+});
+app.dataToolVariablesByFile.get('file').set('x avg int ddt', {
+    name: 'x avg int ddt',
+    tool: 'derivative',
+    targetMode: 'create',
+    sourceName: 'x avg int',
+    params: { method: 'forward' },
+});
+assert.deepEqual(
+    app._dataToolDependents('file', 'x avg'),
+    ['x avg int', 'x avg int ddt'],
+    'dependents reach the whole chain, not just the direct child',
+);
+assert.deepEqual(app._dataToolDependents('file', 'x avg int ddt'), [], 'the last link has no dependents');
+
 app._reapplyDataToolVariables('file', chainData);
-closeArray(chainData.variables['x avg'].data, [0, 3, 8], 'pipeline reapply is stable once');
+closeArray(chainData.variables['x avg'].data, [3, 5, 6], 'chained reapply is stable once');
+closeArray(chainData.variables['x avg int'].data, [0, 3, 8], 'the second link reapplies from the first');
+closeArray(chainData.variables['x avg int ddt'].data, [3, 5, 5], 'the third link reapplies from the second');
 app._reapplyDataToolVariables('file', chainData);
-closeArray(chainData.variables['x avg'].data, [0, 3, 8], 'pipeline reapply is stable twice');
+closeArray(chainData.variables['x avg'].data, [3, 5, 6], 'chained reapply does not compound');
+closeArray(chainData.variables['x avg int'].data, [0, 3, 8], 'the second link does not compound either');
+
+// Renaming moves a key through four places at once. Missing any one of them
+// leaves a dangling reference: a definition pointing at a source that no longer
+// exists, or a trace drawing a variable that was renamed out from under it.
+{
+    const renameData = numericData([0, 1, 2], 'index');
+    renameData.variables.x = { name: 'x', kind: 'variable', data: [1, 2, 4] };
+    renameData.variables['x avg'] = { name: 'x avg', kind: 'variable', data: [1.5, 3, 4] };
+    renameData.variables['x avg int'] = { name: 'x avg int', kind: 'variable', data: [0, 1.5, 4.5] };
+    const rebuilt = [];
+    const renameApp = new DataToolHarness();
+    renameApp.dataToolVariablesByFile = new Map([['f', new Map([
+        ['x avg', { name: 'x avg', tool: 'movingAverage', targetMode: 'create', sourceName: 'x', params: { window: 2 } }],
+        ['x avg int', { name: 'x avg int', tool: 'integrate', targetMode: 'create', sourceName: 'x avg', params: { method: 'rectangular' } }],
+    ])]]);
+    renameApp.plotManager = {
+        files: new Map([['f', { data: renameData }]]),
+        plots: new Map([['p1', {
+            traces: [{ fileId: 'f', varName: 'x avg' }, { fileId: 'other', varName: 'x avg' }],
+            phaseTraces: [{ fileId: 'f', x: 'x', y: 'x avg', z: null }],
+        }]]),
+        _rebuildPanel: id => rebuilt.push(id),
+        updateFileData: () => {},
+    };
+
+    renameApp._renameDataToolVariable('f', renameData, 'x avg', 'x smooth');
+    const definitions = renameApp.dataToolVariablesByFile.get('f');
+    assert.ok(renameData.variables['x smooth'], 'the variable moves to the new key');
+    assert.ok(!renameData.variables['x avg'], 'the old key is gone');
+    assert.equal(renameData.variables['x smooth'].name, 'x smooth', 'the variable carries its new name');
+    assert.ok(definitions.has('x smooth') && !definitions.has('x avg'), 'the definition moves with it');
+    assert.equal(definitions.get('x avg int').sourceName, 'x smooth', 'dependents follow the rename');
+    const plot = renameApp.plotManager.plots.get('p1');
+    assert.equal(plot.traces[0].varName, 'x smooth', 'a plotted trace follows the rename');
+    assert.equal(plot.traces[1].varName, 'x avg', 'another file keeping the old name is left alone');
+    assert.equal(plot.phaseTraces[0].y, 'x smooth', 'phase-trace axes follow the rename too');
+    assert.deepEqual(rebuilt, ['p1'], 'only the touched panel is rebuilt');
+}
+
+// Sessions saved before the redesign carry a steps[] pipeline on one variable.
+// They still have to load and reapply, which is why the pipeline builder stays.
+const legacyData = numericData([0, 1, 2], 'index');
+legacyData.variables.x = { name: 'x', kind: 'variable', data: [1, 2, 4] };
+app.plotManager.files.set('legacy', { data: legacyData });
+app.dataToolVariablesByFile.set('legacy', new Map([['x avg', {
+    name: 'x avg',
+    targetMode: 'create',
+    sourceName: 'x',
+    steps: [
+        { tool: 'movingAverage', params: { window: 2 } },
+        { tool: 'integrate', params: { method: 'rectangular' } },
+    ],
+}]]));
+app._reapplyDataToolVariables('legacy', legacyData);
+closeArray(legacyData.variables['x avg'].data, [0, 1.5, 4.5], 'a legacy steps[] pipeline still reapplies');
 
 const modifyData = numericData([0, 1, 2], 'index');
 modifyData.variables.y = { name: 'y', kind: 'variable', data: [1, 2, 3] };

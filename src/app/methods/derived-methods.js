@@ -420,7 +420,7 @@ proto._getDerivedSuggestions = function(prefix) {
         .filter(({ name, variable }) => {
             // The time axis (abscissa) is a valid operand — expose it so formulas
             // like diff(time) or time/period are discoverable, not just typeable.
-            if (variable.plottable === false) return false;
+            if (variable.plottable === false || variable.previewOnly) return false;
             const displayName = variable.displayName || '';
             return name.toLowerCase().includes(needle) || displayName.toLowerCase().includes(needle);
         })

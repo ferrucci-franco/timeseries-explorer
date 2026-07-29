@@ -685,11 +685,121 @@
 .data-tool-actions {
     display: flex;
     gap: 0.4rem;
+    flex-wrap: wrap;
 }
 
 .data-tool-actions button {
     min-width: 0;
     white-space: nowrap;
+    flex: 1 1 auto;
+}
+
+/* The output name plus its rename lock. */
+.data-tool-name-row {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+.data-tool-name-row .derived-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.data-tool-rename-btn {
+    flex: 0 0 auto;
+}
+
+.data-tool-rename-btn.active {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.data-tool-editing-banner {
+    padding: 0.3rem 0.5rem;
+    border-left: 3px solid var(--primary-color);
+    background-color: var(--bg-tertiary, var(--bg-secondary));
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    border-radius: 0 4px 4px 0;
+}
+
+.data-tool-live-chain {
+    font-size: 0.78rem;
+}
+
+/* Transformations table: two lines per row, because the sidebar is narrow. */
+.data-tool-table-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.data-tool-table-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+}
+
+.data-tool-table {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    max-height: 13rem;
+    overflow-y: auto;
+}
+
+.data-tool-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0.35rem 0.45rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background-color: var(--bg-primary);
+}
+
+.data-tool-row.editing {
+    border-color: var(--primary-color);
+}
+
+.data-tool-row-flow {
+    font-size: 0.78rem;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.data-tool-row-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.35rem;
+}
+
+.data-tool-row-tool {
+    font-size: 0.74rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.data-tool-row-actions {
+    display: flex;
+    gap: 0.2rem;
+    flex: 0 0 auto;
+}
+
+.data-tool-row-btn {
+    padding: 0.1rem 0.3rem;
+    font-size: 0.75rem;
+    line-height: 1.2;
 }
 
 .data-tool-actions button:disabled,
