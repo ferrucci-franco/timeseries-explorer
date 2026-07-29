@@ -446,6 +446,82 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     assert.equal(config.params.mode, 'zeroPhase');
 }
 
+{
+    // A manual initial state is part of the filter's definition, so the wrong
+    // number of values blocks the commit exactly as an unstable denominator does.
+    const h = new Harness();
+    const dom = (order2 = true, state = '') => fakeDocument({
+        'data-tool-select': 'filter',
+        'filter-b': '1',
+        'filter-a': order2 ? '1, -1.8, 0.81' : '1, -0.5',
+        'filter-init': 'manual',
+        'filter-init-state': state,
+    });
+
+    const short = withDocument(dom(true, '0.5'), () => h._filterPlan());
+    assert.equal(short.ok, false);
+    assert.equal(short.code, 'dataToolFilterInitStateLength');
+    assert.match(short.text, /exactly 2 state values; 1 given/);
+
+    const right = withDocument(dom(true, '0.5, 0.25'), () => h._filterPlan());
+    assert.equal(right.ok, true, 'two values for an order-2 filter');
+    assert.deepEqual(right.manual.state, [0.5, 0.25]);
+
+    // The blocker names it, so the panel can say which field is at fault.
+    const blocker = withDocument(dom(true, '1, 2, 3'), () => h._dataToolCommitBlocker({
+        hasSource: true, hasValidConfig: false, editing: null, fileId: 'f1', data: { variables: {} },
+    }));
+    assert.equal(blocker, 'dataToolFilterInitStateLength');
+
+    // Steady and zero need no state at all.
+    for (const mode of ['steady', 'zero']) {
+        const plan = withDocument(fakeDocument({
+            'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': '1, -0.5', 'filter-init': mode,
+        }), () => h._filterPlan());
+        assert.equal(plan.ok, true, `${mode} needs no manual state`);
+        assert.equal(plan.manual.mode, mode);
+    }
+}
+
+{
+    // The stored config carries the whole convention, so a restored session
+    // reproduces the run rather than approximating it.
+    const h = new Harness();
+    const config = withDocument(fakeDocument({
+        'data-tool-select': 'filter',
+        'filter-b': '0.25', 'filter-a': '1, -0.5',
+        'filter-mode': 'forward', 'filter-init': 'manual', 'filter-init-state': '0.75',
+        'filter-restart-gap': '5',
+    }), () => h._getDataToolConfig('filter'));
+    assert.deepEqual(config.params.b, [0.25, 0]);
+    assert.deepEqual(config.params.a, [1, -0.5]);
+    assert.equal(config.params.init, 'manual');
+    assert.deepEqual(config.params.initState, [0.75]);
+    assert.equal(config.params.restartGap, 5);
+
+    assert.match(h._filterDescription(config.params), /from state \[0\.75\]/);
+    assert.match(h._filterDescription(config.params), /restart after gaps > 5 samples/);
+    // Zero phase derives its own edges, so quoting an initial condition there
+    // would describe something that did not happen.
+    assert.doesNotMatch(
+        h._filterDescription({ ...config.params, mode: 'zeroPhase' }),
+        /from state/,
+    );
+}
+
+{
+    // The default the panel opens with must be a first-order IIR of gain 0.5 —
+    // two lone 1s taught nothing about these fields taking vectors.
+    const h = new Harness();
+    const plan = withDocument(fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': '0.25', 'filter-a': '1, -0.5',
+    }), () => h._filterPlan());
+    assert.equal(plan.ok, true);
+    assert.ok(Math.abs(plan.inspection.dcGain - 0.5) < 1e-12, `DC gain 0.5 (got ${plan.inspection.dcGain})`);
+    assert.equal(plan.inspection.denominatorOrder, 1, 'and it really is an IIR');
+    assert.match(plan.text, /^IIR, order 1/);
+}
+
 // ── The detrend form ──────────────────────────────────────────────────────
 
 {

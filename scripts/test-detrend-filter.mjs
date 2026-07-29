@@ -298,9 +298,116 @@ const N = NaN;
 }
 
 {
-    // The identity filter is the do-nothing default the panel opens with.
+    // The identity filter.
     const x = [3, 1, 4, 1, 5];
     close(applyFilter(x, { b: [1], a: [1], mode: 'forward' }).values, x, 'b = a = 1 passes through');
+}
+
+// ── Initial conditions ────────────────────────────────────────────────────
+
+{
+    const x = new Array(40).fill(300);
+    const b = [0.5];
+    const a = [1, -0.5];   // unit DC gain
+
+    const steady = applyFilter(x, { b, a, mode: 'forward', init: 'steady' }).values;
+    assert.ok(Math.abs(steady[0] - 300) < 1e-9, 'steady state opens where the signal is');
+
+    const zero = applyFilter(x, { b, a, mode: 'forward', init: 'zero' }).values;
+    assert.ok(Math.abs(zero[0] - 150) < 1e-9, `at rest the first output is b0·x (got ${zero[0]})`);
+    assert.ok(Math.abs(zero[39] - 300) < 1e-6, 'and it settles to the same place');
+    assert.ok(zero[0] < zero[5] && zero[5] < zero[10], 'the startup transient is a real climb');
+
+    // Manual reproduces either of them exactly, which is the check that the
+    // vector really is the state and not something adjacent to it.
+    const asZero = applyFilter(x, { b, a, mode: 'forward', init: 'manual', initState: [0] }).values;
+    close(asZero, zero, 'manual [0] equals starting at rest');
+    const ziForStep = filterInitialState(Float64Array.from([0.5, 0]), Float64Array.from([1, -0.5]));
+    const asSteady = applyFilter(x, {
+        b, a, mode: 'forward', init: 'manual', initState: [ziForStep[0] * 300],
+    }).values;
+    close(asSteady, steady, 'manual with the steady-state vector equals steady state', 1e-9);
+}
+
+{
+    // A short manual state is padded rather than thrown: the panel refuses one,
+    // but a session restored from an older file must still open.
+    const r = applyFilter([1, 2, 3], { b: [1], a: [1, -0.5], init: 'manual', initState: [] });
+    assert.ok(r.values.every(Number.isFinite), 'a missing manual state degrades to rest');
+}
+
+// ── Restarting across holes ───────────────────────────────────────────────
+
+{
+    const N9 = NaN;
+    const values = [1, 1, 1, N9, 1, 1, 1];
+    const b = [0.5];
+    const a = [1, -0.5];
+
+    // Default: rebuild after any hole. Both runs then start in steady state, so
+    // both open at exactly 1.
+    const restart = applyFilter(values, { b, a, mode: 'forward', restartGap: 0 });
+    assert.equal(restart.restarts, 2);
+    assert.equal(restart.carriedBreaks, 0);
+    assert.ok(Math.abs(restart.values[4] - 1) < 1e-12, 'the second run opens in steady state');
+
+    // Tolerating a one-sample hole carries the state straight over it.
+    const carried = applyFilter(values, { b, a, mode: 'forward', restartGap: 1 });
+    assert.equal(carried.restarts, 1, 'one continuous run');
+    assert.equal(carried.carriedBreaks, 1, 'and the break is counted, not hidden');
+    assert.ok(Number.isNaN(carried.values[3]), 'the hole is still a hole');
+
+    // A hole longer than the tolerance still restarts.
+    const longHole = [1, 1, 1, N9, N9, N9, 1, 1, 1];
+    assert.equal(applyFilter(longHole, { b, a, restartGap: 1 }).restarts, 2, 'three missing > tolerance 1');
+    assert.equal(applyFilter(longHole, { b, a, restartGap: 3 }).restarts, 1, 'three missing = tolerance 3');
+}
+
+{
+    // A TIME gap with no missing rows: every row is present and finite, but the
+    // clock jumped. This is the case that was invisible before — the recursion
+    // cannot see it, so the axis has to be read for it.
+    const values = [1, 1, 1, 1, 1, 1];
+    const time = { values: Float64Array.from([0, 1, 2, 13, 14, 15]), kind: 'numeric' };
+    const b = [0.5];
+    const a = [1, -0.5];
+
+    const seen = applyFilter(values, { b, a, time, restartGap: 0 });
+    assert.equal(seen.restarts, 2, 'the ten-step jump is a break even with no NaN');
+    assert.equal(seen.skippedCount, 0, 'and no sample was dropped');
+
+    const tolerated = applyFilter(values, { b, a, time, restartGap: 20 });
+    assert.equal(tolerated.restarts, 1, 'a large enough tolerance steps over it');
+    assert.equal(tolerated.carriedBreaks, 1);
+
+    // Without a time axis the same values look perfectly continuous.
+    const blind = applyFilter(values, { b, a, restartGap: 0 });
+    assert.equal(blind.restarts, 1, 'no axis, no visible break');
+}
+
+{
+    // An irregular axis is reported, not refused: only the user knows whether a
+    // cut-off that is not a fixed frequency matters for what they are doing.
+    const values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const irregular = { values: Float64Array.from([0, 0.4, 1.9, 2.0, 5.5, 5.6, 9.9, 10.4, 17, 30]), kind: 'numeric' };
+    const r = applyFilter(values, { b: [1], a: [1, -0.5], time: irregular });
+    assert.equal(r.irregular, true, 'an irregular axis is flagged');
+    assert.equal(r.irregularReason, 'irregularStep');
+    assert.ok(r.values.every(Number.isFinite), 'but the filter still ran');
+
+    const uniform = { values: Float64Array.from(Array.from({ length: 10 }, (_, i) => i)), kind: 'numeric' };
+    assert.equal(applyFilter(values, { b: [1], a: [1, -0.5], time: uniform }).irregular, false);
+}
+
+{
+    // Zero phase pads each contiguous run itself, so the restart threshold has
+    // nothing to act on and every run is independent whatever it is set to.
+    const N9 = NaN;
+    const values = [1, 2, 3, 4, N9, 5, 6, 7, 8];
+    const r = applyFilter(values, { b: [0.5], a: [1, -0.5], mode: 'zeroPhase', restartGap: 99 });
+    assert.equal(r.segments, 2, 'two runs, filtered independently');
+    assert.ok(Number.isNaN(r.values[4]));
+    assert.ok(r.values.filter(Number.isFinite).length === 8);
 }
 
 console.log('detrend + digital filter kernel tests passed');

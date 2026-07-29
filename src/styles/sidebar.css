@@ -676,6 +676,7 @@
 #outlier-method-wrap.collapsed,
 #outlier-replacement-wrap.collapsed,
 #interpolate-window-wrap.collapsed,
+#filter-init-state-wrap.collapsed,
 #detrend-order-wrap.collapsed,
 #detrend-window-wrap.collapsed,
 .resample-grid-controls.collapsed,
@@ -934,11 +935,20 @@
 
 .resample-grid-controls,
 #interpolate-window-wrap,
+#filter-init-state-wrap,
 #detrend-order-wrap,
 #detrend-window-wrap {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
+}
+
+/* An irregular Δt does not make the filter refuse — only the user knows whether
+   it matters — so this reads as a caution rather than an error. */
+.data-tool-axis-note {
+    border-style: solid;
+    border-color: color-mix(in srgb, #d97706 55%, transparent);
+    color: color-mix(in srgb, var(--text-primary) 78%, #d97706);
 }
 
 /* Coefficient lists are pasted from MATLAB or scipy far more often than they are

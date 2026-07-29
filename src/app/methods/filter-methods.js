@@ -9,7 +9,13 @@
 
 import i18n from '../../i18n/index.js';
 import { inspectFilter } from '../../compute/kernels/index.js';
-import { FILTER_MODES, parseCoefficients } from '../../compute/kernels/iir.js';
+import {
+    FILTER_INIT_MODES,
+    FILTER_MODES,
+    normalizeFilterRestartGap,
+    parseCoefficients,
+} from '../../compute/kernels/iir.js';
+import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 
 export function installFilterMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -19,16 +25,34 @@ proto.initFilterTool = function() {
     // run the stability test on the "1, -" of "1, -1.8" and flash "unstable"
     // at someone who is halfway through typing a perfectly good filter.
     for (const id of ['filter-b', 'filter-a']) {
-        document.getElementById(id)?.addEventListener('change', () => this._handleDataToolOptionChange());
+        document.getElementById(id)?.addEventListener('change', () => {
+            // A manual state belongs to the filter it was written for. Once the
+            // coefficients move, its length is very likely wrong and its meaning
+            // certainly is, so it is cleared rather than silently reinterpreted.
+            this._clearManualFilterState();
+            this._handleDataToolOptionChange();
+        });
         // The summary is cheap and non-committal, so it may follow along live;
         // only the verdict waits for the field to settle.
         document.getElementById(id)?.addEventListener('input', () => this._syncFilterControls());
     }
-    document.getElementById('filter-mode')?.addEventListener('change', () => this._handleDataToolOptionChange());
+    for (const id of ['filter-mode', 'filter-init', 'filter-init-state', 'filter-restart-gap']) {
+        document.getElementById(id)?.addEventListener('change', () => this._handleDataToolOptionChange());
+    }
+    document.getElementById('filter-init-state')?.addEventListener('input', () => this._syncFilterControls());
     document.getElementById('filter-help-toggle')?.addEventListener('click', (event) => {
         event.stopPropagation();
         this._toggleFilterHelpPopover();
     });
+    document.getElementById('filter-init-help-toggle')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._toggleFilterInitHelpPopover();
+    });
+};
+
+proto._clearManualFilterState = function() {
+    const input = document.getElementById('filter-init-state');
+    if (input) input.value = '';
 };
 
 proto._toggleFilterHelpPopover = function(show) {
@@ -42,11 +66,27 @@ proto._toggleFilterHelpPopover = function(show) {
     if (willShow) this._positionFilterHelpPopover(popover, button);
 };
 
+proto._toggleFilterInitHelpPopover = function(show) {
+    const popover = document.getElementById('filter-init-help-popover');
+    const button = document.getElementById('filter-init-help-toggle');
+    if (!popover || !button) return;
+    const willShow = typeof show === 'boolean' ? show : popover.hidden;
+    popover.hidden = !willShow;
+    button.classList.toggle('active', willShow);
+    button.setAttribute('aria-expanded', String(willShow));
+    if (willShow) this._positionFilterHelpPopover(popover, button);
+};
+
 // The sidebar clips horizontal overflow, so a popover wide enough to hold the
 // difference equation on one line cannot be absolutely positioned inside it.
 // Fixed positioning escapes the clip; the cost is that the placement has to be
-// computed here rather than declared in CSS. Clamped to the viewport on both
-// axes so it can never open partly off-screen on a narrow window.
+// computed here rather than declared in CSS.
+//
+// It opens BESIDE the sidebar, not below the button. Below is where the filter's
+// own controls are, and a 600px panel dropped on top of them hides exactly what
+// the reader is trying to understand; it also lands near the bottom of the page,
+// since Data Tools sits well down the sidebar. Vertically it tracks the button
+// and is then pulled up as far as needed to fit on screen.
 proto._positionFilterHelpPopover = function(popover, button) {
     if (typeof window === 'undefined' || !button.getBoundingClientRect) return;
     const rect = button.getBoundingClientRect();
@@ -57,12 +97,23 @@ proto._positionFilterHelpPopover = function(popover, button) {
     const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 900;
     const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 700;
     const width = Math.max(300, Math.min(600, viewportWidth - 2 * margin));
-    const top = Math.min(rect.bottom + 8, Math.max(margin, viewportHeight - 120));
-    const left = Math.max(margin, Math.min(rect.left, viewportWidth - width - margin));
+
+    const sidebarRight = document.getElementById('sidebar')?.getBoundingClientRect().right ?? rect.right;
+    // Beside the sidebar when there is room for it; otherwise as far right as the
+    // window allows, which on a narrow window means overlapping — still better
+    // than off-screen.
+    const left = Math.max(margin, Math.min(sidebarRight + margin, viewportWidth - width - margin));
+
     popover.style.position = 'fixed';
     popover.style.width = `${width}px`;
     popover.style.left = `${left}px`;
     popover.style.right = 'auto';
+    popover.style.maxHeight = `${Math.max(160, viewportHeight - 2 * margin)}px`;
+    // Measured only once it is laid out at its final width, so the clamp below
+    // works on the real height rather than a guess.
+    popover.style.top = `${margin}px`;
+    const height = popover.offsetHeight || 0;
+    const top = Math.max(margin, Math.min(rect.top - 8, viewportHeight - height - margin));
     popover.style.top = `${top}px`;
     popover.style.maxHeight = `${Math.max(160, viewportHeight - top - margin)}px`;
 };
@@ -122,13 +173,52 @@ proto._filterPlan = function() {
         return { ok: false, code: 'dataToolFilterUnstable', text, inspection };
     }
 
+    // A manual state is part of the filter's definition, so a wrong-length one is
+    // as much a reason to refuse as an unstable denominator: running it would
+    // silently pad or truncate the state the user carefully wrote.
+    const manual = this._readManualFilterState(inspection.order);
+    if (manual.code) {
+        return { ok: false, code: manual.code, text: manual.text, inspection, manual };
+    }
+
     const isFir = inspection.denominatorOrder === 0;
     const key = isFir ? 'dataToolFilterInfoFir' : 'dataToolFilterInfo';
     const text = i18n.t(key)
         .replace('{order}', String(inspection.order))
         .replace('{pole}', formatNumber(inspection.maxPoleRadius))
         .replace('{gain}', formatNumber(inspection.dcGain));
-    return { ok: true, code: '', text, inspection };
+    return { ok: true, code: '', text, inspection, manual };
+};
+
+/**
+ * The manual initial state, checked against the filter's order.
+ * @returns {{ mode: string, state: number[], code: string, text: string }}
+ */
+proto._readManualFilterState = function(order) {
+    const mode = document.getElementById('filter-init')?.value;
+    const resolved = FILTER_INIT_MODES.has(mode) ? mode : 'steady';
+    if (resolved !== 'manual') return { mode: resolved, state: [], code: '', text: '' };
+
+    const raw = document.getElementById('filter-init-state')?.value ?? '';
+    const parsed = parseCoefficients(raw);
+    if (!parsed.values) {
+        return {
+            mode: resolved, state: [], code: 'dataToolFilterNotNumeric',
+            text: i18n.t('dataToolFilterNotNumeric').replace('{token}', parsed.badToken),
+        };
+    }
+    if (parsed.values.length !== order) {
+        return {
+            mode: resolved, state: parsed.values, code: 'dataToolFilterInitStateLength',
+            // A global replace: the order appears twice in this sentence, and the
+            // single-shot .replace() used everywhere else would leave the second
+            // one as a literal placeholder.
+            text: i18n.t(order === 1 ? 'dataToolFilterInitStateLengthOne' : 'dataToolFilterInitStateLength')
+                .replace(/\{needed\}/g, String(order))
+                .replace('{given}', String(parsed.values.length)),
+        };
+    }
+    return { mode: resolved, state: parsed.values, code: '', text: '' };
 };
 
 proto._getFilterConfig = function() {
@@ -150,27 +240,92 @@ proto._getFilterConfig = function() {
             b: Array.from(plan.inspection.b),
             a: Array.from(plan.inspection.a),
             mode: FILTER_MODES.has(mode) ? mode : 'forward',
+            init: plan.manual.mode,
+            initState: plan.manual.mode === 'manual' ? [...plan.manual.state] : [],
+            restartGap: normalizeFilterRestartGap(document.getElementById('filter-restart-gap')?.value),
         },
     };
 };
 
 proto._syncFilterControls = function() {
     const info = document.getElementById('filter-info');
+    const axisNote = document.getElementById('filter-axis-note');
+    const hint = document.getElementById('filter-init-hint');
+    const stateWrap = document.getElementById('filter-init-state-wrap');
+    const selected = this._getSelectedDataTool() === 'filter';
+
+    const initMode = document.getElementById('filter-init')?.value || 'steady';
+    stateWrap?.classList.toggle('collapsed', initMode !== 'manual');
+
     if (!info) return;
-    if (this._getSelectedDataTool() !== 'filter') {
+    if (!selected) {
         info.textContent = '';
         info.classList.remove('invalid');
+        if (axisNote) axisNote.textContent = '';
+        if (hint) hint.hidden = true;
         return;
     }
+
     const plan = this._filterPlan();
     info.textContent = plan.text;
     info.classList.toggle('invalid', !plan.ok);
+
+    // The manual-state complaint belongs under the field it is about, in red,
+    // not only in the summary at the bottom of the panel.
+    if (hint) {
+        const wrong = plan.manual?.code === 'dataToolFilterInitStateLength'
+            || (initMode === 'manual' && plan.manual?.code === 'dataToolFilterNotNumeric');
+        hint.hidden = !wrong;
+        hint.textContent = wrong ? plan.text : '';
+    }
+    document.getElementById('filter-init-state')?.classList
+        .toggle('data-tool-input-invalid', !!hint && !hint.hidden);
+
+    if (axisNote) {
+        const note = this._filterAxisNote();
+        axisNote.textContent = note;
+    }
+};
+
+// Whether the source's time axis has a nominal step at all, using the same
+// detector the integral kernel uses (utils/sampling-gaps.js). A filter is
+// defined per sample, so an irregular axis does not stop it — but the cut-off
+// then is not a frequency in the file's units, and that has to be said out loud
+// rather than left for the user to discover from a result that looks fine.
+proto._filterAxisNote = function() {
+    const fileId = this.activeFileId;
+    const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+    const sourceName = document.getElementById('outlier-variable')?.value || '';
+    const variable = sourceName ? data?.variables?.[sourceName] : null;
+    if (!variable) return '';
+    const time = this._resampleTimeContext?.(data);
+    const values = time?.values;
+    if (!values || values.length !== variable.data?.length || time.kind === 'index') return '';
+
+    const info = detectSamplingGaps(values);
+    if (!info.hasNominalStep) {
+        return i18n.t(info.reason === 'nonMonotonic'
+            ? 'dataToolFilterAxisBackwards'
+            : 'dataToolFilterAxisIrregular');
+    }
+    if (info.count > 0) {
+        return i18n.t(info.count === 1 ? 'dataToolFilterAxisGapsOne' : 'dataToolFilterAxisGaps')
+            .replace('{count}', String(info.count))
+            .replace('{missing}', String(info.totalMissing));
+    }
+    return '';
 };
 
 proto._filterDescription = function(params = {}) {
     const list = values => Array.from(values || []).map(value => Number(Number(value).toPrecision(6))).join(', ');
-    const pass = params.mode === 'zeroPhase' ? 'zero phase' : 'forward';
-    return `b [${list(params.b)}]; a [${list(params.a)}]; ${pass}`;
+    const direction = params.mode === 'zeroPhase' ? 'zero phase' : 'forward';
+    const parts = [`b [${list(params.b)}]`, `a [${list(params.a)}]`, direction];
+    if (params.mode !== 'zeroPhase') {
+        if (params.init === 'zero') parts.push('from rest');
+        else if (params.init === 'manual') parts.push(`from state [${list(params.initState)}]`);
+    }
+    if (params.restartGap > 0) parts.push(`restart after gaps > ${params.restartGap} samples`);
+    return parts.join('; ');
 };
 
 }

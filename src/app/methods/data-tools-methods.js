@@ -25,7 +25,7 @@ import {
     normalizeDetrendParams,
     normalizeDetrendWindow,
 } from '../../compute/kernels/detrend.js';
-import { FILTER_MODES } from '../../compute/kernels/iir.js';
+import { FILTER_INIT_MODES, FILTER_MODES, normalizeFilterRestartGap } from '../../compute/kernels/iir.js';
 // Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
 // the two features spell a duration the same way.
 import { formatNaturalDuration } from '../../utils/fft.js';
@@ -354,8 +354,15 @@ proto._syncDataTools = function() {
         'detrend-window', 'detrend-window-slider']) {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'detrend');
     }
-    for (const id of ['filter-b', 'filter-a', 'filter-mode']) {
-        document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'filter');
+    const filterOff = !hasSource || tool !== 'filter';
+    for (const id of ['filter-b', 'filter-a', 'filter-mode', 'filter-restart-gap']) {
+        document.getElementById(id)?.toggleAttribute('disabled', filterOff);
+    }
+    // Zero phase builds its own edges out of the reflection padding, so an
+    // initial-condition choice there would be a control over nothing.
+    const zeroPhase = document.getElementById('filter-mode')?.value === 'zeroPhase';
+    for (const id of ['filter-init', 'filter-init-state']) {
+        document.getElementById(id)?.toggleAttribute('disabled', filterOff || zeroPhase);
     }
     for (const id of ['resample-grid-mode', 'resample-method', 'resample-step', 'resample-factor', 'resample-count']) {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'resample');
@@ -1023,6 +1030,9 @@ const DATA_TOOL_PARAMETER_IDS = [
     'filter-b',
     'filter-a',
     'filter-mode',
+    'filter-init',
+    'filter-init-state',
+    'filter-restart-gap',
     'resample-grid-mode',
     'resample-method',
     'resample-step',
@@ -1130,6 +1140,9 @@ proto._writeDataToolForm = function(definition, name) {
         set('filter-b', (params.b || [1]).join(', '));
         set('filter-a', (params.a || [1]).join(', '));
         set('filter-mode', params.mode);
+        set('filter-init', params.init || 'steady');
+        set('filter-init-state', (params.initState || []).join(', '));
+        set('filter-restart-gap', params.restartGap ?? 0);
     } else if (definition.tool === 'interpolate') {
         set('interpolate-method', params.method);
         set('interpolate-max-gap', params.maxGap);
@@ -1492,7 +1505,7 @@ proto._buildSingleDataToolResult = function(sourceValues, sourceVariable, config
     if (config.tool === 'movingAverage') return this._buildMovingAverageResult(sourceValues, sourceVariable, config, pre);
     if (config.tool === 'interpolate') return this._buildInterpolateResult(sourceValues, sourceVariable, config, data, pre);
     if (config.tool === 'detrend') return this._buildDetrendResult(sourceValues, sourceVariable, config, data, pre);
-    if (config.tool === 'filter') return this._buildFilterResult(sourceValues, sourceVariable, config, pre);
+    if (config.tool === 'filter') return this._buildFilterResult(sourceValues, sourceVariable, config, data, pre);
     return this._buildOutlierResult(sourceValues, sourceVariable, config, pre);
 };
 
@@ -1754,10 +1767,10 @@ proto._detrendNote = function(result, params = {}) {
     return i18n.t(perUnit).replace('{slope}', formatSignificant(result.slope));
 };
 
-proto._buildFilterResult = function(sourceValues, sourceVariable, config, pre = null) {
+proto._buildFilterResult = function(sourceValues, sourceVariable, config, data, pre = null) {
     const result = pre
         ? { ...pre.meta, values: pre.values }
-        : this._computeFilteredValues(sourceValues, config.params);
+        : this._computeFilteredValues(sourceValues, data, config.params);
     const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
         ...config,
         tool: 'filter',
@@ -1765,9 +1778,15 @@ proto._buildFilterResult = function(sourceValues, sourceVariable, config, pre = 
         mode: config.params.mode,
         b: [...config.params.b],
         a: [...config.params.a],
+        init: config.params.init,
+        initState: [...(config.params.initState || [])],
+        restartGap: config.params.restartGap,
         segments: result.segments,
+        restarts: result.restarts,
+        carriedBreaks: result.carriedBreaks,
         filteredCount: result.filteredCount,
         skippedCount: result.skippedCount,
+        irregular: result.irregular,
     });
     const warning = () => this._filterNote(result);
     return {
@@ -1779,14 +1798,22 @@ proto._buildFilterResult = function(sourceValues, sourceVariable, config, pre = 
     };
 };
 
-// Restarting at every hole is the right thing to do — a NaN inside the recursion
-// would otherwise be NaN forever — but it does mean the filter's transient
-// appears once per run, so the panel says when there was more than one.
+// What the run had to work around. Both facts change how the result should be
+// read, and neither is visible on the plot: a restart spends a settling
+// transient, and an irregular axis means the cut-off is not a frequency.
 proto._filterNote = function(result) {
-    if (!(result?.segments > 1)) return '';
-    return i18n.t('dataToolFilterSegments')
-        .replace('{segments}', String(result.segments))
-        .replace('{count}', String(result.skippedCount));
+    const parts = [];
+    if (result?.restarts > 1) {
+        parts.push(i18n.t('dataToolFilterSegments')
+            .replace('{segments}', String(result.restarts))
+            .replace('{count}', String(result.skippedCount)));
+    }
+    if (result?.carriedBreaks > 0) {
+        parts.push(i18n.t(result.carriedBreaks === 1 ? 'dataToolFilterCarriedOne' : 'dataToolFilterCarried')
+            .replace('{count}', String(result.carriedBreaks)));
+    }
+    if (result?.irregular) parts.push(i18n.t('dataToolFilterAxisIrregular'));
+    return parts.join(' ');
 };
 
 proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config, pre = null) {
@@ -1886,9 +1913,10 @@ proto._computeDetrendValues = function(sourceValues, data, params = {}) {
     return computeDetrend(sourceValues, time, params);
 };
 
-proto._computeFilteredValues = function(sourceValues, params = {}) {
+proto._computeFilteredValues = function(sourceValues, data, params = {}) {
+    const time = this._getDataToolTimeContext(data, sourceValues?.length || 0);
     try {
-        return applyFilter(sourceValues, params);
+        return applyFilter(sourceValues, { ...params, time });
     } catch (err) {
         throw translateKernelError(err);
     }
@@ -2415,6 +2443,13 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
             b: list(params.b),
             a: list(params.a),
             mode: FILTER_MODES.has(params.mode) ? params.mode : 'forward',
+            init: FILTER_INIT_MODES.has(params.init) ? params.init : 'steady',
+            initState: Array.isArray(params.initState)
+                ? params.initState.map(Number).filter(Number.isFinite)
+                : [],
+            // Sessions saved before the restart threshold existed rebuilt the
+            // state at every hole, and 0 is exactly that behaviour.
+            restartGap: normalizeFilterRestartGap(params.restartGap),
         };
     }
     return this._normalizeOutlierParams(params.method || 'spike', params);
@@ -2472,6 +2507,7 @@ proto._resetDataToolPicker = function() {
     this._toggleInterpolateHelpPopover?.(false);
     this._toggleResampleHelpPopover?.(false);
     this._toggleFilterHelpPopover?.(false);
+    this._toggleFilterInitHelpPopover?.(false);
     this._setOutlierMessage('', '');
     this._syncDataTools?.();
 };

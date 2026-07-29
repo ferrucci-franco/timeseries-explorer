@@ -88,16 +88,20 @@ export function runDataToolStep(values, time, step) {
             };
         }
         case 'filter': {
-            const { values: out, segments, filteredCount, skippedCount } = applyFilter(values, params);
+            // The filter is the one tool that reads the time axis without using
+            // it as a coordinate: it needs the nominal step to tell a dropped
+            // sample from an ordinary one.
+            const { values: out, ...counts } = applyFilter(values, { ...params, time });
             return {
                 values: out,
                 meta: {
                     mode: params.mode,
                     b: params.b,
                     a: params.a,
-                    segments,
-                    filteredCount,
-                    skippedCount,
+                    init: params.init,
+                    initState: params.initState,
+                    restartGap: params.restartGap,
+                    ...counts,
                 },
             };
         }

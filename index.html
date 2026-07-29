@@ -407,15 +407,55 @@
                                 </button>
                             </div>
                             <label class="options-subgroup-label filter-coefficient-label" for="filter-b" data-i18n="dataToolFilterB">b (numerator)</label>
-                            <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="0.5" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">
+                            <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="0.25" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">
                             <label class="options-subgroup-label filter-coefficient-label" for="filter-a" data-i18n="dataToolFilterA">a (denominator)</label>
                             <input id="filter-a" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1, -0.5" placeholder="1, -0.5" data-i18n-placeholder="dataToolFilterAPlaceholder">
 
-                            <label class="options-subgroup-label" for="filter-mode" data-i18n="dataToolFilterMode">Pass</label>
+                            <label class="options-subgroup-label" for="filter-mode" data-i18n="dataToolFilterMode">Direction</label>
                             <select id="filter-mode" class="data-tool-select">
-                                <option value="forward" selected data-i18n="dataToolFilterForward">Forward (causal, shifts phase)</option>
+                                <option value="forward" selected data-i18n="dataToolFilterForward">Forward (causal)</option>
                                 <option value="zeroPhase" data-i18n="dataToolFilterZeroPhase">Forward and back (zero phase)</option>
                             </select>
+
+                            <div class="data-tool-label-row">
+                                <label class="options-subgroup-label" for="filter-init" data-i18n="dataToolFilterInit">Initial conditions</label>
+                                <button id="filter-init-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Initial conditions help" data-i18n-title="dataToolFilterInitHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-init-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <select id="filter-init" class="data-tool-select">
+                                <option value="steady" selected data-i18n="dataToolFilterInitSteady">Steady state (no startup transient)</option>
+                                <option value="zero" data-i18n="dataToolFilterInitZero">Zero (filter starts at rest)</option>
+                                <option value="manual" data-i18n="dataToolFilterInitManual">Manual</option>
+                            </select>
+
+                            <div id="filter-init-state-wrap" class="collapsed">
+                                <input id="filter-init-state" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="z₁, z₂" data-i18n-placeholder="dataToolFilterInitStatePlaceholder">
+                                <div id="filter-init-hint" class="data-tool-name-hint" hidden></div>
+                            </div>
+
+                            <div id="filter-init-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-init-help-title" hidden>
+                                <div class="derived-help-title" id="filter-init-help-title" data-i18n="dataToolFilterInitHelpTitle">Initial conditions help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterInitSteady">Steady state (no startup transient)</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpSteady">The default. The state is loaded as if the input had been constant at the first sample forever, so a signal sitting at 300 opens at 300 instead of swinging up from zero. Use it unless you have a reason not to.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterInitZero">Zero (filter starts at rest)</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpZero">Every state value starts at 0, which is what a real DSP does when it powers up. Reproduces the startup transient of an embedded filter — including the swing from zero, which here is a real part of the answer rather than an artefact.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterInitManual">Manual</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpManual">You supply the state yourself: **exactly N numbers for a filter of order N**, in the order z₁, z₂ … z_N, separated like the coefficients. These are the internal state of the transposed direct-form II realisation — the same vector Steady state computes for you — not past inputs or past outputs.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterInitHelpWhenLabel">When it is used</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpWhen">The state is set at the first sample and again at every restart (see **Missing data**). Zero phase ignores this setting: it derives its own edges from the reflection padding. Changing **b** or **a** clears a manual state, because a state of the wrong length belongs to a different filter.</span>
+                                </div>
+                            </div>
+
+                            <label class="options-subgroup-label" for="filter-restart-gap" data-i18n="dataToolFilterRestartGap">Restart after a gap longer than</label>
+                            <input id="filter-restart-gap" class="derived-input data-tool-number-input" type="number" min="0" step="1" value="0">
 
                             <div id="filter-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-help-title" hidden>
                                 <div class="derived-help-title" id="filter-help-title" data-i18n="dataToolFilterHelpTitle">Digital filter help</div>
@@ -435,16 +475,23 @@
                                     <span data-i18n-rich="dataToolFilterHelpStability">An unstable filter cannot be created: its own output feeds back and grows until every later sample is infinite. The poles of <strong>a</strong> are checked before anything runs.</span>
                                 </div>
                                 <div class="derived-help-row">
-                                    <span class="derived-help-label" data-i18n="dataToolFilterZeroPhase">Forward and back (zero phase)</span>
-                                    <span data-i18n-rich="dataToolFilterHelpZeroPhase">Filters twice in opposite directions, so nothing shifts in time — at the cost of applying the magnitude response twice.</span>
+                                    <span class="derived-help-label" data-i18n="dataToolFilterMode">Direction</span>
+                                    <span data-i18n-rich="dataToolFilterHelpDirectionForward">**Forward (causal)** runs from the first sample to the last, so every output uses only the past — exactly what a filter running in real time on an instrument does. The unavoidable price is delay: the output lags the input, and by a different amount at every frequency.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpDirectionZero">**Forward and back (zero phase)** filters the signal, then filters that result backwards. The second pass applies exactly the opposite delay, so the two cancel and nothing moves in time at all — a feature stays at the sample it happened on.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpDirectionNonCausal">This makes it a **non-causal** filter: each output depends on samples that come after it. That is impossible in real time and perfectly ordinary offline, which is what this app does — but it means the result cannot be reproduced by any filter running on live data. Two further consequences: the signal passes through the response **twice**, so the attenuation is squared (a filter that halves at some frequency now quarters it), and the effective order is doubled.</span>
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterHelpGapsLabel">Missing data</span>
-                                    <span data-i18n-rich="dataToolFilterHelpGaps">Each run of present samples is filtered on its own, so one hole cannot poison the rest of the signal. Fill the holes first to filter across them.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpGaps">Holes stay holes: the output is missing wherever the input is, and wherever the file skipped a stretch of time. What is configurable is the STATE. By default the recursion is rebuilt after any hole, so nothing is carried across a break; raise the restart threshold to step over short holes with the state left standing, and spend one settling transient instead of many.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpRateLabel">Sample rate</span>
+                                    <span data-i18n-rich="dataToolFilterHelpRate">A digital filter is defined per SAMPLE, not per second: the coefficients know nothing about the time axis. On a file with an irregular Δt the cut-off is therefore not a fixed frequency in the data's own units, and the panel says so. Resample to a uniform grid first if you need the cut-off to mean a frequency.</span>
                                 </div>
                             </div>
 
                             <div id="filter-info" class="data-tool-resample-info"></div>
+                            <div id="filter-axis-note" class="data-tool-resample-info data-tool-axis-note"></div>
                         </div>
 
                         <div class="data-tool-controls collapsed" data-tool-kind="resample">

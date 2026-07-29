@@ -22,9 +22,23 @@
 // or fail to converge. Root-finding is done too, but only to say WHERE the
 // offending pole is — a diagnosis, never the verdict.
 
-import { asFloat64, copyFloat64, DataToolError } from './shared.js';
+import { asFloat64, copyFloat64, DataToolError, normalizeTimeContext } from './shared.js';
+import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 
 export const FILTER_MODES = new Set(['forward', 'zeroPhase']);
+
+// Where the recursion starts from at the beginning of a run.
+//   steady — as if the input had been constant at the run's first sample
+//            forever. No transient that the data did not ask for.
+//   zero   — at rest, which is what a real DSP does when it powers up.
+//   manual — the caller supplies the state directly, one number per order.
+export const FILTER_INIT_MODES = new Set(['steady', 'zero', 'manual']);
+
+export function normalizeFilterRestartGap(value) {
+    const n = Math.floor(Number(value));
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.min(1e9, n);
+}
 
 // A filter longer than this is not something anyone types into a text box, and
 // the O(N²) stability test and the O(N) per-sample recursion both stop being
@@ -325,19 +339,41 @@ function oddExtend(segment, padLength) {
     return out;
 }
 
-function filterSegmentForward(b, a, segment) {
-    const zi = filterInitialState(b, a);
-    const state = Float64Array.from(zi, value => value * segment[0]);
-    return lfilter(b, a, segment, state);
+/**
+ * The state a run starts from, under the caller's chosen convention.
+ * @param {Float64Array} zi steady-state solution for a unit step
+ * @param {number} first the run's first sample
+ */
+function startingState(zi, first, init) {
+    if (init.mode === 'zero') return new Float64Array(zi.length);
+    if (init.mode === 'manual') {
+        const given = init.state || [];
+        // Length is validated in the panel; here a short list is padded rather
+        // than throwing, because a saved session must never fail to reopen.
+        const state = new Float64Array(zi.length);
+        for (let i = 0; i < zi.length; i++) {
+            const value = Number(given[i]);
+            state[i] = Number.isFinite(value) ? value : 0;
+        }
+        return state;
+    }
+    return Float64Array.from(zi, value => value * first);
+}
+
+export function normalizeFilterInit(params = {}) {
+    const mode = FILTER_INIT_MODES.has(params.init) ? params.init : 'steady';
+    const state = Array.isArray(params.initState)
+        ? params.initState.map(Number).filter(Number.isFinite)
+        : [];
+    return { mode, state };
 }
 
 // Forward then backward: the two passes have opposite phase, so the phase
 // distortion cancels exactly and a feature stays where it was. The price is a
 // doubled magnitude response (the filter is applied twice) and a non-causal
 // result, which is fine for a file that has already been recorded.
-function filterSegmentZeroPhase(b, a, segment) {
+function filterSegmentZeroPhase(b, a, segment, zi) {
     const n = segment.length;
-    const zi = filterInitialState(b, a);
     if (n < 2) return copyFloat64(segment);
     const padLength = Math.min(3 * Math.max(1, zi.length), n - 1);
     const extended = padLength > 0 ? oddExtend(segment, padLength) : copyFloat64(segment);
@@ -349,17 +385,70 @@ function filterSegmentZeroPhase(b, a, segment) {
     return backward.slice(padLength, padLength + n);
 }
 
+// ── What counts as a break in the signal ──────────────────────────────────
+//
+// A digital filter is defined per SAMPLE, not per second: the recursion has no
+// idea how much time passed between two rows. So a hole matters twice over — the
+// samples are missing AND the state carries a memory that is now out of date by
+// however long the hole lasted.
+//
+// Two kinds of hole are therefore the same thing here and are measured the same
+// way: rows that exist but hold NaN, and rows that do not exist at all because
+// the logger stopped. `expectedBetween` converts both into one number — how many
+// sample positions between two usable values carry no usable value.
+//
+// The nominal step comes from detectSamplingGaps (utils/sampling-gaps.js), the
+// same detector the integral kernel already uses for the same question. It is
+// deliberately one of several in this codebase — see docs and the project note —
+// and this is the one that fits: eager, full-resolution, in-memory arrays.
+function filterAxis(values, time) {
+    const context = normalizeTimeContext(time);
+    const x = context.kind !== 'index' && context.values && context.values.length === values.length
+        ? context.values
+        : null;
+    if (!x) return { x: null, medianDt: NaN, hasNominalStep: false, reason: 'noTimeAxis' };
+    const info = detectSamplingGaps(x);
+    return {
+        x,
+        medianDt: info.medianDt,
+        hasNominalStep: info.hasNominalStep,
+        reason: info.reason,
+        gapCount: info.count,
+        totalMissing: info.totalMissing,
+    };
+}
+
+function expectedBetween(axis, from, to) {
+    const rows = to - from - 1;
+    if (!axis.hasNominalStep || !axis.x) return rows;
+    const dt = axis.x[to] - axis.x[from];
+    if (!Number.isFinite(dt) || !(axis.medianDt > 0)) return rows;
+    // Rounded to the nearest whole number of steps: ordinary jitter must not be
+    // read as a fraction of a missing sample.
+    return Math.max(rows, Math.max(0, Math.round(dt / axis.medianDt) - 1));
+}
+
 /**
- * Filter a series. Each run of consecutive finite samples is filtered on its
- * own and non-finite samples stay non-finite.
+ * Filter a series.
  *
- * That is not a convenience: a single NaN inside an IIR recursion enters the
- * state and every sample after it is NaN for the rest of the file. Restarting at
- * each hole confines the damage to the hole, which is also the same promise the
- * resampling tool makes — a hole stays a hole, and the tool that bridges one is
- * Fill missing data.
+ * Non-finite samples stay non-finite — a single NaN inside an IIR recursion
+ * enters the state and every sample after it is NaN for the rest of the file.
+ * What happens to the STATE across a hole is the caller's choice:
  *
- * @returns {{ values: Float64Array, segments: number, filteredCount: number, skippedCount: number }}
+ *   restartGap = 0  the state is rebuilt after any hole at all (the default).
+ *                   Honest and simple: nothing is carried across a break.
+ *   restartGap = N  a hole of at most N samples is stepped over with the state
+ *                   left standing, so a single dropped sample does not cost a
+ *                   whole settling transient. Anything longer restarts.
+ *
+ * Zero phase ignores restartGap: a backward pass cannot cross a hole, so each
+ * contiguous run is padded and filtered on its own whatever the setting.
+ *
+ * @returns {{
+ *   values: Float64Array, segments: number, restarts: number, carriedBreaks: number,
+ *   filteredCount: number, skippedCount: number,
+ *   irregular: boolean, irregularReason: string, medianDt: number,
+ * }}
  */
 export function applyFilter(sourceValues, params = {}) {
     const mode = FILTER_MODES.has(params.mode) ? params.mode : 'forward';
@@ -370,26 +459,63 @@ export function applyFilter(sourceValues, params = {}) {
     if (!inspection.stable) throw new DataToolError('dataToolFilterUnstable');
 
     const { b, a } = inspection;
+    const init = normalizeFilterInit(params);
+    const tolerance = normalizeFilterRestartGap(params.restartGap);
     const values = asFloat64(sourceValues);
     const n = values.length;
     const out = new Float64Array(n).fill(NaN);
-    let segments = 0;
-    let filteredCount = 0;
-    let skippedCount = 0;
+    const zi = filterInitialState(b, a);
+    const axis = filterAxis(values, params.time);
 
-    let i = 0;
-    while (i < n) {
-        if (!Number.isFinite(values[i])) { skippedCount++; i++; continue; }
-        let end = i;
-        while (end < n && Number.isFinite(values[end])) end++;
-        const segment = values.subarray(i, end);
-        const filtered = mode === 'zeroPhase'
-            ? filterSegmentZeroPhase(b, a, segment)
-            : filterSegmentForward(b, a, segment);
-        out.set(filtered, i);
-        segments++;
-        filteredCount += end - i;
-        i = end;
+    const report = {
+        values: out,
+        segments: 0, restarts: 0, carriedBreaks: 0,
+        filteredCount: 0, skippedCount: 0,
+        // A series with no nominal step has no meaningful sample rate, so the
+        // filter's cut-off is not a frequency in the data's own units. The panel
+        // warns; it does not refuse, because a slightly irregular axis is still
+        // worth filtering and only the user knows whether it is.
+        irregular: !axis.hasNominalStep,
+        irregularReason: axis.hasNominalStep ? '' : (axis.reason || ''),
+        medianDt: axis.medianDt,
+    };
+    if (!n) return report;
+
+    if (mode === 'zeroPhase') {
+        let i = 0;
+        while (i < n) {
+            if (!Number.isFinite(values[i])) { report.skippedCount++; i++; continue; }
+            let end = i;
+            while (end < n && Number.isFinite(values[end])) end++;
+            out.set(filterSegmentZeroPhase(b, a, values.subarray(i, end), zi), i);
+            report.segments++;
+            report.restarts++;
+            report.filteredCount += end - i;
+            i = end;
+        }
+        return report;
     }
-    return { values: out, segments, filteredCount, skippedCount };
+
+    const order = zi.length;
+    let state = null;
+    let lastValid = -1;
+    for (let i = 0; i < n; i++) {
+        const x = values[i];
+        if (!Number.isFinite(x)) { report.skippedCount++; continue; }
+        const hole = lastValid < 0 ? 0 : expectedBetween(axis, lastValid, i);
+        if (state === null || hole > tolerance) {
+            state = startingState(zi, x, init);
+            report.restarts++;
+            report.segments++;
+        } else if (hole > 0) {
+            report.carriedBreaks++;
+        }
+        const y = b[0] * x + (order ? state[0] : 0);
+        for (let k = 0; k < order - 1; k++) state[k] = b[k + 1] * x + state[k + 1] - a[k + 1] * y;
+        if (order) state[order - 1] = b[order] * x - a[order] * y;
+        out[i] = y;
+        report.filteredCount++;
+        lastValid = i;
+    }
+    return report;
 }
