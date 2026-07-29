@@ -654,6 +654,8 @@
 #outlier-method-wrap.collapsed,
 #outlier-replacement-wrap.collapsed,
 #interpolate-window-wrap.collapsed,
+#detrend-order-wrap.collapsed,
+#detrend-window-wrap.collapsed,
 .resample-grid-controls.collapsed,
 .outlier-method-controls.collapsed {
     display: none;
@@ -909,10 +911,27 @@
 }
 
 .resample-grid-controls,
-#interpolate-window-wrap {
+#interpolate-window-wrap,
+#detrend-order-wrap,
+#detrend-window-wrap {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
+}
+
+/* Coefficient lists are pasted from MATLAB or scipy far more often than they are
+   typed, so the field is monospaced and left-aligned: the reader is checking a
+   sequence of numbers against another window, not reading prose. */
+.data-tool-coefficients {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.filter-coefficient-label {
+    margin-bottom: -0.2rem;
 }
 
 /* What the chosen grid actually works out to: the resulting Δt, the sample

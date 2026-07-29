@@ -9,10 +9,13 @@ import { computeDerivative } from './derivative.js';
 import { computeIntegral } from './integral.js';
 import { computeMovingAverage } from './moving-average.js';
 import { fillMissingValues } from './interpolate.js';
+import { computeDetrend } from './detrend.js';
+import { applyFilter, inspectFilter } from './iir.js';
 import { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN } from './outliers.js';
 import { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep } from './regrid.js';
 
 export { computeDerivative, computeIntegral, computeMovingAverage, fillMissingValues };
+export { computeDetrend, applyFilter, inspectFilter };
 export { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN };
 export { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep };
 
@@ -68,6 +71,35 @@ export function runDataToolStep(values, time, step) {
         case 'movingAverage': {
             const out = computeMovingAverage(values, params);
             return { values: out, meta: { window: params.window } };
+        }
+        case 'detrend': {
+            const { values: out, ...trend } = computeDetrend(values, time, params);
+            return {
+                values: out,
+                meta: {
+                    method: params.method,
+                    order: trend.order,
+                    window: params.window,
+                    coefficients: trend.coefficients,
+                    slope: trend.slope,
+                    fitPoints: trend.fitPoints,
+                    usedTimeAxis: trend.usedTimeAxis,
+                },
+            };
+        }
+        case 'filter': {
+            const { values: out, segments, filteredCount, skippedCount } = applyFilter(values, params);
+            return {
+                values: out,
+                meta: {
+                    mode: params.mode,
+                    b: params.b,
+                    a: params.a,
+                    segments,
+                    filteredCount,
+                    skippedCount,
+                },
+            };
         }
         case 'interpolate': {
             const { values: out, ...counts } = fillMissingValues(values, time, params);

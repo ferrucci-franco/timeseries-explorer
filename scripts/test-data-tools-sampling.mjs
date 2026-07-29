@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { installDataToolsMethods } from '../src/app/methods/data-tools-methods.js';
 import { installResampleMethods } from '../src/app/methods/resample-methods.js';
+import { installFilterMethods } from '../src/app/methods/filter-methods.js';
 
 // The smallest document these methods can run against: an id → value map with
 // the class-list and dataset surface the sync functions touch.
@@ -64,6 +65,7 @@ class Harness {
 
 installDataToolsMethods(Harness);
 installResampleMethods(Harness);
+installFilterMethods(Harness);
 
 const withDocument = (mockDocument, fn) => {
     const previous = globalThis.document;
@@ -355,6 +357,128 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     };
     const calendarText = new TextDecoder().decode(h._resampleCsvBytes(calendar));
     assert.match(calendarText, /1970-01-01T00:00:00\.000Z,1/, 'a calendar axis is written as ISO timestamps');
+}
+
+// ── The stability gate, as the panel enforces it ──────────────────────────
+
+{
+    const h = new Harness();
+    const filterDom = (b, a, mode = 'forward') => fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': b, 'filter-a': a, 'filter-mode': mode,
+    });
+
+    // Stable: the summary states the pole and the gain, and nothing blocks.
+    const okPlan = withDocument(filterDom('1', '1, -1.8, 0.81'), () => h._filterPlan());
+    assert.equal(okPlan.ok, true);
+    assert.equal(okPlan.code, '');
+    assert.match(okPlan.text, /Order 2/);
+    assert.match(okPlan.text, /0\.9/, 'the furthest pole is quoted');
+
+    // Unstable: refused, and the message names WHERE the pole is, because that is
+    // the number that tells the user which coefficient to pull back.
+    const badPlan = withDocument(filterDom('1', '1, -2.2, 1.21'), () => h._filterPlan());
+    assert.equal(badPlan.ok, false);
+    assert.equal(badPlan.code, 'dataToolFilterUnstable');
+    assert.match(badPlan.text, /1\.1/, 'the offending pole radius is named');
+
+    // ...and the commit blocker reports that same specific reason, not a generic
+    // "check the parameters". This is the gate the whole feature turns on.
+    const blocker = withDocument(filterDom('1', '1, -2.2, 1.21'), () => h._dataToolCommitBlocker({
+        hasSource: true, hasValidConfig: false, editing: null, fileId: 'f1', data: { variables: {} },
+    }));
+    assert.equal(blocker, 'dataToolFilterUnstable', 'an unstable filter blocks the Create buttons by name');
+
+    // Reading the config throws rather than returning one, so the preview and the
+    // commit both refuse through a single check.
+    withDocument(filterDom('1', '1, -2.2, 1.21'), () => {
+        assert.throws(() => h._getDataToolConfig('filter'), err => err.code === 'dataToolFilterUnstable');
+        assert.equal(h._tryReadDataToolConfig(), null, 'there is no config for an unstable filter');
+    });
+
+    // A pole exactly on the unit circle is refused too: it neither decays nor
+    // stays bounded, and "marginally stable" is not a thing a data tool can
+    // offer. It also gets its own sentence — calling a pole that sits ON the
+    // circle "outside" it would be plainly wrong to the people reading this.
+    for (const a of ['1, -1', '1, 1', '1, -2, 1']) {
+        const plan = withDocument(filterDom('1', a), () => h._filterPlan());
+        assert.equal(plan.ok, false, `a = [${a}] is refused`);
+        assert.equal(plan.code, 'dataToolFilterUnstable');
+        assert.match(plan.text, /exactly on the unit circle/, `a = [${a}] is described as on the circle`);
+        assert.doesNotMatch(plan.text, /outside/, `a = [${a}] is not described as outside it`);
+    }
+}
+
+{
+    const h = new Harness();
+    // Nonsense in the box is its own diagnosis, naming the token.
+    const plan = withDocument(fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': '1, oops',
+    }), () => h._filterPlan());
+    assert.equal(plan.ok, false);
+    assert.equal(plan.code, 'dataToolFilterNotNumeric');
+    assert.match(plan.text, /"oops"/);
+
+    const zero = withDocument(fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': '0, 1',
+    }), () => h._filterPlan());
+    assert.equal(zero.code, 'dataToolFilterLeadingZero');
+}
+
+{
+    const h = new Harness();
+    // An FIR has no poles, and the summary says so rather than quoting |z| = 0.
+    const plan = withDocument(fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': '[0.25 0.5 0.25]', 'filter-a': '1',
+    }), () => h._filterPlan());
+    assert.equal(plan.ok, true);
+    assert.match(plan.text, /FIR, order 2/);
+    assert.match(plan.text, /gain at DC 1/);
+
+    // The stored config is NORMALIZED, so a restored session reproduces the
+    // recursion that ran rather than the text that was typed.
+    const config = withDocument(fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': '2, 1', 'filter-a': '4, 2', 'filter-mode': 'zeroPhase',
+    }), () => h._getDataToolConfig('filter'));
+    assert.deepEqual(config.params.b, [0.5, 0.25]);
+    assert.deepEqual(config.params.a, [1, 0.5]);
+    assert.equal(config.params.mode, 'zeroPhase');
+}
+
+// ── The detrend form ──────────────────────────────────────────────────────
+
+{
+    const h = new Harness();
+    const config = withDocument(fakeDocument({
+        'data-tool-select': 'detrend',
+        'detrend-method': 'polynomial',
+        'detrend-order': '5',
+        'detrend-window': '51',
+    }), () => h._getDataToolConfig('detrend'));
+    assert.deepEqual(config, { tool: 'detrend', params: { method: 'polynomial', order: 5, window: 51 } });
+
+    // Order belongs to the polynomial and the window to the baseline; each is
+    // hidden under the methods that never read it.
+    for (const [method, orderHidden, windowHidden] of [
+        ['linear', true, true],
+        ['polynomial', false, true],
+        ['movingAverage', true, false],
+    ]) {
+        const dom = fakeDocument({ 'data-tool-select': 'detrend', 'detrend-method': method });
+        withDocument(dom, () => h._syncDetrendControls());
+        assert.equal(dom.getElementById('detrend-order-wrap').classList.contains('collapsed'), orderHidden,
+            `order visibility for ${method}`);
+        assert.equal(dom.getElementById('detrend-window-wrap').classList.contains('collapsed'), windowHidden,
+            `window visibility for ${method}`);
+    }
+
+    assert.equal(h._detrendDescription({ method: 'polynomial', order: 3 }), 'polynomial order 3');
+    assert.equal(h._detrendDescription({ method: 'linear' }), 'least-squares line');
+    assert.equal(h._dataToolLabel('detrend'), 'Detrend');
+    assert.equal(h._dataToolLabel('filter'), 'Digital filter');
+    // The drift is quoted per second on a real time axis and per sample without one.
+    assert.match(h._detrendNote({ slope: 0.25, usedTimeAxis: true }, { method: 'linear' }), /0\.25 per second/);
+    assert.match(h._detrendNote({ slope: 0.25, usedTimeAxis: false }, { method: 'linear' }), /per sample/);
+    assert.equal(h._detrendNote({ slope: null }, { method: 'mean' }), '', 'no slope, nothing to say');
 }
 
 console.log('data tools sampling panel tests passed');

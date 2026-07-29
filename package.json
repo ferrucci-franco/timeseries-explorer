@@ -55,6 +55,7 @@
     "test:compute-kernels": "node scripts/test-compute-kernels.mjs",
     "test:resample-kernel": "node scripts/test-resample-kernel.mjs",
     "test:interpolate-regrid": "node scripts/test-interpolate-regrid.mjs",
+    "test:detrend-filter": "node scripts/test-detrend-filter.mjs",
     "test:data-tools-sampling": "node scripts/test-data-tools-sampling.mjs",
     "test:parse-worker": "node scripts/test-parse-worker.mjs",
     "test:expr-compiler": "node scripts/test-expr-compiler.mjs",

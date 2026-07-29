@@ -1,8 +1,10 @@
-# Data tools: filling holes and resampling — design note
+# Data tools: filling, detrending, filtering and resampling — design note
 
 > Status: **implemented**.
-> Scope: two new entries in the sidebar *Data tools* picker — *Fill missing data*
-> and *Resample*. The existing four tools are untouched.
+> Scope: four new entries in the sidebar *Data tools* picker — *Fill missing
+> data*, *Detrend*, *Digital filter* and *Resample*. The original four tools are
+> untouched. §§1–4b and 5–7 cover filling and resampling; §9 covers detrending
+> and filtering.
 
 ## 1. Two different problems
 
@@ -221,6 +223,91 @@ away.
   repeated timestamps (a Modelica event step, and the pendulum's repeated final
   sample), and the refusal of a backwards axis.
 - `scripts/test-data-tools-sampling.mjs` — the panel: the tool taxonomy, reading
-  both forms, the box-past-the-slider behaviour, the seconds↔milliseconds
+  every form, the box-past-the-slider behaviour, the seconds↔milliseconds
   conversion on a calendar axis, the summary's numbers, the shape of the file a
-  resample produces, and the CSV serializer.
+  resample produces, the CSV serializer, and the stability gate as the panel
+  enforces it.
+- `scripts/test-detrend-filter.mjs` — the detrend fits (exactness on a line and a
+  parabola, an epoch-ms axis, holes, the moving-average high-pass) and the
+  filter (coefficient parsing, Schur–Cohn cross-checked against root finding on
+  eight denominators, unit-circle poles, steady-state initialisation, zero-phase
+  symmetry, and per-run restart at a hole).
+
+## 9. Detrend and the digital filter
+
+Both are ordinary variable-producing tools: same length, same axis, full
+preview, table, chaining and editing.
+
+### Detrend
+
+Every method is a **subtraction**, so the residual is in the signal's units and
+adding the trend back reconstructs the original exactly. Nothing is rescaled.
+
+| Method | Removes |
+|---|---|
+| `linear` | the least-squares straight line (the default) |
+| `mean` | the offset only |
+| `polynomial` | a fit of order 2–8 |
+| `movingAverage` | a centred moving-average baseline — a high-pass that follows a wandering floor a polynomial cannot |
+| `firstSample` | the first value, so the series starts at zero |
+
+`mean` and `linear` are orders 0 and 1 of the same solver: one place where a fit
+can be wrong instead of three. The fit runs on a **centred and scaled** abscissa,
+u = (x − mid)/half ∈ [−1, 1] — a datetime axis carries ~1.8e12 as epoch
+milliseconds, and u³ of that is out of useful double precision before the fit
+starts. When the normal equations come out singular the order **steps down**
+rather than giving up: with every sample at the same instant a line is
+undetermined but the mean is not, and handing the signal back untouched would
+hide something real. Non-finite samples take no part in the fit and stay
+non-finite. For a linear detrend the panel reports the drift it removed, per
+second on a real time axis and per sample without one — the one number that
+makes a detrend checkable, since the result looks trendless either way.
+
+### Digital filter
+
+`a₀·y[n] = b₀·x[n] + b₁·x[n−1] + … − a₁·y[n−1] − …`, coefficients typed in.
+Nothing designs a filter and nothing guesses. Both boxes accept commas, spaces,
+newlines and MATLAB/NumPy brackets, because coefficients are pasted far more
+often than typed.
+
+**Stability is a gate, not a warning** — the point of the feature. An IIR filter
+feeds its own output back; with a pole on or outside the unit circle the output
+reaches ±1e308 within a few thousand samples and is Infinity for the rest,
+poisoning every downstream tool, autoscale and export. There is no useful
+"unstable" output to look at, so:
+
+- the Create buttons go dead and name the reason,
+- the live preview stops drawing,
+- reading the config *throws*, so the commit and the preview refuse through one
+  check rather than two,
+- and `applyFilter` refuses again in the kernel, because a definition restored
+  from a session predating this check can also reach it.
+
+The verdict comes from the **Schur–Cohn** test (Levinson step-down), an exact
+decision procedure that reads stability off the coefficients in O(N²) with no
+iteration to converge or fail. Root-finding (Durand–Kerner) runs too, but only
+to say *where* the pole is: "a pole at |z| = 1.03" tells the user which
+coefficient to pull back, and "unstable" does not. `test-detrend-filter.mjs`
+cross-checks the two on eight denominators — they are computed by completely
+different routes, so the agreement is a real check. A pole exactly on the unit
+circle is refused: it neither decays nor stays bounded, and it is the singular
+point of the step-down itself.
+
+Two more decisions worth naming:
+
+- **Steady-state initial conditions** (scipy's `lfilter_zi`). Starting from rest
+  makes a signal sitting at 300 K open with a swing from zero that has nothing to
+  do with the data — the most common "the filter broke my signal" report there
+  is. The state is pre-loaded as if the input had been constant at its first
+  sample forever, so a constant in gives that constant out for any filter with
+  unit DC gain.
+- **Each run of present samples is filtered on its own.** A single NaN inside an
+  IIR recursion enters the state and every sample after it is NaN for the rest of
+  the file. Restarting at each hole confines the damage to the hole — the same
+  promise the resampler makes, and the panel says when there was more than one
+  run, because the filter's transient then appears more than once.
+
+*Forward and back (zero phase)* filters in both directions with odd-reflection
+padding, so nothing shifts in time, at the cost of applying the magnitude
+response twice. Verified against a symmetric bump: forward moves its peak 15
+samples later, zero phase leaves it exactly where it was.

@@ -194,6 +194,8 @@
                         <option value="integrate" data-i18n="dataToolIntegrate">Integral</option>
                         <option value="movingAverage" data-i18n="dataToolMovingAverage">Moving average</option>
                         <option value="interpolate" data-i18n="dataToolInterpolate">Fill missing data</option>
+                        <option value="detrend" data-i18n="dataToolDetrend">Detrend</option>
+                        <option value="filter" data-i18n="dataToolFilter">Digital filter</option>
                         <option value="resample" data-i18n="dataToolResample">Resample</option>
                     </select>
 
@@ -361,6 +363,81 @@
                                 <option value="leave" selected data-i18n="dataToolInterpolateEdgesLeave">Leave them missing</option>
                                 <option value="hold" data-i18n="dataToolInterpolateEdgesHold">Hold the nearest value</option>
                             </select>
+                        </div>
+
+                        <div class="data-tool-controls collapsed" data-tool-kind="detrend">
+                            <label class="options-subgroup-label" for="detrend-method" data-i18n="dataToolDetrendMethod">Trend to remove</label>
+                            <select id="detrend-method" class="data-tool-select">
+                                <option value="linear" selected data-i18n="dataToolDetrendLinear">Straight line (least squares)</option>
+                                <option value="mean" data-i18n="dataToolDetrendMean">Mean (offset only)</option>
+                                <option value="polynomial" data-i18n="dataToolDetrendPolynomial">Polynomial</option>
+                                <option value="movingAverage" data-i18n="dataToolDetrendMovingAverage">Moving-average baseline</option>
+                                <option value="firstSample" data-i18n="dataToolDetrendFirstSample">First sample (zero the start)</option>
+                            </select>
+
+                            <div id="detrend-order-wrap" class="collapsed">
+                                <div class="data-tool-label-row">
+                                    <label class="options-subgroup-label" for="detrend-order-slider" data-i18n="dataToolDetrendOrder">Order</label>
+                                    <span id="detrend-order-value" class="data-tool-slider-value">2</span>
+                                </div>
+                                <div class="data-tool-slider-row">
+                                    <input id="detrend-order-slider" class="data-tool-slider" type="range" min="2" max="8" step="1" value="2">
+                                    <input id="detrend-order" class="derived-input data-tool-number-input" type="number" min="2" max="8" step="1" value="2">
+                                </div>
+                            </div>
+
+                            <div id="detrend-window-wrap" class="collapsed">
+                                <div class="data-tool-label-row">
+                                    <label class="options-subgroup-label" for="detrend-window-slider" data-i18n="dataToolDetrendWindow">Baseline window</label>
+                                    <span id="detrend-window-value" class="data-tool-slider-value">101</span>
+                                </div>
+                                <div class="data-tool-slider-row">
+                                    <input id="detrend-window-slider" class="data-tool-slider" type="range" min="3" max="501" step="2" value="101">
+                                    <input id="detrend-window" class="derived-input data-tool-number-input" type="number" min="3" step="2" value="101">
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <div class="data-tool-controls collapsed" data-tool-kind="filter">
+                            <div class="data-tool-label-row">
+                                <span class="options-subgroup-label" data-i18n="dataToolFilterCoefficients">Coefficients</span>
+                                <button id="filter-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Digital filter help" data-i18n-title="dataToolFilterHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <label class="options-subgroup-label filter-coefficient-label" for="filter-b" data-i18n="dataToolFilterB">b (numerator)</label>
+                            <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">
+                            <label class="options-subgroup-label filter-coefficient-label" for="filter-a" data-i18n="dataToolFilterA">a (denominator)</label>
+                            <input id="filter-a" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1" placeholder="1, -0.5" data-i18n-placeholder="dataToolFilterAPlaceholder">
+
+                            <label class="options-subgroup-label" for="filter-mode" data-i18n="dataToolFilterMode">Pass</label>
+                            <select id="filter-mode" class="data-tool-select">
+                                <option value="forward" selected data-i18n="dataToolFilterForward">Forward (causal, shifts phase)</option>
+                                <option value="zeroPhase" data-i18n="dataToolFilterZeroPhase">Forward and back (zero phase)</option>
+                            </select>
+
+                            <div id="filter-help-popover" class="derived-help-popover data-tool-help-popover" role="dialog" aria-labelledby="filter-help-title" hidden>
+                                <div class="derived-help-title" id="filter-help-title" data-i18n="dataToolFilterHelpTitle">Digital filter help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpEquationLabel">What it computes</span>
+                                    <span data-i18n="dataToolFilterHelpEquation">a₀·y[n] = b₀·x[n] + b₁·x[n−1] + … − a₁·y[n−1] − … . Leave a at 1 for an FIR.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpStabilityLabel">Stability</span>
+                                    <span data-i18n="dataToolFilterHelpStability">An unstable filter cannot be created: its own output feeds back and grows until every later sample is infinite. The poles of a are checked before anything runs.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterZeroPhase">Forward and back (zero phase)</span>
+                                    <span data-i18n="dataToolFilterHelpZeroPhase">Filters twice in opposite directions, so nothing shifts in time — at the cost of applying the magnitude response twice.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpGapsLabel">Missing data</span>
+                                    <span data-i18n="dataToolFilterHelpGaps">Each run of present samples is filtered on its own, so one hole cannot poison the rest of the signal. Fill the holes first to filter across them.</span>
+                                </div>
+                            </div>
+
+                            <div id="filter-info" class="data-tool-resample-info"></div>
                         </div>
 
                         <div class="data-tool-controls collapsed" data-tool-kind="resample">

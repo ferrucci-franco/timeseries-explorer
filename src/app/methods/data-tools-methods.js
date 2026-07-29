@@ -1,7 +1,9 @@
 import i18n from '../../i18n/index.js';
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
 import {
+    applyFilter,
     computeDerivative,
+    computeDetrend,
     computeIntegral,
     computeMovingAverage,
     detectOutlierIndexes,
@@ -17,13 +19,23 @@ import {
     normalizeInterpolateParams,
     normalizeInterpolateWindow,
 } from '../../compute/kernels/interpolate.js';
+import {
+    DETREND_METHODS,
+    normalizeDetrendOrder,
+    normalizeDetrendParams,
+    normalizeDetrendWindow,
+} from '../../compute/kernels/detrend.js';
+import { FILTER_MODES } from '../../compute/kernels/iir.js';
 // Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
 // the two features spell a duration the same way.
 import { formatNaturalDuration } from '../../utils/fft.js';
 
 // Tools whose result is a VARIABLE of the current file: same length, same time
 // axis, so it can be stored next to its source and edited in place.
-const DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage', 'interpolate']);
+const DATA_TOOLS = new Set([
+    'removeOutliers', 'derivative', 'integrate', 'movingAverage',
+    'interpolate', 'detrend', 'filter',
+]);
 // Tools whose result is a FILE. Resampling moves the samples onto a new time
 // axis, and a file owns exactly one of those, so the result cannot live inside
 // the source file — see resample-methods.js. These are selectable in the picker
@@ -154,7 +166,26 @@ proto.initDataTools = function() {
         this._toggleInterpolateHelpPopover();
     });
 
+    document.getElementById('detrend-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
+    for (const [sliderId, inputId] of [
+        ['detrend-order-slider', 'detrend-order'],
+        ['detrend-window-slider', 'detrend-window'],
+    ]) {
+        document.getElementById(sliderId)?.addEventListener('input', (event) => {
+            const numeric = document.getElementById(inputId);
+            if (numeric) numeric.value = event.target.value;
+            this._syncDataTools();
+            this._handleDataToolPreviewChange({ immediate: true });
+        });
+        document.getElementById(inputId)?.addEventListener('input', () => {
+            this._syncDetrendControls();
+            this._syncDataTools();
+            this._handleDataToolPreviewChange({ immediate: true });
+        });
+    }
+
     this.initResampleTool?.();
+    this.initFilterTool?.();
 
     this._dataToolParameterInputs().forEach(input => {
         const isBound = input.id === 'outlier-lower-bound' || input.id === 'outlier-upper-bound';
@@ -240,7 +271,9 @@ proto._syncDataTools = function() {
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
+    this._syncDetrendControls();
     this._syncResampleControls?.();
+    this._syncFilterControls?.();
 
     const fileTool = this._isFileDataTool(tool);
     const previous = sourceSelect.value;
@@ -317,6 +350,13 @@ proto._syncDataTools = function() {
         'interpolate-max-gap', 'interpolate-window-slider', 'interpolate-window']) {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'interpolate');
     }
+    for (const id of ['detrend-method', 'detrend-order', 'detrend-order-slider',
+        'detrend-window', 'detrend-window-slider']) {
+        document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'detrend');
+    }
+    for (const id of ['filter-b', 'filter-a', 'filter-mode']) {
+        document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'filter');
+    }
     for (const id of ['resample-grid-mode', 'resample-method', 'resample-step', 'resample-factor', 'resample-count']) {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'resample');
     }
@@ -360,6 +400,13 @@ proto._dataToolCommitBlocker = function({ hasSource, hasValidConfig, editing, fi
         return this._resamplePlan(data).ok ? '' : 'dataToolFixParameters';
     }
     if (!hasSource) return 'dataToolChooseVariable';
+    // An unstable filter is refused BY NAME rather than through the generic
+    // "check the parameters": the reason is specific, the fix is specific, and
+    // the whole point of the check is that the user learns which it is.
+    if (tool === 'filter') {
+        const plan = this._filterPlan();
+        if (!plan.ok) return plan.code;
+    }
     if (!hasValidConfig) return 'dataToolFixParameters';
     const outputName = (document.getElementById('outlier-output-name')?.value || '').trim();
     if (!outputName) return 'dataToolOutputNameRequired';
@@ -517,6 +564,34 @@ proto._syncInterpolateControls = function() {
     }
 };
 
+// Order belongs to the polynomial fit and the window to the moving-average
+// baseline; each is shown only under the method that reads it.
+proto._syncDetrendControls = function() {
+    const method = document.getElementById('detrend-method')?.value || 'linear';
+    document.getElementById('detrend-order-wrap')?.classList.toggle('collapsed', method !== 'polynomial');
+    document.getElementById('detrend-window-wrap')?.classList.toggle('collapsed', method !== 'movingAverage');
+
+    const sourceName = document.getElementById('outlier-variable')?.value || '';
+    const length = Number(this.activeFileId
+        ? this.plotManager.files.get(this.activeFileId)?.data?.variables?.[sourceName]?.data?.length
+        : 0);
+    const max = Number.isFinite(length) && length >= 3 ? length : Infinity;
+
+    for (const [inputId, sliderId, valueId, normalize] of [
+        ['detrend-order', 'detrend-order-slider', 'detrend-order-value', value => normalizeDetrendOrder(value)],
+        ['detrend-window', 'detrend-window-slider', 'detrend-window-value', value => normalizeDetrendWindow(value, max)],
+    ]) {
+        const input = document.getElementById(inputId);
+        const slider = document.getElementById(sliderId);
+        const value = document.getElementById(valueId);
+        if (!input || !slider) continue;
+        const normalized = normalize(input.value === '' ? slider.value : input.value);
+        if (input.value === '') input.value = String(normalized);
+        slider.value = String(Math.max(Number(slider.min), Math.min(Number(slider.max), normalized)));
+        if (value) value.textContent = String(normalized);
+    }
+};
+
 proto._toggleInterpolateHelpPopover = function(show) {
     const popover = document.getElementById('interpolate-help-popover');
     const button = document.getElementById('interpolate-help-toggle');
@@ -602,6 +677,8 @@ proto._suggestDataToolOutputName = function(sourceName, tool = this._getSelected
         integrate: 'int',
         movingAverage: 'avg',
         interpolate: 'filled',
+        detrend: 'detrended',
+        filter: 'filtered',
     }[tool] || 'tool';
     return this._uniqueDataToolVariableName(`${sourceName} ${suffix}`);
 };
@@ -938,6 +1015,14 @@ const DATA_TOOL_PARAMETER_IDS = [
     'interpolate-edges',
     'interpolate-window',
     'interpolate-window-slider',
+    'detrend-method',
+    'detrend-order',
+    'detrend-order-slider',
+    'detrend-window',
+    'detrend-window-slider',
+    'filter-b',
+    'filter-a',
+    'filter-mode',
     'resample-grid-mode',
     'resample-method',
     'resample-step',
@@ -968,7 +1053,9 @@ proto._resetDataToolParameters = function() {
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
+    this._syncDetrendControls();
     this._syncResampleControls?.();
+    this._syncFilterControls?.();
 };
 
 proto._enterDataToolEditing = function(fileId, name) {
@@ -1033,6 +1120,16 @@ proto._writeDataToolForm = function(definition, name) {
     } else if (definition.tool === 'movingAverage') {
         set('moving-average-window', params.window);
         set('moving-average-window-slider', params.window);
+    } else if (definition.tool === 'detrend') {
+        set('detrend-method', params.method);
+        set('detrend-order', params.order);
+        set('detrend-order-slider', params.order);
+        set('detrend-window', params.window);
+        set('detrend-window-slider', params.window);
+    } else if (definition.tool === 'filter') {
+        set('filter-b', (params.b || [1]).join(', '));
+        set('filter-a', (params.a || [1]).join(', '));
+        set('filter-mode', params.mode);
     } else if (definition.tool === 'interpolate') {
         set('interpolate-method', params.method);
         set('interpolate-max-gap', params.maxGap);
@@ -1284,6 +1381,8 @@ proto._dataToolLabel = function(tool) {
         integrate: 'dataToolIntegrate',
         movingAverage: 'dataToolMovingAverage',
         interpolate: 'dataToolInterpolate',
+        detrend: 'dataToolDetrend',
+        filter: 'dataToolFilter',
         resample: 'dataToolResample',
     }[tool] || 'dataTools');
 };
@@ -1392,6 +1491,8 @@ proto._buildSingleDataToolResult = function(sourceValues, sourceVariable, config
     if (config.tool === 'integrate') return this._buildIntegralResult(sourceValues, sourceVariable, config, data, pre);
     if (config.tool === 'movingAverage') return this._buildMovingAverageResult(sourceValues, sourceVariable, config, pre);
     if (config.tool === 'interpolate') return this._buildInterpolateResult(sourceValues, sourceVariable, config, data, pre);
+    if (config.tool === 'detrend') return this._buildDetrendResult(sourceValues, sourceVariable, config, data, pre);
+    if (config.tool === 'filter') return this._buildFilterResult(sourceValues, sourceVariable, config, pre);
     return this._buildOutlierResult(sourceValues, sourceVariable, config, pre);
 };
 
@@ -1618,6 +1719,76 @@ proto._interpolateWarning = function(result) {
     return parts.join(' ');
 };
 
+proto._buildDetrendResult = function(sourceValues, sourceVariable, config, data, pre = null) {
+    const result = pre
+        ? { ...pre.meta, values: pre.values }
+        : this._computeDetrendValues(sourceValues, data, config.params);
+    const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
+        ...config,
+        tool: 'detrend',
+    }, result.values, {
+        method: config.params.method,
+        order: result.order,
+        window: config.params.window,
+        slope: result.slope,
+        fitPoints: result.fitPoints,
+    });
+    const warning = () => this._detrendNote(result, config.params);
+    return {
+        variable,
+        count: result.values.length,
+        tool: 'detrend',
+        name: config.targetName,
+        warning: warning() ? warning : '',
+    };
+};
+
+// The drift that was taken out, in the file's own units per second. A detrend is
+// the one transformation whose effect is hard to read off the plot afterwards —
+// the result looks like a signal with no trend either way — so the number that
+// was removed is worth stating.
+proto._detrendNote = function(result, params = {}) {
+    if (!Number.isFinite(result?.slope)) return '';
+    if (params.method !== 'linear') return '';
+    const perUnit = result.usedTimeAxis ? 'dataToolDetrendSlope' : 'dataToolDetrendSlopePerSample';
+    return i18n.t(perUnit).replace('{slope}', formatSignificant(result.slope));
+};
+
+proto._buildFilterResult = function(sourceValues, sourceVariable, config, pre = null) {
+    const result = pre
+        ? { ...pre.meta, values: pre.values }
+        : this._computeFilteredValues(sourceValues, config.params);
+    const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
+        ...config,
+        tool: 'filter',
+    }, result.values, {
+        mode: config.params.mode,
+        b: [...config.params.b],
+        a: [...config.params.a],
+        segments: result.segments,
+        filteredCount: result.filteredCount,
+        skippedCount: result.skippedCount,
+    });
+    const warning = () => this._filterNote(result);
+    return {
+        variable,
+        count: result.filteredCount,
+        tool: 'filter',
+        name: config.targetName,
+        warning: warning() ? warning : '',
+    };
+};
+
+// Restarting at every hole is the right thing to do — a NaN inside the recursion
+// would otherwise be NaN forever — but it does mean the filter's transient
+// appears once per run, so the panel says when there was more than one.
+proto._filterNote = function(result) {
+    if (!(result?.segments > 1)) return '';
+    return i18n.t('dataToolFilterSegments')
+        .replace('{segments}', String(result.segments))
+        .replace('{count}', String(result.skippedCount));
+};
+
 proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config, pre = null) {
     const values = pre ? pre.values : this._computeMovingAverageValues(sourceValues, config.params);
     const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
@@ -1648,6 +1819,12 @@ proto._dataToolDescription = function(config) {
     if (config.tool === 'interpolate') {
         return `Data tool: fill missing data in ${config.sourceName}; ${this._interpolateDescription(config.params)}`;
     }
+    if (config.tool === 'detrend') {
+        return `Data tool: detrend ${config.sourceName}; ${this._detrendDescription(config.params)}`;
+    }
+    if (config.tool === 'filter') {
+        return `Data tool: filter ${config.sourceName}; ${this._filterDescription(config.params)}`;
+    }
     return `Data tool: remove outliers from ${config.sourceName}; ${this._outlierDetectorDescription(config)}; ${config.replacement}`;
 };
 
@@ -1658,11 +1835,21 @@ proto._interpolateDescription = function(params = {}) {
     return `${params.method}${window}; gaps ${limit}${edges}`;
 };
 
+proto._detrendDescription = function(params = {}) {
+    if (params.method === 'polynomial') return `polynomial order ${params.order}`;
+    if (params.method === 'movingAverage') return `moving-average baseline, window ${params.window}`;
+    if (params.method === 'firstSample') return 'first sample';
+    if (params.method === 'mean') return 'mean';
+    return 'least-squares line';
+};
+
 proto._dataToolStepLabel = function(step) {
     if (step.tool === 'derivative') return step.params.method === 'difference' ? 'difference' : `derivative (${step.params.method})`;
     if (step.tool === 'integrate') return `integral (${step.params.method}, gaps: ${step.params.gapPolicy})`;
     if (step.tool === 'movingAverage') return `moving average (window ${step.params.window})`;
     if (step.tool === 'interpolate') return `fill missing (${this._interpolateDescription(step.params)})`;
+    if (step.tool === 'detrend') return `detrend (${this._detrendDescription(step.params)})`;
+    if (step.tool === 'filter') return `filter (${this._filterDescription(step.params)})`;
     return `remove outliers (${this._outlierDetectorDescription(step)}; ${step.replacement})`;
 };
 
@@ -1692,6 +1879,19 @@ proto._computeMovingAverageValues = function(sourceValues, params = {}) {
 proto._computeInterpolatedValues = function(sourceValues, data, params = {}) {
     const time = this._getDataToolTimeContext(data, sourceValues?.length || 0);
     return fillMissingValues(sourceValues, time, params);
+};
+
+proto._computeDetrendValues = function(sourceValues, data, params = {}) {
+    const time = this._getDataToolTimeContext(data, sourceValues?.length || 0);
+    return computeDetrend(sourceValues, time, params);
+};
+
+proto._computeFilteredValues = function(sourceValues, params = {}) {
+    try {
+        return applyFilter(sourceValues, params);
+    } catch (err) {
+        throw translateKernelError(err);
+    }
 };
 
 proto._getDataToolTimeContext = function(data, expectedLength) {
@@ -1795,6 +1995,18 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
             }),
         };
     }
+    if (tool === 'detrend') {
+        const method = document.getElementById('detrend-method')?.value;
+        return {
+            tool,
+            params: normalizeDetrendParams({
+                method: DETREND_METHODS.has(method) ? method : 'linear',
+                order: document.getElementById('detrend-order')?.value,
+                window: document.getElementById('detrend-window')?.value,
+            }),
+        };
+    }
+    if (tool === 'filter') return this._getFilterConfig();
     if (tool === 'resample') return this._getResampleConfig();
 
     const method = this._getOutlierDetectorMethod();
@@ -2191,6 +2403,20 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
         return { window: this._normalizeMovingAverageWindow(params.window, Number(params.maxLength) || Infinity) };
     }
     if (tool === 'interpolate') return normalizeInterpolateParams(params);
+    if (tool === 'detrend') return normalizeDetrendParams(params);
+    if (tool === 'filter') {
+        // Coefficients are stored already normalized, so a restored session keeps
+        // whatever ran. A definition that carries none is the identity filter,
+        // which is the only safe reading of "no coefficients".
+        const list = values => (Array.isArray(values) && values.length
+            ? values.map(Number).filter(Number.isFinite)
+            : [1]);
+        return {
+            b: list(params.b),
+            a: list(params.a),
+            mode: FILTER_MODES.has(params.mode) ? params.mode : 'forward',
+        };
+    }
     return this._normalizeOutlierParams(params.method || 'spike', params);
 };
 
@@ -2245,6 +2471,7 @@ proto._resetDataToolPicker = function() {
     this._toggleOutlierHelpPopover?.(false);
     this._toggleInterpolateHelpPopover?.(false);
     this._toggleResampleHelpPopover?.(false);
+    this._toggleFilterHelpPopover?.(false);
     this._setOutlierMessage('', '');
     this._syncDataTools?.();
 };
@@ -2515,6 +2742,17 @@ proto._spikeParamsFromSensitivity = function(sensitivity) {
 proto._sensitivityFromLegacyThreshold = function(threshold) {
     return this._normalizeSensitivity(12 - this._positiveNumber(threshold, 6));
 };
+
+// Significant digits, not decimal places: a drift of 3e-7 per second and one of
+// 4.2e4 per second are both real, and %.2f renders the first as "0.00".
+function formatSignificant(value, digits = 4) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '?';
+    if (n === 0) return '0';
+    const abs = Math.abs(n);
+    if (abs >= 1e6 || abs < 1e-4) return n.toExponential(3);
+    return String(Number(n.toPrecision(digits)));
+}
 
 proto._formatOutlierNumber = function(value, digits = 2) {
     const number = Number(value);
