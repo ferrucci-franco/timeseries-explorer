@@ -47,6 +47,7 @@ export function defaultIntegralState() {
         method: 'trapezoidal',
         missingPolicy: 'zero',
         discardIncompleteEnds: false,
+        extendLastSample: true,
         integralUnit: 'hour',
         scale: 'auto',
         orientation: 'vertical',
@@ -90,6 +91,7 @@ export function normalizeIntegralState(raw = {}, missingPolicies) {
         method: INTEGRAL_METHODS.has(raw.method) ? raw.method : defaults.method,
         missingPolicy: policyOk ? raw.missingPolicy : defaults.missingPolicy,
         discardIncompleteEnds: raw.discardIncompleteEnds === true,
+        extendLastSample: raw.extendLastSample !== false,
         integralUnit: INTEGRAL_UNITS.has(raw.integralUnit) ? raw.integralUnit : defaults.integralUnit,
         scale: INTEGRAL_SCALES.has(raw.scale) ? raw.scale : defaults.scale,
         orientation: INTEGRAL_ORIENTATIONS.has(raw.orientation) ? raw.orientation : defaults.orientation,
@@ -311,7 +313,7 @@ export function buildIntegralExportTable(view, options = {}) {
     const fileNameFor = options.fileNameFor || (() => '');
     const headers = ['signal', 'file', 'value_unit', 'integral', 'integral_unit',
         'per_day', 'per_day_unit', 'mean', 'mean_unit',
-        'method', 'missing_policy',
+        'method', 'missing_policy', 'sample_reading',
         'range_start', 'range_end', 'covered', 'uncovered', 'discarded_days', 'days_in_range', 'samples'];
     const isCalendar = view.timeKind === 'datetime';
     const stamp = (value) => (isCalendar && Number.isFinite(value) ? new Date(value).toISOString() : value);
@@ -333,6 +335,8 @@ export function buildIntegralExportTable(view, options = {}) {
             mean == null ? '' : (model.unit || ''),
             result.method,
             result.missingPolicy,
+            // Points or periods: a total is not auditable without it.
+            result.extendLastSample ? 'periods' : 'points',
             stamp(result.rangeStart),
             stamp(result.rangeEnd),
             result.coveredTime,

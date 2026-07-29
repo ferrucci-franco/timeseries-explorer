@@ -89,6 +89,8 @@ const fallbackText = {
     integralSamples: 'samples',
     integralValue: 'Integral',
     integralSignal: 'Signal',
+    integralExtendLast: 'Each sample covers its own step',
+    integralExtendLastTip: 'Read the timestamps as periods, not points: the last sample is extended by one nominal step, so a whole day of quarter-hours integrates to 24 h.',
     integralStatusOne: '1 signal totalled over {time}',
     integralStatusMany: '{count} signals totalled over {time}',
     integralStatusMixed: '{count} signals totalled, each over a different duration — see the summary',
@@ -867,6 +869,8 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             gapCount: entry.gapCount,
             nanSegmentCount: entry.nanSegmentCount,
             discardIncompleteEnds: state.discardIncompleteEnds,
+            extendLastSample: state.extendLastSample,
+            explicitRangeEnd: !state.rangeFull,
             excludedDays: sharedExcludedDays,
         });
         models.push({
@@ -1059,6 +1063,7 @@ proto._integralKernelParams = function(state, candidate, range, sharedExcludedDa
             rangeStart: range?.[0] ?? null,
             rangeEnd: range?.[1] ?? null,
             discardIncompleteEnds: kind === 'datetime' && state.discardIncompleteEnds,
+            extendLastSample: state.extendLastSample,
             excludedDays: sharedExcludedDays,
         },
     };
@@ -1492,6 +1497,12 @@ proto._renderIntegralOptionsPanel = function(panelId, plot) {
 
     // ── Data handling ──
     section(text('integralDataHandling'));
+    // Points or periods. This is an assertion about what the timestamps MEAN, so
+    // it sits with the other data-reading choices rather than under Display.
+    row(text('integralExtendLast'), checkbox(state.extendLastSample, checked => {
+        state.extendLastSample = checked;
+        this._scheduleIntegralRecompute(panelId, { immediate: true });
+    }), text('integralExtendLastTip'));
     row(text('integralDiscardEnds'), checkbox(state.discardIncompleteEnds && calendar, checked => {
         state.discardIncompleteEnds = checked;
         this._scheduleIntegralRecompute(panelId, { immediate: true });

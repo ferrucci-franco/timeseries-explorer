@@ -215,14 +215,68 @@ function hourlyTime(count, start = day0) {
     close(trimmed.value, 100 * 24 * 3600, 'and it integrates to a clean 24 h');
     equal(trimmed.discardedDayCount, 2, 'both ragged ends are reported');
 
-    // A day whose last sample sits one nominal step short of midnight IS
-    // complete — hourly 00:00…23:00 covers the day.
-    const whole = computeDefiniteIntegral(new Array(24).fill(100), hourlyTime(24), {
-        discardIncompleteEnds: true,
-        rangeStart: day0,
-        rangeEnd: day0 + MS_PER_DAY,
+    // Hourly samples at 00:00…23:00 either cover the day or they do not, and the
+    // two settings have to AGREE about it — reporting "1 day integrated" over
+    // 23 h is what the panel must never do.
+    const points = new Array(24).fill(100);
+    const dayRange = { discardIncompleteEnds: true, rangeStart: day0, rangeEnd: day0 + MS_PER_DAY };
+
+    // Read as points: no sample at midnight, so the day is NOT covered and goes.
+    const asPoints = computeDefiniteIntegral(points, hourlyTime(24), dayRange);
+    equal(asPoints.discardedDayCount, 1, 'read as points, a day ending at 23:00 is not complete');
+    equal(asPoints.reason, 'allDiscarded', 'and there is then nothing left to integrate');
+
+    // Read as periods: the 23:00 sample owns the last hour, so the day IS
+    // covered — 24 h, not 23 — and the reported duration matches the total.
+    const asPeriods = computeDefiniteIntegral(points, hourlyTime(24), { ...dayRange, extendLastSample: true });
+    equal(asPeriods.discardedDayCount, 0, 'read as periods, the same day is complete');
+    close(asPeriods.coveredTime, 24 * 3600, 'and the integral covers the whole 24 h');
+    close(asPeriods.value, 100 * 24 * 3600, 'so a flat 100 over one day is 2400 unit·h, not 2300');
+}
+
+// ─── 8b. The last sample as a period ──────────────────────────────────────
+// A trapezoid needs a sample on both sides, so a series ending at 23:45 leaves
+// the last quarter-hour out. That is right for a sampled signal and wrong for a
+// PyPSA snapshot, where the timestamp represents the step that follows it.
+{
+    const time = hourlyTime(24);
+    const values = new Array(24).fill(100);
+    const points = computeDefiniteIntegral(values, time, {});
+    const periods = computeDefiniteIntegral(values, time, { extendLastSample: true });
+    close(points.coveredTime, 23 * 3600, 'as points, 24 hourly samples span 23 h');
+    close(periods.coveredTime, 24 * 3600, 'as periods, they span 24 h');
+    close(periods.value - points.value, 100 * 3600, 'the difference is exactly one step of the last value');
+
+    // The extension is held constant, not extrapolated: a ramp gains
+    // last_value × step, never a continued slope.
+    const ramp = Array.from({ length: 11 }, (_, i) => i);
+    const rampPeriods = computeDefiniteIntegral(ramp, hourlyTime(11), { extendLastSample: true });
+    close(rampPeriods.value, (50 + 10) * 3600, 'the trailing period holds the last value flat');
+
+    // It never runs past the range: a range ending at the last sample gains
+    // nothing, because there is no room for the period.
+    const clipped = computeDefiniteIntegral(values, time, {
+        extendLastSample: true,
+        rangeEnd: day0 + 23 * HOUR,
     });
-    equal(whole.discardedDayCount, 0, 'one nominal step of slack keeps a full day');
+    close(clipped.coveredTime, 23 * 3600, 'a range ending on the last sample has no room to extend');
+
+    // And only half a step fits when the range ends mid-period.
+    const half = computeDefiniteIntegral(values, time, {
+        extendLastSample: true,
+        rangeEnd: day0 + 23.5 * HOUR,
+    });
+    close(half.coveredTime, 23.5 * 3600, 'the period is clipped by the range like any other interval');
+
+    // Without a nominal step there is no defensible period length, so nothing
+    // is invented — the same gate that governs missing-row detection.
+    const raw = [0, 300, 900, 1500, 1800, 1830, 1860, 2100, 2400, 2700,
+        3000, 3300, 3540, 3600, 3900, 4200, 5400, 6600, 7200];
+    const irregular = { values: Float64Array.from(raw, s => day0 + s * 1000), kind: 'datetime' };
+    const flat = new Array(raw.length).fill(10);
+    const noStep = computeDefiniteIntegral(flat, irregular, { extendLastSample: true });
+    equal(noStep.hasNominalStep, false, 'irregular sampling has no nominal step');
+    close(noStep.value, 10 * 7200, 'so no trailing period is invented');
 }
 
 // ─── 9. Refusals ──────────────────────────────────────────────────────────
@@ -305,16 +359,33 @@ function hourlyTime(count, start = day0) {
     });
     close(shared.coveredTime, dropped.coveredTime, 'so both signals integrate the same duration');
 
-    // Ragged ends: a first day that starts at 06:00 is not a whole day.
+    // Ragged ends: a first day that starts at 06:00 is not a whole day. The
+    // reducer applies the SAME points-vs-periods agreement as the eager kernel,
+    // so the last day only earns its step of slack when that step is integrated.
     const ragged = [
         { ...wholeDay(0, AREA / 2), coveredMs: 18 * 3600000, firstT: day(0) * MS_PER_DAY + 6 * HOUR },
         wholeDay(1, AREA),
     ];
-    const trimmed = reduceDailyIntegral(ragged, {
-        rangeStart: day0 + 6 * HOUR, rangeEnd: day0 + 2 * MS_PER_DAY, medianDt: HOUR, discardIncompleteEnds: true,
-    });
-    equal(trimmed.discardedDayCount, 1, 'the ragged first day is trimmed');
-    close(trimmed.value, 100 * 24 * 3600, 'leaving the one whole day');
+    const raggedRange = {
+        rangeStart: day0 + 6 * HOUR, rangeEnd: day0 + 2 * MS_PER_DAY - HOUR,
+        medianDt: HOUR, hasNominalStep: true, discardIncompleteEnds: true,
+    };
+    const asPeriods = reduceDailyIntegral(ragged, { ...raggedRange, extendLastSample: true });
+    equal(asPeriods.discardedDayCount, 1, 'read as periods, only the ragged first day is trimmed');
+    close(asPeriods.value, 100 * 24 * 3600, 'and the whole day integrates to 24 h');
+
+    const asPoints = reduceDailyIntegral(ragged, raggedRange);
+    equal(asPoints.discardedDayCount, 2, 'read as points, the last day is short of midnight too');
+    equal(asPoints.reason, 'allDiscarded', 'which leaves nothing');
+
+    // The trailing period is held at the last value and attributed to its day.
+    const tailOnly = reduceDailyIntegral(
+        [{ ...wholeDay(0, AREA), coveredMs: 23 * 3600000, lastFiniteT: day(0) * MS_PER_DAY + 23 * HOUR, lastValue: 100 }],
+        { rangeStart: day0, rangeEnd: day0 + 23 * HOUR, medianDt: HOUR, hasNominalStep: true, extendLastSample: true },
+    );
+    close(tailOnly.coveredTime, 24 * 3600, 'the tail closes the day');
+    close(tailOnly.value, (100 * 24 * 3600000 + 100 * 3600000) / 1000,
+        'adding exactly one step of the last value');
 
     // Disorder is fatal on the lazy path too.
     const unsorted = reduceDailyIntegral([wholeDay(0, AREA)], { ...range, negativeDtCount: 3 });

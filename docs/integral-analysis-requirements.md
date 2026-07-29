@@ -117,10 +117,33 @@ El kernel devuelve tres duraciones distintas y no las mezcla:
 
 ---
 
-## 7. Discard incomplete start/end days
+## 7. Puntos o períodos, y los días de los extremos
 
-Checkbox, **default off**, habilitado solo con eje calendario. Descarta el primer y el último día UTC del rango cuando los datos no lo cubren de extremo a extremo, con una tolerancia de **un paso nominal**: datos horarios de 00:00 a 23:00 cubren el día, aunque el último trapecio termine a las 23:00.
+### 7.1 `Each sample covers its own step` (default **on**)
 
+Checkbox en **Data handling**. Es una afirmación sobre lo que *significan* las marcas de tiempo, no una regla de cuadratura:
+
+- **Períodos** (on): cada muestra representa el paso que la sigue, así que la última se extiende **un paso nominal**. Un día completo de cuartos de hora integra **24 h**, no 23 h 45 min. Es lo que significa una ponderación de snapshot en PyPSA, y por eso es el default en un panel escrito para redes eléctricas.
+- **Puntos** (off): un trapecio necesita muestra a los dos lados, así que el último paso es genuinamente desconocido y no se integra.
+
+Precisiones: el tramo final se mantiene **constante** al último valor (no extrapola la pendiente), se recorta por el rango y por medianoche como cualquier otro intervalo, y **solo existe si el eje tiene un paso nominal** — sin él no hay largo defendible que darle, y usar la mediana de un montón de distancias sin relación sería una adivinanza disfrazada de dato.
+
+En modo Full el **dominio** llega un paso más allá de la última muestra; un rango que el usuario tipeó o arrastró nunca se ensancha.
+
+### 7.2 `Discard incomplete start/end days`
+
+Checkbox, **default off**, habilitado solo con eje calendario. Descarta el primer y el último día UTC del rango cuando los datos no lo cubren de extremo a extremo.
+
+**Las dos opciones tienen que coincidir, y ahora coinciden.** La tolerancia del final es de un paso nominal **solo bajo la lectura de períodos** — porque ahí ese paso efectivamente se integra. Con datos cada 15 min que terminan un 2 de febrero a las 23:45:
+
+| Lectura | Días descartados | Duración reportada | Total |
+|---|---|---|---|
+| Períodos (default) | 1 (el primer día ragged) | **32 d** | 76 800 MW·h |
+| Puntos | 2 (también el último) | **31 d** | 74 400 MW·h |
+
+Antes decía *32 días* habiendo integrado 31 d 23 h 45 min: la opción declaraba el día completo y la cuadratura cubría un paso menos. Reportar una duración que no se integró es lo único que ninguna de las dos lecturas permite.
+
+La lectura usada viaja en el resultado y sale en la exportación (`sample_reading`: `periods` / `points`): un total no es auditable sin ella.
 ---
 
 ## 8. Unidades
@@ -218,8 +241,8 @@ El botón CSV de la toolbar exporta la **tabla de resultados**, no la serie: una
 ## 13. Persistencia, i18n, tests
 
 - Estado del panel completo en la sesión, con `_normalizeIntegralState` tolerante a sesiones viejas; los warnings guardados se descartan al restaurar porque describen un cálculo que todavía no corrió.
-- 72 claves × 4 idiomas; `test:i18n-consistency` pasa (1392 claves × 4).
-- Tests nuevos: `test:definite-integral` (64 checks, valores analíticos) y `test:integral-analysis` (137 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
+- 74 claves × 4 idiomas; `test:i18n-consistency` pasa (1394 claves × 4).
+- Tests nuevos: `test:definite-integral` (80 checks, valores analíticos) y `test:integral-analysis` (143 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
 
 Verificado además en la app real (Vite + Plotly + DuckDB-WASM):
 
@@ -278,14 +301,14 @@ Mientras la consulta corre, el panel muestra la misma píldora de progreso no bl
 | D13 | Qué es el "valor medio llano" | El total dividido por la duración integrada, en la unidad propia de la señal | Es el nivel constante que daría la misma área; cualquier otra media (aritmética sobre muestras) daría un número distinto con muestreo irregular |
 | D14 | Desorden de filas en lazy | Reportar "no se sabe", no negarse | El chequeo de orden físico da falsos positivos en DuckDB (§15) |
 | D15 | Estado con coberturas distintas | `integralStatusMixed`, que apunta al resumen | Afirmar una duración sola sería falso para las otras señales |
+| D16 | Puntos o períodos | Checkbox, **default períodos** | Es la convención de PyPSA y la que hace que un día de cuartos de hora sean 24 h; el default cambia números respecto de la v1, a cambio de que la duración reportada sea la integrada (§7) |
 
 ---
 
 ## 17. Limitaciones conocidas
 
-1. **El último trapecio no extiende el día.** Datos horarios de 00:00 a 23:00 cubren 23 h de trapecios, no 24. La cobertura se **reporta** (`2/2 days`, `1.96 d`) en vez de inventar un paso extra. Si en PyPSA conviene que cada muestra "posea" su paso, hay que agregar una regla de cuadratura nueva, no parchear ésta.
-2. **DST**: heredada de `detectSamplingGaps` — un salto de hora de reloj no se distingue de una hora faltante usando solo el vector de tiempo.
-3. **Cambio de tasa sesgado** (fixture 14): la misma limitación que documenta PR #18; el detector es compartido a propósito.
-4. **FFT y el checkbox de unidades**: las trazas del espectro muestran la unidad de la fuente, correcta para un espectro de amplitud pero no para PSD.
-5. **Lazy sin eje calendario** y variables lazy sin columna fuente exacta (§15).
-6. **Orden de filas en archivos lazy**: no se detecta el desorden (§15, D14).
+1. **DST**: heredada de `detectSamplingGaps` — un salto de hora de reloj no se distingue de una hora faltante usando solo el vector de tiempo.
+2. **Cambio de tasa sesgado** (fixture 14): la misma limitación que documenta PR #18; el detector es compartido a propósito.
+3. **FFT y el checkbox de unidades**: las trazas del espectro muestran la unidad de la fuente, correcta para un espectro de amplitud pero no para PSD.
+4. **Lazy sin eje calendario** y variables lazy sin columna fuente exacta (§15).
+5. **Orden de filas en archivos lazy**: no se detecta el desorden (§15, D14).

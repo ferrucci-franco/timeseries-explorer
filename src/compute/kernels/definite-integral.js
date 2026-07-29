@@ -113,13 +113,18 @@ function boundOrNull(value) {
     return Number.isFinite(number) ? number : null;
 }
 
+// `explicitEnd` matters for `extendLastSample`: read as periods, the DOMAIN runs
+// one step past the last sample, so the implied end has to move with it. A range
+// the user actually typed or dragged is never widened — it means what it says.
 function resolveRange(at, n, params) {
-    let start = boundOrNull(params.rangeStart);
-    let end = boundOrNull(params.rangeEnd);
-    if (start === null) start = at(0);
-    if (end === null) end = at(n - 1);
+    const startBound = boundOrNull(params.rangeStart);
+    const endBound = boundOrNull(params.rangeEnd);
+    const start = startBound === null ? at(0) : startBound;
+    const end = endBound === null ? at(n - 1) : endBound;
     if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-    return start <= end ? [start, end] : [end, start];
+    const range = start <= end ? [start, end] : [end, start];
+    range.explicitEnd = endBound !== null;
+    return range;
 }
 
 function scanGaps(ctx, useTimes, params) {
@@ -165,8 +170,9 @@ function segmentIsHole(values, i, rectangular, gapEnds) {
 export function reduceDailyIntegral(days = [], params = {}) {
     const toSeconds = 1 / 1000;
     const rangeStart = Number(params.rangeStart);
-    const rangeEnd = Number(params.rangeEnd);
     const medianDt = Number.isFinite(params.medianDt) ? params.medianDt : null;
+    const step = Number.isFinite(medianDt) && medianDt > 0 && params.hasNominalStep ? medianDt : 0;
+    const extendLastSample = params.extendLastSample === true && step > 0;
     const excluded = new Set();
     if (params.excludedDays) {
         for (const day of params.excludedDays) if (Number.isFinite(day)) excluded.add(day);
@@ -174,16 +180,32 @@ export function reduceDailyIntegral(days = [], params = {}) {
     const policy = INTEGRAL_MISSING_POLICIES.has(params.missingPolicy) ? params.missingPolicy : 'zero';
     const sorted = days.slice().sort((a, b) => a.day - b.day);
 
+    // The trailing period the last sample owns, added here rather than in SQL:
+    // the query already reports the last timestamp and value per day, and doing
+    // it in JS keeps eager and lazy reading from one rule instead of two.
+    const withSamples = sorted.filter(entry => (entry.sampleCount || 0) > 0);
+    const lastEntry = withSamples[withSamples.length - 1] || null;
+    let rangeEnd = Number(params.rangeEnd);
+    let tail = null;
+    if (extendLastSample && lastEntry && Number.isFinite(lastEntry.lastFiniteT)) {
+        const from = lastEntry.lastFiniteT;
+        if (!params.explicitRangeEnd && Number.isFinite(rangeEnd) && from >= rangeEnd) rangeEnd += step;
+        const to = Math.min(from + step, rangeEnd);
+        if (Number.isFinite(lastEntry.lastValue) && to > from) {
+            tail = { from, to, value: lastEntry.lastValue };
+        }
+    }
+
     if (policy === 'discard-day-own' || policy === 'discard-day-all') {
         for (const entry of sorted) if (entry.hasHole) excluded.add(entry.day);
     }
     if (params.discardIncompleteEnds) {
-        const withSamples = sorted.filter(entry => (entry.sampleCount || 0) > 0);
         const first = withSamples[0];
-        const last = withSamples[withSamples.length - 1];
-        const tolerance = Number.isFinite(medianDt) && medianDt > 0 ? medianDt : 0;
-        if (first && first.firstT > utcDayStart(first.day) + tolerance) excluded.add(first.day);
-        if (last && last.lastT < utcDayStart(last.day + 1) - tolerance) excluded.add(last.day);
+        // Same agreement the eager kernel enforces: the day gets one step of
+        // slack only when that step is actually integrated.
+        const tolerance = extendLastSample ? step : 0;
+        if (first && first.firstT > utcDayStart(first.day)) excluded.add(first.day);
+        if (lastEntry && lastEntry.lastT < utcDayStart(lastEntry.day + 1) - tolerance) excluded.add(lastEntry.day);
     }
 
     let area = 0;
@@ -200,6 +222,16 @@ export function reduceDailyIntegral(days = [], params = {}) {
         }
         area += Number(entry.areaMs) || 0;
         covered += Number(entry.coveredMs) || 0;
+    }
+    if (tail) {
+        // Split at midnight like any other interval: a step that does not divide
+        // the day evenly can put the tail on both sides of it.
+        for (const [pieceStart, pieceEnd] of splitAtDayBoundaries(tail.from, tail.to)) {
+            const span = pieceEnd - pieceStart;
+            if (!(span > 0)) continue;
+            if (excluded.has(utcDayIndex(pieceStart))) discarded += span;
+            else { area += tail.value * span; covered += span; }
+        }
     }
 
     let dayCount = 0;
@@ -224,6 +256,7 @@ export function reduceDailyIntegral(days = [], params = {}) {
         value: reason === null ? area * toSeconds : null,
         method: INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal',
         missingPolicy: policy,
+        extendLastSample,
         timeKind: 'datetime',
         rangeStart: Number.isFinite(rangeStart) ? rangeStart : null,
         rangeEnd: Number.isFinite(rangeEnd) ? rangeEnd : null,
@@ -278,9 +311,16 @@ export function collectMissingDays(sourceValues, time, params = {}) {
 }
 
 // The first and last UTC day of the range, when the data does not cover them
-// end to end. "Covered" allows one nominal step of slack: hourly samples at
-// 00:00…23:00 cover the day, even though the last trapezoid stops at 23:00.
-function incompleteEndDays(values, at, n, rangeStart, rangeEnd, medianDt) {
+// end to end.
+//
+// The slack allowed at the end is exactly one nominal step, but ONLY when the
+// last sample is taken to own that step (`extendLastSample`). The two settings
+// have to agree or the panel contradicts itself: hourly samples at 00:00…23:00
+// either cover the day — in which case the integral must run to midnight too —
+// or they do not, in which case the day is not complete and goes. Reporting
+// "32 days integrated" over 31 days and 23 hours is the one thing neither
+// reading permits.
+function incompleteEndDays(at, n, rangeStart, rangeEnd, medianDt, extendLastSample) {
     let firstT = null;
     let lastT = null;
     for (let i = 0; i < n; i++) {
@@ -290,13 +330,42 @@ function incompleteEndDays(values, at, n, rangeStart, rangeEnd, medianDt) {
         lastT = t;
     }
     if (firstT === null) return [];
-    const tolerance = Number.isFinite(medianDt) && medianDt > 0 ? medianDt : 0;
+    const step = Number.isFinite(medianDt) && medianDt > 0 ? medianDt : 0;
+    const tolerance = extendLastSample ? step : 0;
     const out = [];
     const firstDay = utcDayIndex(firstT);
-    if (firstT > utcDayStart(firstDay) + tolerance) out.push(firstDay);
+    if (firstT > utcDayStart(firstDay)) out.push(firstDay);
     const lastDay = utcDayIndex(lastT);
     if (lastT < utcDayStart(lastDay + 1) - tolerance && !out.includes(lastDay)) out.push(lastDay);
     return out;
+}
+
+/**
+ * The trailing interval the last sample owns, when the data is read as periods
+ * rather than as points.
+ *
+ * A trapezoid needs a sample on both sides, so a series ending at 23:45 leaves
+ * the last 15 minutes of the day uncovered — the total is short by one step and
+ * the reported duration says so. That is right for a sampled signal and wrong
+ * for a PyPSA-style snapshot, where each timestamp REPRESENTS the step that
+ * follows it and a whole day of quarter-hours is 24 h by construction.
+ *
+ * Only a series with a nominal step can be extended: without one there is no
+ * defensible length to give the last period, and inventing the median of a
+ * spread of unrelated distances would be a guess dressed as data.
+ *
+ * @returns {{ from: number, to: number, value: number }|null} in raw time units
+ */
+function trailingPeriod(values, at, n, rangeEnd, medianDt, hasNominalStep) {
+    if (!hasNominalStep || !(medianDt > 0)) return null;
+    for (let i = n - 1; i >= 0; i--) {
+        const t = at(i);
+        const value = values[i];
+        if (!Number.isFinite(t) || !Number.isFinite(value)) continue;
+        if (t >= rangeEnd) return null;
+        return { from: t, to: Math.min(t + medianDt, rangeEnd), value };
+    }
+    return null;
 }
 
 /**
@@ -308,6 +377,9 @@ function incompleteEndDays(values, at, n, rangeStart, rangeEnd, medianDt) {
  *   rangeStart, rangeEnd   raw abscissa units (epoch ms on a calendar axis);
  *                          null/absent means the data extent
  *   discardIncompleteEnds  drop the first/last UTC day when not fully covered
+ *   extendLastSample       read the samples as periods: the last one owns one
+ *                          nominal step, so a whole day of quarter-hours
+ *                          integrates to 24 h instead of 23 h 45 min
  *   excludedDays           extra UTC day indexes to remove (the panel's union,
  *                          for 'discard-day-all')
  *   detectGaps             false disables missing-row detection entirely
@@ -351,10 +423,17 @@ export function computeDefiniteIntegral(sourceValues, time, params = {}) {
 
     const range = resolveRange(at, n, params);
     if (!range) return empty;
-    const [rangeStart, rangeEnd] = range;
+    const [rangeStart] = range;
+    let rangeEnd = range[1];
 
     const { hasNominalStep, medianDt, gapEnds } = scanGaps(ctx, useTimes, params);
     const work = policy === 'interpolate' ? bridgeNonFinite(values, ctx) : values;
+    const extendLastSample = params.extendLastSample === true;
+    // Read as periods with no explicit end, the domain reaches one step past the
+    // last sample — that is what makes a day of quarter-hours 24 h long.
+    if (extendLastSample && !range.explicitEnd && hasNominalStep && medianDt > 0) {
+        rangeEnd += medianDt;
+    }
 
     // Days removed from the domain of integration. Only a calendar axis has
     // days; on any other axis both policies fall back to 'zero', which the
@@ -370,7 +449,7 @@ export function computeDefiniteIntegral(sourceValues, time, params = {}) {
             for (const day of collectMissingDays(sourceValues, time, params).days) excluded.add(day);
         }
         if (params.discardIncompleteEnds) {
-            for (const day of incompleteEndDays(values, at, n, rangeStart, rangeEnd, medianDt)) {
+            for (const day of incompleteEndDays(at, n, rangeStart, rangeEnd, medianDt, extendLastSample)) {
                 excluded.add(day);
             }
         }
@@ -438,6 +517,24 @@ export function computeDefiniteIntegral(sourceValues, time, params = {}) {
         }
     }
 
+    // The step the last sample owns, when the data is read as periods. Held
+    // constant (there is nothing to interpolate towards), clipped to the range
+    // and split at midnight like every other interval, so a day that only
+    // leaves it out is no longer reported as fully integrated.
+    if (extendLastSample) {
+        const tail = trailingPeriod(values, at, n, rangeEnd, medianDt, hasNominalStep);
+        if (tail && tail.to > tail.from) {
+            const pieces = excluded.size ? splitAtDayBoundaries(tail.from, tail.to) : [[tail.from, tail.to]];
+            for (const [pieceStart, pieceEnd] of pieces) {
+                const span = pieceEnd - pieceStart;
+                if (!(span > 0)) continue;
+                if (excluded.size && excluded.has(utcDayIndex(pieceStart))) { discarded += span; continue; }
+                area += tail.value * span;
+                covered += span;
+            }
+        }
+    }
+
     let dayCount = 0;
     let discardedDays = [];
     if (isDatetime && rangeEnd > rangeStart) {
@@ -462,6 +559,7 @@ export function computeDefiniteIntegral(sourceValues, time, params = {}) {
         value: reason === null ? area * toSeconds : null,
         method,
         missingPolicy: policy,
+        extendLastSample,
         timeKind: ctx.kind,
         rangeStart,
         rangeEnd,

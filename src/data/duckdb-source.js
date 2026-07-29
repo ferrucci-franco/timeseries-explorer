@@ -2060,7 +2060,9 @@ export default class DuckDbSource {
                 )`},
                 samples AS (
                     SELECT ${floorDiv('t_ms')} AS day, COUNT(*) AS n,
-                        MIN(t_ms) AS first_t, MAX(t_ms) AS last_t
+                        MIN(t_ms) AS first_t, MAX(t_ms) AS last_t,
+                        MAX(CASE WHEN vf IS NOT NULL THEN t_ms END) AS last_finite_t,
+                        arg_max(vf, t_ms) AS last_value
                     FROM ord WHERE t_ms BETWEEN ${r0} AND ${r1} GROUP BY day
                 ),
                 joined AS (
@@ -2070,7 +2072,8 @@ export default class DuckDbSource {
                         COALESCE(holes.uncovered_ms, 0) AS uncovered_ms,
                         COALESCE(holes.has_hole, 0) AS has_hole,
                         COALESCE(samples.n, 0) AS n,
-                        samples.first_t, samples.last_t
+                        samples.first_t, samples.last_t,
+                        samples.last_finite_t, samples.last_value
                     FROM area
                     FULL OUTER JOIN holes ON area.day = holes.day
                     FULL OUTER JOIN samples ON COALESCE(area.day, holes.day) = samples.day
@@ -2083,6 +2086,8 @@ export default class DuckDbSource {
                     n::BIGINT AS n,
                     first_t::DOUBLE AS first_t,
                     last_t::DOUBLE AS last_t,
+                    last_finite_t::DOUBLE AS last_finite_t,
+                    last_value::DOUBLE AS last_value,
                     (SELECT m FROM med)::DOUBLE AS median_step,
                     (SELECT has_step FROM nominal)::BOOLEAN AS has_step,
                     (SELECT gap_segments FROM counts)::BIGINT AS gap_segments,
@@ -2105,6 +2110,8 @@ export default class DuckDbSource {
                     sampleCount: Number(row.n) || 0,
                     firstT: row.first_t == null ? null : Number(row.first_t),
                     lastT: row.last_t == null ? null : Number(row.last_t),
+                    lastFiniteT: row.last_finite_t == null ? null : Number(row.last_finite_t),
+                    lastValue: row.last_value == null ? null : Number(row.last_value),
                 })),
                 medianDt: head.median_step == null ? null : Number(head.median_step),
                 hasNominalStep: head.has_step === true || head.has_step === 1,

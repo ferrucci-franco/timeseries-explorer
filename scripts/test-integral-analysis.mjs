@@ -84,6 +84,13 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
         eq(state({ missingPolicy: policy }).missingPolicy, policy, `${policy} survives normalisation`);
     }
 
+    // Periods, not points, is the default: the panel is written for power-grid
+    // series, where a timestamp represents the step that follows it. It has to be
+    // opt-OUT so the reported duration and the discard rule agree by default.
+    eq(defaults.extendLastSample, true, 'each sample covers its own step by default');
+    eq(state({ extendLastSample: false }).extendLastSample, false, 'and it can be turned off');
+    eq(state({ extendLastSample: 'nonsense' }).extendLastSample, true, 'anything but false keeps the default');
+
     // A session predating rangeFull that carries a window keeps the window.
     const legacy = state({ x1: 10, x2: 20 });
     eq(legacy.rangeFull, false, 'a saved window implies Selection');
@@ -357,6 +364,11 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(/for \(const entry of lazyByTrace\.values\(\)\)[\s\S]{0,200}hasHole/.test(methods),
         'the discard-day-all union spans lazy signals too, or the bars stop being comparable');
     ok(methods.includes('_setIntegralComputing'), 'a lazy query shows the non-blocking progress pill');
+    // The trailing period needs the last finite sample AND its value; without
+    // both, the lazy reducer cannot close the day the eager kernel closes.
+    ok(duckdb.includes('last_finite_t'), 'the query reports the last finite timestamp per day');
+    ok(duckdb.includes('arg_max(vf, t_ms)'), 'and the value at it');
+    ok(methods.includes('extendLastSample: state.extendLastSample'), 'both paths get the periods setting');
 
     // The pie lives in its own pane behind its own splitter, and the inner split
     // runs perpendicular to the outer one so neither pane becomes a sliver.
