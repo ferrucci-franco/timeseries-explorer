@@ -346,6 +346,15 @@
                                 <input id="interpolate-max-gap-slider" class="data-tool-slider" type="range" min="1" max="200" step="1" value="10">
                                 <input id="interpolate-max-gap" class="derived-input data-tool-number-input" type="number" min="1" step="1" value="10">
                             </div>
+                            <!-- What the current setting would fill, live. Counted from the
+                                 variable's runs of missing samples, so dragging the slider
+                                 updates it without recomputing the fill. -->
+                            <div id="interpolate-status" class="data-tool-count"></div>
+
+                            <label id="interpolate-show-added-wrap" class="checkbox-label data-tool-live-chain">
+                                <input type="checkbox" id="interpolate-show-added">
+                                <span data-i18n="dataToolInterpolateShowAdded">Preview only the added samples</span>
+                            </label>
 
                             <div id="interpolate-window-wrap">
                                 <div class="data-tool-label-row">

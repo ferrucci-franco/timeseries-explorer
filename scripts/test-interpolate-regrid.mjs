@@ -3,7 +3,9 @@
 import assert from 'node:assert/strict';
 import {
     fillMissingValues,
+    missingRuns,
     normalizeInterpolateParams,
+    summariseMissing,
     INTERPOLATE_MAX_GAP_UNLIMITED,
 } from '../src/compute/kernels/interpolate.js';
 import {
@@ -199,6 +201,62 @@ const N = NaN;
     assert.equal(step.meta.filledCount, 1);
 }
 
+// ── Counting a fill without performing it ─────────────────────────────────
+
+{
+    const runs = missingRuns([N, 1, 2, N, N, 3, N, N, N, 4, N]);
+    assert.deepEqual(runs, [
+        { start: 0, length: 1, edge: true },
+        { start: 3, length: 2, edge: false },
+        { start: 6, length: 3, edge: false },
+        { start: 10, length: 1, edge: true },
+    ], 'runs, with the ones touching an end marked');
+}
+
+{
+    // The live label in the panel is counted from the runs; the result comes from
+    // the fill. If those two ever disagreed the panel would be lying, so they are
+    // checked against each other across the whole parameter space that matters.
+    const time = Array.from({ length: 24 }, (_, i) => i);
+    const values = Array.from({ length: 24 }, (_, i) => i * 2);
+    for (const hole of [[0, 1], [2, 3], [7, 1], [12, 5], [22, 2]]) {
+        for (let k = 0; k < hole[1]; k++) values[hole[0] + k] = NaN;
+    }
+    const runs = missingRuns(values);
+    for (const maxGap of [1, 2, 3, 5, 100, 0]) {
+        for (const edges of ['leave', 'hold']) {
+            const params = { method: 'linear', maxGap, edges };
+            const predicted = summariseMissing(runs, params);
+            const actual = fillMissingValues(values, numericTime(time), params);
+            const label = `maxGap=${maxGap} edges=${edges}`;
+            assert.equal(predicted.filled, actual.filledCount, `${label}: filled count`);
+            assert.equal(predicted.skipped, actual.skippedCount, `${label}: skipped count`);
+            assert.equal(predicted.runsFilled, actual.filledRuns, `${label}: filled runs`);
+            assert.equal(predicted.runsSkipped, actual.skippedRuns, `${label}: skipped runs`);
+            assert.equal(predicted.missing, actual.missingCount, `${label}: total missing`);
+            assert.equal(predicted.edgeFilled, actual.edgeFilledCount, `${label}: edge filled`);
+            assert.equal(predicted.edgeSkipped, actual.edgeSkippedCount, `${label}: edge skipped`);
+            // The prediction must also match what the OUTPUT actually contains.
+            let became = 0;
+            for (let i = 0; i < values.length; i++) {
+                if (!Number.isFinite(values[i]) && Number.isFinite(actual.values[i])) became++;
+            }
+            assert.equal(predicted.filled, became, `${label}: samples that really became finite`);
+        }
+    }
+}
+
+{
+    // A series with nothing missing: no runs, and the summary says zero rather
+    // than anything that could be mistaken for work done.
+    const runs = missingRuns([1, 2, 3, 4]);
+    assert.deepEqual(runs, []);
+    const summary = summariseMissing(runs, { method: 'linear' });
+    assert.equal(summary.missing, 0);
+    assert.equal(summary.filled, 0);
+    assert.equal(summary.runsFilled, 0);
+}
+
 // ── Resampling ────────────────────────────────────────────────────────────
 
 {
@@ -318,6 +376,52 @@ const N = NaN;
     const r = resampleValues(y, x, grid, { method: 'mean' });
     assert.ok(Number.isNaN(r.values[2]), 'an empty bin is missing, not zero');
     assert.ok(r.emptyCount >= 1);
+}
+
+{
+    // Absent ROWS are not missing values, and a point method must reach across
+    // them — a uniform grid has to have a value at every step. What it must not do
+    // is stay quiet: bridgedCount is how the panel gets to say how much of the
+    // result was reached for rather than measured. This is the shape of the file
+    // that prompted "fill missing data does not work": no NaN anywhere, just a
+    // stretch the logger skipped.
+    const gappedX = Float64Array.from([0, 1, 2, 3, 20, 21, 22]);
+    const gappedY = Float64Array.from([0, 1, 2, 3, 20, 21, 22]);
+    const gapped = buildResampleGrid(gappedX, { gridMode: 'step', step: 1 });
+    assert.equal(gapped.sourceStep, 1);
+    const bridged = resampleValues(gappedY, gappedX, gapped.grid, { method: 'linear', sourceStep: gapped.sourceStep });
+    assert.equal(bridged.emptyCount, 0, 'nothing is missing, so nothing comes out missing');
+    // Targets at t = 4 … 19 all sit inside the one wide interval [3, 20].
+    assert.equal(bridged.bridgedCount, 16, 'every target inside the gap is reported as bridged');
+    assert.ok(bridged.values.every(Number.isFinite), 'and they do get values');
+
+    // Without the nominal step there is nothing to compare against, so no claim is
+    // made rather than a wrong one.
+    assert.equal(resampleValues(gappedY, gappedX, gapped.grid, { method: 'linear' }).bridgedCount, 0,
+        'no nominal step, no bridging claim');
+
+    // An evenly sampled file reaches across nothing.
+    const cleanX = Float64Array.from([0, 1, 2, 3, 4]);
+    const clean = buildResampleGrid(cleanX, { gridMode: 'step', step: 0.5 });
+    assert.equal(
+        resampleValues(Float64Array.from([0, 1, 2, 3, 4]), cleanX, clean.grid,
+            { method: 'linear', sourceStep: clean.sourceStep }).bridgedCount,
+        0,
+    );
+
+    // Bin methods do not reach: an interval with no samples is simply empty.
+    const binned = resampleValues(gappedY, gappedX, gapped.grid, { method: 'mean', sourceStep: gapped.sourceStep });
+    assert.equal(binned.bridgedCount, 0);
+    assert.ok(binned.emptyCount > 0, 'the bin method reports the same gap as empty instead');
+
+    // runResample threads the nominal step to every column, so they all judge
+    // "wider than a sampling step" against the same number.
+    const batch = runResample({
+        columns: [gappedY, gappedY],
+        time: { values: gappedX, kind: 'numeric' },
+        params: { gridMode: 'step', step: 1, method: 'linear' },
+    });
+    assert.deepEqual(batch.bridgedCounts, [16, 16], 'every column is judged alike');
 }
 
 {

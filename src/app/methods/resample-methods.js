@@ -279,6 +279,12 @@ proto.commitResampleTool = async function(options = {}) {
     }
 
     const emptyTotal = resampled.emptyCounts.reduce((sum, value) => sum + value, 0);
+    // How much of the new series was reached for rather than measured: target
+    // samples produced by spanning an interval wider than the file's own Δt. On a
+    // file with absent rows this is the number that says the gaps were crossed —
+    // which is usually what the user wanted, and never something to leave unsaid.
+    const bridgedTotal = (resampled.bridgedCounts || []).reduce((sum, value) => sum + value, 0);
+    const bridgedPerVariable = names.length ? Math.round(bridgedTotal / names.length) : 0;
     this._setOutlierMessage(() => {
         const one = names.length === 1;
         const key = target.replaced
@@ -294,7 +300,11 @@ proto.commitResampleTool = async function(options = {}) {
             ? i18n.t(emptyTotal === 1 ? 'dataToolResampleHolesOne' : 'dataToolResampleHoles')
                 .replace('{count}', formatCount(emptyTotal))
             : '';
-        return [base, holes].filter(Boolean).join(' ');
+        const bridged = bridgedPerVariable > 0
+            ? i18n.t(bridgedPerVariable === 1 ? 'dataToolResampleBridgedOne' : 'dataToolResampleBridged')
+                .replace('{count}', formatCount(bridgedPerVariable))
+            : '';
+        return [base, bridged, holes].filter(Boolean).join(' ');
     }, emptyTotal > 0 ? 'error' : 'ok');
 
     this._clearDataToolDraft({ keepMessage: true });

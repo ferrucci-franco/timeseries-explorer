@@ -959,6 +959,34 @@
     gap: 0.4rem;
 }
 
+/* What a setting would do, stated before it is committed. Green when there is
+   something to do, neutral when the answer is "nothing", and amber when nothing
+   is the answer for a reason the user needs to hear. */
+.data-tool-count {
+    font-size: 0.73rem;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #2e7d32;
+}
+
+.theme-dark .data-tool-count {
+    color: #81c784;
+}
+
+.data-tool-count:empty {
+    display: none;
+}
+
+.data-tool-count.idle {
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.data-tool-count.warn {
+    font-weight: 500;
+    color: color-mix(in srgb, var(--text-primary) 72%, #d97706);
+}
+
 /* An irregular Δt does not make the filter refuse — only the user knows whether
    it matters — so this reads as a caution rather than an error. */
 .data-tool-axis-note {

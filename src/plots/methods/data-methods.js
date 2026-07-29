@@ -1235,6 +1235,41 @@ proto._upperBound = function(sortedValues, target) {
     return lo;
 };
 
+/**
+ * The present samples of a mostly-empty series, as compact arrays.
+ *
+ * Min/max bucket decimation is the wrong reduction here. It emits two points per
+ * bucket regardless of how many are present, so a run of sixty inserted samples
+ * inside a 20 000-sample trace comes back as a handful — and the trace exists to
+ * show WHERE those samples are. Collecting the finite ones instead keeps every
+ * position, and there are few of them by construction, so nothing is sent to
+ * Plotly that a full-length array of NaN would have carried for nothing.
+ *
+ * Only if the present samples themselves exceed the visual budget is a stride
+ * applied, which is the honest reduction for a scatter of positions.
+ */
+proto._buildSparseVisualData = function(timeData, values) {
+    const n = Math.min(timeData?.length || 0, values?.length || 0);
+    const x = [];
+    const y = [];
+    for (let i = 0; i < n; i++) {
+        const value = values[i];
+        if (!Number.isFinite(value)) continue;
+        x.push(timeData[i]);
+        y.push(value);
+    }
+    const target = this.timeseriesVisualMaxPoints;
+    if (target == null || x.length <= target) return { x, y };
+    const stride = Math.ceil(x.length / target);
+    const thinnedX = [];
+    const thinnedY = [];
+    for (let i = 0; i < x.length; i += stride) {
+        thinnedX.push(x[i]);
+        thinnedY.push(y[i]);
+    }
+    return { x: thinnedX, y: thinnedY };
+};
+
 proto._buildTimeseriesVisualData = function(timeData, values, visibleRange = null, isStep = false) {
     const n = Math.min(timeData?.length || 0, values?.length || 0);
     if (n <= 0) return { x: timeData || [], y: values || [] };
@@ -1706,11 +1741,17 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     // menu for discrete-looking real variables.
     const isStep = t.lineShape ? t.lineShape === 'hv' : this._variableDefaultsToStairs(variable);
     const useGL = !isStep && values.length >= PlotManager.GL_POINT_THRESHOLD;
-    const visual = this._applyTimeseriesStackZeroPadding(
-        plot,
-        t,
-        this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep)
-    );
+    // A markers-only trace (the data-tool preview of the samples a fill would add)
+    // is mostly NaN by construction, and min/max bucket decimation would throw
+    // away the few points that ARE there — losing exactly the positions the trace
+    // exists to show. It gets its own reduction, over the present samples only.
+    const visual = t.markersOnly
+        ? this._buildSparseVisualData(timeData, values)
+        : this._applyTimeseriesStackZeroPadding(
+            plot,
+            t,
+            this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep)
+        );
     const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
     const customdata = highResolutionCalendarAxis
         ? Array.from(visual.x || [], value => this._formatGeneratedCalendarDateTime(
@@ -1728,6 +1769,19 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     // Set only by the data-tool preview, which draws a curve that does not exist
     // yet and must not read as a real trace.
     if (t.dash) line.dash = t.dash;
+    if (t.markersOnly) {
+        return {
+            x: plotX, y: visual.y,
+            name, type: 'scatter', mode: 'markers',
+            visible: t.visible ?? true,
+            yaxis,
+            // Open circles: they sit ON the original curve without hiding the
+            // sample underneath, which is the comparison being invited.
+            marker: { color: t.color, size: 7, symbol: 'circle-open', line: { color: t.color, width: 1.6 } },
+            ...(customdata ? { customdata } : {}),
+            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}<extra></extra>`,
+        };
+    }
     return {
         x: plotX, y: visual.y,
         name, type: plot?.timeseriesStacked ? 'scatter' : (useGL ? 'scattergl' : 'scatter'), mode: 'lines',

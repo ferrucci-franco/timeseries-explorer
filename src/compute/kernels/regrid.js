@@ -22,14 +22,23 @@
 //   the median is its outlier-proof sibling. Min and max keep the envelope, so a
 //   spike survives a 100× reduction instead of being averaged into nothing.
 //
-// On missing data this module deliberately does NOT interpolate. A target sample
-// whose surrounding source pair contains a NaN comes out NaN, and an empty bin
-// comes out NaN. Bridging a hole is a decision with its own parameters (how far
-// is too far, by what shape) and it has its own tool — run Interpolate first if
-// that is what you want. Silently inventing it here would hide the hole inside
-// an operation the user asked to do for a different reason.
+// On missing VALUES this module deliberately does not interpolate. A target
+// sample whose surrounding source pair contains a NaN comes out NaN, and an empty
+// bin comes out NaN. Bridging a hole is a decision with its own parameters (how
+// far is too far, by what shape) and it has its own tool — run Interpolate first
+// if that is what you want.
+//
+// Absent ROWS are a different matter and cannot be treated the same way. A file
+// that simply stops logging for a minute has no NaN in it: the samples either
+// side of the gap are perfectly good, so every point method reaches across and
+// produces values there — and it must, because a uniform grid has to have a value
+// at every step. What it must NOT do is stay quiet about it. `bridgedCount`
+// reports how many target samples were produced by spanning an interval wider
+// than the file's own Δt, so the panel can say how much of the result was reached
+// for rather than measured.
 
 import { asFloat64, DataToolError } from './shared.js';
+import { GAP_THRESHOLD_FACTOR } from '../../utils/sampling-gaps.js';
 
 export const RESAMPLE_METHODS = new Set([
     'linear', 'pchip', 'akima', 'nearest', 'previous',
@@ -158,23 +167,37 @@ export function buildResampleGrid(x, params = {}) {
 
 /**
  * Resample `values` (sampled at `x`) onto `grid`.
- * @returns {{ values: Float64Array, emptyCount: number }} `emptyCount` counts the
- *   target samples that came out NaN because the source had nothing to offer
- *   there — an empty bin, or a source interval containing a hole.
+ *
+ * @param {object} params also accepts `sourceStep`, the file's nominal Δt. Given
+ *   it, the point methods report how many target samples landed inside a source
+ *   interval far WIDER than that step — samples produced by reaching across a
+ *   stretch the file has no rows for.
+ * @returns {{ values: Float64Array, emptyCount: number, bridgedCount: number }}
+ *   `emptyCount` counts targets that came out NaN because the source had nothing
+ *   to offer there. `bridgedCount` counts the opposite and more dangerous case:
+ *   targets that DID get a value, by interpolating over absent rows.
  */
 export function resampleValues(sourceValues, x, grid, params = {}) {
     const settings = normalizeResampleParams(params);
     const values = asFloat64(sourceValues);
+    const sourceStep = Number(params.sourceStep);
     return RESAMPLE_BIN_METHODS.has(settings.method)
         ? resampleByBin(values, x, grid, settings)
-        : resampleByPoint(values, x, grid, settings);
+        : resampleByPoint(values, x, grid, settings, sourceStep);
 }
 
-function resampleByPoint(values, x, grid, settings) {
+function resampleByPoint(values, x, grid, settings, sourceStep = NaN) {
     const n = values.length;
     const m = grid.length;
     const out = new Float64Array(m).fill(NaN);
     let emptyCount = 0;
+    let bridgedCount = 0;
+    // Wider than this and the source interval is not a sampling step, it is a
+    // stretch the file has no rows for. Same 1.5× the gap detector uses, so the
+    // two agree about what counts as a gap.
+    const bridgeThreshold = Number.isFinite(sourceStep) && sourceStep > 0
+        ? sourceStep * GAP_THRESHOLD_FACTOR
+        : Infinity;
     let k = 0;   // last source index at or before the current target time
 
     // The four points a cubic slope wants, grown OUTWARDS from the bracketing
@@ -212,6 +235,9 @@ function resampleByPoint(values, x, grid, settings) {
 
         const xL = x[iL];
         const xR = x[iR];
+        // Counted before the method runs, so it is the same tally whichever one
+        // reaches across the gap.
+        if (xR - xL > bridgeThreshold) bridgedCount++;
         if (settings.method === 'previous') { out[g] = yL; continue; }
         if (settings.method === 'nearest') { out[g] = (t - xL) <= (xR - t) ? yL : yR; continue; }
         if (settings.method === 'linear' || xR <= xL) {
@@ -229,7 +255,7 @@ function resampleByPoint(values, x, grid, settings) {
         const mR = slope(xs, ys, nodeR);
         out[g] = hermite(xL, yL, mL, xR, yR, mR, t);
     }
-    return { values: out, emptyCount };
+    return { values: out, emptyCount, bridgedCount };
 }
 
 // Bins are centred on their grid point: [t − step/2, t + step/2). Centring
@@ -278,7 +304,9 @@ function resampleByBin(values, x, grid, settings) {
             out[g] = count % 2 ? bucket[mid] : (bucket[mid - 1] + bucket[mid]) / 2;
         }
     }
-    return { values: out, emptyCount };
+    // Bin methods never reach across anything: an interval with no samples in it
+    // is simply empty, which emptyCount already reports.
+    return { values: out, emptyCount, bridgedCount: 0 };
 }
 
 // ── Local cubic slopes (same estimators as interpolate.js) ─────────────────

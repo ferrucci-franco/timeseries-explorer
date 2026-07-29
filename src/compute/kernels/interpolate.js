@@ -68,6 +68,64 @@ export function normalizeInterpolateParams(params = {}) {
     };
 }
 
+// ── Where the holes are ────────────────────────────────────────────────────
+
+/**
+ * Every run of non-finite samples, as {start, length, edge}. `edge` marks a run
+ * that touches the first or last sample — extrapolation rather than
+ * interpolation, since it has known data on one side only.
+ *
+ * Split out so the panel can COUNT what a setting would fill without producing
+ * it. Dragging the gap slider then costs one pass over a handful of runs instead
+ * of a fresh O(n) fill per tick, and — the part that matters — the number shown
+ * comes from the same enumeration the fill itself walks, so the label cannot
+ * disagree with the result.
+ */
+export function missingRuns(sourceValues) {
+    const values = asFloat64(sourceValues);
+    const n = values.length;
+    const runs = [];
+    let i = 0;
+    while (i < n) {
+        if (Number.isFinite(values[i])) { i++; continue; }
+        let end = i;
+        while (end < n && !Number.isFinite(values[end])) end++;
+        runs.push({ start: i, length: end - i, edge: i === 0 || end >= n });
+        i = end;
+    }
+    return runs;
+}
+
+/**
+ * What a given setting WOULD do, counted from the runs alone.
+ * @returns {{ filled, skipped, runsFilled, runsSkipped, longestSkipped, missing, edgeFilled, edgeSkipped }}
+ */
+export function summariseMissing(runs, params = {}) {
+    const settings = normalizeInterpolateParams(params);
+    const out = {
+        filled: 0, skipped: 0, runsFilled: 0, runsSkipped: 0,
+        longestSkipped: 0, missing: 0, edgeFilled: 0, edgeSkipped: 0,
+    };
+    for (const run of runs || []) {
+        out.missing += run.length;
+        const withinLimit = run.length <= settings.maxGap;
+        // An edge run is only ever filled by holding the nearest known value;
+        // there is no second endpoint to interpolate towards.
+        const fillable = withinLimit && (!run.edge || settings.edges === 'hold');
+        if (fillable) {
+            out.filled += run.length;
+            out.runsFilled++;
+            if (run.edge) out.edgeFilled += run.length;
+        } else {
+            out.skipped += run.length;
+            out.runsSkipped++;
+            out.longestSkipped = Math.max(out.longestSkipped, run.length);
+            if (run.edge) out.edgeSkipped += run.length;
+        }
+    }
+    return out;
+}
+
 // ── Coordinates ────────────────────────────────────────────────────────────
 // The x used for interpolation. A datetime axis is milliseconds and a numeric
 // one is whatever the column carried; neither is converted, because every
@@ -239,17 +297,17 @@ export function fillMissingValues(sourceValues, time, params = {}) {
         return found;
     };
 
-    let i = 0;
-    while (i < n) {
-        if (Number.isFinite(values[i])) { i++; continue; }
-        let end = i;
-        while (end < n && !Number.isFinite(values[end])) end++;
-        const runLength = end - i;
+    // The same enumeration summariseMissing counts from, so the live label in the
+    // panel and the result it predicts can never disagree.
+    for (const run of missingRuns(values)) {
+        const i = run.start;
+        const end = run.start + run.length;
+        const runLength = run.length;
         report.missingCount += runLength;
 
         const left = i - 1;
         const right = end;
-        const isEdge = left < 0 || right >= n;
+        const isEdge = run.edge;
         const withinLimit = runLength <= settings.maxGap;
 
         if (!withinLimit) {
@@ -281,7 +339,6 @@ export function fillMissingValues(sourceValues, time, params = {}) {
             report.filledRuns++;
             report.filledCount += runLength;
         }
-        i = end;
     }
     return report;
 }

@@ -15,10 +15,13 @@ import {
 import * as kernelShared from '../../compute/kernels/shared.js';
 import {
     INTERPOLATE_MAX_GAP_UNLIMITED,
+    missingRuns,
     normalizeInterpolateMaxGap,
     normalizeInterpolateParams,
     normalizeInterpolateWindow,
+    summariseMissing,
 } from '../../compute/kernels/interpolate.js';
+import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import {
     DETREND_METHODS,
     normalizeDetrendOrder,
@@ -157,6 +160,7 @@ proto.initDataTools = function() {
         });
         document.getElementById(inputId)?.addEventListener('input', () => {
             this._syncInterpolateControls();
+    this._syncInterpolateStatus();
             this._syncDataTools();
             this._handleDataToolPreviewChange({ immediate: true });
         });
@@ -164,6 +168,12 @@ proto.initDataTools = function() {
     document.getElementById('interpolate-help-toggle')?.addEventListener('click', (event) => {
         event.stopPropagation();
         this._toggleInterpolateHelpPopover();
+    });
+    document.getElementById('interpolate-show-added')?.addEventListener('change', () => {
+        // Changes what the preview DRAWS, not what it computes, so the trace has
+        // to come down and be rebuilt in the other style.
+        this._clearDataToolPreview();
+        this._handleDataToolOptionChange();
     });
 
     document.getElementById('detrend-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
@@ -311,6 +321,7 @@ proto._syncDataTools = function() {
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
+    this._syncInterpolateStatus();
     this._syncDetrendControls();
     this._syncResampleControls?.();
     this._syncFilterControls?.();
@@ -387,7 +398,8 @@ proto._syncDataTools = function() {
     document.getElementById('moving-average-window-slider')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.getElementById('moving-average-window')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     for (const id of ['interpolate-method', 'interpolate-edges', 'interpolate-max-gap-slider',
-        'interpolate-max-gap', 'interpolate-window-slider', 'interpolate-window']) {
+        'interpolate-max-gap', 'interpolate-window-slider', 'interpolate-window',
+        'interpolate-show-added']) {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'interpolate');
     }
     for (const id of ['detrend-method', 'detrend-order', 'detrend-order-slider',
@@ -638,6 +650,116 @@ proto._syncDetrendControls = function() {
         slider.value = String(Math.max(Number(slider.min), Math.min(Number(slider.max), normalized)));
         if (value) value.textContent = String(normalized);
     }
+};
+
+// Runs of missing samples for the selected variable, cached against the very
+// array they were measured from: a reload or a recompute replaces that array, so
+// identity alone invalidates the entry. Without the cache the live label would
+// re-scan a multi-million-sample series on every tick of the gap slider.
+proto._interpolateRuns = function(variable) {
+    const values = variable?.data;
+    if (!values) return [];
+    const cached = this._interpolateRunsCache;
+    if (cached?.source === values) return cached.runs;
+    const runs = missingRuns(values);
+    this._interpolateRunsCache = { source: values, runs };
+    return runs;
+};
+
+/**
+ * What the current setting would fill, and — when the answer is "nothing" — why.
+ *
+ * The second half is the important one. A file whose rows are simply ABSENT for a
+ * stretch of time has no missing VALUES at all: there is nothing in the array to
+ * replace, so this tool correctly does nothing, and saying nothing about it looks
+ * exactly like a broken tool. The panel now names the gaps and points at the tool
+ * that can materialise those rows.
+ *
+ * @returns {{ text: string, tone: 'ok'|'idle'|'warn', filled: number }}
+ */
+proto._interpolateStatus = function() {
+    const fileId = this.activeFileId;
+    const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
+    const sourceName = document.getElementById('outlier-variable')?.value || '';
+    const variable = sourceName ? data?.variables?.[sourceName] : null;
+    if (!variable) return { text: '', tone: 'idle', filled: 0 };
+
+    let params;
+    try {
+        params = this._getDataToolConfig('interpolate').params;
+    } catch {
+        return { text: '', tone: 'idle', filled: 0 };
+    }
+
+    const runs = this._interpolateRuns(variable);
+    const summary = summariseMissing(runs, params);
+
+    if (summary.missing === 0) {
+        // Nothing to fill. Whether that is good news depends on the file, so look
+        // at the time axis before declaring the variable complete.
+        const gaps = this._interpolateAxisGaps(data, variable);
+        if (gaps) {
+            return {
+                text: i18n.t(gaps.count === 1 ? 'dataToolInterpolateRowsAbsentOne' : 'dataToolInterpolateRowsAbsent')
+                    .replace('{gaps}', String(gaps.count))
+                    .replace('{samples}', formatCount(gaps.missing)),
+                tone: 'warn',
+                filled: 0,
+            };
+        }
+        return { text: i18n.t('dataToolInterpolateNothingMissing'), tone: 'idle', filled: 0 };
+    }
+
+    // "+0 samples across 0 gaps" is a worse way to say "nothing", so a limit that
+    // fills nothing leads with what it refused instead of with a zero.
+    if (summary.filled === 0) {
+        return {
+            text: i18n.t('dataToolInterpolateFillsNothing')
+                .replace('{count}', formatCount(summary.skipped))
+                .replace('{longest}', formatCount(summary.longestSkipped)),
+            tone: 'warn',
+            filled: 0,
+        };
+    }
+
+    const parts = [i18n.t(summary.filled === 1 ? 'dataToolInterpolateWillFillOne' : 'dataToolInterpolateWillFill')
+        .replace('{count}', formatCount(summary.filled))
+        .replace('{runs}', formatCount(summary.runsFilled))];
+    if (summary.skipped > 0) {
+        parts.push(i18n.t('dataToolInterpolateWillSkip')
+            .replace('{count}', formatCount(summary.skipped))
+            .replace('{longest}', formatCount(summary.longestSkipped)));
+    }
+    return {
+        text: parts.join(' · '),
+        tone: 'ok',
+        filled: summary.filled,
+    };
+};
+
+// Gaps in the file's own time axis — rows that do not exist — as opposed to rows
+// that exist holding nothing. Same detector the integral and the filter use.
+proto._interpolateAxisGaps = function(data, variable) {
+    const time = this._resampleTimeContext?.(data);
+    const values = time?.values;
+    if (!values || time.kind === 'index') return null;
+    if (values.length !== variable?.data?.length) return null;
+    const info = detectSamplingGaps(values);
+    if (!info.hasNominalStep || info.count === 0) return null;
+    return { count: info.count, missing: info.totalMissing };
+};
+
+proto._syncInterpolateStatus = function() {
+    const el = document.getElementById('interpolate-status');
+    if (!el) return;
+    if (this._getSelectedDataTool() !== 'interpolate') {
+        el.textContent = '';
+        el.className = 'data-tool-count';
+        return;
+    }
+    const status = this._interpolateStatus();
+    el.textContent = status.text;
+    el.className = `data-tool-count${status.tone === 'ok' ? '' : ` ${status.tone}`}`;
 };
 
 proto._toggleInterpolateHelpPopover = function(show) {
@@ -1063,6 +1185,7 @@ const DATA_TOOL_PARAMETER_IDS = [
     'interpolate-edges',
     'interpolate-window',
     'interpolate-window-slider',
+    'interpolate-show-added',
     'detrend-method',
     'detrend-order',
     'detrend-order-slider',
@@ -1095,6 +1218,10 @@ proto._resetDataToolParameters = function() {
         if (el.tagName === 'SELECT') {
             const fallback = [...el.options].find(option => option.defaultSelected) || el.options[0];
             if (fallback) el.value = fallback.value;
+        } else if (el.type === 'checkbox') {
+            // A checkbox carries its state in `checked`; assigning `value` would
+            // leave it ticked from the previous draft.
+            el.checked = el.defaultChecked;
         } else {
             el.value = el.defaultValue;
         }
@@ -1106,6 +1233,7 @@ proto._resetDataToolParameters = function() {
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
+    this._syncInterpolateStatus();
     this._syncDetrendControls();
     this._syncResampleControls?.();
     this._syncFilterControls?.();
@@ -2700,10 +2828,21 @@ proto._drawDataToolPreviewTrace = function(context, result) {
     }
     const { fileId, data } = context;
     const name = DATA_TOOL_PREVIEW_NAME;
+    // "Only the added samples" is a different QUESTION from "what does the result
+    // look like", and it needs a different mark on the plot. A dashed line through
+    // the whole filled curve answers the first badly: where the fill is a handful
+    // of samples inside a long signal, the new part is invisible under the old.
+    const addedOnly = this._interpolatePreviewShowsAddedOnly(context);
+    const previewValues = addedOnly
+        ? this._addedSamplesOnly(context.sourceVariable.data, result.variable.data)
+        : result.variable.data;
     data.variables[name] = {
         ...result.variable,
         name,
-        displayName: context.outputName,
+        data: previewValues,
+        displayName: addedOnly
+            ? i18n.t('dataToolInterpolateAddedTrace').replace('{name}', context.outputName)
+            : context.outputName,
         description: '',
         previewOnly: true,
     };
@@ -2719,11 +2858,37 @@ proto._drawDataToolPreviewTrace = function(context, result) {
         this.plotManager.addTrace(panelId, name, panelEl);
         const added = plot?.traces.find(trace => trace.fileId === fileId && trace.varName === name);
         if (added) {
-            added.dash = 'dot';
+            // Markers, not a thicker line. The samples this fills are scattered
+            // through the signal, and a line joining them would draw straight
+            // segments across every untouched stretch in between — segments that
+            // are not data and that the eye reads as data. Markers can only ever
+            // say "here", which is the whole question being asked.
+            if (addedOnly) added.markersOnly = true;
+            else added.dash = 'dot';
             this.plotManager._rebuildPanel(panelId, { preserveView: true });
         }
     }
-    this._dataToolPreview = { fileId, panelId };
+    this._dataToolPreview = { fileId, panelId, addedOnly };
+};
+
+proto._interpolatePreviewShowsAddedOnly = function(context) {
+    return context?.tool === 'interpolate'
+        && document.getElementById('interpolate-show-added')?.checked === true;
+};
+
+// The filled samples on their own: NaN wherever the source already had a value,
+// so what is drawn is exactly and only what the tool would add.
+//
+// Derived by comparing the two arrays rather than asking the kernel for a list of
+// indexes: a list would be an allocation the size of the fill, and this needs no
+// storage beyond the array the plot is about to draw anyway.
+proto._addedSamplesOnly = function(sourceValues, filledValues) {
+    const n = Math.min(sourceValues?.length || 0, filledValues?.length || 0);
+    const out = new Float64Array(n).fill(NaN);
+    for (let i = 0; i < n; i++) {
+        if (!Number.isFinite(sourceValues[i]) && Number.isFinite(filledValues[i])) out[i] = filledValues[i];
+    }
+    return out;
 };
 
 // Only preview against a panel that already draws the source, so the dashed
@@ -2816,6 +2981,11 @@ proto._outlierDetectorDescription = function(config) {
     }
     return `spike/dropout sensitivity ${config.params.sensitivity}`;
 };
+
+function formatCount(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toLocaleString() : '?';
+}
 
 // Numeric helpers shared with the kernels. The definitions moved to
 // src/compute/kernels/shared.js so the worker can use them; these stay as

@@ -31,12 +31,16 @@ export function runResample({ columns, time, params }) {
     const { grid, step, sourceStep } = buildResampleGrid(x, params);
     const outputs = [];
     const emptyCounts = [];
+    const bridgedCounts = [];
     for (const column of columns || []) {
-        const { values, emptyCount } = resampleValues(column, x, grid, params);
+        // The nominal step travels with the params so every column judges "this
+        // interval is wider than a sampling step" against the same number.
+        const { values, emptyCount, bridgedCount } = resampleValues(column, x, grid, { ...params, sourceStep });
         outputs.push(values);
         emptyCounts.push(emptyCount);
+        bridgedCounts.push(bridgedCount);
     }
-    return { grid, step, sourceStep, columns: outputs, emptyCounts };
+    return { grid, step, sourceStep, columns: outputs, emptyCounts, bridgedCounts };
 }
 
 /**
