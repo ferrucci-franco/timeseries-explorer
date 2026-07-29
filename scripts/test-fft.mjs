@@ -474,4 +474,66 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
     assert.ok(full.amplitudes.indexOf(42) >= 0, 'the global peak still survives the full-range window');
 }
 
+// ── The status note for a span carrying bands ──
+// A band over the analyzed span used to produce one message whether or not a
+// spectrum came out, so a valid result was shown next to "select a span without
+// bands to run the FFT" — advice for something that had already happened.
+{
+    // The uniformity gate is what makes the two cases distinguishable, so pin
+    // that it really does refuse when data is missing INSIDE the span. If this
+    // ever loosened, the "spectrum implies nothing is missing" reasoning behind
+    // the note below would stop holding.
+    const step = 60_000;
+    const clean = Array.from({ length: 128 }, (_, i) => i * step);
+    const values = clean.map((_, i) => Math.sin(i / 5));
+
+    const withNaN = values.slice();
+    withNaN[64] = NaN;
+    assert.equal(computeAmplitudeSpectrum({ times: clean, values: withNaN, timeKind: 'datetime' }).reason,
+        'nan', 'a non-finite value in the span is refused outright');
+
+    const dropped = clean.filter((_, i) => i !== 64);
+    assert.equal(computeAmplitudeSpectrum({
+        times: dropped, values: dropped.map((_, i) => Math.sin(i / 5)), timeKind: 'datetime',
+    }).reason, 'nonUniform', 'a single dropped sample is refused too');
+
+    // A span at a different but CONSTANT step analyses fine — this is the case
+    // the note exists for.
+    const coarse = Array.from({ length: 64 }, (_, i) => (4200 + i * 600) * 1000);
+    const coarseSpectrum = computeAmplitudeSpectrum({
+        times: coarse, values: coarse.map(t => Math.sin(2 * Math.PI * (t / 1000) / 6000)), timeKind: 'datetime',
+    });
+    assert.equal(coarseSpectrum.ok, true, 'a uniformly-sampled span analyses whatever its step');
+    assert.equal(coarseSpectrum.sampling.dt, 600, 'and reports its own step, not the file median');
+
+    // Two texts, and they must not be interchangeable: one is advice for a
+    // failure, the other confirms a result.
+    const t = translations.en;
+    assert.ok(/select a span without bands/i.test(t.fftGapsWarning),
+        'the failure text keeps the actionable advice');
+    assert.ok(!/valid/i.test(t.fftGapsWarning),
+        'and never claims a spectrum came out');
+    assert.ok(/valid/i.test(t.fftGapsUniformSpan),
+        'the success text confirms the spectrum');
+    assert.ok(!/select/i.test(t.fftGapsUniformSpan),
+        'and does not send the user to pick another span');
+
+    for (const lang of Object.keys(translations)) {
+        const tr = translations[lang];
+        // The bands have been amber since they were recoloured to clear the
+        // second trace; the old text still called them red.
+        assert.ok(!/\bred\b|rouge|roja|ross/i.test(tr.fftGapsWarning),
+            `${lang}: the failure text does not call the bands red`);
+        // Uneven spacing is what was measured. Whether samples were lost or the
+        // recorder changed rate is not knowable, so neither text may say.
+        for (const key of ['fftGapsWarning', 'fftGapsUniformSpan', 'fftGapsUniformSpanNoStep']) {
+            assert.ok(!/missing sampl|echantillons manquants|muestras faltantes|campioni mancanti/i.test(tr[key]),
+                `${lang}/${key}: does not assert samples are missing`);
+        }
+        assert.ok(tr.fftGapsUniformSpan.includes('{dt}'), `${lang}: the step placeholder survives`);
+        assert.ok(!tr.fftGapsUniformSpanNoStep.includes('{dt}'),
+            `${lang}: the fallback carries no unfilled placeholder`);
+    }
+}
+
 console.log('FFT tests passed');
