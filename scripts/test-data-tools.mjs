@@ -272,17 +272,61 @@ closeArray(modifyData.variables.y.data, [0, 1, 3], 'modify reapply does not comp
     );
 
     // The warning is the thing that stops a gap from being silent, so a result
-    // WITH holes must never come back with an empty message.
-    const holes = { negativeDtCount: 0, gapCount: 1, nanSegmentCount: 22, uncoveredTime: 1320 };
+    // WITH holes must never come back with an empty message. The quantity is
+    // how much of the span has no data — a property of the FILE, so the same
+    // under every policy; only the sentence after it changes.
+    const holes = {
+        negativeDtCount: 0, gapCount: 1, nanSegmentCount: 22,
+        uncoveredTime: 1320, timeKind: 'datetime',
+    };
     const messages = new Set();
     for (const gapPolicy of ['zero', 'interpolate', 'propagate']) {
         const text = h._integralWarning(holes, { gapPolicy });
         assert.ok(text, `${gapPolicy}: a hole always produces a warning`);
-        assert.ok(text.includes('1'), `${gapPolicy}: the gap count is named`);
-        assert.ok(text.includes('22'), `${gapPolicy}: the invalid-segment count is named`);
+        assert.ok(text.includes('22 min'), `${gapPolicy}: names the uncovered span as a duration`);
+        assert.ok(!/\{time\}/.test(text), `${gapPolicy}: the placeholder is filled in`);
         messages.add(text);
     }
     assert.equal(messages.size, 3, 'each policy explains its own claim');
+
+    // A duration is only true on a datetime axis. Row numbers are not hours.
+    assert.equal(h._formatUncoveredTime({ uncoveredTime: 4800, timeKind: 'datetime' }), '1 h 20 min');
+    assert.equal(h._formatUncoveredTime({ uncoveredTime: 190800, timeKind: 'datetime' }), '2 d 5 h');
+    assert.equal(h._formatUncoveredTime({ uncoveredTime: 90, timeKind: 'datetime' }), '1 min 30 s');
+    assert.match(h._formatUncoveredTime({ uncoveredTime: 80, timeKind: 'index' }), /80/);
+    assert.ok(!/min|h\b|\bd\b/.test(h._formatUncoveredTime({ uncoveredTime: 80, timeKind: 'index' })),
+        'an index axis counts samples, it does not invent a duration');
+    assert.equal(h._formatUncoveredTime({ uncoveredTime: 1320, timeKind: 'numeric' }), '1320',
+        'a numeric axis carries its column unit, so the bare number is all we can say');
+
+    // The panel message is written imperatively, so the data-i18n sweep never
+    // sees it: a message already on screen has to be produced AGAIN when the
+    // language changes, which means storing how to build it, not the text.
+    {
+        const el = { textContent: '', className: '' };
+        const host = Object.create(Object.getPrototypeOf(h));
+        host._renderDataToolMessage = h._renderDataToolMessage;
+        host._setOutlierMessage = h._setOutlierMessage;
+        // Stand in for document.getElementById without a DOM.
+        const originalDoc = globalThis.document;
+        globalThis.document = { getElementById: (id) => (id === 'outlier-message' ? el : null) };
+        try {
+            let lang = 'en';
+            host._setOutlierMessage(() => `msg-${lang}`, 'error');
+            assert.equal(el.textContent, 'msg-en', 'a function message renders immediately');
+            lang = 'es';
+            host._renderDataToolMessage();
+            assert.equal(el.textContent, 'msg-es', 'and is produced again on a language switch');
+
+            // A plain string is text nobody translated (an exception message):
+            // it must survive re-rendering rather than vanish.
+            host._setOutlierMessage('boom', 'error');
+            host._renderDataToolMessage();
+            assert.equal(el.textContent, 'boom', 'a plain string message is kept as-is');
+        } finally {
+            globalThis.document = originalDoc;
+        }
+    }
 
     // Clean data stays quiet.
     assert.equal(

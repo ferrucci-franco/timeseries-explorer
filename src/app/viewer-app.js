@@ -89,6 +89,9 @@ class OpenModelicaViewer {
         if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();
         if (typeof this._syncHoverCornerPicker === 'function') this._syncHoverCornerPicker();
         if (typeof this._syncDataTools === 'function') this._syncDataTools();
+        // Written imperatively, so the data-i18n sweep above never sees it: a
+        // message already on screen has to be produced again in the new language.
+        if (typeof this._renderDataToolMessage === 'function') this._renderDataToolMessage();
         this._renderFilesList();
         if (this._currentTree) this._renderFilteredTree();
         this.layoutManager.render();

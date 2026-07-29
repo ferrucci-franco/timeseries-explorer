@@ -829,9 +829,14 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         // A spectrum DID come out, so the span passed the uniformity gate and
         // nothing is missing within it. Telling the user to pick a span without
         // bands would be advice they have already followed, about a result that
-        // is valid — so explain the bands instead. Informational, not a warning.
+        // is valid — so explain the bands instead.
+        //
+        // Typed as a warning for PLACEMENT, not severity: that is the type whose
+        // full text goes to the side panel while the topbar points there. A
+        // sentence this long does not belong in the topbar, and the panel is
+        // where every other FFT explanation already lives.
         const spanDt = spanSteps.size === 1 ? [...spanSteps][0] : NaN;
-        this._setFftStatus(plot, this._fftUniformSpanNote(spanDt), 'muted');
+        this._setFftStatus(plot, this._fftUniformSpanNote(spanDt), 'warning');
     } else {
         this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
     }

@@ -254,6 +254,20 @@ for (const n of SIZES) {
         assert.ok(byCell.nanSegmentCount > 0, 'and are reported as NaN segments');
         assert.equal(byRow.uncoveredTime, 1320, 'the uncovered span is reported in dt units');
         assert.equal(byRow.hasNominalStep, true, 'the axis has a nominal step');
+        assert.equal(byRow.timeKind, 'numeric', 'the axis kind travels with it, to give it a unit');
+    }
+
+    // How much of the span has no data is a property of the FILE, so it must not
+    // move with the policy — otherwise the same file reports 22 minutes missing
+    // under one choice and none under another. It read 0 under 'interpolate'
+    // until the count was taken from the source instead of the bridged values.
+    {
+        for (const input of [missingRows, missingValues]) {
+            const seen = ['zero', 'interpolate', 'propagate']
+                .map(gapPolicy => computeIntegral(input.values, input.time, { gapPolicy }).uncoveredTime);
+            assert.deepEqual(seen, [1320, 1320, 1320],
+                'the uncovered span is the same under every policy');
+        }
     }
 
     // Genuinely irregular sampling: no nominal step, so nothing is called a gap

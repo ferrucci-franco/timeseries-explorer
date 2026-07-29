@@ -26,7 +26,7 @@ export function runDataToolStep(values, time, step) {
             return { values: out, meta: { method: params.method } };
         }
         case 'integrate': {
-            const { values: out, negativeDtCount, gapCount, nanSegmentCount, uncoveredTime, hasNominalStep }
+            const { values: out, negativeDtCount, gapCount, nanSegmentCount, uncoveredTime, hasNominalStep, timeKind }
                 = computeIntegral(values, time, params);
             return {
                 values: out,
@@ -38,6 +38,7 @@ export function runDataToolStep(values, time, step) {
                     nanSegmentCount,
                     uncoveredTime,
                     hasNominalStep,
+                    timeKind,
                 },
             };
         }

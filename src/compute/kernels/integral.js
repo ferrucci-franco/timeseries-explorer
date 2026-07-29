@@ -107,22 +107,33 @@ export function computeIntegral(sourceValues, time, params = {}) {
         const dt = timeDelta(ctx, i - 1, i);
         if (Number.isFinite(dt)) {
             if (dt < 0) negativeDtCount++;
-            const y0 = work[i - 1];
-            const y1 = work[i];
+            // Holes are counted against the SOURCE, before any policy touches
+            // them: how much of the span the file has no data for is a property
+            // of the file, not of what was decided about it. Reading `work`
+            // here instead would report zero under 'interpolate', where the
+            // bridge has already filled the hole in.
+            const s0 = values[i - 1];
+            const s1 = values[i];
             // Kept per-method: the rectangular rule only ever read y0, and that
             // asymmetry is part of the behaviour the differential test pins.
+            const sourceUsable = rectangular
+                ? Number.isFinite(s0)
+                : (Number.isFinite(s0) && Number.isFinite(s1));
+            const missingRow = gapEndIndexes !== null && gapEndIndexes.has(i);
+            if (missingRow) gapCount++;
+            if (!sourceUsable) nanSegmentCount++;
+            if (missingRow || !sourceUsable) uncoveredTime += dt;
+
+            const y0 = work[i - 1];
+            const y1 = work[i];
             const usable = rectangular
                 ? Number.isFinite(y0)
                 : (Number.isFinite(y0) && Number.isFinite(y1));
-            const missingRow = gapEndIndexes !== null && gapEndIndexes.has(i);
-            if (missingRow) gapCount++;
             // Under 'interpolate' a missing row is not a hole to skip: letting
             // the quadrature run straight across it IS the linear bridge the
             // policy promises, and it is what makes an absent row agree with an
             // empty cell (which bridgeNonFinite already filled above).
             if (!usable || (missingRow && policy !== 'interpolate')) {
-                if (!usable) nanSegmentCount++;
-                uncoveredTime += dt;
                 // 'zero' adds nothing. 'interpolate' only lands here when the
                 // run could not be bridged (a leading or trailing NaN, with no
                 // finite sample on one side to interpolate towards), and adding
@@ -137,5 +148,17 @@ export function computeIntegral(sourceValues, time, params = {}) {
         }
         out[i] = acc;
     }
-    return { values: out, negativeDtCount, gapCount, nanSegmentCount, uncoveredTime, hasNominalStep };
+    // `timeKind` travels with `uncoveredTime` because it is what gives that
+    // number a unit: seconds on a datetime axis, x-units on a numeric one, and
+    // a plain sample count on an index axis. Formatting it as a duration
+    // without checking would invent hours out of row numbers.
+    return {
+        values: out,
+        negativeDtCount,
+        gapCount,
+        nanSegmentCount,
+        uncoveredTime,
+        hasNominalStep,
+        timeKind: ctx.kind,
+    };
 }

@@ -534,6 +534,20 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
         assert.ok(!tr.fftGapsUniformSpanNoStep.includes('{dt}'),
             `${lang}: the fallback carries no unfilled placeholder`);
     }
+
+    // Placement, not severity: 'warning' is the only status type whose full text
+    // is routed to the side panel while the topbar shows a pointer to it. A
+    // sentence this long in the topbar is what the type controls here.
+    assert.match(
+        fftMethodsSource,
+        /_fftUniformSpanNote\(spanDt\), 'warning'\)/,
+        'the note is typed so its full text lands in the side panel',
+    );
+    assert.match(
+        fftMethodsSource,
+        /type === 'warning' && message\)\s*\?\s*i18n\.t\('fftWarningSeePanel'\)/,
+        'and that type is what makes the topbar point at the panel',
+    );
 }
 
 console.log('FFT tests passed');
