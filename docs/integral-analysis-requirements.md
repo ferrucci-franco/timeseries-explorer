@@ -1,6 +1,6 @@
 # Análisis "Integral" — requerimientos e implementación
 
-> Estado: **implementado** en la rama `claude/integral-curves-analysis-bd46ad` (base `f091128`).
+> Estado: **implementado** en la rama `claude/integral-curves-analysis-bd46ad` (base `f091128`), incluido el camino lazy (DuckDB) y las magnitudes por día y media.
 > Motivación: totales energéticos sobre series temporales de redes eléctricas (archivos PyPSA): potencia [MW] → energía [MWh].
 > §16 lista las decisiones que se tomaron sin consultar y §17 lo que quedó fuera.
 > Cada afirmación sobre el código está anclada como `archivo:línea`.
@@ -156,7 +156,19 @@ Si las señales visibles tienen unidades distintas: warning `integralMixedUnits`
 
 ### 9.1 Barras
 
-Una barra por señal visible, con su color de traza. Segmented `Vertical` (default) / `Horizontal`; el eje de valores incluye el cero. Dropdown `Order`: `As in panel` (default), `Largest first`, `Smallest first`. Hover con valor completo + unidad, cobertura, días descartados y nº de muestras.
+Una barra por señal visible, con su color de traza. Segmented `Vertical` (default) / `Horizontal`; el eje de valores incluye el cero. Dropdown `Order`: `As in panel` (default), `Largest first`, `Smallest first`.
+
+**Dropdown `Show`** — qué magnitud llevan las barras:
+
+| Valor | Qué es | Unidad |
+|---|---|---|
+| `Total` (**default**) | La integral definida | `MW·h` |
+| `Per day` | El total dividido por la duración integrada **en días** | `MW·h/d` |
+| `Mean value` | El total dividido por **toda** la duración integrada: el nivel constante que produciría la misma área | `MW` |
+
+Las tres salen del **mismo par de números** — el área y la duración realmente integrada — así que no pueden contradecirse entre sí. El eje nombra la que está dibujada: dejarlo en "Integral" mientras las barras muestran una media sería una etiqueta que contradice los números.
+
+**Las tres se muestran siempre** en el resumen, en el hover y en la exportación, sea cual sea la dibujada: un total sin su media esconde sobre cuánto tiempo está repartido, y una media sin su cobertura esconde de cuántos datos sale. `Per day` solo existe con eje calendario; en un eje numérico no hay día por el que dividir y no se inventa uno.
 
 ### 9.2 Torta
 
@@ -166,9 +178,11 @@ Checkbox **default off**. Solo se dibuja si todas las señales comparten **una u
 
 ## 10. Panel lateral
 
-`Range` → `Start`/`End` → **Integration** (`Rule`, `Integral unit`, `Scale`) → **Data handling** (`Discard incomplete start/end days`, `Missing values`) → **Display** (`Bars`, `Order`, `Show pie chart`, `Show values on bars`) → **Summary**.
+`Range` → `Start`/`End` → **Integration** (`Rule`, `Integral unit`, `Scale`) → **Data handling** (`Discard incomplete start/end days`, `Missing values`) → **Display** (`Show`, `Bars`, `Order`, `Show pie chart`, `Show values on bars`) → **Summary**.
 
-Con eje no calendario, el checkbox de extremos y las dos opciones por día quedan deshabilitados, con tooltip que explica por qué.
+Con eje no calendario quedan deshabilitados: el checkbox de extremos, las dos opciones por día y `Per day` — con tooltip que explica por qué.
+
+La tabla `Summary` lista **Signal · Integral · Per day · Mean value · Coverage**.
 
 ---
 
@@ -184,17 +198,20 @@ Warnings implementados: `integralNoData`, `integralAllDiscarded`, `integralUnsor
 
 ## 12. Exportación
 
-El botón CSV de la toolbar exporta la **tabla de resultados**, no la serie: una fila por señal con `signal, file, value_unit, integral, integral_unit, method, missing_policy, range_start, range_end, covered, uncovered, discarded_days, days_in_range, samples`. El valor va **sin escalar** y las marcas de tiempo en ISO — el prefijo del panel sirve para leer un gráfico, no una planilla.
+El botón CSV de la toolbar exporta la **tabla de resultados**, no la serie: una fila por señal con `signal, file, value_unit, integral, integral_unit, per_day, per_day_unit, mean, mean_unit, method, missing_policy, range_start, range_end, covered, uncovered, discarded_days, days_in_range, samples`. Las tres magnitudes salen juntas siempre: cuál estaba en pantalla es una elección de visualización, no una propiedad del dato. El valor va **sin escalar** y las marcas de tiempo en ISO — el prefijo del panel sirve para leer un gráfico, no una planilla.
 
 ---
 
 ## 13. Persistencia, i18n, tests
 
 - Estado del panel completo en la sesión, con `_normalizeIntegralState` tolerante a sesiones viejas; los warnings guardados se descartan al restaurar porque describen un cálculo que todavía no corrió.
-- 60 claves × 4 idiomas; `test:i18n-consistency` pasa (1380 claves × 4).
-- Tests nuevos: `test:definite-integral` (48 checks, valores analíticos) y `test:integral-analysis` (94 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
+- 68 claves × 4 idiomas; `test:i18n-consistency` pasa (1388 claves × 4).
+- Tests nuevos: `test:definite-integral` (64 checks, valores analíticos) y `test:integral-analysis` (123 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
 
-Verificado además en la app real (Vite + Plotly) con el fixture `test-files/csv/integral-missing/04_constant_step_missing_values.csv`: política `zero` → 3840, `interpolate` → 24960, exactamente los valores que documenta el README de esas fixtures.
+Verificado además en la app real (Vite + Plotly + DuckDB-WASM):
+
+1. Con el fixture `test-files/csv/integral-missing/04_constant_step_missing_values.csv`: política `zero` → 3840, `interpolate` → 24960, exactamente los valores que documenta el README de esas fixtures.
+2. **Paridad eager ↔ lazy** sobre un CSV de 320 000 filas (11 MB) con dos celdas vacías y una hora de filas ausentes, cargado **dos veces** —una por debajo y otra por encima del umbral de `csvFullLoadMb`— y con las dos trazas en el mismo panel. Coinciden dígito a dígito `value`, `covered`, `uncovered`, `gapCount`, `nanSegmentCount`, `dayCount`, `medianDt` y `sampleCount` bajo las cuatro políticas, con `discardIncompleteEnds` y con una selección **no alineada a muestras** (25 %–75 % del dominio) — esto último es lo que prueba que la interpolación en los bordes es idéntica en SQL y en JS.
 
 ---
 
@@ -212,7 +229,20 @@ El corte permite testear todo el comportamiento sin Plotly ni DOM, y garantiza q
 
 ## 15. Archivos lazy (DuckDB)
 
-**No soportados todavía**: el modo se ofrece pero cada traza lazy produce `integralLazyUnsupported` y no se calcula. El camino exacto en SQL existe como modelo (`_queryCalendarHeatmapIntegral`, [`duckdb-source.js:1732`](../src/data/duckdb-source.js:1732)) y ya resuelve orden, pares consecutivos, descarte de huecos y partición de trapecios. Es la continuación natural.
+**Implementado.** `getDefiniteIntegralByDay` ([`duckdb-source.js`](../src/data/duckdb-source.js)) devuelve **una fila por día UTC y por variable**: área, tiempo cubierto, tiempo de hueco, bandera de hueco, nº de muestras y primer/último timestamp del día. `reduceDailyIntegral` ([`definite-integral.js`](../src/compute/kernels/definite-integral.js)) las pliega en el mismo objeto que devuelve el kernel eager.
+
+El corte es deliberado: **el SQL contesta solo "cuánto y dónde", nunca "cuenta o no"**. Todas las políticas de día —descartar para esta señal, para todas, recortar los extremos— se deciden en JS, con las mismas reglas que aplica el camino eager. Eso es lo que impide que los dos caminos se separen con el tiempo.
+
+Decisiones dentro de la consulta:
+
+- **No se filtra por el rango al escanear.** El paso mediano y el veredicto de huecos son propiedades de la serie entera (es lo que ve `detectSamplingGaps` en eager), y un intervalo que cruza el borde del rango necesita su extremo de afuera para interpolar en el límite. Ambas cosas saldrían mal si se filtraran las filas primero; el recorte se hace por intervalo.
+- **La compuerta de paso nominal está replicada en SQL** (mediana, 10 % de tolerancia, 80 % de acuerdo con ≥8 pasos), así que un archivo genuinamente irregular tampoco reclama huecos por el camino lazy.
+- `interpolate` empareja **muestras finitas consecutivas** en vez de puentear valores: es exactamente equivalente —los valores puenteados caen sobre la recta que las une, y los trapecios de sus trozos suman el trapecio entero— y cuesta un `WHERE` en lugar de cuatro funciones de ventana.
+- **El orden de filas no se juzga.** Un escaneo paralelo devuelve las filas en el orden en que terminan los hilos, así que un `LAG` sobre el orden "físico" reporta desorden que es un artefacto del escaneo: disparó sobre un CSV de 320 000 filas perfectamente ordenado. Se reporta `negativeDtCount: 0` —"no se sabe"— en vez de negarse a calcular. `file_row_number` de `read_csv` es la vía si alguna vez hace falta contestarlo; es la misma postura que ya toma el reductor de buckets lazy.
+
+Sigue sin soportarse: un archivo lazy **sin eje temporal calendario**, y una variable lazy sin columna fuente exacta (derivada solo del overview). Ambos casos producen `integralLazyUnsupported` con el motivo, y ninguna barra.
+
+Mientras la consulta corre, el panel muestra la misma píldora de progreso no bloqueante que usan el FFT y el Profile lazy: las barras anteriores siguen legibles.
 
 ---
 
@@ -231,13 +261,17 @@ El corte permite testear todo el comportamiento sin Plotly ni DOM, y garantiza q
 | D9 | Torta con signos mixtos | **Ocultar + explicar** | Una torta no puede mostrar cancelaciones |
 | D10 | Exportación | Botón CSV de la toolbar | Es el entregable natural del análisis |
 | D11 | Integral acumulada superpuesta | No | Ya existe en Data Tools |
+| D12 | Dónde van la media y el total por día | En el resumen, el hover y la exportación **siempre**, más un dropdown `Show` que elige cuál dibujan las barras | Pedías "en alguna parte"; separarlas del gráfico las escondería, y ponerlas solo en el gráfico obligaría a elegir |
+| D13 | Qué es el "valor medio llano" | El total dividido por la duración integrada, en la unidad propia de la señal | Es el nivel constante que daría la misma área; cualquier otra media (aritmética sobre muestras) daría un número distinto con muestreo irregular |
+| D14 | Desorden de filas en lazy | Reportar "no se sabe", no negarse | El chequeo de orden físico da falsos positivos en DuckDB (§15) |
 
 ---
 
 ## 17. Limitaciones conocidas
 
-1. **Archivos lazy** (§15).
-2. **El último trapecio no extiende el día.** Datos horarios de 00:00 a 23:00 cubren 23 h de trapecios, no 24. La cobertura se **reporta** (`2/2 days`, `1.96 d`) en vez de inventar un paso extra. Si en PyPSA conviene que cada muestra "posea" su paso, hay que agregar una regla de cuadratura nueva, no parchear ésta.
-3. **DST**: heredada de `detectSamplingGaps` — un salto de hora de reloj no se distingue de una hora faltante usando solo el vector de tiempo.
-4. **Cambio de tasa sesgado** (fixture 14): la misma limitación que documenta PR #18; el detector es compartido a propósito.
-5. **FFT y el checkbox de unidades**: las trazas del espectro muestran la unidad de la fuente, correcta para un espectro de amplitud pero no para PSD.
+1. **El último trapecio no extiende el día.** Datos horarios de 00:00 a 23:00 cubren 23 h de trapecios, no 24. La cobertura se **reporta** (`2/2 days`, `1.96 d`) en vez de inventar un paso extra. Si en PyPSA conviene que cada muestra "posea" su paso, hay que agregar una regla de cuadratura nueva, no parchear ésta.
+2. **DST**: heredada de `detectSamplingGaps` — un salto de hora de reloj no se distingue de una hora faltante usando solo el vector de tiempo.
+3. **Cambio de tasa sesgado** (fixture 14): la misma limitación que documenta PR #18; el detector es compartido a propósito.
+4. **FFT y el checkbox de unidades**: las trazas del espectro muestran la unidad de la fuente, correcta para un espectro de amplitud pero no para PSD.
+5. **Lazy sin eje calendario** y variables lazy sin columna fuente exacta (§15).
+6. **Orden de filas en archivos lazy**: no se detecta el desorden (§15, D14).

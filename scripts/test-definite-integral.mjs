@@ -12,6 +12,7 @@ import {
     collectMissingDays,
     computeDefiniteIntegral,
     MS_PER_DAY,
+    reduceDailyIntegral,
     utcDayIndex,
 } from '../src/compute/kernels/definite-integral.js';
 
@@ -259,6 +260,72 @@ function hourlyTime(count, start = day0) {
     equal(r.hasNominalStep, false, 'irregular sampling has no nominal step');
     equal(r.gapCount, 0, 'so nothing is called a gap');
     close(r.value, 10 * 7200, 'and the whole span is integrated');
+}
+
+// ─── 11. The daily reducer (the lazy path's other half) ───────────────────
+// A lazy file answers in per-day partials; this folds them into the same
+// result the eager kernel returns. The point of the split is that every
+// whole-day POLICY is decided here, so eager and lazy cannot drift apart.
+{
+    const day = (index) => utcDayIndex(day0) + index;
+    const wholeDay = (index, area, hasHole = false) => ({
+        day: day(index),
+        areaMs: area,
+        coveredMs: 24 * 3600000,
+        uncoveredMs: hasHole ? 3600000 : 0,
+        hasHole,
+        sampleCount: 24,
+        firstT: day(index) * MS_PER_DAY,
+        lastT: day(index) * MS_PER_DAY + 23 * HOUR,
+    });
+    // 100 MW × 24 h in ms-space is 100 × 86400000.
+    const AREA = 100 * 24 * 3600000;
+    const range = { rangeStart: day0, rangeEnd: day0 + 3 * MS_PER_DAY, medianDt: HOUR };
+
+    const clean = reduceDailyIntegral([wholeDay(0, AREA), wholeDay(1, AREA), wholeDay(2, AREA)], range);
+    close(clean.value, 100 * 72 * 3600, 'three clean days fold into 72 h of energy');
+    close(clean.coveredTime, 72 * 3600, 'with the covered time in seconds');
+    equal(clean.dayCount, 3, 'and the day count comes from the range');
+    equal(clean.ok, true, 'the fold succeeds');
+    equal(clean.timeKind, 'datetime', 'the lazy path is calendar-only, and says so');
+
+    const dirty = [wholeDay(0, AREA), wholeDay(1, AREA, true), wholeDay(2, AREA)];
+    const kept = reduceDailyIntegral(dirty, range);
+    close(kept.value, 100 * 72 * 3600, 'under the default policy a holed day still contributes');
+    close(kept.uncoveredTime, 3600, 'while the hole itself is reported');
+
+    const dropped = reduceDailyIntegral(dirty, { ...range, missingPolicy: 'discard-day-own' });
+    close(dropped.value, 100 * 48 * 3600, 'discarding the day removes exactly that day');
+    equal(dropped.discardedDayCount, 1, 'and reports it');
+    close(dropped.discardedTime, 24 * 3600, 'with the time it took out');
+
+    // The union path: a clean signal drops the day another signal poisoned.
+    const shared = reduceDailyIntegral([wholeDay(0, AREA), wholeDay(1, AREA), wholeDay(2, AREA)], {
+        ...range, missingPolicy: 'discard-day-all', excludedDays: [day(1)],
+    });
+    close(shared.coveredTime, dropped.coveredTime, 'so both signals integrate the same duration');
+
+    // Ragged ends: a first day that starts at 06:00 is not a whole day.
+    const ragged = [
+        { ...wholeDay(0, AREA / 2), coveredMs: 18 * 3600000, firstT: day(0) * MS_PER_DAY + 6 * HOUR },
+        wholeDay(1, AREA),
+    ];
+    const trimmed = reduceDailyIntegral(ragged, {
+        rangeStart: day0 + 6 * HOUR, rangeEnd: day0 + 2 * MS_PER_DAY, medianDt: HOUR, discardIncompleteEnds: true,
+    });
+    equal(trimmed.discardedDayCount, 1, 'the ragged first day is trimmed');
+    close(trimmed.value, 100 * 24 * 3600, 'leaving the one whole day');
+
+    // Disorder is fatal on the lazy path too.
+    const unsorted = reduceDailyIntegral([wholeDay(0, AREA)], { ...range, negativeDtCount: 3 });
+    equal(unsorted.ok, false, 'disordered rows produce no total');
+    equal(unsorted.reason, 'unsorted', 'and say why');
+
+    // Every day discarded is distinct from having no data at all.
+    const none = reduceDailyIntegral([wholeDay(0, AREA, true)], {
+        rangeStart: day0, rangeEnd: day0 + MS_PER_DAY, missingPolicy: 'discard-day-own',
+    });
+    equal(none.reason, 'allDiscarded', 'discarding everything is its own answer');
 }
 
 console.log(`definite integral: ${checks} checks passed`);

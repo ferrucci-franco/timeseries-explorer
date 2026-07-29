@@ -52,6 +52,7 @@ export function defaultIntegralState() {
         showPie: false,
         showValues: true,
         sort: 'panel',
+        quantity: 'total',
         warnings: [],
     };
 }
@@ -92,6 +93,7 @@ export function normalizeIntegralState(raw = {}, missingPolicies) {
         showPie: raw.showPie === true,
         showValues: raw.showValues !== false,
         sort: INTEGRAL_SORTS.has(raw.sort) ? raw.sort : defaults.sort,
+        quantity: INTEGRAL_QUANTITIES.has(raw.quantity) ? raw.quantity : defaults.quantity,
         warnings: Array.isArray(raw.warnings) ? raw.warnings.slice(0, 20) : [],
     };
 }
@@ -179,27 +181,65 @@ export function formatIntegralDuration(seconds, timeKind, labels = {}) {
     return `${Number(seconds.toFixed(1))} s`;
 }
 
+// What the bars plot. All three come from the same pair of numbers — the total
+// and the duration actually integrated — so switching between them can never
+// make two signals disagree about the underlying computation.
+//
+//   total    the definite integral, e.g. MW·h
+//   per-day  that total divided by the integrated duration in days, MW·h/d.
+//            The reading a grid operator compares across months of different
+//            length, or across signals that lost days to a discard policy.
+//   mean     the total divided by the integrated duration, back in the signal's
+//            OWN unit (MW). The flat level that would produce the same area —
+//            which is why a mean is only honest next to its coverage.
+export const INTEGRAL_QUANTITIES = new Set(['total', 'per-day', 'mean']);
+
+const SECONDS_PER_DAY = 86400;
+
+// The unit of each quantity. `mean` drops back to the signal's own unit because
+// dividing an area by the time it spans undoes the time factor exactly.
+export function integralQuantityUnit(unit, quantity, integralUnit, timeKind, samplesLabel = 'samples') {
+    const total = integralResultUnit(unit, integralUnit, timeKind, samplesLabel);
+    if (quantity === 'mean') return unit || '';
+    if (quantity === 'per-day') return `${total}/d`;
+    return total;
+}
+
 /**
  * Turn the computed models into everything the four consumers need.
  *
  * A model is `{ name, unit, base, result }` where `result` is a
  * computeDefiniteIntegral() return value and `base` a timeBaseForAxis() one.
  *
- * @returns {{ rows, exponent, factor, axisUnit, resultUnit, mixedUnits, timeKind }}
- *   `rows[].value` is the true total in the chosen unit; `rows[].scaled` is what
- *   gets plotted. Exports read `value`, charts read `scaled` — a spreadsheet has
- *   no use for the panel's display prefix.
+ * Every row carries all three quantities (`value`, `perDay`, `mean`) whatever
+ * the panel is plotting, because the summary and the export show them together
+ * — a total without its mean hides how much time it is spread over.
+ *
+ * `rows[].scaled` is the PLOTTED quantity after the shared exponent; exports
+ * read the unscaled fields. A spreadsheet has no use for a display prefix.
  */
 export function buildIntegralPresentation(models, state, options = {}) {
+    const quantity = INTEGRAL_QUANTITIES.has(state.quantity) ? state.quantity : 'total';
     const ready = models.filter(model => model?.result?.ok);
     const rows = ready.map(model => {
         // The kernel answers in value-unit × abscissa-unit. Two conversions get
         // it to the requested reading: the axis unit to seconds, then seconds to
         // hours when asked. An index axis has neither, so it stays per-sample.
         const isIndex = model.base?.kind === 'index';
-        const seconds = isIndex ? model.result.value : model.result.value * (model.base?.secondsPerUnit ?? 1);
+        const secondsPerUnit = isIndex ? 1 : (model.base?.secondsPerUnit ?? 1);
+        const seconds = model.result.value * secondsPerUnit;
         const value = !isIndex && state.integralUnit === 'hour' ? seconds / 3600 : seconds;
-        return { model, value };
+        // Coverage in the abscissa's own units; converted to seconds the same
+        // way, so the division cancels the time factor exactly rather than
+        // approximately.
+        const coveredSeconds = (model.result.coveredTime || 0) * secondsPerUnit;
+        const mean = coveredSeconds > 0 ? seconds / coveredSeconds : null;
+        // Per day only means something on a calendar axis; elsewhere there is
+        // no day to divide by and inventing one would be a fiction.
+        const perDay = (!isIndex && coveredSeconds > 0 && model.result.timeKind === 'datetime')
+            ? value / (coveredSeconds / SECONDS_PER_DAY)
+            : null;
+        return { model, value, mean, perDay, coveredSeconds };
     });
 
     const timeKind = ready[0]?.result?.timeKind || 'datetime';
@@ -207,32 +247,50 @@ export function buildIntegralPresentation(models, state, options = {}) {
     const mixedUnits = units.size > 1;
     const baseUnit = mixedUnits ? '' : ([...units][0] || '');
     const resultUnit = integralResultUnit(baseUnit, state.integralUnit, timeKind, options.samplesLabel);
+    const meanUnit = baseUnit;
+    const perDayUnit = `${resultUnit}/d`;
 
-    const maxAbs = rows.reduce((max, row) => Math.max(max, Math.abs(row.value)), 0);
+    // The plotted number per row, and the unit that goes with it.
+    const plotted = (row) => (quantity === 'mean' ? row.mean : quantity === 'per-day' ? row.perDay : row.value);
+    const quantityUnit = integralQuantityUnit(baseUnit, quantity, state.integralUnit, timeKind, options.samplesLabel);
+
+    const maxAbs = rows.reduce((max, row) => {
+        const candidate = plotted(row);
+        return Number.isFinite(candidate) ? Math.max(max, Math.abs(candidate)) : max;
+    }, 0);
     const exponent = state.scale === 'auto'
         ? autoExponent(maxAbs)
         : (INTEGRAL_SCALE_EXPONENTS[state.scale] ?? 0);
     const factor = 10 ** exponent;
-    const { label, residual } = scaleUnitLabel(mixedUnits ? '' : resultUnit, exponent);
+    const { label, residual } = scaleUnitLabel(mixedUnits ? '' : quantityUnit, exponent);
     // Mixed units get NO axis unit: picking one of them would be a lie, and
     // inventing a neutral one would be worse.
     const axisUnit = mixedUnits
         ? ''
         : residual
-            ? `${resultUnit} ×10${superscript(residual)}`
+            ? `${quantityUnit} ×10${superscript(residual)}`
             : label;
 
     const ordered = rows.slice();
-    if (state.sort === 'desc') ordered.sort((a, b) => b.value - a.value);
-    else if (state.sort === 'asc') ordered.sort((a, b) => a.value - b.value);
+    const key = (row) => (Number.isFinite(plotted(row)) ? plotted(row) : -Infinity);
+    if (state.sort === 'desc') ordered.sort((a, b) => key(b) - key(a));
+    else if (state.sort === 'asc') ordered.sort((a, b) => key(a) - key(b));
 
     return {
         state,
-        rows: ordered.map(row => ({ ...row, scaled: row.value / factor })),
+        quantity,
+        rows: ordered.map(row => ({
+            ...row,
+            plotted: plotted(row),
+            scaled: Number.isFinite(plotted(row)) ? plotted(row) / factor : null,
+        })),
         exponent,
         factor,
         axisUnit,
         resultUnit,
+        meanUnit,
+        perDayUnit,
+        quantityUnit,
         mixedUnits,
         timeKind,
     };
@@ -248,18 +306,28 @@ export function buildIntegralPresentation(models, state, options = {}) {
  */
 export function buildIntegralExportTable(view, options = {}) {
     const fileNameFor = options.fileNameFor || (() => '');
-    const headers = ['signal', 'file', 'value_unit', 'integral', 'integral_unit', 'method', 'missing_policy',
+    const headers = ['signal', 'file', 'value_unit', 'integral', 'integral_unit',
+        'per_day', 'per_day_unit', 'mean', 'mean_unit',
+        'method', 'missing_policy',
         'range_start', 'range_end', 'covered', 'uncovered', 'discarded_days', 'days_in_range', 'samples'];
     const isCalendar = view.timeKind === 'datetime';
     const stamp = (value) => (isCalendar && Number.isFinite(value) ? new Date(value).toISOString() : value);
-    const rows = view.rows.map(({ model, value }) => {
+    const rows = view.rows.map(({ model, value, perDay, mean }) => {
         const result = model.result;
+        const total = integralResultUnit(model.unit, view.state.integralUnit, result.timeKind, options.samplesLabel);
         return [
             model.name,
             fileNameFor(model.trace?.fileId),
             model.unit,
             value,
-            integralResultUnit(model.unit, view.state.integralUnit, result.timeKind, options.samplesLabel),
+            total,
+            // All three quantities go out together whatever the panel is
+            // plotting: which one was on screen is a viewing choice, not a
+            // property of the data.
+            perDay ?? '',
+            perDay == null ? '' : `${total}/d`,
+            mean ?? '',
+            mean == null ? '' : (model.unit || ''),
             result.method,
             result.missingPolicy,
             stamp(result.rangeStart),
@@ -280,7 +348,10 @@ export function buildIntegralExportTable(view, options = {}) {
 export function integralPieAllowed(view) {
     if (!view?.state?.showPie || !view.rows.length) return false;
     if (view.mixedUnits) return false;
-    const positive = view.rows.some(row => row.value > 0);
-    const negative = view.rows.some(row => row.value < 0);
+    // Judged on the PLOTTED quantity: per-day and mean are the total divided by
+    // a positive duration, so the signs agree, but reading the plotted value
+    // keeps the gate honest if that ever stops being true.
+    const positive = view.rows.some(row => row.plotted > 0);
+    const negative = view.rows.some(row => row.plotted < 0);
     return !(positive && negative);
 }

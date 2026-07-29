@@ -4,6 +4,7 @@ import {
     collectMissingDays,
     computeDefiniteIntegral,
     INTEGRAL_MISSING_POLICIES,
+    reduceDailyIntegral,
 } from '../../compute/kernels/definite-integral.js';
 import {
     buildIntegralExportTable,
@@ -80,7 +81,7 @@ const fallbackText = {
     integralUnequalCoverage: 'signals cover different durations — compare with care',
     integralUncovered: 'missing time in the range: {time}. It contributed nothing, so the totals are lower bounds.',
     integralUncoveredInterpolated: 'missing time in the range: {time}. It was crossed by linear interpolation.',
-    integralLazyUnsupported: 'large (lazy) files are not supported by this analysis yet',
+    integralLazyUnsupported: 'this large (lazy) signal has no exact source column, or its file has no calendar time axis',
     integralPieMixedSigns: 'the pie is hidden: the totals do not all share one sign, and a pie cannot show a sum with cancellations',
     integralPieMixedUnits: 'the pie is hidden: the signals do not share one unit',
     integralCoverage: 'Coverage',
@@ -89,6 +90,14 @@ const fallbackText = {
     integralSamples: 'samples',
     integralValue: 'Integral',
     integralSignal: 'Signal',
+    integralQuantity: 'Show',
+    integralQuantityTotal: 'Total',
+    integralQuantityPerDay: 'Per day',
+    integralQuantityMean: 'Mean value',
+    integralQuantityTip: 'What the bars carry. All three appear in the summary and the hover regardless.',
+    integralPerDay: 'Per day',
+    integralMean: 'Mean value',
+    integralLazyFailed: 'the file could not be queried for this total',
 };
 
 function text(key) {
@@ -708,7 +717,7 @@ proto._scheduleIntegralRecompute = function(panelId, options = {}) {
     else plot._integralRecomputeTimer = setTimeout(run, INTEGRAL_RECOMPUTE_DEBOUNCE_MS);
 };
 
-proto._recomputeIntegral = function(panelId, plot = this.plots.get(panelId)) {
+proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId)) {
     if (!plot?.integralDiv || plot.mode !== 'integral') return;
     const token = (plot._integralToken || 0) + 1;
     plot._integralToken = token;
@@ -717,37 +726,52 @@ proto._recomputeIntegral = function(panelId, plot = this.plots.get(panelId)) {
     const warnings = [];
     const models = [];
 
-    const candidates = [];
+    // Eager traces are read from memory; lazy ones are asked of DuckDB. The two
+    // produce the same result shape, so everything downstream is shared.
+    const eager = [];
+    const lazy = [];
     for (let traceIndex = 0; traceIndex < (plot.traces || []).length; traceIndex++) {
         const trace = plot.traces[traceIndex];
-        const name = this._traceName(trace.varName, trace.fileId);
         if (!this._isVisible(trace)) continue;
+        const name = this._traceName(trace.varName, trace.fileId);
+        const base = this._integralTimeBase(trace);
         if (traceIsLazy(this, trace)) {
-            warnings.push(`${name}: ${text('integralLazyUnsupported')}`);
+            lazy.push({ trace, traceIndex, name, base });
             continue;
         }
-        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
-        const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
-        const base = this._integralTimeBase(trace);
-        candidates.push({ trace, traceIndex, name, times, values, base });
+        eager.push({
+            trace, traceIndex, name, base,
+            times: this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [],
+            values: this._getTransformedVariableData(trace.fileId, trace.varName) || [],
+        });
     }
 
+    if (lazy.length) this._setIntegralComputing(plot, true);
+    const lazyByTrace = await this._queryLazyIntegralDays(plot, lazy, state, range, warnings);
+    if (plot._integralToken !== token) return;
+    this._setIntegralComputing(plot, false);
+
     // `discard-day-all` needs every signal's holes before any total can be
-    // computed, so that all bars end up integrating exactly the same days.
+    // computed, so that all bars end up integrating exactly the same days. The
+    // union spans eager and lazy alike — a day missing from a large file must
+    // leave the domain of the small one too, or the bars stop being comparable.
     let sharedExcludedDays = null;
     if (state.missingPolicy === 'discard-day-all') {
         const union = new Set();
-        for (const candidate of candidates) {
+        for (const candidate of eager) {
             if (candidate.base.kind !== 'datetime') continue;
             const params = this._integralKernelParams(state, candidate, range, null);
             for (const day of collectMissingDays(candidate.values, params.time, params.options).days) union.add(day);
+        }
+        for (const entry of lazyByTrace.values()) {
+            for (const day of entry.days || []) if (day.hasHole) union.add(day.day);
         }
         sharedExcludedDays = [...union];
     }
 
     let assumedSeconds = false;
     let indexAxis = false;
-    for (const candidate of candidates) {
+    for (const candidate of eager) {
         const params = this._integralKernelParams(state, candidate, range, sharedExcludedDays);
         const result = computeDefiniteIntegral(candidate.values, params.time, params.options);
         if (candidate.base.assumed) assumedSeconds = true;
@@ -761,6 +785,33 @@ proto._recomputeIntegral = function(panelId, plot = this.plots.get(panelId)) {
             result,
         });
     }
+    for (const candidate of lazy) {
+        const entry = lazyByTrace.get(candidate.trace);
+        if (!entry) continue;
+        const result = reduceDailyIntegral(entry.days, {
+            method: state.method,
+            missingPolicy: state.missingPolicy,
+            rangeStart: entry.rangeStart,
+            rangeEnd: entry.rangeEnd,
+            medianDt: entry.medianDt,
+            hasNominalStep: entry.hasNominalStep,
+            negativeDtCount: entry.negativeDtCount,
+            gapCount: entry.gapCount,
+            nanSegmentCount: entry.nanSegmentCount,
+            discardIncompleteEnds: state.discardIncompleteEnds,
+            excludedDays: sharedExcludedDays,
+        });
+        models.push({
+            trace: candidate.trace,
+            traceIndex: candidate.traceIndex,
+            name: candidate.name,
+            unit: this._integralValueUnit(candidate.trace),
+            base: candidate.base,
+            result,
+            lazy: true,
+        });
+    }
+    models.sort((a, b) => a.traceIndex - b.traceIndex);
 
     if (plot._integralToken !== token) return;
     plot._integralModels = models;
@@ -816,6 +867,95 @@ proto._recomputeIntegral = function(panelId, plot = this.plots.get(panelId)) {
     this._setIntegralStatus(plot, warnings.length ? warnings.join(' | ') : summary, warnings.length ? 'warning' : 'ready');
 };
 
+// Per-day integral partials for the lazy traces, one query per file. The SQL
+// answers only "how much, where"; every whole-day policy is decided afterwards
+// by reduceDailyIntegral, against the same rules the eager kernel applies.
+//
+// Anything the query cannot answer degrades to a named warning and no bar —
+// never to a number that looks exact and is not.
+proto._queryLazyIntegralDays = async function(plot, lazy, state, range, warnings) {
+    const byTrace = new Map();
+    if (!lazy.length) return byTrace;
+    const byFile = new Map();
+    for (const candidate of lazy) {
+        if (!byFile.has(candidate.trace.fileId)) byFile.set(candidate.trace.fileId, []);
+        byFile.get(candidate.trace.fileId).push(candidate);
+    }
+    for (const [fileId, candidates] of byFile) {
+        const data = this.files.get(fileId)?.data;
+        const source = data?._duckdb?.source;
+        if (!source?.getDefiniteIntegralByDay) {
+            for (const candidate of candidates) warnings.push(`${candidate.name}: ${text('integralLazyUnsupported')}`);
+            continue;
+        }
+        const transform = this._fileTransform(fileId);
+        const timeShiftMs = this._parseTimeShift(fileId, transform.timeShift) || 0;
+        const cropStart = this._parseTimeBoundary(fileId, transform.cropStart);
+        const cropEnd = this._parseTimeBoundary(fileId, transform.cropEnd);
+        const cropRange = (cropStart != null || cropEnd != null)
+            ? [cropStart ?? -Infinity, cropEnd ?? Infinity]
+            : null;
+        const transforms = {};
+        for (const candidate of candidates) {
+            const sign = this.isVariableSignInverted?.(fileId, candidate.trace.varName) ? -1 : 1;
+            transforms[candidate.trace.varName] = { gain: transform.gain * sign, yOffset: transform.yOffset };
+        }
+        try {
+            const result = await source.getDefiniteIntegralByDay(data, candidates.map(c => c.trace.varName), {
+                timeShiftMs,
+                cropRange,
+                range,
+                missingPolicy: state.missingPolicy,
+                transforms,
+            });
+            if (!result?.ok) {
+                for (const candidate of candidates) warnings.push(`${candidate.name}: ${text('integralLazyUnsupported')}`);
+                continue;
+            }
+            for (const blockedName of result.blocked || []) {
+                warnings.push(`${this._traceName(blockedName, fileId)}: ${text('integralLazyUnsupported')}`);
+            }
+            const entryByVar = new Map(result.traces.map(entry => [entry.varName, entry]));
+            for (const candidate of candidates) {
+                const entry = entryByVar.get(candidate.trace.varName);
+                if (entry) byTrace.set(candidate.trace, entry);
+            }
+        } catch (error) {
+            for (const candidate of candidates) {
+                warnings.push(`${candidate.name}: ${text('integralLazyFailed')}`);
+            }
+            console.warn('Integral: lazy query failed', error);
+        }
+    }
+    return byTrace;
+};
+
+// The same non-blocking pill the lazy FFT and Profile use: it sits above the
+// analysis pane with pointer-events:none, so the previous bars stay readable
+// and pannable while the replacement is being queried.
+proto._setIntegralComputing = function(plot, loading) {
+    const pane = plot?.integralDiv?.parentElement;
+    if (!pane) return;
+    let pill = pane.querySelector('.integral-computing-indicator');
+    if (loading) {
+        if (!pill) {
+            pill = document.createElement('div');
+            pill.className = 'lazy-detail-indicator integral-computing-indicator';
+            pill.setAttribute('aria-live', 'polite');
+            pill.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
+            pane.appendChild(pill);
+        }
+        const label = text('integralCalculating');
+        const labelElement = pill.querySelector('.lazy-detail-text');
+        if (labelElement) labelElement.textContent = label;
+        pill.setAttribute('aria-label', label);
+        pill.classList.add('active');
+    } else if (pill) {
+        pill.classList.remove('active');
+        pill.remove();
+    }
+};
+
 // The kernel's inputs for one candidate: the time context in raw abscissa units
 // (epoch ms on a calendar axis) plus the policy options from the panel.
 proto._integralKernelParams = function(state, candidate, range, sharedExcludedDays) {
@@ -860,17 +1000,28 @@ proto._buildIntegralTraces = function(plot, models = []) {
     const values = view.rows.map(row => row.scaled);
     const colors = view.rows.map(row => row.model.trace.color);
     const unitSuffix = view.axisUnit ? ` ${view.axisUnit}` : '';
+    // The hover always shows all three quantities, whichever one the bars are
+    // plotting: a total is only readable next to the duration it spans, and the
+    // mean is that comparison made explicit.
+    const withUnit = (value, unit) => (value == null ? '—' : `${formatNumber(value, 6)}${unit ? ` ${unit}` : ''}`);
     const customdata = view.rows.map(row => [
-        formatNumber(row.value, 6),
-        view.resultUnit,
+        withUnit(row.value, view.resultUnit),
+        withUnit(row.perDay, view.perDayUnit),
+        withUnit(row.mean, view.meanUnit),
         formatDuration(row.model.result.coveredTime, row.model.result.timeKind),
         row.model.result.discardedDayCount,
         row.model.result.sampleCount,
+        // The name travels in customdata rather than as %{x}: the category axis
+        // swaps sides between the two orientations, the customdata does not.
+        row.model.name,
     ]);
-    const hovertemplate = `<b>%{customdata[0]} %{customdata[1]}</b><br>`
-        + `${escapeHtml(text('integralCoverage'))} = %{customdata[2]}<br>`
-        + `${escapeHtml(text('integralDiscarded'))} = %{customdata[3]} ${escapeHtml(text('integralDays'))}<br>`
-        + `${escapeHtml(text('integralSamples'))} = %{customdata[4]}<extra></extra>`;
+    const hovertemplate = `<b>%{customdata[6]}</b><br>`
+        + `${escapeHtml(text('integralValue'))} = %{customdata[0]}<br>`
+        + `${escapeHtml(text('integralPerDay'))} = %{customdata[1]}<br>`
+        + `${escapeHtml(text('integralMean'))} = %{customdata[2]}<br>`
+        + `${escapeHtml(text('integralCoverage'))} = %{customdata[3]}<br>`
+        + `${escapeHtml(text('integralDiscarded'))} = %{customdata[4]} ${escapeHtml(text('integralDays'))}<br>`
+        + `${escapeHtml(text('integralSamples'))} = %{customdata[5]}<extra></extra>`;
 
     const horizontal = state.orientation === 'horizontal';
     traces.push({
@@ -931,7 +1082,14 @@ proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
         zeroline: true,
         zerolinecolor: gridColor,
         zerolinewidth: 1,
-        title: { text: `${text('integralAxisTitle')}${unitSuffix}`, font: { size: 10 } },
+        // The axis names what it carries. Leaving it at "Integral" while the
+        // bars plot a mean would be a label that contradicts the numbers.
+        title: {
+            text: `${text(resolved.quantity === 'mean' ? 'integralMean'
+                : resolved.quantity === 'per-day' ? 'integralPerDay'
+                    : 'integralAxisTitle')}${unitSuffix}`,
+            font: { size: 10 },
+        },
     };
     const categoryAxis = {
         gridcolor: gridColor,
@@ -953,7 +1111,9 @@ proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
         margin: { l: 62, r: 18, t: 12, b: 52 },
         autosize: true,
         hovermode: 'closest',
-        uirevision: `integral-${state.orientation}-${state.integralUnit}-${state.scale}`,
+        // Switching quantity changes the axis by orders of magnitude, so the
+        // view must not be preserved across it.
+        uirevision: `integral-${state.orientation}-${state.integralUnit}-${state.scale}-${state.quantity}`,
     };
 };
 
@@ -989,22 +1149,31 @@ proto._renderIntegralSummary = function(plot, models = []) {
         host.innerHTML = '';
         return;
     }
-    const rows = view.rows.map(({ model, value }) => {
+    // All three quantities are listed side by side rather than only the plotted
+    // one: the total answers "how much", the mean answers "at what level", and
+    // reading either without the other invites the wrong conclusion.
+    const cell = (value, unit) => (value == null
+        ? '<td class="integral-num">—</td><td></td>'
+        : `<td class="integral-num">${escapeHtml(formatNumber(value, 5))}</td><td>${escapeHtml(unit)}</td>`);
+    const rows = view.rows.map(({ model, value, perDay, mean }) => {
         const result = model.result;
         const coverage = result.timeKind === 'datetime' && result.dayCount
             ? `${result.dayCount - result.discardedDayCount}/${result.dayCount} ${escapeHtml(text('integralDays'))}`
             : formatDuration(result.coveredTime, result.timeKind);
+        const totalUnit = this._integralResultUnit(model.unit, view.state, result.timeKind);
         return `<tr>
             <td><span class="integral-swatch" style="background:${escapeHtml(model.trace.color)}"></span>${escapeHtml(model.name)}</td>
-            <td class="integral-num">${escapeHtml(formatNumber(value, 5))}</td>
-            <td>${escapeHtml(this._integralResultUnit(model.unit, view.state, result.timeKind))}</td>
+            ${cell(value, totalUnit)}
+            ${cell(perDay, `${totalUnit}/d`)}
+            ${cell(mean, model.unit || '')}
             <td>${coverage}</td>
         </tr>`;
     }).join('');
     host.innerHTML = `<table class="integral-summary-table"><thead><tr>
         <th>${escapeHtml(text('integralSignal'))}</th>
-        <th class="integral-num">${escapeHtml(text('integralValue'))}</th>
-        <th>&nbsp;</th>
+        <th class="integral-num" colspan="2">${escapeHtml(text('integralValue'))}</th>
+        <th class="integral-num" colspan="2">${escapeHtml(text('integralPerDay'))}</th>
+        <th class="integral-num" colspan="2">${escapeHtml(text('integralMean'))}</th>
         <th>${escapeHtml(text('integralCoverage'))}</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
 };
@@ -1204,6 +1373,16 @@ proto._renderIntegralOptionsPanel = function(panelId, plot) {
 
     // ── Display ──
     section(text('integralDisplay'));
+    // Which of the three readings the bars carry. All three appear in the
+    // summary and the hover regardless; this only decides what is drawn.
+    row(text('integralQuantity'), select([
+        { value: 'total', label: text('integralQuantityTotal') },
+        { value: 'per-day', label: text('integralQuantityPerDay') },
+        { value: 'mean', label: text('integralQuantityMean') },
+    ], state.quantity, value => {
+        state.quantity = value;
+        this._scheduleIntegralRecompute(panelId, { immediate: true });
+    }, calendar ? new Set() : new Set(['per-day'])), text('integralQuantityTip'));
     row(text('integralOrientation'), segmented([
         { label: text('integralVertical'), value: 'vertical' },
         { label: text('integralHorizontal'), value: 'horizontal' },

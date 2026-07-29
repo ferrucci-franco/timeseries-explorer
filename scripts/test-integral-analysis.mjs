@@ -18,6 +18,7 @@ import {
     buildIntegralPresentation,
     defaultIntegralState,
     integralPieAllowed,
+    integralQuantityUnit,
     integralResultUnit,
     normalizeIntegralState,
     timeBaseForAxis,
@@ -133,6 +134,70 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     const noPrefix = buildIntegralPresentation(makeModels([flat('flow', 'p.u.', 100)]), state());
     ok(noPrefix.axisUnit.includes('p.u.·h'), 'the unprefixable unit is kept');
     ok(/×10/.test(noPrefix.axisUnit), 'and the leftover decade is stated, not hidden');
+}
+
+// ─── 4b. Per day and mean ─────────────────────────────────────────────────
+// Both come from the same pair of numbers as the total — the area and the
+// duration actually integrated — so they can never disagree with it.
+{
+    // 100 MW held over 25 hourly samples: 24 h covered, 2400 MW·h.
+    const models = makeModels([flat('gen', 'MW', 100)]);
+    const view = buildIntegralPresentation(models, state());
+    close(view.rows[0].value, 2400, 'the total is 2400 MW·h');
+    close(view.rows[0].mean, 100, 'the mean is the flat level that produces that area — 100 MW');
+    close(view.rows[0].perDay, 2400, 'and 24 h of it is exactly one day of energy');
+
+    // Two days: the total doubles, the mean does not move, per-day does not move.
+    const twoDays = makeModels([flat('gen', 'MW', 100, 49)]);
+    const twoDayView = buildIntegralPresentation(twoDays, state());
+    close(twoDayView.rows[0].value, 4800, 'twice the span, twice the total');
+    close(twoDayView.rows[0].mean, 100, 'the mean is unchanged — that is the point of it');
+    close(twoDayView.rows[0].perDay, 2400, 'and so is the daily figure');
+
+    // The mean is unit-independent of the per-hour/per-second choice, because
+    // dividing an area by its own time undoes the time factor exactly.
+    const perSecond = buildIntegralPresentation(models, state({ integralUnit: 'second' }));
+    close(perSecond.rows[0].mean, 100, 'the mean stays 100 MW under a per-second reading');
+    close(perSecond.rows[0].value, 2400 * 3600, 'even though the total changed by 3600');
+
+    // Units.
+    eq(integralQuantityUnit('MW', 'total', 'hour', 'datetime'), 'MW·h', 'a total is an energy');
+    eq(integralQuantityUnit('MW', 'per-day', 'hour', 'datetime'), 'MW·h/d', 'per day divides it by days');
+    eq(integralQuantityUnit('MW', 'mean', 'hour', 'datetime'), 'MW', 'a mean is back in the signal unit');
+    eq(integralQuantityUnit('', 'mean', 'hour', 'datetime'), '', 'and unitless stays unitless');
+
+    // Whatever the bars plot, the axis unit follows.
+    eq(buildIntegralPresentation(models, state({ quantity: 'mean', scale: '1' })).axisUnit, 'MW',
+        'plotting the mean labels the axis in MW');
+    close(buildIntegralPresentation(models, state({ quantity: 'mean', scale: '1' })).rows[0].scaled, 100,
+        'and plots the mean, not the total');
+    eq(buildIntegralPresentation(models, state({ quantity: 'per-day', scale: '1' })).axisUnit, 'MW·h/d',
+        'plotting per-day labels the axis per day');
+
+    // A hole shortens the covered time, so the mean of the REMAINING data is
+    // unchanged while the total falls — which is exactly what makes the mean
+    // worth showing next to it.
+    const holey = new Array(25).fill(100);
+    holey[10] = NaN;
+    const holeyView = buildIntegralPresentation(makeModels([{ name: 'holey', unit: 'MW', values: holey }]), state());
+    ok(holeyView.rows[0].value < 2400, 'the hole costs the total three hours of area');
+    close(holeyView.rows[0].mean, 100, 'but the level it did see was still 100 MW');
+}
+
+// ─── 4c. Per day needs a calendar ─────────────────────────────────────────
+{
+    const numeric = {
+        trace: { varName: 'x', fileId: 'f1', color: '#000000' },
+        traceIndex: 0,
+        name: 'x',
+        unit: 'MW',
+        base: timeBaseForAxis('numeric', 's'),
+        result: computeDefiniteIntegral([2, 2, 2], { values: new Float64Array([0, 1, 2]), kind: 'numeric' }, {}),
+    };
+    const view = buildIntegralPresentation([numeric], state());
+    eq(view.rows[0].perDay, null, 'a numeric axis has no day to divide by, and none is invented');
+    ok(Number.isFinite(view.rows[0].mean), 'the mean still means something there');
+    close(view.rows[0].mean, 2, 'and it is the level');
 }
 
 // ─── 5. One exponent for the whole panel ──────────────────────────────────
@@ -278,6 +343,20 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(methods.includes("fillcolor: 'rgba(67,160,71,0.14)'"), 'the selection band keeps the shared green');
     ok(methods.includes("i18n.t('fftRangeFull')") && methods.includes("i18n.t('fftRangeSelection')"),
         'Full/Selection reuse the shared labels rather than new ones');
+
+    // The lazy path: the SQL answers per-day partials, JS decides the policies.
+    // Keeping the day decisions out of SQL is what stops eager and lazy drifting.
+    const duckdb = read('src/data/duckdb-source.js');
+    ok(duckdb.includes('async getDefiniteIntegralByDay('), 'DuckDB exposes the per-day integral query');
+    ok(duckdb.includes('unnest(range('), 'intervals are split at day boundaries in SQL');
+    ok(/1\.5 \* \(SELECT m FROM med\)/.test(duckdb), 'the gap threshold matches the shared 1.5x median rule');
+    ok(/< 0\.8 THEN FALSE/.test(duckdb), 'and the 80% nominal-step gate is mirrored');
+    ok(duckdb.includes('negativeDtCount: 0'), 'row order is reported as unknown, not guessed, on the lazy path');
+    ok(methods.includes('_queryLazyIntegralDays'), 'the mode queries lazy files');
+    ok(methods.includes('reduceDailyIntegral('), 'and folds the per-day rows with the shared reducer');
+    ok(/for \(const entry of lazyByTrace\.values\(\)\)[\s\S]{0,200}hasHole/.test(methods),
+        'the discard-day-all union spans lazy signals too, or the bars stop being comparable');
+    ok(methods.includes('_setIntegralComputing'), 'a lazy query shows the non-blocking progress pill');
 
     ok(html.includes('id="legend-units"'), 'the sidebar carries the legend-units checkbox');
     ok(html.indexOf('id="legend-units"') > html.indexOf('id="mouse-wheel-zoom"'),

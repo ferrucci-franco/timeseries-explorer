@@ -149,6 +149,104 @@ function segmentIsHole(values, i, rectangular, gapEnds) {
 }
 
 /**
+ * Fold per-UTC-day partial sums into the same result a whole-array run would
+ * have produced. This is what lets a lazy (DuckDB-backed) file share the eager
+ * semantics instead of re-deriving them in SQL: the query answers "area,
+ * covered time and holes, per day", and every policy that operates on WHOLE
+ * DAYS — discard-day-own, discard-day-all, discard-incomplete-ends — is then
+ * decided here, against the same rules the eager kernel applies.
+ *
+ * `days` entries: { day, areaMs, coveredMs, uncoveredMs, hasHole, sampleCount,
+ * firstT, lastT }. Areas and durations arrive in raw ms; the seconds conversion
+ * happens here so callers cannot forget it.
+ *
+ * @returns {object} the shape computeDefiniteIntegral returns
+ */
+export function reduceDailyIntegral(days = [], params = {}) {
+    const toSeconds = 1 / 1000;
+    const rangeStart = Number(params.rangeStart);
+    const rangeEnd = Number(params.rangeEnd);
+    const medianDt = Number.isFinite(params.medianDt) ? params.medianDt : null;
+    const excluded = new Set();
+    if (params.excludedDays) {
+        for (const day of params.excludedDays) if (Number.isFinite(day)) excluded.add(day);
+    }
+    const policy = INTEGRAL_MISSING_POLICIES.has(params.missingPolicy) ? params.missingPolicy : 'zero';
+    const sorted = days.slice().sort((a, b) => a.day - b.day);
+
+    if (policy === 'discard-day-own' || policy === 'discard-day-all') {
+        for (const entry of sorted) if (entry.hasHole) excluded.add(entry.day);
+    }
+    if (params.discardIncompleteEnds) {
+        const withSamples = sorted.filter(entry => (entry.sampleCount || 0) > 0);
+        const first = withSamples[0];
+        const last = withSamples[withSamples.length - 1];
+        const tolerance = Number.isFinite(medianDt) && medianDt > 0 ? medianDt : 0;
+        if (first && first.firstT > utcDayStart(first.day) + tolerance) excluded.add(first.day);
+        if (last && last.lastT < utcDayStart(last.day + 1) - tolerance) excluded.add(last.day);
+    }
+
+    let area = 0;
+    let covered = 0;
+    let uncovered = 0;
+    let discarded = 0;
+    let sampleCount = 0;
+    for (const entry of sorted) {
+        sampleCount += Number(entry.sampleCount) || 0;
+        uncovered += Number(entry.uncoveredMs) || 0;
+        if (excluded.has(entry.day)) {
+            discarded += Number(entry.coveredMs) || 0;
+            continue;
+        }
+        area += Number(entry.areaMs) || 0;
+        covered += Number(entry.coveredMs) || 0;
+    }
+
+    let dayCount = 0;
+    let discardedDays = [];
+    if (Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) && rangeEnd > rangeStart) {
+        const firstDay = utcDayIndex(rangeStart);
+        const lastDay = lastDayIndex(rangeEnd);
+        dayCount = Math.max(0, lastDay - firstDay + 1);
+        discardedDays = [...excluded].filter(day => day >= firstDay && day <= lastDay).sort((a, b) => a - b);
+    }
+
+    const negativeDtCount = Number(params.negativeDtCount) || 0;
+    const reason = negativeDtCount > 0
+        ? 'unsorted'
+        : covered > 0
+            ? null
+            : (discardedDays.length ? 'allDiscarded' : 'noData');
+
+    return {
+        ok: reason === null,
+        reason,
+        value: reason === null ? area * toSeconds : null,
+        method: INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal',
+        missingPolicy: policy,
+        timeKind: 'datetime',
+        rangeStart: Number.isFinite(rangeStart) ? rangeStart : null,
+        rangeEnd: Number.isFinite(rangeEnd) ? rangeEnd : null,
+        spanTime: Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) ? (rangeEnd - rangeStart) * toSeconds : 0,
+        coveredTime: covered * toSeconds,
+        uncoveredTime: uncovered * toSeconds,
+        discardedTime: discarded * toSeconds,
+        sampleCount,
+        gapCount: Number(params.gapCount) || 0,
+        nanSegmentCount: Number(params.nanSegmentCount) || 0,
+        negativeDtCount,
+        hasNominalStep: !!params.hasNominalStep,
+        medianDt: medianDt == null ? null : medianDt * toSeconds,
+        dayCount,
+        discardedDayCount: discardedDays.length,
+        discardedDays,
+        // Marks the number as coming from the file itself rather than from a
+        // downsampled overview, which is the whole point of the lazy path.
+        exact: true,
+    };
+}
+
+/**
  * UTC days (as day indexes) that hold a hole inside the range. The panel unions
  * these across signals to implement `discard-day-all`, which is the only way
  * every bar can claim the same integrated duration.

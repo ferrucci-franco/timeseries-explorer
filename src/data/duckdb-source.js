@@ -1872,6 +1872,262 @@ export default class DuckDbSource {
     }
 
     /**
+     * Exact per-UTC-day integral partials for the Integral analysis on a lazy
+     * file. One row per day per variable: area, covered time, hole time and a
+     * hole flag, plus the day's sample count and first/last timestamp.
+     *
+     * Days rather than one scalar because every whole-day policy — discard the
+     * day for this signal, for all signals, or trim the ragged ends — is then
+     * decided in JS by reduceDailyIntegral(), against the SAME rules the eager
+     * kernel applies. Splitting it that way is what keeps eager and lazy from
+     * drifting: the SQL answers only "how much, where", never "does it count".
+     *
+     * Deliberately NOT filtered by the selection range at scan time. The median
+     * step and the gap verdict are properties of the whole series (that is what
+     * detectSamplingGaps sees eagerly), and an interval straddling the range
+     * edge needs its outside endpoint to be interpolated at the boundary. Both
+     * would be wrong if the rows were filtered first; the clipping happens per
+     * interval instead.
+     *
+     * Returns `{ ok, blocked, traces: [{ varName, days, medianDt, hasNominalStep,
+     * negativeDtCount, gapCount, nanSegmentCount }] }`.
+     */
+    async getDefiniteIntegralByDay(legacyData, varNames, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getDefiniteIntegralByDay: data is not DuckDB-backed (eager mode)');
+        if (legacyData?.metadata?.timeKind !== 'datetime') {
+            return { ok: false, reason: 'notDatetime', blocked: [], traces: [] };
+        }
+
+        const requested = [...new Set(varNames || [])]
+            .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
+            .filter(item => item.variable);
+        const usable = [];
+        const blocked = [];
+        for (const item of requested) {
+            if (item.variable._duckdbCol || item.variable._duckdbDataTool) usable.push(item);
+            else blocked.push(item.varName);
+        }
+        if (!usable.length) return { ok: true, blocked, traces: [] };
+
+        const shiftMs = Math.trunc(Number(options.timeShiftMs) || 0);
+        const cropRange = this._normalizeMsRange(options.cropRange);
+        const range = this._normalizeMsRange(options.range);
+        const transforms = options.transforms || {};
+        // 'interpolate' is the one policy that bridges holes. Pairing CONSECUTIVE
+        // FINITE samples is exactly equivalent to the eager bridge — the bridged
+        // values lie on the straight line between them, and the trapezoids over
+        // its pieces sum to the single trapezoid over the whole span — and it
+        // costs one WHERE instead of four window functions.
+        const bridge = options.missingPolicy === 'interpolate';
+
+        const tableName = meta.tableName;
+        const lit = (value) => this._numericLiteral(value);
+        const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
+        const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
+        const where = [`(${meta.timeExprSql}) IS NOT NULL`];
+        if (cropRange) {
+            where.push(`${baseMsExpr} BETWEEN ${lit(cropRange[0])} AND ${lit(cropRange[1])}`);
+        }
+        const whereSql = where.join(' AND ');
+        const DAY = 86400000;
+        // Floored division, so days before 1970 land on the day they belong to
+        // instead of being truncated towards zero. Cast to BIGINT because the
+        // clipped bounds are DOUBLE (the selection band is not sample-aligned)
+        // and range()/unnest() only accept integers.
+        const floorDiv = (x) => `CAST((((${x}) - (((((${x}) % ${DAY}) + ${DAY}) % ${DAY}))) / ${DAY}) AS BIGINT)`;
+
+        const traces = [];
+        for (const { varName, variable } of usable) {
+            const t = transforms[varName] || {};
+            const gain = Number(t.gain ?? 1);
+            const yOffset = Number(t.yOffset ?? 0);
+            let vExpr = this._valueExpressionSql(variable, varName, { castDouble: true });
+            if (gain !== 1) vExpr = `(${vExpr}) * ${lit(gain)}`;
+            if (yOffset !== 0) vExpr = `(${vExpr}) + ${lit(yOffset)}`;
+
+            const r0 = range ? lit(range[0]) : '(SELECT lo FROM extent)';
+            const r1 = range ? lit(range[1]) : '(SELECT hi FROM extent)';
+
+            const sql = `
+                WITH src AS (
+                    SELECT ${tExpr} AS t_ms, ${vExpr} AS v
+                    FROM ${tableName}
+                    WHERE ${whereSql}
+                ),
+                ord AS (
+                    SELECT t_ms, CASE WHEN v IS NOT NULL AND isfinite(v) THEN v END AS vf FROM src
+                ),
+                extent AS (SELECT MIN(t_ms) AS lo, MAX(t_ms) AS hi FROM ord),
+                steps AS (SELECT (t_ms - LAG(t_ms) OVER (ORDER BY t_ms)) AS d FROM ord),
+                pos AS (SELECT d FROM steps WHERE d IS NOT NULL AND d > 0),
+                med AS (SELECT median(d) AS m, COUNT(*) AS n FROM pos),
+                -- The nominal-step gate, mirroring detectSamplingGaps: below 80%
+                -- agreement the median is the middle of a spread of unrelated
+                -- distances, and no statement about missing rows is justified.
+                nominal AS (
+                    SELECT CASE
+                        WHEN (SELECT m FROM med) IS NULL OR (SELECT m FROM med) <= 0 THEN FALSE
+                        WHEN (SELECT n FROM med) < 2 THEN FALSE
+                        WHEN (SELECT n FROM med) >= 8 AND (
+                            SELECT COUNT(*)::DOUBLE FROM pos
+                            WHERE abs(d - (SELECT m FROM med)) <= 0.1 * (SELECT m FROM med)
+                        ) / (SELECT n FROM med) < 0.8 THEN FALSE
+                        ELSE TRUE END AS has_step
+                ),
+                -- Chain A walks every row: it is what knows where the file has
+                -- no data, whatever the policy decides to do about it.
+                all_pairs AS (
+                    SELECT LAG(t_ms) OVER (ORDER BY t_ms) AS a, LAG(vf) OVER (ORDER BY t_ms) AS va,
+                           t_ms AS b, vf AS vb
+                    FROM ord
+                ),
+                all_iv AS (
+                    SELECT a, va, b, vb, (b - a) AS dur,
+                        CASE WHEN (SELECT has_step FROM nominal) AND (b - a) > 1.5 * (SELECT m FROM med)
+                             THEN 1 ELSE 0 END AS is_gap
+                    FROM all_pairs WHERE a IS NOT NULL AND b > a
+                ),
+                all_kept AS (
+                    SELECT *, greatest(a, ${r0}) AS s0, least(b, ${r1}) AS e0 FROM all_iv
+                ),
+                all_clip AS (SELECT * FROM all_kept WHERE e0 > s0),
+                all_split AS (
+                    SELECT *, unnest(range(${floorDiv('s0')}, ${floorDiv('e0 - 1')} + 1)) AS day FROM all_clip
+                ),
+                all_seg AS (
+                    SELECT day, is_gap, a, va, b, vb, dur,
+                        greatest(s0, day * ${DAY}) AS s, least(e0, day * ${DAY} + ${DAY}) AS e
+                    FROM all_split
+                ),
+                all_seg2 AS (
+                    SELECT day, is_gap, va, vb, a, dur, (e - s) AS overlap, s, e,
+                        (va IS NULL OR vb IS NULL OR is_gap = 1) AS is_hole
+                    FROM all_seg WHERE e > s
+                ),
+                holes AS (
+                    SELECT day,
+                        SUM(CASE WHEN is_hole THEN overlap ELSE 0 END)::DOUBLE AS uncovered_ms,
+                        MAX(CASE WHEN is_hole THEN 1 ELSE 0 END) AS has_hole
+                    FROM all_seg2 GROUP BY day
+                ),
+                counts AS (
+                    SELECT COALESCE(SUM(CASE WHEN is_gap = 1 THEN 1 ELSE 0 END), 0) AS gap_segments,
+                           COALESCE(SUM(CASE WHEN va IS NULL OR vb IS NULL THEN 1 ELSE 0 END), 0) AS nan_segments
+                    FROM all_clip
+                ),
+                ${bridge ? `
+                fin AS (SELECT t_ms, vf FROM ord WHERE vf IS NOT NULL),
+                area_pairs AS (
+                    SELECT LAG(t_ms) OVER (ORDER BY t_ms) AS a, LAG(vf) OVER (ORDER BY t_ms) AS va,
+                           t_ms AS b, vf AS vb
+                    FROM fin
+                ),
+                area_iv AS (SELECT a, va, b, vb, (b - a) AS dur FROM area_pairs WHERE a IS NOT NULL AND b > a),
+                area_kept AS (SELECT *, greatest(a, ${r0}) AS s0, least(b, ${r1}) AS e0 FROM area_iv),
+                area_clip AS (SELECT * FROM area_kept WHERE e0 > s0),
+                area_split AS (
+                    SELECT *, unnest(range(${floorDiv('s0')}, ${floorDiv('e0 - 1')} + 1)) AS day FROM area_clip
+                ),
+                area_seg AS (
+                    SELECT day, a, va, b, vb, dur,
+                        greatest(s0, day * ${DAY}) AS s, least(e0, day * ${DAY} + ${DAY}) AS e
+                    FROM area_split
+                ),
+                area_seg2 AS (
+                    SELECT day, (e - s) AS overlap,
+                        (va + (vb - va) * ((s - a)::DOUBLE / dur)) AS vs,
+                        (va + (vb - va) * ((e - a)::DOUBLE / dur)) AS ve
+                    FROM area_seg WHERE e > s
+                ),
+                area AS (
+                    SELECT day,
+                        SUM((vs + ve) / 2.0 * overlap)::DOUBLE AS area_ms,
+                        SUM(overlap)::DOUBLE AS covered_ms
+                    FROM area_seg2 GROUP BY day
+                )` : `
+                area_seg2 AS (
+                    SELECT day, overlap, is_hole,
+                        (va + (vb - va) * ((s - a)::DOUBLE / dur)) AS vs,
+                        (va + (vb - va) * ((e - a)::DOUBLE / dur)) AS ve
+                    FROM all_seg2
+                ),
+                area AS (
+                    SELECT day,
+                        SUM(CASE WHEN NOT is_hole THEN (vs + ve) / 2.0 * overlap ELSE 0 END)::DOUBLE AS area_ms,
+                        SUM(CASE WHEN NOT is_hole THEN overlap ELSE 0 END)::DOUBLE AS covered_ms
+                    FROM area_seg2 GROUP BY day
+                )`},
+                samples AS (
+                    SELECT ${floorDiv('t_ms')} AS day, COUNT(*) AS n,
+                        MIN(t_ms) AS first_t, MAX(t_ms) AS last_t
+                    FROM ord WHERE t_ms BETWEEN ${r0} AND ${r1} GROUP BY day
+                ),
+                joined AS (
+                    SELECT COALESCE(area.day, holes.day, samples.day) AS day,
+                        COALESCE(area.area_ms, 0) AS area_ms,
+                        COALESCE(area.covered_ms, 0) AS covered_ms,
+                        COALESCE(holes.uncovered_ms, 0) AS uncovered_ms,
+                        COALESCE(holes.has_hole, 0) AS has_hole,
+                        COALESCE(samples.n, 0) AS n,
+                        samples.first_t, samples.last_t
+                    FROM area
+                    FULL OUTER JOIN holes ON area.day = holes.day
+                    FULL OUTER JOIN samples ON COALESCE(area.day, holes.day) = samples.day
+                )
+                SELECT day::BIGINT AS day,
+                    area_ms::DOUBLE AS area_ms,
+                    covered_ms::DOUBLE AS covered_ms,
+                    uncovered_ms::DOUBLE AS uncovered_ms,
+                    has_hole::BIGINT AS has_hole,
+                    n::BIGINT AS n,
+                    first_t::DOUBLE AS first_t,
+                    last_t::DOUBLE AS last_t,
+                    (SELECT m FROM med)::DOUBLE AS median_step,
+                    (SELECT has_step FROM nominal)::BOOLEAN AS has_step,
+                    (SELECT gap_segments FROM counts)::BIGINT AS gap_segments,
+                    (SELECT nan_segments FROM counts)::BIGINT AS nan_segments,
+                    ${r0}::DOUBLE AS range_lo,
+                    ${r1}::DOUBLE AS range_hi
+                FROM joined
+                ORDER BY day`;
+
+            const rows = this._arrowRowsToObjects(await this._interactiveQuery(sql));
+            const head = rows[0] || {};
+            traces.push({
+                varName,
+                days: rows.map(row => ({
+                    day: Number(row.day),
+                    areaMs: Number(row.area_ms) || 0,
+                    coveredMs: Number(row.covered_ms) || 0,
+                    uncoveredMs: Number(row.uncovered_ms) || 0,
+                    hasHole: Number(row.has_hole) === 1,
+                    sampleCount: Number(row.n) || 0,
+                    firstT: row.first_t == null ? null : Number(row.first_t),
+                    lastT: row.last_t == null ? null : Number(row.last_t),
+                })),
+                medianDt: head.median_step == null ? null : Number(head.median_step),
+                hasNominalStep: head.has_step === true || head.has_step === 1,
+                // Always 0: row order is not observable here. A parallel scan
+                // hands back rows in whatever order the threads finish in, so a
+                // LAG over "physical" order reports disorder that is an artefact
+                // of the scan, not of the file — it fired on a perfectly sorted
+                // 320k-row CSV. read_csv's file_row_number is the way in if this
+                // ever needs answering; until then the honest report is "not
+                // known", not a refusal. Same position the lazy bucket reducer
+                // already takes.
+                negativeDtCount: 0,
+                gapCount: Number(head.gap_segments) || 0,
+                nanSegmentCount: Number(head.nan_segments) || 0,
+                rangeStart: head.range_lo == null ? null : Number(head.range_lo),
+                rangeEnd: head.range_hi == null ? null : Number(head.range_hi),
+            });
+        }
+
+        return { ok: true, blocked, traces };
+    }
+
+    /**
      * Exact temporal-profile statistics for lazy files. Source rows are reduced
      * to calendar-period/bin aggregates in DuckDB; only O(periods × bins)
      * compact rows cross into JavaScript. Multiple variables share the scan.

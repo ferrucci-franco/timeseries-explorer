@@ -3043,7 +3043,10 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 /* Integral: the result pane is a bar chart, so the shell is Histogram's with a
    summary table under the options instead of a stats block. */
 .integral-container .hist-hist-pane { position: relative; }
-.integral-summary { max-height: 220px; overflow: auto; }
+.integral-computing-indicator { top: 10px; }
+/* Total / per-day / mean sit side by side, so the table is wider than the
+   sidebar and scrolls horizontally rather than wrapping into illegibility. */
+.integral-summary { max-height: 240px; overflow: auto; }
 .integral-summary-table {
     width: 100%;
     border-collapse: collapse;
