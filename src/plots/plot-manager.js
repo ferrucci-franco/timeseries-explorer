@@ -11,6 +11,7 @@ import { installPlotCorrelationMethods } from './methods/correlation-methods.js'
 import { installPlotPhase2dFitMethods } from './methods/phase2d-fit-methods.js';
 import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js';
 import { installPlotTemporalProfileMethods } from './methods/temporal-profile-methods.js';
+import { installPlotExportMethods } from './methods/export-methods.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -2020,15 +2021,13 @@ class PlotManager {
         if (!isTimeseriesFamily) {
             panelEl.querySelector('.timeseries-tools-group')?.remove();
         }
-        const csvBtn = panelEl.querySelector('.csv-export-btn');
-        if (csvBtn) {
-            // Aggregated Heatmap CSV belongs to the dedicated export phase; never
-            // fall back to exporting a visually unrelated raw table. Correlation
-            // exports a per-pair summary, but not while a lazy pair is dirty.
-            csvBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile'
-                || (plot?.mode === 'correlation' && !!plot?.correlation?.dirty);
-            if (plot?.mode === 'heatmap') csvBtn.title = i18n.t('heatmapExportPending');
-            if (plot?.mode === 'temporal-profile') csvBtn.title = i18n.t('temporalProfileMode');
+        const exportBtn = panelEl.querySelector('.panel-export-btn');
+        if (exportBtn) {
+            // The dialog behind this button also writes PNG and SVG, so it stays
+            // available in the modes that have no data table to export
+            // (Heatmap, Temporal Profile, a stale Correlation); the CSV option
+            // inside is the one that reports why it is unavailable.
+            exportBtn.disabled = !has;
         }
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
         if (statsBtn) {
@@ -2095,14 +2094,16 @@ class PlotManager {
         }
     }
 
-    _exportCSV(panelId) {
+    // options.fileName / options.baseName carry the name chosen in the export
+    // dialog. Without them the file keeps the name the CSV button always wrote.
+    _exportCSV(panelId, options = {}) {
         const plot = this.plots.get(panelId);
         if (!plot || !this._hasContent(plot)) return;
 
         // With the 2D Curve Fit workspace open, offer the fit-specific exports
         // (summary / curve / displayed points) instead of the raw X/Y dump.
         if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && this._exportPhase2dFitCsv) {
-            this._exportPhase2dFitCsv(panelId, plot);
+            this._exportPhase2dFitCsv(panelId, plot, { baseName: options.baseName });
             return;
         }
 
@@ -2212,7 +2213,7 @@ class PlotManager {
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
-        a.download = `${plot.mode}_export.csv`;
+        a.download = options.fileName || `${plot.mode}_export.csv`;
         a.click();
         URL.revokeObjectURL(url);
     }
@@ -3653,5 +3654,6 @@ installPlotCorrelationMethods(PlotManager);
 installPlotPhase2dFitMethods(PlotManager);
 installPlotCalendarHeatmapMethods(PlotManager);
 installPlotTemporalProfileMethods(PlotManager);
+installPlotExportMethods(PlotManager);
 
 export default PlotManager;

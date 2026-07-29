@@ -1316,6 +1316,19 @@
     display: block;
 }
 
+/* The export button carries a download arrow: it opens the export dialog
+   (CSV / PNG / SVG) instead of writing one fixed format on click. */
+.panel-export-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.panel-export-btn svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+}
+
 .layout-toolbar-btn:hover:not(:disabled) {
     background-color: var(--primary-color);
     border-color: var(--primary-color);
