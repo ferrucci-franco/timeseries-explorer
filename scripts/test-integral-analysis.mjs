@@ -440,6 +440,28 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(legendGroup.indexOf('id="legend-units"') > legendGroup.lastIndexOf('name="legend-pos"'),
         'and below the position radio buttons');
     ok(methods.includes('formatAxisDuration('), 'durations go through the axis-aware formatter');
+
+    // The summary rule separates COLUMNS, and a figure with its unit is one
+    // column: a rule between "2,988" and "MW·h/d" would read as two figures.
+    ok(/td class="integral-num">\$\{escapeHtml\(formatNumber\(value, 5\)\)\}<\/td>/.test(methods),
+        'the figure cell carries no group rule');
+    ok(/<td class="integral-group-end">\$\{escapeHtml\(unit\)\}<\/td>/.test(methods),
+        'the rule falls after the unit');
+    ok(/\.integral-summary-table td\.integral-group-end,[\s\S]{0,80}border-right/.test(css),
+        'and the class draws it');
+
+    // The periods/instants checkbox has to teach the choice, not just name it,
+    // and PyPSA is one example among many rather than the only tool there is.
+    const translations = read('src/i18n/translations.js');
+    for (const [lang, phrase] of [['en', 'such as PyPSA'], ['es', 'tales como PyPSA'],
+        ['fr', 'tels que PyPSA'], ['it', 'quali PyPSA']]) {
+        const block = translations.slice(translations.indexOf(`        ${lang}: {`));
+        const tip = block.slice(block.indexOf('integralExtendLastTip:'));
+        ok(tip.slice(0, 2000).includes(phrase), `${lang} presents PyPSA as an example, not the only tool`);
+    }
+    const enTip = translations.slice(translations.indexOf('integralExtendLastTip:'));
+    ok(/instant/.test(enTip.slice(0, 1200)), 'the tooltip names both readings');
+    ok(/24 h/.test(enTip.slice(0, 1200)), 'and works a concrete example');
     ok(session.includes('legendUnits: !!this.legendUnits,'), 'the setting is saved with the session');
     ok(session.includes('plot.integral = this.plotManager._normalizeIntegralState'), 'and so is the panel state');
 

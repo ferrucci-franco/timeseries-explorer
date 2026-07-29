@@ -119,12 +119,12 @@ El kernel devuelve tres duraciones distintas y no las mezcla:
 
 ## 7. Puntos o períodos, y los días de los extremos
 
-### 7.1 `Each sample covers its own step` (default **on**)
+### 7.1 `Cada muestra dura hasta la siguiente` (default **on**)
 
-Checkbox en **Data handling**. Es una afirmación sobre lo que *significan* las marcas de tiempo, no una regla de cuadratura:
+Checkbox en **Data handling**. Es una afirmación sobre lo que *significan* las marcas de tiempo, no una regla de cuadratura. El tooltip plantea la pregunta y la trabaja con un ejemplo concreto, porque la etiqueta sola no alcanza: ¿una marca de tiempo señala un **instante** o el **tramo de tiempo que le sigue**?
 
-- **Períodos** (on): cada muestra representa el paso que la sigue, así que la última se extiende **un paso nominal**. Un día completo de cuartos de hora integra **24 h**, no 23 h 45 min. Es lo que significa una ponderación de snapshot en PyPSA, y por eso es el default en un panel escrito para redes eléctricas.
-- **Puntos** (off): un trapecio necesita muestra a los dos lados, así que el último paso es genuinamente desconocido y no se integra.
+- **Tramos** (on): cada muestra se mantiene hasta la siguiente, así que la última se mantiene **un paso nominal** más. 24 muestras horarias abarcan **24 h**, y un día de cuartos de hora integra 24 h exactas. Las herramientas de sistemas energéticos **tales como PyPSA** escriben este tipo — cada snapshot representa un período y lleva una ponderación — y por eso es el default acá.
+- **Instantes** (off): la señal solo se conoce *en* cada muestra, el área entre dos es un trapecio y nada puede decirse más allá de la última. Las mismas 24 muestras horarias abarcan 23 h. Un datalogger que registra una temperatura suele escribir de este tipo.
 
 Precisiones: el tramo final se mantiene **constante** al último valor (no extrapola la pendiente), se recorta por el rango y por medianoche como cualquier otro intervalo, y **solo existe si el eje tiene un paso nominal** — sin él no hay largo defendible que darle, y usar la mediana de un montón de distancias sin relación sería una adivinanza disfrazada de dato.
 
@@ -138,8 +138,8 @@ Checkbox, **default off**, habilitado solo con eje calendario. Descarta el prime
 
 | Lectura | Días descartados | Duración reportada | Total |
 |---|---|---|---|
-| Períodos (default) | 1 (el primer día ragged) | **32 d** | 76 800 MW·h |
-| Puntos | 2 (también el último) | **31 d** | 74 400 MW·h |
+| Tramos (default) | 1 (el primer día ragged) | **32 d** | 76 800 MW·h |
+| Instantes | 2 (también el último) | **31 d** | 74 400 MW·h |
 
 Antes decía *32 días* habiendo integrado 31 d 23 h 45 min: la opción declaraba el día completo y la cuadratura cubría un paso menos. Reportar una duración que no se integró es lo único que ninguna de las dos lecturas permite.
 
@@ -222,7 +222,7 @@ La tabla `Summary` lista **Signal · Integral · Per day · Mean value · Covera
 
 ## 11. Resumen y warnings
 
-Tabla `Summary` con Signal (chip de color) · Integral · Per day · Mean value · Coverage (`días incluidos / días del rango`). Es más ancha que el panel, así que scrollea horizontal con una barra **de tamaño real y siempre dibujada** — una overlay que aparece solo al pasar el mouse no deja ninguna señal de que hay columnas a la derecha — y deja aire debajo para que la última fila no quede pegada al borde.
+Tabla `Summary` con Signal (chip de color) · Integral · Per day · Mean value · Coverage (`días incluidos / días del rango`), con **líneas separadoras verticales entre columnas**. Una cifra y su unidad son *una* columna partida en dos celdas (dígitos a la derecha, unidad a la izquierda), así que la línea va **después de la unidad**: entre `2.988` y `MW·h/d` se leería como dos cifras distintas. Es más ancha que el panel, así que scrollea horizontal con una barra **de tamaño real y siempre dibujada** — una overlay que aparece solo al pasar el mouse no deja ninguna señal de que hay columnas a la derecha — y deja aire debajo para que la última fila no quede pegada al borde.
 
 **La barra superior lleva el resumen, no el texto de los warnings.** Dice qué es: `3 signals totalled over 9.96 d`. Si las señales no cubrieron la misma duración, nombrar una sería afirmar algo falso sobre las otras, así que usa `integralStatusMixed` y apunta al resumen. Cuando hay warnings solo se agrega un puntero corto (`Warning: see the message in the Integral side panel`); el texto completo va en el panel lateral y en el tooltip — es el mismo reparto que ya hacen FFT y Profile.
 
@@ -243,7 +243,7 @@ El botón CSV de la toolbar exporta la **tabla de resultados**, no la serie: una
 - Estado del panel completo en la sesión, con `_normalizeIntegralState` tolerante a sesiones viejas; los warnings guardados se descartan al restaurar porque describen un cálculo que todavía no corrió.
 - 74 claves × 4 idiomas; `test:i18n-consistency` pasa (1394 claves × 4).
 - Las **duraciones se leen igual en todo eje**: el kernel cuenta en unidades de abscisa, así que una señal muestreada en segundos reportaba un `20` pelado donde los mismos 20 s en un eje calendario decían `20 s`. `axisDuration()` convierte primero por la unidad del eje (un eje en horas se convierte, no se lee como segundos) y después las dos usan la misma escalera s/min/h/d. Un eje de índice no tiene unidad y sigue diciendo `samples`.
-- Tests nuevos: `test:definite-integral` (80 checks, valores analíticos) y `test:integral-analysis` (152 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
+- Tests nuevos: `test:definite-integral` (80 checks, valores analíticos) y `test:integral-analysis` (161 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
 
 Verificado además en la app real (Vite + Plotly + DuckDB-WASM):
 

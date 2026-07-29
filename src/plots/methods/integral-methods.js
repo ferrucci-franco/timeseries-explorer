@@ -90,8 +90,8 @@ const fallbackText = {
     integralSamples: 'samples',
     integralValue: 'Integral',
     integralSignal: 'Signal',
-    integralExtendLast: 'Each sample covers its own step',
-    integralExtendLastTip: 'Read the timestamps as periods, not points: the last sample is extended by one nominal step, so a whole day of quarter-hours integrates to 24 h.',
+    integralExtendLast: 'Each sample lasts until the next one',
+    integralExtendLastTip: 'Does a timestamp mark an instant, or the stretch of time that follows it? OFF — instants: the signal is only known AT each sample, the area between two of them is a trapezoid, and nothing can be said past the last one. 24 hourly samples then span 23 h. ON — stretches: each sample holds until the next, so the last one holds for one more step. The same 24 samples span 24 h, and a day of quarter-hours totals exactly 24 h. Energy-system tools such as PyPSA write the second kind, where every snapshot stands for a period and carries a weighting; a datalogger recording a temperature usually writes the first. Needs a time axis with a regular step — without one there is no length to give the last sample.',
     integralStatusOne: '1 signal totalled over {time}',
     integralStatusMany: '{count} signals totalled over {time}',
     integralStatusMixed: '{count} signals totalled, each over a different duration — see the summary',
@@ -1303,9 +1303,13 @@ proto._renderIntegralSummary = function(plot, models = []) {
     // All three quantities are listed side by side rather than only the plotted
     // one: the total answers "how much", the mean answers "at what level", and
     // reading either without the other invites the wrong conclusion.
+    // A number and its unit are ONE column split in two cells (right-aligned
+    // digits, left-aligned unit), so the rule goes after the unit — never
+    // between "2,988" and "MW·h/d", which would read as two separate figures.
     const cell = (value, unit) => (value == null
-        ? '<td class="integral-num">—</td><td></td>'
-        : `<td class="integral-num">${escapeHtml(formatNumber(value, 5))}</td><td>${escapeHtml(unit)}</td>`);
+        ? '<td class="integral-num">—</td><td class="integral-group-end"></td>'
+        : `<td class="integral-num">${escapeHtml(formatNumber(value, 5))}</td>`
+            + `<td class="integral-group-end">${escapeHtml(unit)}</td>`);
     const rows = view.rows.map(({ model, value, perDay, mean }) => {
         const result = model.result;
         const coverage = result.timeKind === 'datetime' && result.dayCount
@@ -1313,7 +1317,7 @@ proto._renderIntegralSummary = function(plot, models = []) {
             : formatAxisDuration(model, result.coveredTime);
         const totalUnit = this._integralResultUnit(model.unit, view.state, result.timeKind);
         return `<tr>
-            <td><span class="integral-swatch" style="background:${escapeHtml(model.trace.color)}"></span>${escapeHtml(model.name)}</td>
+            <td class="integral-group-end"><span class="integral-swatch" style="background:${escapeHtml(model.trace.color)}"></span>${escapeHtml(model.name)}</td>
             ${cell(value, totalUnit)}
             ${cell(perDay, `${totalUnit}/d`)}
             ${cell(mean, model.unit || '')}
@@ -1321,10 +1325,10 @@ proto._renderIntegralSummary = function(plot, models = []) {
         </tr>`;
     }).join('');
     host.innerHTML = `<table class="integral-summary-table"><thead><tr>
-        <th>${escapeHtml(text('integralSignal'))}</th>
-        <th class="integral-num" colspan="2">${escapeHtml(text('integralValue'))}</th>
-        <th class="integral-num" colspan="2">${escapeHtml(text('integralPerDay'))}</th>
-        <th class="integral-num" colspan="2">${escapeHtml(text('integralMean'))}</th>
+        <th class="integral-group-end">${escapeHtml(text('integralSignal'))}</th>
+        <th class="integral-num integral-group-end" colspan="2">${escapeHtml(text('integralValue'))}</th>
+        <th class="integral-num integral-group-end" colspan="2">${escapeHtml(text('integralPerDay'))}</th>
+        <th class="integral-num integral-group-end" colspan="2">${escapeHtml(text('integralMean'))}</th>
         <th>${escapeHtml(text('integralCoverage'))}</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
 };

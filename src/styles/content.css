@@ -3125,6 +3125,17 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 .integral-summary-table th { font-weight: 600; color: var(--text-primary); }
 .integral-summary-table td.integral-num,
 .integral-summary-table th.integral-num { text-align: right; font-variant-numeric: tabular-nums; }
+/* A figure and its unit are one column rendered as two cells — digits flush
+   right, unit flush left — so the rule sits after the unit. Putting it between
+   them would read as two unrelated numbers. */
+.integral-summary-table td.integral-group-end,
+.integral-summary-table th.integral-group-end {
+    border-right: 1px solid var(--border-color);
+    padding-right: 6px;
+}
+.integral-summary-table td.integral-num { padding-right: 3px; }
+.integral-summary-table td.integral-group-end + td.integral-num,
+.integral-summary-table th.integral-group-end + th { padding-left: 6px; }
 .integral-swatch {
     display: inline-block;
     width: 8px;
