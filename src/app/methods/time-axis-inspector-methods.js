@@ -57,11 +57,44 @@ proto._cachedTimeAxisDiagnostics = function(fileId) {
     return cached && cached.key === key ? cached.value : null;
 };
 
+// Returns the stored object, which is NOT the one passed in: it carries the
+// import-repair fields added below. Callers must use the return value, or they
+// hand the caller-supplied object to the UI and the cache disagrees with what
+// was just rendered.
 proto._storeTimeAxisDiagnostics = function(fileId, value) {
+    const enriched = this._withImportRepairs(fileId, value);
     const key = this._timeAxisDiagnosticsKey(fileId);
-    if (!key) return;
+    if (!key) return enriched;
     if (!this.timeAxisDiagnosticsCache) this.timeAxisDiagnosticsCache = new Map();
-    this.timeAxisDiagnosticsCache.set(fileId, { key, value });
+    this.timeAxisDiagnosticsCache.set(fileId, { key, value: enriched });
+    return enriched;
+};
+
+// The diagnostics are computed from the time vector alone, so they can only
+// describe the data AS LOADED. That is a problem for one specific repair: the
+// CSV reader sorts rows chronologically on import, so a file that arrived out
+// of order is reported — truthfully — as having no time going backwards, and
+// the reader takes that to mean the file was in order. Carrying the parser's
+// count alongside separates "it is fine now" from "it was fine".
+//
+// Three states, following the `backwards: null` convention already used here:
+//
+//   number     the reader sorted and counted the rows it had to move.
+//   null       the reader delivers rows in time order but cannot say whether
+//              the file was already in that order — the SQL reader asks the
+//              engine for a sorted result and never sees the file's own order,
+//              so the question is unanswerable rather than answered "none".
+//   undefined  the source does not reorder anything (a .mat, a NetCDF), so the
+//              row is omitted: there is nothing to report, not zero to report.
+proto._withImportRepairs = function(fileId, value) {
+    if (!value || typeof value !== 'object') return value;
+    const data = this.plotManager.files.get(fileId)?.data;
+    const reordered = data?.metadata?.reorderedRows;
+    if (Number.isFinite(reordered)) return { ...value, reorderedRows: reordered };
+    if (data?.metadata?.backend === 'duckdb' || data?._duckdb) {
+        return { ...value, reorderedRows: null };
+    }
+    return value;
 };
 
 // Eager files: one in-memory pass, cheap enough to run inline and cache.
@@ -70,8 +103,7 @@ proto._computeEagerTimeAxisDiagnostics = function(fileId) {
     const timeVar = data ? this._getActiveTimeVar(data) : null;
     if (!timeVar?.data?.length) return null;
     const diagnostics = computeTimeAxisDiagnostics(timeVar.data, this._timeAxisSecondsScale(timeVar));
-    this._storeTimeAxisDiagnostics(fileId, diagnostics);
-    return diagnostics;
+    return this._storeTimeAxisDiagnostics(fileId, diagnostics);
 };
 
 // What the file's panel shows without asking for anything: the eager verdict,
@@ -94,7 +126,7 @@ proto._computeLazyTimeAxisDiagnostics = async function(fileId, { signal, onParti
     const scale = this._timeAxisSecondsScale(this._getActiveTimeVar(data));
 
     const raw = await source.getTimeAxisSummary(data, { signal });
-    const partial = finalizeTimeAxisDiagnostics(raw, scale);
+    const partial = this._withImportRepairs(fileId, finalizeTimeAxisDiagnostics(raw, scale));
     onPartial?.(partial);
 
     const gapThreshold = Number.isFinite(partial.dtMean) && raw.intervals > 0
@@ -102,11 +134,15 @@ proto._computeLazyTimeAxisDiagnostics = async function(fileId, { signal, onParti
         : NaN;
     const steps = await source.getTimeAxisSteps(data, { gapThreshold, signal });
     const complete = finalizeTimeAxisDiagnostics(mergeTimeAxisSteps(raw, steps), scale);
-    this._storeTimeAxisDiagnostics(fileId, complete);
-    return complete;
+    return this._storeTimeAxisDiagnostics(fileId, complete);
 };
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
+
+// Ties a short value in the table to the footnote that explains it. Lives here
+// rather than inside the translated strings so the two ends cannot drift apart,
+// and so translators are handed plain sentences without markup to preserve.
+const TIME_AXIS_FOOTNOTE_MARK = '*';
 
 // Seconds ladder. A sampling step reads as "1 ms", never as "1.000e-3 s".
 const TIME_AXIS_UNITS = [
@@ -165,6 +201,12 @@ proto._timeAxisAnomalyPhrases = function(diagnostics) {
     add(diagnostics.repeated, 'timeAxisCountRepeatedOne', 'timeAxisCountRepeatedMany');
     add(diagnostics.gaps, 'timeAxisCountGapsOne', 'timeAxisCountGapsMany');
     add(diagnostics.backwards, 'timeAxisCountBackwardsOne', 'timeAxisCountBackwardsMany');
+    // Not an anomaly of the loaded axis — that one is clean — but of the file it
+    // came from. It belongs here because this line is the only verdict most
+    // users read, and "equidistant" alone would hide that rows had to be moved.
+    // `add` skips null, which is what we want: "cannot be determined" is worth a
+    // row in the detail panel but would be noise appended to every summary.
+    add(diagnostics.reorderedRows, 'timeAxisCountReorderedOne', 'timeAxisCountReorderedMany');
     return phrases;
 };
 
@@ -252,9 +294,33 @@ proto._renderTimeAxisDiagnosticsBlock = function(container, diagnostics, state =
     }
     rows.push([i18n.t('timeAxisDiagRepeated'), String(diagnostics.repeated)]);
     rows.push([i18n.t('timeAxisDiagGaps'), diagnostics.gaps === null ? unknown : String(diagnostics.gaps)]);
+
+    // Registers an explanation and returns the marker that points at it. The
+    // same text registered twice returns the same marker: on a file whose rows
+    // arrive sorted, "time going backwards" and "rows reordered" are both
+    // unanswerable for one reason, and printing it twice would be noise.
+    const footnotes = [];
+    const footnote = (text) => {
+        let index = footnotes.indexOf(text);
+        if (index < 0) index = footnotes.push(text) - 1;
+        return TIME_AXIS_FOOTNOTE_MARK.repeat(index + 1);
+    };
+    const sortedOrderNote = () => footnote(i18n.t('timeAxisDiagSortedOrderNote'));
+
+    // The value column hugs its content, so anything longer than a number here
+    // squeezes the labels and wraps every row. Both unanswerable values are a
+    // short word plus a marker; the sentence lives under the table.
     rows.push([i18n.t('timeAxisDiagBackwards'), diagnostics.backwards === null
-        ? i18n.t('timeAxisDiagNotChecked')
+        ? i18n.t('timeAxisDiagNotChecked') + sortedOrderNote()
         : String(diagnostics.backwards)]);
+    // Only for sources that sort on import; see _withImportRepairs. Rendered
+    // right under "time going backwards" because it is the answer to the
+    // question that row raises when it reads zero on a file you know was messy.
+    if (diagnostics.reorderedRows !== undefined) {
+        rows.push([i18n.t('timeAxisDiagReordered'), diagnostics.reorderedRows === null
+            ? i18n.t('timeAxisDiagReorderedUnknown') + sortedOrderNote()
+            : String(diagnostics.reorderedRows)]);
+    }
 
     const table = document.createElement('div');
     table.className = 'time-axis-diag-grid';
@@ -294,6 +360,16 @@ proto._renderTimeAxisDiagnosticsBlock = function(container, diagnostics, state =
         note.textContent = i18n.t('timeAxisDiagExcludesRepeated');
         container.appendChild(note);
     }
+    // Why those rows cannot answer. Without it the value reads as a defect
+    // rather than as a property of how this file is read. Markers are assigned
+    // in the order the values were built, so each note is findable from the
+    // value that raised it.
+    footnotes.forEach((text, index) => {
+        const note = document.createElement('div');
+        note.className = 'time-axis-diag-footnote';
+        note.textContent = TIME_AXIS_FOOTNOTE_MARK.repeat(index + 1) + text;
+        container.appendChild(note);
+    });
 };
 
 /**

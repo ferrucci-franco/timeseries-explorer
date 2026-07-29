@@ -722,4 +722,33 @@ await testSingleColumnGeneratedIndexAdjustParsing();
 await testEco2mixSparseRowsKeepRealHeader();
 await testCsvProfilePreservesUnitsAfterColumnRename();
 
+// The reader sorts rows chronologically on import. That repair is right, but it
+// erases the evidence: every later check sees a clean axis and truthfully
+// reports no time going backwards, which reads as "the file was in order".
+// Reporting how many rows had to move is what keeps the two apart.
+await (async function testReorderedRowsIsReported() {
+    const encode = text => new TextEncoder().encode(text).buffer;
+    const iso = s => new Date(Date.UTC(2024, 0, 1, 0, 0, s)).toISOString().replace('.000Z', '');
+
+    const ordered = [0, 60, 120, 180, 240];
+    const clean = await parser.parse(encode(
+        ['t,v', ...ordered.map((s, i) => `${iso(s)},${i}`)].join('\n')));
+    assert(clean.metadata.reorderedRows === 0, 'an ordered file moves no rows');
+
+    // Two rows swapped: both change position, so the count is 2 — not 1, which
+    // is how many backward STEPS the swap produces. The count answers "how much
+    // of my file was moved", not "how many inversions were seen".
+    const swapped = [0, 120, 60, 180, 240];
+    const repaired = await parser.parse(encode(
+        ['t,v', ...swapped.map((s, i) => `${iso(s)},${i}`)].join('\n')));
+    assert(repaired.metadata.reorderedRows === 2,
+        `both swapped rows are counted (got ${repaired.metadata.reorderedRows})`);
+
+    // The repair itself still has to happen, and carry the value columns along.
+    const times = Array.from(repaired.variables.t.data);
+    assert(times.every((t, i) => i === 0 || t >= times[i - 1]), 'the axis comes out sorted');
+    assert(Array.from(repaired.variables.v.data).join() === '0,2,1,3,4',
+        'values follow their own timestamps through the sort');
+}());
+
 console.log(`CSV fixtures OK: ${rows.length} files`);

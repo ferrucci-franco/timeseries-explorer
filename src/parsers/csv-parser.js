@@ -123,8 +123,9 @@ export default class CsvParser {
         if (!timeValues.length) {
             throw new Error('CSV does not contain time values.');
         }
+        let reorderedRows = 0;
         if (timeKind !== 'index') {
-            this._sortTimeSeriesByTime(timeValues, variableColumns);
+            reorderedRows = this._sortTimeSeriesByTime(timeValues, variableColumns);
             if (timeKind === 'datetime') timeOriginMs = timeValues[0];
         }
         const datetimeAxisStalled = timeKind === 'datetime' && this._isStalledTimeAxis(timeValues);
@@ -203,6 +204,7 @@ export default class CsvParser {
             skippedRows: table.headerIndex,
             skippedRowsAfterHeader: Math.max(0, table.dataStartIndex - table.headerIndex - (hasHeader ? 1 : 0)),
             skippedInvalidTimeRows: invalidTimeRows,
+            reorderedRows,
             timeName: timeVar.name,
             timeKind,
             timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
@@ -414,8 +416,9 @@ export default class CsvParser {
         if (!timeValues.length) {
             throw new Error('CSV does not contain time values.');
         }
+        let reorderedRows = 0;
         if (timeKind !== 'index') {
-            this._sortTimeSeriesByTime(timeValues, variableColumns);
+            reorderedRows = this._sortTimeSeriesByTime(timeValues, variableColumns);
             if (timeKind === 'datetime') timeOriginMs = timeValues[0];
         }
         const datetimeAxisStalled = timeKind === 'datetime' && this._isStalledTimeAxis(timeValues);
@@ -494,6 +497,7 @@ export default class CsvParser {
             skippedRows: headerIndex,
             skippedRowsAfterHeader: Math.max(0, dataStartIndex - headerIndex - (hasHeader ? 1 : 0)),
             skippedInvalidTimeRows: invalidTimeRows,
+            reorderedRows,
             skippedColumnCountRows: discardedColumnCountRows,
             skippedFilteredRows: filteredRowCount,
             timeName: timeVar.name,
@@ -728,8 +732,22 @@ export default class CsvParser {
         return rows;
     }
 
+    // Put the rows in chronological order, and report how many had to move.
+    //
+    // The repair itself is nearly always right for a time series, but it is
+    // invisible downstream: every later check — the time-axis inspector, the
+    // Missing/NaN overlay, the integral's negative-dt warning — sees an already
+    // sorted vector and truthfully reports "no time going backwards", which the
+    // reader takes to mean the FILE was in order. Returning the count lets the
+    // UI say what happened instead of leaving that gap between "the data is
+    // fine now" and "the data was fine".
+    //
+    // The count is rows whose POSITION changed, not the number of backward
+    // steps: one block moved out of place produces a handful of backward steps
+    // but relocates every row in the block, and the second number is the one a
+    // reader means by "my file was reordered".
     _sortTimeSeriesByTime(timeValues, variableColumns) {
-        if (!Array.isArray(timeValues) || timeValues.length < 2) return;
+        if (!Array.isArray(timeValues) || timeValues.length < 2) return 0;
         let sorted = true;
         for (let i = 1; i < timeValues.length; i++) {
             if (timeValues[i] < timeValues[i - 1]) {
@@ -737,7 +755,7 @@ export default class CsvParser {
                 break;
             }
         }
-        if (sorted) return;
+        if (sorted) return 0;
 
         const order = timeValues
             .map((time, index) => ({ time, index }))
@@ -753,6 +771,8 @@ export default class CsvParser {
                 column.stringValues = order.map(index => column.stringValues[index]);
             }
         }
+        return order.reduce((count, sourceIndex, targetIndex) =>
+            count + (sourceIndex === targetIndex ? 0 : 1), 0);
     }
 
     _isStalledTimeAxis(timeValues) {

@@ -309,6 +309,8 @@
 
 .time-axis-diag-grid {
     display: grid;
+    /* The value column hugs its content, so every value here has to stay short —
+       a sentence in it squeezes the labels to nothing and wraps all of them. */
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.25rem 1rem;
     padding: 0.7rem 0.85rem;
