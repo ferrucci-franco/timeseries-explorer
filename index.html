@@ -430,7 +430,10 @@
                             </select>
 
                             <div id="filter-init-state-wrap" class="collapsed">
-                                <input id="filter-init-state" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="z₁, z₂" data-i18n-placeholder="dataToolFilterInitStatePlaceholder">
+                                <!-- The placeholder is computed from the filter's own order, not fixed:
+                                     showing "z₁, z₂" under a first-order filter that needs one number
+                                     contradicts the error message right below it. -->
+                                <input id="filter-init-state" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="z₁">
                                 <div id="filter-init-hint" class="data-tool-name-hint" hidden></div>
                             </div>
 
@@ -446,7 +449,8 @@
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterInitManual">Manual</span>
-                                    <span data-i18n-rich="dataToolFilterInitHelpManual">You supply the state yourself: **exactly N numbers for a filter of order N**, in the order z₁, z₂ … z_N, separated like the coefficients. These are the internal state of the transposed direct-form II realisation — the same vector Steady state computes for you — not past inputs or past outputs.</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpManual">You supply the state yourself: <strong>exactly N numbers for a filter of order N</strong>, in the order z₁, z₂ … z_N, separated like the coefficients. The box shows how many the filter in the fields above needs.</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpManualZ">These are <strong>not</strong> the previous samples. z is the filter's internal state — one accumulator per order, each holding a mixture of past inputs and past outputs — the same vector Steady state computes for you, and the same one MATLAB and scipy take. For a first-order filter it works out to z₁ = b₁·x[−1] − a₁·y[−1]: one number carrying both histories, which is why there are N of them and not 2N.</span>
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterInitHelpWhenLabel">When it is used</span>
@@ -454,8 +458,36 @@
                                 </div>
                             </div>
 
-                            <label class="options-subgroup-label" for="filter-restart-gap" data-i18n="dataToolFilterRestartGap">Restart after a gap longer than</label>
-                            <input id="filter-restart-gap" class="derived-input data-tool-number-input" type="number" min="0" step="1" value="0">
+                            <div class="data-tool-label-row">
+                                <label class="options-subgroup-label" for="filter-restart-gap" data-i18n="dataToolFilterRestartGap">Restart after a gap longer than</label>
+                                <button id="filter-gap-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Restart threshold help" data-i18n-title="dataToolFilterGapHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-gap-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <div class="data-tool-slider-row unit-row">
+                                <input id="filter-restart-gap" class="derived-input data-tool-number-input" type="number" min="0" step="1" value="0">
+                                <span class="data-tool-unit-suffix" data-i18n="dataToolFilterRestartGapUnit">samples</span>
+                            </div>
+
+                            <div id="filter-gap-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-gap-help-title" hidden>
+                                <div class="derived-help-title" id="filter-gap-help-title" data-i18n="dataToolFilterGapHelpTitle">Restart threshold help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpUnitLabel">The unit is samples</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpUnit">**Samples, never seconds.** The number is how many consecutive sample positions may carry no usable value and still be stepped over. A filter has no notion of time, so counting the break in seconds would mean nothing to it.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpCountLabel">What is counted</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpCount">Two things that look different in the file but are the same break in the signal: rows that exist and hold a missing value, and stretches of time the file simply skipped. The second is measured against the file's own nominal step — a jump of 10 Δt counts as 9 missing samples even though no row is there to see.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpZeroLabel">0 — restart at every break</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpZero">The default, and the conservative choice: nothing is carried across a hole. The recursion begins again on the far side under the initial conditions you chose, which costs one settling transient per break.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpHigherLabel">Higher — step over short breaks</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpHigher">A break of at most this many samples is stepped over with the filter's state **left standing**, so the signal continues as though the gap had not happened and you spend one transient instead of many. Sound when the hole is short next to the filter's memory, misleading when it is long — the state then carries a memory of a moment that is already far in the past. The output stays missing over the hole either way; only the state is affected.</span>
+                                </div>
+                            </div>
 
                             <div id="filter-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-help-title" hidden>
                                 <div class="derived-help-title" id="filter-help-title" data-i18n="dataToolFilterHelpTitle">Digital filter help</div>

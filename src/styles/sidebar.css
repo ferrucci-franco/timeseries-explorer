@@ -966,6 +966,18 @@
     margin-bottom: -0.2rem;
 }
 
+/* A unit that belongs to the number beside it. Left-aligned, unlike the
+   right-aligned slider read-outs, because it reads as part of the field. */
+.data-tool-unit-suffix {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    align-self: center;
+}
+
+.data-tool-slider-row.unit-row {
+    grid-template-columns: 4.8rem minmax(0, 1fr);
+}
+
 /* What the chosen grid actually works out to: the resulting Δt, the sample
    count, and whether that is up or down from the file's own rate. Shown before
    committing because "factor 2.5" says nothing until it is a number of samples. */

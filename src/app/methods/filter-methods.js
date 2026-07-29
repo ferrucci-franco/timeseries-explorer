@@ -48,7 +48,28 @@ proto.initFilterTool = function() {
         event.stopPropagation();
         this._toggleFilterInitHelpPopover();
     });
+    document.getElementById('filter-gap-help-toggle')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._toggleFilterGapHelpPopover();
+    });
 };
+
+// Subscripts, so the placeholder reads the way the help does.
+const SUBSCRIPTS = '₀₁₂₃₄₅₆₇₈₉';
+function subscript(n) {
+    return String(n).split('').map(digit => SUBSCRIPTS[Number(digit)] ?? digit).join('');
+}
+
+// The state vector this filter actually wants, spelled out. Fixed text cannot do
+// it: "z₁, z₂" under a first-order filter contradicts the error message sitting
+// directly beneath it, which is exactly how the placeholder was found to be wrong.
+function manualStatePlaceholder(order) {
+    if (!(order > 0)) return '';
+    if (order <= 4) {
+        return Array.from({ length: order }, (_, i) => `z${subscript(i + 1)}`).join(', ');
+    }
+    return `z${subscript(1)}, z${subscript(2)}, … z${subscript(order)}`;
+}
 
 proto._clearManualFilterState = function() {
     const input = document.getElementById('filter-init-state');
@@ -58,6 +79,17 @@ proto._clearManualFilterState = function() {
 proto._toggleFilterHelpPopover = function(show) {
     const popover = document.getElementById('filter-help-popover');
     const button = document.getElementById('filter-help-toggle');
+    if (!popover || !button) return;
+    const willShow = typeof show === 'boolean' ? show : popover.hidden;
+    popover.hidden = !willShow;
+    button.classList.toggle('active', willShow);
+    button.setAttribute('aria-expanded', String(willShow));
+    if (willShow) this._positionFilterHelpPopover(popover, button);
+};
+
+proto._toggleFilterGapHelpPopover = function(show) {
+    const popover = document.getElementById('filter-gap-help-popover');
+    const button = document.getElementById('filter-gap-help-toggle');
     if (!popover || !button) return;
     const willShow = typeof show === 'boolean' ? show : popover.hidden;
     popover.hidden = !willShow;
@@ -256,6 +288,18 @@ proto._syncFilterControls = function() {
 
     const initMode = document.getElementById('filter-init')?.value || 'steady';
     stateWrap?.classList.toggle('collapsed', initMode !== 'manual');
+
+    // The placeholder tracks the coefficients, so it always shows exactly as many
+    // slots as the filter in the boxes above needs.
+    const stateInput = document.getElementById('filter-init-state');
+    if (stateInput) {
+        const b = parseCoefficients(document.getElementById('filter-b')?.value ?? '1');
+        const a = parseCoefficients(document.getElementById('filter-a')?.value ?? '1');
+        const order = b.values && a.values
+            ? Math.max(1, Math.max(b.values.length, a.values.length)) - 1
+            : 0;
+        stateInput.placeholder = manualStatePlaceholder(order);
+    }
 
     if (!info) return;
     if (!selected) {

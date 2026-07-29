@@ -510,6 +510,25 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
 }
 
 {
+    // The placeholder must agree with the error message directly below it. A
+    // fixed "z₁, z₂" under a first-order filter said two while the validator
+    // said one, which is how the mismatch was spotted.
+    const h = new Harness();
+    for (const [a, expected] of [
+        ['1, -0.5', 'z₁'],
+        ['1, -1.8, 0.81', 'z₁, z₂'],
+        ['1, -0.1, 0.2, -0.3, 0.4, -0.05', 'z₁, z₂, … z₅'],
+    ]) {
+        const dom = fakeDocument({
+            'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': a, 'filter-init': 'manual',
+        });
+        withDocument(dom, () => h._syncFilterControls());
+        assert.equal(dom.getElementById('filter-init-state').placeholder, expected,
+            `placeholder for a = [${a}]`);
+    }
+}
+
+{
     // The default the panel opens with must be a first-order IIR of gain 0.5 —
     // two lone 1s taught nothing about these fields taking vectors.
     const h = new Harness();
