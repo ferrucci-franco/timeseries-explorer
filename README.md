@@ -1,6 +1,6 @@
 # Time Series Explorer
 
-Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, generic and PyPSA netCDF, and small pandas pickle result files.
+Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, generic and PyPSA netCDF, small pandas pickle result files, and audio recordings.
 
 Created by [Franco Ferrucci](https://github.com/ferrucci-franco). A technical
 publication about the application is [in preparation](PUBLICATION.md).
@@ -112,7 +112,7 @@ output path.
 - `public`: files copied as-is into the final build
 - `src/app`: top-level application orchestration
 - `src/plots`: plot lifecycle, modes, interactions, Plotly integration
-- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, generic/PyPSA netCDF, and pandas pickle inputs
+- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, generic/PyPSA netCDF, pandas pickle, and audio inputs
 - `src/ui`: layout engine and modal helpers
 - `src/i18n`: translations and DOM localization
 - `src/styles`: split CSS source files
@@ -136,6 +136,29 @@ it downloads a local zip package and opens a prefilled GitHub Issue; attach the
 zip only when the contents are safe to share publicly.
 
 More detail: [docs/feedback.md](docs/feedback.md)
+
+## Audio support
+
+Recordings open as one signal per channel (`Mono`, or `Left`/`Right`) on a time
+axis in elapsed seconds, built from the file's own sample rate. Accepted:
+`.wav`, `.mp3`, `.m4a`, `.m4b`, `.aac`, `.flac`, `.ogg`, `.oga`, `.opus`,
+`.aif`, `.aiff`, `.aifc`, `.caf`, `.3gp`, `.3gpp`, `.amr`, `.webm`, `.weba` —
+which covers phone voice memos (iPhone `.m4a`; Android `.m4a`, `.3gp`,
+`.webm`). A `Recording` node in the variable tree carries the sample rate,
+channel count, duration and format.
+
+WAV is decoded by `src/parsers/audio-decode.js` itself (PCM 8/16/24/32-bit,
+32/64-bit float, and G.711 A-law/mu-law), so it works with no audio engine
+present — including in Node, where `npm run test:audio` exercises it. Every
+other container is handed to the browser's own `decodeAudioData`, on a context
+created at the sample rate read from the container header so the samples come
+back at the file's rate rather than the sound card's. This is the one format
+the app decodes on the main thread: Web Audio does not exist inside a Worker.
+
+Because a small file can decode into a very large one, the size limit for audio
+is measured on the decoded samples rather than on the file, and is asked about
+between decoding and building the columns (Settings → File loading → Audio
+full-load limit).
 
 ## netCDF support
 

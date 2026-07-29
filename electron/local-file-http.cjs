@@ -1,6 +1,21 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+// Recordings the viewer reads as one signal per channel. Kept beside the MIME
+// map because the two lists describe the same set of files, and the file dialog
+// in main.cjs needs the extensions on their own.
+const AUDIO_FILE_EXTENSIONS = [
+  'wav', 'wave',
+  'mp3',
+  'm4a', 'm4b', 'aac',
+  'flac',
+  'ogg', 'oga', 'opus',
+  'aif', 'aiff', 'aifc',
+  'caf',
+  '3gp', '3gpp', 'amr',
+  'webm', 'weba',
+];
+
 const mimeTypes = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
@@ -14,6 +29,25 @@ const mimeTypes = new Map([
   ['.netcdf', 'application/x-netcdf'],
   ['.pkl', 'application/octet-stream'],
   ['.pickle', 'application/octet-stream'],
+  ['.wav', 'audio/wav'],
+  ['.wave', 'audio/wav'],
+  ['.mp3', 'audio/mpeg'],
+  ['.m4a', 'audio/mp4'],
+  ['.m4b', 'audio/mp4'],
+  ['.aac', 'audio/aac'],
+  ['.flac', 'audio/flac'],
+  ['.ogg', 'audio/ogg'],
+  ['.oga', 'audio/ogg'],
+  ['.opus', 'audio/ogg'],
+  ['.aif', 'audio/aiff'],
+  ['.aiff', 'audio/aiff'],
+  ['.aifc', 'audio/aiff'],
+  ['.caf', 'audio/x-caf'],
+  ['.3gp', 'audio/3gpp'],
+  ['.3gpp', 'audio/3gpp'],
+  ['.amr', 'audio/amr'],
+  ['.webm', 'audio/webm'],
+  ['.weba', 'audio/webm'],
   ['.wasm', 'application/wasm'],
   ['.png', 'image/png'],
   ['.jpg', 'image/jpeg'],
@@ -158,6 +192,7 @@ function streamLocalFile(req, res, filePath, stat) {
 }
 
 module.exports = {
+  AUDIO_FILE_EXTENSIONS,
   fileInfoPayload,
   localFileHeaders,
   mimeTypeForPath,

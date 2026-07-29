@@ -10,7 +10,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { checkFullLoadLimit, eagerOnlyFormatFor, EAGER_ONLY_FORMATS } from '../src/app/file-size-limits.js';
+import {
+    checkDecodedAudioLimit,
+    checkFullLoadLimit,
+    eagerOnlyFormatFor,
+    EAGER_ONLY_FORMATS,
+} from '../src/app/file-size-limits.js';
 
 const MB = 1024 * 1024;
 const LIMITS = {
@@ -31,6 +36,38 @@ check('eager-only formats are the four without a lazy path', () => {
         EAGER_ONLY_FORMATS.map(f => f.id).sort(),
         ['excel', 'mat', 'netcdf', 'pickle'],
     );
+});
+
+check('audio is deliberately NOT one of them', () => {
+    // Audio has no lazy path either, but its file size says almost nothing
+    // about its memory cost — 5 MB of MP3 is roughly twenty times the samples
+    // of 5 MB of WAV. Checking it here, before the file is read, would wave the
+    // expensive case through and stop the cheap one.
+    for (const extension of ['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.3gp', '.webm']) {
+        assert.equal(eagerOnlyFormatFor(extension), null, `${extension} is measured after decoding, not before`);
+    }
+});
+
+check('the decoded-audio check warns on memory, not on file size', () => {
+    const limit = 400 * MB;
+    assert.equal(checkDecodedAudioLimit('memo.m4a', limit, limit), null, 'exactly at the limit loads silently');
+    const verdict = checkDecodedAudioLimit('memo.m4a', limit + 1, limit);
+    assert.equal(verdict.format, 'audio');
+    assert.equal(verdict.sizeBytes, limit + 1);
+    assert.equal(verdict.limitBytes, limit);
+    // Its own wording: "memo.m4a is 420 MB" would be nonsense printed over a
+    // 4 MB file, which is the whole reason this format is measured differently.
+    assert.equal(verdict.bodyKey, 'fileOverLimitAudioBody');
+    assert.equal(verdict.titleKey, 'fileOverLimitAudioTitle');
+    assert.equal(verdict.formatLabelKey, 'fileFormatAudio');
+    assert.equal(verdict.settingLabelKey, 'audioFullLoadLimit');
+});
+
+check('an unknown decoded size is not evidence of a problem', () => {
+    for (const size of [0, -1, NaN, undefined]) {
+        assert.equal(checkDecodedAudioLimit('memo.m4a', size, 400 * MB), null, `size ${size}`);
+    }
+    assert.equal(checkDecodedAudioLimit('memo.m4a', 900 * MB, 0), null, 'no limit configured');
 });
 
 check('formats with a memory-saving path are not covered here', () => {
