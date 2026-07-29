@@ -8,9 +8,11 @@ import PlotExportDialog from '../../ui/plot-export-dialog.js';
  *
  * The panel used to have a CSV button that wrote a file on click. It now has a
  * download button that opens one dialog offering the same CSV plus the plot
- * itself as PNG (with a quality multiplier) or SVG. Panels that show two charts
- * (time series + spectrum / histogram / heatmap / profile / correlation, and
- * the 2D fit workspace) let the user pick which one to save.
+ * itself as PNG (with a quality multiplier) or SVG. Panels that show more than
+ * one chart let the user pick which to save: time series + spectrum /
+ * histogram / heatmap / profile / correlation, the 2D fit workspace, and the
+ * Integral panel, which shows three (time series, bars and — when it is
+ * legitimate — the pie).
  *
  * The CSV writing itself stays in plot-manager (_exportCSV) and in the 2D fit
  * methods; this file only routes to them.
@@ -66,7 +68,7 @@ export function installPlotExportMethods(TargetClass) {
     // Every live Plotly chart in the panel, in the order they are drawn.
     proto._exportableCharts = function(plot) {
         if (!plot) return [];
-        const analysisMode = ['fft', 'histogram', 'heatmap', 'temporal-profile', 'correlation'].includes(plot.mode);
+        const analysisMode = ['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'correlation'].includes(plot.mode);
         const inFitWorkspace = plot.mode === 'phase2d' && !!plot.phase2dFitTimeDiv;
         // In the 2D fit workspace plot.div is the scatter and the extra chart is
         // the time series; in the analysis modes plot.div is the time series.
@@ -101,6 +103,10 @@ export function installPlotExportMethods(TargetClass) {
         add(plot.histogramDiv, 'histogram', 'exportChartHistogram');
         add(plot.heatmapDiv, 'heatmap', 'modeHeatmapLabel');
         add(plot.temporalProfileDiv, 'profile', 'temporalProfileModeLabel');
+        add(plot.integralDiv, 'bars', 'exportChartBars');
+        // The pie div exists whether or not a pie is drawn in it, so an empty
+        // one must not be offered: exporting it would hand back a blank square.
+        if (plot._integralPieVisible) add(plot.integralPieDiv, 'pie', 'exportChartPie');
         add(plot.correlationDiv, 'correlation', 'modeCorrelationLabel');
 
         charts.sort((a, b) => (
@@ -117,6 +123,7 @@ export function installPlotExportMethods(TargetClass) {
             histogram: 'histogram',
             heatmap: 'heatmap',
             'temporal-profile': 'profile',
+            integral: 'bars',
             correlation: 'correlation',
         }[plot?.mode];
         if (preferred && charts.some(chart => chart.id === preferred)) return preferred;
@@ -130,6 +137,12 @@ export function installPlotExportMethods(TargetClass) {
         if (!plot) return '';
         if (plot.mode === 'heatmap') return i18n.t('heatmapExportPending');
         if (plot.mode === 'temporal-profile') return i18n.t('exportCsvUnavailableProfile');
+        // The Integral table IS its analysis, so it is only unavailable while
+        // there is no result yet — an empty click on Download would otherwise
+        // look like a bug.
+        if (plot.mode === 'integral' && !this._integralExportTable?.(plot)?.rows.length) {
+            return i18n.t('exportCsvUnavailableIntegral');
+        }
         if (plot.mode === 'correlation' && plot.correlation?.dirty) return i18n.t('exportCsvUnavailableStale');
         if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled
             && this._ensurePhase2dState?.(plot)?.dirty) return i18n.t('phase2dFitCsvDirty');

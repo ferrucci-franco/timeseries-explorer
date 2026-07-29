@@ -32,6 +32,7 @@ class StateHarness {
             setLegendPosition(value) { this.legendPosition = value; },
             setLegendOverlayCorner(value) { this.legendOverlayCorner = value; },
             setMouseWheelZoom(value) { this.mouseWheelZoom = !!value; },
+            setLegendUnits(value) { this.legendUnits = !!value; },
             setTimeseriesDownsamplingLimit(value) { this.timeseriesVisualMaxPoints = value; },
             setPhaseDownsamplingLimit(value) { this.phaseVisualMaxPoints = value; },
             setRelayoutRefreshMode(value) { this.relayoutRefreshMode = value; },
@@ -41,6 +42,8 @@ class StateHarness {
             _defaultHistogramState() { return { binCount: 20, normalization: 'count' }; },
             _defaultCalendarHeatmapState() { return {}; },
             _defaultTemporalProfileState() { return { period: 'day', renderMode: 'line-band' }; },
+            _defaultIntegralState() { return { method: 'trapezoidal', integralUnit: 'hour', missingPolicy: 'zero' }; },
+            _normalizeIntegralState(raw) { return { method: 'trapezoidal', integralUnit: 'hour', missingPolicy: 'zero', ...raw }; },
             _defaultCorrelationState() { return {}; },
             _defaultPhase2dState() { return {}; },
             _defaultLiveViewPolicy() { return {}; },
@@ -77,6 +80,7 @@ class StateHarness {
         this.reloadAsNewVersionMode = true;
         this.scrollablePlotArea = true;
         this.mouseWheelZoom = false;
+        this.legendUnits = true;
         this.advancedSettings = { panZoomRefreshMode: 'responsive', matlabFullLoadMb: 777 };
         this._filterText = 'temperature';
         this.activeFileId = fileId;
@@ -131,6 +135,7 @@ source.plotManager.plots.set('panel-1', {
     histogram: { binCount: 77, normalization: 'percent', layout: 'horizontal' },
     heatmap: {},
     temporalProfile: { period: 'month', renderMode: 'columns', groupedBars: true, discardIncomplete: true, dayGrouping: 'all', yearResolution: 'month', resolutionByPeriod: { day: 5, week: 60, month: 1440, year: 1440 } },
+    integral: { method: 'rectangular', integralUnit: 'second', missingPolicy: 'discard-day-all', scale: 'G', orientation: 'horizontal', showPie: true },
     correlation: {},
     phase2d: {},
     liveView: {},
@@ -157,7 +162,7 @@ assert.deepEqual(snapshot.plots[0].modeViews.fft.xRange, [10, 20]);
 const restored = new StateHarness('f99');
 restored.plotManager.plots.set('panel-1', {
     mode: 'timeseries', traces: [], phaseTraces: [], phasePending: {}, stateSlots: {}, stateConfig: {},
-    histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {},
+    histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {}, integral: {},
 });
 const fileMap = new Map([['f1', 'f99']]);
 restored._applySessionSettings(snapshot.settings);
@@ -178,6 +183,15 @@ assert.deepEqual(restoredPlot._modeViews.fft.fftSpectrum.xRange, [1, 5]);
 assert.deepEqual(restoredPlot.phasePending, { x: 'x', y: 'y', z: null, fileId: 'f99' });
 assert.deepEqual(restoredPlot.stateSlots, { x: ['x'], dx: ['dx'], fileId: 'f99' });
 assert.equal(restored.mouseWheelZoom, false);
+// The Integral panel settings and the legend-units preference round-trip too.
+assert.equal(restoredPlot.integral.method, 'rectangular');
+assert.equal(restoredPlot.integral.integralUnit, 'second');
+assert.equal(restoredPlot.integral.missingPolicy, 'discard-day-all');
+assert.equal(restoredPlot.integral.scale, 'G');
+assert.equal(restoredPlot.integral.orientation, 'horizontal');
+assert.equal(restoredPlot.integral.showPie, true);
+assert.equal(restored.legendUnits, true);
+assert.equal(restored.plotManager.legendUnits, true);
 assert.equal(restored.plotManager.mouseWheelZoom, false);
 assert.equal(restored.plotManager.relayoutRefreshMode, 'responsive');
 assert.deepEqual(restored.plotManager.liveViewDefaults.phase, { viewMode: 'autoscale' });
@@ -186,7 +200,7 @@ assert.equal(restored._expandedFileTransforms.has('f99'), true);
 const phaseToolbarRestored = new StateHarness('f99');
 phaseToolbarRestored.plotManager.plots.set('panel-1', {
     mode: 'timeseries', traces: [], phaseTraces: [], phasePending: {}, stateSlots: {}, stateConfig: {},
-    histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {},
+    histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {}, integral: {},
 });
 const phasePanelEl = {};
 const originalDocument = globalThis.document;
@@ -218,7 +232,7 @@ const preservedTheme = new StateHarness('f99');
 preservedTheme.theme = 'light';
 preservedTheme.plotManager.plots.set('panel-1', {
     mode: 'timeseries', traces: [], phaseTraces: [], phasePending: {}, stateSlots: {}, stateConfig: {},
-    histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {},
+    histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {}, integral: {},
 });
 await preservedTheme._applySessionSnapshot(snapshot, {
     source: 'project',

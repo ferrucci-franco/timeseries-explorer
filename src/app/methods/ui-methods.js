@@ -210,6 +210,15 @@ proto.initEventListeners = function() {
         });
     }
 
+    const legendUnitsToggle = document.getElementById('legend-units');
+    if (legendUnitsToggle) {
+        legendUnitsToggle.checked = !!this.legendUnits;
+        legendUnitsToggle.addEventListener('change', (e) => {
+            this.legendUnits = e.target.checked;
+            this.plotManager.setLegendUnits(this.legendUnits);
+        });
+    }
+
     document.querySelectorAll('input[name="legend-pos"]').forEach(radio => {
         radio.addEventListener('change', (e) => {
             this.plotManager.setLegendPosition(e.target.value);

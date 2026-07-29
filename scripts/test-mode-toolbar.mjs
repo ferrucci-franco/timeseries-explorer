@@ -427,7 +427,7 @@ assert.equal(globalAutoscaleIcon, '⛶', 'global autoscale uses the expected ico
 
 // Fourier, Histogram and Heatmap are contextual actions of the time-series family,
 // not primary plot types alongside 2D/3D/state animation.
-for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile']) {
+for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']) {
     const { manager, toolbar } = renderToolbar(mode);
     const primaryModes = toolbar
         .querySelector('.mode-btn-group')
@@ -437,6 +437,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.ok(!primaryModes.includes('histogram'), `${mode}: Histogram is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('heatmap'), `${mode}: Heatmap is absent from the primary plot-mode group`);
     assert.ok(!primaryModes.includes('temporal-profile'), `${mode}: Temporal Profile is absent from the primary plot-mode group`);
+    assert.ok(!primaryModes.includes('integral'), `${mode}: Integral is absent from the primary plot-mode group`);
 
     const timeseriesPrimary = findModeButton(toolbar, 'timeseries', 'mode-btn');
     assert.ok(timeseriesPrimary?.classList.contains('active'), `${mode}: time-series family keeps its primary mode pressed`);
@@ -477,7 +478,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
     assert.deepEqual(
         analysisButtons.map(button => button.dataset.mode).sort(),
-        ['fft', 'heatmap', 'histogram', 'temporal-profile'],
+        ['fft', 'heatmap', 'histogram', 'integral', 'temporal-profile'],
         `${mode}: all time-series analyses share the contextual group beside Stack/Y`,
     );
     for (const button of [stackBtn, y2Btn, missingBtn, ...analysisButtons]) {
@@ -528,6 +529,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(findModeButton(toolbar, 'histogram'), undefined, 'non-time-series plots do not expose Histogram');
     assert.equal(findModeButton(toolbar, 'heatmap'), undefined, 'non-time-series plots do not expose Heatmap');
     assert.equal(findModeButton(toolbar, 'temporal-profile'), undefined, 'non-time-series plots do not expose Temporal Profile');
+    assert.equal(findModeButton(toolbar, 'integral'), undefined, 'non-time-series plots do not expose Integral');
 }
 
 // Phase/state views use the same contextual Autoscale action. In 2D it owns
@@ -601,7 +603,7 @@ for (const { mode, stateAnimDim = 2 } of [
     const refreshSource = plotManagerSource.slice(refreshStart, refreshEnd);
     assert.match(
         refreshSource,
-        /\['timeseries',\s*'fft',\s*'histogram',\s*'heatmap',\s*'temporal-profile'\]\.includes\(plot\?\.mode\)/,
+        /\['timeseries',\s*'fft',\s*'histogram',\s*'heatmap',\s*'temporal-profile',\s*'integral'\]\.includes\(plot\?\.mode\)/,
         'toolbar refresh recognizes every member of the time-series family',
     );
     assert.match(
@@ -650,6 +652,11 @@ for (const [from, clicked, expected] of [
     ['heatmap', 'histogram', 'histogram'],
     ['histogram', 'temporal-profile', 'temporal-profile'],
     ['temporal-profile', 'fft', 'fft'],
+    ['timeseries', 'integral', 'integral'],
+    ['integral', 'integral', 'timeseries'],
+    ['integral', 'temporal-profile', 'temporal-profile'],
+    ['temporal-profile', 'integral', 'integral'],
+    ['fft', 'integral', 'integral'],
 ]) {
     const { manager, toolbar } = renderToolbar(from);
     const fftConfig = manager.plot.fft;
