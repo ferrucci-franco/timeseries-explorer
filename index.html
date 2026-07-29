@@ -448,12 +448,21 @@
                                 <option value="past" data-i18n="dataToolFilterInitPast">Past samples of x and y</option>
                             </select>
 
-                            <div id="filter-init-state-wrap" class="collapsed">
-                                <!-- The placeholder is computed from the filter's own order and the
-                                     chosen convention, so it always names exactly the values that
-                                     mode needs — one level, or x[−1] … y[−N]. -->
-                                <input id="filter-init-state" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="x[−1], y[−1]">
-                                <div id="filter-init-hint" class="data-tool-name-hint" hidden></div>
+                            <div id="filter-init-level-wrap" class="collapsed">
+                                <input id="filter-init-level" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="level before the start" data-i18n-placeholder="dataToolFilterInitLevelPlaceholder">
+                                <div id="filter-init-level-hint" class="data-tool-name-hint" hidden></div>
+                            </div>
+
+                            <!-- Two boxes, not one. Past inputs and past outputs are different
+                                 quantities; a single field holding both made the order something
+                                 the user had to be told rather than something they could see.
+                                 Each placeholder names its own values, newest first. -->
+                            <div id="filter-init-past-wrap" class="collapsed">
+                                <label class="options-subgroup-label filter-coefficient-label" for="filter-init-x" data-i18n="dataToolFilterInitPastInputs">Past inputs — newest first</label>
+                                <input id="filter-init-x" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="x[−1]">
+                                <label class="options-subgroup-label filter-coefficient-label" for="filter-init-y" data-i18n="dataToolFilterInitPastOutputs">Past outputs — newest first</label>
+                                <input id="filter-init-y" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="y[−1]">
+                                <div id="filter-init-past-hint" class="data-tool-name-hint" hidden></div>
                             </div>
 
                             <div id="filter-init-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-init-help-title" hidden>
@@ -475,7 +484,7 @@
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterInitPast">Past samples of x and y</span>
-                                    <span data-i18n-rich="dataToolFilterInitHelpPast">The fully general option, and the one to reach for when you know the history: <strong>x[−1] … x[−N] then y[−1] … y[−N]</strong> for a filter of order N, in that order, separated like the coefficients. The box shows exactly which values it wants.</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpPast">The fully general option, and the one to reach for when you know the history. Two boxes, <strong>N values each for a filter of order N</strong>, newest first: the inputs box takes x[−1], x[−2] … and the outputs box takes y[−1], y[−2] …, separated like the coefficients. Each placeholder names its own values.</span>
                                     <span data-i18n-rich="dataToolFilterInitHelpPastY">Give the past outputs too, not just the inputs. Leaving y at zero while x is not describes a filter that was fed a history but had its output memory wiped — a state no running filter is ever in, and it produces a startup kick of its own. If you do not know the past outputs, one of the three options above is a better answer than guessing them.</span>
                                 </div>
                                 <div class="derived-help-row">

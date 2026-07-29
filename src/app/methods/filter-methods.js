@@ -37,10 +37,13 @@ proto.initFilterTool = function() {
         // only the verdict waits for the field to settle.
         document.getElementById(id)?.addEventListener('input', () => this._syncFilterControls());
     }
-    for (const id of ['filter-mode', 'filter-init', 'filter-init-state', 'filter-restart-gap']) {
+    for (const id of ['filter-mode', 'filter-init', 'filter-init-level',
+        'filter-init-x', 'filter-init-y', 'filter-restart-gap']) {
         document.getElementById(id)?.addEventListener('change', () => this._handleDataToolOptionChange());
     }
-    document.getElementById('filter-init-state')?.addEventListener('input', () => this._syncFilterControls());
+    for (const id of ['filter-init-level', 'filter-init-x', 'filter-init-y']) {
+        document.getElementById(id)?.addEventListener('input', () => this._syncFilterControls());
+    }
     document.getElementById('filter-help-toggle')?.addEventListener('click', (event) => {
         event.stopPropagation();
         this._toggleFilterHelpPopover();
@@ -59,21 +62,20 @@ proto.initFilterTool = function() {
     });
 };
 
-// The values this filter actually wants, named in the convention the user chose.
-// Fixed text cannot do it — a first-order filter needs a different list from a
-// third-order one, and "level" needs one number whatever the order.
-function manualStatePlaceholder(mode, order) {
-    if (mode === 'level') return i18n.t('dataToolFilterInitLevelPlaceholder');
-    if (mode !== 'past' || !(order > 0)) return '';
-    const run = (symbol) => (order <= 3
+// The values one box actually wants, spelled out. Fixed text cannot do it — a
+// first-order filter needs a different list from a third-order one.
+function pastSamplesPlaceholder(symbol, order) {
+    if (!(order > 0)) return '';
+    return order <= 3
         ? Array.from({ length: order }, (_, i) => `${symbol}[−${i + 1}]`).join(', ')
-        : `${symbol}[−1] … ${symbol}[−${order}]`);
-    return `${run('x')}, ${run('y')}`;
+        : `${symbol}[−1] … ${symbol}[−${order}]`;
 }
 
 proto._clearManualFilterState = function() {
-    const input = document.getElementById('filter-init-state');
-    if (input) input.value = '';
+    for (const id of ['filter-init-level', 'filter-init-x', 'filter-init-y']) {
+        const input = document.getElementById(id);
+        if (input) input.value = '';
+    }
 };
 
 proto._toggleFilterHelpPopover = function(show) {
@@ -244,40 +246,67 @@ proto._filterPlan = function() {
 
 /**
  * The typed initial conditions, checked against what the chosen convention needs.
- * @returns {{ mode: string, state: number[], code: string, text: string }}
+ *
+ * `state` is flattened to [x…, y…] for the kernel, which is the order the filtic
+ * conversion expects; the panel keeps the two histories in separate fields
+ * because they are separate quantities and their order should be visible rather
+ * than remembered.
+ *
+ * @returns {{ mode, state: number[], code: string, text: string, levelText, pastText }}
  */
 proto._readManualFilterState = function(order) {
     const mode = document.getElementById('filter-init')?.value;
     const resolved = FILTER_INIT_MODES.has(mode) ? mode : 'steady';
-    const needed = filterInitStateLength(resolved, order);
-    if (!needed) return { mode: resolved, state: [], code: '', text: '' };
+    const blank = { mode: resolved, state: [], code: '', text: '', levelText: '', pastText: '' };
+    if (!filterInitStateLength(resolved, order)) return blank;
 
-    const raw = document.getElementById('filter-init-state')?.value ?? '';
-    const parsed = parseCoefficients(raw);
-    if (!parsed.values) {
+    // The counts appear more than once in these sentences, so every substitution
+    // here is global; the single-shot .replace() used elsewhere would leave the
+    // later ones as literal placeholders.
+    const fill = (key, given) => i18n.t(key)
+        .replace(/\{order\}/g, String(order))
+        .replace(/\{given\}/g, String(given));
+
+    const read = (id) => {
+        const parsed = parseCoefficients(document.getElementById(id)?.value ?? '');
+        return parsed;
+    };
+
+    if (resolved === 'level') {
+        const parsed = read('filter-init-level');
+        if (!parsed.values) {
+            const text = i18n.t('dataToolFilterNotNumeric').replace('{token}', parsed.badToken);
+            return { ...blank, code: 'dataToolFilterNotNumeric', text, levelText: text };
+        }
+        if (parsed.values.length !== 1) {
+            const text = fill('dataToolFilterInitLevelLength', parsed.values.length);
+            return { ...blank, state: parsed.values, code: 'dataToolFilterInitStateLength', text, levelText: text };
+        }
+        return { ...blank, state: parsed.values };
+    }
+
+    const xs = read('filter-init-x');
+    const ys = read('filter-init-y');
+    const bad = !xs.values ? xs : (!ys.values ? ys : null);
+    if (bad) {
+        const text = i18n.t('dataToolFilterNotNumeric').replace('{token}', bad.badToken);
+        return { ...blank, code: 'dataToolFilterNotNumeric', text, pastText: text };
+    }
+    // Each box is counted in its own terms and named, so the message points at
+    // the field that is actually wrong instead of at a combined total.
+    const wrong = xs.values.length !== order
+        ? fill('dataToolFilterInitPastLengthX', xs.values.length)
+        : (ys.values.length !== order ? fill('dataToolFilterInitPastLengthY', ys.values.length) : '');
+    if (wrong) {
         return {
-            mode: resolved, state: [], code: 'dataToolFilterNotNumeric',
-            text: i18n.t('dataToolFilterNotNumeric').replace('{token}', parsed.badToken),
+            ...blank,
+            state: [...xs.values, ...ys.values],
+            code: 'dataToolFilterInitStateLength',
+            text: wrong,
+            pastText: wrong,
         };
     }
-    if (parsed.values.length !== needed) {
-        // Each convention is counted in its own terms — one level, or a pair of
-        // histories — because "2 values" means nothing without saying which.
-        const key = resolved === 'level'
-            ? 'dataToolFilterInitLevelLength'
-            : (order === 1 ? 'dataToolFilterInitPastLengthOne' : 'dataToolFilterInitPastLength');
-        return {
-            mode: resolved, state: parsed.values, code: 'dataToolFilterInitStateLength',
-            // A global replace: the counts appear more than once in these
-            // sentences, and the single-shot .replace() used everywhere else
-            // would leave the later ones as literal placeholders.
-            text: i18n.t(key)
-                .replace(/\{needed\}/g, String(needed))
-                .replace(/\{order\}/g, String(order))
-                .replace(/\{given\}/g, String(parsed.values.length)),
-        };
-    }
-    return { mode: resolved, state: parsed.values, code: '', text: '' };
+    return { ...blank, state: [...xs.values, ...ys.values] };
 };
 
 proto._getFilterConfig = function() {
@@ -309,33 +338,44 @@ proto._getFilterConfig = function() {
 proto._syncFilterControls = function() {
     const info = document.getElementById('filter-info');
     const axisNote = document.getElementById('filter-axis-note');
-    const hint = document.getElementById('filter-init-hint');
-    const stateWrap = document.getElementById('filter-init-state-wrap');
+    const levelHint = document.getElementById('filter-init-level-hint');
+    const pastHint = document.getElementById('filter-init-past-hint');
     const selected = this._getSelectedDataTool() === 'filter';
 
     const initMode = document.getElementById('filter-init')?.value || 'steady';
-    // Only the two conventions that ask for numbers show a field.
-    const needsField = initMode === 'level' || initMode === 'past';
-    stateWrap?.classList.toggle('collapsed', !needsField);
+    // Each convention shows only its own fields.
+    document.getElementById('filter-init-level-wrap')?.classList.toggle('collapsed', initMode !== 'level');
+    document.getElementById('filter-init-past-wrap')?.classList.toggle('collapsed', initMode !== 'past');
 
-    // The placeholder tracks the coefficients AND the convention, so it always
-    // names exactly the values the current choice needs.
-    const stateInput = document.getElementById('filter-init-state');
-    if (stateInput) {
-        const b = parseCoefficients(document.getElementById('filter-b')?.value ?? '1');
-        const a = parseCoefficients(document.getElementById('filter-a')?.value ?? '1');
-        const order = b.values && a.values
-            ? Math.max(1, Math.max(b.values.length, a.values.length)) - 1
-            : 0;
-        stateInput.placeholder = manualStatePlaceholder(initMode, order);
-    }
+    // The placeholders track the coefficients, so each box always names exactly
+    // the values it wants for the filter currently in the fields above.
+    const b = parseCoefficients(document.getElementById('filter-b')?.value ?? '1');
+    const a = parseCoefficients(document.getElementById('filter-a')?.value ?? '1');
+    const order = b.values && a.values
+        ? Math.max(1, Math.max(b.values.length, a.values.length)) - 1
+        : 0;
+    const xInput = document.getElementById('filter-init-x');
+    const yInput = document.getElementById('filter-init-y');
+    if (xInput) xInput.placeholder = pastSamplesPlaceholder('x', order);
+    if (yInput) yInput.placeholder = pastSamplesPlaceholder('y', order);
+
+    const markHint = (hint, text, inputs) => {
+        if (hint) {
+            hint.hidden = !text;
+            hint.textContent = text || '';
+        }
+        for (const input of inputs) {
+            input?.classList.toggle('data-tool-input-invalid', !!text);
+        }
+    };
 
     if (!info) return;
     if (!selected) {
         info.textContent = '';
         info.classList.remove('invalid');
         if (axisNote) axisNote.textContent = '';
-        if (hint) hint.hidden = true;
+        markHint(levelHint, '', [document.getElementById('filter-init-level')]);
+        markHint(pastHint, '', [xInput, yInput]);
         return;
     }
 
@@ -343,16 +383,10 @@ proto._syncFilterControls = function() {
     info.textContent = plan.text;
     info.classList.toggle('invalid', !plan.ok);
 
-    // The manual-state complaint belongs under the field it is about, in red,
+    // A complaint about a history belongs under the boxes it is about, in red,
     // not only in the summary at the bottom of the panel.
-    if (hint) {
-        const wrong = plan.manual?.code === 'dataToolFilterInitStateLength'
-            || (needsField && plan.manual?.code === 'dataToolFilterNotNumeric');
-        hint.hidden = !wrong;
-        hint.textContent = wrong ? plan.text : '';
-    }
-    document.getElementById('filter-init-state')?.classList
-        .toggle('data-tool-input-invalid', !!hint && !hint.hidden);
+    markHint(levelHint, plan.manual?.levelText || '', [document.getElementById('filter-init-level')]);
+    markHint(pastHint, plan.manual?.pastText || '', [xInput, yInput]);
 
     if (axisNote) {
         const note = this._filterAxisNote();

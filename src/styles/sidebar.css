@@ -576,6 +576,11 @@
     border-radius: 6px;
     font-size: 0.82rem;
     box-sizing: border-box;
+    /* A value longer than the field ends in an ellipsis instead of being sliced
+       mid-character. Applies while the field is not focused, which is exactly
+       when the user is reading it rather than editing it — a coefficient list or
+       a variable name in a 320px sidebar overflows constantly. */
+    text-overflow: ellipsis;
 }
 
 .derived-input:focus {
@@ -1045,10 +1050,34 @@
     box-sizing: border-box;
     min-width: 4.8rem;
     padding-left: 0.35rem;
-    padding-right: 0.45rem;
+    /* No right padding: the stepper is anchored to the field's inner edge below,
+       and padding here is what left a gap between the arrows and the border. */
+    padding-right: 0;
     text-align: right;
     font-variant-numeric: tabular-nums;
     color-scheme: light;
+}
+
+/* The native stepper is laid out inside the content box, so by default it floats
+   with a margin on all four sides and reads as loose. Stretching it to the full
+   inner height and dropping the field's right padding makes it sit flush against
+   the border instead — the input clips it to its own corner radius, so it follows
+   the field's shape rather than hovering inside it. */
+.data-tool-number-input::-webkit-inner-spin-button,
+.data-tool-number-input::-webkit-outer-spin-button {
+    height: 100%;
+    margin: 0;
+    align-self: stretch;
+    opacity: 1;
+    cursor: pointer;
+}
+
+/* Where a unit label butts up against the field, the rounded right edge leaves a
+   wedge of background between the two. Squaring it there reads as one control;
+   everywhere else the field stands alone and keeps its corners. */
+.data-tool-slider-row.unit-row .data-tool-number-input {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
 }
 
 .theme-dark .data-tool-number-input {

@@ -451,42 +451,55 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     // number of values blocks the commit exactly as an unstable denominator does
     // — and each convention is counted in its OWN terms.
     const h = new Harness();
-    const dom = (init, a, state) => fakeDocument({
-        'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': a,
-        'filter-init': init, 'filter-init-state': state,
+    const dom = (init, a, fields = {}) => fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': a, 'filter-init': init, ...fields,
     });
 
-    // Past samples want 2N: x[−1] … x[−N] then y[−1] … y[−N].
-    const short = withDocument(dom('past', '1, -1.8, 0.81', '1, 2, 3'), () => h._filterPlan());
-    assert.equal(short.ok, false);
-    assert.equal(short.code, 'dataToolFilterInitStateLength');
-    assert.match(short.text, /order 2 needs 4 numbers/);
-    assert.match(short.text, /x\[−1\] … x\[−2\] then y\[−1\] … y\[−2\]/);
+    // Past samples live in two boxes, N values each, counted separately so the
+    // complaint points at the box that is actually wrong.
+    const shortX = withDocument(dom('past', '1, -1.8, 0.81', {
+        'filter-init-x': '1', 'filter-init-y': '3, 4',
+    }), () => h._filterPlan());
+    assert.equal(shortX.ok, false);
+    assert.equal(shortX.code, 'dataToolFilterInitStateLength');
+    assert.match(shortX.text, /^Past inputs: a filter of order 2 needs 2 values; 1 given\./);
 
-    const right = withDocument(dom('past', '1, -1.8, 0.81', '1, 2, 3, 4'), () => h._filterPlan());
-    assert.equal(right.ok, true, 'four values for an order-2 filter');
+    const shortY = withDocument(dom('past', '1, -1.8, 0.81', {
+        'filter-init-x': '1, 2', 'filter-init-y': '3',
+    }), () => h._filterPlan());
+    assert.match(shortY.text, /^Past outputs: a filter of order 2 needs 2 values; 1 given\./);
+
+    // Both right: flattened to [x…, y…] for the kernel, which is the order the
+    // filtic conversion expects.
+    const right = withDocument(dom('past', '1, -1.8, 0.81', {
+        'filter-init-x': '1, 2', 'filter-init-y': '3, 4',
+    }), () => h._filterPlan());
+    assert.equal(right.ok, true, 'two values in each box for an order-2 filter');
     assert.deepEqual(right.manual.state, [1, 2, 3, 4]);
 
-    // Order 1 gets its own sentence rather than "2 numbers" with no names.
-    const one = withDocument(dom('past', '1, -0.5', '5'), () => h._filterPlan());
-    assert.match(one.text, /order 1 needs two numbers — x\[−1\] then y\[−1\]/);
-
-    // A level is one number whatever the order.
-    const level = withDocument(dom('level', '1, -1.8, 0.81', '300'), () => h._filterPlan());
+    // A level is one number whatever the order, and its complaint lands on its
+    // own field rather than on the past-sample boxes.
+    const level = withDocument(dom('level', '1, -1.8, 0.81', { 'filter-init-level': '300' }),
+        () => h._filterPlan());
     assert.equal(level.ok, true, 'one number is enough for a level');
-    const levelBad = withDocument(dom('level', '1, -0.5', '300, 400'), () => h._filterPlan());
+    assert.deepEqual(level.manual.state, [300]);
+    const levelBad = withDocument(dom('level', '1, -0.5', { 'filter-init-level': '300, 400' }),
+        () => h._filterPlan());
     assert.equal(levelBad.ok, false);
     assert.match(levelBad.text, /one number; 2 given/);
+    assert.ok(levelBad.manual.levelText, 'the level field gets the message');
+    assert.equal(levelBad.manual.pastText, '', 'and the past-sample fields do not');
 
     // The blocker names it, so the panel can say which field is at fault.
-    const blocker = withDocument(dom('past', '1, -0.5', '1, 2, 3'), () => h._dataToolCommitBlocker({
-        hasSource: true, hasValidConfig: false, editing: null, fileId: 'f1', data: { variables: {} },
-    }));
+    const blocker = withDocument(dom('past', '1, -0.5', { 'filter-init-x': '1, 2' }),
+        () => h._dataToolCommitBlocker({
+            hasSource: true, hasValidConfig: false, editing: null, fileId: 'f1', data: { variables: {} },
+        }));
     assert.equal(blocker, 'dataToolFilterInitStateLength');
 
     // Steady and zero ask for nothing.
     for (const mode of ['steady', 'zero']) {
-        const plan = withDocument(dom(mode, '1, -0.5', ''), () => h._filterPlan());
+        const plan = withDocument(dom(mode, '1, -0.5'), () => h._filterPlan());
         assert.equal(plan.ok, true, `${mode} needs no typed values`);
         assert.equal(plan.manual.mode, mode);
         assert.deepEqual(plan.manual.state, []);
@@ -500,7 +513,8 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     const config = withDocument(fakeDocument({
         'data-tool-select': 'filter',
         'filter-b': '0.25', 'filter-a': '1, -0.5',
-        'filter-mode': 'forward', 'filter-init': 'past', 'filter-init-state': '0.75, 0.5',
+        'filter-mode': 'forward', 'filter-init': 'past',
+        'filter-init-x': '0.75', 'filter-init-y': '0.5',
         'filter-restart-gap': '5',
     }), () => h._getDataToolConfig('filter'));
     assert.deepEqual(config.params.b, [0.25, 0]);
@@ -520,28 +534,37 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
 }
 
 {
-    // The placeholder names the values the current convention actually wants, so
-    // it can never contradict the validator sitting right below it.
+    // Each box names its own values, so the order is something the user can see
+    // rather than something they have to be told.
     const h = new Harness();
-    for (const [init, a, expected] of [
-        ['past', '1, -0.5', 'x[−1], y[−1]'],
-        ['past', '1, -1.8, 0.81', 'x[−1], x[−2], y[−1], y[−2]'],
-        ['past', '1, -0.1, 0.2, -0.3, 0.4', 'x[−1] … x[−4], y[−1] … y[−4]'],
-        ['level', '1, -1.8, 0.81', 'level before the start'],
-        ['steady', '1, -0.5', ''],
+    for (const [a, x, y] of [
+        ['1, -0.5', 'x[−1]', 'y[−1]'],
+        ['1, -1.8, 0.81', 'x[−1], x[−2]', 'y[−1], y[−2]'],
+        ['1, -0.1, 0.2, -0.3, 0.4', 'x[−1] … x[−4]', 'y[−1] … y[−4]'],
     ]) {
         const dom = fakeDocument({
-            'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': a, 'filter-init': init,
+            'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': a, 'filter-init': 'past',
         });
         withDocument(dom, () => h._syncFilterControls());
-        assert.equal(dom.getElementById('filter-init-state').placeholder, expected,
-            `placeholder for ${init} with a = [${a}]`);
-        // ...and the field only appears for the conventions that ask for numbers.
-        assert.equal(
-            dom.getElementById('filter-init-state-wrap').classList.contains('collapsed'),
-            init === 'steady',
-            `field visibility for ${init}`,
-        );
+        assert.equal(dom.getElementById('filter-init-x').placeholder, x, `x placeholder for a = [${a}]`);
+        assert.equal(dom.getElementById('filter-init-y').placeholder, y, `y placeholder for a = [${a}]`);
+    }
+
+    // Each convention shows only its own fields.
+    for (const [init, levelShown, pastShown] of [
+        ['steady', false, false],
+        ['zero', false, false],
+        ['level', true, false],
+        ['past', false, true],
+    ]) {
+        const dom = fakeDocument({
+            'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': '1, -0.5', 'filter-init': init,
+        });
+        withDocument(dom, () => h._syncFilterControls());
+        assert.equal(!dom.getElementById('filter-init-level-wrap').classList.contains('collapsed'),
+            levelShown, `level field visibility for ${init}`);
+        assert.equal(!dom.getElementById('filter-init-past-wrap').classList.contains('collapsed'),
+            pastShown, `past-sample field visibility for ${init}`);
     }
 }
 
@@ -556,6 +579,49 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     assert.ok(Math.abs(plan.inspection.dcGain - 0.5) < 1e-12, `DC gain 0.5 (got ${plan.inspection.dcGain})`);
     assert.equal(plan.inspection.denominatorOrder, 1, 'and it really is an IIR');
     assert.match(plan.text, /^IIR, order 1/);
+}
+
+// ── An invalid configuration draws nothing ────────────────────────────────
+
+{
+    // A preview left over from the last valid settings is worse than no preview:
+    // it is a curve belonging to a filter the panel no longer describes — an
+    // unstable one, say — with nothing on screen saying so.
+    const h = new Harness();
+    let cleared = 0;
+    let restored = 0;
+    h._clearDataToolPreview = () => { cleared++; };
+    h._restoreEditedTraceValues = () => { restored++; };
+    h._getOutlierContext = () => ({
+        fileId: 'f1', data: { variables: {} }, sourceName: 'y',
+        sourceVariable: { data: [1, 2, 3] }, outputName: 'out', tool: 'filter', lazy: false,
+    });
+    h._buildDataToolResultOffThread = () => { throw new Error('should not run'); };
+
+    // Unstable coefficients: the config throws, so the draft preview comes down.
+    withDocument(fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': '1, -2.2, 1.21',
+    }), () => h._runDataToolPreview());
+    assert.equal(cleared, 1, 'an unstable filter takes the dashed trace down');
+    assert.equal(restored, 0, 'nothing to restore while drafting');
+
+    // The same while EDITING writes into the live variable, so abandoning has to
+    // put the pre-edit values back as well.
+    h._dataToolEditing = { fileId: 'f1', name: 'out' };
+    withDocument(fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': '1, -2.2, 1.21',
+    }), () => h._runDataToolPreview());
+    assert.equal(cleared, 2);
+    assert.equal(restored, 1, 'an edited trace is restored, not left showing the invalid curve');
+    h._dataToolEditing = null;
+
+    // Any other invalid configuration behaves the same way — the mechanism is
+    // "the config would not read", not anything filter-specific.
+    withDocument(fakeDocument({
+        'data-tool-select': 'removeOutliers', 'outlier-method': 'bounds',
+        'outlier-lower-bound': '10', 'outlier-upper-bound': '1',
+    }), () => h._runDataToolPreview());
+    assert.equal(cleared, 3, 'inverted bounds take the preview down too');
 }
 
 // ── The detrend form ──────────────────────────────────────────────────────

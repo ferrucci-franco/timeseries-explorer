@@ -361,7 +361,7 @@ proto._syncDataTools = function() {
     // Zero phase builds its own edges out of the reflection padding, so an
     // initial-condition choice there would be a control over nothing.
     const zeroPhase = document.getElementById('filter-mode')?.value === 'zeroPhase';
-    for (const id of ['filter-init', 'filter-init-state']) {
+    for (const id of ['filter-init', 'filter-init-level', 'filter-init-x', 'filter-init-y']) {
         document.getElementById(id)?.toggleAttribute('disabled', filterOff || zeroPhase);
     }
     for (const id of ['resample-grid-mode', 'resample-method', 'resample-step', 'resample-factor', 'resample-count']) {
@@ -1031,7 +1031,9 @@ const DATA_TOOL_PARAMETER_IDS = [
     'filter-a',
     'filter-mode',
     'filter-init',
-    'filter-init-state',
+    'filter-init-level',
+    'filter-init-x',
+    'filter-init-y',
     'filter-restart-gap',
     'resample-grid-mode',
     'resample-method',
@@ -1141,7 +1143,13 @@ proto._writeDataToolForm = function(definition, name) {
         set('filter-a', (params.a || [1]).join(', '));
         set('filter-mode', params.mode);
         set('filter-init', params.init || 'steady');
-        set('filter-init-state', (params.initState || []).join(', '));
+        // The stored state is flat [x…, y…]; the panel splits it back into the
+        // two boxes it was typed in.
+        const stored = params.initState || [];
+        const order = Math.max(0, (params.a || [1]).length - 1);
+        set('filter-init-level', params.init === 'level' ? (stored[0] ?? '') : '');
+        set('filter-init-x', params.init === 'past' ? stored.slice(0, order).join(', ') : '');
+        set('filter-init-y', params.init === 'past' ? stored.slice(order).join(', ') : '');
         set('filter-restart-gap', params.restartGap ?? 0);
     } else if (definition.tool === 'interpolate') {
         set('interpolate-method', params.method);
@@ -2538,24 +2546,38 @@ proto._handleDataToolPreviewChange = function(options = {}) {
     }, delay);
 };
 
+// Take the preview down whatever form it is in. Drafting draws a dashed
+// throwaway trace; editing writes into the real variable and keeps a backup, so
+// abandoning it has to put those values back or the plot keeps showing a curve
+// no setting in the panel produces any more.
+proto._abandonDataToolPreview = function() {
+    this._clearDataToolPreview();
+    if (this._dataToolEditing) this._restoreEditedTraceValues();
+};
+
 proto._runDataToolPreview = function() {
     // Resampling has no preview: its result does not share this file's time axis,
     // so there is no trace it could be drawn as next to the source.
     if (this._isFileDataTool()) {
-        this._clearDataToolPreview();
+        this._abandonDataToolPreview();
         return;
     }
     const context = this._getOutlierContext({ quiet: true });
     // A lazy file holds column references, not arrays: previewing would compute
     // over the overview and show a curve the commit would not reproduce.
     if (!context || context.lazy) {
-        this._clearDataToolPreview();
+        this._abandonDataToolPreview();
         return;
     }
     let config;
     try {
         config = this._getDataToolConfig(context.tool, context);
     } catch {
+        // An unreadable configuration has no curve. Leaving the last valid one on
+        // the plot is worse than showing nothing: it is a trace that belongs to a
+        // filter the panel is no longer describing — an unstable one, say — and
+        // nothing on screen says so.
+        this._abandonDataToolPreview();
         return;
     }
 
@@ -2570,8 +2592,12 @@ proto._runDataToolPreview = function() {
         else this._drawDataToolPreviewTrace(context, result);
     }).catch(err => {
         // A superseded run is the normal outcome of dragging a slider: a newer
-        // preview is already in flight and will report for it.
+        // preview is already in flight and will report for it, and its trace is
+        // the one that should stay up.
         if (err?.cancelled) return;
+        // Anything else means this configuration produced nothing, so nothing is
+        // what the plot should show for it.
+        this._abandonDataToolPreview();
         this._setOutlierMessage(err?.message || String(err), 'error');
     });
 };
