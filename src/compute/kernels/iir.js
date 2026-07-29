@@ -27,12 +27,26 @@ import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 
 export const FILTER_MODES = new Set(['forward', 'zeroPhase']);
 
-// Where the recursion starts from at the beginning of a run.
+// Where the recursion starts from at the beginning of a run. All four describe
+// the SAME thing — the filter's memory at the moment the data begins — in the
+// terms most likely to be the ones the user is thinking in.
+//
 //   steady — as if the input had been constant at the run's first sample
 //            forever. No transient that the data did not ask for.
 //   zero   — at rest, which is what a real DSP does when it powers up.
-//   manual — the caller supplies the state directly, one number per order.
-export const FILTER_INIT_MODES = new Set(['steady', 'zero', 'manual']);
+//   level  — steady, but at a value the caller names: "the signal had been
+//            sitting at 300 before the recording started". One number.
+//   past   — the samples themselves: x[−1] … x[−N] and y[−1] … y[−N]. Fully
+//            general (every state above is expressible this way) and the
+//            convention MATLAB's filtic uses.
+export const FILTER_INIT_MODES = new Set(['steady', 'zero', 'level', 'past']);
+
+/** How many numbers a given init mode expects for a filter of this order. */
+export function filterInitStateLength(mode, order) {
+    if (mode === 'level') return 1;
+    if (mode === 'past') return 2 * order;
+    return 0;
+}
 
 export function normalizeFilterRestartGap(value) {
     const n = Math.floor(Number(value));
@@ -340,22 +354,55 @@ function oddExtend(segment, padLength) {
 }
 
 /**
+ * Past samples → the recursion's internal state, i.e. MATLAB's `filtic`.
+ *
+ * Derived straight from the transposed direct-form II update by unrolling it
+ * backwards: the state entering sample 0 is whatever the same recursion would
+ * have left behind after processing x[−N..−1] and emitting y[−N..−1].
+ *
+ *     z_k = Σ_{i=k+1}^{N} ( b_i·x[k−i] − a_i·y[k−i] )
+ *
+ * Each z mixes past inputs AND past outputs, which is exactly why there are N
+ * of them and not 2N — and why asking the user for z was asking the wrong
+ * question. `xPast[j]` is x[−1−j] and `yPast[j]` is y[−1−j].
+ */
+export function stateFromPastSamples(b, a, xPast = [], yPast = []) {
+    const order = Math.max(0, b.length - 1);
+    const state = new Float64Array(order);
+    const at = (list, index) => {
+        const value = Number(list?.[index]);
+        return Number.isFinite(value) ? value : 0;
+    };
+    for (let k = 0; k < order; k++) {
+        let sum = 0;
+        for (let i = k + 1; i <= order; i++) {
+            const j = i - k - 1;   // x[k−i] is x[−(i−k)] is xPast[i−k−1]
+            sum += b[i] * at(xPast, j) - a[i] * at(yPast, j);
+        }
+        state[k] = sum;
+    }
+    return state;
+}
+
+/**
  * The state a run starts from, under the caller's chosen convention.
  * @param {Float64Array} zi steady-state solution for a unit step
  * @param {number} first the run's first sample
  */
-function startingState(zi, first, init) {
+function startingState(zi, first, init, b, a) {
     if (init.mode === 'zero') return new Float64Array(zi.length);
-    if (init.mode === 'manual') {
-        const given = init.state || [];
-        // Length is validated in the panel; here a short list is padded rather
-        // than throwing, because a saved session must never fail to reopen.
-        const state = new Float64Array(zi.length);
-        for (let i = 0; i < zi.length; i++) {
-            const value = Number(given[i]);
-            state[i] = Number.isFinite(value) ? value : 0;
-        }
-        return state;
+    if (init.mode === 'level') {
+        // `zi` is the state for a unit step, so scaling it by the level gives
+        // the state for a step of that height — the same arithmetic `steady`
+        // does, with the height named rather than taken from the data.
+        const level = Number(init.state?.[0]);
+        return Float64Array.from(zi, value => value * (Number.isFinite(level) ? level : first));
+    }
+    if (init.mode === 'past') {
+        const order = zi.length;
+        // Length is validated in the panel; a short list is padded with zeros
+        // here rather than throwing, so a stored definition always reopens.
+        return stateFromPastSamples(b, a, (init.state || []).slice(0, order), (init.state || []).slice(order));
     }
     return Float64Array.from(zi, value => value * first);
 }
@@ -504,7 +551,7 @@ export function applyFilter(sourceValues, params = {}) {
         if (!Number.isFinite(x)) { report.skippedCount++; continue; }
         const hole = lastValid < 0 ? 0 : expectedBetween(axis, lastValid, i);
         if (state === null || hole > tolerance) {
-            state = startingState(zi, x, init);
+            state = startingState(zi, x, init, b, a);
             report.restarts++;
             report.segments++;
         } else if (hole > 0) {

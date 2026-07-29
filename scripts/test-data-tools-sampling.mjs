@@ -447,39 +447,49 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
 }
 
 {
-    // A manual initial state is part of the filter's definition, so the wrong
-    // number of values blocks the commit exactly as an unstable denominator does.
+    // Typed initial conditions are part of the filter's definition, so the wrong
+    // number of values blocks the commit exactly as an unstable denominator does
+    // — and each convention is counted in its OWN terms.
     const h = new Harness();
-    const dom = (order2 = true, state = '') => fakeDocument({
-        'data-tool-select': 'filter',
-        'filter-b': '1',
-        'filter-a': order2 ? '1, -1.8, 0.81' : '1, -0.5',
-        'filter-init': 'manual',
-        'filter-init-state': state,
+    const dom = (init, a, state) => fakeDocument({
+        'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': a,
+        'filter-init': init, 'filter-init-state': state,
     });
 
-    const short = withDocument(dom(true, '0.5'), () => h._filterPlan());
+    // Past samples want 2N: x[−1] … x[−N] then y[−1] … y[−N].
+    const short = withDocument(dom('past', '1, -1.8, 0.81', '1, 2, 3'), () => h._filterPlan());
     assert.equal(short.ok, false);
     assert.equal(short.code, 'dataToolFilterInitStateLength');
-    assert.match(short.text, /exactly 2 state values; 1 given/);
+    assert.match(short.text, /order 2 needs 4 numbers/);
+    assert.match(short.text, /x\[−1\] … x\[−2\] then y\[−1\] … y\[−2\]/);
 
-    const right = withDocument(dom(true, '0.5, 0.25'), () => h._filterPlan());
-    assert.equal(right.ok, true, 'two values for an order-2 filter');
-    assert.deepEqual(right.manual.state, [0.5, 0.25]);
+    const right = withDocument(dom('past', '1, -1.8, 0.81', '1, 2, 3, 4'), () => h._filterPlan());
+    assert.equal(right.ok, true, 'four values for an order-2 filter');
+    assert.deepEqual(right.manual.state, [1, 2, 3, 4]);
+
+    // Order 1 gets its own sentence rather than "2 numbers" with no names.
+    const one = withDocument(dom('past', '1, -0.5', '5'), () => h._filterPlan());
+    assert.match(one.text, /order 1 needs two numbers — x\[−1\] then y\[−1\]/);
+
+    // A level is one number whatever the order.
+    const level = withDocument(dom('level', '1, -1.8, 0.81', '300'), () => h._filterPlan());
+    assert.equal(level.ok, true, 'one number is enough for a level');
+    const levelBad = withDocument(dom('level', '1, -0.5', '300, 400'), () => h._filterPlan());
+    assert.equal(levelBad.ok, false);
+    assert.match(levelBad.text, /one number; 2 given/);
 
     // The blocker names it, so the panel can say which field is at fault.
-    const blocker = withDocument(dom(true, '1, 2, 3'), () => h._dataToolCommitBlocker({
+    const blocker = withDocument(dom('past', '1, -0.5', '1, 2, 3'), () => h._dataToolCommitBlocker({
         hasSource: true, hasValidConfig: false, editing: null, fileId: 'f1', data: { variables: {} },
     }));
     assert.equal(blocker, 'dataToolFilterInitStateLength');
 
-    // Steady and zero need no state at all.
+    // Steady and zero ask for nothing.
     for (const mode of ['steady', 'zero']) {
-        const plan = withDocument(fakeDocument({
-            'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': '1, -0.5', 'filter-init': mode,
-        }), () => h._filterPlan());
-        assert.equal(plan.ok, true, `${mode} needs no manual state`);
+        const plan = withDocument(dom(mode, '1, -0.5', ''), () => h._filterPlan());
+        assert.equal(plan.ok, true, `${mode} needs no typed values`);
         assert.equal(plan.manual.mode, mode);
+        assert.deepEqual(plan.manual.state, []);
     }
 }
 
@@ -490,41 +500,48 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     const config = withDocument(fakeDocument({
         'data-tool-select': 'filter',
         'filter-b': '0.25', 'filter-a': '1, -0.5',
-        'filter-mode': 'forward', 'filter-init': 'manual', 'filter-init-state': '0.75',
+        'filter-mode': 'forward', 'filter-init': 'past', 'filter-init-state': '0.75, 0.5',
         'filter-restart-gap': '5',
     }), () => h._getDataToolConfig('filter'));
     assert.deepEqual(config.params.b, [0.25, 0]);
     assert.deepEqual(config.params.a, [1, -0.5]);
-    assert.equal(config.params.init, 'manual');
-    assert.deepEqual(config.params.initState, [0.75]);
+    assert.equal(config.params.init, 'past');
+    assert.deepEqual(config.params.initState, [0.75, 0.5]);
     assert.equal(config.params.restartGap, 5);
 
-    assert.match(h._filterDescription(config.params), /from state \[0\.75\]/);
+    assert.match(h._filterDescription(config.params), /from past samples \[0\.75, 0\.5\]/);
     assert.match(h._filterDescription(config.params), /restart after gaps > 5 samples/);
     // Zero phase derives its own edges, so quoting an initial condition there
     // would describe something that did not happen.
     assert.doesNotMatch(
         h._filterDescription({ ...config.params, mode: 'zeroPhase' }),
-        /from state/,
+        /from past samples/,
     );
 }
 
 {
-    // The placeholder must agree with the error message directly below it. A
-    // fixed "z₁, z₂" under a first-order filter said two while the validator
-    // said one, which is how the mismatch was spotted.
+    // The placeholder names the values the current convention actually wants, so
+    // it can never contradict the validator sitting right below it.
     const h = new Harness();
-    for (const [a, expected] of [
-        ['1, -0.5', 'z₁'],
-        ['1, -1.8, 0.81', 'z₁, z₂'],
-        ['1, -0.1, 0.2, -0.3, 0.4, -0.05', 'z₁, z₂, … z₅'],
+    for (const [init, a, expected] of [
+        ['past', '1, -0.5', 'x[−1], y[−1]'],
+        ['past', '1, -1.8, 0.81', 'x[−1], x[−2], y[−1], y[−2]'],
+        ['past', '1, -0.1, 0.2, -0.3, 0.4', 'x[−1] … x[−4], y[−1] … y[−4]'],
+        ['level', '1, -1.8, 0.81', 'level before the start'],
+        ['steady', '1, -0.5', ''],
     ]) {
         const dom = fakeDocument({
-            'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': a, 'filter-init': 'manual',
+            'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': a, 'filter-init': init,
         });
         withDocument(dom, () => h._syncFilterControls());
         assert.equal(dom.getElementById('filter-init-state').placeholder, expected,
-            `placeholder for a = [${a}]`);
+            `placeholder for ${init} with a = [${a}]`);
+        // ...and the field only appears for the conventions that ask for numbers.
+        assert.equal(
+            dom.getElementById('filter-init-state-wrap').classList.contains('collapsed'),
+            init === 'steady',
+            `field visibility for ${init}`,
+        );
     }
 }
 

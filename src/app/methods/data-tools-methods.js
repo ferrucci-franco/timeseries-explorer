@@ -2509,6 +2509,7 @@ proto._resetDataToolPicker = function() {
     this._toggleFilterHelpPopover?.(false);
     this._toggleFilterInitHelpPopover?.(false);
     this._toggleFilterGapHelpPopover?.(false);
+    this._toggleFilterDirectionHelpPopover?.(false);
     this._setOutlierMessage('', '');
     this._syncDataTools?.();
 };

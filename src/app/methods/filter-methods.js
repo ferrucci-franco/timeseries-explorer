@@ -12,6 +12,7 @@ import { inspectFilter } from '../../compute/kernels/index.js';
 import {
     FILTER_INIT_MODES,
     FILTER_MODES,
+    filterInitStateLength,
     normalizeFilterRestartGap,
     parseCoefficients,
 } from '../../compute/kernels/iir.js';
@@ -52,23 +53,22 @@ proto.initFilterTool = function() {
         event.stopPropagation();
         this._toggleFilterGapHelpPopover();
     });
+    document.getElementById('filter-direction-help-toggle')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._toggleFilterDirectionHelpPopover();
+    });
 };
 
-// Subscripts, so the placeholder reads the way the help does.
-const SUBSCRIPTS = '₀₁₂₃₄₅₆₇₈₉';
-function subscript(n) {
-    return String(n).split('').map(digit => SUBSCRIPTS[Number(digit)] ?? digit).join('');
-}
-
-// The state vector this filter actually wants, spelled out. Fixed text cannot do
-// it: "z₁, z₂" under a first-order filter contradicts the error message sitting
-// directly beneath it, which is exactly how the placeholder was found to be wrong.
-function manualStatePlaceholder(order) {
-    if (!(order > 0)) return '';
-    if (order <= 4) {
-        return Array.from({ length: order }, (_, i) => `z${subscript(i + 1)}`).join(', ');
-    }
-    return `z${subscript(1)}, z${subscript(2)}, … z${subscript(order)}`;
+// The values this filter actually wants, named in the convention the user chose.
+// Fixed text cannot do it — a first-order filter needs a different list from a
+// third-order one, and "level" needs one number whatever the order.
+function manualStatePlaceholder(mode, order) {
+    if (mode === 'level') return i18n.t('dataToolFilterInitLevelPlaceholder');
+    if (mode !== 'past' || !(order > 0)) return '';
+    const run = (symbol) => (order <= 3
+        ? Array.from({ length: order }, (_, i) => `${symbol}[−${i + 1}]`).join(', ')
+        : `${symbol}[−1] … ${symbol}[−${order}]`);
+    return `${run('x')}, ${run('y')}`;
 }
 
 proto._clearManualFilterState = function() {
@@ -79,6 +79,17 @@ proto._clearManualFilterState = function() {
 proto._toggleFilterHelpPopover = function(show) {
     const popover = document.getElementById('filter-help-popover');
     const button = document.getElementById('filter-help-toggle');
+    if (!popover || !button) return;
+    const willShow = typeof show === 'boolean' ? show : popover.hidden;
+    popover.hidden = !willShow;
+    button.classList.toggle('active', willShow);
+    button.setAttribute('aria-expanded', String(willShow));
+    if (willShow) this._positionFilterHelpPopover(popover, button);
+};
+
+proto._toggleFilterDirectionHelpPopover = function(show) {
+    const popover = document.getElementById('filter-direction-help-popover');
+    const button = document.getElementById('filter-direction-help-toggle');
     if (!popover || !button) return;
     const willShow = typeof show === 'boolean' ? show : popover.hidden;
     popover.hidden = !willShow;
@@ -123,31 +134,40 @@ proto._positionFilterHelpPopover = function(popover, button) {
     if (typeof window === 'undefined' || !button.getBoundingClientRect) return;
     const rect = button.getBoundingClientRect();
     const margin = 12;
-    // A viewport that reports zero (an offscreen or not-yet-composited window)
-    // would otherwise collapse the popover to a sliver. Fall back to the document
-    // width, and never go below a width the equation can still be read in.
-    const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 900;
-    const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 700;
-    const width = Math.max(300, Math.min(600, viewportWidth - 2 * margin));
+    // The viewport may report zero on a window that is offscreen or has not
+    // composited yet. Where it does, the honest answer is "unknown", not a made-up
+    // number: an invented width both shrinks the popover and drags it left over
+    // the very controls it is explaining. Unknown means skip the clamp instead.
+    const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
+    const width = viewportWidth
+        ? Math.max(300, Math.min(600, viewportWidth - 2 * margin))
+        : 600;
 
     const sidebarRight = document.getElementById('sidebar')?.getBoundingClientRect().right ?? rect.right;
-    // Beside the sidebar when there is room for it; otherwise as far right as the
-    // window allows, which on a narrow window means overlapping — still better
-    // than off-screen.
-    const left = Math.max(margin, Math.min(sidebarRight + margin, viewportWidth - width - margin));
+    // Beside the sidebar, which is what keeps it clear of the filter's controls.
+    // Only a viewport we actually measured may pull it back left, and on a window
+    // too narrow for that it overlaps — still better than opening off-screen.
+    const preferred = sidebarRight + margin;
+    const left = viewportWidth
+        ? Math.max(margin, Math.min(preferred, viewportWidth - width - margin))
+        : preferred;
 
     popover.style.position = 'fixed';
     popover.style.width = `${width}px`;
     popover.style.left = `${left}px`;
     popover.style.right = 'auto';
-    popover.style.maxHeight = `${Math.max(160, viewportHeight - 2 * margin)}px`;
+    if (viewportHeight) popover.style.maxHeight = `${Math.max(160, viewportHeight - 2 * margin)}px`;
+    else popover.style.maxHeight = '';
     // Measured only once it is laid out at its final width, so the clamp below
     // works on the real height rather than a guess.
     popover.style.top = `${margin}px`;
     const height = popover.offsetHeight || 0;
-    const top = Math.max(margin, Math.min(rect.top - 8, viewportHeight - height - margin));
+    const top = viewportHeight
+        ? Math.max(margin, Math.min(rect.top - 8, viewportHeight - height - margin))
+        : Math.max(margin, rect.top - 8);
     popover.style.top = `${top}px`;
-    popover.style.maxHeight = `${Math.max(160, viewportHeight - top - margin)}px`;
+    if (viewportHeight) popover.style.maxHeight = `${Math.max(160, viewportHeight - top - margin)}px`;
 };
 
 // ─── Reading the form ─────────────────────────────────────────────────────
@@ -223,13 +243,14 @@ proto._filterPlan = function() {
 };
 
 /**
- * The manual initial state, checked against the filter's order.
+ * The typed initial conditions, checked against what the chosen convention needs.
  * @returns {{ mode: string, state: number[], code: string, text: string }}
  */
 proto._readManualFilterState = function(order) {
     const mode = document.getElementById('filter-init')?.value;
     const resolved = FILTER_INIT_MODES.has(mode) ? mode : 'steady';
-    if (resolved !== 'manual') return { mode: resolved, state: [], code: '', text: '' };
+    const needed = filterInitStateLength(resolved, order);
+    if (!needed) return { mode: resolved, state: [], code: '', text: '' };
 
     const raw = document.getElementById('filter-init-state')?.value ?? '';
     const parsed = parseCoefficients(raw);
@@ -239,15 +260,21 @@ proto._readManualFilterState = function(order) {
             text: i18n.t('dataToolFilterNotNumeric').replace('{token}', parsed.badToken),
         };
     }
-    if (parsed.values.length !== order) {
+    if (parsed.values.length !== needed) {
+        // Each convention is counted in its own terms — one level, or a pair of
+        // histories — because "2 values" means nothing without saying which.
+        const key = resolved === 'level'
+            ? 'dataToolFilterInitLevelLength'
+            : (order === 1 ? 'dataToolFilterInitPastLengthOne' : 'dataToolFilterInitPastLength');
         return {
             mode: resolved, state: parsed.values, code: 'dataToolFilterInitStateLength',
-            // A global replace: the order appears twice in this sentence, and the
-            // single-shot .replace() used everywhere else would leave the second
-            // one as a literal placeholder.
-            text: i18n.t(order === 1 ? 'dataToolFilterInitStateLengthOne' : 'dataToolFilterInitStateLength')
-                .replace(/\{needed\}/g, String(order))
-                .replace('{given}', String(parsed.values.length)),
+            // A global replace: the counts appear more than once in these
+            // sentences, and the single-shot .replace() used everywhere else
+            // would leave the later ones as literal placeholders.
+            text: i18n.t(key)
+                .replace(/\{needed\}/g, String(needed))
+                .replace(/\{order\}/g, String(order))
+                .replace(/\{given\}/g, String(parsed.values.length)),
         };
     }
     return { mode: resolved, state: parsed.values, code: '', text: '' };
@@ -273,7 +300,7 @@ proto._getFilterConfig = function() {
             a: Array.from(plan.inspection.a),
             mode: FILTER_MODES.has(mode) ? mode : 'forward',
             init: plan.manual.mode,
-            initState: plan.manual.mode === 'manual' ? [...plan.manual.state] : [],
+            initState: [...plan.manual.state],
             restartGap: normalizeFilterRestartGap(document.getElementById('filter-restart-gap')?.value),
         },
     };
@@ -287,10 +314,12 @@ proto._syncFilterControls = function() {
     const selected = this._getSelectedDataTool() === 'filter';
 
     const initMode = document.getElementById('filter-init')?.value || 'steady';
-    stateWrap?.classList.toggle('collapsed', initMode !== 'manual');
+    // Only the two conventions that ask for numbers show a field.
+    const needsField = initMode === 'level' || initMode === 'past';
+    stateWrap?.classList.toggle('collapsed', !needsField);
 
-    // The placeholder tracks the coefficients, so it always shows exactly as many
-    // slots as the filter in the boxes above needs.
+    // The placeholder tracks the coefficients AND the convention, so it always
+    // names exactly the values the current choice needs.
     const stateInput = document.getElementById('filter-init-state');
     if (stateInput) {
         const b = parseCoefficients(document.getElementById('filter-b')?.value ?? '1');
@@ -298,7 +327,7 @@ proto._syncFilterControls = function() {
         const order = b.values && a.values
             ? Math.max(1, Math.max(b.values.length, a.values.length)) - 1
             : 0;
-        stateInput.placeholder = manualStatePlaceholder(order);
+        stateInput.placeholder = manualStatePlaceholder(initMode, order);
     }
 
     if (!info) return;
@@ -318,7 +347,7 @@ proto._syncFilterControls = function() {
     // not only in the summary at the bottom of the panel.
     if (hint) {
         const wrong = plan.manual?.code === 'dataToolFilterInitStateLength'
-            || (initMode === 'manual' && plan.manual?.code === 'dataToolFilterNotNumeric');
+            || (needsField && plan.manual?.code === 'dataToolFilterNotNumeric');
         hint.hidden = !wrong;
         hint.textContent = wrong ? plan.text : '';
     }
@@ -366,7 +395,8 @@ proto._filterDescription = function(params = {}) {
     const parts = [`b [${list(params.b)}]`, `a [${list(params.a)}]`, direction];
     if (params.mode !== 'zeroPhase') {
         if (params.init === 'zero') parts.push('from rest');
-        else if (params.init === 'manual') parts.push(`from state [${list(params.initState)}]`);
+        else if (params.init === 'level') parts.push(`from level ${list(params.initState)}`);
+        else if (params.init === 'past') parts.push(`from past samples [${list(params.initState)}]`);
     }
     if (params.restartGap > 0) parts.push(`restart after gaps > ${params.restartGap} samples`);
     return parts.join('; ');

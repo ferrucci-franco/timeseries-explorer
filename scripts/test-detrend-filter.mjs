@@ -10,11 +10,13 @@ import {
 import {
     applyFilter,
     denominatorPoles,
+    filterInitStateLength,
     filterInitialState,
     inspectFilter,
     normalizeFilterCoefficients,
     parseCoefficients,
     schurCohnStable,
+    stateFromPastSamples,
 } from '../src/compute/kernels/iir.js';
 import { runDataToolStep } from '../src/compute/kernels/index.js';
 
@@ -318,22 +320,68 @@ const N = NaN;
     assert.ok(Math.abs(zero[39] - 300) < 1e-6, 'and it settles to the same place');
     assert.ok(zero[0] < zero[5] && zero[5] < zero[10], 'the startup transient is a real climb');
 
-    // Manual reproduces either of them exactly, which is the check that the
-    // vector really is the state and not something adjacent to it.
-    const asZero = applyFilter(x, { b, a, mode: 'forward', init: 'manual', initState: [0] }).values;
-    close(asZero, zero, 'manual [0] equals starting at rest');
-    const ziForStep = filterInitialState(Float64Array.from([0.5, 0]), Float64Array.from([1, -0.5]));
-    const asSteady = applyFilter(x, {
-        b, a, mode: 'forward', init: 'manual', initState: [ziForStep[0] * 300],
+    // A named level reproduces steady state when the level IS the first sample,
+    // and differs when it is not — which is the whole reason it exists.
+    const asSteady = applyFilter(x, { b, a, mode: 'forward', init: 'level', initState: [300] }).values;
+    close(asSteady, steady, 'level 300 equals steady state on a signal at 300', 1e-9);
+    const fromLow = applyFilter(x, { b, a, mode: 'forward', init: 'level', initState: [0] }).values;
+    close(fromLow, zero, 'level 0 equals starting at rest', 1e-9);
+
+    // Past samples: the fully general form. A history consistent with a constant
+    // 300 must reproduce steady state exactly.
+    const past = applyFilter(x, {
+        b, a, mode: 'forward', init: 'past', initState: [300, 300],
     }).values;
-    close(asSteady, steady, 'manual with the steady-state vector equals steady state', 1e-9);
+    close(past, steady, 'x[−1] = y[−1] = 300 equals steady state', 1e-9);
+    // ...and an all-zero history must reproduce starting at rest.
+    const pastRest = applyFilter(x, {
+        b, a, mode: 'forward', init: 'past', initState: [0, 0],
+    }).values;
+    close(pastRest, zero, 'a zero history equals starting at rest', 1e-9);
 }
 
 {
-    // A short manual state is padded rather than thrown: the panel refuses one,
-    // but a session restored from an older file must still open.
-    const r = applyFilter([1, 2, 3], { b: [1], a: [1, -0.5], init: 'manual', initState: [] });
-    assert.ok(r.values.every(Number.isFinite), 'a missing manual state degrades to rest');
+    // The conversion itself, against the difference equation by hand.
+    // For order 1: z = b1·x[−1] − a1·y[−1].
+    const b = Float64Array.from([0.5, 0.25]);
+    const a = Float64Array.from([1, -0.4]);
+    const z = stateFromPastSamples(b, a, [2], [3]);
+    assert.ok(Math.abs(z[0] - (0.25 * 2 - (-0.4) * 3)) < 1e-12, `filtic order 1 (got ${z[0]})`);
+
+    // For order 2: z0 = b1·x[−1] − a1·y[−1] + b2·x[−2] − a2·y[−2], z1 = b2·x[−2 index 0] …
+    const b2 = Float64Array.from([1, 2, 3]);
+    const a2 = Float64Array.from([1, -0.5, 0.2]);
+    const z2 = stateFromPastSamples(b2, a2, [7, 5], [11, 13]);
+    const expected0 = 2 * 7 - (-0.5) * 11 + 3 * 5 - 0.2 * 13;
+    const expected1 = 3 * 7 - 0.2 * 11;
+    assert.ok(Math.abs(z2[0] - expected0) < 1e-12, `filtic order 2, z0 (got ${z2[0]}, want ${expected0})`);
+    assert.ok(Math.abs(z2[1] - expected1) < 1e-12, `filtic order 2, z1 (got ${z2[1]}, want ${expected1})`);
+}
+
+{
+    // The convention is checked against the recursion end to end: filtering a
+    // signal whose first samples are a known history, then filtering the tail
+    // alone with that history as the initial condition, must agree exactly.
+    const b = [0.4, 0.2];
+    const a = [1, -0.6];
+    const whole = [5, 7, 2, 9, 4, 6, 8, 3, 1, 5];
+    const full = applyFilter(whole, { b, a, mode: 'forward', init: 'zero' }).values;
+    // Restart at index 3 with x[−1] = whole[2], y[−1] = full[2].
+    const tail = whole.slice(3);
+    const resumed = applyFilter(tail, {
+        b, a, mode: 'forward', init: 'past', initState: [whole[2], full[2]],
+    }).values;
+    close(resumed, full.slice(3), 'a run resumed from its own past samples matches the whole', 1e-12);
+}
+
+{
+    // A missing history is padded rather than thrown: the panel refuses one, but
+    // a stored definition must always reopen.
+    const r = applyFilter([1, 2, 3], { b: [1], a: [1, -0.5], init: 'past', initState: [] });
+    assert.ok(r.values.every(Number.isFinite), 'a missing history degrades to rest');
+    assert.equal(filterInitStateLength('level', 3), 1);
+    assert.equal(filterInitStateLength('past', 3), 6, 'x and y histories, so 2N');
+    assert.equal(filterInitStateLength('steady', 3), 0);
 }
 
 // ── Restarting across holes ───────────────────────────────────────────────
