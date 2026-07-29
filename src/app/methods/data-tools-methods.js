@@ -10,12 +10,16 @@ import {
     runDataToolPipeline,
 } from '../../compute/kernels/index.js';
 import * as kernelShared from '../../compute/kernels/shared.js';
+// Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
+// the two features spell a duration the same way.
+import { formatNaturalDuration } from '../../utils/fft.js';
 
 const DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'movingAverage']);
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
 const INTEGRAL_METHODS = new Set(['trapezoidal', 'rectangular']);
+const INTEGRAL_GAP_POLICIES = kernelShared.INTEGRAL_GAP_POLICIES;
 
 // One pool for the whole app. Created lazily so importing this module in a Node
 // test harness (which has no Worker) costs nothing.
@@ -79,6 +83,7 @@ proto.initDataTools = function() {
     methodSelect.addEventListener('change', () => this._handleOutlierMethodChange());
     document.getElementById('derivative-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
     document.getElementById('integral-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
+    document.getElementById('integral-gap-policy')?.addEventListener('change', () => this._handleDataToolOptionChange());
 
     document.getElementById('moving-average-window-slider')?.addEventListener('input', (event) => {
         const numeric = document.getElementById('moving-average-window');
@@ -222,6 +227,7 @@ proto._syncDataTools = function() {
     this._dataToolParameterInputs().forEach(input => { input.disabled = !hasSource || (lazy && input.id !== 'outlier-lower-bound' && input.id !== 'outlier-upper-bound'); });
     document.getElementById('derivative-method')?.toggleAttribute('disabled', !hasSource || tool !== 'derivative');
     document.getElementById('integral-method')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
+    document.getElementById('integral-gap-policy')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
     document.getElementById('moving-average-window-slider')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.getElementById('moving-average-window')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
@@ -233,13 +239,13 @@ proto._syncDataTools = function() {
     form.classList.toggle('data-tool-invalid', hasSource && (!hasTargetMode || !hasOutput || !hasValidConfig));
 
     if (hasTool && lazy && !allowed) {
-        this._setOutlierMessage(i18n.t('dataToolLazyDisabled'), 'error');
+        this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
     } else if (hasSource && !hasTargetMode) {
         const messageEl = document.getElementById('outlier-message');
-        if (!messageEl?.textContent) this._setOutlierMessage(i18n.t('dataToolChooseTargetMode'), '');
+        if (!messageEl?.textContent) this._setOutlierMessage(() => i18n.t('dataToolChooseTargetMode'), '');
     } else if (hasTool && lazy && tool === 'removeOutliers') {
         const messageEl = document.getElementById('outlier-message');
-        if (!messageEl?.textContent) this._setOutlierMessage(i18n.t('dataToolLazyBoundsOnly'), '');
+        if (!messageEl?.textContent) this._setOutlierMessage(() => i18n.t('dataToolLazyBoundsOnly'), '');
     }
 };
 
@@ -361,13 +367,14 @@ proto._autoApplyOutlierTool = function() {
     Promise.resolve(this.applyOutlierTool({ silent: true })).then(result => {
         if (result) {
             const key = result.tool === 'removeOutliers' ? 'outlierAutoApplied' : 'dataToolAutoApplied';
+            const warning = result.warning;
             this._setOutlierMessage(
-                i18n.t(key)
+                () => i18n.t(key)
                     .replace('{count}', String(result.count ?? 0))
                     .replace('{name}', result.name || context.outputName || context.sourceName),
-                result.warning ? 'error' : (result.count ? 'ok' : '')
+                warning ? 'error' : (result.count ? 'ok' : '')
             );
-            if (result.warning) this._setOutlierMessage(result.warning, 'error');
+            if (warning) this._setOutlierMessage(warning, 'error');
         }
         this._syncDataTools();
     }).catch(err => {
@@ -536,7 +543,7 @@ proto._applyDataToolAppendToCreatedVariable = async function(context, config, ex
     const baseSourceName = normalized.sourceName;
     const baseVariable = data.variables?.[baseSourceName];
     if (!baseSourceName || baseSourceName === sourceName || !baseVariable) {
-        if (!options.silent) this._setOutlierMessage(i18n.t('outlierOutputSameAsSource'), 'error');
+        if (!options.silent) this._setOutlierMessage(() => i18n.t('outlierOutputSameAsSource'), 'error');
         return null;
     }
 
@@ -719,11 +726,14 @@ proto._setDataToolApplyMessage = function(result, action, name) {
             modified: 'dataToolModified',
             modifiedUpdated: 'dataToolModifiedUpdated',
         };
-    let message = i18n.t(keyByAction[action] || 'dataToolUpdated')
-        .replace('{count}', String(result?.count ?? 0))
-        .replace('{name}', name || result?.name || '');
-    if (result?.warning) message += ` ${result.warning}`;
-    this._setOutlierMessage(message, result?.warning ? 'error' : 'ok');
+    const warning = result?.warning;
+    this._setOutlierMessage(() => {
+        const base = i18n.t(keyByAction[action] || 'dataToolUpdated')
+            .replace('{count}', String(result?.count ?? 0))
+            .replace('{name}', name || result?.name || '');
+        const note = typeof warning === 'function' ? warning() : (warning || '');
+        return note ? `${base} ${note}` : base;
+    }, warning ? 'error' : 'ok');
 };
 
 proto.resetOutlierTool = function(options = {}) {
@@ -745,7 +755,7 @@ proto.resetOutlierTool = function(options = {}) {
     });
 
     if (!fileId || !data || !resetTarget) {
-        if (!options.silent) this._setOutlierMessage(i18n.t('outlierResetNothing'), '');
+        if (!options.silent) this._setOutlierMessage(() => i18n.t('outlierResetNothing'), '');
         this._syncDataTools();
         return false;
     }
@@ -761,7 +771,7 @@ proto._resetOutlierModifiedVariable = function(fileId, data, name, definition, o
     const variable = data.variables?.[name];
     const originalData = Array.from(definition.originalData || []);
     if (!variable || !originalData.length) {
-        if (!options.silent) this._setOutlierMessage(i18n.t('outlierResetNothing'), '');
+        if (!options.silent) this._setOutlierMessage(() => i18n.t('outlierResetNothing'), '');
         this._syncDataTools();
         return false;
     }
@@ -783,7 +793,7 @@ proto._resetOutlierModifiedVariable = function(fileId, data, name, definition, o
     this._renderFilteredTree();
     this._rebuildPlotsUsingVariable?.(fileId, name);
     if (!options.silent) {
-        this._setOutlierMessage(i18n.t('outlierResetModified').replace('{name}', name), 'ok');
+        this._setOutlierMessage(() => i18n.t('outlierResetModified').replace('{name}', name), 'ok');
     }
     this._syncDataTools();
     return true;
@@ -809,7 +819,7 @@ proto._resetOutlierCreatedVariable = function(fileId, data, name, options = {}) 
     this._clearVariableSelection?.();
     this._renderFilteredTree();
     if (!options.silent) {
-        this._setOutlierMessage(i18n.t('outlierResetCreated').replace('{name}', name), 'ok');
+        this._setOutlierMessage(() => i18n.t('outlierResetCreated').replace('{name}', name), 'ok');
     }
     this._syncDataTools();
     return true;
@@ -987,20 +997,70 @@ proto._buildDerivativeResult = function(sourceValues, sourceVariable, config, da
 };
 
 proto._buildIntegralResult = function(sourceValues, sourceVariable, config, data, pre = null) {
-    const result = pre
-        ? { values: pre.values, negativeDtCount: pre.meta.negativeDtCount }
-        : this._computeIntegralValues(sourceValues, data, config.params);
+    const result = pre ? { ...pre.meta, values: pre.values } : this._computeIntegralValues(sourceValues, data, config.params);
     const variable = this._baseDataToolVariable(sourceValues, sourceVariable, {
         ...config,
         tool: 'integrate',
     }, result.values, {
         method: config.params.method,
+        gapPolicy: config.params.gapPolicy,
         negativeDtCount: result.negativeDtCount,
+        gapCount: result.gapCount,
+        nanSegmentCount: result.nanSegmentCount,
+        uncoveredTime: result.uncoveredTime,
+        hasNominalStep: result.hasNominalStep,
     });
-    const warning = result.negativeDtCount > 0
-        ? i18n.t('dataToolNegativeDtWarning').replace('{count}', String(result.negativeDtCount))
-        : '';
-    return { variable, count: result.values.length, tool: 'integrate', name: config.targetName, warning };
+    // A function, not a string: the panel re-renders it on a language switch,
+    // and the counts it reads live on `result` rather than in baked text.
+    const warning = () => this._integralWarning(result, config.params);
+    return {
+        variable,
+        count: result.values.length,
+        tool: 'integrate',
+        name: config.targetName,
+        warning: warning() ? warning : '',
+    };
+};
+
+// A gap changes the answer, so it cannot stay silent — that silence is the bug
+// this tool had.
+//
+// The quantity is how much of the span the file has no data for. It is the same
+// number under every policy, because it describes the FILE; what each policy
+// changes is the sentence after it, which says what was done about it. Counting
+// gaps and invalid segments separately, as this did at first, made the reader
+// decode two internal categories to answer one question: how much of my
+// integral was not measured.
+proto._integralWarning = function(result, params = {}) {
+    const parts = [];
+    if (result.negativeDtCount > 0) {
+        parts.push(i18n.t('dataToolNegativeDtWarning').replace('{count}', String(result.negativeDtCount)));
+    }
+    const holes = (result.gapCount || 0) + (result.nanSegmentCount || 0);
+    if (holes > 0) {
+        const key = params.gapPolicy === 'interpolate'
+            ? 'dataToolIntegralGapWarningInterpolate'
+            : (params.gapPolicy === 'propagate'
+                ? 'dataToolIntegralGapWarningPropagate'
+                : 'dataToolIntegralGapWarningZero');
+        parts.push(i18n.t(key).replace('{time}', this._formatUncoveredTime(result)));
+    }
+    return parts.join(' ');
+};
+
+// Only a datetime axis measures the uncovered span in seconds, so only there is
+// a duration ("22 min", "1 h 20 min", "2 d 5 h") a true statement. A numeric
+// axis carries whatever unit its column had, and an index axis counts rows —
+// formatting either as a duration would invent hours out of row numbers.
+proto._formatUncoveredTime = function(result) {
+    const amount = Number(result?.uncoveredTime);
+    if (!Number.isFinite(amount)) return '?';
+    if (result?.timeKind === 'datetime') return formatNaturalDuration(amount);
+    if (result?.timeKind === 'index') {
+        return i18n.t(amount === 1 ? 'dataToolIntegralGapSample' : 'dataToolIntegralGapSamples')
+            .replace('{n}', String(amount));
+    }
+    return String(Number(amount.toPrecision(6)));
 };
 
 proto._buildMovingAverageResult = function(sourceValues, sourceVariable, config, pre = null) {
@@ -1023,7 +1083,7 @@ proto._dataToolDescription = function(config) {
             : `Data tool: derivative of ${config.sourceName}; ${config.params.method}`;
     }
     if (config.tool === 'integrate') {
-        return `Data tool: integral of ${config.sourceName}; ${config.params.method}`;
+        return `Data tool: integral of ${config.sourceName}; ${config.params.method}; missing data: ${config.params.gapPolicy}`;
     }
     if (config.tool === 'movingAverage') {
         return `Data tool: moving average of ${config.sourceName}; window ${config.params.window}`;
@@ -1033,7 +1093,7 @@ proto._dataToolDescription = function(config) {
 
 proto._dataToolStepLabel = function(step) {
     if (step.tool === 'derivative') return step.params.method === 'difference' ? 'difference' : `derivative (${step.params.method})`;
-    if (step.tool === 'integrate') return `integral (${step.params.method})`;
+    if (step.tool === 'integrate') return `integral (${step.params.method}, gaps: ${step.params.gapPolicy})`;
     if (step.tool === 'movingAverage') return `moving average (window ${step.params.window})`;
     return `remove outliers (${this._outlierDetectorDescription(step)}; ${step.replacement})`;
 };
@@ -1106,19 +1166,19 @@ proto._getOutlierContext = function(options = {}) {
     const sourceVariable = data?.variables?.[sourceName];
     const lazy = this._isDataToolLazyData(data);
     if (!tool || !fileId || !data || !sourceVariable) {
-        if (!options.quiet) this._setOutlierMessage(i18n.t('outlierLoadFileFirst'), 'error');
+        if (!options.quiet) this._setOutlierMessage(() => i18n.t('outlierLoadFileFirst'), 'error');
         return null;
     }
     if (!targetMode) {
-        if (!options.quiet) this._setOutlierMessage(i18n.t('dataToolChooseTargetMode'), '');
+        if (!options.quiet) this._setOutlierMessage(() => i18n.t('dataToolChooseTargetMode'), '');
         return null;
     }
     if (targetMode === 'create' && !outputName) {
-        if (!options.quiet) this._setOutlierMessage(i18n.t('dataToolOutputNameRequired'), 'error');
+        if (!options.quiet) this._setOutlierMessage(() => i18n.t('dataToolOutputNameRequired'), 'error');
         return null;
     }
     if (lazy && !this._isDataToolAvailableForData(tool, data)) {
-        if (!options.quiet) this._setOutlierMessage(i18n.t('dataToolLazyDisabled'), 'error');
+        if (!options.quiet) this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
         return null;
     }
     return { fileId, data, sourceName, sourceVariable, outputName, targetMode, tool, lazy };
@@ -1137,7 +1197,14 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     }
     if (tool === 'integrate') {
         const method = document.getElementById('integral-method')?.value || 'trapezoidal';
-        return { tool, params: { method: INTEGRAL_METHODS.has(method) ? method : 'trapezoidal' } };
+        const gapPolicy = document.getElementById('integral-gap-policy')?.value || 'zero';
+        return {
+            tool,
+            params: {
+                method: INTEGRAL_METHODS.has(method) ? method : 'trapezoidal',
+                gapPolicy: INTEGRAL_GAP_POLICIES.has(gapPolicy) ? gapPolicy : 'zero',
+            },
+        };
     }
     if (tool === 'movingAverage') {
         const max = context?.sourceVariable?.data?.length
@@ -1567,7 +1634,12 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
     }
     if (tool === 'integrate') {
         const method = INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
-        return { method };
+        // Sessions saved before the gap policy existed carry no `gapPolicy`, so
+        // they land on the default like everything else. That is deliberate: the
+        // old value was a bug, and silently reproducing it on reload would keep
+        // exactly the results this change exists to correct.
+        const gapPolicy = INTEGRAL_GAP_POLICIES.has(params.gapPolicy) ? params.gapPolicy : 'zero';
+        return { method, gapPolicy };
     }
     if (tool === 'movingAverage') {
         return { window: this._normalizeMovingAverageWindow(params.window, Number(params.maxLength) || Infinity) };
@@ -1640,10 +1712,23 @@ proto._toggleOutlierHelpPopover = function(show) {
     button.setAttribute('aria-expanded', String(willShow));
 };
 
+// Keep HOW to produce the text, not the text. The panel message is written
+// imperatively, so it carries no data-i18n attribute for the language sweep to
+// find, and a message already on screen used to stay in the previous language
+// until something else replaced it. Call sites that pass a function get
+// re-rendered on a language switch; the ones that pass a plain string (an
+// exception's own message) simply keep it, which is all we can do for text that
+// was never translated to begin with.
 proto._setOutlierMessage = function(message, type) {
+    this._dataToolMessage = { message, type };
+    this._renderDataToolMessage();
+};
+
+proto._renderDataToolMessage = function() {
     const el = document.getElementById('outlier-message');
     if (!el) return;
-    el.textContent = message;
+    const { message, type } = this._dataToolMessage || {};
+    el.textContent = (typeof message === 'function' ? message() : message) || '';
     el.className = `derived-message data-tool-message${type ? ' ' + type : ''}`;
 };
 

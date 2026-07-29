@@ -386,9 +386,29 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     // surface the "zoom in" hint accordingly.
     if (showMissing && plot.div) {
         Plotly.relayout(plot.div, { shapes: this._missingDataBandShapes(plot) });
-        this._setMissingDensityNotice(plot, missDense);
+        // A file with no nominal step marks no sampling gaps at all, so "zoom in
+        // for detail" would be a lie: zooming reveals nothing. Explain the
+        // absence instead — it outranks the density hint.
+        this._setMissingDensityNotice(plot, this._missingStepNotice(missInfo.stepIssues) || missDense);
     }
     this._refreshElapsedDateTimeAxisTicks(plot, range);
+};
+
+// Repaint the Missing/NaN overlay after a legend visibility change.
+//
+// The amber bands are layout SHAPES, not trace data, so Plotly's own show/hide
+// leaves them exactly as they were: hiding the trace that owned a NaN run left
+// its band on screen until some later pan or zoom happened to repaint. The
+// overlay is the union over VISIBLE traces (and _missingDataInfo keys its cache
+// on them), so a visibility change is a content change and has to go through the
+// authoritative refresh — which also covers the lazy path and the notice.
+//
+// Gated on the opt-in flag: with the overlay off there is nothing on screen that
+// depends on which traces are visible, and rebuilding every trace on each legend
+// click would be pure cost.
+proto._refreshMissingOverlayForVisibility = function(panelId, plot) {
+    if (plot?.mode !== 'timeseries' || !plot.showMissingData || !plot.div) return;
+    this._refreshTimeseriesVisuals(panelId, plot);
 };
 
 proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
@@ -1220,13 +1240,16 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 
 // zoom, and cleared when the Missing/NaN overlay is turned off.
 // `state`: false/null → hide; true/'dense' → "too dense, zoom in"; 'loading' →
 // a spinner + "Searching for missing data…" while the lazy DuckDB query runs
-// (so the user knows something is happening before the bands appear).
+// (so the user knows something is happening before the bands appear); or an
+// object `{ mode, label }` carrying its own text — used for the no-nominal-step
+// notices, whose wording depends on the measured step agreement.
 proto._setMissingDensityNotice = function(plot, state) {
     const panelEl = plot?.div?.closest('.layout-panel');
     if (!panelEl) return;
-    const mode = state === true ? 'dense' : (state || null);
+    const custom = state && typeof state === 'object' ? state : null;
+    const mode = custom ? custom.mode : (state === true ? 'dense' : (state || null));
     let pill = panelEl.querySelector('.missing-dense-indicator');
-    if (mode === 'dense' || mode === 'loading') {
+    if (custom || mode === 'dense' || mode === 'loading') {
         if (!pill) {
             pill = document.createElement('div');
             pill.className = 'lazy-detail-indicator missing-dense-indicator';
@@ -1234,7 +1257,9 @@ proto._setMissingDensityNotice = function(plot, state) {
             pill.innerHTML = '<span class="lazy-detail-spinner missing-notice-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
             panelEl.appendChild(pill);
         }
-        const label = i18n.t(mode === 'loading' ? 'timeseriesMissingSearching' : 'timeseriesMissingDense');
+        const label = custom
+            ? custom.label
+            : i18n.t(mode === 'loading' ? 'timeseriesMissingSearching' : 'timeseriesMissingDense');
         const text = pill.querySelector('.lazy-detail-text');
         if (text) text.textContent = label;
         const spinner = pill.querySelector('.missing-notice-spinner');
@@ -1284,7 +1309,8 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
         }
         entry.varNames.add(t.varName);
     }
-    const eagerItems = this._missingDataInfo(plot).bandItems; // non-view files only
+    const eagerInfo = this._missingDataInfo(plot); // non-view files only
+    const eagerItems = eagerInfo.bandItems;
 
     // Cache the verdict, then paint. Timeseries paints the bands directly and
     // shows the "zoom in" pill; the FFT time pane re-derives its shapes via
@@ -1301,7 +1327,7 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
         }
         if (!plot.showMissingData) return;
         Plotly.relayout(plot.div, { shapes: this._lazyMissingShapes(plot) });
-        this._setMissingDensityNotice(plot, dense);
+        this._setMissingDensityNotice(plot, this._missingStepNotice(eagerInfo.stepIssues) || dense);
     };
 
     if (!perFile.size) {

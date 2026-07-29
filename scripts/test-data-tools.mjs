@@ -236,4 +236,111 @@ closeArray(modifyData.variables.y.data, [0, 1, 3], 'modify reapply uses original
 app._reapplyDataToolVariables('modify', modifyData);
 closeArray(modifyData.variables.y.data, [0, 1, 3], 'modify reapply does not compound');
 
+// ── Integral gap policy: normalization, persistence, warning ──
+{
+    // The default is the corrected behaviour, not the historical one.
+    assert.deepEqual(
+        h._normalizeDataToolParams('integrate', {}),
+        { method: 'trapezoidal', gapPolicy: 'zero' },
+        'integral params default to the zero policy',
+    );
+    assert.equal(
+        h._normalizeDataToolParams('integrate', { gapPolicy: 'nonsense' }).gapPolicy,
+        'zero',
+        'an unknown policy falls back to the default',
+    );
+    // A session saved before the policy existed carries no gapPolicy. It must
+    // land on the default rather than silently reproducing the old result —
+    // that result is the bug this change corrects.
+    assert.equal(
+        h._normalizeDataToolParams('integrate', { method: 'rectangular' }).gapPolicy,
+        'zero',
+        'a pre-policy session reloads with the corrected default',
+    );
+    assert.equal(
+        h._normalizeDataToolParams('integrate', { gapPolicy: 'propagate' }).gapPolicy,
+        'propagate',
+        'an explicit policy survives normalization',
+    );
+
+    // Params are serialized with a generic deep clone, so the new field has to
+    // survive a session round-trip without any extra plumbing.
+    assert.equal(
+        h._cloneDataToolParams({ method: 'trapezoidal', gapPolicy: 'interpolate' }).gapPolicy,
+        'interpolate',
+        'the policy survives session serialization',
+    );
+
+    // The warning is the thing that stops a gap from being silent, so a result
+    // WITH holes must never come back with an empty message. The quantity is
+    // how much of the span has no data — a property of the FILE, so the same
+    // under every policy; only the sentence after it changes.
+    const holes = {
+        negativeDtCount: 0, gapCount: 1, nanSegmentCount: 22,
+        uncoveredTime: 1320, timeKind: 'datetime',
+    };
+    const messages = new Set();
+    for (const gapPolicy of ['zero', 'interpolate', 'propagate']) {
+        const text = h._integralWarning(holes, { gapPolicy });
+        assert.ok(text, `${gapPolicy}: a hole always produces a warning`);
+        assert.ok(text.includes('22 min'), `${gapPolicy}: names the uncovered span as a duration`);
+        assert.ok(!/\{time\}/.test(text), `${gapPolicy}: the placeholder is filled in`);
+        messages.add(text);
+    }
+    assert.equal(messages.size, 3, 'each policy explains its own claim');
+
+    // A duration is only true on a datetime axis. Row numbers are not hours.
+    assert.equal(h._formatUncoveredTime({ uncoveredTime: 4800, timeKind: 'datetime' }), '1 h 20 min');
+    assert.equal(h._formatUncoveredTime({ uncoveredTime: 190800, timeKind: 'datetime' }), '2 d 5 h');
+    assert.equal(h._formatUncoveredTime({ uncoveredTime: 90, timeKind: 'datetime' }), '1 min 30 s');
+    assert.match(h._formatUncoveredTime({ uncoveredTime: 80, timeKind: 'index' }), /80/);
+    assert.ok(!/min|h\b|\bd\b/.test(h._formatUncoveredTime({ uncoveredTime: 80, timeKind: 'index' })),
+        'an index axis counts samples, it does not invent a duration');
+    assert.equal(h._formatUncoveredTime({ uncoveredTime: 1320, timeKind: 'numeric' }), '1320',
+        'a numeric axis carries its column unit, so the bare number is all we can say');
+
+    // The panel message is written imperatively, so the data-i18n sweep never
+    // sees it: a message already on screen has to be produced AGAIN when the
+    // language changes, which means storing how to build it, not the text.
+    {
+        const el = { textContent: '', className: '' };
+        const host = Object.create(Object.getPrototypeOf(h));
+        host._renderDataToolMessage = h._renderDataToolMessage;
+        host._setOutlierMessage = h._setOutlierMessage;
+        // Stand in for document.getElementById without a DOM.
+        const originalDoc = globalThis.document;
+        globalThis.document = { getElementById: (id) => (id === 'outlier-message' ? el : null) };
+        try {
+            let lang = 'en';
+            host._setOutlierMessage(() => `msg-${lang}`, 'error');
+            assert.equal(el.textContent, 'msg-en', 'a function message renders immediately');
+            lang = 'es';
+            host._renderDataToolMessage();
+            assert.equal(el.textContent, 'msg-es', 'and is produced again on a language switch');
+
+            // A plain string is text nobody translated (an exception message):
+            // it must survive re-rendering rather than vanish.
+            host._setOutlierMessage('boom', 'error');
+            host._renderDataToolMessage();
+            assert.equal(el.textContent, 'boom', 'a plain string message is kept as-is');
+        } finally {
+            globalThis.document = originalDoc;
+        }
+    }
+
+    // Clean data stays quiet.
+    assert.equal(
+        h._integralWarning({ negativeDtCount: 0, gapCount: 0, nanSegmentCount: 0 }, { gapPolicy: 'zero' }),
+        '',
+        'no holes means no warning',
+    );
+    // The pre-existing negative-dt warning still fires, and coexists.
+    const both = h._integralWarning(
+        { negativeDtCount: 6, gapCount: 1, nanSegmentCount: 0 },
+        { gapPolicy: 'zero' },
+    );
+    assert.ok(both.includes('6'), 'the negative-dt warning survives');
+    assert.ok(both.length > 40, 'and is joined with the gap warning rather than replacing it');
+}
+
 console.log('data tools logic tests passed');

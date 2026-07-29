@@ -74,7 +74,15 @@ for (const n of SIZES) {
             assertBitEqual(got.values, want.values, `derivative n=${n} ${kind}/${method}`);
         }
         for (const method of ['trapezoidal', 'rectangular']) {
-            const got = computeIntegral(values, time, { method });
+            // The integral gained a gap policy, so the pre-policy behaviour is
+            // no longer the DEFAULT — it is one reachable configuration:
+            // gapPolicy 'zero' (a non-finite segment adds nothing, as before)
+            // with detectGaps off (a missing row is not identified, so the
+            // quadrature runs straight across it, as before). Pinning that
+            // combination keeps the old code verifiable bit-for-bit while the
+            // default is free to be the corrected one.
+            const legacy = { method, gapPolicy: 'zero', detectGaps: false };
+            const got = computeIntegral(values, time, legacy);
             const want = refIntegral(values, time, { method });
             assertBitEqual(got.values, want.values, `integral n=${n} ${kind}/${method}`);
             assert.equal(got.negativeDtCount, want.negativeDtCount, `integral n=${n} ${kind}/${method}: negativeDtCount`);
@@ -161,6 +169,128 @@ for (const n of SIZES) {
     assert.throws(() => detectOutlierIndexes(new Float64Array(10), 'bounds', { lower: 5, upper: 1 }), /outlierBoundsInvalid/);
     assert.throws(() => detectOutlierIndexes(new Float64Array(2), 'iqr', {}), /outlierNotEnoughData/);
     checks += 3;
+}
+
+// ─── Integral gap policy ──────────────────────────────────────────────────
+// Behavioural, not differential: this is the part that deliberately no longer
+// matches the legacy reference. Signal and expected numbers mirror
+// test-files/csv/integral-missing/, where they are derived by hand.
+//
+// Triangular power pulse, breakpoints at 1800/2700/3600 s, sampled every 60 s.
+// The trapezoidal rule is EXACT on the complete data, so the reference is
+// 54000 exactly and any deviation is the policy, not discretisation.
+{
+    const triangle = (t) => {
+        if (t <= 1800 || t >= 3600) return 0;
+        if (t <= 2700) return (t - 1800) / 15;
+        return (3600 - t) / 15;
+    };
+    const seconds = [];
+    for (let t = 0; t <= 7200; t += 60) seconds.push(t);
+    const numericTime = (list) => ({ values: list, kind: 'numeric' });
+
+    const full = { time: numericTime(seconds), values: seconds.map(triangle) };
+    // The same physical hole, 2040..3360 s, written the two ways a file can
+    // express it: the rows are gone, or the rows are there with empty cells.
+    const absentRows = seconds.filter(t => t <= 2040 || t >= 3360);
+    const missingRows = { time: numericTime(absentRows), values: absentRows.map(triangle) };
+    const missingValues = {
+        time: numericTime(seconds),
+        values: seconds.map(t => (t > 2040 && t < 3360 ? NaN : triangle(t))),
+    };
+    const total = (input, params) => {
+        const r = computeIntegral(input.values, input.time, params);
+        return r.values[r.values.length - 1];
+    };
+
+    // Complete data: every policy agrees, and agrees with the exact answer.
+    for (const gapPolicy of ['zero', 'interpolate', 'propagate']) {
+        assert.equal(total(full, { gapPolicy }), 54000, `complete data is exact under ${gapPolicy}`);
+    }
+
+    // THE regression. Before the policy existed these two returned 24960 and
+    // 3840 — the same hole, a 6.5x difference, decided by how the file happened
+    // to spell it. Every policy must now give one answer for both.
+    const expected = { zero: 3840, interpolate: 24960 };
+    for (const [gapPolicy, want] of Object.entries(expected)) {
+        assert.equal(total(missingRows, { gapPolicy }), want, `missing rows, ${gapPolicy}`);
+        assert.equal(total(missingValues, { gapPolicy }), want, `empty cells, ${gapPolicy}`);
+    }
+    assert.ok(Number.isNaN(total(missingRows, { gapPolicy: 'propagate' })), 'missing rows, propagate');
+    assert.ok(Number.isNaN(total(missingValues, { gapPolicy: 'propagate' })), 'empty cells, propagate');
+    checks += 8;
+
+    // 'zero' is the default: the corrected behaviour is what you get without
+    // asking, and it is the one that leaves a visible plateau in the curve.
+    assert.equal(total(missingRows, {}), 3840, 'zero is the default policy');
+
+    // 'propagate' blanks everything AFTER the hole, not just the hole: the
+    // cumulative value past an unknown increment is unknown too.
+    {
+        const r = computeIntegral(missingRows.values, missingRows.time, { gapPolicy: 'propagate' });
+        const firstNaN = r.values.findIndex(Number.isNaN);
+        assert.ok(firstNaN > 0, 'values before the hole survive');
+        assert.ok(r.values.slice(0, firstNaN).every(Number.isFinite), 'and are all finite');
+        assert.ok(r.values.slice(firstNaN).every(Number.isNaN), 'nothing after the hole is finite');
+    }
+
+    // 'zero' keeps the curve finite and flat across the hole — the plateau is
+    // what makes the loss visible without reading any warning.
+    {
+        const r = computeIntegral(missingValues.values, missingValues.time, { gapPolicy: 'zero' });
+        assert.ok(r.values.every(Number.isFinite), 'zero never produces NaN');
+        const inHole = seconds.map((t, i) => ({ t, i })).filter(({ t }) => t > 2100 && t < 3300);
+        const level = r.values[inHole[0].i];
+        assert.ok(inHole.every(({ i }) => r.values[i] === level), 'the curve plateaus across the hole');
+    }
+
+    // Diagnostics: both spellings report the hole, each in its own currency.
+    {
+        const byRow = computeIntegral(missingRows.values, missingRows.time, {});
+        const byCell = computeIntegral(missingValues.values, missingValues.time, {});
+        assert.equal(byRow.gapCount, 1, 'the absent rows are reported as one gap');
+        assert.equal(byRow.nanSegmentCount, 0, 'and not as NaN segments');
+        assert.equal(byCell.gapCount, 0, 'empty cells leave the time axis intact');
+        assert.ok(byCell.nanSegmentCount > 0, 'and are reported as NaN segments');
+        assert.equal(byRow.uncoveredTime, 1320, 'the uncovered span is reported in dt units');
+        assert.equal(byRow.hasNominalStep, true, 'the axis has a nominal step');
+        assert.equal(byRow.timeKind, 'numeric', 'the axis kind travels with it, to give it a unit');
+    }
+
+    // How much of the span has no data is a property of the FILE, so it must not
+    // move with the policy — otherwise the same file reports 22 minutes missing
+    // under one choice and none under another. It read 0 under 'interpolate'
+    // until the count was taken from the source instead of the bridged values.
+    {
+        for (const input of [missingRows, missingValues]) {
+            const seen = ['zero', 'interpolate', 'propagate']
+                .map(gapPolicy => computeIntegral(input.values, input.time, { gapPolicy }).uncoveredTime);
+            assert.deepEqual(seen, [1320, 1320, 1320],
+                'the uncovered span is the same under every policy');
+        }
+    }
+
+    // Genuinely irregular sampling: no nominal step, so nothing is called a gap
+    // and the quadrature runs over the real deltas — the same rule the
+    // Missing/NaN overlay follows, so the two features cannot disagree.
+    {
+        const irregular = [0, 300, 900, 1500, 1800, 1830, 1860, 2100, 2400, 2700,
+            3000, 3300, 3540, 3600, 3900, 4200, 5400, 6600, 7200];
+        const input = { time: numericTime(irregular), values: irregular.map(triangle) };
+        const r = computeIntegral(input.values, input.time, {});
+        assert.equal(r.hasNominalStep, false, 'irregular sampling has no nominal step');
+        assert.equal(r.gapCount, 0, 'so no interval is called a gap');
+        assert.equal(r.values[r.values.length - 1], 54000, 'and the trapezoid answer stands');
+    }
+
+    // An index axis carries no timestamps, so a missing row is undetectable —
+    // reported as "no nominal step", not as "no gaps found".
+    {
+        const r = computeIntegral(absentRows.map(triangle), { values: null, kind: 'index' }, {});
+        assert.equal(r.hasNominalStep, false, 'an index axis cannot be judged');
+        assert.equal(r.gapCount, 0, 'and nothing is claimed about it');
+    }
+    checks += 4;
 }
 
 console.log(`compute kernels: ${checks} bit-exact comparisons passed`);

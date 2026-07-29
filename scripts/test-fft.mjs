@@ -5,8 +5,6 @@ import {
     computeAmplitudeSpectrum,
     downsampleSpectrumForDisplay,
     windowSpectrumForDisplay,
-    detectSamplingGaps,
-    detectNaNRuns,
     fftRadix2,
     fftWindowCoefficients,
     formatNaturalDuration,
@@ -142,43 +140,6 @@ assert.equal(nextPowerOfTwo(513), 1024);
     const spectrum = computeAmplitudeSpectrum({ times, values });
     assert.equal(spectrum.ok, false, 'real non-uniform spacing is still rejected');
     assert.equal(spectrum.reason, 'nonUniform', 'non-uniform spacing reports nonUniform');
-}
-
-{
-    // detectSamplingGaps: uniform 10-min series (in ms) with two dropped runs.
-    const step = 600_000; // 10 min in ms, mimicking datetime timeKind
-    const times = [];
-    let t = 0;
-    for (let i = 0; i < 20; i++) { times.push(t); t += step; }
-    t += step * 3;                       // 3 missing samples (single gap)
-    for (let i = 0; i < 20; i++) { times.push(t); t += step; }
-    t += step;                           // 1 missing sample
-    for (let i = 0; i < 20; i++) { times.push(t); t += step; }
-    const info = detectSamplingGaps(times);
-    assert.equal(info.medianDt, step, 'gap detector uses the median step');
-    assert.equal(info.count, 2, 'both gaps are detected');
-    assert.equal(info.totalMissing, 4, 'missing-sample count sums across gaps');
-    assert.equal(info.largest.missing, 3, 'largest gap reports its missing run');
-    assert.ok(info.gaps[0].t1 > info.gaps[0].t0, 'gap interval is ordered');
-
-    const perfect = detectSamplingGaps(Float64Array.from({ length: 50 }, (_, i) => i * step));
-    assert.equal(perfect.count, 0, 'a perfectly uniform series has no gaps');
-}
-
-{
-    // detectNaNRuns: intervals span from the last good sample before a NaN run
-    // to the first good sample after it, so a band covers the real hole.
-    const times = [0, 1, 2, 3, 4, 5, 6, 7];
-    const values = [10, NaN, NaN, 40, 50, 60, NaN, 80];
-    const runs = detectNaNRuns(times, values);
-    assert.equal(runs.length, 2, 'both NaN runs are detected');
-    assert.equal(runs[0].t0, 0, 'run starts at the last good sample before it');
-    assert.equal(runs[0].t1, 3, 'run ends at the first good sample after it');
-    assert.equal(runs[0].count, 2, 'run reports how many samples are NaN');
-    assert.equal(runs[1].t0, 5, 'second run brackets its hole');
-    assert.equal(runs[1].t1, 7, 'second run brackets its hole');
-
-    assert.equal(detectNaNRuns(times, [10, 20, 30, 40, 50, 60, 70, 80]).length, 0, 'all-finite series has no NaN runs');
 }
 
 for (const windowType of ['hann', 'hamming', 'blackman']) {
@@ -511,6 +472,82 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
     const full = windowSpectrumForDisplay(freqs, amps, null, null, 8000);
     assert.ok(full.frequencies.length <= 8000, 'the full-range window stays within the budget');
     assert.ok(full.amplitudes.indexOf(42) >= 0, 'the global peak still survives the full-range window');
+}
+
+// ── The status note for a span carrying bands ──
+// A band over the analyzed span used to produce one message whether or not a
+// spectrum came out, so a valid result was shown next to "select a span without
+// bands to run the FFT" — advice for something that had already happened.
+{
+    // The uniformity gate is what makes the two cases distinguishable, so pin
+    // that it really does refuse when data is missing INSIDE the span. If this
+    // ever loosened, the "spectrum implies nothing is missing" reasoning behind
+    // the note below would stop holding.
+    const step = 60_000;
+    const clean = Array.from({ length: 128 }, (_, i) => i * step);
+    const values = clean.map((_, i) => Math.sin(i / 5));
+
+    const withNaN = values.slice();
+    withNaN[64] = NaN;
+    assert.equal(computeAmplitudeSpectrum({ times: clean, values: withNaN, timeKind: 'datetime' }).reason,
+        'nan', 'a non-finite value in the span is refused outright');
+
+    const dropped = clean.filter((_, i) => i !== 64);
+    assert.equal(computeAmplitudeSpectrum({
+        times: dropped, values: dropped.map((_, i) => Math.sin(i / 5)), timeKind: 'datetime',
+    }).reason, 'nonUniform', 'a single dropped sample is refused too');
+
+    // A span at a different but CONSTANT step analyses fine — this is the case
+    // the note exists for.
+    const coarse = Array.from({ length: 64 }, (_, i) => (4200 + i * 600) * 1000);
+    const coarseSpectrum = computeAmplitudeSpectrum({
+        times: coarse, values: coarse.map(t => Math.sin(2 * Math.PI * (t / 1000) / 6000)), timeKind: 'datetime',
+    });
+    assert.equal(coarseSpectrum.ok, true, 'a uniformly-sampled span analyses whatever its step');
+    assert.equal(coarseSpectrum.sampling.dt, 600, 'and reports its own step, not the file median');
+
+    // Two texts, and they must not be interchangeable: one is advice for a
+    // failure, the other confirms a result.
+    const t = translations.en;
+    assert.ok(/select a span without bands/i.test(t.fftGapsWarning),
+        'the failure text keeps the actionable advice');
+    assert.ok(!/valid/i.test(t.fftGapsWarning),
+        'and never claims a spectrum came out');
+    assert.ok(/valid/i.test(t.fftGapsUniformSpan),
+        'the success text confirms the spectrum');
+    assert.ok(!/select/i.test(t.fftGapsUniformSpan),
+        'and does not send the user to pick another span');
+
+    for (const lang of Object.keys(translations)) {
+        const tr = translations[lang];
+        // The bands have been amber since they were recoloured to clear the
+        // second trace; the old text still called them red.
+        assert.ok(!/\bred\b|rouge|roja|ross/i.test(tr.fftGapsWarning),
+            `${lang}: the failure text does not call the bands red`);
+        // Uneven spacing is what was measured. Whether samples were lost or the
+        // recorder changed rate is not knowable, so neither text may say.
+        for (const key of ['fftGapsWarning', 'fftGapsUniformSpan', 'fftGapsUniformSpanNoStep']) {
+            assert.ok(!/missing sampl|echantillons manquants|muestras faltantes|campioni mancanti/i.test(tr[key]),
+                `${lang}/${key}: does not assert samples are missing`);
+        }
+        assert.ok(tr.fftGapsUniformSpan.includes('{dt}'), `${lang}: the step placeholder survives`);
+        assert.ok(!tr.fftGapsUniformSpanNoStep.includes('{dt}'),
+            `${lang}: the fallback carries no unfilled placeholder`);
+    }
+
+    // Placement, not severity: 'warning' is the only status type whose full text
+    // is routed to the side panel while the topbar shows a pointer to it. A
+    // sentence this long in the topbar is what the type controls here.
+    assert.match(
+        fftMethodsSource,
+        /_fftUniformSpanNote\(spanDt\), 'warning'\)/,
+        'the note is typed so its full text lands in the side panel',
+    );
+    assert.match(
+        fftMethodsSource,
+        /type === 'warning' && message\)\s*\?\s*i18n\.t\('fftWarningSeePanel'\)/,
+        'and that type is what makes the topbar point at the panel',
+    );
 }
 
 console.log('FFT tests passed');

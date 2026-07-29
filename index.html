@@ -279,6 +279,12 @@
                                 <option value="trapezoidal" selected data-i18n="dataToolIntegralTrapezoidal">Trapezoidal</option>
                                 <option value="rectangular" data-i18n="dataToolIntegralRectangular">Rectangular</option>
                             </select>
+                            <label class="options-subgroup-label" for="integral-gap-policy" data-i18n="dataToolIntegralGapPolicy">Missing data</label>
+                            <select id="integral-gap-policy" class="data-tool-select">
+                                <option value="zero" selected data-i18n="dataToolIntegralGapZero">Contributes nothing</option>
+                                <option value="interpolate" data-i18n="dataToolIntegralGapInterpolate">Interpolate across it</option>
+                                <option value="propagate" data-i18n="dataToolIntegralGapPropagate">Mark as unknown (NaN)</option>
+                            </select>
                         </div>
 
                         <div class="data-tool-controls collapsed" data-tool-kind="movingAverage">

@@ -2,8 +2,6 @@ import i18n from '../../i18n/index.js';
 import {
     computeAmplitudeSpectrum,
     windowSpectrumForDisplay,
-    detectSamplingGaps,
-    detectNaNRuns,
     fftWindowCoefficients,
     formatNaturalDuration,
     frequencyPeriod,
@@ -17,6 +15,7 @@ import {
     FFT_MAX_POINTS_WEB,
     FFT_WORKER_THRESHOLD_POINTS,
 } from '../../utils/fft.js';
+import { detectNaNRuns, detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import Plotly from '../../vendor/plotly.js';
 
 const FFT_LAYOUTS = new Set(['horizontal', 'vertical']);
@@ -717,6 +716,10 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     const spectra = [];
     const fullEntries = [];
     const warnings = [];
+    // Step of the analyzed span, as the uniformity gate measured it. Only worth
+    // naming in the status when every plotted trace agrees on it; overlaid files
+    // can carry different steps, and picking one of them would be a guess.
+    const spanSteps = new Set();
     for (const trace of visible) {
         if (plot._fftToken !== token) return;
         let series;
@@ -745,6 +748,7 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
             warnings.push(this._fftWarningText(trace, spectrum.reason, spectrum));
             continue;
         }
+        if (Number.isFinite(spectrum.sampling?.dt)) spanSteps.add(spectrum.sampling.dt);
         for (const warning of spectrum.warnings || []) {
             warnings.push(this._fftWarningText(trace, warning, spectrum));
         }
@@ -814,14 +818,25 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     this._syncFftOptionsPanel(plot);
     this._installCursorHandlers(panelId, plot);
     this._syncCursorDisplay(panelId, plot);
-    const gapNote = this._fftGapsSummaryText(plot);
+    const bandsInRange = this._fftGapsOverlapAnalyzedRange(plot);
     if (warnings.length) {
+        // No spectrum. If a band overlaps the span, that band is the actionable
+        // part of the failure: another span may well work.
         const base = warnings.join(' | ');
-        this._setFftStatus(plot, gapNote ? `${base} - ${gapNote}` : base, 'warning');
-    } else if (gapNote) {
-        // Spectrum computed, but the analyzed span still straddles gaps worth
-        // flagging (e.g. a lone dropped sample the tolerance happened to allow).
-        this._setFftStatus(plot, gapNote, 'warning');
+        const note = bandsInRange ? i18n.t('fftGapsWarning') : '';
+        this._setFftStatus(plot, note ? `${base} - ${note}` : base, 'warning');
+    } else if (bandsInRange) {
+        // A spectrum DID come out, so the span passed the uniformity gate and
+        // nothing is missing within it. Telling the user to pick a span without
+        // bands would be advice they have already followed, about a result that
+        // is valid — so explain the bands instead.
+        //
+        // Typed as a warning for PLACEMENT, not severity: that is the type whose
+        // full text goes to the side panel while the topbar points there. A
+        // sentence this long does not belong in the topbar, and the panel is
+        // where every other FFT explanation already lives.
+        const spanDt = spanSteps.size === 1 ? [...spanSteps][0] : NaN;
+        this._setFftStatus(plot, this._fftUniformSpanNote(spanDt), 'warning');
     } else {
         this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
     }
@@ -1505,14 +1520,27 @@ proto._missingDataInfo = function(plot) {
     const fileGaps = new Map();       // fileId -> { timeVar, gaps: [{t0,t1}] }
     const traceIntervals = new Map(); // missTraceKey -> sorted [{t0,t1}]
     const bandItems = [];
+    // Files whose time vector has no nominal step (irregular or out of order).
+    // Their `gaps` come back empty by construction; the reason travels with them
+    // so the overlay can say WHY no sampling gaps are marked instead of letting
+    // the user read the absence of bands as "nothing is missing".
+    const stepIssues = [];
     for (const t of visible) {
         // A reservoir-sampled overview has no truthful time spacing or NaN runs.
         if (!this._hasTruthfulGapSeries(t.fileId)) continue;
         if (!fileGaps.has(t.fileId)) {
             const times = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
             const timeVar = this._getTimeVar(t.fileId);
-            const gaps = detectSamplingGaps(times).gaps.map(g => ({ t0: g.t0, t1: g.t1 }));
+            const info = detectSamplingGaps(times);
+            const gaps = info.gaps.map(g => ({ t0: g.t0, t1: g.t1 }));
             fileGaps.set(t.fileId, { timeVar, gaps });
+            if (!info.hasNominalStep && info.reason && info.reason !== 'tooFewSamples') {
+                stepIssues.push({
+                    fileId: t.fileId,
+                    reason: info.reason,
+                    stepAgreement: info.stepAgreement,
+                });
+            }
             for (const g of gaps) bandItems.push({ fileId: t.fileId, timeVar, t0: g.t0, t1: g.t1 });
         }
         const entry = fileGaps.get(t.fileId);
@@ -1524,29 +1552,67 @@ proto._missingDataInfo = function(plot) {
             .sort((p, q) => p.t0 - q.t0);
         traceIntervals.set(this._missTraceKey(t), merged);
     }
-    const result = { fileGaps, traceIntervals, bandItems };
+    const result = { fileGaps, traceIntervals, bandItems, stepIssues };
     plot._missSig = sig;
     plot._missCache = result;
     return result;
+};
+
+// The notice to show instead of the "zoom in" hint when a visible file has no
+// nominal step. Out-of-order timestamps outrank an irregular step: they are the
+// more fundamental defect, and fixing them may well make the step regular.
+proto._missingStepNotice = function(stepIssues) {
+    if (!stepIssues?.length) return null;
+    const unsorted = stepIssues.find(issue => issue.reason === 'nonMonotonic');
+    if (unsorted) return { mode: 'unsorted', label: i18n.t('timeseriesMissingUnsorted') };
+    const irregular = stepIssues.find(issue => issue.reason === 'irregularStep');
+    if (!irregular) return null;
+    const percent = Number.isFinite(irregular.stepAgreement)
+        ? Math.round(irregular.stepAgreement * 100)
+        : 0;
+    return {
+        mode: 'irregular',
+        label: i18n.t('timeseriesMissingIrregular').replace('{percent}', String(percent)),
+    };
 };
 
 proto._missingDataBandShapes = function(plot) {
     return this._adaptiveGapBandShapes(plot, this._missingDataInfo(plot).bandItems);
 };
 
-// (C) When gaps fall inside the analyzed range, explain what the red bands
-// mean and how to act — that is what makes the "not uniform" failure
-// actionable. Static text (no counts): the bands already convey the extent.
-proto._fftGapsSummaryText = function(plot) {
+// (C) Does a band overlap the span the spectrum was built from? The gaps are
+// detected over the WHOLE file, so this is what connects a band on screen to
+// the range actually analyzed. What to SAY about it depends on whether the
+// spectrum came out, which the caller knows and this does not.
+proto._fftGapsOverlapAnalyzedRange = function(plot) {
     const info = this._fftGapInfo(plot);
-    if (!info.count) return '';
+    if (!info.count) return false;
     const [lo, hi] = this._activeFftRange(plot);
     for (const file of info.perFile) {
         for (const gap of file.gaps) {
-            if (gap.t1 > lo && gap.t0 < hi) return i18n.t('fftGapsWarning');
+            if (gap.t1 > lo && gap.t0 < hi) return true;
         }
     }
-    return '';
+    return false;
+};
+
+// The note for a span that produced a spectrum despite carrying bands.
+//
+// Reaching here means the span passed the uniformity gate, and that gate is
+// strict: a single dropped sample doubles one interval, which is a 100% error
+// against a 0.1% tolerance, and a non-finite value is refused outright. So a
+// computed spectrum is proof that nothing is missing RELATIVE TO THIS SPAN'S OWN
+// step — the bands come from comparing the file against its own median, not
+// from anything wrong inside the analyzed range.
+//
+// What the note must not do is guess why the spacing differs. A recorder
+// switched to a slower rate and a recorder that lost nine of every ten samples
+// produce identical data; neither this code nor anything else can separate them.
+// So it states the spacing differs, and stops there.
+proto._fftUniformSpanNote = function(spanSeconds) {
+    return Number.isFinite(spanSeconds) && spanSeconds > 0
+        ? i18n.t('fftGapsUniformSpan').replace('{dt}', formatNaturalDuration(spanSeconds))
+        : i18n.t('fftGapsUniformSpanNoStep');
 };
 
 proto._fftSelectionShapes = function(plot) {

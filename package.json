@@ -80,6 +80,7 @@
     "test:calendar-axis": "node scripts/test-calendar-axis.mjs",
     "test:calendar-heatmap": "node scripts/test-calendar-heatmap.mjs",
     "test:fft": "node scripts/test-fft.mjs",
+    "test:sampling-gaps": "node scripts/test-sampling-gaps.mjs",
     "test:histogram": "node scripts/test-histogram.mjs",
     "test:temporal-profile": "node scripts/test-temporal-profile.mjs",
     "test:temporal-profile-lazy": "node scripts/test-temporal-profile-lazy.mjs",

@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import i18n from '../src/i18n/index.js';
+import translations from '../src/i18n/translations.js';
 import { installDerivedMethods, TIME_AXIS_VARIABLE_KINDS } from '../src/app/methods/derived-methods.js';
 import { installTimeAxisInspectorMethods } from '../src/app/methods/time-axis-inspector-methods.js';
 import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
@@ -560,5 +561,84 @@ assert.match(overlaysCss, /@media \(min-width: 860px\)[\s\S]{0,400}grid-template
     'the inspector uses the extra width for a second column, not longer lines');
 const sidebarCss = readFileSync(new URL('../src/styles/sidebar.css', import.meta.url), 'utf8');
 assert.match(sidebarCss, /\.tree-time-axis-inspect\s*\{/, 'the tree shortcut is styled');
+
+// ── Import repairs: what the reader changed before we ever saw the data ──
+// The diagnostics describe the axis AS LOADED, so "time going backwards: 0" is
+// also what a file that arrived out of order reports once the reader has sorted
+// it. These three states keep "it is fine now" apart from "it was fine".
+{
+    const h = new Harness();
+    const withMeta = (metadata, extra = {}) => {
+        h.plotManager.files.set('f1', { data: { metadata, variables: {}, ...extra } });
+        return h._withImportRepairs('f1', { backwards: 0, repeated: 0 });
+    };
+
+    // A reader that sorted and counted: report the number of rows it moved.
+    assert.equal(withMeta({ reorderedRows: 6 }).reorderedRows, 6, 'a counted repair is reported');
+    assert.equal(withMeta({ reorderedRows: 0 }).reorderedRows, 0,
+        'zero is meaningful when the reader actually checked');
+
+    // A reader that asks the engine for a sorted result never sees the file's
+    // own order. null, not 0 — the question is unanswerable, not answered.
+    assert.equal(withMeta({ backend: 'duckdb' }).reorderedRows, null,
+        'the SQL reader cannot know, and says so instead of claiming none');
+    assert.equal(h._withImportRepairs('f1', { backwards: 0 }) && (() => {
+        h.plotManager.files.set('f1', { data: { metadata: {}, variables: {}, _duckdb: { viewMode: true } } });
+        return h._withImportRepairs('f1', { backwards: 0 }).reorderedRows;
+    })(), null, 'the same holds for a file kept in the engine');
+
+    // A source that reorders nothing: omit the row rather than assert a zero
+    // about a repair that never applies to it.
+    assert.ok(!('reorderedRows' in withMeta({ backend: 'mat' })),
+        'a source that never reorders reports nothing at all');
+
+    // The count must survive to the caller, not only into the cache: the first
+    // render uses the returned object.
+    h.plotManager.files.set('f1', {
+        data: { metadata: { reorderedRows: 3 }, variables: {} },
+    });
+    const stored = h._storeTimeAxisDiagnostics('f1', { backwards: 0 });
+    assert.equal(stored?.reorderedRows, 3, 'the store returns the enriched object');
+
+    // The one-line summary names a real repair, and stays quiet when the answer
+    // is merely unknown — that would otherwise be appended to every CSV.
+    const phrases = (reorderedRows) => h._timeAxisAnomalyPhrases(
+        { repeated: 0, gaps: 0, backwards: 0, reorderedRows });
+    assert.equal(phrases(6).length, 1, 'a real reordering reaches the summary line');
+    assert.match(phrases(6)[0], /6/, 'and carries the count');
+    assert.equal(phrases(null).length, 0, '"cannot be determined" stays out of the summary');
+    assert.equal(phrases(0).length, 0, 'and so does a checked zero');
+}
+
+// ── The two unanswerable rows share one explanation ──
+// A file whose rows arrive sorted cannot answer either "did time go backwards"
+// or "were rows reordered", and it is the same fact behind both. Marking them
+// separately would print that fact twice; leaving one of them unmarked would
+// make it read as a defect.
+{
+    const src = readFileSync(new URL('../src/app/methods/time-axis-inspector-methods.js', import.meta.url), 'utf8');
+    assert.match(src, /const footnote = \(text\) => \{[\s\S]{0,200}?indexOf\(text\)/,
+        'footnotes are deduplicated by their text');
+    assert.match(src, /timeAxisDiagNotChecked'\) \+ sortedOrderNote\(\)/,
+        '"time going backwards" points at the shared note');
+    assert.match(src, /timeAxisDiagReorderedUnknown'\) \+ sortedOrderNote\(\)/,
+        'and so does "rows reordered on import"');
+
+    // The value column is sized for numbers: a sentence there collapses the
+    // label column and wraps every row, which is why the marker exists.
+    const t = translations.en;
+    for (const key of ['timeAxisDiagNotChecked', 'timeAxisDiagReorderedUnknown']) {
+        assert.ok(t[key].length <= 14, `${key} stays short enough for the value cell (${t[key]})`);
+    }
+    assert.ok(t.timeAxisDiagSortedOrderNote.length > 40, 'the explanation lives in the footnote instead');
+
+    // The jargon is gone: "lazy" is an implementation word, not a user's word.
+    for (const lang of Object.keys(translations)) {
+        assert.ok(!/lazy/i.test(translations[lang].timeAxisDiagNotChecked),
+            `${lang}: the value cell does not expose "lazy"`);
+        assert.ok(!/lazy|duckdb|sql/i.test(translations[lang].timeAxisDiagSortedOrderNote),
+            `${lang}: neither does the footnote`);
+    }
+}
 
 console.log('Time-axis inspector tests passed.');

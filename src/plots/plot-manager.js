@@ -1449,7 +1449,10 @@ class PlotManager {
                     return false;
                 }
                 toggleVisByName(clickedName);
-                setTimeout(() => this._syncCursorDisplay(panelId, plot), 0);
+                setTimeout(() => {
+                    this._syncCursorDisplay(panelId, plot);
+                    this._refreshMissingOverlayForVisibility(panelId, plot);
+                }, 0);
             });
             // Double-click isolates one trace (or restores all). Read _fullData after it settles.
             div.on('plotly_legenddoubleclick', () => {
@@ -1463,6 +1466,7 @@ class PlotManager {
                         );
                         if (t) t.visible = fd.visible ?? true;
                     });
+                    this._refreshMissingOverlayForVisibility(panelId, plot);
                 }, 50);
             });
             div.on('plotly_afterplot', () => {
