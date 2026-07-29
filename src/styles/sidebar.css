@@ -498,6 +498,28 @@
     z-index: 28;
 }
 
+/* A popover that must be wider than the sidebar. The sidebar clips horizontal
+   overflow, so this one is positioned `fixed` (set on open, next to its toggle)
+   and escapes the clip entirely — the difference equation has to be readable on
+   one line, and 300px cannot hold it. */
+.derived-help-popover.data-tool-help-wide {
+    width: min(600px, calc(100vw - 2rem));
+    max-width: none;
+    overflow-y: auto;
+}
+
+.filter-help-equation {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 700;
+    font-size: 0.78rem;
+    /* One line is the whole point; if the viewport is genuinely too narrow the
+       equation scrolls rather than folding into an unreadable stack. */
+    white-space: nowrap;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+    margin-bottom: 0.1rem;
+}
+
 .derived-help-title {
     font-size: 0.8rem;
     font-weight: 600;

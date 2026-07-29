@@ -371,7 +371,9 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     const okPlan = withDocument(filterDom('1', '1, -1.8, 0.81'), () => h._filterPlan());
     assert.equal(okPlan.ok, true);
     assert.equal(okPlan.code, '');
-    assert.match(okPlan.text, /Order 2/);
+    // The kind is named in both cases: an FIR line that says "FIR" next to an
+    // IIR line that says nothing reads as an omission rather than a distinction.
+    assert.match(okPlan.text, /^IIR, order 2/);
     assert.match(okPlan.text, /0\.9/, 'the furthest pole is quoted');
 
     // Unstable: refused, and the message names WHERE the pole is, because that is

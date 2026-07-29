@@ -407,9 +407,9 @@
                                 </button>
                             </div>
                             <label class="options-subgroup-label filter-coefficient-label" for="filter-b" data-i18n="dataToolFilterB">b (numerator)</label>
-                            <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">
+                            <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="0.5" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">
                             <label class="options-subgroup-label filter-coefficient-label" for="filter-a" data-i18n="dataToolFilterA">a (denominator)</label>
-                            <input id="filter-a" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1" placeholder="1, -0.5" data-i18n-placeholder="dataToolFilterAPlaceholder">
+                            <input id="filter-a" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1, -0.5" placeholder="1, -0.5" data-i18n-placeholder="dataToolFilterAPlaceholder">
 
                             <label class="options-subgroup-label" for="filter-mode" data-i18n="dataToolFilterMode">Pass</label>
                             <select id="filter-mode" class="data-tool-select">
@@ -417,23 +417,30 @@
                                 <option value="zeroPhase" data-i18n="dataToolFilterZeroPhase">Forward and back (zero phase)</option>
                             </select>
 
-                            <div id="filter-help-popover" class="derived-help-popover data-tool-help-popover" role="dialog" aria-labelledby="filter-help-title" hidden>
+                            <div id="filter-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-help-title" hidden>
                                 <div class="derived-help-title" id="filter-help-title" data-i18n="dataToolFilterHelpTitle">Digital filter help</div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterHelpEquationLabel">What it computes</span>
-                                    <span data-i18n="dataToolFilterHelpEquation">a₀·y[n] = b₀·x[n] + b₁·x[n−1] + … − a₁·y[n−1] − … . Leave a at 1 for an FIR.</span>
+                                    <span class="filter-help-equation" data-i18n-rich="dataToolFilterHelpEquation">a₀·y[n] = b₀·x[n] + b₁·x[n−1] + … − a₁·y[n−1] − a₂·y[n−2] − …</span>
+                                    <span data-i18n-rich="dataToolFilterHelpEquationNote">Leave <strong>a</strong> at 1 for an FIR: with no feedback term the output depends only on the input.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpOrderLabel">Numerator and denominator</span>
+                                    <span data-i18n-rich="dataToolFilterHelpOrder">Both are lists in ascending delay order: <strong>b</strong> is b₀, b₁, b₂ … (weights on x[n], x[n−1], x[n−2] …) and <strong>a</strong> is a₀, a₁, a₂ … (weights on y[n], y[n−1], y[n−2] …). The lists need not be the same length; the shorter one is padded with zeros.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpOrderA0"><strong>a₀ need not be 1.</strong> It divides every other coefficient, so it may be any non-zero number and the filter is normalised for you — 2, 1 is the same filter as 1, 0.5. Only zero is refused: that is not a difference equation.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpOrderSyntax">Separate the numbers with commas, spaces, semicolons or newlines, and square brackets are accepted so a list can be pasted straight from MATLAB or NumPy. All of these are the same: <strong>0.5, 0.24</strong> · <strong>0.5 0.24</strong> · <strong>[0.5 0.24]</strong> · <strong>[0.5, 0.24]</strong></span>
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterHelpStabilityLabel">Stability</span>
-                                    <span data-i18n="dataToolFilterHelpStability">An unstable filter cannot be created: its own output feeds back and grows until every later sample is infinite. The poles of a are checked before anything runs.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpStability">An unstable filter cannot be created: its own output feeds back and grows until every later sample is infinite. The poles of <strong>a</strong> are checked before anything runs.</span>
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterZeroPhase">Forward and back (zero phase)</span>
-                                    <span data-i18n="dataToolFilterHelpZeroPhase">Filters twice in opposite directions, so nothing shifts in time — at the cost of applying the magnitude response twice.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpZeroPhase">Filters twice in opposite directions, so nothing shifts in time — at the cost of applying the magnitude response twice.</span>
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterHelpGapsLabel">Missing data</span>
-                                    <span data-i18n="dataToolFilterHelpGaps">Each run of present samples is filtered on its own, so one hole cannot poison the rest of the signal. Fill the holes first to filter across them.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpGaps">Each run of present samples is filtered on its own, so one hole cannot poison the rest of the signal. Fill the holes first to filter across them.</span>
                                 </div>
                             </div>
 

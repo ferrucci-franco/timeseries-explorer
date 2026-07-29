@@ -39,6 +39,32 @@ proto._toggleFilterHelpPopover = function(show) {
     popover.hidden = !willShow;
     button.classList.toggle('active', willShow);
     button.setAttribute('aria-expanded', String(willShow));
+    if (willShow) this._positionFilterHelpPopover(popover, button);
+};
+
+// The sidebar clips horizontal overflow, so a popover wide enough to hold the
+// difference equation on one line cannot be absolutely positioned inside it.
+// Fixed positioning escapes the clip; the cost is that the placement has to be
+// computed here rather than declared in CSS. Clamped to the viewport on both
+// axes so it can never open partly off-screen on a narrow window.
+proto._positionFilterHelpPopover = function(popover, button) {
+    if (typeof window === 'undefined' || !button.getBoundingClientRect) return;
+    const rect = button.getBoundingClientRect();
+    const margin = 12;
+    // A viewport that reports zero (an offscreen or not-yet-composited window)
+    // would otherwise collapse the popover to a sliver. Fall back to the document
+    // width, and never go below a width the equation can still be read in.
+    const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 900;
+    const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 700;
+    const width = Math.max(300, Math.min(600, viewportWidth - 2 * margin));
+    const top = Math.min(rect.bottom + 8, Math.max(margin, viewportHeight - 120));
+    const left = Math.max(margin, Math.min(rect.left, viewportWidth - width - margin));
+    popover.style.position = 'fixed';
+    popover.style.width = `${width}px`;
+    popover.style.left = `${left}px`;
+    popover.style.right = 'auto';
+    popover.style.top = `${top}px`;
+    popover.style.maxHeight = `${Math.max(160, viewportHeight - top - margin)}px`;
 };
 
 // ─── Reading the form ─────────────────────────────────────────────────────

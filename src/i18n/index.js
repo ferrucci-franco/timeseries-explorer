@@ -5,6 +5,19 @@
 
 import translations from './translations.js';
 
+// `**bold**` inside a translated string, and nothing else. Everything is escaped
+// before the markers are honoured, so the only tags that can reach the DOM are
+// the ones produced here — a translation file is data, not markup.
+function renderRichText(text) {
+    const escaped = String(text ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    return escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
 const i18n = {
     currentLang: 'en',
     translations,
@@ -40,6 +53,15 @@ const i18n = {
             } else {
                 el.textContent = translation;
             }
+        });
+
+        // Strings that need a word or two emphasised INSIDE the sentence — a
+        // coefficient name, a formula. Splitting them into three keys around the
+        // emphasis would wreck them for translators, whose word order differs:
+        // the marker travels with the word instead. Only **bold** is understood,
+        // and the text is escaped first, so a translation can never inject HTML.
+        document.querySelectorAll('[data-i18n-rich]').forEach(el => {
+            el.innerHTML = renderRichText(this.t(el.getAttribute('data-i18n-rich')));
         });
 
         document.querySelectorAll('[data-i18n-title]').forEach(el => {
