@@ -1,6 +1,6 @@
 // The panel download button and the export dialog behind it: which charts a
 // panel offers, which one is preselected, why CSV is sometimes unavailable,
-// how the files are named, and that a background chosen for the export is put
+// how the files are named, and that a theme chosen for the export is put
 // back afterwards.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -73,20 +73,20 @@ assert.ok(
     'the dialog dims and blurs what is behind it',
 );
 for (const key of ['exportFormatCsv', 'exportFormatPng', 'exportFormatSvg', 'exportQuality',
-    'exportBackground', 'exportFileName', 'exportAction']) {
+    'exportTheme', 'exportFileName', 'exportAction']) {
     assert.ok(dialogSource.includes(`i18n.t('${key}')`), `the dialog is translated: ${key}`);
 }
 assert.ok(
     dialogSource.includes('const remembered = {'),
-    'format, quality and background survive between openings',
+    'format, quality and theme survive between openings',
 );
 
 const translationKeys = [
     'exportPanel', 'exportDialogTitle', 'exportDialogBody', 'exportFormat',
     'exportFormatCsv', 'exportFormatCsvHint', 'exportFormatPng', 'exportFormatPngHint',
     'exportFormatSvg', 'exportFormatSvgHint', 'exportChart', 'exportChartSpectrum',
-    'exportChartHistogram', 'exportQuality', 'exportQualityHint', 'exportBackground',
-    'exportBackgroundTheme', 'exportBackgroundLight', 'exportBackgroundTransparent',
+    'exportChartHistogram', 'exportQuality', 'exportQualityHint', 'exportTheme',
+    'exportThemeCurrent', 'exportThemeLight', 'exportThemeDark', 'exportThemeLightTransparent',
     'exportFileName', 'exportAction', 'exportCsvUnavailableProfile', 'exportCsvUnavailableStale',
     'exportFailedTitle', 'exportFailedBody', 'exportFailedDetails',
 ];
@@ -262,7 +262,7 @@ for (const [mode, extraKey, chartId] of [
 {
     const plot = { mode: 'timeseries', div: makeDiv(1) };
     const manager = new Harness(plot);
-    dialogAnswer = { format: 'csv', chartId: 'plot', scale: 2, background: 'theme', baseName: 'run7', fileName: 'run7.csv' };
+    dialogAnswer = { format: 'csv', chartId: 'plot', scale: 2, theme: 'current', baseName: 'run7', fileName: 'run7.csv' };
     await manager._openExportDialog('panel');
     assert.equal(manager.csvExports.length, 1, 'one CSV export is requested');
     assert.equal(manager.csvExports[0].panelId, 'panel', 'the export targets the panel that asked');
@@ -288,7 +288,7 @@ for (const [mode, extraKey, chartId] of [
     const manager = new Harness(plot);
     toImageCalls.length = 0;
     downloads.length = 0;
-    dialogAnswer = { format: 'png', chartId: 'spectrum', scale: 3, background: 'theme', baseName: 'fft_spectrum', fileName: 'fft_spectrum.png' };
+    dialogAnswer = { format: 'png', chartId: 'spectrum', scale: 3, theme: 'current', baseName: 'fft_spectrum', fileName: 'fft_spectrum.png' };
     await manager._openExportDialog('panel');
     assert.equal(toImageCalls.length, 1, 'one image is rendered');
     assert.equal(toImageCalls[0].options.format, 'png', 'PNG is requested as PNG');
@@ -299,50 +299,80 @@ for (const [mode, extraKey, chartId] of [
     assert.deepEqual(downloads, ['fft_spectrum.png'], 'the file is saved under the chosen name');
 
     toImageCalls.length = 0;
-    dialogAnswer = { format: 'svg', chartId: 'time', scale: 4, background: 'theme', baseName: 'fft_time', fileName: 'fft_time.svg' };
+    dialogAnswer = { format: 'svg', chartId: 'time', scale: 4, theme: 'current', baseName: 'fft_time', fileName: 'fft_time.svg' };
     await manager._openExportDialog('panel');
     assert.equal(toImageCalls[0].options.scale, 1, 'a vector image ignores the pixel multiplier');
     assert.equal(toImageCalls[0].options.format, 'svg', 'SVG is requested as SVG');
 }
 
-// A background chosen for the export is put back afterwards.
+// A theme chosen for the export is applied to the whole figure, not just its
+// paper, and the panel is put back afterwards. The app runs the dark theme
+// here, so "dark" has to be an explicit choice rather than a no-op.
 {
     const plot = { mode: 'timeseries', div: makeDiv(1) };
     const manager = new Harness(plot);
-    relayouts.length = 0;
-    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, background: 'transparent', baseName: 'p', fileName: 'p.png' };
-    await manager._openExportDialog('panel');
-    assert.equal(relayouts.length, 2, 'the chart is repainted for the export and restored after it');
-    assert.equal(relayouts[0].update.paper_bgcolor, 'rgba(0,0,0,0)', 'the export gets a transparent background');
-    assert.equal(relayouts[1].update.paper_bgcolor, '#2d2d2d', 'the panel gets its own background back');
 
     relayouts.length = 0;
-    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, background: 'light', baseName: 'p', fileName: 'p.png' };
+    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, theme: 'light', baseName: 'p', fileName: 'p.png' };
     await manager._openExportDialog('panel');
-    assert.equal(relayouts[0].update.paper_bgcolor, '#ffffff', 'a light export also gets light paper');
+    assert.equal(relayouts.length, 2, 'the chart is repainted for the export and restored after it');
+    assert.equal(relayouts[0].update.paper_bgcolor, '#ffffff', 'a light export gets light paper');
     assert.equal(relayouts[0].update['font.color'], '#333333', 'a light export gets readable text, not the dark theme');
+    assert.equal(relayouts[1].update.paper_bgcolor, '#2d2d2d', 'the panel gets its own paper back');
     assert.equal(relayouts[1].update['font.color'], '#d0d0d0', 'the panel keeps the theme it had');
     assert.equal(manager.theme, 'dark', 'the app theme itself is never changed');
 
     relayouts.length = 0;
-    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, background: 'theme', baseName: 'p', fileName: 'p.png' };
+    const lightApp = new Harness(plot, { theme: 'light' });
+    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, theme: 'dark', baseName: 'p', fileName: 'p.png' };
+    await lightApp._openExportDialog('panel');
+    assert.equal(relayouts[0].update.paper_bgcolor, '#2d2d2d', 'a dark export gets dark paper from a light app');
+    assert.equal(relayouts[0].update['font.color'], '#d0d0d0', 'a dark export gets light text');
+    assert.equal(lightApp.theme, 'light', 'the app theme itself is never changed');
+
+    relayouts.length = 0;
+    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, theme: 'light-transparent', baseName: 'p', fileName: 'p.png' };
+    await manager._openExportDialog('panel');
+    assert.equal(relayouts[0].update.paper_bgcolor, 'rgba(0,0,0,0)', 'transparent takes the paper away');
+    assert.equal(relayouts[0].update.plot_bgcolor, 'rgba(0,0,0,0)', 'transparent takes the plot area away too');
+    assert.equal(relayouts[0].update['font.color'], '#333333',
+        'transparent is a variant of light: the text is the one that reads on a white page');
+    assert.equal(relayouts[1].update.paper_bgcolor, '#2d2d2d', 'the panel gets its paper back');
+
+    relayouts.length = 0;
+    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, theme: 'current', baseName: 'p', fileName: 'p.png' };
     await manager._openExportDialog('panel');
     assert.equal(relayouts.length, 0, 'exporting with the current theme touches nothing');
+
+    relayouts.length = 0;
+    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, theme: 'dark', baseName: 'p', fileName: 'p.png' };
+    await manager._openExportDialog('panel');
+    assert.equal(relayouts.length, 0, 'naming the theme the app is already in touches nothing either');
 }
 
-// The Calendar Heatmap needs a rebuild rather than a relayout to go light.
+// The Calendar Heatmap needs a rebuild rather than a relayout to change theme.
 {
     const plot = { mode: 'heatmap', div: makeDiv(1), heatmapDiv: makeDiv(2) };
     const manager = new Harness(plot);
     relayouts.length = 0;
-    dialogAnswer = { format: 'png', chartId: 'heatmap', scale: 2, background: 'light', baseName: 'h', fileName: 'h.png' };
+    dialogAnswer = { format: 'png', chartId: 'heatmap', scale: 2, theme: 'light', baseName: 'h', fileName: 'h.png' };
     await manager._openExportDialog('panel');
-    assert.deepEqual(manager.heatmapRenders.map(r => r.theme), ['light', 'dark'],
+    assert.deepEqual(Array.from(manager.heatmapRenders, r => r.theme), ['light', 'dark'],
         'the heatmap is rebuilt light for the export and dark again after it');
     assert.equal(relayouts.length, 0, 'the heatmap takes the rebuild path, not the relayout one');
     assert.equal(manager.theme, 'dark', 'the app theme survives the heatmap export');
     assert.equal(dialogOptions.csvBlockedReason, 'heatmapExportPending',
         'the dialog explains why the heatmap has no CSV');
+
+    // Transparent still rides on top of the rebuild.
+    manager.heatmapRenders.length = 0;
+    relayouts.length = 0;
+    dialogAnswer = { format: 'png', chartId: 'heatmap', scale: 2, theme: 'light-transparent', baseName: 'h', fileName: 'h.png' };
+    await manager._openExportDialog('panel');
+    assert.deepEqual(Array.from(manager.heatmapRenders, r => r.theme), ['light', 'dark'],
+        'a transparent heatmap is still rebuilt in its export theme');
+    assert.equal(relayouts[0].update.paper_bgcolor, 'rgba(0,0,0,0)', 'and then loses its paper');
+    assert.equal(relayouts[1].update.paper_bgcolor, '#2d2d2d', 'and gets it back afterwards');
 }
 
 // A failed render reports instead of throwing, and still restores the panel.
@@ -353,7 +383,7 @@ for (const [mode, extraKey, chartId] of [
     alerts.length = 0;
     const workingToImage = sandbox.Plotly.toImage;
     sandbox.Plotly.toImage = async () => { throw new Error('WebGL context lost'); };
-    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, background: 'transparent', baseName: 'p', fileName: 'p.png' };
+    dialogAnswer = { format: 'png', chartId: 'plot', scale: 1, theme: 'light-transparent', baseName: 'p', fileName: 'p.png' };
     await manager._openExportDialog('panel');
     sandbox.Plotly.toImage = workingToImage;
     assert.equal(alerts.length, 1, 'the failure is reported');

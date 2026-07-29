@@ -16,11 +16,14 @@ import Modal from './modal.js';
 const DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';
 
 const SCALES = [1, 2, 3, 4];
-const BACKGROUNDS = ['theme', 'light', 'transparent'];
+// The exported figure keeps the app's theme, or takes the one the document it
+// is going into wants. Transparent belongs to a theme rather than replacing
+// one: without dark text on it, a transparent figure is only half a decision.
+const THEMES = ['current', 'light', 'dark', 'light-transparent'];
 
-// Format, quality and background survive between openings: producing the
-// figures of one report means making the same three choices every time.
-const remembered = { format: 'csv', scale: 2, background: 'theme' };
+// Format, quality and theme survive between openings: producing the figures of
+// one report means making the same three choices every time.
+const remembered = { format: 'csv', scale: 2, theme: 'current' };
 
 const IMAGE_FORMATS = new Set(['png', 'svg']);
 
@@ -44,7 +47,7 @@ export default class PlotExportDialog {
      *   explanation rather than silently missing
      * @param {(format: string, chart: object|null) => string} [options.defaultBaseName]
      * @returns {Promise<null|{format: string, chartId: string, scale: number,
-     *   background: string, baseName: string, fileName: string}>}
+     *   theme: string, baseName: string, fileName: string}>}
      */
     static open({
         contextLabel = '',
@@ -73,7 +76,7 @@ export default class PlotExportDialog {
                 format: csvBlockedReason && remembered.format === 'csv' ? 'png' : remembered.format,
                 chartId: defaultChartId || charts[0]?.id || '',
                 scale: SCALES.includes(remembered.scale) ? remembered.scale : 2,
-                background: BACKGROUNDS.includes(remembered.background) ? remembered.background : 'theme',
+                theme: THEMES.includes(remembered.theme) ? remembered.theme : 'current',
             };
             if (!charts.length) state.format = 'csv';
 
@@ -213,26 +216,27 @@ export default class PlotExportDialog {
             qualityHint.className = 'export-hint-line';
             qualitySection.appendChild(qualityHint);
 
-            // Background (images only)
-            const backgroundSection = makeSection(i18n.t('exportBackground'));
-            const backgroundGroup = radioGroup('background');
-            backgroundGroup.classList.add('export-option-grid-compact');
-            const backgroundLabels = {
-                theme: i18n.t('exportBackgroundTheme'),
-                light: i18n.t('exportBackgroundLight'),
-                transparent: i18n.t('exportBackgroundTransparent'),
+            // Theme (images only)
+            const themeSection = makeSection(i18n.t('exportTheme'));
+            const themeGroup = radioGroup('theme');
+            themeGroup.classList.add('export-option-grid-2col');
+            const themeLabels = {
+                current: i18n.t('exportThemeCurrent'),
+                light: i18n.t('exportThemeLight'),
+                dark: i18n.t('exportThemeDark'),
+                'light-transparent': i18n.t('exportThemeLightTransparent'),
             };
-            const backgroundInputs = BACKGROUNDS.map((background) => {
-                const { row, input } = radioCard('background', background, backgroundLabels[background], '');
+            const themeInputs = THEMES.map((theme) => {
+                const { row, input } = radioCard('theme', theme, themeLabels[theme], '');
                 input.addEventListener('change', () => {
                     if (!input.checked) return;
-                    state.background = background;
+                    state.theme = theme;
                     sync();
                 });
-                backgroundGroup.appendChild(row);
+                themeGroup.appendChild(row);
                 return input;
             });
-            backgroundSection.appendChild(backgroundGroup);
+            themeSection.appendChild(themeGroup);
 
             // File name
             const nameSection = makeSection(i18n.t('exportFileName'), 'export-name-section');
@@ -278,13 +282,13 @@ export default class PlotExportDialog {
                 formatInputs.forEach((input, index) => { input.checked = formats[index].id === state.format; });
                 chartInputs.forEach((input, index) => { input.checked = charts[index].id === state.chartId; });
                 qualityInputs.forEach((input, index) => { input.checked = SCALES[index] === state.scale; });
-                backgroundInputs.forEach((input, index) => { input.checked = BACKGROUNDS[index] === state.background; });
+                themeInputs.forEach((input, index) => { input.checked = THEMES[index] === state.theme; });
 
                 // One chart means no choice to make; CSV covers the panel, not
                 // a single pane, so the selector goes away there too.
                 chartSection.hidden = !isImage || charts.length < 2;
                 qualitySection.hidden = state.format !== 'png';
-                backgroundSection.hidden = !isImage;
+                themeSection.hidden = !isImage;
 
                 const chart = currentChart();
                 if (chart) {
@@ -317,12 +321,12 @@ export default class PlotExportDialog {
                 const baseName = sanitizeBaseName(nameInput.value) || sanitizeBaseName(defaultBaseName(state.format, currentChart())) || 'export';
                 remembered.format = state.format;
                 remembered.scale = state.scale;
-                remembered.background = state.background;
+                remembered.theme = state.theme;
                 finish({
                     format: state.format,
                     chartId: state.chartId,
                     scale: state.scale,
-                    background: state.background,
+                    theme: state.theme,
                     baseName,
                     fileName: `${baseName}.${format.ext}`,
                 });

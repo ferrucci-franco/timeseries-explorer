@@ -19,9 +19,15 @@ import PlotExportDialog from '../../ui/plot-export-dialog.js';
 // Node.DOCUMENT_POSITION_FOLLOWING — "b comes after a in the document".
 const DOCUMENT_POSITION_FOLLOWING = 4;
 
-// The Plotly layout keys the transparent background touches. The light-document
-// background reuses the app's own theme update instead, so it covers fonts and
-// grid lines too.
+// What each theme offered by the export dialog means. A forced theme reuses
+// the app's own theme update, so it covers fonts, grid and legend and not just
+// the paper; 'current' is absent because it repaints nothing.
+const EXPORT_THEMES = {
+    light: { theme: 'light' },
+    dark: { theme: 'dark' },
+    'light-transparent': { theme: 'light', transparent: true },
+};
+
 const CLEAR_COLOR = 'rgba(0,0,0,0)';
 
 const readLayoutPath = (layout, path) => path.split('.')
@@ -176,8 +182,8 @@ export function installPlotExportMethods(TargetClass) {
         await this._exportPlotImage(panelId, plot, chart, result);
     };
 
-    proto._exportPlotImage = async function(panelId, plot, chart, { format, scale, background, fileName }) {
-        const restore = await this._applyExportBackground(panelId, plot, chart.div, background);
+    proto._exportPlotImage = async function(panelId, plot, chart, { format, scale, theme, fileName }) {
+        const restore = await this._applyExportTheme(panelId, plot, chart.div, theme);
         try {
             const dataUrl = await Plotly.toImage(chart.div, {
                 format,
@@ -199,36 +205,44 @@ export function installPlotExportMethods(TargetClass) {
     };
 
     /**
-     * Repaint the chart for the export, and hand back the undo.
+     * Repaint the chart in the theme chosen for the export, and hand back the
+     * undo.
      *
      * Plotly renders whatever is on screen, so a figure for a white page has to
-     * be a white figure for as long as it takes to snapshot it. The dialog's
-     * default ("current theme") changes nothing at all.
+     * be a white figure for as long as it takes to snapshot it — and a light
+     * figure means light everywhere, not white paper under the dark theme's
+     * grey text. The dialog's default ("current theme") changes nothing at all.
      */
-    proto._applyExportBackground = async function(panelId, plot, div, background) {
+    proto._applyExportTheme = async function(panelId, plot, div, theme) {
         const noop = () => Promise.resolve();
-        if (background !== 'light' && background !== 'transparent') return noop;
+        const preset = EXPORT_THEMES[theme];
+        if (!preset) return noop;
+        // Asking for the theme the app is already in is the default in
+        // disguise: repainting it would only cost a flicker.
+        if (preset.theme === this.theme && !preset.transparent) return noop;
 
-        // A light Calendar Heatmap needs its per-signal axes rebuilt, not just
+        // A Calendar Heatmap needs its per-signal axes rebuilt, not just
         // relayouted — same reason the app re-renders it on a theme change.
-        if (background === 'light' && plot.mode === 'heatmap' && div === plot.heatmapDiv
-            && this._renderCalendarHeatmapModels) {
+        const rebuildsHeatmap = plot.mode === 'heatmap' && div === plot.heatmapDiv
+            && !!this._renderCalendarHeatmapModels;
+        const renderHeatmap = (asTheme) => {
             const realTheme = this.theme;
-            this.theme = 'light';
-            await Promise.resolve(this._renderCalendarHeatmapModels(panelId, plot, { preserveView: true }));
-            return async () => {
-                this.theme = realTheme;
-                await Promise.resolve(this._renderCalendarHeatmapModels(panelId, plot, { preserveView: true }));
-            };
-        }
+            this.theme = asTheme;
+            const done = Promise.resolve(this._renderCalendarHeatmapModels(panelId, plot, { preserveView: true }));
+            this.theme = realTheme;
+            return done;
+        };
 
         const update = {};
-        if (background === 'light') {
+        if (!rebuildsHeatmap) {
             const realTheme = this.theme;
-            this.theme = 'light';
+            this.theme = preset.theme;
             try { Object.assign(update, this._themeRelayoutUpdate(plot)); }
             finally { this.theme = realTheme; }
-        } else {
+        }
+        // Transparent is a variant of a theme, not a theme of its own: the paper
+        // goes away, the text and grid stay whatever the theme made them.
+        if (preset.transparent) {
             update.paper_bgcolor = CLEAR_COLOR;
             update.plot_bgcolor = CLEAR_COLOR;
             if (div._fullLayout?.scene) update['scene.bgcolor'] = CLEAR_COLOR;
@@ -236,18 +250,20 @@ export function installPlotExportMethods(TargetClass) {
 
         // Undo from what the chart actually had, not from what the theme says
         // it should have: the two differ once the user has zoomed a 3D scene or
-        // an analysis pane has painted itself.
+        // an analysis pane has painted itself. Read before anything moves.
         const previous = {};
         for (const key of Object.keys(update)) {
             const value = readLayoutPath(div._fullLayout, key);
             if (value !== undefined) previous[key] = value;
         }
 
-        await Plotly.relayout(div, update);
+        if (rebuildsHeatmap) await renderHeatmap(preset.theme);
+        if (Object.keys(update).length) await Plotly.relayout(div, update);
         this._refreshAxisDecorations?.(plot);
         this._refreshOriginCross?.(plot);
         return async () => {
-            await Plotly.relayout(div, previous);
+            if (Object.keys(previous).length) await Plotly.relayout(div, previous);
+            if (rebuildsHeatmap) await renderHeatmap(this.theme);
             this._refreshAxisDecorations?.(plot);
             this._refreshOriginCross?.(plot);
         };
