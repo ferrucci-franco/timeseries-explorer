@@ -206,9 +206,10 @@
                             <div class="data-tool-name-row">
                                 <input id="outlier-output-name" class="derived-input" type="text" autocomplete="off">
                                 <button id="data-tool-rename" class="tree-control-btn data-tool-rename-btn" type="button" hidden title="Rename variable" data-i18n-title="dataToolRenameTitle">
-                                    <span>✎</span>
+                                    <span id="data-tool-rename-glyph">✎</span>
                                 </button>
                             </div>
+                            <div id="data-tool-name-hint" class="data-tool-name-hint" hidden></div>
                         </div>
 
                         <div id="outlier-method-wrap">
@@ -275,6 +276,8 @@
                                 <option value="trapezoidal" selected data-i18n="dataToolIntegralTrapezoidal">Trapezoidal</option>
                                 <option value="rectangular" data-i18n="dataToolIntegralRectangular">Rectangular</option>
                             </select>
+                            <label class="options-subgroup-label" for="integral-initial" data-i18n="dataToolIntegralInitial">Initial condition</label>
+                            <input id="integral-initial" class="derived-input data-tool-number-input" type="number" step="0.1" value="0">
                             <label class="options-subgroup-label" for="integral-gap-policy" data-i18n="dataToolIntegralGapPolicy">Missing data</label>
                             <select id="integral-gap-policy" class="data-tool-select">
                                 <option value="zero" selected data-i18n="dataToolIntegralGapZero">Contributes nothing</option>

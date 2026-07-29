@@ -202,6 +202,42 @@ app._reapplyDataToolVariables('file', chainData);
 closeArray(chainData.variables['x avg'].data, [3, 5, 6], 'chained reapply does not compound');
 closeArray(chainData.variables['x avg int'].data, [0, 3, 8], 'the second link does not compound either');
 
+// The integral's constant of integration. It shifts the whole curve, starting at
+// the first sample; leaving it out has to stay identical to the old behaviour.
+{
+    const initialData = numericData([0, 1, 2, 3], 'index');
+    const values = [2, 2, 2, 2];
+    const base = h._computeIntegralValues(values, initialData, { method: 'rectangular' });
+    closeArray(base.values, [0, 2, 4, 6], 'no initial condition keeps the historical result');
+
+    const offset = h._computeIntegralValues(values, initialData, { method: 'rectangular', initial: 10 });
+    closeArray(offset.values, [10, 12, 14, 16], 'the initial condition offsets the whole accumulation');
+
+    const negative = h._computeIntegralValues(values, initialData, { method: 'rectangular', initial: -1.5 });
+    closeArray(negative.values, [-1.5, 0.5, 2.5, 4.5], 'a negative initial condition works too');
+
+    // A hole under 'propagate' still poisons everything after it: the offset is a
+    // starting point, not a repair.
+    const holed = h._computeIntegralValues([2, NaN, 2, 2], initialData, {
+        method: 'rectangular',
+        initial: 10,
+        gapPolicy: 'propagate',
+    });
+    assert.equal(holed.values[0], 10, 'the initial condition survives at the first sample');
+    assert.ok(Number.isNaN(holed.values[3]), 'propagate still marks the tail unknown');
+
+    assert.equal(
+        h._normalizeDataToolParams('integrate', { initial: '2.5' }).initial,
+        2.5,
+        'a numeric string initial condition is accepted',
+    );
+    assert.equal(
+        h._normalizeDataToolParams('integrate', { initial: 'nonsense' }).initial,
+        0,
+        'an unparseable initial condition falls back to zero',
+    );
+}
+
 // Renaming moves a key through four places at once. Missing any one of them
 // leaves a dangling reference: a definition pointing at a source that no longer
 // exists, or a trace drawing a variable that was renamed out from under it.
@@ -277,8 +313,8 @@ closeArray(modifyData.variables.y.data, [0, 1, 3], 'modify reapply does not comp
     // The default is the corrected behaviour, not the historical one.
     assert.deepEqual(
         h._normalizeDataToolParams('integrate', {}),
-        { method: 'trapezoidal', gapPolicy: 'zero' },
-        'integral params default to the zero policy',
+        { method: 'trapezoidal', gapPolicy: 'zero', initial: 0 },
+        'integral params default to the zero policy and a zero initial condition',
     );
     assert.equal(
         h._normalizeDataToolParams('integrate', { gapPolicy: 'nonsense' }).gapPolicy,

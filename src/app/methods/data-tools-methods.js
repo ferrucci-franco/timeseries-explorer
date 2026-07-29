@@ -85,10 +85,18 @@ proto.initDataTools = function() {
     // The name never computes anything. Typing here used to commit a variable
     // under a half-typed name, which is the defect this panel was rebuilt for.
     outputInput.addEventListener('input', () => this._syncDataTools());
+    outputInput.addEventListener('keydown', (event) => {
+        if (!this._dataToolRenameUnlocked) return;
+        if (event.key === 'Enter') { event.preventDefault(); this._confirmDataToolRename(); }
+        else if (event.key === 'Escape') { event.preventDefault(); this._cancelDataToolRename(); }
+    });
     methodSelect.addEventListener('change', () => this._handleDataToolOptionChange());
     document.getElementById('derivative-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
     document.getElementById('integral-method')?.addEventListener('change', () => this._handleDataToolOptionChange());
     document.getElementById('integral-gap-policy')?.addEventListener('change', () => this._handleDataToolOptionChange());
+    // Number inputs commit on blur/Enter; previewing every keystroke would run on
+    // the "-" of "-1.5".
+    document.getElementById('integral-initial')?.addEventListener('change', () => this._handleDataToolOptionChange());
 
     document.getElementById('moving-average-window-slider')?.addEventListener('input', (event) => {
         const numeric = document.getElementById('moving-average-window');
@@ -126,7 +134,7 @@ proto.initDataTools = function() {
     createBtn?.addEventListener('click', () => this.commitDataTool({ plot: false }));
     createPlotBtn?.addEventListener('click', () => this.commitDataTool({ plot: true }));
     clearBtn?.addEventListener('click', () => this.clearDataToolForm());
-    renameBtn?.addEventListener('click', () => this._unlockDataToolRename());
+    renameBtn?.addEventListener('click', () => this._toggleDataToolRename());
     liveChain?.addEventListener('change', () => this._handleDataToolPreviewChange({ immediate: true }));
     tableEl?.addEventListener('click', (event) => this._handleDataToolTableClick(event));
 
@@ -234,6 +242,7 @@ proto._syncDataTools = function() {
     document.getElementById('derivative-method')?.toggleAttribute('disabled', !hasSource || tool !== 'derivative');
     document.getElementById('integral-method')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
     document.getElementById('integral-gap-policy')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
+    document.getElementById('integral-initial')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
     document.getElementById('moving-average-window-slider')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.getElementById('moving-average-window')?.toggleAttribute('disabled', !hasSource || tool !== 'movingAverage');
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
@@ -243,6 +252,7 @@ proto._syncDataTools = function() {
 
     const blocker = this._dataToolCommitBlocker({ hasSource, hasValidConfig, editing, fileId, data });
     form.classList.toggle('data-tool-invalid', hasSource && !!blocker);
+    this._syncDataToolNameHint();
     this._syncDataToolActions(editing, blocker);
     this._syncDataToolLiveChainToggle(editing, fileId);
     this._renderDataToolTable();
@@ -283,13 +293,24 @@ proto._syncDataToolActions = function(editing, blocker) {
         createBtn.textContent = i18n.t(editing ? 'dataToolUpdate' : 'dataToolCreate');
     }
     if (createPlotBtn) {
-        createPlotBtn.disabled = !!blocker;
+        // While editing something already on a panel, "and plot" has nothing left
+        // to do — the live update is already redrawing that very trace.
+        const alreadyPlotted = !!editing && this._isDataToolVariablePlotted(editing.fileId, editing.name);
+        createPlotBtn.disabled = !!blocker || alreadyPlotted;
+        createPlotBtn.title = alreadyPlotted ? i18n.t('dataToolAlreadyPlotted') : '';
         createPlotBtn.textContent = i18n.t(editing ? 'dataToolUpdateAndPlot' : 'dataToolCreateAndPlot');
     }
     if (clearBtn) clearBtn.textContent = i18n.t(editing ? 'dataToolCancel' : 'dataToolClear');
     if (renameBtn) {
+        // Hidden while drafting: there is nothing to rename yet, the field is
+        // already open.
+        const renaming = !!this._dataToolRenameUnlocked;
         renameBtn.hidden = !editing;
-        renameBtn.classList.toggle('active', !!this._dataToolRenameUnlocked);
+        renameBtn.classList.toggle('active', renaming);
+        renameBtn.disabled = renaming && !!this._dataToolNameHint();
+        renameBtn.title = i18n.t(renaming ? 'dataToolRenameConfirmTitle' : 'dataToolRenameTitle');
+        const glyph = document.getElementById('data-tool-rename-glyph');
+        if (glyph) glyph.textContent = renaming ? '✓' : '✎';
     }
     if (banner) {
         banner.hidden = !editing;
@@ -303,12 +324,17 @@ proto._syncDataToolLiveChainToggle = function(editing, fileId) {
     const wrap = document.getElementById('data-tool-live-chain-wrap');
     const label = document.getElementById('data-tool-live-chain-label');
     if (!wrap) return;
-    const count = editing ? this._dataToolDependents(fileId, editing.name).length : 0;
+    const dependents = editing ? this._dataToolDependents(fileId, editing.name) : [];
+    const count = dependents.length;
     wrap.hidden = count === 0;
-    if (label && count > 0) {
+    if (count === 0) return;
+    if (label) {
         label.textContent = i18n.t(count === 1 ? 'dataToolLiveChainOne' : 'dataToolLiveChain')
             .replace('{count}', String(count));
     }
+    // "Live-update chain" says nothing on its own; the tooltip names the actual
+    // variables that ride along with each parameter change.
+    wrap.title = i18n.t('dataToolLiveChainHelp').replace('{names}', dependents.join(', '));
 };
 
 proto._syncDataToolPickerOptions = function(lazy) {
@@ -463,8 +489,10 @@ proto.commitDataTool = async function(options = {}) {
     // the backup before leaving the editing state, which would otherwise restore
     // them over the result that was just written.
     this._dataToolEditBackup = null;
+    // Back to "Choose a tool" either way: a finished transformation is a finished
+    // job, and leaving the form half-populated invites a second accidental one.
     if (editing) this._exitDataToolEditing({ keepMessage: true });
-    else this._clearDataToolDraft({ keepTool: true, keepMessage: true });
+    else this._clearDataToolDraft({ keepMessage: true });
     this._syncDataTools();
     return result;
 };
@@ -552,9 +580,10 @@ proto._updateDataToolVariable = async function(context, config, editing) {
         const dependents = this._dataToolDependents(fileId, outputName);
         this._reapplyDataToolDependents(fileId, data, outputName);
 
+        // One rebuild, from updateFileData, which restores each panel's view.
+        // Rebuilding again here would capture the not-yet-restored view and pin
+        // the autoranged one, throwing away the zoom the user was working at.
         this.plotManager.updateFileData(fileId, data);
-        this._rebuildPlotsUsingVariable?.(fileId, outputName);
-        for (const name of dependents) this._rebuildPlotsUsingVariable?.(fileId, name);
         this._renderFilteredTree();
         this._setDataToolApplyMessage(result, 'updated', outputName, dependents.length);
         return result;
@@ -594,7 +623,9 @@ proto._renameDataToolVariable = function(fileId, data, oldName, newName) {
                 if (trace[axis] === oldName) { trace[axis] = newName; touched = true; }
             }
         }
-        if (touched) this.plotManager._rebuildPanel(panelId);
+        // A rename changes a label, not the data: there is no reason for the view
+        // to jump.
+        if (touched) this.plotManager._rebuildPanel(panelId, { preserveView: true });
     }
 };
 
@@ -743,6 +774,7 @@ proto._exitDataToolEditing = function(options = {}) {
     this._restoreEditedTraceValues();
     this._dataToolEditing = null;
     this._dataToolRenameUnlocked = false;
+    this._dataToolRenamePrevious = '';
     this._clearDataToolDraft({ keepMessage: options.keepMessage, keepTool: options.keepTool });
 };
 
@@ -773,17 +805,82 @@ proto._writeDataToolForm = function(definition, name) {
     } else if (definition.tool === 'integrate') {
         set('integral-method', params.method);
         set('integral-gap-policy', params.gapPolicy);
+        set('integral-initial', params.initial ?? 0);
     } else if (definition.tool === 'movingAverage') {
         set('moving-average-window', params.window);
         set('moving-average-window-slider', params.window);
     }
 };
 
-proto._unlockDataToolRename = function() {
+// The pencil opens the field; it then becomes a check that commits the new name.
+// Enter does the same, Escape puts the old one back. Committing is refused while
+// the name is invalid, so the field can never be left holding a name the variable
+// does not have.
+proto._toggleDataToolRename = function() {
     if (!this._dataToolEditing) return;
-    this._dataToolRenameUnlocked = !this._dataToolRenameUnlocked;
+    if (!this._dataToolRenameUnlocked) {
+        this._dataToolRenamePrevious = document.getElementById('outlier-output-name')?.value || '';
+        this._dataToolRenameUnlocked = true;
+        this._syncDataTools();
+        const input = document.getElementById('outlier-output-name');
+        input?.focus();
+        input?.select();
+        return;
+    }
+    this._confirmDataToolRename();
+};
+
+proto._confirmDataToolRename = function() {
+    if (!this._dataToolEditing) return;
+    if (this._dataToolNameHint()) return;
+    this._dataToolRenameUnlocked = false;
+    this._dataToolRenamePrevious = '';
     this._syncDataTools();
-    if (this._dataToolRenameUnlocked) document.getElementById('outlier-output-name')?.focus();
+};
+
+proto._cancelDataToolRename = function() {
+    if (!this._dataToolRenameUnlocked) return;
+    const input = document.getElementById('outlier-output-name');
+    if (input) input.value = this._dataToolRenamePrevious || input.value;
+    this._dataToolRenameUnlocked = false;
+    this._dataToolRenamePrevious = '';
+    this._syncDataTools();
+};
+
+// The i18n key naming what is wrong with the name in the field, or '' when it is
+// usable. Shown under the input rather than only disabling a button, so the
+// reason is visible where the mistake was made.
+proto._dataToolNameHint = function() {
+    const name = (document.getElementById('outlier-output-name')?.value || '').trim();
+    const sourceName = document.getElementById('outlier-variable')?.value || '';
+    const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
+    if (!name) return 'dataToolNameEmpty';
+    if (name === sourceName) return 'outlierOutputSameAsSource';
+    if (data?.variables?.[name] && name !== this._dataToolEditing?.name) return 'dataToolNameTaken';
+    return '';
+};
+
+proto._syncDataToolNameHint = function() {
+    const hint = document.getElementById('data-tool-name-hint');
+    const input = document.getElementById('outlier-output-name');
+    if (!hint || !input) return '';
+    const editable = !input.disabled;
+    const key = editable ? this._dataToolNameHint() : '';
+    hint.hidden = !key;
+    hint.textContent = key
+        ? i18n.t(key).replace('{name}', (input.value || '').trim())
+        : '';
+    input.classList.toggle('data-tool-input-invalid', !!key);
+    return key;
+};
+
+proto._isDataToolVariablePlotted = function(fileId, name) {
+    for (const [, plot] of this.plotManager?.plots || []) {
+        if (plot.traces?.some(trace => trace.fileId === fileId && trace.varName === name)) return true;
+        if (plot.phaseTraces?.some(trace => trace.fileId === fileId
+            && (trace.x === name || trace.y === name || trace.z === name))) return true;
+    }
+    return false;
 };
 
 // Names of every transformation built, directly or not, on top of `name`.
@@ -1114,6 +1211,7 @@ proto._buildIntegralResult = function(sourceValues, sourceVariable, config, data
     }, result.values, {
         method: config.params.method,
         gapPolicy: config.params.gapPolicy,
+        initial: config.params.initial,
         negativeDtCount: result.negativeDtCount,
         gapCount: result.gapCount,
         nanSegmentCount: result.nanSegmentCount,
@@ -1193,7 +1291,9 @@ proto._dataToolDescription = function(config) {
             : `Data tool: derivative of ${config.sourceName}; ${config.params.method}`;
     }
     if (config.tool === 'integrate') {
-        return `Data tool: integral of ${config.sourceName}; ${config.params.method}; missing data: ${config.params.gapPolicy}`;
+        const initial = config.params.initial || 0;
+        const from = initial ? `; from ${initial}` : '';
+        return `Data tool: integral of ${config.sourceName}; ${config.params.method}${from}; missing data: ${config.params.gapPolicy}`;
     }
     if (config.tool === 'movingAverage') {
         return `Data tool: moving average of ${config.sourceName}; window ${config.params.window}`;
@@ -1303,11 +1403,13 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     if (tool === 'integrate') {
         const method = document.getElementById('integral-method')?.value || 'trapezoidal';
         const gapPolicy = document.getElementById('integral-gap-policy')?.value || 'zero';
+        const initial = Number(document.getElementById('integral-initial')?.value);
         return {
             tool,
             params: {
                 method: INTEGRAL_METHODS.has(method) ? method : 'trapezoidal',
                 gapPolicy: INTEGRAL_GAP_POLICIES.has(gapPolicy) ? gapPolicy : 'zero',
+                initial: Number.isFinite(initial) ? initial : 0,
             },
         };
     }
@@ -1698,7 +1800,10 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
         // old value was a bug, and silently reproducing it on reload would keep
         // exactly the results this change exists to correct.
         const gapPolicy = INTEGRAL_GAP_POLICIES.has(params.gapPolicy) ? params.gapPolicy : 'zero';
-        return { method, gapPolicy };
+        // Sessions saved before the initial condition existed carry none, and
+        // zero is exactly the accumulation they were computed with.
+        const initial = Number.isFinite(Number(params.initial)) ? Number(params.initial) : 0;
+        return { method, gapPolicy, initial };
     }
     if (tool === 'movingAverage') {
         return { window: this._normalizeMovingAverageWindow(params.window, Number(params.maxLength) || Infinity) };
@@ -1826,9 +1931,12 @@ proto._previewEditedVariable = function(context, editing, result) {
         : this._dataToolDependents(fileId, editing.name);
     if (dependents.length) this._reapplyDataToolDependents(fileId, data, editing.name);
 
+    // updateFileData already rebuilds every panel using this file and restores the
+    // view it captured. Rebuilding again on top of it is what LOST the zoom: the
+    // second capture ran before the first restore had been applied, so it recorded
+    // the autoranged view and pinned that. The point of a live preview is to watch
+    // a parameter's effect where you zoomed in, so one rebuild it is.
     this.plotManager.updateFileData(fileId, data);
-    this._rebuildPlotsUsingVariable?.(fileId, editing.name);
-    for (const name of dependents) this._rebuildPlotsUsingVariable?.(fileId, name);
 };
 
 proto._restoreEditedTraceValues = function() {
@@ -1844,7 +1952,6 @@ proto._restoreEditedTraceValues = function() {
     variable.dataTool = backup.dataTool;
     this._reapplyDataToolDependents(backup.fileId, data, backup.name);
     this.plotManager.updateFileData(backup.fileId, data);
-    this._rebuildPlotsUsingVariable?.(backup.fileId, backup.name);
 };
 
 // The draft preview goes through the ordinary trace machinery, under a reserved
@@ -1871,10 +1978,10 @@ proto._drawDataToolPreviewTrace = function(context, result) {
 
     const plot = this.plotManager.plots.get(panelId);
     const existing = plot?.traces.find(trace => trace.fileId === fileId && trace.varName === name);
+    // updateFileData rebuilds the panel and restores its view, so an existing
+    // preview trace redraws with the zoom intact and needs nothing further.
     this.plotManager.updateFileData(fileId, data);
-    if (existing) {
-        this._rebuildPlotsUsingVariable?.(fileId, name);
-    } else {
+    if (!existing) {
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         if (!panelEl) return;
         this.plotManager.addTrace(panelId, name, panelEl);
@@ -1941,6 +2048,21 @@ proto._toggleOutlierHelpPopover = function(show) {
 proto._setOutlierMessage = function(message, type) {
     this._dataToolMessage = { message, type };
     this._renderDataToolMessage();
+
+    // A success notice reports something that already happened; leaving it up
+    // makes it read as the current state of a panel the user has since moved on
+    // from. Errors stay: they describe a condition still in effect.
+    if (this._dataToolMessageTimer) {
+        clearTimeout(this._dataToolMessageTimer);
+        this._dataToolMessageTimer = null;
+    }
+    if (type === 'ok' && typeof setTimeout === 'function') {
+        const shown = this._dataToolMessage;
+        this._dataToolMessageTimer = setTimeout(() => {
+            this._dataToolMessageTimer = null;
+            if (this._dataToolMessage === shown) this._setOutlierMessage('', '');
+        }, 6000);
+    }
 };
 
 proto._renderDataToolMessage = function() {

@@ -97,7 +97,12 @@ export function computeIntegral(sourceValues, time, params = {}) {
 
     const work = policy === 'interpolate' ? bridgeNonFinite(values, ctx) : values;
 
-    let acc = 0;
+    // The constant of integration. Zero keeps the historical result, so leaving
+    // it alone changes nothing; a level, an energy or a position needs the value
+    // the accumulation starts from.
+    const initial = Number.isFinite(Number(params.initial)) ? Number(params.initial) : 0;
+    let acc = initial;
+    out[0] = initial;
     let negativeDtCount = 0;
     let gapCount = 0;
     let nanSegmentCount = 0;

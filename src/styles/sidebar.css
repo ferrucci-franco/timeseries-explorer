@@ -694,6 +694,14 @@
     flex: 1 1 auto;
 }
 
+/* `hidden` has to win here: .tree-control-btn and .checkbox-label both set
+   `display`, which outranks the user-agent [hidden] rule, so the rename button,
+   the editing banner and the chain checkbox stayed on screen — the checkbox even
+   showing its untranslated markup text. */
+.data-tools-section [hidden] {
+    display: none !important;
+}
+
 /* The output name plus its rename lock. */
 .data-tool-name-row {
     display: flex;
@@ -710,9 +718,23 @@
     flex: 0 0 auto;
 }
 
+/* Confirm state: outlined, not filled. .tree-control-btn.active paints the whole
+   button solid, which read as "disabled/selected" rather than "press me to
+   confirm". */
 .data-tool-rename-btn.active {
-    border-color: var(--primary-color);
-    color: var(--primary-color);
+    background-color: var(--bg-primary);
+    border-color: var(--success-color, var(--primary-color));
+    color: var(--success-color, var(--primary-color));
+}
+
+.data-tool-name-hint {
+    font-size: 0.72rem;
+    color: var(--error-color, #c62828);
+    margin-top: -0.25rem;
+}
+
+.data-tool-input-invalid {
+    border-color: var(--error-color, #c62828);
 }
 
 .data-tool-editing-banner {

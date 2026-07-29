@@ -49,6 +49,11 @@ Three concrete defects follow from that:
 | D10 | While drafting, a **dashed preview trace** updates live and writes nothing. While editing, the **real trace** updates live. |
 | D11 | Editing a variable with dependents recomputes the whole chain live, behind a checkbox that defaults to on. |
 | D12 | Suggested output names keep the existing scheme (`velocity ddt`, `velocity avg`, …). |
+| D13 | Committing returns the panel to "Choose a tool". A finished transformation is a finished job. |
+| D14 | The integral takes an **initial condition** (step 0.1, default 0) — the constant of integration. |
+| D15 | An invalid name is reported under the field and cannot be confirmed, rather than only greying a button. |
+| D16 | Recomputes preserve the panel view. Watching a parameter's effect is the point of zooming in. |
+| D17 | Success notices clear themselves after a few seconds; errors stay. |
 
 Decisions deliberately **not** taken: merging this table with the derived
 variables list (D9 makes it unnecessary — a formula variable is selectable as a
@@ -111,13 +116,29 @@ if none exists.
 ### 3.3 The name field
 
 The name field triggers **no computation, ever**. It is validated on input
-(empty, collision) and read once at commit time. This is the direct fix for
-"typing a name creates variables".
+(empty, collision, same as source) and read once at commit time. This is the
+direct fix for "typing a name creates variables".
 
-While editing, the field is disabled and carries a pencil button. Pressing it
-enables renaming; committing the rename updates the table row, the variable
-tree, and any plotted trace label. A rename never recomputes anything: the
-values are unchanged, only the key moves.
+While drafting, the field is open and the pencil is hidden — there is nothing to
+rename yet. While editing, the field is locked and the pencil unlocks it; the
+pencil then becomes a **check**, and Enter confirms while Escape restores the
+previous name. Confirming is refused while the name is invalid, so the field can
+never be left showing a name the variable does not have. The reason appears
+under the input (`Name already exists`, `Enter a name`, …), because greying a
+button alone does not say what is wrong.
+
+A rename moves the key through the variable map, the definition registry, every
+definition naming it as a source, and any trace already drawing it. It never
+recomputes: the values are unchanged.
+
+### 3.4 View stability
+
+Every recompute goes through `plotManager.updateFileData`, which rebuilds the
+affected panels and restores each one's captured view. Nothing calls
+`_rebuildPlotsUsingVariable` on top of that: a second rebuild captures the view
+*before* the first restore has been applied, pinning the autoranged one and
+throwing away the user's zoom. That is exactly the zoom they set to inspect the
+parameter they are tuning.
 
 ## 4. The table
 
@@ -184,6 +205,10 @@ is discarded on `Clear`, on tool change, on file change, and on commit — where
 Debouncing keeps the existing 350 ms and the existing worker pool; a superseded
 run is already handled (`err.cancelled`).
 
+`Update and plot` is disabled while editing a variable that is already on a
+panel: the live update is already redrawing that very trace, so there is nothing
+left for it to do.
+
 ### 6.1 Live-update chain
 
 When editing a variable that has dependents, the panel shows:
@@ -194,7 +219,14 @@ When editing a variable that has dependents, the panel shows:
 
 Default on. Only rendered when the count is greater than zero — with no chain it
 would be noise. Unchecking limits live redraw to the edited variable; dependents
-refresh on `Update`.
+refresh on `Update`. The label says nothing on its own, so the tooltip names the
+actual variables that ride along.
+
+Note that `hidden` needs help here: `.checkbox-label` and `.tree-control-btn`
+both set `display`, which outranks the user-agent `[hidden]` rule. Without
+`.data-tools-section [hidden] { display: none !important }` the checkbox, the
+rename button and the editing banner all stay on screen — the checkbox even
+showing its untranslated markup text.
 
 If a live recompute is measured slower than ~300 ms, the checkbox clears itself
 once and the message line explains why. Deferred until the slowness is observed
@@ -224,7 +256,8 @@ All of it is in [data-tools-methods.js](../src/app/methods/data-tools-methods.js
 | Why a commit is blocked | `_dataToolCommitBlocker` |
 | Table | `_renderDataToolTable`, `_handleDataToolTableClick` |
 | Chain walk | `_dataToolDependents` (over the existing topological `_orderedDataToolDefinitions`) |
-| Rename | `_renameDataToolVariable` |
+| Rename | `_toggleDataToolRename` / `_confirmDataToolRename` / `_cancelDataToolRename` → `_renameDataToolVariable` |
+| Name validation | `_dataToolNameHint`, `_syncDataToolNameHint` |
 | Delete with cascade | `_deleteDataToolVariable` |
 | Preview | `_runDataToolPreview`, `_drawDataToolPreviewTrace`, `_previewEditedVariable`, `_clearDataToolPreview` |
 
