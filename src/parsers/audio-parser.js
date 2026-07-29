@@ -164,7 +164,13 @@ export default class AudioParser {
             // panel measures Δt off this very vector, and a reader who saw
             // "20.8333 µs" there and "2.08333e-5 s" here would have no way to
             // tell they are the same number.
-            ['Sampling time', formatTimeMagnitude(1 / audio.sampleRate)],
+            //
+            // "Sample time" and not "Sampling time" so it lands NEXT TO the rate
+            // it restates. The sidebar sorts entries alphabetically by default
+            // (the A↓ toggle), which ignores the order they are built in here,
+            // and "Sampling time" sorts past "Samples per channel". Renaming it
+            // is the only lever that puts the pair together in both modes.
+            ['Sample time', formatTimeMagnitude(1 / audio.sampleRate)],
             // Never a bare number: the sidebar runs a parameter's value through
             // Number() and a plain "1" comes back rendered as "1.00000".
             ['Channels', channelCountLabel(audio.channelCount)],
