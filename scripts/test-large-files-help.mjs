@@ -128,12 +128,13 @@ check(() => {
         ['excelFullLoadMb', "desktop ? 150 : 50"],
         ['pickleFullLoadMb', "desktop ? 200 : 80"],
         ['pypsaNetcdfFullLoadMb', "desktop ? 1024 : 250"],
+        ['audioFullLoadMb', "desktop ? 1024 : 400"],
     ];
     for (const [key, value] of expected) {
         assert.ok(defaults.includes(`${key}: ${value}`), `${key} default is still ${value} — update the help table if this changed`);
     }
     // And the numbers the help quotes.
-    for (const mb of ['150 MB', '100 MB', '200 MB', '250 MB', '1024 MB', '50 MB', '80 MB']) {
+    for (const mb of ['150 MB', '100 MB', '200 MB', '250 MB', '1024 MB', '50 MB', '80 MB', '400 MB']) {
         assert.ok(bodies.en.includes(mb), `the help table quotes ${mb}`);
     }
 });
@@ -206,7 +207,7 @@ check(() => {
 
 check(() => {
     const switching = ['csvFullLoadLimitHelp', 'parquetFullLoadLimitHelp'];
-    const warning = ['matlabFullLoadLimitHelp', 'excelFullLoadLimitHelp', 'pickleFullLoadLimitHelp', 'pypsaNetcdfFullLoadLimitHelp'];
+    const warning = ['matlabFullLoadLimitHelp', 'excelFullLoadLimitHelp', 'pickleFullLoadLimitHelp', 'pypsaNetcdfFullLoadLimitHelp', 'audioFullLoadLimitHelp'];
     const stillOpens = { en: /still open/i, fr: /s ouvrent quand meme/i, es: /se abren igual/i, it: /si aprono comunque/i };
     const warns = { en: /warned/i, fr: /averti/i, es: /se te avisa/i, it: /avvisato/i };
 

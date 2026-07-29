@@ -234,7 +234,17 @@ Warnings implementados: `integralNoData`, `integralAllDiscarded`, `integralUnsor
 
 ## 12. Exportación
 
-El botón CSV de la toolbar exporta la **tabla de resultados**, no la serie: una fila por señal con `signal, file, value_unit, integral, integral_unit, per_day, per_day_unit, mean, mean_unit, method, missing_policy, range_start, range_end, covered, uncovered, discarded_days, days_in_range, samples`. Las tres magnitudes salen juntas siempre: cuál estaba en pantalla es una elección de visualización, no una propiedad del dato. El valor va **sin escalar** y las marcas de tiempo en ISO — el prefijo del panel sirve para leer un gráfico, no una planilla.
+Desde el **diálogo de exportación** del panel (botón *download*, que en main reemplazó al botón CSV). El modo Integral es el primero con **tres** gráficos, y el diálogo los ofrece los tres:
+
+| Opción | id | Nombre de archivo |
+|---|---|---|
+| Time series | `time` | `integral_time.png` |
+| Bars | `bars` | `integral_bars.png` |
+| Pie chart | `pie` | `integral_pie.png` |
+
+Precisiones: **Bars** viene preseleccionado (es el pane en el que el usuario está trabajando); la torta **solo se ofrece si hay una dibujada** —el div existe siempre, y exportar uno vacío devolvería un cuadrado en blanco—; y si todavía no hay ningún total, la opción CSV aparece **deshabilitada con el motivo** (`exportCsvUnavailableIntegral`) en vez de no hacer nada al hacer clic.
+
+El CSV exporta la **tabla de resultados**, no la serie: una fila por señal con `signal, file, value_unit, integral, integral_unit, per_day, per_day_unit, mean, mean_unit, method, missing_policy, range_start, range_end, covered, uncovered, discarded_days, days_in_range, samples`. Las tres magnitudes salen juntas siempre: cuál estaba en pantalla es una elección de visualización, no una propiedad del dato. El valor va **sin escalar** y las marcas de tiempo en ISO — el prefijo del panel sirve para leer un gráfico, no una planilla.
 
 ---
 
@@ -243,7 +253,7 @@ El botón CSV de la toolbar exporta la **tabla de resultados**, no la serie: una
 - Estado del panel completo en la sesión, con `_normalizeIntegralState` tolerante a sesiones viejas; los warnings guardados se descartan al restaurar porque describen un cálculo que todavía no corrió.
 - 74 claves × 4 idiomas; `test:i18n-consistency` pasa (1394 claves × 4).
 - Las **duraciones se leen igual en todo eje**: el kernel cuenta en unidades de abscisa, así que una señal muestreada en segundos reportaba un `20` pelado donde los mismos 20 s en un eje calendario decían `20 s`. `axisDuration()` convierte primero por la unidad del eje (un eje en horas se convierte, no se lee como segundos) y después las dos usan la misma escalera s/min/h/d. Un eje de índice no tiene unidad y sigue diciendo `samples`.
-- Tests nuevos: `test:definite-integral` (80 checks, valores analíticos) y `test:integral-analysis` (161 checks). `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
+- Tests nuevos: `test:definite-integral` (80 checks, valores analíticos) y `test:integral-analysis` (167 checks). Con main mezclado son **75** tests de release. `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
 
 Verificado además en la app real (Vite + Plotly + DuckDB-WASM):
 

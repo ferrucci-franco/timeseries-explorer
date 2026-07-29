@@ -1357,7 +1357,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     };
 
     // ── CSV export (fit summary / fit curve / displayed points) ─────
-    proto._exportPhase2dFitCsv = async function(panelId, plot = this.plots.get(panelId)) {
+    proto._exportPhase2dFitCsv = async function(panelId, plot = this.plots.get(panelId), options = {}) {
         if (!plot || plot.mode !== 'phase2d') return;
         const state = this._ensurePhase2dState(plot);
         // A stale lazy fit must not be exported as if it were current.
@@ -1379,7 +1379,12 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (choice === 'summary') out = this._phase2dFitSummaryCsv(plot);
         else if (choice === 'curve') out = this._phase2dFitCurveCsv(plot);
         else out = this._phase2dFitDisplayedCsv(plot);
-        if (out) this._downloadCsvColumns(out.headers, out.columns, out.filename);
+        if (!out) return;
+        // The export dialog owns the file name; each fit export still adds the
+        // suffix that says which of the three it is.
+        const suffix = { summary: 'summary', curve: 'curve', displayed: 'displayed_visual_sample' }[choice];
+        const filename = options.baseName ? `${options.baseName}_${suffix}.csv` : out.filename;
+        this._downloadCsvColumns(out.headers, out.columns, filename);
     };
 
     proto._downloadCsvColumns = function(headers, columns, filename) {

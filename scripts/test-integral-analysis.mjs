@@ -431,6 +431,21 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
 
     // The checkbox belongs to the Legend group, after its radio buttons — it is a
     // legend setting, so it sits with the other legend settings.
+    // The panel's download button offers every chart the mode draws. Integral is
+    // the first panel with THREE, and the pie div outlives the pie itself, so an
+    // empty one must not be offered — it would export a blank square.
+    const exportMethods = read('src/plots/methods/export-methods.js');
+    ok(/analysisMode = \[[^\]]*'integral'/.test(exportMethods), 'the export dialog treats Integral as an analysis');
+    ok(exportMethods.includes("add(plot.integralDiv, 'bars', 'exportChartBars')"), 'the bars are exportable');
+    ok(/plot\._integralPieVisible\) add\(plot\.integralPieDiv, 'pie'/.test(exportMethods),
+        'the pie only when one is actually drawn');
+    ok(/integral: 'bars',/.test(exportMethods), 'and the bars are what "this plot" means here');
+    ok(exportMethods.includes('exportCsvUnavailableIntegral'),
+        'an empty result says so on the CSV option instead of doing nothing');
+    ok(plotManager.includes('installPlotExportMethods(PlotManager)')
+        && plotManager.includes('installPlotIntegralMethods(PlotManager)'),
+        'both method sets are installed after the merge');
+
     ok(html.includes('id="legend-units"'), 'the sidebar carries the legend-units checkbox');
     const legendGroup = html.slice(
         html.indexOf('data-i18n="legendPosition"'),

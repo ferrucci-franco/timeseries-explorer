@@ -29,6 +29,24 @@ export const TEXT_TABLE_EXTENSIONS = Object.freeze([
     '.out',
 ]);
 
+// Recordings the app reads as one signal per channel.
+//
+// `.amr` and `.3gp` are here even though no browser ships an AMR decoder:
+// they are what some Android voice recorders still produce, and accepting the
+// file in order to say "no decoder for AMR — convert it to WAV" is more use
+// than refusing it as an unknown extension and leaving the user guessing.
+export const AUDIO_EXTENSIONS = Object.freeze([
+    '.wav', '.wave',
+    '.mp3',
+    '.m4a', '.m4b', '.aac',
+    '.flac',
+    '.ogg', '.oga', '.opus',
+    '.aif', '.aiff', '.aifc',
+    '.caf',
+    '.3gp', '.3gpp', '.amr',
+    '.webm', '.weba',
+]);
+
 // Formats the app reads through a dedicated reader, plus common archives and
 // media that would only ever be a mistake here. Parquet is on this list
 // because it is binary and already has its own path.
@@ -38,6 +56,7 @@ export const BINARY_EXTENSIONS = Object.freeze([
     '.pkl', '.pickle',
     '.nc', '.netcdf', '.cdf', '.h5', '.hdf5',
     '.xlsx', '.xlsm', '.xlsb', '.xls', '.ods',
+    ...AUDIO_EXTENSIONS,
     '.zip', '.gz', '.bz2', '.xz', '.7z', '.rar', '.tar',
     '.png', '.jpg', '.jpeg', '.gif', '.pdf',
     '.exe', '.dll', '.so', '.dylib',
@@ -54,6 +73,7 @@ export const SPREADSHEET_EXTENSIONS = Object.freeze([
 const TEXT = new Set(TEXT_TABLE_EXTENSIONS);
 const BINARY = new Set(BINARY_EXTENSIONS);
 const SPREADSHEET = new Set(SPREADSHEET_EXTENSIONS);
+const AUDIO = new Set(AUDIO_EXTENSIONS);
 
 const normalize = (extension) => String(extension || '').toLowerCase();
 
@@ -87,4 +107,9 @@ export function mayBeTextTable(extension) {
 /** A workbook the app can read a sheet out of. */
 export function isSpreadsheetExtension(extension) {
     return SPREADSHEET.has(normalize(extension));
+}
+
+/** A recording the app reads as one signal per channel. */
+export function isAudioExtension(extension) {
+    return AUDIO.has(normalize(extension));
 }

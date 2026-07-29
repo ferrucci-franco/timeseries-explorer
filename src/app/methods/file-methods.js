@@ -17,13 +17,19 @@ import {
     MATLAB_MAT_DESKTOP_EAGER_LIMIT_BYTES,
     MATLAB_MAT_WEB_EAGER_LIMIT_BYTES,
 } from '../../parsers/matlab-mat-limits.js';
+import {
+    AUDIO_DESKTOP_DECODED_LIMIT_BYTES,
+    AUDIO_WEB_DECODED_LIMIT_BYTES,
+    decodedAudioBytes,
+} from '../../parsers/audio-limits.js';
 
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
-import { checkFullLoadLimit } from '../file-size-limits.js';
+import { checkDecodedAudioLimit, checkFullLoadLimit } from '../file-size-limits.js';
 import { describeLoadError, formatLoadErrorMessage } from '../load-error-messages.js';
 import {
     SPREADSHEET_EXTENSIONS,
     TEXT_TABLE_EXTENSIONS,
+    isAudioExtension,
     isSpreadsheetExtension,
     isTextTableExtension,
     mayBeTextTable,
@@ -91,6 +97,7 @@ let netcdfParserClassPromise = null;
 let pickleParserClassPromise = null;
 let excelWorkbookModulePromise = null;
 let matlabMatFileClassPromise = null;
+let audioModulesPromise = null;
 
 async function loadDuckDbSourceClass() {
     if (globalThis.__OMV_PORTABLE__ === true) return null;
@@ -145,6 +152,16 @@ async function loadMatlabMatFileClass() {
         matlabMatFileClassPromise = import('../../parsers/matlab-mat-file.js').then(module => module.default);
     }
     return matlabMatFileClassPromise;
+}
+
+async function loadAudioModules() {
+    if (!audioModulesPromise) {
+        audioModulesPromise = Promise.all([
+            import('../../parsers/audio-decode.js'),
+            import('../../parsers/audio-parser.js'),
+        ]).then(([decode, parser]) => ({ decode, AudioParser: parser.default }));
+    }
+    return audioModulesPromise;
 }
 
 function resolveExcelSheetName(excelModule, workbook, preferredName = null) {
@@ -1250,7 +1267,7 @@ proto._confirmOversizedFile = async function(verdict, file = null) {
     const key = this._oversizedDecisionKey(file || { name: verdict.name, size: verdict.sizeBytes });
     if (this._oversizedApproved.has(key)) return true;
 
-    const body = i18n.t('fileOverLimitBody')
+    const body = i18n.t(verdict.bodyKey || 'fileOverLimitBody')
         .replace('{file}', verdict.name)
         .replace('{size}', this._formatFileSize(verdict.sizeBytes))
         .replace('{limit}', this._formatFileSize(verdict.limitBytes))
@@ -1258,7 +1275,7 @@ proto._confirmOversizedFile = async function(verdict, file = null) {
         .replace('{setting}', i18n.t(verdict.settingLabelKey));
 
     const choice = await Modal.choice(body, {
-        title: i18n.t('fileOverLimitTitle'),
+        title: i18n.t(verdict.titleKey || 'fileOverLimitTitle'),
         icon: '⚠️',
         className: 'modal-dialog-wide',
         choices: [
@@ -1550,6 +1567,7 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
     if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer, options);
     if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer, options);
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
+    if (isAudioExtension(extension)) return this._parseAudioResultBuffer(filename, buffer, options);
     if (extension === '.mat') return this._parseMatlabResultBuffer(filename, buffer, options);
     // Routed by extension, not by sniffing the bytes: a known text file may
     // have been left unread on purpose (see _canParseFromFile) so DuckDB can
@@ -1745,6 +1763,81 @@ proto._parsePickleResultBuffer = async function(filename, buffer, options = {}) 
         throw err;
     }
 };
+
+proto._audioDecodedLimitBytes = function() {
+    const fallback = this.capabilities?.isDesktop
+        ? AUDIO_DESKTOP_DECODED_LIMIT_BYTES
+        : AUDIO_WEB_DECODED_LIMIT_BYTES;
+    return this._advancedSettingBytes('audioFullLoadMb', fallback);
+};
+
+// A recording, read as one signal per channel on a time axis in seconds.
+//
+// The only format the app decodes on the main thread. Web Audio does not exist
+// inside a Worker, and shipping our own MP3/AAC/Opus decoders to get around
+// that would add megabytes to duplicate what every browser already has. The
+// expensive part — the codec — runs on the browser's own thread anyway; what is
+// left here is a copy loop.
+//
+// Decoding and building the columns are two steps because the question in
+// between can only be asked there. A 4 MB voice memo can decode into 300 MB of
+// samples, so the size that matters is known only once the audio exists and
+// before it is copied into Float64 columns. That is also why audio does not go
+// through _checkFullLoadLimit, which reads the file size before the file is
+// read at all.
+proto._parseAudioResultBuffer = async function(filename, buffer, options = {}) {
+    const { decode, AudioParser } = await loadAudioModules();
+
+    let decoded;
+    try {
+        decoded = await decode.decodeAudioFile(buffer);
+    } catch (err) {
+        throw translateAudioError(err, filename);
+    }
+
+    if (!options.allowOversized) {
+        const verdict = checkDecodedAudioLimit(
+            filename,
+            decodedAudioBytes(decoded.frames, decoded.channels.length),
+            this._audioDecodedLimitBytes(),
+        );
+        if (verdict && !(await this._confirmOversizedFile(verdict, { name: filename, size: verdict.sizeBytes }))) {
+            const cancelled = new Error('Audio load cancelled');
+            cancelled.name = 'AbortError';
+            throw cancelled;
+        }
+    }
+
+    const parser = new AudioParser(this.parser);
+    try {
+        return parser.parse(decoded, filename);
+    } catch (err) {
+        throw translateAudioError(err, filename);
+    }
+};
+
+// The decoder reports what went wrong by code; this turns the ones we can
+// explain into advice. Anything else keeps its own message, which is more
+// honest than inventing a reason.
+function translateAudioError(err, filename) {
+    const replace = (key, extra = {}) => {
+        let text = i18n.t(key);
+        for (const [name, value] of Object.entries({ file: filename, ...extra })) {
+            text = text.split(`{${name}}`).join(String(value));
+        }
+        const translated = new Error(text);
+        translated.code = err?.code || '';
+        return translated;
+    };
+    switch (err?.code) {
+        case 'AUDIO_UNRECOGNIZED': return replace('audioUnrecognized');
+        case 'AUDIO_CODEC_UNAVAILABLE': return replace('audioCodecUnavailable', { format: err.format || 'unknown' });
+        case 'AUDIO_NO_DECODER': return replace('audioNoDecoder');
+        case 'AUDIO_EMPTY': return replace('audioEmpty');
+        case 'AUDIO_DECODE_FAILED': return replace('audioDecodeFailed', { format: err.format || 'audio' });
+        default: return err;
+    }
+}
 
 // Files bigger than this threshold (bytes) trigger DuckDB lazy mode: the
 // in-memory copy holds a downsampled overview, and zoom queries hit DuckDB.
@@ -3537,6 +3630,11 @@ proto._fileTypeLabel = function(_entry, fileId = null) {
     }
     if (metadata?.format === 'pandas-pickle' || metadata?.source === 'pandas') {
         return i18n.t('fileTypePandasPickle');
+    }
+    if (metadata?.format === 'audio' || metadata?.source === 'audio') {
+        return i18n.t('fileTypeAudio')
+            .replace('{format}', metadata.audio?.containerLabel || '?')
+            .replace('{rate}', String(metadata.audio?.sampleRate || 0));
     }
     if (metadata?.source === 'matlab') {
         return i18n.t('fileTypeMatlab').replace('{version}', metadata.matVersion || '?');

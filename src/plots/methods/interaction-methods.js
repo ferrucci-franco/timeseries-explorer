@@ -3970,19 +3970,22 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     });
     toolbar.appendChild(statsBtn);
 
-    // CSV export button - pushed to far right, 🗑️ follows immediately after
-    const csvBtn = document.createElement('button');
-    csvBtn.className = 'layout-toolbar-btn panel-action-btn csv-export-btn';
-    csvBtn.textContent = 'CSV';
-    csvBtn.title = i18n.t('exportCsv');
-    csvBtn.disabled = !this._hasContent(plot);
-    csvBtn.addEventListener('click', (e) => {
+    // Export button - pushed to far right, 🗑️ follows immediately after. It
+    // opens the export dialog (CSV data, or the plot as PNG / SVG) rather than
+    // writing a file on click, so the icon says "download", not "CSV".
+    const exportBtn = document.createElement('button');
+    exportBtn.className = 'layout-toolbar-btn panel-action-btn panel-export-btn';
+    exportBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';
+    exportBtn.title = i18n.t('exportPanel');
+    exportBtn.setAttribute('aria-label', exportBtn.title);
+    exportBtn.disabled = !this._hasContent(plot);
+    exportBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this._exportCSV(panelId);
+        this._openExportDialog(panelId);
     });
-    toolbar.appendChild(csvBtn);
+    toolbar.appendChild(exportBtn);
 
-    // Clear button — immediately right of CSV
+    // Clear button — immediately right of the export button
     const clearBtn = document.createElement('button');
     clearBtn.className = 'layout-toolbar-btn panel-action-btn trash-panel-btn';
     clearBtn.textContent = '🗑️';
