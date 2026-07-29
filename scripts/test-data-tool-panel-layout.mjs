@@ -98,12 +98,15 @@ assert.equal(
 // they all landed), and it only ever marks the right-hand end while a field
 // scrolled to its end hides text on the left. So the marker is drawn here.
 assert.match(css, /\.derived-input\s*\{[^}]*text-overflow:\s*ellipsis/s, 'the native ellipsis is still worth having');
-assert.match(dataTools, /_rewindDataToolInputs/, 'an unfocused field should read from its beginning');
-assert.match(
-    dataTools,
-    /_rewindDataToolInputs = function\(\)[\s\S]*?document\.activeElement[\s\S]*?scrollLeft = 0/,
-    'the rewind must skip the field being typed in',
-);
+
+// And nothing may move a field's scroll on its behalf. Forcing every unfocused
+// field back to its first character is the only way to make the native ellipsis
+// paint, and it threw away where the user had scrolled to: clicking back into a
+// long list to edit its last coefficient landed at the beginning again. Marking
+// the hidden side works at any scroll position, so the rewind is not a trade-off
+// worth having — it is simply unnecessary.
+assert.doesNotMatch(dataTools, /scrollLeft = 0/, 'the panel must not reset a field’s scroll position');
+assert.doesNotMatch(dataTools, /_rewindDataToolInputs/, 'the rewind is gone, not merely unused');
 
 // Each side is marked independently, because either side can be the one hiding
 // something — and both can be at once.
@@ -133,10 +136,25 @@ assert.match(
     'the right marker must key off text remaining beyond the visible end',
 );
 // Panel syncs alone are not enough: the caret and the field's own scrolling both
-// change which side is hidden without the panel being touched.
-for (const eventName of ['input', 'scroll']) {
-    assert.match(dataTools, new RegExp(`'${eventName}'`), `${eventName} must refresh the markers`);
+// change which side is hidden without the panel being touched. focusin/focusout
+// rather than focus/blur, because only the former pair bubbles to the section.
+const markerEvents = dataTools.match(
+    /for \(const eventName of \[([^\]]+)\]\) \{\s*\r?\n\s*section\?\.addEventListener\(eventName, \(\) => this\._syncDataToolOverflowMarks\(\)\);/,
+);
+assert.ok(markerEvents, 'the markers must be refreshed from a list of events on the section');
+for (const eventName of ['input', 'keyup', 'click', 'focusin', 'focusout']) {
+    assert.match(markerEvents[1], new RegExp(`'${eventName}'`), `${eventName} must refresh the markers`);
 }
+assert.match(
+    dataTools,
+    /addEventListener\('scroll'[\s\S]*?\{ capture: true \}/,
+    'a scroll inside the field only reaches the section with capture',
+);
+assert.doesNotMatch(
+    dataTools,
+    /addEventListener\('focus',/,
+    'plain focus does not bubble, so it would never fire here',
+);
 
 // Every field long enough to need a marker has to be wrapped for one.
 for (const id of ['filter-b', 'filter-a', 'filter-init-level', 'filter-init-x', 'filter-init-y']) {

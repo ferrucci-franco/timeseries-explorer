@@ -208,28 +208,19 @@ proto.initDataTools = function() {
         this._toggleOutlierHelpPopover();
     });
 
-    // `text-overflow: ellipsis` on an input only paints while the field is
-    // scrolled to its start — and typing leaves it scrolled to the END, which is
-    // why the ellipsis never appeared. Rewinding is what makes the CSS visible.
-    // Losing focus is the obvious moment for it; _syncDataTools does it again for
-    // every field nobody is typing in, so a value that arrived by any other route
-    // (a definition loaded for editing, a tool switch, a suggested name) also
-    // reads from its beginning.
-    const section = document.querySelector('.data-tools-section');
-    section?.addEventListener('focusout', (event) => {
-        const input = event.target;
-        if (input?.tagName === 'INPUT' && input.type === 'text') input.scrollLeft = 0;
-        this._syncDataToolOverflowMarks();
-    });
     // The overflow markers have to follow the caret and the field's own scrolling,
     // not just the panel's syncs: typing past the right edge, or dragging the text
-    // back to the start, both change which side is hiding something.
-    for (const eventName of ['input', 'scroll', 'focus', 'keyup', 'click']) {
-        section?.addEventListener(eventName, (event) => {
-            if (!event.target?.classList?.contains('data-tool-coefficients')) return;
-            this._syncDataToolOverflowMarks();
-        }, eventName === 'scroll' ? { capture: true } : undefined);
+    // back to the start, both change which side is hiding something without the
+    // panel being touched. `scroll` needs capture, and focusin/focusout are used
+    // rather than focus/blur because only the former pair bubbles this far.
+    const section = document.querySelector('.data-tools-section');
+    for (const eventName of ['input', 'keyup', 'click', 'focusin', 'focusout']) {
+        section?.addEventListener(eventName, () => this._syncDataToolOverflowMarks());
     }
+    section?.addEventListener('scroll', (event) => {
+        if (!event.target?.classList?.contains('data-tool-coefficients')) return;
+        this._syncDataToolOverflowMarks();
+    }, { capture: true });
 
     createBtn?.addEventListener('click', () => this.commitDataTool({ plot: false }));
     createPlotBtn?.addEventListener('click', () => this.commitDataTool({ plot: true }));
@@ -247,23 +238,17 @@ proto.initDataTools = function() {
     this._syncDataTools();
 };
 
-// Scroll every text field nobody is typing in back to its first character, so a
-// value too long for the sidebar reads from its beginning rather than showing its
-// tail with no sign that a beginning exists. The field being edited is left alone
-// — rewinding under the caret would be maddening.
-proto._rewindDataToolInputs = function() {
-    const section = document.querySelector('.data-tools-section');
-    if (!section) return;
-    for (const input of section.querySelectorAll('input[type="text"]')) {
-        if (input === document.activeElement) continue;
-        if (input.scrollLeft) input.scrollLeft = 0;
-    }
-};
-
 // Mark which SIDE of a field is hiding text, so a coefficient list too long for
 // the sidebar says so — while it is being typed in as much as afterwards, which
 // is where `text-overflow: ellipsis` gives up (Chromium will not ellipsize a
 // focused editable field, and only ever marks the right-hand end anyway).
+//
+// Nothing here moves the field's scroll. An earlier attempt forced every
+// unfocused field back to its first character, because that is the only state in
+// which the native ellipsis paints — and it threw away where the user had
+// scrolled to, so returning to edit the last coefficient of a long list meant
+// scrolling there again. Marking the hidden side works at ANY scroll position,
+// which is what made the rewind unnecessary rather than merely unfortunate.
 proto._syncDataToolOverflowMarks = function() {
     const section = document.querySelector('.data-tools-section');
     if (!section) return;
@@ -435,7 +420,6 @@ proto._syncDataTools = function() {
 
     const blocker = this._dataToolCommitBlocker({ hasSource, hasValidConfig, editing, fileId, data });
     form.classList.toggle('data-tool-invalid', hasSource && !!blocker);
-    this._rewindDataToolInputs();
     this._syncDataToolOverflowMarks();
     this._syncDataToolNameHint();
     this._syncDataToolActions(editing, blocker);
