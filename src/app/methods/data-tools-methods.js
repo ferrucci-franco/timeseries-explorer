@@ -377,8 +377,14 @@ proto._syncMovingAverageControls = function() {
     const source = this.activeFileId
         ? this.plotManager.files.get(this.activeFileId)?.data?.variables?.[sourceName]
         : null;
-    const max = Math.max(2, Number(source?.data?.length) || 2);
-    input.max = String(max);
+    // The window can only be capped once we know how long the series is. With no
+    // source picked there is no length to cap against, and clamping to the
+    // two-sample floor would drag the default 21 down to 2 in the slider while
+    // the number box still read 21.
+    const length = Number(source?.data?.length);
+    const max = Number.isFinite(length) && length >= 2 ? length : Infinity;
+    if (Number.isFinite(max)) input.max = String(max);
+    else input.removeAttribute('max');
     const windowSize = this._normalizeMovingAverageWindow(input.value || slider.value, max);
     if (!input.value) input.value = String(windowSize);
     const sliderMin = Number(slider.min);
@@ -743,11 +749,50 @@ proto._clearDataToolDraft = function(options = {}) {
     const outputInput = document.getElementById('outlier-output-name');
     if (sourceSelect) sourceSelect.value = '';
     if (outputInput) outputInput.value = '';
+    this._resetDataToolParameters();
     if (!options.keepTool) {
         const toolSelect = document.getElementById('data-tool-select');
         if (toolSelect) toolSelect.value = '';
     }
     if (!options.keepMessage) this._setOutlierMessage('', '');
+};
+
+// Every parameter control the four tools own. Read from the DOM rather than
+// listed as constants here, so the defaults live in one place: the markup.
+const DATA_TOOL_PARAMETER_IDS = [
+    'outlier-method',
+    'outlier-spike-sensitivity',
+    'outlier-lower-bound',
+    'outlier-upper-bound',
+    'derivative-method',
+    'integral-method',
+    'integral-gap-policy',
+    'integral-initial',
+    'moving-average-window',
+    'moving-average-window-slider',
+];
+
+// A new transformation starts from the tool's defaults. Carrying the last run's
+// sensitivity or window into the next variable silently applies a setting the
+// user chose for something else — and it is invisible, because the control that
+// holds it may be collapsed under a different tool.
+proto._resetDataToolParameters = function() {
+    if (typeof document === 'undefined') return;
+    for (const id of DATA_TOOL_PARAMETER_IDS) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        if (el.tagName === 'SELECT') {
+            const fallback = [...el.options].find(option => option.defaultSelected) || el.options[0];
+            if (fallback) el.value = fallback.value;
+        } else {
+            el.value = el.defaultValue;
+        }
+    }
+    document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
+        input.checked = input.defaultChecked;
+    });
+    this._syncOutlierMethodControls();
+    this._syncMovingAverageControls();
 };
 
 proto._enterDataToolEditing = function(fileId, name) {
@@ -760,6 +805,9 @@ proto._enterDataToolEditing = function(fileId, name) {
     this._dataToolEditing = { fileId, name };
     this._dataToolRenameUnlocked = false;
     this._setOutlierMessage('', '');
+    // Defaults first, so the controls this definition does not use show the tool's
+    // default rather than whatever a previous draft left in them.
+    this._resetDataToolParameters();
     // Two passes on purpose: the first sync repopulates the source picker for the
     // selected tool, and only then does writing `sourceName` into it stick.
     const toolSelect = document.getElementById('data-tool-select');
