@@ -686,12 +686,28 @@
     display: flex;
     gap: 0.4rem;
     flex-wrap: wrap;
+    align-items: stretch;
 }
 
+/* An explicit box rather than one implied by padding and line-height: the solid
+   Create button and the outlined Clear button otherwise depend on identical text
+   metrics to line up, and any font fallback breaks that. */
 .data-tool-actions button {
     min-width: 0;
     white-space: nowrap;
     flex: 1 1 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.9rem;
+    line-height: 1.15;
+}
+
+/* Three long labels never fit one sidebar row (Spanish wraps at "Cancelar"), and
+   a lone stretched button on the second row reads as a different control. Let it
+   keep its natural width instead. */
+.data-tool-actions #data-tool-clear {
+    flex: 0 0 auto;
 }
 
 /* `hidden` has to win here: .tree-control-btn and .checkbox-label both set
