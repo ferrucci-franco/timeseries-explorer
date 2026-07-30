@@ -71,6 +71,7 @@ export function installPlotCorrelationMethods(TargetClass) {
             timeSeriesHidden: false,
             optionsVisible: true,
             rangeFull: true,
+            autoRangeLimited: false,
             x1: null,
             x2: null,
             method: 'pearson',
@@ -93,6 +94,7 @@ export function installPlotCorrelationMethods(TargetClass) {
             timeSeriesHidden: raw.timeSeriesHidden === true,
             optionsVisible: raw.optionsVisible !== false,
             rangeFull: raw.rangeFull !== undefined ? !!raw.rangeFull : !(x1 !== null || x2 !== null),
+            autoRangeLimited: raw.autoRangeLimited === true,
             x1,
             x2,
             method: 'pearson',
@@ -543,6 +545,8 @@ export function installPlotCorrelationMethods(TargetClass) {
                 lo = dragging.startLo + delta; hi = dragging.startHi + delta;
             }
             if (lo > hi) [lo, hi] = [hi, lo];
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state.x1 = Math.max(domain.min, Math.min(domain.max, lo));
             state.x2 = Math.max(domain.min, Math.min(domain.max, hi));
             this._updateCorrelationSelectionShapes(panelId, plot);
@@ -600,13 +604,15 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (rangeFull) {
             return { x: xVals.slice(0, n), y: yVals.slice(0, n), nScope: n };
         }
-        const [lo, hi] = range;
-        const x = [], y = [];
-        for (let i = 0; i < n; i++) {
-            const t = Number(times[i]);
-            if (t >= lo && t <= hi) { x.push(xVals[i]); y.push(yVals[i]); }
-        }
-        return { x, y, nScope: x.length };
+        let [lo, hi] = range;
+        if (lo > hi) [lo, hi] = [hi, lo];
+        const start = Math.max(0, Math.min(n, this._lowerBound(times, lo)));
+        const end = Math.max(start, Math.min(n, this._upperBound(times, hi)));
+        return {
+            x: xVals.slice(start, end),
+            y: yVals.slice(start, end),
+            nScope: end - start,
+        };
     };
 
     proto._isLazyFile = function(fileId) {
@@ -617,7 +623,17 @@ export function installPlotCorrelationMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot?.correlationDiv || plot.mode !== 'correlation') return;
         clearTimeout(plot._correlationRecomputeTimer);
-        const run = () => this._refreshCorrelationResults(panelId, plot);
+        const run = () => {
+            const state = this._ensureCorrelationState(plot);
+            const adjusted = this._autoLimitAnalysisRange(plot, state, 'correlation');
+            if (adjusted) this._updateCorrelationSelectionShapes(panelId, plot);
+            this._setCorrelationStatus(plot, i18n.t('correlationCalculating'), 'loading');
+            plot._correlationRecomputeTimer = setTimeout(() => {
+                if (plot.mode === 'correlation' && plot.correlationDiv) {
+                    this._refreshCorrelationResults(panelId, plot);
+                }
+            }, 0);
+        };
         if (options.immediate) run();
         else plot._correlationRecomputeTimer = setTimeout(run, 150);
     };
@@ -859,6 +875,8 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (!plot?.div) return;
         const state = this._ensureCorrelationState(plot);
         state.rangeFull = true;
+        state.autoRangeLimited = false;
+        state.autoRangeWarning = null;
         state.x1 = null;
         state.x2 = null;
         this._refreshCorrelationTimePlot(panelId, plot);
@@ -954,6 +972,7 @@ export function installPlotCorrelationMethods(TargetClass) {
                 const st = this._ensureCorrelationState(plot);
                 if (!!st.rangeFull === isFull) return;
                 st.autoRangeWarning = null;
+                st.autoRangeLimited = false;
                 st.rangeFull = isFull;
                 if (!isFull) seedSelectionFromView();
                 this._updateCorrelationSelectionShapes(panelId, plot);
@@ -973,6 +992,8 @@ export function installPlotCorrelationMethods(TargetClass) {
             input.addEventListener('change', () => {
                 const st = this._ensureCorrelationState(plot);
                 const n = usesCalendar ? datetimeInputToMs(input.value) : Number(input.value);
+                st.autoRangeWarning = null;
+                st.autoRangeLimited = false;
                 st[key] = Number.isFinite(n) ? n : null;
                 this._ensureCorrelationRange(plot);
                 this._updateCorrelationSelectionShapes(panelId, plot);
@@ -992,6 +1013,8 @@ export function installPlotCorrelationMethods(TargetClass) {
             input.addEventListener('input', () => {
                 const st = this._ensureCorrelationState(plot);
                 const n = Number(input.value);
+                st.autoRangeWarning = null;
+                st.autoRangeLimited = false;
                 st[key] = Number.isFinite(n) ? n : null;
                 this._syncCorrelationRangeInputs(plot, { skipSliders: true });
                 this._updateCorrelationSelectionShapes(panelId, plot);

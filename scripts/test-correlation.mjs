@@ -1,10 +1,79 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import {
     pearsonCorrelation,
     groupDropIntoPairs,
     CORRELATION_MANY_PAIRS_WARNING,
     CORRELATION_MAX_PAIRS,
 } from '../src/utils/correlation.js';
+
+const correlationMethodsSource = readFileSync(
+    new URL('../src/plots/methods/correlation-methods.js', import.meta.url),
+    'utf8',
+);
+
+// Pair extraction must use binary bounds before copying X/Y. A selected block
+// of a multi-GB signal must never trigger a full time-array scan.
+{
+    const start = correlationMethodsSource.indexOf('proto._correlationPairSeries = function');
+    const end = correlationMethodsSource.indexOf('\n    proto.', start + 1);
+    assert.ok(start >= 0 && end > start, 'Correlation bounded sampler can be isolated');
+    const isolatedProto = {};
+    vm.runInNewContext(correlationMethodsSource.slice(start, end), { proto: isolatedProto });
+    const hugeLength = 20_000_000;
+    let timeReads = 0;
+    let copiedX = 0;
+    let copiedY = 0;
+    const times = new Proxy({ length: hugeLength }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                timeReads++;
+                return index;
+            }
+            return undefined;
+        },
+    });
+    const makeValues = onCopy => ({
+        length: hugeLength,
+        slice(first, last) {
+            onCopy(last - first);
+            return { length: last - first };
+        },
+    });
+    const xValues = makeValues(count => { copiedX += count; });
+    const yValues = makeValues(count => { copiedY += count; });
+    const bound = upper => (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (upper ? array[mid] <= target : array[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const selected = isolatedProto._correlationPairSeries.call({
+        _getTransformedTimeDataForVariable: () => times,
+        _getTransformedVariableData: (_fileId, variable) => variable === 'x' ? xValues : yValues,
+        _lowerBound: bound(false),
+        _upperBound: bound(true),
+    }, { fileId: 'audio', x: 'x', y: 'y' }, [7_000_000, 7_262_143], false);
+    assert.equal(selected.nScope, 262_144);
+    assert.equal(selected.x.length, 262_144);
+    assert.equal(selected.y.length, 262_144);
+    assert.ok(timeReads < 100, `Correlation bounds stay logarithmic (${timeReads} reads)`);
+    assert.equal(copiedX, 262_144);
+    assert.equal(copiedY, 262_144);
+}
+
+assert.match(
+    correlationMethodsSource,
+    /_scheduleCorrelationRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'correlation'\)[\s\S]*_setCorrelationStatus\(plot, i18n\.t\('correlationCalculating'\), 'loading'\)[\s\S]*setTimeout\(\(\) =>/,
+    'Correlation preflights and paints progress before eager computation',
+);
 
 const close = (actual, expected, tolerance, label) => {
     assert.ok(
