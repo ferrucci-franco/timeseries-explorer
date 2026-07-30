@@ -365,6 +365,13 @@ function matAsciiPayload(text, length = text.length) {
     return payload;
 }
 
+function matFloat64Payload(values) {
+    const payload = new Uint8Array(values.length * 8);
+    const view = new DataView(payload.buffer);
+    values.forEach((value, index) => view.setFloat64(index * 8, value, true));
+    return payload;
+}
+
 function matMatrix(classId, dimensions, name, extra = []) {
     const parts = [
         matElement(6, matUint32Payload([classId, 0])),   // array flags
@@ -396,14 +403,57 @@ function matFile(elements) {
 {
     const matFileParser = new MatlabMatFile(new MatParser());
 
-    // 1) Decompression bomb: ~190 KB of file, 200 MB inflated.
+    // 1) Decompression bomb, spread over several elements.
+    //
+    // The budget is a fixed ceiling, not a compression ratio, so a bomb has to be
+    // big enough to reach it — and that is the point. A ratio cannot separate a
+    // bomb from real data: measured on 8 MB of Float64, a constant signal
+    // compresses 683:1 and an all-NaN one 683:1, which a result file full of held
+    // parameters and NaN padding hits routinely. The limit asks whether the data
+    // fits in memory and refuses either kind once it does not.
+    //
+    // Eight elements of 200 MB each rather than one of 1.6 GB: it keeps the test
+    // cheap, and it is the case the budget exists for. Any per-element check would
+    // pass all eight — only a total carried across the file catches them.
     const { zlibSync } = await import('fflate');
-    const bomb = matFile([matElement(15, zlibSync(new Uint8Array(200 * MB)))]);
-    assert.ok(bomb.byteLength < MB, 'the bomb really is a small file');
+    const oneBlock = zlibSync(new Uint8Array(200 * MB), { level: 6 });
+    const bomb = matFile(Array.from({ length: 8 }, () => matElement(15, oneBlock)));
+    assert.ok(bomb.byteLength < 8 * MB, 'the bomb is still a small file');
     await assert.rejects(
         () => matFileParser.inspect(bomb, 'bomb.mat'),
-        /expands to far more data/,
-        'a compressed element that inflates past the budget is refused',
+        (err) => /decompresses to more than/.test(err.message)
+            && !/corrupt|not a genuine/i.test(err.message),
+        'inflated bytes are counted across the whole file, and refused without calling it corrupt',
+    );
+
+    // The counterpart, and the reason the limit is not a ratio: a held parameter
+    // stored as a full-length trace is a real thing in a simulation result, and it
+    // compresses 683:1 — indistinguishable from the bomb above by ratio alone.
+    // 143 KB of file, 95 MB of constant signal. A 20:1 rule with a 64 MB floor
+    // refused this, and told its owner the file was corrupt.
+    const held = new Float64Array(12_500_000).fill(42);
+    const heldMatrix = matMatrix(6, [1, held.length], 'held_parameter', [
+        matElement(9, new Uint8Array(held.buffer)),
+    ]);
+    const heldFile = matFile([matElement(15, zlibSync(heldMatrix, { level: 6 }))]);
+    assert.ok(heldFile.byteLength < MB, 'the honest file is small too');
+    const heldInspection = await matFileParser.inspect(heldFile, 'held-parameter.mat');
+    assert.equal(
+        heldInspection.entries.find(entry => entry.path === 'held_parameter')?.elementCount,
+        held.length,
+        'a highly compressible but legitimate signal is read, not refused',
+    );
+
+    // An empty compressed element carries nothing and is skipped, rather than
+    // failing the whole file the way unzlibSync's "invalid zlib data" did.
+    const emptyCompressed = matFile([
+        matElement(15, new Uint8Array(0)),
+        matMatrix(6, [1, 3], 'kept', [matElement(9, matFloat64Payload([7, 8, 9]))]),
+    ]);
+    const afterEmpty = await matFileParser.inspect(emptyCompressed, 'empty-element.mat');
+    assert.ok(
+        afterEmpty.entries.some(entry => (entry.path || entry.name) === 'kept'),
+        'the variable after an empty compressed element is still read',
     );
 
     // 2) Sparse matrix declaring 2 × 2^30 elements: a valid JS array length, and
@@ -427,6 +477,35 @@ function matFile(elements) {
     assert.ok(
         performance.now() - started < 5000,
         'a struct with an inflated declared shape does not spin on the declaration',
+    );
+
+    // The other half of that bound: a WELL-FORMED struct array must still be read
+    // whole. No fixture has a struct array with more than one instance, so
+    // bounding the loop by the instance data present was unverified against the
+    // case it must not break. A 1x2 struct with two fields carries 4 submatrices,
+    // and all four values have to come back.
+    const structArray = matFile([matMatrix(2, [1, 2], 'sensors', [
+        matElement(5, matInt32Payload([32])),
+        matElement(1, new Uint8Array([...matAsciiPayload('temp', 32), ...matAsciiPayload('flow', 32)])),
+        matMatrix(6, [1, 3], '', [matElement(9, matFloat64Payload([1, 2, 3]))]),
+        matMatrix(6, [1, 3], '', [matElement(9, matFloat64Payload([10, 20, 30]))]),
+        matMatrix(6, [1, 3], '', [matElement(9, matFloat64Payload([4, 5, 6]))]),
+        matMatrix(6, [1, 3], '', [matElement(9, matFloat64Payload([40, 50, 60]))]),
+    ])]);
+    const arrayInspection = await matFileParser.inspect(structArray, 'struct-array.mat');
+    assert.deepEqual(
+        arrayInspection.entries.map(entry => entry.path).sort(),
+        ['sensors(1).flow', 'sensors(1).temp', 'sensors(2).flow', 'sensors(2).temp'],
+        'both instances of a two-field struct array are read',
+    );
+    const arrayData = matFileParser.materialize(arrayInspection, {
+        selectedIds: arrayInspection.entries.filter(entry => entry.selectable).map(entry => entry.id),
+        timeMode: 'index',
+    }, 'struct-array.mat');
+    assert.deepEqual(
+        Array.from(arrayData.variables['sensors(2).flow'].data),
+        [40, 50, 60],
+        'the last instance keeps its own values rather than the first instance\'s',
     );
 }
 

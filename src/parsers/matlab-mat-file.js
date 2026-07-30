@@ -2,7 +2,7 @@ import { Unzlib } from 'fflate';
 import h5wasm from 'h5wasm';
 import MatParser from './mat-parser.js';
 import McosSubsystem, { isObjectReferenceArray, decodeObjectReference } from './matlab-mcos.js';
-import { MATLAB_MAT_MAX_DENSE_ELEMENTS, matlabMatMaxInflatedBytes } from './matlab-mat-limits.js';
+import { MATLAB_MAT_MAX_DENSE_ELEMENTS, MATLAB_MAT_MAX_INFLATED_BYTES } from './matlab-mat-limits.js';
 
 const HDF5_MAGIC = [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a];
 const MAT5_TYPES = new Set([1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18]);
@@ -91,8 +91,9 @@ class Mat5Reader {
         this.subsystem = null;
         // Budget for everything this reader inflates, counted across the whole
         // file: nested miCOMPRESSED elements would otherwise each pass a
-        // per-element check and still add up to an unbounded total.
-        this.maxInflatedBytes = matlabMatMaxInflatedBytes(buffer.byteLength);
+        // per-element check and still add up to an unbounded total. See
+        // matlab-mat-limits.js for why this is a fixed ceiling and not a ratio.
+        this.maxInflatedBytes = MATLAB_MAT_MAX_INFLATED_BYTES;
         this.inflatedBytes = 0;
     }
 
@@ -103,12 +104,20 @@ class Mat5Reader {
     // limit stop it partway: fflate calls ondata synchronously, so throwing
     // there aborts the inflate with at most one internal buffer allocated.
     _inflate(payload) {
+        // A zero-length compressed element carries nothing to inflate. Skipping it
+        // and reading on is deliberate — the same tolerance _readElements shows
+        // when it breaks on a tag it cannot make sense of, rather than failing the
+        // whole file over one unreadable element. (unzlibSync used to throw
+        // "invalid zlib data" here, and the slice loop below would simply never
+        // run, so this says out loud what would otherwise happen by accident.)
+        if (!payload.length) return new Uint8Array(0);
+
         const budget = this.maxInflatedBytes - this.inflatedBytes;
         const chunks = [];
         let produced = 0;
         const stream = new Unzlib(chunk => {
             produced += chunk.length;
-            if (produced > budget) throw this._inflationBombError();
+            if (produced > budget) throw this._inflatedBudgetError();
             // ondata hands out a view into a buffer the next push may reuse.
             chunks.push(chunk.slice());
         });
@@ -130,11 +139,15 @@ class Mat5Reader {
         return inflated;
     }
 
-    _inflationBombError() {
+    // Deliberately says nothing about the file being wrong. A genuine result full
+    // of constant or NaN traces compresses hundreds of times over, so this limit
+    // is reached by big honest files as readily as by a crafted one, and accusing
+    // the file of being corrupt was both wrong and rude in the common case.
+    _inflatedBudgetError() {
         return new Error(
-            'This MAT file expands to far more data than its size allows '
-            + `(over ${Math.round(this.maxInflatedBytes / (1024 * 1024))} MB decompressed). `
-            + 'It is either corrupt or not a genuine MATLAB file.'
+            `This MAT file decompresses to more than ${Math.round(this.maxInflatedBytes / (1024 * 1024))} MB, `
+            + 'which is more than can be held in memory at once. '
+            + 'Open it in MATLAB and save the variables you need on their own, or convert them to CSV or Parquet.'
         );
     }
 
