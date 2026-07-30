@@ -518,7 +518,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (plot.phase2dFitContainer?.isConnected) return;
         plot.phase2dFitContainer = null;
         const state = this._ensurePhase2dState(plot);
-        if (this._autoLimitAnalysisRange(plot, state, 'phase2d')) {
+        if (this._autoLimitAnalysisRange(plot, state, 'phase2d', { initial: true })) {
             state.timeSeriesHidden = false;
         }
         // A fresh build re-reads current data, so any prior live-append dirtiness

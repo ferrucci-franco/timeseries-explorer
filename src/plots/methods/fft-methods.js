@@ -232,7 +232,7 @@ proto._createFftChart = function(panelId, panelEl) {
     // Let the browser paint the shell, controls and calculating indicator
     // before any signal inspection or Plotly trace construction begins.
     setTimeout(async () => {
-        await this._prepareFftAutoRange(panelId, plot, preparationToken);
+        await this._prepareFftAutoRange(panelId, plot, preparationToken, { initial: true });
         if (plot._fftPreparationToken !== preparationToken || plot.mode !== 'fft' || !plot.fftContainer?.isConnected) return;
         const domain = this._fftDomain(plot);
         const fullTimeRange = domain ? [domain.min, domain.max] : null;
@@ -474,6 +474,23 @@ proto._buildFftWindowedTimeTraces = function(plot, visibleRange = null) {
         if (!this._isVisible(trace)) continue;
         const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+        const length = Math.min(times?.length || 0, values?.length || 0);
+        let selectedCount = length;
+        if (Array.isArray(range) && range.length >= 2 && length) {
+            let lo = Number(range[0]);
+            let hi = Number(range[1]);
+            if (lo > hi) [lo, hi] = [hi, lo];
+            if (Number.isFinite(lo) && Number.isFinite(hi)) {
+                selectedCount = Math.max(
+                    0,
+                    Math.min(length, this._upperBound(times, hi))
+                        - Math.max(0, this._lowerBound(times, lo)),
+                );
+            }
+        }
+        // The dotted overlay is decorative. Do not copy a multi-million-point
+        // manual selection on the UI thread merely to decide not to draw it.
+        if (selectedCount < 2 || selectedCount > 200000) continue;
         const selected = selectFftRange(times, values, range);
         const n = Math.min(selected.times?.length || 0, selected.values?.length || 0);
         if (n < 2 || n > 200000) continue;
@@ -725,16 +742,28 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
     };
     const run = async () => {
         if (plot.mode !== 'fft' || !plot.fftDiv) return;
-        // Every range edit gets the same O(log n) preflight as initial entry.
-        // This must happen before selectFftRange slices/copies the samples:
-        // discovering an oversized 160M-sample selection afterwards can take a
-        // minute even though its point count was knowable almost instantly.
+        // Manual ranges are never shortened automatically: changing the green
+        // selection is the user's explicit opt-in to a longer calculation.
+        // The O(log n) preflight remains here solely to reject an NFFT above
+        // the real platform memory limit before any enormous slice/copy.
         const preparationToken = (plot._fftPreparationToken || 0) + 1;
         plot._fftPreparationToken = preparationToken;
         const adjusted = await this._prepareFftAutoRange(panelId, plot, preparationToken);
         if (plot._fftPreparationToken !== preparationToken
             || plot.mode !== 'fft'
             || !plot.fftDiv) return;
+        if (plot._fftPreflightTooLarge) {
+            plot._fftToken = (plot._fftToken || 0) + 1;
+            this._abortFftWorkerJob(plot, 'FFT selection exceeds the platform limit');
+            const trace = (plot.traces || []).find(item => this._isVisible(item));
+            const warning = this._fftWarningText(trace, 'tooManyPoints', plot._fftPreflightTooLarge);
+            const state = this._ensureFftState(plot);
+            state.warnings = [warning];
+            this._setFftStatus(plot, warning, 'warning');
+            this._setFftComputing(plot, false);
+            this._syncFftOptionsPanel(plot);
+            return;
+        }
         if (adjusted) {
             // Keep the UI truthful: the green band and numeric controls must
             // show the exact smaller block that will be sent to the FFT.
@@ -748,9 +777,10 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
     plot._fftRecomputeTimer = setTimeout(run, options.immediate ? 0 : 120);
 };
 
-proto._prepareFftAutoRange = async function(panelId, plot, token) {
+proto._prepareFftAutoRange = async function(panelId, plot, token, options = {}) {
     const state = this._ensureFftState(plot);
     const trace = (plot.traces || []).find(item => this._isVisible(item));
+    plot._fftPreflightTooLarge = null;
     if (!trace) return false;
     const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
     const values = this._getTransformedVariableData(trace.fileId, trace.varName);
@@ -792,7 +822,23 @@ proto._prepareFftAutoRange = async function(panelId, plot, token) {
         }
     }
     const selectedCount = Math.max(0, selectionEnd - selectionStart);
+    if (selectedCount < 2) return false;
     const estimatedMs = estimateFftDurationMs(selectedCount, state.zeroPaddingFactor);
+    const estimatedNfft = nextPowerOfTwo(selectedCount)
+        * normalizeZeroPaddingFactor(state.zeroPaddingFactor);
+    if (options.initial !== true) {
+        const effectiveMaxNfft = this._canUseFftWorker()
+            ? this._fftComputationMaxNfft()
+            : this._fftLiveMaxNfft();
+        if (estimatedNfft > effectiveMaxNfft) {
+            plot._fftPreflightTooLarge = {
+                n: selectedCount,
+                nfft: estimatedNfft,
+                maxNfft: effectiveMaxNfft,
+            };
+        }
+        return false;
+    }
     // Keep the automatically selected transform itself around 2^18 NFFT even
     // when zero padding is enabled. The old fixed 262k source points became a
     // 4.2M-point transform at x16.
@@ -1875,6 +1921,10 @@ proto._updateFftSelectionShapes = function(panelId, plot = this.plots.get(panelI
 
 proto._dismissFftAutoRangeWarning = function(plot) {
     const state = this._ensureFftState(plot);
+    // Any range gesture transfers ownership to the user. Subsequent preflights
+    // may still reject a true hard-memory overflow, but must never silently
+    // restore the initial fast block.
+    state.autoRangeLimited = false;
     const warning = state.autoRangeWarning;
     if (!warning) return false;
     state.autoRangeWarning = null;

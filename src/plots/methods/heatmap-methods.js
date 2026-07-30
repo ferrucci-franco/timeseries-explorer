@@ -407,7 +407,7 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureCalendarHeatmapState(plot);
-    this._autoLimitAnalysisRange(plot, state, 'heatmap');
+    this._autoLimitAnalysisRange(plot, state, 'heatmap', { initial: true });
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
 

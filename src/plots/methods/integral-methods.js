@@ -269,7 +269,7 @@ proto._createIntegralChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureIntegralState(plot);
-    this._autoLimitAnalysisRange(plot, state, 'integral');
+    this._autoLimitAnalysisRange(plot, state, 'integral', { initial: true });
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
 

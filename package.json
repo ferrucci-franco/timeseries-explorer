@@ -92,6 +92,7 @@
     "test:calendar-heatmap": "node scripts/test-calendar-heatmap.mjs",
     "test:fft": "node scripts/test-fft.mjs",
     "test:large-analysis": "node scripts/test-large-analysis-responsiveness.mjs",
+    "test:native-autoscale-loading": "node scripts/test-native-autoscale-loading.mjs",
     "test:sampling-gaps": "node scripts/test-sampling-gaps.mjs",
     "test:histogram": "node scripts/test-histogram.mjs",
     "test:temporal-profile": "node scripts/test-temporal-profile.mjs",

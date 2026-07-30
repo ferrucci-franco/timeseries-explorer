@@ -2210,8 +2210,12 @@ proto._finiteSortedExtent = function(arrays) {
     return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
 };
 
-proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode) {
+proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode, options = {}) {
     if (!plot || !state) return false;
+    // The bounded range is an initial fast preview. Once the user changes or
+    // expands the selector, recomputes must honor that explicit range even when
+    // the estimate is slow.
+    if (options.initial !== true) return false;
     const source = plot.traces?.find(trace => this._isVisible(trace))
         || plot.phaseTraces?.find(trace => trace.visible !== false);
     const fileId = source?.fileId;

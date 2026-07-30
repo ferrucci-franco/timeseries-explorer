@@ -1258,6 +1258,96 @@ proto._runWithEagerDetailLoading = function(panelId, work) {
         });
 };
 
+proto._plotlyModebarButtonName = function(div, target) {
+    const button = target?.closest?.('.modebar-btn');
+    if (!button || !div?.contains?.(button)) return '';
+    const direct = button.__data__?.name
+        || button.__data__?.attr
+        || button.dataset?.name
+        || button.getAttribute?.('data-name');
+    if (direct) return String(direct);
+
+    // Plotly binds its button descriptors to the DOM in most builds. Keep an
+    // index fallback for minified/distribution variants that omit __data__.
+    const domButtons = Array.from(div.querySelectorAll?.('.modebar-btn') || []);
+    const index = domButtons.indexOf(button);
+    const definitions = (div?._fullLayout?._modeBar?.buttons || []).flat(Infinity).filter(Boolean);
+    const definition = index >= 0 ? definitions[index] : null;
+    if (definition?.name) return String(definition.name);
+
+    // Last-resort tooltip fallback for the locales bundled by the app.
+    const title = String(button.getAttribute?.('data-title') || button.title || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+    if (/autoscale|auto scale|escala automatica|echelle automatique|scala automatica/.test(title)) {
+        return 'autoScale2d';
+    }
+    if (/reset axes|restablecer ejes|reinitialiser les axes|reimposta assi/.test(title)) {
+        return 'resetScale2d';
+    }
+    return '';
+};
+
+proto._isPlotlyAutoscaleModebarTarget = function(div, target) {
+    const name = this._plotlyModebarButtonName(div, target).toLowerCase();
+    return name === 'autoscale2d' || name === 'resetscale2d';
+};
+
+proto._installEagerTimeseriesAutoscaleGuards = function(panelId, plot, div) {
+    if (!div || div._eagerAutoscaleGuardsInstalled) return;
+    div._eagerAutoscaleGuardsInstalled = true;
+
+    const cancelNative = event => {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        event.stopImmediatePropagation?.();
+    };
+    const runAutoscale = event => {
+        cancelNative(event);
+        if (plot._eagerNativeAutoscalePending) return;
+        plot._eagerNativeAutoscalePending = true;
+        Promise.resolve(this._runWithEagerDetailLoading(
+            panelId,
+            () => this._autoScalePlot(panelId, plot),
+        )).finally(() => {
+            plot._eagerNativeAutoscalePending = false;
+        });
+    };
+    const nativeDoubleClickIsActive = event => (
+        event?.button === 0
+        && event.detail >= 2
+        && !event.target?.closest?.('.modebar')
+        && this._eventInsidePlotArea(div, event)
+    );
+
+    // Plotly starts its double-click autorange from the second mousedown. This
+    // guard is installed before newPlot, so the loading pill owns the first
+    // synchronous work and Plotly never begins a hidden full-range relayout.
+    div.addEventListener('mousedown', event => {
+        if (!nativeDoubleClickIsActive(event)) return;
+        plot._suppressNativeAutoscaleUntil = performance.now() + 750;
+        runAutoscale(event);
+    }, { capture: true });
+
+    // Modebar autoscale/reset is a normal click. Intercept the actual Plotly
+    // button before its handler and route it through the painted loading path.
+    div.addEventListener('click', event => {
+        if (this._isPlotlyAutoscaleModebarTarget(div, event.target)) {
+            runAutoscale(event);
+            return;
+        }
+        if (event.detail >= 2 && performance.now() < (plot._suppressNativeAutoscaleUntil || 0)) {
+            cancelNative(event);
+        }
+    }, { capture: true });
+    for (const type of ['mouseup', 'dblclick']) {
+        div.addEventListener(type, event => {
+            if (performance.now() < (plot._suppressNativeAutoscaleUntil || 0)) cancelNative(event);
+        }, { capture: true });
+    }
+};
+
 proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 'timeseries') {
     const panelEl = plot?.div?.closest('.layout-panel');
     if (!panelEl) return;

@@ -53,10 +53,12 @@ const cleanBlock = fft.match(/const blockIsClean = start => \{[\s\S]*?\n    \};/
 assert.ok(cleanBlock, 'FFT clean-block validator exists');
 assert.doesNotMatch(cleanBlock, /await|setTimeout/, 'first bounded FFT block is validated without timer delays');
 assert.match(fft, /state\.autoRangeLimited = true/);
-assert.match(fft, /_dismissFftAutoRangeWarning[\s\S]*state\.autoRangeWarning = null/);
+assert.match(fft, /_dismissFftAutoRangeWarning[\s\S]*state\.autoRangeLimited = false[\s\S]*state\.autoRangeWarning = null/);
+assert.match(fft, /options\.initial !== true[\s\S]*_fftPreflightTooLarge[\s\S]*return false/);
+assert.match(fft, /selectedCount > 200000[\s\S]*selectFftRange\(times, values, range\)/);
 
-// Manual oversized selections must be clamped by the same bounded preflight
-// used on initial entry, before any full-range slice/copy is attempted.
+// Initial entry gets a bounded clean block. Manual ranges remain untouched
+// unless their NFFT exceeds the real platform limit.
 {
     const start = fft.indexOf('proto._prepareFftAutoRange = async function');
     const end = fft.indexOf('\nproto.', start + 1);
@@ -65,6 +67,8 @@ assert.match(fft, /_dismissFftAutoRangeWarning[\s\S]*state\.autoRangeWarning = n
     vm.runInNewContext(fft.slice(start, end), {
         proto: preflightProto,
         estimateFftDurationMs,
+        nextPowerOfTwo: value => 2 ** Math.ceil(Math.log2(Math.max(1, Number(value)))),
+        normalizeZeroPaddingFactor: value => Math.max(1, Number(value) || 1),
         FFT_AUTO_SLOW_MS,
         FFT_AUTO_TARGET_POINTS,
         i18n: {
@@ -117,10 +121,19 @@ assert.match(fft, /_dismissFftAutoRangeWarning[\s\S]*state\.autoRangeWarning = n
         _getTransformedTimeDataForVariable: () => hugeTimes,
         _getTransformedVariableData: () => hugeValues,
         _activeFftRange: () => [state.x1, state.x2],
+        _canUseFftWorker: () => true,
+        _fftComputationMaxNfft: () => 2 ** 24,
+        _fftLiveMaxNfft: () => 2 ** 22,
         _syncFftOptionsPanel() {},
     };
-    const adjusted = await preflightProto._prepareFftAutoRange.call(harness, 'panel', plot, 1);
-    assert.equal(adjusted, true, 'oversized manual FFT selection is adjusted');
+    const adjusted = await preflightProto._prepareFftAutoRange.call(
+        harness,
+        'panel',
+        plot,
+        1,
+        { initial: true },
+    );
+    assert.equal(adjusted, true, 'oversized initial FFT selection is adjusted');
     assert.equal(state.x1, 0);
     assert.equal(state.x2, FFT_AUTO_TARGET_POINTS - 1);
     assert.equal(state.autoRangeLimited, true);
@@ -128,6 +141,24 @@ assert.match(fft, /_dismissFftAutoRangeWarning[\s\S]*state\.autoRangeWarning = n
         `preflight stays bounded (${preflightTimeReads} time reads)`);
     assert.ok(preflightValueReads <= FFT_AUTO_TARGET_POINTS,
         `preflight validates only the chosen block (${preflightValueReads} value reads)`);
+
+    state.autoRangeLimited = false;
+    state.x1 = 0;
+    state.x2 = 5_000_000 - 1;
+    plot._fftPreparationToken = 2;
+    preflightValueReads = 0;
+    const manualAdjusted = await preflightProto._prepareFftAutoRange.call(harness, 'panel', plot, 2);
+    assert.equal(manualAdjusted, false, 'slow manual FFT selection is not adjusted');
+    assert.equal(state.x2, 5_000_000 - 1, 'manual FFT range remains truthful');
+    assert.equal(plot._fftPreflightTooLarge, null, 'manual FFT within hard limit is allowed');
+    assert.equal(preflightValueReads, 0, 'manual preflight never scans values');
+
+    state.x2 = hugeLength - 1;
+    plot._fftPreparationToken = 3;
+    const hardAdjusted = await preflightProto._prepareFftAutoRange.call(harness, 'panel', plot, 3);
+    assert.equal(hardAdjusted, false, 'hard overflow is rejected rather than silently adjusted');
+    assert.equal(state.x2, hugeLength - 1, 'hard overflow leaves the visible selection unchanged');
+    assert.equal(plot._fftPreflightTooLarge.maxNfft, 2 ** 24);
 }
 
 const dataMethods = read('src/plots/methods/data-methods.js');
@@ -178,8 +209,8 @@ for (const path of [
     assert.match(read(path), /_finiteSortedExtent\(arrays\)/, `${path} uses constant-time time domains`);
 }
 
-// Shared non-FFT preflight must count a manually selected span with binary
-// bounds and clamp it before an analysis-specific sampler can scan the source.
+// Shared non-FFT preflight clamps only the initial range. A later explicit
+// user range is honored even when the estimate exceeds five seconds.
 {
     const start = dataMethods.indexOf('proto._autoLimitAnalysisRange = function');
     const end = dataMethods.indexOf('\n};', start + 1) + 3;
@@ -243,12 +274,26 @@ for (const path of [
         { mode: 'histogram', traces: [{ fileId: 'audio', varName: 'Left' }] },
         state,
         'histogram',
+        { initial: true },
     );
-    assert.equal(adjusted, true, 'manual oversized analysis range is adjusted');
+    assert.equal(adjusted, true, 'initial oversized analysis range is adjusted');
     assert.equal(state.rangeFull, false);
     assert.equal(state.x1, 0);
     assert.equal(state.x2, FFT_AUTO_TARGET_POINTS - 1);
     assert.ok(timeReads < 100, `shared preflight stays logarithmic (${timeReads} reads)`);
+
+    state.autoRangeLimited = false;
+    state.x2 = hugeLength - 1;
+    timeReads = 0;
+    const manualAdjusted = preflightProto._autoLimitAnalysisRange.call(
+        harness,
+        { mode: 'histogram', traces: [{ fileId: 'audio', varName: 'Left' }] },
+        state,
+        'histogram',
+    );
+    assert.equal(manualAdjusted, false, 'manual oversized analysis range is honored');
+    assert.equal(state.x2, hugeLength - 1);
+    assert.equal(timeReads, 0, 'manual opt-in does not spend time in auto-limiting');
 }
 
 const interaction = read('src/plots/methods/interaction-methods.js');
@@ -272,7 +317,10 @@ const manager = read('src/plots/plot-manager.js');
 assert.match(manager, /Object\.defineProperty\(clone, '_fullVisualCache'/);
 assert.match(manager, /_eagerInitialDetailDeferred[\s\S]*_yieldForDetailIndicatorPaint/);
 assert.match(manager, /autoZoomAll[\s\S]*_runWithEagerDetailLoading/);
-assert.match(manager, /plot\.mode === 'timeseries'[\s\S]*addEventListener\('click'[\s\S]*event\.detail !== 2[\s\S]*_runWithEagerDetailLoading[\s\S]*capture: true/);
+assert.match(manager, /plot\.mode === 'timeseries'[\s\S]*_installEagerTimeseriesAutoscaleGuards/);
+assert.match(interaction, /_installEagerTimeseriesAutoscaleGuards[\s\S]*_runWithEagerDetailLoading/);
+assert.match(interaction, /_installEagerTimeseriesAutoscaleGuards[\s\S]*addEventListener\('mousedown'[\s\S]*capture: true/);
+assert.match(interaction, /_isPlotlyAutoscaleModebarTarget[\s\S]*name === 'autoscale2d' \|\| name === 'resetscale2d'/);
 for (const token of [
     '_fftToken', '_histToken', '_calendarHeatmapToken',
     '_temporalProfileToken', '_integralToken', '_correlationToken',
@@ -290,7 +338,15 @@ const analysisHooks = {
     phase2d: 'src/plots/methods/phase2d-fit-methods.js',
 };
 for (const [mode, path] of Object.entries(analysisHooks)) {
-    assert.ok(read(path).includes(`_autoLimitAnalysisRange(plot, state, '${mode}')`), `${mode} uses the shared analysis budget`);
+    const source = read(path);
+    assert.ok(
+        source.includes(`_autoLimitAnalysisRange(plot, state, '${mode}', { initial: true })`),
+        `${mode} applies the shared budget on initial entry`,
+    );
+    assert.ok(
+        source.includes(`_autoLimitAnalysisRange(plot, state, '${mode}')`),
+        `${mode} respects the manual-range recompute path`,
+    );
 }
 assert.match(read(analysisHooks.phase2d), /state\.timeSeriesHidden = false/);
 

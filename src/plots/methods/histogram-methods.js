@@ -137,7 +137,7 @@ proto._createHistogramChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureHistogramState(plot);
-    this._autoLimitAnalysisRange(plot, state, 'histogram');
+    this._autoLimitAnalysisRange(plot, state, 'histogram', { initial: true });
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
     if (restoreView?.histogramBars) plot._histogramPendingBarView = restoreView.histogramBars;

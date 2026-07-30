@@ -1365,6 +1365,10 @@ class PlotManager {
         div.className = `plotly-container plotly-mode-${plot.mode}`;
         panelEl.appendChild(div);
         plot.div = div;
+        if (plot.mode === 'timeseries') {
+            // Install before Plotly registers native dblclick/modebar handlers.
+            this._installEagerTimeseriesAutoscaleGuards(panelId, plot, div);
+        }
 
         // Missing/NaN toggling rebuilds the timeseries so line breaks can be
         // added safely. Show its lazy-search pill on the first empty frame,
@@ -1408,28 +1412,7 @@ class PlotManager {
                 }
                 finish3DSetup();
             });
-            if (plot.mode === 'timeseries') {
-                // Plotly emits plotly_doubleclick only after its native
-                // autorange has already run. On a huge eager trace that blocks
-                // for seconds, so a loading pill started there paints too late.
-                // The second click arrives before dblclick; capture it before
-                // Plotly sees it, then own the autoscale operation.
-                div.addEventListener('click', event => {
-                    if (event.button !== 0 || event.detail !== 2) return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    event.stopImmediatePropagation?.();
-                    this._runWithEagerDetailLoading(
-                        panelId,
-                        () => this._autoScalePlot(panelId, plot),
-                    );
-                }, { capture: true });
-                div.addEventListener('dblclick', event => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    event.stopImmediatePropagation?.();
-                }, { capture: true });
-            } else {
+            if (plot.mode !== 'timeseries') {
                 div.on('plotly_doubleclick', () => {
                     this._autoScalePlot(panelId, plot);
                     return false;

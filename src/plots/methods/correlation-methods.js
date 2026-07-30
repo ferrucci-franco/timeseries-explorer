@@ -166,7 +166,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!this._hasContent(plot)) return;
         const state = this._ensureCorrelationState(plot);
-        this._autoLimitAnalysisRange(plot, state, 'correlation');
+        this._autoLimitAnalysisRange(plot, state, 'correlation', { initial: true });
 
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) placeholder.style.display = 'none';

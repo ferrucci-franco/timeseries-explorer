@@ -317,7 +317,7 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureTemporalProfileState(plot);
-    this._autoLimitAnalysisRange(plot, state, 'temporal-profile');
+    this._autoLimitAnalysisRange(plot, state, 'temporal-profile', { initial: true });
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
     if (restoreView?.temporalProfileView) plot._temporalProfilePendingView = restoreView.temporalProfileView;
