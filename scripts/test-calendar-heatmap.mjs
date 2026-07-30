@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import {
     CALENDAR_HEATMAP_DAY_MS,
     CALENDAR_HEATMAP_HOUR_MS,
@@ -19,6 +21,81 @@ import {
     getUtcIsoWeek,
     validateCalendarHeatmapCellLimit,
 } from '../src/utils/calendar-heatmap.js';
+
+const heatmapMethodsSource = readFileSync(
+    new URL('../src/plots/methods/heatmap-methods.js', import.meta.url),
+    'utf8',
+);
+
+// A bounded eager Heatmap must not feed the full source arrays into the
+// calendar kernel, which otherwise filters by range only after an O(n) scan.
+{
+    const start = heatmapMethodsSource.indexOf('proto._calendarHeatmapSeriesForTrace = function');
+    const end = heatmapMethodsSource.indexOf('\nproto.', start + 1);
+    assert.ok(start >= 0 && end > start, 'Heatmap bounded sampler can be isolated');
+    const isolatedProto = {};
+    vm.runInNewContext(heatmapMethodsSource.slice(start, end), { proto: isolatedProto });
+    const hugeLength = 20_000_000;
+    let timeReads = 0;
+    let copiedTimes = 0;
+    let copiedValues = 0;
+    const times = new Proxy({
+        length: hugeLength,
+        slice(first, last) {
+            copiedTimes += last - first;
+            return { length: last - first };
+        },
+    }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                timeReads++;
+                return index;
+            }
+            return undefined;
+        },
+    });
+    const values = {
+        length: hugeLength,
+        slice(first, last) {
+            copiedValues += last - first;
+            return { length: last - first };
+        },
+    };
+    const bound = (upper) => (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (upper ? array[mid] <= target : array[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const harness = {
+        _getTransformedTimeDataForVariable: () => times,
+        _getTransformedVariableData: () => values,
+        _lowerBound: bound(false),
+        _upperBound: bound(true),
+    };
+    const selected = isolatedProto._calendarHeatmapSeriesForTrace.call(
+        harness,
+        { fileId: 'audio', varName: 'Left' },
+        [9_000_000, 9_262_143],
+    );
+    assert.equal(selected.times.length, 262_144);
+    assert.equal(selected.values.length, 262_144);
+    assert.ok(timeReads < 100, `Heatmap bounds stay logarithmic (${timeReads} reads)`);
+    assert.equal(copiedTimes, 262_144);
+    assert.equal(copiedValues, 262_144);
+}
+
+assert.match(
+    heatmapMethodsSource,
+    /_scheduleCalendarHeatmapRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'heatmap'\)[\s\S]*setTimeout\(\(\) =>/,
+    'Heatmap preflights and yields before eager aggregation',
+);
 
 const utc = value => Date.parse(value);
 const close = (actual, expected, tolerance, label) => {
