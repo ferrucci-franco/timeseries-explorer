@@ -200,6 +200,7 @@ proto._defaultTemporalProfileState = function() {
         timeSeriesHidden: false,
         optionsVisible: true,
         rangeFull: true,
+        autoRangeLimited: false,
         x1: null,
         x2: null,
         period: 'day',
@@ -245,6 +246,7 @@ proto._normalizeTemporalProfileState = function(raw = {}) {
         timeSeriesHidden: raw.timeSeriesHidden === true,
         optionsVisible: raw.optionsVisible !== false,
         rangeFull: raw.rangeFull !== undefined ? !!raw.rangeFull : !(hasFinite(raw.x1) || hasFinite(raw.x2)),
+        autoRangeLimited: raw.autoRangeLimited === true,
         x1: finiteOrNull(raw.x1),
         x2: finiteOrNull(raw.x2),
         period: TEMPORAL_PROFILE_PERIODS.has(raw.period) ? raw.period : defaults.period,
@@ -605,9 +607,36 @@ proto._scheduleTemporalProfileRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.temporalProfileDiv || plot.mode !== 'temporal-profile') return;
     clearTimeout(plot._temporalProfileRecomputeTimer);
-    const run = () => this._recomputeTemporalProfile(panelId, plot);
+    const run = () => {
+        const state = this._ensureTemporalProfileState(plot);
+        const adjusted = this._autoLimitAnalysisRange(plot, state, 'temporal-profile');
+        if (adjusted) this._updateTemporalProfileSelectionShapes(panelId, plot);
+        this._setTemporalProfileStatus(plot, text('temporalProfileCalculating'), 'loading');
+        this._setTemporalProfileComputing(plot, true);
+        plot.temporalProfileContainer?.setAttribute('aria-busy', 'true');
+        plot._temporalProfileRecomputeTimer = setTimeout(() => {
+            if (plot.mode === 'temporal-profile' && plot.temporalProfileDiv) {
+                this._recomputeTemporalProfile(panelId, plot);
+            }
+        }, 0);
+    };
     if (options.immediate) run();
     else plot._temporalProfileRecomputeTimer = setTimeout(run, PROFILE_RECOMPUTE_DEBOUNCE_MS);
+};
+
+proto._temporalProfileSeriesForTrace = function(trace, range = null) {
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
+    const length = Math.min(times.length || 0, values.length || 0);
+    if (!length || !range) return { times, values };
+    let [lower, upper] = range;
+    if (lower > upper) [lower, upper] = [upper, lower];
+    const start = Math.max(0, Math.min(length, this._lowerBound(times, lower)));
+    const end = Math.max(start, Math.min(length, this._upperBound(times, upper)));
+    return {
+        times: times.slice(start, end),
+        values: values.slice(start, end),
+    };
 };
 
 proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(panelId)) {
@@ -647,8 +676,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
             lazyByFile.get(trace.fileId).push({ trace, traceIndex, name });
             continue;
         }
-        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
-        const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
+        const { times, values } = this._temporalProfileSeriesForTrace(trace, range);
         const result = buildTemporalProfile({
             times,
             values,
@@ -657,8 +685,9 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
             resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
             dayGrouping: state.dayGrouping,
             combineWeekends: state.combineWeekends,
-            rangeStart: range?.[0] ?? null,
-            rangeEnd: range?.[1] ?? null,
+            // Eager arrays are already cropped with binary bounds.
+            rangeStart: null,
+            rangeEnd: null,
             discardIncomplete: state.discardIncomplete,
         });
         if (!result.ok) {
@@ -1071,6 +1100,8 @@ proto._installTemporalProfileSelectionHandlers = function(panelId, plot) {
             hi = dragging.startHi + delta;
         }
         if (lo > hi) [lo, hi] = [hi, lo];
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
         state.x1 = Math.max(domain.min, Math.min(domain.max, lo));
         state.x2 = Math.max(domain.min, Math.min(domain.max, hi));
         this._updateTemporalProfileSelectionShapes(panelId, plot);
@@ -1093,6 +1124,7 @@ proto._setTemporalProfileRangeMode = function(panelId, full) {
     const state = this._ensureTemporalProfileState(plot);
     if (state.rangeFull === full) return;
     state.autoRangeWarning = null;
+    state.autoRangeLimited = false;
     state.rangeFull = full;
     if (!full) {
         const axis = plot.div?._fullLayout?.xaxis;
@@ -1164,6 +1196,8 @@ proto._resetTemporalProfileView = function(panelId) {
     if (!plot?.div) return;
     const state = this._ensureTemporalProfileState(plot);
     state.rangeFull = true;
+    state.autoRangeLimited = false;
+    state.autoRangeWarning = null;
     state.x1 = null;
     state.x2 = null;
     this._updateTemporalProfileSelectionShapes(panelId, plot);
@@ -1316,6 +1350,8 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         input.addEventListener('change', () => {
             let value = utcInputMs(input.value);
             if (Number.isFinite(value) && domain) value = Math.max(domain.min, Math.min(domain.max, value));
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = Number.isFinite(value) ? value : null;
             this._updateTemporalProfileSelectionShapes(panelId, plot);
             this._scheduleTemporalProfileRecompute(panelId);
@@ -1332,6 +1368,8 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
         if (Number.isFinite(activeRange[index])) slider.value = String(activeRange[index]);
         slider.addEventListener('input', () => {
             const number = Number(slider.value);
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = Number.isFinite(number) ? number : null;
             this._updateTemporalProfileSelectionShapes(panelId, plot);
         });

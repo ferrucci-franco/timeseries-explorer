@@ -1,9 +1,96 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import {
     buildTemporalProfile,
     inferTemporalProfileStepMs,
     TEMPORAL_PROFILE_MAX_BINS,
 } from '../src/utils/temporal-profile.js';
+
+const temporalProfileMethodsSource = readFileSync(
+    new URL('../src/plots/methods/temporal-profile-methods.js', import.meta.url),
+    'utf8',
+);
+
+// Timestep inference and selected-series extraction both stay bounded on a
+// multi-GB eager timeline.
+{
+    const hugeLength = 20_000_000;
+    let inferenceReads = 0;
+    const virtualTimeline = new Proxy({ length: hugeLength }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                inferenceReads++;
+                return index * 1000;
+            }
+            return undefined;
+        },
+    });
+    assert.equal(inferTemporalProfileStepMs(virtualTimeline), 1000);
+    assert.ok(inferenceReads <= 100_001, `step inference is capped (${inferenceReads} reads)`);
+
+    const start = temporalProfileMethodsSource.indexOf('proto._temporalProfileSeriesForTrace = function');
+    const end = temporalProfileMethodsSource.indexOf('\nproto.', start + 1);
+    assert.ok(start >= 0 && end > start, 'Temporal Profile bounded sampler can be isolated');
+    const isolatedProto = {};
+    vm.runInNewContext(temporalProfileMethodsSource.slice(start, end), { proto: isolatedProto });
+    let boundReads = 0;
+    let copiedTimes = 0;
+    let copiedValues = 0;
+    const times = new Proxy({
+        length: hugeLength,
+        slice(first, last) {
+            copiedTimes += last - first;
+            return { length: last - first };
+        },
+    }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                boundReads++;
+                return index;
+            }
+            return undefined;
+        },
+    });
+    const values = {
+        length: hugeLength,
+        slice(first, last) {
+            copiedValues += last - first;
+            return { length: last - first };
+        },
+    };
+    const bound = upper => (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (upper ? array[mid] <= target : array[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const selected = isolatedProto._temporalProfileSeriesForTrace.call({
+        _getTransformedTimeDataForVariable: () => times,
+        _getTransformedVariableData: () => values,
+        _lowerBound: bound(false),
+        _upperBound: bound(true),
+    }, { fileId: 'audio', varName: 'Left' }, [4_000_000, 4_262_143]);
+    assert.equal(selected.times.length, 262_144);
+    assert.equal(selected.values.length, 262_144);
+    assert.ok(boundReads < 100, `profile bounds stay logarithmic (${boundReads} reads)`);
+    assert.equal(copiedTimes, 262_144);
+    assert.equal(copiedValues, 262_144);
+}
+
+assert.match(
+    temporalProfileMethodsSource,
+    /_scheduleTemporalProfileRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'temporal-profile'\)[\s\S]*_setTemporalProfileComputing\(plot, true\)[\s\S]*setTimeout\(\(\) =>/,
+    'Temporal Profile paints progress and preflights before eager computation',
+);
 
 const utc = value => Date.parse(value);
 const close = (actual, expected, epsilon = 1e-12, message = '') => {
