@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import {
     linearFit,
     quadraticFitCentered,
@@ -8,6 +10,8 @@ import {
     fitPair,
     FIT_CURVE_POINTS,
 } from '../src/utils/regression.js';
+
+const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 const close = (actual, expected, tolerance, label) => {
     assert.ok(
@@ -200,6 +204,110 @@ const close = (actual, expected, tolerance, label) => {
     assert.equal(fitPair('linear', [1, 2, 3], [1, 2, 3]).model, 'linear', 'dispatch linear');
     assert.equal(fitPair('quadratic', [1, 2, 3, 4], [1, 4, 9, 16]).model, 'quadratic', 'dispatch quadratic');
     assert.equal(fitPair('none', [1], [1]), null, 'dispatch none → null');
+}
+
+// Curve Fit must crop a huge selected range with binary bounds before copying
+// or fitting it. A linear scan over this virtual source would be impractical.
+{
+    const source = read('src/plots/methods/phase2d-fit-methods.js');
+    const start = source.indexOf('proto._phase2dPairSeries = function');
+    const end = source.indexOf('\n    };', start) + 7;
+    assert.ok(start >= 0 && end > start, 'Curve Fit pair sampler can be isolated');
+    const proto = {};
+    vm.runInNewContext(source.slice(start, end), { proto });
+
+    const length = 20_000_000;
+    let timeReads = 0;
+    const times = new Proxy({ length }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                timeReads++;
+                return index;
+            }
+            return undefined;
+        },
+    });
+    const makeValues = offset => ({
+        length,
+        slice: (sliceStart, sliceEnd) => ({
+            offset,
+            start: sliceStart,
+            end: sliceEnd,
+            length: sliceEnd - sliceStart,
+        }),
+    });
+    const lowerBound = (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (array[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const upperBound = (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (array[mid] <= target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const harness = {
+        _ensurePhase2dState: () => ({ rangeFull: false, x1: 1000, x2: 263143 }),
+        _getTransformedVariableData: (_fileId, name) => makeValues(name === 'x' ? 0 : 1),
+        _getTransformedTimeDataForVariable: () => times,
+        _phase2dFitActiveRange: () => [1000, 263143],
+        _lowerBound: lowerBound,
+        _upperBound: upperBound,
+    };
+    const result = proto._phase2dPairSeries.call(
+        harness,
+        {},
+        { fileId: 'huge', x: 'x', y: 'y' },
+    );
+    assert.equal(result.nScope, 262_144, 'Curve Fit copies only the bounded selected block');
+    assert.equal(result.x.start, 1000);
+    assert.equal(result.x.end, 263144);
+    assert.equal(result.y.length, 262_144);
+    assert.ok(timeReads < 100, `Curve Fit bounds stay logarithmic (${timeReads} timestamp reads)`);
+
+    const domainStart = source.indexOf('proto._phase2dFitDomain = function');
+    const domainEnd = source.indexOf('\n    };', domainStart) + 7;
+    const domainProto = {};
+    vm.runInNewContext(source.slice(domainStart, domainEnd), { proto: domainProto });
+    let domainReads = 0;
+    const domainTimes = new Proxy({ length }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                domainReads++;
+                return 500 + index;
+            }
+            return undefined;
+        },
+    });
+    const domain = domainProto._phase2dFitDomain.call({
+        _getTransformedTimeDataForVariable: () => domainTimes,
+    }, {
+        phaseTraces: [{ fileId: 'huge', x: 'x', y: 'y' }],
+    });
+    assert.equal(domain.min, 500);
+    assert.equal(domain.max, 500 + length - 1);
+    assert.ok(domainReads < 20, `Curve Fit domain reads only finite endpoints (${domainReads} reads)`);
+
+    assert.match(source, /_schedulePhase2dFitRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'phase2d'\)/);
+    assert.match(source, /_setPhase2dFitStatus\(plot, i18n\.t\('phase2dFitCalculating'\), 'loading'\)/);
+    assert.match(source, /setTimeout\(run, options\.immediate \? 0 : 150\)/);
+    assert.match(source, /_renderPhase2dFitDrawer\(panelId, plot, \{ results: plot\._phase2dFits \|\| \[\] \}\)/);
+    assert.match(source, /state\.timeSeriesHidden = false/);
+    assert.match(source, /_clearPhase2dAutoRangeNotice[\s\S]*state\.autoRangeLimited = false/);
 }
 
 console.log('test-regression: all assertions passed');

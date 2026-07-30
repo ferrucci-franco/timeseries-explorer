@@ -242,13 +242,13 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const times = this._getTransformedTimeDataForVariable(pair.fileId, pair.x);
         const n = Math.min(times?.length || 0, xVals?.length || 0, yVals?.length || 0);
         const [lo, hi] = this._phase2dFitActiveRange(plot);
-        const x = [];
-        const y = [];
-        for (let i = 0; i < n; i++) {
-            const t = Number(times[i]);
-            if (t >= lo && t <= hi) { x.push(xVals[i]); y.push(yVals[i]); }
-        }
-        return { x, y, nScope: x.length };
+        const start = Math.max(0, Math.min(n, this._lowerBound(times, lo)));
+        const end = Math.max(start, Math.min(n, this._upperBound(times, hi)));
+        return {
+            x: (xVals || []).slice(start, end),
+            y: (yVals || []).slice(start, end),
+            nScope: end - start,
+        };
     };
 
     // Compute one OLS fit per visible pair for the active model, cache on the
@@ -379,7 +379,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             });
         }
         this._rerenderPhase2dPlot(panelId, plot);
-        this._renderPhase2dFitDrawer(panelId, plot);
+        this._renderPhase2dFitDrawer(panelId, plot, { results: plot._phase2dFits || [] });
     };
 
     // Plotly traces for the fit curves: same colour as the pair, thicker dashed
@@ -432,12 +432,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const n = Math.min(times?.length || 0, xAll?.length || 0, yAll?.length || 0);
         if (!n) return null;
         const [lo, hi] = this._phase2dFitActiveRange(plot);
-        const xs = [];
-        const ys = [];
-        for (let i = 0; i < n; i++) {
-            const t = Number(times[i]);
-            if (t >= lo && t <= hi) { xs.push(xAll[i]); ys.push(yAll[i]); }
-        }
+        const start = Math.max(0, Math.min(n, this._lowerBound(times, lo)));
+        const end = Math.max(start, Math.min(n, this._upperBound(times, hi)));
+        const xs = (xAll || []).slice(start, end);
+        const ys = (yAll || []).slice(start, end);
         const [x, y] = this._buildPhaseVisualSeries([xs, ys]);
         return { x, y };
     };
@@ -490,9 +488,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const pair = this._phase2dActivePair(plot);
         if (!pair) return;
         pair.fitModel = PHASE2D_FIT_MODELS.has(model) ? model : 'none';
-        this._rerenderPhase2dPlot(panelId, plot);
-        this._renderPhase2dFitDrawer(panelId, plot);
-        if (this._hasLazyPhase2dPairs(plot)) this._refreshPhase2dLazyFits(panelId, plot);
+        this._schedulePhase2dFitRecompute(panelId, { immediate: true });
     };
 
     // Re-render the 2D plot preserving the current view (a fit/range change must
@@ -608,40 +604,42 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         plot.phase2dFitOptions = options;
 
         this._ensurePhase2dFitRange(plot);
+        this._setPhase2dFitStatus(plot, i18n.t('phase2dFitCalculating'), 'loading');
+        this._renderPhase2dFitDrawer(panelId, plot, { pending: true });
         const timeRestoreView = plot._phase2dFitPendingTimeView || null;
         delete plot._phase2dFitPendingTimeView;
-        Plotly.newPlot(timeDiv, this._buildPhase2dFitTimeTraces(plot), this._buildPhase2dFitTimeLayout(plot), this._getPlotlyConfig()).then(() => {
-            timeDiv.on('plotly_doubleclick', () => { this._autoScalePhase2dFitTime(plot); return false; });
-            timeDiv.on('plotly_relayout', (ed) => {
-                const touchesX = ed && (
-                    ed['xaxis.autorange'] !== undefined
-                    || ed['xaxis.range'] !== undefined
-                    || ed['xaxis.range[0]'] !== undefined
-                    || ed['xaxis.range[1]'] !== undefined
-                );
-                if (!touchesX) return;
-                clearTimeout(plot._phase2dFitVisualTimer);
-                plot._phase2dFitVisualTimer = setTimeout(() => {
-                    const r = timeDiv?._fullLayout?.xaxis?.range;
-                    this._refreshPhase2dFitTimeVisuals(panelId, plot, Array.isArray(r) ? r : null);
-                }, 120);
+        // Paint the shell, controls and progress message before either Plotly
+        // pane starts reading a large eager source.
+        plot._phase2dFitOpenTimer = setTimeout(() => {
+            if (this.plots.get(panelId) !== plot || !container.isConnected) return;
+            Plotly.newPlot(timeDiv, this._buildPhase2dFitTimeTraces(plot), this._buildPhase2dFitTimeLayout(plot), this._getPlotlyConfig()).then(() => {
+                timeDiv.on('plotly_doubleclick', () => { this._autoScalePhase2dFitTime(plot); return false; });
+                timeDiv.on('plotly_relayout', (ed) => {
+                    const touchesX = ed && (
+                        ed['xaxis.autorange'] !== undefined
+                        || ed['xaxis.range'] !== undefined
+                        || ed['xaxis.range[0]'] !== undefined
+                        || ed['xaxis.range[1]'] !== undefined
+                    );
+                    if (!touchesX) return;
+                    clearTimeout(plot._phase2dFitVisualTimer);
+                    plot._phase2dFitVisualTimer = setTimeout(() => {
+                        const r = timeDiv?._fullLayout?.xaxis?.range;
+                        this._refreshPhase2dFitTimeVisuals(panelId, plot, Array.isArray(r) ? r : null);
+                    }, 120);
+                });
+                this._installPhase2dFitSelectionHandlers(panelId, plot);
+                this._installPhase2dFitSplitterHandlers(panelId, plot);
+                this._installWheelPan?.(panelId, plot, timeDiv, {});
+                this._installRightButtonPan?.(panelId, plot, timeDiv, {});
+                Promise.resolve(this._restore2DViewToDiv?.(timeDiv, timeRestoreView)).then(() => {
+                    const range = timeDiv?._fullLayout?.xaxis?.range;
+                    this._refreshPhase2dFitTimeVisuals(panelId, plot, Array.isArray(range) ? range : null);
+                });
+                Plotly.Plots.resize(div);
             });
-            this._installPhase2dFitSelectionHandlers(panelId, plot);
-            this._installPhase2dFitSplitterHandlers(panelId, plot);
-            this._installWheelPan?.(panelId, plot, timeDiv, {});
-            this._installRightButtonPan?.(panelId, plot, timeDiv, {});
-            Promise.resolve(this._restore2DViewToDiv?.(timeDiv, timeRestoreView)).then(() => {
-                const range = timeDiv?._fullLayout?.xaxis?.range;
-                this._refreshPhase2dFitTimeVisuals(panelId, plot, Array.isArray(range) ? range : null);
-            });
-            Plotly.Plots.resize(div);
-        });
-
-        this._renderPhase2dFitDrawer(panelId, plot);
-        // Add the fit curves to the (reparented) 2D plot.
-        this._rerenderPhase2dPlot(panelId, plot);
-        // Kick off exact lazy fits for any DuckDB-backed pairs.
-        if (this._hasLazyPhase2dPairs(plot)) this._refreshPhase2dLazyFits(panelId, plot);
+            this._schedulePhase2dFitRecompute(panelId, { immediate: true });
+        }, 0);
     };
 
     proto._exitPhase2dFitShell = function(panelId, plot = this.plots.get(panelId)) {
@@ -673,6 +671,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         }
         clearTimeout(plot._phase2dFitRecomputeTimer);
         clearTimeout(plot._phase2dFitVisualTimer);
+        clearTimeout(plot._phase2dFitOpenTimer);
     };
 
     // ── Temporal pane: X(t) solid + Y(t) dashed, one per pair ───────
@@ -748,18 +747,27 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
     // ── Temporal domain / active range (Todo/Selección) ─────────────
     proto._phase2dFitDomain = function(plot) {
-        const arrays = [];
         const seen = new Set();
+        let min = Infinity;
+        let max = -Infinity;
         for (const pair of plot?.phaseTraces || []) {
             if (seen.has(pair.fileId)) continue;
             seen.add(pair.fileId);
             const xTimes = this._getTransformedTimeDataForVariable(pair.fileId, pair.x);
             const yTimes = this._getTransformedTimeDataForVariable(pair.fileId, pair.y);
-            if (xTimes?.length) arrays.push(xTimes);
-            if (yTimes?.length) arrays.push(yTimes);
+            for (const times of [xTimes, yTimes]) {
+                let first = 0;
+                let last = (times?.length || 0) - 1;
+                while (first <= last && !Number.isFinite(Number(times[first]))) first++;
+                while (last >= first && !Number.isFinite(Number(times[last]))) last--;
+                if (first > last) continue;
+                const lo = Number(times[first]);
+                const hi = Number(times[last]);
+                min = Math.min(min, lo, hi);
+                max = Math.max(max, lo, hi);
+            }
         }
-        const extent = this._finiteExtent(arrays);
-        return extent ? { min: extent.min, max: extent.max } : null;
+        return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
     };
 
     proto._phase2dFitActiveRange = function(plot) {
@@ -867,6 +875,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             const x = this._eventToXValue(timeDiv, event);
             if (!Number.isFinite(x) || !domain) return;
             const state = this._ensurePhase2dState(plot);
+            this._clearPhase2dAutoRangeNotice(plot, state);
             let lo = dragging.startLo, hi = dragging.startHi;
             if (dragging.hit === 'left') lo = x;
             else if (dragging.hit === 'right') hi = x;
@@ -970,12 +979,11 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         state.rangeFull = true;
         state.x1 = null;
         state.x2 = null;
-        this._refreshPhase2dFitTimePlot(panelId, plot);
+        this._clearPhase2dAutoRangeNotice(plot, state);
         this._autoScalePhase2dFitTime(plot);
         // 2D pane back to autoscale (respecting 1:1) + recompute over all rows.
         if (plot.div) Plotly.relayout(plot.div, { 'xaxis.autorange': true, 'yaxis.autorange': true });
         this._schedulePhase2dFitRecompute(panelId, { immediate: true });
-        this._renderPhase2dFitDrawer(panelId, plot);
     };
 
     proto._setPhase2dFitStatus = function(plot, message, type = 'muted') {
@@ -984,6 +992,14 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         el.textContent = message || '';
         el.className = `fft-status fft-status-${type}`;
         el.title = message || '';
+    };
+
+    proto._clearPhase2dAutoRangeNotice = function(plot, state = this._ensurePhase2dState(plot)) {
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
+        if (Array.isArray(state.warnings)) state.warnings = [];
+        plot?.phase2dFitOptions?.querySelector('.phase2d-auto-range-warning')?.remove();
+        this._setPhase2dFitStatus(plot, '', 'muted');
     };
 
     // ── Live-update dirty (lazy pairs only) ────────────────────────
@@ -1020,14 +1036,33 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot || plot.mode !== 'phase2d') return;
         clearTimeout(plot._phase2dFitRecomputeTimer);
-        const run = () => {
-            this._rerenderPhase2dPlot(panelId, plot);
-            this._renderPhase2dFitDrawer(panelId, plot);
+        const state = this._ensurePhase2dState(plot);
+        const adjusted = this._autoLimitAnalysisRange(plot, state, 'phase2d');
+        if (adjusted) {
+            state.timeSeriesHidden = false;
+            plot.phase2dFitContainer?.classList.remove('fft-time-series-hidden');
+            const timeButton = plot.phase2dFitContainer?.querySelector('.fft-time-series-btn');
+            timeButton?.classList.remove('active');
+            timeButton?.setAttribute('aria-pressed', 'false');
+            this._updatePhase2dFitSelectionShapes(panelId, plot);
+            this._syncPhase2dFitRangeInputs(plot);
+        }
+        this._setPhase2dFitStatus(plot, i18n.t('phase2dFitCalculating'), 'loading');
+        this._renderPhase2dFitDrawer(panelId, plot, { pending: true });
+        const run = async () => {
+            if (this.plots.get(panelId) !== plot || !plot.phase2dFitContainer?.isConnected) return;
+            await this._rerenderPhase2dPlot(panelId, plot);
+            if (this.plots.get(panelId) !== plot || !plot.phase2dFitContainer?.isConnected) return;
+            this._renderPhase2dFitDrawer(panelId, plot, { results: plot._phase2dFits || [] });
+            this._setPhase2dFitStatus(
+                plot,
+                state.autoRangeWarning || '',
+                state.autoRangeWarning ? 'warning' : 'muted',
+            );
             // Lazy pairs re-query DuckDB on release (never on every drag frame).
             if (this._hasLazyPhase2dPairs(plot)) this._refreshPhase2dLazyFits(panelId, plot);
         };
-        if (options.immediate) run();
-        else plot._phase2dFitRecomputeTimer = setTimeout(run, 150);
+        plot._phase2dFitRecomputeTimer = setTimeout(run, options.immediate ? 0 : 150);
     };
 
     // Generic model formula + resolved coefficient values for a fit result.
@@ -1087,14 +1122,21 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     // 1) temporal range, 2) pair selector, 3) fit type (+ help), 4) the selected
     // pair's equation / metrics. Each pair carries its own model, so switching
     // the pair selector shows/edits that pair's fit.
-    proto._renderPhase2dFitDrawer = function(panelId, plot = this.plots.get(panelId)) {
+    proto._renderPhase2dFitDrawer = function(panelId, plot = this.plots.get(panelId), options = {}) {
         const drawer = plot?.phase2dFitOptions;
         if (!drawer) return;
         const state = this._ensurePhase2dState(plot);
-        const results = this._computePhase2dFits(plot);
+        const results = options.results || (options.pending ? [] : this._computePhase2dFits(plot));
         const fmt = (v, d = 4) => (Number.isFinite(v) ? v.toPrecision(d) : 'N/A');
 
         drawer.replaceChildren();
+        if (state.autoRangeWarning) {
+            const notice = document.createElement('div');
+            notice.className = 'phase2d-fit-warning phase2d-auto-range-warning';
+            notice.setAttribute('role', 'alert');
+            notice.textContent = state.autoRangeWarning;
+            drawer.appendChild(notice);
+        }
 
         // ── 1) Temporal range: Todo / Selección (mirrors FFT/Correlation) ──
         const domain = this._phase2dFitDomain(plot);
@@ -1129,7 +1171,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             btn.addEventListener('click', (event) => {
                 event.preventDefault();
                 if (!!state.rangeFull === isFull) return;
-                state.autoRangeWarning = null;
+                this._clearPhase2dAutoRangeNotice(plot, state);
                 state.rangeFull = isFull;
                 if (!isFull) {
                     seedSelectionFromView();
@@ -1146,7 +1188,6 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 }
                 this._updatePhase2dFitSelectionShapes(panelId, plot);
                 this._schedulePhase2dFitRecompute(panelId, { immediate: true });
-                this._renderPhase2dFitDrawer(panelId, plot);
             });
             return btn;
         };
@@ -1160,6 +1201,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             input.disabled = !!state.rangeFull;
             input.addEventListener('change', () => {
                 const n = usesCalendar ? p2dDatetimeInputToMs(input.value) : Number(input.value);
+                this._clearPhase2dAutoRangeNotice(plot, state);
                 state[key] = Number.isFinite(n) ? n : null;
                 this._ensurePhase2dFitRange(plot);
                 this._updatePhase2dFitSelectionShapes(panelId, plot);
@@ -1178,6 +1220,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             input.disabled = !!state.rangeFull;
             input.addEventListener('input', () => {
                 const n = Number(input.value);
+                this._clearPhase2dAutoRangeNotice(plot, state);
                 state[key] = Number.isFinite(n) ? n : null;
                 this._syncPhase2dFitRangeInputs(plot, { skipSliders: true });
                 this._updatePhase2dFitSelectionShapes(panelId, plot);
@@ -1244,7 +1287,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         pairSelect.title = this._phase2dFitPairLabel(plot, activePair);
         pairSelect.addEventListener('change', () => {
             state.activePairIndex = Number(pairSelect.value) || 0;
-            this._renderPhase2dFitDrawer(panelId, plot);
+            this._renderPhase2dFitDrawer(panelId, plot, { results: plot._phase2dFits || [] });
         });
         pairField.append(pairLbl, pairSelect);
         drawer.appendChild(pairField);
@@ -1344,7 +1387,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             block.appendChild(stats);
         }
 
-        const warn = this._phase2dFitWarningText(r.fit, r.lazy, r.lazyStatus);
+        const warn = options.pending
+            ? i18n.t('phase2dFitCalculating')
+            : this._phase2dFitWarningText(r.fit, r.lazy, r.lazyStatus);
         if (warn) {
             const w = document.createElement('div');
             w.className = 'phase2d-fit-warning';
