@@ -1,7 +1,8 @@
-import { unzlibSync } from 'fflate';
+import { Unzlib } from 'fflate';
 import h5wasm from 'h5wasm';
 import MatParser from './mat-parser.js';
 import McosSubsystem, { isObjectReferenceArray, decodeObjectReference } from './matlab-mcos.js';
+import { MATLAB_MAT_MAX_DENSE_ELEMENTS, matlabMatMaxInflatedBytes } from './matlab-mat-limits.js';
 
 const HDF5_MAGIC = [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a];
 const MAT5_TYPES = new Set([1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18]);
@@ -88,6 +89,53 @@ class Mat5Reader {
         const subsysOffset = high * 2 ** 32 + low;
         this.subsysOffset = subsysOffset >= 128 && subsysOffset < buffer.byteLength ? subsysOffset : 0;
         this.subsystem = null;
+        // Budget for everything this reader inflates, counted across the whole
+        // file: nested miCOMPRESSED elements would otherwise each pass a
+        // per-element check and still add up to an unbounded total.
+        this.maxInflatedBytes = matlabMatMaxInflatedBytes(buffer.byteLength);
+        this.inflatedBytes = 0;
+    }
+
+    // Decompress against the budget instead of finding out afterwards.
+    // unzlibSync materializes the whole output before returning, so a check on
+    // its result is a check that runs after the memory is already gone. Pushing
+    // the compressed bytes through the streaming inflater in slices lets the
+    // limit stop it partway: fflate calls ondata synchronously, so throwing
+    // there aborts the inflate with at most one internal buffer allocated.
+    _inflate(payload) {
+        const budget = this.maxInflatedBytes - this.inflatedBytes;
+        const chunks = [];
+        let produced = 0;
+        const stream = new Unzlib(chunk => {
+            produced += chunk.length;
+            if (produced > budget) throw this._inflationBombError();
+            // ondata hands out a view into a buffer the next push may reuse.
+            chunks.push(chunk.slice());
+        });
+
+        const SLICE = 64 * 1024;
+        for (let offset = 0; offset < payload.length; offset += SLICE) {
+            const end = Math.min(payload.length, offset + SLICE);
+            stream.push(payload.subarray(offset, end), end >= payload.length);
+        }
+
+        this.inflatedBytes += produced;
+        if (chunks.length === 1) return chunks[0];
+        const inflated = new Uint8Array(produced);
+        let cursor = 0;
+        for (const chunk of chunks) {
+            inflated.set(chunk, cursor);
+            cursor += chunk.length;
+        }
+        return inflated;
+    }
+
+    _inflationBombError() {
+        return new Error(
+            'This MAT file expands to far more data than its size allows '
+            + `(over ${Math.round(this.maxInflatedBytes / (1024 * 1024))} MB decompressed). `
+            + 'It is either corrupt or not a genuine MATLAB file.'
+        );
     }
 
     read() {
@@ -107,9 +155,9 @@ class Mat5Reader {
                 // The subsystem is not a user variable — parse it into MCOS state
                 // instead of emitting it as a stray uint8 array. Both branches
                 // hand _readSubsystem the full miMATRIX element (tag included).
-                this._readSubsystem(tag.type === 15 ? unzlibSync(payload) : bytes.subarray(offset, tag.nextOffset));
+                this._readSubsystem(tag.type === 15 ? this._inflate(payload) : bytes.subarray(offset, tag.nextOffset));
             } else if (tag.type === 15) {
-                const inflated = unzlibSync(payload);
+                const inflated = this._inflate(payload);
                 this._readElements(inflated, nodes, prefix);
             } else if (tag.type === 14) {
                 const node = this._matrix(payload, prefix);
@@ -243,7 +291,15 @@ class Mat5Reader {
             fields.push(decodeAscii(namesBytes.subarray(offset, offset + fieldLength)));
         }
         const matrices = parts.slice(2);
-        const instances = Math.max(1, product(base.shape));
+        // The declared shape says how many struct instances follow; the element
+        // itself says how many actually do. Trusting the declaration turns a
+        // shape of [65535, 65535] into ~4.3e9 iterations on the main thread from
+        // a few hundred bytes of file. _cell already bounds itself this way.
+        const declaredInstances = Math.max(1, product(base.shape));
+        const availableInstances = fields.length
+            ? Math.max(1, Math.floor(matrices.length / fields.length))
+            : 1;
+        const instances = Math.min(declaredInstances, availableInstances);
         for (let instance = 0; instance < instances; instance++) {
             for (let fieldIndex = 0; fieldIndex < fields.length; fieldIndex++) {
                 const tag = matrices[instance * fields.length + fieldIndex];
@@ -275,8 +331,23 @@ class Mat5Reader {
         const jc = parts[1] ? this._numbers(parts[1]) : [];
         const real = parts[2] ? this._numbers(parts[2]) : [];
         const imag = base.complex && parts[3] ? this._numbers(parts[3]) : null;
-        base.data = new Array(rows * cols).fill(0);
-        base.imaginary = imag ? new Array(rows * cols).fill(0) : null;
+        // This reader expands a sparse matrix into a dense array, so the declared
+        // shape is an allocation request straight from the file. [2, 2^30] is a
+        // legal JS array length and tens of GB of fill from a few hundred bytes;
+        // the column index also has to agree with the declared column count, or
+        // the shape is not describing this payload.
+        const elements = rows * cols;
+        if (!Number.isSafeInteger(elements) || elements > MATLAB_MAT_MAX_DENSE_ELEMENTS) {
+            throw new Error(
+                `A sparse matrix in this MAT file declares ${shapeLabel(base.shape)} elements, `
+                + `more than this reader expands (${MATLAB_MAT_MAX_DENSE_ELEMENTS.toLocaleString('en-US')}).`
+            );
+        }
+        if (jc.length && jc.length < cols + 1) {
+            throw new Error(`A sparse matrix in this MAT file declares ${cols} columns but carries ${Math.max(0, jc.length - 1)}.`);
+        }
+        base.data = new Array(elements).fill(0);
+        base.imaginary = imag ? new Array(elements).fill(0) : null;
         for (let col = 0; col < cols; col++) {
             for (let cursor = Number(jc[col] || 0); cursor < Number(jc[col + 1] || 0); cursor++) {
                 const row = Number(ir[cursor]);
@@ -678,12 +749,12 @@ export default class MatlabMatFile {
     }
 
     _buildMatlabTree(variables) {
-        const tree = { _type: 'root', _name: '', _children: {}, _variables: {} };
+        const tree = { _type: 'root', _name: '', _children: Object.create(null), _variables: Object.create(null) };
         const component = (parent, name, fullName) => {
             if (!parent._children[name]) {
                 parent._children[name] = {
                     _type: 'component', _name: name, _fullName: fullName,
-                    _children: {}, _variables: {},
+                    _children: Object.create(null), _variables: Object.create(null),
                 };
             }
             return parent._children[name];

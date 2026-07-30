@@ -324,4 +324,110 @@ assert.ok(
 );
 assert.match(fileMethodsSource, /modal-dialog-mat-too-large/, 'the MAT reader still uses the wider alert for long messages');
 
+// ---------------------------------------------------------------------------
+// Hostile Level 5 files, assembled byte by byte.
+//
+// Everything a MAT file says about its own size is a claim: the compressed
+// element's real size is only known after inflating it, and a declared shape is
+// just six bytes. All three cases below are a few hundred bytes of file that
+// used to ask for tens of GB or billions of iterations.
+// ---------------------------------------------------------------------------
+function matElement(type, payload) {
+    // miCOMPRESSED (15) is written without the usual 8-byte padding.
+    const stored = type === 15 ? payload.length : Math.ceil(payload.length / 8) * 8;
+    const element = new Uint8Array(8 + stored);
+    const view = new DataView(element.buffer);
+    view.setUint32(0, type, true);
+    view.setUint32(4, payload.length, true);
+    element.set(payload, 8);
+    return element;
+}
+
+function matUint32Payload(values) {
+    const payload = new Uint8Array(values.length * 4);
+    const view = new DataView(payload.buffer);
+    values.forEach((value, index) => view.setUint32(index * 4, value, true));
+    return payload;
+}
+
+function matInt32Payload(values) {
+    const payload = new Uint8Array(values.length * 4);
+    const view = new DataView(payload.buffer);
+    values.forEach((value, index) => view.setInt32(index * 4, value, true));
+    return payload;
+}
+
+function matAsciiPayload(text, length = text.length) {
+    const payload = new Uint8Array(length);
+    for (let index = 0; index < text.length && index < length; index += 1) {
+        payload[index] = text.charCodeAt(index);
+    }
+    return payload;
+}
+
+function matMatrix(classId, dimensions, name, extra = []) {
+    const parts = [
+        matElement(6, matUint32Payload([classId, 0])),   // array flags
+        matElement(5, matInt32Payload(dimensions)),      // dimensions
+        matElement(1, matAsciiPayload(name)),            // name
+        ...extra,
+    ];
+    const total = parts.reduce((sum, part) => sum + part.length, 0);
+    const body = new Uint8Array(total);
+    let cursor = 0;
+    for (const part of parts) { body.set(part, cursor); cursor += part.length; }
+    return matElement(14, body);
+}
+
+function matFile(elements) {
+    const header = new Uint8Array(128);
+    header.set(matAsciiPayload('MATLAB 5.0 MAT-file, synthetic security fixture'), 0);
+    new DataView(header.buffer).setUint16(124, 0x0100, true);
+    header[126] = 'I'.charCodeAt(0);   // little-endian marker
+    header[127] = 'M'.charCodeAt(0);
+    const total = 128 + elements.reduce((sum, element) => sum + element.length, 0);
+    const bytes = new Uint8Array(total);
+    bytes.set(header, 0);
+    let cursor = 128;
+    for (const element of elements) { bytes.set(element, cursor); cursor += element.length; }
+    return bytes.buffer;
+}
+
+{
+    const matFileParser = new MatlabMatFile(new MatParser());
+
+    // 1) Decompression bomb: ~190 KB of file, 200 MB inflated.
+    const { zlibSync } = await import('fflate');
+    const bomb = matFile([matElement(15, zlibSync(new Uint8Array(200 * MB)))]);
+    assert.ok(bomb.byteLength < MB, 'the bomb really is a small file');
+    await assert.rejects(
+        () => matFileParser.inspect(bomb, 'bomb.mat'),
+        /expands to far more data/,
+        'a compressed element that inflates past the budget is refused',
+    );
+
+    // 2) Sparse matrix declaring 2 × 2^30 elements: a valid JS array length, and
+    //    tens of GB of dense fill from a file with no data in it at all.
+    const sparse = matFile([matMatrix(5, [2, 2 ** 30], 'huge')]);
+    await assert.rejects(
+        () => matFileParser.inspect(sparse, 'sparse.mat'),
+        /more than this reader expands/,
+        'a sparse shape larger than the dense expansion limit is refused',
+    );
+
+    // 3) Struct declaring 65535 × 65535 instances with no instance data: the loop
+    //    used to run ~4.3e9 times on the main thread. Bounded by what is there,
+    //    it now returns immediately — so this test finishing IS the assertion.
+    const struct = matFile([matMatrix(2, [65535, 65535], 'fake', [
+        matElement(5, matInt32Payload([32])),        // field name length
+        matElement(1, matAsciiPayload('a', 32)),     // one field, no instances
+    ])]);
+    const started = performance.now();
+    await matFileParser.inspect(struct, 'struct.mat').catch(() => {});
+    assert.ok(
+        performance.now() - started < 5000,
+        'a struct with an inflated declared shape does not spin on the declaration',
+    );
+}
+
 console.log('MATLAB MAT parser tests passed.');

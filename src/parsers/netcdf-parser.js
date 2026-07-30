@@ -715,16 +715,22 @@ export default class NetcdfParser {
     }
 
     _rootNode() {
-        return { _type: 'root', _name: '', _children: {}, _variables: {} };
+        return { _type: 'root', _name: '', _children: Object.create(null), _variables: Object.create(null) };
     }
 
+    // Every key here is a path segment out of the file. On a plain object
+    // `_children['__proto__']` reads Object.prototype instead of "not there yet",
+    // and assigning to it sets the prototype instead of adding a child — so a
+    // crafted group name walked the builder into Object.prototype and the parse
+    // died on a TypeError rather than saying the file was unsupported. The maps
+    // are prototype-less (see _rootNode), which makes a segment just a key.
     _ensureNode(root, parts) {
         let node = root;
         let fullName = '';
         for (const part of parts) {
             fullName = fullName ? `${fullName}.${part}` : part;
             if (!node._children[part]) {
-                node._children[part] = { _type: 'component', _name: part, _fullName: fullName, _children: {}, _variables: {} };
+                node._children[part] = { _type: 'component', _name: part, _fullName: fullName, _children: Object.create(null), _variables: Object.create(null) };
             }
             node = node._children[part];
         }
