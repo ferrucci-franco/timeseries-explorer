@@ -3090,6 +3090,22 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 .integral-pie-visible.hist-layout-horizontal .integral-splitter { cursor: row-resize; }
 .integral-container .integral-bars-pane { position: relative; }
 .integral-computing-indicator { top: 10px; }
+/* Reads back what the typed unit will produce. A unit field has to be free
+   text — the space of units is infinite — so this line is what replaces the
+   validation it cannot have. */
+.integral-unit-hint {
+    margin: -2px 0 8px;
+    font-size: 0.66rem;
+    line-height: 1.35;
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+.integral-unit-input { font-variant-numeric: normal; }
+/* A note sits in the same box as a warning but is not one: no amber, and no
+   pointer in the topbar. */
+.integral-note { color: var(--text-secondary); }
+.integral-message > .integral-note:not(:first-child) { margin-top: 5px; }
+
 /* Total / per-day / mean sit side by side, so the table is wider than the
    sidebar and scrolls horizontally rather than wrapping into illegibility.
    The scrollbar is deliberately chunky and ALWAYS drawn: an overlay bar that

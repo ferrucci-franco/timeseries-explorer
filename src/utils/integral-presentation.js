@@ -49,6 +49,7 @@ export function defaultIntegralState() {
         discardIncompleteEnds: false,
         extendLastSample: true,
         integralUnit: 'hour',
+        unitOverride: '',
         scale: 'auto',
         orientation: 'vertical',
         showPie: false,
@@ -93,6 +94,9 @@ export function normalizeIntegralState(raw = {}, missingPolicies) {
         discardIncompleteEnds: raw.discardIncompleteEnds === true,
         extendLastSample: raw.extendLastSample !== false,
         integralUnit: INTEGRAL_UNITS.has(raw.integralUnit) ? raw.integralUnit : defaults.integralUnit,
+        // Free text: the space of units is infinite, so it is trimmed and
+        // capped rather than validated against a list that could not exist.
+        unitOverride: String(raw.unitOverride ?? '').trim().slice(0, 24),
         scale: INTEGRAL_SCALES.has(raw.scale) ? raw.scale : defaults.scale,
         orientation: INTEGRAL_ORIENTATIONS.has(raw.orientation) ? raw.orientation : defaults.orientation,
         showPie: raw.showPie === true,
@@ -115,13 +119,20 @@ export function timeBaseForAxis(kind, axisUnit) {
     return { kind, secondsPerUnit: 1, assumed: true, axisUnit: unit };
 }
 
+// Stands in for a unit the file never declared. It is NOT the same as "no
+// unit": a PyPSA netCDF simply carries no `units` attribute, so writing the
+// integral of an undeclared signal as "h" would claim the signal was
+// dimensionless and turn a total into what looks like a duration. The brackets
+// also keep it out of the prefix arithmetic below, so it can never become "kh".
+export const UNKNOWN_UNIT = '[?]';
+
 // The unit the totals carry: the signal's unit times the chosen time unit. Same
 // spelling the calendar heatmap already uses for its per-cell integral, so a
 // power in MW reads MW·h in both places.
 export function integralResultUnit(unit, integralUnit, timeKind, samplesLabel = 'samples') {
-    if (timeKind === 'index') return unit ? `${unit}·${samplesLabel}` : samplesLabel;
-    const suffix = integralUnit === 'second' ? 's' : 'h';
-    return unit ? `${unit}·${suffix}` : suffix;
+    const base = unit || UNKNOWN_UNIT;
+    if (timeKind === 'index') return `${base}·${samplesLabel}`;
+    return `${base}·${integralUnit === 'second' ? 's' : 'h'}`;
 }
 
 export function splitUnitPrefix(unit) {
@@ -134,13 +145,52 @@ export function splitUnitPrefix(unit) {
     return { power: 0, rest: raw };
 }
 
-// A unit can absorb an SI prefix only if its leading token looks like a symbol
-// — one to three letters, as W, MW, VAr or EUR do. `p.u.` does not, and writing
-// "kp.u.·h" would be worse than showing the decade outright.
-const PREFIXABLE_HEAD = /^[A-Za-zµΩ°]{1,3}$/;
+// Units that take an SI prefix, by name rather than by shape.
+//
+// The rule used to be "one to three letters", which is a guess about what a
+// unit looks like — and it guessed wrong in both directions: `pu` became
+// "kpu·h" and `°C` became "k°C·h", neither of which is a thing, while anything
+// longer was refused whatever it was. Knowing the bases instead makes the
+// default SAFE: what is not on this list keeps its spelling and shows the
+// decade separately, which is never wrong, only less pretty.
+//
+// The list is the SI set plus the electrical vocabulary the app is aimed at.
+// It is meant to grow when a real unit is missing, not to be exhaustive.
+const PREFIXABLE_BASES = new Set([
+    // electrical
+    'W', 'Wh', 'VA', 'VAh', 'var', 'VAr', 'VAR', 'varh', 'V', 'A', 'Ah', 'Ω', 'ohm', 'F', 'H', 'S', 'C', 'Wb', 'Wp',
+    // mechanical, thermal and the rest of SI
+    'J', 'N', 'Pa', 'Hz', 'K', 'g', 't', 'm', 'm2', 'm3', 'l', 'L', 's', 'mol', 'cd', 'lm', 'lx', 'Bq', 'Gy', 'Sv',
+    // data
+    'b', 'B', 'bps',
+]);
 
+// The comparison ignores case only for a miss, never for a hit: `mm` is
+// millimetres and `Mm` is megametres, and a unit table that conflated them
+// would be worse than one that refuses.
 function unitAcceptsPrefix(rest) {
-    return PREFIXABLE_HEAD.test(String(rest).split('·')[0]);
+    return PREFIXABLE_BASES.has(String(rest).split('·')[0]);
+}
+
+/**
+ * What the scale dropdown will be able to do with a unit, for the panel to show
+ * before the user commits to it.
+ *
+ * Typing a unit is free text — the space of units is infinite — so the app
+ * cannot validate it. What it CAN do is say what it understood: `MW` folds to
+ * kW·h / GW·h / TW·h, `pu` does not fold and gets ×10ⁿ instead. Seeing that is
+ * what replaces a dropdown of impossible completeness.
+ *
+ * @returns {{ prefixable: boolean, examples: string[] }}
+ */
+export function describeUnitScaling(unit, integralUnit = 'hour', timeKind = 'datetime', samplesLabel = 'samples') {
+    const result = integralResultUnit(unit, integralUnit, timeKind, samplesLabel);
+    const examples = [];
+    for (const exponent of [-3, 3, 6]) {
+        const { label, residual } = scaleUnitLabel(result, exponent);
+        if (!residual && label && !examples.includes(label)) examples.push(label);
+    }
+    return { prefixable: examples.length > 0, examples, resultUnit: result };
 }
 
 // Fold `exponent` into `unit`: MW·h scaled by 10³ must read GW·h, never GMW·h.
@@ -225,7 +275,9 @@ const SECONDS_PER_DAY = 86400;
 // dividing an area by the time it spans undoes the time factor exactly.
 export function integralQuantityUnit(unit, quantity, integralUnit, timeKind, samplesLabel = 'samples') {
     const total = integralResultUnit(unit, integralUnit, timeKind, samplesLabel);
-    if (quantity === 'mean') return unit || '';
+    // The mean drops back to the signal's own unit — undeclared included, since
+    // "200.5" with nothing after it is the same silence as "308.2 h".
+    if (quantity === 'mean') return unit || UNKNOWN_UNIT;
     if (quantity === 'per-day') return `${total}/d`;
     return total;
 }
@@ -268,11 +320,20 @@ export function buildIntegralPresentation(models, state, options = {}) {
     });
 
     const timeKind = ready[0]?.result?.timeKind || 'datetime';
+    // A unit the user typed replaces whatever the files said, for every signal
+    // in the panel. Comparing totals only makes sense in one unit anyway — the
+    // panel already refuses to compare two — so declaring one is declaring all
+    // of them, and the mixed/undeclared warnings give way to "you said so".
+    const override = String(state.unitOverride || '').trim();
     const units = new Set(ready.map(model => model.unit).filter(Boolean));
-    const mixedUnits = units.size > 1;
-    const baseUnit = mixedUnits ? '' : ([...units][0] || '');
+    const fileMixedUnits = units.size > 1;
+    const mixedUnits = !override && fileMixedUnits;
+    const baseUnit = override || (fileMixedUnits ? '' : ([...units][0] || ''));
+    const declaredUnit = !!override;
+    const undeclaredUnits = !override && units.size === 0;
     const resultUnit = integralResultUnit(baseUnit, state.integralUnit, timeKind, options.samplesLabel);
-    const meanUnit = baseUnit;
+    // Same marker the total uses: a bare "200.5" is the same silence as "308.2 h".
+    const meanUnit = baseUnit || UNKNOWN_UNIT;
     const perDayUnit = `${resultUnit}/d`;
 
     // The plotted number per row, and the unit that goes with it.
@@ -306,6 +367,9 @@ export function buildIntegralPresentation(models, state, options = {}) {
         quantity,
         rows: ordered.map(row => ({
             ...row,
+            // The unit each row is actually shown in, so the summary and the
+            // export never read model.unit again and miss the override.
+            unit: override || row.model.unit,
             plotted: plotted(row),
             scaled: Number.isFinite(plotted(row)) ? plotted(row) / factor : null,
         })),
@@ -317,6 +381,13 @@ export function buildIntegralPresentation(models, state, options = {}) {
         perDayUnit,
         quantityUnit,
         mixedUnits,
+        // Whether the unit was typed by the user rather than read from a file.
+        // The panel says so instead of the mixed/undeclared warnings, and the
+        // export records it — a total is not auditable without knowing where
+        // its unit came from.
+        declaredUnit,
+        baseUnit,
+        undeclaredUnits,
         timeKind,
     };
 }
@@ -331,19 +402,23 @@ export function buildIntegralPresentation(models, state, options = {}) {
  */
 export function buildIntegralExportTable(view, options = {}) {
     const fileNameFor = options.fileNameFor || (() => '');
-    const headers = ['signal', 'file', 'value_unit', 'integral', 'integral_unit',
+    const headers = ['signal', 'file', 'value_unit', 'value_unit_source', 'integral', 'integral_unit',
         'per_day', 'per_day_unit', 'mean', 'mean_unit',
         'method', 'missing_policy', 'sample_reading',
         'range_start', 'range_end', 'covered', 'uncovered', 'discarded_days', 'days_in_range', 'samples'];
     const isCalendar = view.timeKind === 'datetime';
     const stamp = (value) => (isCalendar && Number.isFinite(value) ? new Date(value).toISOString() : value);
-    const rows = view.rows.map(({ model, value, perDay, mean }) => {
+    const rows = view.rows.map(({ model, unit, value, perDay, mean }) => {
         const result = model.result;
-        const total = integralResultUnit(model.unit, view.state.integralUnit, result.timeKind, options.samplesLabel);
+        const total = integralResultUnit(unit, view.state.integralUnit, result.timeKind, options.samplesLabel);
         return [
             model.name,
             fileNameFor(model.trace?.fileId),
-            model.unit,
+            unit,
+            // Where that unit came from. A total is not auditable without it:
+            // "MW·h" read from the file and "MW·h" typed into the panel are the
+            // same string and very different claims.
+            unit ? (view.declaredUnit ? 'declared' : 'file') : 'none',
             value,
             total,
             // All three quantities go out together whatever the panel is
@@ -352,7 +427,7 @@ export function buildIntegralExportTable(view, options = {}) {
             perDay ?? '',
             perDay == null ? '' : `${total}/d`,
             mean ?? '',
-            mean == null ? '' : (model.unit || ''),
+            mean == null ? '' : (unit || ''),
             result.method,
             result.missingPolicy,
             // Points or periods: a total is not auditable without it.

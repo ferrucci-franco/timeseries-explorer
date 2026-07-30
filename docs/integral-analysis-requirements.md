@@ -160,6 +160,42 @@ La lectura usada viaja en el resultado y sale en la exportación (`sample_readin
 
 Si las señales visibles tienen unidades distintas: warning `integralMixedUnits`, el eje de valores **queda sin unidad** (elegir una sería mentir) y la torta se deshabilita. Si conviven señales con y sin unidad, warning más suave `integralUnknownUnits`.
 
+### 8.2b Cuando el archivo no declara unidad
+
+Muchos archivos no traen unidades — un netCDF de PyPSA no trae **ninguna**, ni siquiera en el eje temporal — y el panel **no la inventa**. Escribir la integral de una señal no declarada como `h` afirmaba que la señal era adimensional, y convertía una energía en lo que se lee como una duración; con datos más grandes la escala Auto llegaba a ofrecer `kh`, kilohoras.
+
+Ahora se marca: `[?]·h`, `[?]·h/d`, y la media `[?]`. Los corchetes además la mantienen **fuera de la aritmética de prefijos**, así que nunca puede volverse `kh`: se muestra `[?]·h ×10⁶`. El título del eje no duplica los corchetes (`Integral [?]·h`, no `Integral [[?]·h]`).
+
+El mismo arreglo se aplicó al **Calendar Heatmap**, que tenía el bug idéntico. Dejar dos respuestas contradictorias en la misma app sería peor que tocar una feature ya publicada.
+
+Y se cerró un agujero en los warnings: `integralUnknownUnits` solo saltaba si *algunas* señales tenían unidad. Cuando **ninguna** la tiene — el caso de PyPSA — no avisaba nada, justo cuando más falta hacía. Ahora existe `integralNoUnits`.
+
+### 8.2c `Unidad de las señales` — declararla a mano
+
+Campo de texto libre en **Integration**, arriba de `Integral unit`. El espacio de unidades es infinito, así que un dropdown solo podría estar incompleto; en cambio el panel **lee de vuelta lo que entendió**, en una línea debajo del campo:
+
+- escribís `MW` → *“Totals read MW·h · scaled: kW·h / GW·h / TW·h”*
+- escribís `pu` → *“Totals read pu·h · scaling shown as ×10ⁿ”*
+
+Precisiones:
+
+1. **Es una etiqueta, no una conversión.** Ningún número cambia, solo cómo se llaman. Verificado: los totales son idénticos dígito a dígito antes y después de escribir la unidad.
+2. **Se aplica a todas las señales del panel** y reemplaza lo que dijeran los archivos. Comparar totales solo tiene sentido en una unidad —el panel ya se niega a comparar dos— así que declarar una es declararlas todas, y el warning de unidades mezcladas cede el lugar.
+3. **Vive solo en este panel.** La misma señal en otro panel sigue como estaba, igual que el sidebar y los otros modos. El tooltip lo dice.
+4. **Llega a la leyenda de la serie temporal de este panel** cuando *Add units to the legends* está activo. El reetiquetado se hace **dentro del módulo Integral**, no en el `_traceName` compartido: el override es local por diseño, y enseñárselo a la función global invitaría a que otro panel heredara una unidad que su archivo nunca declaró.
+5. **Es una nota, no un warning.** El panel registra *“Unit MW was typed into this panel, not read from the files”* en un canal neutro: nada está mal, algo simplemente vale la pena saberlo. Pintarlo de ámbar en cada recálculo enseñaría a ignorar el ámbar, y entonces un warning de verdad tampoco se leería.
+6. **La exportación lo registra** en `value_unit_source`: `file` / `declared` / `none`. `MW·h` leído de un archivo y `MW·h` tipeado en el panel son la misma cadena y afirmaciones muy distintas.
+
+#### Qué unidades aceptan prefijo
+
+La regla era *“¿parece una unidad?”* — cualquier token de 1 a 3 letras. Erraba en las dos direcciones: `pu` se volvía `kpu` y `°C` se volvía `k°C`, mientras que cualquier cosa más larga se rechazaba fuera lo que fuera. Ahora la regla es *“¿conozco esta base?”*, contra una tabla de bases SI más el vocabulario eléctrico. Lo desconocido **conserva su forma y muestra la década aparte**, que nunca está mal, solo menos lindo.
+
+| Escribís | Escala ×10³ |
+|---|---|
+| `MW` / `kW` / `W` | GW·h / MW·h / kW·h |
+| `Mvar` / `MVA` / `kV` | Gvar·h / GVA·h / MV·h |
+| `pu` / `°C` / `%` / `p.u.` | sin plegar, `×10³` aparte |
+
 ### 8.3 Unidad de la integral (dropdown)
 
 `per hour ( · h )` (default) y `per second ( · s )`. Formato `MW·h`, la misma convención que ya usa el calendar heatmap ([`heatmap-methods.js:156`](../src/plots/methods/heatmap-methods.js:156)). Sin unidad de origen → `h` a secas.
@@ -253,7 +289,7 @@ El CSV exporta la **tabla de resultados**, no la serie: una fila por señal con 
 - Estado del panel completo en la sesión, con `_normalizeIntegralState` tolerante a sesiones viejas; los warnings guardados se descartan al restaurar porque describen un cálculo que todavía no corrió.
 - 74 claves × 4 idiomas; `test:i18n-consistency` pasa (1394 claves × 4).
 - Las **duraciones se leen igual en todo eje**: el kernel cuenta en unidades de abscisa, así que una señal muestreada en segundos reportaba un `20` pelado donde los mismos 20 s en un eje calendario decían `20 s`. `axisDuration()` convierte primero por la unidad del eje (un eje en horas se convierte, no se lee como segundos) y después las dos usan la misma escalera s/min/h/d. Un eje de índice no tiene unidad y sigue diciendo `samples`.
-- Tests nuevos: `test:definite-integral` (80 checks, valores analíticos) y `test:integral-analysis` (167 checks). Con main mezclado son **75** tests de release. `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
+- Tests nuevos: `test:definite-integral` (80 checks, valores analíticos) y `test:integral-analysis` (223 checks). Son **75** tests de release. `test:mode-toolbar` y `test:session-state` extendidos. **Los 73 tests de `npm run test:release` pasan.**
 
 Verificado además en la app real (Vite + Plotly + DuckDB-WASM):
 

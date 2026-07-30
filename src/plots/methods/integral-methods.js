@@ -9,6 +9,7 @@ import {
 import {
     axisDuration,
     buildIntegralExportTable,
+    describeUnitScaling,
     buildIntegralPresentation,
     defaultIntegralState,
     formatIntegralDuration,
@@ -16,6 +17,7 @@ import {
     integralPieAllowed,
     integralResultUnit,
     normalizeIntegralState,
+    UNKNOWN_UNIT,
     timeBaseForAxis,
 } from '../../utils/integral-presentation.js';
 
@@ -90,6 +92,12 @@ const fallbackText = {
     integralSamples: 'samples',
     integralValue: 'Integral',
     integralSignal: 'Signal',
+    integralUnitOverride: 'Unit of the signals',
+    integralUnitOverrideTip: 'Many files declare no unit at all — a PyPSA netCDF carries none — and the panel will not invent one: the totals then read [?]·h. Type the unit here and every total, mean, axis and legend in THIS panel reads it: MW gives MW·h, MW·h/d and MW. It is a label, not a conversion — no number changes, only what they are called. It applies to every signal in the panel, replacing whatever the files said, and it lives in this panel alone: other panels and the sidebar are untouched. Leave it empty to go back to reading the files.',
+    integralUnitHintScales: 'Totals read {unit} · scaled: {examples}',
+    integralUnitHintFlat: 'Totals read {unit} · scaling shown as ×10ⁿ',
+    integralUnitDeclared: 'Unit {unit} was typed into this panel, not read from the files.',
+    integralNoUnits: 'no signal declares a unit, so the totals are shown as [?]·h — type the unit under Integration to name them',
     integralExtendLast: 'Each sample lasts until the next one',
     integralExtendLastTip: 'Does a timestamp mark an instant, or the stretch of time that follows it? OFF — instants: the signal is only known AT each sample, the area between two of them is a trapezoid, and nothing can be said past the last one. 24 hourly samples then span 23 h. ON — stretches: each sample holds until the next, so the last one holds for one more step. The same 24 samples span 24 h, and a day of quarter-hours totals exactly 24 h. Energy-system tools such as PyPSA write the second kind, where every snapshot stands for a period and carries a weighting; a datalogger recording a temperature usually writes the first. Needs a time axis with a regular step — without one there is no length to give the last sample.',
     integralStatusOne: '1 signal totalled over {time}',
@@ -198,7 +206,7 @@ proto._invalidateIntegralForDataChange = function(plot) {
     const state = this._ensureIntegralState(plot);
     state.warnings = [];
     plot._integralModels = [];
-    this._setIntegralStatus?.(plot, '', [], 'muted');
+    this._setIntegralStatus?.(plot, '', [], 'muted', []);
 };
 
 // ─── Time base and units ──────────────────────────────────────────────────
@@ -210,6 +218,20 @@ proto._invalidateIntegralForDataChange = function(plot) {
 proto._integralTimeBase = function(trace) {
     const kind = this._fftTimeKind(trace.fileId);
     return timeBaseForAxis(kind, this._timeUnitLabel(trace.fileId));
+};
+
+// The unit the FILES declare for the visible signals, as the placeholder to
+// show behind an empty override field: it says what is being replaced. Empty
+// when nothing declares one, or when they disagree — there is then no single
+// thing the field would be overriding.
+proto._integralDetectedUnits = function(plot) {
+    const units = new Set();
+    for (const trace of plot?.traces || []) {
+        if (!this._isVisible(trace)) continue;
+        const unit = this._integralValueUnit(trace);
+        if (unit) units.add(unit);
+    }
+    return units.size === 1 ? [...units][0] : '';
 };
 
 proto._integralValueUnit = function(trace) {
@@ -384,7 +406,26 @@ proto._createIntegralChart = function(panelId, panelEl) {
 };
 
 proto._buildIntegralTimeTraces = function(plot) {
-    return plot.traces.map((trace, index) => this._buildTimeTrace(trace, null, plot, index)).filter(Boolean);
+    const built = plot.traces.map((trace, index) => this._buildTimeTrace(trace, null, plot, index)).filter(Boolean);
+    return this._applyIntegralLegendUnit(plot, built);
+};
+
+// A unit declared in this panel reaches this panel's legend too, but no
+// further. The rewrite happens HERE rather than in the shared _traceName
+// because the override is panel-local by design: teaching the global name
+// builder about it would let any other panel inherit a unit its own file never
+// declared. Only runs when the user asked for units in legends at all.
+proto._applyIntegralLegendUnit = function(plot, built) {
+    const declared = String(this._ensureIntegralState(plot).unitOverride || '').trim();
+    if (!declared || !this.legendUnits) return built;
+    for (let index = 0; index < built.length; index++) {
+        const trace = plot.traces[index];
+        if (!trace || !built[index]) continue;
+        // _traceName already appended the file's unit when there was one; the
+        // bare name is the thing to re-label, so it is rebuilt from scratch.
+        built[index].name = `${this._traceName(trace.varName, trace.fileId, { units: false })} [${declared}]`;
+    }
+    return built;
 };
 
 proto._buildIntegralTimeLayout = function(plot) {
@@ -802,6 +843,7 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     const state = this._ensureIntegralState(plot);
     const range = state.rangeFull ? null : this._activeIntegralRange(plot);
     const warnings = [];
+    const notes = [];
     const models = [];
 
     // Eager traces are read from memory; lazy ones are asked of DuckDB. The two
@@ -907,8 +949,23 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
 
     const ready = models.filter(model => model.result.ok);
     const units = new Set(ready.map(model => model.unit).filter(Boolean));
-    if (units.size > 1) warnings.push(text('integralMixedUnits'));
-    else if (units.size === 1 && ready.some(model => !model.unit)) warnings.push(text('integralUnknownUnits'));
+    const declared = String(state.unitOverride || '').trim();
+    if (declared) {
+        // Typing a unit is an assertion about every signal in the panel, so it
+        // answers the mixed and undeclared questions at once — but it is the
+        // user's answer, not the file's, and the panel records which. A note,
+        // not a warning: nothing is wrong, something is merely worth knowing.
+        notes.push(text('integralUnitDeclared').replace('{unit}', declared));
+    } else if (units.size > 1) {
+        warnings.push(text('integralMixedUnits'));
+    } else if (units.size === 0) {
+        // Nothing anywhere declares a unit. This used to say nothing at all —
+        // the one case where the panel most needed to speak, because the totals
+        // then read as bare hours.
+        warnings.push(text('integralNoUnits'));
+    } else if (ready.some(model => !model.unit)) {
+        warnings.push(text('integralUnknownUnits'));
+    }
     if (assumedSeconds) warnings.push(text('integralAssumedSeconds'));
     if (indexAxis) warnings.push(text('integralIndexAxis'));
 
@@ -964,7 +1021,7 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             : text(ready.length === 1 ? 'integralStatusOne' : 'integralStatusMany')
                 .replace('{count}', String(ready.length))
                 .replace('{time}', formatAxisDuration(ready[0], ready[0].result.coveredTime));
-    this._setIntegralStatus(plot, summary, warnings, 'ready');
+    this._setIntegralStatus(plot, summary, warnings, 'ready', notes);
 };
 
 // Per-day integral partials for the lazy traces, one query per file. The SQL
@@ -1217,7 +1274,13 @@ proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
     const state = this._ensureIntegralState(plot);
     const resolved = view || this._integralPresentation(plot, models);
     const horizontal = state.orientation === 'horizontal';
-    const unitSuffix = resolved.axisUnit ? ` [${resolved.axisUnit}]` : '';
+    // Axis titles wrap the unit in brackets, but the undeclared-unit marker
+    // already carries its own: "Integral [[?]·h]" reads as a typo.
+    const unitSuffix = !resolved.axisUnit
+        ? ''
+        : resolved.axisUnit.startsWith(UNKNOWN_UNIT)
+            ? ` ${resolved.axisUnit}`
+            : ` [${resolved.axisUnit}]`;
     const valueAxis = {
         gridcolor: gridColor,
         linecolor: gridColor,
@@ -1266,17 +1329,23 @@ proto._buildIntegralLayout = function(plot, { models = [], view = null } = {}) {
 // way FFT and Profile already split it. A warning only leaves a short pointer
 // here (the panel can be closed) plus the full text in the tooltip — a topbar
 // that reads like a log of concatenated sentences tells the user nothing.
-proto._setIntegralStatus = function(plot, summary, warnings = [], kind = 'muted') {
+proto._setIntegralStatus = function(plot, summary, warnings = [], kind = 'muted', notes = []) {
     const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
-    const full = list.join(' | ');
-    plot._integralStatusMessage = full;
+    const noteList = Array.isArray(notes) ? notes.filter(Boolean) : [];
+    plot._integralWarningMessage = list.join(' | ');
+    plot._integralNoteMessage = noteList.join(' | ');
     plot._integralStatusKind = list.length ? 'warning' : kind;
     const status = plot?.integralContainer?.querySelector('.hist-status');
     if (status) {
+        // Only a real warning pulls the topbar out of its summary. A note lives
+        // in the panel and nowhere else — it is a fact about the reading, not a
+        // problem with it, and amber on every recompute would train the user to
+        // stop looking at amber.
         const pointer = list.length ? text('integralWarningSeePanel') : '';
         status.textContent = [summary, pointer].filter(Boolean).join(' · ');
         status.className = `hist-status hist-status-${list.length ? 'warning' : kind}`;
-        status.title = full || summary || '';
+        status.title = [plot._integralWarningMessage, plot._integralNoteMessage].filter(Boolean).join(' | ')
+            || summary || '';
     }
     this._syncIntegralMessage(plot);
 };
@@ -1284,12 +1353,24 @@ proto._setIntegralStatus = function(plot, summary, warnings = [], kind = 'muted'
 proto._syncIntegralMessage = function(plot) {
     const box = plot?.integralContainer?.querySelector('.integral-message');
     if (!box) return;
-    const message = plot._integralStatusMessage || '';
+    const warning = plot._integralWarningMessage || '';
+    const note = plot._integralNoteMessage || '';
     const kind = plot._integralStatusKind || 'muted';
-    const show = !!message && kind === 'warning';
-    box.hidden = !show;
-    box.textContent = show ? message : '';
-    box.className = `fft-message integral-message fft-message-${kind}`;
+    const showWarning = !!warning && kind === 'warning';
+    box.hidden = !showWarning && !note;
+    box.innerHTML = '';
+    if (showWarning) {
+        const line = document.createElement('div');
+        line.textContent = warning;
+        box.appendChild(line);
+    }
+    if (note) {
+        const line = document.createElement('div');
+        line.className = 'integral-note';
+        line.textContent = note;
+        box.appendChild(line);
+    }
+    box.className = `fft-message integral-message fft-message-${showWarning ? kind : 'muted'}`;
 };
 
 proto._renderIntegralSummary = function(plot, models = []) {
@@ -1310,17 +1391,17 @@ proto._renderIntegralSummary = function(plot, models = []) {
         ? '<td class="integral-num">—</td><td class="integral-group-end"></td>'
         : `<td class="integral-num">${escapeHtml(formatNumber(value, 5))}</td>`
             + `<td class="integral-group-end">${escapeHtml(unit)}</td>`);
-    const rows = view.rows.map(({ model, value, perDay, mean }) => {
+    const rows = view.rows.map(({ model, unit, value, perDay, mean }) => {
         const result = model.result;
         const coverage = result.timeKind === 'datetime' && result.dayCount
             ? `${result.dayCount - result.discardedDayCount}/${result.dayCount} ${escapeHtml(text('integralDays'))}`
             : formatAxisDuration(model, result.coveredTime);
-        const totalUnit = this._integralResultUnit(model.unit, view.state, result.timeKind);
+        const totalUnit = this._integralResultUnit(unit, view.state, result.timeKind);
         return `<tr>
             <td class="integral-group-end"><span class="integral-swatch" style="background:${escapeHtml(model.trace.color)}"></span>${escapeHtml(model.name)}</td>
             ${cell(value, totalUnit)}
             ${cell(perDay, `${totalUnit}/d`)}
-            ${cell(mean, model.unit || '')}
+            ${cell(mean, unit || UNKNOWN_UNIT)}
             <td>${coverage}</td>
         </tr>`;
     }).join('');
@@ -1489,6 +1570,47 @@ proto._renderIntegralOptionsPanel = function(panelId, plot) {
         state.method = value;
         this._scheduleIntegralRecompute(panelId, { immediate: true });
     }));
+    // Declaring the signal's unit. Free text, because the space of units is
+    // infinite and a dropdown of them could only ever be wrong — but free text
+    // the panel then reads back, so the user sees what it understood before
+    // trusting the axis. Placed with the other two unit controls: the signal's
+    // unit, the time unit and the scale tell one story together.
+    const detected = this._integralDetectedUnits(plot);
+    const unitInput = document.createElement('input');
+    unitInput.type = 'text';
+    unitInput.className = 'fft-number-input integral-unit-input';
+    unitInput.value = state.unitOverride || '';
+    unitInput.maxLength = 24;
+    unitInput.spellcheck = false;
+    unitInput.placeholder = detected || UNKNOWN_UNIT;
+    unitInput.setAttribute('aria-label', text('integralUnitOverride'));
+    const unitHint = document.createElement('div');
+    unitHint.className = 'integral-unit-hint';
+    const renderUnitHint = () => {
+        const value = unitInput.value.trim();
+        const scaling = describeUnitScaling(value || detected, state.integralUnit,
+            this._integralHasCalendarAxis(plot) ? 'datetime' : 'numeric', text('integralSamples'));
+        unitHint.textContent = scaling.prefixable
+            ? text('integralUnitHintScales')
+                .replace('{unit}', scaling.resultUnit)
+                .replace('{examples}', scaling.examples.join(' / '))
+            : text('integralUnitHintFlat').replace('{unit}', scaling.resultUnit);
+    };
+    renderUnitHint();
+    unitInput.addEventListener('input', renderUnitHint);
+    const commitUnit = () => {
+        const value = unitInput.value.trim().slice(0, 24);
+        if (value === state.unitOverride) return;
+        state.unitOverride = value;
+        this._refreshIntegralTimePlot(panelId, plot, { preserveView: true });
+        this._scheduleIntegralRecompute(panelId, { immediate: true });
+    };
+    unitInput.addEventListener('change', commitUnit);
+    unitInput.addEventListener('blur', commitUnit);
+    unitInput.addEventListener('keydown', event => { if (event.key === 'Enter') commitUnit(); });
+    row(text('integralUnitOverride'), unitInput, text('integralUnitOverrideTip'));
+    options.appendChild(unitHint);
+
     row(text('integralResultUnit'), select([
         { value: 'hour', label: text('integralPerHour') },
         { value: 'second', label: text('integralPerSecond') },

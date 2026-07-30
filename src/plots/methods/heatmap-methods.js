@@ -4,6 +4,9 @@ import {
     calendarHeatmapCellValue,
     densifyCalendarHeatmap,
 } from '../../utils/calendar-heatmap.js';
+// Shared with the Integral analysis so the two never disagree about how an
+// undeclared unit is written.
+import { UNKNOWN_UNIT } from '../../utils/integral-presentation.js';
 import Plotly from '../../vendor/plotly.js';
 
 const HEATMAP_LAYOUTS = new Set(['horizontal', 'vertical']);
@@ -153,10 +156,15 @@ const aggregationTooltipKey = {
 
 // The integral of a value sampled over time carries the value's unit times
 // hours: a power in MW integrates to energy in MW·h.
+//
+// A signal whose file never declared a unit gets the same placeholder the
+// Integral analysis uses, and for the same reason: writing the integral of an
+// undeclared signal as a bare "h" claims the signal was dimensionless, and
+// turns an energy into what reads as a duration.
 function unitForAggregation(unit, aggregation) {
     if (aggregation === 'count') return '';
     if (aggregation !== 'integral') return unit || '';
-    return unit ? `${unit}·h` : 'h';
+    return `${unit || UNKNOWN_UNIT}·h`;
 }
 
 function formatDurationMs(ms) {
