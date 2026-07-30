@@ -770,6 +770,10 @@
                         <input type="radio" name="legend-pos" value="hidden">
                         <span data-i18n="legendHidden">Hide legend</span>
                     </label>
+                    <label class="checkbox-label" title="Append each signal's unit to its legend entry, when the file declares one. Analyses that change the unit show the changed one — an integral of MW reads MW·h." data-i18n-title="legendUnitsTooltip">
+                        <input type="checkbox" id="legend-units" aria-label="Add units to the legends" data-i18n-aria-label="legendUnits">
+                        <span data-i18n="legendUnits">Add units to the legends</span>
+                    </label>
                 </div>
             </div>
 
@@ -797,7 +801,7 @@
                     <button id="file-select-btn" class="primary-btn" data-i18n="selectFile">Select File</button>
                     <div id="light-version-notice" class="light-version-notice" hidden></div>
                     <div id="drop-zone-status" class="drop-zone-status">Loading application...</div>
-                    <input type="file" id="file-input" multiple accept=".mat,.csv,.txt,.parquet,.nc,.netcdf,.pkl,.pickle,.xlsx,.xlsm,.xls,.ods" style="display: none;">
+                    <input type="file" id="file-input" multiple accept=".mat,.csv,.txt,.parquet,.nc,.netcdf,.pkl,.pickle,.xlsx,.xlsm,.xls,.ods,.wav,.wave,.mp3,.m4a,.m4b,.aac,.flac,.ogg,.oga,.opus,.aif,.aiff,.aifc,.caf,.3gp,.3gpp,.amr,.webm,.weba" style="display: none;">
                 </div>
                 <div class="drop-zone-drag-card" aria-hidden="true">
                     <span class="icon">📁</span>

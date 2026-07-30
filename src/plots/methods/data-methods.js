@@ -1697,7 +1697,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             : (durationAxis ? 'duration' : (timeMode === 'elapsedSeconds' ? 's' : (primaryTimeVar ? this._extractUnit(primaryTimeVar.description) : 's'))));
     const unit     = this._extractUnit(variable.description);
     const name     = this._traceName(t.varName, t.fileId);
-    const hoverName = this._escapeHTML(name);
+    const hoverName = this._escapeHTML(this._traceName(t.varName, t.fileId, { units: false }));
     const hoverTimeUnit = this._escapeHTML(timeUnit);
     const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
     const primaryCalendarTimeFormat = this._calendarTimeFormat(primaryTimeTrace.fileId, primaryTimeVar);

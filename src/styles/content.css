@@ -1385,6 +1385,19 @@
     display: block;
 }
 
+/* The export button carries a download arrow: it opens the export dialog
+   (CSV / PNG / SVG) instead of writing one fixed format on click. */
+.panel-export-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.panel-export-btn svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+}
+
 .layout-toolbar-btn:hover:not(:disabled) {
     background-color: var(--primary-color);
     border-color: var(--primary-color);
@@ -2737,11 +2750,13 @@ body.fft-selection-dragging.fft-selection-moving {
 .plotly-mode-fft-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-hist-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-profile-time.fft-cursor-ew .nsewdrag,
+.plotly-mode-integral-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-correlation-time.fft-cursor-ew .nsewdrag,
 .plotly-mode-phase2d-fit-time.fft-cursor-ew .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-fft-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-hist-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-profile-time .nsewdrag,
+body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-integral-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-correlation-time .nsewdrag,
 body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-phase2d-fit-time .nsewdrag {
     cursor: ew-resize !important;
@@ -2750,6 +2765,7 @@ body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-phase2d-fit-
 .plotly-mode-fft-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-hist-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-profile-time.fft-cursor-grab .nsewdrag,
+.plotly-mode-integral-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-correlation-time.fft-cursor-grab .nsewdrag,
 .plotly-mode-phase2d-fit-time.fft-cursor-grab .nsewdrag {
     cursor: grab !important;
@@ -2758,6 +2774,7 @@ body.fft-selection-dragging:not(.fft-selection-moving) .plotly-mode-phase2d-fit-
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-fft-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-hist-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-profile-time .nsewdrag,
+body.fft-selection-dragging.fft-selection-moving .plotly-mode-integral-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-correlation-time .nsewdrag,
 body.fft-selection-dragging.fft-selection-moving .plotly-mode-phase2d-fit-time .nsewdrag {
     cursor: grabbing !important;
@@ -3105,6 +3122,127 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 .temporal-profile-options.temporal-profile-controls-disabled select:disabled {
     cursor: not-allowed;
 }
+/* Integral: the result pane is a bar chart, so the shell is Histogram's with a
+   summary table under the options instead of a stats block. */
+/* The result pane splits again for the pie, on the axis PERPENDICULAR to the
+   outer one: rows outside ⇒ columns inside, columns outside ⇒ rows inside. With
+   no pie the grid collapses to one cell so the bars get the whole pane back. */
+.integral-result-area {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    overflow: hidden;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+.integral-pane { min-width: 0; min-height: 0; display: flex; }
+.integral-pie-pane,
+.integral-splitter { display: none; }
+.integral-pie-visible .integral-pie-pane { display: flex; }
+.integral-pie-visible .integral-splitter { display: block; }
+.integral-pie-visible.hist-layout-vertical .integral-result-area {
+    grid-template-columns: minmax(0, var(--integral-pie-split)) 7px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+.integral-pie-visible.hist-layout-horizontal .integral-result-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, var(--integral-pie-split)) 7px minmax(0, 1fr);
+}
+.integral-splitter {
+    background: color-mix(in srgb, var(--border-color) 72%, transparent);
+    position: relative;
+    z-index: 2;
+}
+.integral-splitter:hover { background: color-mix(in srgb, var(--primary-color) 42%, var(--border-color)); }
+.integral-pie-visible.hist-layout-vertical .integral-splitter { cursor: col-resize; }
+.integral-pie-visible.hist-layout-horizontal .integral-splitter { cursor: row-resize; }
+.integral-container .integral-bars-pane { position: relative; }
+.integral-computing-indicator { top: 10px; }
+/* Reads back what the typed unit will produce. A unit field has to be free
+   text — the space of units is infinite — so this line is what replaces the
+   validation it cannot have. */
+.integral-unit-hint {
+    margin: -2px 0 8px;
+    font-size: 0.66rem;
+    line-height: 1.35;
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+.integral-unit-input { font-variant-numeric: normal; }
+/* A note sits in the same box as a warning but is not one: no amber, and no
+   pointer in the topbar. */
+.integral-note { color: var(--text-secondary); }
+.integral-message > .integral-note:not(:first-child) { margin-top: 5px; }
+
+/* Total / per-day / mean sit side by side, so the table is wider than the
+   sidebar and scrolls horizontally rather than wrapping into illegibility.
+   The scrollbar is deliberately chunky and ALWAYS drawn: an overlay bar that
+   only fades in on hover leaves no sign that there are columns to the right. */
+.integral-summary {
+    max-height: 240px;
+    overflow: auto;
+    /* Reserves the track, so the table does not reflow when the bar appears. */
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    scrollbar-color: color-mix(in srgb, var(--text-secondary) 55%, transparent) transparent;
+    /* Keeps the last row clear of the panel's bottom edge — the table used to
+       sit flush against it with the scrollbar on top of the final row. */
+    padding-bottom: 6px;
+    margin-bottom: 14px;
+}
+.integral-summary::-webkit-scrollbar { height: 14px; width: 14px; }
+.integral-summary::-webkit-scrollbar-track {
+    background: color-mix(in srgb, var(--border-color) 40%, transparent);
+    border-radius: 999px;
+}
+.integral-summary::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-secondary) 55%, transparent);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+}
+.integral-summary::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--primary-color) 70%, var(--text-secondary));
+    border: 3px solid transparent;
+    background-clip: content-box;
+}
+.integral-summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+}
+.integral-summary-table th,
+.integral-summary-table td {
+    padding: 2px 4px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
+}
+.integral-summary-table th { font-weight: 600; color: var(--text-primary); }
+.integral-summary-table td.integral-num,
+.integral-summary-table th.integral-num { text-align: right; font-variant-numeric: tabular-nums; }
+/* A figure and its unit are one column rendered as two cells — digits flush
+   right, unit flush left — so the rule sits after the unit. Putting it between
+   them would read as two unrelated numbers. */
+.integral-summary-table td.integral-group-end,
+.integral-summary-table th.integral-group-end {
+    border-right: 1px solid var(--border-color);
+    padding-right: 6px;
+}
+.integral-summary-table td.integral-num { padding-right: 3px; }
+.integral-summary-table td.integral-group-end + td.integral-num,
+.integral-summary-table th.integral-group-end + th { padding-left: 6px; }
+.integral-swatch {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+
 .hist-range-bound { margin: 2px 0 8px; }
 .hist-range-bound .fft-range-input { width: 100%; margin-top: 2px; }
 /* Calendar Start/End: the datetime picker (with hh:mm:ss) needs full width,

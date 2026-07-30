@@ -16,6 +16,17 @@ import { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep } fro
 
 export { computeDerivative, computeIntegral, computeMovingAverage, fillMissingValues };
 export { computeDetrend, applyFilter, inspectFilter };
+// The Integral analysis mode's scalar total. Not a Data Tools step — it creates
+// no variable — but it belongs to the same pure-kernel family and is re-exported
+// here so callers have one import site for the compute layer.
+export {
+    collectMissingDays,
+    computeDefiniteIntegral,
+    INTEGRAL_MISSING_POLICIES,
+    MS_PER_DAY,
+    utcDayIndex,
+    utcDayStart,
+} from './definite-integral.js';
 export { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN };
 export { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep };
 

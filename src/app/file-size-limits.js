@@ -47,6 +47,56 @@ export const EAGER_ONLY_FORMATS = [
     },
 ];
 
+// Audio is the one eager-only format that is NOT in the list above, and it is
+// left out on purpose.
+//
+// Every entry there is checked before the file is read, against its size on
+// disk. For audio that proxy is worthless: 5 MB of WAV is about 1.3 million
+// samples, 5 MB of MP3 is roughly twenty times that. The same check would wave
+// the expensive case through and stop the cheap one.
+//
+// So audio is measured after decoding, against the memory it is about to
+// occupy — see checkDecodedAudioLimit — and it shares the dialog, the wording
+// and the "load anyway" override with every other format.
+export const AUDIO_DECODED_FORMAT = Object.freeze({
+    id: 'audio',
+    limitKey: 'audioFullLoadMb',
+    settingLabelKey: 'audioFullLoadLimit',
+    formatLabelKey: 'fileFormatAudio',
+    sampleName: 'recording.wav',
+});
+
+/**
+ * Does this decoded recording exceed the configured limit?
+ *
+ * Same verdict shape as checkFullLoadLimit, so the same dialog renders it. The
+ * size reported is the DECODED size, which is the number the limit is about.
+ *
+ * @param {string} name file name, for the dialog
+ * @param {number} decodedBytes what the samples will occupy as app columns
+ * @param {number} limitBytes the configured limit
+ */
+export function checkDecodedAudioLimit(name, decodedBytes, limitBytes) {
+    const sizeBytes = Number(decodedBytes);
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return null;
+    const limit = Number(limitBytes);
+    if (!Number.isFinite(limit) || limit <= 0) return null;
+    if (sizeBytes <= limit) return null;
+    return {
+        format: AUDIO_DECODED_FORMAT.id,
+        name: name || AUDIO_DECODED_FORMAT.sampleName,
+        sizeBytes,
+        limitBytes: limit,
+        settingLabelKey: AUDIO_DECODED_FORMAT.settingLabelKey,
+        formatLabelKey: AUDIO_DECODED_FORMAT.formatLabelKey,
+        // The standard wording would read "recording.mp3 is 420 MB" over a 4 MB
+        // file, which is exactly the confusion this format creates. Its own
+        // wording says the size is what the file DECODES to.
+        titleKey: 'fileOverLimitAudioTitle',
+        bodyKey: 'fileOverLimitAudioBody',
+    };
+}
+
 const BY_EXTENSION = new Map();
 for (const format of EAGER_ONLY_FORMATS) {
     for (const extension of format.extensions) BY_EXTENSION.set(extension, format);

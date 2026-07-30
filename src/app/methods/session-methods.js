@@ -260,6 +260,7 @@ proto._captureSessionSettings = function() {
         sortAlphabetical: !!this.sortAlphabetical,
         scrollablePlotArea: !!this.scrollablePlotArea,
         mouseWheelZoom: !!this.mouseWheelZoom,
+        legendUnits: !!this.legendUnits,
         reloadAsNewVersionMode: !!this.reloadAsNewVersionMode,
         syncAxes: !!this.plotManager.syncAxes,
         syncHover: !!this.plotManager.syncHover,
@@ -293,6 +294,7 @@ proto._capturePlotSessions = function() {
             histogram: this._cloneSerializable(plot.histogram || this.plotManager._defaultHistogramState?.()),
             heatmap: this._cloneSerializable(plot.heatmap || this.plotManager._defaultCalendarHeatmapState?.()),
             temporalProfile: this._cloneSerializable(plot.temporalProfile || this.plotManager._defaultTemporalProfileState?.()),
+            integral: this._cloneSerializable(plot.integral || this.plotManager._defaultIntegralState?.()),
             correlation: this._cloneSerializable(plot.correlation || this.plotManager._defaultCorrelationState?.()),
             phase2d: this._cloneSerializable(plot.phase2d || this.plotManager._defaultPhase2dState?.()),
             projection: plot.projection || 'orthographic',
@@ -622,6 +624,7 @@ proto._applySessionSettings = function(settings) {
     this.sortAlphabetical = settings.sortAlphabetical !== false;
     this.reloadAsNewVersionMode = !!settings.reloadAsNewVersionMode;
     this.mouseWheelZoom = settings.mouseWheelZoom !== false;
+    this.legendUnits = settings.legendUnits === true;
     this._filterText = String(settings.variableFilterText || '').trim().toLowerCase();
     this._sessionSidebarHidden = !!settings.sidebarHidden;
     this._sessionSidebarWidth = typeof settings.sidebarWidth === 'string' ? settings.sidebarWidth : '';
@@ -637,6 +640,7 @@ proto._applySessionSettings = function(settings) {
     this.plotManager.setLegendPosition(settings.legendPosition || 'overlay');
     this.plotManager.setLegendOverlayCorner(settings.legendOverlayCorner || 'tl');
     this.plotManager.setMouseWheelZoom(this.mouseWheelZoom);
+    this.plotManager.setLegendUnits(this.legendUnits);
     this.plotManager.setTimeseriesDownsamplingLimit(settings.timeseriesVisualMaxPoints ?? this.plotManager.timeseriesVisualMaxPoints);
     this.plotManager.setPhaseDownsamplingLimit(settings.phaseVisualMaxPoints ?? this.plotManager.phaseVisualMaxPoints);
     if (settings.liveViewDefaults) {
@@ -689,6 +693,7 @@ proto._syncSessionSettingsUI = function() {
     checked('#sync-hover', this.plotManager.syncHover);
     checked('#hover-proximity', this.plotManager.hoverProximity);
     checked('#mouse-wheel-zoom', this.mouseWheelZoom);
+    checked('#legend-units', this.legendUnits);
     checked('#scrollable-plot-area', this.scrollablePlotArea);
     checked('#reload-as-version-toggle', this.reloadAsNewVersionMode);
     document.querySelectorAll('input[name="legend-pos"]').forEach(input => {
@@ -929,6 +934,12 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.temporalProfile = this.plotManager._normalizeTemporalProfileState
             ? this.plotManager._normalizeTemporalProfileState(saved.temporalProfile || plot.temporalProfile || {})
             : this._cloneSerializable(saved.temporalProfile || plot.temporalProfile);
+        plot.integral = this.plotManager._normalizeIntegralState
+            ? this.plotManager._normalizeIntegralState(saved.integral || plot.integral || {})
+            : this._cloneSerializable(saved.integral || plot.integral);
+        // Totals are recomputed from the restored range, so a saved warning list
+        // would describe a computation that has not run yet.
+        if (plot.integral) plot.integral.warnings = [];
         plot.correlation = this.plotManager._normalizeCorrelationState
             ? this.plotManager._normalizeCorrelationState(saved.correlation || plot.correlation || {})
             : this._cloneSerializable(saved.correlation || plot.correlation);

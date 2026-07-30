@@ -11,6 +11,8 @@ import { installPlotCorrelationMethods } from './methods/correlation-methods.js'
 import { installPlotPhase2dFitMethods } from './methods/phase2d-fit-methods.js';
 import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js';
 import { installPlotTemporalProfileMethods } from './methods/temporal-profile-methods.js';
+import { installPlotIntegralMethods } from './methods/integral-methods.js';
+import { installPlotExportMethods } from './methods/export-methods.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -46,6 +48,7 @@ class PlotManager {
         this.hoverInfoCorner = 'bl';
         this.hoverProximity = true;
         this.mouseWheelZoom = true;
+        this.legendUnits    = false;
         this.liveViewDefaults = {
             timeseries: { xMode: 'pin-start', windowSeconds: 60, yMode: 'expand' },
             phase: { viewMode: 'keep' },
@@ -91,7 +94,7 @@ class PlotManager {
         const affectedPanels = new Set();
 
         for (const [panelId, plot] of this.plots) {
-            if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile'].includes(plot.mode)) {
+            if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
                 const before = plot.traces.length;
                 plot.traces = plot.traces.filter(t => t.fileId !== fileId);
                 if (plot.traces.length < before) affectedPanels.add(panelId);
@@ -138,6 +141,9 @@ class PlotManager {
             plot._fftGapsSig = null; plot._fftGapsCache = null;
             if (plot.mode === 'temporal-profile') {
                 this._invalidateTemporalProfileForDataChange?.(plot, fileId);
+            }
+            if (plot.mode === 'integral') {
+                this._invalidateIntegralForDataChange?.(plot);
             }
             // A lazy Heatmap must not silently re-scan a multi-GB file on every
             // live poll: flag it dirty and let the user click Update. Eager
@@ -189,7 +195,7 @@ class PlotManager {
         // the original view handling untouched, so it can never be regressed here.
         const rowIndexInvolved = previousTransform.timeDisplayMode === 'index'
             || nextTransform.timeDisplayMode === 'index';
-        const mainTimePaneModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'correlation']);
+        const mainTimePaneModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral', 'correlation']);
         const pendingViews = new Map();
         const pendingRowRanges = new Map();
         for (const [panelId, plot] of this.plots) {
@@ -374,7 +380,7 @@ class PlotManager {
             && typeof this._phase2dFitTimeDescriptors === 'function') {
             return this._phase2dFitTimeDescriptors(plot);
         }
-        if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile'].includes(plot.mode)) {
+        if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
             return plot.traces || [];
         }
         return [];
@@ -583,7 +589,19 @@ class PlotManager {
             this._applyMouseWheelZoomConfig(plot?.histogramDiv, next);
             this._applyMouseWheelZoomConfig(plot?.heatmapDiv, next);
             this._applyMouseWheelZoomConfig(plot?.temporalProfileDiv, next);
+            this._applyMouseWheelZoomConfig(plot?.integralDiv, next);
+            this._applyMouseWheelZoomConfig(plot?.integralPieDiv, next);
         }
+    }
+
+    // Units in the legend are a display choice, so the panels are rebuilt
+    // rather than restyled: several modes fold the trace name into hovers,
+    // exports and legend-click identity, and a restyle would desynchronise them.
+    setLegendUnits(enabled) {
+        const next = !!enabled;
+        if (this.legendUnits === next) return;
+        this.legendUnits = next;
+        this._rebuildAllPanels();
     }
 
     _getPlotlyConfig(overrides = {}) {
@@ -630,6 +648,8 @@ class PlotManager {
             if (plot.histogramDiv) Plotly.Plots.resize(plot.histogramDiv);
             if (plot.heatmapDiv) Plotly.Plots.resize(plot.heatmapDiv);
             if (plot.temporalProfileDiv) Plotly.Plots.resize(plot.temporalProfileDiv);
+            if (plot.integralDiv) Plotly.Plots.resize(plot.integralDiv);
+            if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
         }
     }
 
@@ -697,7 +717,7 @@ class PlotManager {
         const nextDim = mode === 'state-anim' ? (stateAnimDim || plot.stateAnimDim || 2) : plot.stateAnimDim;
         if (plot.mode === mode && plot.stateAnimDim === nextDim) return;
         this._dismissModeChangeWarning?.(panelId);
-        const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile']);
+        const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
         const preserveTimeTraces = !!options.preserveTimeTraces
             && timeTraceModes.has(previousMode)
             && timeTraceModes.has(mode);
@@ -756,6 +776,7 @@ class PlotManager {
             plot.histogram = plot.histogram || this._defaultHistogramState?.();
             plot.heatmap = plot.heatmap || this._defaultHeatmapState?.();
             plot.temporalProfile = plot.temporalProfile || this._defaultTemporalProfileState?.();
+            plot.integral = plot.integral || this._defaultIntegralState?.();
             // Switching analysis tears down the chart (and the cursor overlay
             // with it). Keep cursor positions, but close the windows so the A|B
             // button is not left stuck "on" over a chart that has no cursors.
@@ -768,6 +789,7 @@ class PlotManager {
             plot.histogram = this._defaultHistogramState?.() || plot.histogram;
             plot.heatmap = this._defaultHeatmapState?.() || plot.heatmap;
             plot.temporalProfile = this._defaultTemporalProfileState?.() || plot.temporalProfile;
+            plot.integral = this._defaultIntegralState?.() || plot.integral;
         }
         plot.correlation = preservePhasePairs
             ? (plot.correlation || this._defaultCorrelationState?.())
@@ -959,6 +981,11 @@ class PlotManager {
             return;
         }
 
+        if (plot.mode === 'integral') {
+            names.forEach(varName => this.addTrace(panelId, varName, panelEl));
+            return;
+        }
+
         if (plot.mode === 'phase2d' || plot.mode === 'phase2dt' || plot.mode === 'phase3d') {
             const groupSize = plot.mode === 'phase3d' ? 3 : 2;
             if (!this._canAddTraceWithFileTime(plot, this.activeFileId)) return;
@@ -1060,6 +1087,12 @@ class PlotManager {
                 : i18n.t('dropToAddTrace');
         }
 
+        if (mode === 'integral') {
+            return plot.traces.length === 0
+                ? i18n.t('integralDrop')
+                : i18n.t('dropToAddTrace');
+        }
+
         // State-anim mode
         if (mode === 'state-anim') {
             const sx = plot.stateSlots?.x || [];
@@ -1109,6 +1142,8 @@ class PlotManager {
             this._addHeatmapTrace(panelId, varName, panelEl, plot);
         } else if (plot.mode === 'temporal-profile') {
             this._addTemporalProfileTrace(panelId, varName, panelEl, plot);
+        } else if (plot.mode === 'integral') {
+            this._addIntegralTrace(panelId, varName, panelEl, plot);
         } else if (plot.mode === 'state-anim') {
             this._addStateAnimVar(panelId, varName, panelEl, plot);
         } else {
@@ -1246,6 +1281,10 @@ class PlotManager {
         }
         if (plot.mode === 'temporal-profile') {
             this._createTemporalProfileChart(panelId, panelEl);
+            return;
+        }
+        if (plot.mode === 'integral') {
+            this._createIntegralChart(panelId, panelEl);
             return;
         }
         if (plot.mode === 'correlation') {
@@ -1834,6 +1873,7 @@ class PlotManager {
             const histContainer = plot.div.closest('.hist-container');
             const heatmapContainer = plot.div.closest('.heatmap-container');
             const temporalProfileContainer = plot.div.closest('.temporal-profile-container');
+            const integralContainer = plot.div.closest('.integral-container');
             if (correlationContainer) {
                 // Checked before .fft-container: the shell reuses fft-* CSS but
                 // carries a distinct correlation-container marker.
@@ -1843,6 +1883,16 @@ class PlotManager {
                 plot.div = null;
                 plot.correlationDiv = null;
                 plot.correlationContainer = null;
+            } else if (integralContainer) {
+                if (plot.integralDiv) Plotly.purge(plot.integralDiv);
+                if (plot.integralPieDiv) Plotly.purge(plot.integralPieDiv);
+                Plotly.purge(plot.div);
+                integralContainer.remove();
+                plot.div = null;
+                plot.integralDiv = null;
+                plot.integralPieDiv = null;
+                plot.integralContainer = null;
+                plot._integralPieVisible = undefined;
             } else if (temporalProfileContainer) {
                 if (plot.temporalProfileDiv) Plotly.purge(plot.temporalProfileDiv);
                 Plotly.purge(plot.div);
@@ -1935,6 +1985,24 @@ class PlotManager {
         clearTimeout(plot._temporalProfileRecomputeTimer);
         plot._temporalProfileHandlersInstalled = false;
         plot._temporalProfileSelectionDiv = null;
+        if (plot._integralSelectionDocListeners) {
+            document.removeEventListener('mousemove', plot._integralSelectionDocListeners.move);
+            document.removeEventListener('mouseup', plot._integralSelectionDocListeners.up);
+            plot._integralSelectionDocListeners = null;
+        }
+        if (plot._integralSplitterDocListeners) {
+            document.removeEventListener('mousemove', plot._integralSplitterDocListeners.move);
+            document.removeEventListener('mouseup', plot._integralSplitterDocListeners.up);
+            plot._integralSplitterDocListeners = null;
+        }
+        if (plot._integralPieSplitterDocListeners) {
+            document.removeEventListener('mousemove', plot._integralPieSplitterDocListeners.move);
+            document.removeEventListener('mouseup', plot._integralPieSplitterDocListeners.up);
+            plot._integralPieSplitterDocListeners = null;
+        }
+        clearTimeout(plot._integralRecomputeTimer);
+        plot._integralSelectionDiv = null;
+        plot._integralModels = [];
         if (plot._correlationSelectionDocListeners) {
             document.removeEventListener('mousemove', plot._correlationSelectionDocListeners.move);
             document.removeEventListener('mouseup', plot._correlationSelectionDocListeners.up);
@@ -1982,6 +2050,7 @@ class PlotManager {
             existing.fft = this._defaultFftState?.() || existing.fft;
             existing.heatmap = this._defaultHeatmapState?.() || existing.heatmap;
             existing.temporalProfile = this._defaultTemporalProfileState?.() || existing.temporalProfile;
+            existing.integral = this._defaultIntegralState?.() || existing.integral;
             existing.correlation = this._defaultCorrelationState?.() || existing.correlation;
             existing.phase2d = this._defaultPhase2dState?.() || existing.phase2d;
             existing.stateSlots    = { x: [], dx: [], fileId: null };
@@ -1995,7 +2064,7 @@ class PlotManager {
             // family) is a toggle on top of a base view; clearing drops it and
             // returns to that base so its toolbar button un-presses. Other modes
             // (timeseries, 2D, 3D, state-anim) are kept.
-            if (['fft', 'histogram', 'heatmap', 'temporal-profile'].includes(existing.mode)) { existing.mode = 'timeseries'; modeReset = true; }
+            if (['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(existing.mode)) { existing.mode = 'timeseries'; modeReset = true; }
             else if (existing.mode === 'correlation') { existing.mode = 'phase2d'; modeReset = true; }
         }
 
@@ -2016,23 +2085,21 @@ class PlotManager {
         if (!panelEl) return;
         const plot = this.plots.get(panelId);
         const has = this._hasContent(plot);
-        const isTimeseriesFamily = ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile'].includes(plot?.mode);
+        const isTimeseriesFamily = ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot?.mode);
         if (!isTimeseriesFamily) {
             panelEl.querySelector('.timeseries-tools-group')?.remove();
         }
-        const csvBtn = panelEl.querySelector('.csv-export-btn');
-        if (csvBtn) {
-            // Aggregated Heatmap CSV belongs to the dedicated export phase; never
-            // fall back to exporting a visually unrelated raw table. Correlation
-            // exports a per-pair summary, but not while a lazy pair is dirty.
-            csvBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile'
-                || (plot?.mode === 'correlation' && !!plot?.correlation?.dirty);
-            if (plot?.mode === 'heatmap') csvBtn.title = i18n.t('heatmapExportPending');
-            if (plot?.mode === 'temporal-profile') csvBtn.title = i18n.t('temporalProfileMode');
+        const exportBtn = panelEl.querySelector('.panel-export-btn');
+        if (exportBtn) {
+            // The dialog behind this button also writes PNG and SVG, so it stays
+            // available in the modes that have no data table to export
+            // (Heatmap, Temporal Profile, a stale Correlation); the CSV option
+            // inside is the one that reports why it is unavailable.
+            exportBtn.disabled = !has;
         }
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
         if (statsBtn) {
-            statsBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile';
+            statsBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile' || plot?.mode === 'integral';
             if (plot?.mode === 'heatmap') statsBtn.title = i18n.t('heatmapStatsPending');
         }
         const equalAspectBtn = panelEl.querySelector('.equal-aspect-btn');
@@ -2042,7 +2109,7 @@ class PlotManager {
         }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {
-            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && plot?.mode !== 'heatmap' && plot?.mode !== 'temporal-profile' && plot?.mode !== 'correlation' && this.files.size > 1);
+            compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && plot?.mode !== 'heatmap' && plot?.mode !== 'temporal-profile' && plot?.mode !== 'integral' && plot?.mode !== 'correlation' && this.files.size > 1);
         }
         const cursorBtn = panelEl.querySelector('.cursor-btn');
         if (cursorBtn) {
@@ -2095,14 +2162,16 @@ class PlotManager {
         }
     }
 
-    _exportCSV(panelId) {
+    // options.fileName / options.baseName carry the name chosen in the export
+    // dialog. Without them the file keeps the name the CSV button always wrote.
+    _exportCSV(panelId, options = {}) {
         const plot = this.plots.get(panelId);
         if (!plot || !this._hasContent(plot)) return;
 
         // With the 2D Curve Fit workspace open, offer the fit-specific exports
         // (summary / curve / displayed points) instead of the raw X/Y dump.
         if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled && this._exportPhase2dFitCsv) {
-            this._exportPhase2dFitCsv(panelId, plot);
+            this._exportPhase2dFitCsv(panelId, plot, { baseName: options.baseName });
             return;
         }
 
@@ -2198,6 +2267,20 @@ class PlotManager {
                 headers.push(header);
                 columns.push(results.map((r, i) => esc(fn(r, i))));
             }
+        } else if (plot.mode === 'integral') {
+            // One row per signal: the totals ARE the analysis, so the raw series
+            // would be the wrong table. Values go out unscaled — the panel's
+            // display prefix is for reading, not for a spreadsheet.
+            const table = this._integralExportTable?.(plot);
+            if (!table?.rows.length) return;
+            const esc = (value) => {
+                const cell = String(value ?? '');
+                return /[",\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell;
+            };
+            table.headers.forEach((header, index) => {
+                headers.push(header);
+                columns.push(table.rows.map(row => esc(row[index])));
+            });
         }
 
         if (!columns.length) return;
@@ -2212,7 +2295,7 @@ class PlotManager {
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
-        a.download = `${plot.mode}_export.csv`;
+        a.download = options.fileName || `${plot.mode}_export.csv`;
         a.click();
         URL.revokeObjectURL(url);
     }
@@ -2244,7 +2327,7 @@ class PlotManager {
             const v = d?.variables[t.varName];
             if (!v) continue;
             const u    = this._extractUnit(v.description);
-            const name = this._traceName(t.varName, t.fileId);
+            const name = this._traceName(t.varName, t.fileId, { units: false });
             if (perTraceTime) {
                 // Independent-index variables keep their row-index column; a
                 // cross-file overlay exports each trace's real time column.
@@ -2287,7 +2370,7 @@ class PlotManager {
             const varName = phaseTrace[axis];
             const variable = vars[index];
             const unit = this._extractUnit(variable.description);
-            const name = this._traceName(varName, phaseTrace.fileId);
+            const name = this._traceName(varName, phaseTrace.fileId, { units: false });
             headers.push(unit ? `${name} [${unit}]` : name);
             columns.push(Array.from(this._getTransformedVariableData(phaseTrace.fileId, varName)));
         });
@@ -2295,7 +2378,7 @@ class PlotManager {
 
     _compareAcrossFiles(panelId) {
         const plot = this.plots.get(panelId);
-        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim' || plot.mode === 'fft' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile') return;
+        if (!plot || !this._hasContent(plot) || plot.mode === 'state-anim' || plot.mode === 'fft' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral') return;
         const usesTimeTraces = ['timeseries', 'histogram'].includes(plot.mode);
 
         // Collect variables used. Overlay must be decided per trace signature,
@@ -2449,7 +2532,7 @@ class PlotManager {
             const stats = this._statsForValues(this._getTransformedVariableData(fileId, varName));
             if (!stats) return;
             entries.push({
-                name: this._traceName(varName, fileId),
+                name: this._traceName(varName, fileId, { units: false }),
                 unit: this._extractUnit(variable.description),
                 ...stats,
             });
@@ -2533,6 +2616,8 @@ class PlotManager {
             if (plot.fftDiv) Plotly.relayout(plot.fftDiv, this._themeRelayoutUpdate(plot));
             if (plot.histogramDiv) Plotly.relayout(plot.histogramDiv, this._themeRelayoutUpdate(plot));
             if (plot.temporalProfileDiv) Plotly.relayout(plot.temporalProfileDiv, this._themeRelayoutUpdate(plot));
+            if (plot.integralDiv) Plotly.relayout(plot.integralDiv, this._themeRelayoutUpdate(plot));
+            if (plot.integralPieDiv) Plotly.relayout(plot.integralPieDiv, this._themeRelayoutUpdate(plot));
             if (plot.heatmapDiv) {
                 // Rebuild only the cached Plotly traces/layout so every
                 // small-multiple y-axis picks up the theme. Source data and
@@ -2619,6 +2704,7 @@ class PlotManager {
         if (plot.mode === 'histogram') return plot.traces.length > 0;
         if (plot.mode === 'heatmap') return plot.traces.length > 0;
         if (plot.mode === 'temporal-profile') return plot.traces.length > 0;
+        if (plot.mode === 'integral') return plot.traces.length > 0;
         if (plot.mode === 'state-anim') return plot.stateSlots.x.length >= (plot.stateAnimDim || 2);
         return plot.phaseTraces.length > 0;
     }
@@ -2681,7 +2767,7 @@ class PlotManager {
     }
 
     _plotModeRequiresCompatibleTime(mode) {
-        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft' || mode === 'histogram' || mode === 'heatmap' || mode === 'temporal-profile' || mode === 'correlation';
+        return mode === 'timeseries' || mode === 'phase2dt' || mode === 'fft' || mode === 'histogram' || mode === 'heatmap' || mode === 'temporal-profile' || mode === 'integral' || mode === 'correlation';
     }
 
     _padRange(min, max, pad = 0.05) {
@@ -2836,6 +2922,7 @@ class PlotManager {
         if (plot.mode === 'histogram') return this._autoScaleHistogramAxis(plot, axis);
         if (plot.mode === 'heatmap') return this._autoScaleHeatmapAxis(plot, axis);
         if (plot.mode === 'temporal-profile') return this._autoScaleTemporalProfileAxis(plot, axis);
+        if (plot.mode === 'integral') return this._autoScaleIntegralAxis(plot, axis);
         if (plot.mode === 'correlation') return this._autoScaleCorrelationAxis(plot, axis);
         return Promise.resolve();
     }
@@ -2857,6 +2944,10 @@ class PlotManager {
 
         if (plot.mode === 'temporal-profile') {
             return this._autoScaleTemporalProfilePanel(panelId, plot);
+        }
+
+        if (plot.mode === 'integral') {
+            return this._autoScaleIntegralPanel(panelId, plot);
         }
 
         if (plot.mode === 'correlation') {
@@ -3059,6 +3150,8 @@ class PlotManager {
             if (plot.histogramDiv) Plotly.relayout(plot.histogramDiv, update);
             if (plot.heatmapDiv) Plotly.relayout(plot.heatmapDiv, { ...update, showlegend: false });
             if (plot.temporalProfileDiv) Plotly.relayout(plot.temporalProfileDiv, update);
+            if (plot.integralDiv) Plotly.relayout(plot.integralDiv, { ...update, showlegend: false });
+            if (plot.integralPieDiv) Plotly.relayout(plot.integralPieDiv, { ...update, showlegend: false });
         }
     }
 
@@ -3091,6 +3184,10 @@ class PlotManager {
             temporalProfileDiv: null,
             temporalProfileContainer: null,
             temporalProfile: this._defaultTemporalProfileState?.() || null,
+            integralDiv: null,
+            integralPieDiv: null,
+            integralContainer: null,
+            integral: this._defaultIntegralState?.() || null,
             correlationDiv: null,
             correlationContainer: null,
             correlation: this._defaultCorrelationState?.() || null,
@@ -3442,6 +3539,12 @@ class PlotManager {
                 xRange: manualAxisRange(pfl?.xaxis),
                 yRange: manualAxisRange(pfl?.yaxis),
             };
+        } else if (plot.mode === 'integral') {
+            const ifl = plot.integralDiv?._fullLayout;
+            view.integralView = {
+                xRange: manualAxisRange(ifl?.xaxis),
+                yRange: manualAxisRange(ifl?.yaxis),
+            };
         } else if (plot.mode === 'phase2d' && plot.phase2d?.fitEnabled) {
             const tfl = plot.phase2dFitTimeDiv?._fullLayout;
             view.phase2dFitTime = {
@@ -3525,13 +3628,19 @@ class PlotManager {
         return v ? this._extractUnit(v.description) : '';
     }
 
-    _traceName(label, fileId) {
+    // `options.units` overrides the global setting. Callers that append the
+    // unit themselves (CSV headers, the statistics table, hover templates) pass
+    // false, otherwise the unit would appear twice.
+    _traceName(label, fileId, options = {}) {
         const displayLabel = this._variableLabel(label, fileId) || label;
+        const wantUnits = options.units === undefined ? this.legendUnits : !!options.units;
+        const unit = wantUnits ? this._varUnit(label, fileId) : '';
+        const labelled = unit ? `${displayLabel} [${unit}]` : displayLabel;
         if (this.files.size >= 2 && fileId) {
             const f = this.files.get(fileId);
-            if (f) return `[${f.name}] ${displayLabel}`;
+            if (f) return `[${f.name}] ${labelled}`;
         }
-        return displayLabel;
+        return labelled;
     }
 
     _findTimeIdx(times, xVal) {
@@ -3653,5 +3762,7 @@ installPlotCorrelationMethods(PlotManager);
 installPlotPhase2dFitMethods(PlotManager);
 installPlotCalendarHeatmapMethods(PlotManager);
 installPlotTemporalProfileMethods(PlotManager);
+installPlotIntegralMethods(PlotManager);
+installPlotExportMethods(PlotManager);
 
 export default PlotManager;

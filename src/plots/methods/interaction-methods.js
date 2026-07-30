@@ -65,14 +65,14 @@ proto._onRelayout = function(sourcePanelId, eventData) {
     }
     this._clearRelayoutingRefresh(plot);
 
-    if (plot?.mode === 'timeseries' || plot?.mode === 'fft' || plot?.mode === 'histogram' || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile') {
+    if (plot?.mode === 'timeseries' || plot?.mode === 'fft' || plot?.mode === 'histogram' || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile' || plot?.mode === 'integral') {
         const autorangeRequested = update['xaxis.autorange'] === true
             || eventData?.['yaxis.autorange'] === true
             || eventData?.['yaxis2.autorange'] === true;
         if (autorangeRequested) {
             // FFT: the relayout comes from the time sub-plot; leave the
             // spectrum axes (and manual fMin/fMax/yMin/yMax) untouched.
-            if (plot.mode === 'fft' || plot.mode === 'histogram' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile') this._autoScalePlotTimeOnly(plot);
+            if (plot.mode === 'fft' || plot.mode === 'histogram' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral') this._autoScalePlotTimeOnly(plot);
             else this._autoScalePlot(sourcePanelId, plot);
         } else {
             const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
@@ -322,7 +322,7 @@ proto._xAxisUpdateFromRelayout = function(eventData, plot = null) {
 };
 
 proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelId), visibleRange = null) {
-    if (!plot?.div || !['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile'].includes(plot.mode)) return;
+    if (!plot?.div || !['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) return;
     const range = visibleRange
         || plot.div._fullLayout?.xaxis?.range
         || plot.div.layout?.xaxis?.range
@@ -1456,7 +1456,7 @@ proto._lazyMissingBucketCount = function(data, sourceLo, sourceHi, pxWidth) {
 };
 
 proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
-    if (!plot?.div || !['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile'].includes(plot.mode)) {
+    if (!plot?.div || !['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
         return Promise.resolve();
     }
     const fid = this._primaryTimeFileId(plot);
@@ -1497,7 +1497,7 @@ proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
 
 proto._refreshAllTimeseriesVisuals = function() {
     for (const [panelId, plot] of this.plots) {
-        if (plot?.div && ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile'].includes(plot.mode)) {
+        if (plot?.div && ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
             this._refreshTimeseriesVisuals(panelId, plot);
         }
     }
@@ -1879,7 +1879,8 @@ proto._defaultCursors = function() {
 
 proto._plotSupportsCursors = function(plot) {
     return plot?.mode === 'timeseries' || plot?.mode === 'fft'
-        || plot?.mode === 'histogram' || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile';
+        || plot?.mode === 'histogram' || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile'
+        || plot?.mode === 'integral';
 };
 
 // True while ANY cursor window is open. FFT has two (time + spectrum); the A|B
@@ -2411,7 +2412,8 @@ proto._syncCursorDisplay = function(panelId, plot, options = {}) {
     const timeSeriesHidden = (plot.mode === 'fft' && plot.fft?.timeSeriesHidden === true)
         || (plot.mode === 'histogram' && plot.histogram?.timeSeriesHidden === true)
         || (plot.mode === 'heatmap' && plot.heatmap?.timeSeriesHidden === true)
-        || (plot.mode === 'temporal-profile' && plot.temporalProfile?.timeSeriesHidden === true);
+        || (plot.mode === 'temporal-profile' && plot.temporalProfile?.timeSeriesHidden === true)
+        || (plot.mode === 'integral' && plot.integral?.timeSeriesHidden === true);
     for (const view of this._cursorViews(panelId, plot)) {
         if (timeSeriesHidden && !view.isSpectrum) {
             this._hideCursorOverlay(view);
@@ -3673,7 +3675,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
 
     const plot = this.plots.get(panelId);
-    const timeseriesFamilyModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile']);
+    const timeseriesFamilyModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
     const phase2dFamilyModes = new Set(['phase2d', 'correlation']);
     const isTimeseriesFamily = timeseriesFamilyModes.has(currentMode);
     const isPhase2dFamily = phase2dFamilyModes.has(currentMode);
@@ -3792,6 +3794,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
             { id: 'histogram', label: i18n.t('modeHistogramLabel'), titleKey: 'modeHistogram', className: 'timeseries-histogram-btn' },
             { id: 'heatmap', label: i18n.t('modeHeatmapLabel'), titleKey: 'modeHeatmap', className: 'timeseries-heatmap-btn' },
             { id: 'temporal-profile', label: i18n.t('temporalProfileModeLabel'), titleKey: 'temporalProfileMode', className: 'timeseries-temporal-profile-btn' },
+            { id: 'integral', label: i18n.t('integralModeLabel'), titleKey: 'integralMode', className: 'timeseries-integral-btn' },
         ];
         analysisModes.forEach(({ id, label, titleKey, className }) => {
             const active = currentMode === id;
@@ -3934,6 +3937,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         && plot.mode !== 'fft'
         && plot.mode !== 'heatmap'
         && plot.mode !== 'temporal-profile'
+        && plot.mode !== 'integral'
         && plot.mode !== 'correlation'
         && this.files.size > 1;
     compareBtn.disabled = !canCompare;
@@ -3966,19 +3970,22 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     });
     toolbar.appendChild(statsBtn);
 
-    // CSV export button - pushed to far right, 🗑️ follows immediately after
-    const csvBtn = document.createElement('button');
-    csvBtn.className = 'layout-toolbar-btn panel-action-btn csv-export-btn';
-    csvBtn.textContent = 'CSV';
-    csvBtn.title = i18n.t('exportCsv');
-    csvBtn.disabled = !this._hasContent(plot);
-    csvBtn.addEventListener('click', (e) => {
+    // Export button - pushed to far right, 🗑️ follows immediately after. It
+    // opens the export dialog (CSV data, or the plot as PNG / SVG) rather than
+    // writing a file on click, so the icon says "download", not "CSV".
+    const exportBtn = document.createElement('button');
+    exportBtn.className = 'layout-toolbar-btn panel-action-btn panel-export-btn';
+    exportBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';
+    exportBtn.title = i18n.t('exportPanel');
+    exportBtn.setAttribute('aria-label', exportBtn.title);
+    exportBtn.disabled = !this._hasContent(plot);
+    exportBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this._exportCSV(panelId);
+        this._openExportDialog(panelId);
     });
-    toolbar.appendChild(csvBtn);
+    toolbar.appendChild(exportBtn);
 
-    // Clear button — immediately right of CSV
+    // Clear button — immediately right of the export button
     const clearBtn = document.createElement('button');
     clearBtn.className = 'layout-toolbar-btn panel-action-btn trash-panel-btn';
     clearBtn.textContent = '🗑️';
@@ -3991,7 +3998,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 };
 
 proto._toggleTimeseriesAnalysisMode = function(panelId, analysisMode) {
-    if (!['fft', 'histogram', 'heatmap', 'temporal-profile'].includes(analysisMode)) return;
+    if (!['fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(analysisMode)) return;
     const plot = this.plots.get(panelId);
     if (!plot) return;
     const targetMode = plot.mode === analysisMode ? 'timeseries' : analysisMode;
@@ -4006,7 +4013,7 @@ proto._requestModeChange = function(panelId, mode, stateAnimDim = null) {
         this._dismissModeChangeWarning(panelId);
         return;
     }
-    const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile']);
+    const timeTraceModes = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
     const preservesTimeTraces = timeTraceModes.has(plot.mode) && timeTraceModes.has(mode);
     if (preservesTimeTraces) {
         this._setMode(panelId, mode, stateAnimDim, { preserveTimeTraces: true });
@@ -4090,7 +4097,7 @@ proto._dismissModeChangeWarning = function(panelId) {
 proto._updateModeButtons = function(panelEl, activeMode) {
     const panelId = panelEl.dataset.id;
     const plot = panelId ? this.plots.get(panelId) : null;
-    const activePrimaryMode = ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile'].includes(activeMode)
+    const activePrimaryMode = ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(activeMode)
         ? 'timeseries'
         : activeMode;
     panelEl.querySelectorAll('.mode-btn').forEach(btn => {
@@ -4291,6 +4298,9 @@ proto._updatePlaceholder = function(panelId, panelEl) {
             break;
         case 'temporal-profile':
             msg = i18n.t('temporalProfileDrop');
+            break;
+        case 'integral':
+            msg = i18n.t('integralDrop');
             break;
         default: // timeseries
             msg = i18n.t('dropTimeseriesMulti');
