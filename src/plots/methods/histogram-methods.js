@@ -234,7 +234,11 @@ proto._createHistogramChart = function(panelId, panelEl) {
     ]).then(() => {
         this._refreshActionBtns(panelId);
         const viewPromise = restoreView ? this._restorePlotView(plot, restoreView) : Promise.resolve();
-        Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
+        Promise.resolve(viewPromise).then(() => {
+            this._refreshTimeseriesVisuals(panelId, plot);
+            // After any restored view is applied, so the focus is not undone.
+            this._applyPendingAnalysisFocus(plot);
+        });
         this._installHistogramPlotHandlers(panelId, plot);
         // Cursor capture handlers before selection handlers, so an enabled
         // cursor over a selection boundary keeps the pointer (as in Heatmap).

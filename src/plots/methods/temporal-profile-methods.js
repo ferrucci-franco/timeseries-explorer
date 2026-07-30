@@ -418,7 +418,11 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
     ]).then(() => {
         this._refreshActionBtns(panelId);
         const viewPromise = restoreView ? this._restorePlotView(plot, restoreView) : Promise.resolve();
-        Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
+        Promise.resolve(viewPromise).then(() => {
+            this._refreshTimeseriesVisuals(panelId, plot);
+            // After any restored view is applied, so the focus is not undone.
+            this._applyPendingAnalysisFocus(plot);
+        });
         this._installTemporalProfilePlotHandlers(panelId, plot);
         this._installCursorHandlers?.(panelId, plot);
         this._installTemporalProfileSelectionHandlers(panelId, plot);

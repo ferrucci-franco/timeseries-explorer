@@ -167,6 +167,11 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (!this._hasContent(plot)) return;
         const state = this._ensureCorrelationState(plot);
         this._autoLimitAnalysisRange(plot, state, 'correlation', { initial: true });
+        // Correlation keeps no restored view of its own, so the x view is always
+        // ours to set: the whole signal, or the cut range when the analysis
+        // limited itself. Applied after the first recompute, because that is
+        // what decides which of the two it is.
+        state.autoRangeFocusPending = true;
 
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) placeholder.style.display = 'none';
@@ -320,9 +325,13 @@ export function installPlotCorrelationMethods(TargetClass) {
             // Same gestures on the results (bars) pane, like the FFT spectrum pane.
             this._installWheelPan(panelId, plot, plot.correlationDiv, {});
             this._installRightButtonPan(panelId, plot, plot.correlationDiv, {});
-            // Opening Correlation is an analysis action: show the whole signal,
-            // the way Curve Fit already does, instead of inheriting whatever
-            // zoom the previous mode happened to be sitting at.
+            // Opening Correlation must not inherit the previous mode's zoom.
+            // Autoscaling here is not enough on its own: the recompute that
+            // follows refreshes the time pane with preserveView, so whatever is
+            // set now is what sticks — and when the analysis limits its own
+            // range, the whole signal is the wrong thing to show. The focus
+            // helper covers both cases and runs after the first recompute has
+            // decided the range.
             this._autoScaleCorrelationTime(plot);
             this._scheduleCorrelationRecompute(panelId, { immediate: true });
             let timer;
@@ -781,6 +790,8 @@ export function installPlotCorrelationMethods(TargetClass) {
         } else {
             this._setCorrelationStatus(plot, i18n.t('correlationReady'), 'ready');
         }
+        // Last, so the preserveView refresh above cannot overwrite it.
+        this._applyPendingAnalysisFocus(plot);
     };
 
     // ── Result bars ────────────────────────────────────────────────

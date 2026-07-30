@@ -626,6 +626,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         plot._phase2dFitOpenTimer = setTimeout(() => {
             if (this.plots.get(panelId) !== plot || !container.isConnected) return;
             Plotly.newPlot(timeDiv, this._buildPhase2dFitTimeTraces(plot), this._buildPhase2dFitTimeLayout(plot), this._getPlotlyConfig()).then(() => {
+                this._applyPendingAnalysisFocus(plot);
                 timeDiv.on('plotly_doubleclick', () => { this._autoScalePhase2dFitTime(plot); return false; });
                 timeDiv.on('plotly_relayout', (ed) => {
                     const touchesX = ed && (
@@ -1063,6 +1064,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             const measured = this._measureAnalysisKernel(panelId, plot, () => this._computePhase2dFits(plot));
             // The measurement widened the range and rescheduled; this is stale.
             if (measured.superseded) return;
+            // The range for this pass is settled, so the time view can follow it.
+            this._applyPendingAnalysisFocus(plot);
             await this._rerenderPhase2dPlot(panelId, plot);
             if (this.plots.get(panelId) !== plot || !plot.phase2dFitContainer?.isConnected) return;
             this._renderPhase2dFitDrawer(panelId, plot, { results: plot._phase2dFits || [] });

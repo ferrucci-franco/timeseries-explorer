@@ -528,6 +528,8 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
                 });
             }
             this._refreshTimeseriesVisuals(panelId, plot);
+            // After any restored view is applied, so the focus is not undone.
+            this._applyPendingAnalysisFocus(plot);
         });
         this._installCalendarHeatmapPlotHandlers(panelId, plot);
         // Cursor capture handlers must be registered before selection handlers,

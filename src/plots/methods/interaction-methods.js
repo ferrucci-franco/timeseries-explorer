@@ -1286,6 +1286,44 @@ proto._runAnalysisAfterPaint = function(plot, runKey, isReady, work) {
     });
 };
 
+// The pane the range selector is drawn on. Every analysis but Curve Fit
+// reparents the panel's own time plot into its shell; Curve Fit builds its own.
+proto._analysisTimeDivForMode = function(plot, mode = plot?.mode) {
+    if (mode === 'phase2d') return plot?.phase2dFitTimeDiv || null;
+    return plot?.div || null;
+};
+
+proto._analysisTimeDomainForMode = function(plot, mode = plot?.mode) {
+    switch (mode) {
+        case 'fft': return this._fftDomain?.(plot);
+        case 'histogram': return this._histogramDomain?.(plot);
+        case 'heatmap': return this._calendarHeatmapDomain?.(plot);
+        case 'temporal-profile': return this._temporalProfileDomain?.(plot);
+        case 'integral': return this._integralDomain?.(plot);
+        case 'correlation': return this._correlationDomain?.(plot);
+        case 'phase2d': return this._phase2dFitDomain?.(plot);
+        default: return null;
+    }
+};
+
+// Move the time view onto whatever range the analysis settled on. Called once
+// the pane exists, because the range is decided before it is built.
+proto._applyPendingAnalysisFocus = function(plot, mode = plot?.mode) {
+    const state = this._analysisStateForMode(plot, mode);
+    if (!state?.autoRangeFocusPending) return false;
+    state.autoRangeFocusPending = false;
+    const div = this._analysisTimeDivForMode(plot, mode);
+    const domain = this._analysisTimeDomainForMode(plot, mode);
+    if (!div?._fullLayout || !domain) return false;
+    // Back to a full range (the measurement widened it): show all of it again.
+    const range = state.rangeFull
+        ? [domain.min, domain.max]
+        : this._analysisFocusViewRange(state.x1, state.x2, domain.min, domain.max);
+    if (!range) return false;
+    Plotly.relayout(div, { 'xaxis.range': range.slice(), 'xaxis.autorange': false });
+    return true;
+};
+
 // Times only the data-dependent kernel of an analysis and hands the result to
 // the auto-limit reconsider. Timing the whole recompute instead would fold in
 // Plotly.react and the options-panel rebuild — costs that do not grow with the

@@ -237,8 +237,12 @@ proto._createFftChart = function(panelId, panelEl) {
         const domain = this._fftDomain(plot);
         const fullTimeRange = domain ? [domain.min, domain.max] : null;
         await Promise.all([
-            // The analyzed block is a green selection over the complete signal;
-            // it must never become the time pane's initial zoom.
+            // The analyzed block is a green selection over the complete signal,
+            // so the pane is built showing everything rather than zoomed to the
+            // block. When the block was chosen automatically that view is then
+            // narrowed to a padded window around it (_applyPendingAnalysisFocus
+            // below): at full zoom the automatic block is a few pixels wide and
+            // its edges cannot be dragged, which costs more than the context.
             Plotly.newPlot(timeDiv, this._buildFftTimeTraces(plot), this._buildFftTimeLayout(plot, fullTimeRange), config),
             Plotly.newPlot(spectrumDiv, [], this._buildFftSpectrumLayout(plot), config),
         ]);
@@ -251,9 +255,13 @@ proto._createFftChart = function(panelId, panelEl) {
         // Lazy traces still need their viewport query after Plotly exists.
         const hasLazyTrace = (plot.traces || []).some(trace =>
             !!this.files.get(trace.fileId)?.data?._duckdb);
-        if (hasLazyTrace) {
-            Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
-        }
+        Promise.resolve(viewPromise).then(() => {
+            // The viewport query is only owed to lazy traces; the focus is owed
+            // to every trace, so it must not sit inside that branch.
+            if (hasLazyTrace) this._refreshTimeseriesVisuals(panelId, plot);
+            // After any restored view is applied, so the focus is not undone.
+            this._applyPendingAnalysisFocus(plot, 'fft');
+        });
         this._installFftPlotHandlers(panelId, plot);
         // Cursor handlers first: their capture listeners must run before the
         // selection ones so a cursor line inside the selection stays grabbable.
@@ -769,6 +777,7 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
                 this._setFftStatus(plot, warning, 'warning');
                 this._updateFftSelectionShapes(panelId, plot);
                 this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+                this._applyPendingAnalysisFocus(plot, 'fft');
                 this._syncFftOptionsPanel(plot);
                 this._renderFftOptionsPanel(panelId, plot);
                 this._refreshFftSpectrumPlot(panelId, plot).then(() => {
@@ -791,9 +800,11 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
         }
         if (adjusted) {
             // Keep the UI truthful: the green band and numeric controls must
-            // show the exact smaller block that will be sent to the FFT.
+            // show the exact smaller block that will be sent to the FFT, and
+            // the view must sit close enough for its edges to be draggable.
             this._updateFftSelectionShapes(panelId, plot);
             this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+            this._applyPendingAnalysisFocus(plot, 'fft');
         }
         this._refreshFftSpectrumPlot(panelId, plot);
     };
@@ -934,6 +945,10 @@ proto._prepareFftAutoRange = async function(panelId, plot, token, options = {}) 
     if (!foundCleanBlock) cleanStart = selectionStart;
     state.rangeFull = false;
     state.autoRangeLimited = true;
+    // Without this the automatic block is drawn a few pixels wide on the full
+    // time axis and neither green edge can be grabbed. See the note on
+    // ANALYSIS_FOCUS_PADDING in data-methods.js.
+    state.autoRangeFocusPending = true;
     state.x1 = Number(times[cleanStart]);
     state.x2 = Number(times[cleanStart + target - 1]);
     const seconds = Math.max(5, Math.round(estimatedMs / 1000));
@@ -2564,6 +2579,9 @@ proto._revertFftToLastAccepted = function(panelId, plot, state = this._ensureFft
     state.x1 = accepted.x1;
     state.x2 = accepted.x2;
     state.zeroPaddingFactor = accepted.zeroPaddingFactor;
+    // The restored range may be nothing like the one on screen, so the view has
+    // to follow it back too.
+    state.autoRangeFocusPending = true;
     plot._fftPreflightTooLarge = null;
     return true;
 };

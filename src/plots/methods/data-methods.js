@@ -8,6 +8,22 @@ const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
 // an initial fast preview.
 const ANALYSIS_AUTO_LIMIT_BUDGET_MS = 5000;
 
+// Shortening the analysed range without moving the view leaves the selection
+// drawn a few pixels wide: on a ten-minute signal the automatic 5.9 s block
+// came out 5.9 px across a 596 px axis. Both green edges then sit inside the
+// same 12 px grab tolerance (histogram-methods.js), so neither can be picked
+// up and dragging starts a new selection instead — the range control becomes
+// unusable at exactly the moment the app decides the range for the user.
+//
+// So the view follows the range. The padding sets how much context stays
+// around the selection; at 4x the selection occupies a quarter of the axis,
+// which on any real panel width is far above the minimum below.
+const ANALYSIS_FOCUS_PADDING = 4;
+// A selection narrower than this many pixels is not draggable. Four times the
+// 12 px edge tolerance, so the two edges are separated by two clear tolerance
+// windows with room to spare.
+const ANALYSIS_MIN_SELECTION_PX = 48;
+
 export function getCalendarTimeFormats(mode = '24h', language = 'en') {
     const useAmPm = mode === 'ampm' || mode === 'calendar-ampm';
     const tickformat = useAmPm ? '%-I:%M %p' : '%H:%M';
@@ -2298,6 +2314,9 @@ proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode, options
     state.autoRangeMeasured = false;
     state.rangeFull = false;
     state.autoRangeLimited = true;
+    // The pane does not exist yet at this point, so the view cannot be moved
+    // here; the panel applies this once it has drawn.
+    state.autoRangeFocusPending = true;
     state.x1 = Number(times[start]);
     state.x2 = Number(times[end - 1]);
     state.autoRangeWarning = warningText(end - start, selectedCount);
@@ -2320,8 +2339,32 @@ proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode, options
 // affordable and is restored and recomputed. When it does not, nothing is
 // claimed about the duration: the threefold spread makes any figure fiction,
 // and the warning states the sample counts instead.
+// Pure: the view window that keeps [x1, x2] draggable. Centred on the
+// selection, `padding` times wider, clamped to the data domain — and when the
+// clamp runs out of room on one side the window grows on the other, so the
+// selection never ends up hugging an edge with less context than asked for.
+proto._analysisFocusViewRange = function(x1, x2, domainMin, domainMax, padding = ANALYSIS_FOCUS_PADDING) {
+    const lo = Math.min(Number(x1), Number(x2));
+    const hi = Math.max(Number(x1), Number(x2));
+    const min = Math.min(Number(domainMin), Number(domainMax));
+    const max = Math.max(Number(domainMin), Number(domainMax));
+    if (![lo, hi, min, max].every(Number.isFinite) || hi <= lo || max <= min) return null;
+    const wanted = Math.min((hi - lo) * Math.max(1, padding), max - min);
+    // Already wide enough relative to the domain: leave the view alone.
+    if (wanted >= max - min) return [min, max];
+    const centre = (lo + hi) / 2;
+    let start = centre - wanted / 2;
+    if (start < min) start = min;
+    if (start + wanted > max) start = max - wanted;
+    return [start, start + wanted];
+};
+
 proto._analysisStateForMode = function(plot, mode = plot?.mode) {
     switch (mode) {
+        // FFT bounds its own range through _prepareFftAutoRange rather than
+        // _autoLimitAnalysisRange, but it lands the user in the same unusable
+        // geometry, so it shares the focus machinery.
+        case 'fft': return this._ensureFftState?.(plot);
         case 'histogram': return this._ensureHistogramState?.(plot);
         case 'heatmap': return this._ensureCalendarHeatmapState?.(plot);
         case 'temporal-profile': return this._ensureTemporalProfileState?.(plot);
@@ -2367,6 +2410,9 @@ proto._reconsiderAutoLimitedRange = function(panelId, plot, elapsedMs) {
     state.x2 = previous.x2;
     state.autoRangeLimited = false;
     state.autoRangeWarning = null;
+    // The view was pulled in around the cut range; the range is whole again, so
+    // the view has to open back up with it.
+    state.autoRangeFocusPending = true;
     if (Array.isArray(state.warnings)) state.warnings = [];
     this._rescheduleAnalysisRecompute(panelId, mode);
     return true;
