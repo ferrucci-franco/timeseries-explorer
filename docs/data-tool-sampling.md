@@ -201,11 +201,16 @@ Three places now state it, all reading one predicate,
 
 - an amber **in memory** badge on the row, with the whole explanation in its
   tooltip (including that a project session does keep it);
-- a **⤓** button beside it that writes the CSV. Where the browser offers a save
+- a save button beside it that writes the CSV. Where the browser offers a save
   dialog it is used, so the user picks the path and the write is confirmed;
   where it does not — Firefox, Safari — it falls back to a download, the same
   two branches `_pickBrowserParquetDestination` already faces. Backing out of
-  the dialog is a decision, not a failure, and reports nothing;
+  the dialog is a decision, not a failure, and reports nothing. It sits ahead of
+  the format controls (CSV parsing, MAT arrays, transform), because it is about
+  whether the file exists at all rather than how it is read, and its icon is
+  drawn as an SVG: `⤓` as a glyph renders hairline thin at 0.85 rem and vanishes
+  among the controls beside it, which is the opposite of what a button resolving
+  a warning should do;
 - one sentence in the message the resample already prints, at the moment the
   user is certainly looking.
 
@@ -213,6 +218,15 @@ The badge does **not** disappear once a copy has been written, and this is the
 point: a CSV on disk is not the same as this entry being backed by one. Reload
 the app and the file is still gone. What the save adds is a second tooltip line
 naming the copy — cleared on a rewrite, since the copy is then stale.
+
+**Reload is refused with a reason.** Pressing Reload on one of these files used
+to reach `_readLatestBuffer` and raise `No buffer available` through a native
+`alert()` — a message about an internal field, thrown at the bottom of a parse
+path, that says nothing about why. `_refuseReloadOfInMemoryFile` catches it at
+the top of both reload entry points (`reloadActiveFile` and
+`reloadActiveFileAsNewVersion`) while the reason is still known, and names the
+way forward: write it out, then open that CSV like any other file and close this
+copy. If a copy already exists the advice skips straight to opening it.
 
 ## 6. Where the work runs
 

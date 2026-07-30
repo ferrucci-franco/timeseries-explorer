@@ -787,11 +787,33 @@ proto._showLazyFileNotice = function(fileId) {
     requestAnimationFrame(() => notice.classList.add('show'));
 };
 
+/**
+ * Reloading a file the app built has nothing to read, and said so through a
+ * native alert reading "No buffer available" — a message about an internal
+ * field, raised at the bottom of a parse path, that tells the reader nothing
+ * about why. Caught up front instead, where the reason is still known and the
+ * way forward can be named.
+ */
+proto._refuseReloadOfInMemoryFile = async function(entry) {
+    if (!this._isInMemoryFile(entry)) return false;
+    const next = entry.savedCopyName
+        ? i18n.t('fileInMemoryReloadSaved').replace('{saved}', entry.savedCopyName)
+        : i18n.t('fileInMemoryReloadUnsaved');
+    await Modal.alert(
+        i18n.t('fileInMemoryReloadTitle'),
+        `${i18n.t('fileInMemoryReloadBody').replace('{name}', this._fileDisplayName(entry))}\n\n${next}`,
+        { icon: '🔄' },
+    );
+    this._updateTopBar?.();
+    return true;
+};
+
 proto.reloadActiveFile = async function() {
     const id = this.plotManager.activeFileId;
     if (!id) return;
     const entry = this.files.get(id);
     if (!entry) return;
+    if (await this._refuseReloadOfInMemoryFile(entry)) return;
 
     const streamable = this._canParseFromFile(entry.file, entry.extension);
     const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
@@ -880,6 +902,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
     if (!sourceId) return;
     const source = this.files.get(sourceId);
     if (!source) return;
+    if (await this._refuseReloadOfInMemoryFile(source)) return;
 
     const name = this._nextVersionName(source.name);
     const streamable = this._canParseFromFile(source.file, source.extension);
@@ -3543,10 +3566,13 @@ proto._renderFilesList = function() {
         memoryBadge.hidden = !inMemory;
         memoryBadge.addEventListener('click', () => this.setActiveFile(fileId));
 
+        // Drawn rather than typed: ⤓ as a glyph comes out hairline thin at this
+        // size and disappears among the other controls, which is the opposite of
+        // what a button resolving a warning should do.
         const saveBtn = document.createElement('button');
         saveBtn.type = 'button';
         saveBtn.className = 'file-entry-save';
-        saveBtn.textContent = '⤓';
+        saveBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 3h4v7h4l-6 6.5L6 10h4V3Z"/><path d="M4.5 18.5h15V21h-15z"/></svg>';
         saveBtn.title = i18n.t('fileInMemorySaveTitle');
         saveBtn.setAttribute('aria-label', i18n.t('fileInMemorySaveTitle'));
         saveBtn.hidden = !inMemory;
@@ -3616,9 +3642,11 @@ proto._renderFilesList = function() {
         entry.appendChild(memoryBadge);
         entry.appendChild(lazyIndicator);
         if (entryData.liveUpdate?.enabled) entry.appendChild(liveIndicator);
+        // Ahead of the format-specific controls: it is about whether the file
+        // exists at all, not about how it is read.
+        entry.appendChild(saveBtn);
         entry.appendChild(csvParsingBtn);
         entry.appendChild(matArraysBtn);
-        entry.appendChild(saveBtn);
         entry.appendChild(transformBtn);
         entry.appendChild(closeBtn);
         item.appendChild(entry);

@@ -3,9 +3,16 @@
 // a loaded one and vanished when the tab closed. These tests cover the two
 // halves of the answer — the row states it, and the row can resolve it.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import i18n from '../src/i18n/index.js';
+import Modal from '../src/ui/modal.js';
 import { installFileMethods } from '../src/app/methods/file-methods.js';
 import { installSessionMethods } from '../src/app/methods/session-methods.js';
+
+// The dialogs are what the user actually reads, so they are captured and read
+// back rather than merely allowed to happen.
+const alerts = [];
+Modal.alert = async (title, body, options) => { alerts.push({ title, body, options }); };
 
 class Harness {
     constructor() {
@@ -127,8 +134,24 @@ const builtEntry = (over = {}) => ({
 {
     const h = new Harness();
     h.files.set('f2', { ...builtEntry(), syntheticBytes: undefined });
+    alerts.length = 0;
     assert.equal(await h.saveInMemoryFile('f2'), false, 'nothing to serialize, nothing to save');
     assert.equal(await h.saveInMemoryFile('nope'), false, 'an unknown file id is not an error');
+    assert.equal(alerts.length, 0, 'neither is worth a dialog: there was no button to press');
+}
+
+// A serializer that throws — a grid too large to render as text — is reported,
+// not swallowed.
+{
+    const h = new Harness();
+    h.files.set('f2', builtEntry({
+        syntheticBytes: () => { throw new Error('Resampled dataset is too large to serialize'); },
+    }));
+    alerts.length = 0;
+    assert.equal(await h.saveInMemoryFile('f2'), false);
+    assert.equal(alerts.length, 1);
+    assert.ok(alerts[0].body.includes('too large to serialize'), 'the reason reaches the user');
+    assert.ok(!h.files.get('f2').savedCopyName, 'and nothing claims a copy exists');
 }
 
 // ── The tooltip says what the row cannot show ────────────────────────────
@@ -142,6 +165,85 @@ const builtEntry = (over = {}) => ({
     h._formatBytes = bytes => `${bytes} B`;
     const loaded = h._fileEntryTooltip({ name: 'a.csv', file: { size: 12 } });
     assert.equal(loaded.split('\n').length, 1, 'a loaded file gains nothing');
+}
+
+// ── Reload is refused with a reason, not with "No buffer available" ────────
+//
+// The native alert the old path produced named an internal field and was raised
+// deep inside a parse; the reader learned nothing. This is the guard that stops
+// the reload before it gets there.
+
+{
+    const h = new Harness();
+    h._fileDisplayName = entry => entry.name;
+    h._updateTopBar = () => {};
+
+    alerts.length = 0;
+    const refused = await h._refuseReloadOfInMemoryFile(builtEntry());
+    assert.equal(refused, true, 'a built file cannot be reloaded');
+    assert.equal(alerts.length, 1, 'and it says so once');
+    assert.equal(alerts[0].title, i18n.t('fileInMemoryReloadTitle'));
+    assert.ok(alerts[0].body.includes('pendulum resampled.csv'), 'the file is named');
+    assert.ok(alerts[0].body.includes(i18n.t('fileInMemoryReloadUnsaved')), 'unsaved: it says to write it out first');
+    assert.ok(!alerts[0].body.includes('{saved}'), 'no placeholder survives');
+
+    // With a copy on disk the advice changes: open that file, close this one.
+    alerts.length = 0;
+    await h._refuseReloadOfInMemoryFile(builtEntry({ savedCopyName: 'out.csv' }));
+    assert.ok(alerts[0].body.includes('out.csv'), 'the copy is named');
+    assert.ok(
+        !alerts[0].body.includes(i18n.t('fileInMemoryReloadUnsaved')),
+        'and it does not also tell the user to write out a copy that exists',
+    );
+
+    // A loaded file is not intercepted: its reload has a source to read.
+    alerts.length = 0;
+    assert.equal(await h._refuseReloadOfInMemoryFile({ name: 'a.csv', file: { size: 5 } }), false);
+    assert.equal(alerts.length, 0, 'and nothing is said about it');
+}
+
+// Both reload entry points go through the guard — the "as new version" one reads
+// the same absent bytes.
+{
+    for (const method of ['reloadActiveFile', 'reloadActiveFileAsNewVersion']) {
+        const h = new Harness();
+        h._fileDisplayName = entry => entry.name;
+        h._updateTopBar = () => {};
+        h.files.set('f2', builtEntry());
+        h.plotManager = { activeFileId: 'f2', files: new Map() };
+        alerts.length = 0;
+        // Would throw on any of the parse helpers this harness does not have, so
+        // returning quietly is itself the assertion that the guard fired first.
+        await h[method]();
+        assert.equal(alerts.length, 1, `${method} explains instead of failing`);
+    }
+}
+
+// ── The row puts it where it can be seen ──────────────────────────────────
+
+{
+    const source = readFileSync(new URL('../src/app/methods/file-methods.js', import.meta.url), 'utf8');
+    const names = ['saveBtn', 'csvParsingBtn', 'matArraysBtn', 'transformBtn', 'closeBtn'];
+    const at = names.map((name) => {
+        const index = source.indexOf(`entry.appendChild(${name})`);
+        assert.ok(index > 0, `${name} must be appended to the row`);
+        return index;
+    });
+    assert.deepEqual(
+        [...at].sort((a, b) => a - b),
+        at,
+        'the save button comes first: it is about whether the file exists, not how it is read',
+    );
+
+    // Drawn, not typed — the glyph came out hairline thin at this size.
+    assert.match(source, /saveBtn\.innerHTML = '<svg/, 'the icon is an svg, not a text glyph');
+
+    const css = readFileSync(new URL('../src/styles/content.css', import.meta.url), 'utf8');
+    const rule = css.match(/\.file-entry-save \{([^}]*)\}/s)?.[1] || '';
+    assert.match(rule, /border-radius:/, 'a framed control, like the gear beside it');
+    assert.match(rule, /border: 1px solid/, 'with a visible edge');
+    assert.match(rule, /--warning-color/, 'in the orange that draws the eye');
+    assert.match(css, /\.file-entry-save svg \{[^}]*fill: currentColor/s, 'so the icon follows that colour');
 }
 
 console.log('In-memory file tests passed.');

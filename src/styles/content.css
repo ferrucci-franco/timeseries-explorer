@@ -576,22 +576,49 @@
     opacity: 1;
 }
 
-/* The one control in the row that resolves a problem the row is reporting, so
-   it carries the same amber as the badge rather than the neutral grey of the
-   controls beside it. */
+/* The one control in the row that resolves a problem the row is reporting, so it
+   is given the same framed shape as the transform gear and the badge's orange,
+   rather than sitting flat and grey among controls that only change how a file
+   is read. */
 .file-entry-save {
-    font-size: 0.95rem;
-    opacity: 0.9;
-    color: color-mix(in srgb, var(--warning-color) 80%, var(--text-primary));
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.6rem;
+    height: 1.45rem;
+    padding: 0 0.2rem;
+    border: 1px solid color-mix(in srgb, var(--warning-color) 62%, var(--border-color));
+    border-radius: 0.4rem;
+    background: color-mix(in srgb, var(--warning-color) 16%, var(--bg-primary));
+    color: color-mix(in srgb, var(--warning-color) 78%, var(--text-primary));
+    opacity: 1;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
+}
+
+.file-entry-save svg {
+    width: 0.85rem;
+    height: 0.85rem;
+    display: block;
+    fill: currentColor;
 }
 
 .file-entry.active .file-entry-save {
+    border-color: rgba(255, 255, 255, 0.7);
+    background: rgba(255, 255, 255, 0.22);
     color: #fff;
 }
 
 .file-entry-save:hover {
-    opacity: 1;
-    transform: translateY(1px);
+    border-color: var(--warning-color);
+    background: color-mix(in srgb, var(--warning-color) 28%, var(--bg-primary));
+    color: color-mix(in srgb, var(--warning-color) 92%, var(--text-primary));
+    transform: translateY(-1px);
+}
+
+.file-entry.active .file-entry-save:hover {
+    border-color: #fff;
+    background: rgba(255, 255, 255, 0.32);
+    color: #fff;
 }
 
 .file-entry-save[hidden] {
