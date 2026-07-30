@@ -269,6 +269,7 @@ proto._createIntegralChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureIntegralState(plot);
+    this._autoLimitAnalysisRange(plot, state, 'integral');
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
 
@@ -406,7 +407,9 @@ proto._createIntegralChart = function(panelId, panelEl) {
 };
 
 proto._buildIntegralTimeTraces = function(plot) {
-    const built = plot.traces.map((trace, index) => this._buildTimeTrace(trace, null, plot, index)).filter(Boolean);
+    const state = this._ensureIntegralState(plot);
+    const visualRange = state.autoRangeWarning ? this._activeIntegralRange(plot) : null;
+    const built = plot.traces.map((trace, index) => this._buildTimeTrace(trace, visualRange, plot, index)).filter(Boolean);
     return this._applyIntegralLegendUnit(plot, built);
 };
 
@@ -662,6 +665,7 @@ proto._setIntegralRangeMode = function(panelId, full) {
     if (!plot) return;
     const state = this._ensureIntegralState(plot);
     if (state.rangeFull === full) return;
+    state.autoRangeWarning = null;
     state.rangeFull = full;
     if (!full) {
         const axis = plot.div?._fullLayout?.xaxis;
@@ -842,7 +846,7 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     plot._integralToken = token;
     const state = this._ensureIntegralState(plot);
     const range = state.rangeFull ? null : this._activeIntegralRange(plot);
-    const warnings = [];
+    const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
     const notes = [];
     const models = [];
 

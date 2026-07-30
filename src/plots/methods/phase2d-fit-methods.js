@@ -521,6 +521,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (plot.phase2dFitContainer?.isConnected) return;
         plot.phase2dFitContainer = null;
         const state = this._ensurePhase2dState(plot);
+        if (this._autoLimitAnalysisRange(plot, state, 'phase2d')) {
+            state.timeSeriesHidden = false;
+        }
         // A fresh build re-reads current data, so any prior live-append dirtiness
         // is resolved by construction.
         state.dirty = false;
@@ -685,8 +688,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._buildPhase2dFitTimeTraces = function(plot) {
         const descriptors = this._phase2dFitTimeDescriptors(plot);
         const plotLike = { ...plot, traces: descriptors, timeseriesStacked: false, timeseriesY2Enabled: false };
+        const state = this._ensurePhase2dState(plot);
+        const visualRange = state.autoRangeWarning ? this._phase2dFitActiveRange(plot) : null;
         return descriptors.map((d, idx) => {
-            const built = this._buildTimeTrace(d, null, plotLike, idx);
+            const built = this._buildTimeTrace(d, visualRange, plotLike, idx);
             if (!built) return null;
             if (built.type === 'scattergl') built.type = 'scatter';
             built.line = { ...(built.line || {}), color: d.color, dash: d.dash };
@@ -1123,8 +1128,21 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             btn.addEventListener('click', (event) => {
                 event.preventDefault();
                 if (!!state.rangeFull === isFull) return;
+                state.autoRangeWarning = null;
                 state.rangeFull = isFull;
-                if (!isFull) seedSelectionFromView();
+                if (!isFull) {
+                    seedSelectionFromView();
+                    // A selected time window must remain visible; Curve Fit
+                    // starts with its time pane hidden.
+                    if (state.timeSeriesHidden) {
+                        state.timeSeriesHidden = false;
+                        plot.phase2dFitContainer?.classList.remove('fft-time-series-hidden');
+                        const timeButton = plot.phase2dFitContainer?.querySelector('.fft-time-series-btn');
+                        timeButton?.classList.remove('active');
+                        timeButton?.setAttribute('aria-pressed', 'false');
+                        if (plot.phase2dFitTimeDiv) Plotly.Plots.resize(plot.phase2dFitTimeDiv);
+                    }
+                }
                 this._updatePhase2dFitSelectionShapes(panelId, plot);
                 this._schedulePhase2dFitRecompute(panelId, { immediate: true });
                 this._renderPhase2dFitDrawer(panelId, plot);

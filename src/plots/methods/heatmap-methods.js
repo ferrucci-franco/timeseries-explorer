@@ -405,6 +405,7 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureCalendarHeatmapState(plot);
+    this._autoLimitAnalysisRange(plot, state, 'heatmap');
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
 
@@ -565,8 +566,10 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
 };
 
 proto._buildCalendarHeatmapTimeTraces = function(plot) {
+    const state = this._ensureCalendarHeatmapState(plot);
+    const visualRange = state.autoRangeWarning ? this._activeCalendarHeatmapRange(plot) : null;
     return (plot?.traces || [])
-        .map((trace, index) => this._buildTimeTrace(trace, null, plot, index))
+        .map((trace, index) => this._buildTimeTrace(trace, visualRange, plot, index))
         .filter(Boolean);
 };
 
@@ -834,6 +837,7 @@ proto._setCalendarHeatmapRangeMode = function(panelId, full) {
     if (!plot) return;
     const state = this._ensureCalendarHeatmapState(plot);
     if (state.rangeFull === full) return;
+    state.autoRangeWarning = null;
     state.rangeFull = full;
     if (!full) {
         const xaxis = plot.div?._fullLayout?.xaxis;
@@ -871,7 +875,7 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
     const token = (plot._calendarHeatmapToken || 0) + 1;
     plot._calendarHeatmapToken = token;
     const state = this._ensureCalendarHeatmapState(plot);
-    const warnings = [];
+    const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
     const eager = [];
     const allTraces = plot.traces || [];
 

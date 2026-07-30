@@ -1017,7 +1017,13 @@ proto._lazyExpandedTarget = function(target, queryRange, t0, t1) {
 proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     if (!plot?.div) return Promise.resolve();
     const valid = results
-        .filter(result => result && Number.isInteger(result.idx) && plot.traces[result.idx])
+        .filter(result => {
+            if (!result || !Number.isInteger(result.idx) || !plot.traces[result.idx]) return false;
+            // A detail query may finish after another trace was removed and all
+            // following indices shifted. Never restyle the new occupant with
+            // stale x/y data from the old trace.
+            return !result.trace || plot.traces[result.idx] === result.trace;
+        })
         .sort((a, b) => a.idx - b.idx);
     if (!valid.length) return Promise.resolve();
     const xs = [];

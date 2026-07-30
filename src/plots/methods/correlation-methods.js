@@ -164,6 +164,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!this._hasContent(plot)) return;
         const state = this._ensureCorrelationState(plot);
+        this._autoLimitAnalysisRange(plot, state, 'correlation');
 
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) placeholder.style.display = 'none';
@@ -357,8 +358,10 @@ export function installPlotCorrelationMethods(TargetClass) {
     proto._buildCorrelationTimeTraces = function(plot) {
         const descriptors = this._correlationTimeDescriptors(plot);
         const plotLike = { ...plot, traces: descriptors, timeseriesStacked: false, timeseriesY2Enabled: false };
+        const state = this._ensureCorrelationState(plot);
+        const visualRange = state.autoRangeWarning ? this._activeCorrelationRange(plot) : null;
         return descriptors.map((d, idx) => {
-            const built = this._buildTimeTrace(d, null, plotLike, idx);
+            const built = this._buildTimeTrace(d, visualRange, plotLike, idx);
             if (!built) return null;
             // Force SVG so the custom dash pattern renders (scattergl ignores it);
             // the pane is downsampled to ~2000 points, so SVG is cheap.
@@ -727,7 +730,7 @@ export function installPlotCorrelationMethods(TargetClass) {
 
         if (plot._correlationToken !== token) return;
 
-        const warnings = [];
+        const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
         for (const r of results) {
             if (!r || r.status === 'ok') continue;
             if (r.status === 'undefined') warnings.push(`${r.label}: ${i18n.t('correlationUndefined')}`);
@@ -950,6 +953,7 @@ export function installPlotCorrelationMethods(TargetClass) {
                 event.preventDefault();
                 const st = this._ensureCorrelationState(plot);
                 if (!!st.rangeFull === isFull) return;
+                st.autoRangeWarning = null;
                 st.rangeFull = isFull;
                 if (!isFull) seedSelectionFromView();
                 this._updateCorrelationSelectionShapes(panelId, plot);

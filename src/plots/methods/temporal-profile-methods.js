@@ -315,6 +315,7 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureTemporalProfileState(plot);
+    this._autoLimitAnalysisRange(plot, state, 'temporal-profile');
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
     if (restoreView?.temporalProfileView) plot._temporalProfilePendingView = restoreView.temporalProfileView;
@@ -437,7 +438,9 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
 };
 
 proto._buildTemporalProfileTimeTraces = function(plot) {
-    return plot.traces.map((trace, index) => this._buildTimeTrace(trace, null, plot, index)).filter(Boolean);
+    const state = this._ensureTemporalProfileState(plot);
+    const visualRange = state.autoRangeWarning ? this._activeTemporalProfileRange(plot) : null;
+    return plot.traces.map((trace, index) => this._buildTimeTrace(trace, visualRange, plot, index)).filter(Boolean);
 };
 
 proto._buildTemporalProfileTimeLayout = function(plot) {
@@ -626,7 +629,7 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
         state.customResolutionByPeriod[state.period] = matchingPreset == null;
         this._renderTemporalProfileOptionsPanel(panelId, plot);
     }
-    const warnings = [];
+    const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
     const models = [];
     const lazyByFile = new Map();
     const visibleDayCategories = temporalProfileCategoryIds(state).filter(id => this._temporalProfileCategoryEnabled(state, id));
@@ -1089,6 +1092,7 @@ proto._setTemporalProfileRangeMode = function(panelId, full) {
     if (!plot) return;
     const state = this._ensureTemporalProfileState(plot);
     if (state.rangeFull === full) return;
+    state.autoRangeWarning = null;
     state.rangeFull = full;
     if (!full) {
         const axis = plot.div?._fullLayout?.xaxis;

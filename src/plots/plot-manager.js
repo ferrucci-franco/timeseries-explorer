@@ -97,11 +97,17 @@ class PlotManager {
             if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
                 const before = plot.traces.length;
                 plot.traces = plot.traces.filter(t => t.fileId !== fileId);
-                if (plot.traces.length < before) affectedPanels.add(panelId);
+                if (plot.traces.length < before) {
+                    this._cancelPanelAnalysis?.(panelId, plot, 'File removed');
+                    affectedPanels.add(panelId);
+                }
             } else {
                 const before = plot.phaseTraces.length;
                 plot.phaseTraces = plot.phaseTraces.filter(t => t.fileId !== fileId);
-                if (plot.phaseTraces.length < before) affectedPanels.add(panelId);
+                if (plot.phaseTraces.length < before) {
+                    this._cancelPanelAnalysis?.(panelId, plot, 'File removed');
+                    affectedPanels.add(panelId);
+                }
                 if (plot.phasePending?.fileId === fileId) {
                     plot.phasePending = { x: null, y: null, z: null, fileId: null };
                 }
@@ -1843,6 +1849,7 @@ class PlotManager {
     _destroyChart(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        this._cancelPanelAnalysis?.(panelId, plot, 'Panel destroyed');
         if (typeof this._cleanupLazyDetailForPanel === 'function') {
             this._cleanupLazyDetailForPanel(panelId, plot);
         }
@@ -2026,6 +2033,29 @@ class PlotManager {
         plot._correlationSelectionDiv = null;
         this._cleanupHeatmapChart?.(panelId, plot);
         plot.cameraOverlayEl = null;
+    }
+
+    _cancelPanelAnalysis(panelId, plot = this.plots.get(panelId), reason = 'Analysis cancelled') {
+        if (!plot) return;
+        plot._fftToken = (plot._fftToken || 0) + 1;
+        plot._fftPreparationToken = (plot._fftPreparationToken || 0) + 1;
+        plot._histToken = (plot._histToken || 0) + 1;
+        plot._calendarHeatmapToken = (plot._calendarHeatmapToken || 0) + 1;
+        plot._temporalProfileToken = (plot._temporalProfileToken || 0) + 1;
+        plot._integralToken = (plot._integralToken || 0) + 1;
+        plot._correlationToken = (plot._correlationToken || 0) + 1;
+        plot._phase2dLazyToken = (plot._phase2dLazyToken || 0) + 1;
+        for (const key of [
+            '_fftRecomputeTimer', '_histRecomputeTimer', '_calendarHeatmapRecomputeTimer',
+            '_temporalProfileRecomputeTimer', '_integralRecomputeTimer',
+            '_correlationRecomputeTimer', '_corrVisualTimer',
+            '_phase2dFitRecomputeTimer', '_phase2dFitVisualTimer',
+        ]) {
+            clearTimeout(plot[key]);
+            plot[key] = null;
+        }
+        this._abortFftWorkerJob?.(plot, reason);
+        this._cleanupLazyDetailForPanel?.(panelId, plot);
     }
 
     _clearPanel(panelId) {

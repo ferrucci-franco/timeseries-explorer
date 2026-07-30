@@ -135,6 +135,7 @@ proto._createHistogramChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureHistogramState(plot);
+    this._autoLimitAnalysisRange(plot, state, 'histogram');
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
     if (restoreView?.histogramBars) plot._histogramPendingBarView = restoreView.histogramBars;
@@ -360,8 +361,10 @@ proto._removeHistogramTraceFromLegend = function(panelId, plot, trace) {
 // ─── Time plot (top/left pane) ─────────────────────────────────────
 
 proto._buildHistogramTimeTraces = function(plot) {
+    const state = this._ensureHistogramState(plot);
+    const visualRange = state.autoRangeWarning ? this._activeHistogramRange(plot) : null;
     return plot.traces
-        .map((t, idx) => this._buildTimeTrace(t, null, plot, idx))
+        .map((t, idx) => this._buildTimeTrace(t, visualRange, plot, idx))
         .filter(Boolean);
 };
 
@@ -482,7 +485,7 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
     const state = this._ensureHistogramState(plot);
     const range = state.rangeFull ? null : this._activeHistogramRange(plot);
     const allTraces = plot.traces || [];
-    const warnings = [];
+    const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
     const config = this._getPlotlyConfig();
 
     if (!allTraces.length) {
@@ -766,6 +769,7 @@ proto._setHistogramRangeMode = function(panelId, full) {
     if (!plot) return;
     const state = this._ensureHistogramState(plot);
     if (state.rangeFull === full) return;
+    state.autoRangeWarning = null;
     state.rangeFull = full;
     if (!full) {
         // Initialize the selection from the currently visible time span.
