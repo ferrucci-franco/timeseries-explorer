@@ -32,6 +32,7 @@ import {
 } from '../../compute/kernels/regrid.js';
 import * as kernelShared from '../../compute/kernels/shared.js';
 import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
+import { csvCell } from '../../utils/csv-cell.js';
 
 export function installResampleMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -734,7 +735,12 @@ proto._resampleCsvBytes = function(data) {
     if (rows * (columns.length + 1) > 60_000_000) throw new Error('Resampled dataset is too large to serialize');
 
     const isDatetime = data.metadata?.timeKind === 'datetime';
-    const parts = [[timeName, ...columns.map(([name]) => name)].join(',')];
+    // Variable names come from the source file, and a comma inside one would
+    // shift every column after it. Quoting only, deliberately: these bytes are
+    // read back by the CSV parser when a session is restored, so the formula
+    // guard csvTextCell adds (an apostrophe before = + - @) would rename the
+    // variable on the way back in and orphan the plots that reference it.
+    const parts = [[timeName, ...columns.map(([name]) => name)].map(csvCell).join(',')];
     for (let r = 0; r < rows; r++) {
         const cells = new Array(columns.length + 1);
         const t = abscissa.data[r];

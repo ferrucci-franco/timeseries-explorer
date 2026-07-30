@@ -15,6 +15,7 @@ import {
     PHASE2D_FIT_MODELS,
 } from '../phase2d-state.js';
 import { fitPair, buildFitCurve } from '../../utils/regression.js';
+import { csvValueCell } from '../../utils/csv-cell.js';
 
 // Range-input formatting / datetime conversion — mirrors the FFT & Correlation
 // panels so the Todo/Selección controls look and behave identically.
@@ -1401,11 +1402,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         URL.revokeObjectURL(url);
     };
 
-    // Shared CSV helpers.
-    proto._phase2dCsvEsc = function(value) {
-        const s = String(value ?? '');
-        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
+    // Shared CSV helpers. Cell escaping itself lives in utils/csv-cell.js, which
+    // also keeps a file-derived name from reaching a spreadsheet as a formula.
     proto._phase2dVarUnit = function(fileId, varName) {
         const v = this.files.get(fileId)?.data?.variables?.[varName];
         return v ? this._extractUnit(v.description) : '';
@@ -1424,8 +1422,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const scope = state.rangeFull ? 'all' : 'selection';
         const selStart = state.rangeFull ? '' : (state.x1 ?? '');
         const selEnd = state.rangeFull ? '' : (state.x2 ?? '');
-        const esc = (v) => this._phase2dCsvEsc(v);
-        const num = (v) => (Number.isFinite(v) ? String(v) : '');
+        const esc = csvValueCell;
+        // Kept as a number so the escaper can tell -0.5 (data) from a
+        // file-derived name that merely opens with a minus sign (a formula).
+        const num = (v) => (Number.isFinite(v) ? v : '');
         const fitOf = (r, key) => (r.fit && r.fit.status === 'ok' ? r.fit[key] : NaN);
         const displayedCount = (r) => {
             const vis = this._phase2dDisplayedVisual(plot, r.pair);
@@ -1473,7 +1473,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     // 2) Fit curve — long format, 200 points per fitted pair (no extrapolation).
     proto._phase2dFitCurveCsv = function(plot) {
         const results = this._computePhase2dFits(plot);
-        const esc = (v) => this._phase2dCsvEsc(v);
+        const esc = csvValueCell;
         const pairIdx = [];
         const pairCol = [];
         const modelCol = [];
@@ -1502,7 +1502,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._phase2dFitDisplayedCsv = function(plot) {
         const pairs = (plot.phaseTraces || []).filter(p => p.visible !== false);
         if (!pairs.length) return null;
-        const esc = (v) => this._phase2dCsvEsc(v);
+        const esc = csvValueCell;
         const pairIdx = [];
         const pairCol = [];
         const xCol = [];
