@@ -3360,26 +3360,26 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
    Responsive
    ============================================ */
 @media (max-width: 768px) {
-    .sidebar {
+    html:not(.phone-stage) .sidebar {
         position: absolute;
         height: 100%;
         z-index: 100;
         box-shadow: 2px 0 8px rgba(0,0,0,0.1);
     }
 
-    .top-bar {
+    html:not(.phone-stage) .top-bar {
         padding: 0.5rem 1rem;
     }
 
-    .top-bar-left h1 {
+    html:not(.phone-stage) .top-bar-left h1 {
         font-size: 1rem;
     }
 
-    .app-brand {
+    html:not(.phone-stage) .app-brand {
         max-width: 10rem;
     }
 
-    .app-subtitle {
+    html:not(.phone-stage) .app-subtitle {
         font-size: 0.66rem;
     }
 }

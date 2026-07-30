@@ -5,6 +5,7 @@ import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
 import { expandedAxisRangeForExtent, installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';
+import { installPlotTouchMethods } from './methods/touch-methods.js';
 import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
@@ -1452,6 +1453,12 @@ class PlotManager {
                 // Two-finger horizontal trackpad swipe pans; vertical keeps
                 // Plotly's zoom.
                 this._installWheelPan(panelId, plot, div, {
+                    finalize: plot.mode === 'timeseries'
+                        ? (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange })
+                        : null,
+                });
+                // Touch: one finger pans, two pinch to zoom, double tap autoscales.
+                this._installTouchGestures(panelId, plot, div, {
                     finalize: plot.mode === 'timeseries'
                         ? (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange })
                         : null,
@@ -3770,6 +3777,7 @@ class PlotManager {
 installPlotDataMethods(PlotManager);
 installPlotStateMethods(PlotManager);
 installPlotInteractionMethods(PlotManager);
+installPlotTouchMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotCorrelationMethods(PlotManager);

@@ -60,6 +60,8 @@ body {
     background-color: var(--bg-primary);
     color: var(--text-primary);
     overflow: hidden;
+    /* The window, not --app-vh: body is the stage's PARENT, so it really is
+       measured by the window even when the stage inside it is not. */
     height: 100vh;
     display: flex;
     flex-direction: column;
@@ -95,7 +97,7 @@ body {
     flex-direction: column;
     justify-content: center;
     min-width: 0;
-    max-width: clamp(13rem, 28vw, 26rem);
+    max-width: clamp(13rem, calc(0.28 * var(--app-vw, 100vw)), 26rem);
 }
 
 .top-bar-left h1 {
@@ -530,10 +532,10 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 }
 
 .example-menu.live-update-topbar-menu {
-    width: min(720px, calc(100vw - 1rem));
-    min-width: min(360px, calc(100vw - 1rem));
-    max-width: calc(100vw - 1rem);
-    max-height: calc(100vh - 76px);
+    width: min(720px, calc(var(--app-vw, 100vw) - 1rem));
+    min-width: min(360px, calc(var(--app-vw, 100vw) - 1rem));
+    max-width: calc(var(--app-vw, 100vw) - 1rem);
+    max-height: calc(var(--app-vh, 100vh) - 76px);
     overflow-y: auto;
     overscroll-behavior: contain;
     display: grid;
@@ -621,7 +623,7 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 }
 
 @media (max-width: 720px) {
-    .example-menu.live-update-topbar-menu {
+    html:not(.phone-stage) .example-menu.live-update-topbar-menu {
         grid-template-columns: 1fr;
     }
 }

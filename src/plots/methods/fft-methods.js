@@ -250,6 +250,13 @@ proto._createFftChart = function(panelId, panelEl) {
         this._installRightButtonPan(panelId, plot, plot.fftDiv, {
             finalize: () => { if (plot.cursorsSpectrum?.enabled) this._syncCursorDisplay(panelId, plot); },
         });
+        // Touch equivalents: one finger pans, two pinch to zoom.
+        this._installTouchGestures(panelId, plot, plot.div, {
+            finalize: (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange }),
+        });
+        this._installTouchGestures(panelId, plot, plot.fftDiv, {
+            finalize: () => { if (plot.cursorsSpectrum?.enabled) this._syncCursorDisplay(panelId, plot); },
+        });
         this._syncCursorDisplay(panelId, plot);
         this._scheduleFftRecompute(panelId, {
             immediate: true,

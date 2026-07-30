@@ -317,6 +317,9 @@ export function installPlotCorrelationMethods(TargetClass) {
             // Same gestures on the results (bars) pane, like the FFT spectrum pane.
             this._installWheelPan(panelId, plot, plot.correlationDiv, {});
             this._installRightButtonPan(panelId, plot, plot.correlationDiv, {});
+            // Touch equivalents: one finger pans, two pinch to zoom.
+            this._installTouchGestures(panelId, plot, plot.div, {});
+            this._installTouchGestures(panelId, plot, plot.correlationDiv, {});
             this._scheduleCorrelationRecompute(panelId, { immediate: true });
             let timer;
             const ro = new ResizeObserver(() => {

@@ -31,10 +31,15 @@
     box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--primary-color) 28%, transparent);
 }
 
+/* Sized against the drop zone, not the window. The window is the wrong ruler:
+   this sits BESIDE the sidebar, so measuring the whole viewport never subtracts
+   the sidebar's 320px and the card slid underneath it — on any desktop window
+   below about 1240px, and on the phone stage, whose 1152px layout lands right
+   in that range. */
 .drop-zone-content {
     text-align: center;
     padding: 2rem;
-    width: min(1040px, calc(100vw - 3rem));
+    width: min(1040px, calc(100% - 3rem));
     max-width: 1040px;
 }
 
@@ -99,10 +104,13 @@
     transform: translateY(0);
 }
 
+/* Same correction. The old 7rem was 3rem of gutter plus the 2 x 2rem padding of
+   .drop-zone-content — reconstructing, from the window, the box this already
+   sits inside. Measuring that box directly is both shorter and right. */
 .light-version-notice {
-    width: min(920px, calc(100vw - 7rem));
+    width: min(920px, 100%);
     max-width: 920px;
-    max-height: min(56vh, 520px);
+    max-height: min(calc(0.56 * var(--app-vh, 100vh)), 520px);
     overflow: auto;
     margin: 1.25rem auto 0;
     padding: 1.15rem 1.3rem;
@@ -156,25 +164,25 @@
 }
 
 @media (min-height: 760px) and (min-width: 900px) {
-    .light-version-notice {
+    html:not(.phone-stage) .light-version-notice {
         max-height: none;
         overflow: visible;
     }
 }
 
 @media (max-width: 760px) {
-    .drop-zone-content {
-        width: min(100%, calc(100vw - 1rem));
+    html:not(.phone-stage) .drop-zone-content {
+        width: min(100%, calc(var(--app-vw, 100vw) - 1rem));
         padding: 1rem;
     }
 
-    .light-version-notice {
-        width: min(100%, calc(100vw - 2rem));
-        max-height: min(48vh, 420px);
+    html:not(.phone-stage) .light-version-notice {
+        width: min(100%, calc(var(--app-vw, 100vw) - 2rem));
+        max-height: min(calc(0.48 * var(--app-vh, 100vh)), 420px);
         padding: 1rem;
     }
 
-    .light-version-notice ul {
+    html:not(.phone-stage) .light-version-notice ul {
         columns: 1;
     }
 }
@@ -1252,7 +1260,7 @@
     }
 
     .help-topic-button {
-        flex: 0 0 min(205px, 58vw);
+        flex: 0 0 min(205px, 57.99999999999999vw);
         min-height: 48px;
         grid-template-columns: 35px minmax(0, 1fr);
         scroll-snap-align: start;
@@ -2297,7 +2305,7 @@ body.cursor-box-dragging {
 .fft-options {
     flex: 0 0 286px;
     width: 286px;
-    max-width: min(42vw, 320px);
+    max-width: min(calc(0.42 * var(--app-vw, 100vw)), 320px);
     min-width: 230px;
     padding: 9px;
     border-left: 1px solid var(--border-color);
@@ -2664,7 +2672,8 @@ body.cursor-box-dragging {
     z-index: 1;
     display: block;
     text-align: center;
-    width: min(420px, calc(100vw - 3rem));
+    /* Beside the sidebar too, so the same container-relative ruler. */
+    width: min(420px, calc(100% - 3rem));
     padding: 2rem 2.5rem;
     border: 2px dashed var(--drop-zone-drag-card-border);
     border-radius: 18px;
@@ -2814,7 +2823,7 @@ body.fft-split-dragging {
     position: fixed;
     z-index: 40;
     width: 300px;
-    max-width: calc(100vw - 16px);
+    max-width: calc(var(--app-vw, 100vw) - 16px);
     margin: 0;
     white-space: normal;
     background: var(--bg-primary);
@@ -2831,11 +2840,11 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 }
 
 @media (max-width: 760px) {
-    .fft-workspace {
+    html:not(.phone-stage) .fft-workspace {
         flex-direction: column;
     }
 
-    .fft-options {
+    html:not(.phone-stage) .fft-options {
         flex: 0 0 auto;
         width: auto;
         max-width: none;
@@ -2844,7 +2853,7 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
         border-top: 1px solid var(--border-color);
     }
 
-    .fft-topbar {
+    html:not(.phone-stage) .fft-topbar {
         gap: 4px;
     }
 }
@@ -3431,7 +3440,7 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
 .heatmap-options {
     flex: 0 0 286px;
     width: 286px;
-    max-width: min(42vw, 320px);
+    max-width: min(calc(0.42 * var(--app-vw, 100vw)), 320px);
     min-width: 230px;
     padding: 9px;
     border-left: 1px solid var(--border-color);
@@ -3574,7 +3583,7 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
 
 @media (max-width: 760px) {
     .heatmap-workspace { flex-direction: column; }
-    .heatmap-options {
+    html:not(.phone-stage) .heatmap-options {
         flex: 0 0 auto;
         width: auto;
         max-width: none;

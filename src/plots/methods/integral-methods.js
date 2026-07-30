@@ -389,6 +389,8 @@ proto._createIntegralChart = function(panelId, panelEl) {
         this._installIntegralPieSplitterHandlers(panelId, plot);
         this._installWheelPan(panelId, plot, timeDiv, { finalize: xRange => this._onRelayout(panelId, { 'xaxis.range': xRange }) });
         this._installRightButtonPan(panelId, plot, timeDiv, { finalize: xRange => this._onRelayout(panelId, { 'xaxis.range': xRange }) });
+        // Touch equivalent: one finger pans, two pinch to zoom.
+        this._installTouchGestures(panelId, plot, timeDiv, { finalize: xRange => this._onRelayout(panelId, { 'xaxis.range': xRange }) });
         this._syncCursorDisplay?.(panelId, plot);
         this._scheduleIntegralRecompute(panelId, { immediate: true });
         let timer;

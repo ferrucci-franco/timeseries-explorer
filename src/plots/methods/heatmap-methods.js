@@ -543,6 +543,11 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
             finalize: (range) => this._onRelayout(panelId, { 'xaxis.range': range }),
         });
         this._installRightButtonPan(panelId, plot, plot.heatmapDiv);
+        // Touch equivalents: one finger pans, two pinch to zoom.
+        this._installTouchGestures(panelId, plot, plot.div, {
+            finalize: (range) => this._onRelayout(panelId, { 'xaxis.range': range }),
+        });
+        this._installTouchGestures(panelId, plot, plot.heatmapDiv);
         this._syncCursorDisplay?.(panelId, plot);
         this._scheduleCalendarHeatmapRecompute(panelId, { immediate: true });
 

@@ -17,6 +17,7 @@ import {
     parseCoefficients,
 } from '../../compute/kernels/iir.js';
 import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
+import { fixedPositioningBox, screenRectToFixed } from '../../ui/viewport-transform.js';
 
 export function installFilterMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -134,19 +135,27 @@ proto._toggleFilterInitHelpPopover = function(show) {
 // and is then pulled up as far as needed to fit on screen.
 proto._positionFilterHelpPopover = function(popover, button) {
     if (typeof window === 'undefined' || !button.getBoundingClientRect) return;
-    const rect = button.getBoundingClientRect();
+    // The popover is `position: fixed` inside the sidebar, so on the phone stage
+    // it is laid out against the stage rather than the window; both the anchor
+    // and the clamps below have to be in that same space.
+    const rect = screenRectToFixed(button.getBoundingClientRect());
     const margin = 12;
     // The viewport may report zero on a window that is offscreen or has not
     // composited yet. Where it does, the honest answer is "unknown", not a made-up
     // number: an invented width both shrinks the popover and drags it left over
     // the very controls it is explaining. Unknown means skip the clamp instead.
-    const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
-    const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
+    const box = fixedPositioningBox(
+        window.innerWidth || document.documentElement?.clientWidth || 0,
+        window.innerHeight || document.documentElement?.clientHeight || 0,
+    );
+    const viewportWidth = box.width;
+    const viewportHeight = box.height;
     const width = viewportWidth
         ? Math.max(300, Math.min(600, viewportWidth - 2 * margin))
         : 600;
 
-    const sidebarRight = document.getElementById('sidebar')?.getBoundingClientRect().right ?? rect.right;
+    const sidebar = document.getElementById('sidebar');
+    const sidebarRight = sidebar ? screenRectToFixed(sidebar.getBoundingClientRect()).right : rect.right;
     // Beside the sidebar, which is what keeps it clear of the filter's controls.
     // Only a viewport we actually measured may pull it back left, and on a window
     // too narrow for that it overlaps — still better than opening off-screen.

@@ -6,6 +6,9 @@ const translations = {
             appSubtitleMorePrefix: 'and',
             appSubtitleMoreLink: 'more!',
             supportedFormatsTitle: 'Supported formats',
+            // Phone-only floating view controls
+            mobileFitToScreen: 'Fit to screen',
+            mobileFullscreen: 'Fullscreen',
             supportedFormatsBody: `<div class="supported-formats-help">
                 <div class="supported-formats-table-wrap"><table class="supported-formats-table">
                     <thead><tr><th>Format</th><th>Extensions</th><th>Notes</th></tr></thead>
@@ -1761,6 +1764,8 @@ const translations = {
             appSubtitleMorePrefix: 'et',
             appSubtitleMoreLink: 'plus !',
             supportedFormatsTitle: 'Formats pris en charge',
+            mobileFitToScreen: "Ajuster à l'écran",
+            mobileFullscreen: 'Plein écran',
             supportedFormatsBody: `<div class="supported-formats-help">
                 <div class="supported-formats-table-wrap"><table class="supported-formats-table">
                     <thead><tr><th>Format</th><th>Extensions</th><th>Notes</th></tr></thead>
@@ -3516,6 +3521,8 @@ const translations = {
             appSubtitleMorePrefix: 'y',
             appSubtitleMoreLink: 'más!',
             supportedFormatsTitle: 'Formatos compatibles',
+            mobileFitToScreen: 'Ajustar a la pantalla',
+            mobileFullscreen: 'Pantalla completa',
             supportedFormatsBody: `<div class="supported-formats-help">
                 <div class="supported-formats-table-wrap"><table class="supported-formats-table">
                     <thead><tr><th>Formato</th><th>Extensiones</th><th>Notas</th></tr></thead>
@@ -5241,6 +5248,8 @@ const translations = {
             appSubtitleMorePrefix: 'e',
             appSubtitleMoreLink: 'altro!',
             supportedFormatsTitle: 'Formati supportati',
+            mobileFitToScreen: 'Adatta allo schermo',
+            mobileFullscreen: 'Schermo intero',
             supportedFormatsBody: `<div class="supported-formats-help">
                 <div class="supported-formats-table-wrap"><table class="supported-formats-table">
                     <thead><tr><th>Formato</th><th>Estensioni</th><th>Note</th></tr></thead>

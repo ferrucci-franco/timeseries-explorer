@@ -2,7 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- On a phone src/ui/mobile-viewport.js appends `user-scalable=no` here,
+         because the stage does its own zooming and the browser's pinch would
+         fight it. Every other device keeps the native pinch. -->
+    <meta name="viewport" id="viewport-meta" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <!-- Added to the home screen, iOS and Android run this without the browser's
+         toolbars. On a phone held sideways that bar takes a large bite out of an
+         already short screen, and it is the only way to get it back: iPhone
+         Safari has no element fullscreen to ask for. -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Time Series Explorer">
     <title>Time Series Explorer</title>
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -10,6 +20,11 @@
     <script>
         document.body.className = `theme-${new Date().getHours() >= 7 && new Date().getHours() < 18 ? 'light' : 'dark'}`;
     </script>
+    <!-- Everything the phone stage scales and rotates lives inside #app-stage.
+         It is `display: contents` everywhere else, so the desktop layout is
+         exactly as it was. Dialogs are appended to <body>, outside the stage,
+         and so stay at the screen's own scale. -->
+    <div id="app-stage">
     <!-- Top Bar -->
     <div class="top-bar">
         <div class="top-bar-left">
@@ -814,6 +829,13 @@
                 <!-- Layout panels rendered here by LayoutManager -->
             </div>
         </div>
+    </div>
+    </div><!-- /#app-stage -->
+
+    <!-- Phone-only view controls, outside the stage so they keep their real size. -->
+    <div id="mobile-view-controls" class="mobile-view-controls">
+        <button id="mobile-fit-btn" class="mobile-view-btn" type="button" title="Fit to screen" data-i18n-title="mobileFitToScreen">⤢</button>
+        <button id="mobile-fullscreen-btn" class="mobile-view-btn" type="button" title="Fullscreen" data-i18n-title="mobileFullscreen">⛶</button>
     </div>
     <script>
         window.__OMV_PUBLIC_BASE__ = window.location.protocol === 'file:' ? './public/' : './';

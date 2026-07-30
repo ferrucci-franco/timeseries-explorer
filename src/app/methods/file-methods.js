@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import CsvParsingPreviewDialog from '../../ui/csv-parsing-preview-dialog.js';
+import { fixedPositioningBox, screenRectToFixed } from '../../ui/viewport-transform.js';
 import {
     PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES,
     PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES,
@@ -4017,14 +4018,17 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         popover.innerHTML = `<div class="file-transform-help-title">${title}</div>${bodyHtml}`;
 
         const positionPopover = () => {
-            const rect = btn.getBoundingClientRect();
+            // `position: fixed` inside the sidebar, so on the phone stage it is
+            // laid out against the stage rather than the window.
+            const rect = screenRectToFixed(btn.getBoundingClientRect());
+            const box = fixedPositioningBox(window.innerWidth, window.innerHeight);
             const margin = 8;
             const w = popover.offsetWidth;
             const h = popover.offsetHeight;
-            let left = Math.min(rect.left, window.innerWidth - w - margin);
+            let left = Math.min(rect.left, box.width - w - margin);
             left = Math.max(margin, left);
             let top = rect.bottom + 6;
-            if (top + h > window.innerHeight - margin) top = Math.max(margin, rect.top - h - 6);
+            if (top + h > box.height - margin) top = Math.max(margin, rect.top - h - 6);
             popover.style.left = `${left}px`;
             popover.style.top = `${top}px`;
         };

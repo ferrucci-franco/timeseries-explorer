@@ -3,6 +3,7 @@ import Plotly from '../../vendor/plotly.js';
 import { formatSpectrumPeriod, spectrumCursorMeasurements } from '../../utils/fft.js';
 import { missingBucketsToIntervals } from '../../data/missing-buckets-sql.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
+import { fixedPositioningBox, screenPointToStage, screenRectToFixed } from '../../ui/viewport-transform.js';
 
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -2606,14 +2607,32 @@ proto._beginCursorBoxZoomSuppress = function(panelId, plot) {
     document.addEventListener('keydown', cancel, true);
 };
 
+// A pane's top-left in LAYOUT pixels — the same space Plotly's `_offset` and
+// `_length` are measured in. On the desktop that is just the bounding rect, but
+// under the phone stage the whole app is scaled and, held upright, turned a
+// quarter turn, so a screen position has to come back through that transform
+// first. Right angles map an axis-aligned rectangle to an axis-aligned
+// rectangle, which is why two opposite corners still bound the pane.
+proto._divLayoutOrigin = function(div) {
+    const rect = div.getBoundingClientRect();
+    const a = screenPointToStage(rect.left, rect.top);
+    const b = screenPointToStage(rect.right, rect.bottom);
+    return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y) };
+};
+
+// A pointer or touch position in the pane's own layout pixels.
+proto._layoutPointInDiv = function(div, point) {
+    const origin = this._divLayoutOrigin(div);
+    const p = screenPointToStage(point.clientX, point.clientY);
+    return { x: p.x - origin.x, y: p.y - origin.y };
+};
+
 proto._eventInsidePlotArea = function(div, event) {
     const fl = div?._fullLayout;
     const xa = fl?.xaxis;
     const ya = fl?.yaxis;
     if (!xa || !ya || !xa._length || !ya._length) return false;
-    const rect = div.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const { x, y } = this._layoutPointInDiv(div, event);
     const left = xa._offset || 0;
     const right = left + xa._length;
     const top = ya._offset || 0;
@@ -2974,10 +2993,9 @@ proto._installCursorViewHandlers = function(view) {
 proto._eventToXValue = function(div, event) {
     const xa = div?._fullLayout?.xaxis;
     if (!xa?.range) return NaN;
-    const rect = div.getBoundingClientRect();
-    const pixel = event.clientX - rect.left - (xa._offset || 0);
+    const pixel = this._layoutPointInDiv(div, event).x - (xa._offset || 0);
     if (typeof xa.p2c === 'function') return this._coerceAxisValue(xa.p2c(pixel));
-    const frac = pixel / (xa._length || rect.width || 1);
+    const frac = pixel / (xa._length || div.clientWidth || 1);
     const r0 = this._coerceAxisValue(xa.range[0]);
     const r1 = this._coerceAxisValue(xa.range[1]);
     return r0 + frac * (r1 - r0);
@@ -3246,13 +3264,16 @@ proto._positionCursorHelpPopover = function(box) {
     const popover = box?.querySelector('.cursor-help-popover');
     if (!btn || !popover || popover.hidden) return;
     const margin = 8;
-    const btnRect = btn.getBoundingClientRect();
+    // The popover is `position: fixed` inside the panel, so on the phone stage
+    // it is laid out against the stage rather than the window.
+    const btnRect = screenRectToFixed(btn.getBoundingClientRect());
+    const fixedBox = fixedPositioningBox(window.innerWidth, window.innerHeight);
     const width = popover.offsetWidth;
     const height = popover.offsetHeight;
-    let left = Math.min(btnRect.right - width, window.innerWidth - width - margin);
+    let left = Math.min(btnRect.right - width, fixedBox.width - width - margin);
     left = Math.max(margin, left);
     let top = btnRect.bottom + 6;
-    if (top + height > window.innerHeight - margin) {
+    if (top + height > fixedBox.height - margin) {
         top = Math.max(margin, btnRect.top - height - 6);
     }
     popover.style.left = `${left}px`;

@@ -1,0 +1,111 @@
+/* ============================================
+   Phone stage
+
+   On anything but a phone #app-stage is not a box at all — `display: contents`
+   dissolves it, so the top bar and the main container stay direct flex
+   children of <body> and the desktop layout is untouched.
+
+   On a phone it becomes the one element that carries the whole app: a fixed
+   virtual-desktop-sized box, taken out of flow, scaled and rotated by an
+   inline `transform` that src/ui/mobile-viewport.js keeps up to date.
+   ============================================ */
+
+/* The ruler in-stage layout measures itself with.
+
+   `vw`/`vh` always mean the WINDOW, and on the phone stage the window is the
+   phone while the layout is a 1152px virtual desktop — two different numbers,
+   and Safari's per-site page zoom can make them differ by a factor of two. So
+   anything inside the stage sizes itself against these instead. They are
+   written with the window as their fallback — `var(--app-vw, 100vw)` — and set
+   to real pixels ONLY on the stage element, by src/ui/mobile-viewport.js. So
+   every use outside the stage, and every use at all on the desktop, still
+   measures the real window, as it should.
+
+   Which is also why the help dialog, the legend menu and the dismissible
+   notices keep plain `vw`/`vh`: they are appended to <body>, outside the stage,
+   where the window IS their containing block.
+
+   The same split governs the responsive breakpoints. A `@media (max-width: …)`
+   also measures the window, so on a phone every narrow-screen rule fired over a
+   layout that is 1152px wide and had room to spare — the sidebar turned into an
+   absolutely positioned drawer and covered the left third of the content. The
+   blocks that style in-stage elements are therefore qualified with
+   `html:not(.phone-stage)`; the ones that style body-level dialogs are not,
+   because those really are as narrow as the window says. */
+
+#app-stage {
+    display: contents;
+}
+
+html.phone-stage #app-stage {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    overflow: hidden;
+    background-color: var(--bg-primary);
+    /* The stage is repainted on every frame of a pinch. */
+    will-change: transform;
+}
+
+/* The browser's own pinch-zoom would fight the stage transform, so the page
+   keeps only scrolling; the two-finger zoom is ours. */
+html.phone-stage,
+html.phone-stage body {
+    touch-action: pan-x pan-y;
+    overscroll-behavior: none;
+}
+
+/* Fingers on a chart drive its axes, never the page. */
+html.phone-stage .js-plotly-plot {
+    touch-action: none;
+}
+
+/* ============================================
+   Floating view controls
+
+   Deliberately outside the stage, so they keep their real size no matter how
+   far the app itself is zoomed out.
+   ============================================ */
+
+.mobile-view-controls {
+    display: none;
+}
+
+html.phone-stage .mobile-view-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    position: fixed;
+    right: 8px;
+    bottom: 8px;
+    z-index: 5100;
+}
+
+.mobile-view-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 15px;
+    line-height: 1;
+    opacity: 0.62;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.mobile-view-btn:active {
+    opacity: 1;
+}
+
+/* Resetting the zoom is only worth offering once there is a zoom to reset. */
+html.phone-stage .mobile-view-controls:not(.is-zoomed) #mobile-fit-btn {
+    display: none;
+}

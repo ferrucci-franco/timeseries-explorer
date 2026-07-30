@@ -424,6 +424,9 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
         this._installWheelPan(panelId, plot, profileDiv);
         this._installRightButtonPan(panelId, plot, timeDiv, { finalize: xRange => this._onRelayout(panelId, { 'xaxis.range': xRange }) });
         this._installRightButtonPan(panelId, plot, profileDiv);
+        // Touch equivalents: one finger pans, two pinch to zoom.
+        this._installTouchGestures(panelId, plot, timeDiv, { finalize: xRange => this._onRelayout(panelId, { 'xaxis.range': xRange }) });
+        this._installTouchGestures(panelId, plot, profileDiv);
         this._syncCursorDisplay?.(panelId, plot);
         this._scheduleTemporalProfileRecompute(panelId, { immediate: true });
         let timer;

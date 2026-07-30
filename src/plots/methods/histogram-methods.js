@@ -248,6 +248,11 @@ proto._createHistogramChart = function(panelId, panelEl) {
             finalize: (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange }),
         });
         this._installRightButtonPan(panelId, plot, plot.histogramDiv);
+        // Touch equivalents: one finger pans, two pinch to zoom.
+        this._installTouchGestures(panelId, plot, plot.div, {
+            finalize: (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange }),
+        });
+        this._installTouchGestures(panelId, plot, plot.histogramDiv);
         this._syncCursorDisplay?.(panelId, plot);
         this._scheduleHistogramRecompute(panelId, { immediate: true });
         let timer;
