@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import translations from '../src/i18n/translations.js';
 import {
     HISTOGRAM_AUTO_MAX_BINS,
@@ -20,6 +21,79 @@ const histogramMethodsSource = readFileSync(
 const interactionMethodsSource = readFileSync(
     new URL('../src/plots/methods/interaction-methods.js', import.meta.url),
     'utf8',
+);
+
+// A selected range must be cropped with binary bounds before any values are
+// copied. This catches the multi-GB regression where the range was small but
+// Histogram still walked the entire decoded audio array.
+{
+    const start = histogramMethodsSource.indexOf('proto._histogramSamplesForTrace = function');
+    const end = histogramMethodsSource.indexOf('\nproto.', start + 1);
+    assert.ok(start >= 0 && end > start, 'histogram range sampler can be isolated');
+    const isolatedProto = {};
+    vm.runInNewContext(histogramMethodsSource.slice(start, end), { proto: isolatedProto });
+
+    const hugeLength = 20_000_000;
+    let timeReads = 0;
+    let valueReads = 0;
+    const times = new Proxy({ length: hugeLength }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                timeReads++;
+                return index;
+            }
+            return undefined;
+        },
+    });
+    const values = {
+        length: hugeLength,
+        slice(first, last) {
+            valueReads += last - first;
+            return Array.from({ length: last - first }, (_, offset) => first + offset);
+        },
+    };
+    const lowerBound = (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (array[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const upperBound = (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (array[mid] <= target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const harness = {
+        _getTransformedVariableData: () => values,
+        _getTransformedTimeDataForVariable: () => times,
+        _lowerBound: lowerBound,
+        _upperBound: upperBound,
+    };
+    const selected = isolatedProto._histogramSamplesForTrace.call(
+        harness,
+        { fileId: 'audio', varName: 'Left' },
+        [10_000_000, 10_262_143],
+    );
+    assert.equal(selected.length, 262_144, 'only the selected histogram block is copied');
+    assert.ok(timeReads < 100, `range lookup stays logarithmic (${timeReads} time reads)`);
+    assert.equal(valueReads, 262_144, 'no values outside the bounded range are read');
+}
+
+assert.match(
+    histogramMethodsSource,
+    /_scheduleHistogramRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'histogram'\)[\s\S]*setTimeout\(\(\) =>/,
+    'Histogram preflights and paints its status before starting synchronous work',
 );
 
 const close = (actual, expected, tolerance, label) => {

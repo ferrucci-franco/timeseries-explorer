@@ -43,6 +43,7 @@ proto._defaultHistogramState = function() {
         timeSeriesHidden: false,
         optionsVisible: true,
         rangeFull: true,
+        autoRangeLimited: false,
         x1: null,
         x2: null,
         binMode: 'auto',
@@ -74,6 +75,7 @@ proto._normalizeHistogramState = function(raw = {}) {
         rangeFull: raw.rangeFull !== undefined
             ? !!raw.rangeFull
             : !(hasFinite(raw.x1) || hasFinite(raw.x2)),
+        autoRangeLimited: raw.autoRangeLimited === true,
         x1: finiteOrNull(raw.x1),
         x2: finiteOrNull(raw.x2),
         binMode: HISTOGRAM_BIN_MODES.has(raw.binMode) ? raw.binMode : defaults.binMode,
@@ -456,7 +458,19 @@ proto._scheduleHistogramRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.histogramDiv || plot.mode !== 'histogram') return;
     clearTimeout(plot._histRecomputeTimer);
-    const run = () => this._recomputeHistogram(panelId, plot);
+    const run = () => {
+        const state = this._ensureHistogramState(plot);
+        const adjusted = this._autoLimitAnalysisRange(plot, state, 'histogram');
+        if (adjusted) this._updateHistogramSelectionShapes(panelId, plot);
+        this._setHistogramStatus(plot, i18n.t('integralCalculating'), 'loading');
+        // Give the status and any adjusted green range one frame to paint
+        // before the bounded synchronous histogram passes begin.
+        plot._histRecomputeTimer = setTimeout(() => {
+            if (plot.mode === 'histogram' && plot.histogramDiv) {
+                this._recomputeHistogram(panelId, plot);
+            }
+        }, 0);
+    };
     if (options.immediate) run();
     else plot._histRecomputeTimer = setTimeout(run, HISTOGRAM_RECOMPUTE_DEBOUNCE_MS);
 };
@@ -469,13 +483,13 @@ proto._histogramSamplesForTrace = function(trace, range) {
     if (!range) return values;
     const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
     if (!times || times.length !== values.length) return values;
-    const [lo, hi] = range;
-    const out = [];
-    for (let i = 0; i < values.length; i++) {
-        const t = times[i];
-        if (t >= lo && t <= hi) out.push(values[i]);
-    }
-    return out;
+    let [lo, hi] = range;
+    if (lo > hi) [lo, hi] = [hi, lo];
+    const start = Math.max(0, Math.min(values.length, this._lowerBound(times, lo)));
+    const end = Math.max(start, Math.min(values.length, this._upperBound(times, hi)));
+    // The selected count was already preflighted. Slice only those samples:
+    // scanning the complete 160M-point source here defeated the range cap.
+    return values.slice(start, end);
 };
 
 proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
@@ -747,6 +761,8 @@ proto._installHistogramSelectionHandlers = function(panelId, plot) {
             hi = dragging.startHi + delta;
         }
         if (lo > hi) [lo, hi] = [hi, lo];
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
         state.x1 = Math.max(domain.min, Math.min(domain.max, lo));
         state.x2 = Math.max(domain.min, Math.min(domain.max, hi));
         this._updateHistogramSelectionShapes(panelId, plot);
@@ -770,6 +786,7 @@ proto._setHistogramRangeMode = function(panelId, full) {
     const state = this._ensureHistogramState(plot);
     if (state.rangeFull === full) return;
     state.autoRangeWarning = null;
+    state.autoRangeLimited = false;
     state.rangeFull = full;
     if (!full) {
         // Initialize the selection from the currently visible time span.
@@ -839,6 +856,8 @@ proto._resetHistogramView = function(panelId) {
     if (!plot?.div) return;
     const state = this._ensureHistogramState(plot);
     state.rangeFull = true;
+    state.autoRangeLimited = false;
+    state.autoRangeWarning = null;
     state.x1 = null;
     state.x2 = null;
     state.valueRangeMode = 'auto';
@@ -986,6 +1005,8 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
             const n = isCal ? histDatetimeInputToMs(input.value) : Number(input.value);
             let v = Number.isFinite(n) ? n : null;
             if (v != null && domain) v = Math.max(domain.min, Math.min(domain.max, v));
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = v;
             this._updateHistogramSelectionShapes(panelId, plot);
             this._scheduleHistogramRecompute(panelId);
@@ -1004,6 +1025,8 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
         input.disabled = !!state.rangeFull;
         input.addEventListener('input', () => {
             const n = Number(input.value);
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = Number.isFinite(n) ? n : null;
             this._updateHistogramSelectionShapes(panelId, plot);
         });

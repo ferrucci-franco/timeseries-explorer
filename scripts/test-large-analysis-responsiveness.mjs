@@ -133,6 +133,82 @@ assert.match(fft, /_dismissFftAutoRangeWarning[\s\S]*state\.autoRangeWarning = n
 const dataMethods = read('src/plots/methods/data-methods.js');
 assert.match(dataMethods, /_buildTimeLayout = function\(plot, options = \{\}\)/);
 assert.match(dataMethods, /boundedTimeRange[\s\S]*options\.timeRange/);
+assert.match(dataMethods, /selectedCount = selectionEnd - selectionStart/);
+assert.match(dataMethods, /estimatedMs = \(selectedCount \* traceCount \* factor\)/);
+assert.match(dataMethods, /state\.autoRangeLimited = true/);
+
+// Shared non-FFT preflight must count a manually selected span with binary
+// bounds and clamp it before an analysis-specific sampler can scan the source.
+{
+    const start = dataMethods.indexOf('proto._autoLimitAnalysisRange = function');
+    const end = dataMethods.indexOf('\n};', start + 1) + 3;
+    assert.ok(start >= 0 && end > start, 'shared analysis preflight can be isolated');
+    const preflightProto = {};
+    vm.runInNewContext(dataMethods.slice(start, end), {
+        proto: preflightProto,
+        i18n: {
+            t: () => 'estimated {seconds}; selected {samples}',
+        },
+    });
+    const hugeLength = 20_000_000;
+    let timeReads = 0;
+    const times = new Proxy({ length: hugeLength }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                timeReads++;
+                return index;
+            }
+            return undefined;
+        },
+    });
+    const lowerBound = (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (array[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const upperBound = (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (array[mid] <= target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const state = {
+        rangeFull: false,
+        autoRangeLimited: false,
+        x1: 0,
+        x2: hugeLength - 1,
+        warnings: [],
+    };
+    const harness = {
+        files: new Map([['audio', { data: {} }]]),
+        _isVisible: () => true,
+        _getTransformedTimeDataForVariable: () => times,
+        _lowerBound: lowerBound,
+        _upperBound: upperBound,
+    };
+    const adjusted = preflightProto._autoLimitAnalysisRange.call(
+        harness,
+        { mode: 'histogram', traces: [{ fileId: 'audio', varName: 'Left' }] },
+        state,
+        'histogram',
+    );
+    assert.equal(adjusted, true, 'manual oversized analysis range is adjusted');
+    assert.equal(state.rangeFull, false);
+    assert.equal(state.x1, 0);
+    assert.equal(state.x2, FFT_AUTO_TARGET_POINTS - 1);
+    assert.ok(timeReads < 100, `shared preflight stays logarithmic (${timeReads} reads)`);
+}
 
 const interaction = read('src/plots/methods/interaction-methods.js');
 assert.match(interaction, /plot\.traces\[result\.idx\] === result\.trace/);

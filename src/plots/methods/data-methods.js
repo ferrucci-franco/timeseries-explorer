@@ -2190,7 +2190,7 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
 };
 
 proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode) {
-    if (!plot || !state?.rangeFull || state.autoRangeWarning) return false;
+    if (!plot || !state) return false;
     const source = plot.traces?.find(trace => this._isVisible(trace))
         || plot.phaseTraces?.find(trace => trace.visible !== false);
     const fileId = source?.fileId;
@@ -2199,6 +2199,18 @@ proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode) {
     const times = this._getTransformedTimeDataForVariable(fileId, varName);
     const n = times?.length || 0;
     if (n < 2) return false;
+    let selectionStart = 0;
+    let selectionEnd = n;
+    if (!state.rangeFull) {
+        let lo = Number(state.x1);
+        let hi = Number(state.x2);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return false;
+        if (lo > hi) [lo, hi] = [hi, lo];
+        selectionStart = Math.max(0, Math.min(n, this._lowerBound(times, lo)));
+        selectionEnd = Math.max(selectionStart, Math.min(n, this._upperBound(times, hi)));
+    }
+    const selectedCount = selectionEnd - selectionStart;
+    if (selectedCount < 2) return false;
     const traceCount = Math.max(1,
         (plot.traces || []).filter(trace => this._isVisible(trace)).length
         || (plot.phaseTraces || []).filter(trace => trace.visible !== false).length);
@@ -2210,21 +2222,24 @@ proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode) {
         histogram: 4,
         integral: 3,
     }[mode] || 3;
-    const estimatedMs = (n * traceCount * factor) / 10000;
-    if (estimatedMs <= 5000) return false;
-    const target = Math.min(262144, n);
-    let start = 0;
-    while (start < n && !Number.isFinite(Number(times[start]))) start++;
-    if (start >= n - 1) return false;
-    let end = Math.min(n - 1, start + target - 1);
-    while (end > start && !Number.isFinite(Number(times[end]))) end--;
-    if (end <= start) return false;
+    const estimatedMs = (selectedCount * traceCount * factor) / 10000;
+    const target = Math.min(262144, selectedCount);
+    const needsLimit = estimatedMs > 5000
+        || (state.autoRangeLimited === true && selectedCount > target);
+    if (!needsLimit) return false;
+    let start = selectionStart;
+    while (start < selectionEnd && !Number.isFinite(Number(times[start]))) start++;
+    if (start >= selectionEnd - 1) return false;
+    let end = Math.min(selectionEnd, start + target);
+    while (end > start + 1 && !Number.isFinite(Number(times[end - 1]))) end--;
+    if (end <= start + 1) return false;
     state.rangeFull = false;
+    state.autoRangeLimited = true;
     state.x1 = Number(times[start]);
-    state.x2 = Number(times[end]);
+    state.x2 = Number(times[end - 1]);
     state.autoRangeWarning = i18n.t('analysisAutoRangeWarning')
         .replace('{seconds}', Math.max(5, Math.round(estimatedMs / 1000)).toLocaleString())
-        .replace('{samples}', (end - start + 1).toLocaleString());
+        .replace('{samples}', (end - start).toLocaleString());
     if (Array.isArray(state.warnings)) state.warnings = [state.autoRangeWarning];
     return true;
 };
