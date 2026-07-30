@@ -1952,6 +1952,7 @@ class PlotManager {
         // clean them up before the plot.div removal below.
         this._cleanupPhase2dFitDocListeners?.(plot);
         this._stopAnim(plot);
+        plot._stateAnimRenderToken = (plot._stateAnimRenderToken || 0) + 1;
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
         // Reset dynamic trace indices
         delete plot._arrowXIdx;

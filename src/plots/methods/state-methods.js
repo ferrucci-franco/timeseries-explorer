@@ -133,66 +133,71 @@ proto._createStateAnimChart = function(panelId, panelEl) {
     if (is3D) controls.querySelector('.sa-toggle-dzoom').style.display = 'none';
     panelEl.appendChild(container);
 
-    // Get data
-    const d = this.files.get(slots.fileId)?.data;
-    const timeVar = this._getTimeVar(slots.fileId);
-    if (!d || !timeVar) return;
-    const stateTimes = this._getTransformedTimeDataForVariable(slots.fileId, slots.x[0]);
-    const stateLengths = slots.x
-        .map(name => this._getTransformedVariableData(slots.fileId, name)?.length || 0)
-        .filter(Boolean);
-    const nPts = Math.min(stateTimes.length, ...stateLengths);
-    if (!nPts) return;
-
-    // Set scrubber range
     const scrubber = controls.querySelector('.sa-scrubber');
-    scrubber.max = nPts - 1;
+    const renderToken = (plot._stateAnimRenderToken || 0) + 1;
+    plot._stateAnimRenderToken = renderToken;
+    this._setEagerDetailLoading?.(plot, true, panelEl);
+    // The container and all controls are already mounted. Yield before reading
+    // or plotting data so close/delete and toolbar buttons remain responsive.
+    Promise.resolve(this._yieldForDetailIndicatorPaint?.())
+        .then(async () => {
+            if (plot._stateAnimRenderToken !== renderToken || plot.div !== div || !container.isConnected) return;
+            const d = this.files.get(slots.fileId)?.data;
+            const timeVar = this._getTimeVar(slots.fileId);
+            if (!d || !timeVar) return;
+            const stateTimes = this._getTransformedTimeDataForVariable(slots.fileId, slots.x[0]);
+            const stateLengths = slots.x
+                .map(name => this._getTransformedVariableData(slots.fileId, name)?.length || 0)
+                .filter(Boolean);
+            const nPts = Math.min(stateTimes.length, ...stateLengths);
+            if (!nPts) return;
+            scrubber.max = nPts - 1;
 
-    // Build initial Plotly chart
-    const { traces, layout } = this._buildPlotData(plot);
-    const config = this._getPlotlyConfig({ displayModeBar: false });
-    Plotly.newPlot(div, traces, layout, config).then(() => {
-        const restoreAndDecorate = () => {
-            if (restoreView) return this._restorePlotView(plot, restoreView);
-            return Promise.resolve();
-        };
-        restoreAndDecorate().then(() => {
-            // Add bold axis lines + arrowheads for 3D
+            const { traces, layout } = this._buildPlotData(plot);
+            const config = this._getPlotlyConfig({ displayModeBar: false });
+            await Plotly.newPlot(div, traces, layout, config);
+            if (plot._stateAnimRenderToken !== renderToken || plot.div !== div || !container.isConnected) return;
+            if (restoreView) await this._restorePlotView(plot, restoreView);
             if (is3D) this._add3DAxisDecorations(plot);
             this._stateAnimUpdateFrame(plot, Math.min(plot.animFrame || 0, nPts - 1));
             this._updateCameraOverlay(plot);
-        });
-        div.on('plotly_relayout', () => this._updateCameraOverlay(plot));
-        div.on('plotly_afterplot', () => this._updateCameraOverlay(plot));
-        // Resize observer
-        let timer;
-        const ro = new ResizeObserver(() => {
-            clearTimeout(timer);
-            timer = setTimeout(() => Plotly.Plots.resize(div), 50);
-        });
-        ro.observe(panelEl);
-        plot.resizeObserver = ro;
+            div.on('plotly_relayout', () => this._updateCameraOverlay(plot));
+            div.on('plotly_afterplot', () => this._updateCameraOverlay(plot));
 
-        // Auto-pause on drag: pause animation while user interacts with the plot
-        let wasPlaying = false;
-        div.addEventListener('mousedown', () => {
-            if (plot.animPlaying) {
-                wasPlaying = true;
-                this._stopAnim(plot);
-            }
-        });
-        document.addEventListener('mouseup', () => {
-            if (wasPlaying) {
-                wasPlaying = false;
+            let timer;
+            const ro = new ResizeObserver(() => {
+                clearTimeout(timer);
+                timer = setTimeout(() => Plotly.Plots.resize(div), 50);
+            });
+            ro.observe(panelEl);
+            plot.resizeObserver = ro;
+
+            // Auto-pause on drag: pause animation while user interacts with the plot
+            let wasPlaying = false;
+            div.addEventListener('mousedown', () => {
+                if (plot.animPlaying) {
+                    wasPlaying = true;
+                    this._stopAnim(plot);
+                }
+            });
+            document.addEventListener('mouseup', () => {
+                if (wasPlaying) {
+                    wasPlaying = false;
+                    this._stateAnimTogglePlay(panelId);
+                }
+            });
+
+            if (plot.autoPlayOnRender && plot.div === div) {
+                plot.autoPlayOnRender = false;
                 this._stateAnimTogglePlay(panelId);
             }
+        })
+        .catch(error => console.warn('[state-animation] render failed:', error))
+        .finally(() => {
+            if (plot._stateAnimRenderToken === renderToken) {
+                this._setEagerDetailLoading?.(plot, false, panelEl);
+            }
         });
-
-        if (plot.autoPlayOnRender && plot.div === div) {
-            plot.autoPlayOnRender = false;
-            this._stateAnimTogglePlay(panelId);
-        }
-    });
 
     // Bind controls
     const playBtn = controls.querySelector('.sa-play-btn');
@@ -240,6 +245,29 @@ proto._createStateAnimChart = function(panelId, panelEl) {
     this._refreshActionBtns(panelId);
 };
 
+proto._stateAnimVisualData = function(plot) {
+    const slots = plot.stateSlots;
+    const d = this.files.get(slots.fileId)?.data;
+    if (!d) return { x: [], y: [], z: null };
+    const is3D = slots.x.length >= 3;
+    const xAll = d.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : [];
+    const yAll = d.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : [];
+    const zAll = is3D && d.variables[slots.x[2]]
+        ? this._getTransformedVariableData(slots.fileId, slots.x[2])
+        : null;
+    const visual = this._buildPhaseVisualSeries(zAll ? [xAll, yAll, zAll] : [xAll, yAll]);
+    return { x: visual[0] || [], y: visual[1] || [], z: zAll ? (visual[2] || []) : null };
+};
+
+proto._stateAnimPartialVisual = function(seriesList, endExclusive) {
+    const available = Math.min(...seriesList.map(series => series?.length || 0));
+    const length = Math.max(0, Math.min(available, Math.trunc(Number(endExclusive) || 0)));
+    if (!length) return seriesList.map(() => []);
+    const target = this._phaseTargetInfo?.().limit || 4000;
+    const indexes = this._downsampleStrideIndexes(length, target);
+    return seriesList.map(series => this._pickIndexed(series, indexes));
+};
+
 proto._buildStateAnimTraces = function(plot) {
     // Static traces: full trajectory (dim) + current partial trace + markers
     const slots = plot.stateSlots;
@@ -247,9 +275,10 @@ proto._buildStateAnimTraces = function(plot) {
     if (!d) return [];
     const is3D = slots.x.length >= 3;
 
-    const xData = d.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : [];
-    const yData = d.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : [];
-    const zData = is3D && d.variables[slots.x[2]] ? this._getTransformedVariableData(slots.fileId, slots.x[2]) : null;
+    const visual = this._stateAnimVisualData(plot);
+    const xData = visual.x;
+    const yData = visual.y;
+    const zData = visual.z;
 
     const traces = [];
 
@@ -308,10 +337,10 @@ proto._buildStateAnimLayout = function(plot) {
         const yTitleFont = { color: '#2ecc71', size: 13, family: 'system-ui, sans-serif', weight: 700 };
         const zTitleFont = { color: '#3498db', size: 13, family: 'system-ui, sans-serif', weight: 700 };
         // Explicit ranges including 0 so origin-anchored axis lines don't expand autorange.
-        const d = this.files.get(slots.fileId)?.data;
-        const xRange = this._rangeIncluding0([d?.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : []]);
-        const yRange = this._rangeIncluding0([d?.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : []]);
-        const zRange = this._rangeIncluding0([d?.variables[slots.x[2]] ? this._getTransformedVariableData(slots.fileId, slots.x[2]) : []]);
+        const visual = this._stateAnimVisualData(plot);
+        const xRange = this._rangeIncluding0([visual.x]);
+        const yRange = this._rangeIncluding0([visual.y]);
+        const zRange = this._rangeIncluding0([visual.z || []]);
         return {
             paper_bgcolor: bg, plot_bgcolor: bg,
             font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
@@ -370,6 +399,9 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
     if (!nPts) return;
     frame = Math.max(0, Math.min(nPts - 1, frame));
     plot.animFrame = frame;
+    const renderNow = performance.now();
+    if (plot.animPlaying && plot._lastPlotlyUpdate && renderNow - plot._lastPlotlyUpdate < 80) return;
+    plot._lastPlotlyUpdate = renderNow;
 
     const cfg = plot.stateConfig;
 
@@ -383,9 +415,12 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
         const traces = plot.div.data;
 
         // Trace 1: partial trajectory
-        traces[1].x = cfg.showTrace ? xAll.slice(0, frame + 1) : [];
-        traces[1].y = cfg.showTrace ? yAll.slice(0, frame + 1) : [];
-        traces[1].z = cfg.showTrace ? zAll.slice(0, frame + 1) : [];
+        const partial = cfg.showTrace
+            ? this._stateAnimPartialVisual([xAll, yAll, zAll], frame + 1)
+            : [[], [], []];
+        traces[1].x = partial[0];
+        traces[1].y = partial[1];
+        traces[1].z = partial[2];
 
         // Trace 2: current point marker
         traces[2].x = [xNow]; traces[2].y = [yNow]; traces[2].z = [zNow];
@@ -431,21 +466,16 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
             }
         }
 
-        // Throttled redraw during animation (~12fps) to leave room for mouse events.
-        // When not animating (scrubber, checkbox toggle), always update immediately.
-        const now3D = performance.now();
-        const throttle = plot.animPlaying ? 80 : 0;
-        if (!plot._lastPlotlyUpdate || now3D - plot._lastPlotlyUpdate >= throttle) {
-            plot._lastPlotlyUpdate = now3D;
-
-            Plotly.redraw(plot.div);
-        }
+        Plotly.redraw(plot.div);
 
     } else {
         // ── 2D path ──
         // Batch restyle for traces 1 (partial) and 2 (marker)
-        const partialX = cfg.showTrace ? xAll.slice(0, frame + 1) : [];
-        const partialY = cfg.showTrace ? yAll.slice(0, frame + 1) : [];
+        const partial = cfg.showTrace
+            ? this._stateAnimPartialVisual([xAll, yAll], frame + 1)
+            : [[], []];
+        const partialX = partial[0];
+        const partialY = partial[1];
         Plotly.restyle(plot.div, {
             x: [partialX, [xNow]],
             y: [partialY, [yNow]],
@@ -515,9 +545,10 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
             // very different magnitudes.
             if (plot._xAbsMax === undefined) {
                 let xm = 0, ym = 0;
-                for (let i = 0; i < xAll.length; i++) {
-                    const ax = Math.abs(xAll[i]); if (ax > xm) xm = ax;
-                    const ay = Math.abs(yAll[i]); if (ay > ym) ym = ay;
+                const visual = this._stateAnimVisualData(plot);
+                for (let i = 0; i < visual.x.length; i++) {
+                    const ax = Math.abs(visual.x[i]); if (ax > xm) xm = ax;
+                    const ay = Math.abs(visual.y[i]); if (ay > ym) ym = ay;
                 }
                 plot._xAbsMax = xm || 1;
                 plot._yAbsMax = ym || 1;
@@ -676,9 +707,9 @@ proto._stateAnimTogglePlay = function(panelId) {
             const currentSimTime = timeData[plot.animFrame];
             const targetSimTime = currentSimTime + simTimeDelta;
 
-            // Find next frame
-            let nextFrame = plot.animFrame;
-            while (nextFrame < nPts - 1 && timeData[nextFrame] < targetSimTime) nextFrame++;
+            // Jump to the target time in O(log N). A linear walk can traverse
+            // hundreds of thousands of audio samples in one animation frame.
+            let nextFrame = Math.max(plot.animFrame + 1, this._lowerBound(timeData, targetSimTime));
 
             if (nextFrame >= nPts - 1) {
                 // Loop back to start
