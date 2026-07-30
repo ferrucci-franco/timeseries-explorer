@@ -13,6 +13,7 @@ import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js'
 import { installPlotTemporalProfileMethods } from './methods/temporal-profile-methods.js';
 import { installPlotIntegralMethods } from './methods/integral-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
+import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -133,6 +134,22 @@ class PlotManager {
         const previousData = entry.data;
         entry.data = newData;
         entry._transformCache = null;
+        // A lazy (DuckDB-backed) dataset owns a view, a registered file handle and
+        // a File snapshot pinned in the ~3 GB WASM worker. Replacing it here — a
+        // Reload, or an adjust-CSV re-parse, both of which register a FRESH lazy
+        // dataset — used to abandon all of that: nothing dropped the old view, so
+        // every Reload of a 100 MB+ CSV added one more until parse queries ran the
+        // worker out of memory. removeFile already honours this contract.
+        //
+        // Only when the old data really is being replaced: liveAppend mutates the
+        // dataset in place and hands the same object (and the same _duckdb meta)
+        // straight back, so releasing there would drop the live view.
+        if (previousData && previousData !== newData
+            && previousData._duckdb && previousData._duckdb !== newData?._duckdb) {
+            const stale = previousData;
+            Promise.resolve(stale._duckdb.source?.release?.(stale))
+                .catch(err => console.warn('Could not release the previous lazy dataset.', err));
+        }
         // Rebuild every panel that has at least one trace from this file
         for (const [panelId, plot] of this.plots) {
             const uses = plot.traces.some(t => t.fileId === fileId) ||
@@ -1602,7 +1619,9 @@ class PlotManager {
                     title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
                     item.insertBefore(title, item.firstChild);
                 }
-                title.textContent = i18n.t('legendHint');
+                // A tooltip is plain text; the **emphasis** markers are for the
+                // placeholder hint that renders the same string as HTML.
+                title.textContent = i18n.plain('legendHint');
             });
         });
     }
@@ -2229,7 +2248,7 @@ class PlotManager {
                 const timeVar  = this._getTimeVar(slots.fileId);
                 if (timeVar) {
                     const timeUnit = this._timeUnitLabel(slots.fileId) || 's';
-                    headers.push(this._isCalendarTime(slots.fileId) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
+                    headers.push(csvTextCell(this._isCalendarTime(slots.fileId) ? 'time [datetime UTC]' : `time [${timeUnit}]`));
                     columns.push(this._formatTimeColumnForExport(slots.fileId, this._getTransformedTimeData(slots.fileId)));
                 }
                 const dim = Math.min(slots.x.length, slots.x.length >= 3 ? 3 : 2);
@@ -2239,7 +2258,7 @@ class PlotManager {
                     const v = d.variables[name];
                     if (!v) continue;
                     const u = this._extractUnit(v.description);
-                    headers.push(u ? `${name} [${u}]` : name);
+                    headers.push(csvTextCell(u ? `${name} [${u}]` : name));
                     columns.push(Array.from(this._getTransformedVariableData(slots.fileId, name)));
                 }
                 // Then derivatives
@@ -2249,7 +2268,7 @@ class PlotManager {
                     const v = d.variables[name];
                     if (!v) continue;
                     const u = this._extractUnit(v.description);
-                    headers.push(u ? `${name} [${u}]` : name);
+                    headers.push(csvTextCell(u ? `${name} [${u}]` : name));
                     columns.push(Array.from(this._getTransformedVariableData(slots.fileId, name, { includeYOffset: false })));
                 }
             }
@@ -2260,14 +2279,13 @@ class PlotManager {
             const scope = state.rangeFull ? 'all' : 'selection';
             const selStart = state.rangeFull ? '' : (state.x1 ?? '');
             const selEnd = state.rangeFull ? '' : (state.x2 ?? '');
-            const num = (v) => Number.isFinite(v) ? String(v) : '';
+            // Numbers stay numbers so csvValueCell can tell them from the
+            // file-derived names beside them, which must not reach a spreadsheet
+            // as formulas.
+            const num = (v) => Number.isFinite(v) ? v : '';
             const varUnit = (fileId, varName) => {
                 const v = this.files.get(fileId)?.data?.variables?.[varName];
                 return v ? this._extractUnit(v.description) : '';
-            };
-            const esc = (value) => {
-                const s = String(value ?? '');
-                return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
             };
             // One row per pair (summary of exact results, never overview points).
             const fields = [
@@ -2295,7 +2313,7 @@ class PlotManager {
             ];
             for (const [header, fn] of fields) {
                 headers.push(header);
-                columns.push(results.map((r, i) => esc(fn(r, i))));
+                columns.push(results.map((r, i) => csvValueCell(fn(r, i))));
             }
         } else if (plot.mode === 'integral') {
             // One row per signal: the totals ARE the analysis, so the raw series
@@ -2303,13 +2321,9 @@ class PlotManager {
             // display prefix is for reading, not for a spreadsheet.
             const table = this._integralExportTable?.(plot);
             if (!table?.rows.length) return;
-            const esc = (value) => {
-                const cell = String(value ?? '');
-                return /[",\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell;
-            };
             table.headers.forEach((header, index) => {
                 headers.push(header);
-                columns.push(table.rows.map(row => esc(row[index])));
+                columns.push(table.rows.map(row => csvValueCell(row[index])));
             });
         }
 
@@ -2349,7 +2363,7 @@ class PlotManager {
                 ? this._getTransformedTimeDataForVariable(firstFid, plot.traces[0]?.varName)
                 : [];
             const timeUnit = firstFid ? this._timeUnitLabel(firstFid) : (timeVar ? this._extractUnit(timeVar.description) : 's');
-            headers.push(this._isCalendarTime(firstFid) ? 'time [datetime UTC]' : `time [${timeUnit}]`);
+            headers.push(csvTextCell(this._isCalendarTime(firstFid) ? 'time [datetime UTC]' : `time [${timeUnit}]`));
             columns.push(this._formatTimeColumnForExport(firstFid, times));
         }
         for (const t of plot.traces) {
@@ -2366,13 +2380,13 @@ class PlotManager {
                     : (this._isCalendarTime(t.fileId)
                         ? `${name} time [datetime UTC]`
                         : `${name} time [${this._timeUnitLabel(t.fileId) || 's'}]`);
-                headers.push(header);
+                headers.push(csvTextCell(header));
                 columns.push(this._formatTimeColumnForExport(
                     t.fileId,
                     this._getTransformedTimeDataForVariable(t.fileId, t.varName)
                 ));
             }
-            headers.push(u ? `${name} [${u}]` : name);
+            headers.push(csvTextCell(u ? `${name} [${u}]` : name));
             columns.push(Array.from(this._getTransformedVariableData(t.fileId, t.varName)));
         }
     }
@@ -2388,9 +2402,9 @@ class PlotManager {
         const timeUnit = this._timeUnitLabel(phaseTrace.fileId);
         const timeName = timeVar?.name || 'time';
 
-        headers.push(this._isCalendarTime(phaseTrace.fileId)
+        headers.push(csvTextCell(this._isCalendarTime(phaseTrace.fileId)
             ? `${timeName} [datetime UTC]`
-            : (timeUnit ? `${timeName} [${timeUnit}]` : timeName));
+            : (timeUnit ? `${timeName} [${timeUnit}]` : timeName)));
         columns.push(this._formatTimeColumnForExport(
             phaseTrace.fileId,
             this._getTransformedTimeDataForVariable(phaseTrace.fileId, phaseTrace.x)
@@ -2401,7 +2415,7 @@ class PlotManager {
             const variable = vars[index];
             const unit = this._extractUnit(variable.description);
             const name = this._traceName(varName, phaseTrace.fileId, { units: false });
-            headers.push(unit ? `${name} [${unit}]` : name);
+            headers.push(csvTextCell(unit ? `${name} [${unit}]` : name));
             columns.push(Array.from(this._getTransformedVariableData(phaseTrace.fileId, varName)));
         });
     }

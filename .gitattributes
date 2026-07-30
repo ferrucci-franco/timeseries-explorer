@@ -1,2 +1,10 @@
 /.gitattributes text eol=lf
 *.sh text eol=lf
+
+# cmd.exe reads a .bat by byte offset when it seeks a label (goto :label,
+# call :label), and every one of these launchers uses labels. Checked out with
+# LF-only endings — which is what "Download ZIP" or a clone with
+# core.autocrlf=false gives — the label seek can land mid-line. Git for Windows
+# defaults to autocrlf=true and hid this on the ordinary clone path; this makes
+# it true on every path instead of by luck.
+*.bat text eol=crlf

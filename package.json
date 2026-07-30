@@ -15,6 +15,9 @@
   },
   "type": "module",
   "main": "electron/main.cjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "serve:local": "node scripts/portable-server.mjs",
@@ -58,6 +61,7 @@
     "test:detrend-filter": "node scripts/test-detrend-filter.mjs",
     "test:data-tools-sampling": "node scripts/test-data-tools-sampling.mjs",
     "test:data-tool-panel-layout": "node scripts/test-data-tool-panel-layout.mjs",
+    "test:duckdb-lifecycle": "node scripts/test-duckdb-lifecycle.mjs",
     "test:parse-worker": "node scripts/test-parse-worker.mjs",
     "test:expr-compiler": "node scripts/test-expr-compiler.mjs",
     "test:variable-sign": "node scripts/test-variable-sign-toggle.mjs",

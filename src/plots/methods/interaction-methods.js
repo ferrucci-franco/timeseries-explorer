@@ -7,48 +7,12 @@ import { visualPairForRange } from '../../compute/kernels/resample.js';
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
     const PlotManager = TargetClass;
-const escapeHtml = (text) => String(text)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
-
-const formatPlaceholderHint = (key) => {
-    switch (i18n.currentLang) {
-        case 'fr':
-            if (key === 'multiSelectHint') {
-                return '<strong>Ctrl/Cmd-clic</strong> pour <strong>sélectionner plusieurs variables</strong> avant de les faire glisser.';
-            }
-            if (key === 'legendHint') {
-                return 'Cliquez sur les <strong>éléments de légende</strong> pour <strong>afficher</strong> ou <strong>masquer</strong> les traces. <strong>Maj+clic</strong> pour <strong>supprimer la trace</strong>.';
-            }
-            break;
-        case 'es':
-            if (key === 'multiSelectHint') {
-                return '<strong>Ctrl/Cmd-clic</strong> para <strong>seleccionar varias variables</strong> antes de arrastrarlas.';
-            }
-            if (key === 'legendHint') {
-                return 'Haz clic en la <strong>leyenda</strong> para <strong>mostrar</strong> u <strong>ocultar</strong> trazas. <strong>Mayús+clic</strong> para <strong>eliminar la traza</strong>.';
-            }
-            break;
-        case 'it':
-            if (key === 'multiSelectHint') {
-                return '<strong>Ctrl/Cmd-clic</strong> per <strong>selezionare più variabili</strong> prima di trascinarle.';
-            }
-            if (key === 'legendHint') {
-                return 'Clicca sulla <strong>legenda</strong> per <strong>mostrare</strong> o <strong>nascondere</strong> le tracce. <strong>Maiusc+clic</strong> per <strong>rimuovere la traccia</strong>.';
-            }
-            break;
-        default:
-            if (key === 'multiSelectHint') {
-                return '<strong>Ctrl/Cmd-click</strong> to <strong>multi-select variables</strong> before dragging.';
-            }
-            if (key === 'legendHint') {
-                return 'Click <strong>legend items</strong> to <strong>show</strong> or <strong>hide</strong> traces. <strong>Shift+Click</strong> to <strong>remove trace</strong>.';
-            }
-            break;
-    }
-    return escapeHtml(i18n.t(key));
-};
+// The emphasis lives in translations.js as **markers**, the same convention
+// data-i18n-rich uses in the DOM. This used to be a per-language switch holding
+// fully translated HTML for three locales, so a fifth language would have fallen
+// through to the hardcoded English even with an entry in translations.js — and
+// the emphasis had to be re-applied by hand in every translation.
+const formatPlaceholderHint = (key) => i18n.rich(key);
 
 proto._onRelayout = function(sourcePanelId, eventData) {
     const plot = this.plots.get(sourcePanelId);

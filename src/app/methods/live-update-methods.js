@@ -161,16 +161,23 @@ proto._startLiveUpdate = async function(fileId) {
         state.localPath = path;
     }
 
+    // Every precondition first, and only then flip the state. Setting
+    // enabled/polling before validating the CSV profile left the toggle looking
+    // active with nothing scheduled when the profile was rejected: the top bar
+    // showed live, the menu's Start was disabled, and the user's next click hit
+    // the STOP branch instead of retrying.
+    const csvProfile = this._liveUpdateCsvProfile(entry, this.plotManager.files.get(fileId)?.data);
+    if (!csvProfile) {
+        await Modal.alert(i18n.t('liveUpdateTitle'), i18n.t('liveUpdateInvalidData'), { icon: 'LIVE' });
+        return;
+    }
+
     state.enabled = true;
     state.status = 'polling';
     state.message = i18n.t('liveUpdatePolling');
     state.lastRows = this._liveUpdateRowCount(fileId);
     state.lastFingerprint = this._fileFingerprint(entry.file);
-    state.csvProfile = this._liveUpdateCsvProfile(entry, this.plotManager.files.get(fileId)?.data);
-    if (!state.csvProfile) {
-        await Modal.alert(i18n.t('liveUpdateTitle'), i18n.t('liveUpdateInvalidData'), { icon: 'LIVE' });
-        return;
-    }
+    state.csvProfile = csvProfile;
     await this._refreshLiveUpdateReadCursor(entry, state, entry.file);
     this._renderFilesList();
     this._updateLiveUpdateTopBar();

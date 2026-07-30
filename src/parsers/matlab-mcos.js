@@ -201,7 +201,17 @@ export default class McosSubsystem {
         const view = new DataView(blob.buffer);
         const le = this.stream.le;
         const u32 = offset => view.getUint32(offset, le);
-        const region = [u32(8), u32(12), u32(16), u32(20), u32(24), u32(28)];
+        // Region offsets are raw uint32 read straight out of the file, and every
+        // loop below uses one as its bound. A region of 0xFFFFFFFF freezes the
+        // main thread for tens of seconds — out-of-range indexing on a Uint8Array
+        // returns undefined rather than throwing, so the name scan below spins to
+        // 4.29 billion instead of stopping at the end of the blob. Clamping them
+        // to the blob and forcing them to be monotonic makes each bound real.
+        const region = [u32(8), u32(12), u32(16), u32(20), u32(24), u32(28)]
+            .map(offset => Math.min(offset, blob.byteLength));
+        for (let index = 1; index < region.length; index += 1) {
+            if (region[index] < region[index - 1]) region[index] = region[index - 1];
+        }
 
         // Names: after the 32-byte header, skip alignment nulls, then read
         // null-terminated strings until the first region begins. 1-indexed.

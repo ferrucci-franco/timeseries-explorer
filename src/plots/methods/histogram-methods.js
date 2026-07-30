@@ -1156,7 +1156,10 @@ proto._syncHistogramSummary = function(plot, spec = plot?._histSpec, unit = '') 
             ];
         if (s.underflow) parts.push(`↤ ${s.underflow}`);
         if (s.overflow) parts.push(`↦ ${s.overflow}`);
-        return `<div class="hist-summary-row"><strong>${s.name}</strong><br>${parts.join(' · ')}</div>`;
+        // s.name is file-derived (CSV column header, MATLAB/Modelica variable
+        // name, filename), so it goes through the escaper every sibling summary
+        // uses — markup here is never intended.
+        return `<div class="hist-summary-row"><strong>${this._escapeHTML(s.name)}</strong><br>${parts.join(' · ')}</div>`;
     }).join('');
     void spec; void unit;
 };

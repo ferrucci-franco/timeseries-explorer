@@ -56,6 +56,36 @@ const mimeTypes = new Map([
   ['.ico', 'image/x-icon'],
 ]);
 
+// DNS rebinding is the one way a web page reaches this server. The page cannot
+// read a cross-origin response, so it makes its own hostname resolve to
+// 127.0.0.1 and asks again: same URL, same port, now "same origin" as far as the
+// browser is concerned. The Host header still carries the attacker's hostname,
+// and a browser will not let script forge it — so a request that does not
+// address us as loopback on our own port is not one of ours.
+//
+// scripts/portable-server.mjs carries the same guard; it ships alone in the
+// portable zip and cannot require this module.
+function isTrustedLoopbackRequest(req, port) {
+  const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
+  if (Number(port) === 80) {
+    for (const bare of ['127.0.0.1', 'localhost', '[::1]']) allowed.add(bare);
+  }
+
+  const host = String(req?.headers?.host || '').toLowerCase();
+  if (!allowed.has(host)) return false;
+
+  // Same-origin GETs carry no Origin header at all; when one is present it must
+  // be us. 'null' is an opaque origin (a sandboxed frame or a file:// page) and
+  // is not the app.
+  const origin = req?.headers?.origin;
+  if (origin) {
+    let originHost = '';
+    try { originHost = new URL(origin).host.toLowerCase(); } catch (_) { return false; }
+    if (!allowed.has(originHost)) return false;
+  }
+  return true;
+}
+
 function mimeTypeForPath(filePath) {
   return mimeTypes.get(path.extname(filePath).toLowerCase()) || 'application/octet-stream';
 }
@@ -194,6 +224,7 @@ function streamLocalFile(req, res, filePath, stat) {
 module.exports = {
   AUDIO_FILE_EXTENSIONS,
   fileInfoPayload,
+  isTrustedLoopbackRequest,
   localFileHeaders,
   mimeTypeForPath,
   mimeTypes,

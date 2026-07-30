@@ -8,6 +8,7 @@ const { pathToFileURL } = require('node:url');
 const {
   AUDIO_FILE_EXTENSIONS,
   fileInfoPayload,
+  isTrustedLoopbackRequest,
   mimeTypes,
   mimeTypeForPath,
   streamLocalFile,
@@ -201,7 +202,13 @@ async function loadCsvToParquetCore() {
   return csvToParquetCorePromise;
 }
 
-async function handleApi(req, res, url) {
+async function handleApi(req, res, url, port) {
+  // The local API reads the user's disk. Only the app's own renderer may ask.
+  if (!isTrustedLoopbackRequest(req, port)) {
+    sendText(res, 403, 'Forbidden');
+    return;
+  }
+
   if (url.pathname === '/__omv_local__/status') {
     sendText(res, 200, JSON.stringify({ ok: true, app: 'openmodelica-viewer', desktop: true }), 'application/json; charset=utf-8');
     return;
@@ -239,7 +246,10 @@ async function handleStatic(req, res, url) {
   const relativePath = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
   const targetPath = path.resolve(staticRoot, relativePath);
 
-  if (!targetPath.startsWith(staticRoot)) {
+  // A bare prefix match treats a sibling that merely starts with the same
+  // characters as inside the root: with staticRoot=/app/dist, /app/dist-secret
+  // would pass. The separator is what makes it a containment test.
+  if (targetPath !== staticRoot && !targetPath.startsWith(staticRoot + path.sep)) {
     sendText(res, 403, 'Forbidden');
     return;
   }
@@ -283,7 +293,7 @@ function listenOnAvailablePort(port) {
     const server = http.createServer((req, res) => {
       const url = new URL(req.url || '/', `http://${host}`);
       if (url.pathname.startsWith('/__omv_local__/')) {
-        handleApi(req, res, url).catch(err => sendText(res, 500, err?.message || String(err)));
+        handleApi(req, res, url, port).catch(err => sendText(res, 500, err?.message || String(err)));
         return;
       }
       handleStatic(req, res, url).catch(err => sendText(res, 500, err?.message || String(err)));

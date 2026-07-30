@@ -7,6 +7,8 @@ import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
 const fixture = 'test-files/pypsa/vetea_example_01.nc';
 
 if (!existsSync(fixture)) {
+    // Green-because-it-did-not-run is not a pass. See test-pickle-parser.mjs.
+    if (process.env.CI) throw new Error(`PyPSA netCDF fixture is missing at ${fixture}`);
     console.warn(`Skipping PyPSA netCDF parser test: fixture not found at ${fixture}`);
     process.exit(0);
 }

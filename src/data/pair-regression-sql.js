@@ -14,11 +14,16 @@
 // pairExprs entries are { i, vx, vy } where vx/vy are DOUBLE SQL value
 // expressions with gain/sign/offset already applied by the caller.
 
-const isFin = (e) => `(${e} IS NOT NULL AND NOT isnan(${e}) AND NOT isinf(${e}))`;
+export const isFin = (e) => `(${e} IS NOT NULL AND NOT isnan(${e}) AND NOT isinf(${e}))`;
 
 // Build the paired-finite CTE columns shared by both passes: px_i / py_i are the
 // value or NULL when either side of the row is non-finite (pairwise deletion).
-function pairedCteSql(tableName, where, pairExprs) {
+//
+// Exported because lazy correlation needs exactly this CTE. It used to carry a
+// character-for-character copy, which meant pairwise-deletion semantics were
+// defined twice: a fix to one lazy analytics path could silently miss the other,
+// and lazy correlation and lazy regression would then disagree on the same data.
+export function pairedCteSql(tableName, where, pairExprs) {
     const valsCols = pairExprs
         .map(p => `${p.vx} AS vx${p.i}, ${p.vy} AS vy${p.i}`)
         .join(',\n                           ');

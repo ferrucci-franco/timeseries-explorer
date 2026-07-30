@@ -31,13 +31,19 @@ if %ERRORLEVEL%==0 (
 
 where npm.cmd >nul 2>nul
 if %ERRORLEVEL%==0 (
+    set "HAS_NPM=1"
     if exist "package.json" (
         goto :run_vite
     )
 )
 
+rem :run_vite always calls npm.cmd, so jumping there without npm on PATH dies
+rem with "'npm.cmd' is not recognized" and never reaches the Node static server
+rem below. That is the case a portable/embedded Node with a copied node_modules
+rem lands in. serve.sh gates the same branch on npm being present; this now
+rem matches it.
 if exist "node_modules\vite" (
-    goto :run_vite
+    if "%HAS_NPM%"=="1" goto :run_vite
 )
 
 where python >nul 2>nul
@@ -141,8 +147,12 @@ endlocal
 exit /b 0
 
 :find_free_port
+rem LISTENING only, and only on a local address. The old probe matched any line
+rem containing ":<port> ", so an ESTABLISHED outbound connection from a browser
+rem to some remote host's port 8000 made this report the port as taken — and with
+rem all eleven ports "taken" it printed "No free port was found".
 for %%P in (8000 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010) do (
-    netstat -ano | findstr /R /C:":%%P " >nul 2>nul
+    netstat -ano | findstr /R /C:"LISTENING" | findstr /R /C:":%%P " >nul 2>nul
     if errorlevel 1 (
         set "PORT=%%P"
         exit /b 0

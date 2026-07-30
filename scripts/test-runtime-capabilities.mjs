@@ -83,7 +83,12 @@ try {
     assert.equal(caps.isDesktop, true);
     assert.equal(caps.canUseLiveUpdate, true);
     assert.equal(caps.canUseLocalPath, true);
-    assert.equal(caps.canUseHugeFiles, true);
+    // The object exposes only the gates code actually reads. canUseHugeFiles /
+    // canExportParquet / canUseDuckDbWasm / canUseStaticFiles were assigned here
+    // and read nowhere, so asserting them proved nothing about behaviour.
+    assert.ok(!('canUseHugeFiles' in caps), 'no flag pretends to gate large files');
+    assert.ok(!('canExportParquet' in caps), 'no flag pretends to gate Parquet export');
+    assert.ok(!('canUseDuckDbWasm' in caps), 'the engine check is _canUseDuckDb(), not a stale copy of it');
   });
 
   console.log('Runtime capability checks passed.');

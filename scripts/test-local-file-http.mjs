@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { parseRangeHeader, streamLocalFile } = require('../electron/local-file-http.cjs');
+const { isTrustedLoopbackRequest, parseRangeHeader, streamLocalFile } = require('../electron/local-file-http.cjs');
 
 const dir = await mkdtemp(join(tmpdir(), 'tse-local-file-'));
 const filePath = join(dir, 'sample.csv');
@@ -63,6 +63,41 @@ try {
         length: 3,
         contentRange: 'bytes 7-9/10',
     });
+
+    // DNS rebinding: the request arrives on the loopback socket, but the Host
+    // header names the attacker's hostname. That is the only signal separating
+    // "the app asking" from "a web page that rebound its own domain to
+    // 127.0.0.1", and it must be enough to refuse.
+    {
+        const appRequest = { headers: { host: `127.0.0.1:${port}` } };
+        assert.equal(isTrustedLoopbackRequest(appRequest, port), true, 'the app itself is trusted');
+        assert.equal(
+            isTrustedLoopbackRequest({ headers: { host: `localhost:${port}` } }, port),
+            true,
+            'localhost is the same server',
+        );
+        assert.equal(
+            isTrustedLoopbackRequest({ headers: { host: `evil.example:${port}` } }, port),
+            false,
+            'a rebound hostname is refused',
+        );
+        assert.equal(
+            isTrustedLoopbackRequest({ headers: { host: `127.0.0.1:${port + 1}` } }, port),
+            false,
+            'a different port is not this server',
+        );
+        assert.equal(isTrustedLoopbackRequest({ headers: {} }, port), false, 'no Host header, no service');
+        assert.equal(
+            isTrustedLoopbackRequest({ headers: { host: `127.0.0.1:${port}`, origin: 'https://evil.example' } }, port),
+            false,
+            'a cross-origin fetch is refused even with the right Host',
+        );
+        assert.equal(
+            isTrustedLoopbackRequest({ headers: { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` } }, port),
+            true,
+            'the app own origin is accepted when the browser sends it',
+        );
+    }
 
     console.log('Local file HTTP range checks passed.');
 } finally {

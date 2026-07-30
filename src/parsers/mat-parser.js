@@ -430,8 +430,8 @@ export default class MatParser {
         const tree = {
             _type: 'root',
             _name: '',
-            _children: {},
-            _variables: {}
+            _children: Object.create(null),
+            _variables: Object.create(null)
         };
 
         for (const [name, variable] of Object.entries(variables)) {
@@ -446,8 +446,8 @@ export default class MatParser {
                         _type: 'component',
                         _name: part,
                         _fullName: path.slice(0, i + 1).join('.'),
-                        _children: {},
-                        _variables: {}
+                        _children: Object.create(null),
+                        _variables: Object.create(null)
                     };
                 }
                 node = node._children[part];

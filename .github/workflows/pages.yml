@@ -21,11 +21,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Was pinned to 20 here and 22 in desktop-release.yml, so the two
+          # release paths built on different Node majors. Both now read .nvmrc.
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
 

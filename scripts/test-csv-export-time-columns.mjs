@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { csvCell, csvTextCell, csvValueCell } from '../src/utils/csv-cell.js';
 
 const plotManagerSource = readFileSync(
     new URL('../src/plots/plot-manager.js', import.meta.url),
@@ -24,7 +25,8 @@ const methodText = plotManagerSource.slice(start, end)
     .replace(startMarker, 'proto._appendTimeseriesExportColumns = function(plot, headers, columns) {');
 
 const proto = {};
-vm.runInNewContext(methodText, { proto });
+// The sliced method escapes its headers with the real shared helper.
+vm.runInNewContext(methodText, { proto, csvTextCell });
 
 class Harness {
     constructor() {
@@ -119,6 +121,49 @@ Harness.prototype._appendTimeseriesExportColumns = proto._appendTimeseriesExport
         { fileId: 'p', varName: 'a' },
     ] }, headers, columns);
     assert.deepEqual(headers, ['a index', 'a [-]'], 'independent index keeps its row-index column');
+}
+
+// ── Case 4: a file names its own columns, so a header can be an attack ────────
+// A CSV whose header reads =HYPERLINK(...) round-trips through this export and
+// is evaluated as a formula when the result is opened in Excel/LibreOffice
+// (CWE-1236). A comma in a name is the plainer bug: it shifts every later
+// column. Both are the escaper's job, and it must leave ordinary names alone.
+{
+    const h = new Harness();
+    h.addFile('f1', {
+        t: { kind: 'abscissa', description: 'time [s]' },
+        '=HYPERLINK("http://evil","click")': { description: 'A [m]' },
+        'power, total': { description: 'B [MW]' },
+    });
+    h.setTime('f1', [0, 1]);
+    h.setValues('f1', '=HYPERLINK("http://evil","click")', [1, 2]);
+    h.setValues('f1', 'power, total', [3, 4]);
+    const headers = [], columns = [];
+    h._appendTimeseriesExportColumns({ mode: 'timeseries', traces: [
+        { fileId: 'f1', varName: '=HYPERLINK("http://evil","click")' },
+        { fileId: 'f1', varName: 'power, total' },
+    ] }, headers, columns);
+    assert.deepEqual(
+        headers,
+        [
+            'time [s]',
+            '"\'=HYPERLINK(""http://evil"",""click"") [m]"',
+            '"power, total [MW]"',
+        ],
+        'a formula header is neutralized and a comma in a name is quoted',
+    );
+}
+
+// The escaper itself: text cells are defused, numbers are left untouched.
+{
+    assert.equal(csvTextCell('=cmd|calc'), "'=cmd|calc", 'a leading = is defused');
+    assert.equal(csvTextCell('@SUM(A1)'), "'@SUM(A1)", 'a leading @ is defused');
+    assert.equal(csvTextCell('-2+3+cmd'), "'-2+3+cmd", 'a leading - is defused');
+    assert.equal(csvTextCell('temperature'), 'temperature', 'an ordinary name is untouched');
+    assert.equal(csvTextCell('a"b'), '"a""b"', 'a quote is doubled and the cell wrapped');
+    assert.equal(csvCell(-1.5), '-1.5', 'a negative number stays a number');
+    assert.equal(csvValueCell(-1.5), '-1.5', 'a typed number is not treated as a formula');
+    assert.equal(csvValueCell('-signal'), "'-signal", 'a string that looks like a formula is defused');
 }
 
 console.log('CSV export time-column tests passed.');
