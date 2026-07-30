@@ -1569,8 +1569,8 @@ const translations = {
             dropStateX2: 'Drop the second state variable',
             dropStateX2Short: 'Drop the second state variable',
             dropStateX3: 'Drop the third state variable',
-            multiSelectHint: 'Ctrl/Cmd-click to multi-select variables before dragging.',
-            legendHint: 'Click legend items to show or hide traces. Shift+Click to remove trace.',
+            multiSelectHint: '**Ctrl/Cmd-click** to **multi-select variables** before dragging.',
+            legendHint: 'Click **legend items** to **show** or **hide** traces. **Shift+Click** to **remove trace**.',
 
             // Buttons / dialogs
             confirm: 'Confirm',
@@ -3324,8 +3324,8 @@ const translations = {
             dropStateX2: 'Déposez la deuxième variable d’état',
             dropStateX2Short: 'Déposez la deuxième variable d’état',
             dropStateX3: 'Déposez la troisième variable d’état',
-            multiSelectHint: 'Ctrl/Cmd-clic pour sélectionner plusieurs variables avant de les faire glisser.',
-            legendHint: 'Cliquez sur les éléments de légende pour afficher ou masquer les traces. Maj+clic pour supprimer la trace.',
+            multiSelectHint: '**Ctrl/Cmd-clic** pour **sélectionner plusieurs variables** avant de les faire glisser.',
+            legendHint: 'Cliquez sur les **éléments de légende** pour **afficher** ou **masquer** les traces. **Maj+clic** pour **supprimer la trace**.',
 
             // Buttons / dialogs
             confirm: 'Confirmer',
@@ -5061,8 +5061,8 @@ const translations = {
             dropStateX2: 'Suelta la segunda variable de estado',
             dropStateX2Short: 'Suelta la segunda variable de estado',
             dropStateX3: 'Suelta la tercera variable de estado',
-            multiSelectHint: 'Ctrl/Cmd-clic para seleccionar varias variables antes de arrastrarlas.',
-            legendHint: 'Haz clic en la leyenda para mostrar u ocultar trazas. Mayús+clic para eliminar la traza.',
+            multiSelectHint: '**Ctrl/Cmd-clic** para **seleccionar varias variables** antes de arrastrarlas.',
+            legendHint: 'Haz clic en la **leyenda** para **mostrar** u **ocultar** trazas. **Mayús+clic** para **eliminar la traza**.',
             confirm: 'Confirmar',
             cancel: 'Cancelar',
             dismiss: 'Cerrar',
@@ -6786,8 +6786,8 @@ const translations = {
             dropStateX2: 'Rilascia la seconda variabile di stato',
             dropStateX2Short: 'Rilascia la seconda variabile di stato',
             dropStateX3: 'Rilascia la terza variabile di stato',
-            multiSelectHint: 'Ctrl/Cmd-clic per selezionare più variabili prima di trascinarle.',
-            legendHint: 'Clicca sulla legenda per mostrare o nascondere le tracce. Maiusc+clic per rimuovere la traccia.',
+            multiSelectHint: '**Ctrl/Cmd-clic** per **selezionare più variabili** prima di trascinarle.',
+            legendHint: 'Clicca sulla **legenda** per **mostrare** o **nascondere** le tracce. **Maiusc+clic** per **rimuovere la traccia**.',
             confirm: 'Conferma',
             cancel: 'Annulla',
             dismiss: 'Chiudi',
