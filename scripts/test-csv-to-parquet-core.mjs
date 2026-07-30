@@ -8,6 +8,7 @@ import {
     closeDuckDbDatabase,
     convertCsvToParquet,
     inspectCsvForParquet,
+    parquetCompression,
     runDuckDb,
 } from '../src/data/csv-to-parquet-core.js';
 
@@ -100,6 +101,24 @@ try {
         await closeDuckDbConnection(datedConn);
         await closeDuckDbDatabase(datedDb);
     }
+
+    // The compression name is spliced into the COPY statement, so it is the one
+    // option that could carry SQL rather than choose a codec.
+    assert.equal(parquetCompression(undefined), 'zstd', 'the default is unchanged');
+    assert.equal(parquetCompression('ZSTD'), 'zstd', 'the name is case-folded as before');
+    for (const name of ['snappy', 'gzip', 'lz4', 'none']) {
+        assert.equal(parquetCompression(name), name, `${name} is a real DuckDB codec`);
+    }
+    assert.throws(
+        () => parquetCompression("zstd) TO 'x.parquet' -- "),
+        /Unsupported Parquet compression/,
+        'anything outside the option list is refused rather than concatenated',
+    );
+    await assert.rejects(
+        () => convertCsvToParquet({ inputPath: csvPath, outputPath: join(dir, 'x.parquet'), compression: 'evil' }),
+        /Unsupported Parquet compression/,
+        'the converter validates before it builds any SQL',
+    );
 
     console.log('CSV-to-Parquet core checks passed.');
 } finally {

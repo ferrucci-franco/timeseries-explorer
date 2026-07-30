@@ -338,6 +338,21 @@ export function quoteIdent(name) {
     return `"${String(name ?? '').replace(/"/g, '""')}"`;
 }
 
+// Every other value in this module reaches SQL through quoteIdent, sqlPath,
+// escapeSqlString or numericLiteral. The compression name was the one that went
+// in by concatenation, so it is the one place a caller could have written SQL
+// into the COPY statement instead of choosing an option. An allowlist is the
+// whole fix: these are the codecs DuckDB writes.
+export const PARQUET_COMPRESSIONS = new Set(['zstd', 'snappy', 'gzip', 'lz4', 'none']);
+
+export function parquetCompression(value) {
+    const name = String(value ?? 'zstd').trim().toLowerCase() || 'zstd';
+    if (!PARQUET_COMPRESSIONS.has(name)) {
+        throw new Error(`Unsupported Parquet compression: ${name}. Use one of ${[...PARQUET_COMPRESSIONS].join(', ')}.`);
+    }
+    return name;
+}
+
 export function escapeSqlString(value) {
     return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "''");
 }
@@ -381,7 +396,7 @@ export async function convertCsvToParquet(options = {}) {
     }
 
     const inputStat = statSync(inputPath);
-    const compression = String(options.compression || 'zstd').toLowerCase();
+    const compression = parquetCompression(options.compression);
     const profile = options.csvProfile || inspectCsvForParquet(inputPath);
     const timeInfo = timeInfoFromProfile(profile);
     if (!timeInfo?.sql) {
