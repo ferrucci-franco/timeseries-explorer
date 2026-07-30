@@ -371,37 +371,40 @@ proto._resamplePlan = function(data, time = this._resampleTimeContext(data)) {
     const gapCount = regular?.ok ? regular.gaps : (gaps?.count || 0);
     const repeats = regular?.ok ? regular.repeats : 0;
 
-    let change;
+    // One fact per line. Run together on a single line the four of them read as
+    // one long clause and the reader stops parsing at the first separator.
+    const unit = this._resampleUnitLabel(time.kind, time.variable);
+    const lines = [
+        i18n.t('dataToolResampleInfoStep')
+            .replace('{oldStep}', Number.isFinite(sourceStep) ? formatNumber(sourceStep / scale) : '?')
+            .replace('{newStep}', formatNumber(step / scale))
+            .replace('{unit}', unit),
+        i18n.t('dataToolResampleInfoSamples')
+            .replace('{oldCount}', formatCount(length))
+            .replace('{newCount}', formatCount(count)),
+    ];
+
     if (sameRate && missing > 0) {
-        change = i18n.t(gapCount === 1 ? 'dataToolResampleCompletesRowsOne' : 'dataToolResampleCompletesRows')
+        lines.push(i18n.t(gapCount === 1 ? 'dataToolResampleCompletesRowsOne' : 'dataToolResampleCompletesRows')
             .replace('{samples}', formatCount(missing))
-            .replace('{gaps}', formatCount(gapCount));
-        // Collapsing a repeated timestamp is a real change to the data and the one
-        // nobody expects, so it is never folded into the sentence above.
-        if (repeats > 0) {
-            change += ` · ${i18n.t(repeats === 1 ? 'dataToolResampleCollapsesOne' : 'dataToolResampleCollapses')
-                .replace('{count}', formatCount(repeats))}`;
-        }
-    } else if (sameRate && repeats > 0) {
-        change = i18n.t(repeats === 1 ? 'dataToolResampleCollapsesOne' : 'dataToolResampleCollapses')
-            .replace('{count}', formatCount(repeats));
-    } else if (!Number.isFinite(ratio) || sameRate) {
-        change = i18n.t('dataToolResampleSame');
-    } else {
-        change = i18n.t(ratio > 1 ? 'dataToolResampleUp' : 'dataToolResampleDown')
-            .replace('{factor}', formatNumber(ratio > 1 ? ratio : 1 / ratio));
+            .replace('{gaps}', formatCount(gapCount)));
+    }
+    // Collapsing a repeated timestamp is a real change to the data and the one
+    // nobody expects, so it always gets a line to itself.
+    if (sameRate && repeats > 0) {
+        lines.push(i18n.t(repeats === 1 ? 'dataToolResampleCollapsesOne' : 'dataToolResampleCollapses')
+            .replace('{count}', formatCount(repeats)));
+    }
+    if (sameRate && missing === 0 && repeats === 0) {
+        lines.push(i18n.t('dataToolResampleSame'));
+    } else if (!sameRate) {
+        lines.push(Number.isFinite(ratio)
+            ? i18n.t(ratio > 1 ? 'dataToolResampleUp' : 'dataToolResampleDown')
+                .replace('{factor}', formatNumber(ratio > 1 ? ratio : 1 / ratio))
+            : i18n.t('dataToolResampleSame'));
     }
 
-    const unit = this._resampleUnitLabel(time.kind, time.variable);
-    const text = i18n.t('dataToolResampleInfo')
-        .replace('{oldStep}', Number.isFinite(sourceStep) ? formatNumber(sourceStep / scale) : '?')
-        .replace('{newStep}', formatNumber(step / scale))
-        .replace('{unit}', unit)
-        .replace('{oldCount}', formatCount(length))
-        .replace('{newCount}', formatCount(count))
-        .replace('{change}', change);
-
-    return { ok: true, text, step, sourceStep, count, length, ratio };
+    return { ok: true, text: lines.join('\n'), lines, step, sourceStep, count, length, ratio };
 };
 
 // ─── Committing ───────────────────────────────────────────────────────────

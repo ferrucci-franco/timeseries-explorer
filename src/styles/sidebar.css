@@ -1098,6 +1098,8 @@
 /* What the chosen grid actually works out to: the resulting Δt, the sample
    count, and whether that is up or down from the file's own rate. Shown before
    committing because "factor 2.5" says nothing until it is a number of samples. */
+/* These boxes state one fact per line and set their text with textContent, so
+   the newlines they write have to survive. */
 .data-tool-resample-info {
     color: var(--text-secondary);
     font-size: 0.73rem;
@@ -1105,6 +1107,7 @@
     padding: 0.35rem 0.5rem;
     border: 1px dashed var(--border-color);
     border-radius: 6px;
+    white-space: pre-line;
 }
 
 .data-tool-resample-info:empty {

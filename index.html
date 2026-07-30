@@ -588,7 +588,9 @@
                         </div>
 
                         <div class="data-tool-controls collapsed" data-tool-kind="resample">
-                            <label class="options-subgroup-label" for="resample-grid-mode" data-i18n="dataToolResampleGrid">New sampling</label>
+                            <div class="data-tool-label-row data-tool-group-row first">
+                                <label class="options-subgroup-label" for="resample-grid-mode" data-i18n="dataToolResampleGrid">New sampling</label>
+                            </div>
                             <select id="resample-grid-mode" class="data-tool-select">
                                 <option value="step" selected data-i18n="dataToolResampleGridStep">Δt</option>
                                 <option value="factor" data-i18n="dataToolResampleGridFactor">Rate factor</option>
@@ -601,7 +603,7 @@
 
                             <div class="resample-grid-controls" data-resample-grid="step">
                                 <div class="data-tool-label-row">
-                                    <label class="options-subgroup-label" for="resample-step" data-i18n="dataToolResampleStep">Δt</label>
+                                    <label class="options-subgroup-label data-tool-sublabel" for="resample-step" data-i18n="dataToolResampleStep">Δt</label>
                                     <span id="resample-step-unit" class="data-tool-slider-value">s</span>
                                 </div>
                                 <!-- The field opens holding the step measured from the file, and the
@@ -617,16 +619,16 @@
                             </div>
 
                             <div class="resample-grid-controls collapsed" data-resample-grid="factor">
-                                <label class="options-subgroup-label" for="resample-factor" data-i18n="dataToolResampleFactor">Factor (2 = twice the rate)</label>
+                                <label class="options-subgroup-label data-tool-sublabel" for="resample-factor" data-i18n="dataToolResampleFactor">Factor (2 = twice the rate)</label>
                                 <input id="resample-factor" class="derived-input data-tool-number-input" type="number" min="0" step="any" value="2">
                             </div>
 
                             <div class="resample-grid-controls collapsed" data-resample-grid="count">
-                                <label class="options-subgroup-label" for="resample-count" data-i18n="dataToolResampleCount">Samples</label>
+                                <label class="options-subgroup-label data-tool-sublabel" for="resample-count" data-i18n="dataToolResampleCount">Samples</label>
                                 <input id="resample-count" class="derived-input data-tool-number-input" type="number" min="2" step="1" value="1000">
                             </div>
 
-                            <div class="data-tool-label-row">
+                            <div class="data-tool-label-row data-tool-group-row">
                                 <label class="options-subgroup-label" for="resample-method" data-i18n="dataToolResampleMethod">Method</label>
                                 <button id="resample-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Resampling help" data-i18n-title="dataToolResampleHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="resample-help-popover">
                                     <span>?</span>
@@ -666,7 +668,9 @@
                                 </div>
                             </div>
 
-                            <label class="options-subgroup-label data-tool-sublabel" for="resample-gap-policy" data-i18n="dataToolResampleGapPolicy">Gaps in the source</label>
+                            <div class="data-tool-label-row data-tool-group-row">
+                                <label class="options-subgroup-label" for="resample-gap-policy" data-i18n="dataToolResampleGapPolicy">Gaps in the source</label>
+                            </div>
                             <select id="resample-gap-policy" class="data-tool-select">
                                 <option value="leave" selected data-i18n="dataToolResampleGapLeave">Leave them empty (NaN)</option>
                                 <option value="bridge" data-i18n="dataToolResampleGapBridge">Interpolate across them</option>

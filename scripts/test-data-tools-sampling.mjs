@@ -226,8 +226,13 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     assert.equal(plan.ok, true);
     assert.ok(Math.abs(plan.step - 0.25) < 1e-12);
     assert.equal(plan.count, 41, 'floor(10 / 0.25) + 1');
-    assert.match(plan.text, /downsample/, 'a coarser Δt is announced as a downsample');
-    assert.match(plan.text, /101 → 41/);
+    // One fact per line, in this order: the step, the sample count, then what
+    // the change amounts to.
+    assert.deepEqual(plan.lines, [
+        'Δt 0.1 → 0.25 axis units',
+        '101 → 41 samples',
+        'Downsample ×2.5',
+    ], 'the summary is three separate lines');
 }
 
 {
@@ -256,7 +261,7 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
         'resample-factor': '4',
     }), () => h._resamplePlan(data));
     assert.equal(factor.step, 0.25, 'factor 4 quarters the step');
-    assert.match(factor.text, /upsample ×4/);
+    assert.match(factor.text, /Upsample ×4/);
 
     const counted = withDocument(fakeDocument({
         'data-tool-select': 'resample',

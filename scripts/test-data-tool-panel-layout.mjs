@@ -79,15 +79,51 @@ assert.doesNotMatch(html, /id="filter-init-state"/, 'the combined state field is
 // under which heading.
 assert.match(css, /\.data-tool-group-row\s*\{[^}]*border-top:/s, 'group headings need their separator');
 assert.match(css, /\.data-tool-sublabel\s*\{[^}]*font-weight:\s*500/s, 'field labels must be lighter than headings');
-assert.equal(
-    [...html.matchAll(/class="data-tool-label-row data-tool-group-row/g)].length,
-    4,
-    'the filter panel has four control groups',
+
+// Counted per panel, not across the file: the hierarchy is a promise each tool
+// makes on its own, and a global count would drift with every tool added.
+const panels = new Map();
+for (const match of html.matchAll(/data-tool-kind="(\w+)"/g)) {
+    const rest = html.slice(match.index);
+    const end = rest.indexOf('data-tool-kind="', match[0].length);
+    panels.set(match[1], end < 0 ? rest : rest.slice(0, end));
+}
+
+for (const [kind, groups] of [['filter', 4], ['resample', 3]]) {
+    const panel = panels.get(kind);
+    assert.ok(panel, `the ${kind} panel must exist`);
+    assert.equal(
+        [...panel.matchAll(/class="data-tool-label-row data-tool-group-row/g)].length,
+        groups,
+        `the ${kind} panel has ${groups} control groups`,
+    );
+    assert.equal(
+        [...panel.matchAll(/data-tool-group-row first"/g)].length,
+        1,
+        `in the ${kind} panel only the first group skips the separator above it`,
+    );
+}
+
+// The gap policy heads its own control group; it spent a commit styled as a
+// field label under Method, which read as if it belonged to the method.
+assert.doesNotMatch(
+    panels.get('resample'),
+    /data-tool-sublabel"? for="resample-gap-policy"/,
+    'the gap policy is a group heading, not a field of the one above it',
 );
-assert.equal(
-    [...html.matchAll(/data-tool-group-row first"/g)].length,
-    1,
-    'only the first group skips the separator above it',
+
+// The summary writes one fact per line with textContent, so the newlines only
+// show if the stylesheet preserves them — asserting the JS emits '\n' would
+// prove nothing about what is painted.
+assert.match(
+    resample,
+    /lines\.join\('\\n'\)/,
+    'the resample summary is assembled as separate lines',
+);
+assert.match(
+    css,
+    /\.data-tool-resample-info\s*\{[^}]*white-space:\s*pre-line/s,
+    'the summary box must preserve the newlines it is given',
 );
 
 // ── Overflowing coefficient lists say so ──────────────────────────────────
