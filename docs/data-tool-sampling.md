@@ -188,6 +188,32 @@ That choice has three consequences, all deliberate:
   session saves it and reloads it through the ordinary CSV path. Lazily, because
   a multi-million-sample grid should not become a string until something asks.
 
+### 5b. Saying that the file is not on disk
+
+A resampled file looks exactly like a loaded one in the files list — same name,
+same variables, same plots — and vanishes when the tab closes. Nothing said so.
+The row showed the absence rather than the fact: no size, no path in the
+tooltip, which is not something a reader notices.
+
+Three places now state it, all reading one predicate,
+`_isInMemoryFile` — an entry with a `syntheticBytes()` hook and no `file`,
+`buffer` or `localPath`:
+
+- an amber **in memory** badge on the row, with the whole explanation in its
+  tooltip (including that a project session does keep it);
+- a **⤓** button beside it that writes the CSV. Where the browser offers a save
+  dialog it is used, so the user picks the path and the write is confirmed;
+  where it does not — Firefox, Safari — it falls back to a download, the same
+  two branches `_pickBrowserParquetDestination` already faces. Backing out of
+  the dialog is a decision, not a failure, and reports nothing;
+- one sentence in the message the resample already prints, at the moment the
+  user is certainly looking.
+
+The badge does **not** disappear once a copy has been written, and this is the
+point: a CSV on disk is not the same as this entry being backed by one. Reload
+the app and the file is still gone. What the save adds is a second tooltip line
+naming the copy — cleared on a rewrite, since the copy is then stale.
+
 ## 6. Where the work runs
 
 Filling goes through the existing `dataTool:pipeline` worker op, so it chains

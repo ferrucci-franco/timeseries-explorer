@@ -456,6 +456,25 @@
     background: rgba(255, 255, 255, 0.22);
 }
 
+/* A statement about the file, not a warning about the data: amber rather than
+   red, and it stays up for as long as the file has nothing on disk behind it. */
+.file-entry-memory {
+    border-color: color-mix(in srgb, var(--warning-color) 45%, var(--border-color));
+    color: color-mix(in srgb, var(--warning-color) 80%, var(--text-primary));
+    background: color-mix(in srgb, var(--warning-color) 12%, var(--bg-primary));
+    cursor: help;
+}
+
+.file-entry.active .file-entry-memory {
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.68);
+    background: rgba(255, 255, 255, 0.22);
+}
+
+.file-entry-memory[hidden] {
+    display: none;
+}
+
 .file-entry-lazy-indicator {
     width: 1.25rem;
     height: 1.25rem;
@@ -510,6 +529,7 @@
 .file-entry-transform,
 .file-entry-csv-parsing,
 .file-entry-mat-arrays,
+.file-entry-save,
 .file-entry-close {
     flex-shrink: 0;
     background: none;
@@ -554,6 +574,28 @@
 
 .file-entry-close:hover {
     opacity: 1;
+}
+
+/* The one control in the row that resolves a problem the row is reporting, so
+   it carries the same amber as the badge rather than the neutral grey of the
+   controls beside it. */
+.file-entry-save {
+    font-size: 0.95rem;
+    opacity: 0.9;
+    color: color-mix(in srgb, var(--warning-color) 80%, var(--text-primary));
+}
+
+.file-entry.active .file-entry-save {
+    color: #fff;
+}
+
+.file-entry-save:hover {
+    opacity: 1;
+    transform: translateY(1px);
+}
+
+.file-entry-save[hidden] {
+    display: none;
 }
 
 .file-entry-transform:hover {

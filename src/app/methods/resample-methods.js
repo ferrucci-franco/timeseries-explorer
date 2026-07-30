@@ -490,7 +490,14 @@ proto.commitResampleTool = async function(options = {}) {
             ? i18n.t(gapLeftPerVariable === 1 ? 'dataToolResampleGapLeftOne' : 'dataToolResampleGapLeft')
                 .replace('{count}', formatCount(gapLeftPerVariable))
             : '';
-        return [base, bridged, left, holes].filter(Boolean).join(' ');
+        // Said at the one moment the user is certain to be looking: the file they
+        // just made will not be on disk unless they put it there. Repeated on a
+        // rewrite on purpose — that is exactly when a copy saved earlier has just
+        // gone stale. The badge in the files list is the standing reminder.
+        const memory = this._isInMemoryFile?.(this.files.get(target.fileId))
+            ? i18n.t('dataToolResampleInMemory')
+            : '';
+        return [base, bridged, left, holes, memory].filter(Boolean).join(' ');
     }, emptyTotal > 0 ? 'error' : 'ok');
 
     this._clearDataToolDraft({ keepMessage: true });
@@ -640,7 +647,12 @@ proto._registerResampleFile = function(sourceFileId, name, data) {
     const existingId = this._findResampleFileByName(name);
     if (existingId) {
         const entry = this.files.get(existingId);
-        if (entry) entry.syntheticBytes = () => this._resampleCsvBytes(data);
+        if (entry) {
+            entry.syntheticBytes = () => this._resampleCsvBytes(data);
+            // Whatever was written out before this rewrite is now a copy of data
+            // that no longer exists here, so the row stops claiming it.
+            entry.savedCopyName = '';
+        }
         this.plotManager.updateFileData(existingId, data);
         this.plotManager.setActiveFile(existingId);
         this._renderFilesList();

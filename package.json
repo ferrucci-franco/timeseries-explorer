@@ -62,6 +62,7 @@
     "test:expr-compiler": "node scripts/test-expr-compiler.mjs",
     "test:variable-sign": "node scripts/test-variable-sign-toggle.mjs",
     "test:file-transform": "node scripts/test-file-transform-reset.mjs",
+    "test:in-memory-file": "node scripts/test-in-memory-file.mjs",
     "test:file-size-limits": "node scripts/test-file-size-limits.mjs",
     "test:load-error-messages": "node scripts/test-load-error-messages.mjs",
     "test:crash-reporting": "node scripts/test-crash-reporting.mjs",
