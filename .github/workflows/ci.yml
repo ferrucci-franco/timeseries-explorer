@@ -1,0 +1,48 @@
+name: CI
+
+# The 45-script suite used to run only on a v* tag, so main deployed to GitHub
+# Pages with no test execution at all and a pull request got no verification.
+# A breaking commit surfaced weeks later, at release time, with many commits to
+# bisect. The suite is offline and fixture-based, so it runs here as-is.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run release test suite
+        run: npm run test:release
+
+      # The web bundle is what main deploys, so a build failure has to be caught
+      # here rather than by the Pages workflow after the merge.
+      - name: Build web bundle
+        run: npm run build
