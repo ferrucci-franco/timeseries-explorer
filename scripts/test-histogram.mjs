@@ -92,7 +92,7 @@ const interactionMethodsSource = readFileSync(
 
 assert.match(
     histogramMethodsSource,
-    /_scheduleHistogramRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'histogram'\)[\s\S]*setTimeout\(\(\) =>/,
+    /_scheduleHistogramRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'histogram'\)[\s\S]*_runAnalysisAfterPaint\(/,
     'Histogram preflights and paints its status before starting synchronous work',
 );
 

@@ -88,7 +88,7 @@ const temporalProfileMethodsSource = readFileSync(
 
 assert.match(
     temporalProfileMethodsSource,
-    /_scheduleTemporalProfileRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'temporal-profile'\)[\s\S]*_setTemporalProfileComputing\(plot, true\)[\s\S]*setTimeout\(\(\) =>/,
+    /_scheduleTemporalProfileRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'temporal-profile'\)[\s\S]*_setTemporalProfileComputing\(plot, true\)[\s\S]*_runAnalysisAfterPaint\(/,
     'Temporal Profile paints progress and preflights before eager computation',
 );
 

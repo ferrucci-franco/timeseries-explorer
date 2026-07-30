@@ -1450,13 +1450,12 @@ proto._fftDomain = function(plot) {
         if (!n) continue;
         // Imported time axes are ascending. Probe only the edges so opening FFT
         // never performs a full-array extent scan before its UI exists.
-        for (let i = 0; i < Math.min(n, 1024); i++) {
+        const probe = Math.min(n, 1024);
+        for (let i = 0; i < probe; i++) {
             const lo = Number(values[i]);
-            const hi = Number(values[n - 1 - i]);
             if (Number.isFinite(lo)) { min = Math.min(min, lo); break; }
-            if (Number.isFinite(hi)) { max = Math.max(max, hi); break; }
         }
-        for (let i = 0; i < Math.min(n, 1024); i++) {
+        for (let i = 0; i < probe; i++) {
             const hi = Number(values[n - 1 - i]);
             if (Number.isFinite(hi)) { max = Math.max(max, hi); break; }
         }

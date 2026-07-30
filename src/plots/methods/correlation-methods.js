@@ -320,6 +320,10 @@ export function installPlotCorrelationMethods(TargetClass) {
             // Same gestures on the results (bars) pane, like the FFT spectrum pane.
             this._installWheelPan(panelId, plot, plot.correlationDiv, {});
             this._installRightButtonPan(panelId, plot, plot.correlationDiv, {});
+            // Opening Correlation is an analysis action: show the whole signal,
+            // the way Curve Fit already does, instead of inheriting whatever
+            // zoom the previous mode happened to be sitting at.
+            this._autoScaleCorrelationTime(plot);
             this._scheduleCorrelationRecompute(panelId, { immediate: true });
             let timer;
             const ro = new ResizeObserver(() => {
@@ -628,11 +632,12 @@ export function installPlotCorrelationMethods(TargetClass) {
             const adjusted = this._autoLimitAnalysisRange(plot, state, 'correlation');
             if (adjusted) this._updateCorrelationSelectionShapes(panelId, plot);
             this._setCorrelationStatus(plot, i18n.t('correlationCalculating'), 'loading');
-            plot._correlationRecomputeTimer = setTimeout(() => {
-                if (plot.mode === 'correlation' && plot.correlationDiv) {
-                    this._refreshCorrelationResults(panelId, plot);
-                }
-            }, 0);
+            this._runAnalysisAfterPaint(
+                plot,
+                '_correlationRecomputeRun',
+                () => plot.mode === 'correlation' && !!plot.correlationDiv,
+                () => this._refreshCorrelationResults(panelId, plot),
+            );
         };
         if (options.immediate) run();
         else plot._correlationRecomputeTimer = setTimeout(run, 150);
@@ -688,16 +693,22 @@ export function installPlotCorrelationMethods(TargetClass) {
         // Eager pairs compute synchronously; lazy pairs are grouped per file and
         // computed exactly in DuckDB (one aggregate query each, never overview).
         const lazyByFile = new Map();
-        pairs.forEach((pair, index) => {
-            if (this._isLazyFile(pair.fileId)) {
-                if (!lazyByFile.has(pair.fileId)) lazyByFile.set(pair.fileId, []);
-                lazyByFile.get(pair.fileId).push({ index, pair });
-                return;
-            }
-            const series = this._correlationPairSeries(pair, range, state.rangeFull);
-            const stats = pearsonCorrelation(series.x, series.y);
-            results[index] = { pair, label: label(pair), nScope: series.nScope, ...stats };
+        // Pearson over the selected slice is the range-dependent cost; the
+        // auto-limit reconsider measures exactly this.
+        const measured = this._measureAnalysisKernel(panelId, plot, () => {
+            pairs.forEach((pair, index) => {
+                if (this._isLazyFile(pair.fileId)) {
+                    if (!lazyByFile.has(pair.fileId)) lazyByFile.set(pair.fileId, []);
+                    lazyByFile.get(pair.fileId).push({ index, pair });
+                    return;
+                }
+                const series = this._correlationPairSeries(pair, range, state.rangeFull);
+                const stats = pearsonCorrelation(series.x, series.y);
+                results[index] = { pair, label: label(pair), nScope: series.nScope, ...stats };
+            });
         });
+        // The measurement widened the range and rescheduled; this pass is stale.
+        if (measured.superseded) return;
 
         if (lazyByFile.size) {
             const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
@@ -762,10 +773,14 @@ export function installPlotCorrelationMethods(TargetClass) {
         plot._correlationResults = results;
         Plotly.react(plot.correlationDiv, this._buildCorrelationResultTraces(results), this._buildCorrelationResultLayout(plot, results), this._getPlotlyConfig());
         this._renderCorrelationOptionsPanel(panelId, plot);
-        // Show the actual warning text (not just a count) so the user knows why;
-        // it is also listed in the drawer. The topbar truncates with a tooltip.
-        if (warnings.length) this._setCorrelationStatus(plot, warnings.join(' · '), 'warning');
-        else this._setCorrelationStatus(plot, i18n.t('correlationReady'), 'ready');
+        // The topbar is for short messages. Warning text — which can be a full
+        // paragraph — belongs in the drawer box that already lists it; the bar
+        // only points there, and keeps the full text as its tooltip.
+        if (warnings.length) {
+            this._setCorrelationStatus(plot, i18n.t('correlationWarningSeePanel'), 'warning', warnings.join(' · '));
+        } else {
+            this._setCorrelationStatus(plot, i18n.t('correlationReady'), 'ready');
+        }
     };
 
     // ── Result bars ────────────────────────────────────────────────
@@ -899,12 +914,12 @@ export function installPlotCorrelationMethods(TargetClass) {
             : { 'yaxis.autorange': true });
     };
 
-    proto._setCorrelationStatus = function(plot, message, type = 'muted') {
+    proto._setCorrelationStatus = function(plot, message, type = 'muted', tooltip = '') {
         const el = plot?.correlationContainer?.querySelector('.fft-status');
         if (!el) return;
         el.textContent = message || '';
         el.className = `fft-status fft-status-${type}`;
-        el.title = message || '';
+        el.title = tooltip || message || '';
     };
 
     // ── Right drawer (options panel) ───────────────────────────────

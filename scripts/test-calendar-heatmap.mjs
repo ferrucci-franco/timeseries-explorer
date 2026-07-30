@@ -93,7 +93,7 @@ const heatmapMethodsSource = readFileSync(
 
 assert.match(
     heatmapMethodsSource,
-    /_scheduleCalendarHeatmapRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'heatmap'\)[\s\S]*setTimeout\(\(\) =>/,
+    /_scheduleCalendarHeatmapRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'heatmap'\)[\s\S]*_runAnalysisAfterPaint\(/,
     'Heatmap preflights and yields before eager aggregation',
 );
 

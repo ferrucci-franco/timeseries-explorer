@@ -465,11 +465,12 @@ proto._scheduleHistogramRecompute = function(panelId, options = {}) {
         this._setHistogramStatus(plot, i18n.t('integralCalculating'), 'loading');
         // Give the status and any adjusted green range one frame to paint
         // before the bounded synchronous histogram passes begin.
-        plot._histRecomputeTimer = setTimeout(() => {
-            if (plot.mode === 'histogram' && plot.histogramDiv) {
-                this._recomputeHistogram(panelId, plot);
-            }
-        }, 0);
+        this._runAnalysisAfterPaint(
+            plot,
+            '_histRecomputeRun',
+            () => plot.mode === 'histogram' && !!plot.histogramDiv,
+            () => this._recomputeHistogram(panelId, plot),
+        );
     };
     if (options.immediate) run();
     else plot._histRecomputeTimer = setTimeout(run, HISTOGRAM_RECOMPUTE_DEBOUNCE_MS);
@@ -520,19 +521,25 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
         }
     }
     if (!eager.length) {
-        this._setHistogramStatus(plot, warnings.join(' | '), 'warning');
+        this._setHistogramStatus(plot, '', 'warning', warnings);
         state.warnings = warnings;
         Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayoutForReact(plot), config);
         return;
     }
 
-    // Pass 1: per-trace samples + finite stats for every eager trace.
+    // Pass 1: per-trace samples + finite stats for every eager trace. This is
+    // the part whose cost scales with the range, so it is what the auto-limit
+    // reconsider measures.
     const perTrace = [];
-    for (const trace of eager) {
-        const samples = this._histogramSamplesForTrace(trace, range);
-        const stat = histogramFiniteStats(samples);
-        perTrace.push({ trace, samples, stat, visible: this._isVisible(trace) });
-    }
+    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+        for (const trace of eager) {
+            const samples = this._histogramSamplesForTrace(trace, range);
+            const stat = histogramFiniteStats(samples);
+            perTrace.push({ trace, samples, stat, visible: this._isVisible(trace) });
+        }
+    }, warnings);
+    // The measurement widened the range and rescheduled; this pass is stale.
+    if (measured.superseded) return;
 
     // Edges come from VISIBLE traces with finite data, so hiding a trace never
     // shifts the others' bins. If everything is hidden, fall back to all finite
@@ -554,7 +561,7 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
         state.warnings = warnings;
         if (plot._histToken !== token) return;
         Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayoutForReact(plot), config);
-        this._setHistogramStatus(plot, i18n.t('histogramNoFinite'), 'warning');
+        this._setHistogramStatus(plot, '', 'warning', warnings);
         return;
     }
 
@@ -641,15 +648,35 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
     });
 
     const methodLabel = `${i18n.t(`histogramMethod_${spec.method}`) || spec.method} · ${spec.k} ${i18n.t('histogramBinsShort')}`;
-    if (warnings.length) this._setHistogramStatus(plot, `${methodLabel} — ${warnings.join(' | ')}`, 'warning');
-    else this._setHistogramStatus(plot, methodLabel, 'ready');
+    this._setHistogramStatus(plot, methodLabel, warnings.length ? 'warning' : 'ready', warnings);
 };
 
-proto._setHistogramStatus = function(plot, text, kind = 'muted') {
+// The topbar carries a short summary; warning prose — which can run to a full
+// paragraph — goes to the drawer box, exactly as FFT, Heatmap, Profile and
+// Integral do. The bar only points there and keeps the text as its tooltip.
+proto._setHistogramStatus = function(plot, text, kind = 'muted', warnings = []) {
+    const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+    plot._histogramWarningMessage = list.join(' | ');
+    plot._histogramStatusKind = list.length ? 'warning' : kind;
     const status = plot?.histogramContainer?.querySelector('.hist-status');
-    if (!status) return;
-    status.textContent = text || '';
-    status.className = `hist-status hist-status-${kind}`;
+    if (status) {
+        const pointer = list.length ? i18n.t('histogramWarningSeePanel') : '';
+        status.textContent = [text, pointer].filter(Boolean).join(' · ');
+        status.className = `hist-status hist-status-${plot._histogramStatusKind}`;
+        status.title = plot._histogramWarningMessage || text || '';
+    }
+    this._syncHistogramMessage(plot);
+};
+
+proto._syncHistogramMessage = function(plot) {
+    const box = plot?.histogramContainer?.querySelector('.hist-message');
+    if (!box) return;
+    const warning = plot._histogramWarningMessage || '';
+    const kind = plot._histogramStatusKind || 'muted';
+    const show = !!warning && kind === 'warning';
+    box.hidden = !show;
+    box.textContent = show ? warning : '';
+    box.className = `fft-message hist-message fft-message-${kind}`;
 };
 
 // ─── Temporal selection (Todo / Selección) — mechanics mirror FFT ──
@@ -922,6 +949,11 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
     const options = plot?.histogramContainer?.querySelector('.hist-options');
     if (!options) return;
     options.innerHTML = '';
+    const message = document.createElement('div');
+    message.className = 'fft-message hist-message';
+    message.hidden = true;
+    options.appendChild(message);
+    this._syncHistogramMessage(plot);
 
     const section = (titleKey) => {
         const h = document.createElement('div');

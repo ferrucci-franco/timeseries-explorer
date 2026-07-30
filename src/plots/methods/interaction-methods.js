@@ -1235,12 +1235,86 @@ proto._setEagerDetailLoading = function(plot, loading, panelElement = null) {
 };
 
 proto._yieldForDetailIndicatorPaint = function() {
+    // A frame is the accurate "the indicator is on screen" signal, and chart
+    // creation and the analysis recomputes are gated on this promise so the
+    // label is visible before the main thread is blocked for seconds.
+    //
+    // A hidden document produces no frames at all: requestAnimationFrame is
+    // suspended and delayed timers are throttled (a 50 ms one can take a
+    // minute), while zero-delay ones still run. Waiting for a paint that
+    // cannot happen would strand the work and leave the panel blank until the
+    // tab is looked at again — and there is nothing on screen to wait for
+    // anyway, so hand the work straight back on a macrotask.
     return new Promise(resolve => {
-        const scheduleFrame = typeof requestAnimationFrame === 'function'
-            ? requestAnimationFrame
-            : callback => setTimeout(callback, 0);
-        scheduleFrame(() => setTimeout(resolve, 0));
+        const hidden = typeof document !== 'undefined' && document.hidden;
+        if (hidden || typeof requestAnimationFrame !== 'function') {
+            setTimeout(resolve, 0);
+            return;
+        }
+        let settled = false;
+        const done = () => {
+            if (settled) return;
+            settled = true;
+            setTimeout(resolve, 0);
+        };
+        requestAnimationFrame(done);
+        // A visible document can still miss a frame (occluded window, a
+        // compositor that never ticks). Timers are not throttled there, so
+        // this backstop is reliable.
+        setTimeout(done, 250);
     });
+};
+
+// Paint-then-block for an analysis whose recompute is one long synchronous
+// pass. The caller has just written its "Calculating…" status; a setTimeout(0)
+// hop is not enough to get that on screen, because the continuation can be
+// dispatched in the same event-loop turn as the DOM write and the compute then
+// blocks the main thread before any frame is produced — the label is set, and
+// the user still sees a frozen panel with the previous result.
+//
+// `runKey` names a per-plot slot holding the latest scheduled run. A newer
+// schedule (slider drag, option toggle) replaces it, so the superseded run is
+// dropped instead of computing a result nobody is waiting for.
+proto._runAnalysisAfterPaint = function(plot, runKey, isReady, work) {
+    if (!plot) return Promise.resolve();
+    const token = {};
+    plot[runKey] = token;
+    return this._yieldForDetailIndicatorPaint().then(() => {
+        if (plot[runKey] !== token || !isReady()) return;
+        plot[runKey] = null;
+        return work();
+    });
+};
+
+// Times only the data-dependent kernel of an analysis and hands the result to
+// the auto-limit reconsider. Timing the whole recompute instead would fold in
+// Plotly.react and the options-panel rebuild — costs that do not grow with the
+// sample count — and extrapolating those linearly turned a 5 ms histogram over
+// 262k points into a projected two minutes over the full signal.
+proto._measureAnalysisKernel = function(panelId, plot, run, warnings = null) {
+    const state = this._analysisStateForMode(plot, plot?.mode);
+    // Callers seed their warning list from the pre-measurement guess before the
+    // kernel runs. Remember that so the guess can be replaced in place, rather
+    // than leaving the panel quoting a number the measurement just disproved.
+    const seededIndex = Array.isArray(warnings) && state?.autoRangeWarning
+        ? warnings.indexOf(state.autoRangeWarning)
+        : -1;
+    const startedAt = performance.now();
+    const result = run();
+    const elapsedMs = performance.now() - startedAt;
+    const superseded = this._reconsiderAutoLimitedRange(panelId, plot, elapsedMs);
+    if (!superseded && seededIndex >= 0) {
+        if (state.autoRangeWarning) warnings[seededIndex] = state.autoRangeWarning;
+        else warnings.splice(seededIndex, 1);
+    }
+    return { result, elapsedMs, superseded };
+};
+
+proto._panelIdForPlot = function(plot) {
+    for (const [id, candidate] of this.plots) {
+        if (candidate === plot) return id;
+    }
+    return null;
 };
 
 proto._runWithEagerDetailLoading = function(panelId, work) {

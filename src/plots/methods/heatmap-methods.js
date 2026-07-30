@@ -877,11 +877,12 @@ proto._scheduleCalendarHeatmapRecompute = function(panelId, options = {}) {
         this._setCalendarHeatmapStatus(plot, text('heatmapLoading'), 'loading');
         plot.heatmapContainer?.setAttribute('aria-busy', 'true');
         // Paint the status and truthful selection before eager aggregation.
-        plot._calendarHeatmapRecomputeTimer = setTimeout(() => {
-            if (plot.mode === 'heatmap' && plot.heatmapDiv) {
-                this._recomputeCalendarHeatmap(panelId, plot);
-            }
-        }, 0);
+        this._runAnalysisAfterPaint(
+            plot,
+            '_calendarHeatmapRecomputeRun',
+            () => plot.mode === 'heatmap' && !!plot.heatmapDiv,
+            () => this._recomputeCalendarHeatmap(panelId, plot),
+        );
     };
     if (options.immediate) run();
     else plot._calendarHeatmapRecomputeTimer = setTimeout(run, HEATMAP_RECOMPUTE_DEBOUNCE_MS);
@@ -985,42 +986,48 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
         warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${reason}`);
     };
 
-    for (const trace of eager) {
-        const selected = this._calendarHeatmapSeriesForTrace(
-            trace,
-            state.rangeFull ? null : [rangeStart, rangeEnd],
-        );
-        const { times, values } = selected;
-        if (!times?.length || !values?.length) {
-            warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapNoRows')}`);
-            continue;
+    // The eager aggregation is the range-dependent cost; the auto-limit
+    // reconsider measures exactly this and nothing around it.
+    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+        for (const trace of eager) {
+            const selected = this._calendarHeatmapSeriesForTrace(
+                trace,
+                state.rangeFull ? null : [rangeStart, rangeEnd],
+            );
+            const { times, values } = selected;
+            if (!times?.length || !values?.length) {
+                warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapNoRows')}`);
+                continue;
+            }
+            if (times.length !== values.length) {
+                warnings.push(`${this._traceName(trace.varName, trace.fileId)}: time/value length mismatch`);
+            }
+            try {
+                const grid = buildCalendarHeatmap({
+                    times,
+                    values,
+                    calendarMode: state.calendarMode,
+                    aggregation: state.aggregation,
+                    // Eager arrays are already cropped with binary bounds.
+                    rangeStart: null,
+                    rangeEnd: null,
+                    // Transformed arrays already include crop and timeShift.
+                    timeShiftMs: 0,
+                    domainStart: densifyOptions.domainStart,
+                    domainEnd: densifyOptions.domainEnd,
+                    traceCount: retainedTraceCount,
+                    runtime,
+                });
+                if (!grid?.ok) { noteGridFailure(trace, grid); continue; }
+                noteGridWarnings(trace, grid);
+                modelByTrace.set(trace, { trace, grid });
+            } catch (error) {
+                warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
+            }
         }
-        if (times.length !== values.length) {
-            warnings.push(`${this._traceName(trace.varName, trace.fileId)}: time/value length mismatch`);
-        }
-        try {
-            const grid = buildCalendarHeatmap({
-                times,
-                values,
-                calendarMode: state.calendarMode,
-                aggregation: state.aggregation,
-                // Eager arrays are already cropped with binary bounds.
-                rangeStart: null,
-                rangeEnd: null,
-                // Transformed arrays already include crop and timeShift.
-                timeShiftMs: 0,
-                domainStart: densifyOptions.domainStart,
-                domainEnd: densifyOptions.domainEnd,
-                traceCount: retainedTraceCount,
-                runtime,
-            });
-            if (!grid?.ok) { noteGridFailure(trace, grid); continue; }
-            noteGridWarnings(trace, grid);
-            modelByTrace.set(trace, { trace, grid });
-        } catch (error) {
-            warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
-        }
-    }
+    }, warnings);
+    // The measurement widened the range and rescheduled; this pass is stale.
+    if (measured.superseded) return;
 
     // Lazy traces are aggregated exactly in DuckDB (never the overview), then
     // densified through the same kernel path as eager. Group by file so each

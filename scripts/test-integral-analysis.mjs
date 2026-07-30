@@ -123,7 +123,7 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     eq(copiedTimes, 262_146, 'Integral does not copy time values outside the bounded block');
     eq(copiedValues, 262_146, 'Integral does not copy signal values outside the bounded block');
     ok(
-        /_scheduleIntegralRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'integral'\)[\s\S]*_setIntegralComputing\(plot, true\)[\s\S]*setTimeout\(\(\) =>/.test(methods),
+        /_scheduleIntegralRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'integral'\)[\s\S]*_setIntegralComputing\(plot, true\)[\s\S]*_runAnalysisAfterPaint\(/.test(methods),
         'Integral preflights and paints progress before eager computation',
     );
 }

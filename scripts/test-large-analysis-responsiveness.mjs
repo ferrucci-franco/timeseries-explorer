@@ -71,6 +71,7 @@ assert.match(fft, /selectedCount > 200000[\s\S]*selectFftRange\(times, values, r
         normalizeZeroPaddingFactor: value => Math.max(1, Number(value) || 1),
         FFT_AUTO_SLOW_MS,
         FFT_AUTO_TARGET_POINTS,
+        ANALYSIS_AUTO_LIMIT_BUDGET_MS: 5000,
         i18n: {
             t: key => key === 'fftAutoRangeWarning'
                 ? 'estimated {seconds}; selected {samples}'
@@ -218,6 +219,7 @@ for (const path of [
     const preflightProto = {};
     vm.runInNewContext(dataMethods.slice(start, end), {
         proto: preflightProto,
+        ANALYSIS_AUTO_LIMIT_BUDGET_MS: 5000,
         i18n: {
             t: () => 'estimated {seconds}; selected {samples}',
         },
@@ -353,6 +355,124 @@ assert.match(read(analysisHooks.phase2d), /state\.timeSeriesHidden = false/);
 for (const [language, strings] of Object.entries(translations)) {
     assert.ok(strings.fftAutoRangeWarning, `${language}: FFT auto-range warning`);
     assert.ok(strings.analysisAutoRangeWarning, `${language}: generic analysis auto-range warning`);
+}
+
+// The preflight above is exercised in a vm sandbox with `i18n` supplied as a
+// global, so a module that calls i18n.t() without importing it still passes
+// there and then throws a ReferenceError in the browser — mid-mutation, after
+// the range has already been shortened. Check the real module graph instead.
+for (const path of [
+    'src/plots/methods/data-methods.js',
+    ...Object.values(analysisHooks),
+    'src/plots/methods/fft-methods.js',
+    'src/plots/methods/interaction-methods.js',
+]) {
+    const source = read(path);
+    if (!/(^|[^.\w])i18n\s*\./.test(source)) continue;
+    assert.match(
+        source,
+        /^import\s+i18n\s+from\s+['"][^'"]*i18n\/index\.js['"];/m,
+        `${path} calls i18n.t() and must import i18n`,
+    );
+}
+
+// The vm harnesses below supply this as a sandbox global, so a rename in the
+// module would go unnoticed there. Pin the declaration itself.
+assert.match(
+    dataMethods,
+    /^const ANALYSIS_AUTO_LIMIT_BUDGET_MS = 5000;$/m,
+    'data-methods declares the analysis budget the sandboxes stub',
+);
+
+// Leaving and re-entering an analysis must not turn the automatic fast preview
+// into a silent one: the shortened range no longer looks expensive precisely
+// because it was already cut, so the explanation has to be restated.
+{
+    const start = dataMethods.indexOf('proto._autoLimitAnalysisRange = function');
+    const end = dataMethods.indexOf('\n};', start + 1) + 3;
+    const reentryProto = {};
+    vm.runInNewContext(dataMethods.slice(start, end), {
+        proto: reentryProto,
+        ANALYSIS_AUTO_LIMIT_BUDGET_MS: 5000,
+        i18n: { t: () => 'about {seconds} s; {samples} samples' },
+    });
+    const times = { length: 20_000_000 };
+    const harness = {
+        files: new Map([['audio', { data: {} }]]),
+        _isVisible: () => true,
+        _getTransformedTimeDataForVariable: () => times,
+        _lowerBound: () => 0,
+        _upperBound: () => FFT_AUTO_TARGET_POINTS,
+    };
+    const state = {
+        rangeFull: false,
+        autoRangeLimited: true,
+        autoRangeWarning: null,
+        x1: 0,
+        x2: FFT_AUTO_TARGET_POINTS - 1,
+        warnings: [],
+    };
+    const restated = reentryProto._autoLimitAnalysisRange.call(
+        harness,
+        { mode: 'histogram', traces: [{ fileId: 'audio', varName: 'Left' }] },
+        state,
+        'histogram',
+        { initial: true },
+    );
+    assert.equal(restated, true, 're-entry restates why the range is short');
+    assert.ok(state.autoRangeWarning, 're-entry produces the auto-range warning again');
+    // The array is built inside the vm realm, so compare contents, not shape.
+    assert.equal(state.warnings.length, 1);
+    assert.equal(state.warnings[0], state.autoRangeWarning);
+    assert.equal(state.x2, FFT_AUTO_TARGET_POINTS - 1, 're-entry leaves the range untouched');
+
+    // A user who widened the range owns it: no warning, no re-clamping.
+    const owned = { ...state, autoRangeLimited: false, autoRangeWarning: null, warnings: [] };
+    assert.equal(
+        reentryProto._autoLimitAnalysisRange.call(
+            harness,
+            { mode: 'histogram', traces: [{ fileId: 'audio', varName: 'Left' }] },
+            owned,
+            'histogram',
+            { initial: true },
+        ),
+        false,
+        'a user-owned short range is left alone',
+    );
+    assert.equal(owned.autoRangeWarning, null);
+}
+
+// Chart creation awaits this promise. requestAnimationFrame never fires in a
+// hidden document, so it must not be the only thing that can settle it.
+{
+    const interactionSource = read('src/plots/methods/interaction-methods.js');
+    const start = interactionSource.indexOf('proto._yieldForDetailIndicatorPaint = function');
+    const end = interactionSource.indexOf('\n};', start + 1) + 3;
+    assert.ok(start >= 0 && end > start, 'paint yield helper can be isolated');
+    const settlesWithin = async (globals, label) => {
+        const yieldProto = {};
+        vm.runInNewContext(interactionSource.slice(start, end), { proto: yieldProto, ...globals });
+        await assert.doesNotReject(
+            () => Promise.race([
+                yieldProto._yieldForDetailIndicatorPaint(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('never settled')), 2000)),
+            ]),
+            label,
+        );
+    };
+    // A hidden document: rAF is suspended and delayed timers are throttled to
+    // the point of uselessness, so only the zero-delay path can settle this.
+    await settlesWithin({
+        document: { hidden: true },
+        requestAnimationFrame: () => {},
+        setTimeout: (fn, ms) => setTimeout(fn, ms ? 60_000 : 0),
+    }, 'the paint yield settles in a hidden document');
+    // A visible document whose frames never arrive (occluded window).
+    await settlesWithin({
+        document: { hidden: false },
+        requestAnimationFrame: () => {},
+        setTimeout,
+    }, 'the paint yield settles when no frame arrives');
 }
 
 console.log('Large-analysis responsiveness checks passed.');

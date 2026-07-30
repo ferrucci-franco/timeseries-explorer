@@ -2132,6 +2132,14 @@ class PlotManager {
             clearTimeout(plot[key]);
             plot[key] = null;
         }
+        // Recomputes that are waiting for a paint frame are not timers: they
+        // hold a token slot, and clearing it is what drops the pending run.
+        for (const key of [
+            '_histRecomputeRun', '_calendarHeatmapRecomputeRun', '_temporalProfileRecomputeRun',
+            '_integralRecomputeRun', '_correlationRecomputeRun', '_phase2dFitRecomputeRun',
+        ]) {
+            plot[key] = null;
+        }
         this._abortFftWorkerJob?.(plot, reason);
         this._cleanupLazyDetailForPanel?.(panelId, plot);
     }

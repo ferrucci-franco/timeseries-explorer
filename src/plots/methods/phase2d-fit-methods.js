@@ -445,6 +445,13 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return PHASE2D_FIT_MODELS.has(pair?.fitModel) ? pair.fitModel : 'none';
     };
 
+    // Whether any visible pair would actually be fitted right now.
+    proto._phase2dHasSelectedFitModel = function(plot) {
+        return (plot?.phaseTraces || []).some(pair => (
+            pair?.visible !== false && this._phase2dPairModel(pair) !== 'none'
+        ));
+    };
+
     // The pair the drawer currently edits (clamped to the visible pairs).
     proto._phase2dActivePair = function(plot) {
         const pairs = (plot?.phaseTraces || []).filter(p => p.visible !== false);
@@ -518,7 +525,12 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (plot.phase2dFitContainer?.isConnected) return;
         plot.phase2dFitContainer = null;
         const state = this._ensurePhase2dState(plot);
-        if (this._autoLimitAnalysisRange(plot, state, 'phase2d', { initial: true })) {
+        // Opening Curve Fit computes nothing: the user still has to pick a pair
+        // and a fit type. Cutting the range here would announce a speed-up for
+        // work that is not about to happen, and would quietly leave a narrowed
+        // selection behind for the fit they eventually ask for.
+        if (this._phase2dHasSelectedFitModel(plot)
+            && this._autoLimitAnalysisRange(plot, state, 'phase2d', { initial: true })) {
             state.timeSeriesHidden = false;
         }
         // A fresh build re-reads current data, so any prior live-append dirtiness
@@ -604,8 +616,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         plot.phase2dFitOptions = options;
 
         this._ensurePhase2dFitRange(plot);
-        this._setPhase2dFitStatus(plot, i18n.t('phase2dFitCalculating'), 'loading');
-        this._renderPhase2dFitDrawer(panelId, plot, { pending: true });
+        const openingWithFit = this._phase2dHasSelectedFitModel(plot);
+        if (openingWithFit) this._setPhase2dFitStatus(plot, i18n.t('phase2dFitCalculating'), 'loading');
+        this._renderPhase2dFitDrawer(panelId, plot, { pending: openingWithFit });
         const timeRestoreView = plot._phase2dFitPendingTimeView || null;
         delete plot._phase2dFitPendingTimeView;
         // Paint the shell, controls and progress message before either Plotly
@@ -976,12 +989,12 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         this._schedulePhase2dFitRecompute(panelId, { immediate: true });
     };
 
-    proto._setPhase2dFitStatus = function(plot, message, type = 'muted') {
+    proto._setPhase2dFitStatus = function(plot, message, type = 'muted', tooltip = '') {
         const el = plot?.phase2dFitContainer?.querySelector('.fft-status');
         if (!el) return;
         el.textContent = message || '';
         el.className = `fft-status fft-status-${type}`;
-        el.title = message || '';
+        el.title = tooltip || message || '';
     };
 
     proto._clearPhase2dAutoRangeNotice = function(plot, state = this._ensurePhase2dState(plot)) {
@@ -1037,22 +1050,43 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             this._updatePhase2dFitSelectionShapes(panelId, plot);
             this._syncPhase2dFitRangeInputs(plot);
         }
-        this._setPhase2dFitStatus(plot, i18n.t('phase2dFitCalculating'), 'loading');
-        this._renderPhase2dFitDrawer(panelId, plot, { pending: true });
+        // No pair carries a model yet, so nothing is being calculated. Saying
+        // otherwise puts a spinner on a panel that is simply waiting for the
+        // user to choose.
+        const pending = this._phase2dHasSelectedFitModel(plot);
+        if (pending) this._setPhase2dFitStatus(plot, i18n.t('phase2dFitCalculating'), 'loading');
+        this._renderPhase2dFitDrawer(panelId, plot, { pending });
         const run = async () => {
             if (this.plots.get(panelId) !== plot || !plot.phase2dFitContainer?.isConnected) return;
+            // The OLS fits are the range-dependent cost. Measuring them ahead of
+            // the redraw keeps Plotly's fixed cost out of the projection.
+            const measured = this._measureAnalysisKernel(panelId, plot, () => this._computePhase2dFits(plot));
+            // The measurement widened the range and rescheduled; this is stale.
+            if (measured.superseded) return;
             await this._rerenderPhase2dPlot(panelId, plot);
             if (this.plots.get(panelId) !== plot || !plot.phase2dFitContainer?.isConnected) return;
             this._renderPhase2dFitDrawer(panelId, plot, { results: plot._phase2dFits || [] });
+            // The drawer already shows the full auto-range explanation in its
+            // own box. The topbar only points at it.
             this._setPhase2dFitStatus(
                 plot,
-                state.autoRangeWarning || '',
+                state.autoRangeWarning ? i18n.t('phase2dFitWarningSeePanel') : '',
                 state.autoRangeWarning ? 'warning' : 'muted',
+                state.autoRangeWarning || '',
             );
             // Lazy pairs re-query DuckDB on release (never on every drag frame).
             if (this._hasLazyPhase2dPairs(plot)) this._refreshPhase2dLazyFits(panelId, plot);
         };
-        plot._phase2dFitRecomputeTimer = setTimeout(run, options.immediate ? 0 : 150);
+        if (options.immediate) {
+            this._runAnalysisAfterPaint(
+                plot,
+                '_phase2dFitRecomputeRun',
+                () => plot.mode === 'phase2d' && !!plot.phase2dFitContainer?.isConnected,
+                run,
+            );
+        } else {
+            plot._phase2dFitRecomputeTimer = setTimeout(run, 150);
+        }
     };
 
     // Generic model formula + resolved coefficient values for a fit result.
@@ -1121,8 +1155,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
         drawer.replaceChildren();
         if (state.autoRangeWarning) {
+            // Same boxed style every other analysis drawer uses, not the bare
+            // red line reserved for a per-fit remark.
             const notice = document.createElement('div');
-            notice.className = 'phase2d-fit-warning phase2d-auto-range-warning';
+            notice.className = 'fft-message fft-message-warning phase2d-auto-range-warning';
             notice.setAttribute('role', 'alert');
             notice.textContent = state.autoRangeWarning;
             drawer.appendChild(notice);

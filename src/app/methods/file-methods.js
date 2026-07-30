@@ -1306,6 +1306,10 @@ proto._confirmOversizedFile = async function(verdict, file = null) {
         title: i18n.t(verdict.titleKey || 'fileOverLimitTitle'),
         icon: '⚠️',
         className: 'modal-dialog-wide',
+        // Loading a file over the limit can take minutes and a lot of memory.
+        // A stray click beside the dialog is not consent to that: only Cancel
+        // or Escape dismiss it.
+        requireChoice: true,
         choices: [
             { value: 'cancel', text: i18n.t('cancel'), className: 'modal-btn-cancel', autoFocus: true },
             { value: 'load', text: i18n.t('fileOverLimitLoadAnyway'), className: 'modal-btn-confirm' },

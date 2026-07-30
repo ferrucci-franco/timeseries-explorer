@@ -614,11 +614,12 @@ proto._scheduleTemporalProfileRecompute = function(panelId, options = {}) {
         this._setTemporalProfileStatus(plot, text('temporalProfileCalculating'), 'loading');
         this._setTemporalProfileComputing(plot, true);
         plot.temporalProfileContainer?.setAttribute('aria-busy', 'true');
-        plot._temporalProfileRecomputeTimer = setTimeout(() => {
-            if (plot.mode === 'temporal-profile' && plot.temporalProfileDiv) {
-                this._recomputeTemporalProfile(panelId, plot);
-            }
-        }, 0);
+        this._runAnalysisAfterPaint(
+            plot,
+            '_temporalProfileRecomputeRun',
+            () => plot.mode === 'temporal-profile' && !!plot.temporalProfileDiv,
+            () => this._recomputeTemporalProfile(panelId, plot),
+        );
     };
     if (options.immediate) run();
     else plot._temporalProfileRecomputeTimer = setTimeout(run, PROFILE_RECOMPUTE_DEBOUNCE_MS);
@@ -664,40 +665,46 @@ proto._recomputeTemporalProfile = async function(panelId, plot = this.plots.get(
     const visibleDayCategories = temporalProfileCategoryIds(state).filter(id => this._temporalProfileCategoryEnabled(state, id));
     if (state.period === 'day' && state.dayGrouping === 'day-type' && !visibleDayCategories.length) warnings.push(text('temporalProfileNoCategories'));
 
-    for (let traceIndex = 0; traceIndex < (plot.traces || []).length; traceIndex++) {
-        const trace = plot.traces[traceIndex];
-        const name = this._traceName(trace.varName, trace.fileId);
-        if (this._fftTimeKind(trace.fileId) !== 'datetime') {
-            if (this._isVisible(trace)) warnings.push(`${name}: ${text('temporalProfileCalendarRequired')}`);
-            continue;
+    // The eager binning is the range-dependent cost the auto-limit reconsider
+    // measures; nothing around it scales with the sample count.
+    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+        for (let traceIndex = 0; traceIndex < (plot.traces || []).length; traceIndex++) {
+            const trace = plot.traces[traceIndex];
+            const name = this._traceName(trace.varName, trace.fileId);
+            if (this._fftTimeKind(trace.fileId) !== 'datetime') {
+                if (this._isVisible(trace)) warnings.push(`${name}: ${text('temporalProfileCalendarRequired')}`);
+                continue;
+            }
+            if (traceIsLazy(this, trace)) {
+                if (!lazyByFile.has(trace.fileId)) lazyByFile.set(trace.fileId, []);
+                lazyByFile.get(trace.fileId).push({ trace, traceIndex, name });
+                continue;
+            }
+            const { times, values } = this._temporalProfileSeriesForTrace(trace, range);
+            const result = buildTemporalProfile({
+                times,
+                values,
+                period: state.period,
+                resolutionMinutes: state.period === 'year' ? 1440 : state.resolutionByPeriod[state.period],
+                resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
+                dayGrouping: state.dayGrouping,
+                combineWeekends: state.combineWeekends,
+                // Eager arrays are already cropped with binary bounds.
+                rangeStart: null,
+                rangeEnd: null,
+                discardIncomplete: state.discardIncomplete,
+            });
+            if (!result.ok) {
+                const message = result.reason === 'tooManyBins' ? text('temporalProfileTooManyBins') : result.reason;
+                warnings.push(`${name}: ${message}`);
+                continue;
+            }
+            if (!result.stats.nFinite && this._isVisible(trace)) warnings.push(`${name}: ${text('temporalProfileNoFinite')}`);
+            models.push({ trace, traceIndex, name, unit: this._temporalProfileUnit(trace), result });
         }
-        if (traceIsLazy(this, trace)) {
-            if (!lazyByFile.has(trace.fileId)) lazyByFile.set(trace.fileId, []);
-            lazyByFile.get(trace.fileId).push({ trace, traceIndex, name });
-            continue;
-        }
-        const { times, values } = this._temporalProfileSeriesForTrace(trace, range);
-        const result = buildTemporalProfile({
-            times,
-            values,
-            period: state.period,
-            resolutionMinutes: state.period === 'year' ? 1440 : state.resolutionByPeriod[state.period],
-            resolutionUnit: state.period === 'year' && state.yearResolution === 'month' ? 'month' : 'minute',
-            dayGrouping: state.dayGrouping,
-            combineWeekends: state.combineWeekends,
-            // Eager arrays are already cropped with binary bounds.
-            rangeStart: null,
-            rangeEnd: null,
-            discardIncomplete: state.discardIncomplete,
-        });
-        if (!result.ok) {
-            const message = result.reason === 'tooManyBins' ? text('temporalProfileTooManyBins') : result.reason;
-            warnings.push(`${name}: ${message}`);
-            continue;
-        }
-        if (!result.stats.nFinite && this._isVisible(trace)) warnings.push(`${name}: ${text('temporalProfileNoFinite')}`);
-        models.push({ trace, traceIndex, name, unit: this._temporalProfileUnit(trace), result });
-    }
+    }, warnings);
+    // The measurement widened the range and rescheduled; this pass is stale.
+    if (measured.superseded) return;
     if (lazyByFile.size) {
         this._setTemporalProfileStatus(plot, text('temporalProfileCalculating'), 'loading');
         this._setTemporalProfileComputing(plot, true);

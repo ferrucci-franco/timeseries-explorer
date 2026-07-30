@@ -71,7 +71,7 @@ const correlationMethodsSource = readFileSync(
 
 assert.match(
     correlationMethodsSource,
-    /_scheduleCorrelationRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'correlation'\)[\s\S]*_setCorrelationStatus\(plot, i18n\.t\('correlationCalculating'\), 'loading'\)[\s\S]*setTimeout\(\(\) =>/,
+    /_scheduleCorrelationRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'correlation'\)[\s\S]*_setCorrelationStatus\(plot, i18n\.t\('correlationCalculating'\), 'loading'\)[\s\S]*_runAnalysisAfterPaint\(/,
     'Correlation preflights and paints progress before eager computation',
 );
 

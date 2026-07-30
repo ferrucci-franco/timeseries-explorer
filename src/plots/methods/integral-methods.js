@@ -846,11 +846,12 @@ proto._scheduleIntegralRecompute = function(panelId, options = {}) {
         if (adjusted) this._updateIntegralSelectionShapes(panelId, plot);
         this._setIntegralStatus(plot, text('integralCalculating'), [], 'loading', []);
         this._setIntegralComputing(plot, true);
-        plot._integralRecomputeTimer = setTimeout(() => {
-            if (plot.mode === 'integral' && plot.integralDiv) {
-                this._recomputeIntegral(panelId, plot);
-            }
-        }, 0);
+        this._runAnalysisAfterPaint(
+            plot,
+            '_integralRecomputeRun',
+            () => plot.mode === 'integral' && !!plot.integralDiv,
+            () => this._recomputeIntegral(panelId, plot),
+        );
     };
     if (options.immediate) run();
     else plot._integralRecomputeTimer = setTimeout(run, INTEGRAL_RECOMPUTE_DEBOUNCE_MS);
@@ -928,20 +929,26 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
 
     let assumedSeconds = false;
     let indexAxis = false;
-    for (const candidate of eager) {
-        const params = this._integralKernelParams(state, candidate, range, sharedExcludedDays);
-        const result = computeDefiniteIntegral(candidate.values, params.time, params.options);
-        if (candidate.base.assumed) assumedSeconds = true;
-        if (candidate.base.kind === 'index') indexAxis = true;
-        models.push({
-            trace: candidate.trace,
-            traceIndex: candidate.traceIndex,
-            name: candidate.name,
-            unit: this._integralValueUnit(candidate.trace),
-            base: candidate.base,
-            result,
-        });
-    }
+    // Measured over the real quadrature, before anything is drawn: if this says
+    // the full range is affordable after all, the reconsider widens it and
+    // reschedules, and this pass's output is superseded.
+    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+        for (const candidate of eager) {
+            const params = this._integralKernelParams(state, candidate, range, sharedExcludedDays);
+            const result = computeDefiniteIntegral(candidate.values, params.time, params.options);
+            if (candidate.base.assumed) assumedSeconds = true;
+            if (candidate.base.kind === 'index') indexAxis = true;
+            models.push({
+                trace: candidate.trace,
+                traceIndex: candidate.traceIndex,
+                name: candidate.name,
+                unit: this._integralValueUnit(candidate.trace),
+                base: candidate.base,
+                result,
+            });
+        }
+    }, warnings);
+    if (measured.superseded) return;
     for (const candidate of lazy) {
         const entry = lazyByTrace.get(candidate.trace);
         if (!entry) continue;

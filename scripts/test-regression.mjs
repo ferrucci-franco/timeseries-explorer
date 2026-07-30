@@ -308,7 +308,10 @@ const close = (actual, expected, tolerance, label) => {
 
     assert.match(source, /_schedulePhase2dFitRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'phase2d'\)/);
     assert.match(source, /_setPhase2dFitStatus\(plot, i18n\.t\('phase2dFitCalculating'\), 'loading'\)/);
-    assert.match(source, /setTimeout\(run, options\.immediate \? 0 : 150\)/);
+    // Immediate refits paint the "Calculating" drawer on a real frame first;
+    // debounced ones (slider drags) still coalesce on the 150 ms timer.
+    assert.match(source, /_runAnalysisAfterPaint\([\s\S]*'_phase2dFitRecomputeRun'/);
+    assert.match(source, /setTimeout\(run, 150\)/);
     assert.match(source, /_renderPhase2dFitDrawer\(panelId, plot, \{ results: plot\._phase2dFits \|\| \[\] \}\)/);
     assert.match(source, /state\.timeSeriesHidden = false/);
     assert.match(source, /_clearPhase2dAutoRangeNotice[\s\S]*state\.autoRangeLimited = false/);
