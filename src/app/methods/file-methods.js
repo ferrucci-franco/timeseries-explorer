@@ -1068,7 +1068,12 @@ proto._readLatestBuffer = async function(entry) {
     if (entry.file?.arrayBuffer) {
         try {
             buffer = await entry.file.arrayBuffer();
-        } catch (_) {}
+        } catch (err) {
+            // Falling back to the load-time snapshot means the Reload reports
+            // success while re-parsing the OLD bytes. The two branches above say
+            // so; this one used to swallow it silently.
+            console.warn('Could not re-read the file; falling back to the stored snapshot.', err);
+        }
     }
     if (!buffer) buffer = entry.buffer;
     if (!buffer) throw new Error('No buffer available');

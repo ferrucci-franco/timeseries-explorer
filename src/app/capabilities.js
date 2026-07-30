@@ -26,6 +26,17 @@ async function hasLocalApi() {
     }
 }
 
+// What the object is, and is not.
+//
+// The isX/fileProtocol keys describe the runtime. Only three keys gate anything:
+// isDesktop, canUseLiveUpdate and canUseLocalPath. There used to be four more —
+// canUseStaticFiles, canUseDuckDbWasm, canUseHugeFiles, canExportParquet — that
+// no code read: the real decisions are re-derived where they are made
+// (_canUseDuckDb() re-checks Worker/WASM, and the per-format byte limits gate
+// large files off isDesktop). canUseDuckDbWasm was not even equivalent to
+// _canUseDuckDb(), so a maintainer trusting the object would have gated on a
+// different condition than the engine actually uses. They are gone rather than
+// wired up, because nothing wanted them.
 export function initialCapabilities() {
     const desktop = isDesktopRuntime();
     const fileProtocol = globalThis.location?.protocol === 'file:';
@@ -39,12 +50,8 @@ export function initialCapabilities() {
         isPublishedLight: published,
         isLocalhost: isLocalhost(),
         fileProtocol,
-        canUseStaticFiles: true,
-        canUseDuckDbWasm: !fileProtocol && typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined',
         canUseLiveUpdate: desktop,
         canUseLocalPath: desktop,
-        canUseHugeFiles: desktop,
-        canExportParquet: desktop,
         showRuntimeNotice: true,
     };
 }
@@ -64,8 +71,6 @@ export async function resolveCapabilities(previous = initialCapabilities()) {
         isLocalhost: isLocalhost(),
         canUseLiveUpdate: desktop,
         canUseLocalPath: desktop,
-        canUseHugeFiles: desktop,
-        canExportParquet: desktop,
         showRuntimeNotice: true,
     };
 }
