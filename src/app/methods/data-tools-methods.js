@@ -416,7 +416,8 @@ proto._syncDataTools = function() {
     for (const id of ['filter-init', 'filter-init-level', 'filter-init-x', 'filter-init-y']) {
         document.getElementById(id)?.toggleAttribute('disabled', filterOff || zeroPhase);
     }
-    for (const id of ['resample-grid-mode', 'resample-method', 'resample-step', 'resample-factor', 'resample-count']) {
+    for (const id of ['resample-grid-mode', 'resample-method', 'resample-step',
+        'resample-factor', 'resample-count', 'resample-gap-policy']) {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'resample');
     }
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
@@ -716,7 +717,7 @@ proto._interpolateStatus = function() {
         return {
             text: i18n.t('dataToolInterpolateFillsNothing')
                 .replace('{count}', formatCount(summary.skipped))
-                .replace('{longest}', formatCount(summary.longestSkipped)),
+                .replace('{longest}', this._interpolateLongestLabel(summary.longestSkipped, data, variable)),
             tone: 'warn',
             filled: 0,
         };
@@ -728,13 +729,32 @@ proto._interpolateStatus = function() {
     if (summary.skipped > 0) {
         parts.push(i18n.t('dataToolInterpolateWillSkip')
             .replace('{count}', formatCount(summary.skipped))
-            .replace('{longest}', formatCount(summary.longestSkipped)));
+            .replace('{longest}', this._interpolateLongestLabel(summary.longestSkipped, data, variable)));
     }
     return {
         text: parts.join(' · '),
         tone: 'ok',
         filled: summary.filled,
     };
+};
+
+// A run length in samples, plus how long that is on the clock.
+//
+// "longest gap 60 samples" cannot be judged: 60 samples is reconstruction at
+// 1 kHz and invention at 1 Hz. The whole point of the gap limit is deciding where
+// that line falls, so the span has to be readable in the units the signal was
+// recorded in — which is only possible where the axis measures time at all.
+proto._interpolateLongestLabel = function(samples, data, variable) {
+    const base = formatCount(samples);
+    const time = this._resampleTimeContext?.(data);
+    const values = time?.values;
+    if (!values || time.kind === 'index' || values.length !== variable?.data?.length) return base;
+    const info = detectSamplingGaps(kernelShared.asFloat64(values));
+    if (!info.hasNominalStep || !(info.medianDt > 0)) return base;
+    const span = samples * info.medianDt;
+    if (time.kind === 'datetime') return `${base} ≈ ${formatNaturalDuration(span / 1000)}`;
+    const unit = this._resampleUnitLabel?.(time.kind, time.variable) || '';
+    return `${base} ≈ ${Number(span.toPrecision(4))}${unit ? ` ${unit}` : ''}`;
 };
 
 // Gaps in the file's own time axis — rows that do not exist — as opposed to rows
@@ -1204,6 +1224,7 @@ const DATA_TOOL_PARAMETER_IDS = [
     'resample-step',
     'resample-factor',
     'resample-count',
+    'resample-gap-policy',
 ];
 
 // A new transformation starts from the tool's defaults. Carrying the last run's
@@ -2021,7 +2042,7 @@ proto._dataToolDescription = function(config) {
         return `Data tool: moving average of ${config.sourceName}; window ${config.params.window}`;
     }
     if (config.tool === 'interpolate') {
-        return `Data tool: fill missing data in ${config.sourceName}; ${this._interpolateDescription(config.params)}`;
+        return `Data tool: fill NaN in ${config.sourceName}; ${this._interpolateDescription(config.params)}`;
     }
     if (config.tool === 'detrend') {
         return `Data tool: detrend ${config.sourceName}; ${this._detrendDescription(config.params)}`;

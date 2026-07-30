@@ -333,8 +333,16 @@
                                     <span data-i18n="dataToolInterpolateHelpSmooth">Fits a weighted straight line through the surrounding samples, so a noisy signal is bridged along its trend instead of between two noisy readings.</span>
                                 </div>
                                 <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolInterpolateHelpTwoKindsLabel">Two kinds of hole</span>
+                                    <span data-i18n-rich="dataToolInterpolateHelpTwoKinds">One NaN between two good samples one Δt apart is <strong>reconstruction</strong>: the signal cannot have gone far in between. Sixty NaN spanning a stretch the file never sampled is <strong>invention</strong>: the same formula, with nothing to constrain it. The limit below is exactly where you draw that line, which is why the panel quotes the longest run in samples <em>and</em> in time.</span>
+                                </div>
+                                <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolInterpolateMaxGap">Longest gap to fill</span>
                                     <span data-i18n="dataToolInterpolateHelpMaxGap">Runs longer than this are left as they are. Type a number larger than the slider to go past it.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolInterpolateHelpScopeLabel">What it cannot do</span>
+                                    <span data-i18n-rich="dataToolInterpolateHelpScope">It replaces NaN samples <strong>in place</strong>: same length, same time axis, so the result is a variable of this file. It cannot create rows the file does not have — a stretch where the logger stopped contains no NaN to replace. Resample at the file’s own Δt with <strong>Gaps in the source: leave them empty</strong> to materialise those rows as NaN, then come back here.</span>
                                 </div>
                             </div>
 
@@ -635,13 +643,22 @@
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolResampleHelpGapsLabel">Missing data</span>
-                                    <span data-i18n="dataToolResampleHelpGaps">A hole stays a hole: an empty bin, or a new time surrounded by missing samples, comes out missing. Fill it first if you want it bridged.</span>
+                                    <span data-i18n-rich="dataToolResampleHelpGaps">A missing VALUE stays missing: a new time surrounded by NaN, or an empty bin, comes out NaN whatever you choose below.</span>
+                                    <span data-i18n-rich="dataToolResampleHelpGapsRows">Absent ROWS are the separate question <strong>Gaps in the source</strong> answers. A file that stopped logging for a minute has no NaN in it at all — the samples either side are perfectly good — so a point method can reach across. The two cases are the same formula with opposite standing: interpolating between two samples one Δt apart reconstructs, interpolating across sixty of them invents.</span>
+                                    <span data-i18n-rich="dataToolResampleHelpGapsPolicy"><strong>Leave them empty</strong> (the default) marks those samples NaN — which is also what the bin methods have always done with an interval holding nothing — and then Fill NaN values bridges them with a method, a length limit and an edge policy of your choosing. <strong>Interpolate across them</strong> does it here in one step, with no control over how far is too far. Bin methods never reach across anything, so the choice does not apply to them.</span>
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolResampleHelpFileLabel">A new file</span>
                                     <span data-i18n="dataToolResampleHelpFile">The result has its own time axis, so it arrives as a new file next to this one rather than as a variable inside it.</span>
                                 </div>
                             </div>
+
+                            <label class="options-subgroup-label data-tool-sublabel" for="resample-gap-policy" data-i18n="dataToolResampleGapPolicy">Gaps in the source</label>
+                            <select id="resample-gap-policy" class="data-tool-select">
+                                <option value="leave" selected data-i18n="dataToolResampleGapLeave">Leave them empty (NaN)</option>
+                                <option value="bridge" data-i18n="dataToolResampleGapBridge">Interpolate across them</option>
+                            </select>
+                            <div id="resample-gap-note" class="data-tool-count idle"></div>
 
                             <div id="resample-info" class="data-tool-resample-info"></div>
                         </div>

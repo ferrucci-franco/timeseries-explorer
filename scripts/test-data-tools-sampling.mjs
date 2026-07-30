@@ -116,7 +116,9 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     withDocument(fakeDocument({ 'data-tool-select': 'nonsense' }), () => {
         assert.equal(h._getSelectedDataTool(), '', 'an unknown tool selects nothing');
     });
-    assert.equal(h._dataToolLabel('interpolate'), 'Fill missing data');
+    // The name says NaN, because that is all it can act on: a row the file never
+    // wrote holds no NaN to replace, and "missing data" promised otherwise.
+    assert.equal(h._dataToolLabel('interpolate'), 'Fill NaN values');
     assert.equal(h._dataToolLabel('resample'), 'Resample');
 }
 

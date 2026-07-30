@@ -389,39 +389,87 @@ const N = NaN;
     const gappedY = Float64Array.from([0, 1, 2, 3, 20, 21, 22]);
     const gapped = buildResampleGrid(gappedX, { gridMode: 'step', step: 1 });
     assert.equal(gapped.sourceStep, 1);
-    const bridged = resampleValues(gappedY, gappedX, gapped.grid, { method: 'linear', sourceStep: gapped.sourceStep });
-    assert.equal(bridged.emptyCount, 0, 'nothing is missing, so nothing comes out missing');
     // Targets at t = 4 … 19 all sit inside the one wide interval [3, 20].
-    assert.equal(bridged.bridgedCount, 16, 'every target inside the gap is reported as bridged');
+    const GAP_TARGETS = 16;
+
+    // The DEFAULT leaves them alone. That is what makes the point methods agree
+    // with the bin methods, and what lets the NaN-filling tool own the bridging —
+    // with a method, a length limit and an edge policy, none of which exist here.
+    const left = resampleValues(gappedY, gappedX, gapped.grid, { method: 'linear', sourceStep: gapped.sourceStep });
+    assert.equal(left.gapLeftCount, GAP_TARGETS, 'the gap is left empty by default');
+    assert.equal(left.bridgedCount, 0, 'and nothing is reported as bridged');
+    assert.equal(left.emptyCount, 0, 'this is not the NaN-surrounded case');
+    for (let g = 0; g < gapped.grid.length; g++) {
+        const t = gapped.grid[g];
+        const inGap = t > 3 && t < 20;
+        assert.equal(Number.isFinite(left.values[g]), !inGap, `t = ${t} ${inGap ? 'stays NaN' : 'has a value'}`);
+    }
+
+    // Asking for it explicitly still works, and is still counted.
+    const bridged = resampleValues(gappedY, gappedX, gapped.grid,
+        { method: 'linear', gapPolicy: 'bridge', sourceStep: gapped.sourceStep });
+    assert.equal(bridged.bridgedCount, GAP_TARGETS, 'every target inside the gap is reported as bridged');
+    assert.equal(bridged.gapLeftCount, 0);
     assert.ok(bridged.values.every(Number.isFinite), 'and they do get values');
 
     // Without the nominal step there is nothing to compare against, so no claim is
-    // made rather than a wrong one.
-    assert.equal(resampleValues(gappedY, gappedX, gapped.grid, { method: 'linear' }).bridgedCount, 0,
-        'no nominal step, no bridging claim');
+    // made rather than a wrong one — and nothing is refused on a guess.
+    const blind = resampleValues(gappedY, gappedX, gapped.grid, { method: 'linear' });
+    assert.equal(blind.bridgedCount, 0, 'no nominal step, no bridging claim');
+    assert.equal(blind.gapLeftCount, 0, 'and no gap refused on a guess');
+    assert.ok(blind.values.every(Number.isFinite));
 
-    // An evenly sampled file reaches across nothing.
+    // An evenly sampled file has no gaps, so the policy changes nothing for it.
     const cleanX = Float64Array.from([0, 1, 2, 3, 4]);
+    const cleanY = Float64Array.from([0, 1, 2, 3, 4]);
     const clean = buildResampleGrid(cleanX, { gridMode: 'step', step: 0.5 });
-    assert.equal(
-        resampleValues(Float64Array.from([0, 1, 2, 3, 4]), cleanX, clean.grid,
-            { method: 'linear', sourceStep: clean.sourceStep }).bridgedCount,
-        0,
-    );
+    for (const gapPolicy of ['leave', 'bridge']) {
+        const r = resampleValues(cleanY, cleanX, clean.grid,
+            { method: 'linear', gapPolicy, sourceStep: clean.sourceStep });
+        assert.equal(r.bridgedCount, 0, `${gapPolicy}: nothing to reach across`);
+        assert.equal(r.gapLeftCount, 0, `${gapPolicy}: nothing to leave`);
+        assert.ok(r.values.every(Number.isFinite), `${gapPolicy}: a clean file is unaffected`);
+    }
 
-    // Bin methods do not reach: an interval with no samples is simply empty.
-    const binned = resampleValues(gappedY, gappedX, gapped.grid, { method: 'mean', sourceStep: gapped.sourceStep });
-    assert.equal(binned.bridgedCount, 0);
-    assert.ok(binned.emptyCount > 0, 'the bin method reports the same gap as empty instead');
+    // Bin methods never reach across anything, so the policy is a no-op for them:
+    // an interval holding no samples was already empty.
+    for (const gapPolicy of ['leave', 'bridge']) {
+        const binned = resampleValues(gappedY, gappedX, gapped.grid,
+            { method: 'mean', gapPolicy, sourceStep: gapped.sourceStep });
+        assert.equal(binned.bridgedCount, 0, `mean/${gapPolicy}: never bridges`);
+        assert.equal(binned.gapLeftCount, 0, `mean/${gapPolicy}: nothing attributed to the policy`);
+        assert.ok(binned.emptyCount > 0, `mean/${gapPolicy}: reports the same gap as empty instead`);
+    }
 
     // runResample threads the nominal step to every column, so they all judge
     // "wider than a sampling step" against the same number.
     const batch = runResample({
         columns: [gappedY, gappedY],
         time: { values: gappedX, kind: 'numeric' },
+        params: { gridMode: 'step', step: 1, method: 'linear', gapPolicy: 'bridge' },
+    });
+    assert.deepEqual(batch.bridgedCounts, [GAP_TARGETS, GAP_TARGETS], 'every column is judged alike');
+    const batchLeft = runResample({
+        columns: [gappedY, gappedY],
+        time: { values: gappedX, kind: 'numeric' },
         params: { gridMode: 'step', step: 1, method: 'linear' },
     });
-    assert.deepEqual(batch.bridgedCounts, [16, 16], 'every column is judged alike');
+    assert.deepEqual(batchLeft.gapLeftCounts, [GAP_TARGETS, GAP_TARGETS]);
+
+    // And the pairing the default exists for: resample leaving the gap, then fill
+    // the NaN it produced. This is the two-step path end to end.
+    const filled = fillMissingValues(left.values, { values: gapped.grid, kind: 'numeric' },
+        { method: 'linear', maxGap: 100 });
+    assert.equal(filled.filledCount, GAP_TARGETS, 'the filler takes over exactly where resampling stopped');
+    assert.ok(filled.values.every(Number.isFinite), 'and the series comes out complete');
+    // ...and with a limit shorter than the gap, it refuses — which is the control
+    // that bridging inside the resampler cannot offer at all.
+    assert.equal(
+        fillMissingValues(left.values, { values: gapped.grid, kind: 'numeric' },
+            { method: 'linear', maxGap: 5 }).filledCount,
+        0,
+        'a limit shorter than the gap leaves it alone',
+    );
 }
 
 {

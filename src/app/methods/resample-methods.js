@@ -25,10 +25,12 @@ import { runResample, medianStep } from '../../compute/kernels/index.js';
 import {
     RESAMPLE_METHODS,
     RESAMPLE_GRID_MODES,
+    RESAMPLE_BIN_METHODS,
     normalizeResampleParams,
     planResampleGrid,
 } from '../../compute/kernels/regrid.js';
 import * as kernelShared from '../../compute/kernels/shared.js';
+import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 
 export function installResampleMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -40,6 +42,7 @@ proto.initResampleTool = function() {
     };
     document.getElementById('resample-grid-mode')?.addEventListener('change', rerun);
     document.getElementById('resample-method')?.addEventListener('change', rerun);
+    document.getElementById('resample-gap-policy')?.addEventListener('change', rerun);
     // Number inputs settle on blur/Enter. Recomputing the summary on every
     // keystroke would read the "0." of "0.05" and announce a 20× upsample.
     for (const id of ['resample-step', 'resample-factor', 'resample-count']) {
@@ -78,6 +81,7 @@ proto._getResampleConfig = function() {
             step: Number(document.getElementById('resample-step')?.value),
             factor: Number(document.getElementById('resample-factor')?.value),
             count: Number(document.getElementById('resample-count')?.value),
+            gapPolicy: document.getElementById('resample-gap-policy')?.value,
         }),
     };
 };
@@ -165,6 +169,55 @@ proto._syncResampleControls = function() {
     const summary = this._resamplePlan(data, time);
     info.textContent = summary.text;
     info.classList.toggle('invalid', !summary.ok);
+    this._syncResampleGapControls(data, time);
+};
+
+// The gap policy only means something for the point methods. A bin method never
+// reaches across anything — an interval holding no samples has always come out
+// empty — so rather than leave a live control that changes nothing, it is
+// disabled and says why.
+proto._syncResampleGapControls = function(data, time) {
+    const select = document.getElementById('resample-gap-policy');
+    const note = document.getElementById('resample-gap-note');
+    if (!select) return;
+    const method = document.getElementById('resample-method')?.value || 'linear';
+    const isBin = RESAMPLE_BIN_METHODS.has(method);
+    select.disabled = select.disabled || isBin;
+
+    if (!note) return;
+    if (isBin) {
+        note.textContent = i18n.t('dataToolResampleGapBinNote');
+        note.className = 'data-tool-count idle';
+        return;
+    }
+    // How many rows the source is actually missing, so the choice is made against
+    // a number rather than in the abstract.
+    const gaps = this._resampleSourceGaps(data, time);
+    if (!gaps) {
+        note.textContent = '';
+        note.className = 'data-tool-count idle';
+        return;
+    }
+    const leaving = select.value !== 'bridge';
+    note.textContent = i18n.t(leaving ? 'dataToolResampleGapNoteLeave' : 'dataToolResampleGapNoteBridge')
+        .replace('{gaps}', formatCount(gaps.count))
+        .replace('{samples}', formatCount(gaps.missing));
+    note.className = `data-tool-count${leaving ? ' idle' : ' warn'}`;
+};
+
+// Gaps in the SOURCE axis: stretches the file has no rows for. Cached with the
+// axis measurement, since both come from one pass over the same array.
+proto._resampleSourceGaps = function(data, time = this._resampleTimeContext(data)) {
+    const values = time?.values;
+    if (!values || time.kind === 'index') return null;
+    const cached = this._resampleGapsCache;
+    if (cached?.source === values) return cached.gaps;
+    const info = detectSamplingGaps(kernelShared.asFloat64(values));
+    const gaps = info.hasNominalStep && info.count > 0
+        ? { count: info.count, missing: info.totalMissing }
+        : null;
+    this._resampleGapsCache = { source: values, gaps };
+    return gaps;
 };
 
 // Span and native Δt of a file's axis. Measuring them is a full pass plus a
@@ -213,10 +266,19 @@ proto._resamplePlan = function(data, time = this._resampleTimeContext(data)) {
     }
 
     const ratio = Number.isFinite(sourceStep) && sourceStep > 0 ? sourceStep / step : NaN;
-    const change = !Number.isFinite(ratio) || Math.abs(ratio - 1) < 1e-9
-        ? i18n.t('dataToolResampleSame')
-        : i18n.t(ratio > 1 ? 'dataToolResampleUp' : 'dataToolResampleDown')
-            .replace('{factor}', formatNumber(ratio > 1 ? ratio : 1 / ratio));
+    const sameRate = Number.isFinite(ratio) && Math.abs(ratio - 1) < 1e-9;
+    // "same rate, uniform grid" is true but says nothing about what the user is
+    // usually after when they choose the file's own Δt on a file with holes in it:
+    // materialising the rows that are not there. Name that instead.
+    const gaps = sameRate ? this._resampleSourceGaps(data, time) : null;
+    const change = gaps
+        ? i18n.t(gaps.count === 1 ? 'dataToolResampleCompletesRowsOne' : 'dataToolResampleCompletesRows')
+            .replace('{samples}', formatCount(gaps.missing))
+            .replace('{gaps}', formatCount(gaps.count))
+        : (!Number.isFinite(ratio) || sameRate
+            ? i18n.t('dataToolResampleSame')
+            : i18n.t(ratio > 1 ? 'dataToolResampleUp' : 'dataToolResampleDown')
+                .replace('{factor}', formatNumber(ratio > 1 ? ratio : 1 / ratio)));
 
     const unit = this._resampleUnitLabel(time.kind, time.variable);
     const text = i18n.t('dataToolResampleInfo')
@@ -285,6 +347,11 @@ proto.commitResampleTool = async function(options = {}) {
     // which is usually what the user wanted, and never something to leave unsaid.
     const bridgedTotal = (resampled.bridgedCounts || []).reduce((sum, value) => sum + value, 0);
     const bridgedPerVariable = names.length ? Math.round(bridgedTotal / names.length) : 0;
+    // The counterpart: samples deliberately left NaN because the source had no
+    // rows there. Reported just as loudly, because it is the number the user needs
+    // in order to know there is a second step to take.
+    const gapLeftTotal = (resampled.gapLeftCounts || []).reduce((sum, value) => sum + value, 0);
+    const gapLeftPerVariable = names.length ? Math.round(gapLeftTotal / names.length) : 0;
     this._setOutlierMessage(() => {
         const one = names.length === 1;
         const key = target.replaced
@@ -304,7 +371,11 @@ proto.commitResampleTool = async function(options = {}) {
             ? i18n.t(bridgedPerVariable === 1 ? 'dataToolResampleBridgedOne' : 'dataToolResampleBridged')
                 .replace('{count}', formatCount(bridgedPerVariable))
             : '';
-        return [base, bridged, holes].filter(Boolean).join(' ');
+        const left = gapLeftPerVariable > 0
+            ? i18n.t(gapLeftPerVariable === 1 ? 'dataToolResampleGapLeftOne' : 'dataToolResampleGapLeft')
+                .replace('{count}', formatCount(gapLeftPerVariable))
+            : '';
+        return [base, bridged, left, holes].filter(Boolean).join(' ');
     }, emptyTotal > 0 ? 'error' : 'ok');
 
     this._clearDataToolDraft({ keepMessage: true });
@@ -433,6 +504,7 @@ proto._buildResampledData = function(sourceData, time, config, names, resampled)
         resample: {
             method: config.params.method,
             gridMode: config.params.gridMode,
+            gapPolicy: config.params.gapPolicy,
             step: step / scale,
             sourceKind: kind,
         },
