@@ -42,6 +42,13 @@ const fft = read('src/plots/methods/fft-methods.js');
 assert.match(fft, /setTimeout\(async \(\) => \{\s*await this\._prepareFftAutoRange/s);
 assert.match(fft, /_setFftStatus\(plot, i18n\.t\('fftCalculating'\), 'loading'\)/);
 assert.match(fft, /await new Promise\(resolve => setTimeout\(resolve, 0\)\)/);
+assert.match(fft, /FFT_AUTO_TARGET_POINTS \/ state\.zeroPaddingFactor/);
+assert.match(fft, /_buildFftTimeLayout\(plot, visualRange\)/);
+assert.match(fft, /_buildFftTimeTraces\(plot, visualRange\)/);
+
+const dataMethods = read('src/plots/methods/data-methods.js');
+assert.match(dataMethods, /_buildTimeLayout = function\(plot, options = \{\}\)/);
+assert.match(dataMethods, /boundedTimeRange[\s\S]*options\.timeRange/);
 
 const interaction = read('src/plots/methods/interaction-methods.js');
 assert.match(interaction, /plot\.traces\[result\.idx\] === result\.trace/);

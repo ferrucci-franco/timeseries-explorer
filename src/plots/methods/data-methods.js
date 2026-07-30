@@ -1798,7 +1798,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     };
 };
 
-proto._buildTimeLayout = function(plot) {
+proto._buildTimeLayout = function(plot, options = {}) {
     const { bg, gridColor, fontColor, legendBg } = this._colors();
     const margin = this._marginConfig();
     margin.b += 6;
@@ -1815,14 +1815,27 @@ proto._buildTimeLayout = function(plot) {
         visibleFileIds.length ? visibleFileIds : plot.traces.map(t => t.fileId),
     ).effectiveDisplay;
     const timeTitle = this._timeAxisTitleForVar(firstFileId, firstTimeVar, 'Time', panelDisplay);
+    // Analysis views can render a deliberately bounded slice of a multi-GB
+    // signal. Reusing the normal layout must not then rescan every source time
+    // merely to rediscover the x extent: the caller already knows that slice.
+    const boundedTimeRange = Array.isArray(options.timeRange)
+        && options.timeRange.length >= 2
+        && options.timeRange.every(value => Number.isFinite(Number(value)))
+        ? options.timeRange.map(Number)
+        : null;
+    const timeExtentInput = boundedTimeRange
+        ? boundedTimeRange
+        : plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName));
     const xAxisMode = firstTimeMode === 'calendar' || generatedCalendarAxis
-        ? this._calendarAxisConfig(firstFileId, firstTimeVar, plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)))
+        ? this._calendarAxisConfig(firstFileId, firstTimeVar, timeExtentInput)
         : (panelDisplay === 'duration'
-            ? this._elapsedDateTimeAxisConfig(plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)), firstFileId)
+            ? this._elapsedDateTimeAxisConfig(timeExtentInput, firstFileId)
             : { type: 'linear' });
-    const xExtent = this._finiteExtent(plot.traces
-        .filter(t => this._isVisible(t))
-        .map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)));
+    const xExtent = boundedTimeRange
+        ? this._finiteExtent([boundedTimeRange])
+        : this._finiteExtent(plot.traces
+            .filter(t => this._isVisible(t))
+            .map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)));
     const xRange = xExtent ? this._exactRange(xExtent.min, xExtent.max) : null;
     const xRangeConfig = xRange
         ? {

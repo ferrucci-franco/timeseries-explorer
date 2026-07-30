@@ -234,7 +234,7 @@ proto._createFftChart = function(panelId, panelEl) {
         if (plot._fftPreparationToken !== preparationToken || plot.mode !== 'fft' || !plot.fftContainer?.isConnected) return;
         const visualRange = state.autoRangeWarning ? this._activeFftRange(plot) : null;
         await Promise.all([
-            Plotly.newPlot(timeDiv, this._buildFftTimeTraces(plot, visualRange), this._buildFftTimeLayout(plot), config),
+            Plotly.newPlot(timeDiv, this._buildFftTimeTraces(plot, visualRange), this._buildFftTimeLayout(plot, visualRange), config),
             Plotly.newPlot(spectrumDiv, [], this._buildFftSpectrumLayout(plot), config),
         ]);
         if (plot._fftPreparationToken !== preparationToken || plot.mode !== 'fft') return;
@@ -506,8 +506,8 @@ proto._refreshFftWindowedVisuals = function(panelId, plot = this.plots.get(panel
     Plotly.restyle(plot.div, { x: xs, y: ys }, indices);
 };
 
-proto._buildFftTimeLayout = function(plot) {
-    const layout = this._buildTimeLayout(plot);
+proto._buildFftTimeLayout = function(plot, visibleRange = null) {
+    const layout = this._buildTimeLayout(plot, visibleRange ? { timeRange: visibleRange } : undefined);
     layout.shapes = this._fftTimePaneShapes(plot);
     layout.margin = { ...(layout.margin || {}), t: 8 };
     // No hover on the time plot: the tooltips get in the way of the
@@ -666,14 +666,15 @@ proto._refreshFftTimePlot = function(panelId, plot = this.plots.get(panelId), op
     if (!plot?.div || plot.mode !== 'fft') return Promise.resolve();
     const xRange = options.preserveView && options.preserveX !== false ? plot.div._fullLayout?.xaxis?.range : null;
     const yRange = options.preserveView && options.preserveY !== false ? plot.div._fullLayout?.yaxis?.range : null;
-    const layout = this._buildFftTimeLayout(plot);
+    const visualRange = this._ensureFftState(plot).autoRangeWarning ? this._activeFftRange(plot) : null;
+    const layout = this._buildFftTimeLayout(plot, visualRange);
     if (Array.isArray(xRange)) {
         layout.xaxis = { ...(layout.xaxis || {}), range: xRange, autorange: false };
     }
     if (Array.isArray(yRange)) {
         layout.yaxis = { ...(layout.yaxis || {}), range: yRange, autorange: false };
     }
-    return Plotly.react(plot.div, this._buildFftTimeTraces(plot), layout, this._getPlotlyConfig())
+    return Plotly.react(plot.div, this._buildFftTimeTraces(plot, visualRange), layout, this._getPlotlyConfig())
         .then(() => {
             this._installLegendHoverHint(plot.div);
             this._installCursorHandlers(panelId, plot);
@@ -707,56 +708,124 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
 
 proto._prepareFftAutoRange = async function(panelId, plot, token) {
     const state = this._ensureFftState(plot);
-    if (!state.rangeFull || state.autoRangeWarning) return false;
     const trace = (plot.traces || []).find(item => this._isVisible(item));
     if (!trace) return false;
     const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
     const values = this._getTransformedVariableData(trace.fileId, trace.varName);
     const n = Math.min(times?.length || 0, values?.length || 0);
-    const estimatedMs = estimateFftDurationMs(n, state.zeroPaddingFactor);
-    if (estimatedMs <= FFT_AUTO_SLOW_MS) return false;
+    if (n < 2) return false;
 
-    const target = Math.min(FFT_AUTO_TARGET_POINTS, n);
-    let runStart = -1;
-    let runLength = 0;
-    let previousTime = -Infinity;
-    let expectedStep = NaN;
-    for (let i = 0; i < n; i++) {
-        if (plot._fftPreparationToken !== token || plot.mode !== 'fft') return false;
-        const time = Number(times[i]);
-        const value = Number(values[i]);
-        let valid = Number.isFinite(time) && Number.isFinite(value)
-            && (runLength === 0 || time > previousTime);
-        if (valid && runLength > 0) {
-            const step = time - previousTime;
-            if (runLength === 1) expectedStep = step;
-            else if (!Number.isFinite(expectedStep)
-                || Math.abs(step - expectedStep) > Math.abs(expectedStep) * 1e-3) valid = false;
+    const lowerBound = value => {
+        let lo = 0;
+        let hi = n;
+        while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (Number(times[mid]) < value) lo = mid + 1;
+            else hi = mid;
         }
-        if (valid) {
-            if (runLength === 0) runStart = i;
-            runLength += 1;
-            previousTime = time;
-            if (runLength >= target) {
-                state.rangeFull = false;
-                state.x1 = Number(times[runStart]);
-                state.x2 = time;
-                const seconds = Math.max(5, Math.round(estimatedMs / 1000));
-                state.autoRangeWarning = i18n.t('fftAutoRangeWarning')
-                    .replace('{seconds}', seconds.toLocaleString())
-                    .replace('{samples}', target.toLocaleString());
-                this._syncFftOptionsPanel(plot);
-                return true;
+        return lo;
+    };
+    const upperBound = value => {
+        let lo = 0;
+        let hi = n;
+        while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (Number(times[mid]) <= value) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+
+    let selectionStart = 0;
+    let selectionEnd = n;
+    if (!state.rangeFull) {
+        const activeRange = this._activeFftRange(plot);
+        if (Array.isArray(activeRange) && activeRange.length >= 2) {
+            const lo = Math.min(Number(activeRange[0]), Number(activeRange[1]));
+            const hi = Math.max(Number(activeRange[0]), Number(activeRange[1]));
+            if (Number.isFinite(lo) && Number.isFinite(hi)) {
+                selectionStart = lowerBound(lo);
+                selectionEnd = upperBound(hi);
             }
-        } else {
-            runStart = -1;
-            runLength = 0;
-            previousTime = -Infinity;
-            expectedStep = NaN;
         }
-        if ((i & 0x3fff) === 0x3fff) await new Promise(resolve => setTimeout(resolve, 0));
     }
-    return false;
+    const selectedCount = Math.max(0, selectionEnd - selectionStart);
+    const estimatedMs = estimateFftDurationMs(selectedCount, state.zeroPaddingFactor);
+    // Keep the automatically selected transform itself around 2^18 NFFT even
+    // when zero padding is enabled. The old fixed 262k source points became a
+    // 4.2M-point transform at x16.
+    const target = Math.min(
+        selectedCount,
+        Math.max(2, Math.floor(FFT_AUTO_TARGET_POINTS / state.zeroPaddingFactor)),
+    );
+    const needsInitialLimit = state.rangeFull && estimatedMs > FFT_AUTO_SLOW_MS;
+    const needsTighterPriorLimit = !!state.autoRangeWarning && selectedCount > target;
+    if (!needsInitialLimit && !needsTighterPriorLimit) return false;
+
+    const blockIsClean = async start => {
+        const end = Math.min(selectionEnd, start + target);
+        if (end - start < target) return false;
+        let previousTime = NaN;
+        let expectedStep = NaN;
+        for (let i = start; i < end; i++) {
+            if (plot._fftPreparationToken !== token || plot.mode !== 'fft') return null;
+            const time = Number(times[i]);
+            const value = Number(values[i]);
+            if (!Number.isFinite(time) || !Number.isFinite(value)
+                || (i > start && !(time > previousTime))) return false;
+            if (i > start) {
+                const step = time - previousTime;
+                if (i === start + 1) expectedStep = step;
+                else if (!Number.isFinite(expectedStep)
+                    || Math.abs(step - expectedStep) > Math.abs(expectedStep) * 1e-3) return false;
+            }
+            previousTime = time;
+            if (((i - start) & 0x3fff) === 0x3fff) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+        }
+        return true;
+    };
+
+    // Check the earliest consecutive blocks first. If the beginning contains
+    // missing data, probe later blocks without linearly walking a multi-GB
+    // signal. Each candidate is fully validated before it is selected.
+    const candidateStarts = [];
+    const candidateCount = Math.max(1, Math.ceil(selectedCount / target));
+    const sequential = Math.min(candidateCount, 8);
+    for (let block = 0; block < sequential; block++) {
+        candidateStarts.push(selectionStart + block * target);
+    }
+    const probes = Math.min(24, candidateCount - sequential);
+    for (let probe = 1; probe <= probes; probe++) {
+        const block = sequential + Math.floor((probe * (candidateCount - sequential - 1)) / Math.max(1, probes));
+        candidateStarts.push(selectionStart + block * target);
+    }
+
+    let cleanStart = -1;
+    for (const start of [...new Set(candidateStarts)]) {
+        const clean = await blockIsClean(start);
+        if (clean === null) return false;
+        if (clean) {
+            cleanStart = start;
+            break;
+        }
+    }
+    const foundCleanBlock = cleanStart >= 0;
+    // Never fall back to the enormous range: even a pathological file with no
+    // clean candidate must fail quickly and responsively with the normal
+    // NaN/non-uniform warning. The generic wording does not claim this fallback
+    // block was clean.
+    if (!foundCleanBlock) cleanStart = selectionStart;
+    state.rangeFull = false;
+    state.x1 = Number(times[cleanStart]);
+    state.x2 = Number(times[cleanStart + target - 1]);
+    const seconds = Math.max(5, Math.round(estimatedMs / 1000));
+    state.autoRangeWarning = i18n.t(foundCleanBlock ? 'fftAutoRangeWarning' : 'analysisAutoRangeWarning')
+        .replace('{seconds}', seconds.toLocaleString())
+        .replace('{samples}', target.toLocaleString());
+    this._syncFftOptionsPanel(plot);
+    return true;
 };
 
 proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(panelId)) {
