@@ -1745,13 +1745,37 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     // is mostly NaN by construction, and min/max bucket decimation would throw
     // away the few points that ARE there — losing exactly the positions the trace
     // exists to show. It gets its own reduction, over the present samples only.
-    const visual = t.markersOnly
+    const fullVisualCacheable = !visibleRange
+        && !t.markersOnly
+        && !isStep
+        && !plot?.timeseriesStacked;
+    const cachedFullVisual = fullVisualCacheable
+        && t._fullVisualCache?.timeData === timeData
+        && t._fullVisualCache?.values === values
+        && t._fullVisualCache?.target === this.timeseriesVisualMaxPoints
+        ? t._fullVisualCache.visual
+        : null;
+    const baseVisual = t.markersOnly
         ? this._buildSparseVisualData(timeData, values)
-        : this._applyTimeseriesStackZeroPadding(
-            plot,
-            t,
-            this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep)
-        );
+        : (cachedFullVisual || this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep));
+    if (fullVisualCacheable && !cachedFullVisual) {
+        // Mode changes preserve trace state. Reuse the already computed
+        // full-series screen overview when entering FFT instead of rescanning a
+        // multi-GB decoded signal merely to draw the same 2,000-point envelope.
+        // Non-enumerable: session serialization must never walk the source
+        // typed arrays retained only as cache identity guards.
+        Object.defineProperty(t, '_fullVisualCache', {
+            configurable: true,
+            writable: true,
+            value: {
+                timeData,
+                values,
+                target: this.timeseriesVisualMaxPoints,
+                visual: baseVisual,
+            },
+        });
+    }
+    const visual = this._applyTimeseriesStackZeroPadding(plot, t, baseVisual);
     const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
     const customdata = highResolutionCalendarAxis
         ? Array.from(visual.x || [], value => this._formatGeneratedCalendarDateTime(

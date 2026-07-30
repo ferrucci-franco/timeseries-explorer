@@ -689,7 +689,7 @@ class PlotManager {
     autoZoomAll() {
         for (const [id, plot] of this.plots) {
             if (!plot.div) continue;
-            this._autoScalePlot(id, plot);
+            this._runWithEagerDetailLoading(id, () => this._autoScalePlot(id, plot));
         }
     }
 
@@ -745,7 +745,21 @@ class PlotManager {
             && timeTraceModes.has(previousMode)
             && timeTraceModes.has(mode);
         const preservedTraces = preserveTimeTraces
-            ? plot.traces.map(trace => ({ ...trace, axis: 'y' }))
+            ? plot.traces.map(trace => {
+                const clone = { ...trace, axis: 'y' };
+                // _fullVisualCache is deliberately non-enumerable so saved
+                // sessions never traverse its large source-array references.
+                // Carry it explicitly only across the in-memory analysis mode
+                // switch where it avoids rebuilding the same screen overview.
+                if (trace._fullVisualCache) {
+                    Object.defineProperty(clone, '_fullVisualCache', {
+                        configurable: true,
+                        writable: true,
+                        value: trace._fullVisualCache,
+                    });
+                }
+                return clone;
+            })
             : [];
         // phase2d and correlation share the pair list; preserve pairs (and the
         // correlation window) when toggling between them so the user keeps them.
@@ -1314,6 +1328,33 @@ class PlotManager {
             this._createCorrelationChart(panelId, panelEl);
             return;
         }
+        if (plot.mode === 'timeseries'
+            && this._timeseriesNeedsEagerDetailLoading(plot)
+            && !plot._eagerInitialDetailReady) {
+            if (plot._eagerInitialDetailDeferred) return;
+            // Paint the same progress pill used by lazy detail before the first
+            // full-range downsample/layout pass starts. On a 160M-sample eager
+            // audio trace that synchronous pass takes a few seconds; without a
+            // task boundary the panel remains blank with no explanation.
+            const token = {};
+            plot._eagerInitialDetailDeferred = true;
+            plot._eagerInitialDetailToken = token;
+            this._setEagerDetailLoading(plot, true, panelEl);
+            this._yieldForDetailIndicatorPaint().then(() => {
+                if (plot._eagerInitialDetailToken !== token
+                    || this.plots.get(panelId) !== plot
+                    || plot.mode !== 'timeseries'
+                    || plot.div) {
+                    delete plot._eagerInitialDetailDeferred;
+                    this._setEagerDetailLoading(plot, false, panelEl);
+                    return;
+                }
+                delete plot._eagerInitialDetailDeferred;
+                plot._eagerInitialDetailReady = true;
+                this._createChart(panelId, panelEl);
+            });
+            return;
+        }
         const restoreView = plot._pendingViewRestore || null;
         delete plot._pendingViewRestore;
 
@@ -1337,6 +1378,11 @@ class PlotManager {
         const config = this._getPlotlyConfig();
 
         Plotly.newPlot(div, traces, layout, config).then(() => {
+            if (plot._eagerInitialDetailReady) {
+                delete plot._eagerInitialDetailReady;
+                plot._eagerInitialDetailToken = null;
+                this._setEagerDetailLoading(plot, false, panelEl);
+            }
             this._refreshActionBtns(panelId);
             const finish3DSetup = () => {
                 if (!this._is3D(plot.mode)) return;
@@ -1362,10 +1408,33 @@ class PlotManager {
                 }
                 finish3DSetup();
             });
-            div.on('plotly_doubleclick', () => {
-                this._autoScalePlot(panelId, plot);
-                return false;
-            });
+            if (plot.mode === 'timeseries') {
+                // Plotly emits plotly_doubleclick only after its native
+                // autorange has already run. On a huge eager trace that blocks
+                // for seconds, so a loading pill started there paints too late.
+                // The second click arrives before dblclick; capture it before
+                // Plotly sees it, then own the autoscale operation.
+                div.addEventListener('click', event => {
+                    if (event.button !== 0 || event.detail !== 2) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation?.();
+                    this._runWithEagerDetailLoading(
+                        panelId,
+                        () => this._autoScalePlot(panelId, plot),
+                    );
+                }, { capture: true });
+                div.addEventListener('dblclick', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation?.();
+                }, { capture: true });
+            } else {
+                div.on('plotly_doubleclick', () => {
+                    this._autoScalePlot(panelId, plot);
+                    return false;
+                });
+            }
             // Axis sync, hover sync, and scroll-wheel pan (timeseries only)
             if (plot.mode === 'timeseries') {
                 div.on('plotly_relayouting', (ed) => this._onRelayouting(panelId, ed));
@@ -1868,6 +1937,12 @@ class PlotManager {
     _destroyChart(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        plot._eagerInitialDetailToken = null;
+        delete plot._eagerInitialDetailDeferred;
+        delete plot._eagerInitialDetailReady;
+        plot._eagerDetailLoadingCount = 0;
+        const panelElement = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        this._setEagerDetailLoading(plot, false, panelElement);
         this._cancelPanelAnalysis?.(panelId, plot, 'Panel destroyed');
         if (typeof this._cleanupLazyDetailForPanel === 'function') {
             this._cleanupLazyDetailForPanel(panelId, plot);

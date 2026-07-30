@@ -36,7 +36,14 @@ proto._onRelayout = function(sourcePanelId, eventData) {
         if (autorangeRequested) {
             // FFT: the relayout comes from the time sub-plot; leave the
             // spectrum axes (and manual fMin/fMax/yMin/yMax) untouched.
-            if (plot.mode === 'fft' || plot.mode === 'histogram' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral') this._autoScalePlotTimeOnly(plot);
+            if (plot.mode === 'fft') {
+                this._runWithEagerDetailLoading(
+                    sourcePanelId,
+                    () => this._autoScalePlotTimeOnly(plot),
+                );
+            } else if (plot.mode === 'histogram' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral') {
+                this._autoScalePlotTimeOnly(plot);
+            }
             else this._autoScalePlot(sourcePanelId, plot);
         } else {
             const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
@@ -319,20 +326,42 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     // each trace also breaks across its own NaN runs.
     const showMissing = plot.mode === 'timeseries' && plot.showMissingData;
     const fftMode = plot.mode === 'fft';
+    let traceBuildRange = range;
+    if (fftMode && Array.isArray(range) && range.length >= 2) {
+        const domain = this._fftDomain(plot);
+        const a = this._coerceAxisValue(range[0]);
+        const b = this._coerceAxisValue(range[1]);
+        if (domain && Number.isFinite(a) && Number.isFinite(b)) {
+            const lo = Math.min(a, b);
+            const hi = Math.max(a, b);
+            const tolerance = Math.max(Math.abs(domain.max - domain.min) * 1e-9, 1e-9);
+            if (lo <= domain.min + tolerance && hi >= domain.max - tolerance) {
+                // Autoscale restored the complete FFT time domain. Reuse the
+                // cached full overview instead of rescanning the source with a
+                // range that happens to cover every sample.
+                traceBuildRange = null;
+            }
+        }
+    }
     const missInfo = showMissing ? this._missingDataInfo(plot) : null;
     // When the view is too dense to resolve gaps, per-gap line breaks would
     // shred the downsampled trace into invisible fragments — skip them (and the
     // bands) and let the "zoom in" pill carry the message, keeping the signal
     // envelope intact. Bands/breaks return in step once the user zooms in.
     const missDense = showMissing ? this._missingViewIsDense(plot, missInfo.bandItems) : false;
-    const fftGapInfo = fftMode ? this._fftGapInfo(plot) : null;
+    // An auto-limited FFT span was already checked for finite, uniform samples.
+    // Do not rediscover line-break decorations by scanning the complete source:
+    // for decoded multi-GB audio this used to allocate/sort hundreds of millions
+    // of deltas after the small FFT itself was ready.
+    const fftSkipGlobalGaps = fftMode && this._fftShouldSkipGlobalGapScan(plot);
+    const fftGapInfo = fftMode && !fftSkipGlobalGaps ? this._fftGapInfo(plot) : null;
     const fftGapsByFile = fftGapInfo ? new Map(fftGapInfo.perFile.map(f => [f.fileId, f])) : null;
     const attachSourceX = showMissing || fftMode;
     plot.traces.forEach((t, idx) => {
-        const built = this._buildTimeTrace(t, range, plot, idx, attachSourceX ? { attachSourceX: true } : {});
+        const built = this._buildTimeTrace(t, traceBuildRange, plot, idx, attachSourceX ? { attachSourceX: true } : {});
         if (!built) return;
         if (showMissing && !missDense) this._applyLineBreaks(built, missInfo.traceIntervals.get(this._missTraceKey(t)));
-        else if (fftMode) this._applyLineBreaks(built, fftGapsByFile.get(t.fileId)?.gaps);
+        else if (fftMode && fftGapsByFile) this._applyLineBreaks(built, fftGapsByFile.get(t.fileId)?.gaps);
         xs.push(built.x);
         ys.push(built.y);
         cds.push(built.customdata ?? null);
@@ -1166,6 +1195,67 @@ proto._lazyTimeseriesTarget = function() {
     // of points from DuckDB and hand them to Plotly. Use the highest numeric
     // menu budget so "none" remains monotonic with explicit options.
     return { limit: this._maxTimeseriesDownsamplingMenuLimit(), capped: true };
+};
+
+proto._timeseriesNeedsEagerDetailLoading = function(plot) {
+    if (plot?.mode !== 'timeseries' && plot?.mode !== 'fft') return false;
+    const threshold = PlotManager.LIVE_RELAYOUT_MAX_SOURCE_POINTS || 500000;
+    return (plot.traces || []).some(trace => {
+        const data = this.files.get(trace.fileId)?.data;
+        if (!data || data._duckdb) return false;
+        const variable = data.variables?.[trace.varName];
+        const timeVar = this._getTimeVar(trace.fileId);
+        return Math.max(variable?.data?.length || 0, timeVar?.data?.length || 0) > threshold;
+    });
+};
+
+proto._setEagerDetailLoading = function(plot, loading, panelElement = null) {
+    const panelEl = panelElement || plot?.div?.closest('.layout-panel');
+    if (!panelEl) return;
+    let indicator = panelEl.querySelector('.eager-data-detail-indicator');
+    if (loading && !indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'lazy-detail-indicator eager-data-detail-indicator';
+        indicator.setAttribute('aria-live', 'polite');
+        indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text">Loading detail</span>';
+        panelEl.appendChild(indicator);
+    }
+    if (!indicator) return;
+    if (loading) {
+        const limit = Number.isFinite(this.timeseriesVisualMaxPoints)
+            ? Math.round(this.timeseriesVisualMaxPoints)
+            : PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
+        indicator.title = i18n.t('lazyDetailLoading').replace('{limit}', String(limit));
+        indicator.setAttribute('aria-label', indicator.title);
+        indicator.classList.add('active');
+    } else {
+        indicator.classList.remove('active');
+        indicator.remove();
+    }
+};
+
+proto._yieldForDetailIndicatorPaint = function() {
+    return new Promise(resolve => {
+        const scheduleFrame = typeof requestAnimationFrame === 'function'
+            ? requestAnimationFrame
+            : callback => setTimeout(callback, 0);
+        scheduleFrame(() => setTimeout(resolve, 0));
+    });
+};
+
+proto._runWithEagerDetailLoading = function(panelId, work) {
+    const plot = this.plots.get(panelId);
+    if (!this._timeseriesNeedsEagerDetailLoading(plot)) {
+        return Promise.resolve().then(work);
+    }
+    plot._eagerDetailLoadingCount = (plot._eagerDetailLoadingCount || 0) + 1;
+    this._setEagerDetailLoading(plot, true);
+    return this._yieldForDetailIndicatorPaint()
+        .then(work)
+        .finally(() => {
+            plot._eagerDetailLoadingCount = Math.max(0, (plot._eagerDetailLoadingCount || 1) - 1);
+            if (!plot._eagerDetailLoadingCount) this._setEagerDetailLoading(plot, false);
+        });
 };
 
 proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 'timeseries') {
@@ -3659,7 +3749,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         button.disabled = !this._hasContent(plot);
         button.addEventListener('click', (event) => {
             event.stopPropagation();
-            this._autoScalePlot(panelId, this.plots.get(panelId));
+            this._runWithEagerDetailLoading(
+                panelId,
+                () => this._autoScalePlot(panelId, this.plots.get(panelId)),
+            );
         });
         return button;
     };
@@ -3677,7 +3770,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         button.disabled = !this._hasContent(plot);
         button.addEventListener('click', (event) => {
             event.stopPropagation();
-            this._autoScalePlotAxis(panelId, this.plots.get(panelId), axis);
+            this._runWithEagerDetailLoading(
+                panelId,
+                () => this._autoScalePlotAxis(panelId, this.plots.get(panelId), axis),
+            );
         });
         return button;
     };
