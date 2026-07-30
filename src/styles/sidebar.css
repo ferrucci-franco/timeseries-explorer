@@ -498,6 +498,28 @@
     z-index: 28;
 }
 
+/* A popover that must be wider than the sidebar. The sidebar clips horizontal
+   overflow, so this one is positioned `fixed` (set on open, next to its toggle)
+   and escapes the clip entirely — the difference equation has to be readable on
+   one line, and 300px cannot hold it. */
+.derived-help-popover.data-tool-help-wide {
+    width: min(600px, calc(100vw - 2rem));
+    max-width: none;
+    overflow-y: auto;
+}
+
+.filter-help-equation {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 700;
+    font-size: 0.78rem;
+    /* One line is the whole point; if the viewport is genuinely too narrow the
+       equation scrolls rather than folding into an unreadable stack. */
+    white-space: nowrap;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+    margin-bottom: 0.1rem;
+}
+
 .derived-help-title {
     font-size: 0.8rem;
     font-weight: 600;
@@ -554,6 +576,11 @@
     border-radius: 6px;
     font-size: 0.82rem;
     box-sizing: border-box;
+    /* A value longer than the field ends in an ellipsis instead of being sliced
+       mid-character. Applies while the field is not focused, which is exactly
+       when the user is reading it rather than editing it — a coefficient list or
+       a variable name in a 320px sidebar overflows constantly. */
+    text-overflow: ellipsis;
 }
 
 .derived-input:focus {
@@ -653,6 +680,12 @@
 .data-tool-controls.collapsed,
 #outlier-method-wrap.collapsed,
 #outlier-replacement-wrap.collapsed,
+#interpolate-window-wrap.collapsed,
+#filter-init-level-wrap.collapsed,
+#filter-init-past-wrap.collapsed,
+#detrend-order-wrap.collapsed,
+#detrend-window-wrap.collapsed,
+.resample-grid-controls.collapsed,
 .outlier-method-controls.collapsed {
     display: none;
 }
@@ -747,6 +780,15 @@
     font-size: 0.72rem;
     color: var(--error-color, #c62828);
     margin-top: -0.25rem;
+}
+
+/* The negative margin above pulls the hint tight under the output-name row,
+   where a label follows it. Inside the filter's initial-condition groups the
+   hint sits directly under its own field, and the same pull made it collide
+   with the box's bottom border. */
+#filter-init-level-hint,
+#filter-init-past-hint {
+    margin-top: 0;
 }
 
 .data-tool-input-invalid {
@@ -906,6 +948,177 @@
     gap: 0.4rem;
 }
 
+.resample-grid-controls,
+#interpolate-window-wrap,
+#filter-init-level-wrap,
+#filter-init-past-wrap,
+#detrend-order-wrap,
+#detrend-window-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+/* What a setting would do, stated before it is committed. Green when there is
+   something to do, neutral when the answer is "nothing", and amber when nothing
+   is the answer for a reason the user needs to hear. */
+.data-tool-count {
+    font-size: 0.73rem;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #2e7d32;
+}
+
+.theme-dark .data-tool-count {
+    color: #81c784;
+}
+
+.data-tool-count:empty {
+    display: none;
+}
+
+.data-tool-count.idle {
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.data-tool-count.warn {
+    font-weight: 500;
+    color: color-mix(in srgb, var(--text-primary) 72%, #d97706);
+}
+
+/* An irregular Δt does not make the filter refuse — only the user knows whether
+   it matters — so this reads as a caution rather than an error. */
+.data-tool-axis-note {
+    border-style: solid;
+    border-color: color-mix(in srgb, #d97706 55%, transparent);
+    color: color-mix(in srgb, var(--text-primary) 78%, #d97706);
+}
+
+/* An overflow marker the page draws itself, on whichever side actually holds
+   hidden text. `text-overflow: ellipsis` cannot do this job: Chromium refuses to
+   ellipsize a focused editable field, so the moment that matters most — you have
+   just typed eight coefficients and want to know whether they all landed — is
+   exactly the moment it stays silent. It also only ever marks the right, while a
+   field scrolled to its end is hiding text on the LEFT.
+
+   The marker fades the text out beneath itself so the two never collide, and is
+   click-through so it cannot get in the way of editing. */
+.data-tool-input-overflow {
+    position: relative;
+}
+
+.data-tool-input-overflow::before,
+.data-tool-input-overflow::after {
+    content: '…';
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    display: none;
+    align-items: center;
+    pointer-events: none;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.data-tool-input-overflow.overflow-left::before,
+.data-tool-input-overflow.overflow-right::after {
+    display: flex;
+}
+
+.data-tool-input-overflow::before {
+    left: 1px;
+    padding: 0 0.5rem 0 0.3rem;
+    border-radius: 5px 0 0 5px;
+    background: linear-gradient(to left, transparent, var(--bg-primary) 55%);
+}
+
+.data-tool-input-overflow::after {
+    right: 1px;
+    padding: 0 0.3rem 0 0.5rem;
+    border-radius: 0 5px 5px 0;
+    background: linear-gradient(to right, transparent, var(--bg-primary) 55%);
+}
+
+/* Coefficient lists are pasted from MATLAB or scipy far more often than they are
+   typed, so the field is monospaced and left-aligned: the reader is checking a
+   sequence of numbers against another window, not reading prose. */
+.data-tool-coefficients {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.filter-coefficient-label {
+    margin-bottom: -0.2rem;
+}
+
+/* A unit that belongs to the number beside it. Left-aligned, unlike the
+   right-aligned slider read-outs, because it reads as part of the field. */
+.data-tool-unit-suffix {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    align-self: center;
+}
+
+.data-tool-slider-row.unit-row {
+    grid-template-columns: 4.8rem minmax(0, 1fr);
+}
+
+/* The Δt field, its provenance tag and the way back to it. */
+.data-tool-step-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.data-tool-step-row .data-tool-number-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Present only while the value is still the one measured from the file, so its
+   presence is the whole message: this number is mine, you have not changed it. */
+.data-tool-detected-tag {
+    flex: 0 0 auto;
+    font-size: 0.68rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    background-color: var(--hover-bg);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.data-tool-reset-btn {
+    flex: 0 0 auto;
+}
+
+/* What the chosen grid actually works out to: the resulting Δt, the sample
+   count, and whether that is up or down from the file's own rate. Shown before
+   committing because "factor 2.5" says nothing until it is a number of samples. */
+/* These boxes state one fact per line and set their text with textContent, so
+   the newlines they write have to survive. */
+.data-tool-resample-info {
+    color: var(--text-secondary);
+    font-size: 0.73rem;
+    line-height: 1.35;
+    padding: 0.35rem 0.5rem;
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+    white-space: pre-line;
+}
+
+.data-tool-resample-info:empty {
+    display: none;
+}
+
+.data-tool-resample-info.invalid {
+    color: #8b1e1e;
+    border-style: solid;
+}
+
 .data-tool-input-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(5.9rem, 1fr));
@@ -952,10 +1165,34 @@
     box-sizing: border-box;
     min-width: 4.8rem;
     padding-left: 0.35rem;
-    padding-right: 0.45rem;
+    /* No right padding: the stepper is anchored to the field's inner edge below,
+       and padding here is what left a gap between the arrows and the border. */
+    padding-right: 0;
     text-align: right;
     font-variant-numeric: tabular-nums;
     color-scheme: light;
+}
+
+/* The native stepper is laid out inside the content box, so by default it floats
+   with a margin on all four sides and reads as loose. Stretching it to the full
+   inner height and dropping the field's right padding makes it sit flush against
+   the border instead — the input clips it to its own corner radius, so it follows
+   the field's shape rather than hovering inside it. */
+.data-tool-number-input::-webkit-inner-spin-button,
+.data-tool-number-input::-webkit-outer-spin-button {
+    height: 100%;
+    margin: 0;
+    align-self: stretch;
+    opacity: 1;
+    cursor: pointer;
+}
+
+/* Where a unit label butts up against the field, the rounded right edge leaves a
+   wedge of background between the two. Squaring it there reads as one control;
+   everywhere else the field stands alone and keeps its corners. */
+.data-tool-slider-row.unit-row .data-tool-number-input {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
 }
 
 .theme-dark .data-tool-number-input {
@@ -1140,6 +1377,31 @@
     font-weight: 600;
     color: var(--text-primary);
     margin: 0.15rem 0 0.25rem 0;
+}
+
+/* A tool's controls come in groups, and with every label at the same weight
+   there was nothing to say which control belonged under which heading. Group
+   headings keep the bold and gain a hairline above them; the labels of the
+   individual fields step down to a lighter, quieter style. The rule is a
+   hairline rather than a section divider on purpose — the reader must still see
+   one tool, not several. */
+.data-tool-group-row {
+    border-top: 1px solid var(--border-color);
+    margin-top: 0.55rem;
+    padding-top: 0.6rem;
+}
+
+.data-tool-controls > .data-tool-group-row:first-child,
+.data-tool-group-row.first {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0;
+}
+
+.data-tool-sublabel {
+    font-size: 0.74rem;
+    font-weight: 500;
+    color: var(--text-secondary);
 }
 
 .options-help-toggle {

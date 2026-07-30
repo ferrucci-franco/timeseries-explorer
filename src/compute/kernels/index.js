@@ -8,9 +8,14 @@
 import { computeDerivative } from './derivative.js';
 import { computeIntegral } from './integral.js';
 import { computeMovingAverage } from './moving-average.js';
+import { fillMissingValues } from './interpolate.js';
+import { computeDetrend } from './detrend.js';
+import { applyFilter, inspectFilter } from './iir.js';
 import { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN } from './outliers.js';
+import { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep } from './regrid.js';
 
-export { computeDerivative, computeIntegral, computeMovingAverage };
+export { computeDerivative, computeIntegral, computeMovingAverage, fillMissingValues };
+export { computeDetrend, applyFilter, inspectFilter };
 // The Integral analysis mode's scalar total. Not a Data Tools step — it creates
 // no variable — but it belongs to the same pure-kernel family and is re-exported
 // here so callers have one import site for the compute layer.
@@ -23,6 +28,33 @@ export {
     utcDayStart,
 } from './definite-integral.js';
 export { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN };
+export { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep };
+
+/**
+ * Resample a whole set of columns onto one grid. Batched rather than called
+ * per column because the grid and the source-axis validation are shared, and
+ * because off the main thread this is what turns a 20-variable file into one
+ * round-trip instead of twenty.
+ */
+export function runResample({ columns, time, params }) {
+    const length = columns?.[0]?.length || 0;
+    const { x } = resampleSourceAxis(time, length);
+    const { grid, step, sourceStep } = buildResampleGrid(x, params);
+    const outputs = [];
+    const emptyCounts = [];
+    const bridgedCounts = [];
+    const gapLeftCounts = [];
+    for (const column of columns || []) {
+        // The nominal step travels with the params so every column judges "this
+        // interval is wider than a sampling step" against the same number.
+        const result = resampleValues(column, x, grid, { ...params, sourceStep });
+        outputs.push(result.values);
+        emptyCounts.push(result.emptyCount);
+        bridgedCounts.push(result.bridgedCount);
+        gapLeftCounts.push(result.gapLeftCount);
+    }
+    return { grid, step, sourceStep, columns: outputs, emptyCounts, bridgedCounts, gapLeftCounts };
+}
 
 /**
  * Run one Data Tools step.
@@ -56,6 +88,52 @@ export function runDataToolStep(values, time, step) {
         case 'movingAverage': {
             const out = computeMovingAverage(values, params);
             return { values: out, meta: { window: params.window } };
+        }
+        case 'detrend': {
+            const { values: out, ...trend } = computeDetrend(values, time, params);
+            return {
+                values: out,
+                meta: {
+                    method: params.method,
+                    order: trend.order,
+                    window: params.window,
+                    coefficients: trend.coefficients,
+                    slope: trend.slope,
+                    fitPoints: trend.fitPoints,
+                    usedTimeAxis: trend.usedTimeAxis,
+                },
+            };
+        }
+        case 'filter': {
+            // The filter is the one tool that reads the time axis without using
+            // it as a coordinate: it needs the nominal step to tell a dropped
+            // sample from an ordinary one.
+            const { values: out, ...counts } = applyFilter(values, { ...params, time });
+            return {
+                values: out,
+                meta: {
+                    mode: params.mode,
+                    b: params.b,
+                    a: params.a,
+                    init: params.init,
+                    initState: params.initState,
+                    restartGap: params.restartGap,
+                    ...counts,
+                },
+            };
+        }
+        case 'interpolate': {
+            const { values: out, ...counts } = fillMissingValues(values, time, params);
+            return {
+                values: out,
+                meta: {
+                    method: params.method,
+                    maxGap: params.maxGap,
+                    edges: params.edges,
+                    window: params.window,
+                    ...counts,
+                },
+            };
         }
         case 'removeOutliers':
         default: {

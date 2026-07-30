@@ -98,6 +98,10 @@ proto._readProjectEntryBytes = async function(entry) {
 
         let bytes = toBytes(entry?.buffer);
         if (!bytes && entry?.file?.arrayBuffer) bytes = toBytes(await entry.file.arrayBuffer());
+        // A resampled dataset was computed, never read: it has no bytes until it
+        // is asked for them. Serializing lazily keeps a multi-million-sample grid
+        // out of memory until a project save actually needs it.
+        if (!bytes && typeof entry?.syntheticBytes === 'function') bytes = toBytes(entry.syntheticBytes());
         if (!bytes) bytes = toBytes(await this._readLatestBuffer(entry));
         if (bytes) return bytes;
     } catch (err) {

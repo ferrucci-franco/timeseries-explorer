@@ -193,6 +193,10 @@
                         <option value="derivative" data-i18n="dataToolDerivative">Derivative</option>
                         <option value="integrate" data-i18n="dataToolIntegrate">Integral</option>
                         <option value="movingAverage" data-i18n="dataToolMovingAverage">Moving average</option>
+                        <option value="interpolate" data-i18n="dataToolInterpolate">Fill missing data</option>
+                        <option value="detrend" data-i18n="dataToolDetrend">Detrend</option>
+                        <option value="filter" data-i18n="dataToolFilter">Digital filter</option>
+                        <option value="resample" data-i18n="dataToolResample">Resample</option>
                     </select>
 
                     <div id="remove-outliers-tool" class="data-tool-form collapsed">
@@ -202,7 +206,7 @@
                         <select id="outlier-variable" class="data-tool-select"></select>
 
                         <div id="outlier-output-wrap" class="data-tool-output-wrap">
-                            <label class="options-subgroup-label" for="outlier-output-name" data-i18n="outlierOutputName">Output name</label>
+                            <label id="data-tool-output-label" class="options-subgroup-label" for="outlier-output-name" data-i18n="outlierOutputName">Output name</label>
                             <div class="data-tool-name-row">
                                 <input id="outlier-output-name" class="derived-input" type="text" autocomplete="off">
                                 <button id="data-tool-rename" class="tree-control-btn data-tool-rename-btn" type="button" hidden title="Rename variable" data-i18n-title="dataToolRenameTitle">
@@ -295,6 +299,385 @@
                                 <input id="moving-average-window-slider" class="data-tool-slider" type="range" min="2" max="200" step="1" value="21">
                                 <input id="moving-average-window" class="derived-input data-tool-number-input" type="number" min="2" step="1" value="21">
                             </div>
+                        </div>
+
+                        <div class="data-tool-controls collapsed" data-tool-kind="interpolate">
+                            <div class="data-tool-label-row">
+                                <label class="options-subgroup-label" for="interpolate-method" data-i18n="dataToolInterpolateMethod">Method</label>
+                                <button id="interpolate-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Fill methods help" data-i18n-title="dataToolInterpolateHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="interpolate-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <select id="interpolate-method" class="data-tool-select">
+                                <option value="linear" selected data-i18n="dataToolInterpolateLinear">Linear</option>
+                                <option value="pchip" data-i18n="dataToolInterpolatePchip">Shape-preserving cubic (PCHIP)</option>
+                                <option value="akima" data-i18n="dataToolInterpolateAkima">Smooth cubic (Akima)</option>
+                                <option value="smooth" data-i18n="dataToolInterpolateSmooth">Smoothed local trend</option>
+                                <option value="nearest" data-i18n="dataToolInterpolateNearest">Nearest sample</option>
+                                <option value="previous" data-i18n="dataToolInterpolatePrevious">Hold previous</option>
+                                <option value="next" data-i18n="dataToolInterpolateNext">Hold next</option>
+                            </select>
+
+                            <div id="interpolate-help-popover" class="derived-help-popover data-tool-help-popover" role="dialog" aria-labelledby="interpolate-help-title" hidden>
+                                <div class="derived-help-title" id="interpolate-help-title" data-i18n="dataToolInterpolateHelpTitle">Fill methods help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolInterpolateLinear">Linear</span>
+                                    <span data-i18n="dataToolInterpolateHelpLinear">A straight line in time between the samples either side of the hole.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolInterpolateHelpCubicLabel">Cubic</span>
+                                    <span data-i18n="dataToolInterpolateHelpCubic">PCHIP never overshoots the values it joins; Akima is smoother through curvature and shrugs off a single wild sample.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolInterpolateSmooth">Smoothed local trend</span>
+                                    <span data-i18n="dataToolInterpolateHelpSmooth">Fits a weighted straight line through the surrounding samples, so a noisy signal is bridged along its trend instead of between two noisy readings.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolInterpolateHelpTwoKindsLabel">Two kinds of hole</span>
+                                    <span data-i18n-rich="dataToolInterpolateHelpTwoKinds">One NaN between two good samples one Δt apart is <strong>reconstruction</strong>: the signal cannot have gone far in between. Sixty NaN spanning a stretch the file never sampled is <strong>invention</strong>: the same formula, with nothing to constrain it. The limit below is exactly where you draw that line, which is why the panel quotes the longest run in samples <em>and</em> in time.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolInterpolateMaxGap">Longest gap to fill</span>
+                                    <span data-i18n="dataToolInterpolateHelpMaxGap">Runs longer than this are left as they are. Type a number larger than the slider to go past it.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolInterpolateHelpScopeLabel">What it cannot do</span>
+                                    <span data-i18n-rich="dataToolInterpolateHelpScope">It replaces NaN samples <strong>in place</strong>: same length, same time axis, so the result is a variable of this file. It cannot create rows the file does not have — a stretch where the logger stopped contains no NaN to replace. Resample at the file’s own Δt with <strong>Gaps in the source: leave them empty</strong> to materialise those rows as NaN, then come back here.</span>
+                                </div>
+                            </div>
+
+                            <div class="data-tool-label-row">
+                                <label class="options-subgroup-label" for="interpolate-max-gap-slider" data-i18n="dataToolInterpolateMaxGap">Longest gap to fill</label>
+                                <span id="interpolate-max-gap-value" class="data-tool-slider-value">10</span>
+                            </div>
+                            <div class="data-tool-slider-row">
+                                <input id="interpolate-max-gap-slider" class="data-tool-slider" type="range" min="1" max="200" step="1" value="10">
+                                <input id="interpolate-max-gap" class="derived-input data-tool-number-input" type="number" min="1" step="1" value="10">
+                            </div>
+                            <!-- What the current setting would fill, live. Counted from the
+                                 variable's runs of missing samples, so dragging the slider
+                                 updates it without recomputing the fill. -->
+                            <div id="interpolate-status" class="data-tool-count"></div>
+
+                            <label id="interpolate-show-added-wrap" class="checkbox-label data-tool-live-chain">
+                                <input type="checkbox" id="interpolate-show-added">
+                                <span data-i18n="dataToolInterpolateShowAdded">Preview only the added samples</span>
+                            </label>
+
+                            <div id="interpolate-window-wrap">
+                                <div class="data-tool-label-row">
+                                    <label class="options-subgroup-label" for="interpolate-window-slider" data-i18n="dataToolInterpolateWindow">Smoothing window</label>
+                                    <span id="interpolate-window-value" class="data-tool-slider-value">21</span>
+                                </div>
+                                <div class="data-tool-slider-row">
+                                    <input id="interpolate-window-slider" class="data-tool-slider" type="range" min="3" max="201" step="2" value="21">
+                                    <input id="interpolate-window" class="derived-input data-tool-number-input" type="number" min="3" step="2" value="21">
+                                </div>
+                            </div>
+
+                            <label class="options-subgroup-label" for="interpolate-edges" data-i18n="dataToolInterpolateEdges">Missing at the ends</label>
+                            <select id="interpolate-edges" class="data-tool-select">
+                                <option value="leave" selected data-i18n="dataToolInterpolateEdgesLeave">Leave them missing</option>
+                                <option value="hold" data-i18n="dataToolInterpolateEdgesHold">Hold the nearest value</option>
+                            </select>
+                        </div>
+
+                        <div class="data-tool-controls collapsed" data-tool-kind="detrend">
+                            <label class="options-subgroup-label" for="detrend-method" data-i18n="dataToolDetrendMethod">Trend to remove</label>
+                            <select id="detrend-method" class="data-tool-select">
+                                <option value="linear" selected data-i18n="dataToolDetrendLinear">Straight line (least squares)</option>
+                                <option value="mean" data-i18n="dataToolDetrendMean">Mean (offset only)</option>
+                                <option value="polynomial" data-i18n="dataToolDetrendPolynomial">Polynomial</option>
+                                <option value="movingAverage" data-i18n="dataToolDetrendMovingAverage">Moving-average baseline</option>
+                                <option value="firstSample" data-i18n="dataToolDetrendFirstSample">First sample (zero the start)</option>
+                            </select>
+
+                            <div id="detrend-order-wrap" class="collapsed">
+                                <div class="data-tool-label-row">
+                                    <label class="options-subgroup-label" for="detrend-order-slider" data-i18n="dataToolDetrendOrder">Order</label>
+                                    <span id="detrend-order-value" class="data-tool-slider-value">2</span>
+                                </div>
+                                <div class="data-tool-slider-row">
+                                    <input id="detrend-order-slider" class="data-tool-slider" type="range" min="2" max="8" step="1" value="2">
+                                    <input id="detrend-order" class="derived-input data-tool-number-input" type="number" min="2" max="8" step="1" value="2">
+                                </div>
+                            </div>
+
+                            <div id="detrend-window-wrap" class="collapsed">
+                                <div class="data-tool-label-row">
+                                    <label class="options-subgroup-label" for="detrend-window-slider" data-i18n="dataToolDetrendWindow">Baseline window</label>
+                                    <span id="detrend-window-value" class="data-tool-slider-value">101</span>
+                                </div>
+                                <div class="data-tool-slider-row">
+                                    <input id="detrend-window-slider" class="data-tool-slider" type="range" min="3" max="501" step="2" value="101">
+                                    <input id="detrend-window" class="derived-input data-tool-number-input" type="number" min="3" step="2" value="101">
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <div class="data-tool-controls collapsed" data-tool-kind="filter">
+                            <div class="data-tool-label-row data-tool-group-row first">
+                                <span class="options-subgroup-label" data-i18n="dataToolFilterCoefficients">Coefficients</span>
+                                <button id="filter-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Digital filter help" data-i18n-title="dataToolFilterHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-b" data-i18n="dataToolFilterB">b (numerator)</label>
+                            <div class="data-tool-input-overflow">
+                                <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="0.25" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">
+                            </div>
+                            <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-a" data-i18n="dataToolFilterA">a (denominator)</label>
+                            <div class="data-tool-input-overflow">
+                                <input id="filter-a" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="1, -0.5" placeholder="1, -0.5" data-i18n-placeholder="dataToolFilterAPlaceholder">
+                            </div>
+
+                            <div class="data-tool-label-row data-tool-group-row">
+                                <label class="options-subgroup-label" for="filter-mode" data-i18n="dataToolFilterMode">Direction</label>
+                                <button id="filter-direction-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Direction help" data-i18n-title="dataToolFilterDirectionHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-direction-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <select id="filter-mode" class="data-tool-select">
+                                <option value="forward" selected data-i18n="dataToolFilterForward">Forward (causal)</option>
+                                <option value="zeroPhase" data-i18n="dataToolFilterZeroPhase">Forward and back (zero phase)</option>
+                            </select>
+
+                            <div id="filter-direction-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-direction-help-title" hidden>
+                                <div class="derived-help-title" id="filter-direction-help-title" data-i18n="dataToolFilterDirectionHelpTitle">Direction help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterForward">Forward (causal)</span>
+                                    <span data-i18n-rich="dataToolFilterHelpDirectionForward">Runs from the first sample to the last, so every output uses only the past — exactly what a filter running in real time on an instrument does. The unavoidable price is delay: the output lags the input, and by a different amount at every frequency.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterZeroPhase">Forward and back (zero phase)</span>
+                                    <span data-i18n-rich="dataToolFilterHelpDirectionZero">Filters the signal, then filters that result backwards. The second pass applies exactly the opposite delay, so the two cancel and nothing moves in time at all — a feature stays at the sample it happened on.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpDirectionNonCausal">This makes it a <strong>non-causal</strong> filter: each output depends on samples that come after it. That is impossible in real time and perfectly ordinary offline, which is what this app does — but it means the result cannot be reproduced by any filter running on live data. Two further consequences: the signal passes through the response <strong>twice</strong>, so the attenuation is squared (a filter that halves at some frequency now quarters it), and the effective order is doubled.</span>
+                                </div>
+                            </div>
+
+                            <div class="data-tool-label-row data-tool-group-row">
+                                <label class="options-subgroup-label" for="filter-init" data-i18n="dataToolFilterInit">Initial conditions</label>
+                                <button id="filter-init-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Initial conditions help" data-i18n-title="dataToolFilterInitHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-init-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <select id="filter-init" class="data-tool-select">
+                                <option value="steady" selected data-i18n="dataToolFilterInitSteady">Steady state (no startup transient)</option>
+                                <option value="zero" data-i18n="dataToolFilterInitZero">Zero (filter starts at rest)</option>
+                                <option value="level" data-i18n="dataToolFilterInitLevel">Constant level before the start</option>
+                                <option value="past" data-i18n="dataToolFilterInitPast">Past samples of x and y</option>
+                            </select>
+
+                            <div id="filter-init-level-wrap" class="collapsed">
+                                <div class="data-tool-input-overflow">
+                                    <input id="filter-init-level" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="level before the start" data-i18n-placeholder="dataToolFilterInitLevelPlaceholder">
+                                </div>
+                                <div id="filter-init-level-hint" class="data-tool-name-hint" hidden></div>
+                            </div>
+
+                            <!-- Two boxes, not one. Past inputs and past outputs are different
+                                 quantities; a single field holding both made the order something
+                                 the user had to be told rather than something they could see.
+                                 Each placeholder names its own values, newest first. -->
+                            <div id="filter-init-past-wrap" class="collapsed">
+                                <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-init-x" data-i18n="dataToolFilterInitPastInputs">Past inputs — newest first</label>
+                                <div class="data-tool-input-overflow">
+                                    <input id="filter-init-x" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="x[−1]">
+                                </div>
+                                <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-init-y" data-i18n="dataToolFilterInitPastOutputs">Past outputs — newest first</label>
+                                <div class="data-tool-input-overflow">
+                                    <input id="filter-init-y" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" placeholder="y[−1]">
+                                </div>
+                                <div id="filter-init-past-hint" class="data-tool-name-hint" hidden></div>
+                            </div>
+
+                            <div id="filter-init-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-init-help-title" hidden>
+                                <div class="derived-help-title" id="filter-init-help-title" data-i18n="dataToolFilterInitHelpTitle">Initial conditions help</div>
+                                <div class="derived-help-row">
+                                    <span data-i18n-rich="dataToolFilterInitHelpIntro">A recursive filter needs a past to start from: y[0] depends on x[−1] and y[−1], which the file does not contain. All four options answer that one question — what was happening just before the data begins — and they only differ in how you would rather say it.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterInitSteady">Steady state (no startup transient)</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpSteady">The default. As if the input had been sitting at the first sample forever, so a signal at 300 opens at 300 instead of swinging up from zero. Use it unless you have a reason not to.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterInitZero">Zero (filter starts at rest)</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpZero">Everything before the start is taken as 0, which is what a real DSP does when it powers up. Reproduces the startup transient of an embedded filter — including the swing from zero, which here is a real part of the answer rather than an artefact.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterInitLevel">Constant level before the start</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpLevel">One number: the value the input had been holding before the recording began. Steady state with the level named by you instead of read from the first sample — the right answer when the file starts mid-event and its first sample is not where the signal had been resting.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterInitPast">Past samples of x and y</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpPast">The fully general option, and the one to reach for when you know the history. Two boxes, <strong>N values each for a filter of order N</strong>, newest first: the inputs box takes x[−1], x[−2] … and the outputs box takes y[−1], y[−2] …, separated like the coefficients. Each placeholder names its own values.</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpPastY">Give the past outputs too, not just the inputs. Leaving y at zero while x is not describes a filter that was fed a history but had its output memory wiped — a state no running filter is ever in, and it produces a startup kick of its own. If you do not know the past outputs, one of the three options above is a better answer than guessing them.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterInitHelpWhenLabel">When it is used</span>
+                                    <span data-i18n-rich="dataToolFilterInitHelpWhen">The state is set at the first sample and again at every restart (see <strong>Missing values / NaN</strong>). Zero phase ignores this setting: it derives its own edges from the reflection padding. Changing <strong>b</strong> or <strong>a</strong> clears the values you typed, because a history of the wrong length belongs to a different filter.</span>
+                                </div>
+                            </div>
+
+                            <div class="data-tool-label-row data-tool-group-row">
+                                <span class="options-subgroup-label" data-i18n="dataToolFilterMissingGroup">Missing values / NaN</span>
+                                <button id="filter-gap-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Missing values help" data-i18n-title="dataToolFilterGapHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-gap-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-restart-gap" data-i18n="dataToolFilterRestartGap">Restart after a gap longer than</label>
+                            <div class="data-tool-slider-row unit-row">
+                                <input id="filter-restart-gap" class="derived-input data-tool-number-input" type="number" min="0" step="1" value="0">
+                                <span class="data-tool-unit-suffix" data-i18n="dataToolFilterRestartGapUnit">samples</span>
+                            </div>
+
+                            <div id="filter-gap-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-gap-help-title" hidden>
+                                <div class="derived-help-title" id="filter-gap-help-title" data-i18n="dataToolFilterGapHelpTitle">Missing values / NaN help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpOutputLabel">The output</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpOutput">Holes stay holes. The result is missing wherever the input is missing, and wherever the file skipped a stretch of time — nothing is invented across a break. Fill the holes first if you want the filter to run through them; that is a decision with its own parameters, and Fill missing data owns it.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpStateLabel">The state is what you configure</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpState">A single missing value inside a recursive filter would enter the state and make every later sample missing too, so the recursion cannot simply run on. What the threshold below decides is whether the filter's memory <strong>survives</strong> a break or is rebuilt on the far side of it.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpUnitLabel">The unit is samples</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpUnit"><strong>Samples, never seconds.</strong> The number is how many consecutive sample positions may carry no usable value and still be stepped over. A filter has no notion of time, so counting the break in seconds would mean nothing to it.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpCountLabel">What is counted</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpCount">Two things that look different in the file but are the same break in the signal: rows that exist and hold a missing value, and stretches of time the file simply skipped. The second is measured against the file's own nominal step — a jump of 10 Δt counts as 9 missing samples even though no row is there to see.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpZeroLabel">0 — restart at every break</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpZero">The default, and the conservative choice: nothing is carried across a hole. The recursion begins again on the far side under the initial conditions you chose, which costs one settling transient per break.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterGapHelpHigherLabel">Higher — step over short breaks</span>
+                                    <span data-i18n-rich="dataToolFilterGapHelpHigher">A break of at most this many samples is stepped over with the filter's state <strong>left standing</strong>, so the signal continues as though the gap had not happened and you spend one transient instead of many. Sound when the hole is short next to the filter's memory, misleading when it is long — the state then carries a memory of a moment that is already far in the past.</span>
+                                </div>
+                            </div>
+
+                            <div id="filter-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-help-title" hidden>
+                                <div class="derived-help-title" id="filter-help-title" data-i18n="dataToolFilterHelpTitle">Digital filter help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpEquationLabel">What it computes</span>
+                                    <span class="filter-help-equation" data-i18n-rich="dataToolFilterHelpEquation">a₀·y[n] = b₀·x[n] + b₁·x[n−1] + … − a₁·y[n−1] − a₂·y[n−2] − …</span>
+                                    <span data-i18n-rich="dataToolFilterHelpEquationNote">Leave <strong>a</strong> at 1 for an FIR: with no feedback term the output depends only on the input.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpOrderLabel">Numerator and denominator</span>
+                                    <span data-i18n-rich="dataToolFilterHelpOrder">Both are lists in ascending delay order: <strong>b</strong> is b₀, b₁, b₂ … (weights on x[n], x[n−1], x[n−2] …) and <strong>a</strong> is a₀, a₁, a₂ … (weights on y[n], y[n−1], y[n−2] …). The lists need not be the same length; the shorter one is padded with zeros.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpOrderA0"><strong>a₀ need not be 1.</strong> It divides every other coefficient, so it may be any non-zero number and the filter is normalised for you — 2, 1 is the same filter as 1, 0.5. Only zero is refused: that is not a difference equation.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpOrderSyntax">Separate the numbers with commas, spaces, semicolons or newlines, and square brackets are accepted so a list can be pasted straight from MATLAB or NumPy. All of these are the same: <strong>0.5, 0.24</strong> · <strong>0.5 0.24</strong> · <strong>[0.5 0.24]</strong> · <strong>[0.5, 0.24]</strong></span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpStabilityLabel">Stability</span>
+                                    <span data-i18n-rich="dataToolFilterHelpStability">An unstable filter cannot be created: its own output feeds back and grows until every later sample is infinite. The poles of <strong>a</strong> are checked before anything runs.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpRateLabel">Sample rate</span>
+                                    <span data-i18n-rich="dataToolFilterHelpRate">A digital filter is defined per SAMPLE, not per second: the coefficients know nothing about the time axis. On a file with an irregular Δt the cut-off is therefore not a fixed frequency in the data's own units, and the panel says so. Resample to a uniform grid first if you need the cut-off to mean a frequency.</span>
+                                </div>
+                            </div>
+
+                            <div id="filter-info" class="data-tool-resample-info"></div>
+                            <div id="filter-axis-note" class="data-tool-resample-info data-tool-axis-note"></div>
+                        </div>
+
+                        <div class="data-tool-controls collapsed" data-tool-kind="resample">
+                            <div class="data-tool-label-row data-tool-group-row first">
+                                <label class="options-subgroup-label" for="resample-grid-mode" data-i18n="dataToolResampleGrid">New sampling</label>
+                            </div>
+                            <select id="resample-grid-mode" class="data-tool-select">
+                                <option value="step" selected data-i18n="dataToolResampleGridStep">Δt</option>
+                                <option value="factor" data-i18n="dataToolResampleGridFactor">Rate factor</option>
+                                <option value="count" data-i18n="dataToolResampleGridCount">Number of samples</option>
+                                <option value="complete" data-i18n="dataToolResampleGridComplete">Complete missing timestamps</option>
+                            </select>
+                            <!-- Why the fourth option is unavailable, when it is. Greying it out
+                                 without a reason leaves the reader guessing. -->
+                            <div id="resample-complete-note" class="data-tool-count idle"></div>
+
+                            <div class="resample-grid-controls" data-resample-grid="step">
+                                <div class="data-tool-label-row">
+                                    <label class="options-subgroup-label data-tool-sublabel" for="resample-step" data-i18n="dataToolResampleStep">Δt</label>
+                                    <span id="resample-step-unit" class="data-tool-slider-value">s</span>
+                                </div>
+                                <!-- The field opens holding the step measured from the file, and the
+                                     tag says so; it disappears the moment a different number is
+                                     typed, and the button brings the measured one back. -->
+                                <div class="data-tool-step-row">
+                                    <input id="resample-step" class="derived-input data-tool-number-input" type="number" min="0" step="any" value="1">
+                                    <span id="resample-step-detected" class="data-tool-detected-tag" data-i18n="dataToolResampleDetectedTag" hidden>detected</span>
+                                    <button id="resample-step-reset" class="tree-control-btn data-tool-reset-btn" type="button" data-i18n-title="dataToolResampleUseDetected" title="Use the detected Δt" hidden>
+                                        <span aria-hidden="true">↻</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="resample-grid-controls collapsed" data-resample-grid="factor">
+                                <label class="options-subgroup-label data-tool-sublabel" for="resample-factor" data-i18n="dataToolResampleFactor">Factor (2 = twice the rate)</label>
+                                <input id="resample-factor" class="derived-input data-tool-number-input" type="number" min="0" step="any" value="2">
+                            </div>
+
+                            <div class="resample-grid-controls collapsed" data-resample-grid="count">
+                                <label class="options-subgroup-label data-tool-sublabel" for="resample-count" data-i18n="dataToolResampleCount">Samples</label>
+                                <input id="resample-count" class="derived-input data-tool-number-input" type="number" min="2" step="1" value="1000">
+                            </div>
+
+                            <div class="data-tool-label-row data-tool-group-row">
+                                <label class="options-subgroup-label" for="resample-method" data-i18n="dataToolResampleMethod">Method</label>
+                                <button id="resample-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Resampling help" data-i18n-title="dataToolResampleHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="resample-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <select id="resample-method" class="data-tool-select">
+                                <option value="linear" selected data-i18n="dataToolInterpolateLinear">Linear</option>
+                                <option value="pchip" data-i18n="dataToolInterpolatePchip">Shape-preserving cubic (PCHIP)</option>
+                                <option value="akima" data-i18n="dataToolInterpolateAkima">Smooth cubic (Akima)</option>
+                                <option value="nearest" data-i18n="dataToolInterpolateNearest">Nearest sample</option>
+                                <option value="previous" data-i18n="dataToolInterpolatePrevious">Hold previous</option>
+                                <option value="mean" data-i18n="dataToolResampleMean">Bin average (anti-aliased)</option>
+                                <option value="median" data-i18n="dataToolResampleMedian">Bin median</option>
+                                <option value="min" data-i18n="dataToolResampleMin">Bin minimum</option>
+                                <option value="max" data-i18n="dataToolResampleMax">Bin maximum</option>
+                            </select>
+
+                            <div id="resample-help-popover" class="derived-help-popover data-tool-help-popover" role="dialog" aria-labelledby="resample-help-title" hidden>
+                                <div class="derived-help-title" id="resample-help-title" data-i18n="dataToolResampleHelpTitle">Resampling help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolResampleHelpPointLabel">Reading the curve</span>
+                                    <span data-i18n="dataToolResampleHelpPoint">Linear, cubic, nearest and hold read the signal at each new time. Right for upsampling; downsampling this way aliases fast detail into slow structure.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolResampleHelpBinLabel">Reducing a bin</span>
+                                    <span data-i18n="dataToolResampleHelpBin">Average, median, minimum and maximum reduce every sample around each new time. Average is the anti-aliased downsample; minimum and maximum keep the envelope.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolResampleHelpGapsLabel">Missing data</span>
+                                    <span data-i18n-rich="dataToolResampleHelpGaps">A missing VALUE stays missing: a new time surrounded by NaN, or an empty bin, comes out NaN whatever you choose below.</span>
+                                    <span data-i18n-rich="dataToolResampleHelpGapsRows">Absent ROWS are the separate question <strong>Gaps in the source</strong> answers. A file that stopped logging for a minute has no NaN in it at all — the samples either side are perfectly good — so a point method can reach across. The two cases are the same formula with opposite standing: interpolating between two samples one Δt apart reconstructs, interpolating across sixty of them invents.</span>
+                                    <span data-i18n-rich="dataToolResampleHelpGapsPolicy"><strong>Leave them empty</strong> (the default) marks those samples NaN — which is also what the bin methods have always done with an interval holding nothing — and then Fill NaN values bridges them with a method, a length limit and an edge policy of your choosing. <strong>Interpolate across them</strong> does it here in one step, with no control over how far is too far. Bin methods never reach across anything, so the choice does not apply to them.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolResampleHelpFileLabel">A new file</span>
+                                    <span data-i18n="dataToolResampleHelpFile">The result has its own time axis, so it arrives as a new file next to this one rather than as a variable inside it.</span>
+                                </div>
+                            </div>
+
+                            <div class="data-tool-label-row data-tool-group-row">
+                                <label class="options-subgroup-label" for="resample-gap-policy" data-i18n="dataToolResampleGapPolicy">Gaps in the source</label>
+                            </div>
+                            <select id="resample-gap-policy" class="data-tool-select">
+                                <option value="leave" selected data-i18n="dataToolResampleGapLeave">Leave them empty (NaN)</option>
+                                <option value="bridge" data-i18n="dataToolResampleGapBridge">Interpolate across them</option>
+                            </select>
+                            <div id="resample-gap-note" class="data-tool-count idle"></div>
+
+                            <div id="resample-info" class="data-tool-resample-info"></div>
                         </div>
 
                         <div id="outlier-replacement-wrap" class="data-tool-radio-group" role="group" aria-label="Outlier replacement">

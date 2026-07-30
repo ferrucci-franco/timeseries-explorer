@@ -804,11 +804,33 @@ proto._showLazyFileNotice = function(fileId) {
     requestAnimationFrame(() => notice.classList.add('show'));
 };
 
+/**
+ * Reloading a file the app built has nothing to read, and said so through a
+ * native alert reading "No buffer available" — a message about an internal
+ * field, raised at the bottom of a parse path, that tells the reader nothing
+ * about why. Caught up front instead, where the reason is still known and the
+ * way forward can be named.
+ */
+proto._refuseReloadOfInMemoryFile = async function(entry) {
+    if (!this._isInMemoryFile(entry)) return false;
+    const next = entry.savedCopyName
+        ? i18n.t('fileInMemoryReloadSaved').replace('{saved}', entry.savedCopyName)
+        : i18n.t('fileInMemoryReloadUnsaved');
+    await Modal.alert(
+        i18n.t('fileInMemoryReloadTitle'),
+        `${i18n.t('fileInMemoryReloadBody').replace('{name}', this._fileDisplayName(entry))}\n\n${next}`,
+        { icon: '🔄' },
+    );
+    this._updateTopBar?.();
+    return true;
+};
+
 proto.reloadActiveFile = async function() {
     const id = this.plotManager.activeFileId;
     if (!id) return;
     const entry = this.files.get(id);
     if (!entry) return;
+    if (await this._refuseReloadOfInMemoryFile(entry)) return;
 
     const streamable = this._canParseFromFile(entry.file, entry.extension);
     const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
@@ -897,6 +919,7 @@ proto.reloadActiveFileAsNewVersion = async function() {
     if (!sourceId) return;
     const source = this.files.get(sourceId);
     if (!source) return;
+    if (await this._refuseReloadOfInMemoryFile(source)) return;
 
     const name = this._nextVersionName(source.name);
     const streamable = this._canParseFromFile(source.file, source.extension);
@@ -1241,7 +1264,7 @@ proto._checkFullLoadLimit = function(file, extension = this._fileExtension(file?
 // Identity of one decision: this file, at this size, as of this timestamp. A
 // file that changed on disk is a new decision.
 proto._oversizedDecisionKey = function(file) {
-    return [file?.name || '', Number(file?.size) || 0, Number(file?.lastModified) || 0].join(' ');
+    return [file?.name || '', Number(file?.size) || 0, Number(file?.lastModified) || 0].join('\u0000');
 };
 
 // Ask before loading a file bigger than its format's limit.
@@ -1558,6 +1581,9 @@ proto._fileEntryTooltip = function(entry) {
         : name];
     const path = String(entry?.localPath || entry?.file?.webkitRelativePath || '').trim();
     if (path && path !== name) lines.push(path);
+    // Where a loaded file shows its size and path, a built one has neither — an
+    // absence the reader has no way to notice. Name it.
+    if (this._isInMemoryFile(entry)) lines.push(i18n.t('fileInMemoryTooltip'));
     return lines.join('\n');
 };
 
@@ -3518,6 +3544,79 @@ proto._updateActionButtons = function() {
     if (reloadModeSwitch) reloadModeSwitch.classList.toggle('disabled', !hasFiles);
 };
 
+/**
+ * A file the app built rather than read: it has bytes on demand and nothing on
+ * disk behind them.
+ *
+ * The distinction matters because nothing else in the row shows it. A resampled
+ * file looks exactly like a loaded one — same name, same variables, same plots —
+ * and disappears when the tab closes.
+ */
+proto._isInMemoryFile = function(entryData) {
+    return typeof entryData?.syntheticBytes === 'function'
+        && !entryData.file
+        && !entryData.buffer
+        && !entryData.localPath;
+};
+
+/**
+ * Write one of those files out.
+ *
+ * Two branches, the same pair the Parquet conversion already faces: a real save
+ * dialog where the browser offers one (the user picks the path and the write is
+ * confirmed), a download where it does not — Firefox, Safari. Either way the
+ * badge stays: a copy on disk is not the same as this file being backed by one,
+ * and reloading the app would still lose it.
+ */
+proto.saveInMemoryFile = async function(fileId) {
+    const entry = this.files.get(fileId);
+    if (!this._isInMemoryFile(entry)) return false;
+
+    const extension = entry.extension || '.csv';
+    const base = this._safeFileName(this._fileBaseName(this._fileDisplayName(entry)));
+    const filename = base.toLowerCase().endsWith(extension) ? base : `${base}${extension}`;
+
+    try {
+        const bytes = entry.syntheticBytes();
+        const blob = new Blob([bytes], { type: 'text/csv' });
+        const picker = globalThis.showSaveFilePicker;
+        if (typeof picker === 'function') {
+            let handle;
+            try {
+                handle = await picker({
+                    suggestedName: filename,
+                    types: [{ description: 'CSV', accept: { 'text/csv': ['.csv'] } }],
+                });
+            } catch (err) {
+                // Backing out of the dialog is a decision, not a failure.
+                if (err?.name === 'AbortError') return false;
+                throw err;
+            }
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            entry.savedCopyName = handle.name || filename;
+        } else {
+            this._downloadBlob(blob, filename);
+            entry.savedCopyName = filename;
+        }
+    } catch (err) {
+        await Modal.alert(
+            i18n.t('fileInMemorySaveFailedTitle'),
+            i18n.t('fileInMemorySaveFailed')
+                .replace('{name}', filename)
+                .replace('{error}', err?.message || String(err)),
+            { icon: '⬇' },
+        );
+        return false;
+    }
+
+    // The tooltip is where the row says what it knows about the file, so that is
+    // where "a copy went out" belongs.
+    this._renderFilesList();
+    return true;
+};
+
 proto._renderFilesList = function() {
     const list = document.getElementById('files-list');
     const count = document.getElementById('files-count');
@@ -3547,6 +3646,33 @@ proto._renderFilesList = function() {
         typeBadge.classList.toggle('file-entry-type-warning', this._fileTypeHasWarnings(entryData, fileId));
         typeBadge.hidden = !typeLabel;
         typeBadge.addEventListener('click', () => this.setActiveFile(fileId));
+
+        // A file with no bytes on disk behind it says so, and offers the way out
+        // right next to the statement.
+        const inMemory = this._isInMemoryFile(entryData);
+        const memoryBadge = document.createElement('span');
+        memoryBadge.className = 'file-entry-type file-entry-memory';
+        memoryBadge.textContent = i18n.t('fileInMemoryBadge');
+        memoryBadge.title = entryData.savedCopyName
+            ? `${i18n.t('fileInMemoryTooltip')}\n${i18n.t('fileInMemorySavedCopy').replace('{name}', entryData.savedCopyName)}`
+            : i18n.t('fileInMemoryTooltip');
+        memoryBadge.hidden = !inMemory;
+        memoryBadge.addEventListener('click', () => this.setActiveFile(fileId));
+
+        // Drawn rather than typed: ⤓ as a glyph comes out hairline thin at this
+        // size and disappears among the other controls, which is the opposite of
+        // what a button resolving a warning should do.
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'file-entry-save';
+        saveBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 3h4v7h4l-6 6.5L6 10h4V3Z"/><path d="M4.5 18.5h15V21h-15z"/></svg>';
+        saveBtn.title = i18n.t('fileInMemorySaveTitle');
+        saveBtn.setAttribute('aria-label', i18n.t('fileInMemorySaveTitle'));
+        saveBtn.hidden = !inMemory;
+        saveBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.saveInMemoryFile(fileId);
+        });
 
         const lazyIndicator = document.createElement('span');
         lazyIndicator.className = 'file-entry-lazy-indicator';
@@ -3606,8 +3732,12 @@ proto._renderFilesList = function() {
 
         entry.appendChild(nameSpan);
         entry.appendChild(typeBadge);
+        entry.appendChild(memoryBadge);
         entry.appendChild(lazyIndicator);
         if (entryData.liveUpdate?.enabled) entry.appendChild(liveIndicator);
+        // Ahead of the format-specific controls: it is about whether the file
+        // exists at all, not about how it is read.
+        entry.appendChild(saveBtn);
         entry.appendChild(csvParsingBtn);
         entry.appendChild(matArraysBtn);
         entry.appendChild(transformBtn);
