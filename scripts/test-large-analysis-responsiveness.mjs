@@ -137,6 +137,47 @@ assert.match(dataMethods, /selectedCount = selectionEnd - selectionStart/);
 assert.match(dataMethods, /estimatedMs = \(selectedCount \* traceCount \* factor\)/);
 assert.match(dataMethods, /state\.autoRangeLimited = true/);
 
+// Opening an analysis panel must not scan its complete ordered time axis merely
+// to determine the range-selector domain.
+{
+    const start = dataMethods.indexOf('proto._finiteSortedExtent = function');
+    const end = dataMethods.indexOf('\n};', start + 1) + 3;
+    assert.ok(start >= 0 && end > start, 'ordered time-domain helper can be isolated');
+    const extentProto = {};
+    vm.runInNewContext(dataMethods.slice(start, end), { proto: extentProto });
+    const hugeLength = 100_000_000;
+    let reads = 0;
+    const makeTimes = offset => new Proxy({ length: hugeLength }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                reads++;
+                return offset + index;
+            }
+            return undefined;
+        },
+    });
+    const extent = extentProto._finiteSortedExtent([
+        makeTimes(500),
+        makeTimes(-1000),
+    ]);
+    assert.equal(extent.min, -1000);
+    assert.equal(extent.max, 500 + hugeLength - 1);
+    assert.ok(reads <= 8, `time-domain lookup reads endpoints only (${reads} reads)`);
+}
+
+for (const path of [
+    'src/plots/methods/histogram-methods.js',
+    'src/plots/methods/heatmap-methods.js',
+    'src/plots/methods/temporal-profile-methods.js',
+    'src/plots/methods/integral-methods.js',
+    'src/plots/methods/correlation-methods.js',
+    'src/plots/methods/phase2d-fit-methods.js',
+]) {
+    assert.match(read(path), /_finiteSortedExtent\(arrays\)/, `${path} uses constant-time time domains`);
+}
+
 // Shared non-FFT preflight must count a manually selected span with binary
 // bounds and clamp it before an analysis-specific sampler can scan the source.
 {

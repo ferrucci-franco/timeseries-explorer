@@ -706,7 +706,7 @@ proto._calendarHeatmapDomain = function(plot) {
         const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (times?.length) arrays.push(times);
     }
-    const extent = this._finiteExtent(arrays);
+    const extent = this._finiteSortedExtent(arrays);
     return extent ? { min: extent.min, max: extent.max } : null;
 };
 

@@ -295,6 +295,10 @@ const close = (actual, expected, tolerance, label) => {
     });
     const domain = domainProto._phase2dFitDomain.call({
         _getTransformedTimeDataForVariable: () => domainTimes,
+        _finiteSortedExtent: arrays => {
+            const values = arrays[0];
+            return { min: Number(values[0]), max: Number(values[values.length - 1]) };
+        },
     }, {
         phaseTraces: [{ fileId: 'huge', x: 'x', y: 'y' }],
     });

@@ -125,7 +125,7 @@ export function installPlotCorrelationMethods(TargetClass) {
             if (xTimes?.length) arrays.push(xTimes);
             if (yTimes?.length) arrays.push(yTimes);
         }
-        const extent = this._finiteExtent(arrays);
+        const extent = this._finiteSortedExtent(arrays);
         return extent ? { min: extent.min, max: extent.max } : null;
     };
 

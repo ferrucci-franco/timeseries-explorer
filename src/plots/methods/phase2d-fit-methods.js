@@ -747,27 +747,17 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
     // ── Temporal domain / active range (Todo/Selección) ─────────────
     proto._phase2dFitDomain = function(plot) {
+        const arrays = [];
         const seen = new Set();
-        let min = Infinity;
-        let max = -Infinity;
         for (const pair of plot?.phaseTraces || []) {
             if (seen.has(pair.fileId)) continue;
             seen.add(pair.fileId);
             const xTimes = this._getTransformedTimeDataForVariable(pair.fileId, pair.x);
             const yTimes = this._getTransformedTimeDataForVariable(pair.fileId, pair.y);
-            for (const times of [xTimes, yTimes]) {
-                let first = 0;
-                let last = (times?.length || 0) - 1;
-                while (first <= last && !Number.isFinite(Number(times[first]))) first++;
-                while (last >= first && !Number.isFinite(Number(times[last]))) last--;
-                if (first > last) continue;
-                const lo = Number(times[first]);
-                const hi = Number(times[last]);
-                min = Math.min(min, lo, hi);
-                max = Math.max(max, lo, hi);
-            }
+            if (xTimes?.length) arrays.push(xTimes);
+            if (yTimes?.length) arrays.push(yTimes);
         }
-        return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+        return this._finiteSortedExtent(arrays);
     };
 
     proto._phase2dFitActiveRange = function(plot) {

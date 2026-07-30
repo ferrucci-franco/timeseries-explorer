@@ -2189,6 +2189,27 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
     };
 };
 
+// Time arrays used by range selectors are ordered and all range extraction
+// below uses binary bounds. Their domain therefore comes from the first and
+// last finite values; scanning every timestamp would make merely opening an
+// analysis panel linear in multi-gigabyte inputs.
+proto._finiteSortedExtent = function(arrays) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const values of arrays || []) {
+        let first = 0;
+        let last = (values?.length || 0) - 1;
+        while (first <= last && !Number.isFinite(Number(values[first]))) first++;
+        while (last >= first && !Number.isFinite(Number(values[last]))) last--;
+        if (first > last) continue;
+        const a = Number(values[first]);
+        const b = Number(values[last]);
+        min = Math.min(min, a, b);
+        max = Math.max(max, a, b);
+    }
+    return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+};
+
 proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode) {
     if (!plot || !state) return false;
     const source = plot.traces?.find(trace => this._isVisible(trace))
