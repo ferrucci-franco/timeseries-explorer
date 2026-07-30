@@ -117,6 +117,14 @@ async function copyPortableLauncher(packageDir) {
   const runtimeName = process.platform === 'win32' ? 'node.exe' : 'node';
   await copyFileInto(process.execPath, path.join(runtimeDir, runtimeName));
 
+  // One launcher: the one that matches the runtime in the zip.
+  //
+  // All three used to be written unconditionally while runtime/ held a single
+  // binary copied from the build host. A zip built on Linux therefore shipped a
+  // start-windows.bat pointing at a node.exe that was not in it, and a zip built
+  // on Windows shipped POSIX launchers naming ./runtime/node. Nothing in the
+  // package said which platform it was for, and the README's "publish one zip
+  // per OS" was unachievable because the names collided.
   const windowsStart = [
     '@echo off',
     'setlocal',
@@ -137,35 +145,37 @@ async function copyPortableLauncher(packageDir) {
     '',
   ].join('\n');
 
-  await fs.writeFile(path.join(packageDir, 'start-windows.bat'), windowsStart, 'utf8');
-  await fs.writeFile(path.join(packageDir, 'start-linux.sh'), unixStart, 'utf8');
-  await fs.writeFile(path.join(packageDir, 'start-macos.command'), unixStart, 'utf8');
-  if (process.platform !== 'win32') {
-    await fs.chmod(path.join(packageDir, 'start-linux.sh'), 0o755);
-    await fs.chmod(path.join(packageDir, 'start-macos.command'), 0o755);
+  if (process.platform === 'win32') {
+    await fs.writeFile(path.join(packageDir, 'start-windows.bat'), windowsStart, 'utf8');
+    return 'start-windows.bat';
   }
+
+  const name = process.platform === 'darwin' ? 'start-macos.command' : 'start-linux.sh';
+  await fs.writeFile(path.join(packageDir, name), unixStart, 'utf8');
+  await fs.chmod(path.join(packageDir, name), 0o755);
+  return name;
 }
 
-async function writeOfflineReadme(packageDir, folderName) {
+async function writeOfflineReadme(packageDir, folderName, launcherName) {
   const text = [
     `Time Series Explorer portable package`,
     ``,
     `Folder: ${folderName}`,
     `Version: ${pkg.version}`,
     `Commit: ${getCommitShort()}`,
+    `Built for: ${process.platform}-${process.arch}`,
     ``,
     `Use:`,
     `1. Extract the zip.`,
-    `2. Basic offline mode: open index.html with a double click.`,
-    `3. Local browser mode: run the start script for your platform to open http://localhost in your browser:`,
-    `   - Windows: start-windows.bat`,
-    `   - Linux: start-linux.sh`,
-    `   - macOS: start-macos.command`,
+    `2. Basic offline mode: open index.html with a double click. This works on any`,
+    `   operating system — nothing in it is platform-specific.`,
+    `3. Local browser mode: run ${launcherName} to open http://localhost in your`,
+    `   browser. This needs the bundled Node runtime, which is a ${process.platform}-${process.arch}`,
+    `   binary, so it only works on that platform. Other platforms have their own zip.`,
     `4. No internet connection is required after extraction.`,
     ``,
     `Notes:`,
     `- This package is intended for direct file:// opening.`,
-    `- The localhost launcher uses the bundled Node runtime from the platform that built this zip; publish one zip per OS for best results.`,
     `- The local server binds to 127.0.0.1 and exposes only this app. Live Update belongs to the Full Desktop app.`,
     `- Example data is included under public/examples/.`,
   ].join('\n');
@@ -189,6 +199,10 @@ async function publishDownloadArtifacts(zipPath, zipFileName, version, commit) {
   const manifest = {
     version,
     commit,
+    // Which host built it, and therefore which platform the bundled Node runtime
+    // (and the single start script) is for. The file:// mode works everywhere.
+    platform: process.platform,
+    architecture: process.arch,
     fileName: zipFileName,
     zipUrl: `./downloads/${zipFileName}`
   };
@@ -197,7 +211,9 @@ async function publishDownloadArtifacts(zipPath, zipFileName, version, commit) {
 
 async function main() {
   const commit = getCommitShort();
-  const folderName = `timeseries-explorer-v${pkg.version}-${commit}`;
+  // The zip carries a Node binary for one platform, so its name says which. The
+  // untagged name made every OS's zip collide and clobber the previous one.
+  const folderName = `timeseries-explorer-v${pkg.version}-${commit}-${process.platform}-${process.arch}`;
   const packageDir = path.join(outputRoot, folderName);
   const zipFileName = `${folderName}.zip`;
   const zipPath = path.join(outputRoot, zipFileName);
@@ -211,8 +227,8 @@ async function main() {
   await copyFileInto(path.join(projectRoot, 'styles.css'), path.join(packageDir, 'styles.css'));
   await copyDirInto(path.join(projectRoot, 'src', 'styles'), path.join(packageDir, 'src', 'styles'));
   await copyDirInto(path.join(projectRoot, 'public', 'examples'), path.join(packageDir, 'public', 'examples'));
-  await copyPortableLauncher(packageDir);
-  await writeOfflineReadme(packageDir, folderName);
+  const launcherName = await copyPortableLauncher(packageDir);
+  await writeOfflineReadme(packageDir, folderName, launcherName);
   await createZip(packageDir, zipPath, folderName);
   await publishDownloadArtifacts(zipPath, zipFileName, pkg.version, commit);
 

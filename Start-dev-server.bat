@@ -74,8 +74,10 @@ pause
 exit /b 0
 
 :find_free_port
+rem LISTENING only: see the same note in serve.bat. Matching any netstat line
+rem containing ":<port> " counts a remote ESTABLISHED connection as a busy port.
 for %%P in (8000 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010) do (
-    netstat -ano | findstr /R /C:":%%P " >nul 2>nul
+    netstat -ano | findstr /R /C:"LISTENING" | findstr /R /C:":%%P " >nul 2>nul
     if errorlevel 1 (
         set "PORT=%%P"
         exit /b 0
