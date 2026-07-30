@@ -1264,7 +1264,7 @@ proto._checkFullLoadLimit = function(file, extension = this._fileExtension(file?
 // Identity of one decision: this file, at this size, as of this timestamp. A
 // file that changed on disk is a new decision.
 proto._oversizedDecisionKey = function(file) {
-    return [file?.name || '', Number(file?.size) || 0, Number(file?.lastModified) || 0].join(' ');
+    return [file?.name || '', Number(file?.size) || 0, Number(file?.lastModified) || 0].join('\u0000');
 };
 
 // Ask before loading a file bigger than its format's limit.

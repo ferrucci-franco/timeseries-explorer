@@ -258,7 +258,7 @@ const CACHE_LIMIT = 200;
 export function getCompiledFormula(formula, variables, classify) {
     const probe = tokenize(formula, variables);
     const names = [...new Set(probe.filter(t => t.type === 'name').map(t => t.value))].sort();
-    const key = `${formula} ${names.map(name => `${name}:${classify(name)}`).join(',')}`;
+    const key = `${formula}\u0000${names.map(name => `${name}:${classify(name)}`).join(',')}`;
     let compiled = cache.get(key);
     if (!compiled) {
         compiled = compileFormula(formula, variables, classify);
