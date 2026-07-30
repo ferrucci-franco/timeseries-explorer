@@ -150,6 +150,10 @@ export default class WorkerPool {
             const worker = this._spawn();
             worker.addEventListener('message', event => this._onMessage(event));
             worker.addEventListener('error', event => this._onWorkerError(worker, event));
+            // A result that cannot be deserialized fires messageerror, not error
+            // or message: without this the reply is simply dropped and the
+            // caller's promise never settles, which is a hang no Esc can break.
+            worker.addEventListener('messageerror', event => this._onWorkerError(worker, event));
             this._workers.push(worker);
             return worker;
         }

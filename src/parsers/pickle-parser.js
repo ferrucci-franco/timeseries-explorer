@@ -29,6 +29,29 @@ function pickleError(code, message, detail = {}) {
     return err;
 }
 
+// The name registry below is this parser's entire trust boundary: a pickle may
+// only name objects the resolver knows. `getattr` is the one registered callable
+// that reads an attribute chosen by the file, so it must not be able to hand
+// back a callable — getattr(getattr, 'constructor') would otherwise reach the
+// realm's Function constructor and REDUCE would call it with a string from the
+// file, which is arbitrary code execution from merely opening a .pkl.
+const FORBIDDEN_ATTRIBUTES = new Set([
+    'constructor', 'prototype', '__proto__', '__globals__', '__builtins__',
+    '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__',
+]);
+
+function safeGetAttribute(obj, attr) {
+    const name = typeof attr === 'string' ? attr : String(attr ?? '');
+    if (typeof obj === 'function' || FORBIDDEN_ATTRIBUTES.has(name)) {
+        throw pickleError('PICKLE_UNSUPPORTED_OBJECT', `Unsupported pickled attribute access: getattr(…, ${name})`, { type: `getattr.${name}` });
+    }
+    const value = obj?.[name];
+    if (typeof value === 'function') {
+        throw pickleError('PICKLE_UNSUPPORTED_OBJECT', `Unsupported pickled attribute access: getattr(…, ${name})`, { type: `getattr.${name}` });
+    }
+    return value;
+}
+
 function compressedPickleFormat(bytes) {
     if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) return 'gzip';
     if (bytes.length >= 6 && bytes[0] === 0xfd && bytes[1] === 0x37 && bytes[2] === 0x7a && bytes[3] === 0x58 && bytes[4] === 0x5a) return 'xz';
@@ -749,7 +772,7 @@ class PickleNameResolver {
 
         this.register('builtins', 'slice', (start, stop, step) => new SliceObject(start, stop, step));
         this.register('__builtin__', 'slice', (start, stop, step) => new SliceObject(start, stop, step));
-        this.register('builtins', 'getattr', (obj, attr) => obj?.[attr]);
+        this.register('builtins', 'getattr', (obj, attr) => safeGetAttribute(obj, attr));
         this.register('copyreg', '_reconstructor', (cls, _base, state) => {
             const obj = Reflect.construct(cls, []);
             if (obj.__setstate__) obj.__setstate__(state);
@@ -1283,7 +1306,7 @@ export default class PickleParser {
     }
 
     _rootNode() {
-        return { _type: 'root', _name: '', _children: {}, _variables: {} };
+        return { _type: 'root', _name: '', _children: Object.create(null), _variables: Object.create(null) };
     }
 
     _addTreeVariable(root, path, variable) {
@@ -1295,8 +1318,8 @@ export default class PickleParser {
                     _type: 'component',
                     _name: part,
                     _fullName: node._fullName ? `${node._fullName}.${part}` : part,
-                    _children: {},
-                    _variables: {},
+                    _children: Object.create(null),
+                    _variables: Object.create(null),
                 };
             }
             node = node._children[part];
@@ -1314,8 +1337,8 @@ export default class PickleParser {
                 _type: 'metadata',
                 _name: UNSUPPORTED_COLUMNS_NODE,
                 _fullName: UNSUPPORTED_COLUMNS_NODE,
-                _children: {},
-                _variables: {},
+                _children: Object.create(null),
+                _variables: Object.create(null),
             };
         }
         const node = root._children[UNSUPPORTED_COLUMNS_NODE];

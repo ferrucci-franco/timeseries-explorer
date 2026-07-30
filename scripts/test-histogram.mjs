@@ -328,4 +328,25 @@ const runSingle = (values, options = {}) => {
     close(solo.percent.reduce((s, v) => s + v, 0), 100, 1e-9, 'per-trace percent unchanged by default');
 }
 
+// ---------------------------------------------------------------------------
+// The summary box writes innerHTML, and the signal name in it comes from the
+// opened file (CSV header, MATLAB/Modelica variable name, filename). It must go
+// through the escaper, or a column header containing markup executes as script.
+// ---------------------------------------------------------------------------
+{
+    const summaryStart = histogramMethodsSource.indexOf('proto._syncHistogramSummary = function');
+    assert.ok(summaryStart >= 0, 'histogram summary renderer is present');
+    const summarySource = histogramMethodsSource.slice(summaryStart, summaryStart + 1600);
+    assert.match(
+        summarySource,
+        /\$\{this\._escapeHTML\(s\.name\)\}/,
+        'the histogram summary escapes the file-derived signal name',
+    );
+    assert.doesNotMatch(
+        summarySource,
+        /\$\{s\.name\}/,
+        'the histogram summary never interpolates the raw signal name into innerHTML',
+    );
+}
+
 console.log('histogram kernel tests passed');

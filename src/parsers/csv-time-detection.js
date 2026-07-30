@@ -10,7 +10,7 @@
  * Public API:
  *   detectCsvTimeAxis(rawHeaders, dataRows, { delimiter, preferredDateOrder })
  *   parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'auto')
- *   parseCsvText(text, { delimiter })
+ *   parseCsvTimeValue(...) / customDatetimePatternInfo(pattern)
  *
  * Dependency-free, deterministic, browser-compatible (ES module).
  */
@@ -113,19 +113,6 @@ export function parseCsvNumber(rawValue, delimiter = ',', decimalSeparator = 'au
     }
 
     return Number(decimalNormalized);
-}
-
-export function parseCsvText(text, options = {}) {
-    const delimiter = options.delimiter || sniffDelimiter(String(text ?? ''));
-    const rows = parseCsvNative(String(text ?? ''), delimiter)
-        .map(row => row.map(cell => cell.trim()))
-        .filter(row => row.some(cell => cell !== ''));
-
-    return {
-        headers: rows[0] || [],
-        rows: rows.slice(1),
-        delimiter,
-    };
 }
 
 function sniffDelimiter(text) {
@@ -326,10 +313,6 @@ export function parseCsvTimeValue(timeSource, row, rowIndex = 0, delimiter = ','
         return parsePartsDateTimeMs(timeSource, row, delimiter, decimalSeparator);
     }
     return NaN;
-}
-
-export function customDatetimePatternToDuckDbFormat(pattern) {
-    return customDatetimePatternInfo(pattern)?.format || null;
 }
 
 export function customDatetimePatternInfo(pattern) {

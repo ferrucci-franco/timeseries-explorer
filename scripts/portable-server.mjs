@@ -47,7 +47,36 @@ function localPathFromUrl(url) {
     return path.resolve(raw);
 }
 
-async function handleApi(req, res, url) {
+// Same guard as electron/local-file-http.cjs isTrustedLoopbackRequest, spelt out
+// again because this file ships alone in the portable zip. A web page cannot read
+// a cross-origin response, so it makes its own hostname resolve to 127.0.0.1 and
+// asks again — same port, now "same origin" to the browser. The Host header still
+// names the attacker's hostname and script cannot forge it, so a request that
+// does not address us as loopback on our own port is not from the app.
+function isTrustedLoopbackRequest(req, port) {
+    const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
+    if (Number(port) === 80) {
+        for (const bare of ['127.0.0.1', 'localhost', '[::1]']) allowed.add(bare);
+    }
+
+    const hostHeader = String(req?.headers?.host || '').toLowerCase();
+    if (!allowed.has(hostHeader)) return false;
+
+    const origin = req?.headers?.origin;
+    if (origin) {
+        let originHost = '';
+        try { originHost = new URL(origin).host.toLowerCase(); } catch { return false; }
+        if (!allowed.has(originHost)) return false;
+    }
+    return true;
+}
+
+async function handleApi(req, res, url, port) {
+    if (!isTrustedLoopbackRequest(req, port)) {
+        sendText(res, 403, 'Forbidden');
+        return;
+    }
+
     if (webPreviewOnly) {
         sendText(res, 404, 'Local API is disabled in web preview mode');
         return;
@@ -113,7 +142,9 @@ async function handleStatic(req, res, url) {
     const decoded = decodeURIComponent(url.pathname);
     const relativePath = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
     const targetPath = path.resolve(packageRoot, relativePath);
-    if (!targetPath.startsWith(packageRoot)) {
+    // With the separator, or a sibling directory whose name merely starts with
+    // the package name (timeseries-explorer-backup) counts as inside it.
+    if (targetPath !== packageRoot && !targetPath.startsWith(packageRoot + path.sep)) {
         sendText(res, 403, 'Forbidden');
         return;
     }
@@ -170,7 +201,7 @@ function listenOnAvailablePort(port) {
         const server = http.createServer((req, res) => {
             const url = new URL(req.url || '/', `http://${host}`);
             if (url.pathname.startsWith('/__omv_local__/')) {
-                handleApi(req, res, url).catch(err => sendText(res, 500, err?.message || String(err)));
+                handleApi(req, res, url, port).catch(err => sendText(res, 500, err?.message || String(err)));
                 return;
             }
             handleStatic(req, res, url).catch(err => sendText(res, 500, err?.message || String(err)));

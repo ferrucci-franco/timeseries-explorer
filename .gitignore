@@ -17,6 +17,10 @@
 # Track project source and metadata.
 !/.gitignore
 !/.gitattributes
+# The workflows read this with setup-node's node-version-file, so it has to be
+# checked in — the blanket `*` above would otherwise leave it on the author's
+# machine only and every CI run would fail looking for it.
+!/.nvmrc
 !/.github/
 !/.github/**
 !/*.js

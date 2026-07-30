@@ -188,8 +188,8 @@ export default class AudioParser {
             _type: 'component',
             _name: FILE_INFO_NODE,
             _fullName: FILE_INFO_NODE,
-            _children: {},
-            _variables: {},
+            _children: Object.create(null),
+            _variables: Object.create(null),
         };
         for (const [label, value] of entries) {
             node._variables[label] = {
@@ -227,7 +227,7 @@ function channelCountLabel(count) {
 }
 
 function rootNode() {
-    return { _type: 'root', _name: '', _children: {}, _variables: {} };
+    return { _type: 'root', _name: '', _children: Object.create(null), _variables: Object.create(null) };
 }
 
 function formatNumber(value) {

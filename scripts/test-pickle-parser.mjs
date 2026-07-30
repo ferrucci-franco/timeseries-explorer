@@ -47,6 +47,10 @@ function assertBasicResult(name, data) {
 }
 
 if (!existsSync(join(fixtureDir, 'manifest.json'))) {
+    // Skipping on a developer machine is a convenience. Skipping in CI is a
+    // release gate reporting green while the suite did not run: a .gitignore
+    // change, a sparse checkout or a cache miss would silently disable it.
+    if (process.env.CI) throw new Error(`pandas pickle fixtures are missing at ${fixtureDir}`);
     console.warn(`Skipping pandas pickle parser test: fixtures not found at ${fixtureDir}`);
     process.exit(0);
 }
@@ -180,6 +184,37 @@ await assert.rejects(
 await assert.rejects(
     () => parseFixture('range_index.pkl', { internalLimits: { maxArrayBytes: 1 } }),
     err => err?.code === 'PICKLE_LIMIT_EXCEEDED'
+);
+
+// The name registry is the parser's whole trust boundary, so the one accessor
+// that reads a file-chosen attribute must never yield a callable. This is the
+// real exploit chain, assembled byte by byte rather than described: resolve
+// builtins.getattr, then REDUCE it with (getattr, 'constructor') to reach the
+// Function constructor. It has to be refused, not executed.
+function pickleBytes(...parts) {
+    const bytes = [];
+    for (const part of parts) {
+        if (typeof part === 'number') { bytes.push(part); continue; }
+        bytes.push(0x8c, part.length, ...Array.from(part, ch => ch.charCodeAt(0)));
+    }
+    return new Uint8Array(bytes).buffer;
+}
+
+const STACK_GLOBAL = 0x93;
+const TUPLE2 = 0x86;
+const REDUCE = 0x52;
+const STOP = 0x2e;
+const getattrEscape = pickleBytes(
+    0x80, 0x04,
+    'builtins', 'getattr', STACK_GLOBAL,   // the callable REDUCE will invoke
+    'builtins', 'getattr', STACK_GLOBAL,   // …applied to itself
+    'constructor', TUPLE2, REDUCE,         // → Function, if the accessor allows it
+    STOP,
+);
+await assert.rejects(
+    () => parser.parse(getattrEscape, 'getattr-escape.pkl'),
+    err => err?.code === 'PICKLE_UNSUPPORTED_OBJECT' && err?.type === 'getattr.constructor',
+    'getattr must refuse constructor instead of returning the Function constructor'
 );
 
 console.log(`pandas pickle parser test passed: ${positiveFixtures.length} fixtures (${manifest.generator})`);

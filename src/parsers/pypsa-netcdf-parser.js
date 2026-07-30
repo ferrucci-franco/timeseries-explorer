@@ -453,8 +453,8 @@ export default class PypsaNetcdfParser {
             _type: 'metadata',
             _name: UNSUPPORTED_DYNAMIC_NODE,
             _fullName: UNSUPPORTED_DYNAMIC_NODE,
-            _children: {},
-            _variables: {},
+            _children: Object.create(null),
+            _variables: Object.create(null),
         };
         const node = root._children[UNSUPPORTED_DYNAMIC_NODE];
         for (const skipped of skippedDynamic) {
@@ -586,8 +586,8 @@ export default class PypsaNetcdfParser {
         return {
             _type: 'root',
             _name: '',
-            _children: {},
-            _variables: {},
+            _children: Object.create(null),
+            _variables: Object.create(null),
         };
     }
 
@@ -603,8 +603,8 @@ export default class PypsaNetcdfParser {
                 _type: 'metadata',
                 _name: STATIC_ATTRIBUTES_NODE,
                 _fullName: `${assetNode._fullName}.${STATIC_ATTRIBUTES_NODE}`,
-                _children: {},
-                _variables: {},
+                _children: Object.create(null),
+                _variables: Object.create(null),
             };
         }
         assetNode._children[STATIC_ATTRIBUTES_NODE]._variables[attribute] =
@@ -618,8 +618,8 @@ export default class PypsaNetcdfParser {
                 _type: 'component',
                 _name: componentName,
                 _fullName: componentName,
-                _children: {},
-                _variables: {},
+                _children: Object.create(null),
+                _variables: Object.create(null),
             };
         }
         const componentNode = root._children[componentName];
@@ -628,8 +628,8 @@ export default class PypsaNetcdfParser {
                 _type: 'component',
                 _name: asset,
                 _fullName: `${componentName}.${asset}`,
-                _children: {},
-                _variables: {},
+                _children: Object.create(null),
+                _variables: Object.create(null),
             };
         }
         return componentNode._children[asset];

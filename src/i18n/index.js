@@ -39,6 +39,23 @@ const i18n = {
     },
 
     /**
+     * A string for innerHTML: escaped, with **emphasis** turned into <strong>.
+     *
+     * The same markup data-i18n-rich already applies in the DOM, exposed for the
+     * places that build HTML in JavaScript. Those used to inline fully translated
+     * HTML per language, which meant a new locale silently fell back to the
+     * hardcoded English even when translations.js had an entry for it.
+     */
+    rich(key) {
+        return renderRichText(this.t(key));
+    },
+
+    /** The same string with the emphasis markers dropped, for a title or alert. */
+    plain(key) {
+        return this.t(key).replace(/\*\*/g, '');
+    },
+
+    /**
      * Update all elements with data-i18n attribute
      */
     updateDOM() {

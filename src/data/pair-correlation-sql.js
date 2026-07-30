@@ -5,33 +5,21 @@
 // non-finite values become NULL, pairwise deletion, undefined for n<2 or zero
 // variance.
 
+import { pairedCteSql } from './pair-regression-sql.js';
+
 // One aggregate query for every pair. `pairExprs` is [{ i, vx, vy }] where vx/vy
 // are DOUBLE SQL value expressions (transforms already applied).
+//
+// The paired-finite CTE comes from pair-regression-sql.js rather than being
+// spelt out again here: pairwise deletion is one rule, and lazy correlation and
+// lazy regression must never drift into two versions of it.
 export function buildPairCorrelationSql(tExpr, tableName, where, pairExprs) {
-    const isFin = (e) => `(${e} IS NOT NULL AND NOT isnan(${e}) AND NOT isinf(${e}))`;
-    const valsCols = pairExprs
-        .map(p => `${p.vx} AS vx${p.i}, ${p.vy} AS vy${p.i}`)
-        .join(',\n                           ');
-    const pairedCols = pairExprs.map(p => {
-        const both = `${isFin(`vx${p.i}`)} AND ${isFin(`vy${p.i}`)}`;
-        return `CASE WHEN ${both} THEN vx${p.i} END AS px${p.i}, `
-            + `CASE WHEN ${both} THEN vy${p.i} END AS py${p.i}`;
-    }).join(',\n                           ');
     const aggCols = pairExprs.map(p => (
         `COUNT(px${p.i})::BIGINT AS n${p.i}, corr(py${p.i}, px${p.i}) AS r${p.i}, `
         + `avg(px${p.i}) AS mx${p.i}, stddev_samp(px${p.i}) AS sx${p.i}, `
         + `avg(py${p.i}) AS my${p.i}, stddev_samp(py${p.i}) AS sy${p.i}`
     )).join(',\n                       ');
-    return `
-                WITH vals AS (
-                    SELECT ${valsCols}
-                    FROM ${tableName}
-                    WHERE ${where}
-                ),
-                paired AS (
-                    SELECT ${pairedCols}
-                    FROM vals
-                )
+    return `${pairedCteSql(tableName, where, pairExprs)}
                 SELECT COUNT(*)::BIGINT AS n_scope,
                        ${aggCols}
                 FROM paired;

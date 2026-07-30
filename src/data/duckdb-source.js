@@ -54,6 +54,7 @@ const DUCKDB_DEFAULT_THREADS = 2;
 const DUCKDB_DEFAULT_PRESERVE_INSERTION_ORDER = false;
 const DUCKDB_PHASE_THREADS = 1;
 const DUCKDB_PHASE_PRESERVE_INSERTION_ORDER = true;
+const PARQUET_COMPRESSIONS = new Set(['zstd', 'snappy', 'gzip', 'lz4', 'none']);
 
 export default class DuckDbSource {
     constructor(structureParser = null) {
@@ -86,26 +87,45 @@ export default class DuckDbSource {
         if (!this._initPromise) {
             this._initPromise = this._bootstrap();
         }
-        await this._initPromise;
+        try {
+            await this._initPromise;
+        } catch (err) {
+            // A transient failure — one fetch of the WASM bundle that did not
+            // land — used to disable DuckDB for the rest of the session: the
+            // rejected promise stayed cached and every later init() rethrew the
+            // same stale error, so Parquet loads hard-failed and large CSVs
+            // silently fell back to the legacy parser until the page reloaded.
+            this._initPromise = null;
+            throw err;
+        }
     }
 
     async _bootstrap() {
         const bundle = await duckdb.selectBundle(BUNDLES);
         const worker = new Worker(bundle.mainWorker, { type: 'module' });
-        const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
-        const db = new duckdb.AsyncDuckDB(logger, worker);
-        await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-        await db.open({
-            filesystem: {
-                // Desktop local files are registered over HTTP Range. Avoid HEAD/full-read fallbacks:
-                // they can trip DuckDB-WASM/XHR limits and accidentally fetch multi-GB files.
-                reliableHeadRequests: false,
-                allowFullHTTPReads: false,
-                forceFullHTTPReads: false,
-            },
-        });
-        this._db = db;
-        this._conn = await db.connect();
+        // From here on the worker is ours to clean up: if instantiate/open/connect
+        // rejects, nothing else holds a reference and it would sit there running.
+        try {
+            const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
+            const db = new duckdb.AsyncDuckDB(logger, worker);
+            await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+            await db.open({
+                filesystem: {
+                    // Desktop local files are registered over HTTP Range. Avoid HEAD/full-read fallbacks:
+                    // they can trip DuckDB-WASM/XHR limits and accidentally fetch multi-GB files.
+                    reliableHeadRequests: false,
+                    allowFullHTTPReads: false,
+                    forceFullHTTPReads: false,
+                },
+            });
+            this._db = db;
+            this._conn = await db.connect();
+        } catch (err) {
+            this._db = null;
+            this._conn = null;
+            try { worker.terminate(); } catch (_) { /* already gone */ }
+            throw err;
+        }
         // Tune for the WASM context: less parallelism means smaller per-thread
         // chunk buffers, and allowing out-of-order operators frees DuckDB from
         // retaining whole pipelines in memory. Crucial for files near the
@@ -232,9 +252,16 @@ export default class DuckDbSource {
             const readExpr = this._csvReadExpr(inputName, csvProfile);
             const select = await this._conversionSelectSql(readExpr, csvProfile);
             if (state.cancelled) throw conversionCancelled();
-            // Compression reaches SQL unquoted, so it is never allowed to be
-            // anything but a bare identifier.
-            const safeCompression = /^[a-z]+$/i.test(String(compression)) ? String(compression) : 'zstd';
+            // Compression reaches SQL unquoted, so it is not enough for it to
+            // look like an identifier — it has to be one of the codecs DuckDB
+            // writes. Same list as parquetCompression() in csv-to-parquet-core.js,
+            // repeated rather than imported: that module is Node-only (fs, the
+            // native duckdb) and is packaged as a single named file.
+            const requested = String(compression ?? '').trim().toLowerCase();
+            const named = PARQUET_COMPRESSIONS.has(requested) ? requested : 'zstd';
+            // DuckDB spells "no compression" uncompressed; the Node converter
+            // expresses the same choice by omitting the option.
+            const safeCompression = named === 'none' ? 'uncompressed' : named;
             // Sent, not queried. conn.query() blocks until DuckDB is done and
             // cancelSent() has nothing to act on, so the Cancel button fired an
             // interrupt at a query that was not interruptible — it sat on
@@ -3464,7 +3491,7 @@ export default class DuckDbSource {
     }
 
     _buildColumnPathTree(variables, variablePaths) {
-        const root = { _type: 'root', _name: '', _children: {}, _variables: {} };
+        const root = { _type: 'root', _name: '', _children: Object.create(null), _variables: Object.create(null) };
         for (const [name, variable] of Object.entries(variables)) {
             const path = variablePaths.get(name);
             if (!path?.length) {
@@ -3478,8 +3505,8 @@ export default class DuckDbSource {
                         _type: 'component',
                         _name: part,
                         _fullName: '',
-                        _children: {},
-                        _variables: {},
+                        _children: Object.create(null),
+                        _variables: Object.create(null),
                     };
                 }
                 node = node._children[part];

@@ -5,8 +5,12 @@ on:
     tags:
       - 'v*'
 
+# Read by default. Only `publish` creates the release, and it is the only job
+# that gets a writable token: validate and build run `npm ci` and electron-builder,
+# which execute dependency lifecycle code, and a top-level write scope handed that
+# code a token able to push commits or move the v* tag.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: desktop-release-${{ github.ref }}
@@ -20,11 +24,16 @@ jobs:
     steps:
       - name: Checkout tagged source
         uses: actions/checkout@v4
+        with:
+          # Nothing here pushes, and npm ci runs dependency install scripts in
+          # this working tree. Leaving the token in .git/config would let one of
+          # them read it.
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -86,11 +95,13 @@ jobs:
     steps:
       - name: Checkout tagged source
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -137,6 +148,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - name: Checkout tagged source
         uses: actions/checkout@v4
