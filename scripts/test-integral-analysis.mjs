@@ -18,11 +18,13 @@ import {
     buildIntegralExportTable,
     buildIntegralPresentation,
     defaultIntegralState,
+    describeUnitScaling,
     formatIntegralDuration,
     integralPieAllowed,
     integralQuantityUnit,
     integralResultUnit,
     normalizeIntegralState,
+    scaleUnitLabel,
     timeBaseForAxis,
 } from '../src/utils/integral-presentation.js';
 
@@ -102,7 +104,9 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
 // ─── 2. Units: the signal's unit times the chosen time unit ───────────────
 {
     eq(integralResultUnit('MW', 'hour', 'datetime'), 'MW·h', 'a power integrates to an energy');
-    eq(integralResultUnit('', 'hour', 'datetime'), 'h', 'a unitless signal integrates to hours');
+    // NOT 'h': that would claim the signal was dimensionless and turn a total
+    // into what reads as a duration. The file simply did not say.
+    eq(integralResultUnit('', 'hour', 'datetime'), '[?]·h', 'an undeclared unit is marked, not assumed away');
     eq(integralResultUnit('MW', 'second', 'datetime'), 'MW·s', 'per-second is spelled the same way');
     eq(integralResultUnit('MW', 'hour', 'index', 'samples'), 'MW·samples',
         'without a time axis the total is per sample, and says so');
@@ -118,6 +122,83 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(timeBaseForAxis('numeric', 'furlong').assumed,
         'an unrecognised axis unit is flagged as assumed rather than silently taken as seconds');
     eq(timeBaseForAxis('numeric', 'furlong').secondsPerUnit, 1, 'while still producing a number to show');
+}
+
+// ─── 2b. An undeclared unit is marked, never assumed away ─────────────────
+// A PyPSA netCDF carries no `units` attribute at all. Writing that integral as
+// a bare "h" said the signal was dimensionless — it turned an energy into what
+// reads as a duration, and the auto scale then offered "kh", kilohours.
+{
+    const models = makeModels([flat('gen', '', 100)]);
+    const view = buildIntegralPresentation(models, state());
+    eq(view.resultUnit, '[?]·h', 'the total is marked as undeclared');
+    eq(view.perDayUnit, '[?]·h/d', 'so is the daily figure');
+    eq(view.meanUnit, '[?]', 'and the mean');
+    eq(view.undeclaredUnits, true, 'the panel knows to say so');
+
+    // The marker cannot absorb a prefix, so a big total shows the decade
+    // instead of inventing "kh".
+    const big = buildIntegralPresentation(makeModels([flat('gen', '', 1e6)]), state());
+    ok(!/^k|^M|^G/.test(big.axisUnit), `no SI prefix is folded into the marker: ${big.axisUnit}`);
+    ok(big.axisUnit.includes('×10'), 'the decade is stated separately instead');
+}
+
+// ─── 2c. A unit typed into the panel ──────────────────────────────────────
+{
+    const undeclared = makeModels([flat('gen', '', 100)]);
+    const declared = buildIntegralPresentation(undeclared, state({ unitOverride: 'MW' }));
+    eq(declared.resultUnit, 'MW·h', 'the typed unit names the total');
+    eq(declared.meanUnit, 'MW', 'and the mean');
+    eq(declared.perDayUnit, 'MW·h/d', 'and the daily figure');
+    eq(declared.rows[0].unit, 'MW', 'every row carries it');
+    eq(declared.declaredUnit, true, 'and the panel knows it was typed, not read');
+    close(declared.rows[0].value, buildIntegralPresentation(undeclared, state()).rows[0].value,
+        'naming a unit is a label, not a conversion — the number does not move');
+
+    // It scales like any other unit once it is known: 10⁶ MW over 24 h is
+    // 2.4·10⁷ MW·h, so M + 10⁶ lands on T.
+    eq(buildIntegralPresentation(makeModels([flat('gen', '', 1e6)]), state({ unitOverride: 'MW' })).axisUnit,
+        'TW·h', 'and it takes part in the scale arithmetic');
+
+    // It replaces what the files said, for every signal — which is what makes
+    // the totals comparable, and what the mixed-units warning gives way to.
+    const mixed = makeModels([flat('a', 'MW', 100), flat('b', 'kV', 50)]);
+    eq(buildIntegralPresentation(mixed, state()).mixedUnits, true, 'two file units are mixed');
+    // Scale pinned to ×1, so this asserts the naming and not the auto exponent.
+    const flattened = buildIntegralPresentation(mixed, state({ unitOverride: 'MW', scale: '1' }));
+    eq(flattened.mixedUnits, false, 'declaring one unit answers that');
+    eq(flattened.axisUnit, 'MW·h', 'and the axis can name it again');
+    eq(flattened.rows.every(row => row.unit === 'MW'), true, 'both signals take the declared unit');
+
+    // Whitespace is not a unit, and an empty field is the way back.
+    eq(buildIntegralPresentation(undeclared, state({ unitOverride: '   ' })).resultUnit, '[?]·h',
+        'blank input is no declaration');
+    eq(state({ unitOverride: '  MW  ' }).unitOverride, 'MW', 'and a typed one is trimmed');
+    eq(state({ unitOverride: 'x'.repeat(80) }).unitOverride.length, 24, 'and capped');
+}
+
+// ─── 2d. Which units accept an SI prefix ──────────────────────────────────
+// The rule used to be "one to three letters", a guess about shape that produced
+// "kpu" and "k°C". Knowing the bases makes the default safe: what is not known
+// keeps its spelling and shows the decade.
+{
+    for (const [unit, expected] of [['MW', 'GW·h'], ['kW', 'MW·h'], ['W', 'kW·h'],
+        ['Mvar', 'Gvar·h'], ['MVA', 'GVA·h'], ['kV', 'MV·h'], ['MWh', 'GWh·h']]) {
+        eq(scaleUnitLabel(`${unit}·h`, 3).label, expected, `${unit} folds to ${expected}`);
+    }
+    for (const unit of ['pu', '°C', '%', 'p.u.', 'EUR/MWh']) {
+        const folded = scaleUnitLabel(`${unit}·h`, 3);
+        eq(folded.residual, 3, `${unit} does not take a prefix, so the decade is shown`);
+        eq(folded.label, `${unit}·h`, `and ${unit} keeps its spelling`);
+    }
+
+    // What the panel reads back to the user before they commit to a unit.
+    const known = describeUnitScaling('MW');
+    eq(known.prefixable, true, 'a known unit reports that it scales');
+    eq(known.resultUnit, 'MW·h', 'with the total it will produce');
+    ok(known.examples.includes('GW·h'), `and examples of it: ${known.examples.join(', ')}`);
+    eq(describeUnitScaling('pu').prefixable, false, 'an unknown one says it will not fold');
+    eq(describeUnitScaling('').resultUnit, '[?]·h', 'and an empty one shows the marker');
 }
 
 // ─── 3b. Durations read the same on every axis ────────────────────────────
@@ -200,7 +281,7 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     eq(integralQuantityUnit('MW', 'total', 'hour', 'datetime'), 'MW·h', 'a total is an energy');
     eq(integralQuantityUnit('MW', 'per-day', 'hour', 'datetime'), 'MW·h/d', 'per day divides it by days');
     eq(integralQuantityUnit('MW', 'mean', 'hour', 'datetime'), 'MW', 'a mean is back in the signal unit');
-    eq(integralQuantityUnit('', 'mean', 'hour', 'datetime'), '', 'and unitless stays unitless');
+    eq(integralQuantityUnit('', 'mean', 'hour', 'datetime'), '[?]', 'a mean of an undeclared signal says so too');
 
     // Whatever the bars plot, the axis unit follows.
     eq(buildIntegralPresentation(models, state({ quantity: 'mean', scale: '1' })).axisUnit, 'MW',
@@ -295,11 +376,29 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(String(row.range_start).startsWith('2030-01-01'), 'calendar bounds export as ISO timestamps');
     close(row.covered, 24 * 3600, 'covered time travels with the number');
 
-    // Scaling the display must not move the exported number.
+    // Scaling the display must not move the exported number. Read by header,
+    // not by position: a new column should not be able to break this.
     const scaled = buildIntegralExportTable(
         buildIntegralPresentation(makeModels([flat('gen', 'MW', 100)]), state({ scale: 'G' })),
         { fileNameFor: () => 'grid.csv' });
-    close(scaled.rows[0][3], 2400, 'a display prefix leaves the export untouched');
+    const scaledRow = Object.fromEntries(scaled.headers.map((header, i) => [header, scaled.rows[0][i]]));
+    close(scaledRow.integral, 2400, 'a display prefix leaves the export untouched');
+
+    // Where the unit came from travels with it: "MW·h" read from a file and
+    // "MW·h" typed into the panel are the same string and different claims.
+    eq(row.value_unit_source, 'file', 'a unit read from the file says so');
+    const declaredTable = buildIntegralExportTable(
+        buildIntegralPresentation(makeModels([flat('gen', '', 100)]), state({ unitOverride: 'MW' })),
+        { fileNameFor: () => 'grid.csv' });
+    const declaredRow = Object.fromEntries(declaredTable.headers.map((header, i) => [header, declaredTable.rows[0][i]]));
+    eq(declaredRow.value_unit, 'MW', 'a declared unit reaches the export');
+    eq(declaredRow.value_unit_source, 'declared', 'and is marked as declared, not read');
+    eq(declaredRow.integral_unit, 'MW·h', 'so the integral unit follows from it');
+    const noneTable = buildIntegralExportTable(
+        buildIntegralPresentation(makeModels([flat('gen', '', 100)]), state()),
+        { fileNameFor: () => 'grid.csv' });
+    const noneRow = Object.fromEntries(noneTable.headers.map((header, i) => [header, noneTable.rows[0][i]]));
+    eq(noneRow.value_unit_source, 'none', 'and an undeclared one is neither');
 }
 
 // ─── 9. Coverage is what keeps the bars honest ────────────────────────────
@@ -455,6 +554,31 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(legendGroup.indexOf('id="legend-units"') > legendGroup.lastIndexOf('name="legend-pos"'),
         'and below the position radio buttons');
     ok(methods.includes('formatAxisDuration('), 'durations go through the axis-aware formatter');
+
+    // The declared unit is panel-local BY DESIGN, so it is applied where the
+    // panel builds its own traces — teaching the shared _traceName about it
+    // would let any other panel inherit a unit its file never declared.
+    ok(methods.includes('_applyIntegralLegendUnit'), 'the panel relabels its own legend');
+    ok(!plotManager.includes('unitOverride'), 'and the global name builder knows nothing about it');
+    ok(/_applyIntegralLegendUnit[\s\S]{0,400}this\.legendUnits/.test(methods),
+        'only when the user asked for units in legends at all');
+
+    // A note is not a warning: "you typed MW" must not colour the topbar amber
+    // on every recompute, or a real warning stops being read.
+    ok(/_setIntegralStatus = function\(plot, summary, warnings = \[\], kind = 'muted', notes/.test(methods),
+        'the status takes notes and warnings on separate channels');
+    ok(/notes\.push\(text\('integralUnitDeclared'\)/.test(methods), 'the declared unit is a note');
+    ok(/warnings\.push\(text\('integralNoUnits'\)/.test(methods),
+        'while nothing declaring a unit at all IS a warning');
+
+    // The undeclared marker carries its own brackets, so the axis must not add
+    // a second pair around it.
+    ok(/startsWith\(UNKNOWN_UNIT\)/.test(methods), 'the axis title avoids "[[?]·h]"');
+
+    // The Calendar Heatmap had the identical bug and must not now disagree.
+    const heatmap = read('src/plots/methods/heatmap-methods.js');
+    ok(heatmap.includes('UNKNOWN_UNIT'), 'the heatmap marks an undeclared unit the same way');
+    ok(!/return unit \? `\$\{unit\}·h` : 'h';/.test(heatmap), 'and no longer calls it plain hours');
 
     // The summary rule separates COLUMNS, and a figure with its unit is one
     // column: a rule between "2,988" and "MW·h/d" would read as two figures.
