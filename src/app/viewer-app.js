@@ -57,6 +57,7 @@ class OpenModelicaViewer {
         this.initEventListeners();
         this.initDragAndDrop();
         this.initSidebarResize();
+        this.initTopBarSlide();
         i18n.setLanguage('en');
         this._setDropZoneStatus(false);
 

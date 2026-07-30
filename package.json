@@ -120,6 +120,7 @@
     "test:help-layout": "node scripts/test-help-layout.mjs",
     "test:settings-layout": "node scripts/test-settings-layout.mjs",
     "test:mobile-touch": "node scripts/test-mobile-touch.mjs",
+    "test:top-bar-slide": "node scripts/test-top-bar-slide.mjs",
     "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs",
     "test:phase2d": "node scripts/test-phase2d.mjs",
     "test:release": "node scripts/run-release-tests.mjs",

@@ -84,6 +84,56 @@ body {
     z-index: 1300;
 }
 
+/* Sliding the bar when its controls do not fit.
+
+   Deliberately NOT `overflow-x: auto`. Any overflow on this bar would also clip
+   the dropdown menus that hang below it — CSS gives no way to scroll one axis
+   and stay visible on the other — and a scrollbar is not wanted here anyway.
+   Shifting the two halves by one shared amount leaves each menu anchored to its
+   own button and travelling with it, and whatever slides past the edge is
+   clipped by the window (or, on a phone, by the stage). */
+.top-bar {
+    --top-bar-shift: 0px;
+}
+
+.top-bar-left,
+.top-bar-right {
+    transform: translateX(var(--top-bar-shift));
+}
+
+.top-bar.top-bar-sliding .top-bar-left,
+.top-bar.top-bar-sliding .top-bar-right {
+    /* No transition mid-drag: the bar must track the finger exactly. */
+    transition: none;
+}
+
+.top-bar.top-bar-can-slide {
+    cursor: grab;
+}
+
+.top-bar.top-bar-sliding {
+    cursor: grabbing;
+}
+
+/* The only hint that there is more to reach — a soft edge, not a scrollbar.
+   Sits below the menus' z-index, so an open dropdown is never dimmed. */
+.top-bar::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 2.2rem;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+    background: linear-gradient(to left, var(--bg-secondary), transparent);
+}
+
+.top-bar.top-bar-more-right::after {
+    opacity: 1;
+}
+
 .top-bar-left {
     display: flex;
     align-items: center;

@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import { screenDeltaToStage } from '../../ui/viewport-transform.js';
 import { strToU8, zipSync } from '../../../node_modules/fflate/esm/browser.js';
 import {
     APP_VERSION,
@@ -2781,6 +2782,104 @@ proto.initDragAndDrop = function() {
         if (!files.length) { alert(i18n.t('invalidFile')); return; }
         await this.loadFiles(files);
     });
+};
+
+// ─── Top bar slide ─────────────────────────────────────────────
+//
+// When the window (or the phone stage) is too narrow for the whole bar, the
+// controls on the right end up out of reach. Dragging the bar — with the mouse
+// or a finger — brings them back. No scrollbar, and no `overflow` on the bar
+// either: overflow would clip the dropdown menus that hang below it, so the two
+// halves are translated instead and the menus travel with their buttons.
+proto.initTopBarSlide = function() {
+    const bar = document.querySelector('.top-bar');
+    const right = bar?.querySelector('.top-bar-right');
+    if (!bar || !right) return;
+
+    const SLOP = 5;
+    let shift = 0;
+    let maxShift = 0;
+    let drag = null;
+    let suppressClick = false;
+    const pointers = new Set();
+
+    // offsetLeft/offsetWidth, not getBoundingClientRect: these are layout
+    // pixels, so they are already free of both the slide's own transform and
+    // the phone stage's scale and quarter turn.
+    const overflowAmount = () => {
+        const padRight = parseFloat(getComputedStyle(bar).paddingRight) || 0;
+        const contentRight = bar.offsetWidth - padRight;
+        return Math.max(0, Math.round(right.offsetLeft + right.offsetWidth - contentRight));
+    };
+
+    const apply = () => {
+        bar.style.setProperty('--top-bar-shift', `${shift}px`);
+        bar.classList.toggle('top-bar-can-slide', maxShift > 0);
+        bar.classList.toggle('top-bar-more-right', shift > -maxShift + 0.5);
+    };
+
+    const remeasure = () => {
+        maxShift = overflowAmount();
+        shift = Math.min(0, Math.max(-maxShift, shift));
+        apply();
+    };
+
+    // Controls that own their own drag, and open menus, keep it. The live-update
+    // menu carries a range slider: without this, dragging the slider would drag
+    // the bar out from under it.
+    const OWNS_ITS_DRAG = 'input, select, textarea, [contenteditable], .example-menu';
+
+    bar.addEventListener('pointerdown', (event) => {
+        pointers.add(event.pointerId);
+        // Two fingers on the bar are the page pinch, not a slide.
+        if (pointers.size > 1) { drag = null; bar.classList.remove('top-bar-sliding'); return; }
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        if (event.target.closest?.(OWNS_ITS_DRAG)) return;
+        remeasure();
+        if (!maxShift) return;
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, from: shift, moved: false };
+    });
+
+    bar.addEventListener('pointermove', (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        // Screen pixels become layout pixels here, which on an upright phone
+        // also swaps the axes: the bar runs down the side of the screen there.
+        const delta = screenDeltaToStage(event.clientX - drag.x, event.clientY - drag.y);
+        if (!drag.moved) {
+            if (Math.abs(delta.x) < SLOP) return;
+            drag.moved = true;
+            bar.classList.add('top-bar-sliding');
+            bar.setPointerCapture?.(drag.id);
+        }
+        event.preventDefault();
+        shift = Math.min(0, Math.max(-maxShift, drag.from + delta.x));
+        apply();
+    });
+
+    const endDrag = (event) => {
+        pointers.delete(event.pointerId);
+        if (!drag || event.pointerId !== drag.id) return;
+        // A drag must not also press the button it started on.
+        suppressClick = drag.moved;
+        bar.releasePointerCapture?.(drag.id);
+        bar.classList.remove('top-bar-sliding');
+        drag = null;
+    };
+    bar.addEventListener('pointerup', endDrag);
+    bar.addEventListener('pointercancel', endDrag);
+
+    bar.addEventListener('click', (event) => {
+        if (!suppressClick) return;
+        suppressClick = false;
+        event.preventDefault();
+        event.stopPropagation();
+    }, { capture: true });
+
+    // The controls come and go — a file loads, the language changes, the phone
+    // stage re-fits — so what fits is re-read rather than measured once.
+    new ResizeObserver(remeasure).observe(bar);
+    new ResizeObserver(remeasure).observe(right);
+    remeasure();
 };
 
 // ─── Sidebar resize ────────────────────────────────────────────
