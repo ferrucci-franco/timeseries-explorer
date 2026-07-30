@@ -179,8 +179,11 @@ DuckDB file means the *downsampled overview*, not the exact data. There is no
 - No worker pool, no shared cancellation token, no transferable discipline.
   Each feature that wanted a worker hand-rolled its own lifecycle
   (`_getParserWorker`, `_computeFftSpectrumInWorker`).
-- `src/parsers/csv-time-detection_option.js` (941 lines) looks like a stale
-  fork of `csv-time-detection.js` (1 406 lines). Worth confirming and deleting.
+- ~~`src/parsers/csv-time-detection_option.js` (941 lines) looks like a stale
+  fork of `csv-time-detection.js` (1 406 lines).~~ Confirmed stale and deleted:
+  nothing imported it, and it was missing exports the live file has
+  (`parseCsvTimeValue`, `customDatetimePatternInfo`), so it could never have
+  substituted for it. Git history keeps it.
 - `fft-methods.js` and `phase2d-fit-methods.js` contain raw NUL bytes and are
   invisible to `grep`. Any refactor touching them needs care.
 
@@ -699,5 +702,5 @@ gain a row per phase.
    WASM-only, or stay CSP-free and keep the JS codegen path?
 3. **Model size budget for M6.** Classical-only (~30 KB) or is a bundled ONNX
    model of tens of MB acceptable in the installer?
-4. **`csv-time-detection_option.js`** — dead fork, or intentional? It affects
-   how much surface M1 has to keep working.
+4. ~~**`csv-time-detection_option.js`** — dead fork, or intentional?~~ Answered:
+   dead fork, deleted. M1 only has to keep `csv-time-detection.js` working.
