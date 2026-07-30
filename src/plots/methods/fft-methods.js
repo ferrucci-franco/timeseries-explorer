@@ -756,8 +756,33 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
             plot._fftToken = (plot._fftToken || 0) + 1;
             this._abortFftWorkerJob(plot, 'FFT selection exceeds the platform limit');
             const trace = (plot.traces || []).find(item => this._isVisible(item));
-            const warning = this._fftWarningText(trace, 'tooManyPoints', plot._fftPreflightTooLarge);
             const state = this._ensureFftState(plot);
+            const rejected = plot._fftPreflightTooLarge;
+            // Refusing and stopping there leaves the previous spectrum on
+            // screen under settings that did not produce it — the plot then
+            // describes a range and a padding the user is no longer looking
+            // at. Put back the last combination that did fit and recompute, so
+            // what is drawn always matches what the controls say.
+            if (this._revertFftToLastAccepted(panelId, plot, state)) {
+                const warning = this._fftWarningText(trace, 'tooManyPointsReverted', rejected);
+                state.warnings = [warning];
+                this._setFftStatus(plot, warning, 'warning');
+                this._updateFftSelectionShapes(panelId, plot);
+                this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+                this._syncFftOptionsPanel(plot);
+                this._renderFftOptionsPanel(panelId, plot);
+                this._refreshFftSpectrumPlot(panelId, plot).then(() => {
+                    // The recompute reports its own success; restate why the
+                    // settings moved back, or the revert looks like a glitch.
+                    if (plot.mode !== 'fft' || plot._fftPreflightTooLarge) return;
+                    state.warnings = [warning];
+                    this._setFftStatus(plot, warning, 'warning');
+                });
+                return;
+            }
+            // Nothing to fall back to (the very first attempt was already too
+            // large): say so and leave the controls where the user put them.
+            const warning = this._fftWarningText(trace, 'tooManyPoints', rejected);
             state.warnings = [warning];
             this._setFftStatus(plot, warning, 'warning');
             this._setFftComputing(plot, false);
@@ -1073,6 +1098,9 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     } else {
         this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
     }
+    // A spectrum came out, so this range and padding are known to fit the
+    // platform. That is what a later rejected combination falls back to.
+    if (spectra.length) this._rememberAcceptedFftSettings(plot);
     // Terminal for this token (superseding runs manage their own pill on the
     // token-mismatch early returns above, so this only fires for the live run).
     this._setFftComputing(plot, false);
@@ -2509,16 +2537,48 @@ proto._syncFftMessage = function(plot) {
     box.className = `fft-message fft-message-${type}`;
 };
 
+// The last (range, zero padding) combination the platform actually accepted.
+// Recorded only after a spectrum came out, so it is always a setting known to
+// fit — which is what makes it safe to fall back to.
+proto._rememberAcceptedFftSettings = function(plot) {
+    const state = this._ensureFftState(plot);
+    plot._fftLastAccepted = {
+        rangeFull: !!state.rangeFull,
+        x1: state.x1,
+        x2: state.x2,
+        zeroPaddingFactor: normalizeZeroPaddingFactor(state.zeroPaddingFactor),
+    };
+};
+
+proto._revertFftToLastAccepted = function(panelId, plot, state = this._ensureFftState(plot)) {
+    const accepted = plot._fftLastAccepted;
+    if (!accepted) return false;
+    const unchanged = !!state.rangeFull === accepted.rangeFull
+        && state.x1 === accepted.x1
+        && state.x2 === accepted.x2
+        && normalizeZeroPaddingFactor(state.zeroPaddingFactor) === accepted.zeroPaddingFactor;
+    // Reverting to what is already set would recompute the same rejected
+    // request forever; the caller falls back to the plain refusal instead.
+    if (unchanged) return false;
+    state.rangeFull = accepted.rangeFull;
+    state.x1 = accepted.x1;
+    state.x2 = accepted.x2;
+    state.zeroPaddingFactor = accepted.zeroPaddingFactor;
+    plot._fftPreflightTooLarge = null;
+    return true;
+};
+
 proto._fftWarningText = function(trace, reason, extra = {}) {
     const name = this._traceName(trace?.varName, trace?.fileId);
     const prefix = name ? `${name}: ` : '';
     if (reason === 'nan' || reason === 'invalidTime') return prefix + i18n.t('fftWarningNaN');
     if (reason === 'nonUniform' || reason === 'nonMonotonic') return prefix + i18n.t('fftWarningNonUniform');
     if (reason === 'tooFewSamples') return prefix + i18n.t('fftWarningTooFew');
-    if (reason === 'tooManyPoints') {
+    if (reason === 'tooManyPoints' || reason === 'tooManyPointsReverted') {
         const live = this._fftLiveMaxNfft().toLocaleString();
         const hard = this._fftHardMaxNfft().toLocaleString();
-        return prefix + i18n.t('fftWarningTooMany').replace('{live}', live).replace('{hard}', hard);
+        const key = reason === 'tooManyPointsReverted' ? 'fftWarningTooManyReverted' : 'fftWarningTooMany';
+        return prefix + i18n.t(key).replace('{live}', live).replace('{hard}', hard);
     }
     if (reason === 'missingVariable') return prefix + i18n.t('fftWarningMissing');
     if (reason === 'fetchFailed') return prefix + i18n.t('fftWarningFetch');
