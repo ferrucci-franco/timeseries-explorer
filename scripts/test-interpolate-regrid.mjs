@@ -10,8 +10,10 @@ import {
 } from '../src/compute/kernels/interpolate.js';
 import {
     buildResampleGrid,
+    detectRegularSampling,
     medianStep,
     normalizeResampleParams,
+    planResampleGrid,
     resampleSourceAxis,
     resampleValues,
 } from '../src/compute/kernels/regrid.js';
@@ -279,6 +281,107 @@ const N = NaN;
     assert.equal(grid.length, 15, 'floor(10 / 0.7) + 1 grid points');
     assert.ok(grid[grid.length - 1] <= 10, 'the last grid point never passes the last sample');
     close(Array.from(grid.slice(0, 3)), [0, 0.7, 1.4], 'a non-commensurate grid', 1e-12);
+}
+
+// ── "Complete missing timestamps" only when Δt is beyond doubt ─────────────
+
+{
+    // The promise of the mode is that the file's own step is not a guess, so the
+    // test is strict: every step must be a whole multiple of one Δt. Zero (a
+    // repeated timestamp) and k (k−1 absent rows) qualify; 1.4Δt does not.
+    const clean = detectRegularSampling(Float64Array.from([0, 1, 2, 3, 4]));
+    assert.equal(clean.ok, true);
+    assert.equal(clean.step, 1);
+    assert.equal(clean.gaps, 0);
+    assert.equal(clean.missing, 0);
+    assert.equal(clean.repeats, 0);
+
+    // The reported file: absent rows only.
+    const gapped = detectRegularSampling(Float64Array.from([0, 1, 2, 3, 20, 21, 22]));
+    assert.equal(gapped.ok, true, 'absent rows leave the step unambiguous');
+    assert.equal(gapped.step, 1);
+    assert.equal(gapped.gaps, 1);
+    assert.equal(gapped.missing, 16);
+
+    // A Modelica result: repeated final timestamp.
+    const repeated = detectRegularSampling(Float64Array.from([0, 1, 2, 3, 4, 4]));
+    assert.equal(repeated.ok, true, 'a repeated timestamp leaves the step unambiguous');
+    assert.equal(repeated.repeats, 1);
+    assert.equal(repeated.missing, 0);
+
+    // Both at once, which is the general case this mode exists for.
+    const both = detectRegularSampling(Float64Array.from([0, 1, 2, 2, 5, 6, 6]));
+    assert.equal(both.ok, true);
+    assert.equal(both.repeats, 2);
+    assert.equal(both.gaps, 1);
+    assert.equal(both.missing, 2, 't = 3 and 4 are absent');
+
+    // And the cases where the step WOULD be a guess.
+    assert.equal(detectRegularSampling(Float64Array.from([0, 1, 2.4, 3.4, 4.4])).ok, false,
+        'a step of 1.4 Δt is on no sampling at all');
+    assert.equal(detectRegularSampling(Float64Array.from([0, 1, 2.4, 3.4, 4.4])).reason, 'irregularStep');
+    assert.equal(detectRegularSampling(Float64Array.from([0, 1, 0.5, 2])).reason, 'nonMonotonic');
+    assert.equal(detectRegularSampling(Float64Array.from([0, 1])).reason, 'tooFewSamples');
+
+    // The tolerance is tight on purpose. 0.05% of the step passes, 1% does not.
+    assert.equal(detectRegularSampling(Float64Array.from([0, 1, 2, 3.0005, 4.0005])).ok, true,
+        'ordinary rounding in a printed timestamp still passes');
+    assert.equal(detectRegularSampling(Float64Array.from([0, 1, 2, 3.01, 4.01])).ok, false,
+        'a per-cent-level wobble does not — the mode would be guessing');
+}
+
+{
+    // The mode resamples at exactly the detected step, so the grid holds every
+    // implied timestamp once: 7 rows spanning 0…22 become 23.
+    const x = Float64Array.from([0, 1, 2, 3, 20, 21, 22]);
+    const { grid, step } = buildResampleGrid(x, { gridMode: 'complete' });
+    assert.equal(step, 1, 'the file’s own step, not one the user typed');
+    assert.equal(grid.length, 23);
+    assert.equal(grid[0], 0);
+    assert.equal(grid[22], 22);
+
+    // A repeated timestamp collapses, because a uniform grid has one point per step.
+    const repeated = buildResampleGrid(Float64Array.from([0, 1, 2, 3, 4, 4]), { gridMode: 'complete' });
+    assert.equal(repeated.grid.length, 5, 'six rows, five distinct timestamps');
+
+    // With no usable step there is nothing to complete, and it says so rather than
+    // inventing one.
+    assert.throws(
+        () => planResampleGrid({ span: 5, sourceStep: NaN, params: { gridMode: 'complete' } }),
+        err => err.code === 'dataToolResampleNoStep',
+    );
+}
+
+{
+    // The timestamps must come back looking like the file's own. The step is
+    // recovered as the median of parsed decimals, so it is really
+    // 0.00099999999999989 — stepping out from the start multiplies that error by
+    // the sample index and the last timestamp lands on 19.999999999997797, with
+    // every one before it similarly frayed. A mode that promises the file's own
+    // timestamps cannot ship that.
+    const n = 20001;
+    const x = new Float64Array(n);
+    for (let i = 0; i < n; i++) x[i] = Number((i * 0.001).toFixed(3));
+    const { grid, step } = buildResampleGrid(x, { gridMode: 'complete' });
+    assert.equal(grid.length, n);
+    assert.equal(grid[0], 0, 'starts exactly where the file does');
+    assert.equal(grid[n - 1], 20, 'and ends exactly where the file does');
+    // Every point must match the value the file itself would have printed.
+    for (const i of [1, 2899, 10000, 19999]) {
+        assert.equal(grid[i], Number((i * 0.001).toFixed(3)), `grid[${i}] is the file's own timestamp`);
+    }
+    assert.ok(Math.abs(step - 0.001) < 1e-12);
+
+    // A step-defined grid keeps the step the user asked for, exactly.
+    const asked = buildResampleGrid(x, { gridMode: 'step', step: 0.25 });
+    assert.equal(asked.step, 0.25, 'the typed step is authoritative, not the span');
+    assert.equal(asked.grid[1], 0.25);
+    assert.ok(asked.grid[asked.grid.length - 1] <= 20, 'and never runs past the source');
+
+    // Number of samples is span-defined too, so it also pins both ends.
+    const counted = buildResampleGrid(x, { gridMode: 'count', count: 5 });
+    assert.equal(counted.grid[0], 0);
+    assert.equal(counted.grid[4], 20);
 }
 
 {

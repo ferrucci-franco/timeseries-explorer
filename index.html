@@ -588,19 +588,32 @@
                         </div>
 
                         <div class="data-tool-controls collapsed" data-tool-kind="resample">
-                            <label class="options-subgroup-label" for="resample-grid-mode" data-i18n="dataToolResampleGrid">New grid</label>
+                            <label class="options-subgroup-label" for="resample-grid-mode" data-i18n="dataToolResampleGrid">New sampling</label>
                             <select id="resample-grid-mode" class="data-tool-select">
-                                <option value="step" selected data-i18n="dataToolResampleGridStep">New Δt</option>
+                                <option value="step" selected data-i18n="dataToolResampleGridStep">Δt</option>
                                 <option value="factor" data-i18n="dataToolResampleGridFactor">Rate factor</option>
                                 <option value="count" data-i18n="dataToolResampleGridCount">Number of samples</option>
+                                <option value="complete" data-i18n="dataToolResampleGridComplete">Complete missing timestamps</option>
                             </select>
+                            <!-- Why the fourth option is unavailable, when it is. Greying it out
+                                 without a reason leaves the reader guessing. -->
+                            <div id="resample-complete-note" class="data-tool-count idle"></div>
 
                             <div class="resample-grid-controls" data-resample-grid="step">
                                 <div class="data-tool-label-row">
                                     <label class="options-subgroup-label" for="resample-step" data-i18n="dataToolResampleStep">Δt</label>
                                     <span id="resample-step-unit" class="data-tool-slider-value">s</span>
                                 </div>
-                                <input id="resample-step" class="derived-input data-tool-number-input" type="number" min="0" step="any" value="1">
+                                <!-- The field opens holding the step measured from the file, and the
+                                     tag says so; it disappears the moment a different number is
+                                     typed, and the button brings the measured one back. -->
+                                <div class="data-tool-step-row">
+                                    <input id="resample-step" class="derived-input data-tool-number-input" type="number" min="0" step="any" value="1">
+                                    <span id="resample-step-detected" class="data-tool-detected-tag" data-i18n="dataToolResampleDetectedTag" hidden>detected</span>
+                                    <button id="resample-step-reset" class="tree-control-btn data-tool-reset-btn" type="button" data-i18n-title="dataToolResampleUseDetected" title="Use the detected Δt" hidden>
+                                        <span aria-hidden="true">↻</span>
+                                    </button>
+                                </div>
                             </div>
 
                             <div class="resample-grid-controls collapsed" data-resample-grid="factor">

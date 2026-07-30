@@ -52,7 +52,61 @@ export const RESAMPLE_METHODS = new Set([
 
 export const RESAMPLE_BIN_METHODS = new Set(['mean', 'median', 'min', 'max']);
 
-export const RESAMPLE_GRID_MODES = new Set(['step', 'factor', 'count']);
+export const RESAMPLE_GRID_MODES = new Set(['step', 'factor', 'count', 'complete']);
+
+// How far a step may sit from a whole multiple of Δt and still count as that
+// multiple. The same 0.1% the app already requires of a uniform axis before it
+// will quote a frequency in Hz (_timeSamplingRegularity), and deliberately tight:
+// the `complete` mode promises there is NO doubt about the file's own step, so a
+// file that does not clearly sit on one must fail the test rather than be given a
+// Δt of our invention. Anything that fails still has the ordinary Δt mode.
+export const GRID_MULTIPLE_TOLERANCE = 1e-3;
+
+/**
+ * Is this axis a regular sampling with holes in it — and if so, what is its step?
+ *
+ * True when every consecutive step is a whole multiple of the median: zero (a
+ * repeated timestamp), one (an ordinary step) or k (k−1 rows the file never
+ * wrote). A step of 1.4Δt means the file is on no grid at all and its "own Δt"
+ * would be a guess.
+ *
+ * @returns {{ ok, step, gaps, missing, repeats, reason }} `reason` names the
+ *   failure so the panel can say why the mode is unavailable rather than just
+ *   greying it out.
+ */
+export function detectRegularSampling(x, tolerance = GRID_MULTIPLE_TOLERANCE) {
+    const n = x?.length || 0;
+    const blank = (reason) => ({ ok: false, step: NaN, gaps: 0, missing: 0, repeats: 0, reason });
+    if (n < 3) return blank('tooFewSamples');
+    const values = asFloat64(x);
+
+    // Order of business, and it matters: an axis that goes backwards is a
+    // different and worse problem than one that is merely irregular, and the two
+    // want different answers from the user. Checked first so the reason reported
+    // is that one, deterministically — judged against the median it would
+    // otherwise depend on which bad step happened to be measured first.
+    for (let i = 1; i < n; i++) {
+        const dt = values[i] - values[i - 1];
+        if (!Number.isFinite(dt)) return blank('notNumeric');
+        if (dt < 0) return blank('nonMonotonic');
+    }
+
+    const step = medianStep(values);
+    if (!Number.isFinite(step) || step <= 0) return blank('noStep');
+
+    const band = step * tolerance;
+    let gaps = 0;
+    let missing = 0;
+    let repeats = 0;
+    for (let i = 1; i < n; i++) {
+        const dt = values[i] - values[i - 1];
+        const multiple = Math.round(dt / step);
+        if (Math.abs(dt - multiple * step) > band) return blank('irregularStep');
+        if (multiple === 0) repeats++;
+        else if (multiple > 1) { gaps++; missing += multiple - 1; }
+    }
+    return { ok: true, step, gaps, missing, repeats, reason: null };
+}
 
 // What a point method does when the two source samples it would interpolate
 // between are further apart than the file's own Δt — that is, when the file has
@@ -155,6 +209,11 @@ export function planResampleGrid({ span, sourceStep, params = {} }) {
     } else if (settings.gridMode === 'factor') {
         if (!Number.isFinite(sourceStep) || sourceStep <= 0) throw new DataToolError('dataToolResampleNoStep');
         step = sourceStep / settings.factor;
+    } else if (settings.gridMode === 'complete') {
+        // The file's own step, so the result holds every timestamp the sampling
+        // implies — the missing ones created, the repeated ones collapsed to one.
+        if (!Number.isFinite(sourceStep) || sourceStep <= 0) throw new DataToolError('dataToolResampleNoStep');
+        step = sourceStep;
     } else {
         step = settings.step;
     }
@@ -181,10 +240,31 @@ export function buildResampleGrid(x, params = {}) {
     const { step, count } = planResampleGrid({ span: last - first, sourceStep, params });
 
     const grid = new Float64Array(count);
-    for (let i = 0; i < count; i++) grid[i] = first + i * step;
-    // Guard against the accumulated rounding of first + i·step drifting past the
-    // source range on the final sample.
-    if (grid[count - 1] > last) grid[count - 1] = last;
+    // Which quantity is authoritative decides how the points are laid out, and it
+    // is not a detail. `complete` and `count` are defined by the SPAN — the result
+    // must start and end exactly where the file does — so the points are placed by
+    // interpolating between the endpoints. Stepping out from the start instead
+    // multiplies the step's representation error by the sample index: a Δt of
+    // 0.001 recovered as the median of parsed decimals is really
+    // 0.00099999999999989, and 20 000 of those land the last timestamp on
+    // 19.999999999997797 with every one before it similarly frayed. For a mode
+    // whose whole promise is "the file's own timestamps", that is not a rounding
+    // detail, it is the promise broken.
+    //
+    // `step` and `factor` are defined by the STEP: the user asked for exactly
+    // 0.25, so 0.25 it is, and only the final point is pulled back if accumulated
+    // rounding pushed it past the source range.
+    const gridMode = normalizeResampleParams(params).gridMode;
+    const spanDefined = gridMode === 'complete' || gridMode === 'count';
+    if (spanDefined && count > 1) {
+        const total = count - 1;
+        for (let i = 0; i < count; i++) grid[i] = first + ((last - first) * i) / total;
+        grid[0] = first;
+        grid[count - 1] = last;
+    } else {
+        for (let i = 0; i < count; i++) grid[i] = first + i * step;
+        if (grid[count - 1] > last) grid[count - 1] = last;
+    }
     return { grid, step, sourceStep };
 }
 

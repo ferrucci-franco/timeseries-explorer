@@ -1067,6 +1067,34 @@
     grid-template-columns: 4.8rem minmax(0, 1fr);
 }
 
+/* The Δt field, its provenance tag and the way back to it. */
+.data-tool-step-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.data-tool-step-row .data-tool-number-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Present only while the value is still the one measured from the file, so its
+   presence is the whole message: this number is mine, you have not changed it. */
+.data-tool-detected-tag {
+    flex: 0 0 auto;
+    font-size: 0.68rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    background-color: var(--hover-bg);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.data-tool-reset-btn {
+    flex: 0 0 auto;
+}
+
 /* What the chosen grid actually works out to: the resulting Δt, the sample
    count, and whether that is up or down from the file's own rate. Shown before
    committing because "factor 2.5" says nothing until it is a number of samples. */

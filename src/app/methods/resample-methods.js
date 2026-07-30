@@ -26,6 +26,7 @@ import {
     RESAMPLE_METHODS,
     RESAMPLE_GRID_MODES,
     RESAMPLE_BIN_METHODS,
+    detectRegularSampling,
     normalizeResampleParams,
     planResampleGrid,
 } from '../../compute/kernels/regrid.js';
@@ -51,6 +52,16 @@ proto.initResampleTool = function() {
     document.getElementById('resample-help-toggle')?.addEventListener('click', (event) => {
         event.stopPropagation();
         this._toggleResampleHelpPopover();
+    });
+    // Live, so the tag drops away on the first keystroke rather than waiting for
+    // the field to settle — its whole job is to say "you have not changed this".
+    document.getElementById('resample-step')?.addEventListener('input', () => {
+        const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
+        this._syncResampleDetectedTag(data, this._resampleTimeContext(data));
+    });
+    document.getElementById('resample-step-reset')?.addEventListener('click', () => {
+        this._seedResampleDefaults();
+        rerun();
     });
 };
 
@@ -148,13 +159,17 @@ proto._seedResampleDefaults = function() {
 };
 
 proto._syncResampleControls = function() {
+    const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
+    const time = this._resampleTimeContext(data);
+    // Availability first: it may send the mode back to Δt, and the collapse below
+    // has to act on the mode that survives.
+    this._syncResampleCompleteOption(data, time);
+
     const gridMode = document.getElementById('resample-grid-mode')?.value || 'step';
     document.querySelectorAll('.resample-grid-controls').forEach(el => {
         el.classList.toggle('collapsed', el.dataset.resampleGrid !== gridMode);
     });
 
-    const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
-    const time = this._resampleTimeContext(data);
     const unit = document.getElementById('resample-step-unit');
     if (unit) unit.textContent = this._resampleUnitLabel(time.kind, time.variable);
 
@@ -170,6 +185,7 @@ proto._syncResampleControls = function() {
     info.textContent = summary.text;
     info.classList.toggle('invalid', !summary.ok);
     this._syncResampleGapControls(data, time);
+    this._syncResampleDetectedTag(data, time);
 };
 
 // The gap policy only means something for the point methods. A bin method never
@@ -203,6 +219,85 @@ proto._syncResampleGapControls = function(data, time) {
         .replace('{gaps}', formatCount(gaps.count))
         .replace('{samples}', formatCount(gaps.missing));
     note.className = `data-tool-count${leaving ? ' idle' : ' warn'}`;
+};
+
+// Is the file on a regular sampling with holes in it? Cached against the array it
+// was measured from, since this runs on every panel sync.
+proto._resampleRegularSampling = function(data, time = this._resampleTimeContext(data)) {
+    const values = time?.values;
+    if (!values || time.kind === 'index') {
+        return { ok: false, step: NaN, gaps: 0, missing: 0, repeats: 0, reason: 'noTimeAxis' };
+    }
+    const cached = this._resampleRegularCache;
+    if (cached?.source === values) return cached.result;
+    const result = detectRegularSampling(values);
+    this._resampleRegularCache = { source: values, result };
+    return result;
+};
+
+// "Complete missing timestamps" promises there is no doubt about the file's own
+// step, so it is offered only when every step really is a whole multiple of it.
+// Disabled rather than hidden, with the reason — an option that vanishes leaves
+// the reader wondering whether they imagined it.
+proto._syncResampleCompleteOption = function(data, time) {
+    const select = document.getElementById('resample-grid-mode');
+    const option = select ? [...select.options].find(o => o.value === 'complete') : null;
+    const note = document.getElementById('resample-complete-note');
+    if (!option) return;
+
+    const regular = this._resampleRegularSampling(data, time);
+    const available = !!data && regular.ok;
+    option.disabled = !available;
+    // Falling back rather than sitting on a disabled option: switching files can
+    // take the mode away underneath a draft that had already chosen it.
+    if (!available && select.value === 'complete') select.value = 'step';
+
+    if (!note) return;
+    if (this._getSelectedDataTool() !== 'resample' || !data) {
+        note.textContent = '';
+        return;
+    }
+    if (available) {
+        note.textContent = '';
+        return;
+    }
+    const key = {
+        nonMonotonic: 'dataToolResampleCompleteBackwards',
+        irregularStep: 'dataToolResampleCompleteIrregular',
+        noTimeAxis: 'dataToolResampleCompleteNoAxis',
+    }[regular.reason] || 'dataToolResampleCompleteIrregular';
+    note.textContent = i18n.t(key);
+};
+
+// The provenance of the Δt in the box: a tag while it is still the measured value,
+// and a way back once it is not. Without it the seeded number looks like an
+// arbitrary default, which is exactly how it read.
+proto._syncResampleDetectedTag = function(data, time) {
+    const input = document.getElementById('resample-step');
+    const tag = document.getElementById('resample-step-detected');
+    const reset = document.getElementById('resample-step-reset');
+    if (!input || !tag || !reset) return;
+    const detected = this._resampleDetectedStepInUiUnits(data, time);
+    if (!Number.isFinite(detected)) {
+        tag.hidden = true;
+        reset.hidden = true;
+        return;
+    }
+    const typed = Number(input.value);
+    // Compared as displayed, not as measured: the box holds the value rounded to
+    // six significant digits, and a bit-exact test would call that a change.
+    const same = Number.isFinite(typed)
+        && Number(typed.toPrecision(6)) === Number(detected.toPrecision(6));
+    tag.hidden = !same;
+    reset.hidden = same;
+};
+
+proto._resampleDetectedStepInUiUnits = function(data, time = this._resampleTimeContext(data)) {
+    const length = Number(time?.values?.length) || 0;
+    if (length < 2) return NaN;
+    const { sourceStep } = this._resampleAxisMeasure(time.values, length);
+    if (!Number.isFinite(sourceStep) || sourceStep <= 0) return NaN;
+    return sourceStep / this._resampleAxisScale(time.kind);
 };
 
 // Gaps in the SOURCE axis: stretches the file has no rows for. Cached with the
@@ -267,18 +362,35 @@ proto._resamplePlan = function(data, time = this._resampleTimeContext(data)) {
 
     const ratio = Number.isFinite(sourceStep) && sourceStep > 0 ? sourceStep / step : NaN;
     const sameRate = Number.isFinite(ratio) && Math.abs(ratio - 1) < 1e-9;
-    // "same rate, uniform grid" is true but says nothing about what the user is
-    // usually after when they choose the file's own Δt on a file with holes in it:
-    // materialising the rows that are not there. Name that instead.
+    // At the file's own step the rate has not changed, so "same rate" is true and
+    // useless. What HAS changed is that every timestamp the sampling implies is
+    // now present exactly once — name that instead.
+    const regular = sameRate ? this._resampleRegularSampling(data, time) : null;
     const gaps = sameRate ? this._resampleSourceGaps(data, time) : null;
-    const change = gaps
-        ? i18n.t(gaps.count === 1 ? 'dataToolResampleCompletesRowsOne' : 'dataToolResampleCompletesRows')
-            .replace('{samples}', formatCount(gaps.missing))
-            .replace('{gaps}', formatCount(gaps.count))
-        : (!Number.isFinite(ratio) || sameRate
-            ? i18n.t('dataToolResampleSame')
-            : i18n.t(ratio > 1 ? 'dataToolResampleUp' : 'dataToolResampleDown')
-                .replace('{factor}', formatNumber(ratio > 1 ? ratio : 1 / ratio)));
+    const missing = regular?.ok ? regular.missing : (gaps?.missing || 0);
+    const gapCount = regular?.ok ? regular.gaps : (gaps?.count || 0);
+    const repeats = regular?.ok ? regular.repeats : 0;
+
+    let change;
+    if (sameRate && missing > 0) {
+        change = i18n.t(gapCount === 1 ? 'dataToolResampleCompletesRowsOne' : 'dataToolResampleCompletesRows')
+            .replace('{samples}', formatCount(missing))
+            .replace('{gaps}', formatCount(gapCount));
+        // Collapsing a repeated timestamp is a real change to the data and the one
+        // nobody expects, so it is never folded into the sentence above.
+        if (repeats > 0) {
+            change += ` · ${i18n.t(repeats === 1 ? 'dataToolResampleCollapsesOne' : 'dataToolResampleCollapses')
+                .replace('{count}', formatCount(repeats))}`;
+        }
+    } else if (sameRate && repeats > 0) {
+        change = i18n.t(repeats === 1 ? 'dataToolResampleCollapsesOne' : 'dataToolResampleCollapses')
+            .replace('{count}', formatCount(repeats));
+    } else if (!Number.isFinite(ratio) || sameRate) {
+        change = i18n.t('dataToolResampleSame');
+    } else {
+        change = i18n.t(ratio > 1 ? 'dataToolResampleUp' : 'dataToolResampleDown')
+            .replace('{factor}', formatNumber(ratio > 1 ? ratio : 1 / ratio));
+    }
 
     const unit = this._resampleUnitLabel(time.kind, time.variable);
     const text = i18n.t('dataToolResampleInfo')
