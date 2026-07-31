@@ -1020,6 +1020,10 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     // naming in the status when every plotted trace agrees on it; overlaid files
     // can carry different steps, and picking one of them would be a guess.
     const spanSteps = new Set();
+    // How many samples each trace actually transformed. Same rule as the step
+    // above: overlaid files can disagree, and naming one of them would be a
+    // guess, so the count is only reported when they all match.
+    const sampleCounts = new Set();
     for (const trace of visible) {
         if (plot._fftToken !== token) return;
         let series;
@@ -1049,6 +1053,7 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
             continue;
         }
         if (Number.isFinite(spectrum.sampling?.dt)) spanSteps.add(spectrum.sampling.dt);
+        if (Number.isInteger(spectrum.n) && spectrum.n > 0) sampleCounts.add(spectrum.n);
         for (const warning of spectrum.warnings || []) {
             warnings.push(this._fftWarningText(trace, warning, spectrum));
         }
@@ -1137,6 +1142,14 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         // where every other FFT explanation already lives.
         const spanDt = spanSteps.size === 1 ? [...spanSteps][0] : NaN;
         this._setFftStatus(plot, this._fftUniformSpanNote(spanDt), 'warning');
+    } else if (sampleCounts.size === 1) {
+        // The count answers the question the topbar leaves open on a large
+        // file — how much of it this spectrum actually describes.
+        this._setFftStatus(
+            plot,
+            i18n.t('fftReadySamples').replace('{samples}', i18n.formatNumber([...sampleCounts][0])),
+            'ready',
+        );
     } else {
         this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
     }

@@ -39,6 +39,27 @@ const i18n = {
     },
 
     /**
+     * A count formatted for the language the USER picked, not the one the
+     * browser happens to run in. Plain toLocaleString() follows the browser, so
+     * an app switched to Spanish on an English browser prints "16,777,216"
+     * inside a Spanish sentence — the separators say one thing and the words
+     * another.
+     */
+    formatNumber(value) {
+        const n = Number(value);
+        // Empty, never the literal "NaN" or "Infinity": this goes into visible
+        // labels, and a broken count reads better as a gap than as a word the
+        // user cannot act on.
+        if (!Number.isFinite(n)) return '';
+        try {
+            return new Intl.NumberFormat(this.currentLang).format(n);
+        } catch (_) {
+            // An unknown language tag must not cost the caller its number.
+            return n.toLocaleString();
+        }
+    },
+
+    /**
      * A string for innerHTML: escaped, with **emphasis** turned into <strong>.
      *
      * The same markup data-i18n-rich already applies in the DOM, exposed for the

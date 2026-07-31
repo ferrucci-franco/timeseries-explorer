@@ -236,4 +236,67 @@ assert.equal(
     'the reverted warning is translated in all four languages',
 );
 
-console.log('FFT refused-settings checks passed.');
+
+// ── "FFT ready" reports how much was transformed ───────────────────────────
+// A bare "FFT ready" leaves the one question a large file raises unanswered:
+// how much of it does this spectrum actually describe.
+{
+    const i18n = (await import('../src/i18n/index.js')).default;
+    // currentLang directly rather than setLanguage(): the setter repaints the
+    // DOM, which does not exist here, and the formatting is what is under test.
+    const withLanguage = (lang, run) => {
+        const previous = i18n.currentLang;
+        i18n.currentLang = lang;
+        try { return run(); } finally { i18n.currentLang = previous; }
+    };
+
+    const formatted = new Map();
+    for (const lang of ['en', 'fr', 'es', 'it']) {
+        withLanguage(lang, () => {
+            const count = i18n.formatNumber(16777216);
+            assert.match(count, /\d/, `${lang} formats digits`);
+            assert.doesNotMatch(count, /e\+|NaN|undefined/i, `${lang} prints no exponent and no non-number`);
+            assert.notEqual(count, '16777216', `${lang} groups thousands rather than running them together`);
+            formatted.set(lang, count);
+
+            const template = i18n.t('fftReadySamples');
+            assert.notEqual(template, 'fftReadySamples', `${lang} translates the ready message`);
+            assert.match(template, /\{samples\}/, `${lang} keeps the placeholder to substitute`);
+            const message = template.replace('{samples}', count);
+            assert.doesNotMatch(message, /\{samples\}/, `${lang} substitutes the placeholder`);
+            assert.ok(message.includes(count), `${lang} keeps the number in the message`);
+        });
+    }
+
+    // The unit noun lives inside each translated string, so it cannot be left
+    // in English by a caller that forgets to translate it separately.
+    for (const [lang, word] of [['fr', 'echantillons'], ['es', 'muestras'], ['it', 'campioni']]) {
+        withLanguage(lang, () => {
+            const template = i18n.t('fftReadySamples');
+            assert.match(template, new RegExp(word, 'i'), `${lang} names the unit in its own language`);
+            // Compared with the placeholder removed: {samples} is the
+            // substitution token, not the English noun.
+            assert.doesNotMatch(template.replace('{samples}', ''), /samples/i,
+                `${lang} must not fall back to the English word`);
+        });
+    }
+
+    // Separators differ between these locales, so a number formatted for the
+    // browser instead of the chosen language is visibly wrong in at least one.
+    assert.notEqual(formatted.get('en'), formatted.get('es'),
+        'en and es must not share a thousands separator, or the language is being ignored');
+
+    // Degenerate input must never reach the topbar as "NaN" or "Infinity".
+    for (const bad of [NaN, undefined, null, 'abc', Infinity, -Infinity]) {
+        assert.doesNotMatch(i18n.formatNumber(bad), /NaN|Infinity/, `${String(bad)} must not print as a number`);
+    }
+    assert.equal(i18n.formatNumber(0), '0', 'zero is a real count, not an absent one');
+
+    // Reported only when every plotted trace agrees; overlaid files can carry
+    // different lengths and naming one of them would be a guess.
+    assert.match(fft, /sampleCounts\.size === 1/, 'the count is shown only when the traces agree');
+    assert.match(fft, /sampleCounts\.add\(spectrum\.n\)/, 'it comes from what was actually transformed');
+    assert.match(fft, /i18n\.formatNumber\(/, 'and it is formatted for the chosen language');
+}
+
+console.log('FFT refused-settings and ready-status checks passed.');
