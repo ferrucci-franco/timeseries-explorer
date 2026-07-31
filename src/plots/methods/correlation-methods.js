@@ -167,10 +167,16 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (!this._hasContent(plot)) return;
         const state = this._ensureCorrelationState(plot);
         this._autoLimitAnalysisRange(plot, state, 'correlation', { initial: true });
-        // Correlation keeps no restored view of its own, so the x view is always
-        // ours to set: the whole signal, or the cut range when the analysis
-        // limited itself. Applied after the first recompute, because that is
-        // what decides which of the two it is.
+        // Correlation restores no view of its own, so the x view is always ours
+        // to set: the whole signal, or the cut range when the analysis limited
+        // itself. Applied after the first recompute, because that is what
+        // decides which of the two it is.
+        //
+        // The session marker is still consumed rather than ignored. It is per
+        // panel, and a panel that leaves it set hands it to whichever mode the
+        // user switches to next, where it would suppress that mode's opening
+        // view for a session restore this one already declined to honour.
+        this._consumeSessionViewRestore(plot);
         state.autoRangeFocusPending = true;
 
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');

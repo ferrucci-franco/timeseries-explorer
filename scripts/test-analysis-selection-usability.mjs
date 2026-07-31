@@ -128,10 +128,29 @@ const PANELS = [
     ['curve fit', 'src/plots/methods/phase2d-fit-methods.js'],
 ];
 for (const [label, path] of PANELS) {
+    const source = read(path);
     assert.match(
-        read(path),
+        source,
         /this\._applyPendingAnalysisFocus\(plot(?:, '[a-z2-]+')?\)/,
         `${label} must move its time view onto the range it analysed`,
+    );
+    // Applying the focus is only half of it: the flag has to be raised when the
+    // panel is BUILT, not only when a pass cuts the range. Curve Fit applied it
+    // and never raised it, so re-entering a fit whose range had been cut drew
+    // that range a few pixels wide with both edges inside one grab tolerance.
+    assert.match(
+        source,
+        /autoRangeFocusPending = true/,
+        `${label} must claim its own opening view on every build`,
+    );
+    // And every panel consumes the session marker, even one that restores no
+    // view. It lives on the plot, so a panel that leaves it set hands it to
+    // whichever mode the user switches to next, suppressing that mode's
+    // opening view for a restore this one already declined to honour.
+    assert.match(
+        source,
+        /_consumeSessionViewRestore\(plot\)/,
+        `${label} must consume the session-restore marker rather than pass it on`,
     );
 }
 

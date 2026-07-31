@@ -533,6 +533,11 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             && this._autoLimitAnalysisRange(plot, state, 'phase2d', { initial: true })) {
             state.timeSeriesHidden = false;
         }
+        // Like every other analysis: this build owns its time view. Without it
+        // a Curve Fit whose range was cut for a previous fit reopens with that
+        // range drawn a few pixels wide, both green edges inside one grab
+        // tolerance, exactly the way FFT did before it was given the same line.
+        if (!this._consumeSessionViewRestore(plot)) state.autoRangeFocusPending = true;
         // A fresh build re-reads current data, so any prior live-append dirtiness
         // is resolved by construction.
         state.dirty = false;
