@@ -926,6 +926,7 @@ proto._prepareFftAutoRange = async function(panelId, plot, token, options = {}) 
         if (end - start < target) return false;
         let previousTime = NaN;
         let expectedStep = NaN;
+        let stepTolerance = 0;
         for (let i = start; i < end; i++) {
             if (plot._fftPreparationToken !== token || plot.mode !== 'fft') return null;
             const time = Number(times[i]);
@@ -934,9 +935,20 @@ proto._prepareFftAutoRange = async function(panelId, plot, token, options = {}) 
                 || (i > start && !(time > previousTime))) return false;
             if (i > start) {
                 const step = time - previousTime;
-                if (i === start + 1) expectedStep = step;
-                else if (!Number.isFinite(expectedStep)
-                    || Math.abs(step - expectedStep) > Math.abs(expectedStep) * 1e-3) return false;
+                if (i === start + 1) {
+                    expectedStep = step;
+                    // Same floor the sampling gate applies (see analyzeSampling
+                    // in utils/fft.js): timestamps far from zero quantise their
+                    // own differences, so on an absolute calendar this file's
+                    // 0.0227 ms step varies by about 1% no matter how clean the
+                    // recording is. Holding it to 1e-3 there rejects every
+                    // block and walks the whole signal looking for one that
+                    // cannot exist, which is why the panel hung on
+                    // "Calculating FFT" instead of refusing outright.
+                    const ulp = 2 ** (Math.floor(Math.log2(Math.max(Math.abs(time), 1))) - 52);
+                    stepTolerance = Math.max(Math.abs(expectedStep) * 1e-3, 4 * ulp);
+                } else if (!Number.isFinite(expectedStep)
+                    || Math.abs(step - expectedStep) > stepTolerance) return false;
             }
             previousTime = time;
         }
@@ -1418,6 +1430,12 @@ proto._fftFrequencyAxisTitle = function(plot) {
         || mode === 'elapsedDateTime'
         || mode === 'elapsedSeconds'
         || this._isGeneratedDurationTime(trace.fileId, timeVar)
+        // Showing a numeric seconds axis as a duration changes how the numbers
+        // are WRITTEN, not what they measure: the values are the same seconds,
+        // so the spectrum is still in hertz. Without this the unit label reads
+        // 'duration' instead of 's' and the axis fell back to the generic
+        // 1/x-unit for a file that says Hz in every other format.
+        || this._isNumericDurationAxis(trace.fileId, timeVar)
         || unit === 's') {
         return i18n.t('fftFrequencyHz');
     }

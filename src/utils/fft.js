@@ -295,11 +295,31 @@ export function analyzeSampling(times, options = {}) {
     if (!Number.isFinite(dt) || dt <= 0) {
         return { ok: false, reason: 'nonUniform', dt, sampleRate: NaN, maxRelativeError: Infinity };
     }
+    // Two timestamps far from zero cannot express a small step uniformly:
+    // subtracting them quantises the delta to the spacing of the number format,
+    // not to the sampling. Promoting this file's numeric seconds to an absolute
+    // calendar moves them to ~1.767e12 ms, where one ulp is 0.000244 ms while
+    // the 44.1 kHz step is 0.0227 ms — barely 93 ulp. Consecutive deltas then
+    // snap between 0.02246 and 0.02271 ms, a 1.08% spread, and the same
+    // recording that passes as seconds (spread 6e-13) is refused as calendar.
+    //
+    // The signal did not change, only its offset, so the gate must not either.
+    // Below the resolution of the representation, real jitter and rounding are
+    // indistinguishable, and rejecting on the difference asserts something the
+    // numbers cannot support. Four ulp allows a couple at each end of a delta
+    // plus margin; on any axis whose step is not near that floor the term is
+    // negligible and the configured tolerance still decides.
+    const magnitude = Math.max(Math.abs(values[0]), Math.abs(values[values.length - 1]));
+    const ulp = magnitude > 0 ? 2 ** (Math.floor(Math.log2(magnitude)) - 52) : 0;
+    const rawStep = dt * scale;
+    const representationFloor = rawStep > 0 ? (4 * ulp) / rawStep : 0;
+    const effectiveTolerance = Math.max(tolerance, representationFloor);
+
     let maxRelativeError = 0;
     for (const value of deltas) {
         maxRelativeError = Math.max(maxRelativeError, Math.abs(value - dt) / dt);
     }
-    if (maxRelativeError >= tolerance) {
+    if (maxRelativeError >= effectiveTolerance) {
         return { ok: false, reason: 'nonUniform', dt, sampleRate: 1 / dt, maxRelativeError };
     }
     return {
