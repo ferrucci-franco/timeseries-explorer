@@ -158,10 +158,22 @@ proto._createStateAnimChart = function(panelId, panelEl) {
             const config = this._getPlotlyConfig({ displayModeBar: false });
             await Plotly.newPlot(div, traces, layout, config);
             if (plot._stateAnimRenderToken !== renderToken || plot.div !== div || !container.isConnected) return;
-            if (restoreView) await this._restorePlotView(plot, restoreView);
-            if (is3D) this._add3DAxisDecorations(plot);
-            this._stateAnimUpdateFrame(plot, Math.min(plot.animFrame || 0, nPts - 1));
-            this._updateCameraOverlay(plot);
+            // Restoring the view runs BESIDE the listener setup below, never
+            // ahead of it. It is a Plotly.relayout, so it can reject — on a
+            // range the layout will not take, or on a div purged underneath it
+            // — and awaiting it inline carried the pan gestures, the double
+            // click and the zoom release down with it. The panel then looked
+            // exactly like the bug those gestures were added to fix, with
+            // nothing to retry it. A view that fails to restore costs a zoom;
+            // listeners that fail to install cost the whole mode.
+            Promise.resolve(restoreView ? this._restorePlotView(plot, restoreView) : null)
+                .catch(error => console.warn('[state-animation] view restore failed:', error))
+                .then(() => {
+                    if (plot._stateAnimRenderToken !== renderToken || plot.div !== div) return;
+                    if (is3D) this._add3DAxisDecorations(plot);
+                    this._stateAnimUpdateFrame(plot, Math.min(plot.animFrame || 0, nPts - 1));
+                    this._updateCameraOverlay(plot);
+                });
             // Interaction handling comes from main (PR #32): release the
             // dynamic zoom when the USER changes the view, autoscale on
             // double click, and give the 2D animation the same pan gestures

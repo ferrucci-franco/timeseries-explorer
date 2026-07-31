@@ -98,4 +98,53 @@ assert.match(source, /this\._lowerBound\(timeData, targetSimTime\)/, 'playback j
 assert.doesNotMatch(source, /while \(nextFrame < nPts - 1/, 'playback no longer walks every skipped sample');
 assert.match(source, /renderNow - plot\._lastPlotlyUpdate < 80/, 'animation redraws are throttled');
 
+// ── Restoring the view must not be able to take the listeners with it ──────
+// The 2D pan gestures, the double-click autoscale and the dynamic-zoom release
+// were added because the animated mode had none of them. They install after
+// Plotly.newPlot, inside the same deferred pass that keeps a huge series from
+// freezing the panel. Restoring a saved view happens there too — and it is a
+// Plotly.relayout, so it can reject: on a range the layout will not take, or on
+// a div purged underneath it.
+//
+// Awaiting it inline ahead of the listeners means one rejected relayout leaves
+// the panel with no gestures at all — indistinguishable from the bug they were
+// added to fix, and with nothing to retry it. A failed restore may cost the
+// user a zoom; it may not cost them the mode.
+{
+    const start = source.indexOf('proto._createStateAnimChart = function');
+    const end = source.indexOf('\n};', start) + 3;
+    assert.ok(start >= 0 && end > start, 'the state-animation renderer can be isolated');
+    const render = source.slice(start, end);
+
+    assert.doesNotMatch(
+        render,
+        /await this\._restorePlotView/,
+        'the view restore must not be awaited in the chain that installs the listeners',
+    );
+    assert.match(
+        render,
+        /_restorePlotView[\s\S]{0,240}?\.catch\(/,
+        'a rejected view restore must be caught rather than abort the pass',
+    );
+
+    // Order is the whole point: whatever the restore does, the listeners are
+    // still reached.
+    const restoreAt = render.indexOf('_restorePlotView');
+    const gesturesAt = render.indexOf('_install2DPanGestures');
+    const doubleClickAt = render.indexOf('plotly_doubleclick');
+    assert.ok(restoreAt >= 0, 'the renderer still restores a saved view');
+    assert.ok(gesturesAt > restoreAt, 'the pan gestures install after the restore is dispatched');
+    assert.ok(doubleClickAt > restoreAt, 'the double-click handler installs after it too');
+
+    // And beside the restore's continuation rather than nested inside it, or a
+    // rejection would skip them again by another route.
+    const restoreThenAt = render.indexOf('.then(', restoreAt);
+    const continuationEnd = render.indexOf('});', restoreThenAt);
+    assert.ok(restoreThenAt > 0 && continuationEnd > restoreThenAt, 'the restore has its own continuation');
+    assert.ok(
+        gesturesAt > continuationEnd,
+        'the listeners live beside the restore continuation, not nested inside it',
+    );
+}
+
 console.log('State Animation responsiveness checks passed.');
