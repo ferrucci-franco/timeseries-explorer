@@ -108,6 +108,7 @@ async function run() {
         const workbook = loadWorkbook('mixed-content.xlsx');
         const text = sheetToCsvText(workbook, 'Mixed');
         assert(text.includes('"Smith, John","He said ""hi""",1,1.5'), `mixed-content: bad quoting: ${text}`);
+        // crlf-ok: this newline is a cell value out of the binary .xlsx, not a line ending git could rewrite.
         assert(text.includes('"Line\nbreak"'), 'mixed-content: embedded newline should stay quoted');
         assert(/café,0,42\b/.test(text), `mixed-content: formula cell should emit cached value 42: ${text}`);
         assert(/^plain,ok,1,$/m.test(text), `mixed-content: error cell should serialize empty: ${text}`);

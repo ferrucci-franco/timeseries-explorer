@@ -1442,6 +1442,10 @@ proto._confirmOversizedFile = async function(verdict, file = null) {
         title: i18n.t(verdict.titleKey || 'fileOverLimitTitle'),
         icon: '⚠️',
         className: 'modal-dialog-wide',
+        // Loading a file over the limit can take minutes and a lot of memory.
+        // A stray click beside the dialog is not consent to that: only Cancel
+        // or Escape dismiss it.
+        requireChoice: true,
         choices: [
             { value: 'cancel', text: i18n.t('cancel'), className: 'modal-btn-cancel', autoFocus: true },
             { value: 'load', text: i18n.t('fileOverLimitLoadAnyway'), className: 'modal-btn-confirm' },
@@ -3593,10 +3597,33 @@ proto.removeFile = async function(fileId) {
         if (!ok) return;
     }
 
-    // Drop the DuckDB temp table + file handle for this file's lazy data,
-    // if any. Safe no-op on eager / non-DuckDB data.
+    // Remove plots first. This invalidates lazy-detail/FFT tokens immediately,
+    // so the close button never waits behind a long query or transform.
     const pmEntry = this.plotManager.files.get(fileId);
     const lazyData = pmEntry?.data;
+    this.plotManager.removeFile(fileId);
+    this.files.delete(fileId);
+    this.derivedByFile.delete(fileId);
+    this._clearDataToolDefinitions?.(fileId);
+    this._expandedFileTransforms.delete(fileId);
+    this._clearVariableSelection();
+
+    // Reflect the close synchronously before storage cleanup can block.
+    const newActiveId = this.plotManager.activeFileId;
+    if (newActiveId) {
+        const d = this.plotManager.files.get(newActiveId)?.data;
+        if (d?.tree) this.renderVariablesTree(d.tree);
+        else this.renderVariablesTree(null);
+    } else {
+        this.renderVariablesTree(null);
+        document.getElementById('drop-zone').classList.add('active');
+    }
+    this._updateTopBar();
+    this._renderFilesList();
+    this._updateActionButtons();
+
+    // Drop the DuckDB temp table + file handle after the visible UI is gone.
+    // Safe no-op on eager / non-DuckDB data.
     if (lazyData?._duckdb?.source) {
         try { await lazyData._duckdb.source.release(lazyData); } catch (_) { /* ignore */ }
     }
@@ -3609,27 +3636,6 @@ proto.removeFile = async function(fileId) {
         }
     }
 
-    this.plotManager.removeFile(fileId);
-    this.files.delete(fileId);
-    this.derivedByFile.delete(fileId);
-    this._clearDataToolDefinitions?.(fileId);
-    this._expandedFileTransforms.delete(fileId);
-    this._clearVariableSelection();
-
-    // Switch sidebar to new active file (if any)
-    const newActiveId = this.plotManager.activeFileId;
-    if (newActiveId) {
-        const d = this.plotManager.files.get(newActiveId)?.data;
-        if (d?.tree) this.renderVariablesTree(d.tree);
-        else this.renderVariablesTree(null);
-    } else {
-        this.renderVariablesTree(null);
-        document.getElementById('drop-zone').classList.add('active');
-    }
-
-    this._updateTopBar();
-    this._renderFilesList();
-    this._updateActionButtons();
     await this._releaseQueryEngineIfIdle();
 };
 

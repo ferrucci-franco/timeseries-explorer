@@ -36,7 +36,14 @@ proto._onRelayout = function(sourcePanelId, eventData) {
         if (autorangeRequested) {
             // FFT: the relayout comes from the time sub-plot; leave the
             // spectrum axes (and manual fMin/fMax/yMin/yMax) untouched.
-            if (plot.mode === 'fft' || plot.mode === 'histogram' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral') this._autoScalePlotTimeOnly(plot);
+            if (plot.mode === 'fft') {
+                this._runWithEagerDetailLoading(
+                    sourcePanelId,
+                    () => this._autoScalePlotTimeOnly(plot),
+                );
+            } else if (plot.mode === 'histogram' || plot.mode === 'heatmap' || plot.mode === 'temporal-profile' || plot.mode === 'integral') {
+                this._autoScalePlotTimeOnly(plot);
+            }
             else this._autoScalePlot(sourcePanelId, plot);
         } else {
             const visibleRange = Array.isArray(update['xaxis.range']) ? update['xaxis.range'] : null;
@@ -319,20 +326,42 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     // each trace also breaks across its own NaN runs.
     const showMissing = plot.mode === 'timeseries' && plot.showMissingData;
     const fftMode = plot.mode === 'fft';
+    let traceBuildRange = range;
+    if (fftMode && Array.isArray(range) && range.length >= 2) {
+        const domain = this._fftDomain(plot);
+        const a = this._coerceAxisValue(range[0]);
+        const b = this._coerceAxisValue(range[1]);
+        if (domain && Number.isFinite(a) && Number.isFinite(b)) {
+            const lo = Math.min(a, b);
+            const hi = Math.max(a, b);
+            const tolerance = Math.max(Math.abs(domain.max - domain.min) * 1e-9, 1e-9);
+            if (lo <= domain.min + tolerance && hi >= domain.max - tolerance) {
+                // Autoscale restored the complete FFT time domain. Reuse the
+                // cached full overview instead of rescanning the source with a
+                // range that happens to cover every sample.
+                traceBuildRange = null;
+            }
+        }
+    }
     const missInfo = showMissing ? this._missingDataInfo(plot) : null;
     // When the view is too dense to resolve gaps, per-gap line breaks would
     // shred the downsampled trace into invisible fragments — skip them (and the
     // bands) and let the "zoom in" pill carry the message, keeping the signal
     // envelope intact. Bands/breaks return in step once the user zooms in.
     const missDense = showMissing ? this._missingViewIsDense(plot, missInfo.bandItems) : false;
-    const fftGapInfo = fftMode ? this._fftGapInfo(plot) : null;
+    // An auto-limited FFT span was already checked for finite, uniform samples.
+    // Do not rediscover line-break decorations by scanning the complete source:
+    // for decoded multi-GB audio this used to allocate/sort hundreds of millions
+    // of deltas after the small FFT itself was ready.
+    const fftSkipGlobalGaps = fftMode && this._fftShouldSkipGlobalGapScan(plot);
+    const fftGapInfo = fftMode && !fftSkipGlobalGaps ? this._fftGapInfo(plot) : null;
     const fftGapsByFile = fftGapInfo ? new Map(fftGapInfo.perFile.map(f => [f.fileId, f])) : null;
     const attachSourceX = showMissing || fftMode;
     plot.traces.forEach((t, idx) => {
-        const built = this._buildTimeTrace(t, range, plot, idx, attachSourceX ? { attachSourceX: true } : {});
+        const built = this._buildTimeTrace(t, traceBuildRange, plot, idx, attachSourceX ? { attachSourceX: true } : {});
         if (!built) return;
         if (showMissing && !missDense) this._applyLineBreaks(built, missInfo.traceIntervals.get(this._missTraceKey(t)));
-        else if (fftMode) this._applyLineBreaks(built, fftGapsByFile.get(t.fileId)?.gaps);
+        else if (fftMode && fftGapsByFile) this._applyLineBreaks(built, fftGapsByFile.get(t.fileId)?.gaps);
         xs.push(built.x);
         ys.push(built.y);
         cds.push(built.customdata ?? null);
@@ -981,7 +1010,13 @@ proto._lazyExpandedTarget = function(target, queryRange, t0, t1) {
 proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     if (!plot?.div) return Promise.resolve();
     const valid = results
-        .filter(result => result && Number.isInteger(result.idx) && plot.traces[result.idx])
+        .filter(result => {
+            if (!result || !Number.isInteger(result.idx) || !plot.traces[result.idx]) return false;
+            // A detail query may finish after another trace was removed and all
+            // following indices shifted. Never restyle the new occupant with
+            // stale x/y data from the old trace.
+            return !result.trace || plot.traces[result.idx] === result.trace;
+        })
         .sort((a, b) => a.idx - b.idx);
     if (!valid.length) return Promise.resolve();
     const xs = [];
@@ -1160,6 +1195,303 @@ proto._lazyTimeseriesTarget = function() {
     // of points from DuckDB and hand them to Plotly. Use the highest numeric
     // menu budget so "none" remains monotonic with explicit options.
     return { limit: this._maxTimeseriesDownsamplingMenuLimit(), capped: true };
+};
+
+proto._timeseriesNeedsEagerDetailLoading = function(plot) {
+    if (plot?.mode !== 'timeseries' && plot?.mode !== 'fft') return false;
+    const threshold = PlotManager.LIVE_RELAYOUT_MAX_SOURCE_POINTS || 500000;
+    return (plot.traces || []).some(trace => {
+        const data = this.files.get(trace.fileId)?.data;
+        if (!data || data._duckdb) return false;
+        const variable = data.variables?.[trace.varName];
+        const timeVar = this._getTimeVar(trace.fileId);
+        return Math.max(variable?.data?.length || 0, timeVar?.data?.length || 0) > threshold;
+    });
+};
+
+proto._setEagerDetailLoading = function(plot, loading, panelElement = null) {
+    const panelEl = panelElement || plot?.div?.closest('.layout-panel');
+    if (!panelEl) return;
+    let indicator = panelEl.querySelector('.eager-data-detail-indicator');
+    if (loading && !indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'lazy-detail-indicator eager-data-detail-indicator';
+        indicator.setAttribute('aria-live', 'polite');
+        indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text">Loading detail</span>';
+        panelEl.appendChild(indicator);
+    }
+    if (!indicator) return;
+    if (loading) {
+        const limit = Number.isFinite(this.timeseriesVisualMaxPoints)
+            ? Math.round(this.timeseriesVisualMaxPoints)
+            : PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
+        indicator.title = i18n.t('lazyDetailLoading').replace('{limit}', String(limit));
+        indicator.setAttribute('aria-label', indicator.title);
+        indicator.classList.add('active');
+    } else {
+        indicator.classList.remove('active');
+        indicator.remove();
+    }
+};
+
+proto._yieldForDetailIndicatorPaint = function() {
+    // A frame is the accurate "the indicator is on screen" signal, and chart
+    // creation and the analysis recomputes are gated on this promise so the
+    // label is visible before the main thread is blocked for seconds.
+    //
+    // A hidden document produces no frames at all: requestAnimationFrame is
+    // suspended and delayed timers are throttled (a 50 ms one can take a
+    // minute), while zero-delay ones still run. Waiting for a paint that
+    // cannot happen would strand the work and leave the panel blank until the
+    // tab is looked at again — and there is nothing on screen to wait for
+    // anyway, so hand the work straight back on a macrotask.
+    return new Promise(resolve => {
+        const hidden = typeof document !== 'undefined' && document.hidden;
+        if (hidden || typeof requestAnimationFrame !== 'function') {
+            setTimeout(resolve, 0);
+            return;
+        }
+        let settled = false;
+        const done = () => {
+            if (settled) return;
+            settled = true;
+            setTimeout(resolve, 0);
+        };
+        requestAnimationFrame(done);
+        // A visible document can still miss a frame (occluded window, a
+        // compositor that never ticks). Timers are not throttled there, so
+        // this backstop is reliable.
+        setTimeout(done, 250);
+    });
+};
+
+// Paint-then-block for an analysis whose recompute is one long synchronous
+// pass. The caller has just written its "Calculating…" status; a setTimeout(0)
+// hop is not enough to get that on screen, because the continuation can be
+// dispatched in the same event-loop turn as the DOM write and the compute then
+// blocks the main thread before any frame is produced — the label is set, and
+// the user still sees a frozen panel with the previous result.
+//
+// `runKey` names a per-plot slot holding the latest scheduled run. A newer
+// schedule (slider drag, option toggle) replaces it, so the superseded run is
+// dropped instead of computing a result nobody is waiting for.
+proto._runAnalysisAfterPaint = function(plot, runKey, isReady, work) {
+    if (!plot) return Promise.resolve();
+    const token = {};
+    plot[runKey] = token;
+    return this._yieldForDetailIndicatorPaint().then(() => {
+        if (plot[runKey] !== token || !isReady()) return;
+        plot[runKey] = null;
+        return work();
+    });
+};
+
+// The pane the range selector is drawn on. Every analysis but Curve Fit
+// reparents the panel's own time plot into its shell; Curve Fit builds its own.
+proto._analysisTimeDivForMode = function(plot, mode = plot?.mode) {
+    if (mode === 'phase2d') return plot?.phase2dFitTimeDiv || null;
+    return plot?.div || null;
+};
+
+// Whether the view this panel is about to restore came from a saved session
+// rather than from the mode the user just left. Reads once and clears, beside
+// the _pendingViewRestore it describes.
+proto._consumeSessionViewRestore = function(plot) {
+    const fromSession = plot?._viewRestoreFromSession === true;
+    if (plot) delete plot._viewRestoreFromSession;
+    return fromSession;
+};
+
+// The time extent of the panel itself, independent of what any one analysis
+// makes of the axis. Heatmap and Profile report no domain at all when the axis
+// is not a calendar — they cannot run on one — but their pane still draws a
+// time axis, and it still has to open onto the data instead of keeping the
+// zoom the previous mode left behind.
+proto._panelTimeDomain = function(plot) {
+    for (const trace of plot?.traces || []) {
+        if (!this._isVisible(trace)) continue;
+        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+        const count = times?.length || 0;
+        if (count < 2) continue;
+        // The transformed axis is sorted, so the ends are the extent.
+        const min = Number(times[0]);
+        const max = Number(times[count - 1]);
+        if (Number.isFinite(min) && Number.isFinite(max) && max > min) return { min, max };
+    }
+    return null;
+};
+
+proto._analysisTimeDomainForMode = function(plot, mode = plot?.mode) {
+    const own = this._ownAnalysisTimeDomain(plot, mode);
+    if (Number.isFinite(own?.min) && Number.isFinite(own?.max) && own.max > own.min) return own;
+    return this._panelTimeDomain(plot);
+};
+
+proto._ownAnalysisTimeDomain = function(plot, mode = plot?.mode) {
+    switch (mode) {
+        case 'fft': return this._fftDomain?.(plot);
+        case 'histogram': return this._histogramDomain?.(plot);
+        case 'heatmap': return this._calendarHeatmapDomain?.(plot);
+        case 'temporal-profile': return this._temporalProfileDomain?.(plot);
+        case 'integral': return this._integralDomain?.(plot);
+        case 'correlation': return this._correlationDomain?.(plot);
+        case 'phase2d': return this._phase2dFitDomain?.(plot);
+        default: return null;
+    }
+};
+
+// Move the time view onto whatever range the analysis settled on. Called once
+// the pane exists, because the range is decided before it is built.
+proto._applyPendingAnalysisFocus = function(plot, mode = plot?.mode) {
+    const state = this._analysisStateForMode(plot, mode);
+    if (!state?.autoRangeFocusPending) return false;
+    state.autoRangeFocusPending = false;
+    const div = this._analysisTimeDivForMode(plot, mode);
+    const domain = this._analysisTimeDomainForMode(plot, mode);
+    if (!div?._fullLayout || !domain) return false;
+    // Back to a full range (the measurement widened it): show all of it again.
+    const range = state.rangeFull
+        ? [domain.min, domain.max]
+        : this._analysisFocusViewRange(state.x1, state.x2, domain.min, domain.max);
+    if (!range) return false;
+    Plotly.relayout(div, { 'xaxis.range': range.slice(), 'xaxis.autorange': false });
+    return true;
+};
+
+// Times only the data-dependent kernel of an analysis and hands the result to
+// the auto-limit reconsider. Timing the whole recompute instead would fold in
+// Plotly.react and the options-panel rebuild — costs that do not grow with the
+// sample count — and extrapolating those linearly turned a 5 ms histogram over
+// 262k points into a projected two minutes over the full signal.
+proto._measureAnalysisKernel = function(panelId, plot, run, warnings = null) {
+    const state = this._analysisStateForMode(plot, plot?.mode);
+    // Callers seed their warning list from the pre-measurement guess before the
+    // kernel runs. Remember that so the guess can be replaced in place, rather
+    // than leaving the panel quoting a number the measurement just disproved.
+    const seededIndex = Array.isArray(warnings) && state?.autoRangeWarning
+        ? warnings.indexOf(state.autoRangeWarning)
+        : -1;
+    const startedAt = performance.now();
+    const result = run();
+    const elapsedMs = performance.now() - startedAt;
+    const superseded = this._reconsiderAutoLimitedRange(panelId, plot, elapsedMs);
+    if (!superseded && seededIndex >= 0) {
+        if (state.autoRangeWarning) warnings[seededIndex] = state.autoRangeWarning;
+        else warnings.splice(seededIndex, 1);
+    }
+    return { result, elapsedMs, superseded };
+};
+
+proto._panelIdForPlot = function(plot) {
+    for (const [id, candidate] of this.plots) {
+        if (candidate === plot) return id;
+    }
+    return null;
+};
+
+proto._runWithEagerDetailLoading = function(panelId, work) {
+    const plot = this.plots.get(panelId);
+    if (!this._timeseriesNeedsEagerDetailLoading(plot)) {
+        return Promise.resolve().then(work);
+    }
+    plot._eagerDetailLoadingCount = (plot._eagerDetailLoadingCount || 0) + 1;
+    this._setEagerDetailLoading(plot, true);
+    return this._yieldForDetailIndicatorPaint()
+        .then(work)
+        .finally(() => {
+            plot._eagerDetailLoadingCount = Math.max(0, (plot._eagerDetailLoadingCount || 1) - 1);
+            if (!plot._eagerDetailLoadingCount) this._setEagerDetailLoading(plot, false);
+        });
+};
+
+proto._plotlyModebarButtonName = function(div, target) {
+    const button = target?.closest?.('.modebar-btn');
+    if (!button || !div?.contains?.(button)) return '';
+    const direct = button.__data__?.name
+        || button.__data__?.attr
+        || button.dataset?.name
+        || button.getAttribute?.('data-name');
+    if (direct) return String(direct);
+
+    // Plotly binds its button descriptors to the DOM in most builds. Keep an
+    // index fallback for minified/distribution variants that omit __data__.
+    const domButtons = Array.from(div.querySelectorAll?.('.modebar-btn') || []);
+    const index = domButtons.indexOf(button);
+    const definitions = (div?._fullLayout?._modeBar?.buttons || []).flat(Infinity).filter(Boolean);
+    const definition = index >= 0 ? definitions[index] : null;
+    if (definition?.name) return String(definition.name);
+
+    // Last-resort tooltip fallback for the locales bundled by the app.
+    const title = String(button.getAttribute?.('data-title') || button.title || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+    if (/autoscale|auto scale|escala automatica|echelle automatique|scala automatica/.test(title)) {
+        return 'autoScale2d';
+    }
+    if (/reset axes|restablecer ejes|reinitialiser les axes|reimposta assi/.test(title)) {
+        return 'resetScale2d';
+    }
+    return '';
+};
+
+proto._isPlotlyAutoscaleModebarTarget = function(div, target) {
+    const name = this._plotlyModebarButtonName(div, target).toLowerCase();
+    return name === 'autoscale2d' || name === 'resetscale2d';
+};
+
+proto._installEagerTimeseriesAutoscaleGuards = function(panelId, plot, div) {
+    if (!div || div._eagerAutoscaleGuardsInstalled) return;
+    div._eagerAutoscaleGuardsInstalled = true;
+
+    const cancelNative = event => {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        event.stopImmediatePropagation?.();
+    };
+    const runAutoscale = event => {
+        cancelNative(event);
+        if (plot._eagerNativeAutoscalePending) return;
+        plot._eagerNativeAutoscalePending = true;
+        Promise.resolve(this._runWithEagerDetailLoading(
+            panelId,
+            () => this._autoScalePlot(panelId, plot),
+        )).finally(() => {
+            plot._eagerNativeAutoscalePending = false;
+        });
+    };
+    const nativeDoubleClickIsActive = event => (
+        event?.button === 0
+        && event.detail >= 2
+        && !event.target?.closest?.('.modebar')
+        && this._eventInsidePlotArea(div, event)
+    );
+
+    // Plotly starts its double-click autorange from the second mousedown. This
+    // guard is installed before newPlot, so the loading pill owns the first
+    // synchronous work and Plotly never begins a hidden full-range relayout.
+    div.addEventListener('mousedown', event => {
+        if (!nativeDoubleClickIsActive(event)) return;
+        plot._suppressNativeAutoscaleUntil = performance.now() + 750;
+        runAutoscale(event);
+    }, { capture: true });
+
+    // Modebar autoscale/reset is a normal click. Intercept the actual Plotly
+    // button before its handler and route it through the painted loading path.
+    div.addEventListener('click', event => {
+        if (this._isPlotlyAutoscaleModebarTarget(div, event.target)) {
+            runAutoscale(event);
+            return;
+        }
+        if (event.detail >= 2 && performance.now() < (plot._suppressNativeAutoscaleUntil || 0)) {
+            cancelNative(event);
+        }
+    }, { capture: true });
+    for (const type of ['mouseup', 'dblclick']) {
+        div.addEventListener(type, event => {
+            if (performance.now() < (plot._suppressNativeAutoscaleUntil || 0)) cancelNative(event);
+        }, { capture: true });
+    }
 };
 
 proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 'timeseries') {
@@ -2665,7 +2997,27 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     // window) fires this soon after movement stops — decoupled from the long
     // pan-mode latch, so points do not appear only when the latch expires.
     const SETTLE_MS = 150;
-    const state = { mode: null, raf: 0, endTimer: 0, settleTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null };
+    const state = { mode: null, raf: 0, endTimer: 0, settleTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null, active: false, activeTimer: 0 };
+
+    // Zoom stays Plotly's, so a mode that has to react to the whole wheel
+    // gesture cannot hook the pan latch alone — the state animation pauses
+    // playback and gives up its dynamic zoom for a zoom just as much as for a
+    // pan. This fires once per burst of wheel activity, whichever it turns out
+    // to be, and closes it on the same idle gap that ends a pan.
+    const hasGestureHooks = !!(options.onGestureStart || options.onGestureEnd);
+    const noteWheelActivity = () => {
+        if (!hasGestureHooks) return;
+        if (!state.active) {
+            state.active = true;
+            options.onGestureStart?.('wheel');
+        }
+        clearTimeout(state.activeTimer);
+        state.activeTimer = setTimeout(() => {
+            state.activeTimer = 0;
+            state.active = false;
+            options.onGestureEnd?.('wheel');
+        }, END_MS);
+    };
 
     const deltaScale = (event) => {
         if (event.deltaMode === 1) return 16;   // lines -> px (Firefox)
@@ -2759,6 +3111,7 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     };
 
     div.addEventListener('wheel', (event) => {
+        noteWheelActivity();
         // Only PAN is latched. While the latch is alive a vertical event still
         // pans (bridging the lift-and-replace). Otherwise every event is
         // re-evaluated, so a horizontal swipe starts a pan immediately — even
@@ -2866,6 +3219,111 @@ proto._installRightButtonPan = function(panelId, plot, div, options = {}) {
     }, { capture: true });
 
     div.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+};
+
+// The whole pan gesture set for a panel's own 2D plot:
+//   Middle-click: toggle Plotly's native pan dragmode (it only reacts to button 0).
+//   Right-drag:   custom pan — same reason, so the axis ranges are moved directly
+//                 on mousemove, or Plotly's zoom-box catches the drag instead and
+//                 snaps to a strange scale on release.
+//   Two-finger:   a horizontal trackpad swipe pans (see _installWheelPan).
+// Shared so every mode that owns a 2D plot offers the same gestures. The modes
+// that must commit a pan (axis sync, refetch) pass the finalize hooks; a mode
+// that has to react to the gesture itself passes onGestureStart/onGestureEnd,
+// which fire once per gesture with 'wheel' | 'drag' | 'middle'.
+//
+// The analysis modes wire their secondary panes through _installWheelPan and
+// _installRightButtonPan directly: those panes re-fit on a different pipeline
+// (relayoutRefreshMode) and have no legend menu or cursor box-zoom guard.
+proto._install2DPanGestures = function(panelId, plot, div, options = {}) {
+    if (!div || div._panGesturesBound) return;
+    div._panGesturesBound = true;
+
+    div.addEventListener('mousedown', (e) => {
+        if (e.button === 0
+            && plot.mode === 'timeseries'
+            && div?._fullLayout?.dragmode !== 'pan'
+            && this._eventInsidePlotArea(div, e)) {
+            this._beginCursorBoxZoomSuppress(panelId, plot);
+        }
+        if (e.button === 1) {
+            e.preventDefault();
+            options.onGestureStart?.('middle');
+            Plotly.relayout(div, { dragmode: 'pan' });
+            document.addEventListener('mouseup', () => {
+                Plotly.relayout(div, { dragmode: 'zoom' });
+                options.onGestureEnd?.('middle');
+            }, { once: true });
+            return;
+        }
+        if (e.button !== 2) return;
+        const fl = div._fullLayout;
+        const xa = fl?.xaxis, ya = fl?.yaxis;
+        if (!xa || !ya || !xa._length || !ya._length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        options.onGestureStart?.('drag');
+        const startX = e.clientX, startY = e.clientY;
+        const x0 = xa.range.slice(), y0 = ya.range.slice();
+        const y2a = plot.timeseriesY2Enabled ? fl?.yaxis2 : null;
+        const y20 = y2a?.range ? y2a.range.slice() : null;
+        const xNumeric0 = x0.map(value => this._coerceAxisValue(value));
+        const yNumeric0 = y0.map(value => Number(value));
+        const y2Numeric0 = y20?.map(value => Number(value)) || null;
+        if (!xNumeric0.every(Number.isFinite) || !yNumeric0.every(Number.isFinite)) {
+            options.onGestureEnd?.('drag');
+            return;
+        }
+        const xLen = xa._length, yLen = ya._length;
+        const isDateXAxis = xa.type === 'date';
+        let latestXRange = x0;
+        const formatXRange = (range) => isDateXAxis
+            ? range.map(value => new Date(value).toISOString())
+            : range;
+        const onMove = (mv) => {
+            const xSpan = xNumeric0[1] - xNumeric0[0];
+            const ySpan = yNumeric0[1] - yNumeric0[0];
+            const dx = -((mv.clientX - startX) / xLen) * xSpan;
+            const dy =  ((mv.clientY - startY) / yLen) * ySpan;
+            latestXRange = formatXRange([xNumeric0[0] + dx, xNumeric0[1] + dx]);
+            plot._relayoutLiveOnly = true;
+            const update = {
+                'xaxis.range': latestXRange,
+                'yaxis.range': [yNumeric0[0] + dy, yNumeric0[1] + dy],
+            };
+            if (y2Numeric0?.every(Number.isFinite) && y2a?._length) {
+                const y2Span = y2Numeric0[1] - y2Numeric0[0];
+                const dy2 = ((mv.clientY - startY) / y2a._length) * y2Span;
+                update['yaxis2.range'] = [y2Numeric0[0] + dy2, y2Numeric0[1] + dy2];
+            }
+            if (plot.mode === 'timeseries' && this._canLiveRefreshTimeseriesRelayout(plot, latestXRange)) {
+                this._scheduleLiveRelayoutingRefresh(panelId, plot, latestXRange, { allowRelayoutLiveOnly: true });
+            }
+            Plotly.relayout(div, update).finally(() => {
+                if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: latestXRange, lightweight: true });
+            });
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            plot._relayoutLiveOnly = false;
+            options.dragFinalize?.(latestXRange);
+            options.onGestureEnd?.('drag');
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }, { capture: true });
+
+    div.addEventListener('contextmenu', (e) => {
+        if (this._handlePlotLegendContextMenu(panelId, plot, div, e)) return;
+        e.preventDefault();
+    });
+
+    this._installWheelPan(panelId, plot, div, {
+        finalize: options.wheelFinalize,
+        onGestureStart: options.onGestureStart,
+        onGestureEnd: options.onGestureEnd,
+    });
 };
 
 proto._installCursorHandlers = function(panelId, plot) {
@@ -3653,7 +4111,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         button.disabled = !this._hasContent(plot);
         button.addEventListener('click', (event) => {
             event.stopPropagation();
-            this._autoScalePlot(panelId, this.plots.get(panelId));
+            this._runWithEagerDetailLoading(
+                panelId,
+                () => this._autoScalePlot(panelId, this.plots.get(panelId)),
+            );
         });
         return button;
     };
@@ -3671,7 +4132,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         button.disabled = !this._hasContent(plot);
         button.addEventListener('click', (event) => {
             event.stopPropagation();
-            this._autoScalePlotAxis(panelId, this.plots.get(panelId), axis);
+            this._runWithEagerDetailLoading(
+                panelId,
+                () => this._autoScalePlotAxis(panelId, this.plots.get(panelId), axis),
+            );
         });
         return button;
     };

@@ -134,7 +134,12 @@ function median(values) {
 
 export function inferTemporalProfileStepMs(timestamps = []) {
     const sorted = [];
-    for (let index = 0; index < (Number(timestamps.length) || 0); index++) {
+    // A local sampling step needs consecutive observations, not the complete
+    // recording. Stop once enough finite points are available; collecting and
+    // sorting a 160M-sample audio timeline used to block profile startup.
+    for (let index = 0;
+        index < (Number(timestamps.length) || 0) && sorted.length <= STEP_SAMPLE_LIMIT;
+        index++) {
         const value = epochMs(timestamps[index]);
         if (Number.isFinite(value)) sorted.push(value);
     }

@@ -47,6 +47,7 @@ proto._createStateAnimChart = function(panelId, panelEl) {
     // mount (split-window re-render reuses the plot state without going
     // through _destroyChart).
     this._stopAnim(plot);
+    this._cleanupStateAnimDocListeners(plot);
     if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
     if (plot.div) { try { Plotly.purge(plot.div); } catch (_) {} plot.div = null; }
     delete plot._arrowXIdx;
@@ -133,66 +134,117 @@ proto._createStateAnimChart = function(panelId, panelEl) {
     if (is3D) controls.querySelector('.sa-toggle-dzoom').style.display = 'none';
     panelEl.appendChild(container);
 
-    // Get data
-    const d = this.files.get(slots.fileId)?.data;
-    const timeVar = this._getTimeVar(slots.fileId);
-    if (!d || !timeVar) return;
-    const stateTimes = this._getTransformedTimeDataForVariable(slots.fileId, slots.x[0]);
-    const stateLengths = slots.x
-        .map(name => this._getTransformedVariableData(slots.fileId, name)?.length || 0)
-        .filter(Boolean);
-    const nPts = Math.min(stateTimes.length, ...stateLengths);
-    if (!nPts) return;
-
-    // Set scrubber range
     const scrubber = controls.querySelector('.sa-scrubber');
-    scrubber.max = nPts - 1;
+    const renderToken = (plot._stateAnimRenderToken || 0) + 1;
+    plot._stateAnimRenderToken = renderToken;
+    this._setEagerDetailLoading?.(plot, true, panelEl);
+    // The container and all controls are already mounted. Yield before reading
+    // or plotting data so close/delete and toolbar buttons remain responsive.
+    Promise.resolve(this._yieldForDetailIndicatorPaint?.())
+        .then(async () => {
+            if (plot._stateAnimRenderToken !== renderToken || plot.div !== div || !container.isConnected) return;
+            const d = this.files.get(slots.fileId)?.data;
+            const timeVar = this._getTimeVar(slots.fileId);
+            if (!d || !timeVar) return;
+            const stateTimes = this._getTransformedTimeDataForVariable(slots.fileId, slots.x[0]);
+            const stateLengths = slots.x
+                .map(name => this._getTransformedVariableData(slots.fileId, name)?.length || 0)
+                .filter(Boolean);
+            const nPts = Math.min(stateTimes.length, ...stateLengths);
+            if (!nPts) return;
+            scrubber.max = nPts - 1;
 
-    // Build initial Plotly chart
-    const { traces, layout } = this._buildPlotData(plot);
-    const config = this._getPlotlyConfig({ displayModeBar: false });
-    Plotly.newPlot(div, traces, layout, config).then(() => {
-        const restoreAndDecorate = () => {
-            if (restoreView) return this._restorePlotView(plot, restoreView);
-            return Promise.resolve();
-        };
-        restoreAndDecorate().then(() => {
-            // Add bold axis lines + arrowheads for 3D
-            if (is3D) this._add3DAxisDecorations(plot);
-            this._stateAnimUpdateFrame(plot, Math.min(plot.animFrame || 0, nPts - 1));
-            this._updateCameraOverlay(plot);
-        });
-        div.on('plotly_relayout', () => this._updateCameraOverlay(plot));
-        div.on('plotly_afterplot', () => this._updateCameraOverlay(plot));
-        // Resize observer
-        let timer;
-        const ro = new ResizeObserver(() => {
-            clearTimeout(timer);
-            timer = setTimeout(() => Plotly.Plots.resize(div), 50);
-        });
-        ro.observe(panelEl);
-        plot.resizeObserver = ro;
-
-        // Auto-pause on drag: pause animation while user interacts with the plot
-        let wasPlaying = false;
-        div.addEventListener('mousedown', () => {
-            if (plot.animPlaying) {
-                wasPlaying = true;
-                this._stopAnim(plot);
+            const { traces, layout } = this._buildPlotData(plot);
+            const config = this._getPlotlyConfig({ displayModeBar: false });
+            await Plotly.newPlot(div, traces, layout, config);
+            if (plot._stateAnimRenderToken !== renderToken || plot.div !== div || !container.isConnected) return;
+            // Restoring the view runs BESIDE the listener setup below, never
+            // ahead of it. It is a Plotly.relayout, so it can reject — on a
+            // range the layout will not take, or on a div purged underneath it
+            // — and awaiting it inline carried the pan gestures, the double
+            // click and the zoom release down with it. The panel then looked
+            // exactly like the bug those gestures were added to fix, with
+            // nothing to retry it. A view that fails to restore costs a zoom;
+            // listeners that fail to install cost the whole mode.
+            Promise.resolve(restoreView ? this._restorePlotView(plot, restoreView) : null)
+                .catch(error => console.warn('[state-animation] view restore failed:', error))
+                .then(() => {
+                    if (plot._stateAnimRenderToken !== renderToken || plot.div !== div) return;
+                    if (is3D) this._add3DAxisDecorations(plot);
+                    this._stateAnimUpdateFrame(plot, Math.min(plot.animFrame || 0, nPts - 1));
+                    this._updateCameraOverlay(plot);
+                });
+            // Interaction handling comes from main (PR #32): release the
+            // dynamic zoom when the USER changes the view, autoscale on
+            // double click, and give the 2D animation the same pan gestures
+            // every other 2D plot has. It lives inside this branch's deferred
+            // render instead of replacing it -- the token guard and the
+            // Loading-detail indicator are what keep a huge series from
+            // freezing the panel before any of these listeners exist.
+            div.on('plotly_relayout', (ed) => {
+                // A drag-driven view change (box zoom, Plotly's own pan dragmode,
+                // its scroll zoom) reports the bracket keys; our per-frame update
+                // writes the array form, so this reads the user and not ourselves.
+                if (ed && (ed['xaxis.range[0]'] !== undefined || ed['yaxis.range[0]'] !== undefined)) {
+                    this._stateAnimReleaseDynamicZoom(plot);
+                }
+                this._updateCameraOverlay(plot);
+            });
+            div.on('plotly_afterplot', () => this._updateCameraOverlay(plot));
+            div.on('plotly_doubleclick', () => {
+                // Match the Home button (padded full extent) rather than Plotly's
+                // plain autorange, which lands on a slightly different view.
+                this._autoScalePlot(panelId, plot);
+                return false;
+            });
+            // The same pan gestures as every other 2D plot. 3D is left alone: the
+            // gl3d orbit already owns the trackpad there, as in phase3d. No
+            // finalize -- the animation holds all of its data in memory, so a pan
+            // has nothing to refetch or sync.
+            if (!is3D) {
+                this._install2DPanGestures(panelId, plot, div, {
+                    onGestureStart: (kind) => {
+                        this._stateAnimReleaseDynamicZoom(plot);
+                        // Mouse gestures are already paused by the mousedown below,
+                        // which also covers a plain box zoom; only the wheel needs
+                        // its own pause.
+                        if (kind === 'wheel') this._stateAnimBeginInteraction(plot);
+                    },
+                    onGestureEnd: (kind) => {
+                        if (kind === 'wheel') this._stateAnimEndInteraction(panelId, plot);
+                    },
+                });
             }
-        });
-        document.addEventListener('mouseup', () => {
-            if (wasPlaying) {
-                wasPlaying = false;
+
+            let timer;
+            const ro = new ResizeObserver(() => {
+                clearTimeout(timer);
+                timer = setTimeout(() => Plotly.Plots.resize(div), 50);
+            });
+            ro.observe(panelEl);
+            plot.resizeObserver = ro;
+
+            // Auto-pause on drag: pause the animation while the user works on the
+            // plot. Capture phase, because the right-button pan installed above
+            // stops propagation before a bubble listener would ever see the
+            // mousedown.
+            this._cleanupStateAnimDocListeners(plot);
+            const onInteractionUp = () => this._stateAnimEndInteraction(panelId, plot);
+            div.addEventListener('mousedown', () => this._stateAnimBeginInteraction(plot), { capture: true });
+            document.addEventListener('mouseup', onInteractionUp);
+            plot._stateAnimDocListeners = { up: onInteractionUp };
+
+            if (plot.autoPlayOnRender && plot.div === div) {
+                plot.autoPlayOnRender = false;
                 this._stateAnimTogglePlay(panelId);
             }
+        })
+        .catch(error => console.warn('[state-animation] render failed:', error))
+        .finally(() => {
+            if (plot._stateAnimRenderToken === renderToken) {
+                this._setEagerDetailLoading?.(plot, false, panelEl);
+            }
         });
-
-        if (plot.autoPlayOnRender && plot.div === div) {
-            plot.autoPlayOnRender = false;
-            this._stateAnimTogglePlay(panelId);
-        }
-    });
 
     // Bind controls
     const playBtn = controls.querySelector('.sa-play-btn');
@@ -240,6 +292,29 @@ proto._createStateAnimChart = function(panelId, panelEl) {
     this._refreshActionBtns(panelId);
 };
 
+proto._stateAnimVisualData = function(plot) {
+    const slots = plot.stateSlots;
+    const d = this.files.get(slots.fileId)?.data;
+    if (!d) return { x: [], y: [], z: null };
+    const is3D = slots.x.length >= 3;
+    const xAll = d.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : [];
+    const yAll = d.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : [];
+    const zAll = is3D && d.variables[slots.x[2]]
+        ? this._getTransformedVariableData(slots.fileId, slots.x[2])
+        : null;
+    const visual = this._buildPhaseVisualSeries(zAll ? [xAll, yAll, zAll] : [xAll, yAll]);
+    return { x: visual[0] || [], y: visual[1] || [], z: zAll ? (visual[2] || []) : null };
+};
+
+proto._stateAnimPartialVisual = function(seriesList, endExclusive) {
+    const available = Math.min(...seriesList.map(series => series?.length || 0));
+    const length = Math.max(0, Math.min(available, Math.trunc(Number(endExclusive) || 0)));
+    if (!length) return seriesList.map(() => []);
+    const target = this._phaseTargetInfo?.().limit || 4000;
+    const indexes = this._downsampleStrideIndexes(length, target);
+    return seriesList.map(series => this._pickIndexed(series, indexes));
+};
+
 proto._buildStateAnimTraces = function(plot) {
     // Static traces: full trajectory (dim) + current partial trace + markers
     const slots = plot.stateSlots;
@@ -247,9 +322,10 @@ proto._buildStateAnimTraces = function(plot) {
     if (!d) return [];
     const is3D = slots.x.length >= 3;
 
-    const xData = d.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : [];
-    const yData = d.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : [];
-    const zData = is3D && d.variables[slots.x[2]] ? this._getTransformedVariableData(slots.fileId, slots.x[2]) : null;
+    const visual = this._stateAnimVisualData(plot);
+    const xData = visual.x;
+    const yData = visual.y;
+    const zData = visual.z;
 
     const traces = [];
 
@@ -308,10 +384,10 @@ proto._buildStateAnimLayout = function(plot) {
         const yTitleFont = { color: '#2ecc71', size: 13, family: 'system-ui, sans-serif', weight: 700 };
         const zTitleFont = { color: '#3498db', size: 13, family: 'system-ui, sans-serif', weight: 700 };
         // Explicit ranges including 0 so origin-anchored axis lines don't expand autorange.
-        const d = this.files.get(slots.fileId)?.data;
-        const xRange = this._rangeIncluding0([d?.variables[slots.x[0]] ? this._getTransformedVariableData(slots.fileId, slots.x[0]) : []]);
-        const yRange = this._rangeIncluding0([d?.variables[slots.x[1]] ? this._getTransformedVariableData(slots.fileId, slots.x[1]) : []]);
-        const zRange = this._rangeIncluding0([d?.variables[slots.x[2]] ? this._getTransformedVariableData(slots.fileId, slots.x[2]) : []]);
+        const visual = this._stateAnimVisualData(plot);
+        const xRange = this._rangeIncluding0([visual.x]);
+        const yRange = this._rangeIncluding0([visual.y]);
+        const zRange = this._rangeIncluding0([visual.z || []]);
         return {
             paper_bgcolor: bg, plot_bgcolor: bg,
             font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
@@ -370,6 +446,9 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
     if (!nPts) return;
     frame = Math.max(0, Math.min(nPts - 1, frame));
     plot.animFrame = frame;
+    const renderNow = performance.now();
+    if (plot.animPlaying && plot._lastPlotlyUpdate && renderNow - plot._lastPlotlyUpdate < 80) return;
+    plot._lastPlotlyUpdate = renderNow;
 
     const cfg = plot.stateConfig;
 
@@ -383,9 +462,12 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
         const traces = plot.div.data;
 
         // Trace 1: partial trajectory
-        traces[1].x = cfg.showTrace ? xAll.slice(0, frame + 1) : [];
-        traces[1].y = cfg.showTrace ? yAll.slice(0, frame + 1) : [];
-        traces[1].z = cfg.showTrace ? zAll.slice(0, frame + 1) : [];
+        const partial = cfg.showTrace
+            ? this._stateAnimPartialVisual([xAll, yAll, zAll], frame + 1)
+            : [[], [], []];
+        traces[1].x = partial[0];
+        traces[1].y = partial[1];
+        traces[1].z = partial[2];
 
         // Trace 2: current point marker
         traces[2].x = [xNow]; traces[2].y = [yNow]; traces[2].z = [zNow];
@@ -431,21 +513,16 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
             }
         }
 
-        // Throttled redraw during animation (~12fps) to leave room for mouse events.
-        // When not animating (scrubber, checkbox toggle), always update immediately.
-        const now3D = performance.now();
-        const throttle = plot.animPlaying ? 80 : 0;
-        if (!plot._lastPlotlyUpdate || now3D - plot._lastPlotlyUpdate >= throttle) {
-            plot._lastPlotlyUpdate = now3D;
-
-            Plotly.redraw(plot.div);
-        }
+        Plotly.redraw(plot.div);
 
     } else {
         // ── 2D path ──
         // Batch restyle for traces 1 (partial) and 2 (marker)
-        const partialX = cfg.showTrace ? xAll.slice(0, frame + 1) : [];
-        const partialY = cfg.showTrace ? yAll.slice(0, frame + 1) : [];
+        const partial = cfg.showTrace
+            ? this._stateAnimPartialVisual([xAll, yAll], frame + 1)
+            : [[], []];
+        const partialX = partial[0];
+        const partialY = partial[1];
         Plotly.restyle(plot.div, {
             x: [partialX, [xNow]],
             y: [partialY, [yNow]],
@@ -515,9 +592,10 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
             // very different magnitudes.
             if (plot._xAbsMax === undefined) {
                 let xm = 0, ym = 0;
-                for (let i = 0; i < xAll.length; i++) {
-                    const ax = Math.abs(xAll[i]); if (ax > xm) xm = ax;
-                    const ay = Math.abs(yAll[i]); if (ay > ym) ym = ay;
+                const visual = this._stateAnimVisualData(plot);
+                for (let i = 0; i < visual.x.length; i++) {
+                    const ax = Math.abs(visual.x[i]); if (ax > xm) xm = ax;
+                    const ay = Math.abs(visual.y[i]); if (ay > ym) ym = ay;
                 }
                 plot._xAbsMax = xm || 1;
                 plot._yAbsMax = ym || 1;
@@ -676,9 +754,9 @@ proto._stateAnimTogglePlay = function(panelId) {
             const currentSimTime = timeData[plot.animFrame];
             const targetSimTime = currentSimTime + simTimeDelta;
 
-            // Find next frame
-            let nextFrame = plot.animFrame;
-            while (nextFrame < nPts - 1 && timeData[nextFrame] < targetSimTime) nextFrame++;
+            // Jump to the target time in O(log N). A linear walk can traverse
+            // hundreds of thousands of audio samples in one animation frame.
+            let nextFrame = Math.max(plot.animFrame + 1, this._lowerBound(timeData, targetSimTime));
 
             if (nextFrame >= nPts - 1) {
                 // Loop back to start
@@ -691,6 +769,50 @@ proto._stateAnimTogglePlay = function(panelId) {
         };
         plot.animRAF = requestAnimationFrame(step);
     }
+};
+
+// Playback stands still for the length of a pan/zoom gesture. The 2D frame
+// update restyles and relayouts on every animation frame, which would fight
+// the gesture's own relayout stream — and a moving target is not what anyone
+// is trying to zoom into anyway. Counted, because gestures overlap: a wheel
+// pan can start while a mouse button is still down.
+proto._stateAnimBeginInteraction = function(plot) {
+    if (!plot) return;
+    plot._animInteractions = (plot._animInteractions || 0) + 1;
+    if (plot._animInteractions > 1) return;
+    if (!plot.animPlaying) return;
+    plot._animResumeAfterInteraction = true;
+    this._stopAnim(plot);
+};
+
+proto._stateAnimEndInteraction = function(panelId, plot) {
+    if (!plot?._animInteractions) return;
+    plot._animInteractions -= 1;
+    if (plot._animInteractions > 0) return;
+    if (!plot._animResumeAfterInteraction) return;
+    plot._animResumeAfterInteraction = false;
+    if (plot.div) this._stateAnimTogglePlay(panelId);
+};
+
+// "Zoom on x" re-centres both axes on the current point every frame, so it owns
+// the view outright: a pan or a zoom would be overwritten on the very next
+// frame. The user taking the view wins, and the toggle steps aside visibly
+// rather than silently fighting. Written straight through instead of dispatched
+// as a change event — that handler resets the view, which would undo the
+// gesture that got us here.
+proto._stateAnimReleaseDynamicZoom = function(plot) {
+    if (!plot?.stateConfig?.dynamicZoom) return;
+    plot.stateConfig.dynamicZoom = false;
+    const box = plot.div?.closest('.state-anim-container')?.querySelector('.sa-chk-dzoom');
+    if (box) box.checked = false;
+};
+
+proto._cleanupStateAnimDocListeners = function(plot) {
+    if (!plot?._stateAnimDocListeners) return;
+    document.removeEventListener('mouseup', plot._stateAnimDocListeners.up);
+    plot._stateAnimDocListeners = null;
+    plot._animInteractions = 0;
+    plot._animResumeAfterInteraction = false;
 };
 
 proto._stopAnim = function(plot) {

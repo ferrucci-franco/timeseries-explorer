@@ -1,3 +1,11 @@
+# Line endings are decided here rather than by each contributor's core.autocrlf.
+# Several scripts/test-*.mjs read a repo file off disk and match multi-line
+# patterns against it; written against LF, they either failed outright on a CRLF
+# checkout or — worse — silently matched the wrong span and passed. Pinning the
+# working tree to LF everywhere means no test has to think about it. Later rules
+# win, so the two exceptions below still override this.
+* text=auto eol=lf
+
 /.gitattributes text eol=lf
 *.sh text eol=lf
 

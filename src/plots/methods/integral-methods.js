@@ -269,8 +269,13 @@ proto._createIntegralChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureIntegralState(plot);
+    this._autoLimitAnalysisRange(plot, state, 'integral', { initial: true });
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
+    // Opening an analysis shows the whole signal, or the window around the
+    // range it cut for itself — never whatever zoom the previous mode happened
+    // to be sitting at. A saved session view outranks both.
+    if (!this._consumeSessionViewRestore(plot)) state.autoRangeFocusPending = true;
 
     const placeholder = panelEl.querySelector('.layout-panel-placeholder');
     if (placeholder) placeholder.style.display = 'none';
@@ -381,7 +386,11 @@ proto._createIntegralChart = function(panelId, panelEl) {
     ]).then(() => {
         this._refreshActionBtns(panelId);
         const viewPromise = restoreView ? this._restorePlotView(plot, restoreView) : Promise.resolve();
-        Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
+        Promise.resolve(viewPromise).then(() => {
+            this._refreshTimeseriesVisuals(panelId, plot);
+            // After any restored view is applied, so the focus is not undone.
+            this._applyPendingAnalysisFocus(plot);
+        });
         this._installIntegralPlotHandlers(panelId, plot);
         this._installCursorHandlers?.(panelId, plot);
         this._installIntegralSelectionHandlers(panelId, plot);
@@ -406,7 +415,9 @@ proto._createIntegralChart = function(panelId, panelEl) {
 };
 
 proto._buildIntegralTimeTraces = function(plot) {
-    const built = plot.traces.map((trace, index) => this._buildTimeTrace(trace, null, plot, index)).filter(Boolean);
+    const state = this._ensureIntegralState(plot);
+    const visualRange = state.autoRangeWarning ? this._activeIntegralRange(plot) : null;
+    const built = plot.traces.map((trace, index) => this._buildTimeTrace(trace, visualRange, plot, index)).filter(Boolean);
     return this._applyIntegralLegendUnit(plot, built);
 };
 
@@ -538,7 +549,7 @@ proto._integralDomain = function(plot) {
         const values = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (values?.length) arrays.push(values);
     }
-    const extent = this._finiteExtent(arrays);
+    const extent = this._finiteSortedExtent(arrays);
     return extent ? { min: extent.min, max: extent.max } : null;
 };
 
@@ -641,6 +652,8 @@ proto._installIntegralSelectionHandlers = function(panelId, plot) {
             hi = dragging.startHi + delta;
         }
         if (lo > hi) [lo, hi] = [hi, lo];
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
         state.x1 = Math.max(domain.min, Math.min(domain.max, lo));
         state.x2 = Math.max(domain.min, Math.min(domain.max, hi));
         this._updateIntegralSelectionShapes(panelId, plot);
@@ -662,6 +675,8 @@ proto._setIntegralRangeMode = function(panelId, full) {
     if (!plot) return;
     const state = this._ensureIntegralState(plot);
     if (state.rangeFull === full) return;
+    state.autoRangeWarning = null;
+    state.autoRangeLimited = false;
     state.rangeFull = full;
     if (!full) {
         const axis = plot.div?._fullLayout?.xaxis;
@@ -738,6 +753,8 @@ proto._resetIntegralView = function(panelId) {
     if (!plot?.div) return;
     const state = this._ensureIntegralState(plot);
     state.rangeFull = true;
+    state.autoRangeLimited = false;
+    state.autoRangeWarning = null;
     state.x1 = null;
     state.x2 = null;
     this._updateIntegralSelectionShapes(panelId, plot);
@@ -831,9 +848,39 @@ proto._scheduleIntegralRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.integralDiv || plot.mode !== 'integral') return;
     clearTimeout(plot._integralRecomputeTimer);
-    const run = () => this._recomputeIntegral(panelId, plot);
+    const run = () => {
+        const state = this._ensureIntegralState(plot);
+        const adjusted = this._autoLimitAnalysisRange(plot, state, 'integral');
+        if (adjusted) this._updateIntegralSelectionShapes(panelId, plot);
+        this._setIntegralStatus(plot, text('integralCalculating'), [], 'loading', []);
+        this._setIntegralComputing(plot, true);
+        this._runAnalysisAfterPaint(
+            plot,
+            '_integralRecomputeRun',
+            () => plot.mode === 'integral' && !!plot.integralDiv,
+            () => this._recomputeIntegral(panelId, plot),
+        );
+    };
     if (options.immediate) run();
     else plot._integralRecomputeTimer = setTimeout(run, INTEGRAL_RECOMPUTE_DEBOUNCE_MS);
+};
+
+proto._integralSeriesForTrace = function(trace, range = null) {
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [];
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName) || [];
+    const length = Math.min(times.length || 0, values.length || 0);
+    if (!length || !range) return { times, values };
+    let [lower, upper] = range;
+    if (lower > upper) [lower, upper] = [upper, lower];
+    // Keep one neighbour on each side. The integral kernel clips those edge
+    // segments to the exact requested range, preserving interpolation and the
+    // nominal-step estimate without scanning the rest of the source.
+    const start = Math.max(0, Math.min(length, this._lowerBound(times, lower)) - 1);
+    const end = Math.max(start, Math.min(length, this._upperBound(times, upper) + 1));
+    return {
+        times: times.slice(start, end),
+        values: values.slice(start, end),
+    };
 };
 
 proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId)) {
@@ -842,7 +889,7 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
     plot._integralToken = token;
     const state = this._ensureIntegralState(plot);
     const range = state.rangeFull ? null : this._activeIntegralRange(plot);
-    const warnings = [];
+    const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
     const notes = [];
     const models = [];
 
@@ -859,17 +906,16 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             lazy.push({ trace, traceIndex, name, base });
             continue;
         }
+        const selected = this._integralSeriesForTrace(trace, range);
         eager.push({
             trace, traceIndex, name, base,
-            times: this._getTransformedTimeDataForVariable(trace.fileId, trace.varName) || [],
-            values: this._getTransformedVariableData(trace.fileId, trace.varName) || [],
+            times: selected.times,
+            values: selected.values,
         });
     }
 
-    if (lazy.length) this._setIntegralComputing(plot, true);
     const lazyByTrace = await this._queryLazyIntegralDays(plot, lazy, state, range, warnings);
     if (plot._integralToken !== token) return;
-    this._setIntegralComputing(plot, false);
 
     // `discard-day-all` needs every signal's holes before any total can be
     // computed, so that all bars end up integrating exactly the same days. The
@@ -891,20 +937,26 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
 
     let assumedSeconds = false;
     let indexAxis = false;
-    for (const candidate of eager) {
-        const params = this._integralKernelParams(state, candidate, range, sharedExcludedDays);
-        const result = computeDefiniteIntegral(candidate.values, params.time, params.options);
-        if (candidate.base.assumed) assumedSeconds = true;
-        if (candidate.base.kind === 'index') indexAxis = true;
-        models.push({
-            trace: candidate.trace,
-            traceIndex: candidate.traceIndex,
-            name: candidate.name,
-            unit: this._integralValueUnit(candidate.trace),
-            base: candidate.base,
-            result,
-        });
-    }
+    // Measured over the real quadrature, before anything is drawn: if this says
+    // the full range is affordable after all, the reconsider widens it and
+    // reschedules, and this pass's output is superseded.
+    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+        for (const candidate of eager) {
+            const params = this._integralKernelParams(state, candidate, range, sharedExcludedDays);
+            const result = computeDefiniteIntegral(candidate.values, params.time, params.options);
+            if (candidate.base.assumed) assumedSeconds = true;
+            if (candidate.base.kind === 'index') indexAxis = true;
+            models.push({
+                trace: candidate.trace,
+                traceIndex: candidate.traceIndex,
+                name: candidate.name,
+                unit: this._integralValueUnit(candidate.trace),
+                base: candidate.base,
+                result,
+            });
+        }
+    }, warnings);
+    if (measured.superseded) return;
     for (const candidate of lazy) {
         const entry = lazyByTrace.get(candidate.trace);
         if (!entry) continue;
@@ -1021,6 +1073,7 @@ proto._recomputeIntegral = async function(panelId, plot = this.plots.get(panelId
             : text(ready.length === 1 ? 'integralStatusOne' : 'integralStatusMany')
                 .replace('{count}', String(ready.length))
                 .replace('{time}', formatAxisDuration(ready[0], ready[0].result.coveredTime));
+    this._setIntegralComputing(plot, false);
     this._setIntegralStatus(plot, summary, warnings, 'ready', notes);
 };
 
@@ -1530,6 +1583,8 @@ proto._renderIntegralOptionsPanel = function(panelId, plot) {
         input.addEventListener('change', () => {
             let value = calendar ? utcInputMs(input.value) : Number(input.value);
             if (Number.isFinite(value) && domain) value = Math.max(domain.min, Math.min(domain.max, value));
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = Number.isFinite(value) ? value : null;
             this._updateIntegralSelectionShapes(panelId, plot);
             this._scheduleIntegralRecompute(panelId);
@@ -1546,6 +1601,8 @@ proto._renderIntegralOptionsPanel = function(panelId, plot) {
         if (Number.isFinite(activeRange[index])) slider.value = String(activeRange[index]);
         slider.addEventListener('input', () => {
             const number = Number(slider.value);
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = Number.isFinite(number) ? number : null;
             this._updateIntegralSelectionShapes(panelId, plot);
         });

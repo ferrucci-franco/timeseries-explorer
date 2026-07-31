@@ -195,6 +195,7 @@ class ToolbarHarness {
     _plotSupportsCursors() { return true; }
     _anyCursorEnabled(plot) { return !!(plot?.cursors?.enabled || (plot?.mode === 'fft' && plot?.cursorsSpectrum?.enabled)); }
     _autoScalePlot(panelId, plot) { this.autoscaleCalls.push({ panelId, plot }); }
+    _runWithEagerDetailLoading(_panelId, work) { return work(); }
     _dismissModeChangeWarning() {}
     _showModeChangeWarning(panelId, mode) { this.warnings.push({ panelId, mode }); }
     _setMode(panelId, mode, stateAnimDim, options) {

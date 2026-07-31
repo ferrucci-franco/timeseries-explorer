@@ -283,6 +283,7 @@ proto._defaultCalendarHeatmapState = function() {
         optionsVisible: true,
         timeSeriesHidden: false,
         rangeFull: true,
+        autoRangeLimited: false,
         x1: null,
         x2: null,
         calendarMode: 'week-day',
@@ -312,6 +313,7 @@ proto._normalizeCalendarHeatmapState = function(raw = {}) {
         rangeFull: raw.rangeFull !== undefined
             ? !!raw.rangeFull
             : !(hasFinite(raw.x1) || hasFinite(raw.x2)),
+        autoRangeLimited: raw.autoRangeLimited === true,
         x1: finiteOrNull(raw.x1),
         x2: finiteOrNull(raw.x2),
         calendarMode: HEATMAP_CALENDAR_MODES.has(raw.calendarMode) ? raw.calendarMode : defaults.calendarMode,
@@ -405,8 +407,13 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureCalendarHeatmapState(plot);
+    this._autoLimitAnalysisRange(plot, state, 'heatmap', { initial: true });
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
+    // Opening an analysis shows the whole signal, or the window around the
+    // range it cut for itself — never whatever zoom the previous mode happened
+    // to be sitting at. A saved session view outranks both.
+    if (!this._consumeSessionViewRestore(plot)) state.autoRangeFocusPending = true;
 
     const placeholder = panelEl.querySelector('.layout-panel-placeholder');
     if (placeholder) placeholder.style.display = 'none';
@@ -525,6 +532,8 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
                 });
             }
             this._refreshTimeseriesVisuals(panelId, plot);
+            // After any restored view is applied, so the focus is not undone.
+            this._applyPendingAnalysisFocus(plot);
         });
         this._installCalendarHeatmapPlotHandlers(panelId, plot);
         // Cursor capture handlers must be registered before selection handlers,
@@ -565,8 +574,10 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
 };
 
 proto._buildCalendarHeatmapTimeTraces = function(plot) {
+    const state = this._ensureCalendarHeatmapState(plot);
+    const visualRange = state.autoRangeWarning ? this._activeCalendarHeatmapRange(plot) : null;
     return (plot?.traces || [])
-        .map((trace, index) => this._buildTimeTrace(trace, null, plot, index))
+        .map((trace, index) => this._buildTimeTrace(trace, visualRange, plot, index))
         .filter(Boolean);
 };
 
@@ -701,7 +712,7 @@ proto._calendarHeatmapDomain = function(plot) {
         const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (times?.length) arrays.push(times);
     }
-    const extent = this._finiteExtent(arrays);
+    const extent = this._finiteSortedExtent(arrays);
     return extent ? { min: extent.min, max: extent.max } : null;
 };
 
@@ -810,6 +821,8 @@ proto._installCalendarHeatmapSelectionHandlers = function(panelId, plot) {
             upper = dragging.startUpper + delta;
         }
         if (lower > upper) [lower, upper] = [upper, lower];
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
         state.x1 = Math.max(domain.min, Math.min(domain.max, lower));
         state.x2 = Math.max(domain.min, Math.min(domain.max, upper));
         this._updateCalendarHeatmapSelectionShapes(panelId, plot);
@@ -834,6 +847,8 @@ proto._setCalendarHeatmapRangeMode = function(panelId, full) {
     if (!plot) return;
     const state = this._ensureCalendarHeatmapState(plot);
     if (state.rangeFull === full) return;
+    state.autoRangeWarning = null;
+    state.autoRangeLimited = false;
     state.rangeFull = full;
     if (!full) {
         const xaxis = plot.div?._fullLayout?.xaxis;
@@ -861,9 +876,37 @@ proto._scheduleCalendarHeatmapRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.heatmapDiv || plot.mode !== 'heatmap') return;
     clearTimeout(plot._calendarHeatmapRecomputeTimer);
-    const run = () => this._recomputeCalendarHeatmap(panelId, plot);
+    const run = () => {
+        const state = this._ensureCalendarHeatmapState(plot);
+        const adjusted = this._autoLimitAnalysisRange(plot, state, 'heatmap');
+        if (adjusted) this._updateCalendarHeatmapSelectionShapes(panelId, plot);
+        this._setCalendarHeatmapStatus(plot, text('heatmapLoading'), 'loading');
+        plot.heatmapContainer?.setAttribute('aria-busy', 'true');
+        // Paint the status and truthful selection before eager aggregation.
+        this._runAnalysisAfterPaint(
+            plot,
+            '_calendarHeatmapRecomputeRun',
+            () => plot.mode === 'heatmap' && !!plot.heatmapDiv,
+            () => this._recomputeCalendarHeatmap(panelId, plot),
+        );
+    };
     if (options.immediate) run();
     else plot._calendarHeatmapRecomputeTimer = setTimeout(run, HEATMAP_RECOMPUTE_DEBOUNCE_MS);
+};
+
+proto._calendarHeatmapSeriesForTrace = function(trace, range = null) {
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+    const length = Math.min(times?.length || 0, values?.length || 0);
+    if (!length || !range) return { times, values };
+    let [lower, upper] = range;
+    if (lower > upper) [lower, upper] = [upper, lower];
+    const start = Math.max(0, Math.min(length, this._lowerBound(times, lower)));
+    const end = Math.max(start, Math.min(length, this._upperBound(times, upper)));
+    return {
+        times: times.slice(start, end),
+        values: values.slice(start, end),
+    };
 };
 
 proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelId)) {
@@ -871,7 +914,7 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
     const token = (plot._calendarHeatmapToken || 0) + 1;
     plot._calendarHeatmapToken = token;
     const state = this._ensureCalendarHeatmapState(plot);
-    const warnings = [];
+    const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
     const eager = [];
     const allTraces = plot.traces || [];
 
@@ -949,38 +992,48 @@ proto._recomputeCalendarHeatmap = function(panelId, plot = this.plots.get(panelI
         warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${reason}`);
     };
 
-    for (const trace of eager) {
-        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
-        const values = this._getTransformedVariableData(trace.fileId, trace.varName);
-        if (!times?.length || !values?.length) {
-            warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapNoRows')}`);
-            continue;
+    // The eager aggregation is the range-dependent cost; the auto-limit
+    // reconsider measures exactly this and nothing around it.
+    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+        for (const trace of eager) {
+            const selected = this._calendarHeatmapSeriesForTrace(
+                trace,
+                state.rangeFull ? null : [rangeStart, rangeEnd],
+            );
+            const { times, values } = selected;
+            if (!times?.length || !values?.length) {
+                warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${text('heatmapNoRows')}`);
+                continue;
+            }
+            if (times.length !== values.length) {
+                warnings.push(`${this._traceName(trace.varName, trace.fileId)}: time/value length mismatch`);
+            }
+            try {
+                const grid = buildCalendarHeatmap({
+                    times,
+                    values,
+                    calendarMode: state.calendarMode,
+                    aggregation: state.aggregation,
+                    // Eager arrays are already cropped with binary bounds.
+                    rangeStart: null,
+                    rangeEnd: null,
+                    // Transformed arrays already include crop and timeShift.
+                    timeShiftMs: 0,
+                    domainStart: densifyOptions.domainStart,
+                    domainEnd: densifyOptions.domainEnd,
+                    traceCount: retainedTraceCount,
+                    runtime,
+                });
+                if (!grid?.ok) { noteGridFailure(trace, grid); continue; }
+                noteGridWarnings(trace, grid);
+                modelByTrace.set(trace, { trace, grid });
+            } catch (error) {
+                warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
+            }
         }
-        if (times.length !== values.length) {
-            warnings.push(`${this._traceName(trace.varName, trace.fileId)}: time/value length mismatch`);
-        }
-        try {
-            const grid = buildCalendarHeatmap({
-                times,
-                values,
-                calendarMode: state.calendarMode,
-                aggregation: state.aggregation,
-                rangeStart: state.rangeFull ? null : rangeStart,
-                rangeEnd: state.rangeFull ? null : rangeEnd,
-                // Transformed arrays already include crop and timeShift.
-                timeShiftMs: 0,
-                domainStart: densifyOptions.domainStart,
-                domainEnd: densifyOptions.domainEnd,
-                traceCount: retainedTraceCount,
-                runtime,
-            });
-            if (!grid?.ok) { noteGridFailure(trace, grid); continue; }
-            noteGridWarnings(trace, grid);
-            modelByTrace.set(trace, { trace, grid });
-        } catch (error) {
-            warnings.push(`${this._traceName(trace.varName, trace.fileId)}: ${error?.message || String(error)}`);
-        }
-    }
+    }, warnings);
+    // The measurement widened the range and rescheduled; this pass is stale.
+    if (measured.superseded) return;
 
     // Lazy traces are aggregated exactly in DuckDB (never the overview), then
     // densified through the same kernel path as eager. Group by file so each
@@ -1531,6 +1584,8 @@ proto._resetCalendarHeatmapView = function(panelId) {
     if (!plot?.div) return;
     const state = this._ensureCalendarHeatmapState(plot);
     state.rangeFull = true;
+    state.autoRangeLimited = false;
+    state.autoRangeWarning = null;
     state.x1 = null;
     state.x2 = null;
     state.colorRangeMode = 'auto';
@@ -1751,6 +1806,8 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         input.value = utcInputValue(this._activeCalendarHeatmapRange(plot)[index]);
         input.addEventListener('change', () => {
             const value = utcInputMs(input.value);
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = Number.isFinite(value) ? value : null;
             this._updateCalendarHeatmapSelectionShapes(panelId, plot);
             this._scheduleCalendarHeatmapRecompute(panelId);
@@ -1770,6 +1827,8 @@ proto._renderCalendarHeatmapOptionsPanel = function(panelId, plot) {
         }
         slider.addEventListener('input', () => {
             const value = Number(slider.value);
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = Number.isFinite(value) ? value : null;
             this._updateCalendarHeatmapSelectionShapes(panelId, plot);
         });
