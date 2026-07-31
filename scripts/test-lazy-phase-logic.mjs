@@ -136,7 +136,11 @@ const cached = h._buildPhase2DTraces(plot);
 assert.deepEqual([...cached[0].x], [1, 2, 3]);
 assert.deepEqual([...cached[0].y], [4, 5, 6]);
 
-const source = await readFile(new URL('../src/data/duckdb-source.js', import.meta.url), 'utf8');
+// Flatten CRLF at the door: the method-slicing indexOf calls below search for
+// multi-line needles, and on a Windows checkout a missed needle returns -1,
+// which slice() reads as "one from the end" — the assertions would then run
+// against the whole rest of the file and pass without meaning anything.
+const source = (await readFile(new URL('../src/data/duckdb-source.js', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
 const phaseStart = source.indexOf('async _queryPhaseTrajectory');
 const phaseMethod = source.slice(
     phaseStart,

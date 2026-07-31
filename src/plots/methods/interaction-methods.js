@@ -2997,7 +2997,27 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     // window) fires this soon after movement stops — decoupled from the long
     // pan-mode latch, so points do not appear only when the latch expires.
     const SETTLE_MS = 150;
-    const state = { mode: null, raf: 0, endTimer: 0, settleTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null };
+    const state = { mode: null, raf: 0, endTimer: 0, settleTimer: 0, base: null, pendingDX: 0, pendingDY: 0, latestXRange: null, active: false, activeTimer: 0 };
+
+    // Zoom stays Plotly's, so a mode that has to react to the whole wheel
+    // gesture cannot hook the pan latch alone — the state animation pauses
+    // playback and gives up its dynamic zoom for a zoom just as much as for a
+    // pan. This fires once per burst of wheel activity, whichever it turns out
+    // to be, and closes it on the same idle gap that ends a pan.
+    const hasGestureHooks = !!(options.onGestureStart || options.onGestureEnd);
+    const noteWheelActivity = () => {
+        if (!hasGestureHooks) return;
+        if (!state.active) {
+            state.active = true;
+            options.onGestureStart?.('wheel');
+        }
+        clearTimeout(state.activeTimer);
+        state.activeTimer = setTimeout(() => {
+            state.activeTimer = 0;
+            state.active = false;
+            options.onGestureEnd?.('wheel');
+        }, END_MS);
+    };
 
     const deltaScale = (event) => {
         if (event.deltaMode === 1) return 16;   // lines -> px (Firefox)
@@ -3091,6 +3111,7 @@ proto._installWheelPan = function(panelId, plot, div, options = {}) {
     };
 
     div.addEventListener('wheel', (event) => {
+        noteWheelActivity();
         // Only PAN is latched. While the latch is alive a vertical event still
         // pans (bridging the lift-and-replace). Otherwise every event is
         // re-evaluated, so a horizontal swipe starts a pan immediately — even
@@ -3198,6 +3219,111 @@ proto._installRightButtonPan = function(panelId, plot, div, options = {}) {
     }, { capture: true });
 
     div.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+};
+
+// The whole pan gesture set for a panel's own 2D plot:
+//   Middle-click: toggle Plotly's native pan dragmode (it only reacts to button 0).
+//   Right-drag:   custom pan — same reason, so the axis ranges are moved directly
+//                 on mousemove, or Plotly's zoom-box catches the drag instead and
+//                 snaps to a strange scale on release.
+//   Two-finger:   a horizontal trackpad swipe pans (see _installWheelPan).
+// Shared so every mode that owns a 2D plot offers the same gestures. The modes
+// that must commit a pan (axis sync, refetch) pass the finalize hooks; a mode
+// that has to react to the gesture itself passes onGestureStart/onGestureEnd,
+// which fire once per gesture with 'wheel' | 'drag' | 'middle'.
+//
+// The analysis modes wire their secondary panes through _installWheelPan and
+// _installRightButtonPan directly: those panes re-fit on a different pipeline
+// (relayoutRefreshMode) and have no legend menu or cursor box-zoom guard.
+proto._install2DPanGestures = function(panelId, plot, div, options = {}) {
+    if (!div || div._panGesturesBound) return;
+    div._panGesturesBound = true;
+
+    div.addEventListener('mousedown', (e) => {
+        if (e.button === 0
+            && plot.mode === 'timeseries'
+            && div?._fullLayout?.dragmode !== 'pan'
+            && this._eventInsidePlotArea(div, e)) {
+            this._beginCursorBoxZoomSuppress(panelId, plot);
+        }
+        if (e.button === 1) {
+            e.preventDefault();
+            options.onGestureStart?.('middle');
+            Plotly.relayout(div, { dragmode: 'pan' });
+            document.addEventListener('mouseup', () => {
+                Plotly.relayout(div, { dragmode: 'zoom' });
+                options.onGestureEnd?.('middle');
+            }, { once: true });
+            return;
+        }
+        if (e.button !== 2) return;
+        const fl = div._fullLayout;
+        const xa = fl?.xaxis, ya = fl?.yaxis;
+        if (!xa || !ya || !xa._length || !ya._length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        options.onGestureStart?.('drag');
+        const startX = e.clientX, startY = e.clientY;
+        const x0 = xa.range.slice(), y0 = ya.range.slice();
+        const y2a = plot.timeseriesY2Enabled ? fl?.yaxis2 : null;
+        const y20 = y2a?.range ? y2a.range.slice() : null;
+        const xNumeric0 = x0.map(value => this._coerceAxisValue(value));
+        const yNumeric0 = y0.map(value => Number(value));
+        const y2Numeric0 = y20?.map(value => Number(value)) || null;
+        if (!xNumeric0.every(Number.isFinite) || !yNumeric0.every(Number.isFinite)) {
+            options.onGestureEnd?.('drag');
+            return;
+        }
+        const xLen = xa._length, yLen = ya._length;
+        const isDateXAxis = xa.type === 'date';
+        let latestXRange = x0;
+        const formatXRange = (range) => isDateXAxis
+            ? range.map(value => new Date(value).toISOString())
+            : range;
+        const onMove = (mv) => {
+            const xSpan = xNumeric0[1] - xNumeric0[0];
+            const ySpan = yNumeric0[1] - yNumeric0[0];
+            const dx = -((mv.clientX - startX) / xLen) * xSpan;
+            const dy =  ((mv.clientY - startY) / yLen) * ySpan;
+            latestXRange = formatXRange([xNumeric0[0] + dx, xNumeric0[1] + dx]);
+            plot._relayoutLiveOnly = true;
+            const update = {
+                'xaxis.range': latestXRange,
+                'yaxis.range': [yNumeric0[0] + dy, yNumeric0[1] + dy],
+            };
+            if (y2Numeric0?.every(Number.isFinite) && y2a?._length) {
+                const y2Span = y2Numeric0[1] - y2Numeric0[0];
+                const dy2 = ((mv.clientY - startY) / y2a._length) * y2Span;
+                update['yaxis2.range'] = [y2Numeric0[0] + dy2, y2Numeric0[1] + dy2];
+            }
+            if (plot.mode === 'timeseries' && this._canLiveRefreshTimeseriesRelayout(plot, latestXRange)) {
+                this._scheduleLiveRelayoutingRefresh(panelId, plot, latestXRange, { allowRelayoutLiveOnly: true });
+            }
+            Plotly.relayout(div, update).finally(() => {
+                if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: latestXRange, lightweight: true });
+            });
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            plot._relayoutLiveOnly = false;
+            options.dragFinalize?.(latestXRange);
+            options.onGestureEnd?.('drag');
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }, { capture: true });
+
+    div.addEventListener('contextmenu', (e) => {
+        if (this._handlePlotLegendContextMenu(panelId, plot, div, e)) return;
+        e.preventDefault();
+    });
+
+    this._installWheelPan(panelId, plot, div, {
+        finalize: options.wheelFinalize,
+        onGestureStart: options.onGestureStart,
+        onGestureEnd: options.onGestureEnd,
+    });
 };
 
 proto._installCursorHandlers = function(panelId, plot) {

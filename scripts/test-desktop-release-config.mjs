@@ -2,11 +2,18 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const root = new URL('..', import.meta.url);
-const pkg = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
-const constants = await readFile(new URL('src/app/constants.js', root), 'utf8');
-const workflow = await readFile(new URL('.github/workflows/desktop-release.yml', root), 'utf8');
-const builderRunner = await readFile(new URL('scripts/run-electron-builder.mjs', root), 'utf8');
-const manifest = JSON.parse(await readFile(new URL('public/downloads/desktop.json', root), 'utf8'));
+
+// Nothing here is checked in with CRLF, but nothing stops a Windows checkout
+// from materialising it that way — .gitattributes pins eol only for .bat and
+// .sh. The assertions below are written against LF, so the endings are
+// flattened once at the door instead of sprinkling \r? through every pattern.
+const readText = async path => (await readFile(new URL(path, root), 'utf8')).replace(/\r\n/g, '\n');
+
+const pkg = JSON.parse(await readText('package.json'));
+const constants = await readText('src/app/constants.js');
+const workflow = await readText('.github/workflows/desktop-release.yml');
+const builderRunner = await readText('scripts/run-electron-builder.mjs');
+const manifest = JSON.parse(await readText('public/downloads/desktop.json'));
 
 // The version is read from package.json, never spelt out. It used to be written
 // here thirteen times, so every release bump failed this gate until each one was
@@ -14,7 +21,7 @@ const manifest = JSON.parse(await readFile(new URL('public/downloads/desktop.jso
 // the constants, the asset names and the release notes all agree with package.json.
 const version = pkg.version;
 const dotted = version.replace(/\./g, '\\.');
-const releaseNotes = await readFile(new URL(`docs/releases/v${version}.md`, root), 'utf8');
+const releaseNotes = await readText(`docs/releases/v${version}.md`);
 
 assert.match(constants, new RegExp(`APP_VERSION = '${dotted}'`), 'the in-app version matches package.json');
 assert.deepEqual(pkg.build.win.target, ['nsis', 'portable']);
@@ -61,7 +68,7 @@ assert.match(workflow, /tags:\s*\n\s*- ['"]v\*['"]/);
 // Both release paths read the same Node floor, so the web bundle and the desktop
 // build cannot drift onto different majors.
 assert.match(workflow, /node-version-file:\s*\.nvmrc/);
-assert.equal((await readFile(new URL('.nvmrc', root), 'utf8')).trim(), '22.12.0');
+assert.equal((await readText('.nvmrc')).trim(), '22.12.0');
 assert.match(pkg.engines?.node ?? '', /^>=22\./, 'package.json declares the same Node floor');
 // The token is read-only for every job that runs dependency code; only the
 // publish job — which creates the release — is granted write.

@@ -2,7 +2,6 @@ import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import { TIME_AXIS_VARIABLE_KINDS } from './derived-methods.js';
 import {
-    TIME_AXIS_GAP_FACTOR,
     computeTimeAxisDiagnostics,
     finalizeTimeAxisDiagnostics,
     mergeTimeAxisSteps,
@@ -130,10 +129,9 @@ proto._computeLazyTimeAxisDiagnostics = async function(fileId, { signal, onParti
     const partial = this._withImportRepairs(fileId, finalizeTimeAxisDiagnostics(raw, scale));
     onPartial?.(partial);
 
-    const gapThreshold = Number.isFinite(partial.dtMean) && raw.intervals > 0
-        ? ((raw.tMax - raw.tMin) / raw.intervals) * TIME_AXIS_GAP_FACTOR
-        : NaN;
-    const steps = await source.getTimeAxisSteps(data, { gapThreshold, signal });
+    // Nothing to hand over: phase 2 takes the median itself and derives both the
+    // coincidence and the gap threshold from it.
+    const steps = await source.getTimeAxisSteps(data, { signal });
     const complete = finalizeTimeAxisDiagnostics(mergeTimeAxisSteps(raw, steps), scale);
     return this._storeTimeAxisDiagnostics(fileId, complete);
 };
@@ -260,7 +258,8 @@ proto._renderTimeAxisDiagnosticsBlock = function(container, diagnostics, state =
     if (!diagnostics) return;
     const unitless = diagnostics.unitless;
     const unknown = '—';
-    const stepUnit = this._timeAxisUnit([diagnostics.dtMin, diagnostics.dtMean, diagnostics.dtMax], unitless);
+    const stepUnit = this._timeAxisUnit(
+        [diagnostics.dtMin, diagnostics.dtMedian, diagnostics.dtMean, diagnostics.dtMax], unitless);
     const step = value => this._formatTimeAxisValue(value, stepUnit);
 
     const rows = [[i18n.t('timeAxisDiagSamples'), String(diagnostics.nSamples)]];
@@ -268,10 +267,16 @@ proto._renderTimeAxisDiagnosticsBlock = function(container, diagnostics, state =
     if (diagnostics.verdict === null) {
         rows.push([i18n.t('timeAxisDiagStep'), unknown]);
     } else if (diagnostics.verdict === 'irregular') {
+        // Median rather than mean in the middle. On the shape this row exists to
+        // describe — a nominal step with a few holes punched in it — the mean
+        // lands between the two extremes and names no step the file actually has,
+        // while the median names the one most of the samples were written at.
         rows.push([i18n.t('timeAxisDiagStep'),
-            `${step(diagnostics.dtMin)} / ${step(diagnostics.dtMean)} / ${step(diagnostics.dtMax)}`]);
+            `${step(diagnostics.dtMin)} / ${step(diagnostics.dtMedian)} / ${step(diagnostics.dtMax)}`]);
     } else {
-        // Uniform: three identical numbers say less than one.
+        // Uniform: three identical numbers say less than one — and here the mean
+        // is the better of the two, being the span divided by the step count
+        // rather than one measured interval, so it carries no float noise.
         rows.push([i18n.t('timeAxisDiagStepConstant'), step(diagnostics.dtMean)]);
     }
     rows.push([i18n.t('timeAxisDiagRepeated'), String(diagnostics.repeated)]);

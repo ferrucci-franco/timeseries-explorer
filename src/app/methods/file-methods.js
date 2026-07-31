@@ -972,6 +972,32 @@ proto.reloadActiveFileAsNewVersion = async function() {
     this._clearVariableSelection();
     this.renderVariablesTree(data.tree);
     this._updateActionButtons();
+    await this._notifyNewVersionLoaded(name);
+};
+
+/**
+ * Counterpart to the "file has not changed" notice: say so when a version WAS
+ * created, since the only other sign is a new row in the file list. Muted for
+ * the rest of the page's life once the user ticks the box — deliberately not
+ * persisted, so a reload of the app brings the notice back.
+ */
+proto._notifyNewVersionLoaded = async function(name) {
+    if (this._newVersionNoticeMuted) return;
+    const result = await Modal.alert(
+        i18n.t('reloadNewVersionTitle'),
+        i18n.t('reloadNewVersionBody'),
+        {
+            icon: '🔄',
+            className: 'modal-dialog-version-notice',
+            highlightText: name,
+            // Same glyph as the panel toolbar's overlay button (see
+            // _buildPanelToolbar in plots/methods/interaction-methods.js): two
+            // versions loaded is exactly when overlaying them becomes useful.
+            tip: { glyph: '⧉', text: i18n.t('reloadNewVersionOverlayTip') },
+            checkboxLabel: i18n.t('dontShowAgainThisSession'),
+        },
+    );
+    if (result?.checked) this._newVersionNoticeMuted = true;
 };
 
 proto._readLatestFileForStreamableReload = async function(entry) {
