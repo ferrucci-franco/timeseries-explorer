@@ -749,10 +749,12 @@ export default class DuckDbSource {
     }
 
     /**
-     * Time-axis diagnostics, phase 2: min/max Δt and the gap count. Needs
+     * Time-axis diagnostics, phase 2: the median Δt, the min/max around it, the
+     * intervals too short to be steps of their own, and the gap count. Needs
      * consecutive steps, hence ORDER BY — the expensive half, split out so the
      * caller can show phase 1 immediately and let the user cancel this one.
-     * `gapThreshold` comes from phase 1 (gap factor × mean Δt).
+     * Both thresholds are ratios of the median, so this query needs nothing
+     * from phase 1.
      */
     async getTimeAxisSteps(legacyData, options = {}) {
         const meta = legacyData?._duckdb;
@@ -760,12 +762,17 @@ export default class DuckDbSource {
         const sql = buildTimeAxisStepsSql(
             this._timeExpressionSql(legacyData, meta),
             meta.tableName,
-            options?.gapThreshold,
             value => this._numericLiteral(value),
         );
         const result = await this._interactiveQuery(sql, { signal: options?.signal });
         const read = index => this._extractColumnAsFloat64(result, index, 'DOUBLE')[0];
-        return { dtMin: read(0), dtMax: read(1), gaps: read(2) };
+        return {
+            dtMedian: read(0),
+            dtMin: read(1),
+            dtMax: read(2),
+            coincident: read(3),
+            gaps: read(4),
+        };
     }
 
     async _queryColumnsRange(legacyData, meta, requested, t0, t1, maxPoints = 4000) {

@@ -290,6 +290,36 @@ function makeFile(h, fileId, times, extra = {}, timeProps = {}) {
     assert.equal(simple.verdict, 'equidistantRepeats');
 }
 
+// ── An event the solver reopens a fraction of a step later, not at the same t ──
+{
+    // Taken from a real OpenModelica run (Figure2_1_res.mat, 0.01 s output step):
+    // an event writes the instant twice, but the second copy is nudged forward by
+    // the root finder — 2.2e-10 s at t = 0.9 — and the copy after it repeats the
+    // nudged value exactly. Testing dt against zero catches the exact pair and
+    // misses the nudged one, which leaves a 2.2e-10 s "step" in the range and a
+    // file whose sampling is plainly 10 ms reading as irregular.
+    const times = [];
+    for (let i = 0; i <= 400; i++) {
+        times.push(i * 0.01);
+        if (i === 90 || i === 310) {
+            const nudged = i * 0.01 + (i === 90 ? 2.2002499822093569e-10 : 2.1536994410098487e-11);
+            times.push(nudged, nudged);
+        }
+    }
+    times.push(times[times.length - 1]); // and the end point, written twice
+
+    const d = computeTimeAxisDiagnostics(times);
+    assert.equal(d.nSamples, 406);
+    assert.equal(d.intervals, 405);
+    assert.equal(d.repeated, 5, 'three exact repeats plus the two the solver nudged');
+    assert.equal(d.steps, 400, 'exactly the 10 ms grid, nothing else');
+    assert.ok(Math.abs(d.dtMedian - 0.01) < 1e-12, `the median is the output step (got ${d.dtMedian})`);
+    assert.ok(Math.abs(d.dtMin - 0.01) < 1e-9, `and no 0.2 ns interval survives in the range (got ${d.dtMin})`);
+    assert.equal(d.gaps, 0);
+    assert.equal(d.backwards, 0);
+    assert.equal(d.verdict, 'equidistantRepeats', 'the whole point: this file is not irregular');
+}
+
 // ── Seconds conversion applies to every time-valued field ─────────────────────
 {
     const ms = computeTimeAxisDiagnostics([0, 1000, 2000, 3000], { secondsPerUnit: 1e-3 });
@@ -314,7 +344,8 @@ function makeFile(h, fileId, times, extra = {}, timeProps = {}) {
     assert.equal(partial.gaps, null, 'and no gap count');
     assert.equal(partial.backwards, null, 'a sorted walk cannot see time going backwards');
 
-    const complete = finalizeTimeAxisDiagnostics(mergeTimeAxisSteps(raw, { dtMin: 1, dtMax: 8, gaps: 1 }));
+    const complete = finalizeTimeAxisDiagnostics(mergeTimeAxisSteps(raw,
+        { dtMin: 1, dtMax: 8, dtMedian: 1, coincident: 0, gaps: 1 }));
     assert.equal(complete.verdict, 'irregular');
     assert.equal(complete.gaps, 1);
     assert.equal(complete.backwards, null, 'still not checked — reported as such, not as zero');
@@ -324,20 +355,29 @@ function makeFile(h, fileId, times, extra = {}, timeProps = {}) {
     // eager and lazy agree on 1 ms exactly.
     const pendulumRaw = rawFromTimeAxisSummary({ n: 20002, tMin: 0, tMax: 20, nDistinct: 20001 });
     assert.equal(pendulumRaw.repeated, 1, 'duplicates come from the distinct count');
-    const pendulum = finalizeTimeAxisDiagnostics(
-        mergeTimeAxisSteps(pendulumRaw, { dtMin: 0.001, dtMax: 0.001, gaps: 0 }));
+    const pendulum = finalizeTimeAxisDiagnostics(mergeTimeAxisSteps(pendulumRaw,
+        { dtMin: 0.001, dtMax: 0.001, dtMedian: 0.001, coincident: 0, gaps: 0 }));
     assert.equal(pendulum.steps, 20000);
     assert.equal(pendulum.dtMean, 0.001);
     assert.equal(pendulum.verdict, 'equidistantRepeats');
+
+    // The intervals phase 2 finds too short to be steps join the exact duplicates
+    // phase 1 counted — otherwise they would be counted as steps twice over.
+    const nudged = finalizeTimeAxisDiagnostics(mergeTimeAxisSteps(pendulumRaw,
+        { dtMin: 0.001, dtMax: 0.001, dtMedian: 0.001, coincident: 2, gaps: 0 }));
+    assert.equal(nudged.repeated, 3, 'one exact duplicate plus the two the solver nudged');
+    assert.equal(nudged.steps, 19998);
 
     // Phase 1 must not sort or window; phase 2 owns the ordered walk.
     const summarySql = buildTimeAxisSummarySql('"t"::DOUBLE', 'tbl');
     assert.ok(!/ORDER BY|LAG\(/i.test(summarySql), 'phase 1 is a plain streaming aggregate');
     assert.match(summarySql, /COUNT\(DISTINCT t\)/, 'duplicates without ordering');
-    const stepsSql = buildTimeAxisStepsSql('"t"::DOUBLE', 'tbl', 1.5, v => String(v));
+    const stepsSql = buildTimeAxisStepsSql('"t"::DOUBLE', 'tbl', v => String(v));
     assert.match(stepsSql, /LAG\(t\) OVER \(ORDER BY t\)/, 'phase 2 walks consecutive steps');
-    assert.match(stepsSql, /dt > 1\.5/, 'the gap threshold comes from phase 1');
-    assert.match(stepsSql, /dt <> 0/, 'repeated timestamps stay out of the Δt range');
+    assert.match(stepsSql, /median\(dt\)/, 'phase 2 owns the median every threshold is a ratio of');
+    assert.match(stepsSql, /dt > med \* 1\.5/, 'the gap threshold is derived, not passed in');
+    assert.match(stepsSql, /dt <> 0 AND dt <= med \* 0\.000001/,
+        'and the near-zero intervals are counted without re-counting the exact ones');
     for (const sql of [summarySql, stepsSql]) {
         assert.match(sql, /isnan\(t\)/, 'non-finite timestamps are excluded');
     }
