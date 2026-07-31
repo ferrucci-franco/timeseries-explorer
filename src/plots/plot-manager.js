@@ -205,6 +205,11 @@ class PlotManager {
         if (!entry) return;
         const previousTransform = this._normalizeFileTransform(entry.transform);
         const previousTimeMode = this._timeDisplayMode(fileId);
+        // Read before the transform is replaced. Demoting a promoted calendar
+        // back to seconds clears the origin, and converting the view still
+        // needs it — read afterwards it is 0, which turned a 0-15 ms view into
+        // seconds since 1970 and left the trace off screen.
+        const previousOriginMs = this._timeOriginMs(fileId);
         const nextTransform = this._normalizeFileTransform(transform);
         const autoscaleX = options.autoscaleX === true;
         // GATE: only reindex (Row index) transitions use the row-preserving remap.
@@ -262,7 +267,7 @@ class PlotManager {
                     // rather than leave a stale/wrong range.
                     restoreView.xRange = (mapped && mapped.every(v => v != null && (typeof v === 'string' || Number.isFinite(v)))) ? mapped : null;
                 } else {
-                    restoreView.xRange = this._mapTimeRangeBetweenModes(fileId, restoreView.xRange, previousTimeMode, nextTimeMode, previousTransform, nextTransform);
+                    restoreView.xRange = this._mapTimeRangeBetweenModes(fileId, restoreView.xRange, previousTimeMode, nextTimeMode, previousTransform, nextTransform, previousOriginMs);
                 }
             }
             this._rebuildPanel(panelId, { restoreView });
@@ -3581,15 +3586,28 @@ class PlotManager {
         return Number.isFinite(numeric) ? numeric : 0;
     }
 
-    _mapTimeRangeBetweenModes(fileId, range, fromMode, toMode, fromTransform = null, toTransform = null) {
+    _mapTimeRangeBetweenModes(fileId, range, fromMode, toMode, fromTransform = null, toTransform = null, fallbackOriginMs = 0) {
         if (!Array.isArray(range) || range.length < 2 || fromMode === toMode) return range;
         if (fromMode === 'index' || toMode === 'index') return null;
-        const origin = this._timeOriginMs(fileId);
+        // Both halves of the conversion must use the SAME origin, or the round
+        // trip walks the view. Only one side of a promotion carries one: going
+        // numeric → calendar it is the new transform's, and coming back it is
+        // the old one's, since demoting has already cleared it. Whichever side
+        // has it defines the absolute-millisecond domain for both.
+        const origin = this._timeOriginMs(fileId) || fallbackOriginMs || 0;
         const fromShift = this._timeShiftForMode(fromTransform, fromMode);
         const toShift = this._timeShiftForMode(toTransform, toMode);
+        // 'numeric' reaches here only for a file whose own numeric axis is being
+        // promoted to (or demoted from) a calendar or a duration — a datetime
+        // axis never reports 'numeric', and numeric-to-numeric returns above.
+        // Its values are therefore seconds measured from the origin, exactly
+        // like elapsedSeconds. Treating them as absolute epoch-ms instead sent
+        // a 0-600 s view to 1970, which is where the whole signal went missing
+        // until the user pressed auto-scale.
+        const secondsFromOrigin = mode => mode === 'elapsedDateTime' || mode === 'elapsedSeconds' || mode === 'numeric';
         const toAbsoluteMs = (value) => {
             if (fromMode === 'calendar') return this._coerceAxisValue(value) - fromShift;
-            if (fromMode === 'elapsedDateTime' || fromMode === 'elapsedSeconds') {
+            if (secondsFromOrigin(fromMode)) {
                 const numeric = Number(value);
                 return Number.isFinite(numeric) ? origin + (numeric - fromShift) * 1000 : NaN;
             }
@@ -3599,7 +3617,7 @@ class PlotManager {
         const fromAbsoluteMs = (value) => {
             if (!Number.isFinite(value)) return value;
             if (toMode === 'calendar') return new Date(value + toShift).toISOString();
-            if (toMode === 'elapsedDateTime' || toMode === 'elapsedSeconds') return (value - origin) / 1000 + toShift;
+            if (secondsFromOrigin(toMode)) return (value - origin) / 1000 + toShift;
             return value;
         };
         const mapped = range.map(value => fromAbsoluteMs(toAbsoluteMs(value)));
