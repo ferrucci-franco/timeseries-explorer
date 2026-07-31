@@ -1378,86 +1378,16 @@ class PlotManager {
                     }
                 });
             }
-            // Pan gestures for 2D plots:
-            //   Middle-click: toggle Plotly's native pan dragmode (works with button 1).
-            //   Right-click:  custom pan — Plotly's drag only reacts to button 0, so we
-            //                 manipulate axis ranges directly on mousemove.
+            // Middle-click pan, right-button drag pan, two-finger horizontal
+            // trackpad swipe. Shared with the state animation, which builds its
+            // chart on its own path and passes gesture hooks of its own.
             if (plot.mode === 'timeseries' || plot.mode === 'phase2d') {
-                div.addEventListener('mousedown', (e) => {
-                    if (e.button === 0
-                        && plot.mode === 'timeseries'
-                        && div?._fullLayout?.dragmode !== 'pan'
-                        && this._eventInsidePlotArea(div, e)) {
-                        this._beginCursorBoxZoomSuppress(panelId, plot);
-                    }
-                    if (e.button === 1) {
-                        e.preventDefault();
-                        Plotly.relayout(div, { dragmode: 'pan' });
-                        document.addEventListener('mouseup', () => {
-                            Plotly.relayout(div, { dragmode: 'zoom' });
-                        }, { once: true });
-                        return;
-                    }
-                    if (e.button !== 2) return;
-                    const fl = div._fullLayout;
-                    const xa = fl?.xaxis, ya = fl?.yaxis;
-                    if (!xa || !ya || !xa._length || !ya._length) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const startX = e.clientX, startY = e.clientY;
-                    const x0 = xa.range.slice(), y0 = ya.range.slice();
-                    const y2a = plot.timeseriesY2Enabled ? fl?.yaxis2 : null;
-                    const y20 = y2a?.range ? y2a.range.slice() : null;
-                    const xNumeric0 = x0.map(value => this._coerceAxisValue(value));
-                    const yNumeric0 = y0.map(value => Number(value));
-                    const y2Numeric0 = y20?.map(value => Number(value)) || null;
-                    if (!xNumeric0.every(Number.isFinite) || !yNumeric0.every(Number.isFinite)) return;
-                    const xLen = xa._length, yLen = ya._length;
-                    const isDateXAxis = xa.type === 'date';
-                    let latestXRange = x0;
-                    const formatXRange = (range) => isDateXAxis
-                        ? range.map(value => new Date(value).toISOString())
-                        : range;
-                    const onMove = (mv) => {
-                        const xSpan = xNumeric0[1] - xNumeric0[0];
-                        const ySpan = yNumeric0[1] - yNumeric0[0];
-                        const dx = -((mv.clientX - startX) / xLen) * xSpan;
-                        const dy =  ((mv.clientY - startY) / yLen) * ySpan;
-                        latestXRange = formatXRange([xNumeric0[0] + dx, xNumeric0[1] + dx]);
-                        plot._relayoutLiveOnly = true;
-                        const update = {
-                            'xaxis.range': latestXRange,
-                            'yaxis.range': [yNumeric0[0] + dy, yNumeric0[1] + dy],
-                        };
-                        if (y2Numeric0?.every(Number.isFinite) && y2a?._length) {
-                            const y2Span = y2Numeric0[1] - y2Numeric0[0];
-                            const dy2 = ((mv.clientY - startY) / y2a._length) * y2Span;
-                            update['yaxis2.range'] = [y2Numeric0[0] + dy2, y2Numeric0[1] + dy2];
-                        }
-                        if (plot.mode === 'timeseries' && this._canLiveRefreshTimeseriesRelayout(plot, latestXRange)) {
-                            this._scheduleLiveRelayoutingRefresh(panelId, plot, latestXRange, { allowRelayoutLiveOnly: true });
-                        }
-                        Plotly.relayout(div, update).finally(() => {
-                            if (plot._relayoutLiveOnly) this._renderCursorOverlay(plot, { range: latestXRange, lightweight: true });
-                        });
-                    };
-                    const onUp = () => {
-                        document.removeEventListener('mousemove', onMove);
-                        document.removeEventListener('mouseup', onUp);
-                        plot._relayoutLiveOnly = false;
-                        this._onRelayout(panelId, { 'xaxis.range': latestXRange });
-                    };
-                    document.addEventListener('mousemove', onMove);
-                    document.addEventListener('mouseup', onUp);
-                }, { capture: true });
-                div.addEventListener('contextmenu', (e) => {
-                    if (this._handlePlotLegendContextMenu(panelId, plot, div, e)) return;
-                    e.preventDefault();
-                });
-                // Two-finger horizontal trackpad swipe pans; vertical keeps
-                // Plotly's zoom.
-                this._installWheelPan(panelId, plot, div, {
-                    finalize: plot.mode === 'timeseries'
+                this._install2DPanGestures(panelId, plot, div, {
+                    // A right-drag has always committed on both modes; the wheel
+                    // pan only on timeseries, which is the one with an axis sync
+                    // and a window to refetch.
+                    dragFinalize: (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange }),
+                    wheelFinalize: plot.mode === 'timeseries'
                         ? (xRange) => this._onRelayout(panelId, { 'xaxis.range': xRange })
                         : null,
                 });
@@ -1875,6 +1805,7 @@ class PlotManager {
         // clean them up before the plot.div removal below.
         this._cleanupPhase2dFitDocListeners?.(plot);
         this._stopAnim(plot);
+        this._cleanupStateAnimDocListeners?.(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
         // Reset dynamic trace indices
         delete plot._arrowXIdx;
