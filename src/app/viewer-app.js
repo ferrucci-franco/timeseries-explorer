@@ -51,6 +51,7 @@ class OpenModelicaViewer {
 
         this.layoutManager.onPanelMount   = (id, el) => this.plotManager.onPanelMount(id, el);
         this.layoutManager.onPanelUnmount = (id)     => this.plotManager.onPanelUnmount(id);
+        this.layoutManager.onPanelDetach  = (id)     => this.plotManager.onPanelDetach(id);
         this.plotManager.onTimeAxisVariableDrop = (timeVarName) => this._handleTimeAxisDrop(timeVarName);
 
         this.applyTheme(this.theme);

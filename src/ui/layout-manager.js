@@ -23,6 +23,7 @@ export default class LayoutManager {
         // Optional hooks set by PlotManager
         this.onPanelMount   = null;  // (panelId, panelEl) => void
         this.onPanelUnmount = null;  // (panelId) => void
+        this.onPanelDetach  = null;  // (panelId) => void — panel element is about to be discarded
 
         this._bindGlobalEvents();
     }
@@ -34,6 +35,16 @@ export default class LayoutManager {
         const restoreScrollTop = this.scrollablePlotArea ? this.container.scrollTop : null;
         const revealPanelId = this._pendingRevealPanelId;
         this._pendingRevealPanelId = null;
+        // Every panel element below is about to be discarded, and the panels
+        // that survive this render are mounted again into brand-new elements.
+        // Announce that first: whoever owns their contents has to let go of the
+        // old DOM (charts, observers, document-level listeners) or it leaks and
+        // the rebuilt panel inherits references to nodes nobody can see.
+        // Driven off the live DOM rather than the tree, so a panel already
+        // removed from the tree is not detached twice.
+        if (this.onPanelDetach) {
+            this.container.querySelectorAll('.layout-panel').forEach(el => this.onPanelDetach(el.dataset.id));
+        }
         this.container.innerHTML = '';
         this._renderNode(this.root, this.container);
         this._applyScrollableLayout();

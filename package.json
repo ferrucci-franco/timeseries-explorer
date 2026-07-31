@@ -96,6 +96,7 @@
     "test:large-analysis": "node scripts/test-large-analysis-responsiveness.mjs",
     "test:native-autoscale-loading": "node scripts/test-native-autoscale-loading.mjs",
     "test:eager-detail-remount": "node scripts/test-eager-detail-remount.mjs",
+    "test:panel-detach-on-render": "node scripts/test-panel-detach-on-render.mjs",
     "test:sampling-gaps": "node scripts/test-sampling-gaps.mjs",
     "test:histogram": "node scripts/test-histogram.mjs",
     "test:temporal-profile": "node scripts/test-temporal-profile.mjs",
