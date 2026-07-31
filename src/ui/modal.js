@@ -370,7 +370,15 @@ const Modal = {
      * Show an informational/error dialog with a single close button.
      * @param {string} title - Short heading
      * @param {string} body  - Body message (plain text or HTML if options.html)
-     * @param {Object} [options] - { icon, iconHtml, html }
+     * @param {Object} [options] - { icon, iconHtml, html, highlightText, tip, checkboxLabel }
+     * `highlightText` puts one short string — a generated name, a path — on its
+     * own line below the message. `tip` is `{ glyph, text }`: a subordinate note
+     * pointing at a feature, with the feature's own button glyph beside it.
+     * `checkboxLabel` adds an unticked box above the button, for "do not show
+     * this again" on a notice the user may not want twice.
+     * @returns {Promise<void|{checked: boolean}>} - The box state when
+     * `checkboxLabel` was given, and nothing otherwise. Dismissing the dialog
+     * with ESC or an overlay click reports the box as the user left it.
      */
     alert(title, body, options = {}) {
         return new Promise((resolve) => {
@@ -408,6 +416,36 @@ const Modal = {
             else              messageDiv.textContent = body;
             content.appendChild(messageDiv);
 
+            // A generated name is the one string the user has to read exactly,
+            // so it gets its own line instead of being spliced into a sentence
+            // where a wrap can cut it in two. textContent, never innerHTML:
+            // this carries a file name.
+            if (options.highlightText) {
+                const highlight = document.createElement('div');
+                highlight.className = 'modal-alert-highlight';
+                highlight.textContent = options.highlightText;
+                content.appendChild(highlight);
+            }
+
+            // A pointer to a feature the user is now in a position to want.
+            // The glyph is the one on the real button, so the note teaches
+            // what to look for rather than describing it in words.
+            if (options.tip?.text) {
+                const tip = document.createElement('div');
+                tip.className = 'modal-alert-tip';
+                if (options.tip.glyph) {
+                    const glyph = document.createElement('span');
+                    glyph.className = 'modal-alert-tip-glyph';
+                    glyph.textContent = options.tip.glyph;
+                    glyph.setAttribute('aria-hidden', 'true');
+                    tip.appendChild(glyph);
+                }
+                const text = document.createElement('span');
+                text.textContent = options.tip.text;
+                tip.appendChild(text);
+                content.appendChild(tip);
+            }
+
             // Collapsed technical detail. When a raw browser error is replaced
             // by a translated explanation, the original still has to be
             // reachable — otherwise a bug report loses the one string that
@@ -423,6 +461,21 @@ const Modal = {
                 pre.textContent = String(options.details);
                 details.append(summary, pre);
                 content.appendChild(details);
+            }
+
+            // A notice worth showing once is not worth showing every time. The
+            // box sits above the button and never gates it: this dialog only
+            // reports, so closing it must stay a single click.
+            let checkbox = null;
+            if (options.checkboxLabel) {
+                const row = document.createElement('label');
+                row.className = 'modal-alert-checkbox';
+                checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                const text = document.createElement('span');
+                text.textContent = options.checkboxLabel;
+                row.append(checkbox, text);
+                content.appendChild(row);
             }
 
             const buttons = document.createElement('div');
@@ -443,8 +496,9 @@ const Modal = {
                 if (settled) return;
                 settled = true;
                 document.removeEventListener('keydown', escHandler);
+                const state = checkbox ? { checked: checkbox.checked } : undefined;
                 this.close(overlay, previousActive);
-                resolve();
+                resolve(state);
             };
 
             setTimeout(() => closeBtn.focus(), 100);

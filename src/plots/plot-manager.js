@@ -2515,26 +2515,34 @@ class PlotManager {
     }
 
     _showCompareSummary(foundByVar, missingByFile = []) {
+        // One name per line. Joined with commas, a variable found in four files
+        // ran off the edge as a single bullet — unreadable exactly in the case
+        // the dialog exists to report.
+        const sublist = items => `<ul>${items.map(i => `<li>${this._escapeHTML(i)}</li>`).join('')}</ul>`;
         const foundRows = [...foundByVar.entries()]
             .filter(([, files]) => files.length)
-            .map(([varName, files]) => {
-                const uniqueFiles = [...new Set(files)];
-                return `<li><b>${this._escapeHTML(varName)}</b>: ${uniqueFiles.map(f => this._escapeHTML(f)).join(', ')}</li>`;
-            })
+            .map(([varName, files]) =>
+                `<li><b>${this._escapeHTML(varName)}</b>${sublist([...new Set(files)])}</li>`)
             .join('');
         const skippedRows = missingByFile.length
             ? `<p>${this._escapeHTML(i18n.t('compareFilesSkippedIntro'))}</p><ul>${
                 missingByFile.map(({ file, vars }) =>
-                    `<li>${this._escapeHTML(file)}: ${vars.map(v => this._escapeHTML(v)).join(', ')}</li>`
+                    `<li><b>${this._escapeHTML(file)}</b>${sublist(vars)}</li>`
                 ).join('')
             }</ul>`
             : '';
-        const body = `
-            <p>${this._escapeHTML(i18n.t('compareFilesSummaryIntro'))}</p>
-            <ul>${foundRows}</ul>
-            ${skippedRows}
-        `;
-        Modal.alert(i18n.t('compareFilesSummaryTitle'), body, { html: true });
+        // No newlines between the parts: .modal-message keeps white-space:
+        // pre-line, so template indentation would show up as blank lines.
+        const body = `<p>${this._escapeHTML(i18n.t('compareFilesSummaryIntro'))}</p>`
+            + `<ul>${foundRows}</ul>`
+            + skippedRows;
+        Modal.alert(i18n.t('compareFilesSummaryTitle'), body, {
+            html: true,
+            // Same glyph as the toolbar button that ran the overlay, so the
+            // dialog names the action instead of warning about it.
+            icon: '⧉',
+            className: 'modal-dialog-wide modal-dialog-compare-summary',
+        });
     }
 
     _showPanelStats(panelId) {
