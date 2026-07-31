@@ -80,7 +80,7 @@ const results = new Map();
     assert.equal(d.intervals, 29);
     assert.equal(d.steps, 29);
     assert.equal(d.span, 29);
-    assert.deepEqual([d.dtMin, d.dtMean, d.dtMax], [1, 1, 1]);
+    assert.deepEqual([d.dtMin, d.dtMedian, d.dtMean, d.dtMax], [1, 1, 1, 1]);
     assert.deepEqual([d.repeated, d.gaps, d.backwards], [0, 0, 0]);
     assert.equal(d.verdict, 'equidistant', 'a clean file must not raise anything');
     assert.equal(f.h._timeAxisSummaryLine(d), '30 samples · Δt 1 s · equidistant');
@@ -97,7 +97,8 @@ const results = new Map();
     assert.equal(d.dtMin, 1);
     assert.equal(d.dtMax, 6, 'the widest hole is 10→15');
     near(d.dtMean, 34 / 24, 'mean over the advancing intervals');
-    // Threshold = 1.5 × (34/24) ≈ 2.125, so only the two 6 s jumps qualify.
+    assert.equal(d.dtMedian, 1, 'the median is the nominal step the mean is dragged off');
+    // Threshold = 1.5 × 1 s, so only the two 6 s jumps qualify.
     assert.equal(d.gaps, 2);
     assert.deepEqual([d.repeated, d.backwards], [0, 0]);
     assert.equal(d.verdict, 'irregular');
@@ -215,12 +216,13 @@ const results = new Map();
     assert.ok(d.dtMin >= 0.899 && d.dtMin < 1, `dtMin within the ±10% band (got ${d.dtMin})`);
     assert.ok(d.dtMax <= 1.101 && d.dtMax > 1, `dtMax within the ±10% band (got ${d.dtMax})`);
     assert.ok(Math.abs(d.dtMean - 1) < 0.02, `the mean stays near the nominal step (got ${d.dtMean})`);
+    assert.ok(Math.abs(d.dtMedian - 1) < 0.02, `and so does the median (got ${d.dtMedian})`);
     // This is the point of the case: jittery is not the same as broken.
     assert.deepEqual([d.repeated, d.gaps, d.backwards], [0, 0, 0],
         '±10% jitter must not be reported as gaps, duplicates or reversals');
     assert.equal(d.verdict, 'irregular', 'but 10% is decisively not equidistant');
-    // The gap threshold is 1.5× the mean; the jitter band tops out well below it.
-    assert.ok(d.dtMax < TIME_AXIS_GAP_FACTOR * d.dtMean, 'the jitter band cannot reach the gap threshold');
+    // The gap threshold is 1.5× the median; the jitter band tops out well below it.
+    assert.ok(d.dtMax < TIME_AXIS_GAP_FACTOR * d.dtMedian, 'the jitter band cannot reach the gap threshold');
 }
 
 // ── mixed.csv — 3 repeated, 2 gaps, 1 sample sorted back into place ───────────
@@ -282,16 +284,19 @@ const results = new Map();
             near(phase1.dtMean, eager.dtMean, `${name}: mean Δt`);
             assert.equal(phase1.verdict, null, `${name}: phase 1 alone reaches no verdict`);
 
-            const threshold = phase1.dtMean * TIME_AXIS_GAP_FACTOR;
-            const [steps] = await runDuckDb(conn, buildTimeAxisStepsSql('t', view, threshold, v => String(v)));
+            const [steps] = await runDuckDb(conn, buildTimeAxisStepsSql('t', view, v => String(v)));
             const phase2 = finalizeTimeAxisDiagnostics(mergeTimeAxisSteps(raw, {
                 dtMin: Number(steps.dt_min),
                 dtMax: Number(steps.dt_max),
+                dtMedian: steps.dt_median,
+                coincident: Number(steps.n_coincident),
                 gaps: Number(steps.n_gaps),
             }));
 
             near(phase2.dtMin, eager.dtMin, `${name}: min Δt`);
             near(phase2.dtMax, eager.dtMax, `${name}: max Δt`);
+            near(phase2.dtMedian, eager.dtMedian, `${name}: median Δt`);
+            assert.equal(phase2.repeated, eager.repeated, `${name}: repeated timestamps`);
             assert.equal(phase2.gaps, eager.gaps, `${name}: gap count`);
             assert.equal(phase2.verdict, eager.verdict, `${name}: verdict`);
             // The one honest divergence: the sorted SQL walk cannot inspect file
