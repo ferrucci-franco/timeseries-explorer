@@ -47,6 +47,7 @@ proto._createStateAnimChart = function(panelId, panelEl) {
     // mount (split-window re-render reuses the plot state without going
     // through _destroyChart).
     this._stopAnim(plot);
+    this._cleanupStateAnimDocListeners(plot);
     if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
     if (plot.div) { try { Plotly.purge(plot.div); } catch (_) {} plot.div = null; }
     delete plot._arrowXIdx;
@@ -162,8 +163,40 @@ proto._createStateAnimChart = function(panelId, panelEl) {
             this._stateAnimUpdateFrame(plot, Math.min(plot.animFrame || 0, nPts - 1));
             this._updateCameraOverlay(plot);
         });
-        div.on('plotly_relayout', () => this._updateCameraOverlay(plot));
+        div.on('plotly_relayout', (ed) => {
+            // A drag-driven view change (box zoom, Plotly's own pan dragmode,
+            // its scroll zoom) reports the bracket keys; our per-frame update
+            // writes the array form, so this reads the user and not ourselves.
+            if (ed && (ed['xaxis.range[0]'] !== undefined || ed['yaxis.range[0]'] !== undefined)) {
+                this._stateAnimReleaseDynamicZoom(plot);
+            }
+            this._updateCameraOverlay(plot);
+        });
         div.on('plotly_afterplot', () => this._updateCameraOverlay(plot));
+        div.on('plotly_doubleclick', () => {
+            // Match the Home button (padded full extent) rather than Plotly's
+            // plain autorange, which lands on a slightly different view.
+            this._autoScalePlot(panelId, plot);
+            return false;
+        });
+        // The same pan gestures as every other 2D plot. 3D is left alone: the
+        // gl3d orbit already owns the trackpad there, as in phase3d. No
+        // finalize — the animation holds all of its data in memory, so a pan
+        // has nothing to refetch or sync.
+        if (!is3D) {
+            this._install2DPanGestures(panelId, plot, div, {
+                onGestureStart: (kind) => {
+                    this._stateAnimReleaseDynamicZoom(plot);
+                    // Mouse gestures are already paused by the mousedown below,
+                    // which also covers a plain box zoom; only the wheel needs
+                    // its own pause.
+                    if (kind === 'wheel') this._stateAnimBeginInteraction(plot);
+                },
+                onGestureEnd: (kind) => {
+                    if (kind === 'wheel') this._stateAnimEndInteraction(panelId, plot);
+                },
+            });
+        }
         // Resize observer
         let timer;
         const ro = new ResizeObserver(() => {
@@ -173,20 +206,15 @@ proto._createStateAnimChart = function(panelId, panelEl) {
         ro.observe(panelEl);
         plot.resizeObserver = ro;
 
-        // Auto-pause on drag: pause animation while user interacts with the plot
-        let wasPlaying = false;
-        div.addEventListener('mousedown', () => {
-            if (plot.animPlaying) {
-                wasPlaying = true;
-                this._stopAnim(plot);
-            }
-        });
-        document.addEventListener('mouseup', () => {
-            if (wasPlaying) {
-                wasPlaying = false;
-                this._stateAnimTogglePlay(panelId);
-            }
-        });
+        // Auto-pause on drag: pause the animation while the user works on the
+        // plot. Capture phase, because the right-button pan installed above
+        // stops propagation before a bubble listener would ever see the
+        // mousedown.
+        this._cleanupStateAnimDocListeners(plot);
+        const onInteractionUp = () => this._stateAnimEndInteraction(panelId, plot);
+        div.addEventListener('mousedown', () => this._stateAnimBeginInteraction(plot), { capture: true });
+        document.addEventListener('mouseup', onInteractionUp);
+        plot._stateAnimDocListeners = { up: onInteractionUp };
 
         if (plot.autoPlayOnRender && plot.div === div) {
             plot.autoPlayOnRender = false;
@@ -691,6 +719,50 @@ proto._stateAnimTogglePlay = function(panelId) {
         };
         plot.animRAF = requestAnimationFrame(step);
     }
+};
+
+// Playback stands still for the length of a pan/zoom gesture. The 2D frame
+// update restyles and relayouts on every animation frame, which would fight
+// the gesture's own relayout stream — and a moving target is not what anyone
+// is trying to zoom into anyway. Counted, because gestures overlap: a wheel
+// pan can start while a mouse button is still down.
+proto._stateAnimBeginInteraction = function(plot) {
+    if (!plot) return;
+    plot._animInteractions = (plot._animInteractions || 0) + 1;
+    if (plot._animInteractions > 1) return;
+    if (!plot.animPlaying) return;
+    plot._animResumeAfterInteraction = true;
+    this._stopAnim(plot);
+};
+
+proto._stateAnimEndInteraction = function(panelId, plot) {
+    if (!plot?._animInteractions) return;
+    plot._animInteractions -= 1;
+    if (plot._animInteractions > 0) return;
+    if (!plot._animResumeAfterInteraction) return;
+    plot._animResumeAfterInteraction = false;
+    if (plot.div) this._stateAnimTogglePlay(panelId);
+};
+
+// "Zoom on x" re-centres both axes on the current point every frame, so it owns
+// the view outright: a pan or a zoom would be overwritten on the very next
+// frame. The user taking the view wins, and the toggle steps aside visibly
+// rather than silently fighting. Written straight through instead of dispatched
+// as a change event — that handler resets the view, which would undo the
+// gesture that got us here.
+proto._stateAnimReleaseDynamicZoom = function(plot) {
+    if (!plot?.stateConfig?.dynamicZoom) return;
+    plot.stateConfig.dynamicZoom = false;
+    const box = plot.div?.closest('.state-anim-container')?.querySelector('.sa-chk-dzoom');
+    if (box) box.checked = false;
+};
+
+proto._cleanupStateAnimDocListeners = function(plot) {
+    if (!plot?._stateAnimDocListeners) return;
+    document.removeEventListener('mouseup', plot._stateAnimDocListeners.up);
+    plot._stateAnimDocListeners = null;
+    plot._animInteractions = 0;
+    plot._animResumeAfterInteraction = false;
 };
 
 proto._stopAnim = function(plot) {
