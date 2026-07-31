@@ -64,6 +64,52 @@
 .modal-dialog-wide .modal-message li {
     margin: 2px 0;
 }
+/* Second level: the names grouped under a heading row. Tighter than the outer
+   list so a group reads as one block rather than as separate paragraphs. */
+.modal-dialog-wide .modal-message ul ul {
+    margin: 2px 0 8px;
+}
+
+/* Overlay summary: the list is one short line per variable, so a fixed half-window
+   box is mostly empty. Size it to the longest line instead, and only grow past that
+   when a file name needs it — up to 80% of the window, where the lines wrap. */
+.modal-dialog-compare-summary {
+    width: max-content;
+    min-width: min(484px, calc(100vw - 32px));
+    max-width: min(80vw, calc(100vw - 32px));
+    /* Overlaying a dozen variables across a dozen files produces a list taller
+       than the screen. Cap the box and scroll the list alone, so the heading
+       and the Close button never leave the viewport. */
+    max-height: 85vh;
+    display: flex;
+}
+
+.modal-dialog-compare-summary .modal-content {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-height: 0;
+}
+
+.modal-dialog-compare-summary .modal-message {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    /* Reserve the gutter: the dialog is sized by max-content, which is measured
+       before a scrollbar exists, so an unreserved one would clip the longest
+       name by its own width. */
+    scrollbar-gutter: stable;
+}
+
+/* The overlay glyph is a text character, not an emoji: it takes the theme
+   colour, and it needs a smaller size than the 3rem meant for emoji art. */
+.modal-dialog-compare-summary .modal-icon {
+    font-size: 2.25rem;
+    line-height: 1;
+    color: var(--text-primary);
+    margin-bottom: 0.85rem;
+}
 
 .modal-dialog.correlation-help-dialog {
     width: min(880px, calc(100vw - 32px));
@@ -123,6 +169,91 @@
     /* Explanations are written as paragraphs separated by blank lines and are
        inserted as text, so the newlines have to survive as line breaks. */
     white-space: pre-line;
+}
+
+/* A generated name on its own line under an alert message. Monospace in a
+   chip so it reads as a literal value rather than prose, and nowrap so it is
+   always one line — a name broken across two lines is a name you have to
+   reassemble by eye. Scrolls sideways in the rare case it outgrows the box. */
+.modal-alert-highlight {
+    margin: -0.6rem 0 1.4rem;
+    padding: 0.5rem 0.85rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary, rgba(127, 127, 127, 0.12));
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.95rem;
+    text-align: center;
+    white-space: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+}
+
+/* Subordinate note pointing at a feature. No box of its own — the highlight
+   chip above already is one, and two stacked boxes read as two equal things.
+   A hairline and the secondary colour place it below the message instead. */
+.modal-alert-tip {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    margin: 0 0 1.25rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--border-color);
+    text-align: left;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: var(--text-secondary, #888);
+}
+
+/* Deliberately the geometry of .layout-toolbar-btn: the point is that the
+   user recognises this shape when they look at a panel toolbar. */
+.modal-alert-tip-glyph {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 1rem;
+    line-height: 1;
+}
+
+/* Roomier than the default 400px alert so a typical version name sits on its
+   line without scrolling, while the sentence above still wraps normally. */
+.modal-dialog-version-notice {
+    width: min(520px, calc(100vw - 32px));
+    max-width: none;
+}
+
+/* "Do not show again" tick under an informational alert. inline-flex so the
+   surrounding text-align places it: centred in a plain alert, left in a wide
+   one. Secondary colour and a smaller size keep it clearly subordinate to the
+   message it is offering to silence. */
+.modal-alert-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: -0.5rem 0 1.25rem;
+    font-size: 0.88rem;
+    line-height: 1.3;
+    color: var(--text-secondary, #888);
+    cursor: pointer;
+    user-select: none;
+}
+
+.modal-alert-checkbox:hover {
+    color: var(--text-primary);
+}
+
+.modal-alert-checkbox input {
+    margin: 0;
+    cursor: pointer;
+    flex: none;
 }
 
 /* Collapsed technical detail under an error message. Exists so the original
