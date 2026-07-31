@@ -18,6 +18,13 @@ const {
   isAllowedRendererUrl,
   isExternalOpenUrl,
 } = require('./navigation-policy.cjs');
+const {
+  DEFAULT_ZOOM_FACTOR,
+  MAX_ZOOM_FACTOR,
+  MIN_ZOOM_FACTOR,
+  normalizeZoomFactor,
+  stepZoomFactor,
+} = require('./zoom-levels.cjs');
 
 const projectRoot = path.resolve(__dirname, '..');
 const staticRoot = path.join(projectRoot, 'dist');
@@ -28,6 +35,8 @@ let csvToParquetCorePromise = null;
 let mainWindow = null;
 const temporaryParquetPaths = new Set();
 let temporaryParquetSessionDir = null;
+let desktopZoomFactor = DEFAULT_ZOOM_FACTOR;
+let zoomWriteTimer = null;
 
 if (process.env.OMV_REMOTE_DEBUGGING_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', String(process.env.OMV_REMOTE_DEBUGGING_PORT));
@@ -39,6 +48,95 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 ipcMain.on('omv:set-theme', (_event, theme) => {
   nativeTheme.themeSource = theme === 'dark' ? 'dark' : 'light';
+});
+
+// ─── Window zoom ────────────────────────────────────────────────────────────
+//
+// setZoomFactor() is the same mechanism Ctrl +/- drives in a browser: the
+// viewport changes size in CSS pixels, so media queries re-evaluate,
+// devicePixelRatio follows, and Plotly re-lays-out through the resize event it
+// already listens to -- measured at 125%, a panel went from 484 to 353 CSS px
+// and its canvas backing store was rebuilt to match. A CSS transform on a
+// wrapper would instead have stretched the bitmap Plotly had already drawn.
+//
+// The chosen factor is kept by the main process rather than in localStorage
+// because the renderer's origin is not stable: the local server starts on 8876
+// but walks up to 8877+ when that port is taken (a second instance), and
+// per-origin storage would silently lose the setting on that run.
+
+function desktopSettingsPath() {
+  return path.join(app.getPath('userData'), 'desktop-settings.json');
+}
+
+function readDesktopSettings() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(desktopSettingsPath(), 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    // No file yet, or one we cannot parse. Either way the defaults stand.
+    return {};
+  }
+}
+
+function writeZoomFactorNow() {
+  zoomWriteTimer = null;
+  try {
+    const settings = readDesktopSettings();
+    settings.zoomFactor = desktopZoomFactor;
+    fs.mkdirSync(path.dirname(desktopSettingsPath()), { recursive: true });
+    fs.writeFileSync(desktopSettingsPath(), JSON.stringify(settings, null, 2), 'utf8');
+  } catch (err) {
+    // A preference that cannot be remembered is not worth interrupting over.
+    console.error('[desktop] could not save the zoom factor', err?.message || err);
+  }
+}
+
+// Holding + walks the ladder in a few clicks; each one should not be its own
+// disk write. The timer is deliberately NOT unref'd: in the main process the
+// Node loop is pumped by Chromium's, and an unref'd timer does not schedule a
+// wake-up of its own -- it simply never fired on an otherwise idle app, and the
+// setting was silently never saved. Quitting inside the window still flushes.
+function scheduleZoomFactorWrite() {
+  if (zoomWriteTimer) clearTimeout(zoomWriteTimer);
+  zoomWriteTimer = setTimeout(writeZoomFactorNow, 300);
+}
+
+function flushZoomFactorWrite() {
+  if (!zoomWriteTimer) return;
+  clearTimeout(zoomWriteTimer);
+  writeZoomFactorNow();
+}
+
+function loadStoredZoomFactor() {
+  desktopZoomFactor = normalizeZoomFactor(readDesktopSettings().zoomFactor);
+  return desktopZoomFactor;
+}
+
+// The single place the zoom changes. The menu buttons and the keyboard
+// accelerators both land here, so the window, the stored value and the
+// percentage the menu shows can never disagree.
+function applyZoomFactor(win, factor) {
+  const next = normalizeZoomFactor(factor);
+  desktopZoomFactor = next;
+  if (win && !win.isDestroyed()) {
+    win.webContents.setZoomFactor(next);
+    win.webContents.send('omv:zoom-changed', next);
+  }
+  scheduleZoomFactorWrite();
+  return next;
+}
+
+ipcMain.handle('omv:get-zoom', () => ({
+  factor: desktopZoomFactor,
+  min: MIN_ZOOM_FACTOR,
+  max: MAX_ZOOM_FACTOR,
+}));
+
+// The renderer names a direction, never a factor: the ladder stays in one
+// place and there is no arbitrary number to validate coming across the bridge.
+ipcMain.handle('omv:set-zoom', (event, options = {}) => {
+  const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  return applyZoomFactor(win, stepZoomFactor(desktopZoomFactor, options?.action));
 });
 
 function desktopReadErrorPayload(err) {
@@ -312,6 +410,7 @@ function listenOnAvailablePort(port) {
 
 async function createWindow(url) {
   const appOrigin = appOriginFromUrl(url);
+  const startupZoomFactor = loadStoredZoomFactor();
   const win = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -325,11 +424,39 @@ async function createWindow(url) {
       nodeIntegration: false,
       sandbox: false,
       backgroundThrottling: false,
+      // Set here so the first frame is already at the right size: applying the
+      // zoom only after the load would show the window at 100% and then jump.
+      zoomFactor: startupZoomFactor,
     },
   });
 
   mainWindow = win;
   win.removeMenu();
+
+  // Belt and braces for the line above: webPreferences.zoomFactor has been
+  // unreliable across Electron versions, and a reload after a renderer crash
+  // starts from the session's own zoom rather than ours.
+  win.webContents.on('did-finish-load', () => {
+    if (win.isDestroyed()) return;
+    win.webContents.setZoomFactor(desktopZoomFactor);
+  });
+
+  // The zoom accelerators every desktop app is expected to have. Electron gets
+  // them from the application menu's zoomIn/zoomOut/resetZoom roles, and this
+  // app removes that menu, so without this they simply do nothing.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.alt) return;
+    const accelerator = process.platform === 'darwin' ? input.meta : input.control;
+    if (!accelerator) return;
+    // '=' and '_' are the unshifted keys the user actually presses for + and -.
+    const action = ['+', '='].includes(input.key) ? 'in'
+      : ['-', '_'].includes(input.key) ? 'out'
+        : input.key === '0' ? 'reset'
+          : null;
+    if (!action) return;
+    event.preventDefault();
+    applyZoomFactor(win, stepZoomFactor(desktopZoomFactor, action));
+  });
 
   // The one failure the renderer cannot report on its own.
   //
@@ -646,6 +773,7 @@ ipcMain.handle('omv:convert-to-parquet', async (_event, options = {}) => {
 
 app.on('before-quit', cleanupTrackedTemporaryParquets);
 app.on('will-quit', cleanupTrackedTemporaryParquets);
+app.on('before-quit', flushZoomFactorWrite);
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);

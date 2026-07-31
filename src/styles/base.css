@@ -1076,6 +1076,46 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     flex-wrap: wrap;
 }
 
+.extra-zoom-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: auto;
+}
+
+.extra-zoom-btn {
+    min-width: 1.75rem;
+    height: 1.6rem;
+    padding: 0 0.35rem;
+    background: none;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.extra-zoom-btn:hover:not(:disabled) {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.extra-zoom-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+/* Tabular figures so the row does not twitch between 90% and 100%. */
+.extra-zoom-value {
+    min-width: 3.1rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--primary-color);
+    border-color: color-mix(in srgb, var(--primary-color) 30%, var(--border-color));
+}
+
 .extra-version-build {
     flex-basis: 100%;
     margin-left: 2.15rem;

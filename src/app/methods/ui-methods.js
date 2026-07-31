@@ -321,6 +321,7 @@ proto.initEventListeners = function() {
 
     this._initExampleMenu();
     this._initExtraMenu();
+    this._initDesktopZoom();
 };
 
 proto._setScrollablePlotArea = async function(enabled) {
@@ -1350,6 +1351,104 @@ proto._initExtraMenu = function() {
     this._closeExtraMenu = close;
 };
 
+// Window zoom, desktop only.
+//
+// The web build deliberately has no equivalent: there the browser's own Ctrl
+// +/- already zooms the page, and a second zoom inside it would multiply with
+// the first (150% x 150% = 225%) with nothing on screen explaining why.
+proto._initDesktopZoom = function() {
+    const desktop = globalThis.omvDesktop;
+    if (!desktop?.getZoom) return;
+
+    // The limits are whatever the main process reports; until it answers,
+    // leaving them unknown keeps both buttons live rather than dead.
+    this._desktopZoom = { factor: 1 };
+
+    desktop.getZoom().then(state => {
+        if (!state) return;
+        this._desktopZoom = {
+            factor: Number(state.factor) || 1,
+            min: Number(state.min) || undefined,
+            max: Number(state.max) || undefined,
+        };
+        this._updateZoomReadout();
+    }).catch(err => console.error('Reading the window zoom failed:', err));
+
+    // Ctrl +/-/0 change the zoom without going through these buttons.
+    desktop.onZoomChanged?.(factor => {
+        this._desktopZoom = { ...this._desktopZoom, factor: Number(factor) || 1 };
+        this._updateZoomReadout();
+    });
+};
+
+proto._zoomPercentLabel = function() {
+    return `${Math.round((this._desktopZoom?.factor || 1) * 100)}%`;
+};
+
+proto._updateZoomReadout = function() {
+    const readout = this._zoomReadout;
+    if (!readout) return;
+    const { factor, min, max } = this._desktopZoom || {};
+    readout.textContent = this._zoomPercentLabel();
+    // Nothing is broken at the ends of the ladder, but a button that cannot
+    // move should not look like it can.
+    if (this._zoomOutBtn) this._zoomOutBtn.disabled = Number.isFinite(min) && factor <= min + 1e-3;
+    if (this._zoomInBtn) this._zoomInBtn.disabled = Number.isFinite(max) && factor >= max - 1e-3;
+};
+
+proto._createZoomRow = function() {
+    const desktop = globalThis.omvDesktop;
+    if (!this.capabilities?.isDesktop || !desktop?.setZoom) return null;
+
+    const row = document.createElement('div');
+    row.className = 'example-menu-item extra-menu-static extra-zoom-row';
+    row.title = i18n.t('extraZoomTooltip');
+
+    const icon = document.createElement('span');
+    icon.className = 'extra-menu-icon';
+    icon.textContent = '🔍';
+
+    const label = document.createElement('span');
+    label.className = 'example-name';
+    label.textContent = i18n.t('extraZoom');
+
+    const controls = document.createElement('div');
+    controls.className = 'extra-zoom-controls';
+
+    const makeButton = (action, text, labelKey, extraClass) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `extra-zoom-btn${extraClass ? ` ${extraClass}` : ''}`;
+        button.textContent = text;
+        button.title = i18n.t(labelKey);
+        button.setAttribute('aria-label', i18n.t(labelKey));
+        button.addEventListener('click', (e) => {
+            // Zooming is something you do several times in a row while looking
+            // at the result, so the menu stays open instead of closing on the
+            // first click the way an action item would.
+            e.stopPropagation();
+            desktop.setZoom(action).then(factor => {
+                this._desktopZoom = { ...this._desktopZoom, factor: Number(factor) || 1 };
+                this._updateZoomReadout();
+            }).catch(err => console.error('Changing the window zoom failed:', err));
+        });
+        return button;
+    };
+
+    this._zoomOutBtn = makeButton('out', '−', 'extraZoomOut');
+    this._zoomInBtn = makeButton('in', '+', 'extraZoomIn');
+    // The readout is the reset button: it shows where you are and takes you
+    // back to 100%, which is the only value worth a dedicated target. It opens
+    // on the zoom actually in force -- a menu that opens saying 100% while the
+    // window sits at 80% is worse than no readout at all.
+    this._zoomReadout = makeButton('reset', this._zoomPercentLabel(), 'extraZoomReset', 'extra-zoom-value');
+
+    controls.append(this._zoomOutBtn, this._zoomReadout, this._zoomInBtn);
+    row.append(icon, label, controls);
+    this._updateZoomReadout();
+    return row;
+};
+
 proto._renderExtraMenu = function() {
     const menu = document.getElementById('extra-menu');
     if (!menu) return;
@@ -1499,6 +1598,8 @@ proto._renderExtraMenu = function() {
     if (buildText) versionRow.append(versionBuild);
 
     const items = [saveViewItem, saveProjectItem, loadSessionItem, convertParquetItem, displaySettingsItem];
+    const zoomRow = this._createZoomRow();
+    if (zoomRow) items.push(zoomRow);
     if (this.capabilities?.canUseLocalPath) {
         items.push(openTempItem, dymolaDirItem);
     }
