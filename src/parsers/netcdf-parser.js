@@ -14,11 +14,6 @@ const UNSUPPORTED_NODE = 'Unsupported variables';
 const METADATA_NODE = 'File metadata';
 const COORDINATES_NODE = 'Coordinates';
 const MAX_GENERATED_SERIES = 10000;
-// A gridded variable can expose tens of thousands (or millions) of spatial
-// points. Rejecting the whole variable leaves otherwise valid climate files
-// looking as if they failed to load. Keep a representative, deterministic
-// subset instead; users can still inspect the coordinate labels of each slice.
-const MAX_GENERATED_SERIES_PER_VARIABLE = 512;
 const TECHNICAL_ATTRIBUTES = new Set([
     'CLASS', 'NAME', 'REFERENCE_LIST', 'DIMENSION_LIST',
     '_Netcdf4Coordinates', '_Netcdf4Dimid', '_NCProperties',
@@ -209,25 +204,6 @@ function combinations(shape) {
     return result;
 }
 
-function sampledCombinations(shape, limit) {
-    const total = product(shape);
-    if (total <= limit) return combinations(shape);
-    const count = Math.max(1, Math.min(total, limit));
-    const ordinals = new Set();
-    for (let i = 0; i < count; i++) {
-        ordinals.add(Math.round((i * (total - 1)) / Math.max(1, count - 1)));
-    }
-    return [...ordinals].map(ordinal => {
-        const indexes = new Array(shape.length);
-        let remainder = ordinal;
-        for (let axis = shape.length - 1; axis >= 0; axis--) {
-            indexes[axis] = remainder % shape[axis];
-            remainder = Math.floor(remainder / shape[axis]);
-        }
-        return indexes;
-    });
-}
-
 function coordinateLabel(value, index) {
     if (value === undefined || value === null || value === '') return String(index);
     if (typeof value === 'number' && !Number.isFinite(value)) return String(index);
@@ -412,27 +388,14 @@ export default class NetcdfParser {
             }
             const otherAxes = descriptor.shape.map((size, index) => ({ size, index })).filter(item => item.index !== alignment.axis);
             const seriesCount = product(otherAxes.map(item => item.size));
-            const remaining = MAX_GENERATED_SERIES - result.metadata.generatedSeriesCount;
-            if (seriesCount < 1 || remaining < 1) {
+            if (seriesCount < 1 || result.metadata.generatedSeriesCount + seriesCount > MAX_GENERATED_SERIES) {
                 this._skip(result, descriptor, `Expanding this variable would exceed the ${MAX_GENERATED_SERIES.toLocaleString()}-series safety limit.`);
                 continue;
-            }
-            const generatedForVariable = Math.min(seriesCount, remaining, MAX_GENERATED_SERIES_PER_VARIABLE);
-            if (generatedForVariable < seriesCount) {
-                result.metadata.skippedVariables.push({
-                    name: descriptor.path,
-                    reason: `Loaded ${generatedForVariable.toLocaleString()} representative slices out of ${seriesCount.toLocaleString()} to keep the dataset responsive.`,
-                    shape: descriptor.shape,
-                    dimensions: descriptor.dimensions,
-                    partial: true,
-                    generatedSeriesCount: generatedForVariable,
-                    availableSeriesCount: seriesCount,
-                });
             }
             const labelsByAxis = new Map(otherAxes.map(item => [item.index, this._dimensionLabels(
                 descriptor.dimensions[item.index], descriptor.shape[item.index], descriptors, readFlat
             )]));
-            const indexes = sampledCombinations(otherAxes.map(item => item.size), generatedForVariable);
+            const indexes = combinations(otherAxes.map(item => item.size));
             for (const combination of indexes) {
                 const fixed = new Map(otherAxes.map((item, index) => [item.index, combination[index]]));
                 const rawValues = this._readSeries(descriptor, alignment.axis, fixed, readFlat);

@@ -204,28 +204,6 @@ const pypsa = await parser.parse(arrayBuffer(fixtures.pypsa), fixtures.pypsa);
 assert.equal(pypsa.metadata.format, 'pypsa-netcdf', 'PyPSA files must retain the specialized parser and tree');
 assert(pypsa.variables['pypsa:generators/PV1/p_max_pu']);
 
-// Large gridded climate variables used to be rejected wholesale whenever their
-// spatial expansion exceeded 10,000 series. They now load a representative,
-// bounded subset and expose a partial-load warning.
-{
-    const time = {
-        path: '/time', name: 'time', shape: [2], dimensions: ['/time'],
-        dataType: 'double', userAttrs: { units: 'hours since 2000-01-01 00:00:00' },
-        read: () => [0, 1], supportsSlice: false,
-    };
-    const gridValues = Float32Array.from({ length: 2 * 101 * 101 }, (_, index) => index);
-    const grid = {
-        path: '/humidity', name: 'humidity', shape: [2, 101, 101],
-        dimensions: ['/time', '/lat', '/lon'], dataType: 'float',
-        userAttrs: { units: '%' }, read: () => gridValues, supportsSlice: false,
-    };
-    const largeGrid = parser._parseGeneric([time, grid], {}, 'large-grid.nc', 'netcdf3-classic');
-    assert.equal(largeGrid.metadata.generatedSeriesCount, 512);
-    assert.equal(largeGrid.metadata.skippedVariablesCount, 1);
-    assert.equal(largeGrid.metadata.skippedVariables[0].partial, true);
-    assert.equal(largeGrid.metadata.skippedVariables[0].availableSeriesCount, 10201);
-}
-
 const offsetTime = await parser.parse(createClassicBuffer(
     [{ name: 'Time', size: 3 }],
     [
