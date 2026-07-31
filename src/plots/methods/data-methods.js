@@ -1086,14 +1086,50 @@ proto._getTransformIndexData = function(fileId) {
         let hi = cropEnd ?? Infinity;
         if (lo > hi) [lo, hi] = [hi, lo];
 
-        const indexes = [];
-        const times = [];
+        // This loop runs once per sample, so everything that does not vary per
+        // sample has to be lifted out of it. Promoting a ten-minute 44.1 kHz
+        // recording (26.46M samples) to a calendar axis took 29 s — long enough
+        // for the browser to offer to stop the page — and _timeDisplayValueForVar
+        // measured 1.75 µs per call, which is 46 s of the total on its own. It
+        // re-derives the axis mode and origin for every sample even though both
+        // are fixed for the whole file.
+        //
+        // Lifted as a kind plus an origin rather than as generic affine
+        // coefficients so the arithmetic below stays character-for-character the
+        // expression the function used: (raw - origin) / 1000 and
+        // origin / 1000 - raw / 1000 do not round identically.
+        const DISPLAY_PASSTHROUGH = 0;
+        const DISPLAY_NUMERIC_CALENDAR = 1;
+        const DISPLAY_ELAPSED = 2;
+        let displayKind = DISPLAY_PASSTHROUGH;
+        let displayOriginMs = 0;
+        if (!generatedIndex) {
+            if (numericCalendar) {
+                displayKind = DISPLAY_NUMERIC_CALENDAR;
+                displayOriginMs = this._timeOriginMsForVar(fileId, timeVar);
+            } else if (this._isElapsedTimeForVar(fileId, timeVar)) {
+                displayKind = DISPLAY_ELAPSED;
+                displayOriginMs = this._timeOriginMsForVar(fileId, timeVar);
+            }
+        }
+
+        // Without a crop nothing is dropped, so the output length is known up
+        // front and both outputs can be filled in place instead of grown. The
+        // fast path above already hands callers a Float64Array, so a typed
+        // `times` changes no type expectation.
+        const keepIndexes = cropped || displayKind === DISPLAY_ELAPSED || generatedIndex;
+        const total = rawTimes.length;
+        // And when the row map is about to be discarded, do not build it at
+        // all. It stays a plain Array where it IS kept, because a consumer maps
+        // it to floats and a typed one would truncate them.
+        const indexes = keepIndexes ? (cropped ? [] : new Array(total)) : null;
+        const times = cropped ? [] : new Float64Array(total);
         const generatedCalendar = generatedIndex && this._isGeneratedCalendarTime(fileId, timeVar);
         const highResolutionCalendar = generatedCalendar && this._isHighResolutionGeneratedCalendarTime(fileId, timeVar);
         const generatedCalendarOrigin = generatedCalendar ? this._timeOriginMsForVar(fileId, timeVar) : 0;
         const generatedStepMode = generatedIndex ? this._indexTimeStepMode(fileId) : null;
         const generatedStepSeconds = generatedIndex ? this._indexTimeStepSeconds(fileId) : 0;
-        for (let i = 0; i < rawTimes.length; i++) {
+        for (let i = 0; i < total; i++) {
             const rawTime = rawTimes[i];
             // Row that drives a generated index: a DETECTED datetime axis can be
             // irregular/downsampled, so map source time → approximate row; a numeric
@@ -1110,13 +1146,22 @@ proto._getTransformIndexData = function(fileId) {
                             ? generatedRow * generatedStepSeconds
                             : generatedCalendarOrigin + generatedRow * generatedStepSeconds * 1000)
                         : generatedRow * generatedStepSeconds)
-                : this._timeDisplayValueForVar(fileId, rawTime, timeVar);
-            if (!cropped || (displayTime >= lo && displayTime <= hi)) {
-                indexes.push(i);
+                : displayKind === DISPLAY_NUMERIC_CALENDAR
+                    // Value-preserving promotion: the raw value is seconds from
+                    // the origin. Mirrors _timeDisplayValueForVar exactly.
+                    ? displayOriginMs + Number(rawTime) * 1000
+                    : displayKind === DISPLAY_ELAPSED
+                        ? (rawTime - displayOriginMs) / 1000
+                        : rawTime;
+            if (!cropped) {
+                times[i] = displayTime + timeShift;
+                if (indexes) indexes[i] = i;
+            } else if (displayTime >= lo && displayTime <= hi) {
                 times.push(displayTime + timeShift);
+                indexes.push(i);
             }
         }
-        result = { indexes: (cropped || this._isElapsedTimeForVar(fileId, timeVar) || generatedIndex) ? indexes : null, times };
+        result = { indexes, times };
     }
 
     if (cache) cache.indexData = result;

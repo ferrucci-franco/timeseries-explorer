@@ -126,7 +126,8 @@
     "bench:zoom": "node scripts/bench-zoom.mjs",
     "bench:parse": "node --max-old-space-size=8192 scripts/bench-parse.mjs",
     "bench:derived": "node scripts/bench-derived.mjs",
-    "bench:fixtures": "python scripts/gen-perf-fixtures.py"
+    "bench:fixtures": "python scripts/gen-perf-fixtures.py",
+    "test:time-axis-transform": "node scripts/test-time-axis-transform-perf.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",

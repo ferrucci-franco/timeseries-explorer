@@ -3587,9 +3587,17 @@ class PlotManager {
         const origin = this._timeOriginMs(fileId);
         const fromShift = this._timeShiftForMode(fromTransform, fromMode);
         const toShift = this._timeShiftForMode(toTransform, toMode);
+        // 'numeric' reaches here only for a file whose own numeric axis is being
+        // promoted to (or demoted from) a calendar or a duration — a datetime
+        // axis never reports 'numeric', and numeric-to-numeric returns above.
+        // Its values are therefore seconds measured from the origin, exactly
+        // like elapsedSeconds. Treating them as absolute epoch-ms instead sent
+        // a 0-600 s view to 1970, which is where the whole signal went missing
+        // until the user pressed auto-scale.
+        const secondsFromOrigin = mode => mode === 'elapsedDateTime' || mode === 'elapsedSeconds' || mode === 'numeric';
         const toAbsoluteMs = (value) => {
             if (fromMode === 'calendar') return this._coerceAxisValue(value) - fromShift;
-            if (fromMode === 'elapsedDateTime' || fromMode === 'elapsedSeconds') {
+            if (secondsFromOrigin(fromMode)) {
                 const numeric = Number(value);
                 return Number.isFinite(numeric) ? origin + (numeric - fromShift) * 1000 : NaN;
             }
@@ -3599,7 +3607,7 @@ class PlotManager {
         const fromAbsoluteMs = (value) => {
             if (!Number.isFinite(value)) return value;
             if (toMode === 'calendar') return new Date(value + toShift).toISOString();
-            if (toMode === 'elapsedDateTime' || toMode === 'elapsedSeconds') return (value - origin) / 1000 + toShift;
+            if (secondsFromOrigin(toMode)) return (value - origin) / 1000 + toShift;
             return value;
         };
         const mapped = range.map(value => fromAbsoluteMs(toAbsoluteMs(value)));
