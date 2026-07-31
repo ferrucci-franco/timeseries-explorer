@@ -280,7 +280,7 @@ assert.ok(
         && fileMethodsSource.includes('this._updateFileTransform(fileId, patch, { rerender: true })'),
     'the selector maps both calendar options into the existing transform/rebuild path',
 );
-assert.ok(fftMethodsSource.includes('const layout = this._buildTimeLayout(plot)'), 'Fourier redraws reuse the central time layout');
+assert.ok(fftMethodsSource.includes('const layout = this._buildTimeLayout(plot,'), 'Fourier redraws reuse the central time layout');
 assert.ok(histogramMethodsSource.includes('const layout = this._buildTimeLayout(plot)'), 'Histogram redraws reuse the central time layout');
 assert.ok(
     interactionMethodsSource.includes("this._timeAxisRelayoutUpdate(layout.scene.xaxis, 'scene.xaxis')"),
@@ -308,6 +308,30 @@ for (const language of ['fr', 'es', 'it']) {
 const ampmLayout = harness._buildTimeLayout(plot);
 assertAmPmAxis(ampmLayout.xaxis, 'initial layout');
 assert.match(ampmLayout.xaxis.title.text, /AM\/PM/, 'axis title and tick clock both use AM/PM');
+
+// FFT's automatic slice passes its known range into the shared layout. A
+// multi-GB source must not be scanned again just to calculate the same extent.
+let boundedLayoutReads = 0;
+const hugeVirtualTime = new Proxy({ length: 200_000_000 }, {
+    get(target, key) {
+        if (key in target) return target[key];
+        const index = Number(key);
+        if (Number.isInteger(index)) {
+            boundedLayoutReads++;
+            return index / 48_000;
+        }
+        return undefined;
+    },
+});
+const boundedHarness = new Harness('24h');
+boundedHarness.files.get(FILE_ID).transform = {};
+const boundedTimeVar = boundedHarness._getTimeVar(FILE_ID);
+boundedTimeVar.data = hugeVirtualTime;
+boundedTimeVar.timeKind = 'numeric';
+boundedTimeVar.timeDisplayMode = 'raw';
+const boundedLayout = boundedHarness._buildTimeLayout(plotFor(), { timeRange: [0, 1] });
+assert.deepEqual(boundedLayout.xaxis.range, [0, 1]);
+assert.ok(boundedLayoutReads < 20, `bounded FFT layout must not scan the source (${boundedLayoutReads} reads)`);
 
 const ampmTrace = harness._buildTimeTrace(plot.traces[0], null, plot);
 assert.ok(

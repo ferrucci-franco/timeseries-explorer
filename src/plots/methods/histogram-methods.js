@@ -43,6 +43,7 @@ proto._defaultHistogramState = function() {
         timeSeriesHidden: false,
         optionsVisible: true,
         rangeFull: true,
+        autoRangeLimited: false,
         x1: null,
         x2: null,
         binMode: 'auto',
@@ -74,6 +75,7 @@ proto._normalizeHistogramState = function(raw = {}) {
         rangeFull: raw.rangeFull !== undefined
             ? !!raw.rangeFull
             : !(hasFinite(raw.x1) || hasFinite(raw.x2)),
+        autoRangeLimited: raw.autoRangeLimited === true,
         x1: finiteOrNull(raw.x1),
         x2: finiteOrNull(raw.x2),
         binMode: HISTOGRAM_BIN_MODES.has(raw.binMode) ? raw.binMode : defaults.binMode,
@@ -135,8 +137,13 @@ proto._createHistogramChart = function(panelId, panelEl) {
     const plot = this.plots.get(panelId);
     if (!this._hasContent(plot)) return;
     const state = this._ensureHistogramState(plot);
+    this._autoLimitAnalysisRange(plot, state, 'histogram', { initial: true });
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
+    // Opening an analysis shows the whole signal, or the window around the
+    // range it cut for itself — never whatever zoom the previous mode happened
+    // to be sitting at. A saved session view outranks both.
+    if (!this._consumeSessionViewRestore(plot)) state.autoRangeFocusPending = true;
     if (restoreView?.histogramBars) plot._histogramPendingBarView = restoreView.histogramBars;
 
     const placeholder = panelEl.querySelector('.layout-panel-placeholder');
@@ -231,7 +238,11 @@ proto._createHistogramChart = function(panelId, panelEl) {
     ]).then(() => {
         this._refreshActionBtns(panelId);
         const viewPromise = restoreView ? this._restorePlotView(plot, restoreView) : Promise.resolve();
-        Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
+        Promise.resolve(viewPromise).then(() => {
+            this._refreshTimeseriesVisuals(panelId, plot);
+            // After any restored view is applied, so the focus is not undone.
+            this._applyPendingAnalysisFocus(plot);
+        });
         this._installHistogramPlotHandlers(panelId, plot);
         // Cursor capture handlers before selection handlers, so an enabled
         // cursor over a selection boundary keeps the pointer (as in Heatmap).
@@ -360,8 +371,10 @@ proto._removeHistogramTraceFromLegend = function(panelId, plot, trace) {
 // ─── Time plot (top/left pane) ─────────────────────────────────────
 
 proto._buildHistogramTimeTraces = function(plot) {
+    const state = this._ensureHistogramState(plot);
+    const visualRange = state.autoRangeWarning ? this._activeHistogramRange(plot) : null;
     return plot.traces
-        .map((t, idx) => this._buildTimeTrace(t, null, plot, idx))
+        .map((t, idx) => this._buildTimeTrace(t, visualRange, plot, idx))
         .filter(Boolean);
 };
 
@@ -453,7 +466,20 @@ proto._scheduleHistogramRecompute = function(panelId, options = {}) {
     const plot = this.plots.get(panelId);
     if (!plot?.histogramDiv || plot.mode !== 'histogram') return;
     clearTimeout(plot._histRecomputeTimer);
-    const run = () => this._recomputeHistogram(panelId, plot);
+    const run = () => {
+        const state = this._ensureHistogramState(plot);
+        const adjusted = this._autoLimitAnalysisRange(plot, state, 'histogram');
+        if (adjusted) this._updateHistogramSelectionShapes(panelId, plot);
+        this._setHistogramStatus(plot, i18n.t('integralCalculating'), 'loading');
+        // Give the status and any adjusted green range one frame to paint
+        // before the bounded synchronous histogram passes begin.
+        this._runAnalysisAfterPaint(
+            plot,
+            '_histRecomputeRun',
+            () => plot.mode === 'histogram' && !!plot.histogramDiv,
+            () => this._recomputeHistogram(panelId, plot),
+        );
+    };
     if (options.immediate) run();
     else plot._histRecomputeTimer = setTimeout(run, HISTOGRAM_RECOMPUTE_DEBOUNCE_MS);
 };
@@ -466,13 +492,13 @@ proto._histogramSamplesForTrace = function(trace, range) {
     if (!range) return values;
     const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
     if (!times || times.length !== values.length) return values;
-    const [lo, hi] = range;
-    const out = [];
-    for (let i = 0; i < values.length; i++) {
-        const t = times[i];
-        if (t >= lo && t <= hi) out.push(values[i]);
-    }
-    return out;
+    let [lo, hi] = range;
+    if (lo > hi) [lo, hi] = [hi, lo];
+    const start = Math.max(0, Math.min(values.length, this._lowerBound(times, lo)));
+    const end = Math.max(start, Math.min(values.length, this._upperBound(times, hi)));
+    // The selected count was already preflighted. Slice only those samples:
+    // scanning the complete 160M-point source here defeated the range cap.
+    return values.slice(start, end);
 };
 
 proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
@@ -482,7 +508,7 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
     const state = this._ensureHistogramState(plot);
     const range = state.rangeFull ? null : this._activeHistogramRange(plot);
     const allTraces = plot.traces || [];
-    const warnings = [];
+    const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
     const config = this._getPlotlyConfig();
 
     if (!allTraces.length) {
@@ -503,19 +529,25 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
         }
     }
     if (!eager.length) {
-        this._setHistogramStatus(plot, warnings.join(' | '), 'warning');
+        this._setHistogramStatus(plot, '', 'warning', warnings);
         state.warnings = warnings;
         Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayoutForReact(plot), config);
         return;
     }
 
-    // Pass 1: per-trace samples + finite stats for every eager trace.
+    // Pass 1: per-trace samples + finite stats for every eager trace. This is
+    // the part whose cost scales with the range, so it is what the auto-limit
+    // reconsider measures.
     const perTrace = [];
-    for (const trace of eager) {
-        const samples = this._histogramSamplesForTrace(trace, range);
-        const stat = histogramFiniteStats(samples);
-        perTrace.push({ trace, samples, stat, visible: this._isVisible(trace) });
-    }
+    const measured = this._measureAnalysisKernel(panelId, plot, () => {
+        for (const trace of eager) {
+            const samples = this._histogramSamplesForTrace(trace, range);
+            const stat = histogramFiniteStats(samples);
+            perTrace.push({ trace, samples, stat, visible: this._isVisible(trace) });
+        }
+    }, warnings);
+    // The measurement widened the range and rescheduled; this pass is stale.
+    if (measured.superseded) return;
 
     // Edges come from VISIBLE traces with finite data, so hiding a trace never
     // shifts the others' bins. If everything is hidden, fall back to all finite
@@ -537,7 +569,7 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
         state.warnings = warnings;
         if (plot._histToken !== token) return;
         Plotly.react(plot.histogramDiv, [], this._buildHistogramBarLayoutForReact(plot), config);
-        this._setHistogramStatus(plot, i18n.t('histogramNoFinite'), 'warning');
+        this._setHistogramStatus(plot, '', 'warning', warnings);
         return;
     }
 
@@ -624,15 +656,35 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
     });
 
     const methodLabel = `${i18n.t(`histogramMethod_${spec.method}`) || spec.method} · ${spec.k} ${i18n.t('histogramBinsShort')}`;
-    if (warnings.length) this._setHistogramStatus(plot, `${methodLabel} — ${warnings.join(' | ')}`, 'warning');
-    else this._setHistogramStatus(plot, methodLabel, 'ready');
+    this._setHistogramStatus(plot, methodLabel, warnings.length ? 'warning' : 'ready', warnings);
 };
 
-proto._setHistogramStatus = function(plot, text, kind = 'muted') {
+// The topbar carries a short summary; warning prose — which can run to a full
+// paragraph — goes to the drawer box, exactly as FFT, Heatmap, Profile and
+// Integral do. The bar only points there and keeps the text as its tooltip.
+proto._setHistogramStatus = function(plot, text, kind = 'muted', warnings = []) {
+    const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+    plot._histogramWarningMessage = list.join(' | ');
+    plot._histogramStatusKind = list.length ? 'warning' : kind;
     const status = plot?.histogramContainer?.querySelector('.hist-status');
-    if (!status) return;
-    status.textContent = text || '';
-    status.className = `hist-status hist-status-${kind}`;
+    if (status) {
+        const pointer = list.length ? i18n.t('histogramWarningSeePanel') : '';
+        status.textContent = [text, pointer].filter(Boolean).join(' · ');
+        status.className = `hist-status hist-status-${plot._histogramStatusKind}`;
+        status.title = plot._histogramWarningMessage || text || '';
+    }
+    this._syncHistogramMessage(plot);
+};
+
+proto._syncHistogramMessage = function(plot) {
+    const box = plot?.histogramContainer?.querySelector('.hist-message');
+    if (!box) return;
+    const warning = plot._histogramWarningMessage || '';
+    const kind = plot._histogramStatusKind || 'muted';
+    const show = !!warning && kind === 'warning';
+    box.hidden = !show;
+    box.textContent = show ? warning : '';
+    box.className = `fft-message hist-message fft-message-${kind}`;
 };
 
 // ─── Temporal selection (Todo / Selección) — mechanics mirror FFT ──
@@ -643,7 +695,7 @@ proto._histogramDomain = function(plot) {
         const values = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         if (values?.length) arrays.push(values);
     }
-    const extent = this._finiteExtent(arrays);
+    const extent = this._finiteSortedExtent(arrays);
     return extent ? { min: extent.min, max: extent.max } : null;
 };
 
@@ -744,6 +796,8 @@ proto._installHistogramSelectionHandlers = function(panelId, plot) {
             hi = dragging.startHi + delta;
         }
         if (lo > hi) [lo, hi] = [hi, lo];
+        state.autoRangeWarning = null;
+        state.autoRangeLimited = false;
         state.x1 = Math.max(domain.min, Math.min(domain.max, lo));
         state.x2 = Math.max(domain.min, Math.min(domain.max, hi));
         this._updateHistogramSelectionShapes(panelId, plot);
@@ -766,6 +820,8 @@ proto._setHistogramRangeMode = function(panelId, full) {
     if (!plot) return;
     const state = this._ensureHistogramState(plot);
     if (state.rangeFull === full) return;
+    state.autoRangeWarning = null;
+    state.autoRangeLimited = false;
     state.rangeFull = full;
     if (!full) {
         // Initialize the selection from the currently visible time span.
@@ -835,6 +891,8 @@ proto._resetHistogramView = function(panelId) {
     if (!plot?.div) return;
     const state = this._ensureHistogramState(plot);
     state.rangeFull = true;
+    state.autoRangeLimited = false;
+    state.autoRangeWarning = null;
     state.x1 = null;
     state.x2 = null;
     state.valueRangeMode = 'auto';
@@ -899,6 +957,11 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
     const options = plot?.histogramContainer?.querySelector('.hist-options');
     if (!options) return;
     options.innerHTML = '';
+    const message = document.createElement('div');
+    message.className = 'fft-message hist-message';
+    message.hidden = true;
+    options.appendChild(message);
+    this._syncHistogramMessage(plot);
 
     const section = (titleKey) => {
         const h = document.createElement('div');
@@ -982,6 +1045,8 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
             const n = isCal ? histDatetimeInputToMs(input.value) : Number(input.value);
             let v = Number.isFinite(n) ? n : null;
             if (v != null && domain) v = Math.max(domain.min, Math.min(domain.max, v));
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = v;
             this._updateHistogramSelectionShapes(panelId, plot);
             this._scheduleHistogramRecompute(panelId);
@@ -1000,6 +1065,8 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
         input.disabled = !!state.rangeFull;
         input.addEventListener('input', () => {
             const n = Number(input.value);
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state[key] = Number.isFinite(n) ? n : null;
             this._updateHistogramSelectionShapes(panelId, plot);
         });

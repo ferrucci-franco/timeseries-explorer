@@ -46,6 +46,41 @@ class Harness {
 installPlotDataMethods(Harness);
 
 const h = new Harness();
+
+// Eager Phase 2D / 2D+t / 3D trajectories must sample by index instead of
+// scanning the complete source. The virtual arrays are intentionally too large
+// for a linear implementation to finish during this test.
+{
+    const sourceLength = 100_000_000;
+    let sourceReads = 0;
+    const makeVirtualSeries = offset => new Proxy({ length: sourceLength }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                sourceReads++;
+                return offset + index;
+            }
+            return undefined;
+        },
+    });
+    const visual = h._buildPhaseVisualSeries([
+        makeVirtualSeries(0),
+        makeVirtualSeries(100),
+        makeVirtualSeries(200),
+    ]);
+    assert.equal(visual.length, 3);
+    assert.equal(visual[0].length, Harness.DEFAULT_VISUAL_MAX_POINTS_PHASE);
+    assert.equal(visual[1].length, Harness.DEFAULT_VISUAL_MAX_POINTS_PHASE);
+    assert.equal(visual[2].length, Harness.DEFAULT_VISUAL_MAX_POINTS_PHASE);
+    assert.ok(
+        sourceReads <= Harness.DEFAULT_VISUAL_MAX_POINTS_PHASE * 3,
+        `eager phase sampling reads only the displayed points (${sourceReads} reads)`,
+    );
+    assert.equal(visual[0][0], 0, 'phase sampling preserves the first row');
+    assert.equal(visual[0].at(-1), sourceLength - 1, 'phase sampling preserves the last row');
+}
+
 h.files.set('lazy', {
     transform: {
         gain: 2,

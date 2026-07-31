@@ -1,7 +1,28 @@
+import i18n from '../../i18n/index.js';
 import { getCalendarDateTickFormat } from '../plotly-locale.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
 
 const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
+
+// How long an analysis may block the UI thread before its range is cut down to
+// an initial fast preview.
+const ANALYSIS_AUTO_LIMIT_BUDGET_MS = 5000;
+
+// Shortening the analysed range without moving the view leaves the selection
+// drawn a few pixels wide: on a ten-minute signal the automatic 5.9 s block
+// came out 5.9 px across a 596 px axis. Both green edges then sit inside the
+// same 12 px grab tolerance (histogram-methods.js), so neither can be picked
+// up and dragging starts a new selection instead — the range control becomes
+// unusable at exactly the moment the app decides the range for the user.
+//
+// So the view follows the range. The padding sets how much context stays
+// around the selection; at 4x the selection occupies a quarter of the axis,
+// which on any real panel width is far above the minimum below.
+const ANALYSIS_FOCUS_PADDING = 4;
+// A selection narrower than this many pixels is not draggable. Four times the
+// 12 px edge tolerance, so the two edges are separated by two clear tolerance
+// windows with room to spare.
+const ANALYSIS_MIN_SELECTION_PX = 48;
 
 export function getCalendarTimeFormats(mode = '24h', language = 'en') {
     const useAmPm = mode === 'ampm' || mode === 'calendar-ampm';
@@ -1801,13 +1822,37 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     // is mostly NaN by construction, and min/max bucket decimation would throw
     // away the few points that ARE there — losing exactly the positions the trace
     // exists to show. It gets its own reduction, over the present samples only.
-    const visual = t.markersOnly
+    const fullVisualCacheable = !visibleRange
+        && !t.markersOnly
+        && !isStep
+        && !plot?.timeseriesStacked;
+    const cachedFullVisual = fullVisualCacheable
+        && t._fullVisualCache?.timeData === timeData
+        && t._fullVisualCache?.values === values
+        && t._fullVisualCache?.target === this.timeseriesVisualMaxPoints
+        ? t._fullVisualCache.visual
+        : null;
+    const baseVisual = t.markersOnly
         ? this._buildSparseVisualData(timeData, values)
-        : this._applyTimeseriesStackZeroPadding(
-            plot,
-            t,
-            this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep)
-        );
+        : (cachedFullVisual || this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep));
+    if (fullVisualCacheable && !cachedFullVisual) {
+        // Mode changes preserve trace state. Reuse the already computed
+        // full-series screen overview when entering FFT instead of rescanning a
+        // multi-GB decoded signal merely to draw the same 2,000-point envelope.
+        // Non-enumerable: session serialization must never walk the source
+        // typed arrays retained only as cache identity guards.
+        Object.defineProperty(t, '_fullVisualCache', {
+            configurable: true,
+            writable: true,
+            value: {
+                timeData,
+                values,
+                target: this.timeseriesVisualMaxPoints,
+                visual: baseVisual,
+            },
+        });
+    }
+    const visual = this._applyTimeseriesStackZeroPadding(plot, t, baseVisual);
     const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
     const customdata = highResolutionCalendarAxis
         ? Array.from(visual.x || [], value => this._formatGeneratedCalendarDateTime(
@@ -1854,7 +1899,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     };
 };
 
-proto._buildTimeLayout = function(plot) {
+proto._buildTimeLayout = function(plot, options = {}) {
     const { bg, gridColor, fontColor, legendBg } = this._colors();
     const margin = this._marginConfig();
     margin.b += 6;
@@ -1871,14 +1916,27 @@ proto._buildTimeLayout = function(plot) {
         visibleFileIds.length ? visibleFileIds : plot.traces.map(t => t.fileId),
     ).effectiveDisplay;
     const timeTitle = this._timeAxisTitleForVar(firstFileId, firstTimeVar, 'Time', panelDisplay);
+    // Analysis views can render a deliberately bounded slice of a multi-GB
+    // signal. Reusing the normal layout must not then rescan every source time
+    // merely to rediscover the x extent: the caller already knows that slice.
+    const boundedTimeRange = Array.isArray(options.timeRange)
+        && options.timeRange.length >= 2
+        && options.timeRange.every(value => Number.isFinite(Number(value)))
+        ? options.timeRange.map(Number)
+        : null;
+    const timeExtentInput = boundedTimeRange
+        ? boundedTimeRange
+        : plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName));
     const xAxisMode = firstTimeMode === 'calendar' || generatedCalendarAxis
-        ? this._calendarAxisConfig(firstFileId, firstTimeVar, plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)))
+        ? this._calendarAxisConfig(firstFileId, firstTimeVar, timeExtentInput)
         : (panelDisplay === 'duration'
-            ? this._elapsedDateTimeAxisConfig(plot.traces.map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)), firstFileId)
+            ? this._elapsedDateTimeAxisConfig(timeExtentInput, firstFileId)
             : { type: 'linear' });
-    const xExtent = this._finiteExtent(plot.traces
-        .filter(t => this._isVisible(t))
-        .map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)));
+    const xExtent = boundedTimeRange
+        ? this._finiteExtent([boundedTimeRange])
+        : this._finiteExtent(plot.traces
+            .filter(t => this._isVisible(t))
+            .map(t => this._getTransformedTimeDataForVariable(t.fileId, t.varName)));
     const xRange = xExtent ? this._exactRange(xExtent.min, xExtent.max) : null;
     const xRangeConfig = xRange
         ? {
@@ -2206,6 +2264,220 @@ proto._buildPhase3DLayout = function(plot, isTimez) {
         margin:   { l: 0, r: 0, t: 10, b: 0 },
         autosize: true,
     };
+};
+
+// Time arrays used by range selectors are ordered and all range extraction
+// below uses binary bounds. Their domain therefore comes from the first and
+// last finite values; scanning every timestamp would make merely opening an
+// analysis panel linear in multi-gigabyte inputs.
+proto._finiteSortedExtent = function(arrays) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const values of arrays || []) {
+        let first = 0;
+        let last = (values?.length || 0) - 1;
+        while (first <= last && !Number.isFinite(Number(values[first]))) first++;
+        while (last >= first && !Number.isFinite(Number(values[last]))) last--;
+        if (first > last) continue;
+        const a = Number(values[first]);
+        const b = Number(values[last]);
+        min = Math.min(min, a, b);
+        max = Math.max(max, a, b);
+    }
+    return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+};
+
+proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode, options = {}) {
+    if (!plot || !state) return false;
+    // The bounded range is an initial fast preview. Once the user changes or
+    // expands the selector, recomputes must honor that explicit range even when
+    // the estimate is slow.
+    if (options.initial !== true) return false;
+    // Re-entering a mode whose range is STILL the automatic preview rebuilds
+    // the pane with a fresh full-width view, which draws that range a few
+    // pixels across again and puts both its edges back inside one grab
+    // tolerance. The focus is owed on every build of the panel, not only on
+    // the build that did the cutting.
+    if (state.autoRangeLimited === true) state.autoRangeFocusPending = true;
+    const source = plot.traces?.find(trace => this._isVisible(trace))
+        || plot.phaseTraces?.find(trace => trace.visible !== false);
+    const fileId = source?.fileId;
+    const varName = source?.varName || source?.x;
+    if (!fileId || !varName || this.files.get(fileId)?.data?._duckdb) return false;
+    // Heatmap and Profile refuse a non-calendar axis outright. Shortening the
+    // range there announces a fast first result the analysis will never
+    // produce, and buries the one message that explains the empty pane.
+    if ((mode === 'heatmap' || mode === 'temporal-profile')
+        && this._fftTimeKind(fileId) !== 'datetime') return false;
+    const times = this._getTransformedTimeDataForVariable(fileId, varName);
+    const n = times?.length || 0;
+    if (n < 2) return false;
+    let selectionStart = 0;
+    let selectionEnd = n;
+    if (!state.rangeFull) {
+        let lo = Number(state.x1);
+        let hi = Number(state.x2);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return false;
+        if (lo > hi) [lo, hi] = [hi, lo];
+        selectionStart = Math.max(0, Math.min(n, this._lowerBound(times, lo)));
+        selectionEnd = Math.max(selectionStart, Math.min(n, this._upperBound(times, hi)));
+    }
+    const selectedCount = selectionEnd - selectionStart;
+    if (selectedCount < 2) return false;
+    const traceCount = Math.max(1,
+        (plot.traces || []).filter(trace => this._isVisible(trace)).length
+        || (plot.phaseTraces || []).filter(trace => trace.visible !== false).length);
+    const factor = {
+        phase2d: 12,
+        correlation: 8,
+        'temporal-profile': 6,
+        heatmap: 5,
+        histogram: 4,
+        integral: 3,
+    }[mode] || 3;
+    const estimatedMs = (selectedCount * traceCount * factor) / 10000;
+    const target = Math.min(262144, selectedCount);
+    // Deliberately no "about N seconds". A kernel's per-point cost is not
+    // constant — measured over this project's own histogram statistics it
+    // ranges from 0.49 to 1.46 µs/point depending only on how many points it
+    // is handed — so any figure derived from a small probe carries a threefold
+    // error. What IS certain, and what the user actually needs, is how much of
+    // the signal this result describes.
+    const warningText = (samples, total) => i18n.t('analysisAutoRangeWarning')
+        .replace('{samples}', samples.toLocaleString())
+        .replace('{total}', total.toLocaleString());
+    const needsLimit = estimatedMs > ANALYSIS_AUTO_LIMIT_BUDGET_MS
+        || (state.autoRangeLimited === true && selectedCount > target);
+    if (!needsLimit) {
+        // Re-entering a mode whose range is still the automatic fast preview:
+        // the selection no longer looks expensive precisely because it was
+        // already cut. Restate why, or the panel silently describes a fraction
+        // of the signal as if it were the whole of it. `selectedCount` is the
+        // cut range by now, so the whole comes from what was recorded then.
+        if (state.autoRangeLimited !== true || state.autoRangeWarning) return false;
+        state.autoRangeWarning = warningText(
+            Number(state.autoRangeSampleCount) || selectedCount,
+            Number(state.autoRangeFullCount) || n,
+        );
+        if (Array.isArray(state.warnings)) state.warnings = [state.autoRangeWarning];
+        return true;
+    }
+    let start = selectionStart;
+    while (start < selectionEnd && !Number.isFinite(Number(times[start]))) start++;
+    if (start >= selectionEnd - 1) return false;
+    let end = Math.min(selectionEnd, start + target);
+    while (end > start + 1 && !Number.isFinite(Number(times[end - 1]))) end--;
+    if (end <= start + 1) return false;
+    // What the range was before the cut, so a measurement that proves the cut
+    // unnecessary can put it back exactly.
+    state.autoRangePrevious = { rangeFull: !!state.rangeFull, x1: state.x1, x2: state.x2 };
+    state.autoRangeFullCount = selectedCount;
+    state.autoRangeSampleCount = end - start;
+    state.autoRangeMeasured = false;
+    state.rangeFull = false;
+    state.autoRangeLimited = true;
+    // The pane does not exist yet at this point, so the view cannot be moved
+    // here; the panel applies this once it has drawn.
+    state.autoRangeFocusPending = true;
+    state.x1 = Number(times[start]);
+    state.x2 = Number(times[end - 1]);
+    state.autoRangeWarning = warningText(end - start, selectedCount);
+    if (Array.isArray(state.warnings)) state.warnings = [state.autoRangeWarning];
+    return true;
+};
+
+// The per-mode factors above are a guess made before anything has run, and a
+// guess over kernels whose per-point cost differs by more than an order of
+// magnitude is wrong in both directions: Curve Fit was told 32 s for work that
+// takes under one, Integral was told 8 s for work that takes twenty.
+//
+// The bounded first pass is itself a measurement, and it is used for the one
+// question a measurement can answer reliably here: was the cut needed at all?
+// A small probe always runs at a WORSE per-point rate than a large one (JIT
+// warm-up, allocation, cache) — measured on this project's own histogram
+// statistics, 1.46 µs/point at 262k against 0.49 µs/point at 4.2M. Projecting
+// from it therefore yields an upper bound, never an optimistic one. So when
+// even the pessimistic projection fits the budget, the full range is provably
+// affordable and is restored and recomputed. When it does not, nothing is
+// claimed about the duration: the threefold spread makes any figure fiction,
+// and the warning states the sample counts instead.
+// Pure: the view window that keeps [x1, x2] draggable. Centred on the
+// selection, `padding` times wider, clamped to the data domain — and when the
+// clamp runs out of room on one side the window grows on the other, so the
+// selection never ends up hugging an edge with less context than asked for.
+proto._analysisFocusViewRange = function(x1, x2, domainMin, domainMax, padding = ANALYSIS_FOCUS_PADDING) {
+    const lo = Math.min(Number(x1), Number(x2));
+    const hi = Math.max(Number(x1), Number(x2));
+    const min = Math.min(Number(domainMin), Number(domainMax));
+    const max = Math.max(Number(domainMin), Number(domainMax));
+    if (![lo, hi, min, max].every(Number.isFinite) || hi <= lo || max <= min) return null;
+    const wanted = Math.min((hi - lo) * Math.max(1, padding), max - min);
+    // Already wide enough relative to the domain: leave the view alone.
+    if (wanted >= max - min) return [min, max];
+    const centre = (lo + hi) / 2;
+    let start = centre - wanted / 2;
+    if (start < min) start = min;
+    if (start + wanted > max) start = max - wanted;
+    return [start, start + wanted];
+};
+
+proto._analysisStateForMode = function(plot, mode = plot?.mode) {
+    switch (mode) {
+        // FFT bounds its own range through _prepareFftAutoRange rather than
+        // _autoLimitAnalysisRange, but it lands the user in the same unusable
+        // geometry, so it shares the focus machinery.
+        case 'fft': return this._ensureFftState?.(plot);
+        case 'histogram': return this._ensureHistogramState?.(plot);
+        case 'heatmap': return this._ensureCalendarHeatmapState?.(plot);
+        case 'temporal-profile': return this._ensureTemporalProfileState?.(plot);
+        case 'integral': return this._ensureIntegralState?.(plot);
+        case 'correlation': return this._ensureCorrelationState?.(plot);
+        case 'phase2d': return this._ensurePhase2dState?.(plot);
+        default: return null;
+    }
+};
+
+proto._rescheduleAnalysisRecompute = function(panelId, mode) {
+    switch (mode) {
+        case 'histogram': return this._scheduleHistogramRecompute?.(panelId, { immediate: true });
+        case 'heatmap': return this._scheduleCalendarHeatmapRecompute?.(panelId, { immediate: true });
+        case 'temporal-profile': return this._scheduleTemporalProfileRecompute?.(panelId, { immediate: true });
+        case 'integral': return this._scheduleIntegralRecompute?.(panelId, { immediate: true });
+        case 'correlation': return this._scheduleCorrelationRecompute?.(panelId, { immediate: true });
+        case 'phase2d': return this._schedulePhase2dFitRecompute?.(panelId, { immediate: true });
+        default: return undefined;
+    }
+};
+
+proto._reconsiderAutoLimitedRange = function(panelId, plot, elapsedMs) {
+    const mode = plot?.mode;
+    const state = this._analysisStateForMode(plot, mode);
+    if (!state?.autoRangeLimited || state.autoRangeMeasured) return false;
+    const sample = Number(state.autoRangeSampleCount) || 0;
+    const full = Number(state.autoRangeFullCount) || 0;
+    if (sample < 2 || full <= sample || !(elapsedMs >= 0)) return false;
+    state.autoRangeMeasured = true;
+
+    // A pass too short to time says nothing except "cheap"; treat it as the
+    // timer's own resolution so the projection stays an upper bound.
+    const measuredMs = Math.max(elapsedMs, 1);
+    const projectedMs = (measuredMs / sample) * full;
+    if (projectedMs > ANALYSIS_AUTO_LIMIT_BUDGET_MS) return false;
+
+    // Even the pessimistic projection fits: the cut cost the user a partial
+    // answer for nothing. Put the range back and recompute over all of it.
+    const previous = state.autoRangePrevious || { rangeFull: true, x1: null, x2: null };
+    state.rangeFull = previous.rangeFull;
+    state.x1 = previous.x1;
+    state.x2 = previous.x2;
+    state.autoRangeLimited = false;
+    state.autoRangeWarning = null;
+    // The view was pulled in around the cut range; the range is whole again, so
+    // the view has to open back up with it.
+    state.autoRangeFocusPending = true;
+    if (Array.isArray(state.warnings)) state.warnings = [];
+    this._rescheduleAnalysisRecompute(panelId, mode);
+    return true;
 };
 
 // ─── State Animation mode ────────────────────────────────────────

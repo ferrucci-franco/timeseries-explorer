@@ -16,6 +16,8 @@ assert.equal(d.fitEnabled, false, 'fit workspace off by default');
 assert.equal(d.activePairIndex, 0, 'active pair defaults to 0');
 assert.equal(d.timeSeriesHidden, true, 'fit workspace hides the time series by default');
 assert.equal(d.rangeFull, true);
+assert.equal(d.autoRangeLimited, false, 'automatic range limiting starts inactive');
+assert.equal(d.autoRangeWarning, null, 'automatic range warning starts empty');
 
 // Enum validation falls back to defaults.
 assert.equal(normalizePhase2dState({ displayMode: 'bogus' }).displayMode, 'lines');
@@ -47,6 +49,8 @@ assert.equal(normalizePhase2dState({ x1: 1, x2: 2 }).rangeFull, false, 'a select
 assert.equal(normalizePhase2dState({}).rangeFull, true, 'no selection implies rangeFull=true');
 assert.equal(normalizePhase2dState({ x1: 'nope' }).x1, null, 'non-finite x1 -> null');
 assert.equal(normalizePhase2dState({ rangeFull: false, x1: 3, x2: 9 }).rangeFull, false);
+assert.equal(normalizePhase2dState({ autoRangeLimited: true }).autoRangeLimited, true);
+assert.equal(normalizePhase2dState({ autoRangeWarning: 'bounded' }).autoRangeWarning, 'bounded');
 
 // Plotly mode / marker-visibility mapping.
 assert.equal(phase2dPlotlyMode({ displayMode: 'lines' }), 'lines');

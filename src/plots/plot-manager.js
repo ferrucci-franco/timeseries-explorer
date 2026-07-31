@@ -98,11 +98,17 @@ class PlotManager {
             if (['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) {
                 const before = plot.traces.length;
                 plot.traces = plot.traces.filter(t => t.fileId !== fileId);
-                if (plot.traces.length < before) affectedPanels.add(panelId);
+                if (plot.traces.length < before) {
+                    this._cancelPanelAnalysis?.(panelId, plot, 'File removed');
+                    affectedPanels.add(panelId);
+                }
             } else {
                 const before = plot.phaseTraces.length;
                 plot.phaseTraces = plot.phaseTraces.filter(t => t.fileId !== fileId);
-                if (plot.phaseTraces.length < before) affectedPanels.add(panelId);
+                if (plot.phaseTraces.length < before) {
+                    this._cancelPanelAnalysis?.(panelId, plot, 'File removed');
+                    affectedPanels.add(panelId);
+                }
                 if (plot.phasePending?.fileId === fileId) {
                     plot.phasePending = { x: null, y: null, z: null, fileId: null };
                 }
@@ -688,7 +694,7 @@ class PlotManager {
     autoZoomAll() {
         for (const [id, plot] of this.plots) {
             if (!plot.div) continue;
-            this._autoScalePlot(id, plot);
+            this._runWithEagerDetailLoading(id, () => this._autoScalePlot(id, plot));
         }
     }
 
@@ -744,7 +750,21 @@ class PlotManager {
             && timeTraceModes.has(previousMode)
             && timeTraceModes.has(mode);
         const preservedTraces = preserveTimeTraces
-            ? plot.traces.map(trace => ({ ...trace, axis: 'y' }))
+            ? plot.traces.map(trace => {
+                const clone = { ...trace, axis: 'y' };
+                // _fullVisualCache is deliberately non-enumerable so saved
+                // sessions never traverse its large source-array references.
+                // Carry it explicitly only across the in-memory analysis mode
+                // switch where it avoids rebuilding the same screen overview.
+                if (trace._fullVisualCache) {
+                    Object.defineProperty(clone, '_fullVisualCache', {
+                        configurable: true,
+                        writable: true,
+                        value: trace._fullVisualCache,
+                    });
+                }
+                return clone;
+            })
             : [];
         // phase2d and correlation share the pair list; preserve pairs (and the
         // correlation window) when toggling between them so the user keeps them.
@@ -1313,6 +1333,33 @@ class PlotManager {
             this._createCorrelationChart(panelId, panelEl);
             return;
         }
+        if (plot.mode === 'timeseries'
+            && this._timeseriesNeedsEagerDetailLoading(plot)
+            && !plot._eagerInitialDetailReady) {
+            if (plot._eagerInitialDetailDeferred) return;
+            // Paint the same progress pill used by lazy detail before the first
+            // full-range downsample/layout pass starts. On a 160M-sample eager
+            // audio trace that synchronous pass takes a few seconds; without a
+            // task boundary the panel remains blank with no explanation.
+            const token = {};
+            plot._eagerInitialDetailDeferred = true;
+            plot._eagerInitialDetailToken = token;
+            this._setEagerDetailLoading(plot, true, panelEl);
+            this._yieldForDetailIndicatorPaint().then(() => {
+                if (plot._eagerInitialDetailToken !== token
+                    || this.plots.get(panelId) !== plot
+                    || plot.mode !== 'timeseries'
+                    || plot.div) {
+                    delete plot._eagerInitialDetailDeferred;
+                    this._setEagerDetailLoading(plot, false, panelEl);
+                    return;
+                }
+                delete plot._eagerInitialDetailDeferred;
+                plot._eagerInitialDetailReady = true;
+                this._createChart(panelId, panelEl);
+            });
+            return;
+        }
         const restoreView = plot._pendingViewRestore || null;
         delete plot._pendingViewRestore;
 
@@ -1323,6 +1370,10 @@ class PlotManager {
         div.className = `plotly-container plotly-mode-${plot.mode}`;
         panelEl.appendChild(div);
         plot.div = div;
+        if (plot.mode === 'timeseries') {
+            // Install before Plotly registers native dblclick/modebar handlers.
+            this._installEagerTimeseriesAutoscaleGuards(panelId, plot, div);
+        }
 
         // Missing/NaN toggling rebuilds the timeseries so line breaks can be
         // added safely. Show its lazy-search pill on the first empty frame,
@@ -1336,6 +1387,11 @@ class PlotManager {
         const config = this._getPlotlyConfig();
 
         Plotly.newPlot(div, traces, layout, config).then(() => {
+            if (plot._eagerInitialDetailReady) {
+                delete plot._eagerInitialDetailReady;
+                plot._eagerInitialDetailToken = null;
+                this._setEagerDetailLoading(plot, false, panelEl);
+            }
             this._refreshActionBtns(panelId);
             const finish3DSetup = () => {
                 if (!this._is3D(plot.mode)) return;
@@ -1361,10 +1417,12 @@ class PlotManager {
                 }
                 finish3DSetup();
             });
-            div.on('plotly_doubleclick', () => {
-                this._autoScalePlot(panelId, plot);
-                return false;
-            });
+            if (plot.mode !== 'timeseries') {
+                div.on('plotly_doubleclick', () => {
+                    this._autoScalePlot(panelId, plot);
+                    return false;
+                });
+            }
             // Axis sync, hover sync, and scroll-wheel pan (timeseries only)
             if (plot.mode === 'timeseries') {
                 div.on('plotly_relayouting', (ed) => this._onRelayouting(panelId, ed));
@@ -1797,6 +1855,13 @@ class PlotManager {
     _destroyChart(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        plot._eagerInitialDetailToken = null;
+        delete plot._eagerInitialDetailDeferred;
+        delete plot._eagerInitialDetailReady;
+        plot._eagerDetailLoadingCount = 0;
+        const panelElement = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+        this._setEagerDetailLoading(plot, false, panelElement);
+        this._cancelPanelAnalysis?.(panelId, plot, 'Panel destroyed');
         if (typeof this._cleanupLazyDetailForPanel === 'function') {
             this._cleanupLazyDetailForPanel(panelId, plot);
         }
@@ -1805,6 +1870,10 @@ class PlotManager {
         // clean them up before the plot.div removal below.
         this._cleanupPhase2dFitDocListeners?.(plot);
         this._stopAnim(plot);
+        // Both halves of tearing down the state animation, added on either side
+        // of this merge: invalidate any render still in flight, and drop the
+        // document listeners its pan gestures installed.
+        plot._stateAnimRenderToken = (plot._stateAnimRenderToken || 0) + 1;
         this._cleanupStateAnimDocListeners?.(plot);
         if (plot.resizeObserver) { plot.resizeObserver.disconnect(); plot.resizeObserver = null; }
         // Reset dynamic trace indices
@@ -1981,6 +2050,37 @@ class PlotManager {
         plot._correlationSelectionDiv = null;
         this._cleanupHeatmapChart?.(panelId, plot);
         plot.cameraOverlayEl = null;
+    }
+
+    _cancelPanelAnalysis(panelId, plot = this.plots.get(panelId), reason = 'Analysis cancelled') {
+        if (!plot) return;
+        plot._fftToken = (plot._fftToken || 0) + 1;
+        plot._fftPreparationToken = (plot._fftPreparationToken || 0) + 1;
+        plot._histToken = (plot._histToken || 0) + 1;
+        plot._calendarHeatmapToken = (plot._calendarHeatmapToken || 0) + 1;
+        plot._temporalProfileToken = (plot._temporalProfileToken || 0) + 1;
+        plot._integralToken = (plot._integralToken || 0) + 1;
+        plot._correlationToken = (plot._correlationToken || 0) + 1;
+        plot._phase2dLazyToken = (plot._phase2dLazyToken || 0) + 1;
+        for (const key of [
+            '_fftRecomputeTimer', '_histRecomputeTimer', '_calendarHeatmapRecomputeTimer',
+            '_temporalProfileRecomputeTimer', '_integralRecomputeTimer',
+            '_correlationRecomputeTimer', '_corrVisualTimer',
+            '_phase2dFitRecomputeTimer', '_phase2dFitVisualTimer',
+        ]) {
+            clearTimeout(plot[key]);
+            plot[key] = null;
+        }
+        // Recomputes that are waiting for a paint frame are not timers: they
+        // hold a token slot, and clearing it is what drops the pending run.
+        for (const key of [
+            '_histRecomputeRun', '_calendarHeatmapRecomputeRun', '_temporalProfileRecomputeRun',
+            '_integralRecomputeRun', '_correlationRecomputeRun', '_phase2dFitRecomputeRun',
+        ]) {
+            plot[key] = null;
+        }
+        this._abortFftWorkerJob?.(plot, reason);
+        this._cleanupLazyDetailForPanel?.(panelId, plot);
     }
 
     _clearPanel(panelId) {

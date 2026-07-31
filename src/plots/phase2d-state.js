@@ -36,6 +36,8 @@ export function defaultPhase2dState() {
         rangeFull: true,
         x1: null,
         x2: null,
+        autoRangeLimited: false,
+        autoRangeWarning: null,
         warnings: [],
         dirty: false,
     };
@@ -63,6 +65,8 @@ export function normalizePhase2dState(raw = {}) {
         rangeFull: raw.rangeFull !== undefined ? !!raw.rangeFull : !(x1 !== null || x2 !== null),
         x1,
         x2,
+        autoRangeLimited: raw.autoRangeLimited === true,
+        autoRangeWarning: typeof raw.autoRangeWarning === 'string' ? raw.autoRangeWarning : null,
         warnings: Array.isArray(raw.warnings) ? raw.warnings.slice(0, 20) : [],
         dirty: !!raw.dirty,
     };

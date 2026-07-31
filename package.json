@@ -92,6 +92,8 @@
     "test:calendar-axis": "node scripts/test-calendar-axis.mjs",
     "test:calendar-heatmap": "node scripts/test-calendar-heatmap.mjs",
     "test:fft": "node scripts/test-fft.mjs",
+    "test:large-analysis": "node scripts/test-large-analysis-responsiveness.mjs",
+    "test:native-autoscale-loading": "node scripts/test-native-autoscale-loading.mjs",
     "test:sampling-gaps": "node scripts/test-sampling-gaps.mjs",
     "test:histogram": "node scripts/test-histogram.mjs",
     "test:temporal-profile": "node scripts/test-temporal-profile.mjs",
@@ -109,6 +111,7 @@
     "test:regression-lazy": "node scripts/test-regression-lazy.mjs",
     "test:regression-conditioning": "node scripts/test-regression-conditioning.mjs",
     "test:lazy-phase": "node scripts/test-lazy-phase-logic.mjs",
+    "test:state-animation": "node scripts/test-state-animation-responsiveness.mjs",
     "test:audio": "node scripts/test-audio-parser.mjs",
     "test:pickle": "node scripts/test-pickle-parser.mjs",
     "test:netcdf": "node scripts/test-generic-netcdf-parser.mjs",
@@ -128,7 +131,11 @@
     "bench:parse": "node --max-old-space-size=8192 scripts/bench-parse.mjs",
     "bench:derived": "node scripts/bench-derived.mjs",
     "bench:fixtures": "python scripts/gen-perf-fixtures.py",
-    "test:time-axis-transform": "node scripts/test-time-axis-transform-perf.mjs"
+    "test:analysis-selection": "node scripts/test-analysis-selection-usability.mjs",
+    "test:time-axis-transform": "node scripts/test-time-axis-transform-perf.mjs",
+    "test:analysis-measured-range": "node scripts/test-analysis-measured-range.mjs",
+    "test:fft-refused-settings": "node scripts/test-fft-refused-settings.mjs",
+    "test:fft-time-format": "node scripts/test-fft-time-format-invariance.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",

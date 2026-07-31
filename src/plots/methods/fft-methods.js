@@ -10,6 +10,9 @@ import {
     normalizeFftWindow,
     normalizeZeroPaddingFactor,
     selectFftRange,
+    estimateFftDurationMs,
+    FFT_AUTO_SLOW_MS,
+    FFT_AUTO_TARGET_POINTS,
     FFT_LIVE_MAX_POINTS,
     FFT_MAX_POINTS_DESKTOP,
     FFT_MAX_POINTS_WEB,
@@ -31,6 +34,7 @@ proto._defaultFftState = function() {
         timeSeriesHidden: false,
         optionsVisible: true,
         rangeFull: true,
+        autoRangeLimited: false,
         x1: null,
         x2: null,
         windowType: 'none',
@@ -71,6 +75,7 @@ proto._normalizeFftState = function(raw = {}) {
         rangeFull: raw.rangeFull !== undefined
             ? !!raw.rangeFull
             : !(hasFiniteFftValue(rawX1) || hasFiniteFftValue(rawX2)),
+        autoRangeLimited: raw.autoRangeLimited === true,
         x1: finiteOrNull(rawX1),
         x2: finiteOrNull(rawX2),
         windowType: normalizeFftWindow(raw.windowType),
@@ -218,17 +223,49 @@ proto._createFftChart = function(panelId, panelEl) {
     plot.div = timeDiv;
 
     this._renderFftOptionsPanel(panelId, plot);
+    this._setFftStatus(plot, i18n.t('fftCalculating'), 'loading');
+    this._setFftComputing(plot, true);
 
     const config = this._getPlotlyConfig();
-    Promise.all([
-        Plotly.newPlot(timeDiv, this._buildFftTimeTraces(plot), this._buildFftTimeLayout(plot), config),
-        Plotly.newPlot(spectrumDiv, [], this._buildFftSpectrumLayout(plot), config),
-    ]).then(() => {
+    const preparationToken = (plot._fftPreparationToken || 0) + 1;
+    plot._fftPreparationToken = preparationToken;
+    // Let the browser paint the shell, controls and calculating indicator
+    // before any signal inspection or Plotly trace construction begins.
+    setTimeout(async () => {
+        await this._prepareFftAutoRange(panelId, plot, preparationToken, { initial: true });
+        if (plot._fftPreparationToken !== preparationToken || plot.mode !== 'fft' || !plot.fftContainer?.isConnected) return;
+        // Opening FFT shows the whole signal, or the window around the block it
+        // cut for itself — never the zoom the previous mode left behind. A
+        // saved session view outranks both.
+        if (!this._consumeSessionViewRestore(plot)) this._ensureFftState(plot).autoRangeFocusPending = true;
+        const domain = this._fftDomain(plot);
+        const fullTimeRange = domain ? [domain.min, domain.max] : null;
+        await Promise.all([
+            // The analyzed block is a green selection over the complete signal,
+            // so the pane is built showing everything rather than zoomed to the
+            // block. When the block was chosen automatically that view is then
+            // narrowed to a padded window around it (_applyPendingAnalysisFocus
+            // below): at full zoom the automatic block is a few pixels wide and
+            // its edges cannot be dragged, which costs more than the context.
+            Plotly.newPlot(timeDiv, this._buildFftTimeTraces(plot), this._buildFftTimeLayout(plot, fullTimeRange), config),
+            Plotly.newPlot(spectrumDiv, [], this._buildFftSpectrumLayout(plot), config),
+        ]);
+        if (plot._fftPreparationToken !== preparationToken || plot.mode !== 'fft') return;
         this._refreshActionBtns(panelId);
         const viewPromise = restoreView
             ? this._restorePlotView(plot, restoreView)
             : this._autoScalePlotTimeOnly(plot);
-        Promise.resolve(viewPromise).then(() => this._refreshTimeseriesVisuals(panelId, plot));
+        // Eager traces already contain their cached full-series overview.
+        // Lazy traces still need their viewport query after Plotly exists.
+        const hasLazyTrace = (plot.traces || []).some(trace =>
+            !!this.files.get(trace.fileId)?.data?._duckdb);
+        Promise.resolve(viewPromise).then(() => {
+            // The viewport query is only owed to lazy traces; the focus is owed
+            // to every trace, so it must not sit inside that branch.
+            if (hasLazyTrace) this._refreshTimeseriesVisuals(panelId, plot);
+            // After any restored view is applied, so the focus is not undone.
+            this._applyPendingAnalysisFocus(plot, 'fft');
+        });
         this._installFftPlotHandlers(panelId, plot);
         // Cursor handlers first: their capture listeners must run before the
         // selection ones so a cursor line inside the selection stays grabbable.
@@ -266,7 +303,7 @@ proto._createFftChart = function(panelId, panelEl) {
         });
         ro.observe(panelEl);
         plot.resizeObserver = ro;
-    });
+    }, 0);
 };
 
 proto._installFftPlotHandlers = function(panelId, plot) {
@@ -304,10 +341,20 @@ proto._installFftPlotHandlers = function(panelId, plot) {
     bindLegend(plot.div);
     bindLegend(plot.fftDiv);
     plot.div.on('plotly_relayout', ed => this._onRelayout(panelId, ed));
-    plot.div.on('plotly_doubleclick', () => {
-        this._autoScalePlotTimeOnly(plot);
-        return false;
-    });
+    // Plotly can begin native autoscale on the second click, before dblclick is
+    // dispatched. Capture that click first, paint Loading detail, then run ours.
+    plot.div.addEventListener('click', event => {
+        if (event.button !== 0 || event.detail !== 2) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        this._runWithEagerDetailLoading(panelId, () => this._autoScalePlotTimeOnly(plot));
+    }, { capture: true });
+    plot.div.addEventListener('dblclick', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+    }, { capture: true });
     plot.fftDiv.on('plotly_doubleclick', () => {
         this._scheduleFftAxisLimitReset(plot);
         return false;
@@ -403,12 +450,16 @@ proto._removeFftTraceFromLegend = function(panelId, plot, trace) {
     else this._rebuildPanel(panelId, { preserveView: true });
 };
 
-proto._buildFftTimeTraces = function(plot) {
-    const gapInfo = this._fftGapInfo(plot);
+proto._buildFftTimeTraces = function(plot, visibleRange = null) {
+    // Gap discovery is linear in the complete signal. The automatically chosen
+    // clean span has already been validated and must not trigger another scan.
+    const gapInfo = visibleRange || this._fftShouldSkipGlobalGapScan(plot)
+        ? { perFile: [] }
+        : this._fftGapInfo(plot);
     const gapsByFile = new Map(gapInfo.perFile.map(f => [f.fileId, f]));
     const traces = plot.traces
         .map((t, idx) => {
-            const built = this._buildTimeTrace(t, null, plot, idx, { attachSourceX: true });
+            const built = this._buildTimeTrace(t, visibleRange, plot, idx, { attachSourceX: true });
             if (built) this._applyLineBreaks(built, gapsByFile.get(t.fileId)?.gaps);
             return built;
         })
@@ -435,6 +486,23 @@ proto._buildFftWindowedTimeTraces = function(plot, visibleRange = null) {
         if (!this._isVisible(trace)) continue;
         const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
         const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+        const length = Math.min(times?.length || 0, values?.length || 0);
+        let selectedCount = length;
+        if (Array.isArray(range) && range.length >= 2 && length) {
+            let lo = Number(range[0]);
+            let hi = Number(range[1]);
+            if (lo > hi) [lo, hi] = [hi, lo];
+            if (Number.isFinite(lo) && Number.isFinite(hi)) {
+                selectedCount = Math.max(
+                    0,
+                    Math.min(length, this._upperBound(times, hi))
+                        - Math.max(0, this._lowerBound(times, lo)),
+                );
+            }
+        }
+        // The dotted overlay is decorative. Do not copy a multi-million-point
+        // manual selection on the UI thread merely to decide not to draw it.
+        if (selectedCount < 2 || selectedCount > 200000) continue;
         const selected = selectFftRange(times, values, range);
         const n = Math.min(selected.times?.length || 0, selected.values?.length || 0);
         if (n < 2 || n > 200000) continue;
@@ -490,8 +558,8 @@ proto._refreshFftWindowedVisuals = function(panelId, plot = this.plots.get(panel
     Plotly.restyle(plot.div, { x: xs, y: ys }, indices);
 };
 
-proto._buildFftTimeLayout = function(plot) {
-    const layout = this._buildTimeLayout(plot);
+proto._buildFftTimeLayout = function(plot, visibleRange = null) {
+    const layout = this._buildTimeLayout(plot, visibleRange ? { timeRange: visibleRange } : undefined);
     layout.shapes = this._fftTimePaneShapes(plot);
     layout.margin = { ...(layout.margin || {}), t: 8 };
     // No hover on the time plot: the tooltips get in the way of the
@@ -650,7 +718,9 @@ proto._refreshFftTimePlot = function(panelId, plot = this.plots.get(panelId), op
     if (!plot?.div || plot.mode !== 'fft') return Promise.resolve();
     const xRange = options.preserveView && options.preserveX !== false ? plot.div._fullLayout?.xaxis?.range : null;
     const yRange = options.preserveView && options.preserveY !== false ? plot.div._fullLayout?.yaxis?.range : null;
-    const layout = this._buildFftTimeLayout(plot);
+    const domain = this._fftDomain(plot);
+    const fullTimeRange = domain ? [domain.min, domain.max] : null;
+    const layout = this._buildFftTimeLayout(plot, fullTimeRange);
     if (Array.isArray(xRange)) {
         layout.xaxis = { ...(layout.xaxis || {}), range: xRange, autorange: false };
     }
@@ -663,10 +733,11 @@ proto._refreshFftTimePlot = function(panelId, plot = this.plots.get(panelId), op
             this._installCursorHandlers(panelId, plot);
             this._installFftSelectionHandlers(panelId, plot);
             this._syncCursorDisplay(panelId, plot);
-            // The react above rebuilt traces from the base arrays (full-range
-            // downsample / lazy overview); restore the resolution that matches
-            // the preserved view, refetching raw detail for lazy files.
-            this._refreshTimeseriesVisuals(panelId, plot);
+            // Eager full-series overviews are cached. Lazy files still need
+            // their exact viewport query after the Plotly rebuild.
+            const hasLazyTrace = (plot.traces || []).some(trace =>
+                !!this.files.get(trace.fileId)?.data?._duckdb);
+            if (hasLazyTrace) this._refreshTimeseriesVisuals(panelId, plot);
         });
 };
 
@@ -681,9 +752,258 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
         preserveX: options.preserveSpectrumX !== false && prev.preserveX !== false,
         preserveY: options.preserveSpectrumY !== false && prev.preserveY !== false,
     };
-    const run = () => this._refreshFftSpectrumPlot(panelId, plot);
-    if (options.immediate) run();
-    else plot._fftRecomputeTimer = setTimeout(run, 120);
+    const run = async () => {
+        if (plot.mode !== 'fft' || !plot.fftDiv) return;
+        // Manual ranges are never shortened automatically: changing the green
+        // selection is the user's explicit opt-in to a longer calculation.
+        // The O(log n) preflight remains here solely to reject an NFFT above
+        // the real platform memory limit before any enormous slice/copy.
+        const preparationToken = (plot._fftPreparationToken || 0) + 1;
+        plot._fftPreparationToken = preparationToken;
+        const adjusted = await this._prepareFftAutoRange(panelId, plot, preparationToken);
+        if (plot._fftPreparationToken !== preparationToken
+            || plot.mode !== 'fft'
+            || !plot.fftDiv) return;
+        if (plot._fftPreflightTooLarge) {
+            plot._fftToken = (plot._fftToken || 0) + 1;
+            this._abortFftWorkerJob(plot, 'FFT selection exceeds the platform limit');
+            const trace = (plot.traces || []).find(item => this._isVisible(item));
+            const state = this._ensureFftState(plot);
+            const rejected = plot._fftPreflightTooLarge;
+            // Refusing and stopping there leaves the previous spectrum on
+            // screen under settings that did not produce it — the plot then
+            // describes a range and a padding the user is no longer looking
+            // at. Recompute from something valid instead, so what is drawn
+            // always matches what the controls say.
+            //
+            // Prefer the largest range that fits over the last one that did:
+            // the user asked for more data, and that answers them with as much
+            // as the platform can give at the padding they chose, instead of
+            // undoing their request back to whatever preceded it.
+            const clamped = this._clampFftRangeToLimit(plot, state);
+            if (clamped) {
+                const warning = this._fftWarningText(trace, 'tooManyPointsClamped', {
+                    ...rejected,
+                    samples: clamped.samples,
+                });
+                state.warnings = [warning];
+                this._setFftStatus(plot, warning, 'warning');
+                this._updateFftSelectionShapes(panelId, plot);
+                this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+                this._applyPendingAnalysisFocus(plot, 'fft');
+                this._syncFftOptionsPanel(plot);
+                this._renderFftOptionsPanel(panelId, plot);
+                this._refreshFftSpectrumPlot(panelId, plot).then(() => {
+                    if (plot.mode !== 'fft' || plot._fftPreflightTooLarge) return;
+                    state.warnings = [warning];
+                    this._setFftStatus(plot, warning, 'warning');
+                });
+                return;
+            }
+            // Already at the largest fitting range, so the padding is what does
+            // not fit: put back the combination that last worked.
+            if (this._revertFftToLastAccepted(panelId, plot, state)) {
+                const warning = this._fftWarningText(trace, 'tooManyPointsReverted', rejected);
+                state.warnings = [warning];
+                this._setFftStatus(plot, warning, 'warning');
+                this._updateFftSelectionShapes(panelId, plot);
+                this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+                this._applyPendingAnalysisFocus(plot, 'fft');
+                this._syncFftOptionsPanel(plot);
+                this._renderFftOptionsPanel(panelId, plot);
+                this._refreshFftSpectrumPlot(panelId, plot).then(() => {
+                    // The recompute reports its own success; restate why the
+                    // settings moved back, or the revert looks like a glitch.
+                    if (plot.mode !== 'fft' || plot._fftPreflightTooLarge) return;
+                    state.warnings = [warning];
+                    this._setFftStatus(plot, warning, 'warning');
+                });
+                return;
+            }
+            // Nothing to fall back to (the very first attempt was already too
+            // large): say so and leave the controls where the user put them.
+            const warning = this._fftWarningText(trace, 'tooManyPoints', rejected);
+            state.warnings = [warning];
+            this._setFftStatus(plot, warning, 'warning');
+            this._setFftComputing(plot, false);
+            this._syncFftOptionsPanel(plot);
+            return;
+        }
+        if (adjusted) {
+            // Keep the UI truthful: the green band and numeric controls must
+            // show the exact smaller block that will be sent to the FFT, and
+            // the view must sit close enough for its edges to be draggable.
+            this._updateFftSelectionShapes(panelId, plot);
+            this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+            this._applyPendingAnalysisFocus(plot, 'fft');
+        }
+        this._refreshFftSpectrumPlot(panelId, plot);
+    };
+    // Even "immediate" recomputes yield one task. This makes close/clear and
+    // option buttons responsive and guarantees the loading label is painted.
+    plot._fftRecomputeTimer = setTimeout(run, options.immediate ? 0 : 120);
+};
+
+proto._prepareFftAutoRange = async function(panelId, plot, token, options = {}) {
+    const state = this._ensureFftState(plot);
+    const trace = (plot.traces || []).find(item => this._isVisible(item));
+    plot._fftPreflightTooLarge = null;
+    // Same rule as the shared limiter: rebuilding the pane over a range that is
+    // still the automatic preview owes it a focused view, or the selection is
+    // drawn a few pixels wide and neither edge can be grabbed.
+    if (options.initial === true && state.autoRangeLimited === true) state.autoRangeFocusPending = true;
+    if (!trace) return false;
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+    const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+    const n = Math.min(times?.length || 0, values?.length || 0);
+    if (n < 2) return false;
+
+    const lowerBound = value => {
+        let lo = 0;
+        let hi = n;
+        while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (Number(times[mid]) < value) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const upperBound = value => {
+        let lo = 0;
+        let hi = n;
+        while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (Number(times[mid]) <= value) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+
+    let selectionStart = 0;
+    let selectionEnd = n;
+    if (!state.rangeFull) {
+        const activeRange = this._activeFftRange(plot);
+        if (Array.isArray(activeRange) && activeRange.length >= 2) {
+            const lo = Math.min(Number(activeRange[0]), Number(activeRange[1]));
+            const hi = Math.max(Number(activeRange[0]), Number(activeRange[1]));
+            if (Number.isFinite(lo) && Number.isFinite(hi)) {
+                selectionStart = lowerBound(lo);
+                selectionEnd = upperBound(hi);
+            }
+        }
+    }
+    const selectedCount = Math.max(0, selectionEnd - selectionStart);
+    if (selectedCount < 2) return false;
+    const estimatedMs = estimateFftDurationMs(selectedCount, state.zeroPaddingFactor);
+    const estimatedNfft = nextPowerOfTwo(selectedCount)
+        * normalizeZeroPaddingFactor(state.zeroPaddingFactor);
+    if (options.initial !== true) {
+        const effectiveMaxNfft = this._canUseFftWorker()
+            ? this._fftComputationMaxNfft()
+            : this._fftLiveMaxNfft();
+        if (estimatedNfft > effectiveMaxNfft) {
+            plot._fftPreflightTooLarge = {
+                n: selectedCount,
+                nfft: estimatedNfft,
+                maxNfft: effectiveMaxNfft,
+            };
+        }
+        return false;
+    }
+    // Keep the automatically selected transform itself around 2^18 NFFT even
+    // when zero padding is enabled. The old fixed 262k source points became a
+    // 4.2M-point transform at x16.
+    const target = Math.min(
+        selectedCount,
+        Math.max(2, Math.floor(FFT_AUTO_TARGET_POINTS / state.zeroPaddingFactor)),
+    );
+    const needsInitialLimit = estimatedMs > FFT_AUTO_SLOW_MS;
+    const needsTighterPriorLimit = state.autoRangeLimited && selectedCount > target;
+    if (!needsInitialLimit && !needsTighterPriorLimit) return false;
+
+    const blockIsClean = start => {
+        const end = Math.min(selectionEnd, start + target);
+        if (end - start < target) return false;
+        let previousTime = NaN;
+        let expectedStep = NaN;
+        let stepTolerance = 0;
+        for (let i = start; i < end; i++) {
+            if (plot._fftPreparationToken !== token || plot.mode !== 'fft') return null;
+            const time = Number(times[i]);
+            const value = Number(values[i]);
+            if (!Number.isFinite(time) || !Number.isFinite(value)
+                || (i > start && !(time > previousTime))) return false;
+            if (i > start) {
+                const step = time - previousTime;
+                if (i === start + 1) {
+                    expectedStep = step;
+                    // Same floor the sampling gate applies (see analyzeSampling
+                    // in utils/fft.js): timestamps far from zero quantise their
+                    // own differences, so on an absolute calendar this file's
+                    // 0.0227 ms step varies by about 1% no matter how clean the
+                    // recording is. Holding it to 1e-3 there rejects every
+                    // block and walks the whole signal looking for one that
+                    // cannot exist, which is why the panel hung on
+                    // "Calculating FFT" instead of refusing outright.
+                    const ulp = 2 ** (Math.floor(Math.log2(Math.max(Math.abs(time), 1))) - 52);
+                    stepTolerance = Math.max(Math.abs(expectedStep) * 1e-3, 4 * ulp);
+                } else if (!Number.isFinite(expectedStep)
+                    || Math.abs(step - expectedStep) > stepTolerance) return false;
+            }
+            previousTime = time;
+        }
+        return true;
+    };
+
+    // Check the earliest consecutive blocks first. If the beginning contains
+    // missing data, probe later blocks without linearly walking a multi-GB
+    // signal. Each candidate is fully validated before it is selected.
+    const candidateStarts = [];
+    const candidateCount = Math.max(1, Math.ceil(selectedCount / target));
+    const sequential = Math.min(candidateCount, 8);
+    for (let block = 0; block < sequential; block++) {
+        candidateStarts.push(selectionStart + block * target);
+    }
+    const probes = Math.min(24, candidateCount - sequential);
+    for (let probe = 1; probe <= probes; probe++) {
+        const block = sequential + Math.floor((probe * (candidateCount - sequential - 1)) / Math.max(1, probes));
+        candidateStarts.push(selectionStart + block * target);
+    }
+
+    let cleanStart = -1;
+    for (const start of [...new Set(candidateStarts)]) {
+        const clean = blockIsClean(start);
+        if (clean === null) return false;
+        if (clean) {
+            cleanStart = start;
+            break;
+        }
+        // Failed candidates are uncommon, but a file with many sparse NaNs can
+        // require several probes. Yield between candidates, never inside the
+        // first bounded block: timer throttling under memory pressure made the
+        // otherwise trivial 262k-sample validation take 10–12 seconds.
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    const foundCleanBlock = cleanStart >= 0;
+    // Never fall back to the enormous range: even a pathological file with no
+    // clean candidate must fail quickly and responsively with the normal
+    // NaN/non-uniform warning. The generic wording does not claim this fallback
+    // block was clean.
+    if (!foundCleanBlock) cleanStart = selectionStart;
+    state.rangeFull = false;
+    state.autoRangeLimited = true;
+    // Without this the automatic block is drawn a few pixels wide on the full
+    // time axis and neither green edge can be grabbed. See the note on
+    // ANALYSIS_FOCUS_PADDING in data-methods.js.
+    state.autoRangeFocusPending = true;
+    state.x1 = Number(times[cleanStart]);
+    state.x2 = Number(times[cleanStart + target - 1]);
+    const seconds = Math.max(5, Math.round(estimatedMs / 1000));
+    state.autoRangeWarning = i18n.t(foundCleanBlock ? 'fftAutoRangeWarning' : 'analysisAutoRangeWarning')
+        .replace('{seconds}', seconds.toLocaleString())
+        .replace('{samples}', target.toLocaleString());
+    this._syncFftOptionsPanel(plot);
+    return true;
 };
 
 proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(panelId)) {
@@ -715,11 +1035,15 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     this._setFftComputing(plot, true);
     const spectra = [];
     const fullEntries = [];
-    const warnings = [];
+    const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
     // Step of the analyzed span, as the uniformity gate measured it. Only worth
     // naming in the status when every plotted trace agrees on it; overlaid files
     // can carry different steps, and picking one of them would be a guess.
     const spanSteps = new Set();
+    // How many samples each trace actually transformed. Same rule as the step
+    // above: overlaid files can disagree, and naming one of them would be a
+    // guess, so the count is only reported when they all match.
+    const sampleCounts = new Set();
     for (const trace of visible) {
         if (plot._fftToken !== token) return;
         let series;
@@ -749,6 +1073,7 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
             continue;
         }
         if (Number.isFinite(spectrum.sampling?.dt)) spanSteps.add(spectrum.sampling.dt);
+        if (Number.isInteger(spectrum.n) && spectrum.n > 0) sampleCounts.add(spectrum.n);
         for (const warning of spectrum.warnings || []) {
             warnings.push(this._fftWarningText(trace, warning, spectrum));
         }
@@ -837,9 +1162,20 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         // where every other FFT explanation already lives.
         const spanDt = spanSteps.size === 1 ? [...spanSteps][0] : NaN;
         this._setFftStatus(plot, this._fftUniformSpanNote(spanDt), 'warning');
+    } else if (sampleCounts.size === 1) {
+        // The count answers the question the topbar leaves open on a large
+        // file — how much of it this spectrum actually describes.
+        this._setFftStatus(
+            plot,
+            i18n.t('fftReadySamples').replace('{samples}', i18n.formatNumber([...sampleCounts][0])),
+            'ready',
+        );
     } else {
         this._setFftStatus(plot, i18n.t('fftReady'), 'ready');
     }
+    // A spectrum came out, so this range and padding are known to fit the
+    // platform. That is what a later rejected combination falls back to.
+    if (spectra.length) this._rememberAcceptedFftSettings(plot);
     // Terminal for this token (superseding runs manage their own pill on the
     // token-mismatch early returns above, so this only fires for the live run).
     this._setFftComputing(plot, false);
@@ -1094,6 +1430,12 @@ proto._fftFrequencyAxisTitle = function(plot) {
         || mode === 'elapsedDateTime'
         || mode === 'elapsedSeconds'
         || this._isGeneratedDurationTime(trace.fileId, timeVar)
+        // Showing a numeric seconds axis as a duration changes how the numbers
+        // are WRITTEN, not what they measure: the values are the same seconds,
+        // so the spectrum is still in hertz. Without this the unit label reads
+        // 'duration' instead of 's' and the axis fell back to the generic
+        // 1/x-unit for a file that says Hz in every other format.
+        || this._isNumericDurationAxis(trace.fileId, timeVar)
         || unit === 's') {
         return i18n.t('fftFrequencyHz');
     }
@@ -1209,13 +1551,25 @@ proto._ensureFftRange = function(plot, options = {}) {
 };
 
 proto._fftDomain = function(plot) {
-    const arrays = [];
+    let min = Infinity;
+    let max = -Infinity;
     for (const trace of plot?.traces || []) {
         const values = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
-        if (values?.length) arrays.push(values);
+        const n = values?.length || 0;
+        if (!n) continue;
+        // Imported time axes are ascending. Probe only the edges so opening FFT
+        // never performs a full-array extent scan before its UI exists.
+        const probe = Math.min(n, 1024);
+        for (let i = 0; i < probe; i++) {
+            const lo = Number(values[i]);
+            if (Number.isFinite(lo)) { min = Math.min(min, lo); break; }
+        }
+        for (let i = 0; i < probe; i++) {
+            const hi = Number(values[n - 1 - i]);
+            if (Number.isFinite(hi)) { max = Math.max(max, hi); break; }
+        }
     }
-    const extent = this._finiteExtent(arrays);
-    return extent ? { min: extent.min, max: extent.max } : null;
+    return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
 };
 
 // Sampling gaps over the full transformed series of each visible file,
@@ -1258,6 +1612,19 @@ proto._fftGapInfo = function(plot) {
     plot._fftGapsSig = sig;
     plot._fftGapsCache = result;
     return result;
+};
+
+proto._fftShouldSkipGlobalGapScan = function(plot) {
+    if (this._ensureFftState(plot).autoRangeLimited) return true;
+    // Missing-data decorations are optional; selected-range validation is not.
+    // On very large eager signals, keep the latter and avoid an O(n) full-file
+    // pass merely to paint bands. This also keeps a manual range edit or a
+    // switch back to "Full" from reviving the multi-second scan.
+    return (plot?.traces || []).some(trace => {
+        if (!this._isVisible(trace) || !this._hasTruthfulGapSeries(trace.fileId)) return false;
+        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+        return (times?.length || 0) > FFT_LIVE_MAX_POINTS;
+    });
 };
 
 // Red bands marking missing-data intervals on a time pane. Appearance keys
@@ -1433,6 +1800,14 @@ proto._adaptiveGapBandShapes = function(plot, items, denseOverride = null) {
 // but they still block a clean FFT — the fftWarningNaN message tells the user
 // to pick a NaN-free span, so the bands must show where those NaN are.
 proto._fftTimePaneShapes = function(plot) {
+    // _prepareFftAutoRange already verified that the automatically selected
+    // span is finite, increasing and uniformly sampled. Running the decorative
+    // missing-data detector here would scan (and sort deltas for) the complete
+    // multi-GB source again, even though only this small span is displayed.
+    // Per-trace FFT validation still reports NaN/non-uniform secondary traces.
+    if (this._fftShouldSkipGlobalGapScan(plot)) {
+        return this._fftSelectionShapes(plot);
+    }
     // Lazy (view-mode) files can't be scanned in JS; their bands come from the
     // DuckDB bucket query cached on the plot by _refreshLazyMissingBands. Eager
     // files use the in-memory detection. Selection rectangle always on top.
@@ -1585,6 +1960,10 @@ proto._missingDataBandShapes = function(plot) {
 // the range actually analyzed. What to SAY about it depends on whether the
 // spectrum came out, which the caller knows and this does not.
 proto._fftGapsOverlapAnalyzedRange = function(plot) {
+    // The automatic span passed the strict uniformity check before it was
+    // selected. Avoid a redundant full-file gap scan after the spectrum has
+    // completed; on a one-hour decoded audio signal that scan dominates FFT.
+    if (this._fftShouldSkipGlobalGapScan(plot)) return false;
     const info = this._fftGapInfo(plot);
     if (!info.count) return false;
     const [lo, hi] = this._activeFftRange(plot);
@@ -1646,6 +2025,28 @@ proto._updateFftSelectionShapes = function(panelId, plot = this.plots.get(panelI
     if (!plot?.div || plot.mode !== 'fft') return;
     Plotly.relayout(plot.div, { shapes: this._fftTimePaneShapes(plot) });
     this._syncFftOptionsPanel(plot);
+};
+
+proto._dismissFftAutoRangeWarning = function(plot) {
+    const state = this._ensureFftState(plot);
+    // Any range gesture transfers ownership to the user. Subsequent preflights
+    // may still reject a true hard-memory overflow, but must never silently
+    // restore the initial fast block.
+    state.autoRangeLimited = false;
+    const warning = state.autoRangeWarning;
+    if (!warning) return false;
+    state.autoRangeWarning = null;
+    if (Array.isArray(state.warnings)) {
+        state.warnings = state.warnings.filter(message => message !== warning);
+    }
+    // The user has taken ownership of the range; remove the explanatory
+    // warning immediately rather than leaving it visible until recompute ends.
+    if (plot._fftStatusType === 'warning' && String(plot._fftStatusMessage || '').includes(warning)) {
+        this._setFftStatus(plot, '', 'muted');
+    } else {
+        this._syncFftOptionsPanel(plot);
+    }
+    return true;
 };
 
 // The windowed overlay is cut to the analyzed range, so it must be rebuilt
@@ -1724,6 +2125,7 @@ proto._installFftSelectionHandlers = function(panelId, plot) {
             hi = dragging.startHi + delta;
         }
         if (lo > hi) [lo, hi] = [hi, lo];
+        this._dismissFftAutoRangeWarning(plot);
         state.x1 = Math.max(domain.min, Math.min(domain.max, lo));
         state.x2 = Math.max(domain.min, Math.min(domain.max, hi));
         this._updateFftSelectionShapes(panelId, plot);
@@ -1812,6 +2214,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         input.addEventListener('change', () => {
             const state = this._ensureFftState(plot);
             const n = isCalendarRange ? fftDatetimeInputToMs(input.value) : Number(input.value);
+            if (key === 'x1' || key === 'x2') this._dismissFftAutoRangeWarning(plot);
             state[key] = Number.isFinite(n) ? n : null;
             if (FFT_AXIS_LIMIT_KEYS.has(key)) {
                 this._applyFftAxisLimits(plot);
@@ -1840,6 +2243,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         input.addEventListener('input', () => {
             const state = this._ensureFftState(plot);
             const n = Number(input.value);
+            this._dismissFftAutoRangeWarning(plot);
             state[key] = Number.isFinite(n) ? n : null;
             this._syncFftOptionsPanel(plot, { skipRangeSliders: true });
             this._updateFftSelectionShapes(panelId, plot);
@@ -1939,7 +2343,9 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
             event.preventDefault();
             const state = this._ensureFftState(plot);
             if (!!state.rangeFull === isFull) return;
+            this._dismissFftAutoRangeWarning(plot);
             state.rangeFull = isFull;
+            state.autoRangeLimited = false;
             if (!isFull) {
                 // The selection starts as the currently visible time span.
                 const domain = this._fftDomain(plot);
@@ -2212,16 +2618,112 @@ proto._syncFftMessage = function(plot) {
     box.className = `fft-message fft-message-${type}`;
 };
 
+// The last (range, zero padding) combination the platform actually accepted.
+// Recorded only after a spectrum came out, so it is always a setting known to
+// fit — which is what makes it safe to fall back to.
+proto._rememberAcceptedFftSettings = function(plot) {
+    const state = this._ensureFftState(plot);
+    plot._fftLastAccepted = {
+        rangeFull: !!state.rangeFull,
+        x1: state.x1,
+        x2: state.x2,
+        zeroPaddingFactor: normalizeZeroPaddingFactor(state.zeroPaddingFactor),
+    };
+};
+
+// The largest selection the platform will actually transform at the padding
+// the user has chosen, anchored where their selection starts.
+//
+// This is what a refused range should land on. Falling back to the last
+// ACCEPTED range instead answers a different question: on a ten-minute 44.1 kHz
+// recording, asking for the whole file was refused and handed back the initial
+// 262,144-sample preview — 1% of the signal — while the real ceiling allows
+// 16,777,216 samples, 63% of it. The message then reads "narrow the selection"
+// to someone who is nowhere near the limit, and who can indeed widen it by
+// hand, which is how this was found.
+proto._largestFittingFftRange = function(plot, state = this._ensureFftState(plot)) {
+    const trace = (plot?.traces || []).find(item => this._isVisible(item));
+    if (!trace) return null;
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+    const total = times?.length || 0;
+    if (total < 2) return null;
+    const padding = normalizeZeroPaddingFactor(state.zeroPaddingFactor);
+    const maxNfft = this._canUseFftWorker()
+        ? this._fftComputationMaxNfft()
+        : this._fftLiveMaxNfft();
+    // Both are powers of two, so this bound is itself one and survives the
+    // preflight's own nextPowerOfTwo rounding without a further margin.
+    const maxSamples = Math.floor(maxNfft / padding);
+    if (maxSamples < 2) return null;
+
+    let start = 0;
+    if (!state.rangeFull) {
+        const lo = Math.min(Number(state.x1), Number(state.x2));
+        if (Number.isFinite(lo)) start = Math.max(0, Math.min(total - 2, this._lowerBound(times, lo)));
+    }
+    const end = Math.min(total, start + maxSamples);
+    if (end - start < 2) return null;
+    const x1 = Number(times[start]);
+    const x2 = Number(times[end - 1]);
+    if (!Number.isFinite(x1) || !Number.isFinite(x2) || x2 <= x1) return null;
+    return { x1, x2, samples: end - start };
+};
+
+// Replace a refused selection with the largest one that fits. Returns false
+// when the range is already that one, so the caller does not resubmit a request
+// the preflight has just refused.
+proto._clampFftRangeToLimit = function(plot, state = this._ensureFftState(plot)) {
+    const fitting = this._largestFittingFftRange(plot, state);
+    if (!fitting) return null;
+    if (!state.rangeFull && state.x1 === fitting.x1 && state.x2 === fitting.x2) return null;
+    state.rangeFull = false;
+    state.x1 = fitting.x1;
+    state.x2 = fitting.x2;
+    state.autoRangeLimited = false;
+    // The clamped window is a fraction of what was asked for, so the view has
+    // to move onto it or its edges are undraggable.
+    state.autoRangeFocusPending = true;
+    plot._fftPreflightTooLarge = null;
+    return fitting;
+};
+
+proto._revertFftToLastAccepted = function(panelId, plot, state = this._ensureFftState(plot)) {
+    const accepted = plot._fftLastAccepted;
+    if (!accepted) return false;
+    const unchanged = !!state.rangeFull === accepted.rangeFull
+        && state.x1 === accepted.x1
+        && state.x2 === accepted.x2
+        && normalizeZeroPaddingFactor(state.zeroPaddingFactor) === accepted.zeroPaddingFactor;
+    // Reverting to what is already set would recompute the same rejected
+    // request forever; the caller falls back to the plain refusal instead.
+    if (unchanged) return false;
+    state.rangeFull = accepted.rangeFull;
+    state.x1 = accepted.x1;
+    state.x2 = accepted.x2;
+    state.zeroPaddingFactor = accepted.zeroPaddingFactor;
+    // The restored range may be nothing like the one on screen, so the view has
+    // to follow it back too.
+    state.autoRangeFocusPending = true;
+    plot._fftPreflightTooLarge = null;
+    return true;
+};
+
 proto._fftWarningText = function(trace, reason, extra = {}) {
     const name = this._traceName(trace?.varName, trace?.fileId);
     const prefix = name ? `${name}: ` : '';
     if (reason === 'nan' || reason === 'invalidTime') return prefix + i18n.t('fftWarningNaN');
     if (reason === 'nonUniform' || reason === 'nonMonotonic') return prefix + i18n.t('fftWarningNonUniform');
     if (reason === 'tooFewSamples') return prefix + i18n.t('fftWarningTooFew');
-    if (reason === 'tooManyPoints') {
+    if (reason === 'tooManyPoints' || reason === 'tooManyPointsReverted' || reason === 'tooManyPointsClamped') {
         const live = this._fftLiveMaxNfft().toLocaleString();
         const hard = this._fftHardMaxNfft().toLocaleString();
-        return prefix + i18n.t('fftWarningTooMany').replace('{live}', live).replace('{hard}', hard);
+        const key = reason === 'tooManyPointsReverted' ? 'fftWarningTooManyReverted'
+            : reason === 'tooManyPointsClamped' ? 'fftWarningTooManyClamped'
+            : 'fftWarningTooMany';
+        return prefix + i18n.t(key)
+            .replace('{live}', live)
+            .replace('{hard}', hard)
+            .replace('{samples}', Number(extra?.samples || 0).toLocaleString());
     }
     if (reason === 'missingVariable') return prefix + i18n.t('fftWarningMissing');
     if (reason === 'fetchFailed') return prefix + i18n.t('fftWarningFetch');
@@ -2294,14 +2796,34 @@ proto._autoScaleFftPanel = function(panelId, plot = this.plots.get(panelId)) {
 proto._autoScalePlotTimeOnly = function(plot) {
     if (!plot?.div) return Promise.resolve();
     const visibleTraces = (plot.traces || []).filter(t => this._isVisible(t));
-    const xArrays = [];
-    const yArrays = [];
-    for (const t of visibleTraces) {
-        xArrays.push(this._getTransformedTimeDataForVariable(t.fileId, t.varName));
-        yArrays.push(this._getTransformedVariableData(t.fileId, t.varName));
+    // A large FFT time pane shows a cached full-series screen overview. Its
+    // full X domain is known from the edge samples, and its Y extent is known
+    // from that cached envelope. Autoscale must restore the complete signal,
+    // not zoom to the green analyzed block and not rescan 160M source samples.
+    const largeFftOverview = plot.mode === 'fft' && this._fftShouldSkipGlobalGapScan(plot);
+    let xExtent;
+    let yExtent;
+    if (largeFftOverview) {
+        const domain = this._fftDomain(plot);
+        xExtent = domain ? { min: domain.min, max: domain.max } : null;
+        const cachedY = visibleTraces
+            .map(trace => trace._fullVisualCache?.visual?.y)
+            .filter(Boolean);
+        yExtent = this._finiteExtent(cachedY.length
+            ? cachedY
+            : (plot.div.data || [])
+                .filter(trace => trace?.visible !== 'legendonly' && !trace?._fftWindowed)
+                .map(trace => trace?.y));
+    } else {
+        const xArrays = [];
+        const yArrays = [];
+        for (const t of visibleTraces) {
+            xArrays.push(this._getTransformedTimeDataForVariable(t.fileId, t.varName));
+            yArrays.push(this._getTransformedVariableData(t.fileId, t.varName));
+        }
+        xExtent = this._finiteExtent(xArrays);
+        yExtent = this._finiteExtent(yArrays);
     }
-    const xExtent = this._finiteExtent(xArrays);
-    const yExtent = this._finiteExtent(yArrays);
     const update = {};
     if (xExtent) {
         const fileId = visibleTraces[0]?.fileId;

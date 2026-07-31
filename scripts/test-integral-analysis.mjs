@@ -10,6 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 import { computeDefiniteIntegral } from '../src/compute/kernels/definite-integral.js';
 import { INTEGRAL_MISSING_POLICIES } from '../src/compute/kernels/definite-integral.js';
@@ -60,6 +61,73 @@ function makeModels(signals, options = {}) {
 
 const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array(count).fill(value) });
 
+// Integral keeps one neighbour on each side of the selected block so boundary
+// interpolation stays exact, but must not scan or copy the rest of a huge file.
+{
+    const methods = readFileSync(
+        new URL('../src/plots/methods/integral-methods.js', import.meta.url),
+        'utf8',
+    );
+    const start = methods.indexOf('proto._integralSeriesForTrace = function');
+    const end = methods.indexOf('\nproto.', start + 1);
+    ok(start >= 0 && end > start, 'Integral bounded sampler can be isolated');
+    const isolatedProto = {};
+    vm.runInNewContext(methods.slice(start, end), { proto: isolatedProto });
+    const hugeLength = 20_000_000;
+    let timeReads = 0;
+    let copiedTimes = 0;
+    let copiedValues = 0;
+    const times = new Proxy({
+        length: hugeLength,
+        slice(first, last) {
+            copiedTimes += last - first;
+            return { length: last - first };
+        },
+    }, {
+        get(target, key) {
+            if (key in target) return target[key];
+            const index = Number(key);
+            if (Number.isInteger(index)) {
+                timeReads++;
+                return index;
+            }
+            return undefined;
+        },
+    });
+    const values = {
+        length: hugeLength,
+        slice(first, last) {
+            copiedValues += last - first;
+            return { length: last - first };
+        },
+    };
+    const bound = upper => (array, target) => {
+        let lo = 0;
+        let hi = array.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (upper ? array[mid] <= target : array[mid] < target) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    };
+    const selected = isolatedProto._integralSeriesForTrace.call({
+        _getTransformedTimeDataForVariable: () => times,
+        _getTransformedVariableData: () => values,
+        _lowerBound: bound(false),
+        _upperBound: bound(true),
+    }, { fileId: 'audio', varName: 'Left' }, [5_000_000, 5_262_143]);
+    eq(selected.times.length, 262_146, 'Integral retains only the bounded block plus two neighbours');
+    eq(selected.values.length, 262_146, 'Integral value slice matches the time slice');
+    ok(timeReads < 100, `Integral bounds stay logarithmic (${timeReads} reads)`);
+    eq(copiedTimes, 262_146, 'Integral does not copy time values outside the bounded block');
+    eq(copiedValues, 262_146, 'Integral does not copy signal values outside the bounded block');
+    ok(
+        /_scheduleIntegralRecompute[\s\S]*_autoLimitAnalysisRange\(plot, state, 'integral'\)[\s\S]*_setIntegralComputing\(plot, true\)[\s\S]*_runAnalysisAfterPaint\(/.test(methods),
+        'Integral preflights and paints progress before eager computation',
+    );
+}
+
 // ─── 1. State normalisation ───────────────────────────────────────────────
 {
     const defaults = defaultIntegralState();
@@ -70,6 +138,7 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     eq(defaults.showPie, false, 'the pie is opt-in');
     eq(defaults.discardIncompleteEnds, false, 'and so is discarding the ragged ends');
     eq(defaults.rangeFull, true, 'the range starts at Full');
+    eq(defaults.autoRangeLimited, false, 'automatic range limiting starts inactive');
 
     const junk = state({
         method: 'simpson', missingPolicy: 'nonsense', integralUnit: 'fortnight',

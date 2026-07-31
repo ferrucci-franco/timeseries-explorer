@@ -42,6 +42,7 @@ export function defaultIntegralState() {
         timeSeriesHidden: false,
         optionsVisible: true,
         rangeFull: true,
+        autoRangeLimited: false,
         x1: null,
         x2: null,
         method: 'trapezoidal',
@@ -87,6 +88,7 @@ export function normalizeIntegralState(raw = {}, missingPolicies) {
         optionsVisible: raw.optionsVisible !== false,
         // A session predating rangeFull that carries an explicit window keeps it.
         rangeFull: raw.rangeFull !== undefined ? !!raw.rangeFull : !(hasFinite(raw.x1) || hasFinite(raw.x2)),
+        autoRangeLimited: raw.autoRangeLimited === true,
         x1: finiteOrNull(raw.x1),
         x2: finiteOrNull(raw.x2),
         method: INTEGRAL_METHODS.has(raw.method) ? raw.method : defaults.method,

@@ -71,6 +71,7 @@ export function installPlotCorrelationMethods(TargetClass) {
             timeSeriesHidden: false,
             optionsVisible: true,
             rangeFull: true,
+            autoRangeLimited: false,
             x1: null,
             x2: null,
             method: 'pearson',
@@ -93,6 +94,7 @@ export function installPlotCorrelationMethods(TargetClass) {
             timeSeriesHidden: raw.timeSeriesHidden === true,
             optionsVisible: raw.optionsVisible !== false,
             rangeFull: raw.rangeFull !== undefined ? !!raw.rangeFull : !(x1 !== null || x2 !== null),
+            autoRangeLimited: raw.autoRangeLimited === true,
             x1,
             x2,
             method: 'pearson',
@@ -123,7 +125,7 @@ export function installPlotCorrelationMethods(TargetClass) {
             if (xTimes?.length) arrays.push(xTimes);
             if (yTimes?.length) arrays.push(yTimes);
         }
-        const extent = this._finiteExtent(arrays);
+        const extent = this._finiteSortedExtent(arrays);
         return extent ? { min: extent.min, max: extent.max } : null;
     };
 
@@ -164,6 +166,18 @@ export function installPlotCorrelationMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!this._hasContent(plot)) return;
         const state = this._ensureCorrelationState(plot);
+        this._autoLimitAnalysisRange(plot, state, 'correlation', { initial: true });
+        // Correlation restores no view of its own, so the x view is always ours
+        // to set: the whole signal, or the cut range when the analysis limited
+        // itself. Applied after the first recompute, because that is what
+        // decides which of the two it is.
+        //
+        // The session marker is still consumed rather than ignored. It is per
+        // panel, and a panel that leaves it set hands it to whichever mode the
+        // user switches to next, where it would suppress that mode's opening
+        // view for a session restore this one already declined to honour.
+        this._consumeSessionViewRestore(plot);
+        state.autoRangeFocusPending = true;
 
         const placeholder = panelEl.querySelector('.layout-panel-placeholder');
         if (placeholder) placeholder.style.display = 'none';
@@ -317,6 +331,14 @@ export function installPlotCorrelationMethods(TargetClass) {
             // Same gestures on the results (bars) pane, like the FFT spectrum pane.
             this._installWheelPan(panelId, plot, plot.correlationDiv, {});
             this._installRightButtonPan(panelId, plot, plot.correlationDiv, {});
+            // Opening Correlation must not inherit the previous mode's zoom.
+            // Autoscaling here is not enough on its own: the recompute that
+            // follows refreshes the time pane with preserveView, so whatever is
+            // set now is what sticks — and when the analysis limits its own
+            // range, the whole signal is the wrong thing to show. The focus
+            // helper covers both cases and runs after the first recompute has
+            // decided the range.
+            this._autoScaleCorrelationTime(plot);
             this._scheduleCorrelationRecompute(panelId, { immediate: true });
             let timer;
             const ro = new ResizeObserver(() => {
@@ -357,8 +379,10 @@ export function installPlotCorrelationMethods(TargetClass) {
     proto._buildCorrelationTimeTraces = function(plot) {
         const descriptors = this._correlationTimeDescriptors(plot);
         const plotLike = { ...plot, traces: descriptors, timeseriesStacked: false, timeseriesY2Enabled: false };
+        const state = this._ensureCorrelationState(plot);
+        const visualRange = state.autoRangeWarning ? this._activeCorrelationRange(plot) : null;
         return descriptors.map((d, idx) => {
-            const built = this._buildTimeTrace(d, null, plotLike, idx);
+            const built = this._buildTimeTrace(d, visualRange, plotLike, idx);
             if (!built) return null;
             // Force SVG so the custom dash pattern renders (scattergl ignores it);
             // the pane is downsampled to ~2000 points, so SVG is cheap.
@@ -540,6 +564,8 @@ export function installPlotCorrelationMethods(TargetClass) {
                 lo = dragging.startLo + delta; hi = dragging.startHi + delta;
             }
             if (lo > hi) [lo, hi] = [hi, lo];
+            state.autoRangeWarning = null;
+            state.autoRangeLimited = false;
             state.x1 = Math.max(domain.min, Math.min(domain.max, lo));
             state.x2 = Math.max(domain.min, Math.min(domain.max, hi));
             this._updateCorrelationSelectionShapes(panelId, plot);
@@ -597,13 +623,15 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (rangeFull) {
             return { x: xVals.slice(0, n), y: yVals.slice(0, n), nScope: n };
         }
-        const [lo, hi] = range;
-        const x = [], y = [];
-        for (let i = 0; i < n; i++) {
-            const t = Number(times[i]);
-            if (t >= lo && t <= hi) { x.push(xVals[i]); y.push(yVals[i]); }
-        }
-        return { x, y, nScope: x.length };
+        let [lo, hi] = range;
+        if (lo > hi) [lo, hi] = [hi, lo];
+        const start = Math.max(0, Math.min(n, this._lowerBound(times, lo)));
+        const end = Math.max(start, Math.min(n, this._upperBound(times, hi)));
+        return {
+            x: xVals.slice(start, end),
+            y: yVals.slice(start, end),
+            nScope: end - start,
+        };
     };
 
     proto._isLazyFile = function(fileId) {
@@ -614,7 +642,18 @@ export function installPlotCorrelationMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot?.correlationDiv || plot.mode !== 'correlation') return;
         clearTimeout(plot._correlationRecomputeTimer);
-        const run = () => this._refreshCorrelationResults(panelId, plot);
+        const run = () => {
+            const state = this._ensureCorrelationState(plot);
+            const adjusted = this._autoLimitAnalysisRange(plot, state, 'correlation');
+            if (adjusted) this._updateCorrelationSelectionShapes(panelId, plot);
+            this._setCorrelationStatus(plot, i18n.t('correlationCalculating'), 'loading');
+            this._runAnalysisAfterPaint(
+                plot,
+                '_correlationRecomputeRun',
+                () => plot.mode === 'correlation' && !!plot.correlationDiv,
+                () => this._refreshCorrelationResults(panelId, plot),
+            );
+        };
         if (options.immediate) run();
         else plot._correlationRecomputeTimer = setTimeout(run, 150);
     };
@@ -669,16 +708,22 @@ export function installPlotCorrelationMethods(TargetClass) {
         // Eager pairs compute synchronously; lazy pairs are grouped per file and
         // computed exactly in DuckDB (one aggregate query each, never overview).
         const lazyByFile = new Map();
-        pairs.forEach((pair, index) => {
-            if (this._isLazyFile(pair.fileId)) {
-                if (!lazyByFile.has(pair.fileId)) lazyByFile.set(pair.fileId, []);
-                lazyByFile.get(pair.fileId).push({ index, pair });
-                return;
-            }
-            const series = this._correlationPairSeries(pair, range, state.rangeFull);
-            const stats = pearsonCorrelation(series.x, series.y);
-            results[index] = { pair, label: label(pair), nScope: series.nScope, ...stats };
+        // Pearson over the selected slice is the range-dependent cost; the
+        // auto-limit reconsider measures exactly this.
+        const measured = this._measureAnalysisKernel(panelId, plot, () => {
+            pairs.forEach((pair, index) => {
+                if (this._isLazyFile(pair.fileId)) {
+                    if (!lazyByFile.has(pair.fileId)) lazyByFile.set(pair.fileId, []);
+                    lazyByFile.get(pair.fileId).push({ index, pair });
+                    return;
+                }
+                const series = this._correlationPairSeries(pair, range, state.rangeFull);
+                const stats = pearsonCorrelation(series.x, series.y);
+                results[index] = { pair, label: label(pair), nScope: series.nScope, ...stats };
+            });
         });
+        // The measurement widened the range and rescheduled; this pass is stale.
+        if (measured.superseded) return;
 
         if (lazyByFile.size) {
             const jobs = [...lazyByFile.entries()].map(async ([fileId, entries]) => {
@@ -727,7 +772,7 @@ export function installPlotCorrelationMethods(TargetClass) {
 
         if (plot._correlationToken !== token) return;
 
-        const warnings = [];
+        const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
         for (const r of results) {
             if (!r || r.status === 'ok') continue;
             if (r.status === 'undefined') warnings.push(`${r.label}: ${i18n.t('correlationUndefined')}`);
@@ -743,10 +788,16 @@ export function installPlotCorrelationMethods(TargetClass) {
         plot._correlationResults = results;
         Plotly.react(plot.correlationDiv, this._buildCorrelationResultTraces(results), this._buildCorrelationResultLayout(plot, results), this._getPlotlyConfig());
         this._renderCorrelationOptionsPanel(panelId, plot);
-        // Show the actual warning text (not just a count) so the user knows why;
-        // it is also listed in the drawer. The topbar truncates with a tooltip.
-        if (warnings.length) this._setCorrelationStatus(plot, warnings.join(' · '), 'warning');
-        else this._setCorrelationStatus(plot, i18n.t('correlationReady'), 'ready');
+        // The topbar is for short messages. Warning text — which can be a full
+        // paragraph — belongs in the drawer box that already lists it; the bar
+        // only points there, and keeps the full text as its tooltip.
+        if (warnings.length) {
+            this._setCorrelationStatus(plot, i18n.t('correlationWarningSeePanel'), 'warning', warnings.join(' · '));
+        } else {
+            this._setCorrelationStatus(plot, i18n.t('correlationReady'), 'ready');
+        }
+        // Last, so the preserveView refresh above cannot overwrite it.
+        this._applyPendingAnalysisFocus(plot);
     };
 
     // ── Result bars ────────────────────────────────────────────────
@@ -856,6 +907,8 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (!plot?.div) return;
         const state = this._ensureCorrelationState(plot);
         state.rangeFull = true;
+        state.autoRangeLimited = false;
+        state.autoRangeWarning = null;
         state.x1 = null;
         state.x2 = null;
         this._refreshCorrelationTimePlot(panelId, plot);
@@ -878,12 +931,12 @@ export function installPlotCorrelationMethods(TargetClass) {
             : { 'yaxis.autorange': true });
     };
 
-    proto._setCorrelationStatus = function(plot, message, type = 'muted') {
+    proto._setCorrelationStatus = function(plot, message, type = 'muted', tooltip = '') {
         const el = plot?.correlationContainer?.querySelector('.fft-status');
         if (!el) return;
         el.textContent = message || '';
         el.className = `fft-status fft-status-${type}`;
-        el.title = message || '';
+        el.title = tooltip || message || '';
     };
 
     // ── Right drawer (options panel) ───────────────────────────────
@@ -950,6 +1003,8 @@ export function installPlotCorrelationMethods(TargetClass) {
                 event.preventDefault();
                 const st = this._ensureCorrelationState(plot);
                 if (!!st.rangeFull === isFull) return;
+                st.autoRangeWarning = null;
+                st.autoRangeLimited = false;
                 st.rangeFull = isFull;
                 if (!isFull) seedSelectionFromView();
                 this._updateCorrelationSelectionShapes(panelId, plot);
@@ -969,6 +1024,8 @@ export function installPlotCorrelationMethods(TargetClass) {
             input.addEventListener('change', () => {
                 const st = this._ensureCorrelationState(plot);
                 const n = usesCalendar ? datetimeInputToMs(input.value) : Number(input.value);
+                st.autoRangeWarning = null;
+                st.autoRangeLimited = false;
                 st[key] = Number.isFinite(n) ? n : null;
                 this._ensureCorrelationRange(plot);
                 this._updateCorrelationSelectionShapes(panelId, plot);
@@ -988,6 +1045,8 @@ export function installPlotCorrelationMethods(TargetClass) {
             input.addEventListener('input', () => {
                 const st = this._ensureCorrelationState(plot);
                 const n = Number(input.value);
+                st.autoRangeWarning = null;
+                st.autoRangeLimited = false;
                 st[key] = Number.isFinite(n) ? n : null;
                 this._syncCorrelationRangeInputs(plot, { skipSliders: true });
                 this._updateCorrelationSelectionShapes(panelId, plot);

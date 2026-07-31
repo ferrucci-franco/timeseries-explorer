@@ -18,6 +18,8 @@ export const FFT_MAX_POINTS_DESKTOP = 2 ** 26;
 // (~<100ms) is cheaper than spawning + messaging a worker. This is only a
 // "where to run it" switch; the hard/live caps above still bound the size.
 export const FFT_WORKER_THRESHOLD_POINTS = 2 ** 18;
+export const FFT_AUTO_TARGET_POINTS = 2 ** 18;
+export const FFT_AUTO_SLOW_MS = 5000;
 
 // A zero-padded spectrum can hold hundreds of thousands of bins (NFFT/2), but a
 // pane is only ~1000px wide. Rendering, hover, and the per-bin period-label pass
@@ -293,11 +295,31 @@ export function analyzeSampling(times, options = {}) {
     if (!Number.isFinite(dt) || dt <= 0) {
         return { ok: false, reason: 'nonUniform', dt, sampleRate: NaN, maxRelativeError: Infinity };
     }
+    // Two timestamps far from zero cannot express a small step uniformly:
+    // subtracting them quantises the delta to the spacing of the number format,
+    // not to the sampling. Promoting this file's numeric seconds to an absolute
+    // calendar moves them to ~1.767e12 ms, where one ulp is 0.000244 ms while
+    // the 44.1 kHz step is 0.0227 ms — barely 93 ulp. Consecutive deltas then
+    // snap between 0.02246 and 0.02271 ms, a 1.08% spread, and the same
+    // recording that passes as seconds (spread 6e-13) is refused as calendar.
+    //
+    // The signal did not change, only its offset, so the gate must not either.
+    // Below the resolution of the representation, real jitter and rounding are
+    // indistinguishable, and rejecting on the difference asserts something the
+    // numbers cannot support. Four ulp allows a couple at each end of a delta
+    // plus margin; on any axis whose step is not near that floor the term is
+    // negligible and the configured tolerance still decides.
+    const magnitude = Math.max(Math.abs(values[0]), Math.abs(values[values.length - 1]));
+    const ulp = magnitude > 0 ? 2 ** (Math.floor(Math.log2(magnitude)) - 52) : 0;
+    const rawStep = dt * scale;
+    const representationFloor = rawStep > 0 ? (4 * ulp) / rawStep : 0;
+    const effectiveTolerance = Math.max(tolerance, representationFloor);
+
     let maxRelativeError = 0;
     for (const value of deltas) {
         maxRelativeError = Math.max(maxRelativeError, Math.abs(value - dt) / dt);
     }
-    if (maxRelativeError >= tolerance) {
+    if (maxRelativeError >= effectiveTolerance) {
         return { ok: false, reason: 'nonUniform', dt, sampleRate: 1 / dt, maxRelativeError };
     }
     return {
@@ -441,6 +463,31 @@ export function selectFftRange(times, values, range) {
         return { times: sliceLike(times, 0, n), values: sliceLike(values, 0, n) };
     }
     if (lo > hi) [lo, hi] = [hi, lo];
+    // Time axes are normalized to ascending order by the import pipeline.
+    // Binary search avoids walking a multi-gigabyte signal on the UI thread
+    // merely to extract a small selected window.
+    if (n > 1 && Number.isFinite(Number(times[0])) && Number.isFinite(Number(times[n - 1]))
+        && Number(times[0]) <= Number(times[n - 1])) {
+        let left = 0;
+        let right = n;
+        while (left < right) {
+            const mid = (left + right) >> 1;
+            if (Number(times[mid]) < lo) left = mid + 1;
+            else right = mid;
+        }
+        const start = left;
+        right = n;
+        while (left < right) {
+            const mid = (left + right) >> 1;
+            if (Number(times[mid]) <= hi) left = mid + 1;
+            else right = mid;
+        }
+        const end = left;
+        return {
+            times: sliceLike(times, start, end),
+            values: sliceLike(values, start, end),
+        };
+    }
     const outTimes = [];
     const outValues = [];
     for (let i = 0; i < n; i++) {
@@ -454,6 +501,15 @@ export function selectFftRange(times, values, range) {
         times: Float64Array.from(outTimes),
         values: Float64Array.from(outValues),
     };
+}
+
+export function estimateFftDurationMs(sampleCount, zeroPaddingFactor = 1) {
+    const samples = Math.max(0, Math.floor(Number(sampleCount) || 0));
+    if (samples < 2) return 0;
+    const nfft = nextPowerOfTwo(samples) * normalizeZeroPaddingFactor(zeroPaddingFactor);
+    // Deliberately conservative browser estimate. It covers transform,
+    // normalization and spectrum materialization, not just radix-2 butterflies.
+    return (nfft * Math.log2(nfft)) / 50000;
 }
 
 export function normalizeZeroPaddingFactor(value) {
