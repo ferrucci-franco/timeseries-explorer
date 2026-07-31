@@ -407,6 +407,7 @@ proto.loadFiles = async function(items = []) {
     for (const result of loaded) {
         await this._showDatetimeAxisWarningIfNeeded(result.fileId, result.data);
         if (result.data?._duckdb) this._showLazyFileNotice(result.fileId);
+        this._showNetcdfPartialLoadNotice(result.fileId);
     }
 
     return loaded;
@@ -802,6 +803,115 @@ proto._showLazyFileNotice = function(fileId) {
     notice.append(content, close);
     document.body.appendChild(notice);
     requestAnimationFrame(() => notice.classList.add('show'));
+};
+
+/**
+ * A gridded netCDF variable too large to expand in full loads a thinned subset
+ * of its spatial points. That has to be said out loud.
+ *
+ * It used to be said only in the file-type tooltip, as a count. Someone who
+ * does not hover sees a variable that looks complete and is not, and the tree
+ * gives nothing away — the slices that did load carry ordinary coordinate
+ * labels, so a subset of a field is indistinguishable from the field. The
+ * notice is modelled on the memory-saving one above: same class of message, a
+ * file that loaded but not the way its contents would lead you to assume.
+ */
+proto._showNetcdfPartialLoadNotice = function(fileId) {
+    const entry = this.files.get(fileId);
+    const partial = this.plotManager.files.get(fileId)?.data?.metadata?.partialVariables || [];
+    if (!entry || !partial.length) return;
+    const noticeId = `netcdf-partial-notice-${fileId}`;
+    document.getElementById(noticeId)?.remove();
+
+    const notice = document.createElement('div');
+    notice.id = noticeId;
+    notice.className = 'dismissible-notice';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+
+    const content = document.createElement('div');
+    content.className = 'dismissible-notice-content';
+    const title = document.createElement('div');
+    title.className = 'dismissible-notice-title';
+    title.textContent = i18n.t('netcdfPartialNoticeTitle');
+    const body = document.createElement('div');
+    body.className = 'dismissible-notice-body';
+    body.textContent = i18n.t('netcdfPartialNoticeBody')
+        .replace('{count}', String(partial.length))
+        .replace('{file}', this._fileDisplayName(entry));
+
+    const actions = document.createElement('div');
+    actions.className = 'dismissible-notice-actions';
+    const understood = document.createElement('button');
+    understood.type = 'button';
+    understood.className = 'dismissible-notice-action primary';
+    understood.textContent = i18n.t('lazyFileNoticeUnderstood');
+    understood.addEventListener('click', () => notice.remove());
+    const details = document.createElement('button');
+    details.type = 'button';
+    details.className = 'dismissible-notice-action';
+    details.textContent = i18n.t('netcdfPartialNoticeDetails');
+    details.addEventListener('click', () => {
+        notice.remove();
+        this._showNetcdfPartialLoadDetails(fileId);
+    });
+    actions.append(understood, details);
+    content.append(title, body, actions);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'dismissible-notice-close';
+    close.textContent = '×';
+    close.title = i18n.t('closeFile');
+    close.addEventListener('click', () => notice.remove());
+    notice.append(content, close);
+    document.body.appendChild(notice);
+    requestAnimationFrame(() => notice.classList.add('show'));
+};
+
+// Which variables, and exactly how much of each. The per-axis counts are the
+// point: "1,352 of 84,096 slices" says a subset was taken, "8 of 8 level x 13
+// of 73 lat x 13 of 144 lon" says which subset, and that is the difference
+// between a sample someone can reason about and one they cannot.
+proto._showNetcdfPartialLoadDetails = async function(fileId) {
+    const partial = this.plotManager.files.get(fileId)?.data?.metadata?.partialVariables || [];
+    if (!partial.length) return;
+
+    // Variables on one grid get one allowance, so a file lists the same three
+    // lines over and over: ERA-40 repeated them seventeen times, ECHAM would
+    // have repeated them a hundred and twenty-seven. Grouped by what was
+    // actually taken, both collapse to one or two entries that can be read.
+    const groups = new Map();
+    for (const item of partial) {
+        const axes = (item.sampledAxes || [])
+            .map(axis => i18n.t('netcdfPartialAxis')
+                .replace('{kept}', axis.kept.toLocaleString())
+                .replace('{size}', axis.size.toLocaleString())
+                .replace('{dimension}', axis.dimension))
+            .join(' × ');
+        const key = `${item.generatedSeriesCount}|${item.availableSeriesCount}|${axes}`;
+        if (!groups.has(key)) groups.set(key, { item, axes, names: [] });
+        groups.get(key).names.push(item.name);
+    }
+
+    const blocks = [...groups.values()].map(({ item, axes, names }) => {
+        const counts = i18n.t(names.length > 1 ? 'netcdfPartialCountsEach' : 'netcdfPartialCounts')
+            .replace('{loaded}', Number(item.generatedSeriesCount).toLocaleString())
+            .replace('{available}', Number(item.availableSeriesCount).toLocaleString());
+        // No indent under the names: .modal-message is white-space: pre-line,
+        // which keeps the newlines and eats the leading spaces. The blank line
+        // between groups is what separates them.
+        return [names.join(', '), counts, axes].filter(Boolean).join('\n');
+    });
+
+    await Modal.alert(
+        i18n.t('netcdfPartialDetailsTitle'),
+        `${i18n.t('netcdfPartialDetailsIntro')}\n\n${blocks.join('\n\n')}\n\n${i18n.t('netcdfPartialDetailsCaveat')}`,
+        // The list is as long as the file makes it, so the dialog caps its own
+        // height and scrolls the list alone — an alert sized to its content ran
+        // 2,000 px tall on ERA-40 and pushed its own Close button off-screen.
+        { icon: '🌐', className: 'modal-dialog-netcdf-partial' },
+    );
 };
 
 /**
@@ -3812,6 +3922,7 @@ proto._fileTypeLabel = function(_entry, fileId = null) {
 proto._fileTypeHasWarnings = function(_entry, fileId = null) {
     const metadata = fileId ? this.plotManager.files.get(fileId)?.data?.metadata : null;
     return Number(metadata?.skippedDynamicCount || metadata?.skippedDynamic?.length || 0) > 0
+        || Number(metadata?.partialVariablesCount || metadata?.partialVariables?.length || 0) > 0
         || Number(metadata?.skippedVariablesCount || metadata?.skippedVariables?.length || 0) > 0
         || Number(metadata?.skippedColumnsCount || metadata?.skippedColumns?.length || 0) > 0
         || Number(metadata?.precisionLossCount || metadata?.precisionWarnings?.length || 0) > 0
@@ -3824,9 +3935,16 @@ proto._fileTypeTooltip = function(_entry, fileId = null, fallback = '') {
     if ((metadata?.format === 'pypsa-netcdf' || metadata?.source === 'pypsa') && skipped > 0) {
         return `${fallback}\n${i18n.t('fileTypePypsaSkippedDynamic').replace('{count}', String(skipped))}`;
     }
-    const skippedNetcdf = Number(metadata?.skippedVariablesCount || metadata?.skippedVariables?.length || 0);
-    if ((metadata?.format === 'generic-netcdf' || metadata?.source === 'netcdf') && skippedNetcdf > 0) {
-        return `${fallback}\n${i18n.t('fileTypeNetcdfSkippedVariables').replace('{count}', String(skippedNetcdf))}`;
+    if (metadata?.format === 'generic-netcdf' || metadata?.source === 'netcdf') {
+        // Two different things, and folding them into one count said the wrong
+        // one: a variable that could not be aligned is missing, a partially
+        // loaded one is present and thinned.
+        const skippedNetcdf = Number(metadata?.skippedVariablesCount || metadata?.skippedVariables?.length || 0);
+        const partial = Number(metadata?.partialVariablesCount || metadata?.partialVariables?.length || 0);
+        const lines = [fallback].filter(Boolean);
+        if (partial > 0) lines.push(i18n.t('fileTypeNetcdfPartialVariables').replace('{count}', String(partial)));
+        if (skippedNetcdf > 0) lines.push(i18n.t('fileTypeNetcdfSkippedVariables').replace('{count}', String(skippedNetcdf)));
+        if (lines.length > 1) return lines.join('\n');
     }
     if (metadata?.format === 'pandas-pickle' || metadata?.source === 'pandas') {
         const lines = [fallback].filter(Boolean);

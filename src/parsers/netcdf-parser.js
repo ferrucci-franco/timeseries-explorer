@@ -11,9 +11,32 @@ const NETCDF3_MAGICS = new Map([
 ]);
 const CDF5_MAGIC = '43 44 46 05';
 const UNSUPPORTED_NODE = 'Unsupported variables';
+const PARTIAL_NODE = 'Partially loaded variables';
 const METADATA_NODE = 'File metadata';
 const COORDINATES_NODE = 'Coordinates';
 const MAX_GENERATED_SERIES = 10000;
+// A gridded variable can expose tens of thousands (or millions) of spatial
+// points. Rejecting the whole variable leaves otherwise valid climate files
+// looking as if they failed to load. A bounded, evenly spaced subset is loaded
+// instead.
+//
+// How large that subset may be is not a count, because a count is the wrong
+// unit. What a slice costs to hold is dominated by the length of the time
+// axis: a slice of ECMWF ERA-40 (62 steps) is 500 bytes, a slice of a daily
+// century run (31,025 steps) is 240 kB. So the allowance is a budget of
+// retained VALUES, divided by the sample count — 2,000,000 values is 16 MB of
+// float64, and no file in the measured corpus retains more than that per
+// variable. The floor is there because a field sampled too thinly stops being
+// a field: below roughly an 8 x 8 grid there is nothing left to look at.
+//
+// Deliberately absent: a per-variable slice ceiling. An earlier draft capped
+// every variable at 512, then 2,048, and both numbers thinned variables that
+// main had loaded whole (sresa1b's `ua`, 4,352 slices) — a regression paid for
+// nothing, since the file-wide MAX_GENERATED_SERIES already bounds the total.
+// Measured with scripts/bench-netcdf-grid.mjs; the numbers are in
+// docs/netcdf-gridded-subsampling.md.
+const SERIES_VALUE_BUDGET_PER_VARIABLE = 2000000;
+const MIN_SERIES_PER_VARIABLE = 64;
 const TECHNICAL_ATTRIBUTES = new Set([
     'CLASS', 'NAME', 'REFERENCE_LIST', 'DIMENSION_LIST',
     '_Netcdf4Coordinates', '_Netcdf4Dimid', '_NCProperties',
@@ -204,6 +227,90 @@ function combinations(shape) {
     return result;
 }
 
+/**
+ * How many indexes to keep along each axis so that their product stays within
+ * the budget.
+ *
+ * Scaling every axis by the same factor is the obvious thing and the wrong
+ * one: on a [level=8, lat=73, lon=144] grid it rounds the level axis away to a
+ * single level while the horizontal axes still keep a dozen each, so what
+ * comes back is one altitude rather than a thinned volume. Filling the
+ * shortest axis first — it is the one most likely to fit whole — and dividing
+ * what is left among the rest keeps every dimension represented.
+ */
+function axisSampleCounts(sizes, limit) {
+    const counts = new Array(sizes.length);
+    const ascending = sizes.map((size, axis) => ({ size, axis })).sort((a, b) => a.size - b.size || a.axis - b.axis);
+    let budget = Math.max(1, limit);
+    let remaining = ascending.length;
+    for (const item of ascending) {
+        const share = Math.max(1, Math.floor(budget ** (1 / remaining)));
+        counts[item.axis] = Math.min(item.size, share);
+        budget = Math.max(1, Math.floor(budget / counts[item.axis]));
+        remaining -= 1;
+    }
+    return counts;
+}
+
+// Evenly spaced along the axis, both ends included, so the subset spans the
+// full extent of the dimension. A single index is taken from the middle: on a
+// latitude axis the first row is a pole, and a pole is a poor stand-in for a
+// hemisphere.
+function evenIndexes(size, count) {
+    if (count >= size) return Array.from({ length: size }, (_, index) => index);
+    if (count <= 1) return [Math.floor((size - 1) / 2)];
+    return Array.from({ length: count }, (_, index) => Math.round((index * (size - 1)) / (count - 1)));
+}
+
+/**
+ * A bounded subset of a grid's points, thinned along each axis rather than
+ * along the flattened index. Walking the flattened order takes whole leading
+ * rows and none of the rest, which on a lat/lon grid is a band of latitudes,
+ * not a sample of the field.
+ */
+function gridSample(sizes, limit) {
+    const total = product(sizes);
+    if (total <= limit) return { combinations: combinations(sizes), counts: [...sizes], total };
+    const counts = axisSampleCounts(sizes, limit);
+    const indexesByAxis = sizes.map((size, axis) => evenIndexes(size, counts[axis]));
+    return {
+        combinations: combinations(indexesByAxis.map(list => list.length))
+            .map(position => position.map((index, axis) => indexesByAxis[axis][index])),
+        counts: indexesByAxis.map(list => list.length),
+        total,
+    };
+}
+
+/**
+ * How many slices each gridded variable may contribute, given how long the
+ * time axis is and how many variables are competing for the file-wide limit.
+ *
+ * The competition is the part a per-variable constant cannot express. ECMWF
+ * ERA-40 holds seventeen variables on the same 73 x 144 grid: hand the first
+ * few a large allowance and they consume the file's whole budget, and the
+ * remaining variables are rejected outright — the failure this code exists to
+ * avoid, moved one step down the file. So the shortest requests are satisfied
+ * first and the rest divide what is left, which leaves every variable present.
+ */
+function seriesLimits(seriesCounts, sampleCount) {
+    const ceiling = Math.max(
+        MIN_SERIES_PER_VARIABLE,
+        Math.floor(SERIES_VALUE_BUDGET_PER_VARIABLE / Math.max(1, sampleCount)),
+    );
+    const limits = new Array(seriesCounts.length).fill(0);
+    const ascending = seriesCounts
+        .map((count, index) => ({ want: Math.min(count, ceiling), index }))
+        .sort((a, b) => a.want - b.want || a.index - b.index);
+    let budget = MAX_GENERATED_SERIES;
+    let remaining = ascending.length;
+    for (const item of ascending) {
+        limits[item.index] = Math.max(0, Math.min(item.want, Math.floor(budget / remaining)));
+        budget -= limits[item.index];
+        remaining -= 1;
+    }
+    return limits;
+}
+
 function coordinateLabel(value, index) {
     if (value === undefined || value === null || value === '') return String(index);
     if (typeof value === 'number' && !Number.isFinite(value)) return String(index);
@@ -356,6 +463,11 @@ export default class NetcdfParser {
                 dimensions: [...dimensionUsage.entries()].map(([name, info]) => ({ name, size: info.size, variables: info.count })),
                 globalAttributes: globalAttrs,
                 skippedVariables: [],
+                // Kept apart from skippedVariables: a partially loaded variable
+                // is present and plottable, and folding it into the skipped list
+                // made the file-type tooltip report it as one that could not be
+                // read at all.
+                partialVariables: [],
                 generatedSeriesCount: 0,
                 auxiliaryCoordinateCount: 0,
             },
@@ -375,6 +487,10 @@ export default class NetcdfParser {
             result.metadata.auxiliaryCoordinateCount += 1;
         }
 
+        // Two passes: what every variable would cost has to be known before any
+        // one of them is allowed to spend, or the variables that happen to come
+        // first in the file take the whole allowance.
+        const plans = [];
         for (const descriptor of descriptors) {
             if (descriptor.path === coordinate?.path || coordinatePaths.has(descriptor.path)) continue;
             const alignment = this._timeAlignment(descriptor, axis);
@@ -388,15 +504,43 @@ export default class NetcdfParser {
             }
             const otherAxes = descriptor.shape.map((size, index) => ({ size, index })).filter(item => item.index !== alignment.axis);
             const seriesCount = product(otherAxes.map(item => item.size));
-            if (seriesCount < 1 || result.metadata.generatedSeriesCount + seriesCount > MAX_GENERATED_SERIES) {
+            if (seriesCount < 1) {
+                this._skip(result, descriptor, 'The variable has no series to expand along the selected X coordinate.');
+                continue;
+            }
+            plans.push({ descriptor, alignment, otherAxes, seriesCount });
+        }
+
+        const limits = seriesLimits(plans.map(plan => plan.seriesCount), axis.length);
+        for (const [planIndex, plan] of plans.entries()) {
+            const { descriptor, alignment, otherAxes, seriesCount } = plan;
+            const limit = limits[planIndex];
+            if (limit < 1) {
                 this._skip(result, descriptor, `Expanding this variable would exceed the ${MAX_GENERATED_SERIES.toLocaleString()}-series safety limit.`);
                 continue;
             }
             const labelsByAxis = new Map(otherAxes.map(item => [item.index, this._dimensionLabels(
                 descriptor.dimensions[item.index], descriptor.shape[item.index], descriptors, readFlat
             )]));
-            const indexes = combinations(otherAxes.map(item => item.size));
-            for (const combination of indexes) {
+            const sample = gridSample(otherAxes.map(item => item.size), limit);
+            if (sample.combinations.length < seriesCount) {
+                const perAxis = otherAxes.map((item, index) => ({
+                    dimension: basename(descriptor.dimensions[item.index]),
+                    kept: sample.counts[index],
+                    size: item.size,
+                }));
+                result.metadata.partialVariables.push({
+                    name: descriptor.path,
+                    reason: `Loaded ${sample.combinations.length.toLocaleString()} of ${seriesCount.toLocaleString()} slices (${perAxis.map(item => `${item.kept} of ${item.size} ${item.dimension}`).join(' x ')}), evenly spaced along each dimension, to keep the dataset responsive.`,
+                    shape: descriptor.shape,
+                    dimensions: descriptor.dimensions,
+                    partial: true,
+                    generatedSeriesCount: sample.combinations.length,
+                    availableSeriesCount: seriesCount,
+                    sampledAxes: perAxis,
+                });
+            }
+            for (const combination of sample.combinations) {
                 const fixed = new Map(otherAxes.map((item, index) => [item.index, combination[index]]));
                 const rawValues = this._readSeries(descriptor, alignment.axis, fixed, readFlat);
                 const values = decodeNumeric(rawValues, descriptor.userAttrs);
@@ -413,7 +557,9 @@ export default class NetcdfParser {
         }
 
         result.metadata.skippedVariablesCount = result.metadata.skippedVariables.length;
+        result.metadata.partialVariablesCount = result.metadata.partialVariables.length;
         this._addSkippedTree(result.tree, result.metadata.skippedVariables);
+        this._addPartialTree(result.tree, result.metadata.partialVariables);
         if (result.metadata.generatedSeriesCount === 0) {
             throw new Error('The netCDF file did not expose any numeric variables aligned with its selected X coordinate.');
         }
@@ -792,6 +938,23 @@ export default class NetcdfParser {
                 label,
                 'unsupported',
                 `Skipped netCDF variable ${item.name}: ${item.reason} Shape: [${item.shape.join(', ')}]. Dimensions: [${item.dimensions.join(', ')}].`
+            );
+        }
+    }
+
+    // Its own node rather than a corner of "Unsupported variables": these
+    // variables did load, and the tree is where someone goes to find out which
+    // ones they are holding a sample of.
+    _addPartialTree(root, partial) {
+        if (!partial.length) return;
+        const node = this._ensureNode(root, [PARTIAL_NODE]);
+        node._type = 'metadata';
+        for (const item of partial) {
+            node._variables[item.name] = this._metadataVariable(
+                `netcdf:@partial/${idSegment(item.name)}`,
+                item.name,
+                'partial',
+                `Partially loaded netCDF variable ${item.name}: ${item.reason} Shape: [${item.shape.join(', ')}]. Dimensions: [${item.dimensions.join(', ')}].`
             );
         }
     }
