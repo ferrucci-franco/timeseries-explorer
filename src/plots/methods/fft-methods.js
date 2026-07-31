@@ -307,8 +307,15 @@ proto._createFftChart = function(panelId, panelEl) {
 };
 
 proto._installFftPlotHandlers = function(panelId, plot) {
-    if (!plot?.div || !plot?.fftDiv || plot._fftHandlersInstalled) return;
-    plot._fftHandlersInstalled = true;
+    if (!plot?.div || !plot?.fftDiv) return;
+    // Keyed on the two divs rather than a boolean, like the temporal profile:
+    // a layout re-render hands the panel new panes, and a latch that only a
+    // teardown clears would leave them with no handlers at all — no relayout
+    // recompute, no legend clicks — and nothing would report it.
+    if (plot._fftHandlerTimeDiv === plot.div
+        && plot._fftHandlerSpectrumDiv === plot.fftDiv) return;
+    plot._fftHandlerTimeDiv = plot.div;
+    plot._fftHandlerSpectrumDiv = plot.fftDiv;
     const bindLegend = (div) => {
         let lastMouseDownHadShift = false;
         div.addEventListener('mousedown', event => {

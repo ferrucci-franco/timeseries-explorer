@@ -275,8 +275,12 @@ proto._createHistogramChart = function(panelId, panelEl) {
 };
 
 proto._installHistogramPlotHandlers = function(panelId, plot) {
-    if (!plot?.div || !plot?.histogramDiv || plot._histHandlersInstalled) return;
-    plot._histHandlersInstalled = true;
+    if (!plot?.div || !plot?.histogramDiv) return;
+    // Keyed on the divs, not a boolean — see _installFftPlotHandlers.
+    if (plot._histHandlerTimeDiv === plot.div
+        && plot._histHandlerAnalysisDiv === plot.histogramDiv) return;
+    plot._histHandlerTimeDiv = plot.div;
+    plot._histHandlerAnalysisDiv = plot.histogramDiv;
     const bindLegend = (div, isBars) => {
         let lastShift = false;
         div.addEventListener('mousedown', event => { lastShift = !!event.shiftKey; }, { capture: true });

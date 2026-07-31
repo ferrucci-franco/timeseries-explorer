@@ -58,6 +58,12 @@ class PlotManager {
 
         this.onPanelMount   = (id, el) => this._mountPanel(id, el);
         this.onPanelUnmount = (id)     => this._unmountPanel(id);
+        // A layout re-render throws every panel element away and builds new
+        // ones. The panel *state* survives (that is what makes it a re-render
+        // and not a close), but everything the chart hung off the old DOM does
+        // not, so it has to be torn down first — same teardown a close does,
+        // minus dropping the state.
+        this.onPanelDetach  = (id)     => this._destroyChart(id);
         // Optional app hook for a dragged time axis (abscissa). The viewer opens
         // the time-axis inspector and resolves to nothing — a time axis is never
         // plotted as a trace. Kept as a hook (rather than a plain filter) so the
@@ -1892,12 +1898,24 @@ class PlotManager {
         delete plot._arrowDxIdx;
         delete plot._xAbsMax;
         delete plot._yAbsMax;
-        if (plot._cursorDocListeners) {
-            document.removeEventListener('mousemove', plot._cursorDocListeners.move);
-            document.removeEventListener('mouseup',   plot._cursorDocListeners.up);
-            plot._cursorDocListeners = null;
+        // Cursor handlers are installed per view, and keyed that way:
+        // _cursorDocListeners_time, _cursorDocListeners_spectrum, and one
+        // _cursorHandlersDiv_* guard each. Sweep the whole family rather than a
+        // single flat key — re-installing drops the previous set, but a panel
+        // that is closed instead of rebuilt never re-installs, so its listeners
+        // would sit on document for the rest of the session holding the panel.
+        for (const key of Object.keys(plot)) {
+            if (key.startsWith('_cursorDocListeners')) {
+                const listeners = plot[key];
+                if (listeners) {
+                    document.removeEventListener('mousemove', listeners.move);
+                    document.removeEventListener('mouseup',   listeners.up);
+                }
+                plot[key] = null;
+            } else if (key.startsWith('_cursorHandlersDiv')) {
+                delete plot[key];
+            }
         }
-        delete plot._cursorHandlersDiv;
         if (plot.div) {
             const correlationContainer = plot.div.closest('.correlation-container');
             // The 2D fit shell reuses the fft-container CSS but carries its own
@@ -1992,7 +2010,8 @@ class PlotManager {
             document.removeEventListener('keydown', plot._fftHelpDocListeners.key);
             plot._fftHelpDocListeners = null;
         }
-        plot._fftHandlersInstalled = false;
+        plot._fftHandlerTimeDiv = null;
+        plot._fftHandlerSpectrumDiv = null;
         plot._fftSelectionDiv = null;
         if (plot._histSelectionDocListeners) {
             document.removeEventListener('mousemove', plot._histSelectionDocListeners.move);
@@ -2005,7 +2024,8 @@ class PlotManager {
             plot._histSplitterDocListeners = null;
         }
         clearTimeout(plot._histRecomputeTimer);
-        plot._histHandlersInstalled = false;
+        plot._histHandlerTimeDiv = null;
+        plot._histHandlerAnalysisDiv = null;
         plot._histSelectionDiv = null;
         if (plot._temporalProfileSelectionDocListeners) {
             document.removeEventListener('mousemove', plot._temporalProfileSelectionDocListeners.move);
@@ -2018,7 +2038,8 @@ class PlotManager {
             plot._temporalProfileSplitterDocListeners = null;
         }
         clearTimeout(plot._temporalProfileRecomputeTimer);
-        plot._temporalProfileHandlersInstalled = false;
+        plot._temporalProfileHandlerTimeDiv = null;
+        plot._temporalProfileHandlerAnalysisDiv = null;
         plot._temporalProfileSelectionDiv = null;
         if (plot._integralSelectionDocListeners) {
             document.removeEventListener('mousemove', plot._integralSelectionDocListeners.move);

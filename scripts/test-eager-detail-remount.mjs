@@ -9,7 +9,11 @@ import vm from 'node:vm';
 // div. This exercises that block against a fake DOM: it must rebuild the chart
 // into the panel that is on screen now.
 
-const manager = readFileSync(new URL('../src/plots/plot-manager.js', import.meta.url), 'utf8');
+// Flattened at the point of reading: the needles below are multi-line, and a
+// CRLF checkout would make indexOf miss and slice a wrong span that still
+// "passes" — the convention test-crlf-assumptions.mjs describes.
+const manager = readFileSync(new URL('../src/plots/plot-manager.js', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
 
 const START = `        if (plot.mode === 'timeseries'
             && this._timeseriesNeedsEagerDetailLoading(plot)

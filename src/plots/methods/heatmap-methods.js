@@ -605,8 +605,12 @@ proto._refreshCalendarHeatmapTimePlot = function(panelId, plot = this.plots.get(
 };
 
 proto._installCalendarHeatmapPlotHandlers = function(panelId, plot) {
-    if (!plot?.div || !plot?.heatmapDiv || plot._calendarHeatmapHandlersInstalled) return;
-    plot._calendarHeatmapHandlersInstalled = true;
+    if (!plot?.div || !plot?.heatmapDiv) return;
+    // Keyed on the divs, not a boolean — see _installFftPlotHandlers.
+    if (plot._calendarHeatmapHandlerTimeDiv === plot.div
+        && plot._calendarHeatmapHandlerAnalysisDiv === plot.heatmapDiv) return;
+    plot._calendarHeatmapHandlerTimeDiv = plot.div;
+    plot._calendarHeatmapHandlerAnalysisDiv = plot.heatmapDiv;
     let lastShift = false;
     plot.div.addEventListener('mousedown', event => { lastShift = !!event.shiftKey; }, { capture: true });
     plot.div.addEventListener('contextmenu', event => {
@@ -2018,7 +2022,8 @@ proto._cleanupCalendarHeatmapChart = function(panelId, plot = this.plots.get(pan
     clearTimeout(plot._calendarHeatmapRecomputeTimer);
     plot._calendarHeatmapRecomputeTimer = null;
     plot._calendarHeatmapToken = (plot._calendarHeatmapToken || 0) + 1;
-    plot._calendarHeatmapHandlersInstalled = false;
+    plot._calendarHeatmapHandlerTimeDiv = null;
+    plot._calendarHeatmapHandlerAnalysisDiv = null;
     plot._calendarHeatmapSelectionDiv = null;
     plot._calendarHeatmapModels = [];
     document.body.classList.remove(
