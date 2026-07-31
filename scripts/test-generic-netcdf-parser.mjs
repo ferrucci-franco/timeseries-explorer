@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import NetcdfParser from '../src/parsers/netcdf-parser.js';
 import { installFileMethods } from '../src/app/methods/file-methods.js';
+import Modal from '../src/ui/modal.js';
 
 const fixtures = {
     classic: 'test-files/netcdf/generic-timeseries-classic.nc',
@@ -286,6 +287,49 @@ function gridDescriptor(path, shape) {
     assert(many.metadata.generatedSeriesCount <= 10000);
     const counts = new Set(many.metadata.partialVariables.map(item => item.generatedSeriesCount));
     assert.equal(counts.size, 1, `variables with identical shapes must get identical allowances, got ${[...counts]}`);
+}
+
+// The detail dialog groups variables that got the same allowance. ERA-40 puts
+// seventeen variables on one grid and ECHAM a hundred and twenty-seven, and
+// listing the identical three lines once per variable made a dialog 2,000 px
+// tall that pushed its own Close button off the screen.
+{
+    const many = new FileHarness();
+    const descriptors = [timeDescriptor(4)];
+    for (let index = 0; index < 17; index++) descriptors.push(gridDescriptor(`/var${index}`, [4, 40, 50]));
+    many.plotManager.files.set('grids', { data: parser._parseGeneric(descriptors, {}, 'many.nc', 'netcdf3-classic') });
+
+    const alerts = [];
+    const realAlert = Modal.alert;
+    Modal.alert = async (title, body, options) => { alerts.push({ title, body, options }); };
+    try {
+        await many._showNetcdfPartialLoadDetails('grids');
+    } finally {
+        Modal.alert = realAlert;
+    }
+
+    assert.equal(alerts.length, 1);
+    const { body, options } = alerts[0];
+    assert.equal(options.className, 'modal-dialog-netcdf-partial', 'the dialog has to cap its own height');
+    assert.equal(
+        (body.match(/slices each/g) || []).length, 1,
+        'seventeen variables on one grid are one entry, not seventeen',
+    );
+    for (let index = 0; index < 17; index++) assert(body.includes(`/var${index}`), `missing /var${index}`);
+    // Distinct allowances stay distinct, and a lone variable is not "each".
+    const mixed = new FileHarness();
+    mixed.plotManager.files.set('mixed', { data: parser._parseGeneric(
+        [timeDescriptor(4), gridDescriptor('/a', [4, 80, 80]), gridDescriptor('/b', [4, 120, 120])],
+        {}, 'mixed.nc', 'netcdf3-classic',
+    ) });
+    alerts.length = 0;
+    Modal.alert = async (title, body, options) => { alerts.push({ title, body, options }); };
+    try {
+        await mixed._showNetcdfPartialLoadDetails('mixed');
+    } finally {
+        Modal.alert = realAlert;
+    }
+    assert.equal((alerts[0].body.match(/slices loaded/g) || []).length, 2, 'two allowances, two entries, neither "each"');
 }
 
 // The budget is over retained VALUES, not over slice count: the same grid

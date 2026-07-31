@@ -876,22 +876,41 @@ proto._showNetcdfPartialLoadNotice = function(fileId) {
 proto._showNetcdfPartialLoadDetails = async function(fileId) {
     const partial = this.plotManager.files.get(fileId)?.data?.metadata?.partialVariables || [];
     if (!partial.length) return;
-    const lines = partial.map(item => {
+
+    // Variables on one grid get one allowance, so a file lists the same three
+    // lines over and over: ERA-40 repeated them seventeen times, ECHAM would
+    // have repeated them a hundred and twenty-seven. Grouped by what was
+    // actually taken, both collapse to one or two entries that can be read.
+    const groups = new Map();
+    for (const item of partial) {
         const axes = (item.sampledAxes || [])
             .map(axis => i18n.t('netcdfPartialAxis')
                 .replace('{kept}', axis.kept.toLocaleString())
                 .replace('{size}', axis.size.toLocaleString())
                 .replace('{dimension}', axis.dimension))
             .join(' × ');
-        const counts = i18n.t('netcdfPartialCounts')
+        const key = `${item.generatedSeriesCount}|${item.availableSeriesCount}|${axes}`;
+        if (!groups.has(key)) groups.set(key, { item, axes, names: [] });
+        groups.get(key).names.push(item.name);
+    }
+
+    const blocks = [...groups.values()].map(({ item, axes, names }) => {
+        const counts = i18n.t(names.length > 1 ? 'netcdfPartialCountsEach' : 'netcdfPartialCounts')
             .replace('{loaded}', Number(item.generatedSeriesCount).toLocaleString())
             .replace('{available}', Number(item.availableSeriesCount).toLocaleString());
-        return `${item.name}\n    ${counts}${axes ? `\n    ${axes}` : ''}`;
+        // No indent under the names: .modal-message is white-space: pre-line,
+        // which keeps the newlines and eats the leading spaces. The blank line
+        // between groups is what separates them.
+        return [names.join(', '), counts, axes].filter(Boolean).join('\n');
     });
+
     await Modal.alert(
         i18n.t('netcdfPartialDetailsTitle'),
-        `${i18n.t('netcdfPartialDetailsIntro')}\n\n${lines.join('\n\n')}\n\n${i18n.t('netcdfPartialDetailsCaveat')}`,
-        { icon: '🌐' },
+        `${i18n.t('netcdfPartialDetailsIntro')}\n\n${blocks.join('\n\n')}\n\n${i18n.t('netcdfPartialDetailsCaveat')}`,
+        // The list is as long as the file makes it, so the dialog caps its own
+        // height and scrolls the list alone — an alert sized to its content ran
+        // 2,000 px tall on ERA-40 and pushed its own Close button off-screen.
+        { icon: '🌐', className: 'modal-dialog-netcdf-partial' },
     );
 };
 

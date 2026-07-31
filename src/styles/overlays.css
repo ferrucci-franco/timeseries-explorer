@@ -111,6 +111,34 @@
     margin-bottom: 0.85rem;
 }
 
+/* One line per gridded variable, and a file decides how many that is: ERA-40
+   makes seventeen, ECHAM a hundred and twenty-seven. Sized to its content the
+   box ran 2,000 px tall and hung its title off the top of the screen and its
+   Close button off the bottom, with nothing to scroll. Cap it and scroll the
+   list alone, the same way the overlay summary does. */
+.modal-dialog-netcdf-partial {
+    max-height: 85vh;
+    display: flex;
+}
+
+.modal-dialog-netcdf-partial .modal-content {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-height: 0;
+}
+
+.modal-dialog-netcdf-partial .modal-message {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+    /* Variable paths and their counts are a list, not prose: centred, the
+       indented axis lines no longer line up with anything. */
+    text-align: left;
+}
+
 .modal-dialog.correlation-help-dialog {
     width: min(880px, calc(100vw - 32px));
     max-width: none;
