@@ -82,6 +82,7 @@
     "test:autoscale-axis": "node scripts/test-autoscale-axis.mjs",
     "test:i18n-consistency": "node scripts/test-i18n-consistency.mjs",
     "test:source-encoding": "node scripts/test-source-encoding.mjs",
+    "test:crlf-assumptions": "node scripts/test-crlf-assumptions.mjs",
     "test:time-axis-model": "node scripts/test-time-axis-model.mjs",
     "test:time-axis-variables": "node scripts/test-time-axis-variables.mjs",
     "test:time-axis-fixtures": "node scripts/test-time-axis-fixtures.mjs",
