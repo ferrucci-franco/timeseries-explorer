@@ -50,6 +50,7 @@
     "test:electron-navigation": "node scripts/test-electron-navigation-policy.mjs",
     "test:desktop-download": "node scripts/test-desktop-download-dialog.mjs",
     "test:desktop-paths": "node scripts/test-desktop-paths.mjs",
+    "test:desktop-zoom": "node scripts/test-desktop-zoom.mjs",
     "test:desktop-release": "node scripts/test-desktop-release-config.mjs",
     "test:csv-to-parquet": "node scripts/test-csv-to-parquet-core.mjs",
     "test:parquet-pandas": "node scripts/test-parquet-pandas-metadata.mjs",

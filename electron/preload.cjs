@@ -13,6 +13,17 @@ contextBridge.exposeInMainWorld('omvDesktop', {
   tmpdir: os.tmpdir(),
   username,
   setTheme: theme => ipcRenderer.send('omv:set-theme', theme),
+  getZoom: () => ipcRenderer.invoke('omv:get-zoom'),
+  // 'in' | 'out' | 'reset' -- the ladder lives in the main process.
+  setZoom: action => ipcRenderer.invoke('omv:set-zoom', { action }),
+  // Keeps the menu's percentage honest when the keyboard changed the zoom.
+  // Returns an unsubscribe so a caller is never forced to leak the listener.
+  onZoomChanged: callback => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, factor) => callback(factor);
+    ipcRenderer.on('omv:zoom-changed', listener);
+    return () => ipcRenderer.removeListener('omv:zoom-changed', listener);
+  },
   selectFilePath: options => ipcRenderer.invoke('omv:select-file-path', options || {}),
   selectFilePaths: options => ipcRenderer.invoke('omv:select-file-paths', options || {}),
   selectParquetOutputPath: options => ipcRenderer.invoke('omv:select-parquet-output-path', options || {}),
