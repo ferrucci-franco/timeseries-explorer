@@ -769,8 +769,35 @@ proto._scheduleFftRecompute = function(panelId, options = {}) {
             // Refusing and stopping there leaves the previous spectrum on
             // screen under settings that did not produce it — the plot then
             // describes a range and a padding the user is no longer looking
-            // at. Put back the last combination that did fit and recompute, so
-            // what is drawn always matches what the controls say.
+            // at. Recompute from something valid instead, so what is drawn
+            // always matches what the controls say.
+            //
+            // Prefer the largest range that fits over the last one that did:
+            // the user asked for more data, and that answers them with as much
+            // as the platform can give at the padding they chose, instead of
+            // undoing their request back to whatever preceded it.
+            const clamped = this._clampFftRangeToLimit(plot, state);
+            if (clamped) {
+                const warning = this._fftWarningText(trace, 'tooManyPointsClamped', {
+                    ...rejected,
+                    samples: clamped.samples,
+                });
+                state.warnings = [warning];
+                this._setFftStatus(plot, warning, 'warning');
+                this._updateFftSelectionShapes(panelId, plot);
+                this._refreshFftWindowedOverlayIfNeeded(panelId, plot);
+                this._applyPendingAnalysisFocus(plot, 'fft');
+                this._syncFftOptionsPanel(plot);
+                this._renderFftOptionsPanel(panelId, plot);
+                this._refreshFftSpectrumPlot(panelId, plot).then(() => {
+                    if (plot.mode !== 'fft' || plot._fftPreflightTooLarge) return;
+                    state.warnings = [warning];
+                    this._setFftStatus(plot, warning, 'warning');
+                });
+                return;
+            }
+            // Already at the largest fitting range, so the padding is what does
+            // not fit: put back the combination that last worked.
             if (this._revertFftToLastAccepted(panelId, plot, state)) {
                 const warning = this._fftWarningText(trace, 'tooManyPointsReverted', rejected);
                 state.warnings = [warning];
@@ -2565,6 +2592,62 @@ proto._rememberAcceptedFftSettings = function(plot) {
     };
 };
 
+// The largest selection the platform will actually transform at the padding
+// the user has chosen, anchored where their selection starts.
+//
+// This is what a refused range should land on. Falling back to the last
+// ACCEPTED range instead answers a different question: on a ten-minute 44.1 kHz
+// recording, asking for the whole file was refused and handed back the initial
+// 262,144-sample preview — 1% of the signal — while the real ceiling allows
+// 16,777,216 samples, 63% of it. The message then reads "narrow the selection"
+// to someone who is nowhere near the limit, and who can indeed widen it by
+// hand, which is how this was found.
+proto._largestFittingFftRange = function(plot, state = this._ensureFftState(plot)) {
+    const trace = (plot?.traces || []).find(item => this._isVisible(item));
+    if (!trace) return null;
+    const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+    const total = times?.length || 0;
+    if (total < 2) return null;
+    const padding = normalizeZeroPaddingFactor(state.zeroPaddingFactor);
+    const maxNfft = this._canUseFftWorker()
+        ? this._fftComputationMaxNfft()
+        : this._fftLiveMaxNfft();
+    // Both are powers of two, so this bound is itself one and survives the
+    // preflight's own nextPowerOfTwo rounding without a further margin.
+    const maxSamples = Math.floor(maxNfft / padding);
+    if (maxSamples < 2) return null;
+
+    let start = 0;
+    if (!state.rangeFull) {
+        const lo = Math.min(Number(state.x1), Number(state.x2));
+        if (Number.isFinite(lo)) start = Math.max(0, Math.min(total - 2, this._lowerBound(times, lo)));
+    }
+    const end = Math.min(total, start + maxSamples);
+    if (end - start < 2) return null;
+    const x1 = Number(times[start]);
+    const x2 = Number(times[end - 1]);
+    if (!Number.isFinite(x1) || !Number.isFinite(x2) || x2 <= x1) return null;
+    return { x1, x2, samples: end - start };
+};
+
+// Replace a refused selection with the largest one that fits. Returns false
+// when the range is already that one, so the caller does not resubmit a request
+// the preflight has just refused.
+proto._clampFftRangeToLimit = function(plot, state = this._ensureFftState(plot)) {
+    const fitting = this._largestFittingFftRange(plot, state);
+    if (!fitting) return null;
+    if (!state.rangeFull && state.x1 === fitting.x1 && state.x2 === fitting.x2) return null;
+    state.rangeFull = false;
+    state.x1 = fitting.x1;
+    state.x2 = fitting.x2;
+    state.autoRangeLimited = false;
+    // The clamped window is a fraction of what was asked for, so the view has
+    // to move onto it or its edges are undraggable.
+    state.autoRangeFocusPending = true;
+    plot._fftPreflightTooLarge = null;
+    return fitting;
+};
+
 proto._revertFftToLastAccepted = function(panelId, plot, state = this._ensureFftState(plot)) {
     const accepted = plot._fftLastAccepted;
     if (!accepted) return false;
@@ -2592,11 +2675,16 @@ proto._fftWarningText = function(trace, reason, extra = {}) {
     if (reason === 'nan' || reason === 'invalidTime') return prefix + i18n.t('fftWarningNaN');
     if (reason === 'nonUniform' || reason === 'nonMonotonic') return prefix + i18n.t('fftWarningNonUniform');
     if (reason === 'tooFewSamples') return prefix + i18n.t('fftWarningTooFew');
-    if (reason === 'tooManyPoints' || reason === 'tooManyPointsReverted') {
+    if (reason === 'tooManyPoints' || reason === 'tooManyPointsReverted' || reason === 'tooManyPointsClamped') {
         const live = this._fftLiveMaxNfft().toLocaleString();
         const hard = this._fftHardMaxNfft().toLocaleString();
-        const key = reason === 'tooManyPointsReverted' ? 'fftWarningTooManyReverted' : 'fftWarningTooMany';
-        return prefix + i18n.t(key).replace('{live}', live).replace('{hard}', hard);
+        const key = reason === 'tooManyPointsReverted' ? 'fftWarningTooManyReverted'
+            : reason === 'tooManyPointsClamped' ? 'fftWarningTooManyClamped'
+            : 'fftWarningTooMany';
+        return prefix + i18n.t(key)
+            .replace('{live}', live)
+            .replace('{hard}', hard)
+            .replace('{samples}', Number(extra?.samples || 0).toLocaleString());
     }
     if (reason === 'missingVariable') return prefix + i18n.t('fftWarningMissing');
     if (reason === 'fetchFailed') return prefix + i18n.t('fftWarningFetch');

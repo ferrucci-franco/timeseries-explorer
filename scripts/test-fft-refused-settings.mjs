@@ -136,7 +136,87 @@ const makeApp = (state) => ({
         'a padding equal after normalisation is not a change');
 }
 
+// ── A refused RANGE lands on the largest one that fits ─────────────────────
+// Falling back to the last accepted range answers a different question. On the
+// reported file, asking for the whole 26,460,000 samples was refused and handed
+// back the 262,144-sample preview — 1% of the signal — while the ceiling allows
+// 16,777,216, or 63% of it. The user could then widen it by hand, which is what
+// made the "narrow the selection" message read as wrong.
+{
+    const HARD = 16777216;
+    const TOTAL = 26460000;
+    // Index i is at i/44100 seconds; only length and indexing are exercised.
+    const times = new Proxy({ length: TOTAL }, {
+        get: (t, key) => (key in t ? t[key] : (Number.isInteger(Number(key)) ? Number(key) / 44100 : undefined)),
+    });
+    const largest = isolate('_largestFittingFftRange', { normalizeZeroPaddingFactor });
+    const clamp = isolate('_clampFftRangeToLimit', { normalizeZeroPaddingFactor });
+    const makeRangeApp = (state) => ({
+        _ensureFftState: () => state,
+        _isVisible: () => true,
+        _getTransformedTimeDataForVariable: () => times,
+        _canUseFftWorker: () => true,
+        _fftComputationMaxNfft: () => HARD,
+        _fftLiveMaxNfft: () => 4194304,
+        _lowerBound: (arr, value) => Math.max(0, Math.min(TOTAL, Math.ceil(value * 44100))),
+        _largestFittingFftRange: largest,
+    });
+    const plot = { traces: [{ fileId: 'f1', varName: 'Left' }] };
+
+    // Full range refused: clamp to the ceiling, not back to the preview.
+    {
+        const state = { rangeFull: true, x1: null, x2: null, zeroPaddingFactor: 1 };
+        const fitting = clamp.call(makeRangeApp(state), plot, state);
+        assert.ok(fitting, 'a refused full range must be clamped');
+        assert.equal(fitting.samples, HARD, 'clamped to exactly the NFFT ceiling in samples');
+        assert.equal(state.rangeFull, false, 'the range becomes an explicit selection');
+        assert.equal(state.x1, 0, 'anchored at the start of the data');
+        assert.ok(Math.abs(state.x2 - (HARD - 1) / 44100) < 1e-9, 'and ends at the last sample that fits');
+        assert.equal(state.autoRangeFocusPending, true, 'the view moves onto the clamped window');
+        assert.equal(plot._fftPreflightTooLarge, null, 'the refusal is cleared before recomputing');
+    }
+
+    // Zero padding divides the budget, so the window shrinks with it.
+    for (const [padding, expected] of [[2, HARD / 2], [4, HARD / 4], [16, HARD / 16]]) {
+        const state = { rangeFull: true, x1: null, x2: null, zeroPaddingFactor: padding };
+        const fitting = clamp.call(makeRangeApp(state), plot, state);
+        assert.equal(fitting.samples, expected, `x${padding} padding allows ${expected} samples`);
+    }
+
+    // The clamp keeps where the user started rather than jumping to zero.
+    {
+        const state = { rangeFull: false, x1: 100, x2: 600, zeroPaddingFactor: 1 };
+        const fitting = clamp.call(makeRangeApp(state), plot, state);
+        assert.ok(Math.abs(fitting.x1 - 100) < 1e-6, 'the clamped window starts where the selection did');
+        assert.ok(fitting.samples <= HARD, 'and still fits');
+    }
+
+    // Already at the largest fitting range: refuse, so the caller falls through
+    // to reverting the padding instead of resubmitting the same request.
+    {
+        const state = { rangeFull: false, x1: 0, x2: (HARD - 1) / 44100, zeroPaddingFactor: 1 };
+        assert.equal(clamp.call(makeRangeApp(state), plot, state), null,
+            'clamping to the range already set must be refused, or the recompute loops');
+    }
+
+    // A selection near the end of the data cannot grow past it.
+    {
+        const state = { rangeFull: false, x1: (TOTAL - 1000) / 44100, x2: 600, zeroPaddingFactor: 1 };
+        const fitting = clamp.call(makeRangeApp(state), plot, state);
+        assert.ok(!fitting || fitting.samples <= 1000, 'the window never runs past the end of the data');
+    }
+}
+
 // ── The refusal path must actually use it ──────────────────────────────────
+assert.match(fft, /_clampFftRangeToLimit\(plot, state\)/,
+    'the preflight refusal must try the clamp before giving up on the range');
+assert.match(fft, /'tooManyPointsClamped'/,
+    'a clamped refusal must say the selection was reduced to the largest that fits');
+assert.equal(
+    (read('src/i18n/translations.js').match(/fftWarningTooManyClamped:/g) || []).length, 4,
+    'the clamped warning is translated in all four languages',
+);
+
 // A revert helper the preflight never calls protects nothing.
 assert.match(fft, /_revertFftToLastAccepted\(panelId, plot, state\)/,
     'the preflight refusal must attempt the revert');
