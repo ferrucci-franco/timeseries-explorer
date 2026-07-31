@@ -206,24 +206,115 @@ assert(pypsa.variables['pypsa:generators/PV1/p_max_pu']);
 
 // Large gridded climate variables used to be rejected wholesale whenever their
 // spatial expansion exceeded 10,000 series. They now load a representative,
-// bounded subset and expose a partial-load warning.
-{
-    const time = {
-        path: '/time', name: 'time', shape: [2], dimensions: ['/time'],
+// bounded subset and report the partial load separately from the variables that
+// could not be read at all.
+function timeDescriptor(length, name = '/time') {
+    return {
+        path: name, name: name.slice(1), shape: [length], dimensions: [name],
         dataType: 'double', userAttrs: { units: 'hours since 2000-01-01 00:00:00' },
-        read: () => [0, 1], supportsSlice: false,
+        read: () => Array.from({ length }, (_, index) => index), supportsSlice: false,
     };
-    const gridValues = Float32Array.from({ length: 2 * 101 * 101 }, (_, index) => index);
-    const grid = {
-        path: '/humidity', name: 'humidity', shape: [2, 101, 101],
-        dimensions: ['/time', '/lat', '/lon'], dataType: 'float',
-        userAttrs: { units: '%' }, read: () => gridValues, supportsSlice: false,
+}
+
+function gridDescriptor(path, shape) {
+    const values = Float32Array.from({ length: shape.reduce((a, b) => a * b, 1) }, (_, index) => index);
+    return {
+        path, name: path.slice(1), shape,
+        dimensions: ['/time', '/lat', '/lon'].slice(0, shape.length),
+        dataType: 'float', userAttrs: { units: '%' },
+        read: () => values, supportsSlice: false,
     };
-    const largeGrid = parser._parseGeneric([time, grid], {}, 'large-grid.nc', 'netcdf3-classic');
-    assert.equal(largeGrid.metadata.generatedSeriesCount, 512);
-    assert.equal(largeGrid.metadata.skippedVariablesCount, 1);
-    assert.equal(largeGrid.metadata.skippedVariables[0].partial, true);
-    assert.equal(largeGrid.metadata.skippedVariables[0].availableSeriesCount, 10201);
+}
+
+{
+    const grid = parser._parseGeneric(
+        [timeDescriptor(2), gridDescriptor('/humidity', [2, 201, 201])],
+        {}, 'large-grid.nc', 'netcdf3-classic',
+    );
+    assert.equal(grid.metadata.partialVariablesCount, 1);
+    assert.equal(grid.metadata.skippedVariablesCount, 0, 'a partial load is not a skipped variable');
+    const partial = grid.metadata.partialVariables[0];
+    assert.equal(partial.partial, true);
+    assert.equal(partial.availableSeriesCount, 40401);
+    assert.equal(partial.generatedSeriesCount, grid.metadata.generatedSeriesCount);
+    assert(partial.generatedSeriesCount <= 10000 && partial.generatedSeriesCount > 5000,
+        `the file-wide limit should bind for a 2-sample grid, got ${partial.generatedSeriesCount}`);
+
+    // Thinned along BOTH axes, not along the flattened index: walking the flat
+    // order would have taken whole leading latitude rows and no others.
+    assert.deepEqual(partial.sampledAxes.map(item => item.dimension), ['lat', 'lon']);
+    assert.equal(partial.sampledAxes[0].kept, partial.sampledAxes[1].kept);
+    assert(partial.sampledAxes[0].kept < 201 && partial.sampledAxes[0].kept > 1);
+    const lats = new Set();
+    const lons = new Set();
+    for (const variable of Object.values(grid.variables)) {
+        if (variable.kind !== 'variable') continue;
+        lats.add(variable.netcdf.selection.lat.index);
+        lons.add(variable.netcdf.selection.lon.index);
+    }
+    assert.equal(lats.size, partial.sampledAxes[0].kept);
+    assert.equal(lons.size, partial.sampledAxes[1].kept);
+    // Both ends of each axis are present, so the subset spans the whole field.
+    for (const axis of [lats, lons]) {
+        assert(axis.has(0) && axis.has(200), 'the sample must reach both ends of the axis');
+    }
+    assert(grid.tree._children['Partially loaded variables']._variables['/humidity']);
+}
+
+// Nothing is thinned that would have fitted whole. An earlier draft capped
+// every variable at a fixed 2,048 slices and so cut down sresa1b's `ua`
+// (4,352 slices), which main loaded entire — a regression paid for nothing.
+{
+    const fits = parser._parseGeneric(
+        [timeDescriptor(4), gridDescriptor('/ua', [4, 66, 66])],
+        {}, 'fits-whole.nc', 'netcdf3-classic',
+    );
+    assert.equal(fits.metadata.partialVariablesCount, 0);
+    assert.equal(fits.metadata.generatedSeriesCount, 4356);
+}
+
+// Seventeen variables on one grid (ECMWF ERA-40's shape). A generous
+// per-variable allowance would let the first few spend the file's whole budget
+// and leave the rest rejected — the same disappearing-variable failure, moved
+// one step down the file. Every variable has to come back.
+{
+    const descriptors = [timeDescriptor(4)];
+    for (let index = 0; index < 17; index++) descriptors.push(gridDescriptor(`/var${index}`, [4, 40, 50]));
+    const many = parser._parseGeneric(descriptors, {}, 'many-grids.nc', 'netcdf3-classic');
+    assert.equal(many.metadata.partialVariablesCount, 17, 'every variable must be present, if only in part');
+    assert.equal(many.metadata.skippedVariablesCount, 0);
+    assert(many.metadata.generatedSeriesCount <= 10000);
+    const counts = new Set(many.metadata.partialVariables.map(item => item.generatedSeriesCount));
+    assert.equal(counts.size, 1, `variables with identical shapes must get identical allowances, got ${[...counts]}`);
+}
+
+// The budget is over retained VALUES, not over slice count: the same grid
+// thins or not depending on how long its time axis is.
+{
+    const long = parser._parseGeneric(
+        [timeDescriptor(2100), gridDescriptor('/temp', [2100, 34, 34])],
+        {}, 'long-axis.nc', 'netcdf3-classic',
+    );
+    const short = parser._parseGeneric(
+        [timeDescriptor(4), gridDescriptor('/temp', [4, 34, 34])],
+        {}, 'short-axis.nc', 'netcdf3-classic',
+    );
+    assert.equal(short.metadata.partialVariablesCount, 0, 'the same grid at 4 samples fits whole');
+    assert.equal(short.metadata.generatedSeriesCount, 1156);
+    assert.equal(long.metadata.partialVariablesCount, 1, 'at 2,100 samples the same grid does not');
+    assert(long.metadata.generatedSeriesCount < 1156);
+}
+
+// The floor stops the budget from thinning a field out of existence: past
+// ~31,000 samples a slice costs more than the budget divides into, and without
+// a floor the answer would fall to single figures.
+{
+    const veryLong = parser._parseGeneric(
+        [timeDescriptor(31300), gridDescriptor('/temp', [31300, 9, 9])],
+        {}, 'very-long-axis.nc', 'netcdf3-classic',
+    );
+    assert.equal(veryLong.metadata.generatedSeriesCount, 64, 'the 64-slice floor, as an 8 x 8 grid');
+    assert.deepEqual(veryLong.metadata.partialVariables[0].sampledAxes.map(item => item.kept), [8, 8]);
 }
 
 const offsetTime = await parser.parse(createClassicBuffer(
