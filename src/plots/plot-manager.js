@@ -1346,17 +1346,28 @@ class PlotManager {
             plot._eagerInitialDetailToken = token;
             this._setEagerDetailLoading(plot, true, panelEl);
             this._yieldForDetailIndicatorPaint().then(() => {
+                // A layout re-render (language change, split, session restore)
+                // wipes the panel elements without calling _destroyChart, so by
+                // now both the element captured above and plot.div can be
+                // detached. Re-find the live panel, and read a detached
+                // plot.div as "no chart here" — testing plot.div alone let a
+                // stale ref cancel the rebuild, leaving the panel empty for
+                // good on exactly the traces that need this deferral.
+                const livePanelEl = panelEl.isConnected
+                    ? panelEl
+                    : document.querySelector(`.layout-panel[data-id="${panelId}"]`);
                 if (plot._eagerInitialDetailToken !== token
                     || this.plots.get(panelId) !== plot
                     || plot.mode !== 'timeseries'
-                    || plot.div) {
+                    || !livePanelEl
+                    || plot.div?.isConnected) {
                     delete plot._eagerInitialDetailDeferred;
-                    this._setEagerDetailLoading(plot, false, panelEl);
+                    this._setEagerDetailLoading(plot, false, livePanelEl || panelEl);
                     return;
                 }
                 delete plot._eagerInitialDetailDeferred;
                 plot._eagerInitialDetailReady = true;
-                this._createChart(panelId, panelEl);
+                this._createChart(panelId, livePanelEl);
             });
             return;
         }
