@@ -205,6 +205,11 @@ class PlotManager {
         if (!entry) return;
         const previousTransform = this._normalizeFileTransform(entry.transform);
         const previousTimeMode = this._timeDisplayMode(fileId);
+        // Read before the transform is replaced. Demoting a promoted calendar
+        // back to seconds clears the origin, and converting the view still
+        // needs it — read afterwards it is 0, which turned a 0-15 ms view into
+        // seconds since 1970 and left the trace off screen.
+        const previousOriginMs = this._timeOriginMs(fileId);
         const nextTransform = this._normalizeFileTransform(transform);
         const autoscaleX = options.autoscaleX === true;
         // GATE: only reindex (Row index) transitions use the row-preserving remap.
@@ -262,7 +267,7 @@ class PlotManager {
                     // rather than leave a stale/wrong range.
                     restoreView.xRange = (mapped && mapped.every(v => v != null && (typeof v === 'string' || Number.isFinite(v)))) ? mapped : null;
                 } else {
-                    restoreView.xRange = this._mapTimeRangeBetweenModes(fileId, restoreView.xRange, previousTimeMode, nextTimeMode, previousTransform, nextTransform);
+                    restoreView.xRange = this._mapTimeRangeBetweenModes(fileId, restoreView.xRange, previousTimeMode, nextTimeMode, previousTransform, nextTransform, previousOriginMs);
                 }
             }
             this._rebuildPanel(panelId, { restoreView });
@@ -3581,10 +3586,15 @@ class PlotManager {
         return Number.isFinite(numeric) ? numeric : 0;
     }
 
-    _mapTimeRangeBetweenModes(fileId, range, fromMode, toMode, fromTransform = null, toTransform = null) {
+    _mapTimeRangeBetweenModes(fileId, range, fromMode, toMode, fromTransform = null, toTransform = null, fallbackOriginMs = 0) {
         if (!Array.isArray(range) || range.length < 2 || fromMode === toMode) return range;
         if (fromMode === 'index' || toMode === 'index') return null;
-        const origin = this._timeOriginMs(fileId);
+        // Both halves of the conversion must use the SAME origin, or the round
+        // trip walks the view. Only one side of a promotion carries one: going
+        // numeric → calendar it is the new transform's, and coming back it is
+        // the old one's, since demoting has already cleared it. Whichever side
+        // has it defines the absolute-millisecond domain for both.
+        const origin = this._timeOriginMs(fileId) || fallbackOriginMs || 0;
         const fromShift = this._timeShiftForMode(fromTransform, fromMode);
         const toShift = this._timeShiftForMode(toTransform, toMode);
         // 'numeric' reaches here only for a file whose own numeric axis is being

@@ -116,33 +116,107 @@ const mapStart = plotManager.indexOf('    _mapTimeRangeBetweenModes(');
 const mapEnd = plotManager.indexOf('\n    }', mapStart) + '\n    }'.length;
 assert.ok(mapStart >= 0 && mapEnd > mapStart, 'the range mapper can be isolated');
 const mapper = vm.runInNewContext(`({\n${plotManager.slice(mapStart, mapEnd)}\n})`, {});
-const mapperApp = Object.assign(Object.create(null), mapper, {
-    _timeOriginMs: () => ORIGIN_MS,
+// The origin is a property of the CURRENT transform, so it must be modelled as
+// one — an earlier version of this test stubbed it as a constant, which is
+// exactly what hid the demotion bug below: promoting sets the origin, demoting
+// clears it, and the mapper runs after the transform has already been swapped.
+const makeMapperApp = (currentOriginMs) => Object.assign(Object.create(null), mapper, {
+    _timeOriginMs: () => currentOriginMs,
     _timeShiftForMode: () => 0,
     _coerceAxisValue: value => (typeof value === 'string' ? Date.parse(value) : Number(value)),
 });
+const promoting = makeMapperApp(ORIGIN_MS); // calendar is now active
+const demoting = makeMapperApp(0);          // origin already cleared
 
 // The reported case: the whole ten-minute signal, in seconds, promoted.
 {
-    const mapped = mapperApp._mapTimeRangeBetweenModes('f1', [0, 600], 'numeric', 'calendar');
+    const mapped = promoting._mapTimeRangeBetweenModes('f1', [0, 600], 'numeric', 'calendar', null, null, 0);
     assert.equal(mapped[0], new Date(ORIGIN_MS).toISOString(), 'the view start follows the origin, not 1970');
     assert.equal(mapped[1], new Date(ORIGIN_MS + 600000).toISOString(), 'the view end follows too');
     assert.ok(!String(mapped[0]).startsWith('1970'), 'a promoted view must never land in 1970');
 }
 
-// And back again, losslessly — otherwise switching format twice walks the view.
+// Coming back, the origin the values were built from is gone from the file and
+// only survives as the captured fallback. Without it the view became seconds
+// since 1970 (1767225600) and the trace left the screen.
 {
-    const there = mapperApp._mapTimeRangeBetweenModes('f1', [12.5, 480], 'numeric', 'calendar');
-    const back = mapperApp._mapTimeRangeBetweenModes('f1', there, 'calendar', 'numeric');
+    const back = demoting._mapTimeRangeBetweenModes(
+        'f1', [new Date(ORIGIN_MS).toISOString(), new Date(ORIGIN_MS + 15).toISOString()],
+        'calendar', 'numeric', null, null, ORIGIN_MS,
+    );
+    assert.equal(back[0], 0, 'demoting returns seconds from the origin, not from the epoch');
+    assert.ok(Math.abs(back[1] - 0.015) < 1e-9, 'the 15 ms window comes back as 0.015 s');
+}
+
+// Round trip through both directions, each with the origin its own step sees.
+{
+    const there = promoting._mapTimeRangeBetweenModes('f1', [12.5, 480], 'numeric', 'calendar', null, null, 0);
+    const back = demoting._mapTimeRangeBetweenModes('f1', there, 'calendar', 'numeric', null, null, ORIGIN_MS);
     assert.equal(back[0], 12.5, 'round-trip preserves the view start');
     assert.equal(back[1], 480, 'round-trip preserves the view end');
 }
 
-// numeric ↔ duration is value-preserving: both are seconds, so it is identity.
+// numeric ↔ duration is value-preserving: both are seconds, and neither side
+// carries an origin, so it must stay identity rather than pick one up.
 {
-    const mapped = mapperApp._mapTimeRangeBetweenModes('f1', [3, 90], 'numeric', 'elapsedDateTime');
+    const plain = makeMapperApp(0);
+    const mapped = plain._mapTimeRangeBetweenModes('f1', [3, 90], 'numeric', 'elapsedDateTime', null, null, 0);
     assert.equal(mapped[0], 3, 'seconds stay seconds');
     assert.equal(mapped[1], 90, 'seconds stay seconds');
+}
+
+// ── Sub-millisecond samples must stay distinct on a calendar axis ──────────
+{
+    const valueStart = dataMethods.indexOf('proto._plotlyTimeValue = function');
+    const valueEnd = dataMethods.indexOf('\nproto.', valueStart + 1);
+    assert.ok(valueStart >= 0 && valueEnd > valueStart, 'the axis-value formatter can be isolated');
+    const valueProto = {};
+    vm.runInNewContext(dataMethods.slice(valueStart, valueEnd), { proto: valueProto, Date, Math, String });
+    const calendarApp = {
+        _timeDisplayModeForVar: () => 'calendar',
+        _isHighResolutionGeneratedCalendarTime: () => false,
+    };
+    const format = value => valueProto._plotlyTimeValue.call(calendarApp, 'f1', value);
+
+    // 44.1 kHz: 22.6757 µs apart. Three decimals put ~44 of these on one
+    // timestamp, which is what flattened the waveform into vertical bars.
+    const stamps = [];
+    for (let i = 0; i < 200; i++) stamps.push(format(ORIGIN_MS + i * 0.0226757));
+    assert.equal(new Set(stamps).size, 200,
+        'every sub-millisecond sample must get its own timestamp, not share one per millisecond');
+
+    // Whole milliseconds keep the exact string they always had.
+    assert.equal(format(ORIGIN_MS), new Date(ORIGIN_MS).toISOString(), 'whole milliseconds are unchanged');
+    assert.equal(format(ORIGIN_MS + 5), new Date(ORIGIN_MS + 5).toISOString(), 'whole milliseconds are unchanged');
+
+    // The wall clock must not move: the extra digits are appended to the same
+    // instant, never a rounded or shifted one.
+    assert.ok(format(ORIGIN_MS + 0.000023).startsWith(new Date(ORIGIN_MS).toISOString().slice(0, -1)),
+        'sub-millisecond stamps extend the same instant');
+    assert.equal(format(ORIGIN_MS + 1.5), `${new Date(ORIGIN_MS + 1).toISOString().slice(0, -1)}500`,
+        'the fractional millisecond becomes microseconds, carrying nothing into the seconds');
+
+    // Stated as properties rather than exact strings, because how fine a
+    // fraction survives is a property of float64 at this magnitude, not of the
+    // formatter: an epoch-millisecond around 2026 carries ~0.24 µs per unit in
+    // the last place, so 1767225600000.9999 IS exactly ...001 here and takes
+    // the whole-millisecond path legitimately. Asserting a literal string for
+    // it pinned arithmetic this code does not own.
+    for (const fraction of [0.0226757, 0.5, 0.25, 0.999]) {
+        const value = ORIGIN_MS + fraction;
+        if (value === Math.floor(value)) continue; // below the float64 floor here
+        const stamp = format(value);
+        assert.match(stamp, /T\d\d:\d\d:\d\d\.\d{6}$/,
+            `${fraction} ms must print exactly six fractional digits and no zone suffix`);
+        const [datePart, microPart] = [stamp.slice(0, 23), stamp.slice(23)];
+        const roundTripped = Date.parse(`${datePart}Z`) + Number(microPart) / 1000;
+        assert.ok(Math.abs(roundTripped - value) <= 0.0005,
+            `${fraction} ms must survive the round trip, got ${roundTripped - value} ms of drift`);
+    }
+
+    // Non-calendar axes are untouched.
+    const numericApp = { _timeDisplayModeForVar: () => 'numeric', _isHighResolutionGeneratedCalendarTime: () => false };
+    assert.equal(valueProto._plotlyTimeValue.call(numericApp, 'f1', 12.5), 12.5, 'numeric axes pass values through');
 }
 
 console.log('Time-axis transform performance and view-mapping checks passed.');
