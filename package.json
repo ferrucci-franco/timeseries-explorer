@@ -131,7 +131,9 @@
     "bench:derived": "node scripts/bench-derived.mjs",
     "bench:fixtures": "python scripts/gen-perf-fixtures.py",
     "test:analysis-selection": "node scripts/test-analysis-selection-usability.mjs",
-    "test:time-axis-transform": "node scripts/test-time-axis-transform-perf.mjs"
+    "test:time-axis-transform": "node scripts/test-time-axis-transform-perf.mjs",
+    "test:analysis-measured-range": "node scripts/test-analysis-measured-range.mjs",
+    "test:fft-refused-settings": "node scripts/test-fft-refused-settings.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",
