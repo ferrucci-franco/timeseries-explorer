@@ -234,6 +234,10 @@ proto._createFftChart = function(panelId, panelEl) {
     setTimeout(async () => {
         await this._prepareFftAutoRange(panelId, plot, preparationToken, { initial: true });
         if (plot._fftPreparationToken !== preparationToken || plot.mode !== 'fft' || !plot.fftContainer?.isConnected) return;
+        // Opening FFT shows the whole signal, or the window around the block it
+        // cut for itself — never the zoom the previous mode left behind. A
+        // saved session view outranks both.
+        if (!this._consumeSessionViewRestore(plot)) this._ensureFftState(plot).autoRangeFocusPending = true;
         const domain = this._fftDomain(plot);
         const fullTimeRange = domain ? [domain.min, domain.max] : null;
         await Promise.all([
@@ -844,6 +848,10 @@ proto._prepareFftAutoRange = async function(panelId, plot, token, options = {}) 
     const state = this._ensureFftState(plot);
     const trace = (plot.traces || []).find(item => this._isVisible(item));
     plot._fftPreflightTooLarge = null;
+    // Same rule as the shared limiter: rebuilding the pane over a range that is
+    // still the automatic preview owes it a focused view, or the selection is
+    // drawn a few pixels wide and neither edge can be grabbed.
+    if (options.initial === true && state.autoRangeLimited === true) state.autoRangeFocusPending = true;
     if (!trace) return false;
     const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
     const values = this._getTransformedVariableData(trace.fileId, trace.varName);

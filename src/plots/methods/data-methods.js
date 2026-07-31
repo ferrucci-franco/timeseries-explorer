@@ -2293,6 +2293,12 @@ proto._autoLimitAnalysisRange = function(plot, state, mode = plot?.mode, options
     // expands the selector, recomputes must honor that explicit range even when
     // the estimate is slow.
     if (options.initial !== true) return false;
+    // Re-entering a mode whose range is STILL the automatic preview rebuilds
+    // the pane with a fresh full-width view, which draws that range a few
+    // pixels across again and puts both its edges back inside one grab
+    // tolerance. The focus is owed on every build of the panel, not only on
+    // the build that did the cutting.
+    if (state.autoRangeLimited === true) state.autoRangeFocusPending = true;
     const source = plot.traces?.find(trace => this._isVisible(trace))
         || plot.phaseTraces?.find(trace => trace.visible !== false);
     const fileId = source?.fileId;

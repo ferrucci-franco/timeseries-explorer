@@ -1293,7 +1293,41 @@ proto._analysisTimeDivForMode = function(plot, mode = plot?.mode) {
     return plot?.div || null;
 };
 
+// Whether the view this panel is about to restore came from a saved session
+// rather than from the mode the user just left. Reads once and clears, beside
+// the _pendingViewRestore it describes.
+proto._consumeSessionViewRestore = function(plot) {
+    const fromSession = plot?._viewRestoreFromSession === true;
+    if (plot) delete plot._viewRestoreFromSession;
+    return fromSession;
+};
+
+// The time extent of the panel itself, independent of what any one analysis
+// makes of the axis. Heatmap and Profile report no domain at all when the axis
+// is not a calendar — they cannot run on one — but their pane still draws a
+// time axis, and it still has to open onto the data instead of keeping the
+// zoom the previous mode left behind.
+proto._panelTimeDomain = function(plot) {
+    for (const trace of plot?.traces || []) {
+        if (!this._isVisible(trace)) continue;
+        const times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+        const count = times?.length || 0;
+        if (count < 2) continue;
+        // The transformed axis is sorted, so the ends are the extent.
+        const min = Number(times[0]);
+        const max = Number(times[count - 1]);
+        if (Number.isFinite(min) && Number.isFinite(max) && max > min) return { min, max };
+    }
+    return null;
+};
+
 proto._analysisTimeDomainForMode = function(plot, mode = plot?.mode) {
+    const own = this._ownAnalysisTimeDomain(plot, mode);
+    if (Number.isFinite(own?.min) && Number.isFinite(own?.max) && own.max > own.min) return own;
+    return this._panelTimeDomain(plot);
+};
+
+proto._ownAnalysisTimeDomain = function(plot, mode = plot?.mode) {
     switch (mode) {
         case 'fft': return this._fftDomain?.(plot);
         case 'histogram': return this._histogramDomain?.(plot);

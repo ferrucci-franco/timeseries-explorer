@@ -272,6 +272,10 @@ proto._createIntegralChart = function(panelId, panelEl) {
     this._autoLimitAnalysisRange(plot, state, 'integral', { initial: true });
     const restoreView = plot._pendingViewRestore || null;
     delete plot._pendingViewRestore;
+    // Opening an analysis shows the whole signal, or the window around the
+    // range it cut for itself — never whatever zoom the previous mode happened
+    // to be sitting at. A saved session view outranks both.
+    if (!this._consumeSessionViewRestore(plot)) state.autoRangeFocusPending = true;
 
     const placeholder = panelEl.querySelector('.layout-panel-placeholder');
     if (placeholder) placeholder.style.display = 'none';

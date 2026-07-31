@@ -969,7 +969,13 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.stateSlots = this._mappedStateSlots(saved.stateSlots, fileMap);
         plot.phasePending = this._mappedPhasePending(saved.phasePending, fileMap);
 
-        if (saved.view) plot._pendingViewRestore = this._cloneSerializable(saved.view);
+        if (saved.view) {
+            plot._pendingViewRestore = this._cloneSerializable(saved.view);
+            // Marks this as a view the USER saved, as opposed to the one a mode
+            // switch carries over. Only the former outranks a panel's own
+            // opening view; the latter is exactly what should be replaced.
+            plot._viewRestoreFromSession = true;
+        }
         if (typeof document !== 'undefined' && typeof this.plotManager._injectModeButtons === 'function') {
             const panelEl = document.querySelector(`.layout-panel[data-id="${saved.panelId}"]`);
             if (panelEl) this.plotManager._injectModeButtons(saved.panelId, panelEl, plot.mode);
