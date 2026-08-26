@@ -1,5 +1,12 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import {
+    SLIDER_WHEEL_CHANGE_DELAY_MS,
+    SLIDER_WHEEL_DWELL_MS,
+    steppedSliderValue,
+    takeWheelSteps,
+    wheelDeltaPixels,
+} from '../../utils/slider-wheel.js';
 import { strToU8, zipSync } from '../../../node_modules/fflate/esm/browser.js';
 import {
     APP_VERSION,
@@ -258,6 +265,15 @@ proto.initEventListeners = function() {
         });
     }
 
+    const sliderWheelToggle = document.getElementById('slider-wheel');
+    if (sliderWheelToggle) {
+        sliderWheelToggle.checked = !!this.sliderWheel;
+        sliderWheelToggle.addEventListener('change', (e) => {
+            this.sliderWheel = e.target.checked;
+        });
+    }
+    this._installSliderWheel();
+
     const legendUnitsToggle = document.getElementById('legend-units');
     if (legendUnitsToggle) {
         legendUnitsToggle.checked = !!this.legendUnits;
@@ -322,6 +338,65 @@ proto.initEventListeners = function() {
     this._initExampleMenu();
     this._initExtraMenu();
     this._initDesktopZoom();
+};
+
+// Mouse-wheel adjustment for every slider in the app (#58): after the pointer
+// has rested on a range input for SLIDER_WHEEL_DWELL_MS, wheel up increases
+// its value by one step per notch. Delegated at the document so dynamically
+// created sliders (FFT ranges, live-update presets, the animation scrubber)
+// are covered without registration; capture-phase so plot-level wheel
+// handlers cannot swallow the event first. The dwell keeps ordinary sidebar
+// scrolling from snagging on sliders it merely passes over.
+proto._installSliderWheel = function() {
+    const hover = { el: null, since: 0, acc: 0 };
+    const pending = { el: null, timer: 0 };
+
+    // 'change' is where the expensive listeners live (FFT and friends
+    // recompute on it), so it fires once the ticking pauses — like a drag
+    // firing it on release.
+    const flushChange = () => {
+        const el = pending.el;
+        pending.el = null;
+        clearTimeout(pending.timer);
+        pending.timer = 0;
+        el?.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const scheduleChange = (el) => {
+        if (pending.el && pending.el !== el) flushChange();
+        pending.el = el;
+        clearTimeout(pending.timer);
+        pending.timer = setTimeout(flushChange, SLIDER_WHEEL_CHANGE_DELAY_MS);
+    };
+
+    document.addEventListener('pointerover', (e) => {
+        const el = e.target;
+        const slider = el instanceof HTMLInputElement && el.type === 'range' ? el : null;
+        if (slider !== hover.el) {
+            hover.el = slider;
+            hover.since = performance.now();
+            hover.acc = 0;
+        }
+    });
+
+    document.addEventListener('wheel', (e) => {
+        if (!this.sliderWheel) return;
+        const el = e.target;
+        if (!(el instanceof HTMLInputElement) || el.type !== 'range' || el.disabled) return;
+        if (hover.el !== el || performance.now() - hover.since < SLIDER_WHEEL_DWELL_MS) return;
+        // Past the dwell, the slider owns the gesture — even at its end stop
+        // the page must not start scrolling mid-adjustment.
+        e.preventDefault();
+        e.stopPropagation();
+        hover.acc += wheelDeltaPixels(e);
+        const { steps, rest } = takeWheelSteps(hover.acc);
+        hover.acc = rest;
+        if (!steps) return;
+        const next = steppedSliderValue(el, steps);
+        if (next === null) return;
+        el.value = String(next);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        scheduleChange(el);
+    }, { passive: false, capture: true });
 };
 
 proto._setScrollablePlotArea = async function(enabled) {

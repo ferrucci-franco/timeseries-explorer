@@ -47,6 +47,7 @@
     "test:local-file-http": "node scripts/test-local-file-http.mjs",
     "test:loading-overlay-layout": "node scripts/test-loading-overlay-layout.mjs",
     "test:sidebar-resize": "node scripts/test-sidebar-resize.mjs",
+    "test:slider-wheel": "node scripts/test-slider-wheel.mjs",
     "test:desktop-streamable": "node scripts/test-desktop-streamable-file.mjs",
     "test:electron-navigation": "node scripts/test-electron-navigation-policy.mjs",
     "test:desktop-download": "node scripts/test-desktop-download-dialog.mjs",
