@@ -11,6 +11,8 @@ import { readFileSync } from 'node:fs';
 import {
     SLIDER_WHEEL_CHANGE_DELAY_MS,
     SLIDER_WHEEL_DWELL_MS,
+    SLIDER_WHEEL_FINE_NOTCHES,
+    SLIDER_WHEEL_SWEEP_NOTCHES,
     steppedSliderValue,
     takeWheelSteps,
     wheelDeltaPixels,
@@ -39,10 +41,15 @@ check(() => {
     assert.deepEqual(takeWheelSteps(-250), { steps: 2, rest: -50 }, 'fast scrolls take several steps');
 });
 
-// ─── Steps → slider value ─────────────────────────────────────────────────
+// ─── Steps → slider value: the hybrid rule ────────────────────────────────
+// A coarse notch is span/SLIDER_WHEEL_SWEEP_NOTCHES, never less than the
+// native step and rounded to a whole number of native steps; Shift ({fine})
+// is the native step itself, or span/SLIDER_WHEEL_FINE_NOTCHES when the
+// slider is continuous (step="any").
 
 check(() => {
-    // Range-input defaults: min 0, max 100, step 1.
+    // Range-input defaults (min 0, max 100, step 1): span/100 = the native
+    // step, so the hybrid rule degenerates to one unit per notch.
     assert.equal(steppedSliderValue({ value: '50', min: '', max: '', step: '' }, 1), 51);
     assert.equal(steppedSliderValue({ value: '50', min: '', max: '', step: '' }, -2), 48);
     assert.equal(steppedSliderValue({ value: '99', min: '', max: '', step: '' }, 5), 100, 'clamped at max');
@@ -51,19 +58,46 @@ check(() => {
 });
 
 check(() => {
-    // The detrend-window shape: odd values only (min 3, step 2).
-    assert.equal(steppedSliderValue({ value: '5', min: '3', max: '501', step: '2' }, 1), 7);
+    // The animation-scrubber shape: thousands of frames, implicit step 1.
+    // One notch used to be one frame; now it is ~1% of the recording.
+    assert.equal(steppedSliderValue({ value: '0', min: '0', max: '5000', step: '' }, 1), 50);
+    assert.equal(steppedSliderValue({ value: '5000', min: '0', max: '5000', step: '' }, -1), 4950);
+    assert.equal(steppedSliderValue({ value: '120', min: '0', max: '5000', step: '' }, 1, { fine: true }), 121,
+        'Shift still walks single frames');
+});
+
+check(() => {
+    // The FFT-family shape: step="any" over the data's own domain. This was
+    // the reported bug — the old fallback step of 1 either jumped a
+    // microsecond-domain slider to its end stop or left a calendar-domain
+    // slider visibly frozen.
+    const us = { value: '5e-4', min: '0', max: '1e-3', step: 'any' };
+    assert.ok(Math.abs(steppedSliderValue(us, 1) - 5.1e-4) < 1e-12, 'a notch is 1% of a microsecond-scale span');
+    assert.ok(Math.abs(steppedSliderValue(us, 1, { fine: true }) - 5.01e-4) < 1e-12, 'Shift refines to 0.1%');
+    const day = 86_400_000;
+    const calendar = { value: String(1_756_281_600_000), min: String(1_756_281_600_000), max: String(1_756_281_600_000 + 10 * day), step: 'any' };
+    assert.equal(steppedSliderValue(calendar, 1) - 1_756_281_600_000, day / 10, 'a notch is 1% of a calendar span');
+});
+
+check(() => {
+    // The detrend-window shape: odd values only (min 3, step 2, span 498).
+    // A coarse notch is ~span/100 rounded to whole native steps (= 4), so the
+    // grid survives; Shift walks the native step.
+    assert.equal(steppedSliderValue({ value: '5', min: '3', max: '501', step: '2' }, 1), 9);
+    assert.equal(steppedSliderValue({ value: '5', min: '3', max: '501', step: '2' }, 1, { fine: true }), 7);
     assert.equal(steppedSliderValue({ value: '3', min: '3', max: '501', step: '2' }, -1), null);
-    assert.equal(steppedSliderValue({ value: '6', min: '3', max: '501', step: '2' }, 1), 9, 'off-grid values snap to the grid');
+    assert.equal(steppedSliderValue({ value: '6', min: '3', max: '501', step: '2' }, 1, { fine: true }), 9, 'off-grid values snap to the grid');
     // Fractional steps must not accumulate float dust.
-    assert.equal(steppedSliderValue({ value: '0.3', min: '0', max: '1', step: '0.1' }, 1), 0.4);
-    assert.equal(steppedSliderValue({ value: '0.7', min: '0', max: '1', step: '0.1' }, -3), 0.4);
+    assert.equal(steppedSliderValue({ value: '0.3', min: '0', max: '1', step: '0.1' }, 1, { fine: true }), 0.4);
+    assert.equal(steppedSliderValue({ value: '0.7', min: '0', max: '1', step: '0.1' }, -3, { fine: true }), 0.4);
     assert.equal(steppedSliderValue({ value: '1', min: '2', max: '2', step: '1' }, 1), null, 'degenerate range moves nothing');
 });
 
 check(() => {
     assert.ok(Number.isFinite(SLIDER_WHEEL_DWELL_MS) && SLIDER_WHEEL_DWELL_MS > 0, 'dwell is a positive constant');
     assert.ok(Number.isFinite(SLIDER_WHEEL_CHANGE_DELAY_MS) && SLIDER_WHEEL_CHANGE_DELAY_MS > 0);
+    assert.equal(SLIDER_WHEEL_SWEEP_NOTCHES, 100, 'a full sweep takes ~100 notches');
+    assert.ok(SLIDER_WHEEL_FINE_NOTCHES > SLIDER_WHEEL_SWEEP_NOTCHES, 'fine mode is finer than coarse');
 });
 
 // ─── Wiring ───────────────────────────────────────────────────────────────
@@ -83,6 +117,7 @@ check(() => {
     assert.match(ui, /SLIDER_WHEEL_DWELL_MS/, 'the dwell constant gates the grab');
     assert.match(ui, /new Event\('input', \{ bubbles: true \}\)/, "each tick fires 'input'");
     assert.match(ui, /new Event\('change', \{ bubbles: true \}\)/, "a pause fires 'change' for the expensive listeners");
+    assert.match(ui, /\{ fine: e\.shiftKey \}/, 'Shift+wheel asks for fine steps');
 });
 
 check(() => {
