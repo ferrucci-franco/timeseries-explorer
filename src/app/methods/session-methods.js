@@ -260,6 +260,7 @@ proto._captureSessionSettings = function() {
         sortAlphabetical: !!this.sortAlphabetical,
         scrollablePlotArea: !!this.scrollablePlotArea,
         mouseWheelZoom: !!this.mouseWheelZoom,
+        sliderWheel: !!this.sliderWheel,
         legendUnits: !!this.legendUnits,
         reloadAsNewVersionMode: !!this.reloadAsNewVersionMode,
         syncAxes: !!this.plotManager.syncAxes,
@@ -624,6 +625,7 @@ proto._applySessionSettings = function(settings) {
     this.sortAlphabetical = settings.sortAlphabetical !== false;
     this.reloadAsNewVersionMode = !!settings.reloadAsNewVersionMode;
     this.mouseWheelZoom = settings.mouseWheelZoom !== false;
+    this.sliderWheel = settings.sliderWheel !== false;
     this.legendUnits = settings.legendUnits === true;
     this._filterText = String(settings.variableFilterText || '').trim().toLowerCase();
     this._sessionSidebarHidden = !!settings.sidebarHidden;
@@ -693,6 +695,7 @@ proto._syncSessionSettingsUI = function() {
     checked('#sync-hover', this.plotManager.syncHover);
     checked('#hover-proximity', this.plotManager.hoverProximity);
     checked('#mouse-wheel-zoom', this.mouseWheelZoom);
+    checked('#slider-wheel', this.sliderWheel);
     checked('#legend-units', this.legendUnits);
     checked('#scrollable-plot-area', this.scrollablePlotArea);
     checked('#reload-as-version-toggle', this.reloadAsNewVersionMode);
