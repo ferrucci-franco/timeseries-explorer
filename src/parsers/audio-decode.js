@@ -25,6 +25,8 @@
 // itself — runs on the browser's own thread regardless, and the JavaScript left
 // here is a deinterleaving loop.
 
+import { decodeAlacFromMp4 } from './alac-decoder.js';
+
 // Chrome's own bounds for an AudioContext sample rate. A header that claims
 // something outside them is not usable as a context rate, whatever it means.
 const MIN_CONTEXT_SAMPLE_RATE = 3000;
@@ -574,6 +576,29 @@ export async function decodeAudioFile(buffer, options = {}) {
     if (format.container === 'wav') {
         const decoded = decodeWav(bytes);
         return { ...describe(format, decoded), ...decoded, decodedBy: 'wav', resampled: false };
+    }
+
+    // Apple Lossless is the other codec decoded here rather than by the
+    // browser: only Safari ships one, and an iPhone voice memo recorded with
+    // the "Lossless" quality setting would otherwise not open at all. Being
+    // lossless it also comes back bit-exact at the file's own rate, which the
+    // resampling browser path cannot promise.
+    if (format.container === 'mp4' && format.codec === 'alac') {
+        try {
+            const decoded = decodeAlacFromMp4(bytes);
+            if (decoded?.frames && decoded.channels?.length) {
+                return {
+                    ...describe(format, decoded),
+                    ...decoded,
+                    codec: 'Apple Lossless (ALAC)',
+                    decodedBy: 'alac',
+                    resampled: false,
+                };
+            }
+        } catch (err) {
+            // Fall through to decodeAudioData: on Safari the native decoder
+            // may still manage a file this one gave up on.
+        }
     }
 
     const decodeCompressed = options.decodeCompressed || decodeWithWebAudio;

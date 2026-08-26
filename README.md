@@ -149,11 +149,15 @@ channel count, duration and format.
 
 WAV is decoded by `src/parsers/audio-decode.js` itself (PCM 8/16/24/32-bit,
 32/64-bit float, and G.711 A-law/mu-law), so it works with no audio engine
-present — including in Node, where `npm run test:audio` exercises it. Every
-other container is handed to the browser's own `decodeAudioData`, on a context
-created at the sample rate read from the container header so the samples come
-back at the file's rate rather than the sound card's. This is the one format
-the app decodes on the main thread: Web Audio does not exist inside a Worker.
+present — including in Node, where `npm run test:audio` exercises it. Apple
+Lossless (`.m4a` recorded with the Voice Memos "Lossless" quality setting) is
+also decoded by the app's own code, `src/parsers/alac-decoder.js`, because no
+browser except Safari ships an ALAC decoder; `npm run test:alac` verifies that
+decode is bit-exact. Every other container is handed to the browser's own
+`decodeAudioData`, on a context created at the sample rate read from the
+container header so the samples come back at the file's rate rather than the
+sound card's. This is the one format the app decodes on the main thread: Web
+Audio does not exist inside a Worker.
 
 Because a small file can decode into a very large one, the size limit for audio
 is measured on the decoded samples rather than on the file, and is asked about

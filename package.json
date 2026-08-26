@@ -116,6 +116,7 @@
     "test:lazy-phase": "node scripts/test-lazy-phase-logic.mjs",
     "test:state-animation": "node scripts/test-state-animation-responsiveness.mjs",
     "test:audio": "node scripts/test-audio-parser.mjs",
+    "test:alac": "node scripts/test-alac-decoder.mjs",
     "test:pickle": "node scripts/test-pickle-parser.mjs",
     "test:netcdf": "node scripts/test-generic-netcdf-parser.mjs",
     "verify:netcdf-corpus": "node scripts/verify-netcdf-corpus.mjs",
