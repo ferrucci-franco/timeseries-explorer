@@ -956,29 +956,40 @@ proto.reloadActiveFile = async function() {
     if (!entry) return;
     if (await this._refuseReloadOfInMemoryFile(entry)) return;
 
-    const streamable = this._canParseFromFile(entry.file, entry.extension);
-    const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
-    const buffer = streamable ? null : await this._readLatestBuffer(entry);
-    const contentHash = streamable ? this._fileFingerprint(latestFile || entry.file) : await this._hashBuffer(buffer);
+    // Re-reading and re-parsing a large file takes seconds, and a silent
+    // Reload button reads as a broken one (#56). Same overlay as the initial
+    // load; modals this path can open (over-limit confirm, re-pick) stack
+    // above it.
+    this._showFileLoadingOverlay(1);
+    this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(entry), entry.file?.size || entry.buffer?.byteLength);
+    try {
+        await this._waitForNextPaint();
+        const streamable = this._canParseFromFile(entry.file, entry.extension);
+        const latestFile = streamable ? await this._readLatestFileForStreamableReload(entry) : null;
+        const buffer = streamable ? null : await this._readLatestBuffer(entry);
+        const contentHash = streamable ? this._fileFingerprint(latestFile || entry.file) : await this._hashBuffer(buffer);
 
-    const currentProfile = this.plotManager.files.get(id)?.data?.metadata?.csvProfile || null;
-    const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, latestFile || entry.file, {
-        csvProfile: currentProfile?.profileSource === 'user' ? currentProfile : null,
-        excelSheetName: entry.excel?.sheetName || null,
-        matSelection: entry.matlab || null,
-    });
-    if (data?.metadata?.excel) entry.excel = { ...data.metadata.excel };
-    if (data?.metadata?.matlab) entry.matlab = { ...data.metadata.matlab };
-    this._reapplyDerivedVariables(id, data);
-    this._reapplyDataToolVariables?.(id, data);
+        const currentProfile = this.plotManager.files.get(id)?.data?.metadata?.csvProfile || null;
+        const data = await this._parseResultBuffer(this._fileDisplayName(entry), buffer, latestFile || entry.file, {
+            csvProfile: currentProfile?.profileSource === 'user' ? currentProfile : null,
+            excelSheetName: entry.excel?.sheetName || null,
+            matSelection: entry.matlab || null,
+        });
+        if (data?.metadata?.excel) entry.excel = { ...data.metadata.excel };
+        if (data?.metadata?.matlab) entry.matlab = { ...data.metadata.matlab };
+        this._reapplyDerivedVariables(id, data);
+        this._reapplyDataToolVariables?.(id, data);
 
-    entry.buffer = buffer;
-    entry.contentHash = contentHash;
-    this._adoptExcelCsvCache(entry, data);
-    this.plotManager.updateFileData(id, data);
-    this._updateTopBar();
-    this._clearVariableSelection();
-    this.renderVariablesTree(data.tree);
+        entry.buffer = buffer;
+        entry.contentHash = contentHash;
+        this._adoptExcelCsvCache(entry, data);
+        this.plotManager.updateFileData(id, data);
+        this._updateTopBar();
+        this._clearVariableSelection();
+        this.renderVariablesTree(data.tree);
+    } finally {
+        this._hideFileLoadingOverlay();
+    }
 };
 
 proto.adjustMatlabArrays = async function(fileId) {
@@ -1046,57 +1057,74 @@ proto.reloadActiveFileAsNewVersion = async function() {
     if (await this._refuseReloadOfInMemoryFile(source)) return;
 
     const name = this._nextVersionName(source.name);
-    const streamable = this._canParseFromFile(source.file, source.extension);
-    const latestFile = streamable ? await this._readLatestFileForStreamableReload(source) : null;
-    const buffer = streamable ? null : await this._readLatestBuffer(source);
-    const contentHash = streamable ? this._fileFingerprint(latestFile || source.file) : await this._hashBuffer(buffer);
-    const sourceHash = source.contentHash || (source.buffer ? await this._hashBuffer(source.buffer) : '');
-    if (!source.contentHash && sourceHash) source.contentHash = sourceHash;
-    const currentProfile = this.plotManager.files.get(sourceId)?.data?.metadata?.csvProfile || null;
-    const hasCsvRowFilter = currentProfile?.profileSource === 'user' && currentProfile?.rowFilter?.enabled;
-    if (sourceHash && contentHash === sourceHash && !hasCsvRowFilter) {
-        await Modal.alert(i18n.t('reloadAsNewVersion'), i18n.t('reloadUnchangedNoVersion'), { icon: '🔄' });
+    // Same silent-Reload complaint as reloadActiveFile (#56), with one more
+    // wrinkle: this path ends in a modal either way (unchanged notice or
+    // new-version notice), so the overlay is dropped before each of them
+    // rather than lingering underneath.
+    let loading = false;
+    try {
+        this._showFileLoadingOverlay(1);
+        loading = true;
+        this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(source), source.file?.size || source.buffer?.byteLength);
+        await this._waitForNextPaint();
+        const streamable = this._canParseFromFile(source.file, source.extension);
+        const latestFile = streamable ? await this._readLatestFileForStreamableReload(source) : null;
+        const buffer = streamable ? null : await this._readLatestBuffer(source);
+        const contentHash = streamable ? this._fileFingerprint(latestFile || source.file) : await this._hashBuffer(buffer);
+        const sourceHash = source.contentHash || (source.buffer ? await this._hashBuffer(source.buffer) : '');
+        if (!source.contentHash && sourceHash) source.contentHash = sourceHash;
+        const currentProfile = this.plotManager.files.get(sourceId)?.data?.metadata?.csvProfile || null;
+        const hasCsvRowFilter = currentProfile?.profileSource === 'user' && currentProfile?.rowFilter?.enabled;
+        if (sourceHash && contentHash === sourceHash && !hasCsvRowFilter) {
+            this._hideFileLoadingOverlay();
+            loading = false;
+            await Modal.alert(i18n.t('reloadAsNewVersion'), i18n.t('reloadUnchangedNoVersion'), { icon: '🔄' });
+            this._updateTopBar();
+            return;
+        }
+
+        const reloadProfile = currentProfile?.profileSource === 'user'
+            ? (hasCsvRowFilter ? csvProfileWithoutRowFilter(currentProfile) : currentProfile)
+            : null;
+        const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, latestFile || source.file, {
+            csvProfile: reloadProfile,
+            excelSheetName: source.excel?.sheetName || null,
+            matSelection: source.matlab || null,
+        });
+
+        const fileId = `f${this._nextFileId++}`;
+        this._copyDerivedDefinitions(sourceId, fileId);
+        this._reapplyDerivedVariables(fileId, data);
+        this._copyDataToolDefinitions?.(sourceId, fileId);
+        this._reapplyDataToolVariables?.(fileId, data);
+        this.files.set(fileId, {
+            file: latestFile || source.file,
+            fileHandle: source.fileHandle || null,
+            localPath: source.localPath || '',
+            buffer,
+            contentHash,
+            name,
+            extension: source.extension || '.mat',
+            transform: this._normalizeFileTransform(source.transform),
+            excel: data?.metadata?.excel ? { ...data.metadata.excel } : (source.excel ? { ...source.excel } : null),
+            matlab: data?.metadata?.matlab ? { ...data.metadata.matlab } : (source.matlab ? { ...source.matlab } : null),
+        });
+        this._adoptExcelCsvCache(this.files.get(fileId), data);
+        this.plotManager.addFile(fileId, name, data, this.files.get(fileId).transform);
+        this.plotManager.setActiveFile(fileId);
+
+        document.getElementById('drop-zone').classList.remove('active');
         this._updateTopBar();
-        return;
+        this._renderFilesList();
+        this._clearVariableSelection();
+        this.renderVariablesTree(data.tree);
+        this._updateActionButtons();
+        this._hideFileLoadingOverlay();
+        loading = false;
+        await this._notifyNewVersionLoaded(name);
+    } finally {
+        if (loading) this._hideFileLoadingOverlay();
     }
-
-    const reloadProfile = currentProfile?.profileSource === 'user'
-        ? (hasCsvRowFilter ? csvProfileWithoutRowFilter(currentProfile) : currentProfile)
-        : null;
-    const data = await this._parseResultBuffer(this._fileDisplayName(source), buffer, latestFile || source.file, {
-        csvProfile: reloadProfile,
-        excelSheetName: source.excel?.sheetName || null,
-        matSelection: source.matlab || null,
-    });
-
-    const fileId = `f${this._nextFileId++}`;
-    this._copyDerivedDefinitions(sourceId, fileId);
-    this._reapplyDerivedVariables(fileId, data);
-    this._copyDataToolDefinitions?.(sourceId, fileId);
-    this._reapplyDataToolVariables?.(fileId, data);
-    this.files.set(fileId, {
-        file: latestFile || source.file,
-        fileHandle: source.fileHandle || null,
-        localPath: source.localPath || '',
-        buffer,
-        contentHash,
-        name,
-        extension: source.extension || '.mat',
-        transform: this._normalizeFileTransform(source.transform),
-        excel: data?.metadata?.excel ? { ...data.metadata.excel } : (source.excel ? { ...source.excel } : null),
-        matlab: data?.metadata?.matlab ? { ...data.metadata.matlab } : (source.matlab ? { ...source.matlab } : null),
-    });
-    this._adoptExcelCsvCache(this.files.get(fileId), data);
-    this.plotManager.addFile(fileId, name, data, this.files.get(fileId).transform);
-    this.plotManager.setActiveFile(fileId);
-
-    document.getElementById('drop-zone').classList.remove('active');
-    this._updateTopBar();
-    this._renderFilesList();
-    this._clearVariableSelection();
-    this.renderVariablesTree(data.tree);
-    this._updateActionButtons();
-    await this._notifyNewVersionLoaded(name);
 };
 
 /**
