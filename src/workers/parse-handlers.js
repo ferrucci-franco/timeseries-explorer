@@ -54,6 +54,12 @@ export const PARSE_HANDLERS = {
         return { result: await parser.parse(buffer, filename, { maxFileBytes }) };
     },
 
+    'parse:microcap': async ({ filename, buffer }) => {
+        const { default: Parser } = await import('../parsers/microcap-parser.js');
+        const parser = new Parser(getBaseParser());
+        return { result: await parser.parse(buffer, filename) };
+    },
+
     // Spreadsheets are not parsed directly by the app: the chosen sheet is
     // serialized to deterministic CSV text and fed to the CSV pipeline. Both
     // halves of that (decoding the workbook, serializing the sheet) are the

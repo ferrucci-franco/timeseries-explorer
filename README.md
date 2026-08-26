@@ -1,6 +1,6 @@
 # Time Series Explorer
 
-Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, generic and PyPSA netCDF, small pandas pickle result files, and audio recordings.
+Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, generic and PyPSA netCDF, small pandas pickle result files, Micro-Cap numeric output, and audio recordings.
 
 Created by [Franco Ferrucci](https://github.com/ferrucci-franco). A technical
 publication about the application is [in preparation](PUBLICATION.md).
@@ -112,7 +112,7 @@ output path.
 - `public`: files copied as-is into the final build
 - `src/app`: top-level application orchestration
 - `src/plots`: plot lifecycle, modes, interactions, Plotly integration
-- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, generic/PyPSA netCDF, pandas pickle, and audio inputs
+- `src/parsers`: eager file parsers for MATLAB/OpenModelica/Dymola `.mat`, `.csv`, generic/PyPSA netCDF, pandas pickle, Micro-Cap numeric output, and audio inputs
 - `src/ui`: layout engine and modal helpers
 - `src/i18n`: translations and DOM localization
 - `src/styles`: split CSS source files
@@ -163,6 +163,28 @@ Because a small file can decode into a very large one, the size limit for audio
 is measured on the decoded samples rather than on the file, and is asked about
 between decoding and building the columns (Settings → File loading → Audio
 full-load limit).
+
+## Micro-Cap support
+
+Micro-Cap numeric output — the text files the simulator writes next to its
+analyses (`.tno` for transient, `.ano` for AC, `.dno` for DC) — opens
+directly, banner, `Limits`/`Stepping Options` prose and all. The same content
+saved or renamed as `.txt`/`.out` is recognized by its asterisk banner and
+routed to the same reader instead of the CSV path. The first table column
+(`T`, `F`, ...) becomes the file's X axis with its printed unit; every other
+column becomes a signal named as printed (`v(C1)`, `DB(V(2))`, `PD(R3)`) with
+its unit shown in the tree and used for plot legends.
+
+Parameter stepping is the interesting case: a stepped file repeats the
+waveform table once per step combination. Each signal then becomes a group in
+the variable tree holding one entry per run, labelled by the stepped values
+that actually differ between runs (`C1=10u, V1=12`), so overlaying one signal
+across all step values is a matter of picking leaves from one group. Runs
+whose tables share the same printed time grid (the usual interpolated output)
+line up exactly; `Actual Waveform Values` grids that differ per run are placed
+on the union of their time points, with gaps where a run has no sample.
+`npm run test:microcap` exercises the reader against the fixtures under
+`test-files/microcap/`.
 
 ## netCDF support
 
