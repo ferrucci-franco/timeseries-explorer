@@ -20,7 +20,7 @@
 // Kept DOM-free so the arithmetic is testable in Node: the document-level
 // listener in ui-methods.js feeds events in and applies the returned values.
 
-export const SLIDER_WHEEL_DWELL_MS = 350;
+export const SLIDER_WHEEL_DWELL_MS = 150;
 // 'input' fires on every tick; the expensive 'change' listeners (FFT and
 // friends recompute on it) fire once the ticking pauses, matching how a drag
 // fires it on release.
