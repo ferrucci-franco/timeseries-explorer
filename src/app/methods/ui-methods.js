@@ -391,7 +391,7 @@ proto._installSliderWheel = function() {
         const { steps, rest } = takeWheelSteps(hover.acc);
         hover.acc = rest;
         if (!steps) return;
-        const next = steppedSliderValue(el, steps);
+        const next = steppedSliderValue(el, steps, { fine: e.shiftKey });
         if (next === null) return;
         el.value = String(next);
         el.dispatchEvent(new Event('input', { bubbles: true }));
