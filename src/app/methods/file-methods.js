@@ -30,10 +30,12 @@ import {
     SPREADSHEET_EXTENSIONS,
     TEXT_TABLE_EXTENSIONS,
     isAudioExtension,
+    isMicroCapExtension,
     isSpreadsheetExtension,
     isTextTableExtension,
     mayBeTextTable,
 } from '../text-file-formats.js';
+import { MICROCAP_SNIFF_BYTES, looksLikeMicroCapText } from '../../parsers/microcap-sniff.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -154,6 +156,14 @@ async function loadMatlabMatFileClass() {
     return matlabMatFileClassPromise;
 }
 
+let microCapParserClassPromise = null;
+async function loadMicroCapParserClass() {
+    if (!microCapParserClassPromise) {
+        microCapParserClassPromise = import('../../parsers/microcap-parser.js').then(module => module.default);
+    }
+    return microCapParserClassPromise;
+}
+
 async function loadAudioModules() {
     if (!audioModulesPromise) {
         audioModulesPromise = Promise.all([
@@ -231,7 +241,11 @@ proto.loadFile = async function(file, options = {}) {
                     };
                     extension = this._fileExtension(currentFile.name);
                 }
-                const streamable = this._canParseFromFile(currentFile, extension);
+                let streamable = this._canParseFromFile(currentFile, extension);
+                // A Micro-Cap numeric output saved as `.txt`/`.out` must not
+                // be streamed to DuckDB as a delimited table; a 4 KB head
+                // sample is enough to see its banner and take the eager path.
+                if (streamable && await this._fileHeadLooksLikeMicroCap(currentFile)) streamable = false;
                 buffer = options.matBuffer || (streamable ? null : await (currentFile.arrayBuffer ? currentFile.arrayBuffer() : this._readAsArrayBuffer(currentFile)));
                 contentHash = buffer
                     ? await this._hashBuffer(buffer)
@@ -1740,6 +1754,13 @@ proto._parseResultBuffer = async function(filename, buffer, file = null, options
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
     if (isAudioExtension(extension)) return this._parseAudioResultBuffer(filename, buffer, options);
     if (extension === '.mat') return this._parseMatlabResultBuffer(filename, buffer, options);
+    if (isMicroCapExtension(extension)) return this._parseMicroCapResultBuffer(filename, buffer, options);
+    // Micro-Cap output renamed to a text extension: when the bytes are here
+    // (loadFile sniffs the head of streamable text files and reads them whole
+    // on a match), route by content before the CSV path claims them.
+    if (buffer && mayBeTextTable(extension) && this._looksLikeMicroCapBuffer(buffer)) {
+        return this._parseMicroCapResultBuffer(filename, buffer, options);
+    }
     // Routed by extension, not by sniffing the bytes: a known text file may
     // have been left unread on purpose (see _canParseFromFile) so DuckDB can
     // stream it, and there would be no buffer here to sniff.
@@ -1768,6 +1789,20 @@ proto._parseMatlabResultBuffer = async function(filename, buffer, options = {}) 
             const Parser = await loadMatlabMatFileClass();
             const parser = new Parser(this.parser);
             return parser.parse(buffer, filename, { inspection, selection });
+        },
+    );
+};
+
+proto._parseMicroCapResultBuffer = async function(filename, buffer, _options = {}) {
+    const workerBuffer = detachedCopy(buffer);
+    return parseOffThread(
+        'parse:microcap',
+        { filename, buffer: workerBuffer },
+        [workerBuffer],
+        async () => {
+            const Parser = await loadMicroCapParserClass();
+            const parser = new Parser(this.parser);
+            return parser.parse(buffer, filename);
         },
     );
 };
@@ -2080,6 +2115,24 @@ proto._readFileSampleBuffer = async function(file, bytes = 1024 * 1024) {
     return blob.arrayBuffer ? blob.arrayBuffer() : this._readAsArrayBuffer(blob);
 };
 
+proto._looksLikeMicroCapBuffer = function(buffer) {
+    if (!buffer) return false;
+    const bytes = buffer instanceof ArrayBuffer
+        ? new Uint8Array(buffer, 0, Math.min(buffer.byteLength, MICROCAP_SNIFF_BYTES))
+        : new Uint8Array(buffer.buffer || buffer, buffer.byteOffset || 0, Math.min(buffer.byteLength ?? 0, MICROCAP_SNIFF_BYTES));
+    const head = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    return looksLikeMicroCapText(head);
+};
+
+proto._fileHeadLooksLikeMicroCap = async function(file) {
+    try {
+        const head = await this._readFileSampleBuffer(file, MICROCAP_SNIFF_BYTES);
+        return this._looksLikeMicroCapBuffer(head);
+    } catch {
+        return false;
+    }
+};
+
 proto._readCsvPreviewSegment = async function(file, region = 'start', bytes = CSV_PREVIEW_SEGMENT_BYTES) {
     if (!file) return null;
     const requestedBytes = Math.max(64 * 1024, Number(bytes) || CSV_PREVIEW_SEGMENT_BYTES);
@@ -2125,6 +2178,9 @@ proto._largeCsvDecisionKey = function(file, filename = '') {
 proto._shouldOfferLargeCsvPreflight = function(file, options = {}) {
     if (options.skipLargeCsvPreflight) return false;
     const extension = options.extension || this._fileExtension(file?.name || '');
+    // Micro-Cap numeric output is not a delimited table; converting it to
+    // Parquet would only pickle the banner prose.
+    if (isMicroCapExtension(extension)) return false;
     // Any delimited text, not just `.csv`. The reader never checked the
     // extension — it parses whatever sniffs as text — but this offer did, so a
     // 900 MB `.txt` measurement log was left with no way to convert it.
@@ -2205,6 +2261,9 @@ const CANCELLED = Symbol('conversion-cancelled');
 
 proto._offerLargeTextConversion = async function(file, options = {}) {
     if (!this._shouldOfferLargeCsvPreflight(file, options)) return null;
+    // A large Micro-Cap output renamed `.txt`/`.out` is not a table either;
+    // converting it would only produce garbage, so it skips the offer too.
+    if (await this._fileHeadLooksLikeMicroCap(file)) return null;
 
     let csvProfile = null;
     try {
@@ -3915,6 +3974,9 @@ proto._fileTypeLabel = function(_entry, fileId = null) {
     }
     if (metadata?.source === 'matlab') {
         return i18n.t('fileTypeMatlab').replace('{version}', metadata.matVersion || '?');
+    }
+    if (metadata?.format === 'microcap' || metadata?.source === 'microcap') {
+        return i18n.t('fileTypeMicroCap');
     }
     return '';
 };

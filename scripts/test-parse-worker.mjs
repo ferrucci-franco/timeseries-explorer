@@ -30,6 +30,8 @@ const CASES = [
     { op: 'parse:pickle', file: 'test-files/pickle/multiindex_columns_2.pkl' },
     { op: 'parse:netcdf', file: 'test-files/netcdf/generic-timeseries-classic.nc' },
     { op: 'parse:netcdf', file: 'test-files/netcdf/generic-grouped-netcdf4.netcdf' },
+    { op: 'parse:microcap', file: 'test-files/microcap/stepped_interpolated.tno' },
+    { op: 'parse:microcap', file: 'test-files/microcap/single_run.tno' },
     { op: 'parse:csv', file: 'test-files/csv/rabbit.csv' },
     { op: 'parse:csv', file: 'test-files/csv/noaa_mauna_loa_co2_monthly.csv' },
     { op: 'parse:excelToCsv', file: 'test-files/excel/basic-datetime.xlsx' },

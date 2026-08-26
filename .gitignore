@@ -77,6 +77,8 @@
 !/test-files/pickle/manifest.json
 !/test-files/matlab/
 !/test-files/matlab/*.mat
+!/test-files/microcap/
+!/test-files/microcap/**
 !/bench/
 !/bench/**
 

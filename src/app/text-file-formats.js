@@ -70,10 +70,22 @@ export const SPREADSHEET_EXTENSIONS = Object.freeze([
     '.xlsx', '.xlsm', '.xlsb', '.xls', '.ods',
 ]);
 
+// Micro-Cap numeric output: transient (.tno), AC (.ano) and DC (.dno)
+// analyses. Text, but not a delimited table — a banner header, optional
+// Limits/Stepping prose, then one whitespace table per stepped run — so these
+// are deliberately NOT in TEXT_TABLE_EXTENSIONS (they must never be streamed
+// to DuckDB as CSV) and not in BINARY_EXTENSIONS either (a renamed sibling
+// still deserves the text sniff). Micro-Cap output saved as `.txt`/`.out` is
+// caught separately by sniffing the banner (see parsers/microcap-sniff.js).
+export const MICROCAP_EXTENSIONS = Object.freeze([
+    '.tno', '.ano', '.dno',
+]);
+
 const TEXT = new Set(TEXT_TABLE_EXTENSIONS);
 const BINARY = new Set(BINARY_EXTENSIONS);
 const SPREADSHEET = new Set(SPREADSHEET_EXTENSIONS);
 const AUDIO = new Set(AUDIO_EXTENSIONS);
+const MICROCAP = new Set(MICROCAP_EXTENSIONS);
 
 const normalize = (extension) => String(extension || '').toLowerCase();
 
@@ -112,4 +124,9 @@ export function isSpreadsheetExtension(extension) {
 /** A recording the app reads as one signal per channel. */
 export function isAudioExtension(extension) {
     return AUDIO.has(normalize(extension));
+}
+
+/** Micro-Cap numeric output, read by its dedicated parser. */
+export function isMicroCapExtension(extension) {
+    return MICROCAP.has(normalize(extension));
 }
