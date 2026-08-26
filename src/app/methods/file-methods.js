@@ -4018,6 +4018,10 @@ proto._fileTypeTooltip = function(_entry, fileId = null, fallback = '') {
         if (duplicates > 0) lines.push(i18n.t('pickleDuplicateColumns').replace('{count}', String(duplicates)));
         return lines.join('\n');
     }
+    // The Micro-Cap badge is just the brand; the tooltip says what the file is.
+    if (metadata?.format === 'microcap' || metadata?.source === 'microcap') {
+        return i18n.t('fileTypeMicroCapTooltip');
+    }
     return fallback;
 };
 
