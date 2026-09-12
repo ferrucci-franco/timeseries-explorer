@@ -546,9 +546,15 @@ async function selectResultFilePaths(options = {}, multiple = false) {
     // dialog would only let the user pick a file it then has to refuse.
     filters: Array.isArray(options.filters) && options.filters.length ? options.filters : [
       { name: 'Result files', extensions: ['csv', 'txt', 'mat', 'parquet', 'nc', 'netcdf', 'pkl', 'pickle', 'xlsx', 'xlsm', 'xls', 'ods', ...AUDIO_FILE_EXTENSIONS] },
+      // Second, not last. A readable file with the wrong extension — a CSV
+      // exported as `.000`, a measurement log with no extension at all — is
+      // common enough that the way to reach it should be the next entry down,
+      // not the one past three format groups. The app never trusts the
+      // extension anyway: unknown ones are sniffed, which is exactly why
+      // picking one has to be possible.
+      { name: 'All files', extensions: ['*'] },
       { name: 'Spreadsheets', extensions: ['xlsx', 'xlsm', 'xls', 'ods'] },
       { name: 'Audio recordings', extensions: [...AUDIO_FILE_EXTENSIONS] },
-      { name: 'All files', extensions: ['*'] },
     ],
   });
   if (result.canceled) return multiple ? [] : null;
