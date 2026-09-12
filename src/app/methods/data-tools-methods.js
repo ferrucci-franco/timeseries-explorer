@@ -28,7 +28,9 @@ import {
     normalizeDetrendParams,
     normalizeDetrendWindow,
 } from '../../compute/kernels/detrend.js';
-import { FILTER_INIT_MODES, FILTER_MODES, normalizeFilterRestartGap } from '../../compute/kernels/iir.js';
+import { FILTER_INIT_MODES, FILTER_MODES, normalizeFilterRestartGap, normalizeSos } from '../../compute/kernels/iir.js';
+import { normalizeFilterDesign } from '../../compute/kernels/filter-design.js';
+import { FILTER_DESIGN_FIELD_IDS } from './filter-methods.js';
 // Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
 // the two features spell a duration the same way.
 import { formatNaturalDuration } from '../../utils/fft.js';
@@ -407,7 +409,7 @@ proto._syncDataTools = function() {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'detrend');
     }
     const filterOff = !hasSource || tool !== 'filter';
-    for (const id of ['filter-b', 'filter-a', 'filter-mode', 'filter-restart-gap']) {
+    for (const id of ['filter-b', 'filter-a', 'filter-mode', 'filter-restart-gap', ...FILTER_DESIGN_FIELD_IDS]) {
         document.getElementById(id)?.toggleAttribute('disabled', filterOff);
     }
     // Zero phase builds its own edges out of the reflection padding, so an
@@ -1219,6 +1221,7 @@ const DATA_TOOL_PARAMETER_IDS = [
     'filter-init-x',
     'filter-init-y',
     'filter-restart-gap',
+    ...FILTER_DESIGN_FIELD_IDS,
     'resample-grid-mode',
     'resample-method',
     'resample-step',
@@ -1329,6 +1332,19 @@ proto._writeDataToolForm = function(definition, name) {
         set('detrend-window', params.window);
         set('detrend-window-slider', params.window);
     } else if (definition.tool === 'filter') {
+        const designed = params.source === 'design' && params.design;
+        set('filter-source', designed ? 'design' : 'manual');
+        if (designed) {
+            const design = params.design;
+            set('filter-design-family', design.family);
+            set('filter-design-response', design.response);
+            set('filter-design-order', design.order);
+            set('filter-design-order-slider', design.order);
+            set('filter-design-cutoff', design.cutoff?.[0] ?? '');
+            set('filter-design-cutoff-high', design.cutoff?.[1] ?? '');
+            set('filter-design-ripple', design.rippleDb);
+            set('filter-design-attenuation', design.attenuationDb);
+        }
         set('filter-b', (params.b || [1]).join(', '));
         set('filter-a', (params.a || [1]).join(', '));
         set('filter-mode', params.mode);
@@ -1974,8 +1990,11 @@ proto._buildFilterResult = function(sourceValues, sourceVariable, config, data, 
         tool: 'filter',
     }, result.values, {
         mode: config.params.mode,
+        source: config.params.source || 'manual',
         b: [...config.params.b],
         a: [...config.params.a],
+        sos: config.params.sos ? config.params.sos.map(section => [...section]) : undefined,
+        design: config.params.design ? this._cloneDataToolParams(config.params.design) : undefined,
         init: config.params.init,
         initState: [...(config.params.initState || [])],
         restartGap: config.params.restartGap,
@@ -2637,7 +2656,8 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
         const list = values => (Array.isArray(values) && values.length
             ? values.map(Number).filter(Number.isFinite)
             : [1]);
-        return {
+        const normalized = {
+            source: 'manual',
             b: list(params.b),
             a: list(params.a),
             mode: FILTER_MODES.has(params.mode) ? params.mode : 'forward',
@@ -2649,6 +2669,24 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
             // state at every hole, and 0 is exactly that behaviour.
             restartGap: normalizeFilterRestartGap(params.restartGap),
         };
+        // A designed filter carries its sections and its specification. The
+        // sections are what ran and what runs again; the specification is what
+        // the panel reopens with. A list that does not describe a cascade
+        // demotes the definition to its b/a, which is at worst the identity.
+        if (params.source === 'design' && Array.isArray(params.sos) && params.design) {
+            try {
+                normalized.sos = normalizeSos(params.sos).map(({ b, a }) => [b[0], b[1], b[2], a[0], a[1], a[2]]);
+                const design = normalizeFilterDesign(params.design);
+                normalized.design = { ...design, unit: typeof params.design.unit === 'string' ? params.design.unit : '' };
+                normalized.source = 'design';
+                // A cascade cannot start from past samples (see the kernel).
+                if (normalized.init === 'past') { normalized.init = 'steady'; normalized.initState = []; }
+            } catch {
+                delete normalized.sos;
+                delete normalized.design;
+            }
+        }
+        return normalized;
     }
     return this._normalizeOutlierParams(params.method || 'spike', params);
 };
@@ -2708,6 +2746,7 @@ proto._resetDataToolPicker = function() {
     this._toggleFilterInitHelpPopover?.(false);
     this._toggleFilterGapHelpPopover?.(false);
     this._toggleFilterDirectionHelpPopover?.(false);
+    this._toggleFilterDesignHelpPopover?.(false);
     this._setOutlierMessage('', '');
     this._syncDataTools?.();
 };
