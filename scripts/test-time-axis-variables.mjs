@@ -497,8 +497,12 @@ assert.match(fileSrc, /_timeAxisSummaryLine\?\.\(this\._timeAxisDiagnosticsForPa
 
 // Entry point B: the abscissa row in the tree.
 const treeSrc = readSrc('app/methods/tree-methods.js');
-assert.match(treeSrc, /kind === 'abscissa'[\s\S]{0,900}_openTimeAxisInspector\(this\.activeFileId\)/,
+// The row reads the leaf's own file id: a derived dataset's abscissa is drawn
+// in its SOURCE file's tree and must open the inspector on the dataset.
+assert.match(treeSrc, /kind === 'abscissa'[\s\S]{0,900}_openTimeAxisInspector\(leafFileId\)/,
     'the time-axis tree row opens the same inspector');
+assert.match(treeSrc, /const leafFileId = options\.fileId \|\| this\.activeFileId/,
+    'and that id is the active file unless the leaves belong to a dataset');
 
 // The lazy diagnostic must be cancellable and must not outlive its dialog.
 const inspectorSrc = readSrc('app/methods/time-axis-inspector-methods.js');

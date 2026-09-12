@@ -197,6 +197,11 @@ proto._createSessionSnapshot = function(options = {}) {
     const usedArchiveNames = new Set();
 
     for (const [fileId, entry] of this.files) {
+        // A derived dataset is saved as its recipe, under the file it was
+        // computed from (see derivedDatasets below) — never as its rows. Only an
+        // orphan, whose source is gone, is saved as the plain file it now is.
+        const recipe = this._derivedDatasetRecipe?.(entry);
+        if (recipe && this.files.has(recipe.sourceFileId)) continue;
         const displayName = this._fileDisplayName(entry);
         const archivePath = includeData
             ? `data/${this._uniqueArchiveName(displayName, usedArchiveNames)}`
@@ -234,6 +239,9 @@ proto._createSessionSnapshot = function(options = {}) {
             invertedVariables,
             transformPanelExpanded: !!this._expandedFileTransforms?.has(fileId),
             archivePath,
+            derivedDatasets: (this._derivedDatasetsOf?.(fileId) || [])
+                .map(([datasetId]) => this._serializeDerivedDataset(datasetId))
+                .filter(Boolean),
         });
     }
 
@@ -474,6 +482,9 @@ proto._applySessionSnapshot = async function(session, options = {}) {
     this._applySessionDataToolVariables(session, fileMap, { defer: true });
     this._reapplySessionGeneratedVariables(session, fileMap);
     this._applySessionInvertedVariables(session, fileMap);
+    // After the generated variables: a dataset may have been built from one.
+    // Before the plots: they reference the datasets by the ids this maps.
+    await this._applySessionDerivedDatasets(session, fileMap);
     this._applySessionLayout(session.layout);
     await this._applySessionPlots(session.plots || [], fileMap);
 
@@ -658,8 +669,26 @@ proto._applySessionSettings = function(settings) {
     this._syncSessionSettingsUI();
 };
 
+proto._applySessionDerivedDatasets = async function(session, fileMap) {
+    for (const meta of session.files || []) {
+        const sourceId = fileMap.get(meta.id);
+        if (!sourceId || !Array.isArray(meta.derivedDatasets) || !meta.derivedDatasets.length) continue;
+        if (typeof this._restoreDerivedDatasets !== 'function') continue;
+        await this._restoreDerivedDatasets(meta.derivedDatasets, sourceId, fileMap);
+    }
+};
+
 proto._clearGeneratedVariablesForSession = function(fileMap) {
     for (const fileId of new Set(fileMap.values())) {
+        // The datasets derived from a matched file are generated content too:
+        // the session brings its own recipes for that file.
+        for (const [datasetId] of [...(this._derivedDatasetsUnder?.(fileId) || [])].reverse()) {
+            this.plotManager.removeFile(datasetId);
+            this.files.delete(datasetId);
+            this.derivedByFile.delete(datasetId);
+            this.dataToolVariablesByFile?.delete(datasetId);
+            this._expandedFileTransforms?.delete(datasetId);
+        }
         const data = this.plotManager.files.get(fileId)?.data;
         if (!data) continue;
         const toolDefinitions = this.dataToolVariablesByFile?.get(fileId) || new Map();

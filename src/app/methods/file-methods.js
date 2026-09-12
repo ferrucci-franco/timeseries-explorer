@@ -954,6 +954,12 @@ proto.reloadActiveFile = async function() {
     if (!id) return;
     const entry = this.files.get(id);
     if (!entry) return;
+    // Reloading a derived dataset means computing it again from its source's
+    // current data — the one thing a file with no bytes behind it CAN reload.
+    if (this._isDerivedDataset?.(entry)) {
+        await this._recomputeDerivedDataset(id);
+        return;
+    }
     if (await this._refuseReloadOfInMemoryFile(entry)) return;
 
     // Re-reading and re-parsing a large file takes seconds, and a silent
@@ -984,9 +990,13 @@ proto.reloadActiveFile = async function() {
         entry.contentHash = contentHash;
         this._adoptExcelCsvCache(entry, data);
         this.plotManager.updateFileData(id, data);
+        // A dataset derived from this file was computed from the rows that were
+        // just replaced; it follows the source, as the derived variables did.
+        await this._recomputeDerivedDatasetsOf?.(id, { deferUi: true });
         this._updateTopBar();
         this._clearVariableSelection();
         this.renderVariablesTree(data.tree);
+        this._renderFilesList();
     } finally {
         this._hideFileLoadingOverlay();
     }
@@ -3676,20 +3686,34 @@ proto._copyDerivedDefinitions = function(sourceId, targetId) {
     this.derivedByFile.set(targetId, targetDerived);
 };
 
-proto.removeFile = async function(fileId) {
+proto.removeFile = async function(fileId, options = {}) {
     if (!this.files.has(fileId)) return;
     const fileEntry = this.files.get(fileId);
 
-    if (this.plotManager.hasTracesForFile(fileId)) {
+    // Datasets derived from this file go with it (there is nothing left to
+    // recompute them from). One question covers them and the plots they are on;
+    // a cascade closes without asking again.
+    let confirmed = !!options.cascade || !!options.confirmed;
+    let cascaded = false;
+    if (!options.cascade && this._derivedDatasetsUnder?.(fileId).length) {
+        if (!(await this._confirmClosingDerivedDatasets(fileId))) return;
+        await this._closeDerivedDatasetsUnder(fileId);
+        confirmed = true;
+        cascaded = true;
+    }
+    if (!confirmed && this.plotManager.hasTracesForFile(fileId)) {
         const ok = await Modal.confirm(i18n.t('closeFileWarning'), { icon: '⚠️' });
         if (!ok) return;
     }
+    if (this._datasetEditing?.fileId === fileId) this._exitDerivedDatasetEditing?.();
 
     // Remove plots first. This invalidates lazy-detail/FFT tokens immediately,
     // so the close button never waits behind a long query or transform.
     const pmEntry = this.plotManager.files.get(fileId);
     const lazyData = pmEntry?.data;
-    this.plotManager.removeFile(fileId);
+    // A cascaded close leaves the panels to the close that started it, which
+    // rebuilds them all once its own file is gone.
+    this.plotManager.removeFile(fileId, { deferRebuild: !!options.cascade, rebuildAll: cascaded });
     this.files.delete(fileId);
     this.derivedByFile.delete(fileId);
     this._clearDataToolDefinitions?.(fileId);
@@ -3857,9 +3881,30 @@ proto._renderFilesList = function() {
     const count = document.getElementById('files-count');
     if (count) count.textContent = `(${this.files.size})`;
     list.innerHTML = '';
+    // A derived dataset is drawn under its source, indented; only an orphan
+    // (its source closed out from under it) stands on its own.
+    const rendered = new Set();
+    const renderWithDatasets = (fileId, entryData, depth) => {
+        if (rendered.has(fileId)) return;
+        rendered.add(fileId);
+        list.appendChild(this._renderFileListItem(fileId, entryData, depth));
+        for (const [childId, childEntry] of this._derivedDatasetsOf?.(fileId) || []) {
+            renderWithDatasets(childId, childEntry, depth + 1);
+        }
+    };
     for (const [fileId, entryData] of this.files) {
+        const recipe = this._derivedDatasetRecipe?.(entryData);
+        if (recipe && this.files.has(recipe.sourceFileId)) continue;
+        renderWithDatasets(fileId, entryData, 0);
+    }
+};
+
+proto._renderFileListItem = function(fileId, entryData, depth = 0) {
+    {
         const item = document.createElement('div');
-        item.className = 'file-list-item';
+        item.className = 'file-list-item' + (depth > 0 ? ' file-list-item-derived' : '');
+        if (depth > 0) item.style.setProperty('--file-depth', String(depth));
+        const recipe = this._derivedDatasetRecipe?.(entryData);
 
         const entry = document.createElement('div');
         entry.className = 'file-entry' +
@@ -3872,6 +3917,26 @@ proto._renderFilesList = function() {
         nameSpan.textContent = this._fileDisplayName(entryData);
         nameSpan.title = this._fileEntryTooltip(entryData);
         nameSpan.addEventListener('click', () => this.setActiveFile(fileId));
+
+        // The mark that says "built from the file above": drawn ahead of the
+        // name so the indentation reads as a relationship, not as a stray gap.
+        const derivedMark = document.createElement('span');
+        derivedMark.className = 'file-entry-derived-mark';
+        derivedMark.textContent = '↳';
+        derivedMark.setAttribute('aria-hidden', 'true');
+        derivedMark.hidden = depth === 0;
+
+        const derivedBadge = document.createElement('span');
+        derivedBadge.className = 'file-entry-type file-entry-derived';
+        derivedBadge.textContent = i18n.t('derivedDatasetBadge');
+        derivedBadge.hidden = !recipe;
+        if (recipe) {
+            const sourceEntry = this.files.get(recipe.sourceFileId);
+            derivedBadge.title = i18n.t('derivedDatasetTooltip')
+                .replace('{source}', sourceEntry ? this._fileDisplayName(sourceEntry) : '?')
+                .replace('{recipe}', this._derivedDatasetDescription?.(recipe) || recipe.tool);
+        }
+        derivedBadge.addEventListener('click', () => this.setActiveFile(fileId));
 
         const typeLabel = this._fileTypeLabel(entryData, fileId);
         const typeBadge = document.createElement('span');
@@ -3891,7 +3956,9 @@ proto._renderFilesList = function() {
         memoryBadge.title = entryData.savedCopyName
             ? `${i18n.t('fileInMemoryTooltip')}\n${i18n.t('fileInMemorySavedCopy').replace('{name}', entryData.savedCopyName)}`
             : i18n.t('fileInMemoryTooltip');
-        memoryBadge.hidden = !inMemory;
+        // A derived dataset's badge already says it is computed (and its tooltip
+        // that it is not on disk); two badges on a narrow row hid the name.
+        memoryBadge.hidden = !inMemory || !!recipe;
         memoryBadge.addEventListener('click', () => this.setActiveFile(fileId));
 
         // Drawn rather than typed: ⤓ as a glyph comes out hairline thin at this
@@ -3965,8 +4032,10 @@ proto._renderFilesList = function() {
         closeBtn.title = i18n.t('closeFile');
         closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.removeFile(fileId); });
 
+        entry.appendChild(derivedMark);
         entry.appendChild(nameSpan);
         entry.appendChild(typeBadge);
+        entry.appendChild(derivedBadge);
         entry.appendChild(memoryBadge);
         entry.appendChild(lazyIndicator);
         if (entryData.liveUpdate?.enabled) entry.appendChild(liveIndicator);
@@ -3981,7 +4050,7 @@ proto._renderFilesList = function() {
         if (this._expandedFileTransforms.has(fileId)) {
             item.appendChild(this._renderFileTransformPanel(fileId, entryData));
         }
-        list.appendChild(item);
+        return item;
     }
 };
 

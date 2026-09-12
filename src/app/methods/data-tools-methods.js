@@ -306,6 +306,11 @@ proto._syncDataTools = function() {
     // in the file the user just left.
     if (this._dataToolPreview && this._dataToolPreview.fileId !== fileId) this._clearDataToolPreview();
     if (this._dataToolEditing && this._dataToolEditing.fileId !== fileId) this._exitDataToolEditing({ keepMessage: true });
+    // Editing a derived dataset happens in its SOURCE file's panel; leaving that
+    // file abandons the edit the same way.
+    if (this._datasetEditing && this.files.get(this._datasetEditing.fileId)?.derivedDataset?.sourceFileId !== fileId) {
+        this._exitDerivedDatasetEditing?.();
+    }
     const editing = this._dataToolEditing || null;
     this._syncDataToolPickerOptions(lazy);
 
@@ -488,19 +493,24 @@ proto._syncDataToolActions = function(editing, blocker) {
     const clearBtn = document.getElementById('data-tool-clear');
     const renameBtn = document.getElementById('data-tool-rename');
     const banner = document.getElementById('data-tool-editing-banner');
+    // A dataset being edited reads like a variable being edited: Update, not
+    // Create, and a banner naming what is being changed.
+    const datasetEditing = !editing && this._datasetEditing ? this._datasetEditing : null;
+    const updating = !!editing || !!datasetEditing;
     if (createBtn) {
         createBtn.disabled = !!blocker;
-        createBtn.textContent = i18n.t(editing ? 'dataToolUpdate' : 'dataToolCreate');
+        createBtn.textContent = i18n.t(updating ? 'dataToolUpdate' : 'dataToolCreate');
     }
     if (createPlotBtn) {
         // While editing something already on a panel, "and plot" has nothing left
         // to do — the live update is already redrawing that very trace.
-        const alreadyPlotted = !!editing && this._isDataToolVariablePlotted(editing.fileId, editing.name);
+        const alreadyPlotted = (!!editing && this._isDataToolVariablePlotted(editing.fileId, editing.name))
+            || (!!datasetEditing && !!this.plotManager.hasTracesForFile?.(datasetEditing.fileId));
         createPlotBtn.disabled = !!blocker || alreadyPlotted;
         createPlotBtn.title = alreadyPlotted ? i18n.t('dataToolAlreadyPlotted') : '';
-        createPlotBtn.textContent = i18n.t(editing ? 'dataToolUpdateAndPlot' : 'dataToolCreateAndPlot');
+        createPlotBtn.textContent = i18n.t(updating ? 'dataToolUpdateAndPlot' : 'dataToolCreateAndPlot');
     }
-    if (clearBtn) clearBtn.textContent = i18n.t(editing ? 'dataToolCancel' : 'dataToolClear');
+    if (clearBtn) clearBtn.textContent = i18n.t(updating ? 'dataToolCancel' : 'dataToolClear');
     if (renameBtn) {
         // Hidden while drafting: there is nothing to rename yet, the field is
         // already open.
@@ -513,8 +523,10 @@ proto._syncDataToolActions = function(editing, blocker) {
         if (glyph) glyph.textContent = renaming ? '✓' : '✎';
     }
     if (banner) {
-        banner.hidden = !editing;
-        banner.textContent = editing ? i18n.t('dataToolEditing').replace('{name}', editing.name) : '';
+        banner.hidden = !updating;
+        banner.textContent = editing
+            ? i18n.t('dataToolEditing').replace('{name}', editing.name)
+            : (datasetEditing ? i18n.t('derivedDatasetEditing').replace('{name}', datasetEditing.name) : '');
     }
 };
 
@@ -1176,6 +1188,7 @@ proto.clearDataToolForm = function() {
 
 proto._clearDataToolDraft = function(options = {}) {
     this._clearDataToolPreview();
+    this._exitDerivedDatasetEditing?.();
     const sourceSelect = document.getElementById('outlier-variable');
     const outputInput = document.getElementById('outlier-output-name');
     if (sourceSelect) sourceSelect.value = '';
@@ -1508,7 +1521,10 @@ proto._renderDataToolTable = function() {
     // above the one it was built from. Insertion order would not survive a rename,
     // which re-inserts the row at the end.
     const rows = fileId ? this._orderedDataToolDefinitions(fileId) : [];
-    wrap.hidden = !fileId || rows.length === 0;
+    // Datasets derived from this file sit under the variables: same table, same
+    // two buttons, a row that names a file rather than a variable.
+    const datasets = fileId ? (this._derivedDatasetsOf?.(fileId) || []) : [];
+    wrap.hidden = !fileId || (rows.length === 0 && datasets.length === 0);
     if (wrap.hidden) {
         table.innerHTML = '';
         return;
@@ -1517,7 +1533,9 @@ proto._renderDataToolTable = function() {
     const editingName = this._dataToolEditing?.name || '';
     // A pending confirmation for a row that no longer exists would strand the
     // table in a state nothing can dismiss.
-    if (this._dataToolPendingDelete && !rows.some(([name]) => name === this._dataToolPendingDelete)) {
+    const pending = this._dataToolPendingDelete;
+    if (pending && !rows.some(([name]) => name === pending)
+        && !datasets.some(([datasetId]) => `dataset:${datasetId}` === pending)) {
         this._dataToolPendingDelete = '';
     }
     table.innerHTML = '';
@@ -1540,6 +1558,61 @@ proto._renderDataToolTable = function() {
             : this._dataToolRowActions(definition));
         table.appendChild(row);
     }
+    for (const [datasetId, entry] of datasets) {
+        const key = `dataset:${datasetId}`;
+        const confirming = key === this._dataToolPendingDelete;
+        const row = document.createElement('div');
+        row.className = 'data-tool-row data-tool-row-dataset'
+            + (this._datasetEditing?.fileId === datasetId ? ' editing' : '')
+            + (confirming ? ' confirming' : '');
+        row.dataset.datasetId = datasetId;
+        const recipe = entry.derivedDataset || {};
+        const sourceLabel = recipe.sourceName && recipe.sourceName !== RESAMPLE_ALL_VARIABLES
+            ? recipe.sourceName
+            : i18n.t('dataToolRowAllVariables');
+        const flow = document.createElement('div');
+        flow.className = 'data-tool-row-flow';
+        flow.textContent = `${sourceLabel} → ${this._fileDisplayName(entry)}`;
+        flow.title = `${flow.textContent}\n${this._derivedDatasetDescription?.(recipe) || ''}`;
+        row.appendChild(flow);
+        row.appendChild(confirming
+            ? this._datasetRowConfirm(datasetId)
+            : this._datasetRowActions(recipe));
+        table.appendChild(row);
+    }
+};
+
+proto._datasetRowActions = function(recipe) {
+    const bottom = document.createElement('div');
+    bottom.className = 'data-tool-row-bottom';
+    const label = document.createElement('span');
+    label.className = 'data-tool-row-tool';
+    label.textContent = `${this._dataToolLabel(recipe.tool)} · ${i18n.t('dataToolRowDataset')}`;
+    const actions = document.createElement('span');
+    actions.className = 'data-tool-row-actions';
+    actions.appendChild(this._dataToolRowButton('edit', '✎', 'derivedDatasetEditTitle'));
+    actions.appendChild(this._dataToolRowButton('delete', '🗑', 'derivedDatasetRemoveTitle'));
+    bottom.appendChild(label);
+    bottom.appendChild(actions);
+    return bottom;
+};
+
+proto._datasetRowConfirm = function(datasetId) {
+    const dependents = this._derivedDatasetsUnder?.(datasetId) || [];
+    const bottom = document.createElement('div');
+    bottom.className = 'data-tool-row-bottom';
+    const question = document.createElement('span');
+    question.className = 'data-tool-row-question';
+    question.textContent = dependents.length
+        ? i18n.t('dataToolDeleteConfirmChain').replace('{count}', String(dependents.length))
+        : i18n.t('derivedDatasetDeleteConfirm');
+    const actions = document.createElement('span');
+    actions.className = 'data-tool-row-actions';
+    actions.appendChild(this._dataToolRowButton('confirm-delete', '✓', 'dataToolDeleteConfirmTitle'));
+    actions.appendChild(this._dataToolRowButton('cancel-delete', '✕', 'dataToolDeleteCancelTitle'));
+    bottom.appendChild(question);
+    bottom.appendChild(actions);
+    return bottom;
 };
 
 proto._dataToolRowActions = function(definition) {
@@ -1618,10 +1691,29 @@ proto._handleDataToolTableClick = function(event) {
     const button = event.target.closest('.data-tool-row-btn');
     const row = event.target.closest('.data-tool-row');
     if (!button || !row) return;
+    const action = button.dataset.action;
+    const datasetId = row.dataset.datasetId;
+    if (datasetId) {
+        const key = `dataset:${datasetId}`;
+        if (action === 'edit') {
+            this._dataToolPendingDelete = '';
+            this._editDerivedDataset?.(datasetId);
+        } else if (action === 'delete') {
+            this._dataToolPendingDelete = key;
+            this._renderDataToolTable();
+        } else if (action === 'cancel-delete') {
+            this._dataToolPendingDelete = '';
+            this._renderDataToolTable();
+        } else if (action === 'confirm-delete') {
+            this._dataToolPendingDelete = '';
+            // The row already asked; the close must not ask a second time.
+            void this.removeFile(datasetId, { confirmed: true });
+        }
+        return;
+    }
     const name = row.dataset.name;
     const fileId = this.activeFileId;
     if (!name || !fileId) return;
-    const action = button.dataset.action;
     if (action === 'edit') {
         this._dataToolPendingDelete = '';
         this._enterDataToolEditing(fileId, name);
@@ -2735,6 +2827,7 @@ proto._serializeDataToolDefinitions = function(fileId) {
 
 proto._resetDataToolPicker = function() {
     this._dataToolEditing = null;
+    this._exitDerivedDatasetEditing?.();
     this._dataToolRenameUnlocked = false;
     this._clearDataToolPreview();
     const toolSelect = document.getElementById('data-tool-select');

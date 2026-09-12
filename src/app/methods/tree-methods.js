@@ -29,6 +29,7 @@ proto._renderFilteredTree = function() {
     const autoExpand = filter.length > 0;
     this._renderTreeNode(this._currentTree, container, 0, filter, autoExpand);
     this._renderDerivedTreeSection(container, filter, autoExpand);
+    this._renderDerivedDatasetsSection(container, filter, autoExpand);
     this._syncDataTools?.();
 };
 
@@ -61,7 +62,9 @@ proto._toggleVariableSelection = function(varName) {
 };
 
 proto._syncVariableSelectionUI = function() {
-    document.querySelectorAll('.tree-item[data-var-name]').forEach(item => {
+    // Selection is a set of names of the ACTIVE file; a dataset's leaf (drawn in
+    // its source's tree, carrying its own file id) is never part of it.
+    document.querySelectorAll('.tree-item[data-var-name]:not([data-file-id])').forEach(item => {
         item.classList.toggle('selected', this.selectedVariables.has(item.dataset.varName));
     });
 };
@@ -114,6 +117,114 @@ proto._renderDerivedTreeSection = function(parentElement, filter, autoExpand) {
     this._renderVarLeaves(entries, childrenDiv, { derivedActions: true });
     nodeDiv.append(itemDiv, childrenDiv);
     parentElement.appendChild(nodeDiv);
+};
+
+// The datasets derived from the active file — a resample, say — each with its
+// variables ready to drag onto a panel, and the three things one does with a
+// dataset: edit its recipe, save it to disk, close it. The variables belong to
+// ANOTHER file (the dataset has its own axis), which is why every leaf here
+// carries the dataset's file id.
+proto._renderDerivedDatasetsSection = function(parentElement, filter, autoExpand) {
+    const fileId = this.activeFileId;
+    const datasets = fileId ? (this._derivedDatasetsOf?.(fileId) || []) : [];
+    if (!datasets.length) return;
+
+    const items = [];
+    for (const [datasetId, entry] of datasets) {
+        const data = this.plotManager.files.get(datasetId)?.data;
+        const entries = Object.entries(data?.variables || {})
+            .filter(([, variable]) => !variable?.previewOnly)
+            .filter(([name, variable]) => this._variableMatchesFilter(name, variable, filter));
+        const nameMatches = !filter || String(entry.name || '').toLowerCase().includes(filter);
+        if (!entries.length && !nameMatches) continue;
+        items.push({ datasetId, entry, entries });
+    }
+    if (!items.length) return;
+
+    const familyDiv = document.createElement('div');
+    familyDiv.className = 'tree-node';
+    const familyItem = document.createElement('div');
+    familyItem.className = 'tree-item derived-tree-header derived-datasets-header';
+    const familyToggle = document.createElement('span');
+    familyToggle.className = 'tree-toggle expanded';
+    familyToggle.textContent = '▸';
+    const familyIcon = document.createElement('span');
+    familyIcon.className = 'tree-icon';
+    familyIcon.textContent = '▤';
+    const familyLabel = document.createElement('span');
+    familyLabel.className = 'tree-label';
+    familyLabel.textContent = i18n.t('derivedDatasets');
+    const familyInfo = document.createElement('span');
+    familyInfo.className = 'tree-info';
+    familyInfo.textContent = `(${items.length})`;
+    familyItem.append(familyToggle, familyIcon, familyLabel, familyInfo);
+    const familyChildren = document.createElement('div');
+    familyChildren.className = 'tree-children derived-tree-children';
+    familyItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const collapsed = familyChildren.classList.toggle('collapsed');
+        familyToggle.classList.toggle('expanded', !collapsed);
+    });
+
+    for (const { datasetId, entry, entries } of items) {
+        const nodeDiv = document.createElement('div');
+        nodeDiv.className = 'tree-node';
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'tree-item derived-dataset-item';
+        itemDiv.dataset.datasetId = datasetId;
+        const toggle = document.createElement('span');
+        toggle.className = 'tree-toggle' + (autoExpand ? ' expanded' : '');
+        toggle.textContent = '▸';
+        const icon = document.createElement('span');
+        icon.className = 'tree-icon';
+        icon.textContent = '▤';
+        const label = document.createElement('span');
+        label.className = 'tree-label';
+        label.textContent = this._fileDisplayName(entry);
+        label.title = this._derivedDatasetDescription?.(entry.derivedDataset) || '';
+        const info = document.createElement('span');
+        info.className = 'tree-info';
+        info.textContent = `(${entries.length})`;
+        itemDiv.append(toggle, icon, label, info);
+
+        const action = (className, html, titleKey, handler) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `tree-dataset-action ${className}`;
+            button.innerHTML = html;
+            button.title = i18n.t(titleKey);
+            button.setAttribute('aria-label', `${i18n.t(titleKey)}: ${entry.name}`);
+            button.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handler();
+            });
+            button.addEventListener('dragstart', e => e.preventDefault());
+            return button;
+        };
+        itemDiv.appendChild(action('tree-dataset-edit', '✎', 'derivedDatasetEditTitle', () => this._editDerivedDataset(datasetId)));
+        itemDiv.appendChild(action(
+            'tree-dataset-save',
+            '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 3h4v7h4l-6 6.5L6 10h4V3Z"/><path d="M4.5 18.5h15V21h-15z"/></svg>',
+            'fileInMemorySaveTitle',
+            () => this.saveInMemoryFile(datasetId),
+        ));
+        itemDiv.appendChild(action('tree-dataset-remove', 'x', 'derivedDatasetRemoveTitle', () => this._removeDerivedDataset(datasetId)));
+
+        const childrenDiv = document.createElement('div');
+        childrenDiv.className = 'tree-children' + (autoExpand ? '' : ' collapsed');
+        itemDiv.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const collapsed = childrenDiv.classList.toggle('collapsed');
+            toggle.classList.toggle('expanded', !collapsed);
+        });
+        this._renderVarLeaves(entries, childrenDiv, { fileId: datasetId });
+        nodeDiv.append(itemDiv, childrenDiv);
+        familyChildren.appendChild(nodeDiv);
+    }
+
+    familyDiv.append(familyItem, familyChildren);
+    parentElement.appendChild(familyDiv);
 };
 
 /**
@@ -424,6 +535,10 @@ proto._syncVariableSignToggle = function(button, inverted) {
 };
 
 proto._renderVarLeaves = function(entries, parentElement, options = {}) {
+    // Leaves of a derived dataset live in another file than the tree they are
+    // drawn in; everything file-specific below reads this id, not the active one.
+    const leafFileId = options.fileId || this.activeFileId;
+    const foreign = !!options.fileId && options.fileId !== this.activeFileId;
     for (const [name, variable] of entries) {
         const nodeDiv = document.createElement('div');
         nodeDiv.className = 'tree-node' + (variable.derived ? ' tree-node-derived' : '');
@@ -431,11 +546,12 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         const itemDiv = document.createElement('div');
         itemDiv.className = 'tree-item' + (variable.derived ? ' tree-item-derived' : '');
         itemDiv.classList.toggle('tree-item-modified', !!variable.dataToolModified);
-        itemDiv.classList.toggle('selected', this.selectedVariables.has(variable.name));
+        itemDiv.classList.toggle('selected', !foreign && this.selectedVariables.has(variable.name));
         const canPlot = variable.plottable !== false && variable.dataType !== 'string';
         itemDiv.classList.toggle('tree-item-nonplottable', !canPlot);
         itemDiv.setAttribute('draggable', canPlot ? 'true' : 'false');
         itemDiv.setAttribute('data-var-name', variable.name);
+        if (foreign) itemDiv.setAttribute('data-file-id', leafFileId);
 
         const spacer = document.createElement('span');
         spacer.className = 'tree-toggle';
@@ -455,7 +571,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 
         itemDiv.append(spacer, icon, label, info);
         if (canPlot && variable.kind !== 'abscissa') {
-            const inverted = this.plotManager.isVariableSignInverted(this.activeFileId, variable.name);
+            const inverted = this.plotManager.isVariableSignInverted(leafFileId, variable.name);
             const signToggle = document.createElement('button');
             signToggle.type = 'button';
             signToggle.className = 'tree-sign-toggle';
@@ -463,9 +579,9 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             signToggle.addEventListener('click', (event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                const currentInverted = this.plotManager.isVariableSignInverted(this.activeFileId, variable.name);
-                this.plotManager.setVariableSignInverted(this.activeFileId, variable.name, !currentInverted);
-                const nextInverted = this.plotManager.isVariableSignInverted(this.activeFileId, variable.name);
+                const currentInverted = this.plotManager.isVariableSignInverted(leafFileId, variable.name);
+                this.plotManager.setVariableSignInverted(leafFileId, variable.name, !currentInverted);
+                const nextInverted = this.plotManager.isVariableSignInverted(leafFileId, variable.name);
                 this._syncVariableSignToggle(signToggle, nextInverted);
             });
             signToggle.addEventListener('dragstart', event => event.preventDefault());
@@ -484,7 +600,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             inspect.addEventListener('click', (event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                void this._openTimeAxisInspector(this.activeFileId);
+                void this._openTimeAxisInspector(leafFileId);
             });
             inspect.addEventListener('dragstart', event => event.preventDefault());
             itemDiv.appendChild(inspect);
@@ -517,6 +633,9 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
                 if (this.selectedVariables.size > 0) this._clearVariableSelection();
                 return;
             }
+            // Multi-selection is a set of names of the active file. A foreign leaf
+            // is dragged on its own; it neither joins nor clears that set.
+            if (foreign) return;
             if (e.ctrlKey || e.metaKey) {
                 e.preventDefault();
                 this._toggleVariableSelection(variable.name);
@@ -529,7 +648,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
                 e.preventDefault();
                 return;
             }
-            const varNames = this._selectedVariableNamesForDrag(variable.name);
+            const varNames = foreign ? [variable.name] : this._selectedVariableNamesForDrag(variable.name);
             if (!varNames.length) {
                 e.preventDefault();
                 return;
@@ -537,6 +656,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             e.dataTransfer.setData('application/x-openmodelica-variables', JSON.stringify({
                 type: 'variables',
                 names: varNames,
+                ...(foreign ? { fileId: leafFileId } : {}),
             }));
             e.dataTransfer.setData('text/plain', varNames[0] || variable.name);
             e.dataTransfer.effectAllowed = 'copy';
