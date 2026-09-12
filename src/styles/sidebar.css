@@ -1181,9 +1181,12 @@
     box-sizing: border-box;
     min-width: 4.8rem;
     padding-left: 0.35rem;
-    /* No right padding: the stepper is anchored to the field's inner edge below,
-       and padding here is what left a gap between the arrows and the border. */
-    padding-right: 0;
+    /* A little air between the number and whatever sits to its right — the
+       stepper, or the border when the stepper is hidden. The stepper itself is
+       pulled back into this padding below, so it still sits flush against the
+       border and the gap is between the digits and the arrows, not between the
+       arrows and the edge. */
+    padding-right: 0.35rem;
     text-align: right;
     font-variant-numeric: tabular-nums;
     color-scheme: light;
@@ -1197,7 +1200,7 @@
 .data-tool-number-input::-webkit-inner-spin-button,
 .data-tool-number-input::-webkit-outer-spin-button {
     height: 100%;
-    margin: 0;
+    margin: 0 -0.35rem 0 0;
     align-self: stretch;
     opacity: 1;
     cursor: pointer;
