@@ -683,6 +683,10 @@
 #interpolate-window-wrap.collapsed,
 #filter-init-level-wrap.collapsed,
 #filter-init-past-wrap.collapsed,
+#filter-design-wrap.collapsed,
+#filter-design-cutoff-high-wrap.collapsed,
+#filter-design-ripple-wrap.collapsed,
+#filter-design-attenuation-wrap.collapsed,
 #detrend-order-wrap.collapsed,
 #detrend-window-wrap.collapsed,
 .resample-grid-controls.collapsed,
@@ -952,6 +956,10 @@
 #interpolate-window-wrap,
 #filter-init-level-wrap,
 #filter-init-past-wrap,
+#filter-design-wrap,
+#filter-design-cutoff-high-wrap,
+#filter-design-ripple-wrap,
+#filter-design-attenuation-wrap,
 #detrend-order-wrap,
 #detrend-window-wrap {
     display: flex;
@@ -1053,6 +1061,14 @@
 
 .filter-coefficient-label {
     margin-bottom: -0.2rem;
+}
+
+/* A designed filter writes its coefficients here for reading and copying; the
+   boxes stay selectable but say, by their tint, that they are not the input. */
+.data-tool-coefficients[readonly] {
+    color: var(--text-secondary);
+    background-color: color-mix(in srgb, var(--bg-primary) 70%, var(--border-color));
+    cursor: default;
 }
 
 /* A unit that belongs to the number beside it. Left-aligned, unlike the

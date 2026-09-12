@@ -2,9 +2,10 @@
 //
 //     a₀·y[n] = b₀·x[n] + b₁·x[n−1] + … − a₁·y[n−1] − a₂·y[n−2] − …
 //
-// which is a plain FIR when `a` is just [a₀] and an IIR otherwise. The user
-// types b and a; nothing here designs a filter, and nothing here guesses what
-// was meant.
+// which is a plain FIR when `a` is just [a₀] and an IIR otherwise. The
+// coefficients are typed by the user, or arrive as second-order sections from
+// filter-design.js; nothing here designs a filter, and nothing here guesses
+// what was meant.
 //
 // ── Why stability is a gate and not a warning ─────────────────────────────
 //
@@ -257,6 +258,146 @@ export function inspectFilter(rawB, rawA) {
     };
 }
 
+// ── Second-order sections ─────────────────────────────────────────────────
+//
+// A DESIGNED filter (filter-design.js) arrives as a cascade of second-order
+// sections rather than one polynomial: at order 8 with a cut-off far below
+// Nyquist the single polynomial's rounding alone can push a pole across the
+// unit circle, while each section holds its own pole pair exactly. The cascade
+// is run section by section, each with its own state, and everything else —
+// the stability gate, the initial conditions, the gap policy — is the same
+// machinery applied per section.
+
+export const SOS_MAX_SECTIONS = 32;
+
+/**
+ * Sections as the recursion wants them: [{ b: Float64Array(3), a: Float64Array(3) }]
+ * with a₀ = 1 in every section.
+ * @throws {DataToolError} when the list cannot describe a filter at all.
+ */
+export function normalizeSos(rawSos) {
+    if (!Array.isArray(rawSos) || !rawSos.length) throw new DataToolError('dataToolFilterEmpty');
+    if (rawSos.length > SOS_MAX_SECTIONS) throw new DataToolError('dataToolFilterTooLong');
+    return rawSos.map(row => {
+        const values = Array.from(row || [], Number);
+        if (values.length !== 6 || !values.every(Number.isFinite)) throw new DataToolError('dataToolFilterNotNumeric');
+        const scale = values[3];
+        if (!(Math.abs(scale) > 0)) throw new DataToolError('dataToolFilterLeadingZero');
+        return {
+            b: Float64Array.from([values[0] / scale, values[1] / scale, values[2] / scale]),
+            a: Float64Array.from([1, values[4] / scale, values[5] / scale]),
+        };
+    });
+}
+
+/** Expand a cascade into one b/a pair — for display, never for running. */
+export function sosToTransferFunction(rawSos) {
+    const sections = normalizeSos(rawSos);
+    const multiply = (p, q) => {
+        const out = new Array(p.length + q.length - 1).fill(0);
+        for (let i = 0; i < p.length; i++) for (let j = 0; j < q.length; j++) out[i + j] += p[i] * q[j];
+        return out;
+    };
+    let b = [1];
+    let a = [1];
+    for (const section of sections) {
+        b = multiply(b, Array.from(section.b));
+        a = multiply(a, Array.from(section.a));
+    }
+    // A first-order section carries a zero third coefficient; the product then
+    // ends in a zero that says nothing about the filter and would inflate the
+    // reported order.
+    while (b.length > 1 && b[b.length - 1] === 0 && a[a.length - 1] === 0) { b.pop(); a.pop(); }
+    return { b, a };
+}
+
+/** Poles of one section, exactly, from the quadratic formula. */
+function sectionPoles(a) {
+    const a1 = a[1];
+    const a2 = a[2];
+    if (a2 === 0) {
+        if (a1 === 0) return [];
+        return [{ re: -a1, im: 0, r: Math.abs(a1) }];
+    }
+    const disc = a1 * a1 - 4 * a2;
+    if (disc >= 0) {
+        const root = Math.sqrt(disc);
+        return [(-a1 + root) / 2, (-a1 - root) / 2].map(re => ({ re, im: 0, r: Math.abs(re) }));
+    }
+    const re = -a1 / 2;
+    const im = Math.sqrt(-disc) / 2;
+    const r = Math.hypot(re, im);
+    return [{ re, im, r }, { re, im: -im, r }];
+}
+
+/**
+ * The verdict on a cascade — the same shape inspectFilter returns, so the panel
+ * reads either without caring which it was given.
+ */
+export function inspectSos(rawSos) {
+    const sections = normalizeSos(rawSos);
+    let stable = true;
+    let maxReflection = 0;
+    let maxRadius = 0;
+    let dcGain = 1;
+    let order = 0;
+    const poles = [];
+    for (const { b, a } of sections) {
+        const verdict = schurCohnStable(a);
+        if (!verdict.stable) stable = false;
+        maxReflection = Math.max(maxReflection, verdict.maxReflection);
+        for (const pole of sectionPoles(a)) {
+            poles.push(pole);
+            if (pole.r > maxRadius) maxRadius = pole.r;
+        }
+        const numerator = b[0] + b[1] + b[2];
+        const denominator = a[0] + a[1] + a[2];
+        dcGain *= Math.abs(denominator) > 1e-300 ? numerator / denominator : Infinity;
+        order += sectionOrder(b, a);
+    }
+    poles.sort((p, q) => q.r - p.r);
+    const { b, a } = sosToTransferFunction(rawSos);
+    return {
+        b: Float64Array.from(b),
+        a: Float64Array.from(a),
+        sections,
+        order,
+        denominatorOrder: order,
+        numeratorOrder: order,
+        stable,
+        maxReflection,
+        maxPoleRadius: maxRadius,
+        poles,
+        dcGain,
+        code: stable ? '' : 'dataToolFilterUnstable',
+    };
+}
+
+function sectionOrder(b, a) {
+    for (let k = b.length - 1; k >= 1; k--) if (b[k] !== 0 || a[k] !== 0) return k;
+    return 0;
+}
+
+/**
+ * The cascade a run uses, from whichever form the params carry. A `sos` list
+ * takes precedence over b/a: a designed filter stores both, and the polynomial
+ * is the one that must never run.
+ * @returns {Array<{ b: Float64Array, a: Float64Array }>}
+ */
+function resolveSections(params) {
+    if (Array.isArray(params.sos) && params.sos.length) {
+        const inspection = inspectSos(params.sos);
+        if (!inspection.stable) throw new DataToolError('dataToolFilterUnstable');
+        return inspection.sections;
+    }
+    const inspection = inspectFilter(params.b, params.a);
+    // Belt and braces: the panel refuses an unstable filter before ever getting
+    // here, and so does this, because the kernel is also reachable from a
+    // restored session whose coefficients were saved before this check existed.
+    if (!inspection.stable) throw new DataToolError('dataToolFilterUnstable');
+    return [{ b: inspection.b, a: inspection.a }];
+}
+
 // ── Running the filter ────────────────────────────────────────────────────
 
 /**
@@ -323,20 +464,36 @@ function solveLinear(matrix, rhs) {
     return out;
 }
 
-/** Direct form II transposed, over a plain array. `state` is modified in place. */
-function lfilter(b, a, input, state, reverse = false) {
+/**
+ * Direct form II transposed through a cascade, over a plain array. Each entry of
+ * `states` is one section's state and is modified in place. A single section of
+ * arbitrary order (the typed b/a) and a chain of second-order sections (a
+ * designed filter) are the same loop: the output of one section is the input
+ * of the next.
+ */
+function runCascade(sections, states, input, reverse = false) {
     const n = input.length;
-    const order = state.length;
     const out = new Float64Array(n);
     for (let step = 0; step < n; step++) {
         const index = reverse ? n - 1 - step : step;
-        const x = input[index];
+        out[index] = stepCascade(sections, states, input[index]);
+    }
+    return out;
+}
+
+/** One sample through every section. */
+function stepCascade(sections, states, sample) {
+    let x = sample;
+    for (let s = 0; s < sections.length; s++) {
+        const { b, a } = sections[s];
+        const state = states[s];
+        const order = state.length;
         const y = b[0] * x + (order ? state[0] : 0);
         for (let i = 0; i < order - 1; i++) state[i] = b[i + 1] * x + state[i + 1] - a[i + 1] * y;
         if (order) state[order - 1] = b[order] * x - a[order] * y;
-        out[index] = y;
+        x = y;
     }
-    return out;
+    return x;
 }
 
 // Odd reflection about the endpoint: 2·y[0] − y[k]. Continuous in value and in
@@ -385,26 +542,53 @@ export function stateFromPastSamples(b, a, xPast = [], yPast = []) {
 }
 
 /**
- * The state a run starts from, under the caller's chosen convention.
- * @param {Float64Array} zi steady-state solution for a unit step
+ * Steady-state initial conditions for a whole cascade, i.e. scipy's
+ * `sosfilt_zi`: each section's unit-step state, scaled by the DC gain of every
+ * section before it, because that is the level a constant input has reached by
+ * the time it arrives there.
+ * @returns {Float64Array[]} one state per section, for a unit step
+ */
+export function cascadeInitialState(sections) {
+    let level = 1;
+    return sections.map(({ b, a }) => {
+        const zi = filterInitialState(b, a);
+        for (let i = 0; i < zi.length; i++) zi[i] *= level;
+        let numerator = 0;
+        let denominator = 0;
+        for (let i = 0; i < b.length; i++) { numerator += b[i]; denominator += a[i]; }
+        level *= Math.abs(denominator) > 1e-300 ? numerator / denominator : 0;
+        return zi;
+    });
+}
+
+/**
+ * The states a run starts from, under the caller's chosen convention.
+ * @param {Float64Array[]} zis steady-state solution for a unit step, per section
  * @param {number} first the run's first sample
  */
-function startingState(zi, first, init, b, a) {
-    if (init.mode === 'zero') return new Float64Array(zi.length);
+function startingStates(zis, first, init, sections) {
+    if (init.mode === 'zero') return zis.map(zi => new Float64Array(zi.length));
     if (init.mode === 'level') {
-        // `zi` is the state for a unit step, so scaling it by the level gives
+        // `zis` is the state for a unit step, so scaling it by the level gives
         // the state for a step of that height — the same arithmetic `steady`
         // does, with the height named rather than taken from the data.
         const level = Number(init.state?.[0]);
-        return Float64Array.from(zi, value => value * (Number.isFinite(level) ? level : first));
+        const scale = Number.isFinite(level) ? level : first;
+        return zis.map(zi => Float64Array.from(zi, value => value * scale));
     }
-    if (init.mode === 'past') {
-        const order = zi.length;
+    // Past samples describe the filter as a whole — x and y at its outer
+    // terminals — which pins down the state of a SINGLE section exactly and of a
+    // cascade not at all (the signals between sections are unknown). The panel
+    // never offers this convention for a designed filter; a stored definition
+    // that carries it anyway is read as steady state.
+    if (init.mode === 'past' && sections.length === 1) {
+        const { b, a } = sections[0];
+        const order = zis[0].length;
         // Length is validated in the panel; a short list is padded with zeros
         // here rather than throwing, so a stored definition always reopens.
-        return stateFromPastSamples(b, a, (init.state || []).slice(0, order), (init.state || []).slice(order));
+        return [stateFromPastSamples(b, a, (init.state || []).slice(0, order), (init.state || []).slice(order))];
     }
-    return Float64Array.from(zi, value => value * first);
+    return zis.map(zi => Float64Array.from(zi, value => value * first));
 }
 
 export function normalizeFilterInit(params = {}) {
@@ -419,16 +603,18 @@ export function normalizeFilterInit(params = {}) {
 // distortion cancels exactly and a feature stays where it was. The price is a
 // doubled magnitude response (the filter is applied twice) and a non-causal
 // result, which is fine for a file that has already been recorded.
-function filterSegmentZeroPhase(b, a, segment, zi) {
+function filterSegmentZeroPhase(sections, zis, segment) {
     const n = segment.length;
     if (n < 2) return copyFloat64(segment);
-    const padLength = Math.min(3 * Math.max(1, zi.length), n - 1);
+    let totalOrder = 0;
+    for (const zi of zis) totalOrder += zi.length;
+    const padLength = Math.min(3 * Math.max(1, totalOrder), n - 1);
     const extended = padLength > 0 ? oddExtend(segment, padLength) : copyFloat64(segment);
 
-    const forwardState = Float64Array.from(zi, value => value * extended[0]);
-    const forward = lfilter(b, a, extended, forwardState);
-    const backwardState = Float64Array.from(zi, value => value * forward[forward.length - 1]);
-    const backward = lfilter(b, a, forward, backwardState, true);
+    const forwardStates = zis.map(zi => Float64Array.from(zi, value => value * extended[0]));
+    const forward = runCascade(sections, forwardStates, extended, false);
+    const backwardStates = zis.map(zi => Float64Array.from(zi, value => value * forward[forward.length - 1]));
+    const backward = runCascade(sections, backwardStates, forward, true);
     return backward.slice(padLength, padLength + n);
 }
 
@@ -476,7 +662,8 @@ function expectedBetween(axis, from, to) {
 }
 
 /**
- * Filter a series.
+ * Filter a series, through either the typed b/a or — when `params.sos` is
+ * given — a cascade of second-order sections.
  *
  * Non-finite samples stay non-finite — a single NaN inside an IIR recursion
  * enters the state and every sample after it is NaN for the rest of the file.
@@ -499,19 +686,13 @@ function expectedBetween(axis, from, to) {
  */
 export function applyFilter(sourceValues, params = {}) {
     const mode = FILTER_MODES.has(params.mode) ? params.mode : 'forward';
-    const inspection = inspectFilter(params.b, params.a);
-    // Belt and braces: the panel refuses an unstable filter before ever getting
-    // here, and so does this, because the kernel is also reachable from a
-    // restored session whose coefficients were saved before this check existed.
-    if (!inspection.stable) throw new DataToolError('dataToolFilterUnstable');
-
-    const { b, a } = inspection;
+    const sections = resolveSections(params);
     const init = normalizeFilterInit(params);
     const tolerance = normalizeFilterRestartGap(params.restartGap);
     const values = asFloat64(sourceValues);
     const n = values.length;
     const out = new Float64Array(n).fill(NaN);
-    const zi = filterInitialState(b, a);
+    const zis = cascadeInitialState(sections);
     const axis = filterAxis(values, params.time);
 
     const report = {
@@ -534,7 +715,7 @@ export function applyFilter(sourceValues, params = {}) {
             if (!Number.isFinite(values[i])) { report.skippedCount++; i++; continue; }
             let end = i;
             while (end < n && Number.isFinite(values[end])) end++;
-            out.set(filterSegmentZeroPhase(b, a, values.subarray(i, end), zi), i);
+            out.set(filterSegmentZeroPhase(sections, zis, values.subarray(i, end)), i);
             report.segments++;
             report.restarts++;
             report.filteredCount += end - i;
@@ -543,24 +724,20 @@ export function applyFilter(sourceValues, params = {}) {
         return report;
     }
 
-    const order = zi.length;
-    let state = null;
+    let states = null;
     let lastValid = -1;
     for (let i = 0; i < n; i++) {
         const x = values[i];
         if (!Number.isFinite(x)) { report.skippedCount++; continue; }
         const hole = lastValid < 0 ? 0 : expectedBetween(axis, lastValid, i);
-        if (state === null || hole > tolerance) {
-            state = startingState(zi, x, init, b, a);
+        if (states === null || hole > tolerance) {
+            states = startingStates(zis, x, init, sections);
             report.restarts++;
             report.segments++;
         } else if (hole > 0) {
             report.carriedBreaks++;
         }
-        const y = b[0] * x + (order ? state[0] : 0);
-        for (let k = 0; k < order - 1; k++) state[k] = b[k + 1] * x + state[k + 1] - a[k + 1] * y;
-        if (order) state[order - 1] = b[order] * x - a[order] * y;
-        out[i] = y;
+        out[i] = stepCascade(sections, states, x);
         report.filteredCount++;
         lastValid = i;
     }

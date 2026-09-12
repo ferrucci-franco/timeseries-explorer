@@ -418,11 +418,105 @@
 
                         <div class="data-tool-controls collapsed" data-tool-kind="filter">
                             <div class="data-tool-label-row data-tool-group-row first">
-                                <span class="options-subgroup-label" data-i18n="dataToolFilterCoefficients">Coefficients</span>
+                                <label class="options-subgroup-label" for="filter-source" data-i18n="dataToolFilterCoefficients">Coefficients</label>
                                 <button id="filter-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Digital filter help" data-i18n-title="dataToolFilterHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-help-popover">
                                     <span>?</span>
                                 </button>
                             </div>
+                            <select id="filter-source" class="data-tool-select">
+                                <option value="design" selected data-i18n="dataToolFilterSourceDesign">Design from a specification</option>
+                                <option value="manual" data-i18n="dataToolFilterSourceManual">Type b and a</option>
+                            </select>
+
+                            <!-- The designed filter: family, response, order and cut-off in the
+                                 data's own frequency unit. The sample rate is read off the time
+                                 axis, never typed — a cut-off in Hz is only meaningful against
+                                 the rate the data was actually recorded at. -->
+                            <div id="filter-design-wrap">
+                                <div class="data-tool-label-row">
+                                    <label class="options-subgroup-label data-tool-sublabel" for="filter-design-family" data-i18n="dataToolFilterDesignFamily">Family</label>
+                                    <button id="filter-design-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Filter design help" data-i18n-title="dataToolFilterDesignHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-design-help-popover">
+                                        <span>?</span>
+                                    </button>
+                                </div>
+                                <select id="filter-design-family" class="data-tool-select">
+                                    <option value="butterworth" selected data-i18n="dataToolFilterDesignButterworth">Butterworth (maximally flat)</option>
+                                    <option value="chebyshev1" data-i18n="dataToolFilterDesignChebyshev1">Chebyshev I (passband ripple)</option>
+                                    <option value="chebyshev2" data-i18n="dataToolFilterDesignChebyshev2">Chebyshev II (stopband ripple)</option>
+                                    <option value="bessel" data-i18n="dataToolFilterDesignBessel">Bessel (linear phase)</option>
+                                </select>
+                                <label class="options-subgroup-label data-tool-sublabel" for="filter-design-response" data-i18n="dataToolFilterDesignResponse">Response</label>
+                                <select id="filter-design-response" class="data-tool-select">
+                                    <option value="lowpass" selected data-i18n="dataToolFilterDesignLowpass">Low-pass</option>
+                                    <option value="highpass" data-i18n="dataToolFilterDesignHighpass">High-pass</option>
+                                    <option value="bandpass" data-i18n="dataToolFilterDesignBandpass">Band-pass</option>
+                                    <option value="bandstop" data-i18n="dataToolFilterDesignBandstop">Band-stop (notch)</option>
+                                </select>
+                                <div class="data-tool-label-row">
+                                    <label class="options-subgroup-label data-tool-sublabel" for="filter-design-order-slider" data-i18n="dataToolFilterDesignOrder">Order</label>
+                                    <span id="filter-design-order-value" class="data-tool-slider-value">4</span>
+                                </div>
+                                <div class="data-tool-slider-row">
+                                    <input id="filter-design-order-slider" class="data-tool-slider" type="range" min="1" max="12" step="1" value="4">
+                                    <input id="filter-design-order" class="derived-input data-tool-number-input" type="number" min="1" max="12" step="1" value="4">
+                                </div>
+                                <label id="filter-design-cutoff-label" class="options-subgroup-label data-tool-sublabel" for="filter-design-cutoff" data-i18n="dataToolFilterDesignCutoff">Cut-off frequency</label>
+                                <div class="data-tool-slider-row unit-row">
+                                    <input id="filter-design-cutoff" class="derived-input data-tool-number-input" type="number" min="0" step="any" placeholder="e.g. 10">
+                                    <span id="filter-design-cutoff-unit" class="data-tool-unit-suffix">Hz</span>
+                                </div>
+                                <div id="filter-design-cutoff-high-wrap" class="collapsed">
+                                    <label class="options-subgroup-label data-tool-sublabel" for="filter-design-cutoff-high" data-i18n="dataToolFilterDesignCutoffHigh">Upper cut-off frequency</label>
+                                    <div class="data-tool-slider-row unit-row">
+                                        <input id="filter-design-cutoff-high" class="derived-input data-tool-number-input" type="number" min="0" step="any" placeholder="e.g. 50">
+                                        <span id="filter-design-cutoff-high-unit" class="data-tool-unit-suffix">Hz</span>
+                                    </div>
+                                </div>
+                                <div id="filter-design-ripple-wrap" class="collapsed">
+                                    <label class="options-subgroup-label data-tool-sublabel" for="filter-design-ripple" data-i18n="dataToolFilterDesignRipple">Passband ripple</label>
+                                    <div class="data-tool-slider-row unit-row">
+                                        <input id="filter-design-ripple" class="derived-input data-tool-number-input" type="number" min="0.01" max="30" step="any" value="1">
+                                        <span class="data-tool-unit-suffix">dB</span>
+                                    </div>
+                                </div>
+                                <div id="filter-design-attenuation-wrap" class="collapsed">
+                                    <label class="options-subgroup-label data-tool-sublabel" for="filter-design-attenuation" data-i18n="dataToolFilterDesignAttenuation">Stopband attenuation</label>
+                                    <div class="data-tool-slider-row unit-row">
+                                        <input id="filter-design-attenuation" class="derived-input data-tool-number-input" type="number" min="1" max="150" step="any" value="40">
+                                        <span class="data-tool-unit-suffix">dB</span>
+                                    </div>
+                                </div>
+                                <div id="filter-design-rate" class="data-tool-resample-info"></div>
+                            </div>
+
+                            <div id="filter-design-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-design-help-title" hidden>
+                                <div class="derived-help-title" id="filter-design-help-title" data-i18n="dataToolFilterDesignHelpTitle">Filter design help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterDesignHelpWhatLabel">What it does</span>
+                                    <span data-i18n-rich="dataToolFilterDesignHelpWhat">Turns a specification — family, response, order and cut-off — into the coefficients below, the way MATLAB’s **butter** / **cheby1** / **cheby2** / **besself** and scipy’s **iirfilter** do. The families are the classic analog designs; since the data is sampled, the analog prototype is discretised with the **bilinear transform**, pre-warped so the digital filter lands exactly on the cut-off you typed. The coefficients are written into **b** and **a** so you can copy them into another tool.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterDesignHelpFamilyLabel">Family</span>
+                                    <span data-i18n-rich="dataToolFilterDesignHelpButterworth">**Butterworth** — no ripple anywhere: the passband is as flat as an all-pole filter can be, and the roll-off is gentle. The default, and the right choice unless you know why not.</span>
+                                    <span data-i18n-rich="dataToolFilterDesignHelpChebyshev1">**Chebyshev I** — a sharper transition than Butterworth at the same order, paid for with ripple in the passband of the depth you set. The cut-off is where the ripple band ends, so the gain there is −(ripple) dB, not −3 dB.</span>
+                                    <span data-i18n-rich="dataToolFilterDesignHelpChebyshev2">**Chebyshev II** — the same sharpness with the ripple moved into the stopband, so the passband stays flat. The cut-off is where the stopband **begins**: the frequency at which the attenuation you set is first reached.</span>
+                                    <span data-i18n-rich="dataToolFilterDesignHelpBessel">**Bessel** — the flattest group delay: every frequency in the passband is delayed by about the same amount, so pulses and steps keep their shape instead of ringing. The slowest roll-off of the four. Normalised so the gain is −3 dB at the cut-off.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterDesignHelpOrderLabel">Order</span>
+                                    <span data-i18n-rich="dataToolFilterDesignHelpOrder">How many poles the prototype has, and so how steep the roll-off is: a Butterworth falls by about **20·N dB per decade** beyond the cut-off. A band-pass or band-stop of order N is a digital filter of order 2N, because every prototype pole becomes two. Higher orders sharpen the edge and lengthen the transient; 2 to 6 covers most needs.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterDesignHelpRateLabel">Sample rate and Nyquist</span>
+                                    <span data-i18n-rich="dataToolFilterDesignHelpRate">The sample rate is read off the file’s time axis (1 / median Δt) and shown below the fields. A cut-off must sit below **half** of it — nothing above Nyquist exists in sampled data. With no time axis the rate is one sample per sample and the cut-off is entered in cycles per sample, between 0 and 0.5.</span>
+                                    <span data-i18n-rich="dataToolFilterDesignHelpIrregular">**An irregular Δt refuses the design.** A cut-off in hertz means nothing on data whose samples are not evenly spaced, so the panel will not design a filter for it; resample to a uniform grid first. (Typing b and a still works there — a filter is defined per sample — but its cut-off is then not a frequency.)</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterDesignHelpRunsLabel">How it runs</span>
+                                    <span data-i18n-rich="dataToolFilterDesignHelpRuns">A designed filter runs as a cascade of **second-order sections**, never as the single polynomial shown in b and a. At order 8 with a cut-off far below Nyquist the polynomial’s own rounding puts a pole outside the unit circle; the sections keep every pole exactly. The b and a boxes are for reading and copying. With **Forward and back** the response is applied twice, so a −3 dB cut-off becomes −6 dB and the effective order doubles.</span>
+                                </div>
+                            </div>
+
                             <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-b" data-i18n="dataToolFilterB">b (numerator)</label>
                             <div class="data-tool-input-overflow">
                                 <input id="filter-b" class="derived-input data-tool-coefficients" type="text" autocomplete="off" spellcheck="false" value="0.25" placeholder="1, 0.5" data-i18n-placeholder="dataToolFilterBPlaceholder">

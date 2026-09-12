@@ -10,12 +10,13 @@ import { computeIntegral } from './integral.js';
 import { computeMovingAverage } from './moving-average.js';
 import { fillMissingValues } from './interpolate.js';
 import { computeDetrend } from './detrend.js';
-import { applyFilter, inspectFilter } from './iir.js';
+import { applyFilter, inspectFilter, inspectSos } from './iir.js';
+import { designFilter } from './filter-design.js';
 import { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN } from './outliers.js';
 import { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep } from './regrid.js';
 
 export { computeDerivative, computeIntegral, computeMovingAverage, fillMissingValues };
-export { computeDetrend, applyFilter, inspectFilter };
+export { computeDetrend, applyFilter, inspectFilter, inspectSos, designFilter };
 // The Integral analysis mode's scalar total. Not a Data Tools step — it creates
 // no variable — but it belongs to the same pure-kernel family and is re-exported
 // here so callers have one import site for the compute layer.
@@ -115,6 +116,8 @@ export function runDataToolStep(values, time, step) {
                     mode: params.mode,
                     b: params.b,
                     a: params.a,
+                    sos: params.sos,
+                    design: params.design,
                     init: params.init,
                     initState: params.initState,
                     restartGap: params.restartGap,

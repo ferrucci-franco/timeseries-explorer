@@ -248,8 +248,13 @@ away.
   through its CSV bytes. Storing the recipe and regenerating on restore would be
   cheaper on disk, and is a follow-up.
 - **No frequency-domain resampling** (sinc / polyphase). `mean` covers the
-  anti-aliasing that matters for inspection; a proper FIR decimator is a bigger
-  feature with its own filter-design controls.
+  anti-aliasing that matters for inspection. The filter tool can now *design* an
+  IIR low-pass (§9), but the resampler does not call it: a decimator that
+  filters and then picks every k-th sample is still a follow-up.
+- **No elliptic (Cauer) family and no response plot** in the filter designer.
+  Both were considered and deferred: the elliptic prototype needs Jacobi
+  elliptic functions, and a live |H(f)| plot in the sidebar is a feature of its
+  own.
 - **Nothing for lazy DuckDB files.** Both tools need the values, and a lazy file
   holds column references. Same restriction the derivative and integral already
   carry.
@@ -272,6 +277,15 @@ away.
   filter (coefficient parsing, Schur–Cohn cross-checked against root finding on
   eight denominators, unit-circle poles, steady-state initialisation, zero-phase
   symmetry, and per-run restart at a hole).
+- `scripts/test-filter-design.mjs` — the designer: MATLAB's `butter` coefficients
+  to the printed digits, the textbook Chebyshev and Bessel prototype poles, and
+  for every family × response × six orders the property each family promises
+  (−3 dB / −ripple / −attenuation at the cut-off, DC and Nyquist passed or
+  stopped, the passband within bounds, the stopband below the attenuation);
+  the section cascade against the b/a path where both are sound, and the
+  order-8 case where only the cascade is; the panel's sample-rate reading on
+  seconds, milliseconds, calendar, index and irregular axes; every refusal
+  code; and the session round-trip of a designed definition.
 
 ## 9. Detrend and the digital filter
 
@@ -305,10 +319,18 @@ makes a detrend checkable, since the result looks trendless either way.
 
 ### Digital filter
 
-`a₀·y[n] = b₀·x[n] + b₁·x[n−1] + … − a₁·y[n−1] − …`, coefficients typed in.
-Nothing designs a filter and nothing guesses. Both boxes accept commas, spaces,
-newlines and MATLAB/NumPy brackets, because coefficients are pasted far more
-often than typed.
+`a₀·y[n] = b₀·x[n] + b₁·x[n−1] + … − a₁·y[n−1] − …`. The coefficients come from
+one of two places, chosen at the top of the panel:
+
+- **Design from a specification** (the default) — family, response, order and
+  cut-off; see *Designing a filter* below.
+- **Type b and a** — the coefficients as they are. Nothing guesses. Both boxes
+  accept commas, spaces, newlines and MATLAB/NumPy brackets, because
+  coefficients are pasted far more often than typed.
+
+Everything past that point — direction, initial conditions, the gap policy,
+the stability gate, the preview, the table, sessions — is one tool whichever
+way the coefficients arrived.
 
 **Stability is a gate, not a warning** — the point of the feature. An IIR filter
 feeds its own output back; with a pole on or outside the unit circle the output
@@ -351,3 +373,72 @@ Two more decisions worth naming:
 padding, so nothing shifts in time, at the cost of applying the magnitude
 response twice. Verified against a symmetric bump: forward moves its peak 15
 samples later, zero phase leaves it exactly where it was.
+
+### Designing a filter
+
+Issue #62 asked for the classic families with the user choosing type, order and
+cut-off in hertz. The kernel is `src/compute/kernels/filter-design.js`; it takes
+the textbook route, which is also MATLAB's (`butter`, `cheby1`, `cheby2`,
+`besself`) and scipy's (`iirfilter`):
+
+1. an **analog low-pass prototype** at 1 rad/s — Butterworth, Chebyshev I
+   (passband ripple in dB), Chebyshev II (stopband attenuation in dB), or Bessel
+   (roots of the reverse Bessel polynomial, found by Durand–Kerner with a Newton
+   polish, then normalised so the magnitude is −3 dB at the cut-off, as a user
+   who types a cut-off frequency expects);
+2. the **analog frequency transformation** to low-pass, high-pass, band-pass or
+   band-stop, in zero-pole-gain form;
+3. the **bilinear transform**, with the cut-off(s) pre-warped so the digital
+   filter lands exactly on the frequency typed.
+
+So "analog filter" is what the families are — the shape of the response — while
+what runs is necessarily digital: the data is sampled. The help popover says
+this in as many words.
+
+**Sample rate.** Read off the source variable's time axis, never typed:
+1 / median Δt, through the same `detectSamplingGaps` the integral and the gap
+policy use. The cut-off's unit follows from the axis — hertz for a calendar
+axis or a numeric axis whose declared unit is a time unit (`s`, `ms`, `min`,
+`h`…), cycles per sample for an index axis (Nyquist 0.5), and "cycles per
+*unit*" when the file declared something else. A cut-off at or above Nyquist
+is refused with Nyquist spelled out.
+
+**An irregular axis refuses the design.** This is the one place the two
+coefficient sources differ. A typed b/a is defined per sample, so the manual
+tool runs on an irregular axis and merely warns that its cut-off is not a
+frequency. A *designed* filter is a cut-off in hertz and nothing else, and on
+unevenly spaced samples that describes nothing — so the panel does not design
+one: the Create buttons go dead, the summary names the reason and points at
+the resampler, and reading the config throws (same contract as the stability
+gate). Isolated dropped samples on an otherwise uniform axis are not
+"irregular"; they are handled by the gap policy as before.
+
+**Second-order sections.** A designed filter of order 8 with a cut-off at
+fs/1000 has every pole crowded near z = 1. As one polynomial the coefficients
+need more precision than a double carries: rounding alone moves a pole across
+the unit circle and Schur–Cohn — rightly — refuses the filter the user asked
+for in good faith. `test-filter-design.mjs` demonstrates exactly this: the
+expanded polynomial of that design fails `inspectFilter`, the same design as
+sections passes `inspectSos`, and a constant goes through it unchanged. So the
+kernel factors the design into second-order sections (poles nearest the unit
+circle paired with the nearest zeros and placed last, as scipy's `zpk2sos`
+does) and `applyFilter` runs the cascade section by section, with one state per
+section. Steady-state initialisation propagates the level through each
+section's DC gain (scipy's `sosfilt_zi`); the gap policy and zero-phase padding
+are unchanged. The expanded b and a are still produced — they are written into
+the coefficient boxes, read-only, for reading and pasting elsewhere — but they
+never run.
+
+Two consequences follow:
+
+- *Past samples of x and y* is withdrawn for a designed filter. Past samples at
+  the outer terminals pin down the state of one section exactly and of a
+  cascade not at all (the signals between sections are unknown). The option is
+  disabled in design mode; a stored definition that carries it anyway is read
+  as steady state.
+- The stored definition carries the **sections**, the **specification** (with
+  the sample rate and unit it was designed against) and the expanded b/a. The
+  sections are what runs again on restore; the specification is what the panel
+  reopens with; a definition whose sections do not describe a cascade demotes
+  to its b/a, which is at worst the identity. A session from before this
+  feature is a manual filter, as it always was.

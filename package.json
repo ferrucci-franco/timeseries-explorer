@@ -62,6 +62,7 @@
     "test:resample-kernel": "node scripts/test-resample-kernel.mjs",
     "test:interpolate-regrid": "node scripts/test-interpolate-regrid.mjs",
     "test:detrend-filter": "node scripts/test-detrend-filter.mjs",
+    "test:filter-design": "node scripts/test-filter-design.mjs",
     "test:data-tools-sampling": "node scripts/test-data-tools-sampling.mjs",
     "test:data-tool-panel-layout": "node scripts/test-data-tool-panel-layout.mjs",
     "test:duckdb-lifecycle": "node scripts/test-duckdb-lifecycle.mjs",
