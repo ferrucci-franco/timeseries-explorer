@@ -99,8 +99,8 @@ function box(type, ...parts) {
     return Buffer.concat([head, body]);
 }
 
-function buildM4a({ timescale = 44100, channels = 2, bitDepth = 16, codec = 'mp4a' } = {}) {
-    const hdlr = box('hdlr', Buffer.alloc(8), Buffer.from('soun', 'latin1'), Buffer.alloc(12));
+function buildM4a({ timescale = 44100, channels = 2, bitDepth = 16, codec = 'mp4a', handler = 'soun', video = false, brand = 'M4A ' } = {}) {
+    const hdlr = box('hdlr', Buffer.alloc(8), Buffer.from(handler, 'latin1'), Buffer.alloc(12));
     const mdhd = (() => {
         const b = Buffer.alloc(24);
         b.writeUInt8(0, 0);                 // version 0
@@ -120,8 +120,13 @@ function buildM4a({ timescale = 44100, channels = 2, bitDepth = 16, codec = 'mp4
     const minf = box('minf', stbl);
     const mdia = box('mdia', hdlr, mdhd, minf);
     const trak = box('trak', mdia);
-    const moov = box('moov', trak);
-    const ftyp = box('ftyp', 'M4A ', Buffer.alloc(4), 'M4A mp42isom');
+    // A video track alongside the sound one, built the same way: it is only
+    // its `hdlr` that makes it video, which is the whole point.
+    const videoTrak = video
+        ? box('trak', box('mdia', box('hdlr', Buffer.alloc(8), Buffer.from('vide', 'latin1'), Buffer.alloc(12))))
+        : Buffer.alloc(0);
+    const moov = box('moov', videoTrak, trak);
+    const ftyp = box('ftyp', brand, Buffer.alloc(4), 'M4A mp42isom');
     return Buffer.concat([ftyp, moov, box('mdat', Buffer.alloc(16))]);
 }
 
@@ -300,6 +305,48 @@ check('3GP is told apart from MP4 by its brand', () => {
     const sniffed = sniffAudioFormat(file);
     assert.equal(sniffed.container, '3gp');
     assert.equal(sniffed.sampleRate, 8000);
+});
+
+check('an audio-only .mp4 is the same container as .m4a — the WhatsApp case', () => {
+    // A WhatsApp voice message downloads as `.mp4`: `audio/mp4` registers that
+    // extension, and `.m4a` is only Apple's name for the same ISO base-media
+    // file. Nothing in the bytes distinguishes them, and the sniffer never
+    // looks at the name — so the only thing that ever refused these files was
+    // the extension list.
+    const whatsapp = buildM4a({ timescale: 16000, channels: 1, brand: 'mp42' });
+    const sniffed = sniffAudioFormat(whatsapp);
+    assert.equal(sniffed.container, 'mp4');
+    assert.equal(sniffed.sampleRate, 16000);
+    assert.equal(sniffed.hasAudio, true);
+    assert.equal(sniffed.hasVideo, false);
+    assert.ok(AUDIO_EXTENSIONS.includes('.mp4'), '.mp4 is accepted as a recording');
+});
+
+check('a video track next to the sound track does not hide it', () => {
+    const sniffed = sniffAudioFormat(buildM4a({ timescale: 48000, channels: 2, video: true }));
+    assert.equal(sniffed.hasVideo, true);
+    assert.equal(sniffed.hasAudio, true);
+    assert.equal(sniffed.sampleRate, 48000, 'the sound track is still the one read');
+    assert.equal(sniffed.channels, 2);
+});
+
+await checkAsync('an .mp4 that is really video says so instead of failing to decode', async () => {
+    const movie = buildM4a({ handler: 'vide', brand: 'isom' });
+    const sniffed = sniffAudioFormat(movie);
+    assert.equal(sniffed.hasVideo, true);
+    assert.equal(sniffed.hasAudio, false);
+    await assert.rejects(
+        () => decodeAudioFile(movie, { decodeCompressed: () => { throw new Error('a video file must never reach the decoder'); } }),
+        err => err.code === 'AUDIO_NO_AUDIO_TRACK',
+    );
+
+    // An MP4 whose moov could not be read says nothing either way, and still
+    // gets the browser's own attempt: refusing it here would be guessing.
+    const unreadable = Buffer.concat([box('ftyp', 'mp42', Buffer.alloc(4), 'mp42isom'), box('mdat', Buffer.alloc(16))]);
+    const decoded = await decodeAudioFile(unreadable, {
+        decodeCompressed: (_buffer, rate) => ({ sampleRate: rate, frames: 4, channels: [new Float32Array(4)] }),
+    });
+    assert.equal(decoded.decodedBy, 'webaudio');
 });
 
 check('FLAC STREAMINFO', () => {

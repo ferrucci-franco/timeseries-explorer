@@ -113,6 +113,10 @@ export function sniffAudioFormat(buffer) {
         return { container: 'caf', label: 'CAF', codec: '', decodable: true, ...readCafHeader(bytes) };
     }
     if (matches(bytes, 4, 'ftyp')) {
+        // One container, three names: `.m4a` (Apple's), `.mp4` (the one the
+        // `audio/mp4` media type registers, and what WhatsApp voice messages
+        // are saved as) and `.3gp`. The brand separates 3GP from the rest;
+        // readMp4AudioTrack then says whether there is audio in it at all.
         const brand = fourCC(bytes, 8);
         const threeGpp = /^3g/i.test(brand);
         return {
@@ -327,19 +331,24 @@ function walkMp4Boxes(bytes, view, start, end, visit) {
     return true;
 }
 
+// Reads the first sound track of an ISO base-media file, and reports what
+// KINDS of track the file holds. The second half is what tells an audio-only
+// MP4 — a WhatsApp voice message, an iPhone voice memo — from a video someone
+// dropped on the app by mistake: both are `.mp4`, and only the track handlers
+// say which is which.
 function readMp4AudioTrack(bytes) {
     const view = viewOf(bytes);
-    const found = { sampleRate: 0, channels: 0, bitDepth: 0, codec: '' };
+    const found = { sampleRate: 0, channels: 0, bitDepth: 0, codec: '', hasAudio: false, hasVideo: false };
     walkMp4Boxes(bytes, view, 0, bytes.length, (type, start, end) => {
         if (type !== 'moov') return;
         walkMp4Boxes(bytes, view, start, end, (trackType, trackStart, trackEnd) => {
             if (trackType !== 'trak') return;
-            const track = { isAudio: false, sampleRate: 0, channels: 0, bitDepth: 0, codec: '' };
+            const track = { handler: '', sampleRate: 0, channels: 0, bitDepth: 0, codec: '' };
             walkMp4Boxes(bytes, view, trackStart, trackEnd, (mediaType, mediaStart, mediaEnd) => {
                 if (mediaType !== 'mdia') return;
                 walkMp4Boxes(bytes, view, mediaStart, mediaEnd, (t, s, e) => {
                     if (t === 'hdlr') {
-                        track.isAudio = fourCC(bytes, s + 8) === 'soun';
+                        track.handler = fourCC(bytes, s + 8);
                     } else if (t === 'mdhd') {
                         // For an audio track the media timescale IS the sample
                         // rate, and it is stored more reliably than the 16.16
@@ -362,12 +371,16 @@ function readMp4AudioTrack(bytes) {
                     }
                 });
             });
-            if (track.isAudio) {
+            if (track.handler === 'vide') found.hasVideo = true;
+            // The first sound track wins; the walk continues rather than
+            // stopping there, because whether the file ALSO has video is part
+            // of the answer and a `moov` is small enough to read out.
+            if (track.handler === 'soun' && !found.hasAudio) {
+                found.hasAudio = true;
                 found.sampleRate = track.sampleRate;
                 found.channels = track.channels;
                 found.bitDepth = track.bitDepth;
                 found.codec = track.codec;
-                return false;
             }
         });
         return false;
@@ -571,6 +584,14 @@ export async function decodeAudioFile(buffer, options = {}) {
     if (!format) throw audioError('AUDIO_UNRECOGNIZED', 'Not a recognised audio file.');
     if (format.decodable === false) {
         throw audioError('AUDIO_CODEC_UNAVAILABLE', `No decoder is available for ${format.label} audio.`, { format: format.label });
+    }
+    // A video file in an MP4 container, which is what `.mp4` usually means
+    // everywhere else. Saying so beats letting decodeAudioData fail with
+    // "Unable to decode audio data". Only when a video track was positively
+    // found and no sound track was: an MP4 whose `moov` could not be read
+    // leaves both flags false and still gets the browser's own attempt.
+    if (format.hasVideo && !format.hasAudio) {
+        throw audioError('AUDIO_NO_AUDIO_TRACK', `${format.label} file has no audio track.`, { format: format.label });
     }
 
     if (format.container === 'wav') {

@@ -35,10 +35,19 @@ export const TEXT_TABLE_EXTENSIONS = Object.freeze([
 // they are what some Android voice recorders still produce, and accepting the
 // file in order to say "no decoder for AMR — convert it to WAV" is more use
 // than refusing it as an unknown extension and leaving the user guessing.
+//
+// `.mp4` is here for the same reason `.m4a` is: it is the SAME container. An
+// audio-only MP4 is legitimately called `.mp4` — that is the extension the
+// `audio/mp4` media type registers, and `.m4a` is only Apple's convention for
+// it — so a voice message saved from WhatsApp arrives as `.mp4` holding
+// nothing but an AAC track. The sniffer reads the `ftyp` box, never the name,
+// so these files always decoded; only this list refused them. An `.mp4` that
+// does turn out to carry video is caught by the decoder, which reads the track
+// handlers and says so.
 export const AUDIO_EXTENSIONS = Object.freeze([
     '.wav', '.wave',
     '.mp3',
-    '.m4a', '.m4b', '.aac',
+    '.m4a', '.m4b', '.mp4', '.aac',
     '.flac',
     '.ogg', '.oga', '.opus',
     '.aif', '.aiff', '.aifc',
