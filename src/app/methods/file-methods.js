@@ -2066,6 +2066,7 @@ function translateAudioError(err, filename) {
     switch (err?.code) {
         case 'AUDIO_UNRECOGNIZED': return replace('audioUnrecognized');
         case 'AUDIO_CODEC_UNAVAILABLE': return replace('audioCodecUnavailable', { format: err.format || 'unknown' });
+        case 'AUDIO_NO_AUDIO_TRACK': return replace('audioNoAudioTrack');
         case 'AUDIO_NO_DECODER': return replace('audioNoDecoder');
         case 'AUDIO_EMPTY': return replace('audioEmpty');
         case 'AUDIO_DECODE_FAILED': return replace('audioDecodeFailed', { format: err.format || 'audio' });

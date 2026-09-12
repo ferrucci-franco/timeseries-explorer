@@ -7,7 +7,7 @@ const path = require('node:path');
 const AUDIO_FILE_EXTENSIONS = [
   'wav', 'wave',
   'mp3',
-  'm4a', 'm4b', 'aac',
+  'm4a', 'm4b', 'mp4', 'aac',
   'flac',
   'ogg', 'oga', 'opus',
   'aif', 'aiff', 'aifc',
@@ -34,6 +34,8 @@ const mimeTypes = new Map([
   ['.mp3', 'audio/mpeg'],
   ['.m4a', 'audio/mp4'],
   ['.m4b', 'audio/mp4'],
+  // Audio-only MP4 — what a WhatsApp voice message is saved as.
+  ['.mp4', 'audio/mp4'],
   ['.aac', 'audio/aac'],
   ['.flac', 'audio/flac'],
   ['.ogg', 'audio/ogg'],

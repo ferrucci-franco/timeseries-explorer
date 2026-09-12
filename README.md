@@ -141,11 +141,17 @@ More detail: [docs/feedback.md](docs/feedback.md)
 
 Recordings open as one signal per channel (`Mono`, or `Left`/`Right`) on a time
 axis in elapsed seconds, built from the file's own sample rate. Accepted:
-`.wav`, `.mp3`, `.m4a`, `.m4b`, `.aac`, `.flac`, `.ogg`, `.oga`, `.opus`,
-`.aif`, `.aiff`, `.aifc`, `.caf`, `.3gp`, `.3gpp`, `.amr`, `.webm`, `.weba` —
-which covers phone voice memos (iPhone `.m4a`; Android `.m4a`, `.3gp`,
-`.webm`). A `Recording` node in the variable tree carries the sample rate,
+`.wav`, `.mp3`, `.m4a`, `.m4b`, `.mp4`, `.aac`, `.flac`, `.ogg`, `.oga`,
+`.opus`, `.aif`, `.aiff`, `.aifc`, `.caf`, `.3gp`, `.3gpp`, `.amr`, `.webm`,
+`.weba` — which covers phone voice memos (iPhone `.m4a`; Android `.m4a`,
+`.3gp`, `.webm`) and WhatsApp voice messages, which download as an audio-only
+`.mp4`. A `Recording` node in the variable tree carries the sample rate,
 channel count, duration and format.
+
+`.mp4` and `.m4a` are the same ISO base-media container under two names, so
+nothing decodes differently between them; an `.mp4` that turns out to carry a
+video track and no sound track is refused with a message that says exactly
+that, instead of a generic decode failure.
 
 WAV is decoded by `src/parsers/audio-decode.js` itself (PCM 8/16/24/32-bit,
 32/64-bit float, and G.711 A-law/mu-law), so it works with no audio engine
