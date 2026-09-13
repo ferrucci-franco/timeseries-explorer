@@ -1181,9 +1181,12 @@
     box-sizing: border-box;
     min-width: 4.8rem;
     padding-left: 0.35rem;
-    /* No right padding: the stepper is anchored to the field's inner edge below,
-       and padding here is what left a gap between the arrows and the border. */
-    padding-right: 0;
+    /* A little air between the number and whatever sits to its right — the
+       stepper, or the border when the stepper is hidden. The stepper itself is
+       pulled back into this padding below, so it still sits flush against the
+       border and the gap is between the digits and the arrows, not between the
+       arrows and the edge. */
+    padding-right: 0.35rem;
     text-align: right;
     font-variant-numeric: tabular-nums;
     color-scheme: light;
@@ -1197,7 +1200,7 @@
 .data-tool-number-input::-webkit-inner-spin-button,
 .data-tool-number-input::-webkit-outer-spin-button {
     height: 100%;
-    margin: 0;
+    margin: 0 -0.35rem 0 0;
     align-self: stretch;
     opacity: 1;
     cursor: pointer;
@@ -1291,6 +1294,54 @@
 .tree-derived-remove:hover {
     background-color: var(--hover-bg);
     color: var(--danger-color);
+}
+
+/* A derived dataset's row in its source's tree: the name of a file, followed by
+   what one does with a dataset — edit its recipe, save it to disk, close it.
+   Same footprint as the derived-variable remove button so the rows line up. */
+.derived-dataset-item .tree-label {
+    font-weight: 600;
+}
+
+.tree-dataset-action {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    padding: 0;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.75rem;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.tree-dataset-action + .tree-dataset-action {
+    margin-left: 2px;
+}
+
+.tree-dataset-action svg {
+    width: 12px;
+    height: 12px;
+    fill: currentColor;
+}
+
+.tree-dataset-action:hover {
+    background-color: var(--hover-bg);
+    color: var(--text-primary);
+}
+
+.tree-dataset-remove:hover {
+    color: var(--danger-color);
+}
+
+/* The dataset rows of the transformations table name a file, not a variable. */
+.data-tool-row-dataset .data-tool-row-flow {
+    font-weight: 600;
 }
 
 /* Layout Config */

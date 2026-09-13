@@ -170,23 +170,25 @@ overlay on one panel when their axes are compatible (which they are — same
 semantics, same unit), the incompatible-axis guard catches it when they are not,
 and per-trace CSV export already emits one time column per trace.
 
-That choice has three consequences, all deliberate:
+That choice has consequences, all deliberate:
 
 - **The whole file is resampled**, not one variable. A dataset with one column on
   the new grid and the rest left behind is not a dataset. The picker still lets
   you narrow it to a single variable. Parameters (constants) are copied through
   untouched; strings, booleans and variables whose length does not match the
   abscissa are left out.
-- **No Transformations row.** That table lists variables of the current file, and
-  this is not one. Re-running under the same file name rewrites that file in
-  place, which is the edit story; a different name makes a second file.
-- **The file has to be able to serialize itself.** Saving a *project* session
-  reads bytes for every open file, and a computed dataset has none — which
-  aborted the whole save. The entry therefore carries a lazy
-  `syntheticBytes()` that renders the dataset as CSV on demand
-  ([session-methods.js](../src/app/methods/session-methods.js)), so a project
-  session saves it and reloads it through the ordinary CSV path. Lazily, because
-  a multi-million-sample grid should not become a string until something asks.
+- **The file is a derived dataset** (§5c): it carries its recipe, is listed
+  under its source, has a Transformations row, is edited in place, follows a
+  reload of the source and is saved to a session as that recipe. Re-running
+  under the same file name still rewrites that file in place; a different name
+  makes a second dataset.
+- **The file can still serialize itself.** The entry carries a lazy
+  `syntheticBytes()` that renders the dataset as CSV on demand, which is what
+  the *save to disk* button writes. A project session no longer needs it — the
+  recipe is what gets saved — but an orphaned dataset (its source closed out
+  from under it in an older session) is still a plain file with bytes. Lazily,
+  because a multi-million-sample grid should not become a string until
+  something asks.
 
 ### 5b. Saying that the file is not on disk
 
@@ -227,6 +229,63 @@ the top of both reload entry points (`reloadActiveFile` and
 `reloadActiveFileAsNewVersion`) while the reason is still known, and names the
 way forward: write it out, then open that CSV like any other file and close this
 copy. If a copy already exists the advice skips straight to opening it.
+
+### 5c. Derived datasets
+
+A resampled file used to be an orphan: it knew which file it came from and
+nothing else. Changing the Δt meant filling the form again and typing the same
+name; a view session lost it; a project session stored its rows. The user's
+question was the right one — *why is a result that needs its own axis a
+second-class file?* — and the answer is `derived-dataset-methods.js`.
+
+The file entry gains one field:
+
+```js
+entry.derivedDataset = { tool: 'resample', sourceFileId, sourceName, params }
+```
+
+Everything else follows from having that recipe:
+
+- **Where it shows.** In the source file's variable tree, a family *Derived
+  datasets* after *Derived variables*, one node per dataset with its variables
+  as leaves. The leaves belong to another file, so each carries the dataset's
+  file id (`data-file-id`) and a drag from one names that file in the payload;
+  `PlotManager._handleVariableDrop` adds the trace with that file active
+  (`withActiveFile`) and puts the active file back. Multi-selection stays a set
+  of names of the active file; a foreign leaf is dragged on its own. In the
+  files list the dataset sits indented under its source with a `↳` and a
+  *derived* badge (the amber *in memory* badge is dropped there — the tooltip
+  says it, and two badges hid the name). In the Transformations table it has a
+  row of its own, *all variables → name*, with the same edit and delete
+  buttons as a variable.
+- **Editing.** The pencil reopens the tool with the recipe's parameters and the
+  dataset's name, in the source file's panel; the buttons read *Update* and a
+  banner names the dataset. Committing recomputes through the one shared path,
+  `_computeResampleDataset`, and rewrites the same file even under a new name.
+  Panels drawing it are rebuilt by `updateFileData`, as for a variable. The
+  source stays the active file throughout — that is where the dataset is
+  listed and where the user was working.
+- **Reload.** Reloading the source recomputes every dataset derived from it,
+  and datasets derived from those, in order. Reloading a dataset itself is that
+  recompute (it used to be refused: a file with no bytes had nothing to read).
+- **Sessions.** The dataset is not a file of the session. It is recorded under
+  its source's metadata as `derivedDatasets: [{ id, name, tool, sourceName,
+  params, transform, invertedVariables, derivedDatasets }]` — nested, so a
+  chain restores in order — and rebuilt from the recipe after the source's
+  generated variables are back (a resample may include one of them) and
+  before the plots (which reference the dataset by the id the record keeps;
+  `_restoreDerivedDatasets` maps it in `fileMap`). A project session therefore
+  stores no rows for it. Restoring a session over open files first closes the
+  datasets those files already carry: the session brings its own recipes.
+- **Closing.** Closing a source closes what was derived from it, after one
+  question that names the datasets and reminds the user they can be saved to
+  disk first. The question covers the plots too, so there is no second dialog.
+  The cascade defers panel rebuilds to the close that started it
+  (`removeFile(id, { deferRebuild })`, then `{ rebuildAll }`): back-to-back
+  rebuilds of the same panel raced inside Plotly.
+
+The per-tool compute stays with the tool; the module only knows how to ask
+for it. A cross-correlation dataset (lag axis) is the next recipe to plug in.
 
 ## 6. Where the work runs
 
@@ -272,6 +331,11 @@ away.
   conversion on a calendar axis, the summary's numbers, the shape of the file a
   resample produces, the CSV serializer, and the stability gate as the panel
   enforces it.
+- `scripts/test-derived-datasets.mjs` — the recipe's whole life: stored on
+  commit, recomputed from the source's current data through a chain, reopened
+  for editing and rewritten in place under a new name, serialized under the
+  source and restored with its id mapped, closed with its source after one
+  question (and never a second one), and left alone when orphaned.
 - `scripts/test-detrend-filter.mjs` — the detrend fits (exactness on a line and a
   parabola, an epoch-ms axis, holes, the moving-average high-pass) and the
   filter (coefficient parsing, Schur–Cohn cross-checked against root finding on

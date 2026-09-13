@@ -12,12 +12,13 @@
 // Consequences of that choice, all deliberate:
 //   · The whole file is resampled, not one variable. A dataset with one column
 //     on a new axis and the rest missing is not something anyone wants.
-//   · Resample rows never appear in the Transformations table, which lists
-//     variables of the current file. Re-running under the same name updates the
-//     file that name already belongs to, which is the edit story.
-//   · The new file carries a lazy CSV serializer so saving a project session
-//     keeps working: that path reads bytes for every open file, and an in-memory
-//     dataset has none.
+//   · The file is a DERIVED DATASET (derived-dataset-methods.js): it carries
+//     its recipe, sits under its source in the tree and the files list, has a
+//     row in the Transformations table, is edited in place, follows a reload of
+//     the source, and is saved to a session as that recipe.
+//   · The new file also carries a lazy CSV serializer so "save as file" and a
+//     project session can write it out; an in-memory dataset has no bytes
+//     until something asks for them.
 
 import i18n from '../../i18n/index.js';
 import { getComputePool, translateKernelError, RESAMPLE_ALL_VARIABLES } from './data-tools-methods.js';
@@ -432,23 +433,27 @@ proto.commitResampleTool = async function(options = {}) {
         return null;
     }
 
-    const names = this._resampleTargetNames(data, selection);
-    if (!names.length) {
-        this._setOutlierMessage(() => i18n.t('outlierNoVariables'), 'error');
-        return null;
-    }
-
-    let resampled;
+    // The recipe is what the dataset keeps: enough to compute it again from
+    // the source, which is what editing, reloading and sessions all do.
+    const recipe = { tool: 'resample', sourceFileId: fileId, sourceName: selection, params: config.params };
+    let computed;
     try {
-        resampled = await this._runResampleOffThread(data, time, config.params, names);
+        computed = await this._computeResampleDataset(fileId, data, recipe);
     } catch (err) {
         if (err?.cancelled) return null;
+        if (err?.code === 'outlierNoVariables') {
+            this._setOutlierMessage(() => i18n.t('outlierNoVariables'), 'error');
+            return null;
+        }
         this._setOutlierMessage(err?.message || String(err), 'error');
         return null;
     }
-
-    const built = this._buildResampledData(data, time, config, names, resampled);
-    const target = this._registerResampleFile(fileId, outputName, built);
+    const { data: built, resampled, names } = computed;
+    // Editing rewrites the dataset being edited, even under a new name; a fresh
+    // run rewrites a dataset that already carries the name, or makes a new one.
+    const editing = this._datasetEditing;
+    const target = this._registerDerivedDataset(recipe, outputName, built, { fileId: editing?.fileId || null });
+    this._exitDerivedDatasetEditing?.();
     // "and plot" draws the resampled version of what the user was already
     // looking at, when there is one; alphabetically-first is a poor guess.
     if (options.plot) {
@@ -504,6 +509,56 @@ proto.commitResampleTool = async function(options = {}) {
     this._clearDataToolDraft({ keepMessage: true });
     this._syncDataTools();
     return { fileId: target.fileId, name: outputName, tool: 'resample', count: built.metadata.numTimesteps };
+};
+
+/**
+ * A resampled dataset from a recipe, against the source's CURRENT data. Shared
+ * by the commit, by editing, by a reload of the source and by session restore,
+ * so all four produce exactly the same file.
+ * @returns {Promise<{ data: object, resampled: object, names: string[] }>}
+ */
+proto._computeResampleDataset = async function(sourceFileId, sourceData, recipe) {
+    const time = this._resampleTimeContext(sourceData);
+    const names = this._resampleTargetNames(sourceData, recipe.sourceName || '');
+    if (!names.length) {
+        const err = new Error('No variables to resample');
+        err.code = 'outlierNoVariables';
+        throw err;
+    }
+    const params = normalizeResampleParams(recipe.params || {});
+    const resampled = await this._runResampleOffThread(sourceData, time, params, names);
+    const data = this._buildResampledData(sourceData, time, { tool: 'resample', params }, names, resampled);
+    return { data, resampled, names };
+};
+
+/** Push a recipe back into the form, for editing. */
+proto._writeResampleForm = function(recipe, name) {
+    const set = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && value !== undefined && value !== null) el.value = String(value);
+    };
+    const params = recipe?.params || {};
+    set('outlier-variable', recipe?.sourceName || RESAMPLE_ALL_VARIABLES);
+    set('outlier-output-name', name);
+    set('resample-grid-mode', params.gridMode);
+    set('resample-method', params.method);
+    set('resample-step', params.step);
+    set('resample-factor', params.factor);
+    set('resample-count', params.count);
+    set('resample-gap-policy', params.gapPolicy);
+    // The detected-step tag says "you have not changed this"; a stored step is a
+    // choice, so the tag has to be re-judged against it.
+    const data = this.activeFileId ? this.plotManager.files.get(this.activeFileId)?.data : null;
+    if (data) this._syncResampleDetectedTag?.(data, this._resampleTimeContext(data));
+};
+
+/** One line naming what a resample recipe does, for the transformations table. */
+proto._resampleRecipeDescription = function(recipe) {
+    const params = recipe?.params || {};
+    const grid = params.gridMode === 'factor'
+        ? `factor ${params.factor}`
+        : (params.gridMode === 'count' ? `${params.count} samples` : `step ${params.step}`);
+    return `${params.method || 'linear'}, ${grid}, gaps: ${params.gapPolicy || 'nan'}`;
 };
 
 // Which variables ride along. Everything numeric and plottable, or the one the
@@ -641,55 +696,14 @@ proto._buildResampledData = function(sourceData, time, config, names, resampled)
     };
 };
 
-// Register (or refresh) the file the resampled data lives in. Same output name
-// as a previous run ⇒ that file is rewritten in place, so re-running with a
-// different Δt does not leave a trail of near-duplicate files behind.
-proto._registerResampleFile = function(sourceFileId, name, data) {
-    const existingId = this._findResampleFileByName(name);
-    if (existingId) {
-        const entry = this.files.get(existingId);
-        if (entry) {
-            entry.syntheticBytes = () => this._resampleCsvBytes(data);
-            // Whatever was written out before this rewrite is now a copy of data
-            // that no longer exists here, so the row stops claiming it.
-            entry.savedCopyName = '';
-        }
-        this.plotManager.updateFileData(existingId, data);
-        this.plotManager.setActiveFile(existingId);
-        this._renderFilesList();
-        this._clearVariableSelection();
-        this.renderVariablesTree(data.tree);
-        this._updateActionButtons();
-        return { fileId: existingId, replaced: true };
-    }
-
-    const fileId = `f${this._nextFileId++}`;
-    const transform = this._defaultFileTransform();
-    this.files.set(fileId, {
-        file: null,
-        fileHandle: null,
-        localPath: '',
-        temporaryParquetPath: '',
-        buffer: null,
-        contentHash: '',
+// Kept for callers that predate derived datasets: a resample is one of those,
+// registered through the shared path with its recipe alongside.
+proto._registerResampleFile = function(sourceFileId, name, data, recipe = null) {
+    return this._registerDerivedDataset(
+        recipe || { tool: 'resample', sourceFileId, sourceName: '', params: {} },
         name,
-        // The bytes below really are CSV, so a project session saves this file
-        // and reloads it through the ordinary CSV path on restore.
-        extension: '.csv',
-        transform,
-        excel: null,
-        matlab: null,
-        resampledFrom: sourceFileId,
-        syntheticBytes: () => this._resampleCsvBytes(data),
-    });
-    this.plotManager.addFile(fileId, name, data, transform);
-    document.getElementById('drop-zone')?.classList.remove('active');
-    this._updateTopBar?.();
-    this._renderFilesList();
-    this._clearVariableSelection();
-    this.renderVariablesTree(data.tree);
-    this._updateActionButtons();
-    return { fileId, replaced: false };
+        data,
+    );
 };
 
 proto._findResampleFileByName = function(name) {
@@ -701,7 +715,6 @@ proto._findResampleFileByName = function(name) {
 
 proto._plotResampledVariable = function(fileId, name) {
     if (!name) return;
-    this.plotManager.setActiveFile(fileId);
     // An empty panel first: the new file has its own time axis, and dropping it
     // onto a panel already drawing the original would trip the incompatible-axis
     // guard rather than show anything.
@@ -715,7 +728,9 @@ proto._plotResampledVariable = function(fileId, name) {
     }
     if (panelId === null) return;
     const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-    if (panelEl) this.plotManager.addTrace(panelId, name, panelEl);
+    // The trace belongs to the dataset's file; the active file (the source, where
+    // the user is working) is left alone.
+    if (panelEl) this.plotManager.withActiveFile(fileId, () => this.plotManager.addTrace(panelId, name, panelEl));
 };
 
 // ─── Serialization ────────────────────────────────────────────────────────

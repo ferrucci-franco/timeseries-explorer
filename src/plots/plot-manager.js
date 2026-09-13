@@ -96,7 +96,7 @@ class PlotManager {
         if (this.files.has(fileId)) this.activeFileId = fileId;
     }
 
-    removeFile(fileId) {
+    removeFile(fileId, options = {}) {
         const goingToOne = this.files.size === 2;
         const affectedPanels = new Set();
 
@@ -126,8 +126,12 @@ class PlotManager {
             this.activeFileId = this.files.size > 0 ? [...this.files.keys()][0] : null;
         }
 
+        // Closing several files in one go (a source and the datasets derived
+        // from it) rebuilds once, at the end: back-to-back rebuilds of the same
+        // panel race inside Plotly.
+        if (options.deferRebuild) return;
         // If going 2→1, rebuild all (legend labels lose [filename]); else rebuild affected only
-        if (goingToOne) {
+        if (goingToOne || options.rebuildAll) {
             this._rebuildAllPanels();
         } else {
             for (const id of affectedPanels) this._rebuildPanel(id);
@@ -942,7 +946,8 @@ class PlotManager {
             const varNames = this._getDroppedVariableNames(e.dataTransfer);
             if (!varNames.length || !this.data) return;
             const axis = this._timeseriesDropAxis(panelId, panelEl, e);
-            this._handleVariableDrop(panelId, varNames, panelEl, { axis });
+            const fileId = this._getDroppedFileId(e.dataTransfer);
+            this._handleVariableDrop(panelId, varNames, panelEl, { axis, fileId });
         });
     }
 
@@ -950,8 +955,15 @@ class PlotManager {
     // (abscissa) goes to the app hook, which opens the time-axis inspector and
     // resolves to nothing; other names pass through unchanged.
     async _handleVariableDrop(panelId, varNames, panelEl, options = {}) {
+        // A drop from a derived dataset names its file; the variables are looked
+        // up there and added with that file active. Its abscissa is simply left
+        // out — the time-axis inspector hook is about the active file's axis.
+        const fileId = options.fileId && this.files.has(options.fileId) && options.fileId !== this.activeFileId
+            ? options.fileId
+            : null;
+        const data = fileId ? this.files.get(fileId).data : this.data;
         let resolved = varNames;
-        if (this.onTimeAxisVariableDrop) {
+        if (this.onTimeAxisVariableDrop && !fileId) {
             const out = [];
             for (const name of varNames) {
                 if (this.data?.variables?.[name]?.kind === 'abscissa') {
@@ -963,14 +975,18 @@ class PlotManager {
             }
             resolved = out;
         } else {
-            resolved = varNames.filter(name => this.data?.variables?.[name]?.kind !== 'abscissa');
+            resolved = varNames.filter(name => data?.variables?.[name]?.kind !== 'abscissa');
         }
         if (!resolved.length) return;
-        if (resolved.length > 1) {
-            this._addDroppedVariables(panelId, resolved, panelEl, { axis: options.axis });
-        } else {
-            this.addTrace(panelId, resolved[0], panelEl, { axis: options.axis });
-        }
+        const add = () => {
+            if (resolved.length > 1) {
+                this._addDroppedVariables(panelId, resolved, panelEl, { axis: options.axis });
+            } else {
+                this.addTrace(panelId, resolved[0], panelEl, { axis: options.axis });
+            }
+        };
+        if (fileId) this.withActiveFile(fileId, add);
+        else add();
     }
 
     _timeseriesDropAxis(panelId, panelEl, event = null) {
@@ -995,7 +1011,42 @@ class PlotManager {
         return varName ? [varName] : [];
     }
 
+    // A drag from a derived dataset's leaves (drawn in its SOURCE file's tree)
+    // names the file the variables live in; every other drag is from the active
+    // file and carries none.
+    _getDroppedFileId(dataTransfer) {
+        const raw = dataTransfer.getData('application/x-openmodelica-variables');
+        if (!raw) return null;
+        try {
+            const payload = JSON.parse(raw);
+            return payload?.fileId && this.files.has(payload.fileId) ? payload.fileId : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    /**
+     * Add a trace from a file other than the active one. Every add path reads
+     * `this.data`, i.e. the active file, so the active file is switched for the
+     * duration of the call and put back afterwards — the sidebar's notion of
+     * the active file is untouched.
+     */
+    withActiveFile(fileId, fn) {
+        if (!fileId || !this.files.has(fileId) || fileId === this.activeFileId) return fn();
+        const previous = this.activeFileId;
+        this.activeFileId = fileId;
+        try {
+            return fn();
+        } finally {
+            this.activeFileId = previous;
+        }
+    }
+
     _addDroppedVariables(panelId, varNames, panelEl, options = {}) {
+        if (options.fileId && options.fileId !== this.activeFileId) {
+            return this.withActiveFile(options.fileId, () =>
+                this._addDroppedVariables(panelId, varNames, panelEl, { ...options, fileId: null }));
+        }
         if (!this.plots.has(panelId)) this.plots.set(panelId, this._makeState());
         const plot = this.plots.get(panelId);
         const names = varNames.filter(varName => {
