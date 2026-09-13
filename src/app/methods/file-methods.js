@@ -4005,16 +4005,14 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
         const csvParsingBtn = document.createElement('button');
         csvParsingBtn.className = 'file-entry-csv-parsing';
         csvParsingBtn.textContent = '▦';
-        // A computed dataset has no parsing to adjust; the same button opens a
-        // read-only look at its rows instead.
-        const csvTitle = i18n.t(recipe ? 'derivedDatasetViewValues' : 'csvPreviewAction');
-        csvParsingBtn.title = csvTitle;
-        csvParsingBtn.setAttribute('aria-label', csvTitle);
-        csvParsingBtn.hidden = recipe ? false : !this._isCsvTextEntry(entryData, fileId);
+        csvParsingBtn.title = i18n.t('csvPreviewAction');
+        csvParsingBtn.setAttribute('aria-label', i18n.t('csvPreviewAction'));
+        // A computed dataset was never parsed: there is nothing to adjust, and
+        // its curve is already on a panel.
+        csvParsingBtn.hidden = !!recipe || !this._isCsvTextEntry(entryData, fileId);
         csvParsingBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (recipe) this.showDatasetValues(fileId);
-            else this.adjustCsvParsing(fileId);
+            this.adjustCsvParsing(fileId);
         });
 
         const matArraysBtn = document.createElement('button');
@@ -4166,8 +4164,8 @@ proto._isCsvTextEntry = function(entry, fileId = null) {
 proto.adjustCsvParsing = async function(fileId) {
     const entry = this.files.get(fileId);
     if (!entry || !this._isCsvTextEntry(entry, fileId)) return;
-    // Nothing was parsed: the rows were computed. Show them instead.
-    if (this._isDerivedDataset?.(entry)) return this.showDatasetValues(fileId);
+    // Nothing was parsed: the rows were computed from a recipe.
+    if (this._isDerivedDataset?.(entry)) return;
     const displayName = this._fileDisplayName(entry);
     const plotEntry = this.plotManager.files.get(fileId);
     const currentProfile = plotEntry?.data?.metadata?.csvProfile || null;

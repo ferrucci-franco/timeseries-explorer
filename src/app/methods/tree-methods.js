@@ -202,13 +202,9 @@ proto._renderDerivedDatasetsSection = function(parentElement, filter, autoExpand
             button.addEventListener('dragstart', e => e.preventDefault());
             return button;
         };
-        itemDiv.appendChild(action('tree-dataset-edit', '✎', 'derivedDatasetEditTitle', () => this._editDerivedDataset(datasetId)));
-        itemDiv.appendChild(action(
-            'tree-dataset-save',
-            '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 3h4v7h4l-6 6.5L6 10h4V3Z"/><path d="M4.5 18.5h15V21h-15z"/></svg>',
-            'fileInMemorySaveTitle',
-            () => this.saveInMemoryFile(datasetId),
-        ));
+        // One button, as on a derived variable's leaf. Editing lives in the
+        // Transformations table and saving in the files list: a second copy of
+        // either here was one more place to look for the same thing.
         itemDiv.appendChild(action('tree-dataset-remove', 'x', 'derivedDatasetRemoveTitle', () => this._removeDerivedDataset(datasetId)));
 
         const childrenDiv = document.createElement('div');

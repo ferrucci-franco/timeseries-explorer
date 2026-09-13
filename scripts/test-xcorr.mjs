@@ -406,6 +406,15 @@ const xcorrDom = (fields = {}) => fakeDocument({
         assert.equal(g._xcorrPlan(source.data).code, 'dataToolXcorrChooseSecond');
     });
     withDocument(xcorrDom({ 'xcorr-max-lag': '' }), () => assert.equal(g._xcorrPlan(source.data).code, 'dataToolXcorrMaxLagInvalid'));
+    // The step is measured once per axis array: a sync asks several times over,
+    // and on a long file each measurement is a sort of every Δt.
+    {
+        const first = g._xcorrAxisStep(source.data.variables.time.data);
+        assert.equal(g._xcorrAxisStep(source.data.variables.time.data), first, 'the same array returns the same measurement');
+        const other = Float64Array.from(source.data.variables.time.data);
+        assert.notEqual(g._xcorrAxisStep(other), first, 'a new array (reload, recompute) is measured afresh');
+        near(g._xcorrAxisStep(other).medianDt, first.medianDt, 1e-12, 'to the same step');
+    }
     withDocument(xcorrDom({ 'xcorr-max-lag': '0' }), () => assert.equal(g._xcorrPlan(source.data).code, 'dataToolXcorrMaxLagInvalid'));
     source.data.variables.short = { name: 'short', data: new Float64Array(10), kind: 'variable', description: '' };
     withDocument(xcorrDom({ 'xcorr-second': 'short' }), () => assert.equal(g._xcorrPlan(source.data).code, 'dataToolXcorrLengthMismatch'));
@@ -434,8 +443,8 @@ const xcorrDom = (fields = {}) => fakeDocument({
     near(h.plotManager.files.get(made.fileId).data.variables.peak_lag.data[0], -0.04, 1e-12, 'recomputed against the new delay');
     // Editing reopens the form with the recipe.
     const dom = xcorrDom({ 'data-tool-select': '', 'outlier-variable': '', 'xcorr-second': '', 'xcorr-max-lag': '', 'xcorr-normalization': 'coeff' });
-    withDocument(dom, () => {
-        h._editDerivedDataset(made.fileId);
+    await withDocument(dom, async () => {
+        await h._editDerivedDataset(made.fileId);
         assert.deepEqual(h._datasetEditing, { fileId: made.fileId, name: 'xy' });
         assert.equal(dom.getElementById('data-tool-select').value, 'xcorr');
         assert.equal(dom.getElementById('outlier-variable').value, 'x');

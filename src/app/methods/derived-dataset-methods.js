@@ -11,8 +11,9 @@
 //
 //   · listed in the source file's variable tree, under "Derived datasets",
 //     with its own variables ready to drag onto a panel;
-//   · edited: the tool reopens with the recipe's parameters, and Update
-//     recomputes the dataset in place, so panels showing it follow;
+//   · edited (from its row in the Transformations table): the tool reopens
+//     with the recipe's parameters, and Update recomputes the dataset in
+//     place, so panels showing it follow;
 //   · recomputed when the source is reloaded;
 //   · saved to a session as a recipe (both view and project sessions), not as
 //     a copy of its rows;
@@ -30,8 +31,12 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 
-// How many rows the read-only view shows; the rest is what "save to disk" is for.
-export const DATASET_VALUES_ROW_LIMIT = 200;
+// One frame, so a message written just before is on screen before the main
+// thread is taken by synchronous work.
+const nextFrame = () => new Promise(resolve => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(resolve, 0));
+    else setTimeout(resolve, 0);
+});
 
 export function installDerivedDatasetMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -147,95 +152,44 @@ proto._recomputeDerivedDatasetsOf = async function(sourceFileId, options = {}) {
 /**
  * Open the tool that made a dataset, with its recipe in the form. Committing
  * then recomputes the dataset in place instead of making a second file.
+ *
+ * Opening is not free: switching to the source re-renders the tree and the
+ * files list, and the tool's sync measures the source axis (a sort of every
+ * Δt, on a large file a good fraction of a second). The message line says
+ * "opening" before any of that starts and the Create buttons go dead, so a
+ * pause of a couple of seconds on a long file is a visible one.
  */
-proto._editDerivedDataset = function(fileId) {
+proto._editDerivedDataset = async function(fileId) {
     const entry = this.files.get(fileId);
     const recipe = this._derivedDatasetRecipe(entry);
-    if (!recipe || !this.files.has(recipe.sourceFileId)) return;
-    if (this.activeFileId !== recipe.sourceFileId) this.setActiveFile(recipe.sourceFileId);
-    this._exitDataToolEditing?.();
-    this._clearDataToolDraft?.();
-    this._datasetEditing = { fileId, name: entry.name };
-    const toolSelect = document.getElementById('data-tool-select');
-    if (toolSelect) toolSelect.value = recipe.tool;
-    this._syncDataTools?.();
-    if (recipe.tool === 'resample') this._writeResampleForm?.(recipe, entry.name);
-    if (recipe.tool === 'xcorr') this._writeXcorrForm?.(recipe, entry.name);
-    this._syncDataTools?.();
-    // The pencil sits in the tree or the files list, a screen away from the
-    // form it just filled: bring the form up and say what is going on.
-    this._setOutlierMessage?.(() => i18n.t('derivedDatasetEditHint').replace('{name}', entry.name), '');
-    document.querySelector?.('.data-tools-section')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
-};
-
-// ─── Reading the values ───────────────────────────────────────────────────
-// A dataset the app computed has no file to adjust the parsing of, but its
-// rows are still worth a look. This is a read-only table: the first rows,
-// the parameters, and a note on where the rest is.
-
-proto._datasetValuesTable = function(fileId, limit = DATASET_VALUES_ROW_LIMIT) {
-    const data = this.plotManager.files.get(fileId)?.data;
-    if (!data) return null;
-    const timeName = data.metadata?.timeName;
-    const abscissa = timeName ? data.variables?.[timeName] : null;
-    const isDatetime = data.metadata?.timeKind === 'datetime';
-    const columns = [];
-    if (abscissa) columns.push([timeName, abscissa]);
-    for (const [name, variable] of Object.entries(data.variables || {})) {
-        if (name === timeName || variable?.kind !== 'variable' || variable?.previewOnly) continue;
-        columns.push([name, variable]);
+    if (!recipe || !this.files.has(recipe.sourceFileId)) return false;
+    const stopBusy = this._beginDataToolBusy?.({
+        immediate: true,
+        message: () => i18n.t('derivedDatasetEditOpening').replace('{name}', entry.name),
+    }) || (() => {});
+    try {
+        await nextFrame();
+        // The user may have moved on while the frame was pending.
+        if (!this.files.has(fileId) || !this.files.has(recipe.sourceFileId)) return false;
+        if (this.activeFileId !== recipe.sourceFileId) this.setActiveFile(recipe.sourceFileId);
+        this._exitDataToolEditing?.();
+        this._clearDataToolDraft?.();
+        this._datasetEditing = { fileId, name: entry.name };
+        const toolSelect = document.getElementById('data-tool-select');
+        if (toolSelect) toolSelect.value = recipe.tool;
+        this._syncDataTools?.();
+        if (recipe.tool === 'resample') this._writeResampleForm?.(recipe, entry.name);
+        if (recipe.tool === 'xcorr') this._writeXcorrForm?.(recipe, entry.name);
+        this._syncDataTools?.();
+        // The pencil sits in the Transformations table, below the form it just
+        // filled: bring the form up and say what is going on. Written before
+        // the busy state ends, so it is the line that stays.
+        this._setOutlierMessage?.(() => i18n.t('derivedDatasetEditHint').replace('{name}', entry.name), '');
+        document.querySelector?.('.data-tools-section')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+        return true;
+    } finally {
+        stopBusy();
     }
-    const parameters = Object.entries(data.variables || {}).filter(([, variable]) => variable?.kind === 'parameter');
-    const total = Number(data.metadata?.numTimesteps) || Number(abscissa?.data?.length) || 0;
-    const shown = Math.min(total, limit);
-    const unitOf = variable => (String(variable?.description || '').match(/\[([^\]]+)\]/) || [])[1] || '';
-    const format = (value, datetime) => {
-        if (value === null || value === undefined) return '';
-        if (datetime) return Number.isFinite(value) ? new Date(value).toISOString() : '';
-        if (typeof value === 'number') return Number.isFinite(value) ? String(Number(value.toPrecision(7))) : (Number.isNaN(value) ? 'NaN' : String(value));
-        return String(value);
-    };
-    const rows = [];
-    for (let r = 0; r < shown; r++) {
-        rows.push(columns.map(([name, variable]) => format(variable.data?.[r], name === timeName && isDatetime)));
-    }
-    return {
-        headers: columns.map(([name, variable]) => (unitOf(variable) ? `${name} [${unitOf(variable)}]` : name)),
-        rows,
-        parameters: parameters.map(([name, variable]) => ({
-            name,
-            value: format(variable.data?.[0], false),
-            unit: unitOf(variable),
-        })),
-        shown,
-        total,
-    };
-};
-
-proto.showDatasetValues = async function(fileId) {
-    const entry = this.files.get(fileId);
-    const table = this._datasetValuesTable(fileId);
-    if (!entry || !table) return;
-    const escape = value => this._escapeSessionHTML(String(value));
-    const head = table.headers.map(h => `<th>${escape(h)}</th>`).join('');
-    const body = table.rows.map(row => `<tr>${row.map(cell => `<td>${escape(cell)}</td>`).join('')}</tr>`).join('');
-    const parameters = table.parameters.length
-        ? `<div class="dataset-values-params"><span class="dataset-values-params-label">${escape(i18n.t('derivedDatasetValuesParams'))}</span> ${
-            table.parameters.map(p => `<code>${escape(p.name)} = ${escape(p.value)}${p.unit ? ` ${escape(p.unit)}` : ''}</code>`).join(' · ')}</div>`
-        : '';
-    const note = i18n.t('derivedDatasetValuesNote')
-        .replace('{shown}', String(table.shown))
-        .replace('{total}', String(table.total));
-    const html = `
-        <div class="dataset-values-note">${escape(note)}</div>
-        ${parameters}
-        <div class="dataset-values-scroll"><table class="dataset-values-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
-    `;
-    await Modal.alert(
-        i18n.t('derivedDatasetValuesTitle').replace('{name}', this._fileDisplayName(entry)),
-        html,
-        { icon: '▦', html: true, className: 'modal-dialog-dataset-values' },
-    );
 };
 
 proto._exitDerivedDatasetEditing = function() {

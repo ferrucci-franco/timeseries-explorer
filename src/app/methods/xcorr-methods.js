@@ -57,6 +57,11 @@ proto._toggleXcorrHelpPopover = function(show) {
  * panel shows (seconds for a calendar axis, the declared unit otherwise, a
  * sample for an index axis), so lag_k = k · dt.
  *
+ * Measuring the step sorts every Δt of the axis, and a sync of the panel asks
+ * for it several times over; the measurement is kept per axis array (a reload
+ * or a recompute makes a new array, so it can never go stale) and only the
+ * cheap labelling is redone.
+ *
  * @returns {{ ok: boolean, code: string, kind: string, unit: string, dt: number, length: number }}
  */
 proto._xcorrAxis = function(data) {
@@ -68,7 +73,7 @@ proto._xcorrAxis = function(data) {
     if (time.kind === 'index' || !time.values || time.values.length !== length) {
         return { ok: true, code: '', kind: 'index', unit: i18n.t('dataToolResampleUnitSamples'), dt: 1, length };
     }
-    const info = detectSamplingGaps(time.values);
+    const info = this._xcorrAxisStep(time.values);
     if (!info.hasNominalStep || !(info.medianDt > 0)) {
         return {
             ...blank,
@@ -76,6 +81,15 @@ proto._xcorrAxis = function(data) {
         };
     }
     return { ok: true, code: '', kind: time.kind, unit, dt: info.medianDt / this._resampleAxisScale(time.kind), length };
+};
+
+/** The step measurement behind `_xcorrAxis`, one per axis array. */
+proto._xcorrAxisStep = function(values) {
+    const cached = this._xcorrAxisCache;
+    if (cached?.source === values) return cached.info;
+    const info = detectSamplingGaps(values);
+    this._xcorrAxisCache = { source: values, info };
+    return info;
 };
 
 // ─── Reading the form ─────────────────────────────────────────────────────

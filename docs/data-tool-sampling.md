@@ -257,10 +257,20 @@ Everything else follows from having that recipe:
   *derived* badge (the amber *in memory* badge is dropped there — the tooltip
   says it, and two badges hid the name). In the Transformations table it has a
   row of its own, *all variables → name*, with the same edit and delete
-  buttons as a variable.
+  buttons as a variable. Each action has one home: editing in that row, saving
+  to disk in the files list, closing in all three places (the tree node keeps
+  only its `x`, like a derived variable's leaf). Earlier versions repeated the
+  pencil and the save button on the tree node, and that was one more place to
+  look for the same thing.
 - **Editing.** The pencil reopens the tool with the recipe's parameters and the
   dataset's name, in the source file's panel; the buttons read *Update* and a
-  banner names the dataset. Committing recomputes through the one shared path,
+  banner names the dataset. Opening is announced first — the message line
+  reads "Opening *name* for editing…" and the Create buttons go dead — because
+  switching to the source re-renders the sidebar and the tool's sync measures
+  the source axis, a visible pause on a long file. The cross-correlation panel
+  keeps that measurement per axis array (`_xcorrAxisStep`), as the resampler
+  already did, so the sync no longer sorts every Δt three times over.
+  Committing recomputes through the one shared path,
   `_computeResampleDataset`, and rewrites the same file even under a new name.
   Panels drawing it are rebuilt by `updateFileData`, as for a variable. The
   source stays the active file throughout — that is where the dataset is
@@ -284,7 +294,7 @@ Everything else follows from having that recipe:
   (`removeFile(id, { deferRebuild })`, then `{ rebuildAll }`): back-to-back
   rebuilds of the same panel raced inside Plotly.
 
-Four smaller things round it off:
+Three smaller things round it off:
 
 - **Create and plot** puts the dataset's curve on an *empty* time-series
   panel, and when there is none it opens a new panel below the last one
@@ -292,14 +302,14 @@ Four smaller things round it off:
   time axis that means something else. The dataset is registered with its
   panel rebuild deferred: the split's own render redraws every panel once,
   and two rebuilds in flight together raced inside Plotly.
-- **Values, read-only.** The ▦ button a dataset shows in the files list no
-  longer opens the CSV-parsing dialog (there was nothing parsed) but a table
-  of the first 200 rows with the parameters above it and the total count in a
-  note — the recipe is what to edit, and "save to disk" is where the rest is.
+- **No parsing button.** The ▦ button of the files list is hidden on a dataset:
+  nothing was parsed, so there is nothing to adjust, and the rows themselves
+  are on a panel already (a read-only table of the first rows was tried and
+  dropped — the curve says more).
 - **The pencil says what it did.** Editing scrolls the Data tools panel into
   view and the message line reads "Editing *name*: change the parameters
-  below and press Update", because the button sits a screen away from the
-  form it just filled.
+  below and press Update", because the button sits below the form it just
+  filled.
 - **The CSV a dataset writes carries units in its headers** (`lag [s]`,
   `x [V]`), the form the CSV parser reads straight back into a name and a
   unit. Which is also why a variable description must never carry a bracketed

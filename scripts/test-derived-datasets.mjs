@@ -252,8 +252,8 @@ const recipeFor = (sourceFileId, step, sourceName = '') => ({
     const recipe = recipeFor(fileId, 0.05, 'x');
     const made = h._registerDerivedDataset(recipe, 'x only', (await h._computeResampleDataset(fileId, data, recipe)).data);
     const dom = fakeDocument({ 'data-tool-select': '', 'resample-grid-mode': 'step', 'resample-method': 'linear' });
-    withDocument(dom, () => {
-        h._editDerivedDataset(made.fileId);
+    await withDocument(dom, async () => {
+        assert.equal(await h._editDerivedDataset(made.fileId), true);
         assert.deepEqual(h._datasetEditing, { fileId: made.fileId, name: 'x only' });
         assert.equal(dom.getElementById('data-tool-select').value, 'resample');
         assert.equal(dom.getElementById('outlier-output-name').value, 'x only');
@@ -263,10 +263,28 @@ const recipeFor = (sourceFileId, step, sourceName = '') => ({
     });
     // Whole-file recipes reopen on the "every variable" entry.
     const whole = h._registerDerivedDataset(recipeFor(fileId, 0.05), 'all', (await h._computeResampleDataset(fileId, data, recipeFor(fileId, 0.05))).data);
-    withDocument(fakeDocument({}), () => {
-        h._editDerivedDataset(whole.fileId);
+    await withDocument(fakeDocument({}), async () => {
+        await h._editDerivedDataset(whole.fileId);
         assert.equal(document.getElementById('outlier-variable').value, RESAMPLE_ALL_VARIABLES);
     });
+    // Editing announces itself before the (synchronous) work and leaves the
+    // hint, not the "opening" line, once done.
+    {
+        const seen = [];
+        const original = h._setOutlierMessage;
+        h._setOutlierMessage = function(message, type) {
+            seen.push({ text: typeof message === 'function' ? message() : message, type });
+            return original.call(this, message, type);
+        };
+        await withDocument(fakeDocument({}), () => h._editDerivedDataset(made.fileId));
+        h._setOutlierMessage = original;
+        assert.equal(seen[0].type, 'busy', 'the first line is the busy one');
+        assert.match(seen[0].text, /x only/, 'and it names the dataset');
+        assert.equal(seen[seen.length - 1].type, '', 'the last line is the hint');
+        assert.match(seen[seen.length - 1].text, /x only/);
+        assert.equal(h._dataToolBusy, false);
+        assert.equal(await h._editDerivedDataset('nope'), false, 'an unknown id is not an edit');
+    }
     // Committing while editing rewrites the edited dataset even under a new name.
     const commitDom = fakeDocument({
         'data-tool-select': 'resample', 'outlier-variable': 'x', 'outlier-output-name': 'x renamed',
@@ -415,23 +433,16 @@ const recipeFor = (sourceFileId, step, sourceName = '') => ({
     assert.equal(h.plotManager.rebuilt, 1, 'the deferred rebuild ran');
 }
 
-// ── The read-only values view and the CSV header ──────────────────────────
+// ── The CSV header ────────────────────────────────────────────────────────
 
 {
     const h = new Harness();
     const { fileId, data } = makeSource(h, { count: 401 });
     const made = h._registerDerivedDataset(recipeFor(fileId, 0.01), 'ds', (await h._computeResampleDataset(fileId, data, recipeFor(fileId, 0.01))).data);
-    const table = h._datasetValuesTable(made.fileId);
-    assert.deepEqual(table.headers, ['time [s]', 'x [V]', 'y'], 'units ride on the headers where known');
-    assert.equal(table.total, 401);
-    assert.equal(table.shown, 200, 'the view is capped');
-    assert.equal(table.rows.length, 200);
-    assert.equal(table.rows[0][0], '0');
-    assert.equal(table.rows[1][0], '0.01');
-    assert.deepEqual(table.parameters, [], 'a resample of a file without parameters has none');
-    // The CSV the save button writes carries the same headers.
+    // The CSV the save button writes carries units in its headers where known.
     const csv = new TextDecoder().decode(h.files.get(made.fileId).syntheticBytes());
     assert.equal(csv.split('\n')[0], 'time [s],x [V],y');
+    assert.equal(csv.split('\n').length - 1, 402, 'header plus every row');
 }
 
 // ── The busy state around a commit ────────────────────────────────────────
@@ -458,6 +469,12 @@ const recipeFor = (sourceFileId, step, sourceName = '') => ({
         h._dataToolMessage = { message: 'Created', type: 'ok' };
         again();
         assert.equal(h._dataToolMessage.message, 'Created');
+        // Synchronous work cannot wait for a timer: `immediate` says it now,
+        // in its own words.
+        const now = h._beginDataToolBusy({ immediate: true, message: () => 'opening' });
+        assert.deepEqual({ message: h._dataToolMessage.message(), type: h._dataToolMessage.type }, { message: 'opening', type: 'busy' });
+        now();
+        assert.equal(h._dataToolMessage.message, '');
     });
 }
 
