@@ -943,7 +943,14 @@ proto.commitDataTool = async function(options = {}) {
     }
 };
 
-proto._beginDataToolBusy = function() {
+/**
+ * Mark the panel as working until the returned function is called. By default
+ * the message waits DATA_TOOL_BUSY_DELAY_MS so a fast tool never flashes it;
+ * `immediate` writes it at once, for work that is synchronous (a timer could
+ * not fire while it runs) and must announce itself before it starts.
+ * `message` replaces the "Computing {tool}…" line.
+ */
+proto._beginDataToolBusy = function(options = {}) {
     this._dataToolBusy = true;
     for (const id of ['data-tool-create', 'data-tool-create-plot', 'data-tool-clear']) {
         const button = typeof document !== 'undefined' ? document.getElementById(id) : null;
@@ -951,13 +958,18 @@ proto._beginDataToolBusy = function() {
     }
     const tool = this._getSelectedDataTool?.() || '';
     const label = this._dataToolLabel?.(tool) || '';
-    let timer = typeof setTimeout === 'function'
-        ? setTimeout(() => {
+    const message = typeof options.message === 'function'
+        ? options.message
+        : () => i18n.t('dataToolWorking').replace('{tool}', label);
+    let timer = null;
+    if (options.immediate) this._setOutlierMessage(message, 'busy');
+    else if (typeof setTimeout === 'function') {
+        timer = setTimeout(() => {
             timer = null;
             if (!this._dataToolBusy) return;
-            this._setOutlierMessage(() => i18n.t('dataToolWorking').replace('{tool}', label), 'busy');
-        }, DATA_TOOL_BUSY_DELAY_MS)
-        : null;
+            this._setOutlierMessage(message, 'busy');
+        }, DATA_TOOL_BUSY_DELAY_MS);
+    }
     return () => {
         if (timer) clearTimeout(timer);
         timer = null;
