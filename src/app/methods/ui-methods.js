@@ -178,6 +178,9 @@ proto.initEventListeners = function() {
         if (!e.target.closest('#filter-design-help-popover') && !e.target.closest('#filter-design-help-toggle')) {
             this._toggleFilterDesignHelpPopover?.(false);
         }
+        if (!e.target.closest('#xcorr-help-popover') && !e.target.closest('#xcorr-help-toggle')) {
+            this._toggleXcorrHelpPopover?.(false);
+        }
     });
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && !document.getElementById('derived-help-popover')?.hidden) {
@@ -223,6 +226,11 @@ proto.initEventListeners = function() {
         if (e.key === 'Escape' && !document.getElementById('filter-design-help-popover')?.hidden) {
             e.preventDefault();
             this._toggleFilterDesignHelpPopover?.(false);
+            return;
+        }
+        if (e.key === 'Escape' && !document.getElementById('xcorr-help-popover')?.hidden) {
+            e.preventDefault();
+            this._toggleXcorrHelpPopover?.(false);
             return;
         }
         if (e.key === 'Escape' && this.selectedVariables.size > 0) {

@@ -197,6 +197,7 @@
                         <option value="detrend" data-i18n="dataToolDetrend">Detrend</option>
                         <option value="filter" data-i18n="dataToolFilter">Digital filter</option>
                         <option value="resample" data-i18n="dataToolResample">Resample</option>
+                        <option value="xcorr" data-i18n="dataToolXcorr">Cross-correlation</option>
                     </select>
 
                     <div id="remove-outliers-tool" class="data-tool-form collapsed">
@@ -772,6 +773,66 @@
                             <div id="resample-gap-note" class="data-tool-count idle"></div>
 
                             <div id="resample-info" class="data-tool-resample-info"></div>
+                        </div>
+
+                        <div class="data-tool-controls collapsed" data-tool-kind="xcorr">
+                            <div class="data-tool-label-row data-tool-group-row first">
+                                <label class="options-subgroup-label" for="xcorr-second" data-i18n="dataToolXcorrSecond">Second signal (y)</label>
+                                <button id="xcorr-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Cross-correlation help" data-i18n-title="dataToolXcorrHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="xcorr-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <select id="xcorr-second" class="data-tool-select"></select>
+
+                            <label class="options-subgroup-label data-tool-sublabel" for="xcorr-max-lag" data-i18n="dataToolXcorrMaxLag">Maximum lag</label>
+                            <div class="data-tool-slider-row unit-row">
+                                <input id="xcorr-max-lag" class="derived-input data-tool-number-input" type="number" min="0" step="any">
+                                <span id="xcorr-max-lag-unit" class="data-tool-unit-suffix">s</span>
+                            </div>
+
+                            <label class="options-subgroup-label data-tool-sublabel" for="xcorr-normalization" data-i18n="dataToolXcorrNormalization">Normalisation</label>
+                            <select id="xcorr-normalization" class="data-tool-select">
+                                <option value="coeff" selected data-i18n="dataToolXcorrNormCoeff">coeff — 1 at lag 0 for the autocorrelation, values in [−1, 1]</option>
+                                <option value="biased" data-i18n="dataToolXcorrNormBiased">biased — sum ÷ N</option>
+                                <option value="unbiased" data-i18n="dataToolXcorrNormUnbiased">unbiased — sum ÷ overlapping pairs</option>
+                                <option value="none" data-i18n="dataToolXcorrNormNone">none — raw sum</option>
+                            </select>
+
+                            <label class="checkbox-label data-tool-checkbox">
+                                <input type="checkbox" id="xcorr-remove-mean" checked>
+                                <span data-i18n="dataToolXcorrRemoveMean">Remove the mean of each signal first</span>
+                            </label>
+
+                            <div id="xcorr-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="xcorr-help-title" hidden>
+                                <div class="derived-help-title" id="xcorr-help-title" data-i18n="dataToolXcorrHelpTitle">Cross-correlation help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolXcorrHelpWhatLabel">What it computes</span>
+                                    <span class="filter-help-equation" data-i18n-rich="dataToolXcorrHelpEquation">r_xy[k] = Σₙ x[n + k] · y[n],  k = −L … L</span>
+                                    <span data-i18n-rich="dataToolXcorrHelpWhat">**x** is the variable chosen above, **y** the second signal. The result is a new dataset on a **lag** axis, in the file’s time unit: how alike the two signals are when one is slid past the other by each lag. Choose the same signal twice for the **autocorrelation**, which is symmetric and largest at lag 0.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolXcorrHelpSignLabel">The sign of the lag</span>
+                                    <span data-i18n-rich="dataToolXcorrHelpSign">The convention is MATLAB’s **xcorr(x, y)** and SciPy’s **correlate(x, y)**. A peak at a **positive** lag k means x[n + k] lines up with y[n]: **x runs behind y** by k — x is the delayed signal. A peak at a **negative** lag means y is the delayed one. The message after Create says it in words, and the dataset carries the peak lag and value as parameters.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolXcorrHelpNormLabel">Normalisation</span>
+                                    <span data-i18n-rich="dataToolXcorrHelpNorm">The four of xcorr. **none** is the raw sum. **biased** divides by N, the length of the series, so the far lags shrink — a consistent estimate of the correlation function. **unbiased** divides by the number of pairs that overlap at each lag (N − |k|), which is unbiased but noisy at the far lags where few pairs remain. **coeff** divides by √(r_xx[0]·r_yy[0]), so the autocorrelation is exactly 1 at lag 0 and every value lies in [−1, 1]; with the means removed it is the Pearson correlation of the two signals at each lag.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolXcorrHelpMeanLabel">Removing the mean</span>
+                                    <span data-i18n-rich="dataToolXcorrHelpMean">A constant offset correlates with everything: two signals sitting at 300 and 20 have a large, meaningless r at every lag. Removing each signal’s mean first (the default) leaves only how they vary together. Turn it off to reproduce a textbook xcorr on the raw values.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolXcorrHelpMissingLabel">Missing values</span>
+                                    <span data-i18n-rich="dataToolXcorrHelpMissing">A product is counted only when both samples are finite, so a hole in either signal removes pairs rather than poisoning every lag. **unbiased** divides by the pairs that actually exist; **biased** keeps N. A lag with no pair at all comes out NaN.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolXcorrHelpAxisLabel">The lag axis</span>
+                                    <span data-i18n-rich="dataToolXcorrHelpAxis">A lag is a whole number of samples, so it is only a time on a uniform Δt: an irregular axis refuses the tool (resample to a uniform grid first). With no time axis the lag is counted in samples. The maximum lag caps the range; the far lags of a long record are rarely worth the space.</span>
+                                </div>
+                            </div>
+
+                            <div id="xcorr-info" class="data-tool-resample-info"></div>
                         </div>
 
                         <div id="outlier-replacement-wrap" class="data-tool-radio-group" role="group" aria-label="Outlier replacement">

@@ -1415,6 +1415,14 @@
     cursor: pointer;
 }
 
+/* A checkbox inside a tool's form sits with the tool's own labels, not with the
+   sidebar's option rows: smaller, and no extra vertical padding. */
+.data-tool-checkbox {
+    font-size: 0.8rem;
+    padding: 0.1rem 0;
+    color: var(--text-secondary);
+}
+
 .options-group {
     margin-top: 0.6rem;
     display: flex;

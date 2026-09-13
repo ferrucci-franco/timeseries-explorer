@@ -11,6 +11,7 @@ import { installTimeAxisInspectorMethods } from './methods/time-axis-inspector-m
 import { installDataToolsMethods } from './methods/data-tools-methods.js';
 import { installResampleMethods } from './methods/resample-methods.js';
 import { installDerivedDatasetMethods } from './methods/derived-dataset-methods.js';
+import { installXcorrMethods } from './methods/xcorr-methods.js';
 import { installFilterMethods } from './methods/filter-methods.js';
 import { installTreeMethods } from './methods/tree-methods.js';
 import { installSessionMethods } from './methods/session-methods.js';
@@ -285,6 +286,7 @@ installTimeAxisInspectorMethods(OpenModelicaViewer);
 installDataToolsMethods(OpenModelicaViewer);
 installResampleMethods(OpenModelicaViewer);
 installDerivedDatasetMethods(OpenModelicaViewer);
+installXcorrMethods(OpenModelicaViewer);
 installFilterMethods(OpenModelicaViewer);
 installTreeMethods(OpenModelicaViewer);
 installSessionMethods(OpenModelicaViewer);
