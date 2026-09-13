@@ -284,6 +284,33 @@ Everything else follows from having that recipe:
   (`removeFile(id, { deferRebuild })`, then `{ rebuildAll }`): back-to-back
   rebuilds of the same panel raced inside Plotly.
 
+Four smaller things round it off:
+
+- **Create and plot** puts the dataset's curve on an *empty* time-series
+  panel, and when there is none it opens a new panel below the last one
+  (`_openPanelForDataset`) rather than drawing a lag or a new Δt over a
+  time axis that means something else. The dataset is registered with its
+  panel rebuild deferred: the split's own render redraws every panel once,
+  and two rebuilds in flight together raced inside Plotly.
+- **Values, read-only.** The ▦ button a dataset shows in the files list no
+  longer opens the CSV-parsing dialog (there was nothing parsed) but a table
+  of the first 200 rows with the parameters above it and the total count in a
+  note — the recipe is what to edit, and "save to disk" is where the rest is.
+- **The pencil says what it did.** Editing scrolls the Data tools panel into
+  view and the message line reads "Editing *name*: change the parameters
+  below and press Update", because the button sits a screen away from the
+  form it just filled.
+- **The CSV a dataset writes carries units in its headers** (`lag [s]`,
+  `x [V]`), the form the CSV parser reads straight back into a name and a
+  unit. Which is also why a variable description must never carry a bracketed
+  token that is not its unit.
+
+And one thing that is not about datasets: **every commit shows it is
+working**. The Create buttons go dead the moment they are pressed and, if
+the run is still going 250 ms later, the message line turns into a small
+spinner with "Computing *tool*…" — so a filter over a million samples is
+visibly in progress and a fast tool never flashes it (`_beginDataToolBusy`).
+
 The per-tool compute stays with the tool; the module only knows how to ask
 for it. The cross-correlation (§10) is the second recipe.
 

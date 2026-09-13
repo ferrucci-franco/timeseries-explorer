@@ -87,6 +87,9 @@ export function translateKernelError(err) {
     return translated;
 }
 
+// How long a commit may take before the panel says it is working.
+export const DATA_TOOL_BUSY_DELAY_MS = 250;
+
 export function installDataToolsMethods(TargetClass) {
     const proto = TargetClass.prototype;
 
@@ -512,8 +515,9 @@ proto._syncDataToolActions = function(editing, blocker) {
     // Create, and a banner naming what is being changed.
     const datasetEditing = !editing && this._datasetEditing ? this._datasetEditing : null;
     const updating = !!editing || !!datasetEditing;
+    const busy = !!this._dataToolBusy;
     if (createBtn) {
-        createBtn.disabled = !!blocker;
+        createBtn.disabled = !!blocker || busy;
         createBtn.textContent = i18n.t(updating ? 'dataToolUpdate' : 'dataToolCreate');
     }
     if (createPlotBtn) {
@@ -521,11 +525,14 @@ proto._syncDataToolActions = function(editing, blocker) {
         // to do — the live update is already redrawing that very trace.
         const alreadyPlotted = (!!editing && this._isDataToolVariablePlotted(editing.fileId, editing.name))
             || (!!datasetEditing && !!this.plotManager.hasTracesForFile?.(datasetEditing.fileId));
-        createPlotBtn.disabled = !!blocker || alreadyPlotted;
+        createPlotBtn.disabled = !!blocker || alreadyPlotted || busy;
         createPlotBtn.title = alreadyPlotted ? i18n.t('dataToolAlreadyPlotted') : '';
         createPlotBtn.textContent = i18n.t(updating ? 'dataToolUpdateAndPlot' : 'dataToolCreateAndPlot');
     }
-    if (clearBtn) clearBtn.textContent = i18n.t(updating ? 'dataToolCancel' : 'dataToolClear');
+    if (clearBtn) {
+        clearBtn.textContent = i18n.t(updating ? 'dataToolCancel' : 'dataToolClear');
+        clearBtn.disabled = busy;
+    }
     if (renameBtn) {
         // Hidden while drafting: there is nothing to rename yet, the field is
         // already open.
@@ -923,6 +930,46 @@ proto.commitDataTool = async function(options = {}) {
     // superseded" and write nothing. Committing IS the answer to the draft the
     // preview was going to draw, so the draft run is dropped rather than raced.
     this._cancelPendingDataToolPreview();
+    // Nothing on screen used to say a commit was running: a million-sample
+    // filter takes seconds in the worker, and a button that does nothing for
+    // seconds reads as a broken button. The buttons go dead at once; the message
+    // line says "computing" only if the run is still going after a moment, so a
+    // fast tool never flashes it.
+    const stopBusy = this._beginDataToolBusy();
+    try {
+        return await this._commitDataToolNow(options);
+    } finally {
+        stopBusy();
+    }
+};
+
+proto._beginDataToolBusy = function() {
+    this._dataToolBusy = true;
+    for (const id of ['data-tool-create', 'data-tool-create-plot', 'data-tool-clear']) {
+        const button = typeof document !== 'undefined' ? document.getElementById(id) : null;
+        if (button) button.disabled = true;
+    }
+    const tool = this._getSelectedDataTool?.() || '';
+    const label = this._dataToolLabel?.(tool) || '';
+    let timer = typeof setTimeout === 'function'
+        ? setTimeout(() => {
+            timer = null;
+            if (!this._dataToolBusy) return;
+            this._setOutlierMessage(() => i18n.t('dataToolWorking').replace('{tool}', label), 'busy');
+        }, DATA_TOOL_BUSY_DELAY_MS)
+        : null;
+    return () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        this._dataToolBusy = false;
+        // The commit wrote its own verdict over the "computing" line; only a
+        // line still saying "computing" is ours to take down.
+        if (this._dataToolMessage?.type === 'busy') this._setOutlierMessage('', '');
+        this._syncDataTools?.();
+    };
+};
+
+proto._commitDataToolNow = async function(options = {}) {
 
     // Resampling writes a file, not a variable, so it does not pass through the
     // create/update/definition machinery below at all.

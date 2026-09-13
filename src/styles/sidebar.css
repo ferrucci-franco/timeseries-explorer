@@ -923,6 +923,30 @@
     min-height: 2rem;
 }
 
+/* "Computing…": a small ring turning ahead of the text, so a commit that takes
+   seconds in the worker is visibly a commit in progress. */
+.data-tool-message.busy {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--text-secondary);
+}
+
+.data-tool-message.busy::before {
+    content: '';
+    flex: 0 0 auto;
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 50%;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--primary-color);
+    animation: data-tool-busy-spin 0.8s linear infinite;
+}
+
+@keyframes data-tool-busy-spin {
+    to { transform: rotate(360deg); }
+}
+
 .data-tool-label-row {
     display: flex;
     align-items: center;

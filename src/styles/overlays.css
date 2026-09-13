@@ -1283,6 +1283,64 @@
     word-break: normal;
 }
 
+/* The read-only rows of a derived dataset. Wide, scrolling, monospaced numbers. */
+.modal-dialog-dataset-values {
+    width: min(960px, 94vw);
+    max-width: none;
+    max-height: 88vh;
+}
+
+.modal-dialog-dataset-values .modal-message {
+    text-align: left;
+    white-space: normal;
+}
+
+.dataset-values-note {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.dataset-values-params {
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+}
+
+.dataset-values-params-label {
+    color: var(--text-secondary);
+}
+
+.dataset-values-scroll {
+    max-height: 55vh;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+.dataset-values-table {
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    min-width: 100%;
+}
+
+.dataset-values-table th,
+.dataset-values-table td {
+    padding: 0.2rem 0.6rem;
+    text-align: right;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.dataset-values-table th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-secondary, var(--bg-primary));
+    font-weight: 600;
+    text-align: right;
+}
+
 .modal-dialog-stats {
     width: min(1120px, 94vw);
     max-width: none;

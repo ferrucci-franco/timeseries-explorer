@@ -378,4 +378,87 @@ const recipeFor = (sourceFileId, step, sourceName = '') => ({
     assert.deepEqual(snapshot.files.map(f => f.id), [made.fileId], 'an orphan is saved as the plain file it now is');
 }
 
+// ── "Create and plot": an empty panel, or a new one ───────────────────────
+
+{
+    const h = new Harness();
+    const { fileId, data } = makeSource(h);
+    const made = h._registerDerivedDataset(recipeFor(fileId, 0.05), 'ds', (await h._computeResampleDataset(fileId, data, recipeFor(fileId, 0.05))).data);
+    // A layout with two panels, both drawing something.
+    const panels = ['p1', 'p2'];
+    h.layoutManager = {
+        root: { type: 'split', children: panels.map(id => ({ type: 'panel', id })) },
+        _collectPanelIds() { return [...panels]; },
+        splitPanel(anchor, direction) { this.split = { anchor, direction }; panels.push('p3'); },
+    };
+    for (const id of panels) h.plotManager.plots.set(id, { mode: 'timeseries', traces: [{ fileId, varName: 'x' }] });
+    const added = [];
+    h.plotManager.addTrace = (panelId, name) => { added.push([panelId, name, h.plotManager.activeFileId]); };
+    h.plotManager._rebuildAllPanels = () => { h.plotManager.rebuilt = (h.plotManager.rebuilt || 0) + 1; };
+    const dom = fakeDocument({});
+    dom.querySelector = selector => (selector.includes('data-id="p3"') ? { dataset: { id: 'p3' } } : null);
+    withDocument(dom, () => h._plotDerivedDatasetVariable(made.fileId, 'x'));
+    assert.deepEqual(h.layoutManager.split, { anchor: 'p2', direction: 'h' }, 'no empty panel: the last one is split below');
+    assert.deepEqual(added, [['p3', 'x', made.fileId]], 'the trace lands on the new panel, with the dataset active for the call');
+    assert.equal(h.activeFileId, fileId, 'and the source is active again afterwards');
+    assert.equal(h.plotManager.rebuilt || 0, 0, 'the split’s own render redraws; no extra rebuild');
+
+    // With an empty time-series panel nothing is split, and the rebuild the
+    // registration deferred runs here instead.
+    h.plotManager.plots.get('p2').traces = [];
+    h.layoutManager.split = null;
+    added.length = 0;
+    dom.querySelector = selector => (selector.includes('data-id="p2"') ? { dataset: { id: 'p2' } } : null);
+    withDocument(dom, () => h._plotDerivedDatasetVariable(made.fileId, 'x'));
+    assert.equal(h.layoutManager.split, null, 'an empty panel is used as is');
+    assert.deepEqual(added, [['p2', 'x', made.fileId]]);
+    assert.equal(h.plotManager.rebuilt, 1, 'the deferred rebuild ran');
+}
+
+// ── The read-only values view and the CSV header ──────────────────────────
+
+{
+    const h = new Harness();
+    const { fileId, data } = makeSource(h, { count: 401 });
+    const made = h._registerDerivedDataset(recipeFor(fileId, 0.01), 'ds', (await h._computeResampleDataset(fileId, data, recipeFor(fileId, 0.01))).data);
+    const table = h._datasetValuesTable(made.fileId);
+    assert.deepEqual(table.headers, ['time [s]', 'x [V]', 'y'], 'units ride on the headers where known');
+    assert.equal(table.total, 401);
+    assert.equal(table.shown, 200, 'the view is capped');
+    assert.equal(table.rows.length, 200);
+    assert.equal(table.rows[0][0], '0');
+    assert.equal(table.rows[1][0], '0.01');
+    assert.deepEqual(table.parameters, [], 'a resample of a file without parameters has none');
+    // The CSV the save button writes carries the same headers.
+    const csv = new TextDecoder().decode(h.files.get(made.fileId).syntheticBytes());
+    assert.equal(csv.split('\n')[0], 'time [s],x [V],y');
+}
+
+// ── The busy state around a commit ────────────────────────────────────────
+
+{
+    const h = new Harness();
+    h._setOutlierMessage = function(message, type) { this._dataToolMessage = { message, type }; };
+    h._syncDataTools = function() { this.synced = (this.synced || 0) + 1; };
+    const dom = fakeDocument({ 'data-tool-select': 'resample' });
+    withDocument(dom, () => {
+        const stop = h._beginDataToolBusy();
+        assert.equal(h._dataToolBusy, true);
+        assert.equal(dom.getElementById('data-tool-create').disabled, true, 'the buttons go dead at once');
+        assert.equal(dom.getElementById('data-tool-create-plot').disabled, true);
+        assert.equal(dom.getElementById('data-tool-clear').disabled, true);
+        assert.equal(h._dataToolMessage, undefined, 'nothing is said yet: a fast tool never flashes "computing"');
+        h._dataToolMessage = { message: 'computing', type: 'busy' };
+        stop();
+        assert.equal(h._dataToolBusy, false);
+        assert.equal(h._dataToolMessage.message, '', 'a line still saying "computing" is taken down');
+        assert.equal(h.synced, 1, 'the panel is re-synced, which re-enables the buttons');
+        // A verdict the commit wrote is left alone.
+        const again = h._beginDataToolBusy();
+        h._dataToolMessage = { message: 'Created', type: 'ok' };
+        again();
+        assert.equal(h._dataToolMessage.message, 'Created');
+    });
+}
+
 console.log('derived dataset tests passed');
