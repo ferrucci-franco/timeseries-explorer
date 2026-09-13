@@ -296,12 +296,17 @@ Everything else follows from having that recipe:
 
 Three smaller things round it off:
 
-- **Create and plot** puts the dataset's curve on an *empty* time-series
-  panel, and when there is none it opens a new panel below the last one
-  (`_openPanelForDataset`) rather than drawing a lag or a new Δt over a
-  time axis that means something else. The dataset is registered with its
-  panel rebuild deferred: the split's own render redraws every panel once,
-  and two rebuilds in flight together raced inside Plotly.
+- **Create and plot** depends on what the dataset's axis means. A
+  cross-correlation's lag axis is not time: its curve goes on an *empty*
+  time-series panel, and when there is none a new panel opens below the last
+  one (`_openPanelForDataset`) rather than drawing a lag over a time axis. A
+  resample keeps the source's time axis, only with another Δt, so its curve
+  goes on the panel already drawing the source variable (or the first panel
+  drawing anything), as a derived variable's does — the comparison with the
+  original is the point (`_plotDerivedDatasetVariable`'s `alongside`
+  option). The dataset is registered with its panel rebuild deferred: the
+  split's own render redraws every panel once, and two rebuilds in flight
+  together raced inside Plotly.
 - **No parsing button.** The ▦ button of the files list is hidden on a dataset:
   nothing was parsed, so there is nothing to adjust, and the rows themselves
   are on a panel already (a read-only table of the first rows was tried and

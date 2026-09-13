@@ -431,6 +431,26 @@ const recipeFor = (sourceFileId, step, sourceName = '') => ({
     assert.equal(h.layoutManager.split, null, 'an empty panel is used as is');
     assert.deepEqual(added, [['p2', 'x', made.fileId]]);
     assert.equal(h.plotManager.rebuilt, 1, 'the deferred rebuild ran');
+
+    // A resample shares the source's time axis, so "alongside" draws it on the
+    // panel showing the source variable — not on an empty one, never on a new one.
+    h.plotManager.plots.set('p1', { mode: 'timeseries', traces: [{ fileId, varName: 'y' }] });
+    h.plotManager.plots.set('p2', { mode: 'timeseries', traces: [{ fileId, varName: 'x' }] });
+    h.plotManager.plots.set('p3', { mode: 'timeseries', traces: [] });
+    added.length = 0;
+    h.plotManager.rebuilt = 0;
+    dom.querySelector = selector => (selector.includes('data-id="p2"') ? { dataset: { id: 'p2' } } : null);
+    withDocument(dom, () => h._plotDerivedDatasetVariable(made.fileId, 'x', { alongside: { fileId, name: 'x' } }));
+    assert.equal(h.layoutManager.split, null, 'nothing is split');
+    assert.deepEqual(added, [['p2', 'x', made.fileId]], 'the panel drawing the source variable');
+    assert.equal(h.plotManager.rebuilt, 1, 'the deferred rebuild ran');
+    // The source variable not drawn anywhere: the first panel drawing anything.
+    h.plotManager.plots.get('p2').traces = [{ fileId, varName: 'z' }];
+    added.length = 0;
+    dom.querySelector = selector => (selector.includes('data-id="p1"') ? { dataset: { id: 'p1' } } : null);
+    withDocument(dom, () => h._plotDerivedDatasetVariable(made.fileId, 'x', { alongside: { fileId, name: 'x' } }));
+    assert.deepEqual(added, [['p1', 'x', made.fileId]]);
+    assert.equal(h.layoutManager.split, null);
 }
 
 // ── The CSV header ────────────────────────────────────────────────────────

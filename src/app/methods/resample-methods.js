@@ -455,10 +455,13 @@ proto.commitResampleTool = async function(options = {}) {
     const target = this._registerDerivedDataset(recipe, outputName, built, { fileId: editing?.fileId || null, deferRebuild: !!options.plot });
     this._exitDerivedDatasetEditing?.();
     // "and plot" draws the resampled version of what the user was already
-    // looking at, when there is one; alphabetically-first is a poor guess.
+    // looking at, when there is one (alphabetically-first is a poor guess), and
+    // draws it on the same panel: the axis is the same time, only sampled
+    // differently, and the comparison is the point.
     if (options.plot) {
         const plotted = names.find(name => this._isDataToolVariablePlotted(fileId, name));
-        this._plotDerivedDatasetVariable(target.fileId, plotted || names[0]);
+        const name = plotted || names[0];
+        this._plotDerivedDatasetVariable(target.fileId, name, { alongside: { fileId, name } });
     }
 
     const emptyTotal = resampled.emptyCounts.reduce((sum, value) => sum + value, 0);
@@ -713,24 +716,47 @@ proto._findResampleFileByName = function(name) {
     return null;
 };
 
-// "Create and plot" for a derived dataset. Its axis is not the source's (a new
-// Δt, or a lag), so the curve goes onto an EMPTY time-series panel — and when
-// there is none, onto a panel opened for it below the last one, rather than
-// over a plot whose axis means something else.
+// "Create and plot" for a derived dataset. Two cases, decided by whether the
+// dataset's axis means the same thing as the source's:
+//
+//   · A lag axis (cross-correlation) does not. The curve goes onto an EMPTY
+//     time-series panel — and when there is none, onto a panel opened for it
+//     below the last one, rather than over a plot whose axis means something
+//     else.
+//   · A resample keeps the source's time axis, only with another Δt, and the
+//     point of plotting it is to see it AGAINST the original. So with
+//     `options.alongside = { fileId, name }` the curve goes where that source
+//     variable is drawn — as a derived variable's does — or, when it is not
+//     drawn, onto the first panel that shows anything.
 //
 // Registering a second file normally rebuilds every panel, and splitting the
 // layout re-renders every panel too; the two in flight together race inside
 // Plotly. So the commit registers the dataset with that rebuild DEFERRED, and
-// this either lets the split's render redraw everything once, or — when an
-// empty panel was there and nothing is split — runs the deferred rebuild here.
-proto._plotDerivedDatasetVariable = function(fileId, name) {
+// this either lets the split's render redraw everything once, or — when no
+// panel is split — runs the deferred rebuild here.
+proto._plotDerivedDatasetVariable = function(fileId, name, options = {}) {
     if (!name || typeof document === 'undefined') return;
     let panelId = null;
-    for (const [id, plot] of this.plotManager.plots) {
-        if (plot.mode === 'timeseries' && !plot.traces.length) { panelId = id; break; }
+    const alongside = options.alongside;
+    if (alongside) {
+        let firstDrawing = null;
+        for (const [id, plot] of this.plotManager.plots) {
+            if (plot.mode !== 'timeseries') continue;
+            if (plot.traces.some(trace => trace.fileId === alongside.fileId && trace.varName === alongside.name)) { panelId = id; break; }
+            if (firstDrawing === null && plot.traces.length) firstDrawing = id;
+        }
+        if (panelId === null) panelId = firstDrawing;
+    }
+    if (panelId === null) {
+        for (const [id, plot] of this.plotManager.plots) {
+            if (plot.mode === 'timeseries' && !plot.traces.length) { panelId = id; break; }
+        }
     }
     if (panelId !== null) {
         this.plotManager._rebuildAllPanels?.();
+    } else if (alongside) {
+        this.plotManager._rebuildAllPanels?.();
+        panelId = document.querySelector('.layout-panel')?.dataset.id ?? null;
     } else {
         panelId = this._openPanelForDataset();
         if (panelId === null) {
