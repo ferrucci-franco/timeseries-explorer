@@ -275,7 +275,9 @@ proto._buildXcorrData = function(sourceData, recipe, axis, result) {
     variables[rName] = {
         name: rName,
         data: result.values,
-        description: `${what}; ${normalization}${result.removeMean ? ', mean removed' : ''}; r[k] = Σ x[n+k]·y[n]`,
+        // No square brackets here: a bracketed token in a description reads as
+        // the variable's unit, everywhere from the tree to the CSV header.
+        description: `${what}; ${normalization}${result.removeMean ? ', mean removed' : ''}; r(k) = Σ x(n+k)·y(n)`,
         kind: 'variable',
         dataType: this.parser._detectDataType(result.values, 'variable'),
         isConstant: this.parser._isConstantValues(result.values),
@@ -356,10 +358,10 @@ proto.commitXcorrTool = async function(options = {}) {
     }
     const { data: built, result, axis } = computed;
     const editing = this._datasetEditing;
-    const target = this._registerDerivedDataset(recipe, outputName, built, { fileId: editing?.fileId || null });
+    const target = this._registerDerivedDataset(recipe, outputName, built, { fileId: editing?.fileId || null, deferRebuild: !!options.plot });
     this._exitDerivedDatasetEditing?.();
     const rName = plan.x === plan.y ? 'r_xx' : 'r_xy';
-    if (options.plot) this._plotResampledVariable(target.fileId, rName);
+    if (options.plot) this._plotDerivedDatasetVariable(target.fileId, rName);
 
     this._setOutlierMessage(() => {
         const base = i18n.t(target.replaced ? 'dataToolXcorrUpdated' : 'dataToolXcorrCreated')

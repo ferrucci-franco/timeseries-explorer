@@ -452,13 +452,13 @@ proto.commitResampleTool = async function(options = {}) {
     // Editing rewrites the dataset being edited, even under a new name; a fresh
     // run rewrites a dataset that already carries the name, or makes a new one.
     const editing = this._datasetEditing;
-    const target = this._registerDerivedDataset(recipe, outputName, built, { fileId: editing?.fileId || null });
+    const target = this._registerDerivedDataset(recipe, outputName, built, { fileId: editing?.fileId || null, deferRebuild: !!options.plot });
     this._exitDerivedDatasetEditing?.();
     // "and plot" draws the resampled version of what the user was already
     // looking at, when there is one; alphabetically-first is a poor guess.
     if (options.plot) {
         const plotted = names.find(name => this._isDataToolVariablePlotted(fileId, name));
-        this._plotResampledVariable(target.fileId, plotted || names[0]);
+        this._plotDerivedDatasetVariable(target.fileId, plotted || names[0]);
     }
 
     const emptyTotal = resampled.emptyCounts.reduce((sum, value) => sum + value, 0);
@@ -713,24 +713,56 @@ proto._findResampleFileByName = function(name) {
     return null;
 };
 
-proto._plotResampledVariable = function(fileId, name) {
-    if (!name) return;
-    // An empty panel first: the new file has its own time axis, and dropping it
-    // onto a panel already drawing the original would trip the incompatible-axis
-    // guard rather than show anything.
+// "Create and plot" for a derived dataset. Its axis is not the source's (a new
+// Δt, or a lag), so the curve goes onto an EMPTY time-series panel — and when
+// there is none, onto a panel opened for it below the last one, rather than
+// over a plot whose axis means something else.
+//
+// Registering a second file normally rebuilds every panel, and splitting the
+// layout re-renders every panel too; the two in flight together race inside
+// Plotly. So the commit registers the dataset with that rebuild DEFERRED, and
+// this either lets the split's render redraw everything once, or — when an
+// empty panel was there and nothing is split — runs the deferred rebuild here.
+proto._plotDerivedDatasetVariable = function(fileId, name) {
+    if (!name || typeof document === 'undefined') return;
     let panelId = null;
     for (const [id, plot] of this.plotManager.plots) {
         if (plot.mode === 'timeseries' && !plot.traces.length) { panelId = id; break; }
     }
-    if (panelId === null) {
-        const first = document.querySelector('.layout-panel');
-        panelId = first?.dataset.id ?? null;
+    if (panelId !== null) {
+        this.plotManager._rebuildAllPanels?.();
+    } else {
+        panelId = this._openPanelForDataset();
+        if (panelId === null) {
+            this.plotManager._rebuildAllPanels?.();
+            panelId = document.querySelector('.layout-panel')?.dataset.id ?? null;
+        }
     }
     if (panelId === null) return;
     const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
     // The trace belongs to the dataset's file; the active file (the source, where
     // the user is working) is left alone.
     if (panelEl) this.plotManager.withActiveFile(fileId, () => this.plotManager.addTrace(panelId, name, panelEl));
+};
+
+// Kept under its old name for callers that predate the second dataset tool.
+proto._plotResampledVariable = function(fileId, name) {
+    return this._plotDerivedDatasetVariable(fileId, name);
+};
+
+/**
+ * Split the last panel horizontally and return the id of the panel that
+ * appeared below it, or null when the layout cannot be split here.
+ */
+proto._openPanelForDataset = function() {
+    const layout = this.layoutManager;
+    if (!layout?.splitPanel || !layout._collectPanelIds) return null;
+    const before = layout._collectPanelIds(layout.root);
+    if (!before.length) return null;
+    const anchor = before[before.length - 1];
+    layout.splitPanel(anchor, 'h');
+    const after = layout._collectPanelIds(layout.root);
+    return after.find(id => !before.includes(id)) ?? null;
 };
 
 // ─── Serialization ────────────────────────────────────────────────────────
@@ -755,7 +787,13 @@ proto._resampleCsvBytes = function(data) {
     // read back by the CSV parser when a session is restored, so the formula
     // guard csvTextCell adds (an apostrophe before = + - @) would rename the
     // variable on the way back in and orphan the plots that reference it.
-    const parts = [[timeName, ...columns.map(([name]) => name)].map(csvCell).join(',')];
+    // A column that knows its unit says so in the header, "lag [s]", which is
+    // exactly the form the CSV parser reads back into a name and a unit.
+    const header = (name, variable) => {
+        const unit = (String(variable?.description || '').match(/\[([^\]]+)\]/) || [])[1] || '';
+        return unit ? `${name} [${unit}]` : name;
+    };
+    const parts = [[header(timeName, abscissa), ...columns.map(([name, variable]) => header(name, variable))].map(csvCell).join(',')];
     for (let r = 0; r < rows; r++) {
         const cells = new Array(columns.length + 1);
         const t = abscissa.data[r];

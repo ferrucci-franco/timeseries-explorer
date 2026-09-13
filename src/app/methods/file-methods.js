@@ -957,7 +957,14 @@ proto.reloadActiveFile = async function() {
     // Reloading a derived dataset means computing it again from its source's
     // current data — the one thing a file with no bytes behind it CAN reload.
     if (this._isDerivedDataset?.(entry)) {
-        await this._recomputeDerivedDataset(id);
+        this._showFileLoadingOverlay(1);
+        this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(entry));
+        try {
+            await this._waitForNextPaint();
+            await this._recomputeDerivedDataset(id);
+        } finally {
+            this._hideFileLoadingOverlay();
+        }
         return;
     }
     if (await this._refuseReloadOfInMemoryFile(entry)) return;
@@ -3998,12 +4005,16 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
         const csvParsingBtn = document.createElement('button');
         csvParsingBtn.className = 'file-entry-csv-parsing';
         csvParsingBtn.textContent = '▦';
-        csvParsingBtn.title = i18n.t('csvPreviewAction');
-        csvParsingBtn.setAttribute('aria-label', i18n.t('csvPreviewAction'));
-        csvParsingBtn.hidden = !this._isCsvTextEntry(entryData, fileId);
+        // A computed dataset has no parsing to adjust; the same button opens a
+        // read-only look at its rows instead.
+        const csvTitle = i18n.t(recipe ? 'derivedDatasetViewValues' : 'csvPreviewAction');
+        csvParsingBtn.title = csvTitle;
+        csvParsingBtn.setAttribute('aria-label', csvTitle);
+        csvParsingBtn.hidden = recipe ? false : !this._isCsvTextEntry(entryData, fileId);
         csvParsingBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            this.adjustCsvParsing(fileId);
+            if (recipe) this.showDatasetValues(fileId);
+            else this.adjustCsvParsing(fileId);
         });
 
         const matArraysBtn = document.createElement('button');
@@ -4155,6 +4166,8 @@ proto._isCsvTextEntry = function(entry, fileId = null) {
 proto.adjustCsvParsing = async function(fileId) {
     const entry = this.files.get(fileId);
     if (!entry || !this._isCsvTextEntry(entry, fileId)) return;
+    // Nothing was parsed: the rows were computed. Show them instead.
+    if (this._isDerivedDataset?.(entry)) return this.showDatasetValues(fileId);
     const displayName = this._fileDisplayName(entry);
     const plotEntry = this.plotManager.files.get(fileId);
     const currentProfile = plotEntry?.data?.metadata?.csvProfile || null;
