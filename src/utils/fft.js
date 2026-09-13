@@ -263,6 +263,48 @@ export function normalizeFftScale(scale) {
     return 'normal';
 }
 
+// Amplitude scaling is a pure remap of the raw spectrum: linear, dB, or dB
+// relative to the largest non-DC bin. It costs one pass over the bins and needs
+// nothing the transform produced beyond the amplitudes themselves, which is why
+// switching the scale never has to re-run the FFT (see the spectrum cache in
+// plots/methods/fft-methods.js).
+export function applyAmplitudeScale(rawAmplitudes, scale = 'normal', dbFloor = FFT_DB_FLOOR) {
+    const normalized = normalizeFftScale(scale);
+    const floor = Number.isFinite(Number(dbFloor)) ? Number(dbFloor) : FFT_DB_FLOOR;
+    const epsilon = 10 ** (floor / 20);
+    const bins = rawAmplitudes?.length || 0;
+    // Linear is the spectrum as computed: hand back the same array rather than
+    // a copy, so the common case allocates nothing.
+    if (normalized === 'normal') {
+        return { amplitudes: rawAmplitudes, scale: normalized, relativePeakValid: true, warnings: [] };
+    }
+    let relativePeak = -Infinity;
+    if (normalized === 'dbRelative') {
+        for (let k = 1; k < bins; k++) {
+            const value = rawAmplitudes[k];
+            if (Number.isFinite(value) && value > relativePeak) relativePeak = value;
+        }
+    }
+    const relativePeakValid = Number.isFinite(relativePeak) && relativePeak > epsilon;
+    const amplitudes = new Float64Array(bins);
+    for (let k = 0; k < bins; k++) {
+        const amplitude = rawAmplitudes[k];
+        if (normalized === 'db') {
+            amplitudes[k] = Math.max(floor, 20 * Math.log10(Math.max(amplitude, epsilon)));
+        } else {
+            amplitudes[k] = relativePeakValid
+                ? Math.max(floor, 20 * Math.log10(Math.max(amplitude / relativePeak, epsilon)))
+                : floor;
+        }
+    }
+    return {
+        amplitudes,
+        scale: normalized,
+        relativePeakValid,
+        warnings: normalized === 'dbRelative' && !relativePeakValid ? ['noSpectralContent'] : [],
+    };
+}
+
 export function analyzeSampling(times, options = {}) {
     const timeKind = options.timeKind || 'numeric';
     const tolerance = Number.isFinite(Number(options.tolerance))
@@ -392,11 +434,9 @@ export function computeAmplitudeSpectrum(input = {}) {
     const { real: re, imag: im } = fftRadix2(real);
     const bins = (nfft >> 1) + 1;
     const frequencies = new Float64Array(bins);
-    const amplitudes = new Float64Array(bins);
     const rawAmplitudes = new Float64Array(bins);
     const scale = normalizeFftScale(input.amplitudeScale || input.scale || 'normal');
     const dbFloor = Number.isFinite(Number(input.dbFloor)) ? Number(input.dbFloor) : FFT_DB_FLOOR;
-    const epsilon = 10 ** (dbFloor / 20);
     const sampleRate = sampling.sampleRate;
 
     for (let k = 0; k < bins; k++) {
@@ -406,30 +446,12 @@ export function computeAmplitudeSpectrum(input = {}) {
         rawAmplitudes[k] = amplitude;
     }
 
-    let relativePeak = -Infinity;
-    if (scale === 'dbRelative') {
-        for (let k = 1; k < rawAmplitudes.length; k++) {
-            const value = rawAmplitudes[k];
-            if (Number.isFinite(value) && value > relativePeak) relativePeak = value;
-        }
-    }
-    const relativePeakValid = Number.isFinite(relativePeak) && relativePeak > epsilon;
-    for (let k = 0; k < bins; k++) {
-        const amplitude = rawAmplitudes[k];
-        if (scale === 'db') {
-            amplitudes[k] = Math.max(dbFloor, 20 * Math.log10(Math.max(amplitude, epsilon)));
-        } else if (scale === 'dbRelative') {
-            amplitudes[k] = relativePeakValid
-                ? Math.max(dbFloor, 20 * Math.log10(Math.max(amplitude / relativePeak, epsilon)))
-                : dbFloor;
-        } else {
-            amplitudes[k] = amplitude;
-        }
-    }
+    const scaled = applyAmplitudeScale(rawAmplitudes, scale, dbFloor);
+    const amplitudes = scaled.amplitudes;
 
     const warnings = [];
     if (normalized.duplicateCount > 0) warnings.push('duplicateTimes');
-    if (scale === 'dbRelative' && !relativePeakValid) warnings.push('noSpectralContent');
+    warnings.push(...scaled.warnings);
     return {
         ok: true,
         frequencies,
