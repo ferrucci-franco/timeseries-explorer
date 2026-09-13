@@ -285,7 +285,7 @@ Everything else follows from having that recipe:
   rebuilds of the same panel raced inside Plotly.
 
 The per-tool compute stays with the tool; the module only knows how to ask
-for it. A cross-correlation dataset (lag axis) is the next recipe to plug in.
+for it. The cross-correlation (§10) is the second recipe.
 
 ## 6. Where the work runs
 
@@ -336,6 +336,13 @@ away.
   for editing and rewritten in place under a new name, serialized under the
   source and restored with its id mapped, closed with its source after one
   question (and never a second one), and left alone when orphaned.
+- `scripts/test-xcorr.mjs` — the cross-correlation kernel (the MATLAB sign on
+  a delayed copy both ways, the four normalisations by definition, mean
+  removal, holes as removed pairs, the FFT route against the direct one) and
+  its panel (Δt and lag range on seconds, calendar, index and declared-unit
+  axes, every refusal, the lag-axis dataset with the peak as parameters, the
+  sign sentence, and the recipe round trip through the derived-dataset
+  machinery).
 - `scripts/test-detrend-filter.mjs` — the detrend fits (exactness on a line and a
   parabola, an epoch-ms axis, holes, the moving-average high-pass) and the
   filter (coefficient parsing, Schur–Cohn cross-checked against root finding on
@@ -506,3 +513,48 @@ Two consequences follow:
   reopens with; a definition whose sections do not describe a cascade demotes
   to its b/a, which is at worst the identity. A session from before this
   feature is a manual filter, as it always was.
+
+## 10. Cross-correlation
+
+The second derived-dataset tool, and the first whose axis is not time at all.
+Two signals of one file in, r_xy as a function of **lag** out, on a `lag` axis
+in the file's time unit (seconds for a calendar axis, the declared unit
+otherwise, samples when there is no time axis). Kernel:
+`src/compute/kernels/xcorr.js`; panel: `src/app/methods/xcorr-methods.js`.
+
+**The definition and the sign.** r_xy[k] = Σₙ x[n+k]·y[n], the convention of
+MATLAB's `xcorr(x, y)` and SciPy's `correlate(x, y)`. A peak at a *positive*
+lag means x[n+k] lines up with y[n]: x runs behind y — x is the delayed
+signal. The kernel test pins this on a delayed copy in both directions, the
+help says it in words, and the message after Create reads it out ("omega
+runs behind theta by 0.64 s") because the sign of a lag is the one thing every
+user of a cross-correlation gets wrong once. Choosing the same signal twice
+gives the autocorrelation, r_xx, even and largest at lag 0.
+
+**Normalisation.** The four of `xcorr` by their names: `none` (the raw sum),
+`biased` (÷ N), `unbiased` (÷ the overlapping pairs), `coeff` (÷ √(r_xx[0]·
+r_yy[0]), so the autocorrelation is exactly 1 at lag 0 and everything sits
+in [−1, 1]). `coeff` is the default. *Remove the mean* is on by default: a
+constant offset correlates with everything, and with the means gone `coeff`
+is the Pearson coefficient of the two signals at each lag.
+
+**Holes.** A product is counted only when both samples are finite, so a NaN
+removes pairs instead of poisoning every lag. `unbiased` divides by the pairs
+that exist; `biased` keeps N; a lag with no pair is NaN. The FFT route handles
+this with the same arithmetic — the series are zero-filled where missing and
+the pair counts come out of the FFT of the two masks, since the correlation of
+two indicator functions *is* the overlap count. Direct O(N·L) below four
+million multiply-adds, FFT above; the test holds the two routes to 1e-9 with
+holes in both series.
+
+**The axis.** A lag is a whole number of samples, so it is a time only on a
+uniform Δt: the same `detectSamplingGaps` gate as the filter designer, and an
+irregular or backwards axis refuses the tool with the reason. The maximum lag
+is typed in the axis unit and converted against the median step; it opens at
+a quarter of the record. The dataset carries the peak lag and the peak value
+as *parameters*, so they show with their values in the tree next to the curve.
+
+Everything else — recipe, tree family, files-list nesting, Transformations
+row, edit in place, reload, sessions, cascade close — is §5c unchanged; the
+tool only had to provide `_computeXcorrDataset`, `_writeXcorrForm` and a
+description.

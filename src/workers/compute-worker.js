@@ -8,7 +8,7 @@
 // worker (src/workers/fft-worker.js) and its hand-rolled lifecycle. That
 // migration has not happened yet; both exist today.
 
-import { runDataToolPipeline, runResample } from '../compute/kernels/index.js';
+import { runDataToolPipeline, runResample, runCrossCorrelation } from '../compute/kernels/index.js';
 import { computeAmplitudeSpectrum } from '../utils/fft.js';
 
 const HANDLERS = {
@@ -27,6 +27,13 @@ const HANDLERS = {
         return {
             result,
             transfer: collectBuffers([result.grid, ...result.columns]),
+        };
+    },
+    'dataTool:xcorr': (payload) => {
+        const result = runCrossCorrelation(payload || {});
+        return {
+            result,
+            transfer: collectBuffers([result.lags, result.values, result.counts]),
         };
     },
     'fft:spectrum': (input) => {

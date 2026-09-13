@@ -75,6 +75,7 @@ proto._computeDerivedDataset = async function(recipe) {
     const sourceData = recipe?.sourceFileId ? this.plotManager.files.get(recipe.sourceFileId)?.data : null;
     if (!sourceData) return null;
     if (recipe.tool === 'resample') return this._computeResampleDataset(recipe.sourceFileId, sourceData, recipe);
+    if (recipe.tool === 'xcorr') return this._computeXcorrDataset(recipe.sourceFileId, sourceData, recipe);
     throw new Error(`Unknown derived-dataset tool: ${recipe.tool}`);
 };
 
@@ -156,6 +157,7 @@ proto._editDerivedDataset = function(fileId) {
     if (toolSelect) toolSelect.value = recipe.tool;
     this._syncDataTools?.();
     if (recipe.tool === 'resample') this._writeResampleForm?.(recipe, entry.name);
+    if (recipe.tool === 'xcorr') this._writeXcorrForm?.(recipe, entry.name);
     this._syncDataTools?.();
     document.getElementById('data-tool-select')?.scrollIntoView?.({ block: 'nearest' });
 };
@@ -330,6 +332,7 @@ proto._findDerivedDatasetByName = function(sourceFileId, name) {
 proto._derivedDatasetDescription = function(recipe) {
     if (!recipe) return '';
     if (recipe.tool === 'resample') return this._resampleRecipeDescription?.(recipe) || 'resample';
+    if (recipe.tool === 'xcorr') return this._xcorrRecipeDescription?.(recipe) || 'cross-correlation';
     return recipe.tool;
 };
 

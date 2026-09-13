@@ -31,6 +31,7 @@ import {
 import { FILTER_INIT_MODES, FILTER_MODES, normalizeFilterRestartGap, normalizeSos } from '../../compute/kernels/iir.js';
 import { normalizeFilterDesign } from '../../compute/kernels/filter-design.js';
 import { FILTER_DESIGN_FIELD_IDS } from './filter-methods.js';
+import { XCORR_FIELD_IDS } from './xcorr-methods.js';
 // Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
 // the two features spell a duration the same way.
 import { formatNaturalDuration } from '../../utils/fft.js';
@@ -46,7 +47,7 @@ const DATA_TOOLS = new Set([
 // the source file — see resample-methods.js. These are selectable in the picker
 // and share the form, but never enter the definition registry, the
 // transformations table, the editing state or the preview.
-const FILE_DATA_TOOLS = new Set(['resample']);
+const FILE_DATA_TOOLS = new Set(['resample', 'xcorr']);
 // The resample source picker's "every variable" entry. Deliberately not a legal
 // variable name, so it can never collide with a real one.
 export const RESAMPLE_ALL_VARIABLES = '__all_variables__';
@@ -197,6 +198,7 @@ proto.initDataTools = function() {
     }
 
     this.initResampleTool?.();
+    this.initXcorrTool?.();
     this.initFilterTool?.();
 
     this._dataToolParameterInputs().forEach(input => {
@@ -334,6 +336,9 @@ proto._syncDataTools = function() {
     this._syncFilterControls?.();
 
     const fileTool = this._isFileDataTool(tool);
+    // Only the resampler takes the whole file at once; the other file tool
+    // (cross-correlation) picks one signal here and a second one of its own.
+    const wholeFileTool = tool === 'resample';
     const previous = sourceSelect.value;
     const entries = hasTool && allowed ? this._getDataToolSourceEntries(data, tool, editing?.name) : [];
 
@@ -357,7 +362,7 @@ proto._syncDataTools = function() {
         // Resampling rebuilds the whole dataset onto one grid, so "every
         // variable" is its natural default: a file with one column on the new
         // axis and the rest left behind is not a dataset anyone asked for.
-        if (fileTool) {
+        if (wholeFileTool) {
             const option = document.createElement('option');
             option.value = RESAMPLE_ALL_VARIABLES;
             option.textContent = i18n.t('dataToolResampleAllVariables').replace('{count}', String(entries.length));
@@ -378,9 +383,9 @@ proto._syncDataTools = function() {
     }
 
     const keptPrevious = entries.some(([name]) => name === previous)
-        || (fileTool && previous === RESAMPLE_ALL_VARIABLES);
+        || (wholeFileTool && previous === RESAMPLE_ALL_VARIABLES);
     if (keptPrevious) sourceSelect.value = previous;
-    if (!fileTool && !sourceSelect.value) outputInput.value = '';
+    if (!wholeFileTool && !sourceSelect.value) outputInput.value = '';
     // The suggestion is written once, when the source is picked (see the change
     // handler). Re-suggesting here would refill the field the moment the user
     // cleared it to type their own name.
@@ -389,9 +394,12 @@ proto._syncDataTools = function() {
     }
 
     const sourceVariable = sourceSelect.value ? data?.variables?.[sourceSelect.value] : null;
-    const hasSource = fileTool
+    const hasSource = wholeFileTool
         ? (hasTool && allowed && entries.length > 0)
         : (hasTool && allowed && !!sourceSelect.value && !!sourceVariable);
+    // The second picker follows the first: it is filled from the same entries
+    // and defaults to the first signal until the user picks another.
+    this._syncXcorrControls?.();
     const hasValidConfig = !hasSource || !!this._tryReadDataToolConfig();
 
     sourceSelect.disabled = !hasTool || !allowed || !entries.length;
@@ -426,6 +434,9 @@ proto._syncDataTools = function() {
     for (const id of ['resample-grid-mode', 'resample-method', 'resample-step',
         'resample-factor', 'resample-count', 'resample-gap-policy']) {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'resample');
+    }
+    for (const id of XCORR_FIELD_IDS) {
+        document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'xcorr');
     }
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
         input.disabled = !hasSource || tool !== 'removeOutliers' || lazy;
@@ -465,6 +476,10 @@ proto._dataToolCommitBlocker = function({ hasSource, hasValidConfig, editing, fi
         if (!name) return 'dataToolResampleFileNameRequired';
         // A grid that does not resolve to a usable Δt and sample count is the one
         // way this tool can be misconfigured, and the summary already says which.
+        if (tool === 'xcorr') {
+            const plan = this._xcorrPlan(data);
+            return plan.ok ? '' : (plan.code || 'dataToolFixParameters');
+        }
         return this._resamplePlan(data).ok ? '' : 'dataToolFixParameters';
     }
     if (!hasSource) return 'dataToolChooseVariable';
@@ -873,6 +888,7 @@ proto._suggestOutlierOutputName = function(sourceName) {
 };
 
 proto._suggestDataToolOutputName = function(sourceName, tool = this._getSelectedDataTool()) {
+    if (tool === 'xcorr') return this._suggestXcorrFileName(sourceName);
     if (this._isFileDataTool(tool)) return this._suggestResampleFileName();
     if (!sourceName) return '';
     const suffix = {
@@ -910,7 +926,11 @@ proto.commitDataTool = async function(options = {}) {
 
     // Resampling writes a file, not a variable, so it does not pass through the
     // create/update/definition machinery below at all.
-    if (this._isFileDataTool()) return this.commitResampleTool(options);
+    if (this._isFileDataTool()) {
+        return this._getSelectedDataTool() === 'xcorr'
+            ? this.commitXcorrTool(options)
+            : this.commitResampleTool(options);
+    }
 
     const editing = this._dataToolEditing;
     const context = this._getOutlierContext();
@@ -1241,6 +1261,7 @@ const DATA_TOOL_PARAMETER_IDS = [
     'resample-factor',
     'resample-count',
     'resample-gap-policy',
+    ...XCORR_FIELD_IDS,
 ];
 
 // A new transformation starts from the tool's defaults. Carrying the last run's
@@ -1267,6 +1288,7 @@ proto._resetDataToolParameters = function() {
         input.checked = input.defaultChecked;
     });
     this._seedResampleDefaults?.();
+    this._seedXcorrDefaults?.();
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
@@ -1684,6 +1706,7 @@ proto._dataToolLabel = function(tool) {
         detrend: 'dataToolDetrend',
         filter: 'dataToolFilter',
         resample: 'dataToolResample',
+        xcorr: 'dataToolXcorr',
     }[tool] || 'dataTools');
 };
 
@@ -2345,6 +2368,7 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     }
     if (tool === 'filter') return this._getFilterConfig();
     if (tool === 'resample') return this._getResampleConfig();
+    if (tool === 'xcorr') return this._getXcorrConfig();
 
     const method = this._getOutlierDetectorMethod();
     if (lazy && method !== 'bounds') throw new Error(i18n.t('dataToolLazyBoundsOnly'));
@@ -2840,6 +2864,7 @@ proto._resetDataToolPicker = function() {
     this._toggleFilterGapHelpPopover?.(false);
     this._toggleFilterDirectionHelpPopover?.(false);
     this._toggleFilterDesignHelpPopover?.(false);
+    this._toggleXcorrHelpPopover?.(false);
     this._setOutlierMessage('', '');
     this._syncDataTools?.();
 };

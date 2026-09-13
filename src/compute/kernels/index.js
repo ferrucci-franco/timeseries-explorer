@@ -12,11 +12,13 @@ import { fillMissingValues } from './interpolate.js';
 import { computeDetrend } from './detrend.js';
 import { applyFilter, inspectFilter, inspectSos } from './iir.js';
 import { designFilter } from './filter-design.js';
+import { computeCrossCorrelation, runCrossCorrelation } from './xcorr.js';
 import { detectOutlierIndexes, interpolateOutliers, replaceOutliersWithNaN } from './outliers.js';
 import { buildResampleGrid, resampleSourceAxis, resampleValues, medianStep } from './regrid.js';
 
 export { computeDerivative, computeIntegral, computeMovingAverage, fillMissingValues };
 export { computeDetrend, applyFilter, inspectFilter, inspectSos, designFilter };
+export { computeCrossCorrelation, runCrossCorrelation };
 // The Integral analysis mode's scalar total. Not a Data Tools step — it creates
 // no variable — but it belongs to the same pure-kernel family and is re-exported
 // here so callers have one import site for the compute layer.
