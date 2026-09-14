@@ -4386,6 +4386,23 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     });
     toolbar.appendChild(cursorBtn);
 
+    // Listen to what the panel is showing. Next to A|B because both are tools
+    // over the same time data — and because the strip it opens reads the same
+    // selection the analysis modes use.
+    const audioBtn = document.createElement('button');
+    audioBtn.className = 'layout-toolbar-btn panel-action-btn panel-audio-btn' + (plot?.audio?.open ? ' active' : '');
+    audioBtn.textContent = '🔊';
+    // Optional-chained like the other cross-module toolbar hooks: without the
+    // audio module installed the button stays disabled rather than throwing.
+    audioBtn.title = this._audioButtonTitle?.(plot) || i18n.t('audioToggle');
+    audioBtn.disabled = !this._audioPanelPlayable?.(plot);
+    audioBtn.setAttribute('aria-pressed', String(!!plot?.audio?.open));
+    audioBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._toggleAudioStrip(panelId);
+    });
+    toolbar.appendChild(audioBtn);
+
     // Quick numeric summary for reports and lab analysis
     const statsBtn = document.createElement('button');
     statsBtn.className = 'layout-toolbar-btn panel-action-btn panel-stats-btn';

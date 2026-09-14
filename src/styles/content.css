@@ -3730,3 +3730,123 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     background: var(--hover-bg);
     color: var(--text-primary);
 }
+
+/* ============================================
+   Audio playback — the strip under a panel and the playhead over its curve
+   (src/plots/methods/audio-methods.js, issue #89)
+   ============================================ */
+
+.audio-strip {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--border-color);
+    background-color: var(--bg-primary);
+    padding: 4px 6px;
+    font-size: 11px;
+    color: var(--text-primary);
+}
+
+.audio-strip-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.audio-btn {
+    flex: 0 0 auto;
+    min-width: 26px;
+    height: 22px;
+    padding: 0 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.audio-btn:hover:not(:disabled) { background-color: var(--hover-bg); }
+.audio-btn:disabled { opacity: 0.45; cursor: default; }
+.audio-btn.active {
+    border-color: var(--audio-accent);
+    color: var(--audio-accent);
+}
+
+.audio-readout {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--text-primary);
+}
+
+.audio-seek { flex: 1 1 90px; min-width: 70px; }
+.audio-volume { flex: 0 0 64px; }
+
+.audio-source,
+.audio-scale {
+    flex: 0 1 auto;
+    max-width: 150px;
+    height: 22px;
+    padding: 0 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 11px;
+}
+
+.audio-gain-db {
+    flex: 0 0 56px;
+    height: 22px;
+    padding: 0 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 11px;
+}
+
+.audio-dc {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+.audio-strip-note {
+    margin-top: 3px;
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    line-height: 1.35;
+}
+
+/* The playhead lives in the plot container, positioned in pixels like the
+   hover and cursor overlays, so it follows zooming and panning. */
+.audio-playhead {
+    position: absolute;
+    width: 2px;
+    margin-left: -1px;
+    background-color: var(--audio-accent);
+    z-index: 6;
+    pointer-events: none;
+}
+
+.audio-playhead::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -3px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 6px solid var(--audio-accent);
+}
+
+.panel-audio-btn.active {
+    border-color: var(--audio-accent);
+    color: var(--audio-accent);
+}

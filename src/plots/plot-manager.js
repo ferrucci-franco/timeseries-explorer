@@ -13,6 +13,7 @@ import { installPlotCalendarHeatmapMethods } from './methods/heatmap-methods.js'
 import { installPlotTemporalProfileMethods } from './methods/temporal-profile-methods.js';
 import { installPlotIntegralMethods } from './methods/integral-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
+import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 
 /**
@@ -121,6 +122,9 @@ class PlotManager {
             }
         }
 
+        // A closed file must not keep sounding, and its samples must not be
+        // held by a buffer built from them.
+        this.stopAudioPlayback?.();
         this.files.delete(fileId);
         if (this.activeFileId === fileId) {
             this.activeFileId = this.files.size > 0 ? [...this.files.keys()][0] : null;
@@ -676,6 +680,25 @@ class PlotManager {
         }
     }
 
+    /**
+     * Resize one panel's charts. Opening or closing something that takes height
+     * inside the panel — the audio strip — changes the container under Plotly,
+     * whose SVG keeps its old pixel height until it is told. Waiting for the
+     * ResizeObserver leaves the drag layer overhanging what is now below it.
+     */
+    _resizePanelCharts(panelId) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        const divs = [plot.div, plot.fftDiv, plot.histogramDiv, plot.heatmapDiv,
+            plot.temporalProfileDiv, plot.integralDiv, plot.integralPieDiv,
+            plot.correlationDiv].filter(div => div?.isConnected);
+        for (const div of divs) {
+            Promise.resolve(Plotly.Plots.resize(div)).then(() => {
+                this._refreshPanelDomOverlays(plot);
+            }).catch(() => {});
+        }
+    }
+
     resizeAll() {
         for (const [, plot] of this.plots) {
             if (!plot.div) continue;
@@ -699,6 +722,9 @@ class PlotManager {
         if (this.syncHover && typeof this._hideHoverOverlay === 'function') {
             this._hideHoverOverlay(plot);
         }
+        // The playhead is placed in pixels like the cursors are, so it has to
+        // be re-placed for the same reasons: a zoom, a pan, a resize.
+        this._refreshAudioPlayhead?.(plot);
     }
 
     autoZoomAll() {
@@ -709,6 +735,7 @@ class PlotManager {
     }
 
     clearAll() {
+        this.stopAudioPlayback?.();
         for (const [id] of this.plots) this._clearPanel(id);
     }
 
@@ -1926,6 +1953,7 @@ class PlotManager {
     _destroyChart(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        this._teardownAudioForPanel?.(panelId, plot);
         plot._eagerInitialDetailToken = null;
         delete plot._eagerInitialDetailDeferred;
         delete plot._eagerInitialDetailReady;
@@ -2238,6 +2266,23 @@ class PlotManager {
             // (Heatmap, Temporal Profile, a stale Correlation); the CSV option
             // inside is the one that reports why it is unavailable.
             exportBtn.disabled = !has;
+        }
+        const audioBtn = panelEl.querySelector('.panel-audio-btn');
+        if (audioBtn) {
+            const playable = this._audioPanelPlayable?.(plot);
+            audioBtn.disabled = !playable;
+            audioBtn.title = this._audioButtonTitle?.(plot) || audioBtn.title;
+            audioBtn.classList.toggle('active', !!plot?.audio?.open);
+            audioBtn.setAttribute('aria-pressed', String(!!plot?.audio?.open));
+            if (!playable && plot?.audio?.open) {
+                // The panel changed under an open strip (mode switch, traces
+                // removed). Close it rather than leaving controls that cannot
+                // do anything.
+                plot.audio.open = false;
+                this._teardownAudioForPanel?.(panelId, plot);
+            } else if (plot?.audio?.open) {
+                this._syncAudioStrip?.(panelId);
+            }
         }
         const statsBtn = panelEl.querySelector('.panel-stats-btn');
         if (statsBtn) {
@@ -3336,6 +3381,9 @@ class PlotManager {
             correlationDiv: null,
             correlationContainer: null,
             correlation: this._defaultCorrelationState?.() || null,
+            // Listening state belongs to the panel; the player itself is one
+            // for the whole app (src/plots/methods/audio-methods.js).
+            audio: this._defaultAudioState?.() || null,
             // state-anim mode
             stateSlots:   { x: [], dx: [], fileId: null }, // x: [varName,...], dx: [derName,...]
             stateAnimDim: 2,
@@ -3922,5 +3970,6 @@ installPlotCalendarHeatmapMethods(PlotManager);
 installPlotTemporalProfileMethods(PlotManager);
 installPlotIntegralMethods(PlotManager);
 installPlotExportMethods(PlotManager);
+installPlotAudioMethods(PlotManager);
 
 export default PlotManager;

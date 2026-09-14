@@ -27,6 +27,9 @@
     /* Green stays readable on the notice's tinted background rather than being
        one shade shared by both themes: dark enough here, light enough there. */
     --notice-privacy-color: #2e7d32;
+    /* The playhead and the audio strip's accent. Deliberately not the plot
+       palette: the mark has to stay legible on top of any trace colour. */
+    --audio-accent: #d4552f;
 }
 
 .theme-dark {
@@ -44,6 +47,7 @@
     --drop-zone-drag-card-bg: #132f4a;
     --drop-zone-drag-card-border: #4aa3ff;
     --notice-privacy-color: #81c784;
+    --audio-accent: #ff7e52;
 }
 
 /* ============================================
