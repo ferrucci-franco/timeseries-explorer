@@ -391,17 +391,22 @@ tools that legitimately measure something to fill their own form (the
 resampler's Δt, the interpolator's missing-run count) at around 130 ms once
 per file.
 
-What is left, when the signal IS on a panel, is not in this story and not
-about the number of points: the panel already decimates to ~2,000 points for
-the visible window, and Plotly draws them in about 100 ms. A CPU profile of
-one parameter change puts the remaining seconds outside JavaScript
-altogether, in WebGL context work — `_buildTimeTrace` picks `scattergl` over
-`scatter` from the length of the SOURCE series (2.88 M ≥ the 50,000-point
-threshold) rather than from the ~2,000 points actually handed to Plotly, so
-every redraw of a long signal builds a GL context to draw a short trace.
-Forcing the same redraw through SVG takes it from 3.5 s to 0.2 s in a
-software-rendering container; on a machine with a GPU the difference will be
-smaller. That is a plotting matter, untouched here.
+What was left, when the signal IS on a panel, turned out not to be about the
+number of points at all: the panel already decimates to ~2,000 points for the
+visible window, and Plotly draws them in about 100 ms. A CPU profile of one
+parameter change put the remaining seconds outside JavaScript altogether, in
+WebGL context work — `_buildTimeTrace` picked `scattergl` over `scatter` from
+the length of the SOURCE series (2.88 M ≥ the 50,000-point threshold) rather
+than from the ~2,000 points actually handed to Plotly, so every redraw of a
+long signal built a GL context to draw a short trace. The choice is now made
+from the drawn length, which is the question GL answers ("a lot of points on
+screen?"); with the visual limit off, or set above the threshold, the full
+series really is drawn and GL comes back, and a step trace stays SVG either
+way because `hv` is an SVG line shape. One preview redraw on that file went
+from 3.5 s to 0.2 s of blocking in a software-rendering container — on a
+machine with a GPU the difference will be smaller, but a context per redraw
+is not free anywhere. A side effect worth having: `scattergl` ignores
+`line.dash`, so the dashed preview curve only really looks dashed as SVG.
 
 The one cost of a preview that is genuinely this panel's: the whole series
 and its time axis go to the compute worker and the whole result comes back,

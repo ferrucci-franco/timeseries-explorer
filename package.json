@@ -111,6 +111,7 @@
     "test:temporal-profile-lazy": "node scripts/test-temporal-profile-lazy.mjs",
     "test:mode-toolbar": "node scripts/test-mode-toolbar.mjs",
     "test:timeseries-stack": "node scripts/test-timeseries-stack.mjs",
+    "test:timeseries-renderer": "node scripts/test-timeseries-renderer.mjs",
     "test:timeseries-y-expand": "node scripts/test-timeseries-y-expand.mjs",
     "test:missing-data": "node scripts/test-missing-data.mjs",
     "test:missing-lazy": "node scripts/test-missing-lazy.mjs",
@@ -173,7 +174,7 @@
   "build": {
     "appId": "io.github.ferrucci-franco.timeseries-explorer",
     "productName": "Time Series Explorer",
-    "copyright": "Copyright © 2026 Franco Ferrucci",
+    "copyright": "Copyright \u00a9 2026 Franco Ferrucci",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "icon": "build/icons/timeseries-explorer-icon.png",
     "directories": {
