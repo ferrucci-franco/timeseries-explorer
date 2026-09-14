@@ -1077,7 +1077,6 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         this._setFftStatus(plot, i18n.t('fftCalculating'), 'loading');
         this._setFftComputing(plot, true);
     }
-    const spectra = [];
     const fullEntries = [];
     const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
     // Step of the analyzed span, as the uniformity gate measured it. Only worth
@@ -1170,13 +1169,11 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     else if (view.preserveX !== false && liveXAxis && liveXAxis.autorange === false && Array.isArray(liveXAxis.range)) {
         displayRange = liveXAxis.range;
     }
-    for (const entry of fullEntries) spectra.push(this._buildFftSpectrumTrace(plot, entry, displayRange));
-    // Keep hidden traces in the spectrum data as legendonly placeholders so
-    // their legend entry persists (greyed) instead of vanishing on toggle.
-    for (const trace of plot.traces || []) {
-        if (this._isVisible(trace)) continue;
-        spectra.push(legendPlaceholder(trace));
+    const builtByName = new Map();
+    for (const entry of fullEntries) {
+        builtByName.set(entry.name, this._buildFftSpectrumTrace(plot, entry, displayRange));
     }
+    const spectra = this._orderedFftSpectrumTraces(plot, builtByName, legendPlaceholder);
     plot._fftSpectra = spectra;
 
     const layout = this._buildFftSpectrumLayout(plot);
@@ -1230,10 +1227,33 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     }
     // A spectrum came out, so this range and padding are known to fit the
     // platform. That is what a later rejected combination falls back to.
-    if (spectra.length) this._rememberAcceptedFftSettings(plot);
+    if (fullEntries.length) this._rememberAcceptedFftSettings(plot);
     // Terminal for this token (superseding runs manage their own pill on the
     // token-mismatch early returns above, so this only fires for the live run).
     this._setFftComputing(plot, false);
+};
+
+// Order the spectrum pane's traces the way the panel lists its curves. Plotly
+// builds the legend from the data order, so appending the hidden traces at the
+// end made a curve drop to the bottom of the legend the moment it was clicked
+// off — the list reshuffled under the pointer still hovering it. Each trace
+// keeps its own slot here, drawn or greyed.
+proto._orderedFftSpectrumTraces = function(plot, builtByName, legendPlaceholder) {
+    const spectra = [];
+    for (const trace of plot?.traces || []) {
+        if (!this._isVisible(trace)) {
+            // Hidden traces stay in the spectrum data as legendonly placeholders
+            // so their legend entry persists (greyed) instead of vanishing.
+            spectra.push(legendPlaceholder(trace));
+            continue;
+        }
+        const built = builtByName.get(this._traceName(trace.varName, trace.fileId));
+        // A visible trace with no spectrum failed the transform, and the warning
+        // says why. It gets no legend entry — that is what tells it apart from a
+        // curve the user switched off.
+        if (built) spectra.push(built);
+    }
+    return spectra;
 };
 
 // Build one drawn spectrum trace from a full-resolution entry, windowed to the

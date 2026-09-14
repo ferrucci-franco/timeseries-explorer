@@ -224,8 +224,11 @@ assert.match(fft, /'tooManyPointsReverted'/,
     'a reverted refusal must say that the previous settings were restored');
 assert.match(fft, /fftWarningTooManyReverted/,
     'and that message must exist in the warning builder');
-// Recording happens only where a spectrum came out, never before.
-assert.match(fft, /if \(spectra\.length\) this\._rememberAcceptedFftSettings\(plot\)/,
+// Recording happens only where a spectrum came out, never before. Counted on
+// the computed spectra, not on the drawn traces: those also carry a legendonly
+// placeholder per hidden curve, so a panel whose every visible curve failed
+// still had a non-empty trace list and recorded settings that produced nothing.
+assert.match(fft, /if \(fullEntries\.length\) this\._rememberAcceptedFftSettings\(plot\)/,
     'settings are remembered only once they have produced a spectrum');
 
 // Every language must carry the reverted wording, or three of them fall back to

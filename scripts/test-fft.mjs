@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import {
     analyzeSampling,
     computeAmplitudeSpectrum,
@@ -547,6 +548,84 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
         fftMethodsSource,
         /type === 'warning' && message\)\s*\?\s*i18n\.t\('fftWarningSeePanel'\)/,
         'and that type is what makes the topbar point at the panel',
+    );
+}
+
+// ── The spectrum legend keeps the panel's order when a curve is switched off ──
+//
+// Plotly builds the legend from the data order. The hidden traces used to be
+// appended after the drawn ones, so clicking the FIRST curve off dropped it to
+// the bottom of the legend and shifted the others up — the list reshuffled
+// under the pointer that was still hovering it.
+{
+    const start = fftMethodsSource.indexOf('proto._orderedFftSpectrumTraces = function');
+    assert.ok(start >= 0, '_orderedFftSpectrumTraces is declared');
+    const end = fftMethodsSource.indexOf('\n};', start);
+    const proto = {};
+    vm.runInNewContext(fftMethodsSource.slice(start, end + '\n};'.length), { proto });
+    const order = proto._orderedFftSpectrumTraces;
+
+    const app = {
+        _isVisible: trace => trace.visible !== 'legendonly' && trace.visible !== false,
+        _traceName: (varName, fileId) => `${varName}@${fileId}`,
+        _orderedFftSpectrumTraces: order,
+    };
+    // "Mono" and "Mono filtered" overlaid, in the order the panel lists them.
+    const plot = {
+        traces: [
+            { varName: 'mono', fileId: 'f1' },
+            { varName: 'monoFiltered', fileId: 'f1' },
+        ],
+    };
+    const built = new Map([
+        ['mono@f1', { name: 'Mono', drawn: true }],
+        ['monoFiltered@f1', { name: 'Mono filtered', drawn: true }],
+    ]);
+    const placeholder = trace => ({ name: `${trace.varName}@${trace.fileId}`, visible: 'legendonly' });
+    // Array.from, not .map: the result is built inside the vm realm, and a plain
+    // map would hand deepEqual an array whose prototype is not this realm's.
+    const names = result => Array.from(result, trace => trace.name);
+
+    assert.deepEqual(
+        names(order.call(app, plot, built, placeholder)),
+        ['Mono', 'Mono filtered'],
+        'both drawn: the legend follows the panel order',
+    );
+
+    // Switch the FIRST one off: it must stay first, greyed.
+    plot.traces[0].visible = 'legendonly';
+    const afterHidingFirst = order.call(app, plot, built, placeholder);
+    assert.deepEqual(
+        names(afterHidingFirst),
+        ['mono@f1', 'Mono filtered'],
+        'a curve switched off keeps its slot instead of dropping to the bottom',
+    );
+    assert.equal(afterHidingFirst[0].visible, 'legendonly', 'and it is the greyed placeholder');
+
+    // Switching it back on restores the drawn trace in the same slot.
+    delete plot.traces[0].visible;
+    assert.deepEqual(
+        names(order.call(app, plot, built, placeholder)),
+        ['Mono', 'Mono filtered'],
+        'showing it again puts the drawn trace back where it was',
+    );
+
+    // A visible trace whose transform failed has no built spectrum. It gets no
+    // legend entry at all — the warning explains it — which is what tells it
+    // apart from a curve the user switched off.
+    const failing = new Map([['monoFiltered@f1', { name: 'Mono filtered', drawn: true }]]);
+    assert.deepEqual(
+        names(order.call(app, plot, failing, placeholder)),
+        ['Mono filtered'],
+        'a failed transform is left out rather than greyed',
+    );
+
+    // Only a spectrum that came out may mark the range and padding as accepted;
+    // a legendonly placeholder is not one.
+    assert.match(
+        fftMethodsSource,
+        /if \(fullEntries\.length\) this\._rememberAcceptedFftSettings\(plot\)/,
+        'the accepted-settings check counts computed spectra, not legend entries',
     );
 }
 
