@@ -68,6 +68,11 @@ const CLICK_SLOP_PIXELS = 3;
 // short enough to feel immediate, long enough to catch the pair.
 const DOUBLE_CLICK_GRACE_MS = 260;
 
+// How long the panel's selection has to hold still before the sound follows it.
+// Dragging a bound crosses dozens of values; rebuilding on each one would
+// stutter rather than follow.
+const RANGE_SETTLE_MS = 250;
+
 // Auto scale lands the peak at −1 dBFS rather than at full scale: a hair of
 // headroom costs nothing audible and keeps the last sample off the rail.
 const AUTO_PEAK = 0.891;
@@ -185,6 +190,8 @@ export function installPlotAudioMethods(TargetClass) {
             bufferKey: '',
             notice: '',
             resumeAfterScrub: false,
+            pendingRangeKey: null,
+            pendingRangeSince: 0,
         };
     };
 
@@ -655,11 +662,53 @@ export function installPlotAudioMethods(TargetClass) {
         const step = () => {
             player.raf = null;
             if (!player.playing || player.owner?.manager !== this) return;
+            this._followAudioRangeChange();
             this._renderAudioPlayheads();
             this._syncAudioReadout();
             player.raf = requestAnimationFrame(step);
         };
         player.raf = requestAnimationFrame(step);
+    };
+
+    /**
+     * The panel's selection can move while the sound is running — dragging an
+     * FFT bound, typing a new x1. The sound has to follow it, since it IS that
+     * selection; before this, the range only changed on the next stop and play.
+     *
+     * Polled from the tick rather than hooked into each analysis mode: the
+     * range has four owners today and the tick already runs while playing, so
+     * comparing two numbers there beats four callbacks that must not be
+     * forgotten. The change is applied once it has been still for a moment,
+     * so dragging a bound does not restart the take on every frame.
+     */
+    proto._followAudioRangeChange = function() {
+        const panelId = player.owner?.panelId;
+        const plot = this.plots.get(panelId);
+        const state = plot?.audio;
+        if (!state?.buffer) return;
+        const source = this._audioSelectedSource(plot);
+        if (!source?.status?.ok) return;
+        const range = this._audioRange(plot, source);
+        if (!range) return;
+
+        const key = this._audioBufferKey(source, range, state);
+        if (key === state.bufferKey) { state.pendingRangeKey = null; return; }
+        const now = performance.now();
+        if (state.pendingRangeKey !== key) {
+            state.pendingRangeKey = key;
+            state.pendingRangeSince = now;
+            return;
+        }
+        if (now - state.pendingRangeSince < RANGE_SETTLE_MS) return;
+
+        // Keep the instant when the new range still contains it; otherwise
+        // start at the beginning of what was just selected.
+        const absolute = state.buffer.startTime + this._audioPosition(plot);
+        state.pendingRangeKey = null;
+        state.buffer = null;
+        state.bufferKey = '';
+        state.position = (absolute >= range[0] && absolute <= range[1]) ? absolute - range[0] : 0;
+        this._audioPlay(panelId);
     };
 
     proto._stopAudioTick = function() {
@@ -707,27 +756,49 @@ export function installPlotAudioMethods(TargetClass) {
         this._applyAudioMark(plot, mark);
     };
 
+    /**
+     * Drawn INSIDE Plotly's first main-svg — the one holding the traces —
+     * rather than as a div over the container.
+     *
+     * Plotly renders three stacked SVGs: the plot, then the one carrying the
+     * legend, then the hover layer. A div on top of all of them paints over
+     * the legend, which is wrong: the legend is a label for the picture and
+     * the playhead is part of the picture. Appended last inside the first SVG,
+     * it sits above every trace and below the legend, which is exactly where
+     * it belongs — and moving an SVG attribute costs no more than moving a
+     * div, so the 60 fps sweep is unaffected.
+     */
     proto._drawAudioPlayhead = function(plot, dataTime) {
+        const svg = plot?.div?.querySelector('svg.main-svg');
+        if (!svg) return;
         const geometry = this._hoverOverlayGeometry?.(plot, dataTime);
-        let line = plot.div.querySelector('.audio-playhead');
+        let head = svg.querySelector('.audio-playhead-svg');
         if (!geometry || geometry.left < geometry.leftAxis || geometry.left > geometry.rightAxis) {
-            if (line) line.style.display = 'none';
+            head?.remove();
             return;
         }
-        if (!line) {
-            line = document.createElement('div');
-            line.className = 'audio-playhead';
-            line.setAttribute('aria-hidden', 'true');
-            plot.div.appendChild(line);
+        if (!head) {
+            const ns = 'http://www.w3.org/2000/svg';
+            head = document.createElementNS(ns, 'g');
+            head.setAttribute('class', 'audio-playhead-svg');
+            head.setAttribute('aria-hidden', 'true');
+            head.appendChild(document.createElementNS(ns, 'rect'));
+            head.appendChild(document.createElementNS(ns, 'path'));
+            svg.appendChild(head);
         }
-        line.style.display = 'block';
-        line.style.left = `${geometry.left}px`;
-        line.style.top = `${geometry.topAxis}px`;
-        line.style.height = `${Math.max(0, geometry.bottomAxis - geometry.topAxis)}px`;
+        const top = geometry.topAxis;
+        const height = Math.max(0, geometry.bottomAxis - geometry.topAxis);
+        const x = geometry.left;
+        const rect = head.firstChild;
+        rect.setAttribute('x', String(x - 1));
+        rect.setAttribute('y', String(top));
+        rect.setAttribute('width', '2');
+        rect.setAttribute('height', String(height));
+        head.lastChild.setAttribute('d', `M${x - 6},${top} L${x + 6},${top} L${x},${top + 9} Z`);
     };
 
     proto._removeAudioPlayhead = function(plot) {
-        plot?.div?.querySelector?.('.audio-playhead')?.remove();
+        plot?.div?.querySelector?.('.audio-playhead-svg')?.remove();
     };
 
     proto._clearAudioPlayheads = function() {
@@ -980,8 +1051,29 @@ export function installPlotAudioMethods(TargetClass) {
             this._audioPlay(panelId);
         });
         strip.querySelector('.audio-source').addEventListener('change', (event) => {
+            // Switching signal keeps the instant: that is the whole point of
+            // comparing a recording with its filtered version — the same
+            // moment, the other signal. Only a signal that does not reach that
+            // instant (another recording, another length) starts from its own
+            // beginning.
+            const previous = this._audioSelectedSource(plot);
+            const previousStart = Number.isFinite(state.buffer?.startTime)
+                ? state.buffer.startTime
+                : this._audioRange(plot, previous)?.[0];
+            const absolute = Number.isFinite(previousStart)
+                ? previousStart + this._audioPosition(plot)
+                : null;
+
             state.sourceKey = event.target.value;
-            state.position = 0;
+            state.buffer = null;
+            state.bufferKey = '';
+
+            const next = this._audioSelectedSource(plot);
+            const nextRange = next?.status?.ok ? this._audioRange(plot, next) : null;
+            state.position = (absolute !== null && nextRange
+                && absolute >= nextRange[0] && absolute <= nextRange[1])
+                ? absolute - nextRange[0]
+                : 0;
             onOptionChange();
         });
         strip.querySelector('.audio-scale').addEventListener('change', (event) => {
@@ -1016,6 +1108,17 @@ export function installPlotAudioMethods(TargetClass) {
         if (!plot || !strip) return;
         const state = this._ensureAudioState(plot);
         const sources = this._audioSources(plot);
+        // The chosen signal is gone from the panel — cleared, or removed from
+        // the legend. Whatever comes next is a fresh start, not a resumption of
+        // something that is no longer on screen.
+        if (state.sourceKey && !sources.some(source => source.key === state.sourceKey)) {
+            if (this._audioPanelIsPlaying(plot)) this._audioStop(panelId);
+            state.sourceKey = null;
+            state.position = 0;
+            state.buffer = null;
+            state.bufferKey = '';
+            state.notice = '';
+        }
         const selected = this._audioSelectedSource(plot);
         const playing = this._audioPanelIsPlaying(plot);
         const playable = !!selected?.status?.ok;
@@ -1056,7 +1159,9 @@ export function installPlotAudioMethods(TargetClass) {
         strip.querySelector('.audio-volume').value = String(Math.round(state.volume * 100));
 
         const note = strip.querySelector('.audio-strip-note');
-        const reason = playable ? '' : this._audioReasonText(selected?.status);
+        const reason = playable
+            ? ''
+            : (sources.length ? this._audioReasonText(selected?.status) : i18n.t('audioReasonNoTraces'));
         const rangeNote = playable ? this._audioRangeNote(plot, selected) : '';
         const text = [reason, state.notice, rangeNote].filter(Boolean).join(' · ');
         note.textContent = text;

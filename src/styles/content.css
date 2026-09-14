@@ -3845,27 +3845,13 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     line-height: 1.35;
 }
 
-/* The playhead lives in the plot container, positioned in pixels like the
-   hover and cursor overlays, so it follows zooming and panning. */
-.audio-playhead {
-    position: absolute;
-    width: 2px;
-    margin-left: -1px;
-    background-color: var(--audio-accent);
-    z-index: 6;
+/* The playhead is an SVG group inside Plotly's plot layer, so it draws above
+   the traces and below the legend. Both of its parts — the line and the arrow
+   head that makes it findable on a dense waveform — take the accent colour
+   from here rather than from an attribute, so the theme still owns it. */
+.audio-playhead-svg {
+    fill: var(--audio-accent);
     pointer-events: none;
-}
-
-/* The head of the playhead: big enough to find at a glance on a dense
-   waveform, which a 4 px triangle was not. */
-.audio-playhead::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: -5px;
-    border-left: 6px solid transparent;
-    border-right: 6px solid transparent;
-    border-top: 9px solid var(--audio-accent);
 }
 
 .panel-audio-btn.active {

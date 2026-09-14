@@ -2278,13 +2278,17 @@ class PlotManager {
             audioBtn.title = this._audioButtonTitle?.(plot) || audioBtn.title;
             audioBtn.classList.toggle('active', !!plot?.audio?.open);
             audioBtn.setAttribute('aria-pressed', String(!!plot?.audio?.open));
-            if (!playable && plot?.audio?.open) {
-                // The panel changed under an open strip (mode switch, traces
-                // removed). Close it rather than leaving controls that cannot
-                // do anything.
+            const audioMode = ['timeseries', 'fft', 'histogram', 'integral'].includes(plot?.mode);
+            if (plot?.audio?.open && !audioMode) {
+                // A mode with nothing to listen to (2D, 3D, animation) has no
+                // 🔊 button either, so the strip goes with it.
                 plot.audio.open = false;
                 this._teardownAudioForPanel?.(panelId, plot);
             } else if (plot?.audio?.open) {
+                // An empty panel keeps its strip, disabled and saying so. It
+                // closed itself before, and a strip that vanishes when the last
+                // trace is removed — then has to be reopened by hand once a
+                // trace is back — is a worse answer than one that waits.
                 this._syncAudioStrip?.(panelId);
             }
         }
