@@ -465,6 +465,44 @@ const recipeFor = (sourceFileId, step, sourceName = '') => ({
     assert.equal(csv.split('\n').length - 1, 402, 'header plus every row');
 }
 
+// ── The message line belongs to the file it was said about (#55) ──────────
+
+{
+    const h = new Harness();
+    const { fileId: first } = makeSource(h);
+    const dom = fakeDocument({});
+    await withDocument(dom, async () => {
+        h._setOutlierMessage('131 769 new samples are missing', 'warn');
+        assert.equal(h._dataToolMessage.fileId, first, 'the message remembers its file');
+        clearTimeout(h._dataToolMessageTimer);
+        h._syncDataTools();
+        assert.equal(h._dataToolMessage.message, '131 769 new samples are missing', 'same file: the message stays');
+        // Another file becomes active: the verdict on the first one goes.
+        const { fileId: second } = makeSource(h, { amplitude: 2 });
+        assert.equal(h.activeFileId, second);
+        h._syncDataTools();
+        assert.equal(h._dataToolMessage.message, '', 'a message about the other file is dropped');
+        // An error is about the file too.
+        h._setOutlierMessage('the axis is irregular', 'error');
+        h.setActiveFile(first);
+        h._syncDataTools();
+        assert.equal(h._dataToolMessage.message, '', 'so is an error');
+        // A "computing" line rides through a switch: its commit is still running.
+        h._setOutlierMessage('computing', 'busy');
+        h.setActiveFile(second);
+        h._syncDataTools();
+        assert.equal(h._dataToolMessage.message, 'computing', 'busy survives');
+        // Every file closed: nothing left for a message to be about.
+        h._setOutlierMessage('made the file', 'ok');
+        clearTimeout(h._dataToolMessageTimer);
+        await h.removeFile(first);
+        await h.removeFile(second);
+        assert.equal(h.activeFileId, null);
+        h._syncDataTools();
+        assert.equal(h._dataToolMessage.message, '', 'gone with the files');
+    });
+}
+
 // ── The busy state around a commit ────────────────────────────────────────
 
 {

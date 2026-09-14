@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { installDataToolsMethods } from '../src/app/methods/data-tools-methods.js';
+import { installDataToolsMethods, DATA_TOOL_MESSAGE_DISMISS_MS } from '../src/app/methods/data-tools-methods.js';
 
 class DataToolHarness {
     constructor() {
@@ -395,6 +395,19 @@ closeArray(modifyData.variables.y.data, [0, 1, 3], 'modify reapply does not comp
             host._setOutlierMessage('boom', 'error');
             host._renderDataToolMessage();
             assert.equal(el.textContent, 'boom', 'a plain string message is kept as-is');
+            assert.ok(!host._dataToolMessageTimer, 'an error stays until the user acts');
+
+            // A completed action goes away on its own; a caveat on one too, but
+            // later, so its numbers can be read (#55: as an error it never went).
+            host._setOutlierMessage('made it', 'ok');
+            assert.ok(host._dataToolMessageTimer, 'a success is on a timer');
+            clearTimeout(host._dataToolMessageTimer);
+            host._setOutlierMessage('made it, with holes', 'warn');
+            assert.ok(host._dataToolMessageTimer, 'a caveat is on a timer too');
+            clearTimeout(host._dataToolMessageTimer);
+            assert.equal(el.className, 'derived-message data-tool-message warn', 'and has its own look');
+            assert.ok(DATA_TOOL_MESSAGE_DISMISS_MS.warn > DATA_TOOL_MESSAGE_DISMISS_MS.ok, 'longer than a plain success');
+            host._setOutlierMessage('', '');
         } finally {
             globalThis.document = originalDoc;
         }
