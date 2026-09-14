@@ -673,9 +673,9 @@ check('the decoded size counts the time vector as well as the channels', () => {
 // ─── Wiring ───────────────────────────────────────────────────────────────
 
 check('every accepted extension is offered everywhere a file can be picked', () => {
-    // Four separate lists have to agree, and nothing makes them agree by
+    // Three separate lists have to agree, and nothing makes them agree by
     // construction: a missing entry means the format works when dropped and is
-    // invisible in the file dialog, or the other way round.
+    // invisible where files are picked, or the other way round.
     const listed = AUDIO_EXTENSIONS.map(e => e.slice(1)).sort();
 
     assert.deepEqual(
@@ -683,13 +683,6 @@ check('every accepted extension is offered everywhere a file can be picked', () 
         listed,
         'the session/project reader accepts every audio extension',
     );
-
-    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-    const accept = html.match(/id="file-input"[^>]*accept="([^"]+)"/)?.[1] || '';
-    const accepted = accept.split(',').map(e => e.trim());
-    for (const extension of AUDIO_EXTENSIONS) {
-        assert.ok(accepted.includes(extension), `the browser file dialog offers ${extension}`);
-    }
 
     const localHttp = readFileSync(new URL('../electron/local-file-http.cjs', import.meta.url), 'utf8');
     const desktop = localHttp.match(/AUDIO_FILE_EXTENSIONS = \[([\s\S]*?)\]/)?.[1] || '';
@@ -699,6 +692,30 @@ check('every accepted extension is offered everywhere a file can be picked', () 
     for (const extension of AUDIO_EXTENSIONS) {
         assert.match(localHttp, new RegExp(`\\['\\${extension}', 'audio/`), `${extension} is served with an audio MIME type`);
     }
+});
+
+check('the browser Open dialog does not filter by extension', () => {
+    // There is no `accept` on the file input, and that is the point: with one,
+    // the dialog hides files the app can read. An unknown extension is sniffed
+    // rather than refused, so filtering the dialog by a list of known ones
+    // contradicts how the app decides what a file is. Firefox is the reason it
+    // stopped being a small annoyance — one dropdown entry per accept token,
+    // with its own "All Files" pinned above the "All Supported Types" it
+    // preselects, leaving the way out off the top of a 36-item list.
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const input = html.match(/<input[^>]*id="file-input"[^>]*>/)?.[0] || '';
+    assert.ok(input, 'the file input is in the page');
+    assert.ok(!/\baccept=/.test(input), `the Open dialog must show every file, found: ${input}`);
+
+    // The Chromium path is the same promise by another route: no `types`, so
+    // the picker it opens is unfiltered too.
+    const source = readFileSync(new URL('../src/app/methods/file-methods.js', import.meta.url), 'utf8');
+    const picker = source.slice(
+        source.indexOf('proto._pickResultFilesWithHandles'),
+        source.indexOf('proto._getFileHandleSnapshot'),
+    );
+    assert.ok(picker, 'the File System Access picker is where it was');
+    assert.ok(!/types\s*:/.test(picker), 'showOpenFilePicker is called without file-type filters');
 });
 
 check('audio is routed by extension, before the text sniffing', () => {
