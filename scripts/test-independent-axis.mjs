@@ -2,9 +2,11 @@
 //
 // It is a duration in seconds, so it looks exactly like elapsed time and would
 // otherwise pass every compatibility test the panel makes — but its zero is
-// "no shift", not the start of the record. So a panel drawing it must not have
-// its x-axis tied to the panels showing the signals, in either direction, and
-// the synchronized hover must not carry a moment across to it.
+// "no shift", not the start of the record. So a panel drawing NOTHING BUT
+// correlations must not have its x-axis tied to the panels showing the
+// signals, in either direction, and the synchronized hover must not carry a
+// moment across to it. A panel that draws signals too keeps its place in the
+// link: its axis is their time, and the lag trace rides along.
 //
 // Two cross-correlations do not link their axes either: each was asked for its
 // own lag range, and comparing them means putting them in ONE panel.
@@ -89,13 +91,21 @@ assert.deepEqual(sync('p-xcorr-a'), [], 'a lag panel moves nothing');
 assert.deepEqual(sync('p-xcorr-b'), [], 'not even the other cross-correlation');
 assert.equal(h._syncing, false, 'a lag panel never even opens a sync');
 
-// One lag trace is enough to take a mixed panel out of the sync: its x-axis
-// cannot mean two things at once.
+// A panel that ALSO draws signals keeps its place in the link: it is their
+// time axis that moves, and the lag trace rides along. Only a panel drawing
+// nothing but correlations stands apart.
 h.plots.get('p-more').traces.push({ fileId: 'xcorr-a', varName: 'r_xy' });
-assert.equal(h._plotUsesIndependentAxis(h.plots.get('p-more')), true);
-assert.deepEqual(sync('p-signals'), [], 'the mixed panel is no longer a target');
-h.plots.get('p-more').traces.pop();
-assert.deepEqual(sync('p-signals'), ['p-more'], 'and follows again once the lag trace is gone');
+assert.equal(h._plotAxisIsIndependent(h.plots.get('p-more')), false, 'signals plus a lag trace is still a signal panel');
+assert.deepEqual(sync('p-signals'), ['p-more'], 'so it still follows');
+assert.deepEqual(sync('p-more'), ['p-signals'], 'and still leads, without waking the lag panels');
+// Even when the lag trace is the first one on the panel, which is what names
+// the panel's file elsewhere.
+h.plots.get('p-more').traces.reverse();
+assert.equal(h._linkTimeFileId(h.plots.get('p-more')), 'more-signals', 'the link reads the clock from a signal trace');
+assert.deepEqual(sync('p-signals'), ['p-more'], 'order on the panel makes no difference');
+h.plots.get('p-more').traces = h.plots.get('p-more').traces.filter(t => t.fileId !== 'xcorr-a');
+assert.deepEqual(sync('p-signals'), ['p-more'], 'and nothing changed once the lag trace is gone');
+assert.equal(h._plotAxisIsIndependent({ traces: [] }), false, 'an empty panel is not a lag panel');
 
 // ── The shared hover obeys the same line ──────────────────────────────────
 // _onHover reads the DOM and Plotly's layout, so the rule is read off the
@@ -104,12 +114,12 @@ assert.deepEqual(sync('p-signals'), ['p-more'], 'and follows again once the lag 
 const hover = source.slice(source.indexOf('proto._onHover = function'), source.indexOf('proto._onUnhover'));
 assert.match(
     hover,
-    /const sourceIsIndependent = this\._plotUsesIndependentAxis\(srcPlot\);/,
+    /const sourceIsIndependent = this\._plotAxisIsIndependent\(srcPlot\);/,
     'the hover knows whether it started on a lag axis',
 );
 assert.match(
     hover,
-    /if \(this\._plotUsesIndependentAxis\(plot\) !== sourceIsIndependent\) continue;/,
+    /if \(this\._plotAxisIsIndependent\(plot\) !== sourceIsIndependent\) continue;/,
     'and skips every panel of the other kind',
 );
 

@@ -1085,13 +1085,34 @@ proto._hasIndependentAxis = function(fileId) {
     return !!(metadata?.independentAxis || metadata?.xcorr);
 };
 
-/** True when any trace on the panel comes from such a file. */
-proto._plotUsesIndependentAxis = function(plot) {
-    if (!plot) return false;
-    for (const trace of plot.traces || []) {
-        if (trace?.fileId && this._hasIndependentAxis(trace.fileId)) return true;
+/**
+ * Does the PANEL stand on an axis of its own? Only when everything it draws
+ * does. A panel showing signals keeps its place in the time link even if a
+ * correlation was dropped next to them: the link moves the panel's time axis,
+ * which is what its signals are on, and the lag trace simply rides along —
+ * whoever put the two together asked for exactly that. A panel that draws
+ * nothing but correlations has no business in the link.
+ */
+proto._plotAxisIsIndependent = function(plot) {
+    let any = false;
+    for (const trace of plot?.traces || []) {
+        if (!trace?.fileId) continue;
+        if (!this._hasIndependentAxis(trace.fileId)) return false;
+        any = true;
     }
-    return false;
+    return any;
+};
+
+/**
+ * The file whose clock the panel is linked by: the first trace that is ON that
+ * clock, so a correlation sitting among signals does not get to name the
+ * panel's time display mode.
+ */
+proto._linkTimeFileId = function(plot) {
+    for (const trace of plot?.traces || []) {
+        if (trace?.fileId && !this._hasIndependentAxis(trace.fileId)) return trace.fileId;
+    }
+    return this._primaryTimeFileId(plot);
 };
 
 proto._mapTimeValueBetweenFiles = function(sourceFileId, targetFileId, xValue) {

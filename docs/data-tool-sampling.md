@@ -423,17 +423,23 @@ compatibility test in the panel says the two axes match. They do not. Zero on
 a lag axis is "no shift"; zero on a time axis is the start of the record.
 
 So the dataset carries `metadata.independentAxis`, and the plot manager keeps
-any panel drawing such a file out of the axis link (`_hasIndependentAxis`,
-`_plotUsesIndependentAxis`): it is neither a source nor a target, so zooming
-the signals leaves the correlation where it is and zooming the correlation
-leaves the signals alone. One lag trace is enough to take a mixed panel out
-of the link, since its x-axis cannot mean two things at once. Two
-cross-correlations do not link to each other either — each was asked for its
-own lag range, and comparing them means putting them in ONE panel.
+a panel that draws NOTHING BUT such files out of the axis link
+(`_hasIndependentAxis`, `_plotAxisIsIndependent`): it is neither a source nor
+a target, so zooming the signals leaves the correlation where it is and
+zooming the correlation leaves the signals alone. Two cross-correlations do
+not link to each other either — each was asked for its own lag range, and
+comparing them means putting them in ONE panel.
+
+A panel that draws signals AND a correlation stays in the link. Its x-axis is
+the signals' time, that is what the link moves, and the lag trace rides
+along — which is what dropping the two together asks for. The link reads the
+panel's clock from a signal trace (`_linkTimeFileId`), so a correlation
+sitting first on the panel does not get to name its time display mode.
 
 The synchronized hover follows the same line, for the same reason: it reads
 one x value across panels, and a moment is not a shift. It travels among the
-signal panels, or among the correlations, never between them.
+signal panels, or among the correlations, never between them; a panel that
+mixes the two counts as a signal panel, since that is the axis it is drawn on.
 
 A dataset saved before the flag existed is still recognised, by the `xcorr`
 block its metadata already carried.
