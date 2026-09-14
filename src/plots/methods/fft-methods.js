@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import {
+    applyAmplitudeScale,
     computeAmplitudeSpectrum,
     windowSpectrumForDisplay,
     fftWindowCoefficients,
@@ -23,6 +24,23 @@ import Plotly from '../../vendor/plotly.js';
 
 const FFT_LAYOUTS = new Set(['horizontal', 'vertical']);
 const FFT_AXIS_LIMIT_KEYS = new Set(['fMin', 'fMax', 'yMin', 'yMax']);
+
+// Computed spectra are kept per panel, keyed by everything the transform
+// actually depends on: the trace, the analyzed span, and the window / mean /
+// zero-padding settings. Anything else the panel can do — hiding a curve,
+// removing one, switching the amplitude scale to dB — leaves the remaining
+// transforms bit-for-bit identical, so they are reused instead of recomputed.
+// Two budgets bound what is held: one on the number of entries, one on the
+// total bins, since a zero-padded spectrum can be tens of millions of samples.
+const FFT_SPECTRUM_CACHE_MAX_ENTRIES = 8;
+const FFT_SPECTRUM_CACHE_MAX_BINS = 2 ** 23;
+
+// Identity of a file's transform cache, as a comparable number. Every path that
+// can change the numbers behind a trace (new data, live append, a transform, a
+// sign inversion, a data-tool edit) drops that cache object, so a fresh object
+// is exactly the signal "recompute, the data moved".
+const fftDataTokens = new WeakMap();
+let fftDataTokenSeq = 0;
 
 export function installPlotFftMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -427,10 +445,7 @@ proto._handleFftLegendClick = function(panelId, plot, clickedName, shiftClick = 
     const trace = (plot.traces || []).find(t => this._traceName(t.varName, t.fileId) === clickedName);
     if (!trace) return;
     if (shiftClick) {
-        const index = plot.traces.indexOf(trace);
-        if (index >= 0) plot.traces.splice(index, 1);
-        if (!plot.traces.length) this._clearPanel(panelId);
-        else this._rebuildPanel(panelId, { preserveView: true });
+        this._removeFftTraceFromLegend(panelId, plot, trace);
         return;
     }
     trace.visible = trace.visible === 'legendonly' ? true : 'legendonly';
@@ -453,8 +468,23 @@ proto._setFftLegendSelection = function(panelId, plot, selectedTrace, action) {
 proto._removeFftTraceFromLegend = function(panelId, plot, trace) {
     const index = (plot.traces || []).indexOf(trace);
     if (index >= 0) plot.traces.splice(index, 1);
-    if (!plot.traces.length) this._clearPanel(panelId);
-    else this._rebuildPanel(panelId, { preserveView: true });
+    if (!plot.traces.length) {
+        this._clearPanel(panelId);
+        return;
+    }
+    // Closing one curve leaves every other spectrum exactly as it was, so the
+    // panel is updated in place. Rebuilding it instead tore down both panes and
+    // re-ran the whole analysis — the transform included — to arrive at the same
+    // picture minus one line. The removed curve may have been the one defining
+    // the analyzed span, so the range is clamped first; rebuilding the time plot
+    // then redraws the selection band and the windowed overlay from it.
+    this._ensureFftRange(plot);
+    this._refreshFftTimePlot(panelId, plot, { preserveView: true });
+    // Rendered, not synced: the range sliders are built from the time domain,
+    // which the removed curve may have been the one to stretch.
+    this._renderFftOptionsPanel(panelId, plot);
+    this._refreshActionBtns(panelId);
+    this._scheduleFftRecompute(panelId, { immediate: true });
 };
 
 proto._buildFftTimeTraces = function(plot, visibleRange = null) {
@@ -1038,8 +1068,15 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         return;
     }
 
-    this._setFftStatus(plot, i18n.t('fftCalculating'), 'loading');
-    this._setFftComputing(plot, true);
+    // Only announce a computation that will actually happen. Hiding a curve or
+    // switching to dB reuses every spectrum, and a "Computing FFT" pill there
+    // described work the panel was not doing.
+    const cacheKeys = visible.map(trace => this._fftSpectrumCacheKey(trace, range, state));
+    const computing = cacheKeys.some(key => !this._cachedFftSpectrum(plot, key));
+    if (computing) {
+        this._setFftStatus(plot, i18n.t('fftCalculating'), 'loading');
+        this._setFftComputing(plot, true);
+    }
     const spectra = [];
     const fullEntries = [];
     const warnings = state.autoRangeWarning ? [state.autoRangeWarning] : [];
@@ -1051,37 +1088,48 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     // above: overlaid files can disagree, and naming one of them would be a
     // guess, so the count is only reported when they all match.
     const sampleCounts = new Set();
-    for (const trace of visible) {
+    for (const [index, trace] of visible.entries()) {
         if (plot._fftToken !== token) return;
-        let series;
-        try {
-            series = await this._fftSeriesForTrace(trace, range, state);
-        } catch (err) {
-            console.warn('[fft] failed to fetch series:', err);
-            series = { ok: false, reason: 'fetchFailed' };
+        const cacheKey = cacheKeys[index];
+        let spectrum = this._cachedFftSpectrum(plot, cacheKey);
+        if (!spectrum) {
+            let series;
+            try {
+                series = await this._fftSeriesForTrace(trace, range, state);
+            } catch (err) {
+                console.warn('[fft] failed to fetch series:', err);
+                series = { ok: false, reason: 'fetchFailed' };
+            }
+            if (plot._fftToken !== token) return;
+            if (!series?.ok) {
+                warnings.push(this._fftWarningText(trace, series?.reason || 'invalid'));
+                continue;
+            }
+            try {
+                spectrum = await this._computeFftSpectrumForSeries(plot, series, state);
+            } catch (err) {
+                if (plot._fftToken !== token || err?.name === 'AbortError') return;
+                console.warn('[fft] failed to compute spectrum:', err);
+                warnings.push(this._fftWarningText(trace, 'invalid'));
+                continue;
+            }
+            if (plot._fftToken !== token) return;
+            // A refusal is cached too: re-deciding it costs the same fetch and
+            // the same uniformity scan that produced it.
+            this._rememberFftSpectrum(plot, cacheKey, spectrum);
         }
-        if (plot._fftToken !== token) return;
-        if (!series?.ok) {
-            warnings.push(this._fftWarningText(trace, series?.reason || 'invalid'));
-            continue;
-        }
-        let spectrum;
-        try {
-            spectrum = await this._computeFftSpectrumForSeries(plot, series, state);
-        } catch (err) {
-            if (plot._fftToken !== token || err?.name === 'AbortError') return;
-            console.warn('[fft] failed to compute spectrum:', err);
-            warnings.push(this._fftWarningText(trace, 'invalid'));
-            continue;
-        }
-        if (plot._fftToken !== token) return;
         if (!spectrum.ok) {
             warnings.push(this._fftWarningText(trace, spectrum.reason, spectrum));
             continue;
         }
         if (Number.isFinite(spectrum.sampling?.dt)) spanSteps.add(spectrum.sampling.dt);
         if (Number.isInteger(spectrum.n) && spectrum.n > 0) sampleCounts.add(spectrum.n);
-        for (const warning of spectrum.warnings || []) {
+        // The transform is scale-free; the amplitude scale is applied here, on
+        // the amplitudes it produced. Its own warning (a dB-relative spectrum
+        // with no peak to refer to) therefore belongs to this step, not to the
+        // cached result.
+        const scaled = applyAmplitudeScale(spectrum.rawAmplitudes, state.amplitudeScale);
+        for (const warning of [...(spectrum.warnings || []), ...scaled.warnings]) {
             warnings.push(this._fftWarningText(trace, warning, spectrum));
         }
         // Keep the FULL spectrum (all NFFT/2 bins) so a zoom can reveal the fine
@@ -1095,8 +1143,8 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
             color: trace.color,
             visible: trace.visible ?? true,
             frequencies: spectrum.frequencies,
-            amplitudes: spectrum.amplitudes,
-            yExtent: this._finiteExtent([spectrum.amplitudes]),
+            amplitudes: scaled.amplitudes,
+            yExtent: this._finiteExtent([scaled.amplitudes]),
         });
     }
 
@@ -1297,6 +1345,77 @@ proto._fftSeriesForTrace = async function(trace, range, state) {
     };
 };
 
+// Token that changes whenever the data behind a trace could have changed.
+proto._fftDataToken = function(fileId) {
+    if (!this.files.has(fileId)) return null;
+    const cache = this._transformCache(fileId);
+    if (!cache) return null;
+    let token = fftDataTokens.get(cache);
+    if (token === undefined) {
+        token = ++fftDataTokenSeq;
+        fftDataTokens.set(cache, token);
+    }
+    return token;
+};
+
+// The identity of one computed spectrum. Deliberately excludes amplitudeScale
+// (a pure remap of the amplitudes, see applyAmplitudeScale) and which traces are
+// visible (each trace is transformed on its own).
+proto._fftSpectrumCacheKey = function(trace, range, state) {
+    if (!trace) return null;
+    const token = this._fftDataToken(trace.fileId);
+    if (token == null) return null;
+    // On the whole signal each trace transforms its own full series, whatever
+    // the other traces span — so the union range must not enter the key, or
+    // closing a longer curve would invalidate the shorter ones for nothing.
+    let span = 'full';
+    if (!state.rangeFull) {
+        const lo = Array.isArray(range) ? Number(range[0]) : NaN;
+        const hi = Array.isArray(range) ? Number(range[1]) : NaN;
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+        span = `${lo}:${hi}`;
+    }
+    return [
+        trace.fileId,
+        trace.varName,
+        token,
+        span,
+        normalizeFftWindow(state.windowType),
+        state.removeMean !== false ? 'mean' : 'raw',
+        normalizeZeroPaddingFactor(state.zeroPaddingFactor),
+        this._fftComputationMaxNfft(),
+    ].join('\u0000');
+};
+
+proto._cachedFftSpectrum = function(plot, key) {
+    if (!key) return null;
+    const cache = plot?._fftSpectrumCache;
+    const hit = cache?.get(key);
+    if (!hit) return null;
+    // Re-insert so Map iteration order stays least-recently-used first.
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit;
+};
+
+proto._rememberFftSpectrum = function(plot, key, spectrum) {
+    if (!key || !plot || !spectrum) return;
+    if (!plot._fftSpectrumCache) plot._fftSpectrumCache = new Map();
+    const cache = plot._fftSpectrumCache;
+    cache.delete(key);
+    cache.set(key, spectrum);
+    let bins = 0;
+    for (const entry of cache.values()) bins += entry?.rawAmplitudes?.length || 0;
+    // Evict oldest-first until both budgets are met. The entry just stored is
+    // last in iteration order, so the spectrum on screen is never the one freed.
+    for (const oldest of cache.keys()) {
+        if (cache.size <= 1) break;
+        if (cache.size <= FFT_SPECTRUM_CACHE_MAX_ENTRIES && bins <= FFT_SPECTRUM_CACHE_MAX_BINS) break;
+        bins -= cache.get(oldest)?.rawAmplitudes?.length || 0;
+        cache.delete(oldest);
+    }
+};
+
 proto._computeFftSpectrumForSeries = async function(plot, series, state) {
     const times = series.times instanceof Float64Array ? series.times : Float64Array.from(series.times || []);
     const values = series.values instanceof Float64Array ? series.values : Float64Array.from(series.values || []);
@@ -1310,7 +1429,10 @@ proto._computeFftSpectrumForSeries = async function(plot, series, state) {
         removeMean: state.removeMean,
         windowType: state.windowType,
         zeroPaddingFactor,
-        amplitudeScale: state.amplitudeScale,
+        // Always computed linear: the panel applies dB / dB-relative to the
+        // amplitudes afterwards, which is what lets a scale change reuse a
+        // cached spectrum instead of running the transform again.
+        amplitudeScale: 'normal',
         maxNfft: this._fftComputationMaxNfft(),
     };
 

@@ -843,6 +843,9 @@ class PlotManager {
             plot.temporalProfile = this._defaultTemporalProfileState?.() || plot.temporalProfile;
             plot.integral = this._defaultIntegralState?.() || plot.integral;
         }
+        // Cached FFT spectra are only useful to the FFT panel and can hold tens
+        // of megabytes of amplitudes; leaving the mode drops them.
+        if (mode !== 'fft') plot._fftSpectrumCache = null;
         plot.correlation = preservePhasePairs
             ? (plot.correlation || this._defaultCorrelationState?.())
             : (this._defaultCorrelationState?.() || plot.correlation);
@@ -2186,6 +2189,7 @@ class PlotManager {
             existing.timeseriesY2Enabled = false;
             existing.showMissingData = false;
             existing.fft = this._defaultFftState?.() || existing.fft;
+            existing._fftSpectrumCache = null;
             existing.heatmap = this._defaultHeatmapState?.() || existing.heatmap;
             existing.temporalProfile = this._defaultTemporalProfileState?.() || existing.temporalProfile;
             existing.integral = this._defaultIntegralState?.() || existing.integral;
