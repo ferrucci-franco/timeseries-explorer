@@ -391,10 +391,24 @@ tools that legitimately measure something to fill their own form (the
 resampler's Δt, the interpolator's missing-run count) at around 130 ms once
 per file.
 
-What is left, when the signal IS on a panel, is Plotly: redrawing a
-2.88 M-point trace for the live preview costs seconds per parameter change,
-and so does drawing the signal in the first place. That is the plotting
-story, not this one.
+What is left, when the signal IS on a panel, is not in this story and not
+about the number of points: the panel already decimates to ~2,000 points for
+the visible window, and Plotly draws them in about 100 ms. A CPU profile of
+one parameter change puts the remaining seconds outside JavaScript
+altogether, in WebGL context work — `_buildTimeTrace` picks `scattergl` over
+`scatter` from the length of the SOURCE series (2.88 M ≥ the 50,000-point
+threshold) rather than from the ~2,000 points actually handed to Plotly, so
+every redraw of a long signal builds a GL context to draw a short trace.
+Forcing the same redraw through SVG takes it from 3.5 s to 0.2 s in a
+software-rendering container; on a machine with a GPU the difference will be
+smaller. That is a plotting matter, untouched here.
+
+The one cost of a preview that is genuinely this panel's: the whole series
+and its time axis go to the compute worker and the whole result comes back,
+about 46 MB of copying per parameter change (≈ 280 ms on that file), for a
+curve that is then decimated to 2,000 points. Computing a preview over the
+visible window only is not sound for every tool — an IIR filter's state comes
+from the samples before it — so it stays as it is for now.
 
 ## 6. Where the work runs
 
