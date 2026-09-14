@@ -170,6 +170,19 @@ app._renderFilteredTree = () => {};
 app._syncDataTools = () => {};
 app._setOutlierMessage = () => {};
 
+// The axis measurement is made once per array and shared by every tool that
+// asks; a new array (reload, recompute) is measured afresh.
+{
+    const axis = Float64Array.from({ length: 1000 }, (_, i) => i * 0.01);
+    const first = app._axisStepInfo(axis);
+    assert.equal(first.hasNominalStep, true);
+    assert.equal(app._axisStepInfo(axis), first, 'same array, same measurement object');
+    const copy = Float64Array.from(axis);
+    assert.notEqual(app._axisStepInfo(copy), first, 'a new array is measured again');
+    assert.equal(app._axisStepInfo(copy).medianDt, first.medianDt);
+    assert.equal(app._axisStepInfo(null).reason, 'tooFewSamples', 'nothing to measure is not cached, just answered');
+}
+
 // Chaining is now one row per step: a tool-created variable is simply picked as
 // the source of the next one. The dependency walk has to see through the chain,
 // because editing or deleting a link has to reach everything below it.

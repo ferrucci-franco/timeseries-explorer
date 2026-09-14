@@ -3,7 +3,34 @@
 // the FFT time pane is only one of the four consumers, and none of this is a
 // transform.
 import assert from 'node:assert/strict';
-import { detectNaNRuns, detectSamplingGaps } from '../src/utils/sampling-gaps.js';
+import { detectNaNRuns, detectSamplingGaps, medianInPlace, selectKth } from '../src/utils/sampling-gaps.js';
+
+{
+    // The median is a selection, not a sort: hold it to the sorted answer on
+    // random data, odd and even counts, ties, and already-ordered input.
+    let seed = 7;
+    const random = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const sortedMedian = (a) => { const s = Float64Array.from(a).sort(); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    for (const n of [1, 2, 3, 4, 5, 10, 11, 100, 101, 1000, 1001]) {
+        const values = Float64Array.from({ length: n }, () => Math.round(random() * 20) / 4);
+        assert.equal(medianInPlace(Float64Array.from(values)), sortedMedian(values), `median of ${n} values with ties`);
+        const ordered = Float64Array.from({ length: n }, (_, i) => i);
+        assert.equal(medianInPlace(Float64Array.from(ordered)), sortedMedian(ordered), `median of ${n} ordered values`);
+        const reversed = Float64Array.from(ordered).reverse();
+        assert.equal(medianInPlace(reversed), sortedMedian(ordered), `median of ${n} reversed values`);
+        for (const k of [0, n >> 1, n - 1]) {
+            const s = Float64Array.from(values).sort();
+            assert.equal(selectKth(Float64Array.from(values), k), s[k], `k-th smallest, k=${k} of ${n}`);
+        }
+    }
+    assert.ok(Number.isNaN(medianInPlace(new Float64Array(0))), 'no values, no median');
+    // A uniform series with its steps in float arithmetic: the median is still
+    // one of the steps, never an average of two unequal ones.
+    const times = Float64Array.from({ length: 100_001 }, (_, i) => i / 48000);
+    const info = detectSamplingGaps(times);
+    assert.ok(Math.abs(info.medianDt - 1 / 48000) < 1e-15, 'audio-rate step recovered');
+    assert.equal(info.count, 0);
+}
 
 {
     // detectSamplingGaps: uniform 10-min series (in ms) with two dropped runs.

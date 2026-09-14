@@ -340,6 +340,26 @@ file it could have referred to (#55).
 The per-tool compute stays with the tool; the module only knows how to ask
 for it. The cross-correlation (§10) is the second recipe.
 
+### 5d. Measuring the axis once
+
+Every tool that reasons in time asks how the file is sampled — the filter for
+its sample rate and its gap note, the cross-correlation for its lag unit, the
+resampler and the interpolator for their gap notes — and a sync of the panel
+asks several times over. The measurement (`detectSamplingGaps`) used to build
+a plain array of every Δt and sort it with a comparator: most of a second on a
+minute of audio at 48 kHz, and the panel called it thirty-eight times between
+picking the variable and pressing Create — twenty-two seconds with the
+interface frozen while the filter itself took 64 ms in the worker.
+
+Two changes. The median is now a selection (`medianInPlace`, Hoare's
+partition on a `Float64Array`, O(n)) rather than a sort, which is ten times
+faster; `medianStep` in the resample kernel uses it too. And the app makes the
+measurement once per axis array (`_axisStepInfo`, a `WeakMap` keyed by the
+array): a reload or a recompute makes a new array, so nothing can go stale,
+and a closed file's entry is collected with it. The resampler's
+"complete missing timestamps" judgement, a separate pass, is made only while
+that tool is on screen instead of on every file load.
+
 ## 6. Where the work runs
 
 Filling goes through the existing `dataTool:pipeline` worker op, so it chains

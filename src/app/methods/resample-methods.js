@@ -32,7 +32,6 @@ import {
     planResampleGrid,
 } from '../../compute/kernels/regrid.js';
 import * as kernelShared from '../../compute/kernels/shared.js';
-import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import { csvCell } from '../../utils/csv-cell.js';
 
 export function installResampleMethods(TargetClass) {
@@ -246,6 +245,13 @@ proto._syncResampleCompleteOption = function(data, time) {
     const option = select ? [...select.options].find(o => o.value === 'complete') : null;
     const note = document.getElementById('resample-complete-note');
     if (!option) return;
+    // Judged only while the tool is on screen: the judgement is a pass over the
+    // whole axis, and it ran on every file load for an option nobody could see.
+    // The sync that shows the tool makes it.
+    if (this._getSelectedDataTool() !== 'resample') {
+        if (note) note.textContent = '';
+        return;
+    }
 
     const regular = this._resampleRegularSampling(data, time);
     const available = !!data && regular.ok;
@@ -302,19 +308,15 @@ proto._resampleDetectedStepInUiUnits = function(data, time = this._resampleTimeC
     return sourceStep / this._resampleAxisScale(time.kind);
 };
 
-// Gaps in the SOURCE axis: stretches the file has no rows for. Cached with the
-// axis measurement, since both come from one pass over the same array.
+// Gaps in the SOURCE axis: stretches the file has no rows for. From the
+// panel-wide axis measurement, made once per array.
 proto._resampleSourceGaps = function(data, time = this._resampleTimeContext(data)) {
     const values = time?.values;
     if (!values || time.kind === 'index') return null;
-    const cached = this._resampleGapsCache;
-    if (cached?.source === values) return cached.gaps;
-    const info = detectSamplingGaps(kernelShared.asFloat64(values));
-    const gaps = info.hasNominalStep && info.count > 0
+    const info = this._axisStepInfo(values);
+    return info.hasNominalStep && info.count > 0
         ? { count: info.count, missing: info.totalMissing }
         : null;
-    this._resampleGapsCache = { source: values, gaps };
-    return gaps;
 };
 
 // Span and native Δt of a file's axis. Measuring them is a full pass plus a

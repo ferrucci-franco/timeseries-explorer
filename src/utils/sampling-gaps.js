@@ -83,19 +83,22 @@ export function detectSamplingGaps(times, options = {}) {
     });
     if (n < 3) return blank('tooFewSamples');
 
-    const deltas = [];
+    // The positive steps, in a typed array: a plain array of millions of
+    // doubles and a comparator sort were most of a second on a minute of
+    // audio, and the median needs a selection, not an ordering.
+    const steps = new Float64Array(n - 1);
+    let count = 0;
     let monotonic = true;
     for (let i = 1; i < n; i++) {
         const d = values[i] - values[i - 1];
         if (!Number.isFinite(d)) continue;
         if (d < 0) monotonic = false;
-        else if (d > 0) deltas.push(d);
+        else if (d > 0) steps[count++] = d;
     }
     if (!monotonic) return blank('nonMonotonic', { monotonic: false });
-    if (deltas.length < 2) return blank('tooFewSamples');
-    deltas.sort((a, b) => a - b);
-    const mid = deltas.length >> 1;
-    const medianDt = deltas.length % 2 ? deltas[mid] : (deltas[mid - 1] + deltas[mid]) / 2;
+    if (count < 2) return blank('tooFewSamples');
+    const deltas = steps.subarray(0, count);
+    const medianDt = medianInPlace(deltas);
     if (!Number.isFinite(medianDt) || medianDt <= 0) return blank('irregularStep', { medianDt });
 
     const band = medianDt * stepTolerance;
@@ -132,6 +135,49 @@ export function detectSamplingGaps(times, options = {}) {
         monotonic: true,
         reason: null,
     };
+}
+
+// The k-th smallest of `a` (0-based), reordering `a` as it goes: Hoare's
+// partition around a median-of-three pivot, O(n) on average. Exported for the
+// tests, which hold it to a sort.
+export function selectKth(a, k) {
+    let lo = 0;
+    let hi = a.length - 1;
+    while (hi > lo) {
+        const mid = (lo + hi) >>> 1;
+        if (a[mid] < a[lo]) { const t = a[mid]; a[mid] = a[lo]; a[lo] = t; }
+        if (a[hi] < a[lo]) { const t = a[hi]; a[hi] = a[lo]; a[lo] = t; }
+        if (a[hi] < a[mid]) { const t = a[hi]; a[hi] = a[mid]; a[mid] = t; }
+        const pivot = a[mid];
+        let i = lo;
+        let j = hi;
+        while (i <= j) {
+            while (a[i] < pivot) i++;
+            while (a[j] > pivot) j--;
+            if (i <= j) {
+                const t = a[i]; a[i] = a[j]; a[j] = t;
+                i++;
+                j--;
+            }
+        }
+        if (k <= j) hi = j;
+        else if (k >= i) lo = i;
+        else return a[k];
+    }
+    return a[lo];
+}
+
+// The median of `a`, reordering `a`. For an even count the upper middle is
+// selected and the lower middle is then the largest of what sits below it.
+export function medianInPlace(a) {
+    const n = a.length;
+    if (!n) return NaN;
+    const mid = n >> 1;
+    const upper = selectKth(a, mid);
+    if (n % 2) return upper;
+    let lower = -Infinity;
+    for (let i = 0; i < mid; i++) if (a[i] > lower) lower = a[i];
+    return (lower + upper) / 2;
 }
 
 // Runs of non-finite (NaN/Inf) values, returned as the time interval each
