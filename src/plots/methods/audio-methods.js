@@ -20,10 +20,17 @@
 import i18n from '../../i18n/index.js';
 import { FFT_UNIFORM_REL_TOLERANCE } from '../../utils/fft.js';
 
-// What the audio path can take. Below the floor the browser refuses the buffer
-// outright, and a signal that slow is not audible anyway — that is what
-// sonification would be for, and it is deliberately not in v1, so the button
-// says so instead of playing something that is not the signal.
+// The sample rates createBuffer() accepts — a property of the browser's audio
+// output, NOT a statement about what is audible. A signal sampled at 2 kHz can
+// carry a perfectly audible 500 Hz tone; what it cannot do is be handed to this
+// API at its own rate. (Sonification is the different problem of content that
+// falls outside 20 Hz – 20 kHz, and it is deliberately not in v1.)
+//
+// Browsers disagree on the floor — Chrome takes 3 kHz, Firefox 8 kHz — so the
+// gate is generous and _buildAudioBuffer catches what the browser still
+// refuses. Resampling a slow signal up to a rate the output accepts, keeping
+// its duration, would lift this limit entirely; that is a follow-up, not a
+// reason to pretend the signal is unplayable in principle.
 const MIN_PLAYABLE_RATE = 3000;
 const MAX_PLAYABLE_RATE = 384000;
 
@@ -43,6 +50,13 @@ const EDGE_FADE_SECONDS = 0.005;
 // Fade applied when playback is interrupted (stop, pause, another panel taking
 // over). Shorter than the edge fade would click; longer would feel laggy.
 const INTERRUPT_FADE_SECONDS = 0.01;
+
+// What the strip says when a range cannot be turned into a buffer.
+const BUILD_ERROR_KEYS = {
+    rangeTooLong: 'audioRangeTooLong',
+    rangeTooShort: 'audioRangeTooShort',
+    rateUnsupported: 'audioRateUnsupported',
+};
 
 // Auto scale lands the peak at −1 dBFS rather than at full scale: a hair of
 // headroom costs nothing audible and keeps the last sample off the rail.
@@ -339,7 +353,15 @@ export function installPlotAudioMethods(TargetClass) {
         if (state.scale === 'auto') gain = peak > 0 ? AUTO_PEAK / peak : 1;
         else if (state.scale === 'manual') gain = 10 ** ((Number(state.manualDb) || 0) / 20);
 
-        const buffer = context.createBuffer(1, count, sampleRate);
+        let buffer;
+        try {
+            buffer = context.createBuffer(1, count, sampleRate);
+        } catch {
+            // Within the gate above but outside what THIS browser takes —
+            // 4 kHz passes in Chrome and is refused in Firefox. An exception
+            // here would surface as a dead button; a sentence does not.
+            return { error: 'rateUnsupported' };
+        }
         const channel = buffer.getChannelData(0);
         let clipped = 0;
         for (let i = 0; i < count; i++) {
@@ -479,7 +501,7 @@ export function installPlotAudioMethods(TargetClass) {
         if (state.bufferKey !== key || !state.buffer) {
             const built = this._buildAudioBuffer(context, source, range, state);
             if (built.error) {
-                state.notice = i18n.t(built.error === 'rangeTooLong' ? 'audioRangeTooLong' : 'audioRangeTooShort');
+                state.notice = i18n.t(BUILD_ERROR_KEYS[built.error] || 'audioReasonUnavailable');
                 state.buffer = null;
                 state.bufferKey = '';
                 this._syncAudioStrip(panelId);
