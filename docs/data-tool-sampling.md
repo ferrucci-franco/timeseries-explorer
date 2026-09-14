@@ -360,6 +360,61 @@ and a closed file's entry is collected with it. The resampler's
 "complete missing timestamps" judgement, a separate pass, is made only while
 that tool is on screen instead of on every file load.
 
+The same three rules then went through the rest of the panel, because the
+mistake is easy to make again.
+
+- **Measure once, per array, for every measurement** — not just the sampling
+  step. `_memoByArray(key, values, compute)` is the one place that holds them:
+  the step, the runs of missing values (`_interpolateRuns`), whether the
+  sampling is regular (`_resampleRegularSampling`), the span and native Δt
+  (`_resampleAxisMeasure`). These had a single-entry cache each, which a user
+  alternating between the two channels of a stereo recording missed every
+  time. Identity is a sound key because nothing here mutates a series in
+  place.
+- **Do not measure for a tool nobody is looking at.** A reset of the
+  parameters runs on every tool change and seeded the resampler's Δt and the
+  cross-correlation's lag range — two passes over the axis — whichever tool
+  was selected; each tool now seeds its own on the way in. The
+  cross-correlation's lag-unit label did the same on every file load.
+- **Do not compute a preview nobody can see.** The draft preview is a dashed
+  trace beside the source curve, so with no panel drawing that source it had
+  nowhere to go — and it was a whole-series run plus a copy of the values and
+  the time axis, thrown away on arrival. `_runDataToolPreview` now asks for
+  the panel first, the same question `_drawDataToolPreviewTrace` asked after
+  the fact. An edit is different: it writes into the live variable, which its
+  own panels follow, so it runs regardless.
+
+Measured on a minute of audio at 48 kHz (2.88 M samples), picking each tool in
+turn, choosing the signal and nudging one parameter, with nothing plotted:
+main-thread blocking fell from 0.1–0.8 s per tool to zero, except the two
+tools that legitimately measure something to fill their own form (the
+resampler's Δt, the interpolator's missing-run count) at around 130 ms once
+per file.
+
+What was left, when the signal IS on a panel, turned out not to be about the
+number of points at all: the panel already decimates to ~2,000 points for the
+visible window, and Plotly draws them in about 100 ms. A CPU profile of one
+parameter change put the remaining seconds outside JavaScript altogether, in
+WebGL context work — `_buildTimeTrace` picked `scattergl` over `scatter` from
+the length of the SOURCE series (2.88 M ≥ the 50,000-point threshold) rather
+than from the ~2,000 points actually handed to Plotly, so every redraw of a
+long signal built a GL context to draw a short trace. The choice is now made
+from the drawn length, which is the question GL answers ("a lot of points on
+screen?"); with the visual limit off, or set above the threshold, the full
+series really is drawn and GL comes back, and a step trace stays SVG either
+way because `hv` is an SVG line shape. One preview redraw on that file went
+from 3.5 s to 0.2 s of blocking in a software-rendering container — on a
+machine with a GPU the difference will be smaller, but a context per redraw
+is not free anywhere. A side effect worth having: `scattergl` ignores
+`line.dash`, so the dashed preview curve only really looks dashed as SVG.
+
+The one cost of a preview that is genuinely this panel's: the whole series
+and its time axis go to the compute worker and the whole result comes back,
+about 46 MB of copying per parameter change (≈ 280 ms on that file), for a
+curve that is then decimated to 2,000 points. Computing a preview over the
+visible window only is not sound for every tool — an IIR filter's state comes
+from the samples before it — so it stays as it is for now.
+
 ## 6. Where the work runs
 
 Filling goes through the existing `dataTool:pipeline` worker op, so it chains

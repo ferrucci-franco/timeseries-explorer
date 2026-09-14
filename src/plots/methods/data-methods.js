@@ -1817,7 +1817,6 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     // Per-trace line shape overrides the default, set from the legend context
     // menu for discrete-looking real variables.
     const isStep = t.lineShape ? t.lineShape === 'hv' : this._variableDefaultsToStairs(variable);
-    const useGL = !isStep && values.length >= PlotManager.GL_POINT_THRESHOLD;
     // A markers-only trace (the data-tool preview of the samples a fill would add)
     // is mostly NaN by construction, and min/max bucket decimation would throw
     // away the few points that ARE there — losing exactly the positions the trace
@@ -1853,6 +1852,17 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         });
     }
     const visual = this._applyTimeseriesStackZeroPadding(plot, t, baseVisual);
+    // WebGL earns its keep when there are a lot of points ON SCREEN, and what
+    // reaches Plotly is the decimated trace — ~2,000 points for the visible
+    // window, whatever the file holds. Judging by the SOURCE length instead
+    // built a GL context per redraw to draw a couple of thousand points: on a
+    // minute of audio a CPU profile put a live preview's whole cost there,
+    // outside JavaScript, and forcing the same redraw through SVG took it from
+    // 3.5 s to 0.2 s. With the visual limit turned off (or set above the
+    // threshold) the full series really is drawn, and GL is chosen again.
+    // Step traces are excluded either way: 'hv' is an SVG line shape.
+    const drawnPoints = Math.max(visual.x?.length || 0, visual.y?.length || 0);
+    const useGL = !isStep && drawnPoints >= PlotManager.GL_POINT_THRESHOLD;
     const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
     const customdata = highResolutionCalendarAxis
         ? Array.from(visual.x || [], value => this._formatGeneratedCalendarDateTime(

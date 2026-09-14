@@ -181,6 +181,22 @@ app._setOutlierMessage = () => {};
     assert.notEqual(app._axisStepInfo(copy), first, 'a new array is measured again');
     assert.equal(app._axisStepInfo(copy).medianDt, first.medianDt);
     assert.equal(app._axisStepInfo(null).reason, 'tooFewSamples', 'nothing to measure is not cached, just answered');
+
+    // The memo behind it holds every array it has seen, not just the last one:
+    // alternating between two channels of a recording must not re-measure each
+    // time (a single-entry cache missed on every switch).
+    const other = Float64Array.from({ length: 1000 }, (_, i) => i * 0.02);
+    let measured = 0;
+    const count = (values) => app._memoByArray('probe', values, () => { measured++; return values.length; });
+    for (let i = 0; i < 4; i++) { count(axis); count(other); }
+    assert.equal(measured, 2, 'two arrays, two measurements, however often they alternate');
+    // Separate keys are separate memos, and a falsy series is answered, not stored.
+    assert.equal(app._memoByArray('elsewhere', axis, () => 'x'), 'x');
+    assert.equal(app._memoByArray('probe', axis, () => 'never'), axis.length, 'the first memo is untouched');
+    let plain = 0;
+    app._memoByArray('probe', null, () => { plain++; return 1; });
+    app._memoByArray('probe', null, () => { plain++; return 1; });
+    assert.equal(plain, 2, 'nothing to key on, nothing cached');
 }
 
 // Chaining is now one row per step: a tool-created variable is simply picked as

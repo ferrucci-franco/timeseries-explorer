@@ -631,6 +631,69 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     assert.equal(cleared, 3, 'inverted bounds take the preview down too');
 }
 
+// ── A reset seeds only the tool on screen ─────────────────────────────────
+
+{
+    // Seeding the resampler's Δt and the cross-correlation's lag range both
+    // measure the time axis. A reset runs on every tool change, so doing it for
+    // hidden tools measured the axis twice over for fields nobody could see.
+    const h = new Harness();
+    let resample = 0;
+    let xcorr = 0;
+    h._seedResampleDefaults = () => { resample++; };
+    h._seedXcorrDefaults = () => { xcorr++; };
+    for (const method of ['_syncOutlierMethodControls', '_syncMovingAverageControls', '_syncInterpolateControls',
+        '_syncInterpolateStatus', '_syncDetrendControls', '_syncResampleControls', '_syncFilterControls']) {
+        h[method] = () => {};
+    }
+    withDocument(fakeDocument({ 'data-tool-select': 'removeOutliers' }), () => h._resetDataToolParameters());
+    assert.deepEqual([resample, xcorr], [0, 0], 'another tool seeds neither');
+    withDocument(fakeDocument({ 'data-tool-select': 'resample' }), () => h._resetDataToolParameters());
+    assert.deepEqual([resample, xcorr], [1, 0], 'the resampler seeds its own Δt');
+    withDocument(fakeDocument({ 'data-tool-select': 'xcorr' }), () => h._resetDataToolParameters());
+    assert.deepEqual([resample, xcorr], [1, 1], 'and the cross-correlation its lag range');
+}
+
+// ── A preview nobody can see is not computed ──────────────────────────────
+
+{
+    // The draft preview is a dashed trace drawn next to the source curve. With
+    // no panel drawing that source there is nowhere for it to go, and computing
+    // it is a whole-series run plus a copy of the values and the time axis,
+    // thrown away on arrival — on a minute of audio, a tenth of a second of
+    // frozen interface per keystroke.
+    const h = new Harness();
+    let built = 0;
+    let cleared = 0;
+    let panelId = null;
+    h._buildDataToolResultOffThread = () => { built++; return Promise.resolve({ variable: { data: [] } }); };
+    h._clearDataToolPreview = () => { cleared++; };
+    h._restoreEditedTraceValues = () => {};
+    h._dataToolPreviewPanelId = () => panelId;
+    h._getOutlierContext = () => ({
+        fileId: 'f1', data: { variables: {} }, sourceName: 'y',
+        sourceVariable: { data: [1, 2, 3] }, outputName: 'out', tool: 'movingAverage', lazy: false,
+    });
+    const form = () => fakeDocument({ 'data-tool-select': 'movingAverage', 'moving-average-window': '5' });
+
+    withDocument(form(), () => h._runDataToolPreview());
+    assert.equal(built, 0, 'nothing is drawing the source: nothing is computed');
+    assert.equal(cleared, 1, 'and any preview still up comes down');
+
+    // The source is on a panel: the preview runs as before.
+    panelId = 'p1';
+    withDocument(form(), () => h._runDataToolPreview());
+    assert.equal(built, 1, 'a visible source is previewed');
+
+    // An edit writes into the live variable rather than drawing a throwaway
+    // trace, so it runs whether or not that panel search finds anything.
+    panelId = null;
+    h._dataToolEditing = { fileId: 'f1', name: 'out' };
+    withDocument(form(), () => h._runDataToolPreview());
+    assert.equal(built, 2, 'an edit is computed regardless');
+    h._dataToolEditing = null;
+}
+
 // ── The detrend form ──────────────────────────────────────────────────────
 
 {

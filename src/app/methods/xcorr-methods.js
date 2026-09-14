@@ -197,7 +197,10 @@ proto._syncXcorrControls = function() {
         else select.value = '';
     }
 
-    if (unitLabel) {
+    // Only while the tool is on screen: naming the lag unit means measuring the
+    // axis, and the label of a hidden field is worth nobody's wait — this ran on
+    // every file load, whatever tool was selected.
+    if (unitLabel && selected) {
         const axis = data ? this._xcorrAxis(data) : null;
         unitLabel.textContent = axis?.unit || i18n.t('dataToolResampleUnitAxis');
     }
