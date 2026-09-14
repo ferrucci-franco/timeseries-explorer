@@ -58,6 +58,11 @@ const BUILD_ERROR_KEYS = {
     rateUnsupported: 'audioRateUnsupported',
 };
 
+// How far the pointer may travel between press and release and still count as a
+// click rather than a drag. Plotly owns the mouse inside the plot area — a drag
+// is a zoom — so seeking has to take only what a zoom would never claim.
+const CLICK_SLOP_PIXELS = 3;
+
 // Auto scale lands the peak at −1 dBFS rather than at full scale: a hair of
 // headroom costs nothing audible and keeps the last sample off the rail.
 const AUTO_PEAK = 0.891;
@@ -494,8 +499,15 @@ export function installPlotAudioMethods(TargetClass) {
         if (!range) return;
 
         // One panel sounds at a time — including this one, whose previous take
-        // has to end before the next begins.
+        // has to end before the next begins. Yielding snapshots the live clock
+        // into the position of whatever was sounding, which is right when that
+        // is another panel and wrong when it is this one: seeking mid-playback
+        // restarts the take, and the position just asked for would be
+        // overwritten by the one being left behind. So it is taken first and
+        // put back afterwards.
+        const requestedPosition = state.position;
         this._audioYieldPlayer();
+        state.position = requestedPosition;
 
         const key = this._audioBufferKey(source, range, state);
         if (state.bufferKey !== key || !state.buffer) {
@@ -713,6 +725,111 @@ export function installPlotAudioMethods(TargetClass) {
         for (const [, plot] of this.plots) this._removeAudioPlayhead(plot);
     };
 
+    // ─── Click the curve to seek ────────────────────────────────────
+
+    /**
+     * Move the playhead by clicking the waveform, the way every audio editor
+     * does — without taking the mouse away from Plotly, which owns the plot
+     * area for zooming, and without stepping on the measurement cursors when
+     * they are the ones being dragged.
+     *
+     * The guard is the whole trick: the press position is remembered, and the
+     * release only seeks if the pointer barely moved. A zoom drag moves far
+     * more than three pixels, so the two gestures never collide.
+     */
+    proto._installAudioSeekHandlers = function(panelId, plot) {
+        const div = plot?.div;
+        if (!div || plot._audioSeekDiv === div) return;
+        this._removeAudioSeekHandlers(plot);
+        plot._audioSeekDiv = div;
+        let pressedAt = null;
+
+        const onDown = (event) => {
+            pressedAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+        };
+        // The release is read on document, in the capture phase, because
+        // Plotly's drag layer consumes mouseup before it reaches the container:
+        // listening on the container gives a press that never ends.
+        const onUp = (event) => {
+            const start = pressedAt;
+            pressedAt = null;
+            if (!start || event.button !== 0) return;
+            if (Math.abs(event.clientX - start.x) > CLICK_SLOP_PIXELS) return;
+            if (Math.abs(event.clientY - start.y) > CLICK_SLOP_PIXELS) return;
+            this._audioSeekFromClick(panelId, event);
+        };
+
+        div.addEventListener('mousedown', onDown);
+        document.addEventListener('mouseup', onUp, true);
+        plot._audioDocListeners = { up: onUp };
+    };
+
+    /**
+     * Drop the document listener. A panel that is closed rather than rebuilt
+     * never re-installs, so without this its listener would sit on document for
+     * the rest of the session holding the panel — the same trap the cursors
+     * document listeners are swept for in _destroyChart.
+     */
+    proto._removeAudioSeekHandlers = function(plot) {
+        if (!plot) return;
+        if (plot._audioDocListeners?.up) {
+            document.removeEventListener('mouseup', plot._audioDocListeners.up, true);
+        }
+        plot._audioDocListeners = null;
+        plot._audioSeekDiv = null;
+    };
+
+    proto._audioSeekFromClick = function(panelId, event) {
+        const plot = this.plots.get(panelId);
+        if (!plot?.audio?.open || !plot.div) return;
+        // A|B is being used: those cursors are dragged with the same button in
+        // the same pixels, and moving the sound under them would be a surprise.
+        if (this._anyCursorEnabled?.(plot)) return;
+        if (event.target?.closest?.('.modebar, .legend, .audio-strip, .hover-info-box')) return;
+
+        const source = this._audioSelectedSource(plot);
+        if (!source?.status?.ok) return;
+
+        const fullLayout = plot.div._fullLayout;
+        const xa = fullLayout?.xaxis;
+        const ya = fullLayout?.yaxis;
+        if (!xa?.range || !xa._length) return;
+
+        const rect = plot.div.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const left = xa._offset || 0;
+        if (x < left || x > left + xa._length) return;
+        if (ya?._length) {
+            const top = ya._offset || 0;
+            if (y < top || y > top + ya._length) return;
+        }
+
+        const x0 = this._coerceAxisValue(xa.range[0]);
+        const x1 = this._coerceAxisValue(xa.range[1]);
+        if (!Number.isFinite(x0) || !Number.isFinite(x1) || x1 === x0) return;
+
+        this._audioSeekToDataTime(panelId, x0 + ((x - left) / xa._length) * (x1 - x0));
+    };
+
+    /**
+     * Seek to a point in the signal's own time. Outside the range being played
+     * it lands on the nearest end rather than doing nothing: the click said
+     * "over there", and the nearest playable point is the honest answer.
+     */
+    proto._audioSeekToDataTime = function(panelId, dataTime) {
+        const plot = this.plots.get(panelId);
+        if (!plot) return;
+        const state = this._ensureAudioState(plot);
+        const source = this._audioSelectedSource(plot);
+        if (!source?.status?.ok) return;
+        const start = Number.isFinite(state.buffer?.startTime)
+            ? state.buffer.startTime
+            : this._audioRange(plot, source)?.[0];
+        if (!Number.isFinite(start)) return;
+        this._audioSeekTo(panelId, dataTime - start);
+    };
+
     // ─── The strip ──────────────────────────────────────────────────
 
     proto._toggleAudioStrip = function(panelId) {
@@ -723,6 +840,7 @@ export function installPlotAudioMethods(TargetClass) {
         if (!state.open) {
             if (this._audioPanelIsPlaying(plot)) this._audioStop(panelId);
             this._removeAudioStrip(panelId);
+            this._removeAudioSeekHandlers(plot);
         } else {
             this._syncAudioStrip(panelId);
         }
@@ -749,13 +867,18 @@ export function installPlotAudioMethods(TargetClass) {
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         if (!plot || !panelEl) return;
         const state = this._ensureAudioState(plot);
-        if (!state.open) { this._removeAudioStrip(panelId); return; }
+        if (!state.open) {
+            this._removeAudioStrip(panelId);
+            this._removeAudioSeekHandlers(plot);
+            return;
+        }
 
         let strip = panelEl.querySelector('.audio-strip');
         if (!strip) strip = this._buildAudioStrip(panelId);
         // A rebuilt chart is appended to the panel, so a strip created earlier
         // would end up above it. Keep it last, always.
         if (panelEl.lastElementChild !== strip) panelEl.appendChild(strip);
+        this._installAudioSeekHandlers(panelId, plot);
         this._updateAudioStrip(panelId, strip);
     };
 
@@ -945,6 +1068,7 @@ export function installPlotAudioMethods(TargetClass) {
         }
         this._removeAudioPlayhead(plot);
         this._removeAudioStrip(panelId);
+        this._removeAudioSeekHandlers(plot);
         const state = plot?.audio;
         if (state) { state.buffer = null; state.bufferKey = ''; }
     };
