@@ -360,6 +360,42 @@ and a closed file's entry is collected with it. The resampler's
 "complete missing timestamps" judgement, a separate pass, is made only while
 that tool is on screen instead of on every file load.
 
+The same three rules then went through the rest of the panel, because the
+mistake is easy to make again.
+
+- **Measure once, per array, for every measurement** — not just the sampling
+  step. `_memoByArray(key, values, compute)` is the one place that holds them:
+  the step, the runs of missing values (`_interpolateRuns`), whether the
+  sampling is regular (`_resampleRegularSampling`), the span and native Δt
+  (`_resampleAxisMeasure`). These had a single-entry cache each, which a user
+  alternating between the two channels of a stereo recording missed every
+  time. Identity is a sound key because nothing here mutates a series in
+  place.
+- **Do not measure for a tool nobody is looking at.** A reset of the
+  parameters runs on every tool change and seeded the resampler's Δt and the
+  cross-correlation's lag range — two passes over the axis — whichever tool
+  was selected; each tool now seeds its own on the way in. The
+  cross-correlation's lag-unit label did the same on every file load.
+- **Do not compute a preview nobody can see.** The draft preview is a dashed
+  trace beside the source curve, so with no panel drawing that source it had
+  nowhere to go — and it was a whole-series run plus a copy of the values and
+  the time axis, thrown away on arrival. `_runDataToolPreview` now asks for
+  the panel first, the same question `_drawDataToolPreviewTrace` asked after
+  the fact. An edit is different: it writes into the live variable, which its
+  own panels follow, so it runs regardless.
+
+Measured on a minute of audio at 48 kHz (2.88 M samples), picking each tool in
+turn, choosing the signal and nudging one parameter, with nothing plotted:
+main-thread blocking fell from 0.1–0.8 s per tool to zero, except the two
+tools that legitimately measure something to fill their own form (the
+resampler's Δt, the interpolator's missing-run count) at around 130 ms once
+per file.
+
+What is left, when the signal IS on a panel, is Plotly: redrawing a
+2.88 M-point trace for the live preview costs seconds per parameter change,
+and so does drawing the signal in the first place. That is the plotting
+story, not this one.
+
 ## 6. Where the work runs
 
 Filling goes through the existing `dataTool:pipeline` worker op, so it chains

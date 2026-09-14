@@ -229,11 +229,7 @@ proto._resampleRegularSampling = function(data, time = this._resampleTimeContext
     if (!values || time.kind === 'index') {
         return { ok: false, step: NaN, gaps: 0, missing: 0, repeats: 0, reason: 'noTimeAxis' };
     }
-    const cached = this._resampleRegularCache;
-    if (cached?.source === values) return cached.result;
-    const result = detectRegularSampling(values);
-    this._resampleRegularCache = { source: values, result };
-    return result;
+    return this._memoByArray('regularSampling', values, () => detectRegularSampling(values));
 };
 
 // "Complete missing timestamps" promises there is no doubt about the file's own
@@ -324,17 +320,25 @@ proto._resampleSourceGaps = function(data, time = this._resampleTimeContext(data
 // is cached against the very array it was measured from — a reload or an edit
 // replaces that array, which invalidates the entry by identity alone.
 proto._resampleAxisMeasure = function(x, length) {
-    const cached = this._resampleAxisCache;
-    if (cached?.source === x && cached.length === length) return cached;
+    const measure = this._memoByArray('axisMeasure', x, () => {
+        const values = kernelShared.asFloat64(x);
+        return {
+            source: x,
+            length: values.length,
+            span: Number(values[values.length - 1]) - Number(values[0]),
+            sourceStep: medianStep(values),
+        };
+    });
+    // A length other than the array's own is a caller measuring a prefix; rare
+    // enough to be worth measuring afresh rather than keeping a second entry.
+    if (measure.length === length) return measure;
     const values = kernelShared.asFloat64(x);
-    const measure = {
+    return {
         source: x,
         length,
         span: Number(values[length - 1]) - Number(values[0]),
-        sourceStep: medianStep(values),
+        sourceStep: medianStep(values.subarray(0, length)),
     };
-    this._resampleAxisCache = measure;
-    return measure;
 };
 
 // What the chosen grid works out to, or the reason it does not work out. Shares

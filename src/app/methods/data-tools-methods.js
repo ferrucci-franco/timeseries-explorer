@@ -709,11 +709,7 @@ proto._syncDetrendControls = function() {
 proto._interpolateRuns = function(variable) {
     const values = variable?.data;
     if (!values) return [];
-    const cached = this._interpolateRunsCache;
-    if (cached?.source === values) return cached.runs;
-    const runs = missingRuns(values);
-    this._interpolateRunsCache = { source: values, runs };
-    return runs;
+    return this._memoByArray('missingRuns', values, () => missingRuns(values));
 };
 
 /**
@@ -1359,8 +1355,14 @@ proto._resetDataToolParameters = function() {
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
         input.checked = input.defaultChecked;
     });
-    this._seedResampleDefaults?.();
-    this._seedXcorrDefaults?.();
+    // Only the tool on screen. Both of these seed a field by MEASURING the time
+    // axis, and a reset happens on every tool change: picking "Remove outliers"
+    // was measuring the axis twice over for the resampler's Δt and the
+    // cross-correlation's lag range, neither of which is visible. Switching to
+    // either tool comes back through here and seeds it then.
+    const tool = this._getSelectedDataTool?.();
+    if (tool === 'resample') this._seedResampleDefaults?.();
+    if (tool === 'xcorr') this._seedXcorrDefaults?.();
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
@@ -2544,13 +2546,34 @@ proto._isOutlierDataSeries = function(values) {
  * new one, so nothing here can go stale, and the map lets a closed file go.
  */
 proto._axisStepInfo = function(values) {
-    if (!values || typeof values !== 'object') return detectSamplingGaps(values);
-    if (!this._axisStepCache) this._axisStepCache = new WeakMap();
-    const cached = this._axisStepCache.get(values);
-    if (cached) return cached;
-    const info = detectSamplingGaps(values);
-    this._axisStepCache.set(values, info);
-    return info;
+    return this._memoByArray('axisStep', values, () => detectSamplingGaps(values));
+};
+
+/**
+ * Memoise a measurement of an array under `key`, keyed by the ARRAY ITSELF.
+ *
+ * Everything the panel measures over a whole series — the sampling step, the
+ * runs of missing values, whether the sampling is regular — is expensive on a
+ * long file and asked for again on every sync. A single-entry cache is not
+ * enough: the user alternating between two channels of a stereo recording, or
+ * between two files, misses it every time. A WeakMap per measurement hits on
+ * all of them, and lets the arrays of a closed file be collected.
+ *
+ * Identity is a sound key: nothing here mutates a series in place. A reload, a
+ * recompute or an edit builds a new array, so a stale entry cannot be read.
+ */
+proto._memoByArray = function(key, values, compute) {
+    if (!values || typeof values !== 'object') return compute();
+    if (!this._arrayMemos) this._arrayMemos = new Map();
+    let memo = this._arrayMemos.get(key);
+    if (!memo) {
+        memo = new WeakMap();
+        this._arrayMemos.set(key, memo);
+    }
+    if (memo.has(values)) return memo.get(values);
+    const computed = compute();
+    memo.set(values, computed);
+    return computed;
 };
 
 proto._isDataToolDataSeries = function(values, tool = 'removeOutliers') {
@@ -3020,6 +3043,16 @@ proto._runDataToolPreview = function() {
     }
 
     const editing = this._dataToolEditing;
+    // A draft preview is a throwaway trace next to the source curve, so when no
+    // panel is drawing that source there is nothing for it to appear on — and
+    // the run is a whole-series compute, plus a copy of the values and the time
+    // axis, thrown away on arrival. Ask first, as `_drawDataToolPreviewTrace`
+    // did afterwards. (An edit is different: it writes into the live variable,
+    // which its own panels follow, so it runs regardless.)
+    if (!editing && this._dataToolPreviewPanelId(context) === null) {
+        this._abandonDataToolPreview();
+        return;
+    }
     this._buildDataToolResultOffThread(context.sourceVariable.data, context.sourceVariable, {
         ...config,
         sourceName: context.sourceName,
