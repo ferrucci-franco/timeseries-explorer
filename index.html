@@ -960,7 +960,21 @@
                     <button id="file-select-btn" class="primary-btn" data-i18n="selectFile">Select File</button>
                     <div id="light-version-notice" class="light-version-notice" hidden></div>
                     <div id="drop-zone-status" class="drop-zone-status">Loading application...</div>
-                    <input type="file" id="file-input" multiple accept=".mat,.csv,.txt,.tno,.ano,.dno,.parquet,.nc,.netcdf,.pkl,.pickle,.xlsx,.xlsm,.xls,.ods,.wav,.wave,.mp3,.m4a,.m4b,.mp4,.aac,.flac,.ogg,.oga,.opus,.aif,.aiff,.aifc,.caf,.3gp,.3gpp,.amr,.webm,.weba" style="display: none;">
+                    <!-- No `accept` on purpose: it is what turns the browser's
+                         Open dialog into a filtered one, and the filtering was
+                         never worth what it cost. The app does not trust the
+                         extension anyway — an unknown one is sniffed, which is
+                         how a CSV exported as `.000` or a log with no extension
+                         at all gets read — so a dialog that hides those files
+                         hides files the app can open. Firefox made it worse: it
+                         builds one dropdown entry per accept token and pins its
+                         own "All Files" at index 0, above the "All Supported
+                         Types" it selects by default, so the way out sat off the
+                         top of a 36-item list. Chromium already opens an
+                         unfiltered picker here (see _pickResultFilesWithHandles,
+                         which passes no `types`); with no accept this fallback
+                         matches it: every file shown, in every browser. -->
+                    <input type="file" id="file-input" multiple style="display: none;">
                 </div>
                 <div class="drop-zone-drag-card" aria-hidden="true">
                     <span class="icon">📁</span>

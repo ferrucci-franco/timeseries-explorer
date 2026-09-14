@@ -208,8 +208,12 @@ await check(() => {
 await check(() => {
     const handlers = readFileSync(new URL('../src/workers/parse-handlers.js', import.meta.url), 'utf8');
     assert.match(handlers, /'parse:microcap'/, 'worker handler is registered');
+    // The file picker carries no `accept`, so it hides nothing — which is how
+    // Micro-Cap output is reached whatever it is called, including the .txt and
+    // .out exports that only the banner sniff recognises.
     const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-    assert.match(html, /accept="[^"]*\.tno,\.ano,\.dno/, 'file picker accepts the Micro-Cap extensions');
+    const input = html.match(/<input[^>]*id="file-input"[^>]*>/)?.[0] || '';
+    assert.ok(input && !/\baccept=/.test(input), 'the file picker offers every file, Micro-Cap output included');
     const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
     assert.equal([...translations.matchAll(/fileTypeMicroCap:/g)].length, 4, 'file-type label in all locales');
     assert.equal([...translations.matchAll(/fileTypeMicroCapTooltip:/g)].length, 4, 'file-type tooltip in all locales');
