@@ -43,7 +43,7 @@
 // measured.
 
 import { asFloat64, DataToolError } from './shared.js';
-import { GAP_THRESHOLD_FACTOR } from '../../utils/sampling-gaps.js';
+import { GAP_THRESHOLD_FACTOR, medianInPlace } from '../../utils/sampling-gaps.js';
 
 export const RESAMPLE_METHODS = new Set([
     'linear', 'pchip', 'akima', 'nearest', 'previous',
@@ -181,9 +181,8 @@ export function medianStep(x) {
         if (Number.isFinite(dt) && dt > 0) steps[count++] = dt;
     }
     if (!count) return NaN;
-    const used = steps.subarray(0, count).slice().sort();
-    const mid = count >> 1;
-    return count % 2 ? used[mid] : (used[mid - 1] + used[mid]) / 2;
+    // A selection, not a sort: `steps` is this function's own buffer.
+    return medianInPlace(steps.subarray(0, count));
 }
 
 /**

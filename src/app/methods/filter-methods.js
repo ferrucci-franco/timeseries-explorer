@@ -18,7 +18,6 @@ import {
     parseCoefficients,
 } from '../../compute/kernels/iir.js';
 import { designedMagnitudeDb, normalizeFilterDesignOrder } from '../../compute/kernels/filter-design.js';
-import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import { TIME_UNITS } from '../../utils/time-unit-format.js';
 
 // The ids of the design fields, in the one list the parameter reset, the
@@ -283,7 +282,9 @@ proto._filterDesignRate = function() {
     if (!values || time.kind === 'index') {
         return { ...blank, ok: true, sampleRate: 1, unit: i18n.t('dataToolFilterDesignUnitCyclesPerSample'), kind: 'index', medianDt: 1 };
     }
-    const info = detectSamplingGaps(values);
+    // Measured once per axis (`_axisStepInfo`): this runs on every sync of
+    // the panel, and on a long file the measurement is what the user waits for.
+    const info = this._axisStepInfo(values);
     if (!info.hasNominalStep || !(info.medianDt > 0)) {
         return {
             ...blank,
@@ -698,7 +699,7 @@ proto._filterAxisNote = function() {
     const values = time?.values;
     if (!values || values.length !== variable.data?.length || time.kind === 'index') return '';
 
-    const info = detectSamplingGaps(values);
+    const info = this._axisStepInfo(values);
     if (!info.hasNominalStep) {
         return i18n.t(info.reason === 'nonMonotonic'
             ? 'dataToolFilterAxisBackwards'

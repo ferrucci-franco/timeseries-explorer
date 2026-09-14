@@ -18,7 +18,6 @@ import { getComputePool, translateKernelError } from './data-tools-methods.js';
 import { runCrossCorrelation } from '../../compute/kernels/index.js';
 import { XCORR_NORMALIZATIONS, XCORR_DEFAULT_NORMALIZATION, normalizeXcorrParams } from '../../compute/kernels/xcorr.js';
 import * as kernelShared from '../../compute/kernels/shared.js';
-import { detectSamplingGaps } from '../../utils/sampling-gaps.js';
 
 export const XCORR_FIELD_IDS = ['xcorr-second', 'xcorr-max-lag', 'xcorr-normalization', 'xcorr-remove-mean'];
 
@@ -83,13 +82,9 @@ proto._xcorrAxis = function(data) {
     return { ok: true, code: '', kind: time.kind, unit, dt: info.medianDt / this._resampleAxisScale(time.kind), length };
 };
 
-/** The step measurement behind `_xcorrAxis`, one per axis array. */
+/** The step measurement behind `_xcorrAxis`: the panel-wide one, per array. */
 proto._xcorrAxisStep = function(values) {
-    const cached = this._xcorrAxisCache;
-    if (cached?.source === values) return cached.info;
-    const info = detectSamplingGaps(values);
-    this._xcorrAxisCache = { source: values, info };
-    return info;
+    return this._axisStepInfo(values);
 };
 
 // ─── Reading the form ─────────────────────────────────────────────────────

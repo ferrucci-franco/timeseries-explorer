@@ -798,7 +798,7 @@ proto._interpolateLongestLabel = function(samples, data, variable) {
     const time = this._resampleTimeContext?.(data);
     const values = time?.values;
     if (!values || time.kind === 'index' || values.length !== variable?.data?.length) return base;
-    const info = detectSamplingGaps(kernelShared.asFloat64(values));
+    const info = this._axisStepInfo(values);
     if (!info.hasNominalStep || !(info.medianDt > 0)) return base;
     const span = samples * info.medianDt;
     if (time.kind === 'datetime') return `${base} ≈ ${formatNaturalDuration(span / 1000)}`;
@@ -813,7 +813,7 @@ proto._interpolateAxisGaps = function(data, variable) {
     const values = time?.values;
     if (!values || time.kind === 'index') return null;
     if (values.length !== variable?.data?.length) return null;
-    const info = detectSamplingGaps(values);
+    const info = this._axisStepInfo(values);
     if (!info.hasNominalStep || info.count === 0) return null;
     return { count: info.count, missing: info.totalMissing };
 };
@@ -2532,6 +2532,25 @@ proto._dataToolOutputExists = function(fileId, name) {
 
 proto._isOutlierDataSeries = function(values) {
     return this._isDataToolDataSeries(values, 'removeOutliers');
+};
+
+/**
+ * The sampling-step measurement of an axis (`detectSamplingGaps`), once per
+ * array. Every tool that reasons in time — the filter's sample rate, the
+ * cross-correlation's lag unit, the resampler's and the interpolator's gap
+ * notes — asks for it, and a sync of the panel asks several times over; on a
+ * minute of audio each measurement was most of a second, and the panel froze
+ * for the sum of them. The array is the key: a reload or a recompute makes a
+ * new one, so nothing here can go stale, and the map lets a closed file go.
+ */
+proto._axisStepInfo = function(values) {
+    if (!values || typeof values !== 'object') return detectSamplingGaps(values);
+    if (!this._axisStepCache) this._axisStepCache = new WeakMap();
+    const cached = this._axisStepCache.get(values);
+    if (cached) return cached;
+    const info = detectSamplingGaps(values);
+    this._axisStepCache.set(values, info);
+    return info;
 };
 
 proto._isDataToolDataSeries = function(values, tool = 'removeOutliers') {
