@@ -63,6 +63,11 @@ const BUILD_ERROR_KEYS = {
 // is a zoom — so seeking has to take only what a zoom would never claim.
 const CLICK_SLOP_PIXELS = 3;
 
+// A double click on the plot is Plotly's zoom-fit, and its first half is an
+// ordinary click. Seeking waits this long to see whether a second one lands;
+// short enough to feel immediate, long enough to catch the pair.
+const DOUBLE_CLICK_GRACE_MS = 260;
+
 // Auto scale lands the peak at −1 dBFS rather than at full scale: a hair of
 // headroom costs nothing audible and keeps the last sample off the rail.
 const AUTO_PEAK = 0.891;
@@ -179,6 +184,7 @@ export function installPlotAudioMethods(TargetClass) {
             buffer: null,
             bufferKey: '',
             notice: '',
+            resumeAfterScrub: false,
         };
     };
 
@@ -591,7 +597,10 @@ export function installPlotAudioMethods(TargetClass) {
         state.position = this._audioPosition(plot);
         this._audioReleaseNode();
         this._stopAudioTick();
-        this._clearAudioPlayheads();
+        // Paused, not stopped: the playhead stays where the sound stopped.
+        // Removing it was the bug — pause is the one moment a reader wants to
+        // see exactly where they are.
+        this._renderAudioPlayheads();
         this._syncAudioStrip(panelId);
     };
 
@@ -756,12 +765,18 @@ export function installPlotAudioMethods(TargetClass) {
             if (!start || event.button !== 0) return;
             if (Math.abs(event.clientX - start.x) > CLICK_SLOP_PIXELS) return;
             if (Math.abs(event.clientY - start.y) > CLICK_SLOP_PIXELS) return;
-            this._audioSeekFromClick(panelId, event);
+            clearTimeout(plot._audioSeekTimer);
+            const target = { clientX: event.clientX, clientY: event.clientY, target: event.target };
+            plot._audioSeekTimer = setTimeout(() => this._audioSeekFromClick(panelId, target), DOUBLE_CLICK_GRACE_MS);
         };
+        // The second click cancels the first one's seek, so zoom-fit does not
+        // drag the playhead along with it.
+        const onDoubleClick = () => clearTimeout(plot._audioSeekTimer);
 
         div.addEventListener('mousedown', onDown);
         document.addEventListener('mouseup', onUp, true);
-        plot._audioDocListeners = { up: onUp };
+        document.addEventListener('dblclick', onDoubleClick, true);
+        plot._audioDocListeners = { up: onUp, dblclick: onDoubleClick };
     };
 
     /**
@@ -775,6 +790,10 @@ export function installPlotAudioMethods(TargetClass) {
         if (plot._audioDocListeners?.up) {
             document.removeEventListener('mouseup', plot._audioDocListeners.up, true);
         }
+        if (plot._audioDocListeners?.dblclick) {
+            document.removeEventListener('dblclick', plot._audioDocListeners.dblclick, true);
+        }
+        clearTimeout(plot._audioSeekTimer);
         plot._audioDocListeners = null;
         plot._audioSeekDiv = null;
     };
@@ -886,23 +905,33 @@ export function installPlotAudioMethods(TargetClass) {
         const strip = document.createElement('div');
         strip.className = 'audio-strip';
         strip.dataset.panelId = panelId;
+        // Every control that is not a universally understood transport symbol
+        // carries a written label. The first read of this strip found the two
+        // dropdowns unreadable and the loop button mistaken for "refresh",
+        // which is what an unlabelled icon buys.
         strip.innerHTML = `
             <div class="audio-strip-row">
-                <button type="button" class="audio-btn audio-play" aria-label="${i18n.t('audioPlay')}">▶</button>
-                <button type="button" class="audio-btn audio-stop" aria-label="${i18n.t('audioStop')}">⏹</button>
-                <button type="button" class="audio-btn audio-loop" aria-pressed="false" aria-label="${i18n.t('audioLoop')}">🔁</button>
+                <button type="button" class="audio-btn audio-play" title="${i18n.t('audioPlay')}" aria-label="${i18n.t('audioPlay')}">▶</button>
+                <button type="button" class="audio-btn audio-stop" title="${i18n.t('audioStop')}" aria-label="${i18n.t('audioStop')}">⏹</button>
+                <button type="button" class="audio-btn audio-loop audio-btn-wide" aria-pressed="false" title="${i18n.t('audioLoop')}" aria-label="${i18n.t('audioLoop')}">⟲ ${i18n.t('audioLoopLabel')}</button>
                 <span class="audio-readout" role="status"></span>
                 <input type="range" class="audio-seek" min="0" max="1000" value="0" step="1" aria-label="${i18n.t('audioSeek')}">
-                <select class="audio-source" aria-label="${i18n.t('audioSource')}"></select>
-                <select class="audio-scale" aria-label="${i18n.t('audioScale')}">
-                    <option value="auto">${i18n.t('audioScaleAuto')}</option>
-                    <option value="fixed">${i18n.t('audioScaleFixed')}</option>
-                    <option value="manual">${i18n.t('audioScaleManual')}</option>
-                </select>
-                <input type="number" class="audio-gain-db" step="1" value="0" aria-label="${i18n.t('audioGainDb')}" hidden>
+                <label class="audio-field">
+                    <span class="audio-label">${i18n.t('audioSourceLabel')}</span>
+                    <select class="audio-source" title="${i18n.t('audioSource')}" aria-label="${i18n.t('audioSource')}"></select>
+                </label>
+                <label class="audio-field">
+                    <span class="audio-label">${i18n.t('audioScaleLabel')}</span>
+                    <select class="audio-scale" title="${i18n.t('audioScaleHelp')}" aria-label="${i18n.t('audioScale')}">
+                        <option value="auto">${i18n.t('audioScaleAuto')}</option>
+                        <option value="fixed">${i18n.t('audioScaleFixed')}</option>
+                        <option value="manual">${i18n.t('audioScaleManual')}</option>
+                    </select>
+                </label>
+                <input type="number" class="audio-gain-db" step="1" value="0" title="${i18n.t('audioGainDb')}" aria-label="${i18n.t('audioGainDb')}" hidden>
                 <label class="audio-dc"><input type="checkbox" class="audio-dc-input" checked> ${i18n.t('audioRemoveDC')}</label>
-                <button type="button" class="audio-btn audio-mute" aria-pressed="false" aria-label="${i18n.t('audioMute')}">🔈</button>
-                <input type="range" class="audio-volume" min="0" max="100" value="70" step="1" aria-label="${i18n.t('audioVolume')}">
+                <button type="button" class="audio-btn audio-mute" aria-pressed="false" title="${i18n.t('audioMute')}" aria-label="${i18n.t('audioMute')}">🔈</button>
+                <input type="range" class="audio-volume" min="0" max="100" value="70" step="1" title="${i18n.t('audioVolume')}" aria-label="${i18n.t('audioVolume')}">
             </div>
             <div class="audio-strip-note" role="status"></div>
         `;
@@ -922,12 +951,33 @@ export function installPlotAudioMethods(TargetClass) {
         strip.querySelector('.audio-stop').addEventListener('click', () => this._audioStop(panelId));
         strip.querySelector('.audio-loop').addEventListener('click', () => {
             state.loop = !state.loop;
-            if (this._audioPanelIsPlaying(plot)) this._audioPlay(panelId);
-            else this._syncAudioStrip(panelId);
+            // Set it on the take that is already sounding. Restarting to apply
+            // it rebuilt the node and dropped the playhead back by the time
+            // that took — half a second of rewind for a setting that the Web
+            // Audio node accepts live.
+            if (this._audioPanelIsPlaying(plot) && player.node) {
+                player.node.loop = state.loop;
+                player.loop = state.loop;
+            }
+            this._syncAudioStrip(panelId);
         });
-        strip.querySelector('.audio-seek').addEventListener('input', (event) => {
+        const seek = strip.querySelector('.audio-seek');
+        // Scrubbing is silent: the sound stops when the handle is grabbed and
+        // picks up from the new point when it is let go. Seeking on every
+        // pixel of the drag restarts the take on each one, which stutters and
+        // keeps playing from wherever the pointer paused.
+        seek.addEventListener('pointerdown', () => {
+            state.resumeAfterScrub = this._audioPanelIsPlaying(plot);
+            if (state.resumeAfterScrub) this._audioPause(panelId);
+        });
+        seek.addEventListener('input', (event) => {
             const duration = state.buffer?.duration || this._audioRangeDuration(plot);
             this._audioSeekTo(panelId, (Number(event.target.value) / 1000) * duration);
+        });
+        seek.addEventListener('change', () => {
+            if (!state.resumeAfterScrub) return;
+            state.resumeAfterScrub = false;
+            this._audioPlay(panelId);
         });
         strip.querySelector('.audio-source').addEventListener('change', (event) => {
             state.sourceKey = event.target.value;
@@ -1059,7 +1109,16 @@ export function installPlotAudioMethods(TargetClass) {
 
     // ─── Lifecycle ──────────────────────────────────────────────────
 
-    /** Called from _destroyChart: the panel's chart is going away. */
+    /**
+     * Called from _destroyChart: the panel's chart is going away.
+     *
+     * The strip is deliberately left in place. It belongs to the panel, not to
+     * the chart, and a chart is destroyed and rebuilt for ordinary reasons — a
+     * trace removed from the legend, a mode change. Taking the strip out and
+     * putting it back changes the panel's height twice per rebuild, which
+     * makes the rebuild flash. What does have to go is the sound, the
+     * playhead, and the listeners bound to the element being dropped.
+     */
     proto._teardownAudioForPanel = function(panelId, plot) {
         if (player.owner?.manager === this && player.owner.panelId === panelId) {
             this._audioReleaseNode();
@@ -1067,7 +1126,7 @@ export function installPlotAudioMethods(TargetClass) {
             player.owner = null;
         }
         this._removeAudioPlayhead(plot);
-        this._removeAudioStrip(panelId);
+        if (!plot?.audio?.open) this._removeAudioStrip(panelId);
         this._removeAudioSeekHandlers(plot);
         const state = plot?.audio;
         if (state) { state.buffer = null; state.bufferKey = ''; }

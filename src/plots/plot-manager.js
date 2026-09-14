@@ -1278,6 +1278,9 @@ class PlotManager {
         } else {
             this._addPhaseVar(panelId, varName, panelEl, plot);
         }
+        // The audio strip lists the panel's traces: a variable dropped in has
+        // to appear in it without the user hunting for a way to refresh.
+        this._syncAudioStrip?.(panelId);
     }
 
     removeTrace(panelId, varName) {
@@ -1292,6 +1295,7 @@ class PlotManager {
             this._syncTimeseriesMarkerColors(plot);
             if (plot.traces.length === 0) this._clearPanel(panelId);
             else this._syncCursorDisplay(panelId, plot);
+            this._syncAudioStrip?.(panelId);
         });
     }
 
