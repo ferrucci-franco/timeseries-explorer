@@ -415,6 +415,29 @@ curve that is then decimated to 2,000 points. Computing a preview over the
 visible window only is not sound for every tool — an IIR filter's state comes
 from the samples before it — so it stays as it is for now.
 
+### 5e. A lag is not a moment
+
+The cross-correlation's abscissa is a duration in seconds, exactly like the
+elapsed time of the signals it came from — same units, same kind, so every
+compatibility test in the panel says the two axes match. They do not. Zero on
+a lag axis is "no shift"; zero on a time axis is the start of the record.
+
+So the dataset carries `metadata.independentAxis`, and the plot manager keeps
+any panel drawing such a file out of the axis link (`_hasIndependentAxis`,
+`_plotUsesIndependentAxis`): it is neither a source nor a target, so zooming
+the signals leaves the correlation where it is and zooming the correlation
+leaves the signals alone. One lag trace is enough to take a mixed panel out
+of the link, since its x-axis cannot mean two things at once. Two
+cross-correlations do not link to each other either — each was asked for its
+own lag range, and comparing them means putting them in ONE panel.
+
+The synchronized hover follows the same line, for the same reason: it reads
+one x value across panels, and a moment is not a shift. It travels among the
+signal panels, or among the correlations, never between them.
+
+A dataset saved before the flag existed is still recognised, by the `xcorr`
+block its metadata already carried.
+
 ## 6. Where the work runs
 
 Filling goes through the existing `dataTool:pipeline` worker op, so it chains

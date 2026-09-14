@@ -322,6 +322,14 @@ proto._buildXcorrData = function(sourceData, recipe, axis, result) {
         timeKind: 'numeric',
         timeDisplayMode: 'numeric',
         timeOriginMs: 0,
+        // A lag is measured in seconds but it is not a moment in the record:
+        // t = 0 on this axis is "no shift", not the start of the signal. So the
+        // panel drawing it must not have its x-axis tied to the panels showing
+        // the signals themselves — see `_hasIndependentAxis` in the plot
+        // manager. Two cross-correlations do not link to each other either:
+        // their lag ranges are whatever each was asked for, and overlaying
+        // them in ONE panel is the way to compare them.
+        independentAxis: true,
         xcorr: {
             x,
             y,

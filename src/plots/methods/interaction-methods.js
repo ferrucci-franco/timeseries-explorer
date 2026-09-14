@@ -1810,9 +1810,14 @@ proto._refreshAllPhaseVisuals = function() {
 proto._syncXAxisUpdate = function(sourcePanelId, update) {
     const targets = [];
     const sourcePlot = this.plots.get(sourcePanelId);
+    // A panel on an axis of its own (a cross-correlation's lag) neither sends
+    // nor receives: the number on its x-axis is a shift, not a moment, so
+    // zooming the signals must not move it and zooming it must not move them.
+    if (this._plotUsesIndependentAxis(sourcePlot)) return;
     const sourceFid = this._primaryTimeFileId(sourcePlot);
     for (const [id, plot] of this.plots) {
         if (id === sourcePanelId || !plot.div || plot.mode !== 'timeseries') continue;
+        if (this._plotUsesIndependentAxis(plot)) continue;
         const targetFid = this._primaryTimeFileId(plot);
         if (this._timeDisplayMode(sourceFid) !== this._timeDisplayMode(targetFid)) continue;
         targets.push({ id, plot, div: plot.div });
@@ -1855,9 +1860,17 @@ proto._onHover = function(sourcePanelId, eventData) {
         const srcPlot    = this.plots.get(sourcePanelId);
         const srcFid     = srcPlot?.traces?.[0]?.fileId ?? this.activeFileId;
         const formatHoverTime = (fileId, x) => this._formatTimeValue(fileId || srcFid, x);
+        // The shared hover reads one x value across panels, so it only means
+        // something where that value means the same thing. A lag is not a
+        // moment: hovering the signals must not drop a marker on a
+        // cross-correlation, nor the other way round. Between two
+        // cross-correlations it is the same quantity, so those still follow
+        // each other.
+        const sourceIsIndependent = this._plotUsesIndependentAxis(srcPlot);
 
         for (const [, plot] of this.plots) {
             if (!plot.div || !plot.div.isConnected) continue;
+            if (this._plotUsesIndependentAxis(plot) !== sourceIsIndependent) continue;
             const panelEl = plot.div.closest('.layout-panel');
             const targetFid = this._primaryTimeFileId(plot);
             const xVal = this._mapTimeValueBetweenFiles(srcFid, targetFid, sourceXVal);

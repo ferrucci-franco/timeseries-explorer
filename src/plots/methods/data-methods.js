@@ -1072,6 +1072,28 @@ proto._primaryTimeFileId = function(plot) {
     return this.activeFileId;
 };
 
+/**
+ * Does this file's abscissa stand on its own, rather than on the record's
+ * clock? A cross-correlation's `lag` does: it is a duration in seconds, so it
+ * looks like elapsed time and would otherwise pass every compatibility test,
+ * but its zero is "no shift", not the start of the file. Marked by the tool
+ * that builds the dataset (`metadata.independentAxis`); `metadata.xcorr` is
+ * accepted too, so a dataset stored before the flag existed is still known.
+ */
+proto._hasIndependentAxis = function(fileId) {
+    const metadata = this.files.get(fileId)?.data?.metadata;
+    return !!(metadata?.independentAxis || metadata?.xcorr);
+};
+
+/** True when any trace on the panel comes from such a file. */
+proto._plotUsesIndependentAxis = function(plot) {
+    if (!plot) return false;
+    for (const trace of plot.traces || []) {
+        if (trace?.fileId && this._hasIndependentAxis(trace.fileId)) return true;
+    }
+    return false;
+};
+
 proto._mapTimeValueBetweenFiles = function(sourceFileId, targetFileId, xValue) {
     if (!Number.isFinite(xValue)) return NaN;
     if (!sourceFileId || !targetFileId || sourceFileId === targetFileId) return xValue;
