@@ -507,7 +507,10 @@ proto.commitResampleTool = async function(options = {}) {
             ? i18n.t('dataToolResampleInMemory')
             : '';
         return [base, bridged, left, holes, memory].filter(Boolean).join(' ');
-    }, emptyTotal > 0 ? 'error' : 'ok');
+    // Holes in the result are a caveat on a file that WAS made, not a fault to
+    // fix: a warning, which goes away on its own. As an error it stayed up for
+    // ever, through every file the user opened afterwards (#55).
+    }, emptyTotal > 0 ? 'warn' : 'ok');
 
     this._clearDataToolDraft({ keepMessage: true });
     this._syncDataTools();

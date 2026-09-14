@@ -326,6 +326,17 @@ the run is still going 250 ms later, the message line turns into a small
 spinner with "Computing *tool*…" — so a filter over a million samples is
 visibly in progress and a fast tool never flashes it (`_beginDataToolBusy`).
 
+And the message line itself has rules (`_setOutlierMessage`). A success
+notice goes away by itself after 6 s; a *warning* — an action that completed
+with a caveat, such as "131 769 new samples are missing" after a resample
+over holes — after 15 s, long enough to read the numbers; an error stays,
+since it names something the user has to change; a "computing" line is the
+commit's to take down. And every message remembers the file it was said
+about: when the active file changes, or the last file is closed, the sync
+drops it (only a "computing" line rides through). Before this the resample's
+holes notice was typed as an error, so it never went away and outlived every
+file it could have referred to (#55).
+
 The per-tool compute stays with the tool; the module only knows how to ask
 for it. The cross-correlation (§10) is the second recipe.
 

@@ -89,6 +89,9 @@ export function translateKernelError(err) {
 
 // How long a commit may take before the panel says it is working.
 export const DATA_TOOL_BUSY_DELAY_MS = 250;
+// How long a completed action's notice stays up. A caveat gets longer than a
+// plain success: it carries numbers worth reading before it goes.
+export const DATA_TOOL_MESSAGE_DISMISS_MS = { ok: 6000, warn: 15000 };
 
 export function installDataToolsMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -310,6 +313,16 @@ proto._syncDataTools = function() {
     // files abandons both. Without this the placeholder variable would be stranded
     // in the file the user just left.
     if (this._dataToolPreview && this._dataToolPreview.fileId !== fileId) this._clearDataToolPreview();
+    // So does the message line: a verdict on one file's data ("131 769 new
+    // samples are missing", "the axis is irregular") is not a statement about
+    // the file the user switched to, and least of all about no file at all
+    // (#55: a resample notice outlived every file it could refer to). Only a
+    // "computing" line rides through, since the commit that wrote it is still
+    // running.
+    const message = this._dataToolMessage;
+    if (message?.message && message.type !== 'busy' && (message.fileId ?? null) !== (fileId ?? null)) {
+        this._setOutlierMessage('', '');
+    }
     if (this._dataToolEditing && this._dataToolEditing.fileId !== fileId) this._exitDataToolEditing({ keepMessage: true });
     // Editing a derived dataset happens in its SOURCE file's panel; leaving that
     // file abandons the edit the same way.
@@ -1251,7 +1264,7 @@ proto._setDataToolApplyMessage = function(result, action, name, dependentCount =
             : '';
         const note = typeof warning === 'function' ? warning() : (warning || '');
         return [base, chain, note].filter(Boolean).join(' ');
-    }, warning ? 'error' : 'ok');
+    }, warning ? 'warn' : 'ok');
 };
 
 // ─── Draft, editing and the transformations table ─────────────────────────
@@ -3179,23 +3192,36 @@ proto._toggleOutlierHelpPopover = function(show) {
 // re-rendered on a language switch; the ones that pass a plain string (an
 // exception's own message) simply keep it, which is all we can do for text that
 // was never translated to begin with.
+/**
+ * The message line under the Create buttons. `type` is one of:
+ *
+ *   ok     the action completed — taken down by itself after a few seconds,
+ *          because a report of something that already happened, left up,
+ *          reads as the current state of a panel the user has moved on from;
+ *   warn   the action completed with a caveat worth reading ("N new samples
+ *          are missing") — taken down by itself too, later, so the numbers
+ *          can be read; it is not a condition still in effect;
+ *   error  something the user has to change — stays until they do;
+ *   busy   a commit is running — the commit takes it down.
+ *
+ * Every message remembers the file it was said about; `_syncDataTools` drops
+ * it when the active file changes or goes away.
+ */
 proto._setOutlierMessage = function(message, type) {
-    this._dataToolMessage = { message, type };
+    this._dataToolMessage = { message, type, fileId: this.activeFileId ?? null };
     this._renderDataToolMessage();
 
-    // A success notice reports something that already happened; leaving it up
-    // makes it read as the current state of a panel the user has since moved on
-    // from. Errors stay: they describe a condition still in effect.
     if (this._dataToolMessageTimer) {
         clearTimeout(this._dataToolMessageTimer);
         this._dataToolMessageTimer = null;
     }
-    if (type === 'ok' && typeof setTimeout === 'function') {
+    const dismissAfter = DATA_TOOL_MESSAGE_DISMISS_MS[type];
+    if (dismissAfter && typeof setTimeout === 'function') {
         const shown = this._dataToolMessage;
         this._dataToolMessageTimer = setTimeout(() => {
             this._dataToolMessageTimer = null;
             if (this._dataToolMessage === shown) this._setOutlierMessage('', '');
-        }, 6000);
+        }, dismissAfter);
     }
 };
 
