@@ -7,13 +7,15 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('../src/plots/plot-manager.js', import.meta.url), 'utf8');
-const startMarker = '    _autoScaleAxisUpdate(plot, axis) {';
-const start = source.indexOf(startMarker);
-assert.ok(start >= 0, '_autoScaleAxisUpdate is present');
+// Matched by name rather than by a full signature: the parameter list grows
+// (it has already taken an options bag) and the slice should survive that.
+const signature = source.match(/^ {4}_autoScaleAxisUpdate\(([^)]*)\) \{$/m);
+assert.ok(signature, '_autoScaleAxisUpdate is present');
+const start = signature.index;
 const end = source.indexOf('\n    _autoScalePlotAxis(', start + 1);
 assert.ok(end > start, 'method end located');
 const methodText = source.slice(start, end)
-    .replace(startMarker, 'proto._autoScaleAxisUpdate = function(plot, axis) {');
+    .replace(signature[0], `proto._autoScaleAxisUpdate = function(${signature[1]}) {`);
 
 const proto = {};
 vm.runInNewContext(methodText, { proto });
@@ -94,6 +96,18 @@ h._y = { A: [100, 20, 5, 30, 15], B: [-50, -5, 8, 2, 1], C: [1000, 200, 300, 400
     assert.deepEqual(u['yaxis2.range'], [200, 400], 'Y2 from C in window [1,3]');
 }
 
+// ── An analysis panel can borrow the builder for its time pane ───────────────
+// Fit-Y in Fourier mode fits the spectrum AND the signal drawn above it. That
+// upper pane holds ordinary time traces, so it asks for them by name; the mode
+// alone would send the builder looking for phase traces it does not have.
+{
+    const fftPlot = { ...tsPlot([1, 3]), mode: 'fft' };
+    const u = h._autoScaleAxisUpdate(fftPlot, 'y', { treatAsTimeseries: true });
+    assert.deepEqual(u['yaxis.range'], [-5, 30], 'the option reads the panel time traces');
+    assert.throws(() => h._autoScaleAxisUpdate(fftPlot, 'y'),
+        'without the option the mode decides, and fft has no phase traces');
+}
+
 // ── Per-axis auto-fit is wired for the split analysis modes (source checks) ───
 // The update-builder above only covers timeseries/phase2d; the analysis modes
 // dispatch to their own pane-specific methods and each renders its own buttons.
@@ -110,6 +124,8 @@ h._y = { A: [100, 20, 5, 30, 15], B: [-50, -5, 8, 2, 1], C: [1000, 200, 300, 400
     assert.match(read('plots/methods/heatmap-methods.js'), /_autoScaleHeatmapAxis = function\(plot, axis\) \{\s*\n\s*if \(axis !== 'x'/,
         'heatmap per-axis fits X only');
     assert.match(read('plots/methods/fft-methods.js'), /_autoScaleFftAxis = function/, 'fft per-axis method exists');
+    assert.match(read('plots/methods/fft-methods.js'), /_autoScaleAxisUpdate\(plot, 'y', \{ treatAsTimeseries: true \}\)/,
+        'fft fit-Y also fits the time pane above the spectrum');
     assert.match(read('plots/methods/temporal-profile-methods.js'), /_autoScaleTemporalProfileAxis = function/, 'profile per-axis method exists');
 
     // Button visibility: the whole timeseries family gets the X button; every
