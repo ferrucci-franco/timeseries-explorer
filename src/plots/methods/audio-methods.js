@@ -108,6 +108,27 @@ const player = {
 const samplingCache = new WeakMap();
 
 /**
+ * A number that changes when the samples do.
+ *
+ * Recomputing a data tool — a new M for a moving average, another cutoff —
+ * replaces the variable's array rather than editing it, which is the same
+ * contract the missing-data overlays rely on. So the array's identity IS the
+ * version of what should be heard, and putting it in the buffer's key is what
+ * makes a stale take impossible: no identity, no cache hit.
+ */
+const sampleStamps = new WeakMap();
+let nextSampleStamp = 1;
+const sampleStamp = (values) => {
+    if (!values || typeof values !== 'object') return 0;
+    let stamp = sampleStamps.get(values);
+    if (!stamp) {
+        stamp = nextSampleStamp++;
+        sampleStamps.set(values, stamp);
+    }
+    return stamp;
+};
+
+/**
  * Is this time vector uniformly sampled, and at what rate?
  *
  * The same verdict analyzeSampling() reaches, computed without its copy of the
@@ -226,8 +247,8 @@ export function installPlotAudioMethods(TargetClass) {
             bufferKey: '',
             notice: '',
             resumeAfterScrub: false,
-            pendingRangeKey: null,
-            pendingRangeSince: 0,
+            pendingRebuildKey: null,
+            pendingRebuildSince: 0,
         };
     };
 
@@ -448,8 +469,27 @@ export function installPlotAudioMethods(TargetClass) {
         };
     };
 
+    /**
+     * What a built buffer is a copy OF. Two takes with the same key sound the
+     * same, so the buffer is kept; anything else rebuilds it.
+     *
+     * The samples' stamp is the part that took a bug to learn. The key used to
+     * name only the signal, the range and Remove DC — all of which stay put
+     * when a data tool is re-run with new parameters — so a moving average
+     * kept playing the M it was built with, through stop and play, until the
+     * dropdown was moved to another signal and back. The signal's NAME is not
+     * its contents.
+     */
     proto._audioBufferKey = function(source, range, state) {
-        return [source.key, range[0], range[1], state.removeDC ? 1 : 0].join('|');
+        const values = source.status?.values;
+        return [
+            source.key,
+            sampleStamp(values),
+            values?.length || 0,
+            range[0],
+            range[1],
+            state.removeDC ? 1 : 0,
+        ].join('|');
     };
 
     // ─── Transport ──────────────────────────────────────────────────
@@ -733,7 +773,7 @@ export function installPlotAudioMethods(TargetClass) {
         const step = () => {
             player.raf = null;
             if (!player.playing || player.owner?.manager !== this) return;
-            this._followAudioRangeChange();
+            this._followAudioSourceChange();
             this._renderAudioPlayheads();
             this._syncAudioReadout();
             player.raf = requestAnimationFrame(step);
@@ -742,17 +782,20 @@ export function installPlotAudioMethods(TargetClass) {
     };
 
     /**
-     * The panel's selection can move while the sound is running — dragging an
-     * FFT bound, typing a new x1. The sound has to follow it, since it IS that
-     * selection; before this, the range only changed on the next stop and play.
+     * What is being played can change under the sound: the panel's selection
+     * moves — dragging an FFT bound, typing a new x1 — or the samples
+     * themselves are recomputed, which is what happens when a data tool's
+     * parameters are edited while its output is playing. Either way the sound
+     * has to follow, since it IS that selection of those samples.
      *
-     * Polled from the tick rather than hooked into each analysis mode: the
-     * range has four owners today and the tick already runs while playing, so
-     * comparing two numbers there beats four callbacks that must not be
-     * forgotten. The change is applied once it has been still for a moment,
-     * so dragging a bound does not restart the take on every frame.
+     * Polled from the tick rather than hooked into each producer: the range
+     * has four owners today and the data tools more, and the tick already runs
+     * while playing, so comparing one key there beats a dozen callbacks that
+     * must not be forgotten. The change is applied once it has been still for
+     * a moment, so dragging a bound — or an M slider — does not restart the
+     * take on every frame, and the instant is kept across the rebuild.
      */
-    proto._followAudioRangeChange = function() {
+    proto._followAudioSourceChange = function() {
         const panelId = player.owner?.panelId;
         const plot = this.plots.get(panelId);
         const state = plot?.audio;
@@ -763,19 +806,20 @@ export function installPlotAudioMethods(TargetClass) {
         if (!range) return;
 
         const key = this._audioBufferKey(source, range, state);
-        if (key === state.bufferKey) { state.pendingRangeKey = null; return; }
+        if (key === state.bufferKey) { state.pendingRebuildKey = null; return; }
         const now = performance.now();
-        if (state.pendingRangeKey !== key) {
-            state.pendingRangeKey = key;
-            state.pendingRangeSince = now;
+        if (state.pendingRebuildKey !== key) {
+            state.pendingRebuildKey = key;
+            state.pendingRebuildSince = now;
             return;
         }
-        if (now - state.pendingRangeSince < RANGE_SETTLE_MS) return;
+        if (now - state.pendingRebuildSince < RANGE_SETTLE_MS) return;
 
         // Keep the instant when the new range still contains it; otherwise
-        // start at the beginning of what was just selected.
+        // start at the beginning of what was just selected. A recompute keeps
+        // the range, so the instant simply survives it.
         const absolute = state.buffer.startTime + this._audioPosition(plot);
-        state.pendingRangeKey = null;
+        state.pendingRebuildKey = null;
         state.buffer = null;
         state.bufferKey = '';
         state.position = (absolute >= range[0] && absolute <= range[1]) ? absolute - range[0] : 0;
