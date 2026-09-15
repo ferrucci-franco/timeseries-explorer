@@ -3738,6 +3738,10 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
 
 .audio-strip {
     flex: 0 0 auto;
+    /* Pushed to the bottom of the panel. Without this it rides up under the
+       toolbar whenever the chart is not there yet — while a file loads, for
+       instance — and then drops again when the chart appears. */
+    margin-top: auto;
     border-top: 1px solid var(--border-color);
     background-color: var(--bg-primary);
     padding: 4px 6px;

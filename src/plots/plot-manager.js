@@ -1286,8 +1286,22 @@ class PlotManager {
     removeTrace(panelId, varName) {
         const plot = this.plots.get(panelId);
         if (!plot || !plot.div || plot.mode !== 'timeseries') return;
-        const idx = plot.traces.findIndex(t => t.varName === varName);
-        if (idx === -1) return;
+        this._removeTimeseriesTraceAt(panelId, plot.traces.findIndex(t => t.varName === varName));
+    }
+
+    /**
+     * Drop one timeseries trace from the chart that is already on screen.
+     *
+     * Shift-clicking a legend entry used to splice the trace out and rebuild
+     * the whole panel, which blanks the chart for as long as the re-plot takes
+     * — and, since a rebuild destroys the chart, stopped whatever was playing,
+     * even when the trace removed was not the one being heard. Deleting the
+     * one curve leaves the chart, the panel and the sound alone.
+     */
+    _removeTimeseriesTraceAt(panelId, idx) {
+        const plot = this.plots.get(panelId);
+        if (!plot?.div || plot.mode !== 'timeseries') return false;
+        if (!Number.isInteger(idx) || idx < 0 || idx >= plot.traces.length) return false;
         plot.traces.splice(idx, 1);
         const markerWasAfterTrace = Number.isInteger(plot.markerTraceIdx) && idx < plot.markerTraceIdx;
         Plotly.deleteTraces(plot.div, idx).then(() => {
@@ -1297,6 +1311,7 @@ class PlotManager {
             else this._syncCursorDisplay(panelId, plot);
             this._syncAudioStrip?.(panelId);
         });
+        return true;
     }
 
     _addTimeseries(panelId, varName, panelEl, plot, options = {}) {
@@ -1572,7 +1587,9 @@ class PlotManager {
                 if (plot.mode === 'timeseries') {
                     const idx = plot.traces.findIndex(t => this._traceName(t.varName, t.fileId) === clickedName);
                     if (idx < 0) return false;
-                    plot.traces.splice(idx, 1);
+                    // Incremental: no rebuild, so no blank frame and no
+                    // interrupted playback.
+                    return this._removeTimeseriesTraceAt(panelId, idx);
                 } else {
                     const idx = plot.phaseTraces.findIndex(pt => this._phaseTraceName(plot, pt) === clickedName);
                     if (idx < 0) return false;

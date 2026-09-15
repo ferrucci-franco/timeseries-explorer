@@ -514,6 +514,7 @@ export function installPlotAudioMethods(TargetClass) {
         // overwritten by the one being left behind. So it is taken first and
         // put back afterwards.
         const requestedPosition = state.position;
+        const wasSounding = player.playing;
         this._audioYieldPlayer();
         state.position = requestedPosition;
 
@@ -536,8 +537,17 @@ export function installPlotAudioMethods(TargetClass) {
         if (state.position >= built.duration - 0.001) state.position = 0;
 
         const nodeGain = context.createGain();
-        nodeGain.gain.setValueAtTime(1, context.currentTime);
         nodeGain.connect(player.master);
+        if (wasSounding) {
+            // Crossfade: the take being left is already ramping down over the
+            // same 10 ms inside _audioReleaseNode, so fading this one up over
+            // that window closes the gap instead of leaving the click that a
+            // straight cut leaves. It costs one extra gain node for 10 ms.
+            nodeGain.gain.setValueAtTime(0.0001, context.currentTime);
+            nodeGain.gain.linearRampToValueAtTime(1, context.currentTime + INTERRUPT_FADE_SECONDS);
+        } else {
+            nodeGain.gain.setValueAtTime(1, context.currentTime);
+        }
         const node = context.createBufferSource();
         node.buffer = built.buffer;
         node.loop = !!state.loop;
@@ -820,7 +830,17 @@ export function installPlotAudioMethods(TargetClass) {
         let pressedAt = null;
 
         const onDown = (event) => {
-            pressedAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+            // What the gesture IS gets decided where it starts. A shift-click
+            // on a legend entry removes that curve, and its release reaches
+            // this handler looking like an ordinary click over the plot area —
+            // the legend sits inside that rectangle when it is drawn as an
+            // overlay — which seeked the sound on every curve removed. Any
+            // modifier is somebody else's gesture too: the cursors use them.
+            const onChrome = event.target?.closest?.('.legend, .modebar, .audio-strip, .hover-info-box');
+            const modified = event.shiftKey || event.ctrlKey || event.altKey || event.metaKey;
+            pressedAt = (event.button === 0 && !onChrome && !modified)
+                ? { x: event.clientX, y: event.clientY }
+                : null;
         };
         // The release is read on document, in the capture phase, because
         // Plotly's drag layer consumes mouseup before it reaches the container:
