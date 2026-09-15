@@ -1013,8 +1013,17 @@ export function installPlotAudioMethods(TargetClass) {
             // that took — half a second of rewind for a setting that the Web
             // Audio node accepts live.
             if (this._audioPanelIsPlaying(plot) && player.node) {
+                // Read the position BEFORE the flag flips, then re-anchor the
+                // clock to it. While looping, the elapsed time runs past the
+                // buffer's length again and again and only the modulo keeps it
+                // inside the range; dropping the modulo without re-anchoring
+                // left the playhead pinned at the end of the range while the
+                // sound carried on correctly.
+                const position = this._audioPosition(plot);
                 player.node.loop = state.loop;
                 player.loop = state.loop;
+                player.offset = position;
+                player.startedAt = player.context.currentTime;
             }
             this._syncAudioStrip(panelId);
         });
