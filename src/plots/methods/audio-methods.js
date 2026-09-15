@@ -749,7 +749,11 @@ export function installPlotAudioMethods(TargetClass) {
     proto._audioCurrentMark = function() {
         if (!player.owner || player.owner.manager !== this) return null;
         const ownerPlot = this.plots.get(player.owner.panelId);
-        if (!ownerPlot) return null;
+        // A closed strip has no mark. Without this, every relayout after
+        // closing redrew the playhead the close had just cleared: pause leaves
+        // the panel owning the player, and the mark came back with the panel's
+        // next repaint.
+        if (!ownerPlot?.audio?.open) return null;
         const built = this._ensureAudioState(ownerPlot).buffer;
         const source = this._audioSelectedSource(ownerPlot);
         if (!source?.status?.ok || !built) return null;
@@ -956,7 +960,22 @@ export function installPlotAudioMethods(TargetClass) {
         const state = this._ensureAudioState(plot);
         state.open = !state.open;
         if (!state.open) {
+            const owned = player.owner?.manager === this && player.owner.panelId === panelId;
             if (this._audioPanelIsPlaying(plot)) this._audioStop(panelId);
+            // Closing takes the mark with it. Stopping cleared it, but a strip
+            // closed while PAUSED left the line on the chart — pause keeps the
+            // playhead on purpose, and nothing was undoing that. Only this
+            // panel's mark goes unless this panel is the one that owns the
+            // player, in which case its mark is drawn in every panel showing
+            // the same signal.
+            if (owned) {
+                this._clearAudioPlayheads();
+                // Hand the player back: this panel is no longer listening, so
+                // nothing about it should keep the player pointed at it.
+                player.owner = null;
+            } else {
+                this._removeAudioPlayhead(plot);
+            }
             this._removeAudioStrip(panelId);
             this._removeAudioSeekHandlers(plot);
         } else {
