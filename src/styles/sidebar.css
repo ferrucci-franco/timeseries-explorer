@@ -927,13 +927,49 @@
     min-height: 2rem;
 }
 
+/* A commit announces itself as a card, in the shape of the rows above it: a
+   line of grey text at the bottom of a long panel was missed entirely, which
+   is a poor way to say "a worker is busy with your data". The card carries the
+   work from red — running — to green when it lands, and goes away on its own
+   like the line it replaces. No card when there is nothing to say: only a
+   message with a state gets the shell. */
+.data-tool-message.busy,
+.data-tool-message.ok,
+.data-tool-message.warn {
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    /* Red to green as the same card, rather than one card replacing another. */
+    transition: background-color 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+}
+
+/* The card carries the colour; the words keep the page's ink. Green text on a
+   green ground read at 1.9:1 in the light theme — a state worth seeing is not
+   a reason to make the sentence harder to read. */
+.data-tool-message.ok,
+.data-tool-message.warn {
+    color: var(--text-primary);
+}
+
+.data-tool-message.ok {
+    border-color: color-mix(in srgb, var(--success-color) 55%, var(--border-color));
+    background-color: color-mix(in srgb, var(--success-color) 16%, var(--bg-primary));
+}
+
+.data-tool-message.warn {
+    border-color: color-mix(in srgb, var(--warning-color) 55%, var(--border-color));
+    background-color: color-mix(in srgb, var(--warning-color) 16%, var(--bg-primary));
+}
+
 /* "Computing…": a small ring turning ahead of the text, so a commit that takes
    seconds in the worker is visibly a commit in progress. */
 .data-tool-message.busy {
     display: flex;
     align-items: center;
     gap: 0.45rem;
-    color: var(--text-secondary);
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--danger-color) 45%, var(--border-color));
+    background-color: color-mix(in srgb, var(--danger-color) 14%, var(--bg-primary));
 }
 
 .data-tool-message.busy::before {
