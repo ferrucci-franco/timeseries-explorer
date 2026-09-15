@@ -275,6 +275,32 @@ const fakeContext = ({ sampleRate = 48000, accepts = () => true } = {}) => ({
     assert.equal(state.open, true, 'the strip stays open across a redraw');
 }
 
+// ── One line, in the panel that is sounding ───────────────────────
+{
+    // The player is a singleton and only one panel sounds at a time. The mark
+    // used to be applied to every panel plotting that signal, on the grounds
+    // that the clock is one; in front of two panels of the same signal that
+    // reads as two players running at once, which is the one thing the feature
+    // promises never to do. The mark names its panel, and the others lose it.
+    const manager = new FakeManager();
+    manager.addSignal('f1', 'Left', signal(8000, 1));
+    const trace = { fileId: 'f1', varName: 'Left', color: '#1f77b4' };
+    const sounding = manager.addPanel('p1', [trace], { div: { isConnected: true } });
+    const watching = manager.addPanel('p2', [{ ...trace }], { div: { isConnected: true } });
+
+    const drawn = [];
+    const removed = [];
+    manager._drawAudioPlayhead = (plot) => drawn.push(plot);
+    manager._removeAudioPlayhead = (plot) => removed.push(plot);
+
+    const mark = { panelId: 'p1', sourceKey: manager._audioTraceKey(trace), dataTime: 0.4 };
+    manager._applyAudioMark(sounding, mark);
+    manager._applyAudioMark(watching, mark);
+
+    assert.deepEqual(drawn, [sounding], 'the playhead is drawn in the panel that owns the player');
+    assert.deepEqual(removed, [watching], 'and taken off the other panel, however well it knows the signal');
+}
+
 // ── The clock behind the playhead ─────────────────────────────────
 {
     assert.equal(positionInRange(0, 0.4, 1, false), 0.4, 'the position is where the sound is');
