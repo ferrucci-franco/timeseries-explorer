@@ -76,6 +76,16 @@ const RANGE_SETTLE_MS = 250;
 // Auto scale lands the peak at −1 dBFS rather than at full scale: a hair of
 // headroom costs nothing audible and keeps the last sample off the rail.
 const AUTO_PEAK = 0.891;
+/**
+ * Draw the idle (grey) mark when it sits at the very start of the range.
+ *
+ * Off by default: at position zero the line lands on the axis itself, where it
+ * reads as part of the frame rather than as a cursor, so a panel that has not
+ * been played yet shows nothing. Everywhere else the idle mark is drawn, so
+ * the seek slider always has a visible answer to "where am I?". Flip this to
+ * true to have it drawn at the start too.
+ */
+const SHOW_IDLE_MARK_AT_START = false;
 
 // The one player. `owner` is the panel currently making sound, or null.
 const player = {
@@ -466,6 +476,15 @@ export function installPlotAudioMethods(TargetClass) {
         return positionInRange(player.offset, elapsed, player.duration, player.loop);
     };
 
+    /**
+     * Does this panel hold the player? A strip commands its own panel and
+     * nothing else: the node, the clock and the gain are shared, so every
+     * control that touches them has to ask this first.
+     */
+    proto._audioPanelOwnsPlayer = function(panelId) {
+        return !!(player.owner && player.owner.manager === this && player.owner.panelId === panelId);
+    };
+
     proto._audioPanelIsPlaying = function(plot) {
         return !!(player.playing
             && player.owner
@@ -514,8 +533,10 @@ export function installPlotAudioMethods(TargetClass) {
         }
         manager._audioReleaseNode?.();
         manager._stopAudioTick?.();
-        manager._clearAudioPlayheads?.();
         player.owner = null;
+        // After the hand-over, not before: with the player let go, the panel
+        // that was sounding re-draws its mark in the parked grey.
+        manager._renderAudioPlayheads?.();
         if (previous) manager._syncAudioStrip?.(panelId);
     };
 
@@ -587,7 +608,7 @@ export function installPlotAudioMethods(TargetClass) {
         player.startedAt = context.currentTime;
         player.loop = !!state.loop;
         player.playing = true;
-        this._applyAudioVolume(state);
+        this._applyAudioVolume(state, panelId);
 
         node.onended = () => {
             if (player.node !== node) return;
@@ -602,7 +623,10 @@ export function installPlotAudioMethods(TargetClass) {
                 this._ensureAudioState(current).position = built.duration;
             }
             this._stopAudioTick();
-            this._clearAudioPlayheads();
+            // The mark stays where the sound ran out, in grey: it is the
+            // reading the strip shows, and losing it left the chart blank
+            // while the strip still said 3:00.
+            this._renderAudioPlayheads();
             this._syncAudioStrip(panelId);
         };
 
@@ -633,8 +657,13 @@ export function installPlotAudioMethods(TargetClass) {
         if (!plot) return;
         const state = this._ensureAudioState(plot);
         state.position = this._audioPosition(plot);
-        this._audioReleaseNode();
-        this._stopAudioTick();
+        // Only the panel holding the player may silence it. Pressing pause on
+        // a strip that is not sounding parks its own cursor and leaves the
+        // panel that IS sounding alone.
+        if (this._audioPanelOwnsPlayer(panelId)) {
+            this._audioReleaseNode();
+            this._stopAudioTick();
+        }
         // Paused, not stopped: the playhead stays where the sound stopped.
         // Removing it was the bug — pause is the one moment a reader wants to
         // see exactly where they are.
@@ -646,10 +675,15 @@ export function installPlotAudioMethods(TargetClass) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
         const state = this._ensureAudioState(plot);
-        this._audioReleaseNode();
+        // The bug this guard is here for: stop released whatever node was
+        // sounding, so pressing it on an idle strip cut the panel that was
+        // actually playing. A strip stops its own panel and no other.
+        if (this._audioPanelOwnsPlayer(panelId)) {
+            this._audioReleaseNode();
+            this._stopAudioTick();
+        }
         state.position = 0;
-        this._stopAudioTick();
-        this._clearAudioPlayheads();
+        this._renderAudioPlayheads();
         this._syncAudioStrip(panelId);
     };
 
@@ -680,8 +714,14 @@ export function installPlotAudioMethods(TargetClass) {
         return Math.max(0, range[1] - range[0]);
     };
 
-    proto._applyAudioVolume = function(state) {
+    /**
+     * The gain is the player's, and the player belongs to one panel: a strip
+     * that is not sounding records its volume for its next take rather than
+     * turning down the panel that is.
+     */
+    proto._applyAudioVolume = function(state, panelId) {
         if (!player.master) return;
+        if (panelId !== undefined && !this._audioPanelOwnsPlayer(panelId)) return;
         const volume = state.muted ? 0 : Math.max(0, Math.min(1, Number(state.volume) || 0));
         player.master.gain.setTargetAtTime(volume, player.context.currentTime, 0.01);
     };
@@ -748,46 +788,52 @@ export function installPlotAudioMethods(TargetClass) {
     };
 
     /**
-     * The playhead is drawn in the panel that is sounding, and nowhere else.
+     * Each panel draws its own mark, and only its own: the live one in the
+     * panel that holds the player, a parked grey one in any other panel that
+     * has been left somewhere in its signal.
      *
-     * It used to be drawn in every panel plotting the same signal, on the
-     * grounds that the clock is one so the mark should agree everywhere. In
-     * front of two panels it reads as two players running at once, which is
-     * exactly what the feature promises never to do. One line, in the panel
-     * whose strip is playing.
+     * The live mark used to be copied into every panel plotting the same
+     * signal, on the grounds that the clock is one. In front of two panels
+     * that reads as two players running at once, which is the one thing the
+     * feature promises never to do — and it cannot happen here, because a mark
+     * can only be live in the panel that owns the player.
      */
     proto._renderAudioPlayheads = function() {
-        const mark = this._audioCurrentMark();
-        if (!mark) { this._clearAudioPlayheads(); return; }
-        for (const [, plot] of this.plots) this._applyAudioMark(plot, mark);
+        for (const [panelId, plot] of this.plots) {
+            this._applyAudioMark(plot, this._audioPanelMark(panelId, plot));
+        }
     };
 
-    /** Where the playhead is, in the signal's own time. Null when nothing sounds. */
-    proto._audioCurrentMark = function() {
-        if (!player.owner || player.owner.manager !== this) return null;
-        const ownerPlot = this.plots.get(player.owner.panelId);
+    /**
+     * Where this panel's mark belongs, in the signal's own time, and whether
+     * the sound is running under it. Null when the panel has no mark to show.
+     */
+    proto._audioPanelMark = function(panelId, plot = this.plots.get(panelId)) {
         // A closed strip has no mark. Without this, every relayout after
         // closing redrew the playhead the close had just cleared: pause leaves
         // the panel owning the player, and the mark came back with the panel's
         // next repaint.
-        if (!ownerPlot?.audio?.open) return null;
-        const built = this._ensureAudioState(ownerPlot).buffer;
-        const source = this._audioSelectedSource(ownerPlot);
-        if (!source?.status?.ok || !built) return null;
-        return {
-            panelId: player.owner.panelId,
-            sourceKey: source.key,
-            dataTime: built.startTime + this._audioPosition(ownerPlot),
-        };
+        if (!plot?.audio?.open) return null;
+        const source = this._audioSelectedSource(plot);
+        if (!source?.status?.ok) return null;
+        const state = this._ensureAudioState(plot);
+        // Before the first play there is no buffer, and the range's own start
+        // is what the seek slider is measured against.
+        const start = Number.isFinite(state.buffer?.startTime)
+            ? state.buffer.startTime
+            : this._audioRange(plot, source)?.[0];
+        if (!Number.isFinite(start)) return null;
+        const live = this._audioPanelIsPlaying(plot);
+        const position = this._audioPosition(plot);
+        if (!live && position <= 0 && !SHOW_IDLE_MARK_AT_START) return null;
+        return { sourceKey: source.key, dataTime: start + position, live };
     };
 
     proto._applyAudioMark = function(plot, mark) {
-        // Every panel but the one holding the player loses its mark here, which
-        // is what keeps a second panel from looking like it is playing too.
-        if (this.plots.get(mark.panelId) !== plot) { this._removeAudioPlayhead(plot); return; }
+        if (!mark) { this._removeAudioPlayhead(plot); return; }
         const shows = (plot?.traces || []).some(trace => this._audioTraceKey(trace) === mark.sourceKey);
         if (!shows || !plot.div?.isConnected) { this._removeAudioPlayhead(plot); return; }
-        this._drawAudioPlayhead(plot, mark.dataTime);
+        this._drawAudioPlayhead(plot, mark.dataTime, mark.live);
     };
 
     /**
@@ -797,9 +843,11 @@ export function installPlotAudioMethods(TargetClass) {
      */
     proto._refreshAudioPlayhead = function(plot) {
         if (!plot?.div?.isConnected) return;
-        const mark = this._audioCurrentMark();
-        if (!mark) { this._removeAudioPlayhead(plot); return; }
-        this._applyAudioMark(plot, mark);
+        for (const [panelId, candidate] of this.plots) {
+            if (candidate !== plot) continue;
+            this._applyAudioMark(plot, this._audioPanelMark(panelId, plot));
+            return;
+        }
     };
 
     /**
@@ -814,7 +862,7 @@ export function installPlotAudioMethods(TargetClass) {
      * it belongs — and moving an SVG attribute costs no more than moving a
      * div, so the 60 fps sweep is unaffected.
      */
-    proto._drawAudioPlayhead = function(plot, dataTime) {
+    proto._drawAudioPlayhead = function(plot, dataTime, live = true) {
         const svg = plot?.div?.querySelector('svg.main-svg');
         if (!svg) return;
         const geometry = this._hoverOverlayGeometry?.(plot, dataTime);
@@ -841,14 +889,13 @@ export function installPlotAudioMethods(TargetClass) {
         rect.setAttribute('width', '2');
         rect.setAttribute('height', String(height));
         head.lastChild.setAttribute('d', `M${x - 6},${top} L${x + 6},${top} L${x},${top + 9} Z`);
+        // Set on every draw, not only on creation: the same mark goes from red
+        // to grey in place when the sound stops under it.
+        head.setAttribute('class', live ? 'audio-playhead-svg' : 'audio-playhead-svg audio-playhead-idle');
     };
 
     proto._removeAudioPlayhead = function(plot) {
         plot?.div?.querySelector?.('.audio-playhead-svg')?.remove();
-    };
-
-    proto._clearAudioPlayheads = function() {
-        for (const [, plot] of this.plots) this._removeAudioPlayhead(plot);
     };
 
     // ─── Click the curve to seek ────────────────────────────────────
@@ -986,20 +1033,16 @@ export function installPlotAudioMethods(TargetClass) {
         if (!state.open) {
             const owned = player.owner?.manager === this && player.owner.panelId === panelId;
             if (this._audioPanelIsPlaying(plot)) this._audioStop(panelId);
-            // Closing takes the mark with it. Stopping cleared it, but a strip
-            // closed while PAUSED left the line on the chart — pause keeps the
-            // playhead on purpose, and nothing was undoing that. Only this
-            // panel's mark goes unless this panel is the one that owns the
-            // player, in which case its mark is drawn in every panel showing
-            // the same signal.
+            // Closing takes this panel's mark with it — a strip closed while
+            // PAUSED used to leave the line on the chart, since pause keeps
+            // the playhead on purpose and nothing was undoing that. A closed
+            // strip has no mark, so re-drawing is enough to remove it.
             if (owned) {
-                this._clearAudioPlayheads();
                 // Hand the player back: this panel is no longer listening, so
                 // nothing about it should keep the player pointed at it.
                 player.owner = null;
-            } else {
-                this._removeAudioPlayhead(plot);
             }
+            this._renderAudioPlayheads();
             this._removeAudioStrip(panelId);
             this._removeAudioSeekHandlers(plot);
         } else {
@@ -1067,7 +1110,7 @@ export function installPlotAudioMethods(TargetClass) {
                     <span class="audio-label">${i18n.t('audioSourceLabel')}</span>
                     <select class="audio-source" title="${i18n.t('audioSource')}" aria-label="${i18n.t('audioSource')}"></select>
                 </label>
-                <label class="audio-dc"><input type="checkbox" class="audio-dc-input" checked> ${i18n.t('audioRemoveDC')}</label>
+                <label class="audio-dc" title="${i18n.t('audioRemoveDC')}"><input type="checkbox" class="audio-dc-input" checked> <span class="audio-dc-text">${i18n.t('audioRemoveDC')}</span></label>
                 <button type="button" class="audio-btn audio-mute" aria-pressed="false" title="${i18n.t('audioMute')}" aria-label="${i18n.t('audioMute')}">${ICONS.volume}</button>
                 <input type="range" class="audio-volume" min="0" max="100" value="70" step="1" title="${i18n.t('audioVolume')}" aria-label="${i18n.t('audioVolume')}">
             </div>
@@ -1158,13 +1201,13 @@ export function installPlotAudioMethods(TargetClass) {
         });
         strip.querySelector('.audio-mute').addEventListener('click', () => {
             state.muted = !state.muted;
-            this._applyAudioVolume(state);
+            this._applyAudioVolume(state, panelId);
             this._syncAudioStrip(panelId);
         });
         strip.querySelector('.audio-volume').addEventListener('input', (event) => {
             state.volume = Number(event.target.value) / 100;
             state.muted = false;
-            this._applyAudioVolume(state);
+            this._applyAudioVolume(state, panelId);
             this._syncAudioStrip(panelId);
         });
 
@@ -1328,10 +1371,10 @@ export function installPlotAudioMethods(TargetClass) {
         if (player.owner?.manager !== this || player.owner.panelId !== panelId) return;
         this._audioReleaseNode();
         this._stopAudioTick();
-        this._clearAudioPlayheads();
         player.owner = null;
         const plot = this.plots.get(panelId);
         if (plot?.audio) plot.audio.position = 0;
+        this._renderAudioPlayheads();
     };
 
     /** Called when a file closes, the language changes, or the layout resets. */
@@ -1340,8 +1383,8 @@ export function installPlotAudioMethods(TargetClass) {
         const panelId = player.owner.panelId;
         this._audioReleaseNode();
         this._stopAudioTick();
-        this._clearAudioPlayheads();
         player.owner = null;
+        this._renderAudioPlayheads();
         this._syncAudioStrip(panelId);
     };
 }
