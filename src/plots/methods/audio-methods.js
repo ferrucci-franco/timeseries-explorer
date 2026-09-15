@@ -183,8 +183,6 @@ export function installPlotAudioMethods(TargetClass) {
             loop: false,
             volume: 0.7,
             muted: false,
-            scale: 'auto',    // auto | fixed | manual
-            manualDb: 0,
             removeDC: true,
             buffer: null,
             bufferKey: '',
@@ -367,9 +365,11 @@ export function installPlotAudioMethods(TargetClass) {
             if (centred > peak) peak = centred;
         }
 
-        let gain = 1;
-        if (state.scale === 'auto') gain = peak > 0 ? AUTO_PEAK / peak : 1;
-        else if (state.scale === 'manual') gain = 10 ** ((Number(state.manualDb) || 0) / 20);
+        // One amplitude rule, not a choice: the peak goes to −1 dBFS. A signal
+        // is plotted in its own units and heard at a level that works, and the
+        // three-way selector that used to offer fixed and manual gain was read
+        // as "no idea what this does" by the first person to use the strip.
+        const gain = peak > 0 ? AUTO_PEAK / peak : 1;
 
         let buffer;
         try {
@@ -411,12 +411,7 @@ export function installPlotAudioMethods(TargetClass) {
     };
 
     proto._audioBufferKey = function(source, range, state) {
-        return [
-            source.key,
-            range[0], range[1],
-            state.scale, state.manualDb,
-            state.removeDC ? 1 : 0,
-        ].join('|');
+        return [source.key, range[0], range[1], state.removeDC ? 1 : 0].join('|');
     };
 
     // ─── Transport ──────────────────────────────────────────────────
@@ -991,15 +986,6 @@ export function installPlotAudioMethods(TargetClass) {
                     <span class="audio-label">${i18n.t('audioSourceLabel')}</span>
                     <select class="audio-source" title="${i18n.t('audioSource')}" aria-label="${i18n.t('audioSource')}"></select>
                 </label>
-                <label class="audio-field">
-                    <span class="audio-label">${i18n.t('audioScaleLabel')}</span>
-                    <select class="audio-scale" title="${i18n.t('audioScaleHelp')}" aria-label="${i18n.t('audioScale')}">
-                        <option value="auto">${i18n.t('audioScaleAuto')}</option>
-                        <option value="fixed">${i18n.t('audioScaleFixed')}</option>
-                        <option value="manual">${i18n.t('audioScaleManual')}</option>
-                    </select>
-                </label>
-                <input type="number" class="audio-gain-db" step="1" value="0" title="${i18n.t('audioGainDb')}" aria-label="${i18n.t('audioGainDb')}" hidden>
                 <label class="audio-dc"><input type="checkbox" class="audio-dc-input" checked> ${i18n.t('audioRemoveDC')}</label>
                 <button type="button" class="audio-btn audio-mute" aria-pressed="false" title="${i18n.t('audioMute')}" aria-label="${i18n.t('audioMute')}">🔈</button>
                 <input type="range" class="audio-volume" min="0" max="100" value="70" step="1" title="${i18n.t('audioVolume')}" aria-label="${i18n.t('audioVolume')}">
@@ -1076,14 +1062,6 @@ export function installPlotAudioMethods(TargetClass) {
                 : 0;
             onOptionChange();
         });
-        strip.querySelector('.audio-scale').addEventListener('change', (event) => {
-            state.scale = event.target.value;
-            onOptionChange();
-        });
-        strip.querySelector('.audio-gain-db').addEventListener('change', (event) => {
-            state.manualDb = Number(event.target.value) || 0;
-            onOptionChange();
-        });
         strip.querySelector('.audio-dc-input').addEventListener('change', (event) => {
             state.removeDC = !!event.target.checked;
             onOptionChange();
@@ -1148,10 +1126,6 @@ export function installPlotAudioMethods(TargetClass) {
         loopBtn.setAttribute('aria-pressed', String(!!state.loop));
         loopBtn.disabled = !playable;
         strip.querySelector('.audio-seek').disabled = !playable;
-        strip.querySelector('.audio-scale').value = state.scale;
-        const gainInput = strip.querySelector('.audio-gain-db');
-        gainInput.hidden = state.scale !== 'manual';
-        gainInput.value = String(state.manualDb);
         strip.querySelector('.audio-dc-input').checked = !!state.removeDC;
         const muteBtn = strip.querySelector('.audio-mute');
         muteBtn.textContent = state.muted ? '🔇' : '🔈';

@@ -1,6 +1,10 @@
 # Audio Playback Design
 
-Status: specification agreed, not implemented. Nothing here is built yet.
+Status: phase 1 is built (the player and the panel's transport strip, issue #89).
+Phases 2 to 5 — the panel-level selection, stereo and reverse, WAV export, and the
+entry points — are specified here and not built. Where use has corrected the
+specification, this document says what was changed and why rather than quietly
+reading as if it had always said so.
 
 Issue: [#86 — Play audio files (and its filtered versions!) on the browser](https://github.com/ferrucci-franco/timeseries-explorer/issues/86).
 
@@ -191,8 +195,14 @@ five. Reverse stays because it drags in nothing.
 
 ## Numerical honesty
 
-- Amplitude scale: **Auto** (peak to −1 dBFS), **Fixed** (1.0 = full scale) or
-  **Manual** in dB. The app states which one is in use.
+- Amplitude: **the peak always goes to −1 dBFS**, with no control over it. A
+  three-way Auto / Fixed / Manual selector was built and then removed: the
+  first person to use the strip could not tell what it did, and a signal is
+  read in its own units on the plot and only needs to be *audible* through the
+  speakers. The consequence is recorded rather than hidden — each signal is
+  normalised on its own, so a filter that removes energy is not heard as
+  quieter. Level-matched comparison, when it is wanted, belongs with the
+  comparator (phase 3) and has to be a deliberate choice there.
 - Clipping is reported with the number of clipped samples, not applied silently.
 - DC removal before playback (checkbox, on by default) so the speaker does not thump.
 - NaNs and gaps play as silence, and the strip says how many there were.
