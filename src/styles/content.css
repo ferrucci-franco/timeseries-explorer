@@ -3730,3 +3730,144 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     background: var(--hover-bg);
     color: var(--text-primary);
 }
+
+/* ============================================
+   Audio playback — the strip under a panel and the playhead over its curve
+   (src/plots/methods/audio-methods.js, issue #89)
+   ============================================ */
+
+.audio-strip {
+    flex: 0 0 auto;
+    /* Pushed to the bottom of the panel. Without this it rides up under the
+       toolbar whenever the chart is not there yet — while a file loads, for
+       instance — and then drops again when the chart appears. */
+    margin-top: auto;
+    border-top: 1px solid var(--audio-strip-border);
+    background-color: var(--audio-strip-bg);
+    padding: 4px 6px;
+    font-size: 11px;
+    color: var(--text-primary);
+}
+
+.audio-strip-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.audio-btn {
+    flex: 0 0 auto;
+    min-width: 26px;
+    height: 22px;
+    padding: 0 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    /* Flex rather than a line-height guess: the transport glyphs have their own
+       baselines and sat a pixel low against the button's box. */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.audio-btn-wide { gap: 4px; }
+
+/* Drawn, not typed: the icon is a path inside the button's box, so it is
+   centred by construction instead of depending on a font's metrics. */
+.audio-btn svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+    fill: currentColor;
+}
+
+.audio-field {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+.audio-label {
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.audio-btn:hover:not(:disabled) { background-color: var(--hover-bg); }
+.audio-btn:disabled { opacity: 0.45; cursor: default; }
+.audio-btn.active {
+    border-color: var(--audio-accent);
+    color: var(--audio-accent);
+}
+
+.audio-readout {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--text-primary);
+}
+
+.audio-seek { flex: 1 1 90px; min-width: 70px; }
+.audio-volume { flex: 0 0 64px; }
+
+.audio-source,
+.audio-scale {
+    flex: 0 1 auto;
+    max-width: 150px;
+    height: 22px;
+    padding: 0 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 11px;
+}
+
+.audio-gain-db {
+    flex: 0 0 56px;
+    height: 22px;
+    padding: 0 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 11px;
+}
+
+.audio-dc {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+.audio-strip-note {
+    margin-top: 3px;
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    line-height: 1.35;
+}
+
+/* The playhead is an SVG group inside Plotly's plot layer, so it draws above
+   the traces and below the legend. Both of its parts — the line and the arrow
+   head that makes it findable on a dense waveform — take the accent colour
+   from here rather than from an attribute, so the theme still owns it. */
+.audio-playhead-svg {
+    fill: var(--audio-accent);
+    pointer-events: none;
+}
+
+.panel-audio-btn.active {
+    border-color: var(--audio-accent);
+    color: var(--audio-accent);
+}
