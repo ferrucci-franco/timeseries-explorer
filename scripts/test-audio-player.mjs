@@ -247,6 +247,23 @@ const fakeContext = ({ sampleRate = 48000, accepts = () => true } = {}) => ({
     assert.notEqual(manager._audioBufferKey(source, [0, 0.5], state), key, 'a moved bound invalidates it');
     const withoutDC = { ...state, removeDC: false };
     assert.notEqual(manager._audioBufferKey(source, [0, 1], withoutDC), key, 'so does changing DC removal');
+
+    // The bug this is here for: a data tool re-run with new parameters —
+    // another M for a moving average — keeps the signal's name, its range and
+    // its DC setting, and replaces its samples. Keyed on the name alone, the
+    // old take went on playing through stop and play until the dropdown was
+    // moved away and back.
+    manager.addSignal('f1', 'Left', signal(8000, 1, (i) => Math.sin(i / 10)));
+    const recomputed = manager._audioSelectedSource(plot);
+    assert.equal(recomputed.key, source.key, 'the signal is still the same signal by name');
+    assert.notEqual(manager._audioBufferKey(recomputed, [0, 1], state), key,
+        'but its recomputed samples are a different take');
+
+    // And the other half: the stamp must be stable, or the take would restart
+    // on every frame of the tick that checks it.
+    assert.equal(manager._audioBufferKey(manager._audioSelectedSource(plot), [0, 1], state),
+        manager._audioBufferKey(recomputed, [0, 1], state),
+        'samples that have not changed keep their key');
 }
 
 // ── A redraw is not the end of listening ──────────────────────────
