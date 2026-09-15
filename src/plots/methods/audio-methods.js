@@ -748,13 +748,17 @@ export function installPlotAudioMethods(TargetClass) {
     };
 
     /**
-     * The playhead is drawn in every panel that plots the sounding signal, not
-     * only in the one that owns the strip: the clock is one, so the mark has to
-     * agree everywhere it appears.
+     * The playhead is drawn in the panel that is sounding, and nowhere else.
+     *
+     * It used to be drawn in every panel plotting the same signal, on the
+     * grounds that the clock is one so the mark should agree everywhere. In
+     * front of two panels it reads as two players running at once, which is
+     * exactly what the feature promises never to do. One line, in the panel
+     * whose strip is playing.
      */
     proto._renderAudioPlayheads = function() {
         const mark = this._audioCurrentMark();
-        if (!mark) return;
+        if (!mark) { this._clearAudioPlayheads(); return; }
         for (const [, plot] of this.plots) this._applyAudioMark(plot, mark);
     };
 
@@ -770,10 +774,17 @@ export function installPlotAudioMethods(TargetClass) {
         const built = this._ensureAudioState(ownerPlot).buffer;
         const source = this._audioSelectedSource(ownerPlot);
         if (!source?.status?.ok || !built) return null;
-        return { sourceKey: source.key, dataTime: built.startTime + this._audioPosition(ownerPlot) };
+        return {
+            panelId: player.owner.panelId,
+            sourceKey: source.key,
+            dataTime: built.startTime + this._audioPosition(ownerPlot),
+        };
     };
 
     proto._applyAudioMark = function(plot, mark) {
+        // Every panel but the one holding the player loses its mark here, which
+        // is what keeps a second panel from looking like it is playing too.
+        if (this.plots.get(mark.panelId) !== plot) { this._removeAudioPlayhead(plot); return; }
         const shows = (plot?.traces || []).some(trace => this._audioTraceKey(trace) === mark.sourceKey);
         if (!shows || !plot.div?.isConnected) { this._removeAudioPlayhead(plot); return; }
         this._drawAudioPlayhead(plot, mark.dataTime);
