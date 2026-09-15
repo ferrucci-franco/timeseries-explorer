@@ -31,10 +31,14 @@
        palette: the mark has to stay legible on top of any trace colour. */
     --audio-accent: #d4552f;
     /* The strip is a tool bolted under the chart, not part of the panel's own
-       surface: a faint blue ground separates it without shouting, and makes
-       the warm playhead colour read as the one accent in the row. */
-    --audio-strip-bg: #e9f1fb;
-    --audio-strip-border: #c8dcf1;
+       surface, and it has to read as one at a glance. The first pass was a
+       tint so faint it disappeared against the panel; this ground is a real
+       step down from white, and its border a real line, while staying cool
+       enough to leave the warm playhead as the only accent in the row. The
+       two themes are tuned to the same contrast against their own panel
+       (~1.4:1), so the strip sits equally far off the page in both. */
+    --audio-strip-bg: #bcd6ee;
+    --audio-strip-border: #7fa9d2;
 }
 
 .theme-dark {
@@ -53,8 +57,8 @@
     --drop-zone-drag-card-border: #4aa3ff;
     --notice-privacy-color: #81c784;
     --audio-accent: #ff7e52;
-    --audio-strip-bg: #1d2735;
-    --audio-strip-border: #31455e;
+    --audio-strip-bg: #2d4767;
+    --audio-strip-border: #4d76a6;
 }
 
 /* ============================================
