@@ -151,6 +151,21 @@ function analyzeAudioSampling(times) {
     return verdict;
 }
 
+/**
+ * Where the playhead is, in seconds from the start of the range.
+ *
+ * Exported and pure because it is the piece that has already been wrong once:
+ * while looping, the elapsed time runs past the buffer's length and only the
+ * modulo brings it back, so switching loop off has to re-anchor the clock or
+ * the clamp pins the mark at the end. Both halves are covered by
+ * scripts/test-audio-player.mjs.
+ */
+export function positionInRange(offset, elapsed, duration, loop) {
+    if (!(duration > 0)) return 0;
+    const raw = offset + Math.max(0, elapsed);
+    return loop ? raw % duration : Math.min(raw, duration);
+}
+
 /** First index whose time is >= value, over an ascending vector. */
 function lowerBound(times, value) {
     let lo = 0;
@@ -448,9 +463,7 @@ export function installPlotAudioMethods(TargetClass) {
         const state = this._ensureAudioState(plot);
         if (!this._audioPanelIsPlaying(plot)) return state.position;
         const elapsed = player.context.currentTime - player.startedAt;
-        const raw = player.offset + Math.max(0, elapsed);
-        if (!player.duration) return 0;
-        return player.loop ? raw % player.duration : Math.min(raw, player.duration);
+        return positionInRange(player.offset, elapsed, player.duration, player.loop);
     };
 
     proto._audioPanelIsPlaying = function(plot) {
