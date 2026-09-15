@@ -275,30 +275,67 @@ const fakeContext = ({ sampleRate = 48000, accepts = () => true } = {}) => ({
     assert.equal(state.open, true, 'the strip stays open across a redraw');
 }
 
-// ── One line, in the panel that is sounding ───────────────────────
+// ── Each panel's mark is its own ──────────────────────────────────
 {
     // The player is a singleton and only one panel sounds at a time. The mark
-    // used to be applied to every panel plotting that signal, on the grounds
-    // that the clock is one; in front of two panels of the same signal that
-    // reads as two players running at once, which is the one thing the feature
-    // promises never to do. The mark names its panel, and the others lose it.
+    // used to be computed once for the owner and copied into every panel
+    // plotting that signal, on the grounds that the clock is one; in front of
+    // two panels that reads as two players running at once, which is the one
+    // thing the feature promises never to do. Each panel now answers for
+    // itself, and a panel can only be live when it holds the player.
     const manager = new FakeManager();
     manager.addSignal('f1', 'Left', signal(8000, 1));
     const trace = { fileId: 'f1', varName: 'Left', color: '#1f77b4' };
-    const sounding = manager.addPanel('p1', [trace], { div: { isConnected: true } });
-    const watching = manager.addPanel('p2', [{ ...trace }], { div: { isConnected: true } });
+    const parked = manager.addPanel('p1', [trace], { div: { isConnected: true } });
+    const untouched = manager.addPanel('p2', [{ ...trace }], { div: { isConnected: true } });
+    for (const plot of [parked, untouched]) manager._ensureAudioState(plot).open = true;
 
-    const drawn = [];
-    const removed = [];
-    manager._drawAudioPlayhead = (plot) => drawn.push(plot);
-    manager._removeAudioPlayhead = (plot) => removed.push(plot);
+    // Nothing is sounding in this harness, so no panel's mark can be live.
+    manager._ensureAudioState(parked).position = 0.4;
+    const mine = manager._audioPanelMark('p1');
+    assert.equal(mine.live, false, 'a panel that does not hold the player is never the live mark');
+    assert.ok(Math.abs(mine.dataTime - 0.4) < 1e-9, 'the parked mark sits where the panel was left');
+    assert.equal(manager._audioPanelMark('p2'), null,
+        'and the panel next door, left at the start, shows nothing at all');
 
-    const mark = { panelId: 'p1', sourceKey: manager._audioTraceKey(trace), dataTime: 0.4 };
-    manager._applyAudioMark(sounding, mark);
-    manager._applyAudioMark(watching, mark);
+    // The start is the documented exception: at zero the line lands on the
+    // axis, so it is not drawn unless the flag says otherwise.
+    manager._ensureAudioState(parked).position = 0;
+    assert.equal(manager._audioPanelMark('p1'), null, 'back at the start, the parked mark goes');
+    manager._ensureAudioState(parked).position = 0.001;
+    assert.ok(manager._audioPanelMark('p1'), 'a hair past the start it is back');
 
-    assert.deepEqual(drawn, [sounding], 'the playhead is drawn in the panel that owns the player');
-    assert.deepEqual(removed, [watching], 'and taken off the other panel, however well it knows the signal');
+    // A closed strip has no mark, wherever its position is.
+    manager._ensureAudioState(parked).position = 0.4;
+    manager._ensureAudioState(parked).open = false;
+    assert.equal(manager._audioPanelMark('p1'), null, 'a closed strip has no mark');
+}
+
+// ── A strip commands its own panel ────────────────────────────────
+{
+    // The bug: stop released whatever node was sounding and zeroed nothing
+    // else, so pressing stop on an idle strip cut the panel that was actually
+    // playing. Every control that touches the player — stop, pause, the gain —
+    // asks first whether this panel holds it.
+    const manager = new FakeManager();
+    manager.addSignal('f1', 'Left', signal(8000, 1));
+    const trace = { fileId: 'f1', varName: 'Left', color: '#1f77b4' };
+    const first = manager.addPanel('p1', [trace], { div: { isConnected: true } });
+    const second = manager.addPanel('p2', [{ ...trace }], { div: { isConnected: true } });
+    for (const plot of [first, second]) manager._ensureAudioState(plot).open = true;
+    // The strip and the mark are DOM; only what they are told matters here.
+    manager._syncAudioStrip = () => {};
+    manager._drawAudioPlayhead = () => {};
+    manager._removeAudioPlayhead = () => {};
+    manager._ensureAudioState(first).position = 0.4;
+    manager._ensureAudioState(second).position = 0.9;
+
+    assert.equal(manager._audioPanelOwnsPlayer('p1'), false, 'no panel holds the player here');
+
+    manager._audioStop('p2');
+
+    assert.equal(manager._ensureAudioState(second).position, 0, 'stop rewinds the panel it was pressed in');
+    assert.equal(manager._ensureAudioState(first).position, 0.4, 'and leaves the other panel exactly where it was');
 }
 
 // ── The clock behind the playhead ─────────────────────────────────

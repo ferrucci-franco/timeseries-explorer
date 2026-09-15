@@ -37,6 +37,9 @@
        enough to leave the warm playhead as the only accent in the row. The
        two themes are tuned to the same contrast against their own panel
        (~1.4:1), so the strip sits equally far off the page in both. */
+    /* The playhead when nothing is sounding: neutral, and dark enough to be
+       found on a pale trace. */
+    --audio-idle-mark: #5f6b7a;
     --audio-strip-bg: #bcd6ee;
     --audio-strip-border: #7fa9d2;
 }
@@ -57,6 +60,7 @@
     --drop-zone-drag-card-border: #4aa3ff;
     --notice-privacy-color: #81c784;
     --audio-accent: #ff7e52;
+    --audio-idle-mark: #9fb0c4;
     --audio-strip-bg: #2d4767;
     --audio-strip-border: #4d76a6;
 }

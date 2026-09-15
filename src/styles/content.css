@@ -3738,6 +3738,9 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
 
 .audio-strip {
     flex: 0 0 auto;
+    /* The row adapts to the PANEL's width, not the window's: two panels side by
+       side each get their own breakpoints. */
+    container-type: inline-size;
     /* Pushed to the bottom of the panel. Without this it rides up under the
        toolbar whenever the chart is not there yet — while a file loads, for
        instance — and then drops again when the chart appears. */
@@ -3760,6 +3763,24 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     flex-wrap: nowrap;
     overflow-x: auto;
     scrollbar-width: thin;
+}
+
+/* Only the two sliders give up width. A field squeezed below its content went
+   on painting its label over the control next to it — text does not clip
+   itself — which is how a narrow panel ended up with "Signal" written across
+   the Remove DC checkbox. Everything else keeps its size and the row scrolls
+   as the last resort. */
+.audio-strip-row > * { flex: 0 0 auto; }
+
+/* Narrow panels drop the written labels before anything has to scroll. The
+   controls stay: the dropdown still names the signal it plays, and the
+   checkbox keeps the tooltip its label used to provide. */
+@container (max-width: 560px) {
+    .audio-label { display: none; }
+}
+
+@container (max-width: 470px) {
+    .audio-dc-text { display: none; }
 }
 
 .audio-btn {
@@ -3796,8 +3817,6 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     display: flex;
     align-items: center;
     gap: 4px;
-    flex: 0 1 auto;
-    min-width: 0;
 }
 
 .audio-label {
@@ -3819,8 +3838,10 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     color: var(--text-primary);
 }
 
-.audio-seek { flex: 1 1 90px; min-width: 70px; }
-.audio-volume { flex: 0 0 64px; }
+.audio-seek { flex: 1 1 90px; min-width: 60px; }
+/* A short volume slider is still a volume slider; hiding it would leave the
+   mute button as the only way to be quieter. */
+.audio-volume { flex: 0 1 64px; min-width: 40px; }
 
 /* The colour comes from the trace, set on the element; keep the weight up so
    it stays readable against the strip's ground in both themes. */
@@ -3828,7 +3849,6 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
 
 .audio-source,
 .audio-scale {
-    flex: 0 1 auto;
     max-width: 150px;
     height: 22px;
     padding: 0 4px;
@@ -3854,7 +3874,6 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     display: flex;
     align-items: center;
     gap: 3px;
-    flex: 0 0 auto;
     white-space: nowrap;
     color: var(--text-secondary);
 }
@@ -3873,6 +3892,13 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
 .audio-playhead-svg {
     fill: var(--audio-accent);
     pointer-events: none;
+}
+
+/* The same mark in grey when nothing is sounding: red means "this is playing",
+   so a parked cursor — after a stop, or dropped by the seek slider — says
+   where the sound would start without claiming to be running. */
+.audio-playhead-svg.audio-playhead-idle {
+    fill: var(--audio-idle-mark);
 }
 
 .panel-audio-btn.active {
