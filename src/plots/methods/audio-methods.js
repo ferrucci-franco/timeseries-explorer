@@ -1026,8 +1026,13 @@ export function installPlotAudioMethods(TargetClass) {
         let strip = panelEl.querySelector('.audio-strip');
         if (!strip) strip = this._buildAudioStrip(panelId);
         // A rebuilt chart is appended to the panel, so a strip created earlier
-        // would end up above it. Keep it last, always.
-        if (panelEl.lastElementChild !== strip) panelEl.appendChild(strip);
+        // would end up above it. Keep it last, always — and whenever it moves,
+        // tell Plotly, because until it re-lays out its SVG keeps the height it
+        // had before the strip took its share and overhangs it.
+        if (panelEl.lastElementChild !== strip) {
+            panelEl.appendChild(strip);
+            this._resizePanelCharts?.(panelId);
+        }
         this._installAudioSeekHandlers(panelId, plot);
         this._updateAudioStrip(panelId, strip);
     };
@@ -1176,7 +1181,9 @@ export function installPlotAudioMethods(TargetClass) {
         const playable = !!selected?.status?.ok;
 
         const select = strip.querySelector('.audio-source');
-        const wanted = sources.map(source => `${source.key}\u0001${source.label}\u0001${source.status.ok ? 1 : 0}`).join('\u0002');
+        const wanted = sources
+            .map(source => `${source.key}\u0001${source.label}\u0001${source.color}\u0001${source.status.ok ? 1 : 0}`)
+            .join('\u0002');
         if (select.dataset.signature !== wanted) {
             select.dataset.signature = wanted;
             select.innerHTML = '';
@@ -1187,10 +1194,19 @@ export function installPlotAudioMethods(TargetClass) {
                     ? source.label
                     : `${source.label} — ${this._audioReasonText(source.status)}`;
                 option.disabled = !source.status.ok;
+                // Each entry in the trace's own colour, so the list reads like
+                // the legend it is naming rather than like a list of strings.
+                if (source.color) option.style.color = source.color;
                 select.appendChild(option);
             }
         }
-        if (selected) select.value = selected.key;
+        if (selected) {
+            select.value = selected.key;
+            // And the closed select shows the colour of what is selected — the
+            // one place the colour is worth having, since it is the signal the
+            // playhead is tracing.
+            select.style.color = selected.status.ok && selected.color ? selected.color : '';
+        }
 
         const playBtn = strip.querySelector('.audio-play');
         playBtn.innerHTML = playing ? ICONS.pause : ICONS.play;
@@ -1264,24 +1280,47 @@ export function installPlotAudioMethods(TargetClass) {
     /**
      * Called from _destroyChart: the panel's chart is going away.
      *
-     * The strip is deliberately left in place. It belongs to the panel, not to
-     * the chart, and a chart is destroyed and rebuilt for ordinary reasons — a
-     * trace removed from the legend, a mode change. Taking the strip out and
-     * putting it back changes the panel's height twice per rebuild, which
-     * makes the rebuild flash. What does have to go is the sound, the
-     * playhead, and the listeners bound to the element being dropped.
+     * The sound is NOT stopped here, and neither is the strip removed. A chart
+     * is destroyed and rebuilt for ordinary reasons that have nothing to do
+     * with listening — a data tool drawing its preview, a trace removed from
+     * the legend, a rename — and stopping the audio on each of them made the
+     * player unusable while working: the moment a filter previewed, the sound
+     * cut out. The buffer is a copy, so playback does not depend on the chart
+     * that was just dropped.
+     *
+     * What does have to go is everything bound to the element being dropped:
+     * the playhead drawn inside its SVG, and the seek listeners. Both come
+     * back when the new chart appears — the playhead on the next frame of the
+     * playback tick, the listeners from _syncAudioStrip.
+     *
+     * Listening ends elsewhere, where it actually ends: a panel unmounted, a
+     * panel cleared, a mode with no 🔊 button, a file closed.
      */
     proto._teardownAudioForPanel = function(panelId, plot) {
-        if (player.owner?.manager === this && player.owner.panelId === panelId) {
-            this._audioReleaseNode();
-            this._stopAudioTick();
-            player.owner = null;
-        }
         this._removeAudioPlayhead(plot);
         if (!plot?.audio?.open) this._removeAudioStrip(panelId);
         this._removeAudioSeekHandlers(plot);
-        const state = plot?.audio;
-        if (state) { state.buffer = null; state.bufferKey = ''; }
+        // The buffer is kept. A redraw does not change the samples, and the
+        // playhead reads its startTime to know where in the signal the sound
+        // is: dropping it here left the audio playing with no mark on the new
+        // chart. It goes when the source or the range changes — the key says
+        // so — or when the panel is cleared.
+    };
+
+    /**
+     * End listening in this panel, if it is the one making sound. Called where
+     * listening genuinely ends — the panel is unmounted or cleared, or its mode
+     * no longer has anything to play — as opposed to the chart merely being
+     * redrawn, which _teardownAudioForPanel now survives.
+     */
+    proto._stopAudioIfOwner = function(panelId) {
+        if (player.owner?.manager !== this || player.owner.panelId !== panelId) return;
+        this._audioReleaseNode();
+        this._stopAudioTick();
+        this._clearAudioPlayheads();
+        player.owner = null;
+        const plot = this.plots.get(panelId);
+        if (plot?.audio) plot.audio.position = 0;
     };
 
     /** Called when a file closes, the language changes, or the layout resets. */

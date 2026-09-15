@@ -769,6 +769,10 @@ class PlotManager {
     _unmountPanel(panelId) {
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        // The panel is leaving the DOM for good: whatever it was playing has
+        // nowhere left to be shown, so it stops here rather than in the chart
+        // teardown, which a redraw also goes through.
+        this._stopAudioIfOwner?.(panelId);
         this._destroyChart(panelId);
         this.plots.delete(panelId);  // panel is gone from DOM — remove completely
     }
@@ -2226,6 +2230,7 @@ class PlotManager {
             this._cleanupLazyDetailForPanel(panelId, existing);
         }
         if (existing) this._stopAnim(existing);
+        this._stopAudioIfOwner?.(panelId);
         this._destroyChart(panelId);
 
         // Reset state to empty (keep panel alive with fresh state)
@@ -2298,8 +2303,9 @@ class PlotManager {
             const audioMode = ['timeseries', 'fft', 'histogram', 'integral'].includes(plot?.mode);
             if (plot?.audio?.open && !audioMode) {
                 // A mode with nothing to listen to (2D, 3D, animation) has no
-                // 🔊 button either, so the strip goes with it.
+                // 🔊 button either, so the strip and the sound go with it.
                 plot.audio.open = false;
+                this._stopAudioIfOwner?.(panelId);
                 this._teardownAudioForPanel?.(panelId, plot);
             } else if (plot?.audio?.open) {
                 // An empty panel keeps its strip, disabled and saying so. It
@@ -3064,7 +3070,13 @@ class PlotManager {
     //   axis 'x' → fit X to the full data extent ("show all X").
     //   axis 'y' → fit Y (and Y2) to the data visible in the CURRENT X window.
     // Kept pure (no Plotly call) so it can be unit-tested.
-    _autoScaleAxisUpdate(plot, axis) {
+    /**
+     * @param {object} [options]
+     * @param {boolean} [options.treatAsTimeseries] read the panel's time traces
+     *   even when its mode is an analysis one. The FFT's time pane is the same
+     *   chart drawn from the same traces, so fitting it is the timeseries fit.
+     */
+    _autoScaleAxisUpdate(plot, axis, options = {}) {
         const fl = plot?.div?._fullLayout || {};
         const series = [];
         const seriesY2 = [];
@@ -3072,8 +3084,9 @@ class PlotManager {
         const yArrays = [];
         const y2Arrays = [];
         let primaryFileId = null;
+        const fromTimeTraces = options.treatAsTimeseries || plot.mode === 'timeseries';
 
-        if (plot.mode === 'timeseries') {
+        if (fromTimeTraces) {
             for (const t of plot.traces.filter(tr => this._isVisible(tr))) {
                 const v = this.files.get(t.fileId)?.data?.variables?.[t.varName];
                 if (!v) continue;
@@ -3098,7 +3111,7 @@ class PlotManager {
         if (axis === 'x') {
             const xExtent = this._finiteExtent(xArrays);
             if (!xExtent) { update['xaxis.autorange'] = true; return update; }
-            if (plot.mode === 'timeseries') {
+            if (fromTimeTraces) {
                 const timeVar = this._getTimeVar(primaryFileId);
                 const isCalendar = this._timeDisplayModeForVar(primaryFileId, timeVar) === 'calendar';
                 const xRange = this._exactRange(xExtent.min, xExtent.max);
@@ -3114,7 +3127,7 @@ class PlotManager {
         const yExtent = this._timeseriesYExtentForSeries(plot, series, yArrays, xRange);
         if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
         else update['yaxis.autorange'] = true;
-        if (plot.mode === 'timeseries' && plot.timeseriesY2Enabled) {
+        if (fromTimeTraces && plot.timeseriesY2Enabled) {
             const y2Extent = this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, seriesY2, y2Arrays, xRange);
             if (y2Extent) update['yaxis2.range'] = this._padRange(y2Extent.min, y2Extent.max);
             else update['yaxis2.autorange'] = true;

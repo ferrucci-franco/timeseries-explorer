@@ -2919,7 +2919,16 @@ proto._applyFftAxisLimits = function(plot) {
 // Per-axis auto-fit for the spectrum pane (legend/toolbar buttons).
 proto._autoScaleFftAxis = function(plot, axis) {
     if (!plot?.fftDiv) return Promise.resolve();
-    return Plotly.relayout(plot.fftDiv, this._fftAxisLimitUpdate(plot, axis));
+    const spectrum = Plotly.relayout(plot.fftDiv, this._fftAxisLimitUpdate(plot, axis));
+    if (axis !== 'y' || !plot.div) return spectrum;
+    // Fit the time pane's amplitude in the same press. The panel shows two
+    // charts and the button asks "how tall is what I am looking at": fitting
+    // only the spectrum left the signal above it untouched, which meant
+    // reaching for a second control that does not exist in this mode. The
+    // frequency button stays on the spectrum alone — the time pane's X is the
+    // analysed window, not a range to refit.
+    const time = Plotly.relayout(plot.div, this._autoScaleAxisUpdate(plot, 'y', { treatAsTimeseries: true }));
+    return Promise.all([spectrum, time]);
 };
 
 // Plotly performs its native double-click autorange in the same event cycle as

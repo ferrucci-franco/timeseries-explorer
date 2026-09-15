@@ -249,6 +249,32 @@ const fakeContext = ({ sampleRate = 48000, accepts = () => true } = {}) => ({
     assert.notEqual(manager._audioBufferKey(source, [0, 1], withoutDC), key, 'so does changing DC removal');
 }
 
+// ── A redraw is not the end of listening ──────────────────────────
+{
+    // The chart is destroyed and rebuilt for ordinary reasons — a data tool
+    // drawing its preview, a trace removed, a rename — and none of them are a
+    // reason to stop the sound or to throw away what it is playing. The buffer
+    // in particular has to survive: the playhead reads its startTime to know
+    // where in the signal the sound is, and dropping it left the audio playing
+    // with no mark on the new chart.
+    const manager = new FakeManager();
+    manager.addSignal('f1', 'Left', signal(8000, 1));
+    const plot = manager.addPanel('p1', [{ fileId: 'f1', varName: 'Left', color: '#1f77b4' }]);
+    const source = manager._audioSelectedSource(plot);
+    const state = manager._ensureAudioState(plot);
+    state.open = true;
+    state.buffer = manager._buildAudioBuffer(fakeContext(), source, [0, 1], state);
+    state.bufferKey = manager._audioBufferKey(source, [0, 1], state);
+    state.position = 0.25;
+
+    manager._teardownAudioForPanel('p1', plot);
+
+    assert.ok(state.buffer, 'the buffer survives the chart it was playing under');
+    assert.ok(Math.abs(state.buffer.startTime - 0) < 1e-9, 'and still knows where in the signal it starts');
+    assert.equal(state.position, 0.25, 'and the position is where the sound was');
+    assert.equal(state.open, true, 'the strip stays open across a redraw');
+}
+
 // ── The clock behind the playhead ─────────────────────────────────
 {
     assert.equal(positionInRange(0, 0.4, 1, false), 0.4, 'the position is where the sound is');

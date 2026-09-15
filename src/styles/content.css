@@ -3744,6 +3744,10 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
     margin-top: auto;
     border-top: 1px solid var(--audio-strip-border);
     background-color: var(--audio-strip-bg);
+    /* Above the chart's SVG: Plotly keeps the height it had until it re-lays
+       out, and an overhanging drag layer covered the strip's own controls. */
+    position: relative;
+    z-index: 2;
     padding: 4px 6px;
     font-size: 11px;
     color: var(--text-primary);
@@ -3817,6 +3821,10 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
 
 .audio-seek { flex: 1 1 90px; min-width: 70px; }
 .audio-volume { flex: 0 0 64px; }
+
+/* The colour comes from the trace, set on the element; keep the weight up so
+   it stays readable against the strip's ground in both themes. */
+.audio-source { font-weight: 600; }
 
 .audio-source,
 .audio-scale {
