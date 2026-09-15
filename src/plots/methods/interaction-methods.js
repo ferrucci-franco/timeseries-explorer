@@ -1217,7 +1217,7 @@ proto._setEagerDetailLoading = function(plot, loading, panelElement = null) {
         indicator = document.createElement('div');
         indicator.className = 'lazy-detail-indicator eager-data-detail-indicator';
         indicator.setAttribute('aria-live', 'polite');
-        indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text">Loading detail</span>';
+        indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
         panelEl.appendChild(indicator);
     }
     if (!indicator) return;
@@ -1227,6 +1227,10 @@ proto._setEagerDetailLoading = function(plot, loading, panelElement = null) {
             : PlotManager.DEFAULT_VISUAL_MAX_POINTS_TIMESERIES;
         indicator.title = i18n.t('lazyDetailLoading').replace('{limit}', String(limit));
         indicator.setAttribute('aria-label', indicator.title);
+        // Written on every show, like the other pills: the words were hard-coded
+        // in English here, so this was the one pill that stayed English.
+        const eagerText = indicator.querySelector('.lazy-detail-text');
+        if (eagerText) eagerText.textContent = i18n.t('lazyDetailPill');
         indicator.classList.add('active');
     } else {
         indicator.classList.remove('active');
@@ -1508,7 +1512,7 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 
         indicator = document.createElement('div');
         indicator.className = 'lazy-detail-indicator lazy-data-detail-indicator';
         indicator.setAttribute('aria-live', 'polite');
-        indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text">Loading detail</span>';
+        indicator.innerHTML = '<span class="lazy-detail-spinner" aria-hidden="true"></span><span class="lazy-detail-text"></span>';
         panelEl.appendChild(indicator);
     }
     if (!indicator) return;
@@ -1521,7 +1525,7 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 
         indicator.title = i18n.t(key).replace('{limit}', String(limit));
         indicator.setAttribute('aria-label', indicator.title);
         const text = indicator.querySelector('.lazy-detail-text');
-        if (text) text.textContent = kind === 'phase' ? 'Loading phase' : 'Loading detail';
+        if (text) text.textContent = i18n.t(kind === 'phase' ? 'lazyPhasePill' : 'lazyDetailPill');
         indicator.classList.add('active');
     } else {
         indicator.classList.remove('active');

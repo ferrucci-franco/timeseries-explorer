@@ -588,7 +588,7 @@ export function installPlotAudioMethods(TargetClass) {
         if (!source?.status?.ok) return;
 
         const context = this._audioEnsureContext();
-        if (!context) { state.notice = i18n.t('audioNoContext'); this._syncAudioStrip(panelId); return; }
+        if (!context) { state.notice = () => i18n.t('audioNoContext'); this._syncAudioStrip(panelId); return; }
 
         const range = this._audioRange(plot, source);
         if (!range) return;
@@ -609,7 +609,8 @@ export function installPlotAudioMethods(TargetClass) {
         if (state.bufferKey !== key || !state.buffer) {
             const built = this._buildAudioBuffer(context, source, range, state);
             if (built.error) {
-                state.notice = i18n.t(BUILD_ERROR_KEYS[built.error] || 'audioReasonUnavailable');
+                const errorKey = BUILD_ERROR_KEYS[built.error] || 'audioReasonUnavailable';
+                state.notice = () => i18n.t(errorKey);
                 state.buffer = null;
                 state.bufferKey = '';
                 this._syncAudioStrip(panelId);
@@ -675,7 +676,22 @@ export function installPlotAudioMethods(TargetClass) {
         this._syncAudioStrip(panelId);
     };
 
+    /**
+     * Returned as a function, not as a sentence.
+     *
+     * A note written at build time froze the language it was built in: play a
+     * 44.1 kHz file on a 48 kHz output, switch the app to Spanish, and the
+     * strip still read "44,100 Hz played at 48,000 Hz (resampled by the
+     * browser)" — the only English left on the panel. The strip now asks for
+     * the words when it draws them, which is the same thing the data tools'
+     * messages do for the same reason.
+     */
     proto._audioBufferNotice = function(source, built) {
+        const sampleRate = source.status.sampleRate;
+        return () => this._audioBufferNoticeText(sampleRate, built);
+    };
+
+    proto._audioBufferNoticeText = function(sampleRate, built) {
         const notes = [];
         if (built.clipped > 0) {
             notes.push(i18n.t('audioClipped').replace('{count}', built.clipped.toLocaleString()));
@@ -684,9 +700,9 @@ export function installPlotAudioMethods(TargetClass) {
             notes.push(i18n.t('audioNaNs').replace('{count}', built.nanCount.toLocaleString()));
         }
         const contextRate = player.context?.sampleRate;
-        if (contextRate && Math.abs(contextRate - source.status.sampleRate) > 1) {
+        if (contextRate && Math.abs(contextRate - sampleRate) > 1) {
             notes.push(i18n.t('audioResampled')
-                .replace('{from}', Math.round(source.status.sampleRate).toLocaleString())
+                .replace('{from}', Math.round(sampleRate).toLocaleString())
                 .replace('{to}', Math.round(contextRate).toLocaleString()));
         }
         return notes.join(' · ');
@@ -1333,7 +1349,8 @@ export function installPlotAudioMethods(TargetClass) {
         // rate used to sit here permanently and cost a row of a strip that has
         // to stay thin — the readout already gives the length of what is
         // playing, and the panel already shows the selection it came from.
-        const text = [reason, state.notice].filter(Boolean).join(' · ');
+        const notice = typeof state.notice === 'function' ? state.notice() : state.notice;
+        const text = [reason, notice].filter(Boolean).join(' · ');
         note.textContent = text;
         note.hidden = !text;
 
