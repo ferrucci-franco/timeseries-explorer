@@ -3742,8 +3742,8 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
        toolbar whenever the chart is not there yet — while a file loads, for
        instance — and then drops again when the chart appears. */
     margin-top: auto;
-    border-top: 1px solid var(--border-color);
-    background-color: var(--bg-primary);
+    border-top: 1px solid var(--audio-strip-border);
+    background-color: var(--audio-strip-bg);
     padding: 4px 6px;
     font-size: 11px;
     color: var(--text-primary);

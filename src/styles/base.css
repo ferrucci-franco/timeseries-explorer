@@ -30,6 +30,11 @@
     /* The playhead and the audio strip's accent. Deliberately not the plot
        palette: the mark has to stay legible on top of any trace colour. */
     --audio-accent: #d4552f;
+    /* The strip is a tool bolted under the chart, not part of the panel's own
+       surface: a faint blue ground separates it without shouting, and makes
+       the warm playhead colour read as the one accent in the row. */
+    --audio-strip-bg: #e9f1fb;
+    --audio-strip-border: #c8dcf1;
 }
 
 .theme-dark {
@@ -48,6 +53,8 @@
     --drop-zone-drag-card-border: #4aa3ff;
     --notice-privacy-color: #81c784;
     --audio-accent: #ff7e52;
+    --audio-strip-bg: #1d2735;
+    --audio-strip-border: #31455e;
 }
 
 /* ============================================
