@@ -104,9 +104,11 @@ segmented control and two editable bounds is already shared by FFT
 of those modes is active in a panel at a time.
 
 - **Panel in an analysis mode** — the selection already exists and its control is
-  already in the panel's options. The audio strip **does not repeat it**: it shows a
-  read-only label with the current bounds. Dragging a bound changes what is analysed
-  and what sounds at once, because they are the same thing.
+  already in the panel's options, so the audio strip does not repeat it and does not
+  restate it either: the readout gives the length of what is playing and the panel
+  itself shows the bounds. Dragging one changes what is analysed and what sounds at
+  once, because they are the same thing; the sound follows a bound that moves while
+  it plays.
 - **Panel in timeseries mode** — there is no selection yet, so the audio strip
   **carries the control**: same segmented buttons, same draggable bounds, same
   shading. What it creates belongs to the panel, so switching that panel to Fourier

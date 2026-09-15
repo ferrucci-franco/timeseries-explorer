@@ -163,6 +163,19 @@ function lowerBound(times, value) {
     return lo;
 }
 
+// Transport icons as inline SVG rather than glyphs. Centring a button's
+// content centres the line box, not the ink inside it, and the pause and play
+// characters carry their ink off-centre — visibly so at 22 px. A path is drawn
+// where it is told, in currentColor, and renders the same on every platform.
+const ICONS = {
+    play:  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>',
+    pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.4v14H7zm6.6 0H17v14h-3.4z"/></svg>',
+    stop:  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5h11v11h-11z"/></svg>',
+    loop:  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg>',
+    volume: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5zm10.5-1.2v7.4a4 4 0 0 0 0-7.4z"/></svg>',
+    muted: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5zm15 .1-1.4-1.4-2.1 2.1-2.1-2.1L12 9.6l2.1 2.1-2.1 2.1 1.4 1.4 2.1-2.1 2.1 2.1 1.4-1.4-2.1-2.1z"/></svg>',
+};
+
 function formatClock(seconds) {
     const total = Math.max(0, Number(seconds) || 0);
     const minutes = Math.floor(total / 60);
@@ -997,9 +1010,9 @@ export function installPlotAudioMethods(TargetClass) {
         // which is what an unlabelled icon buys.
         strip.innerHTML = `
             <div class="audio-strip-row">
-                <button type="button" class="audio-btn audio-play" title="${i18n.t('audioPlay')}" aria-label="${i18n.t('audioPlay')}">▶</button>
-                <button type="button" class="audio-btn audio-stop" title="${i18n.t('audioStop')}" aria-label="${i18n.t('audioStop')}">⏹</button>
-                <button type="button" class="audio-btn audio-loop audio-btn-wide" aria-pressed="false" title="${i18n.t('audioLoop')}" aria-label="${i18n.t('audioLoop')}">⟲ ${i18n.t('audioLoopLabel')}</button>
+                <button type="button" class="audio-btn audio-play" title="${i18n.t('audioPlay')}" aria-label="${i18n.t('audioPlay')}">${ICONS.play}</button>
+                <button type="button" class="audio-btn audio-stop" title="${i18n.t('audioStop')}" aria-label="${i18n.t('audioStop')}">${ICONS.stop}</button>
+                <button type="button" class="audio-btn audio-loop audio-btn-wide" aria-pressed="false" title="${i18n.t('audioLoop')}" aria-label="${i18n.t('audioLoop')}">${ICONS.loop}<span>${i18n.t('audioLoopLabel')}</span></button>
                 <span class="audio-readout" role="status"></span>
                 <input type="range" class="audio-seek" min="0" max="1000" value="0" step="1" aria-label="${i18n.t('audioSeek')}">
                 <label class="audio-field">
@@ -1007,7 +1020,7 @@ export function installPlotAudioMethods(TargetClass) {
                     <select class="audio-source" title="${i18n.t('audioSource')}" aria-label="${i18n.t('audioSource')}"></select>
                 </label>
                 <label class="audio-dc"><input type="checkbox" class="audio-dc-input" checked> ${i18n.t('audioRemoveDC')}</label>
-                <button type="button" class="audio-btn audio-mute" aria-pressed="false" title="${i18n.t('audioMute')}" aria-label="${i18n.t('audioMute')}">🔈</button>
+                <button type="button" class="audio-btn audio-mute" aria-pressed="false" title="${i18n.t('audioMute')}" aria-label="${i18n.t('audioMute')}">${ICONS.volume}</button>
                 <input type="range" class="audio-volume" min="0" max="100" value="70" step="1" title="${i18n.t('audioVolume')}" aria-label="${i18n.t('audioVolume')}">
             </div>
             <div class="audio-strip-note" role="status"></div>
@@ -1147,7 +1160,11 @@ export function installPlotAudioMethods(TargetClass) {
         }
         if (selected) select.value = selected.key;
 
-        strip.querySelector('.audio-play').textContent = playing ? '⏸' : '▶';
+        const playBtn = strip.querySelector('.audio-play');
+        playBtn.innerHTML = playing ? ICONS.pause : ICONS.play;
+        // The icon is a path now, so the state has to be readable some other
+        // way — by a stylesheet, by a test, by anyone inspecting the strip.
+        playBtn.dataset.state = playing ? 'playing' : 'paused';
         strip.querySelector('.audio-play').disabled = !playable;
         strip.querySelector('.audio-stop').disabled = !playable;
         const loopBtn = strip.querySelector('.audio-loop');
@@ -1157,7 +1174,7 @@ export function installPlotAudioMethods(TargetClass) {
         strip.querySelector('.audio-seek').disabled = !playable;
         strip.querySelector('.audio-dc-input').checked = !!state.removeDC;
         const muteBtn = strip.querySelector('.audio-mute');
-        muteBtn.textContent = state.muted ? '🔇' : '🔈';
+        muteBtn.innerHTML = state.muted ? ICONS.muted : ICONS.volume;
         muteBtn.setAttribute('aria-pressed', String(!!state.muted));
         strip.querySelector('.audio-volume').value = String(Math.round(state.volume * 100));
 
@@ -1165,21 +1182,16 @@ export function installPlotAudioMethods(TargetClass) {
         const reason = playable
             ? ''
             : (sources.length ? this._audioReasonText(selected?.status) : i18n.t('audioReasonNoTraces'));
-        const rangeNote = playable ? this._audioRangeNote(plot, selected) : '';
-        const text = [reason, state.notice, rangeNote].filter(Boolean).join(' · ');
+        // Only things worth a line: why nothing can be played, clipping, missing
+        // samples, a rate the browser had to resample. The range and the sample
+        // rate used to sit here permanently and cost a row of a strip that has
+        // to stay thin — the readout already gives the length of what is
+        // playing, and the panel already shows the selection it came from.
+        const text = [reason, state.notice].filter(Boolean).join(' · ');
         note.textContent = text;
         note.hidden = !text;
 
         this._syncAudioReadout();
-    };
-
-    proto._audioRangeNote = function(plot, source) {
-        const range = this._audioRange(plot, source);
-        if (!range) return '';
-        const rate = Math.round(source.status.sampleRate).toLocaleString();
-        const isAnalysisSelection = ['fft', 'histogram', 'integral'].includes(plot.mode);
-        const label = isAnalysisSelection ? i18n.t('audioRangeFromPanel') : i18n.t('audioRangeWhole');
-        return `${label} ${range[0].toFixed(3)} – ${range[1].toFixed(3)} s · ${rate} Hz`;
     };
 
     proto._syncAudioReadout = function() {

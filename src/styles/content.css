@@ -3779,6 +3779,15 @@ body.cursor-dragging .plotly-mode-heatmap-time .nsewdrag,
 
 .audio-btn-wide { gap: 4px; }
 
+/* Drawn, not typed: the icon is a path inside the button's box, so it is
+   centred by construction instead of depending on a font's metrics. */
+.audio-btn svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+    fill: currentColor;
+}
+
 .audio-field {
     display: flex;
     align-items: center;
