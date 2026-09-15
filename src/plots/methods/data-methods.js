@@ -1072,6 +1072,49 @@ proto._primaryTimeFileId = function(plot) {
     return this.activeFileId;
 };
 
+/**
+ * Does this file's abscissa stand on its own, rather than on the record's
+ * clock? A cross-correlation's `lag` does: it is a duration in seconds, so it
+ * looks like elapsed time and would otherwise pass every compatibility test,
+ * but its zero is "no shift", not the start of the file. Marked by the tool
+ * that builds the dataset (`metadata.independentAxis`); `metadata.xcorr` is
+ * accepted too, so a dataset stored before the flag existed is still known.
+ */
+proto._hasIndependentAxis = function(fileId) {
+    const metadata = this.files.get(fileId)?.data?.metadata;
+    return !!(metadata?.independentAxis || metadata?.xcorr);
+};
+
+/**
+ * Does the PANEL stand on an axis of its own? Only when everything it draws
+ * does. A panel showing signals keeps its place in the time link even if a
+ * correlation was dropped next to them: the link moves the panel's time axis,
+ * which is what its signals are on, and the lag trace simply rides along —
+ * whoever put the two together asked for exactly that. A panel that draws
+ * nothing but correlations has no business in the link.
+ */
+proto._plotAxisIsIndependent = function(plot) {
+    let any = false;
+    for (const trace of plot?.traces || []) {
+        if (!trace?.fileId) continue;
+        if (!this._hasIndependentAxis(trace.fileId)) return false;
+        any = true;
+    }
+    return any;
+};
+
+/**
+ * The file whose clock the panel is linked by: the first trace that is ON that
+ * clock, so a correlation sitting among signals does not get to name the
+ * panel's time display mode.
+ */
+proto._linkTimeFileId = function(plot) {
+    for (const trace of plot?.traces || []) {
+        if (trace?.fileId && !this._hasIndependentAxis(trace.fileId)) return trace.fileId;
+    }
+    return this._primaryTimeFileId(plot);
+};
+
 proto._mapTimeValueBetweenFiles = function(sourceFileId, targetFileId, xValue) {
     if (!Number.isFinite(xValue)) return NaN;
     if (!sourceFileId || !targetFileId || sourceFileId === targetFileId) return xValue;
