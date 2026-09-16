@@ -547,6 +547,29 @@
     text-transform: uppercase;
 }
 
+/* The formula help outgrew one 300px column: operators, twelve functions, the
+   three min/max shapes, the time axis and the constants stacked vertically ran
+   off the bottom of the screen. Opened wide (positioned `fixed` beside the
+   sidebar, like the filter help), the same rows flow into two columns and the
+   panel gets shorter instead of taller.
+
+   `columns: 260px 2` is "at most two columns, and only while each can hold
+   260px", so a narrow window drops back to one on its own. */
+.derived-help-popover-wide .derived-help-grid {
+    columns: 260px 2;
+    column-gap: 1.1rem;
+}
+
+/* A row split across a column break reads as two unrelated fragments — the
+   label in one column, its examples in the other. */
+.derived-help-grid > .derived-help-row {
+    break-inside: avoid;
+}
+
+/* The existing `:first-of-type` rule already does the right thing here: in two
+   columns the top row of the second column is a later sibling, so it keeps its
+   rule and reads as a separated section rather than a continuation. */
+
 /* One example per usage form, each on its own line: the point of the min/max
    row is that all three shapes are legal, which a single example cannot show.
    The gloss sits next to its example and wraps under it when the popover is

@@ -58,6 +58,15 @@ const DERIVED_FUNCTIONS = [
     { name: 'abs', arity: 1 },
     { name: 'log', arity: 1 },
     { name: 'log10', arity: 1 },
+    // Radians, like every other maths library. The help popover says so, because
+    // sin(90) returning 0.894 is the first thing that would otherwise be read as
+    // a bug.
+    { name: 'sin', arity: 1 },
+    { name: 'cos', arity: 1 },
+    { name: 'tan', arity: 1 },
+    { name: 'asin', arity: 1 },
+    { name: 'acos', arity: 1 },
+    { name: 'atan', arity: 1 },
     { name: 'min', minArity: 2 },
     { name: 'max', minArity: 2 },
     { name: 'power', arity: 2 },
@@ -71,6 +80,29 @@ const DERIVED_FUNCTION_ALIASES = new Map([
     ['sqr', 'square'],
     ['minimum', 'min'],
     ['maximum', 'max'],
+    ['arcsin', 'asin'],
+    ['arccos', 'acos'],
+    ['arctan', 'atan'],
+]);
+
+// Named numbers, so a formula can be written the way it is written on paper:
+// `sin(2*pi*1000*time)` rather than `sin(6.283185307179586*1000*time)`.
+//
+// A file's own variables ALWAYS win. A name is looked up here only when the
+// loaded file has nothing by that name, so a result file carrying a column
+// called `pi` or `e` keeps meaning exactly what it meant before this existed —
+// no saved formula can change value. Backticks still force the variable reading
+// (`` `pi` `` is the column, never the number).
+//
+// `math.pi` / `math.e` are the way out when a file does shadow them: a dot is
+// already a legal character in a name, so this needs no grammar, and nothing
+// produces a signal called `math.pi`. Lookup is case-insensitive, as it is for
+// function names.
+const DERIVED_CONSTANTS = new Map([
+    ['pi', Math.PI],
+    ['math.pi', Math.PI],
+    ['e', Math.E],
+    ['math.e', Math.E],
 ]);
 
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.netcdf', '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods', ...AUDIO_EXTENSIONS];
@@ -97,4 +129,4 @@ const RESET_LAYOUT_ICON_SVG = `<svg class="reset-layout-glyph" viewBox="0 0 64 6
     <path fill="none" stroke="#ef8b78" stroke-width="2" d="M6 6h52v52H6zM6 58 58 6M32 6v52M6 32h52"/>
 </svg>`;
 
-export { APP_VERSION, BUILD_SHA, BUILD_DATE, DESKTOP_MANIFEST_PATH, DESKTOP_PLATFORM_ICON_PATHS, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, FEEDBACK_EMAIL, FEEDBACK_ISSUES_URL, ONLINE_VERSION_URL, OPENMODELICA_MODELING_ICON_PATH, RESET_LAYOUT_ICON_SVG, RESULT_FILE_EXTENSIONS };
+export { APP_VERSION, BUILD_SHA, BUILD_DATE, DESKTOP_MANIFEST_PATH, DESKTOP_PLATFORM_ICON_PATHS, DYMOLA_LOGO_ICON_PATH, EXAMPLES, DERIVED_CONSTANTS, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES, FEEDBACK_EMAIL, FEEDBACK_ISSUES_URL, ONLINE_VERSION_URL, OPENMODELICA_MODELING_ICON_PATH, RESET_LAYOUT_ICON_SVG, RESULT_FILE_EXTENSIONS };

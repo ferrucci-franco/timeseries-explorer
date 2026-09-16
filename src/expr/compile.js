@@ -44,9 +44,20 @@ const UNARY_MATH = {
     abs: 'Math.abs',
     log: 'Math.log',
     log10: 'Math.log10',
+    // Radians in, radians out — asin/acos return NaN outside [-1, 1], which
+    // propagates like any other NaN rather than being clamped away.
+    sin: 'Math.sin',
+    cos: 'Math.cos',
+    tan: 'Math.tan',
+    asin: 'Math.asin',
+    acos: 'Math.acos',
+    atan: 'Math.atan',
 };
 
-const ARITY = { sqrt: 1, abs: 1, log: 1, log10: 1, square: 1, diff: 1, root: 2, power: 2 };
+const ARITY = {
+    sqrt: 1, abs: 1, log: 1, log10: 1, square: 1, diff: 1, root: 2, power: 2,
+    sin: 1, cos: 1, tan: 1, asin: 1, acos: 1, atan: 1,
+};
 
 // min/max take two operands or more instead of a fixed count, which is what lets
 // one function cover `min(x, 0)`, `min(x, y)` and `min([x, y, z])`.

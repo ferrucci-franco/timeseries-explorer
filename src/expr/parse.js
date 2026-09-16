@@ -5,7 +5,7 @@
 // behave identically. Only the evaluator changed (see compile.js); the front
 // end was never the problem.
 
-import { DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES } from '../app/constants.js';
+import { DERIVED_CONSTANTS, DERIVED_FUNCTIONS, DERIVED_FUNCTION_ALIASES } from '../app/constants.js';
 
 export function normalizeFunctionName(name) {
     const lower = String(name).toLowerCase();
@@ -69,7 +69,19 @@ export function tokenize(formula, variables) {
                 i = j;
                 continue;
             }
-            if (!variables[name]) throw new Error(`Unknown variable "${name}".`);
+            if (!variables[name]) {
+                // A named number, and only where the file left the name free —
+                // see DERIVED_CONSTANTS. It becomes a plain number token here, so
+                // nothing downstream (codegen, the compile cache key, the session's
+                // reference list) has to know constants exist at all.
+                const constant = DERIVED_CONSTANTS.get(name.toLowerCase());
+                if (constant !== undefined) {
+                    tokens.push({ type: 'number', value: constant });
+                    i = j;
+                    continue;
+                }
+                throw new Error(`Unknown variable "${name}".`);
+            }
             tokens.push({ type: 'name', value: name });
             i = j;
             continue;

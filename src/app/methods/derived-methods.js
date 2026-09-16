@@ -1,6 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
-import { DERIVED_FUNCTIONS } from '../constants.js';
+import { DERIVED_CONSTANTS, DERIVED_FUNCTIONS } from '../constants.js';
 import { getCompiledFormula } from '../../expr/compile.js';
 import { normalizeFunctionName, parse as parseExpression, tokenize as tokenizeExpression } from '../../expr/parse.js';
 
@@ -418,6 +418,10 @@ proto._toggleDerivedHelpPopover = function(show) {
     popover.hidden = !willShow;
     button.classList.toggle('active', willShow);
     button.setAttribute('aria-expanded', String(willShow));
+    // The sidebar clips horizontal overflow, so a panel wider than it has to be
+    // positioned `fixed` and placed by hand. Same geometry as the data-tool help
+    // panels, which xcorr already borrows the same way.
+    if (willShow) this._positionFilterHelpPopover?.(popover, button);
 };
 
 proto._getDerivedSuggestions = function(prefix) {
@@ -427,6 +431,16 @@ proto._getDerivedSuggestions = function(prefix) {
     const functionSuggestions = DERIVED_FUNCTIONS
         .filter(fn => fn.name.startsWith(needle))
         .map(fn => ({ type: 'function', name: fn.name, kind: 'fn' }));
+    // A constant is only offered where this file left the name free; where a
+    // variable shadows one, the `math.` spelling is offered instead, because in
+    // that file it is the only way to reach the number. Typing "pi" finds it
+    // either way — the variable itself comes from the list below.
+    const constantSuggestions = [...DERIVED_CONSTANTS.keys()]
+        .filter(name => !name.startsWith('math.'))
+        .map(name => ({ concept: name, offered: data.variables[name] ? `math.${name}` : name }))
+        .filter(({ concept, offered }) => concept.startsWith(needle) || offered.startsWith(needle))
+        .map(({ offered }) => ({ type: 'constant', name: offered, kind: 'const' }));
+    const namedCount = functionSuggestions.length + constantSuggestions.length;
     const variableSuggestions = Object.entries(data.variables)
         .map(([name, variable]) => ({ name: variable.name || name, variable }))
         .filter(({ name, variable }) => {
@@ -437,13 +451,13 @@ proto._getDerivedSuggestions = function(prefix) {
             return name.toLowerCase().includes(needle) || displayName.toLowerCase().includes(needle);
         })
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-        .slice(0, Math.max(0, 8 - functionSuggestions.length))
+        .slice(0, Math.max(0, 8 - namedCount))
         .map(({ name, variable }) => ({
             type: 'variable',
             name,
             kind: variable.kind === 'parameter' ? 'param' : (variable.kind === 'abscissa' ? 'time' : 'var'),
         }));
-    return [...functionSuggestions, ...variableSuggestions];
+    return [...functionSuggestions, ...constantSuggestions, ...variableSuggestions];
 };
 
 proto._updateDerivedSuggestions = function(e) {
