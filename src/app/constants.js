@@ -72,6 +72,14 @@ const DERIVED_FUNCTIONS = [
     { name: 'sinh', arity: 1 },
     { name: 'cosh', arity: 1 },
     { name: 'tanh', arity: 1 },
+    // The shape pair. `sign` is the ordinary signum (1 / -1 / 0), which is what
+    // MATLAB, NumPy and Modelica all mean by the name, so a formula written
+    // elsewhere keeps its meaning here. `step` is the unit step, 1 from zero
+    // upwards: it is what gives a square wave built out of a sine a defined
+    // value where the sine sits exactly on zero, and it gates and rectifies
+    // (`x*step(x)`, `step(time - 5)`) on its own.
+    { name: 'sign', arity: 1 },
+    { name: 'step', arity: 1 },
     { name: 'min', minArity: 2 },
     { name: 'max', minArity: 2 },
     { name: 'power', arity: 2 },
@@ -88,6 +96,9 @@ const DERIVED_FUNCTION_ALIASES = new Map([
     ['arcsin', 'asin'],
     ['arccos', 'acos'],
     ['arctan', 'atan'],
+    ['sgn', 'sign'],
+    ['signum', 'sign'],
+    ['heaviside', 'step'],
 ]);
 
 // Named numbers, so a formula can be written the way it is written on paper:
