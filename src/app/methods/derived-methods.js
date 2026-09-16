@@ -8,6 +8,18 @@ import { normalizeFunctionName, parse as parseExpression, tokenize as tokenizeEx
 // "Time-axis derived variables" section below), in dialog order.
 export const TIME_AXIS_VARIABLE_KINDS = ['index', 'delta'];
 
+// The partial name under the cursor, for autocomplete. Brackets belong to a
+// name here — `a[1]`, `phase[2].v` — so the run that is scanned back includes
+// them. The one bracket that is NOT part of a name is the `[` opening a
+// min()/max() list: without dropping it, typing `min([x` would search for "[x"
+// and offer nothing. A backticked name is left alone, since inside backticks a
+// bracket really is a character of the name.
+export function derivedNameToken(left) {
+    const match = left.match(/`?[A-Za-z0-9_.\[\]]*$/);
+    const token = match ? match[0] : '';
+    return token.startsWith('`') ? token : token.replace(/^\[+/, '');
+}
+
 const TIME_AXIS_KIND_META = {
     index: { suffix: 'index', description: 'timeAxisIndexDescription', label: 'timeAxisOptionIndexLabel', help: 'timeAxisOptionIndexHelp' },
     delta: { suffix: 'delta', description: 'timeAxisDeltaDescription', label: 'timeAxisOptionDeltaLabel', help: 'timeAxisOptionDeltaHelp' },
@@ -437,8 +449,7 @@ proto._getDerivedSuggestions = function(prefix) {
 proto._updateDerivedSuggestions = function(e) {
     const input = e.target;
     const left = input.value.slice(0, input.selectionStart);
-    const match = left.match(/`?([A-Za-z0-9_.\[\]]*)$/);
-    const prefix = match ? match[1] : '';
+    const prefix = derivedNameToken(left).replace(/^`/, '');
     const suggestions = this._getDerivedSuggestions(prefix);
     const box = document.getElementById('derived-suggestions');
     box.innerHTML = '';
@@ -498,8 +509,7 @@ proto._insertDerivedSuggestion = function(suggestion) {
     const end = input.selectionEnd;
     const left = input.value.slice(0, start);
     const right = input.value.slice(end);
-    const match = left.match(/`?[A-Za-z0-9_.\[\]]*$/);
-    const replaceStart = match ? start - match[0].length : start;
+    const replaceStart = start - derivedNameToken(left).length;
     const name = suggestion?.name || '';
     const isFunction = suggestion?.type === 'function';
     const insert = isFunction

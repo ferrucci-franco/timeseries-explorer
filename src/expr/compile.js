@@ -48,11 +48,68 @@ const UNARY_MATH = {
 
 const ARITY = { sqrt: 1, abs: 1, log: 1, log10: 1, square: 1, diff: 1, root: 2, power: 2 };
 
+// min/max take two operands or more instead of a fixed count, which is what lets
+// one function cover `min(x, 0)`, `min(x, y)` and `min([x, y, z])`.
+const MIN_ARITY = { min: 2, max: 2 };
+
+const LIST_ONLY_IN_MIN_MAX = 'A [a, b] list can only be used inside min() and max().';
+
 function requireArity(name, got) {
+    const least = MIN_ARITY[name];
+    if (least !== undefined) {
+        if (got < least) {
+            throw new Error(`${name}() expects at least ${least} operands: a variable and a constant, two variables, or a list like [a, b, c].`);
+        }
+        return;
+    }
     const expected = ARITY[name];
     if (expected === undefined) throw new Error(`Unknown function "${name}".`);
     if (got !== expected) {
         throw new Error(`${name}() expects ${expected} argument${expected === 1 ? '' : 's'}.`);
+    }
+}
+
+// ─── Pass 0: flatten `[a, b, c]` into the operand list of min()/max() ─────
+//
+// A bracketed list is not a value — nothing in this language carries more than
+// one number per sample — so it never reaches codegen. It is sugar for "these
+// operands", and since min/max are variadic, `min([a, b], c)` and `min(a, b, c)`
+// are literally the same call. Flattening here (rather than at codegen) is also
+// where a list used anywhere else gets an error that names the list.
+
+function flattenInto(node, out) {
+    if (node.type === 'list') {
+        for (const item of node.items) flattenInto(item, out);
+        return out;
+    }
+    out.push(flattenLists(node));
+    return out;
+}
+
+function flattenLists(node) {
+    switch (node.type) {
+        case 'number':
+        case 'name':
+            return node;
+        case 'list':
+            throw new Error(LIST_ONLY_IN_MIN_MAX);
+        case 'unary':
+            return { ...node, expr: flattenLists(node.expr) };
+        case 'binary':
+            return { ...node, left: flattenLists(node.left), right: flattenLists(node.right) };
+        case 'func': {
+            const variadic = MIN_ARITY[node.name] !== undefined;
+            const args = [];
+            for (const arg of node.args) {
+                if (arg.type === 'list' && !variadic) throw new Error(LIST_ONLY_IN_MIN_MAX);
+                if (arg.type === 'list') { flattenInto(arg, args); continue; }
+                args.push(flattenLists(arg));
+            }
+            requireArity(node.name, args.length);
+            return { ...node, args };
+        }
+        default:
+            throw new Error(`Unexpected node "${node.type}".`);
     }
 }
 
@@ -119,6 +176,12 @@ function makeEmitter(classify) {
                     lines.push(`const ${v} = ${emit(node.args[0], lines)};`);
                     return `(${v} * ${v})`;
                 }
+                if (MIN_ARITY[name] !== undefined) {
+                    // Sample by sample across every operand, so a constant, a
+                    // second column and a whole list all read the same way.
+                    // NaN propagates, as it does through + and *.
+                    return `Math.${name}(${node.args.map(arg => emit(arg, lines)).join(', ')})`;
+                }
                 if (name === 'power') return `Math.pow(${emit(node.args[0], lines)}, ${emit(node.args[1], lines)})`;
                 if (name === 'root') return `R(${emit(node.args[0], lines)}, ${emit(node.args[1], lines)})`;
                 throw new Error(`Unknown function "${name}".`);
@@ -182,9 +245,10 @@ export function compileFormula(formula, variables, classify) {
     const tokens = tokenize(formula, variables);
     const ast = parse(tokens);
 
+    const flat = flattenLists(ast);
     const passes = [];
-    const root = lowerDiffs(ast, passes);
-    const names = [...collectNames(ast)];
+    const root = lowerDiffs(flat, passes);
+    const names = [...collectNames(flat)];
 
     const chunks = [...buildBindings(names, classify)];
     passes.forEach((pass, index) => {

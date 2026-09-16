@@ -101,7 +101,8 @@ every reload and on **every live-update append**.
 
 The function set is also thin — `sqrt abs log log10 square diff root power`.
 No comparisons, no conditionals, no reductions, no `min/max/clamp`,
-no trig.
+no trig. (`min`/`max` have since landed, variadic and elementwise, with a
+`[a, b, c]` operand list; the rest of this gap is still open.)
 
 ### 1.4 Rendering is *not* the bottleneck — the marshalling that feeds it is
 
