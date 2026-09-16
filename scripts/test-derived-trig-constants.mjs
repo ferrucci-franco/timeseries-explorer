@@ -118,7 +118,8 @@ for (const n of [1, 2, 7, 64, 4096]) {
     const data = makeDataset(n);
     const { x, ratio } = data.variables;
 
-    for (const [name, fn] of [['sin', Math.sin], ['cos', Math.cos], ['tan', Math.tan]]) {
+    for (const [name, fn] of [['sin', Math.sin], ['cos', Math.cos], ['tan', Math.tan],
+        ['sinh', Math.sinh], ['cosh', Math.cosh], ['tanh', Math.tanh]]) {
         assertSeriesEqual(evaluate(`${name}(x)`, data), map(x.data, fn), `n=${n} ${name}(x)`);
     }
     // The inverses get the operand that leaves their domain, so the NaN outside
@@ -163,6 +164,26 @@ for (const n of [1, 2, 7, 64, 4096]) {
         'sin² + cos² = 1',
     );
     assert.equal(ones.length, n, 'sanity');
+
+    // The hyperbolic counterpart, which is a sign away from the circular one and
+    // therefore the check that would catch a cosh/cos mix-up in the emitter.
+    const hyperbolic = evaluate('cosh(x)^2 - sinh(x)^2', data);
+    const hyperbolicDefined = [...hyperbolic.keys()].filter(i => !Number.isNaN(hyperbolic[i]));
+    assertClose(
+        Float64Array.from(hyperbolicDefined, i => hyperbolic[i]),
+        Float64Array.from(hyperbolicDefined, () => 1),
+        1e-9,
+        'cosh² - sinh² = 1',
+    );
+
+    // tanh is bounded; a signal that reaches ±3 is deep enough into saturation
+    // for a wrong mapping to show up as a value outside the band.
+    const saturating = evaluate('tanh(x)', data);
+    for (let i = 0; i < n; i++) {
+        if (Number.isNaN(saturating[i])) continue;
+        assert.ok(saturating[i] > -1 && saturating[i] < 1, `tanh must stay inside (-1, 1) at ${i}`);
+    }
+    checks++;
 
     // asin(sin(t)) folds back onto t only inside [-pi/2, pi/2]; tan = sin/cos
     // holds wherever cos is not zero, which a sampled signal never lands on.
@@ -273,7 +294,7 @@ for (const n of [1, 2, 7, 64, 4096]) {
 // ─── Discoverability: autocomplete, the popover, and every language ─────────
 {
     const names = DERIVED_FUNCTIONS.map(fn => fn.name);
-    for (const name of ['sin', 'cos', 'tan', 'asin', 'acos', 'atan']) {
+    for (const name of ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh']) {
         assert.ok(names.includes(name), `${name}() must be offered by autocomplete`);
         assert.equal(DERIVED_FUNCTIONS.find(fn => fn.name === name).arity, 1, `${name}() takes one operand`);
     }
@@ -304,6 +325,7 @@ for (const n of [1, 2, 7, 64, 4096]) {
     checks++;
 
     for (const fragment of ['sin(x)', 'cos(x)', 'tan(x)', 'asin(x)', 'acos(x)', 'atan(x)',
+        'sinh(x)', 'cosh(x)', 'tanh(x)',
         'sin(2*pi*1000*time)', 'x + 0.1*sin(2*pi*50*time)', 'pi, e', 'math.pi, math.e']) {
         assert.ok(popover.includes(fragment), `the popover must show ${fragment}`);
     }
@@ -335,7 +357,7 @@ for (const n of [1, 2, 7, 64, 4096]) {
     // recipe in every language, since that is where a reader goes for the why.
     for (const lang of Object.keys(translations)) {
         const body = translations[lang].helpSec10Body;
-        for (const fragment of ['sin(2*pi*1000*time)', '<code>asin</code>', 'math.pi']) {
+        for (const fragment of ['sin(2*pi*1000*time)', '<code>asin</code>', '<code>tanh</code>', 'math.pi']) {
             assert.ok(body.includes(fragment), `${lang}.helpSec10Body must mention ${fragment}`);
         }
     }
@@ -376,7 +398,8 @@ for (const n of [1, 2, 7, 64, 4096]) {
     assert.ok(!names(suggest('pi', free)).includes('math.pi'), 'the escape spelling stays out of the way when unneeded');
 
     // The new functions are reachable by prefix.
-    for (const [prefix, expected] of [['si', 'sin'], ['co', 'cos'], ['ta', 'tan'], ['as', 'asin'], ['ac', 'acos'], ['at', 'atan']]) {
+    for (const [prefix, expected] of [['si', 'sin'], ['co', 'cos'], ['ta', 'tan'], ['as', 'asin'],
+        ['ac', 'acos'], ['at', 'atan'], ['sinh', 'sinh'], ['cosh', 'cosh'], ['tanh', 'tanh']]) {
         assert.ok(names(suggest(prefix, free)).includes(expected), `typing "${prefix}" must offer ${expected}`);
     }
 

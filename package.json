@@ -151,7 +151,8 @@
     "test:analysis-measured-range": "node scripts/test-analysis-measured-range.mjs",
     "test:fft-refused-settings": "node scripts/test-fft-refused-settings.mjs",
     "test:fft-time-format": "node scripts/test-fft-time-format-invariance.mjs",
-    "test:fft-recompute-cache": "node scripts/test-fft-recompute-cache.mjs"
+    "test:fft-recompute-cache": "node scripts/test-fft-recompute-cache.mjs",
+    "test:fft-time-resolution": "node scripts/test-fft-time-resolution.mjs"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",

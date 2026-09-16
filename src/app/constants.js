@@ -67,6 +67,11 @@ const DERIVED_FUNCTIONS = [
     { name: 'asin', arity: 1 },
     { name: 'acos', arity: 1 },
     { name: 'atan', arity: 1 },
+    // The hyperbolic three take a plain number, not an angle — no radians to
+    // mention, and no domain limit either: they are defined everywhere.
+    { name: 'sinh', arity: 1 },
+    { name: 'cosh', arity: 1 },
+    { name: 'tanh', arity: 1 },
     { name: 'min', minArity: 2 },
     { name: 'max', minArity: 2 },
     { name: 'power', arity: 2 },

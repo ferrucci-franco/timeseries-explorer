@@ -280,7 +280,14 @@ proto._createFftChart = function(panelId, panelEl) {
         Promise.resolve(viewPromise).then(() => {
             // The viewport query is only owed to lazy traces; the focus is owed
             // to every trace, so it must not sit inside that branch.
-            if (hasLazyTrace) this._refreshTimeseriesVisuals(panelId, plot);
+            //
+            // A restored session view can be a ZOOM, and the traces just drawn
+            // were built for the whole signal — the same staleness a legend
+            // rebuild used to leave behind. Re-decimate when the view really is
+            // a window; at full zoom the overview already is the answer and a
+            // restyle would be a second draw for nothing.
+            const zoomed = this._fftNormalizeBuildRange(plot, plot.div?._fullLayout?.xaxis?.range);
+            if (hasLazyTrace || zoomed) this._refreshTimeseriesVisuals(panelId, plot);
             // After any restored view is applied, so the focus is not undone.
             this._applyPendingAnalysisFocus(plot, 'fft');
         });
@@ -487,10 +494,13 @@ proto._removeFftTraceFromLegend = function(panelId, plot, trace) {
     this._scheduleFftRecompute(panelId, { immediate: true });
 };
 
+// `visibleRange` is the window the curves are decimated for — null means the
+// whole signal. It says nothing about the gap scan: a legend click on a zoomed
+// pane needs the windowed resolution AND the same missing-data breaks the
+// unzoomed view had, so the O(n) scan is governed by its own guard, which is
+// what _fftShouldSkipGlobalGapScan exists to decide.
 proto._buildFftTimeTraces = function(plot, visibleRange = null) {
-    // Gap discovery is linear in the complete signal. The automatically chosen
-    // clean span has already been validated and must not trigger another scan.
-    const gapInfo = visibleRange || this._fftShouldSkipGlobalGapScan(plot)
+    const gapInfo = this._fftShouldSkipGlobalGapScan(plot)
         ? { perFile: [] }
         : this._fftGapInfo(plot);
     const gapsByFile = new Map(gapInfo.perFile.map(f => [f.fileId, f]));
@@ -505,6 +515,30 @@ proto._buildFftTimeTraces = function(plot, visibleRange = null) {
         traces.push(...this._buildFftWindowedTimeTraces(plot, this._fftCurrentVisibleRange(plot)));
     }
     return traces;
+};
+
+// The range to build traces with, given the range the axis is showing.
+//
+// A window that already covers the whole time domain says nothing that `null`
+// does not, and `null` is the cheaper way to say it: _buildTimeTrace then reuses
+// each trace's cached full-series overview instead of rescanning the source for
+// a window that happens to contain every sample. The tolerance is there because
+// an autoscale lands a hair inside the domain, and that is not a zoom anybody
+// performed.
+//
+// Shared with _refreshTimeseriesVisuals, which had this rule inline: the two
+// paths reach the same view — one by rebuilding, one by relayout — and must
+// build it the same way.
+proto._fftNormalizeBuildRange = function(plot, range) {
+    if (!Array.isArray(range) || range.length < 2) return range || null;
+    const domain = this._fftDomain(plot);
+    const a = this._coerceAxisValue(range[0]);
+    const b = this._coerceAxisValue(range[1]);
+    if (!domain || !Number.isFinite(a) || !Number.isFinite(b)) return range;
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    const tolerance = Math.max(Math.abs(domain.max - domain.min) * 1e-9, 1e-9);
+    return (lo <= domain.min + tolerance && hi >= domain.max - tolerance) ? null : range;
 };
 
 // The current zoom window (frequency-independent x-range) of the time pane, or
@@ -764,7 +798,14 @@ proto._refreshFftTimePlot = function(panelId, plot = this.plots.get(panelId), op
     if (Array.isArray(yRange)) {
         layout.yaxis = { ...(layout.yaxis || {}), range: yRange, autorange: false };
     }
-    return Plotly.react(plot.div, this._buildFftTimeTraces(plot), layout, this._getPlotlyConfig())
+    // Decimate for what will be on screen, not for the whole signal. The axis
+    // keeps its zoom across this rebuild, so building the full-series overview
+    // here drew a 24-second curve's worth of points into a 1-second window and
+    // left it there until some later pan or double-click went through the
+    // relayout path. Doing it here rather than restyling afterwards keeps the
+    // rebuild at one draw — and on a zoomed pane it is strictly less work.
+    const buildRange = this._fftNormalizeBuildRange(plot, xRange);
+    return Plotly.react(plot.div, this._buildFftTimeTraces(plot, buildRange), layout, this._getPlotlyConfig())
         .then(() => {
             this._installLegendHoverHint(plot.div);
             this._installCursorHandlers(panelId, plot);
