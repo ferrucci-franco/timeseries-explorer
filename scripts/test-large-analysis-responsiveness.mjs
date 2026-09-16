@@ -307,7 +307,13 @@ assert.match(interaction, /_timeseriesNeedsEagerDetailLoading[\s\S]*LIVE_RELAYOU
 assert.match(interaction, /plot\?\.mode !== 'timeseries' && plot\?\.mode !== 'fft'/);
 assert.match(interaction, /_runWithEagerDetailLoading[\s\S]*_yieldForDetailIndicatorPaint/);
 assert.match(interaction, /plot\._eagerDetailLoadingCount = \(plot\._eagerDetailLoadingCount \|\| 0\) \+ 1/);
-assert.match(interaction, /traceBuildRange = null/);
+// A view that covers the whole FFT domain must still build from each trace's
+// cached full-series overview instead of rescanning the source for a window that
+// happens to hold every sample. The rule moved out of this inline block into
+// _fftNormalizeBuildRange so the legend-rebuild path could share it; both halves
+// are pinned here so neither can drift away from the other.
+assert.match(interaction, /traceBuildRange = fftMode \? this\._fftNormalizeBuildRange\(plot, range\) : range/);
+assert.match(fft, /_fftNormalizeBuildRange[\s\S]*hi >= domain\.max - tolerance\) \? null : range/);
 assert.match(fft, /plot\.div\.addEventListener\('click'[\s\S]*event\.detail !== 2[\s\S]*_runWithEagerDetailLoading[\s\S]*capture: true/);
 assert.match(fft, /_buildFftTimeTraces\(plot\), this\._buildFftTimeLayout\(plot, fullTimeRange\)/);
 assert.match(fft, /largeFftOverview[\s\S]*_fullVisualCache\?\.visual\?\.y/);

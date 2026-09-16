@@ -326,23 +326,10 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     // each trace also breaks across its own NaN runs.
     const showMissing = plot.mode === 'timeseries' && plot.showMissingData;
     const fftMode = plot.mode === 'fft';
-    let traceBuildRange = range;
-    if (fftMode && Array.isArray(range) && range.length >= 2) {
-        const domain = this._fftDomain(plot);
-        const a = this._coerceAxisValue(range[0]);
-        const b = this._coerceAxisValue(range[1]);
-        if (domain && Number.isFinite(a) && Number.isFinite(b)) {
-            const lo = Math.min(a, b);
-            const hi = Math.max(a, b);
-            const tolerance = Math.max(Math.abs(domain.max - domain.min) * 1e-9, 1e-9);
-            if (lo <= domain.min + tolerance && hi >= domain.max - tolerance) {
-                // Autoscale restored the complete FFT time domain. Reuse the
-                // cached full overview instead of rescanning the source with a
-                // range that happens to cover every sample.
-                traceBuildRange = null;
-            }
-        }
-    }
+    // Autoscale restores the complete FFT time domain, and a range covering every
+    // sample must reuse the cached overview rather than rescan the source. The
+    // rule lives in _fftNormalizeBuildRange so the rebuild path agrees with it.
+    const traceBuildRange = fftMode ? this._fftNormalizeBuildRange(plot, range) : range;
     const missInfo = showMissing ? this._missingDataInfo(plot) : null;
     // When the view is too dense to resolve gaps, per-gap line breaks would
     // shred the downsampled trace into invisible fragments — skip them (and the

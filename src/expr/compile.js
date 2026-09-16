@@ -52,11 +52,15 @@ const UNARY_MATH = {
     asin: 'Math.asin',
     acos: 'Math.acos',
     atan: 'Math.atan',
+    sinh: 'Math.sinh',
+    cosh: 'Math.cosh',
+    tanh: 'Math.tanh',
 };
 
 const ARITY = {
     sqrt: 1, abs: 1, log: 1, log10: 1, square: 1, diff: 1, root: 2, power: 2,
     sin: 1, cos: 1, tan: 1, asin: 1, acos: 1, atan: 1,
+    sinh: 1, cosh: 1, tanh: 1,
 };
 
 // min/max take two operands or more instead of a fixed count, which is what lets
