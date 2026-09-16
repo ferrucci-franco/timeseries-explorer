@@ -25,7 +25,7 @@ export function tokenize(formula, variables) {
     while (i < formula.length) {
         const ch = formula[i];
         if (/\s/.test(ch)) { i++; continue; }
-        if ('+-*/^(),'.includes(ch)) { tokens.push({ type: ch, value: ch }); i++; continue; }
+        if ('+-*/^(),[]'.includes(ch)) { tokens.push({ type: ch, value: ch }); i++; continue; }
         if (ch === '`') {
             const end = formula.indexOf('`', i + 1);
             if (end < 0) throw new Error('Missing closing backtick.');
@@ -43,8 +43,25 @@ export function tokenize(formula, variables) {
             continue;
         }
         if (/[A-Za-z_]/.test(ch)) {
+            // Brackets are ambiguous: they subscript a name (`der(x[1])`,
+            // `phase[2].v` — Modelica arrays are everywhere in these files) and
+            // they also open the operand list of min()/max(). Depth decides. A
+            // `]` is part of the name only while this name has an unclosed `[`,
+            // so the last bracket of `min([a, b[1]])` stays a token of its own.
             let j = i + 1;
-            while (j < formula.length && /[A-Za-z0-9_.\[\]]/.test(formula[j])) j++;
+            let depth = 0;
+            while (j < formula.length) {
+                const c = formula[j];
+                if (c === '[') { depth++; j++; continue; }
+                if (c === ']') {
+                    if (depth === 0) break;
+                    depth--;
+                    j++;
+                    continue;
+                }
+                if (!/[A-Za-z0-9_.]/.test(c)) break;
+                j++;
+            }
             const name = formula.slice(i, j);
             const functionName = normalizeFunctionName(name);
             if (nextNonSpaceChar(formula, j) === '(' && functionName) {
@@ -87,6 +104,19 @@ export function parse(tokens) {
             const expr = parseAddSub();
             if (!take(')')) throw new Error('Missing closing parenthesis.');
             return expr;
+        }
+        // `[a, b, c]` — an operand list, not a value. Only min() and max() take
+        // one; the compiler rejects it anywhere else (see flattenLists there),
+        // where it can name the list in the error instead of a node type.
+        if (take('[')) {
+            const items = [];
+            if (!take(']')) {
+                do {
+                    items.push(parseAddSub());
+                } while (take(','));
+                if (!take(']')) throw new Error('Missing closing bracket "]".');
+            }
+            return { type: 'list', items };
         }
         throw new Error(`Unexpected "${token.value}".`);
     };

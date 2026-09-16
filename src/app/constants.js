@@ -48,11 +48,18 @@ const EXAMPLES = [
     },
 ];
 
+// `arity` is the exact operand count; `minArity` marks a variadic function, which
+// accepts that many operands or more. min/max are the only variadic ones: they
+// compare sample by sample across however many operands they are given, which is
+// what lets `min(x, 0)`, `min(x, y)` and `min([x, y, z])` all be the same call
+// (a bracketed list is flattened into the argument list — see src/expr/compile.js).
 const DERIVED_FUNCTIONS = [
     { name: 'sqrt', arity: 1 },
     { name: 'abs', arity: 1 },
     { name: 'log', arity: 1 },
     { name: 'log10', arity: 1 },
+    { name: 'min', minArity: 2 },
+    { name: 'max', minArity: 2 },
     { name: 'power', arity: 2 },
     { name: 'root', arity: 2 },
     { name: 'diff', arity: 1 },
@@ -62,6 +69,8 @@ const DERIVED_FUNCTION_ALIASES = new Map([
     ['pow', 'power'],
     ['square', 'square'],
     ['sqr', 'square'],
+    ['minimum', 'min'],
+    ['maximum', 'max'],
 ]);
 
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.netcdf', '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods', ...AUDIO_EXTENSIONS];

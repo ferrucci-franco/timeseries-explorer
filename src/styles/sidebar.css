@@ -547,6 +547,28 @@
     text-transform: uppercase;
 }
 
+/* One example per usage form, each on its own line: the point of the min/max
+   row is that all three shapes are legal, which a single example cannot show.
+   The gloss sits next to its example and wraps under it when the popover is
+   too narrow for both. */
+.derived-help-examples {
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+    margin-top: 0.1rem;
+}
+
+.derived-help-example {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.3rem;
+}
+
+.derived-help-example > span {
+    color: var(--text-secondary);
+}
+
 .derived-help-popover code {
     color: var(--text-primary);
     background-color: var(--hover-bg);
