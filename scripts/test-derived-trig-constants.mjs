@@ -198,6 +198,111 @@ for (const n of [1, 2, 7, 64, 4096]) {
     );
 }
 
+// ─── sign and step, and the square wave they are for ───────────────────────
+//
+// The pair exists because of one question: what a sample sitting exactly on
+// zero should become. `sign` answers it the way every other maths library does
+// — zero is neither positive nor negative, so it stays 0 — and `step` is the one
+// that makes it pick a side, which is what a square wave built out of a sine
+// needs at the instant the sine crosses.
+{
+    const n = 9;
+    const time = Float64Array.from({ length: n }, (_, i) => i / 8);
+    // Every case that matters in one column: negative, -0, +0, positive, NaN.
+    const probe = Float64Array.from([-3, -1e-300, -0, 0, 1e-300, 2, Infinity, -Infinity, NaN]);
+    const data = {
+        variables: {
+            time: { name: 'time', kind: 'abscissa', data: time },
+            v: { name: 'v', kind: 'variable', data: probe },
+        },
+    };
+
+    assertSeriesEqual(evaluate('sign(v)', data), map(probe, Math.sign), 'sign is the platform signum');
+    assertSeriesEqual(
+        evaluate('step(v)', data),
+        Float64Array.from([0, 0, 1, 1, 1, 1, 1, 0, NaN]),
+        'step is 1 from zero upwards, 0 below',
+    );
+
+    // The zero rule, stated on its own because it is the decision this pair
+    // encodes: sign keeps zero, step sends it up.
+    const signed = evaluate('sign(v)', data);
+    const stepped = evaluate('step(v)', data);
+    // `===` rather than assert.equal: signum preserves the sign of zero, so
+    // sign(-0) is -0, which is zero and plots as zero but is not Object.is(+0).
+    assert.ok(signed[2] === 0, 'sign(-0) is zero');
+    assert.ok(signed[3] === 0, 'sign(0) is zero');
+    assert.equal(stepped[2], 1, 'step(-0) is 1: negative zero is still zero');
+    assert.equal(stepped[3], 1, 'step(0) is 1');
+    assert.ok(Number.isNaN(signed[8]) && Number.isNaN(stepped[8]), 'both leave NaN alone');
+    checks++;
+
+    // A hole in the signal must not become a 0 — the trap in writing step as a
+    // single `>= 0 ? 1 : 0`, which would silently turn every NaN into "below".
+    assert.ok(!stepped.some((value, i) => Number.isNaN(probe[i]) && value === 0), 'NaN never becomes 0');
+    checks++;
+
+    // Aliases.
+    assertSeriesEqual(evaluate('sgn(v)', data), signed, 'sgn alias');
+    assertSeriesEqual(evaluate('signum(v)', data), signed, 'signum alias');
+    assertSeriesEqual(evaluate('heaviside(v)', data), stepped, 'heaviside alias');
+
+    // step is the half-wave rectifier and the switch-on, which is why it earns
+    // its place beyond squaring a sine.
+    // Written as the multiplication it is, so the expectation carries the sign
+    // of zero the same way: -3 * 0 is -0, which is what the formula produces and
+    // what a rectified sample of a negative value should read as.
+    assertSeriesEqual(evaluate('v * step(v)', data), map(probe, x => x * (x >= 0 ? 1 : (x < 0 ? 0 : NaN))), 'x*step(x) rectifies');
+    assertSeriesEqual(evaluate('step(time - 0.5)', data), map(time, t => (t - 0.5 >= 0 ? 1 : 0)), 'step(time - t0) switches on');
+}
+
+// The square wave, which is what this was asked for.
+{
+    const sampleRate = 800;
+    const n = 400;
+    const frequency = 50;
+    const time = Float64Array.from({ length: n }, (_, i) => i / sampleRate);
+    const data = { variables: { time: { name: 'time', kind: 'abscissa', data: time } } };
+
+    const viaSign = evaluate(`sign(sin(2*pi*${frequency}*time))`, data);
+    const viaStep = evaluate(`2*step(sin(2*pi*${frequency}*time))-1`, data);
+
+    // Strictly two-valued: the reason step is offered alongside sign.
+    for (let i = 0; i < n; i++) {
+        assert.ok(viaStep[i] === 1 || viaStep[i] === -1, `the step square wave is +/-1 at ${i}, got ${viaStep[i]}`);
+    }
+    // sign agrees everywhere the sine is not exactly zero, and the sample at
+    // t=0 is exactly where it does not: sin(0) is 0, so sign gives 0 there.
+    assert.equal(viaSign[0], 0, 'sign leaves the sample on the crossing at 0');
+    assert.equal(viaStep[0], 1, 'step sends the same sample up');
+    for (let i = 1; i < n; i++) {
+        if (Math.sin(2 * Math.PI * frequency * time[i]) === 0) continue;
+        assert.equal(viaSign[i], viaStep[i], `the two agree away from an exact crossing, at ${i}`);
+    }
+
+    // It really is a 50 Hz square wave on an 800 Hz grid: 16 samples per period,
+    // and it repeats.
+    //
+    // Not at every sample, though, and the exception is worth naming: this grid
+    // puts a sample exactly on each crossing, where sin comes out around 1e-16
+    // with a sign that is rounding noise rather than arithmetic. Those samples
+    // are genuinely ambiguous — a square wave from a sine is undefined at the
+    // crossing — so periodicity is asserted where the sine is actually away from
+    // zero, and the count below keeps that from quietly excusing everything.
+    const period = sampleRate / frequency;
+    const sine = (i) => Math.sin(2 * Math.PI * frequency * time[i]);
+    let compared = 0;
+    for (let i = 1; i + period < n; i++) {
+        if (Math.abs(sine(i)) < 1e-12) continue;
+        assert.equal(viaStep[i], viaStep[i + period], `the square wave repeats every ${period} samples (at ${i})`);
+        compared++;
+    }
+    assert.ok(compared > n * 0.8, `most samples must be off the crossings (compared ${compared} of ${n})`);
+    const high = [...viaStep].filter(value => value === 1).length;
+    assert.ok(Math.abs(high - n / 2) <= period, 'a square wave spends about half its time high');
+    checks++;
+}
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 {
     const n = 32;
@@ -294,11 +399,12 @@ for (const n of [1, 2, 7, 64, 4096]) {
 // ─── Discoverability: autocomplete, the popover, and every language ─────────
 {
     const names = DERIVED_FUNCTIONS.map(fn => fn.name);
-    for (const name of ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh']) {
+    for (const name of ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'sign', 'step']) {
         assert.ok(names.includes(name), `${name}() must be offered by autocomplete`);
         assert.equal(DERIVED_FUNCTIONS.find(fn => fn.name === name).arity, 1, `${name}() takes one operand`);
     }
-    for (const [alias, target] of [['arcsin', 'asin'], ['arccos', 'acos'], ['arctan', 'atan']]) {
+    for (const [alias, target] of [['arcsin', 'asin'], ['arccos', 'acos'], ['arctan', 'atan'],
+        ['sgn', 'sign'], ['signum', 'sign'], ['heaviside', 'step']]) {
         assert.equal(DERIVED_FUNCTION_ALIASES.get(alias), target, `${alias} is an alias of ${target}`);
     }
     assert.equal(DERIVED_CONSTANTS.get('pi'), Math.PI, 'pi is π');
@@ -325,7 +431,7 @@ for (const n of [1, 2, 7, 64, 4096]) {
     checks++;
 
     for (const fragment of ['sin(x)', 'cos(x)', 'tan(x)', 'asin(x)', 'acos(x)', 'atan(x)',
-        'sinh(x)', 'cosh(x)', 'tanh(x)',
+        'sinh(x)', 'cosh(x)', 'tanh(x)', 'sign(x), step(x)', '2*step(sin(2*pi*50*time))-1',
         'sin(2*pi*1000*time)', 'x + 0.1*sin(2*pi*50*time)', 'pi, e', 'math.pi, math.e']) {
         assert.ok(popover.includes(fragment), `the popover must show ${fragment}`);
     }
@@ -333,6 +439,7 @@ for (const n of [1, 2, 7, 64, 4096]) {
     // literal. A hardcoded English line would read as English in all four.
     const keys = ['derivedHelpRadians', 'derivedHelpTimeAxis', 'derivedHelpTimeAxisText',
         'derivedHelpTimeAxisTone', 'derivedHelpTimeAxisAdd', 'derivedHelpTimeAxisUnits',
+        'derivedHelpTimeAxisSquare', 'derivedHelpSign',
         'derivedHelpConstants', 'derivedHelpConstantsText'];
     for (const key of keys) {
         assert.ok(popover.includes(`data-i18n="${key}"`), `the popover must bind ${key}`);
@@ -357,7 +464,8 @@ for (const n of [1, 2, 7, 64, 4096]) {
     // recipe in every language, since that is where a reader goes for the why.
     for (const lang of Object.keys(translations)) {
         const body = translations[lang].helpSec10Body;
-        for (const fragment of ['sin(2*pi*1000*time)', '<code>asin</code>', '<code>tanh</code>', 'math.pi']) {
+        for (const fragment of ['sin(2*pi*1000*time)', '<code>asin</code>', '<code>tanh</code>',
+            '<code>step</code>', '2*step(sin(', 'math.pi']) {
             assert.ok(body.includes(fragment), `${lang}.helpSec10Body must mention ${fragment}`);
         }
     }
@@ -399,7 +507,8 @@ for (const n of [1, 2, 7, 64, 4096]) {
 
     // The new functions are reachable by prefix.
     for (const [prefix, expected] of [['si', 'sin'], ['co', 'cos'], ['ta', 'tan'], ['as', 'asin'],
-        ['ac', 'acos'], ['at', 'atan'], ['sinh', 'sinh'], ['cosh', 'cosh'], ['tanh', 'tanh']]) {
+        ['ac', 'acos'], ['at', 'atan'], ['sinh', 'sinh'], ['cosh', 'cosh'], ['tanh', 'tanh'],
+        ['sig', 'sign'], ['st', 'step']]) {
         assert.ok(names(suggest(prefix, free)).includes(expected), `typing "${prefix}" must offer ${expected}`);
     }
 

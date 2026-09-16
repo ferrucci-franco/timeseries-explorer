@@ -55,12 +55,16 @@ const UNARY_MATH = {
     sinh: 'Math.sinh',
     cosh: 'Math.cosh',
     tanh: 'Math.tanh',
+    // 1, -1 or 0 — and NaN for NaN, like every other function here. A sample
+    // sitting exactly on zero is neither positive nor negative, so it comes out
+    // 0; `step` is the one to reach for when a value there has to pick a side.
+    sign: 'Math.sign',
 };
 
 const ARITY = {
     sqrt: 1, abs: 1, log: 1, log10: 1, square: 1, diff: 1, root: 2, power: 2,
     sin: 1, cos: 1, tan: 1, asin: 1, acos: 1, atan: 1,
-    sinh: 1, cosh: 1, tanh: 1,
+    sinh: 1, cosh: 1, tanh: 1, sign: 1, step: 1,
 };
 
 // min/max take two operands or more instead of a fixed count, which is what lets
@@ -190,6 +194,17 @@ function makeEmitter(classify) {
                     const v = `v${tempId++}`;
                     lines.push(`const ${v} = ${emit(node.args[0], lines)};`);
                     return `(${v} * ${v})`;
+                }
+                if (name === 'step') {
+                    // 1 from zero upwards, 0 below. Written as two comparisons
+                    // rather than one so NaN falls through both and stays NaN:
+                    // `NaN >= 0` is false, and a bare `? 1 : 0` would quietly
+                    // turn every hole in the signal into a 0. Inlined like
+                    // square(), so the fused loop keeps its single pass and the
+                    // operand is still evaluated once.
+                    const v = `v${tempId++}`;
+                    lines.push(`const ${v} = ${emit(node.args[0], lines)};`);
+                    return `(${v} >= 0 ? 1 : (${v} < 0 ? 0 : NaN))`;
                 }
                 if (MIN_ARITY[name] !== undefined) {
                     // Sample by sample across every operand, so a constant, a
