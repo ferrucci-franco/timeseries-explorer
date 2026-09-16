@@ -149,32 +149,51 @@
                         </button>
                     </div>
                 </div>
-                <div id="derived-help-popover" class="derived-help-popover" role="dialog" aria-labelledby="derived-help-title" hidden>
+                <div id="derived-help-popover" class="derived-help-popover derived-help-popover-wide" role="dialog" aria-labelledby="derived-help-title" hidden>
                     <div class="derived-help-title" id="derived-help-title" data-i18n="derivedHelpTitle">Formula help</div>
-                    <div class="derived-help-row">
-                        <span class="derived-help-label" data-i18n="derivedHelpOperators">Operators</span>
-                        <code>+ - * / ^ ( )</code>
-                    </div>
-                    <div class="derived-help-row">
-                        <span class="derived-help-label" data-i18n="derivedHelpFunctions">Functions</span>
-                        <code>sqrt(x), abs(x), log(x), log10(x), power(x,n), root(x,n), diff(x), min(...), max(...)</code>
-                    </div>
-                    <div class="derived-help-row">
-                        <span class="derived-help-label" data-i18n="derivedHelpMinMax">Min / max</span>
-                        <span data-i18n="derivedHelpMinMaxText">Compared sample by sample, over as many operands as you give them:</span>
-                        <div class="derived-help-examples">
-                            <div class="derived-help-example"><code>min(x, 0)</code><span data-i18n="derivedHelpMinMaxConstant">a variable and a constant</span></div>
-                            <div class="derived-help-example"><code>max(x, y)</code><span data-i18n="derivedHelpMinMaxPair">two variables</span></div>
-                            <div class="derived-help-example"><code>min([x, y, z])</code><span data-i18n="derivedHelpMinMaxList">a list of variables in square brackets</span></div>
+                    <div class="derived-help-grid">
+                        <div class="derived-help-row">
+                            <span class="derived-help-label" data-i18n="derivedHelpOperators">Operators</span>
+                            <code>+ - * / ^ ( )</code>
                         </div>
-                    </div>
-                    <div class="derived-help-row">
-                        <span class="derived-help-label" data-i18n="derivedHelpVariables">Variables</span>
-                        <span data-i18n="derivedHelpVariablesText">Start typing to autocomplete variable and function names.</span>
-                    </div>
-                    <div class="derived-help-row">
-                        <span class="derived-help-label" data-i18n="derivedHelpExample">Example</span>
-                        <code>x / y^2 * 100</code>
+                        <div class="derived-help-row">
+                            <span class="derived-help-label" data-i18n="derivedHelpFunctions">Functions</span>
+                            <code>sqrt(x), abs(x), log(x), log10(x), power(x,n), root(x,n), diff(x), min(...), max(...)</code>
+                            <code>sin(x), cos(x), tan(x), asin(x), acos(x), atan(x)</code>
+                            <span data-i18n="derivedHelpRadians">Angles are in radians.</span>
+                        </div>
+                        <div class="derived-help-row">
+                            <span class="derived-help-label" data-i18n="derivedHelpMinMax">Min / max</span>
+                            <span data-i18n="derivedHelpMinMaxText">Compared sample by sample, over as many operands as you give them:</span>
+                            <div class="derived-help-examples">
+                                <div class="derived-help-example"><code>min(x, 0)</code><span data-i18n="derivedHelpMinMaxConstant">a variable and a constant</span></div>
+                                <div class="derived-help-example"><code>max(x, y)</code><span data-i18n="derivedHelpMinMaxPair">two variables</span></div>
+                                <div class="derived-help-example"><code>min([x, y, z])</code><span data-i18n="derivedHelpMinMaxList">a list of variables in square brackets</span></div>
+                            </div>
+                        </div>
+                        <div class="derived-help-row">
+                            <span class="derived-help-label" data-i18n="derivedHelpTimeAxis">Time axis</span>
+                            <span data-i18n="derivedHelpTimeAxisText">The time vector is an operand like any other — the one tagged "time" in the suggestions. With it you can synthesize a signal instead of only transforming one:</span>
+                            <div class="derived-help-examples">
+                                <div class="derived-help-example"><code>sin(2*pi*1000*time)</code><span data-i18n="derivedHelpTimeAxisTone">a pure 1 kHz tone</span></div>
+                                <div class="derived-help-example"><code>x + 0.1*sin(2*pi*50*time)</code><span data-i18n="derivedHelpTimeAxisAdd">adds 50 Hz hum to a signal</span></div>
+                            </div>
+                            <span data-i18n="derivedHelpTimeAxisUnits">Frequencies read in Hz when the axis is in seconds; a date/time axis counts in milliseconds.</span>
+                        </div>
+                        <div class="derived-help-row">
+                            <span class="derived-help-label" data-i18n="derivedHelpConstants">Constants</span>
+                            <code>pi, e</code>
+                            <span data-i18n="derivedHelpConstantsText">Available whenever your file has no variable of that name — your own variables always win. If one does shadow them, write:</span>
+                            <code>math.pi, math.e</code>
+                        </div>
+                        <div class="derived-help-row">
+                            <span class="derived-help-label" data-i18n="derivedHelpVariables">Variables</span>
+                            <span data-i18n="derivedHelpVariablesText">Start typing to autocomplete variable and function names.</span>
+                        </div>
+                        <div class="derived-help-row">
+                            <span class="derived-help-label" data-i18n="derivedHelpExample">Example</span>
+                            <code>x / y^2 * 100</code>
+                        </div>
                     </div>
                 </div>
                 <div id="derived-form" class="derived-form collapsed">
