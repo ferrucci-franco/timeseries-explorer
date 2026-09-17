@@ -3737,6 +3737,7 @@ proto.removeFile = async function(fileId, options = {}) {
         this.renderVariablesTree(null);
         document.getElementById('drop-zone').classList.add('active');
     }
+    if (!options.cascade) this._resetLayoutWhenNoFilesLeft();
     this._updateTopBar();
     this._renderFilesList();
     this._updateActionButtons();
@@ -3803,11 +3804,29 @@ proto._updateActionButtons = function() {
     document.getElementById('reload-file').disabled  = !hasFiles;
     document.getElementById('auto-zoom').disabled    = !hasFiles;
     document.getElementById('clear-plots').disabled  = !hasFiles;
+    // Nothing to reset while the app is empty (#49): every panel is already
+    // blank, so the button only offered a confirmation with no work behind it.
+    document.getElementById('reset-layout').disabled = !hasFiles;
     this._updateLiveUpdateTopBar?.();
     const reloadModeToggle = document.getElementById('reload-as-version-toggle');
     const reloadModeSwitch = document.getElementById('reload-as-version-switch');
     if (reloadModeToggle) reloadModeToggle.disabled = !hasFiles;
     if (reloadModeSwitch) reloadModeSwitch.classList.toggle('disabled', !hasFiles);
+};
+
+/**
+ * Closing the last file takes the arrangement with it.
+ *
+ * A split grid only means something while there are signals to put in it: kept
+ * across an empty app it hands the next file panels it never asked for, and
+ * leaves 'Reset layout' -- now disabled -- as the only way back. Silent on
+ * purpose: every panel is empty by the time we get here, so there is nothing
+ * to confirm and nothing to lose.
+ */
+proto._resetLayoutWhenNoFilesLeft = function() {
+    if (this.files.size > 0) return;
+    if (this.layoutManager?.root?.type !== 'split') return;
+    this.layoutManager.reset();
 };
 
 /**
