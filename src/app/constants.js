@@ -122,7 +122,7 @@ const DERIVED_CONSTANTS = new Map([
 ]);
 
 const RESULT_FILE_EXTENSIONS = ['.mat', '.csv', '.txt', '.parquet', '.nc', '.netcdf', '.pkl', '.pickle', '.xlsx', '.xlsm', '.xls', '.ods', ...AUDIO_EXTENSIONS];
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.0';
 // Injected at build time by Vite (see vite.config.js). Fall back to placeholders
 // when running outside a Vite build (e.g. Node test scripts), where the globals
 // are undeclared; `typeof` avoids a ReferenceError in that case.
