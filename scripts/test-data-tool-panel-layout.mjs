@@ -153,12 +153,32 @@ for (const side of ['left', 'right']) {
         `an overflow on the ${side} must have its own marker`,
     );
 }
-assert.match(css, /\.data-tool-input-overflow::before,\s*\r?\n\.data-tool-input-overflow::after\s*\{[^}]*content:\s*'…'/s,
-    'the marker is an ellipsis character');
+// The marker is in two layers: a click-through fade under the text, and an
+// arrow button on the same side that scrolls towards what is hidden. An
+// ellipsis alone told the reader something they could not act on — a list of
+// 2400 coefficients that says "…" at both ends still cannot be read.
 assert.match(css, /\.data-tool-input-overflow::before,[\s\S]*?pointer-events:\s*none/s,
-    'the marker must never intercept a click meant for the field');
+    'the fade must never intercept a click meant for the field');
 assert.match(css, /\.data-tool-input-overflow\s*\{[^}]*position:\s*relative/s,
     'the wrapper must be a positioning context');
+for (const side of ['left', 'right']) {
+    assert.match(
+        css,
+        new RegExp(`\\.data-tool-input-overflow\\.overflow-${side} \\.data-tool-scroll-${side}`),
+        `the ${side} arrow shows only while that side hides text`,
+    );
+}
+assert.match(css, /\.data-tool-scroll\s*\{[^}]*display:\s*none/s, 'the arrows are hidden until needed');
+assert.match(dataTools, /_scrollDataToolInput/, 'the arrows need a driver');
+assert.match(
+    dataTools,
+    /addEventListener\('mousedown', \(event\) => \{\s*\r?\n\s*if \(event\.target\?\.closest\?\.\('\.data-tool-scroll'\)\) event\.preventDefault\(\);/,
+    'pressing an arrow must not pull focus out of the field',
+);
+// Not scrollBy({ behavior: 'smooth' }): Chromium drops a smooth scroll on a
+// text input and the field does not move at all.
+assert.match(dataTools, /input\.scrollLeft \+= step/, 'a click pages the field');
+assert.doesNotMatch(dataTools, /input\.scrollBy\(/, 'no smooth scroll on a text input');
 
 assert.match(dataTools, /_syncDataToolOverflowMarks/, 'the markers need a driver');
 assert.match(
@@ -192,13 +212,21 @@ assert.doesNotMatch(
     'plain focus does not bubble, so it would never fire here',
 );
 
-// Every field long enough to need a marker has to be wrapped for one.
+// Every field long enough to need a marker has to be wrapped for one, with
+// its two arrows beside it — one per side, in the wrapper, after the field.
 for (const id of ['filter-b', 'filter-a', 'filter-init-level', 'filter-init-x', 'filter-init-y']) {
     assert.match(
         html,
         new RegExp(`<div class="data-tool-input-overflow">\\s*\\r?\\n\\s*<input id="${id}"`),
         `#${id} must sit inside an overflow wrapper`,
     );
+    for (const side of ['left', 'right']) {
+        assert.match(
+            html,
+            new RegExp(`<input id="${id}"[^>]*>[\\s\\S]{0,1200}?<button class="data-tool-scroll data-tool-scroll-${side}" type="button" tabindex="-1"`),
+            `#${id} must have a ${side} arrow, out of the tab order`,
+        );
+    }
 }
 
 // An invalid configuration must take the preview down, in both of its forms.

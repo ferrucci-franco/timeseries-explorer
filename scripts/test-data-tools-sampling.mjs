@@ -530,8 +530,11 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     assert.deepEqual(config.params.initState, [0.75, 0.5]);
     assert.equal(config.params.restartGap, 5);
 
-    assert.match(h._filterDescription(config.params), /from past samples \[0\.75, 0\.5\]/);
+    assert.match(h._filterDescription(config.params), /from past samples 0\.75, 0\.5/);
     assert.match(h._filterDescription(config.params), /restart after gaps > 5 samples/);
+    // No square brackets in a description: the variable tree reads the first
+    // [...] of one as the variable's unit, and a coefficient list is not a unit.
+    assert.doesNotMatch(h._filterDescription(config.params), /[[\]]/);
     // Zero phase derives its own edges, so quoting an initial condition there
     // would describe something that did not happen.
     assert.doesNotMatch(
