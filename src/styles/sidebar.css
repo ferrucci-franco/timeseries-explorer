@@ -592,6 +592,53 @@
     color: var(--text-secondary);
 }
 
+/* A second page of help laid over the first (the filter help's long-delays
+   page): one step above it, so it is unmistakably on top, and offset by its
+   opener so the first page still shows underneath. */
+.derived-help-popover.data-tool-help-nested {
+    z-index: 29;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+}
+
+/* The button that opens that second page: a line of text at the end of the
+   row it expands on, not another yellow "?" — there is already one of those
+   on the panel and this is a continuation, not a new topic. */
+.derived-help-more {
+    align-self: flex-start;
+    margin-top: 0.15rem;
+    padding: 0.1rem 0.45rem;
+    font: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #5f4b00;
+    background-color: #fff3b0;
+    border: 1px solid #e3c55a;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.derived-help-more:hover {
+    background-color: #ffe680;
+    border-color: #d3ad2f;
+}
+
+.derived-help-more.active {
+    background-color: #f4cf4f;
+    border-color: #b98f13;
+    color: #3f3100;
+}
+
+.theme-dark .derived-help-more {
+    background-color: #6a560d;
+    border-color: #8a721b;
+    color: #ffe9a3;
+}
+
+.theme-dark .derived-help-more:hover {
+    background-color: #7a6410;
+    border-color: #a18420;
+}
+
 .derived-help-popover code {
     color: var(--text-primary);
     background-color: var(--hover-bg);

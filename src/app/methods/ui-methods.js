@@ -163,7 +163,13 @@ proto.initEventListeners = function() {
         if (!e.target.closest('#resample-help-popover') && !e.target.closest('#resample-help-toggle')) {
             this._toggleResampleHelpPopover?.(false);
         }
-        if (!e.target.closest('#filter-help-popover') && !e.target.closest('#filter-help-toggle')) {
+        // The long-delays page is laid over the filter help; a click on it is a
+        // click inside the help, not outside it.
+        if (!e.target.closest('#filter-zeros-help-popover') && !e.target.closest('#filter-zeros-help-toggle')) {
+            this._toggleFilterZerosHelpPopover?.(false);
+        }
+        if (!e.target.closest('#filter-help-popover') && !e.target.closest('#filter-help-toggle')
+            && !e.target.closest('#filter-zeros-help-popover')) {
             this._toggleFilterHelpPopover?.(false);
         }
         if (!e.target.closest('#filter-init-help-popover') && !e.target.closest('#filter-init-help-toggle')) {
@@ -201,6 +207,12 @@ proto.initEventListeners = function() {
         if (e.key === 'Escape' && !document.getElementById('resample-help-popover')?.hidden) {
             e.preventDefault();
             this._toggleResampleHelpPopover?.(false);
+            return;
+        }
+        // The page on top goes first; the next Escape closes the help itself.
+        if (e.key === 'Escape' && !document.getElementById('filter-zeros-help-popover')?.hidden) {
+            e.preventDefault();
+            this._toggleFilterZerosHelpPopover?.(false);
             return;
         }
         if (e.key === 'Escape' && !document.getElementById('filter-help-popover')?.hidden) {

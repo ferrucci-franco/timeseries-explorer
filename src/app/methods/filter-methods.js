@@ -74,6 +74,10 @@ proto.initFilterTool = function() {
         event.stopPropagation();
         this._toggleFilterHelpPopover();
     });
+    document.getElementById('filter-zeros-help-toggle')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._toggleFilterZerosHelpPopover();
+    });
     document.getElementById('filter-init-help-toggle')?.addEventListener('click', (event) => {
         event.stopPropagation();
         this._toggleFilterInitHelpPopover();
@@ -145,6 +149,39 @@ proto._toggleFilterHelpPopover = function(show) {
     button.classList.toggle('active', willShow);
     button.setAttribute('aria-expanded', String(willShow));
     if (willShow) this._positionFilterHelpPopover(popover, button);
+    // The long-delays popover opens from inside this one and has no meaning
+    // without it: closing the parent takes it along.
+    else this._toggleFilterZerosHelpPopover(false);
+};
+
+// The second page of the filter help — the echo worked through, and the
+// limits — opened from a button inside the first and laid over it, offset a
+// little so the page underneath is still visibly there. Closing it (Escape,
+// its button, a click outside both) brings the first page back untouched.
+proto._toggleFilterZerosHelpPopover = function(show) {
+    const popover = document.getElementById('filter-zeros-help-popover');
+    const button = document.getElementById('filter-zeros-help-toggle');
+    if (!popover || !button) return;
+    const willShow = typeof show === 'boolean' ? show : popover.hidden;
+    popover.hidden = !willShow;
+    button.classList.toggle('active', willShow);
+    button.setAttribute('aria-expanded', String(willShow));
+    if (!willShow) return;
+    const parent = document.getElementById('filter-help-popover');
+    const anchor = parent && !parent.hidden ? parent : button;
+    this._positionFilterHelpPopover(popover, anchor);
+    // Nudged down and to the right of the parent's own corner, as a sheet laid
+    // on a sheet, but never off the right edge of the window.
+    const offset = 28;
+    const viewportWidth = typeof window !== 'undefined' ? (window.innerWidth || 0) : 0;
+    const left = parseFloat(popover.style.left) || 0;
+    const width = parseFloat(popover.style.width) || 0;
+    const shifted = viewportWidth ? Math.min(left + offset, Math.max(12, viewportWidth - width - 12)) : left + offset;
+    popover.style.left = `${shifted}px`;
+    const top = (parseFloat(popover.style.top) || 0) + offset;
+    popover.style.top = `${top}px`;
+    const viewportHeight = typeof window !== 'undefined' ? (window.innerHeight || 0) : 0;
+    if (viewportHeight) popover.style.maxHeight = `${Math.max(160, viewportHeight - top - 12)}px`;
 };
 
 proto._toggleFilterDirectionHelpPopover = function(show) {
@@ -786,11 +823,26 @@ function formatDb(value) {
 // Enough digits that the polynomial pasted elsewhere is the polynomial that was
 // designed, in the same comma-separated form the boxes accept back.
 function formatCoefficientList(values) {
-    return Array.from(values || []).map(value => {
-        const n = Number(value);
-        if (Math.abs(n) < 1e-300) return '0';
-        return String(Number(n.toPrecision(15)));
-    }).join(', ');
+    return Array.from(values || []).map(formatCoefficient).join(', ');
+}
+
+function formatCoefficient(value) {
+    const n = Number(value);
+    if (Math.abs(n) < 1e-300) return '0';
+    return String(Number(n.toPrecision(15)));
+}
+
+/**
+ * A stored polynomial back in its box, the way it was typed rather than the
+ * way it is stored. The definition keeps b and a normalised and padded to one
+ * length, so an echo's `a = 1` is stored as 1 followed by 2400 zeros and its
+ * `b` as 2401 numbers; the padding is dropped and the runs fold back into
+ * `zeros(k)`, so reopening the definition shows `1, zeros(2399), 0.5` and `1`.
+ */
+export function formatCoefficientBox(values) {
+    const list = Array.from(values || [], Number);
+    while (list.length > 1 && list[list.length - 1] === 0) list.pop();
+    return formatSparseCoefficients(list, formatCoefficient);
 }
 
 // Translation keys for the summary line, and plain English for the

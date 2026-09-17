@@ -23,6 +23,9 @@ import {
     FILTER_MAX_TAPS,
 } from '../src/compute/kernels/iir.js';
 import { runDataToolStep } from '../src/compute/kernels/index.js';
+import { formatCoefficientBox, installFilterMethods } from '../src/app/methods/filter-methods.js';
+import { installDataToolsMethods } from '../src/app/methods/data-tools-methods.js';
+import { installResampleMethods } from '../src/app/methods/resample-methods.js';
 
 const close = (actual, expected, label, tol = 1e-9) => {
     assert.equal(actual.length, expected.length, `${label}: length`);
@@ -390,6 +393,52 @@ const zerosThen = (count, ...tail) => [1, ...new Array(count).fill(0), ...tail];
     const elapsed = Date.now() - started;
     assert.ok(elapsed < 3000, `400 k samples through a 13 230-tap echo in ${elapsed} ms`);
     assert.equal(r.filteredCount, x.length);
+}
+
+// ── Reopening a definition shows what was typed, not what is stored ──────
+
+{
+    // The definition stores b and a normalised and padded to one length; the
+    // boxes must not show 2401 numbers for b, nor a padded to 2401 for a.
+    assert.equal(formatCoefficientBox(zerosThen(2399, 0.5)), '1, zeros(2399), 0.5');
+    assert.equal(formatCoefficientBox([1, ...new Array(2400).fill(0)]), '1', 'the padding on a is dropped');
+    assert.equal(formatCoefficientBox([1, 0, 0, 0.5, 0, 0]), '1, 0, 0, 0.5', 'short runs stay written out, trailing zeros go');
+    assert.equal(formatCoefficientBox([0.25, 0.5, 0.25]), '0.25, 0.5, 0.25');
+    assert.equal(formatCoefficientBox([1, -1.8, 0.81]), '1, -1.8, 0.81');
+    assert.equal(formatCoefficientBox([0]), '0');
+    assert.equal(formatCoefficientBox([]), '');
+    // Both boxes, through the panel's own restore, from a definition as the
+    // panel stores it.
+    const fakeDocument = (values = {}) => {
+        const elements = new Map();
+        const make = id => ({
+            id, value: values[id] ?? '', textContent: '', hidden: false, disabled: false, dataset: {},
+            classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
+            setAttribute() {}, toggleAttribute() {},
+        });
+        return {
+            getElementById(id) { if (!elements.has(id)) elements.set(id, make(id)); return elements.get(id); },
+            querySelectorAll: () => [], querySelector: () => null,
+        };
+    };
+    class Harness { constructor() { this.plotManager = { files: new Map(), activeFileId: null }; } }
+    installDataToolsMethods(Harness);
+    installResampleMethods(Harness);
+    installFilterMethods(Harness);
+    const h = new Harness();
+    const stored = { source: 'manual', b: zerosThen(2399, 0.5), a: [1, ...new Array(2400).fill(0)], mode: 'forward', init: 'zero', initState: [], restartGap: 0 };
+    const previous = globalThis.document;
+    globalThis.document = fakeDocument();
+    try {
+        h._writeDataToolForm({ tool: 'filter', sourceName: 'x', params: stored }, 'x filtered');
+        assert.equal(document.getElementById('filter-b').value, '1, zeros(2399), 0.5', 'b reopens folded');
+        assert.equal(document.getElementById('filter-a').value, '1', 'a reopens as typed, not padded');
+        // And what the boxes now hold parses back to exactly the stored filter.
+        assert.deepEqual(parseCoefficients(document.getElementById('filter-b').value).values, zerosThen(2399, 0.5));
+        assert.deepEqual(parseCoefficients(document.getElementById('filter-a').value).values, [1]);
+    } finally {
+        globalThis.document = previous;
+    }
 }
 
 console.log('digital filter echo (long sparse filter) tests passed');

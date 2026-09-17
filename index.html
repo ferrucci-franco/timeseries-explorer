@@ -702,9 +702,11 @@
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterHelpZerosLabel">Long delays: zeros(k)</span>
-                                    <span data-i18n-rich="dataToolFilterHelpZeros">A run of zeros may be written <strong>zeros(k)</strong>, as in MATLAB — <strong>zeros(1,k)</strong> and <strong>zeros(k,1)</strong> mean the same — so a coefficient that acts thousands of samples back needs no thousands of zeros typed in front of it. Only the non-zero coefficients cost anything: a filter of order 2400 with two of them runs as fast as one of order 2.</span>
-                                    <span data-i18n-rich="dataToolFilterHelpZerosEcho">The simple echo is the worked example. With y[n] = x[n] + α·x[n−N] and N = round(T·Fs), a 300 ms echo at half amplitude on 8 kHz audio is N = 2400: <strong>b = 1 zeros(2399) 0.5</strong>, <strong>a = 1</strong>. For the echo to feed back on itself — y[n] = x[n] + α·y[n−N] — put the delay in the denominator instead: <strong>b = 1</strong>, <strong>a = 1 zeros(2399) −0.5</strong>; the stability check then insists on |α| &lt; 1. Choose <strong>Zero (the filter starts at rest)</strong> below to take x[n] = 0 before the recording, as the equation does.</span>
-                                    <span data-i18n-rich="dataToolFilterHelpZerosLimits">Delays up to 2²⁰ samples in <strong>b</strong>, up to 16 384 in <strong>a</strong>, and up to 8 192 non-zero coefficients. Past that length the past-samples start is withdrawn — nobody types 4 800 values — and the stability check no longer locates the poles, only decides.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpZeros">A run of zeros may be written <strong>zeros(k)</strong>, as in MATLAB: <strong>1 zeros(2399) 0.5</strong> is an echo 2400 samples back. Only the non-zero coefficients cost anything, however long the delay.</span>
+                                    <!-- The worked example and the limits live in a second popover, opened
+                                         on top of this one: the first-time reader gets one sentence, the
+                                         one building an echo gets the whole story. -->
+                                    <button id="filter-zeros-help-toggle" class="derived-help-more" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-zeros-help-popover" data-i18n="dataToolFilterHelpZerosMore">More on long delays and echoes…</button>
                                 </div>
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterHelpStabilityLabel">Stability</span>
@@ -713,6 +715,26 @@
                                 <div class="derived-help-row">
                                     <span class="derived-help-label" data-i18n="dataToolFilterHelpRateLabel">Sample rate</span>
                                     <span data-i18n-rich="dataToolFilterHelpRate">A digital filter is defined per SAMPLE, not per second: the coefficients know nothing about the time axis. On a file with an irregular Δt the cut-off is therefore not a fixed frequency in the data's own units, and the panel says so. Resample to a uniform grid first if you need the cut-off to mean a frequency.</span>
+                                </div>
+                            </div>
+
+                            <div id="filter-zeros-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide data-tool-help-nested" role="dialog" aria-labelledby="filter-zeros-help-title" hidden>
+                                <div class="derived-help-title" id="filter-zeros-help-title" data-i18n="dataToolFilterZerosHelpTitle">Long delays and echoes</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpZerosSyntaxLabel">Writing the delay</span>
+                                    <span data-i18n-rich="dataToolFilterHelpZerosSyntax"><strong>zeros(k)</strong> stands for k zeros in the list; <strong>zeros(1,k)</strong> and <strong>zeros(k,1)</strong> mean the same, so <strong>[1 zeros(1,2399) 0.5]</strong> pastes straight from MATLAB. A filter of order 2400 with two non-zero coefficients runs as fast as one of order 2.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpZerosEchoLabel">The simple echo</span>
+                                    <span data-i18n-rich="dataToolFilterHelpZerosEcho">y[n] = x[n] + α·x[n−N], with N = round(T·Fs). A 300 ms echo at half amplitude on 8 kHz audio is N = 2400: <strong>b = 1 zeros(2399) 0.5</strong>, <strong>a = 1</strong>. Choose <strong>Zero (the filter starts at rest)</strong> under Initial conditions to take x[n] = 0 before the recording, as the equation does.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpZerosFeedbackLabel">Feeding the echo back</span>
+                                    <span data-i18n-rich="dataToolFilterHelpZerosEchoFeedback">For the echo to repeat on itself — y[n] = x[n] + α·y[n−N] — put the delay in the denominator instead: <strong>b = 1</strong>, <strong>a = 1 zeros(2399) −0.5</strong>. The stability check then insists on |α| &lt; 1: at α = 1 the echoes never die out.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpZerosLimitsLabel">Limits</span>
+                                    <span data-i18n-rich="dataToolFilterHelpZerosLimits">Delays up to 2²⁰ samples in <strong>b</strong>, up to 16 384 in <strong>a</strong>, and up to 8 192 non-zero coefficients. Past that length the past-samples start is withdrawn — nobody types 4 800 values — and the stability check no longer locates the poles, only decides.</span>
                                 </div>
                             </div>
 
