@@ -30,7 +30,7 @@ import {
 } from '../../compute/kernels/detrend.js';
 import { FILTER_INIT_MODES, FILTER_MODES, normalizeFilterRestartGap, normalizeSos } from '../../compute/kernels/iir.js';
 import { normalizeFilterDesign } from '../../compute/kernels/filter-design.js';
-import { FILTER_DESIGN_FIELD_IDS } from './filter-methods.js';
+import { FILTER_DESIGN_FIELD_IDS, formatCoefficientBox } from './filter-methods.js';
 import { XCORR_FIELD_IDS } from './xcorr-methods.js';
 // Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
 // the two features spell a duration the same way.
@@ -1454,8 +1454,10 @@ proto._writeDataToolForm = function(definition, name) {
             set('filter-design-ripple', design.rippleDb);
             set('filter-design-attenuation', design.attenuationDb);
         }
-        set('filter-b', (params.b || [1]).join(', '));
-        set('filter-a', (params.a || [1]).join(', '));
+        // Folded back the way they were typed — see formatCoefficientBox — not
+        // the padded, expanded lists the definition stores.
+        set('filter-b', formatCoefficientBox(params.b || [1]));
+        set('filter-a', formatCoefficientBox(params.a || [1]));
         set('filter-mode', params.mode);
         set('filter-init', params.init || 'steady');
         // The stored state is flat [x…, y…]; the panel splits it back into the
