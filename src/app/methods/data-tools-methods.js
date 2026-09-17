@@ -1439,6 +1439,11 @@ proto._enterDataToolEditing = function(fileId, name) {
     this._syncDataTools();
     this._writeDataToolForm(normalized, name);
     this._syncDataTools();
+    // The pencil sits in the Transformations table, below the form it just
+    // filled: bring the form up so the parameters that are now editable are the
+    // thing on screen — the same courtesy the derived-dataset edit already
+    // extends (derived-dataset-methods.js).
+    document.querySelector?.('.data-tools-section')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
 };
 
 proto._exitDataToolEditing = function(options = {}) {
