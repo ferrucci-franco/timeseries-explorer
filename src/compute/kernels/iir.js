@@ -55,26 +55,118 @@ export function normalizeFilterRestartGap(value) {
     return Math.min(1e9, n);
 }
 
-// A filter longer than this is not something anyone types into a text box, and
-// the O(N²) stability test and the O(N) per-sample recursion both stop being
-// free well before it.
-export const FILTER_MAX_ORDER = 64;
+// ── How long a filter may be ──────────────────────────────────────────────
+//
+// Two very different things are typed into the boxes. A DENSE filter — every
+// coefficient meaningful, designed in MATLAB or here — is short: nobody types
+// more than a few dozen numbers, and the O(N) per-sample recursion and the
+// O(N²) stability test are free at that size. A SPARSE one is long and almost
+// all zeros: the simple echo
+//
+//     y[n] = x[n] + 0.5·x[n − 2400]        b = 1 zeros(2399) 0.5,  a = 1
+//
+// is the first difference equation a signals course writes, and at 8 kHz its
+// order is 2400 with two non-zero taps. Order and cost are unrelated there, so
+// the limits are three, each bounding the thing that actually costs:
+//
+//   FILTER_DENSE_ORDER      up to this the plain direct-form loop runs (and
+//                           the pole finder, and the past-samples init — all
+//                           of them O(N²) or worse); above it the section is
+//                           run as a sparse delay line that visits only the
+//                           non-zero taps.
+//   FILTER_MAX_ORDER        the longest delay a tap may reach: a state vector
+//                           this long is 8 MB, and 2²⁰ samples is 24 s at
+//                           44.1 kHz — an echo longer than that is not an echo.
+//   FILTER_MAX_DENOMINATOR  the Schur–Cohn test is O(N²) in the DENOMINATOR
+//                           order however sparse it is (the step-down fills
+//                           in), so feedback delays stop well before 2²⁰.
+//   FILTER_MAX_TAPS         non-zero coefficients, which is what every output
+//                           sample pays for.
+export const FILTER_DENSE_ORDER = 64;
+export const FILTER_MAX_ORDER = 1 << 20;
+export const FILTER_MAX_DENOMINATOR_ORDER = 16384;
+export const FILTER_MAX_TAPS = 8192;
+
+// `zeros(k)` as MATLAB writes it — `zeros(1,k)` and `zeros(k,1)` are the same
+// row, and the NumPy spelling is taken too — so `[1 zeros(1,2399) 0.5]` pastes
+// straight from a script. A count is a plain positive integer; anything else in
+// the parentheses is left for the number parser to reject by name.
+const ZEROS_GROUP = /(?:np\.|numpy\.)?zeros\s*\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)/gi;
 
 /**
  * Coefficients as typed: commas, spaces, newlines, and MATLAB/NumPy brackets all
  * accepted, because that is what lands in the box when someone pastes from the
- * tool they designed the filter in.
+ * tool they designed the filter in. Runs of zeros may be written `zeros(k)`.
+ *
+ * @returns {{ values: number[]|null, badToken: string, tooLong?: boolean }}
+ *   `values` is null when a token is not a number (`badToken` names it) or when
+ *   a `zeros(k)` alone exceeds the longest filter accepted (`tooLong`).
  */
 export function parseCoefficients(text) {
-    const cleaned = String(text ?? '').replace(/[[\]()]/g, ' ').replace(/[;,]/g, ' ');
+    // Each zeros(…) group is lifted out before the brackets are thrown away, so
+    // its own parentheses and comma survive the cleaning the rest of the list
+    // gets. The placeholder is not a number, and a stray '#' typed by hand is
+    // caught below by not naming a group.
+    const groups = [];
+    const cleaned = String(text ?? '')
+        .replace(ZEROS_GROUP, (match, rows, cols) => {
+            groups.push({ text: match, count: Number(rows) * (cols === undefined ? 1 : Number(cols)) });
+            return ` #${groups.length - 1} `;
+        })
+        .replace(/[[\]()]/g, ' ')
+        .replace(/[;,]/g, ' ');
     const tokens = cleaned.split(/\s+/).filter(Boolean);
     const out = [];
     for (const token of tokens) {
+        if (token[0] === '#') {
+            const group = groups[Number(token.slice(1))];
+            if (!group) return { values: null, badToken: token };
+            if (!Number.isFinite(group.count) || group.count > FILTER_MAX_ORDER) return { values: null, badToken: group.text, tooLong: true };
+            for (let i = 0; i < group.count; i++) out.push(0);
+            continue;
+        }
         const value = Number(token);
         if (!Number.isFinite(value)) return { values: null, badToken: token };
         out.push(value);
     }
     return { values: out, badToken: '' };
+}
+
+/**
+ * The inverse of the `zeros(k)` spelling: a list with its runs of zeros folded
+ * back, for descriptions and boxes where 2400 numbers would say less than
+ * `1, zeros(2399), 0.5`. Short runs stay written out — `1, 0, 0, 0.5` is
+ * easier to read than `1, zeros(2), 0.5`.
+ */
+export function formatSparseCoefficients(values, formatOne = value => String(value), minRun = 4) {
+    const list = Array.from(values || [], Number);
+    const parts = [];
+    let i = 0;
+    while (i < list.length) {
+        if (list[i] === 0) {
+            let end = i;
+            while (end < list.length && list[end] === 0) end++;
+            const run = end - i;
+            if (run >= minRun) {
+                parts.push(`zeros(${run})`);
+                i = end;
+                continue;
+            }
+        }
+        parts.push(formatOne(list[i]));
+        i++;
+    }
+    return parts.join(', ');
+}
+
+/** Indices ≥ 1 where either list has a non-zero coefficient — the taps. */
+function nonZeroTaps(b, a) {
+    const taps = [];
+    const length = Math.max(b.length, a.length);
+    for (let i = 1; i < length; i++) {
+        if ((i < b.length && b[i] !== 0) || (i < a.length && a[i] !== 0)) taps.push(i);
+    }
+    return taps;
 }
 
 /** Trailing zeros change nothing but inflate the reported order. */
@@ -96,6 +188,8 @@ export function normalizeFilterCoefficients(rawB, rawA) {
     // difference equation.
     if (!(Math.abs(a[0]) > 0)) throw new DataToolError('dataToolFilterLeadingZero');
     if (Math.max(a.length, b.length) - 1 > FILTER_MAX_ORDER) throw new DataToolError('dataToolFilterTooLong');
+    if (a.length - 1 > FILTER_MAX_DENOMINATOR_ORDER) throw new DataToolError('dataToolFilterDenominatorTooLong');
+    if (nonZeroTaps(b, a).length + 1 > FILTER_MAX_TAPS) throw new DataToolError('dataToolFilterTooManyTaps');
 
     const scale = a[0];
     const length = Math.max(a.length, b.length);
@@ -120,21 +214,30 @@ export function normalizeFilterCoefficients(rawB, rawA) {
  * the division by 1 − k² that continues the recursion is the same singularity
  * seen from the other side.
  *
+ * A trailing zero is a reflection coefficient of exactly 0, and the step-down
+ * through it is the identity — so it is skipped rather than computed. That is
+ * what makes an FIR (a = 1, padded with zeros to the numerator's length) a
+ * decision in O(1), and a pure comb `1 zeros(N−1) −α` one in O(N): its first
+ * step-down leaves 1 followed by nothing but zeros.
+ *
  * @returns {{ stable: boolean, maxReflection: number }}
  */
 export function schurCohnStable(a) {
-    let poly = Array.from(a);
+    let poly = Float64Array.from(a);
     let maxReflection = 0;
-    for (let m = poly.length - 1; m >= 1; m--) {
+    let m = poly.length - 1;
+    while (m >= 1) {
+        if (poly[m] === 0) { m--; continue; }
         const k = poly[m];
         const magnitude = Math.abs(k);
         if (magnitude > maxReflection) maxReflection = magnitude;
         if (!(magnitude < 1)) return { stable: false, maxReflection: magnitude };
         const denominator = 1 - k * k;
-        const next = new Array(m);
+        const next = new Float64Array(m);
         next[0] = 1;
         for (let i = 1; i < m; i++) next[i] = (poly[i] - k * poly[m - i]) / denominator;
         poly = next;
+        m--;
     }
     return { stable: true, maxReflection };
 }
@@ -143,6 +246,13 @@ export function schurCohnStable(a) {
  * Poles of A(z), by Durand–Kerner. Best-effort and DIAGNOSTIC ONLY — the verdict
  * is Schur–Cohn's above. Returned so the panel can say "a pole at |z| = 1.03"
  * instead of quoting a reflection coefficient nobody asked about.
+ *
+ * Root-finding a polynomial of degree 2400 is neither quick nor reliable, so
+ * beyond the dense order the poles are simply not located — except for the
+ * pure comb `1 zeros(N−1) a_N`, whose N poles all sit on the circle
+ * |z| = |a_N|^(1/N): that one is the recursive echo, and its radius is what
+ * tells the user the feedback gain must stay below 1.
+ *
  * @returns {{ poles: Array<{re:number,im:number,r:number}>, maxRadius: number, converged: boolean }}
  */
 export function denominatorPoles(a) {
@@ -151,6 +261,12 @@ export function denominatorPoles(a) {
     while (coefficients.length > 1 && coefficients[coefficients.length - 1] === 0) coefficients.pop();
     const degree = coefficients.length - 1;
     if (degree < 1) return { poles: [], maxRadius: 0, converged: true };
+    if (degree > FILTER_DENSE_ORDER) {
+        const comb = coefficients.slice(1, degree).every(value => value === 0);
+        if (!comb) return { poles: [], maxRadius: NaN, converged: false };
+        const r = Math.pow(Math.abs(coefficients[degree]), 1 / degree);
+        return { poles: [], maxRadius: r, converged: true };
+    }
 
     const evaluate = (re, im) => {
         let vr = 1;
@@ -395,7 +511,24 @@ function resolveSections(params) {
     // here, and so does this, because the kernel is also reachable from a
     // restored session whose coefficients were saved before this check existed.
     if (!inspection.stable) throw new DataToolError('dataToolFilterUnstable');
-    return [{ b: inspection.b, a: inspection.a }];
+    return [makeSection(inspection.b, inspection.a)];
+}
+
+/**
+ * A section as the recursion wants it. Above the dense order it also carries
+ * its non-zero taps, which is what the sparse loop visits instead of the whole
+ * state; a designed section (order 2) and a typed short one never do.
+ */
+function makeSection(b, a) {
+    const order = Math.max(b.length, a.length) - 1;
+    if (order <= FILTER_DENSE_ORDER) return { b, a };
+    const indexes = nonZeroTaps(b, a);
+    const taps = {
+        index: Int32Array.from(indexes),
+        b: Float64Array.from(indexes, i => (i < b.length ? b[i] : 0)),
+        a: Float64Array.from(indexes, i => (i < a.length ? a[i] : 0)),
+    };
+    return { b, a, taps };
 }
 
 // ── Running the filter ────────────────────────────────────────────────────
@@ -409,67 +542,52 @@ function resolveSections(params) {
  * if the input had been constant at its first sample forever makes the output
  * start where the signal does.
  *
- * Solves (I − Aᵀ)·zi = b[1:] − a[1:]·b₀, with A the companion matrix of a.
+ * scipy solves (I − Aᵀ)·zi = b[1:] − a[1:]·b₀ with A the companion matrix of a.
+ * The same numbers fall straight out of the transposed direct-form II update
+ * once x ≡ 1 and y ≡ H(1) = Σb / Σa are put into it:
+ *
+ *     z_k = Σ_{i=k+1}^{N} ( b_i − a_i·H(1) )
+ *
+ * one suffix sum, O(N), which is what lets a 2400-tap echo start in its steady
+ * state without a 2400×2400 matrix. The system is singular exactly when
+ * Σa = 0 — a pole at z = 1, where no steady state exists — and the filter then
+ * starts from rest, as it always did.
  */
 export function filterInitialState(b, a) {
     const n = a.length;
     if (n < 2) return new Float64Array(0);
-    const size = n - 1;
-    // I − Aᵀ, where A is the companion matrix of a: column 0 holds −a[row+1] and
-    // the first superdiagonal holds 1. The two never land on the same cell (that
-    // would need row = −1), so each is written once.
-    const matrix = [];
-    for (let row = 0; row < size; row++) {
-        const line = new Array(size).fill(0);
-        for (let col = 0; col < size; col++) {
-            let value = row === col ? 1 : 0;
-            if (col === 0) value += a[row + 1];
-            else if (col === row + 1) value -= 1;
-            line[col] = value;
-        }
-        matrix.push(line);
+    let numerator = 0;
+    let denominator = 0;
+    for (let i = 0; i < n; i++) { numerator += b[i]; denominator += a[i]; }
+    const zi = new Float64Array(n - 1);
+    if (!(Math.abs(denominator) > 1e-300)) return zi;
+    const gain = numerator / denominator;
+    if (!Number.isFinite(gain)) return zi;
+    let sum = 0;
+    for (let k = n - 2; k >= 0; k--) {
+        sum += b[k + 1] - a[k + 1] * gain;
+        zi[k] = Number.isFinite(sum) ? sum : 0;
     }
-    const rhs = new Array(size);
-    for (let i = 0; i < size; i++) rhs[i] = b[i + 1] - a[i + 1] * b[0];
-
-    const solved = solveLinear(matrix, rhs);
-    const zi = new Float64Array(size);
-    if (!solved) return zi;   // rest state: a degenerate system is not worth failing over
-    for (let i = 0; i < size; i++) zi[i] = Number.isFinite(solved[i]) ? solved[i] : 0;
     return zi;
 }
 
-function solveLinear(matrix, rhs) {
-    const n = rhs.length;
-    const m = matrix.map((row, i) => [...row, rhs[i]]);
-    for (let col = 0; col < n; col++) {
-        let pivot = col;
-        for (let row = col + 1; row < n; row++) {
-            if (Math.abs(m[row][col]) > Math.abs(m[pivot][col])) pivot = row;
-        }
-        if (!(Math.abs(m[pivot][col]) > 1e-300)) return null;
-        if (pivot !== col) [m[col], m[pivot]] = [m[pivot], m[col]];
-        for (let row = col + 1; row < n; row++) {
-            const factor = m[row][col] / m[col][col];
-            if (factor === 0) continue;
-            for (let k = col; k <= n; k++) m[row][k] -= factor * m[col][k];
-        }
-    }
-    const out = new Array(n).fill(0);
-    for (let row = n - 1; row >= 0; row--) {
-        let sum = m[row][n];
-        for (let col = row + 1; col < n; col++) sum -= m[row][col] * out[col];
-        out[row] = sum / m[row][row];
-    }
-    return out;
+/**
+ * The state a run carries: the transposed direct-form II vector z, plus where
+ * z₀ currently sits. A dense section keeps z in place and shifts it every
+ * sample, so `pos` stays 0; a sparse section keeps z in a ring and advances
+ * `pos` instead — the shift then costs nothing and only the taps are touched.
+ */
+function makeRunningState(zi, scale = 1) {
+    if (scale === 0) return { z: new Float64Array(zi.length), pos: 0 };
+    return { z: Float64Array.from(zi, value => value * scale), pos: 0 };
 }
 
 /**
  * Direct form II transposed through a cascade, over a plain array. Each entry of
- * `states` is one section's state and is modified in place. A single section of
- * arbitrary order (the typed b/a) and a chain of second-order sections (a
- * designed filter) are the same loop: the output of one section is the input
- * of the next.
+ * `states` is one section's running state and is modified in place. A single
+ * section of arbitrary order (the typed b/a) and a chain of second-order
+ * sections (a designed filter) are the same loop: the output of one section is
+ * the input of the next.
  */
 function runCascade(sections, states, input, reverse = false) {
     const n = input.length;
@@ -485,15 +603,40 @@ function runCascade(sections, states, input, reverse = false) {
 function stepCascade(sections, states, sample) {
     let x = sample;
     for (let s = 0; s < sections.length; s++) {
-        const { b, a } = sections[s];
-        const state = states[s];
-        const order = state.length;
-        const y = b[0] * x + (order ? state[0] : 0);
-        for (let i = 0; i < order - 1; i++) state[i] = b[i + 1] * x + state[i + 1] - a[i + 1] * y;
-        if (order) state[order - 1] = b[order] * x - a[order] * y;
-        x = y;
+        const section = sections[s];
+        x = section.taps ? stepSparse(section, states[s], x) : stepDense(section, states[s], x);
     }
     return x;
+}
+
+function stepDense({ b, a }, running, x) {
+    const state = running.z;
+    const order = state.length;
+    const y = b[0] * x + (order ? state[0] : 0);
+    for (let i = 0; i < order - 1; i++) state[i] = b[i + 1] * x + state[i + 1] - a[i + 1] * y;
+    if (order) state[order - 1] = b[order] * x - a[order] * y;
+    return y;
+}
+
+// The same update as stepDense, with z stored in a ring: z_k lives at
+// (pos + k) mod N. Reading z₀ and advancing pos IS the shift, and the slot that
+// held z₀ becomes the new z_{N−1}, which starts empty; then each tap i adds
+// b_i·x − a_i·y into z_{i−1}. Only the taps are visited, so a 2400-sample echo
+// with two of them costs two multiplications per sample rather than 2400.
+function stepSparse({ b, taps }, running, x) {
+    const state = running.z;
+    const order = state.length;
+    const y = b[0] * x + state[running.pos];
+    state[running.pos] = 0;
+    const pos = running.pos + 1 === order ? 0 : running.pos + 1;
+    running.pos = pos;
+    const { index, b: tb, a: ta } = taps;
+    for (let t = 0; t < index.length; t++) {
+        let slot = pos + index[t] - 1;
+        if (slot >= order) slot -= order;
+        state[slot] += tb[t] * x - ta[t] * y;
+    }
+    return y;
 }
 
 // Odd reflection about the endpoint: 2·y[0] − y[k]. Continuous in value and in
@@ -530,13 +673,16 @@ export function stateFromPastSamples(b, a, xPast = [], yPast = []) {
         const value = Number(list?.[index]);
         return Number.isFinite(value) ? value : 0;
     };
-    for (let k = 0; k < order; k++) {
-        let sum = 0;
-        for (let i = k + 1; i <= order; i++) {
+    // Only the taps contribute — a zero coefficient adds nothing whatever the
+    // history was — so the sum runs over them, in ascending i for every k.
+    const taps = nonZeroTaps(b, a);
+    for (const i of taps) {
+        const bi = i < b.length ? b[i] : 0;
+        const ai = i < a.length ? a[i] : 0;
+        for (let k = 0; k < i; k++) {
             const j = i - k - 1;   // x[k−i] is x[−(i−k)] is xPast[i−k−1]
-            sum += b[i] * at(xPast, j) - a[i] * at(yPast, j);
+            state[k] += bi * at(xPast, j) - ai * at(yPast, j);
         }
-        state[k] = sum;
     }
     return state;
 }
@@ -567,14 +713,14 @@ export function cascadeInitialState(sections) {
  * @param {number} first the run's first sample
  */
 function startingStates(zis, first, init, sections) {
-    if (init.mode === 'zero') return zis.map(zi => new Float64Array(zi.length));
+    if (init.mode === 'zero') return zis.map(zi => makeRunningState(zi, 0));
     if (init.mode === 'level') {
         // `zis` is the state for a unit step, so scaling it by the level gives
         // the state for a step of that height — the same arithmetic `steady`
         // does, with the height named rather than taken from the data.
         const level = Number(init.state?.[0]);
         const scale = Number.isFinite(level) ? level : first;
-        return zis.map(zi => Float64Array.from(zi, value => value * scale));
+        return zis.map(zi => makeRunningState(zi, scale));
     }
     // Past samples describe the filter as a whole — x and y at its outer
     // terminals — which pins down the state of a SINGLE section exactly and of a
@@ -586,9 +732,9 @@ function startingStates(zis, first, init, sections) {
         const order = zis[0].length;
         // Length is validated in the panel; a short list is padded with zeros
         // here rather than throwing, so a stored definition always reopens.
-        return [stateFromPastSamples(b, a, (init.state || []).slice(0, order), (init.state || []).slice(order))];
+        return [makeRunningState(stateFromPastSamples(b, a, (init.state || []).slice(0, order), (init.state || []).slice(order)))];
     }
-    return zis.map(zi => Float64Array.from(zi, value => value * first));
+    return zis.map(zi => makeRunningState(zi, first));
 }
 
 export function normalizeFilterInit(params = {}) {
@@ -611,9 +757,9 @@ function filterSegmentZeroPhase(sections, zis, segment) {
     const padLength = Math.min(3 * Math.max(1, totalOrder), n - 1);
     const extended = padLength > 0 ? oddExtend(segment, padLength) : copyFloat64(segment);
 
-    const forwardStates = zis.map(zi => Float64Array.from(zi, value => value * extended[0]));
+    const forwardStates = zis.map(zi => makeRunningState(zi, extended[0]));
     const forward = runCascade(sections, forwardStates, extended, false);
-    const backwardStates = zis.map(zi => Float64Array.from(zi, value => value * forward[forward.length - 1]));
+    const backwardStates = zis.map(zi => makeRunningState(zi, forward[forward.length - 1]));
     const backward = runCascade(sections, backwardStates, forward, true);
     return backward.slice(padLength, padLength + n);
 }

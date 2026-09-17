@@ -63,6 +63,7 @@
     "test:interpolate-regrid": "node scripts/test-interpolate-regrid.mjs",
     "test:detrend-filter": "node scripts/test-detrend-filter.mjs",
     "test:filter-design": "node scripts/test-filter-design.mjs",
+    "test:filter-echo": "node scripts/test-filter-echo.mjs",
     "test:derived-datasets": "node scripts/test-derived-datasets.mjs",
     "test:derived-min-max": "node scripts/test-derived-min-max.mjs",
     "test:derived-trig-constants": "node scripts/test-derived-trig-constants.mjs",
