@@ -134,6 +134,10 @@ assert.match(
 // they all landed), and it only ever marks the right-hand end while a field
 // scrolled to its end hides text on the left. So the marker is drawn here.
 assert.match(css, /\.derived-input\s*\{[^}]*text-overflow:\s*ellipsis/s, 'the native ellipsis is still worth having');
+// ...but not on the coefficient fields: on an UNFOCUSED input Chromium paints the
+// ellipsized line from the current scroll offset and drops the rest, so a field
+// scrolled by its arrows showed "ros(5000), 0…" and looked as if nothing had moved.
+assert.match(css, /\.data-tool-coefficients\s*\{[^}]*text-overflow:\s*clip/s, 'coefficient fields must not ellipsize');
 
 // And nothing may move a field's scroll on its behalf. Forcing every unfocused
 // field back to its first character is the only way to make the native ellipsis
@@ -169,6 +173,17 @@ for (const side of ['left', 'right']) {
     );
 }
 assert.match(css, /\.data-tool-scroll\s*\{[^}]*display:\s*none/s, 'the arrows are hidden until needed');
+// Beside the field, not over it: a button laid over the text hides the very
+// characters the reader scrolled to see. The wrapper is a flex row, the field
+// shrinks to make room (a text input's intrinsic minimum width would otherwise
+// push the arrows out of the sidebar), and the left arrow is ordered in front.
+assert.match(css, /\.data-tool-input-overflow\s*\{[^}]*display:\s*flex/s, 'the wrapper is a flex row');
+assert.match(css, /\.data-tool-input-overflow > \.data-tool-coefficients\s*\{[^}]*min-width:\s*0/s, 'the field must be allowed to shrink');
+assert.match(css, /\.data-tool-scroll-left\s*\{[^}]*order:\s*-1/s, 'the left arrow goes before the field');
+assert.doesNotMatch(css, /\.data-tool-scroll\s*\{[^}]*position:\s*absolute/s, 'the arrows take their own space');
+// Showing an arrow narrows the field, which can change what it hides: the
+// driver measures again until the marks settle.
+assert.match(dataTools, /for \(let round = 0; round < 3; round\+\+\)/, 'the marks are re-measured after they change');
 assert.match(dataTools, /_scrollDataToolInput/, 'the arrows need a driver');
 assert.match(
     dataTools,
@@ -228,6 +243,17 @@ for (const id of ['filter-b', 'filter-a', 'filter-init-level', 'filter-init-x', 
         );
     }
 }
+
+// Editing a transformation fills a form that sits ABOVE the pencil that was
+// pressed, out of view: the form has to be brought up, or nothing visibly
+// happens (#117). Same courtesy as the derived-dataset edit.
+const enterEditing = dataTools.match(/proto\._enterDataToolEditing = function[\s\S]*?\n\};/);
+assert.ok(enterEditing, '_enterDataToolEditing must exist');
+assert.match(
+    enterEditing[0],
+    /\.data-tools-section'\)\?\.scrollIntoView\?\.\(\{ block: 'start', behavior: 'smooth' \}\)/,
+    'editing a transformation must scroll the Data Tools form into view',
+);
 
 // An invalid configuration must take the preview down, in both of its forms.
 assert.match(dataTools, /_abandonDataToolPreview/, 'there must be one way to take a preview down');

@@ -1166,22 +1166,36 @@
    exactly the moment it stays silent. It also only ever marks the right, while a
    field scrolled to its end is hiding text on the LEFT.
 
-   Two layers. The pseudo-elements are a click-through FADE that dims the text
-   under the marker so the two never collide; the marker itself is a small
-   arrow BUTTON on the same side, which scrolls the field towards the hidden
-   text — a list of 2400 coefficients that says "…" at both ends is telling
-   the reader something they cannot act on. */
+   Two layers. The pseudo-elements are a click-through FADE at the field's edge
+   that dims the last characters so the cut does not look like the end of the
+   list; the marker itself is a small arrow BUTTON BESIDE the field on that side
+   (a flex row: ‹ field ›), which scrolls the field towards the hidden text — a
+   list of 2400 coefficients that says "…" at both ends is telling the reader
+   something they cannot act on. Beside, not over: a button laid over the text
+   hides the very characters the reader scrolled to see. */
 .data-tool-input-overflow {
     position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
 }
 
+.data-tool-input-overflow > .data-tool-coefficients {
+    flex: 1 1 auto;
+    /* A text input's intrinsic minimum width is wider than the box it sits in;
+       without this the buttons push it out of the sidebar instead of shrinking it. */
+    min-width: 0;
+}
+
+/* The fade is shown only while that side's button is, so its inset from the
+   wrapper is a constant: the button's width plus the gap, plus the border. */
 .data-tool-input-overflow::before,
 .data-tool-input-overflow::after {
     content: '';
     position: absolute;
     top: 1px;
     bottom: 1px;
-    width: 2.1rem;
+    width: 1.6rem;
     display: none;
     pointer-events: none;
 }
@@ -1192,21 +1206,19 @@
 }
 
 .data-tool-input-overflow::before {
-    left: 1px;
+    left: calc(1.15rem + 0.3rem + 1px);
     border-radius: 5px 0 0 5px;
-    background: linear-gradient(to left, transparent, var(--bg-primary) 60%);
+    background: linear-gradient(to left, transparent, var(--bg-primary) 75%);
 }
 
 .data-tool-input-overflow::after {
-    right: 1px;
+    right: calc(1.15rem + 0.3rem + 1px);
     border-radius: 0 5px 5px 0;
-    background: linear-gradient(to right, transparent, var(--bg-primary) 60%);
+    background: linear-gradient(to right, transparent, var(--bg-primary) 75%);
 }
 
 .data-tool-scroll {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
+    flex: 0 0 auto;
     width: 1.15rem;
     height: 1.15rem;
     padding: 0;
@@ -1218,7 +1230,6 @@
     border-radius: 4px;
     color: var(--text-secondary);
     cursor: pointer;
-    z-index: 1;
 }
 
 .data-tool-scroll svg {
@@ -1231,12 +1242,10 @@
     border-color: var(--text-secondary);
 }
 
+/* The markup keeps the field first (it is what the wrapper is about); the left
+   arrow is moved in front of it here. */
 .data-tool-scroll-left {
-    left: 0.25rem;
-}
-
-.data-tool-scroll-right {
-    right: 0.25rem;
+    order: -1;
 }
 
 .data-tool-input-overflow.overflow-left .data-tool-scroll-left,
@@ -1253,6 +1262,12 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.78rem;
     font-variant-numeric: tabular-nums;
+    /* No native ellipsis here, unlike the other .derived-input fields: on an
+       UNFOCUSED input Chromium paints the ellipsized line from the current
+       scroll offset and drops the rest, so a field scrolled by its arrows showed
+       "ros(5000), 0…" and looked as if nothing had moved. The fade and the
+       arrows already say the list goes on. */
+    text-overflow: clip;
 }
 
 .filter-coefficient-label {
