@@ -11,9 +11,11 @@
 import i18n from '../../i18n/index.js';
 import { designFilter, inspectFilter, inspectSos } from '../../compute/kernels/index.js';
 import {
+    FILTER_DENSE_ORDER,
     FILTER_INIT_MODES,
     FILTER_MODES,
     filterInitStateLength,
+    formatSparseCoefficients,
     normalizeFilterRestartGap,
     parseCoefficients,
 } from '../../compute/kernels/iir.js';
@@ -334,6 +336,11 @@ proto._filterPlan = function() {
     if (this._filterSource() === 'design') return this._filterDesignPlan();
     const { b, a } = this._readFilterCoefficients();
     if (!b.values || !a.values) {
+        // A zeros(k) past the longest filter is a length complaint, not a
+        // "not a number" one: the token is perfectly well formed.
+        if (b.tooLong || a.tooLong) {
+            return { ok: false, code: 'dataToolFilterTooLong', text: i18n.t('dataToolFilterTooLong'), inspection: null };
+        }
         const bad = b.badToken || a.badToken;
         return {
             ok: false,
@@ -381,8 +388,13 @@ proto._filterPlan = function() {
         return { ok: false, code: manual.code, text: manual.text, inspection, manual };
     }
 
+    // Beyond the dense order the poles of a long denominator are not located
+    // (see denominatorPoles), so the line does without the radius rather than
+    // printing a question mark for it.
     const isFir = inspection.denominatorOrder === 0;
-    const key = isFir ? 'dataToolFilterInfoFir' : 'dataToolFilterInfo';
+    const key = isFir
+        ? 'dataToolFilterInfoFir'
+        : (Number.isFinite(inspection.maxPoleRadius) ? 'dataToolFilterInfo' : 'dataToolFilterInfoLong');
     const text = i18n.t(key)
         .replace('{order}', String(inspection.order))
         .replace('{pole}', formatNumber(inspection.maxPoleRadius))
@@ -552,18 +564,6 @@ proto._syncFilterControls = function() {
 
     this._syncFilterDesignControls(design, selected);
 
-    // A cascade has no single past to be initialised from, so the option is
-    // withdrawn — and a selection made before switching modes falls back to the
-    // default rather than silently meaning something else.
-    const initSelect = document.getElementById('filter-init');
-    const pastOption = initSelect?.querySelector?.('option[value="past"]');
-    if (pastOption) pastOption.disabled = design;
-    if (design && initSelect?.value === 'past') initSelect.value = 'steady';
-    const initMode = initSelect?.value || 'steady';
-    // Each convention shows only its own fields.
-    document.getElementById('filter-init-level-wrap')?.classList.toggle('collapsed', initMode !== 'level');
-    document.getElementById('filter-init-past-wrap')?.classList.toggle('collapsed', initMode !== 'past');
-
     // The placeholders track the coefficients, so each box always names exactly
     // the values it wants for the filter currently in the fields above.
     const b = parseCoefficients(document.getElementById('filter-b')?.value ?? '1');
@@ -571,6 +571,22 @@ proto._syncFilterControls = function() {
     const order = b.values && a.values
         ? Math.max(1, Math.max(b.values.length, a.values.length)) - 1
         : 0;
+
+    // A cascade has no single past to be initialised from, and a long sparse
+    // filter (a 2400-sample echo) would want 4800 values nobody is going to
+    // type — so the option is withdrawn in both cases, and a selection made
+    // before the change falls back to the default rather than silently meaning
+    // something else.
+    const initSelect = document.getElementById('filter-init');
+    const pastOption = initSelect?.querySelector?.('option[value="past"]');
+    const noPast = design || order > FILTER_DENSE_ORDER;
+    if (pastOption) pastOption.disabled = noPast;
+    if (noPast && initSelect?.value === 'past') initSelect.value = 'steady';
+    const initMode = initSelect?.value || 'steady';
+    // Each convention shows only its own fields.
+    document.getElementById('filter-init-level-wrap')?.classList.toggle('collapsed', initMode !== 'level');
+    document.getElementById('filter-init-past-wrap')?.classList.toggle('collapsed', initMode !== 'past');
+
     const xInput = document.getElementById('filter-init-x');
     const yInput = document.getElementById('filter-init-y');
     if (xInput) xInput.placeholder = pastSamplesPlaceholder('x', order);
@@ -714,7 +730,17 @@ proto._filterAxisNote = function() {
 };
 
 proto._filterDescription = function(params = {}) {
-    const list = values => Array.from(values || []).map(value => Number(Number(value).toPrecision(6))).join(', ');
+    // Runs of zeros fold back into the zeros(k) the boxes accept, so the
+    // description of a 2400-sample echo reads `1, zeros(2399), 0.5` rather than
+    // going on for a page.
+    const list = values => formatSparseCoefficients(values, value => String(Number(Number(value).toPrecision(6))));
+    // The stored lists are padded to a common length; the padding says nothing
+    // about the filter, so `a` of an FIR reads `1`, not `1, zeros(2400)`.
+    const polynomial = values => {
+        const trimmed = Array.from(values || []);
+        while (trimmed.length > 1 && Number(trimmed[trimmed.length - 1]) === 0) trimmed.pop();
+        return list(trimmed);
+    };
     const direction = params.mode === 'zeroPhase' ? 'zero phase' : 'forward';
     const parts = [];
     if (params.source === 'design' && params.design) {
@@ -729,7 +755,7 @@ proto._filterDescription = function(params = {}) {
         parts.push(`${family} ${response}, order ${d.order}, ${cutoff} ${unit}${extra}`);
         parts.push(direction);
     } else {
-        parts.push(`b [${list(params.b)}]`, `a [${list(params.a)}]`, direction);
+        parts.push(`b [${polynomial(params.b)}]`, `a [${polynomial(params.a)}]`, direction);
     }
     if (params.mode !== 'zeroPhase') {
         if (params.init === 'zero') parts.push('from rest');
