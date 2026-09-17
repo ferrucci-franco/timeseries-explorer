@@ -165,14 +165,22 @@ assert.match(css, /\.data-tool-input-overflow::before,[\s\S]*?pointer-events:\s*
     'the fade must never intercept a click meant for the field');
 assert.match(css, /\.data-tool-input-overflow\s*\{[^}]*position:\s*relative/s,
     'the wrapper must be a positioning context');
-for (const side of ['left', 'right']) {
-    assert.match(
-        css,
-        new RegExp(`\\.data-tool-input-overflow\\.overflow-${side} \\.data-tool-scroll-${side}`),
-        `the ${side} arrow shows only while that side hides text`,
-    );
-}
-assert.match(css, /\.data-tool-scroll\s*\{[^}]*display:\s*none/s, 'the arrows are hidden until needed');
+// NOTHING beside the field may appear or disappear. Adding or removing a box
+// next to a text input — a pseudo-element switching from display: none, an
+// arrow showing up — makes Gecko rebuild the input's frame, and a rebuilt text
+// control is scrolled back to 0; with the marks refreshed on every keystroke and
+// scroll, Firefox could not be scrolled past the first screen of a long list at
+// all. So both arrows are always in the row (an idle one is disabled) and both
+// fades are always present (an idle one is transparent): style, not structure.
+assert.match(css, /\.data-tool-scroll\s*\{[^}]*display:\s*inline-flex/s, 'the arrows are always in the row');
+assert.doesNotMatch(css, /\.data-tool-scroll[^{]*\{[^}]*display:\s*none/s, 'no arrow is ever display: none');
+assert.match(css, /\.data-tool-scroll:disabled\s*\{[^}]*opacity/s, 'an idle arrow is greyed, not removed');
+assert.doesNotMatch(css, /\.data-tool-input-overflow::before,\s*\r?\n\.data-tool-input-overflow::after\s*\{[^}]*display:\s*none/s,
+    'the fades are never display: none');
+assert.match(css, /\.data-tool-input-overflow\.overflow-left::before,\s*\r?\n\.data-tool-input-overflow\.overflow-right::after\s*\{[^}]*opacity:\s*1/s,
+    'a fade is shown by opacity');
+assert.match(dataTools, /left\.disabled = !hidesLeft/, 'the left arrow is disabled, not hidden, when idle');
+assert.match(dataTools, /right\.disabled = !hidesRight/, 'the right arrow is disabled, not hidden, when idle');
 // Beside the field, not over it: a button laid over the text hides the very
 // characters the reader scrolled to see. The wrapper is a flex row, the field
 // shrinks to make room (a text input's intrinsic minimum width would otherwise
@@ -181,9 +189,13 @@ assert.match(css, /\.data-tool-input-overflow\s*\{[^}]*display:\s*flex/s, 'the w
 assert.match(css, /\.data-tool-input-overflow > \.data-tool-coefficients\s*\{[^}]*min-width:\s*0/s, 'the field must be allowed to shrink');
 assert.match(css, /\.data-tool-scroll-left\s*\{[^}]*order:\s*-1/s, 'the left arrow goes before the field');
 assert.doesNotMatch(css, /\.data-tool-scroll\s*\{[^}]*position:\s*absolute/s, 'the arrows take their own space');
-// Showing an arrow narrows the field, which can change what it hides: the
-// driver measures again until the marks settle.
-assert.match(dataTools, /for \(let round = 0; round < 3; round\+\+\)/, 'the marks are re-measured after they change');
+// With the row's shape constant there is nothing to re-measure and no scroll to
+// restore: the sync reads once and never writes the field's scroll.
+assert.doesNotMatch(
+    dataTools.match(/proto\._syncDataToolOverflowMarks = function[\s\S]*?\n\};/)[0],
+    /scrollLeft\s*=[^=]/,
+    'the marks never move the field',
+);
 assert.match(dataTools, /_scrollDataToolInput/, 'the arrows need a driver');
 assert.match(
     dataTools,

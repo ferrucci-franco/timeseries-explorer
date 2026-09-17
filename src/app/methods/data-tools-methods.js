@@ -279,39 +279,31 @@ proto.initDataTools = function() {
 // scrolled to, so returning to edit the last coefficient of a long list meant
 // scrolling there again. Marking the hidden side works at ANY scroll position,
 // which is what made the rewind unnecessary rather than merely unfortunate.
+//
+// And nothing here changes the row's STRUCTURE: the marks are a class on the
+// wrapper (which fades a pseudo-element in and out) and `disabled` on the two
+// arrows, both always present. Showing or hiding a box beside the field makes
+// Gecko rebuild the field's frame, and a rebuilt text control is scrolled back
+// to 0 — which, with this running on every keystroke and scroll, left Firefox
+// unable to move past the first screen of a long list at all (see the CSS).
 proto._syncDataToolOverflowMarks = function() {
     const section = document.querySelector('.data-tools-section');
     if (!section) return;
     for (const input of section.querySelectorAll('.data-tool-coefficients')) {
         const wrap = input.parentElement;
         if (!wrap?.classList.contains('data-tool-input-overflow')) continue;
-        // Showing an arrow takes width from the field, which can change what
-        // the field hides; measure again until the marks stop moving. Two
-        // rounds settle it (each arrow can only appear once), the third is a
-        // guard.
-        for (let round = 0; round < 3; round++) {
-            // Two pixels of slack: sub-pixel text metrics otherwise report an
-            // overflow on a value that fits exactly — typing to the end of a
-            // list left 1.2 px "hidden" and an arrow pointing at nothing — and
-            // the marker would flicker as you type.
-            const hiddenRight = input.scrollWidth - input.clientWidth - input.scrollLeft;
-            const hidesLeft = input.scrollLeft > 2;
-            const hidesRight = hiddenRight > 2;
-            const changed = wrap.classList.contains('overflow-left') !== hidesLeft
-                || wrap.classList.contains('overflow-right') !== hidesRight;
-            wrap.classList.toggle('overflow-left', hidesLeft);
-            wrap.classList.toggle('overflow-right', hidesRight);
-            if (!changed) break;
-            // The field just narrowed to make room for an arrow. If the reader
-            // was at the end with the caret there — typing — the end has slipped
-            // out of view; keep it in view, as the browser itself does on every
-            // keystroke. Nowhere else is the scroll touched: a reader who moved
-            // AWAY from the end with the left arrow must stay where they went.
-            const caretAtEnd = document.activeElement === input
-                && input.selectionStart === input.value.length
-                && input.selectionEnd === input.value.length;
-            if (hiddenRight <= 2 && caretAtEnd) input.scrollLeft = input.scrollWidth;
-        }
+        // Two pixels of slack: sub-pixel text metrics otherwise report an
+        // overflow on a value that fits exactly — typing to the end of a list
+        // left 1.2 px "hidden" and an arrow pointing at nothing — and the
+        // marker would flicker as you type.
+        const hidesLeft = input.scrollLeft > 2;
+        const hidesRight = input.scrollWidth - input.clientWidth - input.scrollLeft > 2;
+        wrap.classList.toggle('overflow-left', hidesLeft);
+        wrap.classList.toggle('overflow-right', hidesRight);
+        const left = wrap.querySelector('.data-tool-scroll-left');
+        const right = wrap.querySelector('.data-tool-scroll-right');
+        if (left) left.disabled = !hidesLeft;
+        if (right) right.disabled = !hidesRight;
     }
 };
 
