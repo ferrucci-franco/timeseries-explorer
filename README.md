@@ -2,6 +2,14 @@
 
 Frontend web app for visualizing general MATLAB MAT v4-v7.3 arrays, OpenModelica, Dymola, CSV, Parquet, generic and PyPSA netCDF, small pandas pickle result files, Micro-Cap numeric output, and audio recordings.
 
+**▶ [Open the app in your browser](https://ferrucci-franco.github.io/timeseries-explorer/)** — the live version, running now, with
+nothing to install and nothing to clone. Your files are never uploaded: parsing and
+plotting happen in the browser.
+
+Prefer to work offline, with native local-file access and very large files? Download the
+**[Full Desktop edition](https://github.com/ferrucci-franco/timeseries-explorer/releases/latest)**
+for Windows, macOS and Linux.
+
 Created by [Franco Ferrucci](https://github.com/ferrucci-franco). A technical
 publication about the application is [in preparation](PUBLICATION.md).
 Citation metadata for the software is available in [CITATION.cff](CITATION.cff).
@@ -10,7 +18,7 @@ Citation metadata for the software is available in [CITATION.cff](CITATION.cff).
 
 The app is split by runtime capability, not by duplicated source branches:
 
-- **Light Web**: the GitHub Pages/static version. It runs in the browser sandbox and keeps the core viewer features.
+- **Light Web**: the [GitHub Pages](https://ferrucci-franco.github.io/timeseries-explorer/)/static version. It runs in the browser sandbox and keeps the core viewer features.
 - **Web Preview**: the same web app launched with `serve.bat`; useful for checking the GitHub Pages behavior before pushing.
 - **Full Desktop**: the Electron wrapper. It reuses the same app code and is the base for Live Update, native local-file features, and very large files.
 
