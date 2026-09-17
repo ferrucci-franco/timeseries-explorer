@@ -1166,42 +1166,82 @@
    exactly the moment it stays silent. It also only ever marks the right, while a
    field scrolled to its end is hiding text on the LEFT.
 
-   The marker fades the text out beneath itself so the two never collide, and is
-   click-through so it cannot get in the way of editing. */
+   Two layers. The pseudo-elements are a click-through FADE that dims the text
+   under the marker so the two never collide; the marker itself is a small
+   arrow BUTTON on the same side, which scrolls the field towards the hidden
+   text — a list of 2400 coefficients that says "…" at both ends is telling
+   the reader something they cannot act on. */
 .data-tool-input-overflow {
     position: relative;
 }
 
 .data-tool-input-overflow::before,
 .data-tool-input-overflow::after {
-    content: '…';
+    content: '';
     position: absolute;
     top: 1px;
     bottom: 1px;
+    width: 2.1rem;
     display: none;
-    align-items: center;
     pointer-events: none;
-    color: var(--text-secondary);
-    font-size: 0.82rem;
 }
 
 .data-tool-input-overflow.overflow-left::before,
 .data-tool-input-overflow.overflow-right::after {
-    display: flex;
+    display: block;
 }
 
 .data-tool-input-overflow::before {
     left: 1px;
-    padding: 0 0.5rem 0 0.3rem;
     border-radius: 5px 0 0 5px;
-    background: linear-gradient(to left, transparent, var(--bg-primary) 55%);
+    background: linear-gradient(to left, transparent, var(--bg-primary) 60%);
 }
 
 .data-tool-input-overflow::after {
     right: 1px;
-    padding: 0 0.3rem 0 0.5rem;
     border-radius: 0 5px 5px 0;
-    background: linear-gradient(to right, transparent, var(--bg-primary) 55%);
+    background: linear-gradient(to right, transparent, var(--bg-primary) 60%);
+}
+
+.data-tool-scroll {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 1.15rem;
+    height: 1.15rem;
+    padding: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    z-index: 1;
+}
+
+.data-tool-scroll svg {
+    width: 0.7rem;
+    height: 0.7rem;
+}
+
+.data-tool-scroll:hover {
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
+}
+
+.data-tool-scroll-left {
+    left: 0.25rem;
+}
+
+.data-tool-scroll-right {
+    right: 0.25rem;
+}
+
+.data-tool-input-overflow.overflow-left .data-tool-scroll-left,
+.data-tool-input-overflow.overflow-right .data-tool-scroll-right {
+    display: inline-flex;
 }
 
 /* Coefficient lists are pasted from MATLAB or scipy far more often than they are

@@ -241,6 +241,16 @@ proto.initDataTools = function() {
         if (!event.target?.classList?.contains('data-tool-coefficients')) return;
         this._syncDataToolOverflowMarks();
     }, { capture: true });
+    // The arrow buttons on an overflowing field. mousedown is cancelled so the
+    // click does not pull focus (and the caret) out of the field being read;
+    // the scroll it causes then refreshes the markers through the listener above.
+    section?.addEventListener('mousedown', (event) => {
+        if (event.target?.closest?.('.data-tool-scroll')) event.preventDefault();
+    });
+    section?.addEventListener('click', (event) => {
+        const button = event.target?.closest?.('.data-tool-scroll');
+        if (button) this._scrollDataToolInput(button);
+    });
 
     createBtn?.addEventListener('click', () => this.commitDataTool({ plot: false }));
     createPlotBtn?.addEventListener('click', () => this.commitDataTool({ plot: true }));
@@ -282,6 +292,22 @@ proto._syncDataToolOverflowMarks = function() {
         wrap.classList.toggle('overflow-left', hidesLeft);
         wrap.classList.toggle('overflow-right', hidesRight);
     }
+};
+
+/**
+ * Scroll the field an arrow button belongs to, towards the text that side is
+ * hiding: most of a window per click, so a long list is paged through rather
+ * than crawled, with enough overlap to keep one's place.
+ */
+proto._scrollDataToolInput = function(button) {
+    const input = button?.parentElement?.querySelector?.('.data-tool-coefficients');
+    if (!input) return;
+    const direction = button.classList.contains('data-tool-scroll-left') ? -1 : 1;
+    const step = direction * Math.max(40, Math.round(input.clientWidth * 0.7));
+    // Plain assignment, not scrollBy({ behavior: 'smooth' }): Chromium silently
+    // drops a smooth scroll on a text input, and the field stays where it was.
+    input.scrollLeft += step;
+    this._syncDataToolOverflowMarks();
 };
 
 proto._dataToolParameterInputs = function() {
@@ -3291,7 +3317,9 @@ proto._outlierDetectorDescription = function(config) {
     if (config.method === 'bounds') {
         const lower = config.params.lower ?? '-inf';
         const upper = config.params.upper ?? 'inf';
-        return `bounds [${lower}, ${upper}]`;
+        // Not "[lower, upper]": a bracket in a description is read as a unit
+        // by the variable tree.
+        return `bounds ${lower} to ${upper}`;
     }
     if (config.method === 'iqr') {
         return `IQR factor ${this._formatOutlierNumber(config.params.factor, 1)}`;

@@ -792,12 +792,15 @@ proto._filterDescription = function(params = {}) {
         parts.push(`${family} ${response}, order ${d.order}, ${cutoff} ${unit}${extra}`);
         parts.push(direction);
     } else {
-        parts.push(`b [${polynomial(params.b)}]`, `a [${polynomial(params.a)}]`, direction);
+        // No square brackets anywhere in a description: the tree reads the first
+        // [...] of a description as the variable's UNIT (the Modelica convention,
+        // see getVariableInfo), and showed a whole coefficient list as one.
+        parts.push(`b = ${polynomial(params.b)}`, `a = ${polynomial(params.a)}`, direction);
     }
     if (params.mode !== 'zeroPhase') {
         if (params.init === 'zero') parts.push('from rest');
         else if (params.init === 'level') parts.push(`from level ${list(params.initState)}`);
-        else if (params.init === 'past') parts.push(`from past samples [${list(params.initState)}]`);
+        else if (params.init === 'past') parts.push(`from past samples ${list(params.initState)}`);
     }
     if (params.restartGap > 0) parts.push(`restart after gaps > ${params.restartGap} samples`);
     return parts.join('; ');
