@@ -1172,7 +1172,17 @@
    (a flex row: ‹ field ›), which scrolls the field towards the hidden text — a
    list of 2400 coefficients that says "…" at both ends is telling the reader
    something they cannot act on. Beside, not over: a button laid over the text
-   hides the very characters the reader scrolled to see. */
+   hides the very characters the reader scrolled to see.
+
+   NOTHING HERE APPEARS OR DISAPPEARS. Both arrows and both fades are always in
+   the layout; an idle side is a disabled arrow and a transparent fade. Adding or
+   removing a box next to the field — a pseudo-element switching from
+   display: none, an arrow showing up — makes Gecko rebuild the field's frame,
+   and a rebuilt text control starts scrolled to 0: with the markers toggling on
+   every keystroke and scroll, Firefox could not be scrolled past the first
+   screen of a long list at all, by key, by arrow or by End, and every
+   keystroke paid for a reflow of the sidebar. Opacity and `disabled` change
+   style, not structure. */
 .data-tool-input-overflow {
     position: relative;
     display: flex;
@@ -1187,8 +1197,8 @@
     min-width: 0;
 }
 
-/* The fade is shown only while that side's button is, so its inset from the
-   wrapper is a constant: the button's width plus the gap, plus the border. */
+/* The fade's inset from the wrapper is the arrow's width plus the gap, plus the
+   field's border. */
 .data-tool-input-overflow::before,
 .data-tool-input-overflow::after {
     content: '';
@@ -1196,13 +1206,13 @@
     top: 1px;
     bottom: 1px;
     width: 1.6rem;
-    display: none;
+    opacity: 0;
     pointer-events: none;
 }
 
 .data-tool-input-overflow.overflow-left::before,
 .data-tool-input-overflow.overflow-right::after {
-    display: block;
+    opacity: 1;
 }
 
 .data-tool-input-overflow::before {
@@ -1222,7 +1232,7 @@
     width: 1.15rem;
     height: 1.15rem;
     padding: 0;
-    display: none;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     background-color: var(--bg-primary);
@@ -1237,20 +1247,22 @@
     height: 0.7rem;
 }
 
-.data-tool-scroll:hover {
+.data-tool-scroll:hover:not(:disabled) {
     color: var(--text-primary);
     border-color: var(--text-secondary);
+}
+
+/* Nothing to scroll to on that side: the arrow stays, greyed, so the row never
+   changes shape. */
+.data-tool-scroll:disabled {
+    opacity: 0.35;
+    cursor: default;
 }
 
 /* The markup keeps the field first (it is what the wrapper is about); the left
    arrow is moved in front of it here. */
 .data-tool-scroll-left {
     order: -1;
-}
-
-.data-tool-input-overflow.overflow-left .data-tool-scroll-left,
-.data-tool-input-overflow.overflow-right .data-tool-scroll-right {
-    display: inline-flex;
 }
 
 /* Coefficient lists are pasted from MATLAB or scipy far more often than they are
