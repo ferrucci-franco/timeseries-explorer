@@ -25,6 +25,10 @@ import {
 
 const FEEDBACK_MAX_PACKAGE_BYTES = 25 * 1024 * 1024;
 
+// Between two screenshots saved one after the other. Fired in the same tick a
+// browser keeps the first download and silently drops the rest.
+const FEEDBACK_DOWNLOAD_GAP_MS = 150;
+
 const HELP_TOPICS = [
     { section: '1', icon: 'compass', color: '#3b82f6' },
     { section: '2', icon: 'folder', color: '#f59e0b' },
@@ -1990,9 +1994,29 @@ proto.showFeedbackForm = function() {
         }
         return true;
     };
-    const downloadPackage = async () => {
-        if (!ensureValid()) return null;
-        const feedback = collectFeedback();
+    const saveBlob = (blob, filename) => {
+        if (typeof this._downloadBlob === 'function') this._downloadBlob(blob, filename);
+        else this._downloadFeedbackBlob(blob, filename);
+    };
+    // Screenshots go to Downloads as themselves, so they can be dropped
+    // straight into the issue and show up inline. A zip cannot: GitHub renders
+    // it as a link to something no reader will open, and the person reporting
+    // the bug had to unpack their own screenshots to attach them anyway.
+    const downloadScreenshots = async (feedback) => {
+        const names = [];
+        for (let index = 0; index < attachedFiles.length; index++) {
+            const { file } = attachedFiles[index];
+            saveBlob(file, file.name);
+            names.push(file.name);
+            // Browsers drop programmatic downloads fired in the same tick; a
+            // short gap between them is what makes the second one arrive.
+            if (index < attachedFiles.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, FEEDBACK_DOWNLOAD_GAP_MS));
+            }
+        }
+        return { feedback, filename: '', screenshotNames: names };
+    };
+    const downloadPackage = async (feedback) => {
         const zipEntries = {
             'feedback.json': strToU8(`${JSON.stringify(feedback, null, 2)}\n`),
             'feedback.txt': strToU8(this._formatFeedbackIssueBody(feedback, true)),
@@ -2005,16 +2029,19 @@ proto.showFeedbackForm = function() {
         }
         const zip = zipSync(zipEntries, { level: 6 });
         const filename = this._feedbackPackageFileName(feedback);
-        if (typeof this._downloadBlob === 'function') {
-            this._downloadBlob(new Blob([zip], { type: 'application/zip' }), filename);
-        } else {
-            this._downloadFeedbackBlob(new Blob([zip], { type: 'application/zip' }), filename);
-        }
-        return { feedback, filename };
+        saveBlob(new Blob([zip], { type: 'application/zip' }), filename);
+        return { feedback, filename, screenshotNames: [] };
     };
-    const openIssue = (feedback, filename) => {
+    const downloadAttachments = async () => {
+        if (!ensureValid()) return null;
+        const feedback = collectFeedback();
+        return this._feedbackDeliveryMode(attachedFiles) === 'images'
+            ? await downloadScreenshots(feedback)
+            : await downloadPackage(feedback);
+    };
+    const openIssue = (feedback, filename, screenshotNames = []) => {
         const subject = `[Time Series Explorer] ${feedback.summary || i18n.t('extraFeedback')}`;
-        const body = this._formatFeedbackIssueBody(feedback, false, filename);
+        const body = this._formatFeedbackIssueBody(feedback, false, filename, screenshotNames);
         const params = new URLSearchParams({
             title: subject,
             body,
@@ -2022,16 +2049,16 @@ proto.showFeedbackForm = function() {
         });
         window.open(`${FEEDBACK_ISSUES_URL}?${params.toString()}`, '_blank', 'noopener');
     };
-    const openEmail = (feedback, filename) => {
+    const openEmail = (feedback, filename, screenshotNames = []) => {
         const subject = `[Time Series Explorer feedback] ${feedback.summary || i18n.t('extraFeedback')}`;
-        const body = this._formatFeedbackEmailBody(feedback, filename);
+        const body = this._formatFeedbackEmailBody(feedback, filename, screenshotNames);
         const params = new URLSearchParams({ subject, body });
         window.open(`mailto:${encodeURIComponent(FEEDBACK_EMAIL)}?${params.toString()}`, '_blank', 'noopener');
     };
     const prepareForExternalSend = async () => {
         if (!ensureValid()) return null;
-        if (!attachedFiles.length) return { feedback: collectFeedback(), filename: '' };
-        return await downloadPackage();
+        if (!attachedFiles.length) return { feedback: collectFeedback(), filename: '', screenshotNames: [] };
+        return await downloadAttachments();
     };
 
     fileButton.addEventListener('click', () => fileInput.click());
@@ -2054,7 +2081,7 @@ proto.showFeedbackForm = function() {
     });
     emailButton.addEventListener('click', () => {
         prepareForExternalSend().then(result => {
-            if (result) openEmail(result.feedback, result.filename);
+            if (result) openEmail(result.feedback, result.filename, result.screenshotNames);
         }).catch(err => {
             console.error('Feedback email failed:', err);
             Modal.alert(i18n.t('feedbackPackageFailedTitle'), err?.message || String(err), { icon: 'ZIP' });
@@ -2064,7 +2091,7 @@ proto.showFeedbackForm = function() {
         event.preventDefault();
         prepareForExternalSend()
             .then(result => {
-                if (result) openIssue(result.feedback, result.filename);
+                if (result) openIssue(result.feedback, result.filename, result.screenshotNames);
             })
             .catch(err => {
                 console.error('Feedback submit failed:', err);
@@ -2095,7 +2122,10 @@ proto._createFeedbackField = function(labelKey, tagName, attributes = {}) {
     return { wrap, control };
 };
 
-proto._formatFeedbackIssueBody = function(feedback, includeAttachmentList = false, packageFilename = '') {
+// What the reader of the issue is told to do with whatever landed in
+// Downloads. Screenshots are named one by one: dropping them into the issue is
+// what makes them show up in the report instead of as a link to an archive.
+proto._formatFeedbackIssueBody = function(feedback, includeAttachmentList = false, packageFilename = '', screenshotNames = []) {
     const lines = [
         'Time Series Explorer feedback',
         '',
@@ -2118,6 +2148,9 @@ proto._formatFeedbackIssueBody = function(feedback, includeAttachmentList = fals
     ];
     if (packageFilename) {
         lines.push('', `Attach the downloaded package to the GitHub issue if it is safe to share: ${packageFilename}`);
+    } else if (screenshotNames.length) {
+        lines.push('', 'Drag these downloaded screenshots into the GitHub issue if they are safe to share:',
+            ...screenshotNames);
     }
     if (includeAttachmentList) {
         lines.push('', 'Attachments:', ...(feedback.attachmentNames.length ? feedback.attachmentNames : ['none']));
@@ -2125,7 +2158,7 @@ proto._formatFeedbackIssueBody = function(feedback, includeAttachmentList = fals
     return `${lines.join('\n')}\n`;
 };
 
-proto._formatFeedbackEmailBody = function(feedback, packageFilename = '') {
+proto._formatFeedbackEmailBody = function(feedback, packageFilename = '', screenshotNames = []) {
     const lines = [
         this._formatFeedbackIssueBody(feedback, false, ''),
         'No GitHub account:',
@@ -2133,8 +2166,26 @@ proto._formatFeedbackEmailBody = function(feedback, packageFilename = '') {
     ];
     if (packageFilename) {
         lines.push('', `Please attach the downloaded zip file to this email: ${packageFilename}`);
+    } else if (screenshotNames.length) {
+        lines.push('', 'Please attach these downloaded screenshots to this email:', ...screenshotNames);
     }
     return `${lines.join('\n')}\n`;
+};
+
+/**
+ * Which of the two ways the attachments reach Downloads.
+ *
+ * A report with nothing attached needs neither. A report whose attachments are
+ * ALL images gets them saved as themselves: GitHub renders a dropped PNG
+ * inline, where a zip is a link nobody opens, and the reporter had to unpack
+ * their own screenshots to attach them anyway. One non-image — a .mat, a saved
+ * view, a log — and the zip earns its place again: it keeps the whole set
+ * together with feedback.json and feedback.txt beside it.
+ */
+proto._feedbackDeliveryMode = function(attachments) {
+    const files = (attachments || []).map(attachment => attachment?.file).filter(Boolean);
+    if (!files.length) return 'none';
+    return files.every(file => String(file.type || '').startsWith('image/')) ? 'images' : 'package';
 };
 
 proto._formatBytes = function(bytes) {
