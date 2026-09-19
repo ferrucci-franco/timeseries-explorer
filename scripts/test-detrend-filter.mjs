@@ -13,6 +13,8 @@ import {
     filterInitStateLength,
     filterInitialState,
     inspectFilter,
+    differenceEquationLines,
+    normalizeFilterAdvance,
     normalizeFilterCoefficients,
     parseCoefficients,
     schurCohnStable,
@@ -456,6 +458,115 @@ const N = NaN;
     assert.equal(r.segments, 2, 'two runs, filtered independently');
     assert.ok(Number.isNaN(r.values[4]));
     assert.ok(r.values.filter(Number.isFinite).length === 8);
+}
+
+// ── The advance: a filter that looks at the future ────────────────────────
+
+{
+    // A three-tap average with D = 1 is the CENTRED average: the response to an
+    // impulse at row 3 sits on rows 2, 3, 4 rather than 3, 4, 5, which is the
+    // whole point — nothing moves in time.
+    const impulse = [0, 0, 0, 1, 0, 0, 0, 0];
+    const third = [1 / 3, 1 / 3, 1 / 3];
+    const centred = applyFilter(impulse, { b: third, a: [1], advance: 1 });
+    close(centred.values, [0, 0, 1 / 3, 1 / 3, 1 / 3, 0, 0, N], 'centred average');
+    assert.equal(centred.advanceDropped, 1, 'the last output needed a sample past the end');
+    assert.equal(centred.filteredCount, 7, 'and is not counted as filtered data');
+
+    // The same filter without the advance is the same numbers, one row later.
+    const causal = applyFilter(impulse, { b: third, a: [1] });
+    close(causal.values.slice(1, 7), centred.values.slice(0, 6), 'advance is the causal run, read later');
+    assert.equal(causal.advanceDropped, 0);
+}
+
+{
+    // The equation the panel prints, checked term by term against the output.
+    // With D at or above the filter's order every term comes from real data, so
+    // the closed form holds without any appeal to initial conditions.
+    const x = [5, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+    const r = applyFilter(x, { b: [1, -0.5], a: [1], advance: 2 });
+    const expected = x.map((_, n) => (n + 2 < x.length ? x[n + 2] - 0.5 * x[n + 1] : N));
+    close(r.values, expected, 'y[n] = x[n+2] − 0.5·x[n+1]');
+
+    // And with feedback, where there is no closed form, the definition still
+    // holds: the advanced run IS the causal run read D samples later.
+    const iir = { b: [1, -0.5], a: [1, -0.25] };
+    const causal = applyFilter(x, iir).values;
+    const advanced = applyFilter(x, { ...iir, advance: 2 }).values;
+    close(advanced.slice(0, 8), causal.slice(2, 10), 'advance 2 == the causal run, two samples later');
+}
+
+{
+    // A run slides within itself. Sliding across the hole would move a value by
+    // two POSITIONS that are not two samples of anything.
+    const values = [1, 2, 3, 4, N, 9, 8, 7, 6];
+    const r = applyFilter(values, { b: [1], a: [1], advance: 2, restartGap: 99 });
+    close(r.values, [3, 4, N, N, N, 7, 6, N, N], 'each run loses its own last two');
+    assert.equal(r.advanceDropped, 4);
+}
+
+{
+    // Zero phase reads the whole signal in both directions already; sliding its
+    // result would only put back a delay that is not there.
+    const x = [1, 2, 3, 4, 5, 6, 7, 8];
+    const plain = applyFilter(x, { b: [0.5], a: [1, -0.5], mode: 'zeroPhase' });
+    const asked = applyFilter(x, { b: [0.5], a: [1, -0.5], mode: 'zeroPhase', advance: 3 });
+    close(asked.values, plain.values, 'zero phase ignores the advance');
+    assert.equal(asked.advanceDropped, 0);
+
+    // An advance longer than the data leaves nothing behind, and says so rather
+    // than throwing.
+    const empty = applyFilter([1, 2, 3], { b: [1], a: [1], advance: 10 });
+    assert.ok(Array.from(empty.values).every(Number.isNaN), 'no output survives');
+    assert.equal(empty.advanceDropped, 3);
+}
+
+{
+    // Anything that is not a whole number of samples ahead is not an advance.
+    assert.equal(normalizeFilterAdvance(3), 3);
+    assert.equal(normalizeFilterAdvance('4'), 4);
+    assert.equal(normalizeFilterAdvance(2.7), 2, 'truncated, never rounded up past the data');
+    for (const value of [0, -1, -3.5, NaN, Infinity, null, undefined, 'x']) {
+        assert.equal(normalizeFilterAdvance(value), 0, `${String(value)} is no advance`);
+    }
+}
+
+// ── The difference equation, as the panel prints it ───────────────────────
+
+{
+    const one = (b, a, advance = 0) => differenceEquationLines(b, a, advance)[0];
+
+    assert.equal(one([0.25, 0.5, 0.25], [1], 1),
+        'y[n] = 0.25\u00b7x[n+1] + 0.5\u00b7x[n] + 0.25\u00b7x[n\u22121]',
+        'the advance is what makes x[n+1] appear');
+    assert.equal(one([0.25, 0.5, 0.25], [1]),
+        'y[n] = 0.25\u00b7x[n] + 0.5\u00b7x[n\u22121] + 0.25\u00b7x[n\u22122]',
+        'and the same coefficients say nothing about it on their own');
+
+    // Zeros are not printed: every term carries its own index, so a 2400-tap
+    // echo is two terms rather than a screenful.
+    assert.equal(one([1, 0, 0, 0.5], [1]), 'y[n] = 1\u00b7x[n] + 0.5\u00b7x[n\u22123]');
+
+    // The sign belongs to the operator, never in front of the number.
+    assert.equal(one([1, -0.5], [1]), 'y[n] = 1\u00b7x[n] \u2212 0.5\u00b7x[n\u22121]');
+    assert.equal(one([-1, 0.5], [1]), 'y[n] = \u22121\u00b7x[n] + 0.5\u00b7x[n\u22121]');
+
+    // Feedback crosses the equals sign, so its signs come out inverted: the
+    // filter that adds back half of its own last output is a = 1, -0.5.
+    const recursive = differenceEquationLines([1], [1, -0.5]);
+    assert.deepEqual(recursive, ['y[n] = 1\u00b7x[n]', '+ 0.5\u00b7y[n\u22121]']);
+
+    // a\u2080 is shown, not divided out, so every number on the line is one the
+    // reader can find in a box.
+    assert.equal(one([1], [2, -0.5]), '2\u00b7y[n] = 1\u00b7x[n]');
+
+    // A long sum keeps BOTH ends: the last term is the one that says how far the
+    // filter reaches, and with an advance the two ends are what is being read.
+    assert.equal(one([1, 2, 3, 4, 5, 6], [1], 5),
+        'y[n] = 1\u00b7x[n+5] + 2\u00b7x[n+4] + \u2026 + 6\u00b7x[n]');
+
+    assert.deepEqual(differenceEquationLines([0], [1]), ['y[n] = 0'], 'a filter that outputs nothing says so');
+    assert.deepEqual(differenceEquationLines([], []), ['y[n] = 1\u00b7x[n]'], 'empty lists are the identity');
 }
 
 console.log('detrend + digital filter kernel tests passed');
