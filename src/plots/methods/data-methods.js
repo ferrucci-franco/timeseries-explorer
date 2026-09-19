@@ -1391,13 +1391,30 @@ proto._buildSparseVisualData = function(timeData, values) {
     return { x: thinnedX, y: thinnedY };
 };
 
-proto._buildTimeseriesVisualData = function(timeData, values, visibleRange = null, isStep = false) {
+// Stairs are not a special case here, and used to be: a trace drawn with
+// shape 'hv' skipped this function entirely and handed Plotly every sample it
+// had, on the first draw and again on every zoom. Plotly draws 'hv' by
+// expanding each point into two segments, so the same two million samples took
+// about three times what the linear trace beside it took — which is exactly
+// how it read to the user.
+//
+// A staircase says something a straight line does not only when one sample
+// interval is wide enough on screen to show the horizontal run and the
+// vertical jump apart. That needs a few pixels per sample, and by then the
+// visible window holds far fewer samples than the budget, so it is copied out
+// whole: the steps are exact, to the sample. Above it, a drawn segment is
+// under a pixel wide and what reaches the screen is the min/max envelope of
+// each pixel column — the same reduction, at no worse fidelity, than the
+// linear traces beside it have always been given. The lazy DuckDB path has
+// decimated stepped traces this way all along; this was the eager path's own
+// exception.
+proto._buildTimeseriesVisualData = function(timeData, values, visibleRange = null) {
     const n = Math.min(timeData?.length || 0, values?.length || 0);
     if (n <= 0) return { x: timeData || [], y: values || [] };
     const target = this.timeseriesVisualMaxPoints;
     if (target == null) return { x: timeData, y: values };
-    if (isStep || !visibleRange || visibleRange[0] == null || visibleRange[1] == null) {
-        return isStep ? { x: timeData, y: values } : this._downsampleTimeseries(timeData, values, target);
+    if (!visibleRange || visibleRange[0] == null || visibleRange[1] == null) {
+        return this._downsampleTimeseries(timeData, values, target);
     }
 
     let [minX, maxX] = visibleRange.map(value => {
@@ -1870,7 +1887,6 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     // exists to show. It gets its own reduction, over the present samples only.
     const fullVisualCacheable = !visibleRange
         && !t.markersOnly
-        && !isStep
         && !plot?.timeseriesStacked;
     const cachedFullVisual = fullVisualCacheable
         && t._fullVisualCache?.timeData === timeData
@@ -1880,7 +1896,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         : null;
     const baseVisual = t.markersOnly
         ? this._buildSparseVisualData(timeData, values)
-        : (cachedFullVisual || this._buildTimeseriesVisualData(timeData, values, visibleRange, isStep));
+        : (cachedFullVisual || this._buildTimeseriesVisualData(timeData, values, visibleRange));
     if (fullVisualCacheable && !cachedFullVisual) {
         // Mode changes preserve trace state. Reuse the already computed
         // full-series screen overview when entering FFT instead of rescanning a
@@ -1907,7 +1923,10 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     // outside JavaScript, and forcing the same redraw through SVG took it from
     // 3.5 s to 0.2 s. With the visual limit turned off (or set above the
     // threshold) the full series really is drawn, and GL is chosen again.
-    // Step traces are excluded either way: 'hv' is an SVG line shape.
+    // Step traces stay on the SVG path. scattergl does accept 'hv' — it draws
+    // it by doubling the points — but every downsampling limit the menu offers
+    // (2k…10k) keeps a trace under the GL threshold anyway, so this decides
+    // only the "no downsampling" case, which is not this function's problem.
     const drawnPoints = Math.max(visual.x?.length || 0, visual.y?.length || 0);
     const useGL = !isStep && drawnPoints >= PlotManager.GL_POINT_THRESHOLD;
     const plotX = this._plotlyTimeArray(t.fileId, visual.x, timeVar);
