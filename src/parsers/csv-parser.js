@@ -960,11 +960,16 @@ export default class CsvParser {
     }
 
     _normalizeProfileHeaders(headers, rawHeaders, profile = null) {
-        // An explicit 'none' opts out of unit extraction; undefined keeps the
+        // Only 'inline' asks for a unit to be cut out of the title. 'none' says
+        // there are no units, and 'row' says they live in a row of their own —
+        // in both cases a "(V)" or "[kW]" in the header is part of the column's
+        // name, and taking it away leaves the reader with two columns called
+        // "Voltage" and no way to tell them apart. 'row' used to fall through
+        // to the inline parser and lose exactly that. undefined keeps the
         // legacy behavior (auto profiles and pre-unitsMode saved profiles).
         const fallback = profile?.unitsMode === 'inline'
             ? this._makeUniqueInlineHeaders(rawHeaders, profile.inlineUnitFormat || 'auto')
-            : profile?.unitsMode === 'none'
+            : (profile?.unitsMode === 'none' || profile?.unitsMode === 'row')
                 ? this._makeUniquePlainHeaders(rawHeaders)
                 : this._makeUniqueHeaders(rawHeaders);
         if (!Array.isArray(headers) || !headers.length) return fallback;
