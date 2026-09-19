@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
 import {
@@ -260,7 +261,15 @@ export function installPlotCorrelationMethods(TargetClass) {
         const options = document.createElement('aside');
         options.className = 'fft-options correlation-options';
         options.hidden = !state.optionsVisible;
-        workspace.append(plotArea, options);
+        // The rail takes no width of its own, so the border between the plot
+        // and the options keeps the one it has; the pill hangs off it.
+        workspace.append(plotArea, createEdgeToggle({
+            side: 'right',
+            collapsed: !state.optionsVisible,
+            hideKey: 'edgeHideOptions',
+            showKey: 'edgeShowOptions',
+            onToggle: () => this._toggleCorrelationOptions(panelId),
+        }), options);
         container.append(topbar, workspace);
         panelEl.appendChild(container);
 
@@ -891,6 +900,7 @@ export function installPlotCorrelationMethods(TargetClass) {
         if (!plot?.correlationContainer) return;
         const state = this._ensureCorrelationState(plot);
         state.optionsVisible = !state.optionsVisible;
+        syncEdgeToggle(plot.correlationContainer, !state.optionsVisible);
         const options = plot.correlationContainer.querySelector('.correlation-options');
         if (options) options.hidden = !state.optionsVisible;
         const btn = plot.correlationContainer.querySelector('.fft-options-btn');

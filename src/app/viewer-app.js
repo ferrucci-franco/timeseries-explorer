@@ -92,6 +92,7 @@ class OpenModelicaViewer {
         });
         this._applyReloadModeUI();
         this._applyCapabilitiesToUi();
+        this._syncSidebarEdgeToggle?.();
         this._updateLiveUpdateTopBar?.();
         if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();
         if (typeof this._syncHoverCornerPicker === 'function') this._syncHoverCornerPicker();
