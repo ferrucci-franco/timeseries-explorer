@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import { getCalendarDateTickFormat } from '../plotly-locale.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
+import { hoverNumberFormat } from '../../utils/hover-precision.js';
 
 const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
 
@@ -1831,7 +1832,10 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         ? `<b>Time</b> = %{x|${calendarHoverFormat}}<br>`
         : (durationAxis
             ? `<b>Elapsed</b> = %{customdata}<br>`
-            : `<b>Time [${hoverTimeUnit}]</b> = %{x:.4g}<br>`);
+            // Digits from the axis itself, not a constant: four of them turn
+            // every sample of a 100 ns record into the same "0.1235", and
+            // sample 12345 of an index axis into "1.234e+4".
+            : `<b>Time [${hoverTimeUnit}]</b> = %{x:${hoverNumberFormat(timeData)}}<br>`);
 
     if (variable.kind === 'parameter') {
         const tStart = timeData.length ? timeData[0] : 0;
