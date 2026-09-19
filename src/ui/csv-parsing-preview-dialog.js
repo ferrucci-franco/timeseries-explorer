@@ -1475,9 +1475,12 @@ export default class CsvParsingPreviewDialog {
 
         let headers = !isStartSample && Array.isArray(previousProfile?.headers) && previousProfile.headers.length === rawHeaders.length
             ? cloneProfile(previousProfile.headers)
+            // Units in a row of their own leave the title alone: a "(V)" there
+            // is part of the column's name, not a unit to cut out. Only
+            // 'inline' asks for that. (Anything else is a legacy profile.)
             : (this.state.unitsMode === 'inline'
                 ? makeUniqueInlineHeaders(rawHeaders, this.state.inlineUnitFormat)
-                : this.state.unitsMode === 'none'
+                : (this.state.unitsMode === 'none' || this.state.unitsMode === 'row')
                     ? this.parser._makeUniquePlainHeaders(rawHeaders)
                     : this.parser._makeUniqueHeaders(rawHeaders));
         if (unitRowIndex !== null) {

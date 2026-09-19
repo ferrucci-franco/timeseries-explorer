@@ -90,6 +90,7 @@
     "test:export-dialog": "node scripts/test-export-dialog.mjs",
     "test:csv-export": "node scripts/test-csv-export-time-columns.mjs",
     "test:csv-elapsed": "node scripts/test-csv-elapsed-format.mjs",
+    "test:csv-units-mode": "node scripts/test-csv-units-mode.mjs",
     "test:cursor-y2": "node scripts/test-cursor-y2.mjs",
     "test:autoscale-axis": "node scripts/test-autoscale-axis.mjs",
     "test:i18n-consistency": "node scripts/test-i18n-consistency.mjs",
