@@ -1142,3 +1142,113 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
 }
+
+/* ============================================
+   Edge toggle — collapse a panel from its own border
+   ============================================ */
+
+/* A flex item of zero width, dropped where two panels meet. It carries the
+   button without taking any room, so the divider it straddles keeps exactly
+   the width it had: the pill floats over the line rather than widening it. */
+.edge-toggle-rail {
+    position: relative;
+    flex: 0 0 0;
+    width: 0;
+    align-self: stretch;
+    z-index: 8;
+}
+
+/* The sidebar's resize proxy is a fixed element on this same edge (z-index
+   1200). The pill has to sit above it to be clickable at all. */
+.edge-toggle-rail-left {
+    z-index: 1250;
+}
+
+.edge-toggle {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    /* Centred on the line. Collapsed, it moves fully to the side that still
+       has room, so it is never half outside the window or clipped by the
+       panel it belongs to. */
+    transform: translate(-50%, -50%);
+    width: 14px;
+    height: 46px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    /* The sidebar animates its width; the pill rides along instead of jumping
+       to the new edge while the panel is still moving. */
+    transition: transform 0.3s ease, color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+
+.edge-toggle-rail-left .edge-toggle.is-collapsed {
+    transform: translate(0, -50%);
+}
+
+.edge-toggle-rail-right .edge-toggle.is-collapsed {
+    transform: translate(-100%, -50%);
+}
+
+.edge-toggle:hover,
+.edge-toggle:focus-visible {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 10%, var(--bg-primary));
+}
+
+.edge-toggle:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+.edge-toggle-chevron {
+    width: 8px;
+    height: 16px;
+    transform: rotate(0deg);
+}
+
+/* One drawing, four directions: the chevron points the way the panel will go. */
+.edge-toggle-rail-right .edge-toggle-chevron { transform: rotate(180deg); }
+.edge-toggle-rail-left .is-collapsed .edge-toggle-chevron { transform: rotate(180deg); }
+.edge-toggle-rail-right .is-collapsed .edge-toggle-chevron { transform: rotate(0deg); }
+
+/* Narrow screens stack an analysis workspace, so the border the rail sits on
+   turns horizontal and the pill turns with it. */
+@media (max-width: 760px) {
+    .fft-workspace > .edge-toggle-rail,
+    .heatmap-workspace > .edge-toggle-rail {
+        width: auto;
+        align-self: auto;
+    }
+
+    .fft-workspace > .edge-toggle-rail .edge-toggle,
+    .heatmap-workspace > .edge-toggle-rail .edge-toggle {
+        top: 0;
+        left: 50%;
+        width: 46px;
+        height: 14px;
+        transform: translate(-50%, -50%);
+    }
+
+    .fft-workspace > .edge-toggle-rail .edge-toggle.is-collapsed,
+    .heatmap-workspace > .edge-toggle-rail .edge-toggle.is-collapsed {
+        transform: translate(-50%, -100%);
+    }
+
+    .fft-workspace > .edge-toggle-rail .edge-toggle-chevron,
+    .heatmap-workspace > .edge-toggle-rail .edge-toggle-chevron {
+        transform: rotate(-90deg);
+    }
+
+    .fft-workspace > .edge-toggle-rail .is-collapsed .edge-toggle-chevron,
+    .heatmap-workspace > .edge-toggle-rail .is-collapsed .edge-toggle-chevron {
+        transform: rotate(90deg);
+    }
+}

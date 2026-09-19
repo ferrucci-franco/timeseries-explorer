@@ -146,6 +146,7 @@
     "test:feedback-screenshots": "node scripts/test-feedback-screenshots.mjs",
     "test:help-layout": "node scripts/test-help-layout.mjs",
     "test:settings-layout": "node scripts/test-settings-layout.mjs",
+    "test:edge-toggle": "node scripts/test-edge-toggle.mjs",
     "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs",
     "test:phase2d": "node scripts/test-phase2d.mjs",
     "test:release": "node scripts/run-release-tests.mjs",

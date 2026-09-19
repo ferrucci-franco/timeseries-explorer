@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import {
     buildTemporalProfile,
@@ -394,7 +395,15 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
     const options = document.createElement('aside');
     options.className = 'hist-options fft-options temporal-profile-options';
     options.hidden = !state.optionsVisible;
-    workspace.append(plotArea, options);
+    // The rail takes no width of its own, so the border between the plot
+    // and the options keeps the one it has; the pill hangs off it.
+    workspace.append(plotArea, createEdgeToggle({
+        side: 'right',
+        collapsed: !state.optionsVisible,
+        hideKey: 'edgeHideOptions',
+        showKey: 'edgeShowOptions',
+        onToggle: () => this._toggleTemporalProfileOptions(panelId),
+    }), options);
     container.append(topbar, workspace);
     panelEl.appendChild(container);
 
@@ -1195,6 +1204,7 @@ proto._toggleTemporalProfileOptions = function(panelId) {
     if (!plot?.temporalProfileContainer) return;
     const state = this._ensureTemporalProfileState(plot);
     state.optionsVisible = !state.optionsVisible;
+    syncEdgeToggle(plot.temporalProfileContainer, !state.optionsVisible);
     const options = plot.temporalProfileContainer.querySelector('.hist-options');
     if (options) options.hidden = !state.optionsVisible;
     const button = plot.temporalProfileContainer.querySelector('.hist-options-btn');

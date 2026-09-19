@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import {
     SLIDER_WHEEL_CHANGE_DELAY_MS,
     SLIDER_WHEEL_DWELL_MS,
@@ -91,10 +92,7 @@ proto.initEventListeners = function() {
         this.showSupportedFormats();
     });
 
-    document.getElementById('toggle-sidebar').addEventListener('click', () => {
-        document.getElementById('sidebar').classList.toggle('hidden');
-        setTimeout(() => this.plotManager.resizeAll(), 320);
-    });
+    document.getElementById('toggle-sidebar').addEventListener('click', () => this.toggleSidebar());
 
     document.getElementById('toggle-descriptions').addEventListener('click', (e) => {
         this.showDescriptions = !this.showDescriptions;
@@ -3040,9 +3038,35 @@ proto.initDragAndDrop = function() {
 
 // ─── Sidebar resize ────────────────────────────────────────────
 
+// One place to put the sidebar away, so the top-bar button and the control on
+// the sidebar's own edge can never disagree about which way it went.
+proto.toggleSidebar = function() {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    sidebar.classList.toggle('hidden');
+    this._syncSidebarEdgeToggle();
+    // After the width transition, not during it: Plotly measures the container.
+    setTimeout(() => this.plotManager.resizeAll(), 320);
+};
+
+proto._syncSidebarEdgeToggle = function() {
+    if (!this._sidebarEdgeToggle) return;
+    syncEdgeToggle(this._sidebarEdgeToggle, document.getElementById('sidebar')?.classList.contains('hidden'));
+};
+
 proto.initSidebarResize = function() {
     const sidebar = document.getElementById('sidebar');
     const handle  = document.querySelector('.sidebar-resize-handle');
+    // A zero-width rail between the sidebar and the content area: the pill
+    // hangs off it, centred on the border, without moving either panel.
+    this._sidebarEdgeToggle = createEdgeToggle({
+        side: 'left',
+        collapsed: sidebar.classList.contains('hidden'),
+        hideKey: 'edgeHideSidebar',
+        showKey: 'edgeShowSidebar',
+        onToggle: () => this.toggleSidebar(),
+    });
+    sidebar.insertAdjacentElement('afterend', this._sidebarEdgeToggle);
     const proxy = document.createElement('div');
     proxy.className = 'sidebar-resize-proxy';
     document.body.appendChild(proxy);

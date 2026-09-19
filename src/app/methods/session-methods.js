@@ -742,6 +742,9 @@ proto._syncSessionSettingsUI = function() {
         sidebar.classList.toggle('hidden', !!this._sessionSidebarHidden);
         if (this._sessionSidebarWidth) sidebar.style.width = this._sessionSidebarWidth;
     }
+    // A restored view sets the class directly, so the control on the sidebar's
+    // edge has to be told where the sidebar ended up.
+    this._syncSidebarEdgeToggle?.();
     this._applyReloadModeUI?.();
     this._syncLegendCornerPicker?.();
     this._syncHoverCornerPicker?.();

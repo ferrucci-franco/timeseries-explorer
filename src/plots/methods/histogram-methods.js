@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import {
     HISTOGRAM_AUTO_MAX_BINS,
@@ -221,7 +222,15 @@ proto._createHistogramChart = function(panelId, panelEl) {
     const options = document.createElement('aside');
     options.className = 'hist-options fft-options';
     options.hidden = !state.optionsVisible;
-    workspace.append(plotArea, options);
+    // The rail takes no width of its own, so the border between the plot
+    // and the options keeps the one it has; the pill hangs off it.
+    workspace.append(plotArea, createEdgeToggle({
+        side: 'right',
+        collapsed: !state.optionsVisible,
+        hideKey: 'edgeHideOptions',
+        showKey: 'edgeShowOptions',
+        onToggle: () => this._toggleHistogramOptions(panelId),
+    }), options);
     container.append(topbar, workspace);
     panelEl.appendChild(container);
 
@@ -879,6 +888,7 @@ proto._toggleHistogramOptions = function(panelId) {
     if (!plot?.histogramContainer) return;
     const state = this._ensureHistogramState(plot);
     state.optionsVisible = !state.optionsVisible;
+    syncEdgeToggle(plot.histogramContainer, !state.optionsVisible);
     const options = plot.histogramContainer.querySelector('.hist-options');
     if (options) options.hidden = !state.optionsVisible;
     const optionsBtn = plot.histogramContainer.querySelector('.hist-options-btn');

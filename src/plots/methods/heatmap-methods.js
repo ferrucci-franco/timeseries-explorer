@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import {
     buildCalendarHeatmap,
     calendarHeatmapCellValue,
@@ -506,7 +507,15 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
     const options = document.createElement('aside');
     options.className = 'heatmap-options';
     options.hidden = !state.optionsVisible;
-    workspace.append(plotArea, options);
+    // The rail takes no width of its own, so the border between the plot
+    // and the options keeps the one it has; the pill hangs off it.
+    workspace.append(plotArea, createEdgeToggle({
+        side: 'right',
+        collapsed: !state.optionsVisible,
+        hideKey: 'edgeHideOptions',
+        showKey: 'edgeShowOptions',
+        onToggle: () => this._toggleCalendarHeatmapOptions(panelId),
+    }), options);
     container.append(topbar, workspace);
     panelEl.appendChild(container);
 
@@ -1570,6 +1579,7 @@ proto._toggleCalendarHeatmapOptions = function(panelId) {
     if (!plot?.heatmapContainer) return;
     const state = this._ensureCalendarHeatmapState(plot);
     state.optionsVisible = !state.optionsVisible;
+    syncEdgeToggle(plot.heatmapContainer, !state.optionsVisible);
     const options = plot.heatmapContainer.querySelector('.heatmap-options');
     if (options) options.hidden = !state.optionsVisible;
     const button = plot.heatmapContainer.querySelector('.heatmap-options-btn');

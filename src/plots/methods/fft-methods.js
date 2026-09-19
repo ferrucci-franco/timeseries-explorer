@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import {
     applyAmplitudeScale,
     computeAmplitudeSpectrum,
@@ -232,7 +233,15 @@ proto._createFftChart = function(panelId, panelEl) {
     const options = document.createElement('aside');
     options.className = 'fft-options';
     options.hidden = !state.optionsVisible;
-    workspace.append(plotArea, options);
+    // The rail takes no width of its own, so the border between the plot
+    // and the options keeps the one it has; the pill hangs off it.
+    workspace.append(plotArea, createEdgeToggle({
+        side: 'right',
+        collapsed: !state.optionsVisible,
+        hideKey: 'edgeHideOptions',
+        showKey: 'edgeShowOptions',
+        onToggle: () => this._toggleFftOptions(panelId),
+    }), options);
     container.append(topbar, workspace);
     panelEl.appendChild(container);
 
@@ -1667,6 +1676,7 @@ proto._toggleFftOptions = function(panelId) {
     if (!plot?.fftContainer) return;
     const state = this._ensureFftState(plot);
     state.optionsVisible = !state.optionsVisible;
+    syncEdgeToggle(plot.fftContainer, !state.optionsVisible);
     const options = plot.fftContainer.querySelector('.fft-options');
     if (options) options.hidden = !state.optionsVisible;
     const optionsBtn = plot.fftContainer.querySelector('.fft-options-btn');

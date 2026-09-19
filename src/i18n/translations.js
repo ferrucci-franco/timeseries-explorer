@@ -887,6 +887,10 @@ const translations = {
 
             // Tooltips
             toggleSidebar: 'Toggle sidebar',
+            edgeHideSidebar: 'Hide the sidebar',
+            edgeShowSidebar: 'Show the sidebar',
+            edgeHideOptions: 'Hide the options panel',
+            edgeShowOptions: 'Show the options panel',
             autoZoom: 'Auto-fit all plots',
             clearPlots: 'Clear all plots',
             reloadFile: 'Reload file',
@@ -2765,6 +2769,10 @@ const translations = {
 
             // Tooltips
             toggleSidebar: 'Afficher/masquer la barre latérale',
+            edgeHideSidebar: 'Masquer la barre latérale',
+            edgeShowSidebar: 'Afficher la barre latérale',
+            edgeHideOptions: 'Masquer le panneau d\'options',
+            edgeShowOptions: 'Afficher le panneau d\'options',
             autoZoom: 'Ajuster automatiquement tous les graphiques',
             clearPlots: 'Effacer tous les graphiques',
             reloadFile: 'Recharger le fichier',
@@ -4738,6 +4746,10 @@ const translations = {
             variable: 'Variable',
             parameter: 'Parámetro',
             toggleSidebar: 'Mostrar u ocultar barra lateral',
+            edgeHideSidebar: 'Ocultar la barra lateral',
+            edgeShowSidebar: 'Mostrar la barra lateral',
+            edgeHideOptions: 'Ocultar el panel de opciones',
+            edgeShowOptions: 'Mostrar el panel de opciones',
             autoZoom: 'Ajustar automáticamente todos los gráficos',
             clearPlots: 'Borrar todos los gráficos',
             reloadFile: 'Recargar archivo',
@@ -6691,6 +6703,10 @@ const translations = {
             variable: 'Variabile',
             parameter: 'Parametro',
             toggleSidebar: 'Mostra o nascondi barra laterale',
+            edgeHideSidebar: 'Nascondi la barra laterale',
+            edgeShowSidebar: 'Mostra la barra laterale',
+            edgeHideOptions: 'Nascondi il pannello opzioni',
+            edgeShowOptions: 'Mostra il pannello opzioni',
             autoZoom: 'Adatta automaticamente tutti i grafici',
             clearPlots: 'Cancella tutti i grafici',
             reloadFile: 'Ricarica file',

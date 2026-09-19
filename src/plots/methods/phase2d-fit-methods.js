@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import Plotly from '../../vendor/plotly.js';
 import Modal from '../../ui/modal.js';
 import {
@@ -612,7 +613,15 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         options.className = 'fft-options phase2d-fit-options';
         options.hidden = !state.optionsVisible;
         options.setAttribute('aria-label', i18n.t('phase2dFitResultsTitle'));
-        workspace.append(plotArea, options);
+        // The rail takes no width of its own, so the border between the plot
+        // and the options keeps the one it has; the pill hangs off it.
+        workspace.append(plotArea, createEdgeToggle({
+            side: 'right',
+            collapsed: !state.optionsVisible,
+            hideKey: 'edgeHideOptions',
+            showKey: 'edgeShowOptions',
+            onToggle: () => this._togglePhase2dOptions(panelId),
+        }), options);
         container.append(topbar, workspace);
         panelEl.appendChild(container);
 
@@ -971,6 +980,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (!plot?.phase2dFitContainer) return;
         const state = this._ensurePhase2dState(plot);
         state.optionsVisible = !state.optionsVisible;
+        syncEdgeToggle(plot.phase2dFitContainer, !state.optionsVisible);
         if (plot.phase2dFitOptions) plot.phase2dFitOptions.hidden = !state.optionsVisible;
         const btn = plot.phase2dFitContainer.querySelector('.fft-options-btn');
         if (btn) {
