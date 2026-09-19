@@ -106,24 +106,42 @@ export const FILTER_MAX_TAPS = 8192;
 // so the stability gate, the initial conditions and the cascade are all
 // untouched: D moves the numerator's window and never the feedback.
 //
-// Which is also why there is ONE advance and not two. Giving `a` its own anchor,
+// ONE advance arrives here, although the panel asks for TWO. Letting each list
+// carry its own anchor — the way the equation is written in a notebook, with the
+// outputs on the left and the inputs on the right —
 //
 //     Σ aₖ·y[n+Da−k] = Σ bₖ·x[n+Db−k]
 //
 // and substituting m = n + Da returns exactly the recursion above with
-// D = Db − Da: shifting the denominator's anchor only renames the sample being
-// solved for. Two boxes would let three different pairs produce byte-identical
-// output. There is one degree of freedom here and D is it. (The genuinely
-// different thing a denominator can do — depend on LATER outputs — is a
-// backward recursion, not an advance, and it is not this parameter.)
+// D = Db − Da. Shifting the denominator's anchor only renames the sample being
+// solved for, so the pairs (0,2), (1,3) and (7,9) are one filter written three
+// ways and the panel hands all of them to this function as D = 2. The two boxes
+// exist so that a student can type the equation as it stands in front of them
+// and be shown the equivalence; the kernel never sees it. (The genuinely
+// different thing a denominator can do — depend on LATER outputs — is a backward
+// recursion, not an advance, and it is not this parameter.)
 //
-// The price is the far end of every run: the last D outputs would need samples
-// the file does not have, so they are left missing rather than invented, which
+// D < 0 falls out of the same arithmetic, when the outputs are anchored further
+// ahead than the inputs, and is an ordinary DELAY: it is what writing zeros in
+// front of b already does. It is accepted rather than refused because a student
+// who types Da = 3, Db = 0 has written a perfectly good filter and deserves to
+// see it run, not an error message.
+//
+// Either way the price is one end of every run: the outputs at that end would
+// need samples the file does not have — past the last row for an advance, before
+// the first for a delay — so they are left missing rather than invented, which
 // is the same answer this kernel gives everywhere else a value is not there.
 export function normalizeFilterAdvance(value) {
-    const n = Math.floor(Number(value));
-    if (!Number.isFinite(n) || n <= 0) return 0;
-    return Math.min(FILTER_MAX_ORDER, n);
+    // Truncated toward zero, never rounded away from it: half a sample of
+    // look-ahead is not a sample of look-ahead.
+    const n = Math.trunc(Number(value));
+    if (!Number.isFinite(n) || n === 0) return 0;
+    return Math.sign(n) * Math.min(FILTER_MAX_ORDER, Math.abs(n));
+}
+
+/** The single advance a pair of typed anchors comes down to. */
+export function resolveFilterAdvance(advanceB, advanceA) {
+    return normalizeFilterAdvance(normalizeFilterAdvance(advanceB) - normalizeFilterAdvance(advanceA));
 }
 
 // `zeros(k)` as MATLAB writes it — `zeros(1,k)` and `zeros(k,1)` are the same
@@ -247,27 +265,61 @@ function joinEquationTerms(terms, maxTerms, opensTheSide) {
  *
  * @returns {string[]} one or two lines
  */
-export function differenceEquationLines(rawB, rawA, advance = 0, format = String, maxTerms = 4) {
-    const b = Array.from(rawB && rawB.length ? rawB : [1], Number);
-    const a = Array.from(rawA && rawA.length ? rawA : [1], Number);
-    const d = Math.round(Number(advance)) || 0;
-
-    const xTerms = [];
-    for (let k = 0; k < b.length; k++) {
-        if (!Number.isFinite(b[k]) || b[k] === 0) continue;
-        xTerms.push({ negative: b[k] < 0, text: `${format(Math.abs(b[k]))}·x[${equationIndex(d - k)}]` });
+function equationTerms(values, symbol, anchor, format, { from = 0, invert = false } = {}) {
+    const terms = [];
+    for (let k = from; k < values.length; k++) {
+        const value = Number(values[k]);
+        if (!Number.isFinite(value) || value === 0) continue;
+        const magnitude = Math.abs(value);
+        // A coefficient of 1 is written by not writing it, the way it is on
+        // paper: "y[n] = x[n] − 0.5·x[n−1]", never "1·x[n]".
+        const scale = magnitude === 1 ? '' : `${format(magnitude)}·`;
+        terms.push({
+            negative: invert ? value > 0 : value < 0,
+            text: `${scale}${symbol}[${equationIndex(anchor - k)}]`,
+        });
     }
+    return terms;
+}
+
+const coefficientList = (values, fallback) => Array.from(values && values.length ? values : fallback, Number);
+
+/**
+ * The equation with each list left where it was anchored — outputs on the left,
+ * inputs on the right, exactly as it stands in a notebook:
+ *
+ *     a₀·y[n+Da] + a₁·y[n+Da−1] + … = b₀·x[n+Db] + …
+ *
+ * This is the line that mirrors the two boxes, before anything is solved for
+ * y[n]. It is shown above `differenceEquationLines`, which is the same filter
+ * rearranged into the recursion that actually runs — and that pair is the whole
+ * reason the panel offers two anchors: (1,3) and (0,2) print different first
+ * lines and the SAME second one, which is the lesson.
+ *
+ * @returns {string} one line
+ */
+export function differenceEquationAsTyped(rawB, rawA, advanceB = 0, advanceA = 0, format = String, maxTerms = 4) {
+    const b = coefficientList(rawB, [1]);
+    const a = coefficientList(rawA, [1]);
+    const left = equationTerms(a, 'y', Math.trunc(Number(advanceA)) || 0, format);
+    const right = equationTerms(b, 'x', Math.trunc(Number(advanceB)) || 0, format);
+    const side = terms => (terms.length ? joinEquationTerms(terms, maxTerms, true) : '0');
+    return `${side(left)} = ${side(right)}`;
+}
+
+export function differenceEquationLines(rawB, rawA, advance = 0, format = String, maxTerms = 4) {
+    const b = coefficientList(rawB, [1]);
+    const a = coefficientList(rawA, [1]);
+    const d = Math.trunc(Number(advance)) || 0;
+
+    const xTerms = equationTerms(b, 'x', d, format);
     // The feedback terms cross to the right-hand side, so each one is printed
     // with the OPPOSITE of the sign that was typed: a = 1, −0.5 is the filter
     // that adds half of its own last output back.
-    const yTerms = [];
-    for (let k = 1; k < a.length; k++) {
-        if (!Number.isFinite(a[k]) || a[k] === 0) continue;
-        yTerms.push({ negative: a[k] > 0, text: `${format(Math.abs(a[k]))}·y[${equationIndex(-k)}]` });
-    }
+    const yTerms = equationTerms(a, 'y', 0, format, { from: 1, invert: true });
 
     const a0 = Number(a[0]);
-    const left = Number.isFinite(a0) && a0 !== 1 ? `${format(a0)}·y[n]` : 'y[n]';
+    const left = Number.isFinite(a0) && a0 !== 1 ? `${a0 === -1 ? '−' : `${format(a0)}·`}y[n]` : 'y[n]';
     if (!xTerms.length && !yTerms.length) return [`${left} = 0`];
     if (!xTerms.length) return [`${left} = ${joinEquationTerms(yTerms, maxTerms, true)}`];
     const lines = [`${left} = ${joinEquationTerms(xTerms, maxTerms, true)}`];
@@ -938,6 +990,7 @@ function expectedBetween(axis, from, to) {
  */
 function applyAdvance(out, advance) {
     const n = out.length;
+    const step = Math.abs(advance);
     let dropped = 0;
     let i = 0;
     while (i < n) {
@@ -945,10 +998,17 @@ function applyAdvance(out, advance) {
         let end = i;
         while (end < n && Number.isFinite(out[end])) end++;
         const length = end - i;
-        const kept = Math.max(0, length - advance);
-        // Ascending, so every slot is read before it is overwritten.
-        for (let k = 0; k < kept; k++) out[i + k] = out[i + k + advance];
-        for (let k = kept; k < length; k++) out[i + k] = NaN;
+        const kept = Math.max(0, length - step);
+        if (advance > 0) {
+            // Sliding towards the start: ascending, so every slot is read before
+            // it is overwritten, and the run's last outputs go missing.
+            for (let k = 0; k < kept; k++) out[i + k] = out[i + k + step];
+            for (let k = kept; k < length; k++) out[i + k] = NaN;
+        } else {
+            // A delay slides the other way, and so must the loop.
+            for (let k = length - 1; k >= step; k--) out[i + k] = out[i + k - step];
+            for (let k = 0; k < Math.min(step, length); k++) out[i + k] = NaN;
+        }
         dropped += length - kept;
         i = end;
     }
@@ -979,7 +1039,7 @@ function applyAdvance(out, advance) {
  *
  * @returns {{
  *   values: Float64Array, segments: number, restarts: number, carriedBreaks: number,
- *   filteredCount: number, skippedCount: number, advanceDropped: number,
+ *   filteredCount: number, skippedCount: number, advance: number, advanceDropped: number,
  *   irregular: boolean, irregularReason: string, medianDt: number,
  * }}
  */
@@ -998,7 +1058,7 @@ export function applyFilter(sourceValues, params = {}) {
     const report = {
         values: out,
         segments: 0, restarts: 0, carriedBreaks: 0,
-        filteredCount: 0, skippedCount: 0, advanceDropped: 0,
+        filteredCount: 0, skippedCount: 0, advance, advanceDropped: 0,
         // A series with no nominal step has no meaningful sample rate, so the
         // filter's cut-off is not a frequency in the data's own units. The panel
         // warns; it does not refuse, because a slightly irregular axis is still
@@ -1041,7 +1101,7 @@ export function applyFilter(sourceValues, params = {}) {
         report.filteredCount++;
         lastValid = i;
     }
-    if (advance > 0) {
+    if (advance !== 0) {
         report.advanceDropped = applyAdvance(out, advance);
         // filteredCount is what the OUTPUT carries, not what the recursion
         // computed: the samples the advance emptied are not filtered data.

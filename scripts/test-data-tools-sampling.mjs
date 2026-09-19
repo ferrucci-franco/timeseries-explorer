@@ -734,4 +734,115 @@ const numericFile = (harness, { name = 'run', step = 1, count = 11, kind = 'nume
     assert.equal(h._detrendNote({ slope: null }, { method: 'mean' }), '', 'no slope, nothing to say');
 }
 
+// ── Causality: two anchors in the panel, one advance in the filter ────────
+
+{
+    const h = new Harness();
+    const panel = (values) => {
+        const dom = fakeDocument({ 'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': '1', ...values });
+        withDocument(dom, () => h._syncFilterControls());
+        return dom;
+    };
+    const equation = dom => dom.getElementById('filter-equation-typed').textContent;
+    const equivalent = dom => (dom.getElementById('filter-equation-equivalent').hidden
+        ? '' : dom.getElementById('filter-equation-equivalent').textContent);
+
+    // A causal filter is the panel it always was: no anchors, and an equation
+    // with nothing to translate.
+    const causal = panel({ 'filter-b': '0.25, 0.5, 0.25' });
+    assert.ok(causal.getElementById('filter-anchor-wrap').classList.contains('collapsed'),
+        'the anchors stay away until a non-causal filter is asked for');
+    assert.equal(equation(causal), 'y[n] = 0.25\u00b7x[n] + 0.5\u00b7x[n\u22121] + 0.25\u00b7x[n\u22122]');
+    assert.equal(equivalent(causal), '', 'nothing to say twice');
+
+    // The same coefficients, anchored so that the filter is centred.
+    const centred = panel({
+        'filter-b': '0.25, 0.5, 0.25', 'filter-causality': 'nonCausal',
+        'filter-advance-a': '0', 'filter-advance-b': '1',
+    });
+    assert.ok(!centred.getElementById('filter-anchor-wrap').classList.contains('collapsed'));
+    assert.equal(equation(centred), 'y[n] = 0.25\u00b7x[n+1] + 0.5\u00b7x[n] + 0.25\u00b7x[n\u22121]');
+    assert.equal(equivalent(centred), '', 'Da = 0 needs no translation either');
+    assert.ok(/centr/i.test(centred.getElementById('filter-anchor-hint').textContent),
+        'and the note says it is centred');
+
+    // The lesson: three spellings, three first lines, one second line.
+    const index = k => (k === 0 ? 'n' : (k > 0 ? `n+${k}` : `n\u2212${-k}`));
+    for (const [da, db] of [[1, 2], [3, 4], [8, 9]]) {
+        const dom = panel({
+            'filter-b': '0.25, 0.5, 0.25', 'filter-causality': 'nonCausal',
+            'filter-advance-a': String(da), 'filter-advance-b': String(db),
+        });
+        assert.equal(equation(dom),
+            `y[${index(da)}] = 0.25\u00b7x[${index(db)}] + 0.5\u00b7x[${index(db - 1)}] + 0.25\u00b7x[${index(db - 2)}]`,
+            `the equation as typed for (${da}, ${db})`);
+        assert.equal(equivalent(dom),
+            '\u2261 y[n] = 0.25\u00b7x[n+1] + 0.5\u00b7x[n] + 0.25\u00b7x[n\u22121]',
+            `(${da}, ${db}) runs as the same filter`);
+    }
+
+    // Anchors that do not look ahead are not refused, they are explained.
+    const causalPair = panel({
+        'filter-b': '1', 'filter-causality': 'nonCausal', 'filter-advance-a': '2', 'filter-advance-b': '2',
+    });
+    assert.ok(/causal/i.test(causalPair.getElementById('filter-anchor-hint').textContent),
+        'Db = Da is causal after all, and says so');
+    const delayed = panel({
+        'filter-b': '1', 'filter-causality': 'nonCausal', 'filter-advance-a': '3', 'filter-advance-b': '0',
+    });
+    assert.equal(equation(delayed), 'y[n+3] = x[n]');
+    assert.equal(equivalent(delayed), '\u2261 y[n] = x[n\u22123]');
+
+    // An even-length b has no exact middle, and the note is where that is said.
+    const even = panel({
+        'filter-b': '0.25, 0.25, 0.25, 0.25', 'filter-causality': 'nonCausal',
+        'filter-advance-a': '0', 'filter-advance-b': '2',
+    });
+    assert.ok(even.getElementById('filter-anchor-hint').textContent.includes('4'),
+        'the note counts the coefficients it is talking about');
+
+    // Zero phase folds the whole group away rather than offering an anchor that
+    // would mean nothing there.
+    const zeroPhase = panel({ 'filter-mode': 'zeroPhase', 'filter-causality': 'nonCausal', 'filter-advance-b': '3' });
+    assert.ok(zeroPhase.getElementById('filter-causality-wrap').classList.contains('collapsed'));
+    assert.equal(equation(zeroPhase), 'y[n] = x[n]', 'and the equation drops the advance with it');
+}
+
+{
+    // What the definition carries: the pair as typed, plus the single advance
+    // the kernel runs on, which is always their difference.
+    const h = new Harness();
+    const config = (values) => {
+        const dom = fakeDocument({ 'data-tool-select': 'filter', 'filter-b': '1', 'filter-a': '1', ...values });
+        return withDocument(dom, () => h._getFilterConfig());
+    };
+
+    const plain = config({});
+    assert.equal(plain.params.advance, 0, 'a causal filter carries no advance');
+
+    const typed = config({
+        'filter-causality': 'nonCausal', 'filter-advance-a': '1', 'filter-advance-b': '3',
+    });
+    assert.equal(typed.params.advanceA, 1, 'the pair is kept as it was written');
+    assert.equal(typed.params.advanceB, 3);
+    assert.equal(typed.params.advance, 2, 'and only its difference runs');
+
+    // The dropdown wins over the fields: switching back to causal must not leave
+    // a look-ahead behind just because the numbers are still in the boxes.
+    const backToCausal = config({
+        'filter-causality': 'causal', 'filter-advance-a': '1', 'filter-advance-b': '3',
+    });
+    assert.equal(backToCausal.params.advance, 0);
+    assert.equal(backToCausal.params.advanceB, 0);
+
+    // Normalising a stored definition derives the advance again, so a hand-edited
+    // session can never hold a pair and an advance that disagree.
+    const stored = h._normalizeDataToolParams('filter', { b: [1], a: [1], advanceA: 4, advanceB: 6, advance: 99 });
+    assert.equal(stored.advance, 2, 'the pair wins over a stale advance');
+    // And a definition saved before the anchors existed still means what it meant.
+    const legacy = h._normalizeDataToolParams('filter', { b: [1], a: [1], advance: 5 });
+    assert.equal(legacy.advance, 5);
+    assert.equal(legacy.advanceB, 5, 'read as Db with Da at rest');
+}
+
 console.log('data tools sampling panel tests passed');

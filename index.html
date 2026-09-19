@@ -565,6 +565,66 @@
                                 <button class="data-tool-scroll data-tool-scroll-right" type="button" tabindex="-1" title="Scroll right" data-i18n-title="dataToolScrollRight" aria-label="Scroll right" data-i18n-aria-label="dataToolScrollRight"><svg viewBox="0 0 10 10" aria-hidden="true" focusable="false"><path d="M3.5 1.5 7 5l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
                             </div>
 
+                            <!-- Causality. The coefficient boxes cannot say this on their own:
+                                 the index of b is always a delay, so x[n+1] has no spelling.
+                                 Da and Db anchor each side of the equation where the reader
+                                 wrote it; only their difference reaches the filter, and the
+                                 box below shows both the equation as typed and the one that
+                                 runs, which is where that equivalence is learned. -->
+                            <div id="filter-causality-wrap">
+                            <div class="data-tool-label-row data-tool-group-row">
+                                <label class="options-subgroup-label" for="filter-causality" data-i18n="dataToolFilterCausality">Causality</label>
+                                <button id="filter-causality-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Causality help" data-i18n-title="dataToolFilterCausalityHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-causality-help-popover">
+                                    <span>?</span>
+                                </button>
+                            </div>
+                            <select id="filter-causality" class="data-tool-select">
+                                <option value="causal" selected data-i18n="dataToolFilterCausal">Causal (past and present only)</option>
+                                <option value="nonCausal" data-i18n="dataToolFilterNonCausal">Non-causal (may use the future)</option>
+                            </select>
+
+                            <div id="filter-anchor-wrap" class="collapsed">
+                                <label class="options-subgroup-label data-tool-sublabel filter-coefficient-label" for="filter-advance-b" data-i18n="dataToolFilterAnchors">Anchor of each side</label>
+                                <div class="filter-anchor-row">
+                                    <label class="filter-anchor-name" for="filter-advance-a">Da</label>
+                                    <input id="filter-advance-a" class="derived-input data-tool-number-input" type="number" step="1" value="0">
+                                    <label class="filter-anchor-name" for="filter-advance-b">Db</label>
+                                    <input id="filter-advance-b" class="derived-input data-tool-number-input" type="number" step="1" value="1">
+                                </div>
+                                <div id="filter-anchor-hint" class="filter-anchor-hint" hidden></div>
+                            </div>
+                            </div>
+
+                            <!-- Rewritten on every keystroke: the equation as it was typed,
+                                 and under it the recursion that actually runs when the two
+                                 differ. Never an error while a list is half typed — the last
+                                 readable equation stays up, and the boxes do the complaining. -->
+                            <div id="filter-equation" class="filter-equation" aria-live="polite">
+                                <span id="filter-equation-typed"></span>
+                                <span id="filter-equation-equivalent" class="filter-equation-equivalent" hidden></span>
+                            </div>
+
+                            <div id="filter-causality-help-popover" class="derived-help-popover data-tool-help-popover data-tool-help-wide" role="dialog" aria-labelledby="filter-causality-help-title" hidden>
+                                <div class="derived-help-title" id="filter-causality-help-title" data-i18n="dataToolFilterCausalityHelpTitle">Causality help</div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterCausal">Causal (past and present only)</span>
+                                    <span data-i18n-rich="dataToolFilterHelpCausal">Every output uses x[n] and earlier samples, never a later one. It is the only thing a filter running live on an instrument can do, and it is what the coefficient boxes say on their own: the index of b is always a delay.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterNonCausal">Non-causal (may use the future)</span>
+                                    <span data-i18n-rich="dataToolFilterHelpNonCausal">Two anchors appear. <strong>Db</strong> says which sample b₀ multiplies and <strong>Da</strong> which one a₀ does, so the equation can be typed exactly as it stands on paper — outputs on the left, inputs on the right. With Da = 0 and Db = 2 the first coefficient of b multiplies x[n+2], a sample that has not happened yet. Offline that is ordinary; on live data it is impossible.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpAnchorsLabel">Only the difference matters</span>
+                                    <span data-i18n-rich="dataToolFilterHelpAnchors">Moving both anchors together changes nothing: Da = 1, Db = 3 is the same filter as Da = 0, Db = 2, sample for sample. Shifting the left side only renames the output being solved for, so what reaches the filter is <strong>Db − Da</strong>. The box below says so itself — type any of those pairs and the second line, the one that runs, does not move.</span>
+                                    <span data-i18n-rich="dataToolFilterHelpAnchorsCentre">For a symmetric b, Db − Da = (number of coefficients − 1) / 2 puts the filter’s middle on the sample being computed, so nothing shifts in time. An even number of coefficients has no exact middle.</span>
+                                </div>
+                                <div class="derived-help-row">
+                                    <span class="derived-help-label" data-i18n="dataToolFilterHelpAnchorEdgeLabel">What it costs</span>
+                                    <span data-i18n-rich="dataToolFilterHelpAnchorEdge">The last Db − Da samples of every stretch have no value: computing them would need rows past the end of the data, and nothing is invented here. Anchoring the outputs <em>ahead</em> of the inputs (Da greater than Db) is not a look-ahead at all but a plain delay — the same thing zeros written in front of b already do — and it empties the same number of samples at the start instead.</span>
+                                </div>
+                            </div>
+
                             <div class="data-tool-label-row data-tool-group-row">
                                 <label class="options-subgroup-label" for="filter-mode" data-i18n="dataToolFilterMode">Direction</label>
                                 <button id="filter-direction-help-toggle" class="tree-control-btn derived-help-toggle data-tool-help-toggle" title="Direction help" data-i18n-title="dataToolFilterDirectionHelpTitle" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-direction-help-popover">
