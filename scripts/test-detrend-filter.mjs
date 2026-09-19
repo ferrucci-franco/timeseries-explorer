@@ -13,6 +13,10 @@ import {
     filterInitStateLength,
     filterInitialState,
     inspectFilter,
+    differenceEquationAsTyped,
+    differenceEquationLines,
+    normalizeFilterAdvance,
+    resolveFilterAdvance,
     normalizeFilterCoefficients,
     parseCoefficients,
     schurCohnStable,
@@ -456,6 +460,170 @@ const N = NaN;
     assert.equal(r.segments, 2, 'two runs, filtered independently');
     assert.ok(Number.isNaN(r.values[4]));
     assert.ok(r.values.filter(Number.isFinite).length === 8);
+}
+
+// ── The advance: a filter that looks at the future ────────────────────────
+
+{
+    // A three-tap average with D = 1 is the CENTRED average: the response to an
+    // impulse at row 3 sits on rows 2, 3, 4 rather than 3, 4, 5, which is the
+    // whole point — nothing moves in time.
+    const impulse = [0, 0, 0, 1, 0, 0, 0, 0];
+    const third = [1 / 3, 1 / 3, 1 / 3];
+    const centred = applyFilter(impulse, { b: third, a: [1], advance: 1 });
+    close(centred.values, [0, 0, 1 / 3, 1 / 3, 1 / 3, 0, 0, N], 'centred average');
+    assert.equal(centred.advanceDropped, 1, 'the last output needed a sample past the end');
+    assert.equal(centred.filteredCount, 7, 'and is not counted as filtered data');
+
+    // The same filter without the advance is the same numbers, one row later.
+    const causal = applyFilter(impulse, { b: third, a: [1] });
+    close(causal.values.slice(1, 7), centred.values.slice(0, 6), 'advance is the causal run, read later');
+    assert.equal(causal.advanceDropped, 0);
+}
+
+{
+    // The equation the panel prints, checked term by term against the output.
+    // With D at or above the filter's order every term comes from real data, so
+    // the closed form holds without any appeal to initial conditions.
+    const x = [5, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+    const r = applyFilter(x, { b: [1, -0.5], a: [1], advance: 2 });
+    const expected = x.map((_, n) => (n + 2 < x.length ? x[n + 2] - 0.5 * x[n + 1] : N));
+    close(r.values, expected, 'y[n] = x[n+2] − 0.5·x[n+1]');
+
+    // And with feedback, where there is no closed form, the definition still
+    // holds: the advanced run IS the causal run read D samples later.
+    const iir = { b: [1, -0.5], a: [1, -0.25] };
+    const causal = applyFilter(x, iir).values;
+    const advanced = applyFilter(x, { ...iir, advance: 2 }).values;
+    close(advanced.slice(0, 8), causal.slice(2, 10), 'advance 2 == the causal run, two samples later');
+}
+
+{
+    // A run slides within itself. Sliding across the hole would move a value by
+    // two POSITIONS that are not two samples of anything.
+    const values = [1, 2, 3, 4, N, 9, 8, 7, 6];
+    const r = applyFilter(values, { b: [1], a: [1], advance: 2, restartGap: 99 });
+    close(r.values, [3, 4, N, N, N, 7, 6, N, N], 'each run loses its own last two');
+    assert.equal(r.advanceDropped, 4);
+}
+
+{
+    // Zero phase reads the whole signal in both directions already; sliding its
+    // result would only put back a delay that is not there.
+    const x = [1, 2, 3, 4, 5, 6, 7, 8];
+    const plain = applyFilter(x, { b: [0.5], a: [1, -0.5], mode: 'zeroPhase' });
+    const asked = applyFilter(x, { b: [0.5], a: [1, -0.5], mode: 'zeroPhase', advance: 3 });
+    close(asked.values, plain.values, 'zero phase ignores the advance');
+    assert.equal(asked.advanceDropped, 0);
+
+    // An advance longer than the data leaves nothing behind, and says so rather
+    // than throwing.
+    const empty = applyFilter([1, 2, 3], { b: [1], a: [1], advance: 10 });
+    assert.ok(Array.from(empty.values).every(Number.isNaN), 'no output survives');
+    assert.equal(empty.advanceDropped, 3);
+}
+
+{
+    // Anything that is not a whole number of samples is not an advance. A
+    // NEGATIVE one is, though: it is the delay that writing zeros in front of b
+    // already gives, and a student who types the anchors that way has written a
+    // perfectly good filter.
+    assert.equal(normalizeFilterAdvance(3), 3);
+    assert.equal(normalizeFilterAdvance('4'), 4);
+    assert.equal(normalizeFilterAdvance(-2), -2);
+    assert.equal(normalizeFilterAdvance(2.7), 2, 'truncated toward zero');
+    assert.equal(normalizeFilterAdvance(-2.7), -2, 'and from the other side too');
+    for (const value of [0, NaN, Infinity, null, undefined, 'x']) {
+        assert.equal(normalizeFilterAdvance(value), 0, `${String(value)} is no advance`);
+    }
+
+    // The panel's two anchors come down to their difference, which is the one
+    // number the kernel runs on.
+    assert.equal(resolveFilterAdvance(2, 0), 2);
+    assert.equal(resolveFilterAdvance(3, 1), 2, 'the same filter, written differently');
+    assert.equal(resolveFilterAdvance(9, 7), 2, 'and again');
+    assert.equal(resolveFilterAdvance(0, 3), -3, 'outputs anchored ahead of inputs is a delay');
+}
+
+{
+    // A delay empties the START of each run, where an advance empties the end.
+    const r = applyFilter([1, 2, 3, 4, 5], { b: [1], a: [1], advance: -2 });
+    close(r.values, [N, N, 1, 2, 3], 'the run slides the other way');
+    assert.equal(r.advanceDropped, 2);
+
+    // And it is exactly the zeros-in-front-of-b spelling it replaces.
+    const x = [5, 1, 4, 1, 5, 9, 2, 6];
+    close(applyFilter(x, { b: [1, -0.5], a: [1], advance: -2 }).values.slice(2),
+        applyFilter(x, { b: [0, 0, 1, -0.5], a: [1] }).values.slice(2),
+        'a delay is zeros in front of b');
+}
+
+// ── The difference equation, as the panel prints it ───────────────────────
+
+{
+    const one = (b, a, advance = 0) => differenceEquationLines(b, a, advance)[0];
+
+    assert.equal(one([0.25, 0.5, 0.25], [1], 1),
+        'y[n] = 0.25\u00b7x[n+1] + 0.5\u00b7x[n] + 0.25\u00b7x[n\u22121]',
+        'the advance is what makes x[n+1] appear');
+    assert.equal(one([0.25, 0.5, 0.25], [1]),
+        'y[n] = 0.25\u00b7x[n] + 0.5\u00b7x[n\u22121] + 0.25\u00b7x[n\u22122]',
+        'and the same coefficients say nothing about it on their own');
+
+    // Zeros are not printed: every term carries its own index, so a 2400-tap
+    // echo is two terms rather than a screenful.
+    assert.equal(one([1, 0, 0, 0.5], [1]), 'y[n] = x[n] + 0.5\u00b7x[n\u22123]');
+
+    // A coefficient of \u00b11 is written by not writing it, and the sign belongs to
+    // the operator rather than in front of the number.
+    assert.equal(one([1, -0.5], [1]), 'y[n] = x[n] \u2212 0.5\u00b7x[n\u22121]');
+    assert.equal(one([-1, 0.5], [1]), 'y[n] = \u2212x[n] + 0.5\u00b7x[n\u22121]');
+    assert.equal(one([2, -1], [1]), 'y[n] = 2\u00b7x[n] \u2212 x[n\u22121]');
+
+    // Feedback crosses the equals sign, so its signs come out inverted: the
+    // filter that adds back half of its own last output is a = 1, -0.5.
+    assert.deepEqual(differenceEquationLines([1], [1, -0.5]),
+        ['y[n] = x[n]', '+ 0.5\u00b7y[n\u22121]']);
+
+    // a\u2080 is shown, not divided out, so every number on the line is one the
+    // reader can find in a box.
+    assert.equal(one([1], [2, -0.5]), '2\u00b7y[n] = x[n]');
+
+    // A long sum keeps BOTH ends: the last term is the one that says how far the
+    // filter reaches, and with an advance the two ends are what is being read.
+    assert.equal(one([1, 2, 3, 4, 5, 6], [1], 5),
+        'y[n] = x[n+5] + 2\u00b7x[n+4] + \u2026 + 6\u00b7x[n]');
+
+    assert.deepEqual(differenceEquationLines([0], [1]), ['y[n] = 0'], 'a filter that outputs nothing says so');
+    assert.deepEqual(differenceEquationLines([], []), ['y[n] = x[n]'], 'empty lists are the identity');
+}
+
+{
+    // The two anchors, printed where they were typed — and the equivalence that
+    // is the reason the panel offers them: three different first lines, one
+    // second line.
+    const b = [0.25, 0.5, 0.25];
+    assert.equal(differenceEquationAsTyped(b, [1], 2, 0),
+        'y[n] = 0.25\u00b7x[n+2] + 0.5\u00b7x[n+1] + 0.25\u00b7x[n]');
+    assert.equal(differenceEquationAsTyped(b, [1], 3, 1),
+        'y[n+1] = 0.25\u00b7x[n+3] + 0.5\u00b7x[n+2] + 0.25\u00b7x[n+1]');
+    assert.equal(differenceEquationAsTyped(b, [1], 9, 7),
+        'y[n+7] = 0.25\u00b7x[n+9] + 0.5\u00b7x[n+8] + 0.25\u00b7x[n+7]');
+    for (const [db, da] of [[2, 0], [3, 1], [9, 7]]) {
+        assert.equal(differenceEquationLines(b, [1], resolveFilterAdvance(db, da))[0],
+            'y[n] = 0.25\u00b7x[n+2] + 0.5\u00b7x[n+1] + 0.25\u00b7x[n]',
+            `(${da}, ${db}) is the same filter`);
+    }
+
+    // With feedback the two lines differ even at rest: one is the equation, the
+    // other is the recursion that computes it.
+    assert.equal(differenceEquationAsTyped([1], [1, -0.5], 0, 0), 'y[n] \u2212 0.5\u00b7y[n\u22121] = x[n]');
+
+    // Outputs anchored ahead of the inputs: a delay, written as a student would.
+    assert.equal(differenceEquationAsTyped([1], [1], 0, 3), 'y[n+3] = x[n]');
+    assert.equal(differenceEquationLines([1], [1], resolveFilterAdvance(0, 3))[0], 'y[n] = x[n\u22123]');
+
+    assert.equal(differenceEquationAsTyped([0], [1], 0, 0), 'y[n] = 0');
 }
 
 console.log('detrend + digital filter kernel tests passed');

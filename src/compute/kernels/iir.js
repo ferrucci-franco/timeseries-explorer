@@ -87,6 +87,63 @@ export const FILTER_MAX_ORDER = 1 << 20;
 export const FILTER_MAX_DENOMINATOR_ORDER = 16384;
 export const FILTER_MAX_TAPS = 8192;
 
+// ── Looking at the future ─────────────────────────────────────────────────
+//
+// A filter is non-causal when y[n] depends on samples that come after n. The
+// coefficient lists cannot say that on their own — the index of b is always a
+// DELAY, so x[n+1] has no spelling at all. One number supplies it: the ADVANCE
+// D, which anchors b₀ at x[n+D] instead of x[n],
+//
+//     y[n] = b₀·x[n+D] + b₁·x[n+D−1] + … − a₁·y[n−1] − …
+//
+// and the recursion itself does not change one bit. Running the ordinary causal
+// filter and then reading its output D samples later IS this filter:
+//
+//     y_c[n] = Σ bₖ·x[n−k] − Σ aₖ·y_c[n−k]     (what the loop below computes)
+//     y[n]   = y_c[n+D]                       (one index shift, afterwards)
+//            = Σ bₖ·x[n+D−k] − Σ aₖ·y[n−k]    (the equation above)
+//
+// so the stability gate, the initial conditions and the cascade are all
+// untouched: D moves the numerator's window and never the feedback.
+//
+// ONE advance arrives here, although the panel asks for TWO. Letting each list
+// carry its own anchor — the way the equation is written in a notebook, with the
+// outputs on the left and the inputs on the right —
+//
+//     Σ aₖ·y[n+Da−k] = Σ bₖ·x[n+Db−k]
+//
+// and substituting m = n + Da returns exactly the recursion above with
+// D = Db − Da. Shifting the denominator's anchor only renames the sample being
+// solved for, so the pairs (0,2), (1,3) and (7,9) are one filter written three
+// ways and the panel hands all of them to this function as D = 2. The two boxes
+// exist so that a student can type the equation as it stands in front of them
+// and be shown the equivalence; the kernel never sees it. (The genuinely
+// different thing a denominator can do — depend on LATER outputs — is a backward
+// recursion, not an advance, and it is not this parameter.)
+//
+// D < 0 falls out of the same arithmetic, when the outputs are anchored further
+// ahead than the inputs, and is an ordinary DELAY: it is what writing zeros in
+// front of b already does. It is accepted rather than refused because a student
+// who types Da = 3, Db = 0 has written a perfectly good filter and deserves to
+// see it run, not an error message.
+//
+// Either way the price is one end of every run: the outputs at that end would
+// need samples the file does not have — past the last row for an advance, before
+// the first for a delay — so they are left missing rather than invented, which
+// is the same answer this kernel gives everywhere else a value is not there.
+export function normalizeFilterAdvance(value) {
+    // Truncated toward zero, never rounded away from it: half a sample of
+    // look-ahead is not a sample of look-ahead.
+    const n = Math.trunc(Number(value));
+    if (!Number.isFinite(n) || n === 0) return 0;
+    return Math.sign(n) * Math.min(FILTER_MAX_ORDER, Math.abs(n));
+}
+
+/** The single advance a pair of typed anchors comes down to. */
+export function resolveFilterAdvance(advanceB, advanceA) {
+    return normalizeFilterAdvance(normalizeFilterAdvance(advanceB) - normalizeFilterAdvance(advanceA));
+}
+
 // `zeros(k)` as MATLAB writes it — `zeros(1,k)` and `zeros(k,1)` are the same
 // row, and the NumPy spelling is taken too — so `[1 zeros(1,2399) 0.5]` pastes
 // straight from a script. A count is a plain positive integer; anything else in
@@ -157,6 +214,117 @@ export function formatSparseCoefficients(values, formatOne = value => String(val
         i++;
     }
     return parts.join(', ');
+}
+
+// ── The difference equation, in words ─────────────────────────────────────
+//
+// The panel shows the equation the coefficients describe, rewritten on every
+// keystroke, because that line is the only place where an advance is VISIBLE:
+// b stays exactly as typed whether D is 0 or 3, and only `x[n+3]` says which
+// one is running. Three rules earn their keep here:
+//
+//   zero coefficients are dropped   every term carries its own index, so
+//                                   nothing is lost by not printing them — and
+//                                   the 2400-tap echo becomes two terms.
+//   the sign joins the operator     "+ −0.5·x[n−1]" is nobody's handwriting.
+//   long sums keep both ends        the first terms and the LAST one, with an
+//                                   ellipsis between: the last term is the one
+//                                   that says how far back the filter reaches,
+//                                   and with an advance the two ends are
+//                                   precisely what the reader is comparing.
+//
+// `format` is the caller's number formatter, so the line rounds the way the
+// rest of its panel does; nothing here is translated, because nothing here is
+// words.
+
+const equationIndex = offset => (offset === 0 ? 'n' : (offset > 0 ? `n+${offset}` : `n−${-offset}`));
+
+const ELLIPSIS_TERM = { negative: false, text: '…' };
+
+function joinEquationTerms(terms, maxTerms, opensTheSide) {
+    const shown = terms.length > maxTerms
+        ? [terms[0], terms[1], ELLIPSIS_TERM, terms[terms.length - 1]]
+        : terms;
+    let out = '';
+    shown.forEach((term, index) => {
+        if (index === 0 && opensTheSide) out += term.negative ? `−${term.text}` : term.text;
+        else out += `${out ? ' ' : ''}${term.negative ? '−' : '+'} ${term.text}`;
+    });
+    return out;
+}
+
+/**
+ * The difference equation b, a and an advance describe, as one or two lines of
+ * text ready to render. Two lines only when there is feedback AND a numerator:
+ * the x terms and the y terms then read as the two halves they are, which is
+ * also what keeps the line from overflowing a sidebar.
+ *
+ * a₀ is NOT divided out. The panel writes `a₀·y[n] = …` when it is not 1, so
+ * that every number on the line is a number the reader can find in a box; the
+ * normalised form belongs to the recursion, not to the explanation of it.
+ *
+ * @returns {string[]} one or two lines
+ */
+function equationTerms(values, symbol, anchor, format, { from = 0, invert = false } = {}) {
+    const terms = [];
+    for (let k = from; k < values.length; k++) {
+        const value = Number(values[k]);
+        if (!Number.isFinite(value) || value === 0) continue;
+        const magnitude = Math.abs(value);
+        // A coefficient of 1 is written by not writing it, the way it is on
+        // paper: "y[n] = x[n] − 0.5·x[n−1]", never "1·x[n]".
+        const scale = magnitude === 1 ? '' : `${format(magnitude)}·`;
+        terms.push({
+            negative: invert ? value > 0 : value < 0,
+            text: `${scale}${symbol}[${equationIndex(anchor - k)}]`,
+        });
+    }
+    return terms;
+}
+
+const coefficientList = (values, fallback) => Array.from(values && values.length ? values : fallback, Number);
+
+/**
+ * The equation with each list left where it was anchored — outputs on the left,
+ * inputs on the right, exactly as it stands in a notebook:
+ *
+ *     a₀·y[n+Da] + a₁·y[n+Da−1] + … = b₀·x[n+Db] + …
+ *
+ * This is the line that mirrors the two boxes, before anything is solved for
+ * y[n]. It is shown above `differenceEquationLines`, which is the same filter
+ * rearranged into the recursion that actually runs — and that pair is the whole
+ * reason the panel offers two anchors: (1,3) and (0,2) print different first
+ * lines and the SAME second one, which is the lesson.
+ *
+ * @returns {string} one line
+ */
+export function differenceEquationAsTyped(rawB, rawA, advanceB = 0, advanceA = 0, format = String, maxTerms = 4) {
+    const b = coefficientList(rawB, [1]);
+    const a = coefficientList(rawA, [1]);
+    const left = equationTerms(a, 'y', Math.trunc(Number(advanceA)) || 0, format);
+    const right = equationTerms(b, 'x', Math.trunc(Number(advanceB)) || 0, format);
+    const side = terms => (terms.length ? joinEquationTerms(terms, maxTerms, true) : '0');
+    return `${side(left)} = ${side(right)}`;
+}
+
+export function differenceEquationLines(rawB, rawA, advance = 0, format = String, maxTerms = 4) {
+    const b = coefficientList(rawB, [1]);
+    const a = coefficientList(rawA, [1]);
+    const d = Math.trunc(Number(advance)) || 0;
+
+    const xTerms = equationTerms(b, 'x', d, format);
+    // The feedback terms cross to the right-hand side, so each one is printed
+    // with the OPPOSITE of the sign that was typed: a = 1, −0.5 is the filter
+    // that adds half of its own last output back.
+    const yTerms = equationTerms(a, 'y', 0, format, { from: 1, invert: true });
+
+    const a0 = Number(a[0]);
+    const left = Number.isFinite(a0) && a0 !== 1 ? `${a0 === -1 ? '−' : `${format(a0)}·`}y[n]` : 'y[n]';
+    if (!xTerms.length && !yTerms.length) return [`${left} = 0`];
+    if (!xTerms.length) return [`${left} = ${joinEquationTerms(yTerms, maxTerms, true)}`];
+    const lines = [`${left} = ${joinEquationTerms(xTerms, maxTerms, true)}`];
+    if (yTerms.length) lines.push(joinEquationTerms(yTerms, maxTerms, false));
+    return lines;
 }
 
 /** Indices ≥ 1 where either list has a non-zero coefficient — the taps. */
@@ -808,6 +976,46 @@ function expectedBetween(axis, from, to) {
 }
 
 /**
+ * The advance, applied to a finished forward pass: out[i] takes what the
+ * recursion emitted D samples later, so b₀ ends up multiplying x[n+D].
+ *
+ * Run by run, never across the whole array. A hole splits the output into
+ * stretches that are separate signals as far as the recursion is concerned (the
+ * state may or may not have survived it — see restartGap — but the SAMPLES
+ * between them do not exist), and sliding a value backwards over a hole would
+ * move it by D positions that are not D samples of anything. So each stretch
+ * slides within itself and its own last D outputs go missing.
+ *
+ * @returns {number} how many samples the advance emptied
+ */
+function applyAdvance(out, advance) {
+    const n = out.length;
+    const step = Math.abs(advance);
+    let dropped = 0;
+    let i = 0;
+    while (i < n) {
+        if (!Number.isFinite(out[i])) { i++; continue; }
+        let end = i;
+        while (end < n && Number.isFinite(out[end])) end++;
+        const length = end - i;
+        const kept = Math.max(0, length - step);
+        if (advance > 0) {
+            // Sliding towards the start: ascending, so every slot is read before
+            // it is overwritten, and the run's last outputs go missing.
+            for (let k = 0; k < kept; k++) out[i + k] = out[i + k + step];
+            for (let k = kept; k < length; k++) out[i + k] = NaN;
+        } else {
+            // A delay slides the other way, and so must the loop.
+            for (let k = length - 1; k >= step; k--) out[i + k] = out[i + k - step];
+            for (let k = 0; k < Math.min(step, length); k++) out[i + k] = NaN;
+        }
+        dropped += length - kept;
+        i = end;
+    }
+    return dropped;
+}
+
+/**
  * Filter a series, through either the typed b/a or — when `params.sos` is
  * given — a cascade of second-order sections.
  *
@@ -824,14 +1032,20 @@ function expectedBetween(axis, from, to) {
  * Zero phase ignores restartGap: a backward pass cannot cross a hole, so each
  * contiguous run is padded and filtered on its own whatever the setting.
  *
+ * `advance` makes the filter non-causal: D > 0 anchors b₀ at x[n+D], at the cost
+ * of the last D samples of every run. Zero phase ignores it too — a pass in each
+ * direction already reads the whole signal, and sliding that result would only
+ * put back the delay it exists to remove.
+ *
  * @returns {{
  *   values: Float64Array, segments: number, restarts: number, carriedBreaks: number,
- *   filteredCount: number, skippedCount: number,
+ *   filteredCount: number, skippedCount: number, advance: number, advanceDropped: number,
  *   irregular: boolean, irregularReason: string, medianDt: number,
  * }}
  */
 export function applyFilter(sourceValues, params = {}) {
     const mode = FILTER_MODES.has(params.mode) ? params.mode : 'forward';
+    const advance = mode === 'zeroPhase' ? 0 : normalizeFilterAdvance(params.advance);
     const sections = resolveSections(params);
     const init = normalizeFilterInit(params);
     const tolerance = normalizeFilterRestartGap(params.restartGap);
@@ -844,7 +1058,7 @@ export function applyFilter(sourceValues, params = {}) {
     const report = {
         values: out,
         segments: 0, restarts: 0, carriedBreaks: 0,
-        filteredCount: 0, skippedCount: 0,
+        filteredCount: 0, skippedCount: 0, advance, advanceDropped: 0,
         // A series with no nominal step has no meaningful sample rate, so the
         // filter's cut-off is not a frequency in the data's own units. The panel
         // warns; it does not refuse, because a slightly irregular axis is still
@@ -886,6 +1100,12 @@ export function applyFilter(sourceValues, params = {}) {
         out[i] = stepCascade(sections, states, x);
         report.filteredCount++;
         lastValid = i;
+    }
+    if (advance !== 0) {
+        report.advanceDropped = applyAdvance(out, advance);
+        // filteredCount is what the OUTPUT carries, not what the recursion
+        // computed: the samples the advance emptied are not filtered data.
+        report.filteredCount -= report.advanceDropped;
     }
     return report;
 }

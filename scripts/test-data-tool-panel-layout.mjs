@@ -67,6 +67,23 @@ for (const id of ['filter-init-level-wrap', 'filter-init-past-wrap']) {
         `#${id} must start collapsed so nothing shows before a convention is chosen`);
 }
 
+// The anchors appear only once a non-causal filter is asked for; a causal one
+// is the panel it always was.
+assert.match(html, /id="filter-anchor-wrap"[^>]*class="collapsed"/,
+    '#filter-anchor-wrap must start collapsed so Da and Db show only when they mean something');
+for (const id of ['filter-advance-a', 'filter-advance-b']) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*type="number"`), `#${id} must be a number field, so it carries a stepper`);
+}
+// The equation box is never collapsed: it describes the filter in the boxes
+// above whether or not anything about causality has been chosen.
+assert.match(html, /id="filter-equation"/, 'the equation box must exist');
+assert.doesNotMatch(html, /id="filter-equation"[^>]*class="[^"]*collapsed/, 'the equation box is always shown');
+
+// "Forward (causal)" stopped being true the moment an advance became possible:
+// forward with Db > Da runs forward and is not causal.
+assert.doesNotMatch(read('src/i18n/translations.js'), /dataToolFilterForward: '[^']*causal/i,
+    'the direction option must not claim causality, which is now its own control');
+
 // Past inputs and past outputs are separate fields: a single box made their
 // order something the user had to be told rather than see.
 for (const id of ['filter-init-x', 'filter-init-y']) {
@@ -89,7 +106,7 @@ for (const match of html.matchAll(/data-tool-kind="(\w+)"/g)) {
     panels.set(match[1], end < 0 ? rest : rest.slice(0, end));
 }
 
-for (const [kind, groups] of [['filter', 4], ['resample', 3]]) {
+for (const [kind, groups] of [['filter', 5], ['resample', 3]]) {
     const panel = panels.get(kind);
     assert.ok(panel, `the ${kind} panel must exist`);
     assert.equal(

@@ -14,10 +14,13 @@ import {
     FILTER_DENSE_ORDER,
     FILTER_INIT_MODES,
     FILTER_MODES,
+    differenceEquationAsTyped,
+    differenceEquationLines,
     filterInitStateLength,
     formatSparseCoefficients,
     normalizeFilterRestartGap,
     parseCoefficients,
+    resolveFilterAdvance,
 } from '../../compute/kernels/iir.js';
 import { designedMagnitudeDb, normalizeFilterDesignOrder } from '../../compute/kernels/filter-design.js';
 import { TIME_UNITS } from '../../utils/time-unit-format.js';
@@ -64,10 +67,15 @@ proto.initFilterTool = function() {
         document.getElementById(id)?.addEventListener('input', () => this._syncFilterControls());
     }
     for (const id of ['filter-mode', 'filter-init', 'filter-init-level',
-        'filter-init-x', 'filter-init-y', 'filter-restart-gap']) {
+        'filter-init-x', 'filter-init-y', 'filter-restart-gap',
+        'filter-causality', 'filter-advance-a', 'filter-advance-b']) {
         document.getElementById(id)?.addEventListener('change', () => this._handleDataToolOptionChange());
     }
-    for (const id of ['filter-init-level', 'filter-init-x', 'filter-init-y']) {
+    // The equation must follow the anchors as they are typed, not wait for the
+    // field to settle: watching x[n] turn into x[n+1] as the arrow is held down
+    // is the entire point of the box.
+    for (const id of ['filter-init-level', 'filter-init-x', 'filter-init-y',
+        'filter-advance-a', 'filter-advance-b']) {
         document.getElementById(id)?.addEventListener('input', () => this._syncFilterControls());
     }
     document.getElementById('filter-help-toggle')?.addEventListener('click', (event) => {
@@ -90,6 +98,10 @@ proto.initFilterTool = function() {
         event.stopPropagation();
         this._toggleFilterDirectionHelpPopover();
     });
+    document.getElementById('filter-causality-help-toggle')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._toggleFilterCausalityHelpPopover();
+    });
 
     // The design fields. Selects commit at once; the numbers commit on change
     // (blur/Enter) like the coefficients, and merely refresh the summary while
@@ -111,6 +123,33 @@ proto.initFilterTool = function() {
         event.stopPropagation();
         this._toggleFilterDesignHelpPopover();
     });
+};
+
+proto._toggleFilterCausalityHelpPopover = function(show) {
+    const popover = document.getElementById('filter-causality-help-popover');
+    const button = document.getElementById('filter-causality-help-toggle');
+    if (!popover || !button) return;
+    const willShow = typeof show === 'boolean' ? show : popover.hidden;
+    popover.hidden = !willShow;
+    button.classList.toggle('active', willShow);
+    button.setAttribute('aria-expanded', String(willShow));
+    if (willShow) this._positionFilterHelpPopover(popover, button);
+};
+
+/**
+ * The two anchors as the form holds them, and the single advance they come
+ * down to. `causal` is the dropdown, and it wins: the fields keep whatever was
+ * typed in them so that switching back and forth does not lose it, but a causal
+ * filter runs at D = 0 whatever they say.
+ */
+proto._filterAnchors = function() {
+    const number = id => Number(document.getElementById(id)?.value);
+    const causal = (document.getElementById('filter-causality')?.value || 'causal') !== 'nonCausal';
+    const zeroPhase = document.getElementById('filter-mode')?.value === 'zeroPhase';
+    if (causal || zeroPhase) return { causal: true, advanceA: 0, advanceB: 0, advance: 0 };
+    const advanceA = Number.isFinite(number('filter-advance-a')) ? Math.trunc(number('filter-advance-a')) : 0;
+    const advanceB = Number.isFinite(number('filter-advance-b')) ? Math.trunc(number('filter-advance-b')) : 0;
+    return { causal: false, advanceA, advanceB, advance: resolveFilterAdvance(advanceB, advanceA) };
 };
 
 proto._toggleFilterDesignHelpPopover = function(show) {
@@ -566,6 +605,7 @@ proto._getFilterConfig = function() {
         throw error;
     }
     const mode = document.getElementById('filter-mode')?.value;
+    const anchors = this._filterAnchors();
     const params = {
         source: plan.source === 'design' ? 'design' : 'manual',
         // Stored NORMALIZED (a₀ = 1, both lists the same length), so a saved
@@ -574,6 +614,12 @@ proto._getFilterConfig = function() {
         b: Array.from(plan.inspection.b),
         a: Array.from(plan.inspection.a),
         mode: FILTER_MODES.has(mode) ? mode : 'forward',
+        // The PAIR is what the definition keeps, so reopening it shows the
+        // equation the way it was written; `advance` is the one number the
+        // kernel runs on, and is derived from the pair wherever it is read.
+        advance: anchors.advance,
+        advanceA: anchors.advanceA,
+        advanceB: anchors.advanceB,
         init: plan.manual.mode,
         initState: [...plan.manual.state],
         restartGap: normalizeFilterRestartGap(document.getElementById('filter-restart-gap')?.value),
@@ -589,6 +635,30 @@ proto._getFilterConfig = function() {
         if (params.init === 'past') { params.init = 'steady'; params.initState = []; }
     }
     return { tool: 'filter', params };
+};
+
+/**
+ * The equation box: the filter as it was typed, and under it — only when the two
+ * differ — the recursion that actually runs. That second line is the whole
+ * reason there are two anchors: (0,2), (1,3) and (7,9) print three different
+ * first lines and one identical second one.
+ *
+ * A half-typed list leaves the last readable equation standing. A box that
+ * blanks or reddens at the "1, −" on the way to "1, −1.8" is a box nobody reads,
+ * and the coefficient fields already complain in red once they settle.
+ */
+proto._renderFilterEquation = function(b, a, anchors) {
+    const box = document.getElementById('filter-equation');
+    const first = document.getElementById('filter-equation-typed');
+    const second = document.getElementById('filter-equation-equivalent');
+    if (!box || !first || !second) return;
+    if (!b || !a) { box.hidden = !first.textContent; return; }
+    const typed = differenceEquationAsTyped(b, a, anchors.advanceB, anchors.advanceA, formatNumber);
+    const solved = differenceEquationLines(b, a, anchors.advance, formatNumber).join(' ');
+    first.textContent = typed;
+    second.textContent = solved === typed ? '' : `\u2261 ${solved}`;
+    second.hidden = solved === typed;
+    box.hidden = false;
 };
 
 proto._syncFilterControls = function() {
@@ -623,6 +693,21 @@ proto._syncFilterControls = function() {
     // Each convention shows only its own fields.
     document.getElementById('filter-init-level-wrap')?.classList.toggle('collapsed', initMode !== 'level');
     document.getElementById('filter-init-past-wrap')?.classList.toggle('collapsed', initMode !== 'past');
+
+    // Causality. All of it follows the coefficients as they are typed rather
+    // than waiting for the plan, which settles on blur: an equation that lags a
+    // keystroke behind the box above it is worse than no equation.
+    const zeroPhase = document.getElementById('filter-mode')?.value === 'zeroPhase';
+    const anchors = this._filterAnchors();
+    document.getElementById('filter-causality-wrap')?.classList.toggle('collapsed', zeroPhase);
+    document.getElementById('filter-anchor-wrap')?.classList.toggle('collapsed', anchors.causal);
+    this._renderFilterEquation(b.values, a.values, anchors);
+    const anchorHint = document.getElementById('filter-anchor-hint');
+    if (anchorHint) {
+        const note = filterAnchorNote(b.values, a.values, anchors);
+        anchorHint.hidden = !note;
+        anchorHint.textContent = note || '';
+    }
 
     const xInput = document.getElementById('filter-init-x');
     const yInput = document.getElementById('filter-init-y');
@@ -797,6 +882,14 @@ proto._filterDescription = function(params = {}) {
         // see getVariableInfo), and showed a whole coefficient list as one.
         parts.push(`b = ${polynomial(params.b)}`, `a = ${polynomial(params.a)}`, direction);
     }
+    // Written as the pair that was typed, since that is what the panel reopens
+    // with; "Da = 1, Db = 3" and "Db = 2" are the same filter and only one of
+    // them is what the reader wrote down.
+    if (params.advance) {
+        parts.push(params.advanceA
+            ? `anchors Da = ${params.advanceA}, Db = ${params.advanceB}`
+            : `non-causal by ${params.advance} samples`);
+    }
     if (params.mode !== 'zeroPhase') {
         if (params.init === 'zero') parts.push('from rest');
         else if (params.init === 'level') parts.push(`from level ${list(params.initState)}`);
@@ -806,6 +899,44 @@ proto._filterDescription = function(params = {}) {
     return parts.join('; ');
 };
 
+}
+
+/**
+ * The line under Da and Db. It is not a complaint — every red hint in this panel
+ * means something is wrong — but the one piece of arithmetic the reader should
+ * not have to do: which difference centres the filter, or the news that the pair
+ * typed does not look ahead at all.
+ *
+ * A recursive filter is told nothing about centring: its feedback carries a
+ * delay of its own that no anchor on b can cancel, so naming a "centre" there
+ * would be advice that does not hold.
+ */
+function filterAnchorNote(b, a, anchors) {
+    if (anchors.causal || !b || !a) return '';
+    if (anchors.advance < 0) {
+        return i18n.t('dataToolFilterAnchorDelay').replace(/\{count\}/g, String(-anchors.advance));
+    }
+    if (anchors.advance === 0) return i18n.t('dataToolFilterAnchorCausal');
+    if (trimTrailingZeros(a).length > 1) return '';
+    const taps = trimTrailingZeros(b);
+    const centre = Math.round((taps.length - 1) / 2);
+    if (taps.length % 2 === 0) {
+        return i18n.t('dataToolFilterAnchorNoCentre')
+            .replace('{count}', String(taps.length))
+            .replace('{centre}', String(centre));
+    }
+    if (anchors.advance === centre) return i18n.t('dataToolFilterAnchorCentred');
+    return i18n.t('dataToolFilterAnchorCentre')
+        .replace('{count}', String(taps.length))
+        .replace('{centre}', String(centre));
+}
+
+// Trailing zeros say nothing about a filter and would inflate its length — and
+// its middle with it.
+function trimTrailingZeros(values) {
+    const list = Array.from(values || [], Number);
+    while (list.length > 1 && list[list.length - 1] === 0) list.pop();
+    return list;
 }
 
 function formatNumber(value) {

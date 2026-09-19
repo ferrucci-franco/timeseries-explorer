@@ -28,7 +28,10 @@ import {
     normalizeDetrendParams,
     normalizeDetrendWindow,
 } from '../../compute/kernels/detrend.js';
-import { FILTER_INIT_MODES, FILTER_MODES, normalizeFilterRestartGap, normalizeSos } from '../../compute/kernels/iir.js';
+import {
+    FILTER_INIT_MODES, FILTER_MODES, normalizeFilterAdvance, normalizeFilterRestartGap,
+    normalizeSos, resolveFilterAdvance,
+} from '../../compute/kernels/iir.js';
 import { normalizeFilterDesign } from '../../compute/kernels/filter-design.js';
 import { FILTER_DESIGN_FIELD_IDS, formatCoefficientBox } from './filter-methods.js';
 import { XCORR_FIELD_IDS } from './xcorr-methods.js';
@@ -477,7 +480,8 @@ proto._syncDataTools = function() {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'detrend');
     }
     const filterOff = !hasSource || tool !== 'filter';
-    for (const id of ['filter-b', 'filter-a', 'filter-mode', 'filter-restart-gap', ...FILTER_DESIGN_FIELD_IDS]) {
+    for (const id of ['filter-b', 'filter-a', 'filter-mode', 'filter-restart-gap',
+        'filter-causality', 'filter-advance-a', 'filter-advance-b', ...FILTER_DESIGN_FIELD_IDS]) {
         document.getElementById(id)?.toggleAttribute('disabled', filterOff);
     }
     // Zero phase builds its own edges out of the reflection padding, so an
@@ -1356,6 +1360,9 @@ const DATA_TOOL_PARAMETER_IDS = [
     'filter-b',
     'filter-a',
     'filter-mode',
+    'filter-causality',
+    'filter-advance-a',
+    'filter-advance-b',
     'filter-init',
     'filter-init-level',
     'filter-init-x',
@@ -1503,6 +1510,16 @@ proto._writeDataToolForm = function(definition, name) {
         set('filter-b', formatCoefficientBox(params.b || [1]));
         set('filter-a', formatCoefficientBox(params.a || [1]));
         set('filter-mode', params.mode);
+        // The anchors are stored as the pair that was typed, so the equation
+        // reopens in the reader's own spelling rather than the normalised one.
+        const advanceA = Number(params.advanceA) || 0;
+        const advanceB = Number(params.advanceB) || 0;
+        const advance = Number(params.advance) || 0;
+        set('filter-causality', advance === 0 && advanceA === advanceB ? 'causal' : 'nonCausal');
+        set('filter-advance-a', advanceA);
+        // A definition from before the anchors existed carries only `advance`,
+        // which is Db with Da left at zero.
+        set('filter-advance-b', advanceA || advanceB ? advanceB : advance);
         set('filter-init', params.init || 'steady');
         // The stored state is flat [x…, y…]; the panel splits it back into the
         // two boxes it was typed in.
@@ -2230,6 +2247,9 @@ proto._buildFilterResult = function(sourceValues, sourceVariable, config, data, 
         a: [...config.params.a],
         sos: config.params.sos ? config.params.sos.map(section => [...section]) : undefined,
         design: config.params.design ? this._cloneDataToolParams(config.params.design) : undefined,
+        advance: config.params.advance,
+        advanceA: config.params.advanceA,
+        advanceB: config.params.advanceB,
         init: config.params.init,
         initState: [...(config.params.initState || [])],
         restartGap: config.params.restartGap,
@@ -2263,6 +2283,11 @@ proto._filterNote = function(result) {
     if (result?.carriedBreaks > 0) {
         parts.push(i18n.t(result.carriedBreaks === 1 ? 'dataToolFilterCarriedOne' : 'dataToolFilterCarried')
             .replace('{count}', String(result.carriedBreaks)));
+    }
+    if (result?.advanceDropped > 0) {
+        const key = result.advance < 0 ? 'dataToolFilterAdvanceDelayed' : 'dataToolFilterAdvanceDropped';
+        parts.push(i18n.t(result.advanceDropped === 1 ? `${key}One` : key)
+            .replace('{count}', String(result.advanceDropped)));
     }
     if (result?.irregular) parts.push(i18n.t('dataToolFilterAxisIrregular'));
     return parts.join(' ');
@@ -2937,6 +2962,11 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
             b: list(params.b),
             a: list(params.a),
             mode: FILTER_MODES.has(params.mode) ? params.mode : 'forward',
+            // Two anchors in, one advance out, every time this is read: they can
+            // never drift apart in a stored definition, whatever edited it.
+            advanceA: normalizeFilterAdvance(params.advanceA),
+            advanceB: normalizeFilterAdvance(params.advanceB ?? params.advance),
+            advance: resolveFilterAdvance(params.advanceB ?? params.advance, params.advanceA),
             init: FILTER_INIT_MODES.has(params.init) ? params.init : 'steady',
             initState: Array.isArray(params.initState)
                 ? params.initState.map(Number).filter(Number.isFinite)

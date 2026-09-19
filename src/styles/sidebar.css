@@ -779,6 +779,8 @@
 #interpolate-window-wrap.collapsed,
 #filter-init-level-wrap.collapsed,
 #filter-init-past-wrap.collapsed,
+#filter-causality-wrap.collapsed,
+#filter-anchor-wrap.collapsed,
 #filter-design-wrap.collapsed,
 #filter-design-cutoff-high-wrap.collapsed,
 #filter-design-ripple-wrap.collapsed,
@@ -1112,6 +1114,8 @@
 #interpolate-window-wrap,
 #filter-init-level-wrap,
 #filter-init-past-wrap,
+#filter-causality-wrap,
+#filter-anchor-wrap,
 #filter-design-wrap,
 #filter-design-cutoff-high-wrap,
 #filter-design-ripple-wrap,
@@ -1356,6 +1360,59 @@
 .data-tool-resample-info.invalid {
     color: #8b1e1e;
     border-style: solid;
+}
+
+/* Da and Db side by side. They are one setting seen from both ends, and the
+   pair fits a sidebar where two labelled rows stacked would not. */
+.filter-anchor-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.filter-anchor-row .data-tool-number-input {
+    min-width: 0;
+}
+
+.filter-anchor-name {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+/* Not a complaint: it names the anchor that would centre the filter, or points
+   out that the pair typed is causal after all. Every RED hint in this panel
+   means something is wrong, so this one must not be red. */
+.filter-anchor-hint {
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+/* The filter itself, not a remark about it — so a solid edge and a filled
+   ground, where the notes around it are dashed and open. The negative indent
+   hangs a wrapped sum under its own first term instead of under "y[n] =". */
+.filter-equation {
+    padding: 0.4rem 0.55rem 0.4rem 1.4rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background-color: var(--hover-bg);
+    font-size: 0.75rem;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: break-word;
+    text-indent: -0.85rem;
+}
+
+.filter-equation[hidden] {
+    display: none;
+}
+
+/* The second line is the same filter rearranged into what actually runs, so it
+   reads as the echo of the first rather than as another equation. */
+.filter-equation-equivalent {
+    display: block;
+    color: var(--text-secondary);
 }
 
 .data-tool-input-grid {
