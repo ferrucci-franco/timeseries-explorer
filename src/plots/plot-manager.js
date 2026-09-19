@@ -15,6 +15,7 @@ import { installPlotIntegralMethods } from './methods/integral-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
+import { formatMissingCount, seriesStats } from '../utils/series-stats.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -2750,7 +2751,7 @@ class PlotManager {
             const d = this.files.get(fileId)?.data;
             const variable = d?.variables[varName];
             if (!variable) return;
-            const stats = this._statsForValues(this._getTransformedVariableData(fileId, varName));
+            const stats = seriesStats(this._getTransformedVariableData(fileId, varName));
             if (!stats) return;
             entries.push({
                 name: this._traceName(varName, fileId, { units: false }),
@@ -2777,6 +2778,8 @@ class PlotManager {
             return;
         }
 
+        // A variable with no finite sample prints four gaps and a full NaN
+        // count: the row is the answer, so it is no longer dropped.
         const fmt = value => Number.isFinite(value) ? value.toPrecision(6) : '';
         const rows = entries.map(e => `
             <tr>
@@ -2786,6 +2789,7 @@ class PlotManager {
                 <td>${fmt(e.max)}</td>
                 <td>${fmt(e.mean)}</td>
                 <td>${fmt(e.rms)}</td>
+                <td>${this._escapeHTML(formatMissingCount(e.missing, e.total))}</td>
             </tr>
         `).join('');
         const body = `
@@ -2799,6 +2803,7 @@ class PlotManager {
                             <th>${this._escapeHTML(i18n.t('statsMax'))}</th>
                             <th>${this._escapeHTML(i18n.t('statsMean'))}</th>
                             <th>${this._escapeHTML(i18n.t('statsRms'))}</th>
+                            <th title="${this._escapeHTML(i18n.t('statsNaNHint'))}">${this._escapeHTML(i18n.t('statsNaN'))}</th>
                         </tr>
                     </thead>
                     <tbody>${rows}</tbody>
@@ -2807,26 +2812,6 @@ class PlotManager {
         `;
         Modal.alert(i18n.t('panelStatsTitle'), body, { icon: 'Σ', html: true, className: 'modal-dialog-stats' });
     }
-
-    _statsForValues(values) {
-        if (!values || !values.length) return null;
-        let n = 0;
-        let sum = 0;
-        let sumSq = 0;
-        let min = Infinity;
-        let max = -Infinity;
-        for (const value of values) {
-            if (!Number.isFinite(value)) continue;
-            n++;
-            sum += value;
-            sumSq += value * value;
-            if (value < min) min = value;
-            if (value > max) max = value;
-        }
-        if (!n) return null;
-        return { min, max, mean: sum / n, rms: Math.sqrt(sumSq / n) };
-    }
-
 
     // ─── Helpers ───────────────────────────────────────────────────
 
