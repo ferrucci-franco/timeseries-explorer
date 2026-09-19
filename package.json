@@ -43,6 +43,7 @@
     "test:microcap": "node scripts/test-microcap-parser.mjs",
     "test:modelica-units": "node scripts/test-modelica-units.mjs",
     "test:capabilities": "node scripts/test-runtime-capabilities.mjs",
+    "test:runtime-badge-tooltip": "node scripts/test-runtime-badge-tooltip.mjs",
     "test:live-update": "node scripts/test-live-update-logic.mjs",
     "test:local-file-http": "node scripts/test-local-file-http.mjs",
     "test:loading-overlay-layout": "node scripts/test-loading-overlay-layout.mjs",

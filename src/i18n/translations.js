@@ -32,6 +32,8 @@ const translations = {
             runtimeNoticeDesktopDownload: 'For live-updating files, very large files, and better access to files on your computer, use the Desktop version. You can download it from the Menu button.',
             runtimeNoticeWebFeatures: [],
             runtimeNoticeDesktopFeatures: [],
+            runtimeBadgeWebTooltip: 'Light Web: runs entirely in your browser, with no installation.',
+            runtimeBadgeDesktopTooltip: 'Full Desktop: the installed app, with full access to the files on your computer.',
 
             // Top bar
             variables: 'Variables',
@@ -2011,6 +2013,8 @@ const translations = {
             runtimeNoticeDesktopDownload: 'Pour les fichiers mis a jour en direct, les tres gros fichiers et un meilleur acces aux fichiers de votre ordinateur, utilisez la version bureau. Vous pouvez la telecharger depuis le bouton Menu.',
             runtimeNoticeWebFeatures: [],
             runtimeNoticeDesktopFeatures: [],
+            runtimeBadgeWebTooltip: 'Light Web : fonctionne entièrement dans votre navigateur, sans installation.',
+            runtimeBadgeDesktopTooltip: 'Full Desktop : l\'application installée, avec un accès complet aux fichiers de votre ordinateur.',
 
             // Top bar
             variables: 'Variables',
@@ -3990,6 +3994,8 @@ const translations = {
             runtimeNoticeDesktopDownload: 'Para archivos que se actualizan en vivo, archivos muy grandes y mejor acceso a archivos de tu computadora, usa la version de escritorio. Puedes descargarla desde el boton Menú.',
             runtimeNoticeWebFeatures: [],
             runtimeNoticeDesktopFeatures: [],
+            runtimeBadgeWebTooltip: 'Light Web: funciona íntegramente en tu navegador, sin instalar nada.',
+            runtimeBadgeDesktopTooltip: 'Full Desktop: la aplicación instalada, con acceso completo a los archivos de tu computadora.',
             variables: 'Variables',
             filterVariables: 'Filtrar variables…',
             clearVariableFilter: 'Borrar filtro de variables',
@@ -5939,6 +5945,8 @@ const translations = {
             runtimeNoticeDesktopDownload: 'Per file aggiornati in tempo reale, file molto grandi e un accesso migliore ai file del computer, usa la versione desktop. Puoi scaricarla dal pulsante Menù.',
             runtimeNoticeWebFeatures: [],
             runtimeNoticeDesktopFeatures: [],
+            runtimeBadgeWebTooltip: 'Light Web: funziona interamente nel browser, senza installazione.',
+            runtimeBadgeDesktopTooltip: 'Full Desktop: l\'app installata, con accesso completo ai file del tuo computer.',
             variables: 'Variabili',
             filterVariables: 'Filtra variabili…',
             clearVariableFilter: 'Cancella filtro variabili',

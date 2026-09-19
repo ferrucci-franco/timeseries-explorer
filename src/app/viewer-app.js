@@ -161,9 +161,12 @@ class OpenModelicaViewer {
         }
     }
 
+    // The badge text is the runtime's name, the same word in every language.
+    // Its tooltip is a sentence, so it belongs in translations.js: it used to be
+    // written here in English and stayed English after a language switch, while
+    // every other tooltip around it followed.
     _capabilitiesSummary(caps) {
-        if (caps.isDesktop) return 'Full Desktop: native local capabilities enabled.';
-        return 'Light Web: browser-only version for GitHub Pages/static hosting.';
+        return i18n.t(caps.isDesktop ? 'runtimeBadgeDesktopTooltip' : 'runtimeBadgeWebTooltip');
     }
 
     _runtimeNoticeHtml(caps) {
