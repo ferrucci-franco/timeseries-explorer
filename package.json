@@ -118,6 +118,7 @@
     "test:mode-toolbar": "node scripts/test-mode-toolbar.mjs",
     "test:timeseries-stack": "node scripts/test-timeseries-stack.mjs",
     "test:timeseries-renderer": "node scripts/test-timeseries-renderer.mjs",
+    "test:stairs-decimation": "node scripts/test-stairs-decimation.mjs",
     "test:hover-time-precision": "node scripts/test-hover-time-precision.mjs",
     "test:independent-axis": "node scripts/test-independent-axis.mjs",
     "test:timeseries-y-expand": "node scripts/test-timeseries-y-expand.mjs",
