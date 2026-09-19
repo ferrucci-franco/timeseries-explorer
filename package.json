@@ -118,6 +118,7 @@
     "test:timeseries-renderer": "node scripts/test-timeseries-renderer.mjs",
     "test:independent-axis": "node scripts/test-independent-axis.mjs",
     "test:timeseries-y-expand": "node scripts/test-timeseries-y-expand.mjs",
+    "test:panel-stats-nan": "node scripts/test-panel-stats-nan.mjs",
     "test:missing-data": "node scripts/test-missing-data.mjs",
     "test:missing-lazy": "node scripts/test-missing-lazy.mjs",
     "test:correlation": "node scripts/test-correlation.mjs",
