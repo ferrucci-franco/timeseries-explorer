@@ -2696,16 +2696,33 @@ proto._deleteDataToolDefinition = function(fileId, name) {
     if (!definitions.size) this.dataToolVariablesByFile.delete(fileId);
 };
 
+/**
+ * Take a variable off every panel drawing it.
+ * @returns {boolean} true when each panel could drop the curve where it was
+ *   drawn, so the caller has no panel left to rebuild.
+ */
 proto._removeDataToolVariableFromPlots = function(fileId, name) {
+    let allInPlace = true;
     for (const [panelId, plot] of this.plotManager.plots) {
         const beforeTs = plot.traces.length;
         const beforePh = plot.phaseTraces.length;
+        // One timeseries curve can be lifted off the chart that is already
+        // drawn; rebuilding the panel to take it away blanks everything beside
+        // it and purges a div Plotly may still be redrawing (#39).
+        const onlyThisTrace = beforePh === plot.phaseTraces.filter(t =>
+            !(t.fileId === fileId && (t.x === name || t.y === name || t.z === name))).length;
+        if (onlyThisTrace && plot.mode === 'timeseries' && plot.div?._fullLayout
+            && this.plotManager.removeTrace(panelId, name, fileId)) {
+            continue;
+        }
         plot.traces = plot.traces.filter(t => !(t.fileId === fileId && t.varName === name));
         plot.phaseTraces = plot.phaseTraces.filter(t => !(t.fileId === fileId && (t.x === name || t.y === name || t.z === name)));
         if (beforeTs !== plot.traces.length || beforePh !== plot.phaseTraces.length) {
             this.plotManager._rebuildPanel(panelId);
+            allInPlace = false;
         }
     }
+    return allInPlace;
 };
 
 proto._reapplyDataToolVariables = function(fileId, data) {
@@ -3198,12 +3215,17 @@ proto._previewEditedVariable = function(context, editing, result) {
         : this._dataToolDependents(fileId, editing.name);
     if (dependents.length) this._reapplyDataToolDependents(fileId, data, editing.name);
 
-    // updateFileData already rebuilds every panel using this file and restores the
-    // view it captured. Rebuilding again on top of it is what LOST the zoom: the
-    // second capture ran before the first restore had been applied, so it recorded
-    // the autoranged view and pinned that. The point of a live preview is to watch
-    // a parameter's effect where you zoomed in, so one rebuild it is.
-    this.plotManager.updateFileData(fileId, data);
+    // Same as the draft preview: the values moved and nothing else did, so the
+    // traces are restyled in place when every panel drawing them can take that
+    // (#39). Where one cannot — a phase pair, an FFT — updateFileData rebuilds
+    // them, and it is the only rebuild: a second one on top of it is what LOST
+    // the zoom, since the second capture ran before the first restore had been
+    // applied and pinned the autoranged view. The point of a live preview is to
+    // watch a parameter's effect where you zoomed in.
+    const names = [editing.name, ...(dependents || [])];
+    if (!names.every(varName => this.plotManager.refreshTraceValues(fileId, varName))) {
+        this.plotManager.updateFileData(fileId, data);
+    }
 };
 
 proto._restoreEditedTraceValues = function() {
@@ -3256,24 +3278,30 @@ proto._drawDataToolPreviewTrace = function(context, result) {
 
     const plot = this.plotManager.plots.get(panelId);
     const existing = plot?.traces.find(trace => trace.fileId === fileId && trace.varName === name);
-    // updateFileData rebuilds the panel and restores its view, so an existing
-    // preview trace redraws with the zoom intact and needs nothing further.
-    this.plotManager.updateFileData(fileId, data);
-    if (!existing) {
+    if (existing) {
+        // Already on the panel: only its numbers moved, so the curve is
+        // restyled where it is. updateFileData would tear the panel down and
+        // build it again on every slider tick, blanking the chart and dropping
+        // the redraw Plotly had queued for the div it purges (#39).
+        if (!this.plotManager.refreshTraceValues(fileId, name)) {
+            this.plotManager.updateFileData(fileId, data);
+        }
+    } else {
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         if (!panelEl) return;
-        this.plotManager.addTrace(panelId, name, panelEl);
-        const added = plot?.traces.find(trace => trace.fileId === fileId && trace.varName === name);
-        if (added) {
-            // Markers, not a thicker line. The samples this fills are scattered
-            // through the signal, and a line joining them would draw straight
-            // segments across every untouched stretch in between — segments that
-            // are not data and that the eye reads as data. Markers can only ever
-            // say "here", which is the whole question being asked.
-            if (addedOnly) added.markersOnly = true;
-            else added.dash = 'dot';
-            this.plotManager._rebuildPanel(panelId, { preserveView: true });
-        }
+        // The variable is new to the file, and no panel but this one will draw
+        // it, so the caches it is read through are all there is to drop.
+        this.plotManager.invalidateTransformCache(fileId);
+        // Markers, not a thicker line, for "only the added samples". Those
+        // samples are scattered through the signal, and a line joining them
+        // would draw straight segments across every untouched stretch in
+        // between — segments that are not data and that the eye reads as data.
+        // Markers can only ever say "here", which is the whole question being
+        // asked. Handed to addTrace rather than set afterwards: a style applied
+        // after the fact costs a rebuild of the panel to take effect.
+        this.plotManager.addTrace(panelId, name, panelEl, {
+            traceStyle: addedOnly ? { markersOnly: true } : { dash: 'dot' },
+        });
     }
     this._dataToolPreview = { fileId, panelId, addedOnly };
 };
@@ -3317,15 +3345,19 @@ proto._clearDataToolPreview = function() {
     const preview = this._dataToolPreview;
     this._dataToolPreview = null;
     if (!preview || this._clearingDataToolPreview) return;
-    // Taking the trace down rebuilds the panel, which re-enters _syncDataTools;
-    // the guard keeps that from recursing back into this teardown.
+    // Taking the trace down can rebuild the panel, which re-enters
+    // _syncDataTools; the guard keeps that from recursing back into this
+    // teardown.
     this._clearingDataToolPreview = true;
     try {
         const data = this.plotManager?.files.get(preview.fileId)?.data;
-        this._removeDataToolVariableFromPlots(preview.fileId, DATA_TOOL_PREVIEW_NAME);
+        const inPlace = this._removeDataToolVariableFromPlots(preview.fileId, DATA_TOOL_PREVIEW_NAME);
         if (data?.variables?.[DATA_TOOL_PREVIEW_NAME]) {
             delete data.variables[DATA_TOOL_PREVIEW_NAME];
-            this.plotManager.updateFileData(preview.fileId, data);
+            // Nothing is drawing it any more, so the caches it was read through
+            // are all that is left to drop (#39).
+            if (inPlace) this.plotManager.invalidateTransformCache(preview.fileId);
+            else this.plotManager.updateFileData(preview.fileId, data);
         }
     } finally {
         this._clearingDataToolPreview = false;

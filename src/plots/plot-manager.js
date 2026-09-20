@@ -1322,10 +1322,19 @@ class PlotManager {
         this._syncAudioStrip?.(panelId);
     }
 
-    removeTrace(panelId, varName) {
+    /**
+     * Take one curve off a timeseries panel.
+     *
+     * `fileId` narrows it to that file's trace: two loaded files can hold the
+     * same variable name, and a caller removing one file's copy must not take
+     * the other's off instead.
+     */
+    removeTrace(panelId, varName, fileId = null) {
         const plot = this.plots.get(panelId);
-        if (!plot || !plot.div || plot.mode !== 'timeseries') return;
-        this._removeTimeseriesTraceAt(panelId, plot.traces.findIndex(t => t.varName === varName));
+        if (!plot || !plot.div || plot.mode !== 'timeseries') return false;
+        const index = plot.traces.findIndex(t => t.varName === varName
+            && (fileId === null || t.fileId === fileId));
+        return this._removeTimeseriesTraceAt(panelId, index);
     }
 
     /**
@@ -1357,7 +1366,17 @@ class PlotManager {
         if (plot.traces.find(t => t.varName === varName && t.fileId === this.activeFileId)) return; // deduplicate
         if (!this._canAddTraceWithFileTime(plot, this.activeFileId)) return;
         const axis = plot.timeseriesY2Enabled && options.axis === 'y2' ? 'y2' : 'y';
-        plot.traces.push({ varName, color: this._nextTraceColor(plot.traces), fileId: this.activeFileId, axis });
+        // `traceStyle` is how a caller that needs the curve drawn a particular
+        // way — dotted, markers only — says so BEFORE it is built. Setting those
+        // fields afterwards means rebuilding the panel to apply them, which
+        // blanks the chart and purges a div Plotly may still be redrawing (#39).
+        plot.traces.push({
+            varName,
+            color: this._nextTraceColor(plot.traces),
+            fileId: this.activeFileId,
+            axis,
+            ...(options.traceStyle || {}),
+        });
 
         if (!plot.div) {
             this._createChart(panelId, panelEl);
@@ -3077,6 +3096,66 @@ class PlotManager {
                 }, [i]);
             }
         });
+    }
+
+    /**
+     * One variable's VALUES changed, and nothing else about the file did.
+     *
+     * `updateFileData` answers that by DESTROYING and recreating every panel
+     * that draws the file. For a data-tool preview — which recomputes on every
+     * slider tick and every keystroke — that is the wrong answer twice over: the
+     * chart blanks and re-plots each time, and the purge lands on a graph div
+     * Plotly may still have a redraw queued for, whose auto-margin pass then
+     * throws on the `_fullLayout` that is no longer there. The redraw it was
+     * going to do is lost with it, which is how a live preview ends up showing
+     * the previous values (#39).
+     *
+     * The timeseries pane already has the cheap answer: rebuild the traces from
+     * the variable and restyle them in place, no teardown, no lost redraw, zoom
+     * untouched. Anything this cannot answer for — a phase pair, a state
+     * animation, a mode whose result is computed from more than the values —
+     * is refused, and the caller still owes those panels an `updateFileData`.
+     *
+     * @returns {boolean} true when every panel drawing the variable was updated.
+     */
+    /**
+     * A file's variable map changed — one was added or taken away — without
+     * anything already drawn changing. Drops the cache the traces are built
+     * through; the panels themselves need nothing.
+     */
+    invalidateTransformCache(fileId) {
+        const entry = this.files.get(fileId);
+        if (entry) entry._transformCache = null;
+    }
+
+    refreshTraceValues(fileId, varName) {
+        const entry = this.files.get(fileId);
+        if (!entry?.data?.variables?.[varName]) return false;
+        const drawsIt = plot => plot.traces.some(t => t.fileId === fileId && t.varName === varName);
+        let found = false;
+        for (const [, plot] of this.plots) {
+            const usedElsewhere = plot.phaseTraces.some(t => t.fileId === fileId
+                    && (t.x === varName || t.y === varName || t.z === varName))
+                || (plot.stateSlots?.fileId === fileId
+                    && ['x', 'y', 'z'].some(axis => (plot.stateSlots[axis] || []).includes(varName)));
+            if (usedElsewhere) return false;
+            if (!drawsIt(plot)) continue;
+            if (plot.mode !== 'timeseries' || !plot.div?._fullLayout) return false;
+            found = true;
+        }
+        if (!found) return false;
+        // The values are read through the transform cache, which still holds the
+        // previous ones.
+        entry._transformCache = null;
+        for (const [panelId, plot] of this.plots) {
+            if (!drawsIt(plot)) continue;
+            // Same reason updateFileData drops these: the overlays memoize on a
+            // time-only signature that a value change does not move.
+            plot._missSig = null;
+            plot._missCache = null;
+            this._refreshTimeseriesVisuals(panelId, plot);
+        }
+        return true;
     }
 
     _hasContent(plot) {
