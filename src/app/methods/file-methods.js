@@ -4354,6 +4354,9 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     const panel = document.createElement('div');
     panel.className = 'file-transform-panel'
         + (fileId === this.activeFileId ? ' file-transform-panel-active' : '');
+    // Tagged so a transform change can refresh the verdict lines inside it
+    // without rebuilding the whole sidebar (_refreshTimeAxisSummary).
+    panel.dataset.fileId = fileId;
     panel.addEventListener('click', e => e.stopPropagation());
 
     // Yellow "?" help button that opens a FLOATING popup (not an in-flow box):
@@ -5011,13 +5014,10 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
         inspectBtn.addEventListener('click', () => { void this._openTimeAxisInspector(fileId); });
         panel.append(inspectBtn);
 
-        const summary = this._timeAxisSummaryLine?.(this._timeAxisDiagnosticsForPanel?.(fileId));
-        if (summary) {
-            const summaryHint = document.createElement('div');
-            summaryHint.className = 'file-transform-hint file-transform-time-axis-summary';
-            summaryHint.textContent = summary;
-            panel.append(summaryHint);
-        }
+        // One line for the stored column, plus a second for the axis the plots
+        // draw once a transform has made the two different — a reindexed file
+        // otherwise advertises the sampling of a column nothing is drawing.
+        this._appendTimeAxisSummaryLines(fileId, panel);
     }
 
     const pad2 = n => String(n).padStart(2, '0');
@@ -5306,6 +5306,37 @@ proto._resetFileCropAndOffsets = function(fileId) {
     });
 };
 
+// The verdict lines under the inspect button. Appended at the end of `parent`,
+// or right after `anchor` when they are being replaced in an already-built panel.
+proto._appendTimeAxisSummaryLines = function(fileId, parent, anchor = null) {
+    let after = anchor;
+    for (const summary of this._timeAxisPanelSummaryLines?.(fileId) || []) {
+        const hint = document.createElement('div');
+        hint.className = 'file-transform-hint file-transform-time-axis-summary';
+        hint.textContent = summary;
+        if (after) {
+            after.after(hint);
+            after = hint;
+        } else {
+            parent.append(hint);
+        }
+    }
+};
+
+// A transform change deliberately does NOT re-render the sidebar: the panel it
+// came from is full of fields, and rebuilding it would take the focus out of the
+// one being typed into. But the verdict lines ARE about the transform — after a
+// reindex they were the only thing in the panel still describing the old axis
+// (#107) — so they are the one part replaced in place.
+proto._refreshTimeAxisSummary = function(fileId) {
+    const panel = [...document.querySelectorAll('#files-list .file-transform-panel')]
+        .find(node => node.dataset.fileId === fileId);
+    const button = panel?.querySelector('.file-transform-wide-action');
+    if (!button) return;
+    for (const stale of panel.querySelectorAll('.file-transform-time-axis-summary')) stale.remove();
+    this._appendTimeAxisSummaryLines(fileId, panel, button);
+};
+
 proto._updateFileTransform = function(fileId, patch, options = {}) {
     const entry = this.files.get(fileId);
     if (!entry) return;
@@ -5325,6 +5356,7 @@ proto._updateFileTransform = function(fileId, patch, options = {}) {
         for (const row of document.querySelectorAll('#files-list .file-entry')) {
             if (row.dataset.fileId === fileId) row.classList.toggle('transformed', isActive);
         }
+        this._refreshTimeAxisSummary(fileId);
     }
 };
 

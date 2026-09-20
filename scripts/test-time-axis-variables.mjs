@@ -492,7 +492,10 @@ assert.match(sessionSrc, /entry\.timeAxisIndex\s*\n?\s*\?\s*\[\]/, 'session reap
 const fileSrc = readSrc('app/methods/file-methods.js');
 assert.match(fileSrc, /file-transform-wide-action[\s\S]{0,300}_openTimeAxisInspector\(fileId\)/,
     'the file panel opens the inspector');
-assert.match(fileSrc, /_timeAxisSummaryLine\?\.\(this\._timeAxisDiagnosticsForPanel\?\.\(fileId\)\)/,
+// The verdict line moved behind _timeAxisPanelSummaryLines when the panel
+// gained a second line for a transformed axis (#107); it still reads the same
+// cache, and test-time-axis-after-transform.mjs owns the two-line behaviour.
+assert.match(fileSrc, /_timeAxisPanelSummaryLines\?\.\(fileId\)/,
     'the panel shows the cached verdict line');
 
 // Entry point B: the abscissa row in the tree.
@@ -506,6 +509,10 @@ assert.match(treeSrc, /const leafFileId = options\.fileId \|\| this\.activeFileI
 
 // The lazy diagnostic must be cancellable and must not outlive its dialog.
 const inspectorSrc = readSrc('app/methods/time-axis-inspector-methods.js');
+assert.match(inspectorSrc, /_timeAxisPanelSummaryLines = function\(fileId\)[\s\S]{0,200}?_timeAxisDiagnosticsPair\(fileId\)/,
+    'the panel line goes through the stored/plotted pair');
+assert.match(inspectorSrc, /_timeAxisDiagnosticsPair = function\([\s\S]{0,300}?_timeAxisDiagnosticsForPanel\(fileId\)/,
+    'the panel line still comes from the diagnostics cache');
 assert.match(inspectorSrc, /new AbortController\(\)/, 'the lazy diagnostic is abortable');
 assert.match(inspectorSrc, /finally \{[\s\S]{0,200}controller\?\.abort\(\)/,
     'closing the dialog aborts the scan holding the single DuckDB connection');
