@@ -22,6 +22,13 @@ import {
     FFT_WORKER_THRESHOLD_POINTS,
 } from '../../utils/fft.js';
 import { buildFftExportColumns } from '../../utils/fft-export.js';
+import {
+    convertFftAxisLimits,
+    invertAxisValue,
+    invertAxisWindow,
+    normalizeFftXAxisMode,
+    periodSeriesFromSpectrum,
+} from '../../utils/fft-period-axis.js';
 import { largestClearInterval } from '../../utils/largest-clear-interval.js';
 import { detectNaNRuns, detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import Plotly from '../../vendor/plotly.js';
@@ -64,6 +71,7 @@ proto._defaultFftState = function() {
         removeMean: true,
         zeroPaddingFactor: 1,
         amplitudeScale: 'normal',
+        xAxisMode: 'frequency',
         fMin: null,
         fMax: null,
         yMin: null,
@@ -105,6 +113,7 @@ proto._normalizeFftState = function(raw = {}) {
         removeMean: raw.removeMean !== false,
         zeroPaddingFactor: normalizeZeroPaddingFactor(raw.zeroPaddingFactor),
         amplitudeScale: normalizeFftScale(raw.amplitudeScale),
+        xAxisMode: normalizeFftXAxisMode(raw.xAxisMode),
         fMin: finiteOrNull(raw.fMin),
         fMax: finiteOrNull(raw.fMax),
         yMin: finiteOrNull(raw.yMin),
@@ -416,8 +425,7 @@ proto._installFftPlotHandlers = function(panelId, plot) {
         );
         if (!touchesX) return;
         const doWindow = () => {
-            const r = plot.fftDiv?._fullLayout?.xaxis?.range;
-            this._refreshFftSpectrumWindow(panelId, plot, Array.isArray(r) ? r.slice() : null);
+            this._refreshFftSpectrumWindow(panelId, plot, this._fftVisibleXRange(plot));
         };
         clearTimeout(plot._fftSpectrumWindowTimer);
         plot._fftSpectrumWindowTimer = 0;
@@ -654,7 +662,7 @@ proto._buildFftTimeLayout = function(plot, visibleRange = null) {
 proto._buildFftSpectrumLayout = function(plot) {
     const { bg, gridColor, fontColor, legendBg } = this._colors();
     const state = this._ensureFftState(plot);
-    const xRange = this._fftResolvedAxisLimitRange(plot, 'fMin', 'fMax');
+    const xRange = this._fftAxisLayoutRange(plot, this._fftResolvedAxisLimitRange(plot, 'fMin', 'fMax'));
     const yRange = this._fftResolvedAxisLimitRange(plot, 'yMin', 'yMax');
     const yTitle = state.amplitudeScale === 'dbRelative'
         ? i18n.t('fftAmplitudeDbRelative')
@@ -672,7 +680,11 @@ proto._buildFftSpectrumLayout = function(plot) {
             linecolor: gridColor,
             tickcolor: gridColor,
             zeroline: false,
-            title: { text: this._fftFrequencyAxisTitle(plot), font: { size: 10 } },
+            title: { text: this._fftSpectrumXAxisTitle(plot), font: { size: 10 } },
+            // Bins are evenly spaced in frequency, so on a period axis they
+            // crowd into the short end: linear, everything but the slowest few
+            // would sit on top of each other (#108).
+            ...(this._fftXAxisIsPeriod(plot) ? { type: 'log' } : { type: 'linear' }),
             ...(xRange ? { range: xRange, autorange: false } : {}),
         },
         yaxis: {
@@ -687,6 +699,67 @@ proto._buildFftSpectrumLayout = function(plot) {
         autosize: true,
         hovermode: 'closest',
     };
+};
+
+// ─── Frequency or period: one spectrum, two readings (#108) ─────────────────
+
+proto._fftXAxisIsPeriod = function(plot) {
+    return this._ensureFftState(plot).xAxisMode === 'period';
+};
+
+/**
+ * Plotly reports and takes a LOG axis's range in log10 units, and the period
+ * axis is logarithmic — the bins are evenly spaced in frequency, so they crowd
+ * into the short-period end of a linear axis. Everything else in here works in
+ * data units, so the two conversions live in one pair of readers.
+ */
+proto._fftAxisDataRange = function(plot, range) {
+    if (!Array.isArray(range) || range.length < 2) return null;
+    const lo = this._coerceAxisValue(range[0]);
+    const hi = this._coerceAxisValue(range[1]);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+    return this._fftXAxisIsPeriod(plot) ? [10 ** lo, 10 ** hi] : [lo, hi];
+};
+
+proto._fftAxisLayoutRange = function(plot, range) {
+    if (!Array.isArray(range) || range.length < 2) return null;
+    if (!this._fftXAxisIsPeriod(plot)) return range;
+    const lo = Number(range[0]);
+    const hi = Number(range[1]);
+    // A period is positive by construction; a limit that is not (a leftover
+    // frequency bound of 0, say) has no place on a log axis.
+    if (!(lo > 0) || !(hi > 0)) return null;
+    return [Math.log10(lo), Math.log10(hi)];
+};
+
+/** The x window of the spectrum pane, in data units, or null. */
+proto._fftVisibleXRange = function(plot) {
+    return this._fftAxisDataRange(plot, plot?.fftDiv?._fullLayout?.xaxis?.range);
+};
+
+/**
+ * Switch the reading. The stored x limits are re-read for the new mode so a
+ * zoom survives the switch, and the spectrum is redrawn from the bins already
+ * computed — nothing is transformed twice.
+ */
+proto._setFftXAxisMode = function(panelId, mode) {
+    const plot = this.plots.get(panelId);
+    if (!plot) return;
+    const state = this._ensureFftState(plot);
+    const next = normalizeFftXAxisMode(mode);
+    if (next === state.xAxisMode) return;
+    const limits = convertFftAxisLimits(state.fMin, state.fMax);
+    state.xAxisMode = next;
+    state.fMin = limits.min;
+    state.fMax = limits.max;
+    // The cursors mark bins, not numbers: a cursor at 0.5 Hz is the same bin as
+    // one at 2 s, so they move with the axis rather than staying put.
+    for (const key of ['a', 'b']) {
+        const value = plot.cursorsSpectrum?.[key];
+        if (value !== null && value !== undefined) plot.cursorsSpectrum[key] = invertAxisValue(value);
+    }
+    this._refreshFftSpectrumPlot(panelId, plot);
+    this._syncFftOptionsPanel(plot);
 };
 
 proto._fftAxisRange = function(a, b) {
@@ -719,11 +792,13 @@ proto._fftSpectrumExtent = function(plot, axis = 'x') {
     }
     if (Number.isFinite(min) && Number.isFinite(max)) return { min, max };
 
-    const axisLayout = axis === 'y' ? plot?.fftDiv?._fullLayout?.yaxis : plot?.fftDiv?._fullLayout?.xaxis;
-    const r0 = this._coerceAxisValue(axisLayout?.range?.[0]);
-    const r1 = this._coerceAxisValue(axisLayout?.range?.[1]);
-    if (Number.isFinite(r0) && Number.isFinite(r1)) {
-        return { min: Math.min(r0, r1), max: Math.max(r0, r1) };
+    if (axis === 'y') {
+        const r0 = this._coerceAxisValue(plot?.fftDiv?._fullLayout?.yaxis?.range?.[0]);
+        const r1 = this._coerceAxisValue(plot?.fftDiv?._fullLayout?.yaxis?.range?.[1]);
+        if (Number.isFinite(r0) && Number.isFinite(r1)) return { min: Math.min(r0, r1), max: Math.max(r0, r1) };
+    } else {
+        const range = this._fftVisibleXRange(plot);
+        if (range) return { min: Math.min(range[0], range[1]), max: Math.max(range[0], range[1]) };
     }
     return axis === 'y' ? { min: 0, max: 1 } : { min: 0, max: 1 };
 };
@@ -741,7 +816,7 @@ proto._fftAxisLimitSliderDomain = function(plot, key) {
             max = Math.max(max, value);
         }
     }
-    if (!isY) min = Math.min(0, min);
+    if (!isY) { if (!this._fftXAxisIsPeriod(plot)) min = Math.min(0, min); }
     else if (state.amplitudeScale === 'normal') min = Math.min(0, min);
     if (!Number.isFinite(min) || !Number.isFinite(max)) {
         min = isY ? 0 : 0;
@@ -764,6 +839,25 @@ proto._fftAxisLimitDisplayValue = function(plot, key, domain = null) {
     if (hasFiniteFftValue(state[key])) return Number(state[key]);
     const sliderDomain = domain || this._fftAxisLimitSliderDomain(plot, key);
     return key === 'fMin' || key === 'yMin' ? sliderDomain.min : sliderDomain.max;
+};
+
+/**
+ * What the spectrum's x axis is called right now: the frequency title, or the
+ * period one. Period carries the time unit the panel already uses for the
+ * hover's T — seconds for a calendar or seconds-based file, samples when the
+ * file has no time axis of its own.
+ */
+proto._fftSpectrumXAxisTitle = function(plot) {
+    if (!this._fftXAxisIsPeriod(plot)) return this._fftFrequencyAxisTitle(plot);
+    const unit = this._fftCursorPeriodUnit(plot);
+    return unit ? `${i18n.t('fftPeriod')} [${unit}]` : i18n.t('fftPeriod');
+};
+
+/** The unit of the x axis as a suffix, whichever reading is on. */
+proto._fftXUnitSuffix = function(plot) {
+    if (!this._fftXAxisIsPeriod(plot)) return this._fftFrequencyUnitSuffix(plot);
+    const unit = this._fftCursorPeriodUnit(plot);
+    return unit ? ` [${unit}]` : '';
 };
 
 proto._fftFrequencyUnitSuffix = function(plot) {
@@ -792,6 +886,8 @@ proto._fftAmplitudeUnitSuffix = function(plot) {
 proto._appendFftExportColumns = function(plot, headers, columns) {
     const table = buildFftExportColumns(plot?._fftSpectraFull || [], {
         frequencyUnit: this._fftFrequencyUnitSuffix(plot),
+        // Reading the spectrum by period puts a period column in the CSV too.
+        periodUnit: this._fftXAxisIsPeriod(plot) ? this._fftXUnitSuffix(plot) : '',
         amplitudeScaleUnit: this._fftAmplitudeUnitSuffix(plot),
         nameFor: (entry) => (entry.varName
             ? this._traceName(entry.varName, entry.fileId, { units: false })
@@ -803,8 +899,9 @@ proto._appendFftExportColumns = function(plot, headers, columns) {
 };
 
 proto._fftAxisLimitLabel = function(plot, key) {
-    if (key === 'fMin') return `${i18n.t('fftFMin')}${this._fftFrequencyUnitSuffix(plot)}`;
-    if (key === 'fMax') return `${i18n.t('fftFMax')}${this._fftFrequencyUnitSuffix(plot)}`;
+    const period = this._fftXAxisIsPeriod(plot);
+    if (key === 'fMin') return `${i18n.t(period ? 'fftTMin' : 'fftFMin')}${this._fftXUnitSuffix(plot)}`;
+    if (key === 'fMax') return `${i18n.t(period ? 'fftTMax' : 'fftFMax')}${this._fftXUnitSuffix(plot)}`;
     if (key === 'yMin') return `${i18n.t('fftYMin')}${this._fftAmplitudeUnitSuffix(plot)}`;
     if (key === 'yMax') return `${i18n.t('fftYMax')}${this._fftAmplitudeUnitSuffix(plot)}`;
     return key;
@@ -1357,25 +1454,42 @@ proto._buildFftSpectrumTrace = function(plot, entry, range) {
         hi = this._coerceAxisValue(range[1]);
         if (Number.isFinite(lo) && Number.isFinite(hi) && lo > hi) { const t = lo; lo = hi; hi = t; }
     }
-    const { frequencies: dispFreqs, amplitudes: dispAmps } =
-        windowSpectrumForDisplay(entry.frequencies, entry.amplitudes, lo, hi);
+    const isPeriod = this._fftXAxisIsPeriod(plot);
+    // The window arrives in the units of the axis on screen; the bins are
+    // stored and searched by frequency, so a period window is read back.
+    if (isPeriod) {
+        const inverted = invertAxisWindow(lo, hi);
+        lo = inverted.lo;
+        hi = inverted.hi;
+    }
+    const windowed = windowSpectrumForDisplay(entry.frequencies, entry.amplitudes, lo, hi);
+    const asPeriod = isPeriod ? periodSeriesFromSpectrum(windowed.frequencies, windowed.amplitudes) : null;
+    const dispX = isPeriod ? asPeriod.periods : windowed.frequencies;
+    const dispAmps = isPeriod ? asPeriod.amplitudes : windowed.amplitudes;
+    // What the hover shows on its second line: the other reading of the same
+    // bin. Frequency axis → its period; period axis → its frequency.
+    const dispOther = isPeriod ? asPeriod.frequencies : windowed.frequencies;
     const periodUnit = this._fftCursorPeriodUnit(plot);
-    const periodValues = new Float64Array(dispFreqs.length);
+    const otherValues = new Float64Array(dispX.length);
     // Dense (filled with '') — a sparse array leaves holes that Plotly renders
     // as "-" in %{text}, so the hover showed e.g. "1.09227 s-" instead of "s".
-    const naturalPeriodSuffixes = new Array(dispFreqs.length).fill('');
-    for (let i = 0; i < dispFreqs.length; i++) {
-        const period = frequencyPeriod(Number(dispFreqs[i]));
-        periodValues[i] = period;
+    const naturalPeriodSuffixes = new Array(dispX.length).fill('');
+    for (let i = 0; i < dispX.length; i++) {
+        const other = isPeriod ? Number(dispOther[i]) : frequencyPeriod(Number(dispOther[i]));
+        otherValues[i] = other;
+        const period = isPeriod ? Number(dispX[i]) : other;
         if (periodUnit === 's' && Number.isFinite(period) && period >= 60) {
             naturalPeriodSuffixes[i] = ` (${formatNaturalDuration(period, 2)})`;
         }
     }
     const full = entry.frequencies;
+    const fullExtent = isPeriod
+        ? periodExtentOf(full)
+        : { xMin: full.length ? Number(full[0]) : 0, xMax: full.length ? Number(full[full.length - 1]) : 1 };
     return {
-        x: dispFreqs,
+        x: dispX,
         y: dispAmps,
-        customdata: periodValues,
+        customdata: otherValues,
         text: naturalPeriodSuffixes,
         // WebGL keeps the windowed envelope smooth to pan/zoom and is cheap for
         // the bounded point count.
@@ -1384,11 +1498,12 @@ proto._buildFftSpectrumTrace = function(plot, entry, range) {
         name: entry.name,
         visible: entry.visible,
         line: { color: entry.color, width: 1.5 },
-        hovertemplate: `<b>%{fullData.name}</b><br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{x:.6g}<br>${i18n.t('fftPeriod')} = %{customdata:.6g}${periodUnit ? ` ${periodUnit}` : ''}%{text}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`,
+        hovertemplate: isPeriod
+            ? `<b>%{fullData.name}</b><br>${i18n.t('fftPeriod')}${periodUnit ? ` [${periodUnit}]` : ''} = %{x:.6g}%{text}<br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{customdata:.6g}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`
+            : `<b>%{fullData.name}</b><br>${i18n.t('fftFrequency')}${this._fftFrequencyUnitSuffix(plot)} = %{x:.6g}<br>${i18n.t('fftPeriod')} = %{customdata:.6g}${periodUnit ? ` ${periodUnit}` : ''}%{text}<br>${i18n.t('fftAmplitudeShort')}${this._fftAmplitudeUnitSuffix(plot)} = %{y:.6g}<extra></extra>`,
         _fftFullIndex: entry.index,
         _fftExtent: {
-            xMin: full.length ? Number(full[0]) : 0,
-            xMax: full.length ? Number(full[full.length - 1]) : 1,
+            ...fullExtent,
             yMin: entry.yExtent?.min,
             yMax: entry.yExtent?.max,
         },
@@ -2587,6 +2702,11 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         }
         select.value = state[key];
         select.addEventListener('change', () => {
+            if (key === 'xAxisMode') {
+                this._setFftXAxisMode(panelId, select.value);
+                this._renderFftOptionsPanel(panelId, plot);
+                return;
+            }
             const state = this._ensureFftState(plot);
             const previous = state[key];
             state[key] = select.value;
@@ -2748,6 +2868,12 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         { value: 'dbRelative', label: i18n.t('fftScaleDbRelative') },
     ]), i18n.t('fftAmplitudeScaleTooltip')));
 
+    // The same spectrum, read from the other end (#108).
+    options.appendChild(makeRow(i18n.t('fftXAxis'), makeSelect('xAxisMode', [
+        { value: 'frequency', label: i18n.t('fftXAxisFrequency') },
+        { value: 'period', label: i18n.t('fftXAxisPeriod') },
+    ]), i18n.t('fftXAxisTooltip')));
+
     const axesTitle = document.createElement('div');
     axesTitle.className = 'fft-options-subtitle';
     axesTitle.textContent = i18n.t('fftAxisLimits');
@@ -2757,7 +2883,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     const makeAxisBound = (key) => {
         const wrap = document.createElement('div');
         wrap.className = 'fft-axis-bound';
-        const tooltip = this._fftAxisLimitTooltip(key);
+        const tooltip = this._fftAxisLimitTooltip(key, plot);
         wrap.append(makeRow(this._fftAxisLimitLabel(plot, key), makeInput(key), tooltip), makeAxisLimitRange(key));
         return wrap;
     };
@@ -2788,8 +2914,9 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
     const autoXRangeBtn = document.createElement('button');
     autoXRangeBtn.type = 'button';
     autoXRangeBtn.className = 'fft-auto-xrange-btn';
-    autoXRangeBtn.textContent = i18n.t('fftAutoXRange');
-    autoXRangeBtn.title = i18n.t('fftAutoXRangeTooltip');
+    const periodAxis = this._fftXAxisIsPeriod(plot);
+    autoXRangeBtn.textContent = i18n.t(periodAxis ? 'fftAutoXRangePeriod' : 'fftAutoXRange');
+    autoXRangeBtn.title = i18n.t(periodAxis ? 'fftAutoXRangePeriodTooltip' : 'fftAutoXRangeTooltip');
     autoXRangeBtn.addEventListener('click', (event) => {
         event.preventDefault();
         const state = this._ensureFftState(plot);
@@ -2800,8 +2927,11 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         // extent explicitly (the relayout then re-windows back to full).
         if (plot.fftDiv) {
             const ext = this._fftSpectrumExtent(plot, 'x');
-            if (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max) {
-                Plotly.relayout(plot.fftDiv, { 'xaxis.range': [ext.min, ext.max], 'xaxis.autorange': false });
+            const range = (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max)
+                ? this._fftAxisLayoutRange(plot, [ext.min, ext.max])
+                : null;
+            if (range) {
+                Plotly.relayout(plot.fftDiv, { 'xaxis.range': range, 'xaxis.autorange': false });
             } else {
                 Plotly.relayout(plot.fftDiv, { 'xaxis.autorange': true });
             }
@@ -2832,9 +2962,10 @@ proto._installFftHelpDismissHandlers = function(plot) {
     plot._fftHelpDocListeners = { click: onClick, key: onKey };
 };
 
-proto._fftAxisLimitTooltip = function(key) {
-    if (key === 'fMin') return i18n.t('fftFMinTooltip');
-    if (key === 'fMax') return i18n.t('fftFMaxTooltip');
+proto._fftAxisLimitTooltip = function(key, plot = null) {
+    const period = plot ? this._fftXAxisIsPeriod(plot) : false;
+    if (key === 'fMin') return i18n.t(period ? 'fftTMinTooltip' : 'fftFMinTooltip');
+    if (key === 'fMax') return i18n.t(period ? 'fftTMaxTooltip' : 'fftFMaxTooltip');
     if (key === 'yMin') return i18n.t('fftYMinTooltip');
     if (key === 'yMax') return i18n.t('fftYMaxTooltip');
     return '';
@@ -3057,9 +3188,9 @@ proto._fftWarningText = function(trace, reason, extra = {}) {
  * scan is over the points on screen rather than over every bin.
  */
 proto._fftVisibleSpectrumYExtent = function(plot) {
-    const range = plot?.fftDiv?._fullLayout?.xaxis?.range;
-    const lo = Array.isArray(range) ? Math.min(Number(range[0]), Number(range[1])) : -Infinity;
-    const hi = Array.isArray(range) ? Math.max(Number(range[0]), Number(range[1])) : Infinity;
+    const range = this._fftVisibleXRange(plot);
+    const lo = range ? Math.min(range[0], range[1]) : -Infinity;
+    const hi = range ? Math.max(range[0], range[1]) : Infinity;
     // A trace hidden from the legend is not part of "what I am looking at".
     const drawn = (plot?._fftSpectra || []).filter(trace => trace?.visible !== 'legendonly');
     return amplitudeExtentInRange(drawn, lo, hi);
@@ -3072,10 +3203,14 @@ proto._fftAxisLimitUpdate = function(plot, axis, options = {}) {
         ? this._fftResolvedAxisLimitRange(plot, 'fMin', 'fMax')
         : this._fftResolvedAxisLimitRange(plot, 'yMin', 'yMax');
     const update = {};
+    const asLayout = (range) => (isX ? this._fftAxisLayoutRange(plot, range) : range);
     if (manualRange) {
-        update[`${axisKey}.range`] = manualRange;
-        update[`${axisKey}.autorange`] = false;
-        return update;
+        const layoutRange = asLayout(manualRange);
+        if (layoutRange) {
+            update[`${axisKey}.range`] = layoutRange;
+            update[`${axisKey}.autorange`] = false;
+            return update;
+        }
     }
     // Only the fit button asks about the visible window. Restoring the panel's
     // full view (Home, and every recompute) must keep answering for the whole
@@ -3083,8 +3218,11 @@ proto._fftAxisLimitUpdate = function(plot, axis, options = {}) {
     // frequency axis had gone back to everything.
     const ext = (axis === 'y' && options.visibleOnly && this._fftVisibleSpectrumYExtent(plot))
         || this._fftSpectrumExtent(plot, axis);
-    if (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max) {
-        update[`${axisKey}.range`] = [ext.min, ext.max];
+    const extRange = (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max)
+        ? asLayout([ext.min, ext.max])
+        : null;
+    if (extRange) {
+        update[`${axisKey}.range`] = extRange;
         update[`${axisKey}.autorange`] = false;
     } else {
         update[`${axisKey}.autorange`] = true;
@@ -3225,4 +3363,21 @@ function fftDatetimeInputToMs(text) {
     if (!text) return NaN;
     const ms = Date.parse(`${text}Z`);
     return Number.isFinite(ms) ? ms : NaN;
+}
+
+// The longest and the shortest period a frequency grid can speak about: the
+// slowest bin above DC, and the fastest. Empty or all-DC, there is nothing to
+// show and the caller's own default stands.
+function periodExtentOf(frequencies) {
+    const n = frequencies?.length || 0;
+    let lowest = NaN;
+    let highest = NaN;
+    for (let i = 0; i < n; i++) {
+        const f = Number(frequencies[i]);
+        if (!Number.isFinite(f) || f <= 0) continue;
+        if (!Number.isFinite(lowest)) lowest = f;
+        highest = f;
+    }
+    if (!Number.isFinite(lowest) || !Number.isFinite(highest)) return { xMin: 0, xMax: 1 };
+    return { xMin: 1 / highest, xMax: 1 / lowest };
 }

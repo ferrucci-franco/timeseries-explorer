@@ -357,17 +357,25 @@ for (const windowType of ['hann', 'hamming', 'blackman']) {
     // avoid asserting the surrounding HTML whitespace or localized labels.
     assert.match(fftMethodsSource, /\bfrequencyPeriod\b/, 'spectrum builds a period value for every frequency');
     assert.match(fftMethodsSource, /\bformatNaturalDuration\b/, 'spectrum hover builds compact natural suffixes');
+    // customdata carries the OTHER reading of each bin — its period on a
+    // frequency axis, its frequency on a period one (#108) — in a compact
+    // typed array either way.
     assert.match(
         fftMethodsSource,
-        /const periodValues = new Float64Array\(dispFreqs\.length\)/,
-        'spectrum keeps numeric periods in a compact typed array',
+        /const otherValues = new Float64Array\(dispX\.length\)/,
+        'spectrum keeps the second reading in a compact typed array',
     );
-    assert.match(fftMethodsSource, /customdata:\s*periodValues/, 'spectrum carries numeric period values through customdata');
+    assert.match(fftMethodsSource, /customdata:\s*otherValues/, 'spectrum carries those numbers through customdata');
     assert.match(fftMethodsSource, /text:\s*naturalPeriodSuffixes/, 'spectrum carries only natural-unit suffixes through text');
     assert.match(
         fftMethodsSource,
-        /hovertemplate:[^\n]*fftPeriod[^\n]*%\{customdata:\.6g\}[^\n]*%\{text\}/,
-        'spectrum hover combines numeric customdata with the optional natural suffix',
+        /fftPeriod[^\n]*%\{customdata:\.6g\}[^\n]*%\{text\}/,
+        'the frequency-axis hover combines numeric customdata with the optional natural suffix',
+    );
+    assert.match(
+        fftMethodsSource,
+        /fftPeriod[^\n]*= %\{x:\.6g\}%\{text\}[^\n]*fftFrequency[^\n]*%\{customdata:\.6g\}/,
+        'and the period-axis hover reads the period off x, with the frequency beside it',
     );
     assert.match(interactionMethodsSource, /\bformatSpectrumPeriod\b/, 'measurement cursors use the shared period formatter');
     assert.match(

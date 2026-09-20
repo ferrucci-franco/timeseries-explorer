@@ -2050,6 +2050,28 @@ proto._onUnhover = function(sourcePanelId) {
     }, 80);
 };
 
+/**
+ * Where a data value sits, in pixels from the plot's left edge.
+ *
+ * The linear form below — (x − r0)/(r1 − r0) × length — is exactly Plotly's own
+ * for a linear axis, and wrong for a logarithmic one, whose range is kept in
+ * log10 (the spectrum's period axis is the first of those, #108). Plotly's
+ * `d2p` handles both, so it is asked when it is there.
+ */
+proto._axisPixelForValue = function(axis, value, range = null) {
+    const offset = axis?._offset || 0;
+    if (!range && typeof axis?.d2p === 'function') {
+        const pixel = axis.d2p(value);
+        if (Number.isFinite(pixel)) return offset + pixel;
+    }
+    const bounds = Array.isArray(range) && range.length >= 2 ? range : axis?.range;
+    const r0 = this._coerceAxisValue(bounds?.[0]);
+    const r1 = this._coerceAxisValue(bounds?.[1]);
+    const span = r1 - r0;
+    if (!Number.isFinite(r0) || !Number.isFinite(r1) || span === 0) return NaN;
+    return offset + ((value - r0) / span) * (axis?._length || 0);
+};
+
 proto._hoverOverlayGeometry = function(plot, x, y = null, axis = 'y') {
     if (!plot?.div) return null;
     const xValue = this._coerceAxisValue(x);
@@ -2064,7 +2086,7 @@ proto._hoverOverlayGeometry = function(plot, x, y = null, axis = 'y') {
     const rx = x1 - x0;
     if (!Number.isFinite(x0) || !Number.isFinite(x1) || rx === 0) return null;
 
-    const left = (xa._offset || 0) + ((xValue - x0) / rx) * xa._length;
+    const left = this._axisPixelForValue(xa, xValue);
     const leftAxis = xa._offset || 0;
     const rightAxis = leftAxis + xa._length;
     const topAxis = ya._offset || 0;
@@ -2769,7 +2791,7 @@ proto._cursorOverlayGeometry = function(view, trace, x, options = {}) {
     const y1 = Number(ya.range[1]);
     const ry = y1 - y0;
 
-    const left = (xa._offset || 0) + ((x - x0) / rx) * xa._length;
+    const left = this._axisPixelForValue(xa, x, Array.isArray(options.range) ? range : null);
     const leftAxis = xa._offset || 0;
     const rightAxis = leftAxis + xa._length;
     const topAxis = ya._offset || 0;
@@ -3441,6 +3463,8 @@ proto._eventToXValue = function(div, event) {
     if (!xa?.range) return NaN;
     const rect = div.getBoundingClientRect();
     const pixel = event.clientX - rect.left - (xa._offset || 0);
+    // p2d, not p2c: on a log axis p2c hands back log10 of the value (#108).
+    if (typeof xa.p2d === 'function') return this._coerceAxisValue(xa.p2d(pixel));
     if (typeof xa.p2c === 'function') return this._coerceAxisValue(xa.p2c(pixel));
     const frac = pixel / (xa._length || rect.width || 1);
     const r0 = this._coerceAxisValue(xa.range[0]);
@@ -3505,7 +3529,17 @@ proto._updateCursorBox = function(view) {
     };
     const a = measure(traceA, aX);
     const b = measure(traceB, bX);
-    const spectrum = view.isSpectrum ? spectrumCursorMeasurements(aX, bX) : null;
+    // On a period axis the cursor's own x IS the period, so the spectrum
+    // readout — Δf, 1/Δf, each cursor's f and T — is computed from the
+    // frequencies those periods stand for (#108). The rows below then print
+    // the same two lines in either reading.
+    const spectrumIsPeriod = view.isSpectrum && this._fftXAxisIsPeriod?.(plot);
+    const toFrequency = (value) => (spectrumIsPeriod
+        ? (Number.isFinite(value) && value !== 0 ? 1 / Math.abs(value) : NaN)
+        : value);
+    const spectrumFreqA = toFrequency(aX);
+    const spectrumFreqB = toFrequency(bX);
+    const spectrum = view.isSpectrum ? spectrumCursorMeasurements(spectrumFreqA, spectrumFreqB) : null;
     const dx = bX - aX;
     const isDateTimeCursor = a.timeUnit === 'datetime' || b.timeUnit === 'datetime';
     const isDurationCursor = a.timeUnit === 'duration' || b.timeUnit === 'duration';
@@ -3634,8 +3668,8 @@ proto._updateCursorBox = function(view) {
             <div class="cursor-spectrum-frequency-row"><b style="color:${color}">${letter}</b> ${xLabel}=${formatXValue(measurement, x)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(measurement.y)}${unit(measurement.yUnit)}</div>
             <div class="cursor-spectrum-period-row">T=${formatPeriod(period)}</div>`;
     const cursorRowsHTML = view.isSpectrum
-        ? `${spectrumCursorRows('A', colorA, a, aX, spectrum.periodA)}
-           ${spectrumCursorRows('B', colorB, b, bX, spectrum.periodB)}`
+        ? `${spectrumCursorRows('A', colorA, a, spectrumFreqA, spectrum.periodA)}
+           ${spectrumCursorRows('B', colorB, b, spectrumFreqB, spectrum.periodB)}`
         : `<div><b style="color:${colorA}">A</b> ${xLabel}=${formatXValue(a, aX)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(a.y)}${unit(a.yUnit)}</div>
            <div><b style="color:${colorB}">B</b> ${xLabel}=${formatXValue(b, bX)}${xUnitSuffix} ${labelY}=${this._formatHTMLNumber(b.y)}${unit(b.yUnit)}</div>`;
     const valuesHTML = `
