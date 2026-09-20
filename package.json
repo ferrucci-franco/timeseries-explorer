@@ -80,6 +80,7 @@
     "test:in-memory-file": "node scripts/test-in-memory-file.mjs",
     "test:reload-overlay": "node scripts/test-reload-overlay.mjs",
     "test:reload-dropped-traces": "node scripts/test-reload-dropped-traces.mjs",
+    "test:fft-clean-range": "node scripts/test-fft-clean-range.mjs",
     "test:time-axis-after-transform": "node scripts/test-time-axis-after-transform.mjs",
     "test:time-axis-reload-cache": "node scripts/test-time-axis-reload-cache.mjs",
     "test:reset-layout": "node scripts/test-reset-layout-availability.mjs",
