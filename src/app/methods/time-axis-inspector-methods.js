@@ -26,11 +26,33 @@ import { timeAxisViewsDiffer } from '../../utils/time-axis-transform-view.js';
 // opens the dialog, because DuckDB serializes queries on one connection and a
 // full-column scan started from a sidebar re-render would stall pan and zoom.
 
+// A stable number per time vector, handed out on first sight and never reused.
+//
+// Two different time vectors can agree on their name, their kind and their
+// length — reloading a re-run simulation is exactly that case — so a key built
+// from those three alone cannot tell them apart, and the panel went on showing
+// the verdict of the file that had just been replaced (#67). Object identity is
+// what actually distinguishes them; the WeakMap turns it into something a key
+// can carry, without writing a marker onto the array or holding it alive.
+const timeVectorIds = new WeakMap();
+let lastTimeVectorId = 0;
+function timeVectorId(values) {
+    if (!values || typeof values !== 'object') return 0;
+    let id = timeVectorIds.get(values);
+    if (id === undefined) {
+        id = ++lastTimeVectorId;
+        timeVectorIds.set(values, id);
+    }
+    return id;
+}
+
 export function installTimeAxisInspectorMethods(TargetClass) {
     const proto = TargetClass.prototype;
 
 // Cache key: the diagnostic describes the axis AFTER the file transform, so a
-// crop, a shift or a reindex invalidates it. Live-appended rows do too.
+// crop, a shift or a reindex invalidates it. Live-appended rows do too, through
+// the length — and a reload that keeps the same row count, through the identity
+// of the array itself.
 proto._timeAxisDiagnosticsKey = function(fileId) {
     const entry = this.plotManager.files.get(fileId);
     const data = entry?.data;
@@ -42,6 +64,7 @@ proto._timeAxisDiagnosticsKey = function(fileId) {
         timeVar?.name || '',
         timeVar?.timeKind || '',
         timeVar?.data?.length || 0,
+        timeVectorId(timeVar?.data),
         transform.timeDisplayMode || '',
         transform.timeStepMode || '',
         transform.customTimeStep || '',
