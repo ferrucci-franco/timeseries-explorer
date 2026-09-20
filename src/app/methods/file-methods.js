@@ -693,6 +693,81 @@ proto._buildOverlayCancelButton = function(onCancel) {
     return button;
 };
 
+// The same overlay, for work that is not a file being read.
+//
+// Building a large CSV runs for a minute on the main thread with nothing on
+// screen (#132), which is the same problem the loading overlay already solves
+// — so it is the same overlay, with its own words and its own cancel token,
+// rather than a second spinner that looks almost but not quite like it.
+//
+// Returns a handle: `progress` relabels the second line, `close` takes it down.
+// The caller owns the token and decides what cancelling means.
+proto._showBusyOverlay = function({ title, hint = '', token = null } = {}) {
+    document.getElementById('file-loading-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'file-loading-overlay';
+    overlay.className = 'example-loading-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-live', 'assertive');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'example-loading-dialog';
+    const spinner = document.createElement('div');
+    spinner.className = 'example-loading-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    const titleEl = document.createElement('div');
+    titleEl.className = 'example-loading-title';
+    titleEl.id = 'file-loading-title';
+    titleEl.textContent = title || '';
+    const hintEl = document.createElement('div');
+    hintEl.className = 'example-loading-hint';
+    hintEl.id = 'file-loading-hint';
+    hintEl.textContent = hint;
+    dialog.append(spinner, titleEl, hintEl);
+
+    let onKey = null;
+    if (token) {
+        const cancel = this._buildOverlayCancelButton(() => {
+            token.cancelled = true;
+            titleEl.textContent = i18n.t('cancellingConversion');
+            if (onKey) document.removeEventListener('keydown', onKey, true);
+        });
+        const escapeHint = document.createElement('div');
+        escapeHint.className = 'example-loading-hint';
+        escapeHint.id = 'file-loading-cancel-hint';
+        escapeHint.textContent = i18n.t('loadingFilesCancelHint');
+        dialog.append(cancel, escapeHint);
+        // Escape goes through the button, so one press cannot cancel the work
+        // while leaving the label reading "Cancel".
+        onKey = (event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            cancel.click();
+        };
+        document.addEventListener('keydown', onKey, true);
+    }
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('show'));
+
+    return {
+        progress(text) {
+            // Silent once cancelled: the title says so, and a progress line
+            // still counting underneath it reads as the work carrying on.
+            if (token?.cancelled) return;
+            hintEl.textContent = text;
+        },
+        close() {
+            if (onKey) document.removeEventListener('keydown', onKey, true);
+            overlay.classList.remove('show');
+            setTimeout(() => overlay.remove(), 220);
+        },
+    };
+};
+
 proto._showFileLoadingOverlay = function(total = 1, loadToken = null) {
     const existing = document.getElementById('file-loading-overlay');
     if (existing?.classList.contains('show')) {

@@ -58,9 +58,16 @@ assert.ok(
     !refreshSource.includes('csvBtn'),
     'no mode-specific disabling survives on the button itself',
 );
+// The name is chosen in _exportCSV and carried into _writeCsvFile, which does
+// the download — the two halves were split when the writer became chunked
+// (#132), and the default has to survive that split.
 assert.ok(
-    plotManagerSource.includes('a.download = options.fileName || `${plot.mode}_export.csv`;'),
+    plotManagerSource.includes('return this._writeCsvFile(headers, columns, options.fileName || `${plot.mode}_export.csv`);'),
     'CSV keeps its old default name and accepts the one typed in the dialog',
+);
+assert.ok(
+    plotManagerSource.includes('a.download = fileName;'),
+    'and that name is what the browser is given',
 );
 
 // ── The dialog ──────────────────────────────────────────────────────────

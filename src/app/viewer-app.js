@@ -56,6 +56,9 @@ class OpenModelicaViewer {
         this.layoutManager.onPanelUnmount = (id)     => this.plotManager.onPanelUnmount(id);
         this.layoutManager.onPanelDetach  = (id)     => this.plotManager.onPanelDetach(id);
         this.plotManager.onTimeAxisVariableDrop = (timeVarName) => this._handleTimeAxisDrop(timeVarName);
+        // Long jobs inside PlotManager borrow the app's loading overlay. Kept
+        // as a hook, like the one above: the plot manager owns no UI of its own.
+        this.plotManager.onBusyOverlay = (options) => this._showBusyOverlay(options);
 
         this.applyTheme(this.theme);
         this.initEventListeners();
