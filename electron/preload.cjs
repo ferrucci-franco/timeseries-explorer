@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld('omvDesktop', {
   tmpdir: os.tmpdir(),
   username,
   setTheme: theme => ipcRenderer.send('omv:set-theme', theme),
+  // The UI language, plus the context menu's labels in it. Sent from the
+  // renderer because the translations live in src/i18n, where one consistency
+  // guard covers all four languages.
+  setSpellcheck: payload => ipcRenderer.send('omv:set-spellcheck', payload || {}),
   getZoom: () => ipcRenderer.invoke('omv:get-zoom'),
   // 'in' | 'out' | 'reset' -- the ladder lives in the main process.
   setZoom: action => ipcRenderer.invoke('omv:set-zoom', { action }),

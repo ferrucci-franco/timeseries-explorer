@@ -25,6 +25,12 @@ const {
   normalizeZoomFactor,
   stepZoomFactor,
 } = require('./zoom-levels.cjs');
+const {
+  normalizeSpellcheckLanguage,
+  resolveSpellcheckLanguage,
+  spellcheckMenuItems,
+  spellcheckerCodesFor,
+} = require('./spellcheck-languages.cjs');
 
 const projectRoot = path.resolve(__dirname, '..');
 const staticRoot = path.join(projectRoot, 'dist');
@@ -49,6 +55,126 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 ipcMain.on('omv:set-theme', (_event, theme) => {
   nativeTheme.themeSource = theme === 'dark' ? 'dark' : 'light';
 });
+
+// ─── Spellchecker ───────────────────────────────────────────────────────────
+//
+// In a browser the user right-clicks a misspelling and picks another dictionary
+// from Chrome's own menu. This app removes the application menu at startup and
+// had no context menu at all, so Electron's choice — the OS locale — was final:
+// writing English on a French machine underlined every word with no way out
+// (#41). The menu below is the way out, and the choice is remembered.
+//
+// macOS is excluded throughout: there the OS spellchecker runs, detects the
+// language itself, and setSpellCheckerLanguages is documented as a no-op.
+const SPELLCHECK_SUPPORTED = process.platform !== 'darwin';
+
+// What the renderer last told us: the language the app is being used in, and
+// the menu's labels in that language. The labels live in src/i18n so the four
+// translations stay in the one file the consistency guard checks.
+let rendererSpellcheckState = { uiLanguage: '', labels: {} };
+let spellcheckLanguage = null;
+
+function applySpellcheckLanguage(win, language) {
+  spellcheckLanguage = resolveSpellcheckLanguage({ stored: language });
+  if (!SPELLCHECK_SUPPORTED || !win || win.isDestroyed()) return spellcheckLanguage;
+  const session = win.webContents.session;
+  const codes = spellcheckerCodesFor(spellcheckLanguage, session.availableSpellCheckerLanguages);
+  // No matching dictionary on this machine. Setting an unavailable code throws,
+  // and a window that dies because a dictionary is missing is a far worse
+  // outcome than a spellchecker left as it was.
+  if (!codes.length) return spellcheckLanguage;
+  try {
+    session.setSpellCheckerLanguages(codes);
+  } catch (err) {
+    console.error('[desktop] could not set the spellchecker language', err?.message || err);
+  }
+  return spellcheckLanguage;
+}
+
+function writeSpellcheckLanguage(language) {
+  try {
+    const settings = readDesktopSettings();
+    settings.spellcheckLanguage = language;
+    fs.mkdirSync(path.dirname(desktopSettingsPath()), { recursive: true });
+    fs.writeFileSync(desktopSettingsPath(), JSON.stringify(settings, null, 2), 'utf8');
+  } catch (err) {
+    // A preference that cannot be remembered is not worth interrupting over.
+    console.error('[desktop] could not save the spellchecker language', err?.message || err);
+  }
+}
+
+// The renderer pushes this on startup and on every language switch. It only
+// moves the spellchecker while the user has not chosen for themselves: an
+// explicit menu choice is a setting, and a setting does not follow the UI.
+ipcMain.on('omv:set-spellcheck', (event, payload = {}) => {
+  const labels = payload && typeof payload.labels === 'object' ? payload.labels : {};
+  rendererSpellcheckState = {
+    uiLanguage: normalizeSpellcheckLanguage(payload?.uiLanguage) || '',
+    labels,
+  };
+  if (readDesktopSettings().spellcheckLanguage) return;
+  const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  applySpellcheckLanguage(win, rendererSpellcheckState.uiLanguage);
+});
+
+// The right-click menu on a text field. Built per event because everything in
+// it — the suggestions, which edit actions are possible, which language is
+// ticked — describes the click that opened it.
+function installSpellcheckContextMenu(win) {
+  win.webContents.on('context-menu', (_event, params) => {
+    if (!params.isEditable) return;
+    const label = (key, fallback) => rendererSpellcheckState.labels?.[key] || fallback;
+    const template = [];
+
+    for (const suggestion of params.dictionarySuggestions || []) {
+      template.push({
+        label: suggestion,
+        click: () => win.webContents.replaceMisspelling(suggestion),
+      });
+    }
+    if (params.misspelledWord && !(params.dictionarySuggestions || []).length) {
+      template.push({ label: label('spellcheckNoSuggestions', 'No suggestions'), enabled: false });
+    }
+    if (params.misspelledWord) {
+      template.push({
+        label: label('spellcheckAddToDictionary', 'Add to dictionary'),
+        click: () => win.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      template.push({ type: 'separator' });
+    }
+
+    // Roles, not handlers: Electron localizes these itself and greys out what
+    // the selection does not allow.
+    template.push(
+      { role: 'cut', enabled: params.editFlags?.canCut !== false },
+      { role: 'copy', enabled: params.editFlags?.canCopy !== false },
+      { role: 'paste', enabled: params.editFlags?.canPaste !== false },
+      { type: 'separator' },
+      { role: 'selectAll' },
+    );
+
+    if (SPELLCHECK_SUPPORTED) {
+      const available = win.webContents.session.availableSpellCheckerLanguages;
+      const items = spellcheckMenuItems(spellcheckLanguage, available);
+      template.push({ type: 'separator' }, {
+        label: label('spellcheckLanguageMenu', 'Spelling language'),
+        submenu: items.map(item => ({
+          label: item.label,
+          type: 'radio',
+          checked: item.checked,
+          enabled: item.enabled,
+          click: () => {
+            // Chosen by hand from here on: stored, so it survives a restart and
+            // stops following the app's UI language.
+            writeSpellcheckLanguage(applySpellcheckLanguage(win, item.code));
+          },
+        })),
+      });
+    }
+
+    Menu.buildFromTemplate(template).popup({ window: win });
+  });
+}
 
 // ─── Window zoom ────────────────────────────────────────────────────────────
 //
@@ -424,6 +550,8 @@ async function createWindow(url) {
       nodeIntegration: false,
       sandbox: false,
       backgroundThrottling: false,
+      // Electron's default, stated because the menu below depends on it.
+      spellcheck: true,
       // Set here so the first frame is already at the right size: applying the
       // zoom only after the load would show the window at 100% and then jump.
       zoomFactor: startupZoomFactor,
@@ -432,6 +560,11 @@ async function createWindow(url) {
 
   mainWindow = win;
   win.removeMenu();
+
+  // Before the first load, so the very first thing typed is checked against
+  // the right dictionary rather than against the OS locale's.
+  applySpellcheckLanguage(win, readDesktopSettings().spellcheckLanguage);
+  installSpellcheckContextMenu(win);
 
   // Belt and braces for the line above: webPreferences.zoomFactor has been
   // unreliable across Electron versions, and a reload after a renderer crash
