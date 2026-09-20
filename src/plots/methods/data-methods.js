@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import { getCalendarDateTickFormat } from '../plotly-locale.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
 import { hoverNumberFormat } from '../../utils/hover-precision.js';
+import { distinguishingParameterNames, runParameterLabel } from '../../utils/run-parameters.js';
 
 const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
 
@@ -1804,6 +1805,54 @@ proto._variableDefaultsToStairs = function(variable) {
     return variable.timeAxisIndex === true && (variable.timeAxisKind || 'index') === 'index';
 };
 
+// ── Telling one run from another ─────────────────────────────────────────────
+/**
+ * A file's parameters: the values that are fixed for the whole run.
+ *
+ * Two shapes reach this. An OpenModelica result marks them `parameter`;
+ * a CSV cannot, so a column that never changes is one — which is how a
+ * sweep recorded as CSV columns (Kp, Ki, Kd repeated on every row) is
+ * read the same way as the .mat it came from.
+ */
+proto._fileParameters = function(fileId) {
+    const variables = this.files.get(fileId)?.data?.variables || {};
+    const out = {};
+    for (const [name, variable] of Object.entries(variables)) {
+        if (variable?.kind === 'abscissa') continue;
+        if (variable?.kind !== 'parameter' && variable?.isConstant !== true) continue;
+        const value = variable.data?.[0];
+        if (value === undefined) continue;
+        out[name] = value;
+    }
+    return out;
+};
+
+// Recomputed when the set of loaded files changes, not per hover: the
+// answer is about the files, and a hover template is built per trace.
+proto._distinguishingParameterNames = function() {
+    // `!== false` rather than a truthiness test: a harness that installs this
+    // mixin without the PlotManager class has no flag at all, and the feature
+    // is on by default.
+    if (this.hoverRunParameters === false || this.files.size < 2) return [];
+    const signature = [...this.files.keys()].join('\u0000');
+    if (this._runParameterCache?.signature === signature) return this._runParameterCache.names;
+    const names = distinguishingParameterNames(
+        [...this.files.keys()].map(fileId => ({ fileId, parameters: this._fileParameters(fileId) })),
+    );
+    this._runParameterCache = { signature, names };
+    return names;
+};
+
+/** `Kp=2.5 · Ki=0.1` for one file, or '' when there is nothing to say. */
+proto._runParameterLabel = function(fileId) {
+    const names = this._distinguishingParameterNames();
+    if (!names.length) return '';
+    // Short, because this rides along in a hover: five significant digits
+    // is the app's own reading of "enough to tell two runs apart".
+    return runParameterLabel(names, this._fileParameters(fileId),
+        value => (Number.isFinite(Number(value)) ? String(Number(Number(value).toPrecision(5))) : String(value)));
+};
+
 proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex = 0, options = {}) {
     const fileData = this.files.get(t.fileId)?.data;
     if (!fileData) return null;
@@ -1836,6 +1885,11 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     const unit     = this._extractUnit(variable.description);
     const name     = this._traceName(t.varName, t.fileId);
     const hoverName = this._escapeHTML(this._traceName(t.varName, t.fileId, { units: false }));
+    // What tells this run from the others on the panel. Empty unless two files
+    // are loaded and something actually differs between them, so an ordinary
+    // single-file hover is unchanged (#51).
+    const runParams = this._runParameterLabel(t.fileId);
+    const runSuffix = runParams ? `<br><i>${this._escapeHTML(runParams)}</i>` : '';
     const hoverTimeUnit = this._escapeHTML(timeUnit);
     const unitStr  = unit ? ` [${this._escapeHTML(unit)}]` : '';
     const primaryCalendarTimeFormat = this._calendarTimeFormat(primaryTimeTrace.fileId, primaryTimeVar);
@@ -1865,7 +1919,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             yaxis,
             line: { color: t.color, width: 1.5, dash: 'dash' },
             ...stackAttrs,
-            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}<extra></extra>`,
+            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = ${this._formatHTMLNumber(yValue)}${runSuffix}<extra></extra>`,
             ...(highResolutionCalendarAxis
                 ? { customdata: [tStart, tEnd].map(value => this._formatGeneratedCalendarDateTime(
                     t.fileId,
@@ -1956,7 +2010,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
             // sample underneath, which is the comparison being invited.
             marker: { color: t.color, size: 7, symbol: 'circle-open', line: { color: t.color, width: 1.6 } },
             ...(customdata ? { customdata } : {}),
-            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}<extra></extra>`,
+            hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${runSuffix}<extra></extra>`,
         };
     }
     return {
@@ -1971,7 +2025,7 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         // locate sampling gaps for line breaks, then strips it before Plotly
         // sees the trace. Never emitted in timeseries mode.
         ...(options.attachSourceX ? { __srcX: visual.x } : {}),
-        hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}<extra></extra>`,
+        hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${runSuffix}<extra></extra>`,
     };
 };
 

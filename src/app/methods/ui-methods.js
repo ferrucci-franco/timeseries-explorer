@@ -278,6 +278,10 @@ proto.initEventListeners = function() {
         this.plotManager.setHoverProximity(e.target.checked);
     });
 
+    document.getElementById('hover-run-parameters')?.addEventListener('change', (e) => {
+        this.plotManager.setHoverRunParameters(e.target.checked);
+    });
+
     const scrollablePlotAreaToggle = document.getElementById('scrollable-plot-area');
     if (scrollablePlotAreaToggle) {
         scrollablePlotAreaToggle.checked = !!this.scrollablePlotArea;

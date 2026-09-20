@@ -275,6 +275,7 @@ proto._captureSessionSettings = function() {
         syncHover: !!this.plotManager.syncHover,
         hoverInfoCorner: this.plotManager.hoverInfoCorner,
         hoverProximity: !!this.plotManager.hoverProximity,
+        hoverRunParameters: this.plotManager.hoverRunParameters !== false,
         legendPosition: this.plotManager.legendPosition,
         legendOverlayCorner: this.plotManager.legendOverlayCorner,
         timeseriesVisualMaxPoints: this.plotManager.timeseriesVisualMaxPoints,
@@ -650,6 +651,7 @@ proto._applySessionSettings = function(settings) {
     this.plotManager.setSyncHover(!!settings.syncHover);
     this.plotManager.setHoverInfoCorner(settings.hoverInfoCorner || 'bl');
     this.plotManager.setHoverProximity(settings.hoverProximity !== false);
+    this.plotManager.setHoverRunParameters(settings.hoverRunParameters !== false);
     this.plotManager.setLegendPosition(settings.legendPosition || 'overlay');
     this.plotManager.setLegendOverlayCorner(settings.legendOverlayCorner || 'tl');
     this.plotManager.setMouseWheelZoom(this.mouseWheelZoom);
