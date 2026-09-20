@@ -97,7 +97,7 @@ export default class AudioParser {
         result.metadata.timeOriginMs = null;
         result.metadata.timeStart = 0;
         result.metadata.timeEnd = frames ? (frames - 1) / sampleRate : 0;
-        result.metadata.datetimeAxisStalled = false;
+        result.metadata.datetimeRepeats = null;
         return result;
     }
 

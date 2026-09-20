@@ -14,6 +14,7 @@
 import MatParser from './mat-parser.js';
 import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
 import { inlineUnitSplitCollides } from '../utils/inline-unit-headers.js';
+import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
 
 const NUMERIC_COLUMN_MIN_RATIO = 0.5;
 
@@ -129,7 +130,7 @@ export default class CsvParser {
             reorderedRows = this._sortTimeSeriesByTime(timeValues, variableColumns);
             if (timeKind === 'datetime') timeOriginMs = timeValues[0];
         }
-        const datetimeAxisStalled = timeKind === 'datetime' && this._isStalledTimeAxis(timeValues);
+        const datetimeRepeats = timeKind === 'datetime' ? repeatedTimestampSummary(timeValues) : null;
 
         const result = {
             filename: '',
@@ -152,7 +153,9 @@ export default class CsvParser {
         };
         if (timeKind === 'datetime') {
             timeVariable.timeKind = 'datetime';
-            timeVariable.timeDisplayMode = datetimeAxisStalled ? 'index' : 'calendar';
+            // Repeated stamps are reported, never acted on: a burst of rows at
+            // one instant is no reason to throw away the rest of the column (#154).
+            timeVariable.timeDisplayMode = 'calendar';
             timeVariable.timeOriginMs = timeOriginMs;
             timeVariable.description = timeSource.description || '[datetime]';
         } else if (timeKind === 'index') {
@@ -211,7 +214,7 @@ export default class CsvParser {
             timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
             timeOriginMs,
             timeSourceColumns: timeSource.sourceIndexes.map(index => rawHeaders[index] || `column_${index + 1}`),
-            datetimeAxisStalled,
+            datetimeRepeats,
             numericColumnIndexes,
         };
 
@@ -422,7 +425,7 @@ export default class CsvParser {
             reorderedRows = this._sortTimeSeriesByTime(timeValues, variableColumns);
             if (timeKind === 'datetime') timeOriginMs = timeValues[0];
         }
-        const datetimeAxisStalled = timeKind === 'datetime' && this._isStalledTimeAxis(timeValues);
+        const datetimeRepeats = timeKind === 'datetime' ? repeatedTimestampSummary(timeValues) : null;
 
         const result = {
             filename: '',
@@ -445,7 +448,9 @@ export default class CsvParser {
         };
         if (timeKind === 'datetime') {
             timeVariable.timeKind = 'datetime';
-            timeVariable.timeDisplayMode = datetimeAxisStalled ? 'index' : 'calendar';
+            // Repeated stamps are reported, never acted on: a burst of rows at
+            // one instant is no reason to throw away the rest of the column (#154).
+            timeVariable.timeDisplayMode = 'calendar';
             timeVariable.timeOriginMs = timeOriginMs;
             timeVariable.description = timeSource.description || '[datetime]';
         } else if (timeKind === 'index') {
@@ -506,7 +511,7 @@ export default class CsvParser {
             timeDisplayMode: timeVar.timeDisplayMode || 'numeric',
             timeOriginMs,
             timeSourceColumns: (timeSource.sourceIndexes || []).map(index => rawHeaders[index] || `column_${index + 1}`),
-            datetimeAxisStalled,
+            datetimeRepeats,
             numericColumnIndexes,
             csvProfile: { ...profile, delimiter, decimalSeparator, hasHeader, headerIndex, dataStartIndex, rawHeaders, headers, rowFilter, numericColumnIndexes },
         };
@@ -774,26 +779,6 @@ export default class CsvParser {
         }
         return order.reduce((count, sourceIndex, targetIndex) =>
             count + (sourceIndex === targetIndex ? 0 : 1), 0);
-    }
-
-    _isStalledTimeAxis(timeValues) {
-        if (!Array.isArray(timeValues) && !ArrayBuffer.isView(timeValues)) return false;
-        if (timeValues.length < 3) return false;
-        let previous = NaN;
-        let runLength = 0;
-        const limit = Math.min(timeValues.length, 1000);
-        for (let i = 0; i < limit; i++) {
-            const value = Number(timeValues[i]);
-            if (!Number.isFinite(value)) {
-                previous = NaN;
-                runLength = 0;
-                continue;
-            }
-            runLength = value === previous ? runLength + 1 : 1;
-            previous = value;
-            if (runLength >= 3) return true;
-        }
-        return false;
     }
 
     _looksLikeHeaderRow(row, followingRows = [], delimiter = ',') {

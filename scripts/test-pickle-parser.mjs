@@ -159,7 +159,9 @@ assert(Number.isNaN(mixed.variables['pickle:nan_col'].data[1]), 'NaN should surv
 const datetimeNat = await parseFixture('datetime_tz_nat.pkl');
 assert.equal(datetimeNat.metadata.timeKind, 'datetime');
 assert(Number.isNaN(datetimeNat.variables.index.data[1]), 'NaT should become NaN');
-assert.equal(datetimeNat.metadata.datetimeAxisStalled, false);
+assert.equal(datetimeNat.metadata.datetimeRepeats.repeated, 0, 'no two rows share an instant');
+assert.equal(datetimeNat.variables.index.timeDisplayMode, 'calendar',
+    'and the axis is the file\u2019s timestamps, not row numbers');
 
 const rowMulti = await parseFixture('row_multiindex.pkl');
 assert.equal(rowMulti.metadata.timeKind, 'index');

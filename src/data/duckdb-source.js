@@ -25,6 +25,7 @@ import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 import { customDatetimePatternInfo, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
+import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
 import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
 import { buildPairCorrelationSql, parsePairCorrelations } from './pair-correlation-sql.js';
 import {
@@ -3391,7 +3392,7 @@ export default class DuckDbSource {
         const timeType = columnTypes[timeColIndex];
         const timeData = this._extractColumnAsFloat64(table, timeColIndex, timeType);
         const timeKind = timeInfo?.timeKind || (/TIMESTAMP|DATE|TIME/.test(timeType) ? 'datetime' : 'numeric');
-        const datetimeAxisStalled = timeKind === 'datetime' && this._isStalledTimeAxis(timeData);
+        const datetimeRepeats = timeKind === 'datetime' ? repeatedTimestampSummary(timeData) : null;
 
         const usedNames = new Set();
         const variablePaths = new Map();
@@ -3419,7 +3420,8 @@ export default class DuckDbSource {
         };
         if (timeKind === 'datetime') {
             timeVar.timeKind = 'datetime';
-            timeVar.timeDisplayMode = datetimeAxisStalled ? 'index' : 'calendar';
+            // Reported, not acted on — see repeated-timestamps.js (#154).
+            timeVar.timeDisplayMode = 'calendar';
             timeVar.timeOriginMs = timeData.length ? timeData[0] : null;
         } else if (timeKind === 'index') {
             timeVar.timeKind = 'index';
@@ -3477,11 +3479,11 @@ export default class DuckDbSource {
             skippedRowsAfterHeader: 0,
             timeName: timeVar.name,
             timeKind,
-            timeDisplayMode: timeKind === 'datetime' ? (datetimeAxisStalled ? 'index' : 'calendar')
+            timeDisplayMode: timeKind === 'datetime' ? 'calendar'
                 : timeKind === 'index' ? 'index' : 'numeric',
             timeOriginMs: timeVar.timeOriginMs ?? null,
             timeSourceColumns: timeInfo?.sourceNames?.length ? timeInfo.sourceNames : [timeName],
-            datetimeAxisStalled,
+            datetimeRepeats,
             backend: 'duckdb',
         };
 
@@ -3603,25 +3605,6 @@ export default class DuckDbSource {
             if (data[i] !== first) return false;
         }
         return true;
-    }
-
-    _isStalledTimeAxis(data) {
-        if (!data || data.length < 3) return false;
-        let previous = NaN;
-        let runLength = 0;
-        const limit = Math.min(data.length, 1000);
-        for (let i = 0; i < limit; i++) {
-            const value = Number(data[i]);
-            if (!Number.isFinite(value)) {
-                previous = NaN;
-                runLength = 0;
-                continue;
-            }
-            runLength = value === previous ? runLength + 1 : 1;
-            previous = value;
-            if (runLength >= 3) return true;
-        }
-        return false;
     }
 
     _uniqueName(base, used) {
