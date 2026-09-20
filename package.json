@@ -105,6 +105,7 @@
     "test:calendar-axis": "node scripts/test-calendar-axis.mjs",
     "test:calendar-heatmap": "node scripts/test-calendar-heatmap.mjs",
     "test:fft": "node scripts/test-fft.mjs",
+    "test:fft-fit-amplitude": "node scripts/test-fft-fit-amplitude.mjs",
     "test:large-analysis": "node scripts/test-large-analysis-responsiveness.mjs",
     "test:native-autoscale-loading": "node scripts/test-native-autoscale-loading.mjs",
     "test:eager-detail-remount": "node scripts/test-eager-detail-remount.mjs",
