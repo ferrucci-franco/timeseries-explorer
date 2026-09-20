@@ -85,6 +85,7 @@ proto._computeDerivedDataset = async function(recipe) {
     if (!sourceData) return null;
     if (recipe.tool === 'resample') return this._computeResampleDataset(recipe.sourceFileId, sourceData, recipe);
     if (recipe.tool === 'xcorr') return this._computeXcorrDataset(recipe.sourceFileId, sourceData, recipe);
+    if (recipe.tool === 'collapse') return this._computeCollapseDataset(recipe.sourceFileId, sourceData, recipe);
     throw new Error(`Unknown derived-dataset tool: ${recipe.tool}`);
 };
 
@@ -192,6 +193,7 @@ proto._editDerivedDataset = async function(fileId) {
         this._syncDataTools?.();
         if (recipe.tool === 'resample') this._writeResampleForm?.(recipe, entry.name);
         if (recipe.tool === 'xcorr') this._writeXcorrForm?.(recipe, entry.name);
+        if (recipe.tool === 'collapse') this._writeCollapseForm?.(recipe, entry.name);
         this._syncDataTools?.();
         // The pencil sits in the Transformations table, below the form it just
         // filled: bring the form up and say what is going on. Written before
@@ -378,6 +380,7 @@ proto._derivedDatasetDescription = function(recipe) {
     if (!recipe) return '';
     if (recipe.tool === 'resample') return this._resampleRecipeDescription?.(recipe) || 'resample';
     if (recipe.tool === 'xcorr') return this._xcorrRecipeDescription?.(recipe) || 'cross-correlation';
+    if (recipe.tool === 'collapse') return this._collapseRecipeDescription?.(recipe) || 'collapse repeated timestamps';
     return recipe.tool;
 };
 

@@ -230,6 +230,7 @@
                         <option value="filter" data-i18n="dataToolFilter">Digital filter</option>
                         <option value="resample" data-i18n="dataToolResample">Resample</option>
                         <option value="xcorr" data-i18n="dataToolXcorr">Cross-correlation</option>
+                        <option value="collapse" data-i18n="dataToolCollapse">Collapse repeated timestamps</option>
                     </select>
 
                     <div id="remove-outliers-tool" class="data-tool-form collapsed">
@@ -968,6 +969,21 @@
                             </div>
 
                             <div id="xcorr-info" class="data-tool-resample-info"></div>
+                        </div>
+
+                        <div class="data-tool-controls collapsed" data-tool-kind="collapse">
+                            <div class="data-tool-label-row data-tool-group-row first">
+                                <label class="options-subgroup-label" for="collapse-aggregate" data-i18n="dataToolCollapseAggregate">Rows at the same instant become</label>
+                            </div>
+                            <select id="collapse-aggregate" class="data-tool-select">
+                                <option value="mean" selected data-i18n="dataToolCollapseMean">their mean</option>
+                                <option value="max" data-i18n="dataToolCollapseMax">their maximum</option>
+                                <option value="min" data-i18n="dataToolCollapseMin">their minimum</option>
+                                <option value="first" data-i18n="dataToolCollapseFirst">the first of them</option>
+                                <option value="last" data-i18n="dataToolCollapseLast">the last of them</option>
+                            </select>
+
+                            <div id="collapse-info" class="data-tool-resample-info"></div>
                         </div>
 
                         <div id="outlier-replacement-wrap" class="data-tool-radio-group" role="group" aria-label="Outlier replacement">

@@ -37,6 +37,7 @@ import {
 } from '../text-file-formats.js';
 import { MICROCAP_SNIFF_BYTES, looksLikeMicroCapText } from '../../parsers/microcap-sniff.js';
 import { reloadNoticeSections } from '../../utils/reload-report.js';
+import { repeatedTimestampSummary, repeatedTimestampsWorthSaying } from '../../utils/repeated-timestamps.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -596,47 +597,44 @@ proto._expandMatEntries = async function(entries) {
     return expanded;
 };
 
-proto._hasRepeatedDatetimeWarning = function(data) {
+/**
+ * How often this file's datetime column repeats an instant, or null when it has
+ * no datetime column. The parsers count it while they read the rows; this
+ * recounts only when they did not (an older session, a path that hands over
+ * metadata alone).
+ */
+proto._repeatedDatetimeSummary = function(data) {
     const metadata = data?.metadata || {};
-    if (metadata.datetimeAxisStalled) return true;
-    const metadataStart = Number(metadata.timeStart);
-    const metadataEnd = Number(metadata.timeEnd);
-    if (metadata.timeKind === 'datetime'
-        && Number(metadata.numTimesteps) >= 3
-        && Number.isFinite(metadataStart)
-        && metadataStart === metadataEnd) {
-        return true;
+    const counted = metadata.datetimeRepeats;
+    if (counted && Number.isFinite(Number(counted.repeated))) return counted;
+    if (metadata.timeKind !== 'datetime') return null;
+    const timeVar = metadata.timeName ? data?.variables?.[metadata.timeName] : null;
+    if (timeVar?.timeKind === 'datetime' && timeVar.data?.length) {
+        return repeatedTimestampSummary(timeVar.data);
     }
-    const timeName = metadata.timeName;
-    const timeVar = timeName ? data?.variables?.[timeName] : null;
-    if (timeVar?.timeKind !== 'datetime') return false;
-    const values = timeVar.data;
-    if (!values || values.length < 3) return false;
-    let previous = NaN;
-    let runLength = 0;
-    const limit = Math.min(values.length, 1000);
-    for (let i = 0; i < limit; i++) {
-        const value = Number(values[i]);
-        if (!Number.isFinite(value)) {
-            previous = NaN;
-            runLength = 0;
-            continue;
-        }
-        runLength = value === previous ? runLength + 1 : 1;
-        previous = value;
-        if (runLength >= 3) return true;
+    // A lazy file keeps its rows in the engine, so the ends are all there is to
+    // read: a column that starts and finishes at the same instant never advances.
+    const samples = Number(metadata.numTimesteps);
+    const start = Number(metadata.timeStart);
+    const end = Number(metadata.timeEnd);
+    if (samples >= 2 && Number.isFinite(start) && start === end) {
+        return { samples, repeated: samples - 1, longestRun: samples };
     }
-    return false;
+    return null;
 };
 
 proto._showDatetimeAxisWarningIfNeeded = async function(fileId, data) {
-    if (!this._hasRepeatedDatetimeWarning(data)) return;
+    const summary = this._repeatedDatetimeSummary(data);
+    if (!repeatedTimestampsWorthSaying(summary)) return;
     if (!this._datetimeAxisWarningShownFileIds) this._datetimeAxisWarningShownFileIds = new Set();
     if (this._datetimeAxisWarningShownFileIds.has(fileId)) return;
     this._datetimeAxisWarningShownFileIds.add(fileId);
     const entry = this.files.get(fileId);
     const fileName = entry?.name || data?.filename || 'file';
-    const body = i18n.t('datetimeAxisRepeatedDialogBody').replace('{file}', fileName);
+    const body = i18n.t('datetimeAxisRepeatedDialogBody')
+        .replace('{file}', fileName)
+        .replace('{count}', i18n.formatNumber(summary.repeated))
+        .replace('{run}', i18n.formatNumber(summary.longestRun));
     await Modal.alert(i18n.t('datetimeAxisRepeatedDialogTitle'), body, {
         icon: '⚠️',
     });
@@ -4677,34 +4675,14 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
     };
 
     const stepUnits = ['ps', 'ns', 'us', 'ms', 's', 'min', 'h', 'day', 'year'];
-    const isTimeVarAxisStalled = () => {
-        if (!isDateTime) return false;
-        const data = timeVar?.data;
-        if (!data || data.length < 3) return false;
-        let previous = NaN;
-        let runLength = 0;
-        const limit = Math.min(data.length, 1000);
-        for (let i = 0; i < limit; i++) {
-            const value = Number(data[i]);
-            if (!Number.isFinite(value)) {
-                previous = NaN;
-                runLength = 0;
-                continue;
-            }
-            runLength = value === previous ? runLength + 1 : 1;
-            previous = value;
-            if (runLength >= 3) return true;
-        }
-        return false;
-    };
-    const metadata = entryData.data?.metadata || {};
-    const metadataStart = Number(metadata.timeStart);
-    const metadataEnd = Number(metadata.timeEnd);
-    const metadataStalled = metadata.timeKind === 'datetime'
-        && Number(metadata.numTimesteps) >= 3
-        && Number.isFinite(metadataStart)
-        && metadataStart === metadataEnd;
-    const datetimeAxisStalled = Boolean(metadata.datetimeAxisStalled) || metadataStalled || isTimeVarAxisStalled();
+    // The same count the load-time notice used, kept for the panel's own hint:
+    // the axis is the file's whatever it says, so this only explains what a
+    // reader may be seeing in the curve (#154).
+    // `entryData` is the app's file entry (bytes, name, transform); the parsed
+    // data — where the count the parser made lives — hangs off plotManager.
+    const datetimeRepeats = isDateTime
+        ? this._repeatedDatetimeSummary(this.plotManager?.files?.get(fileId)?.data)
+        : null;
 
     const makeCustomStepField = () => {
         const raw = String(transform.customTimeStep || '').trim();
@@ -4897,11 +4875,13 @@ proto._renderFileTransformPanel = function(fileId, entryData) {
             panel.append(fmtWrap);
         }
 
-        if (datetimeAxisStalled) {
-            const stalledHint = document.createElement('div');
-            stalledHint.className = 'file-transform-hint datetime-axis-warning-hint';
-            stalledHint.textContent = i18n.t('datetimeAxisStalledHint');
-            panel.appendChild(stalledHint);
+        if (repeatedTimestampsWorthSaying(datetimeRepeats)) {
+            const repeatsHint = document.createElement('div');
+            repeatsHint.className = 'file-transform-hint datetime-axis-warning-hint';
+            repeatsHint.textContent = i18n.t('datetimeRepeatsHint')
+                .replace('{count}', i18n.formatNumber(datetimeRepeats.repeated))
+                .replace('{run}', i18n.formatNumber(datetimeRepeats.longestRun));
+            panel.appendChild(repeatsHint);
         }
     } else if (isNumericTime) {
         // ── Option B for a numeric (float) time vector: Source × Format ────────

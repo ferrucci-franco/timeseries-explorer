@@ -4,6 +4,7 @@ import {
     PICKLE_DEFAULT_EAGER_LIMIT_BYTES,
     PICKLE_DEFAULT_INTERNAL_LIMITS,
 } from './pickle-limits.js';
+import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
 
 const { Parser } = pickleparser;
 
@@ -1038,10 +1039,11 @@ export default class PickleParser {
             this._sortByTime(timeVar.data, allVariables);
         }
 
-        const datetimeAxisStalled = timeVar.timeKind === 'datetime' && this._isStalledTimeAxis(timeVar.data);
-        if (datetimeAxisStalled) {
-            timeVar.timeDisplayMode = 'index';
-        }
+        // Counted and reported, never acted on: rows sharing an instant are no
+        // reason to plot the file against row number instead (#154).
+        const datetimeRepeats = timeVar.timeKind === 'datetime'
+            ? repeatedTimestampSummary(timeVar.data)
+            : null;
         result.metadata.skippedColumnsCount = result.metadata.skippedColumns.length;
         result.metadata.duplicateColumnCount = result.metadata.duplicateColumns.length;
         result.metadata.numVariables = Object.keys(result.variables).length;
@@ -1056,7 +1058,7 @@ export default class PickleParser {
         result.metadata.timeOriginMs = timeVar.timeOriginMs ?? null;
         result.metadata.timeStart = timeVar.data.length ? timeVar.data[0] : 0;
         result.metadata.timeEnd = timeVar.data.length ? timeVar.data[timeVar.data.length - 1] : 0;
-        result.metadata.datetimeAxisStalled = datetimeAxisStalled;
+        result.metadata.datetimeRepeats = datetimeRepeats;
         return result;
     }
 
@@ -1283,26 +1285,6 @@ export default class PickleParser {
             const sortedData = order.map(index => variable.data[index]);
             variable.data = Float64Array.from(sortedData);
         }
-    }
-
-    _isStalledTimeAxis(timeValues) {
-        if (!Array.isArray(timeValues) && !ArrayBuffer.isView(timeValues)) return false;
-        if (timeValues.length < 3) return false;
-        let previous = NaN;
-        let runLength = 0;
-        const limit = Math.min(timeValues.length, 1000);
-        for (let i = 0; i < limit; i++) {
-            const value = Number(timeValues[i]);
-            if (!Number.isFinite(value)) {
-                previous = NaN;
-                runLength = 0;
-                continue;
-            }
-            runLength = value === previous ? runLength + 1 : 1;
-            previous = value;
-            if (runLength >= 3) return true;
-        }
-        return false;
     }
 
     _rootNode() {

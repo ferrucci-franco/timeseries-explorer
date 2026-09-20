@@ -267,7 +267,7 @@ export default class MicroCapParser {
                 timeOriginMs: null,
                 timeStart: timeAxis.values[0],
                 timeEnd: timeAxis.values[timeAxis.values.length - 1],
-                datetimeAxisStalled: false,
+                datetimeRepeats: null,
             },
         };
     }
