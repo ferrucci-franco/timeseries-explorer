@@ -80,6 +80,37 @@ export function windowSpectrumForDisplay(frequencies, amplitudes, lo, hi, maxPoi
     return downsampleSpectrumForDisplay(frequencies.subarray(start, end), amplitudes.subarray(start, end), maxPoints);
 }
 
+/**
+ * The amplitude extent of one or more spectra over a frequency window.
+ *
+ * What "fit the amplitude axis" has to answer once the frequency axis is
+ * zoomed: scaling to the tallest bin in the whole spectrum flattens the part
+ * on screen against a peak nobody can see.
+ *
+ * @param {Array<{x: ArrayLike<number>, y: ArrayLike<number>}>} seriesList
+ * @param {number} lo inclusive; -Infinity for "everything"
+ * @param {number} hi inclusive; Infinity for "everything"
+ * @returns {{min: number, max: number}|null} null when the window holds nothing
+ */
+export function amplitudeExtentInRange(seriesList, lo = -Infinity, hi = Infinity) {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const series of seriesList || []) {
+        const xs = series?.x;
+        const ys = series?.y;
+        const n = Math.min(xs?.length || 0, ys?.length || 0);
+        for (let i = 0; i < n; i++) {
+            const x = Number(xs[i]);
+            if (!(x >= lo && x <= hi)) continue;
+            const y = Number(ys[i]);
+            if (!Number.isFinite(y)) continue;
+            if (y < min) min = y;
+            if (y > max) max = y;
+        }
+    }
+    return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+}
+
 const TWO_PI = Math.PI * 2;
 
 const FFT_PERIOD_SIGNIFICANT_DIGITS = 6;

@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import {
+    amplitudeExtentInRange,
     applyAmplitudeScale,
     computeAmplitudeSpectrum,
     windowSpectrumForDisplay,
@@ -2937,7 +2938,30 @@ proto._fftWarningText = function(trace, reason, extra = {}) {
 // trace is windowed for display, so Plotly's own autorange would fit only the
 // visible slice — hence the explicit full-span extent from each trace's
 // _fftExtent, matching the pre-windowing "zoom all the way out" behaviour.
-proto._fftAxisLimitUpdate = function(plot, axis) {
+/**
+ * The amplitude of what is on screen.
+ *
+ * `_fftSpectrumExtent` answers for the whole spectrum, which is right when the
+ * panel is restoring its full view and wrong for the fit button: zoomed into a
+ * decade of a spectrum whose peak is somewhere else entirely, "fit Y" flattened
+ * the visible part against a scale set by a peak nobody could see. The time
+ * pane's fit has always read its own visible window; this is the same question
+ * asked of the spectrum.
+ *
+ * Read from the drawn traces, which is exactly what "what I am looking at"
+ * means — and they are windowed to the current frequency range already, so the
+ * scan is over the points on screen rather than over every bin.
+ */
+proto._fftVisibleSpectrumYExtent = function(plot) {
+    const range = plot?.fftDiv?._fullLayout?.xaxis?.range;
+    const lo = Array.isArray(range) ? Math.min(Number(range[0]), Number(range[1])) : -Infinity;
+    const hi = Array.isArray(range) ? Math.max(Number(range[0]), Number(range[1])) : Infinity;
+    // A trace hidden from the legend is not part of "what I am looking at".
+    const drawn = (plot?._fftSpectra || []).filter(trace => trace?.visible !== 'legendonly');
+    return amplitudeExtentInRange(drawn, lo, hi);
+};
+
+proto._fftAxisLimitUpdate = function(plot, axis, options = {}) {
     const isX = axis === 'x';
     const axisKey = isX ? 'xaxis' : 'yaxis';
     const manualRange = isX
@@ -2949,7 +2973,12 @@ proto._fftAxisLimitUpdate = function(plot, axis) {
         update[`${axisKey}.autorange`] = false;
         return update;
     }
-    const ext = this._fftSpectrumExtent(plot, axis);
+    // Only the fit button asks about the visible window. Restoring the panel's
+    // full view (Home, and every recompute) must keep answering for the whole
+    // spectrum, or a zoom would survive in the amplitude axis after the
+    // frequency axis had gone back to everything.
+    const ext = (axis === 'y' && options.visibleOnly && this._fftVisibleSpectrumYExtent(plot))
+        || this._fftSpectrumExtent(plot, axis);
     if (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max) {
         update[`${axisKey}.range`] = [ext.min, ext.max];
         update[`${axisKey}.autorange`] = false;
@@ -2970,7 +2999,7 @@ proto._applyFftAxisLimits = function(plot) {
 // Per-axis auto-fit for the spectrum pane (legend/toolbar buttons).
 proto._autoScaleFftAxis = function(plot, axis) {
     if (!plot?.fftDiv) return Promise.resolve();
-    const spectrum = Plotly.relayout(plot.fftDiv, this._fftAxisLimitUpdate(plot, axis));
+    const spectrum = Plotly.relayout(plot.fftDiv, this._fftAxisLimitUpdate(plot, axis, { visibleOnly: true }));
     if (axis !== 'y' || !plot.div) return spectrum;
     // Fit the time pane's amplitude in the same press. The panel shows two
     // charts and the button asks "how tall is what I am looking at": fitting
