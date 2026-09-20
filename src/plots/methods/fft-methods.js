@@ -22,6 +22,7 @@ import {
     FFT_WORKER_THRESHOLD_POINTS,
 } from '../../utils/fft.js';
 import { buildFftExportColumns } from '../../utils/fft-export.js';
+import { largestClearInterval } from '../../utils/largest-clear-interval.js';
 import { detectNaNRuns, detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import Plotly from '../../vendor/plotly.js';
 
@@ -1031,7 +1032,16 @@ proto._prepareFftAutoRange = async function(panelId, plot, token, options = {}) 
     );
     const needsInitialLimit = estimatedMs > FFT_AUTO_SLOW_MS;
     const needsTighterPriorLimit = state.autoRangeLimited && selectedCount > target;
-    if (!needsInitialLimit && !needsTighterPriorLimit) return false;
+    // Fast enough to transform whole — and yet a single NaN, or one hole in the
+    // timestamps, refuses the entire selection, leaving a warning and no
+    // spectrum at all. When time is not the problem but missing data is, pick
+    // the longest stretch that has none instead of asking the user to hunt for
+    // it with the green handles (#59).
+    if (!needsInitialLimit && !needsTighterPriorLimit) {
+        return this._selectLargestCleanFftRange(plot, state, {
+            times, selectionStart, selectionEnd, lowerBound, upperBound,
+        });
+    }
 
     const blockIsClean = start => {
         const end = Math.min(selectionEnd, start + target);
@@ -1758,6 +1768,64 @@ proto._activeFftRange = function(plot) {
         hi = Math.max(domain.min, Math.min(domain.max, hi));
     }
     return [lo, hi];
+};
+
+// Narrow the selection to the longest stretch every visible trace has data
+// for. Called only from the branch above, where the selection is small enough
+// to transform whole: the search itself reads the missing-data intervals the
+// time pane already computes (sampling gaps AND NaN runs — both refuse a
+// transform, and the panel already draws them under one name), so on a signal
+// small enough to scan it costs nothing extra.
+//
+// Deliberately does NOT set `autoRangeLimited`: that flag means "shortened
+// because the transform would be slow" and drives the re-tightening in
+// _prepareFftAutoRange. This shortening is about validity, not speed, and must
+// not make the panel keep shrinking. It does use the same `autoRangeWarning`
+// slot, so a range gesture dismisses it exactly like the speed one.
+proto._selectLargestCleanFftRange = function(plot, state, span) {
+    // The same guard the decorative bands use: on a signal too large to scan on
+    // the UI thread, nothing here runs — which is also the case the issue set
+    // aside ("para los casos donde el tiempo no es un problema").
+    if (this._fftShouldSkipGlobalGapScan(plot)) return false;
+    const { times, selectionStart, selectionEnd, lowerBound, upperBound } = span;
+    const total = selectionEnd - selectionStart;
+    if (total < 2) return false;
+    const min = Number(times[selectionStart]);
+    const max = Number(times[selectionEnd - 1]);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min)) return false;
+
+    // Every visible trace at once: the panel has one selection, so a stretch is
+    // only usable if nothing is missing from ANY of them over it. Pooling the
+    // intervals and taking the complement is that intersection.
+    const blocked = [];
+    for (const intervals of this._missingDataInfo(plot).traceIntervals.values()) {
+        for (const interval of intervals) blocked.push(interval);
+    }
+    const clear = largestClearInterval({ min, max }, blocked);
+    // Nothing missing inside the selection: leave it exactly as the user left it.
+    if (!clear.blockedCount) return false;
+    // Nothing survives. Say nothing here — the transform's own NaN / non-uniform
+    // warning names the real problem, and a selection of two samples would not
+    // be an improvement on it.
+    if (!clear.range) return false;
+
+    const [lo, hi] = clear.range;
+    const start = lowerBound(lo);
+    const end = upperBound(hi);
+    const samples = Math.max(0, end - start);
+    if (samples < 2 || samples >= total) return false;
+
+    state.rangeFull = false;
+    state.x1 = lo;
+    state.x2 = hi;
+    // Without this the chosen stretch is drawn a few pixels wide on the full
+    // time axis and neither green edge can be grabbed.
+    state.autoRangeFocusPending = true;
+    state.autoRangeWarning = i18n.t('fftMissingDataRangeWarning')
+        .replace('{samples}', samples.toLocaleString())
+        .replace('{total}', total.toLocaleString());
+    this._syncFftOptionsPanel(plot);
+    return true;
 };
 
 proto._ensureFftRange = function(plot, options = {}) {
