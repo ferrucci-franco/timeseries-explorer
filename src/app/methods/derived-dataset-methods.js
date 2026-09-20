@@ -30,6 +30,7 @@
 
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import { datasetFailureText } from '../../utils/reload-report.js';
 
 // One frame, so a message written just before is on screen before the main
 // thread is taken by synchronous work.
@@ -90,6 +91,12 @@ proto._computeDerivedDataset = async function(recipe) {
 /**
  * Recompute one derived dataset in place. Panels drawing it are rebuilt by
  * updateFileData; the tree and the list are refreshed here.
+ *
+ * `options.failures`, when given, collects `{ name, reason }` for every dataset
+ * that could not be recomputed. That is what lets a caller who is in the middle
+ * of something — a reload, with its overlay up — say so afterwards instead of
+ * stopping to ask (#50).
+ *
  * @returns {Promise<boolean>} false when the source is gone or the recipe failed.
  */
 proto._recomputeDerivedDataset = async function(fileId, options = {}) {
@@ -101,12 +108,17 @@ proto._recomputeDerivedDataset = async function(fileId, options = {}) {
         result = await this._computeDerivedDataset(recipe);
     } catch (err) {
         if (err?.cancelled) return false;
+        const name = this._fileDisplayName(entry);
+        // The tools throw a DataToolError whose message is a translation key,
+        // so the reason is translated here rather than printed raw.
+        const reason = datasetFailureText(err, key => i18n.t(key));
+        options.failures?.push({ name, reason });
         if (!options.silent) {
             await Modal.alert(
                 i18n.t('derivedDatasetRecomputeFailedTitle'),
-                i18n.t('derivedDatasetRecomputeFailed')
-                    .replace('{name}', this._fileDisplayName(entry))
-                    .replace('{error}', err?.message || String(err)),
+                reason
+                    ? i18n.t('derivedDatasetRecomputeFailed').replace('{name}', name).replace('{error}', reason)
+                    : i18n.t('derivedDatasetRecomputeFailedNoReason').replace('{name}', name),
                 { icon: '⚠️' },
             );
         }

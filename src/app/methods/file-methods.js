@@ -36,6 +36,7 @@ import {
     mayBeTextTable,
 } from '../text-file-formats.js';
 import { MICROCAP_SNIFF_BYTES, looksLikeMicroCapText } from '../../parsers/microcap-sniff.js';
+import { reloadNoticeSections } from '../../utils/reload-report.js';
 
 const LOCAL_API_BASE = '/__omv_local__';
 const PARQUET_STRONG_HINT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -1111,12 +1112,14 @@ proto.reloadActiveFile = async function() {
     if (this._isDerivedDataset?.(entry)) {
         this._showFileLoadingOverlay(1);
         this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(entry));
+        const failures = [];
         try {
             await this._waitForNextPaint();
-            await this._recomputeDerivedDataset(id);
+            await this._recomputeDerivedDataset(id, { silent: true, failures });
         } finally {
             this._hideFileLoadingOverlay();
         }
+        if (failures.length) this._reportReloadOutcome([], failures);
         return;
     }
     if (await this._refuseReloadOfInMemoryFile(entry)) return;
@@ -1128,6 +1131,11 @@ proto.reloadActiveFile = async function() {
     this._showFileLoadingOverlay(1);
     this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(entry), entry.file?.size || entry.buffer?.byteLength);
     let droppedTraces = null;
+    // A dataset that can no longer be computed from the file must not stop the
+    // reload to ask about it: the overlay is up, it cannot be cancelled, and
+    // the question has no answer that changes anything. Collected here, said
+    // after the overlay is down (#50).
+    const datasetFailures = [];
     try {
         await this._waitForNextPaint();
         const streamable = this._canParseFromFile(entry.file, entry.extension);
@@ -1152,7 +1160,7 @@ proto.reloadActiveFile = async function() {
         const dropped = this.plotManager.updateFileData(id, data);
         // A dataset derived from this file was computed from the rows that were
         // just replaced; it follows the source, as the derived variables did.
-        await this._recomputeDerivedDatasetsOf?.(id, { deferUi: true });
+        await this._recomputeDerivedDatasetsOf?.(id, { deferUi: true, silent: true, failures: datasetFailures });
         this._updateTopBar();
         this._clearVariableSelection();
         this.renderVariablesTree(data.tree);
@@ -1163,19 +1171,35 @@ proto.reloadActiveFile = async function() {
     } finally {
         this._hideFileLoadingOverlay();
     }
-    if (droppedTraces?.length) this._reportDroppedTraces(droppedTraces);
+    this._reportReloadOutcome(droppedTraces, datasetFailures);
 };
 
-// The signals a reload took off the panels, listed once. Same shape as the
-// overlay summary: one name per line, because a row of comma-separated
-// variable names is unreadable exactly when there are several.
-proto._reportDroppedTraces = function(names) {
+// What the reload changed under the user, listed once and only once there is
+// nothing left running. Same shape as the overlay summary: one name per line,
+// because a row of comma-separated variable names is unreadable exactly when
+// there are several.
+proto._reportReloadOutcome = function(dropped, failures) {
+    const sections = reloadNoticeSections({ dropped: dropped || [], failures: failures || [] });
+    if (!sections.length) return;
     const escape = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[ch]));
-    const body = `<p>${escape(i18n.t('reloadDroppedTracesBody'))}</p>`
-        + `<ul>${names.map(name => `<li>${escape(name)}</li>`).join('')}</ul>`;
-    Modal.alert(i18n.t('reloadDroppedTracesTitle'), body, { html: true, icon: '⚠' });
+    const body = sections.map((section) => {
+        if (section.kind === 'dropped') {
+            return `<p>${escape(i18n.t('reloadDroppedTracesBody'))}</p>`
+                + `<ul>${section.items.map(name => `<li>${escape(name)}</li>`).join('')}</ul>`;
+        }
+        return `<p>${escape(i18n.t('reloadDatasetsStaleBody'))}</p>`
+            + `<ul>${section.items.map(({ name, reason }) => `<li>${escape(name)}${reason ? ` — ${escape(reason)}` : ''}</li>`).join('')}</ul>`;
+    }).join('');
+    // Named after what changed the panels when anything did; otherwise after
+    // the datasets, which are then all there is to report.
+    const title = sections[0].kind === 'dropped'
+        ? i18n.t('reloadDroppedTracesTitle')
+        : i18n.t('derivedDatasetRecomputeFailedTitle');
+    // Wide: two lists of names read as two lists only when they are
+    // left-aligned and spaced, which is what that class is for.
+    Modal.alert(title, body, { html: true, icon: '⚠', className: 'modal-dialog-wide' });
 };
 
 proto.adjustMatlabArrays = async function(fileId) {
