@@ -123,7 +123,12 @@ function parsedColumnFormatLabel(timeSource) {
         return PARSED_DATETIME_FORMAT_LABEL;
     }
     if (timeSource?.kind === 'index') return '[index]';
-    if (timeSource?.kind === 'numeric') return '[numeric]';
+    // A numeric time column is read as elapsed SECONDS — that is the app's
+    // standing decision ("float time = seconds" in _timeAxisModel), and it is
+    // what makes an overlay with a datetime file line up and what puts the FFT
+    // in hertz. Saying "[numeric]" named the storage and left the one thing the
+    // reader needs unsaid (#43); the unit row is where it belongs.
+    if (timeSource?.kind === 'numeric') return '[s]';
     return '';
 }
 
@@ -327,11 +332,20 @@ function applyHeaderNamesToTimeSource(timeSource, headers) {
     const namedIndexes = timeSource.sourceIndexes
         .map(index => ({ index, name: headers[index]?.name }))
         .filter(item => Number.isInteger(item.index) && item.name);
-    if (!namedIndexes.length) return timeSource;
+    // A unit set on the time column has to reach the time source even when the
+    // column was not renamed, so this is decided before the early return below.
+    const unit = unitTextFromDescription(headers[timeSource.sourceIndexes[0]]?.description);
+    if (!namedIndexes.length && !unit) return timeSource;
 
     const next = serializeTimeSource(timeSource);
-    next.sourceHeaders = namedIndexes.map(item => item.name);
-    next.name = namedIndexes.map(item => item.name).join(' ') || next.name;
+    if (namedIndexes.length) {
+        next.sourceHeaders = namedIndexes.map(item => item.name);
+        next.name = namedIndexes.map(item => item.name).join(' ') || next.name;
+    }
+    // Only for a numeric axis. A datetime one measures instants, not a quantity
+    // with a unit, and its description is the marker the readers downstream key
+    // off ('[datetime]').
+    if (unit && timeSource.kind === 'numeric') next.description = `[${unit}]`;
     return next;
 }
 
@@ -2033,12 +2047,39 @@ export default class CsvParsingPreviewDialog {
                 if (event.key === 'Enter') name.blur();
             });
 
+            // The unit, as a second box. Pre-filled with whatever was detected
+            // — a units row, an inline "name [unit]" header — so correcting one
+            // is an edit rather than a retype, which is what the report asked
+            // for. Stored as the bracketed description every other reader of a
+            // variable already expects (_extractUnit).
+            const unit = document.createElement('input');
+            unit.type = 'text';
+            unit.className = 'csv-preview-column-unit';
+            unit.value = unitTextFromDescription(header.description);
+            unit.placeholder = i18n.t('csvPreviewColumnUnitPlaceholder');
+            unit.title = i18n.t('csvPreviewColumnUnitTitle');
+            unit.setAttribute('aria-label', i18n.t('csvPreviewColumnUnitTitle'));
+            unit.addEventListener('change', () => {
+                const value = String(unit.value || '').trim();
+                this.state.columnOverrides = { ...(this.state.columnOverrides || {}) };
+                this.state.columnOverrides[index] = {
+                    ...(this.state.columnOverrides[index] || {}),
+                    // Empty means "no unit", not "use the detected one": having
+                    // cleared the box, the reader has said the column has none.
+                    description: value ? `[${value}]` : '',
+                };
+                this._rebuildAndRender();
+            });
+            unit.addEventListener('keydown', event => {
+                if (event.key === 'Enter') unit.blur();
+            });
+
             const raw = document.createElement('div');
             raw.className = 'csv-preview-column-raw';
             raw.textContent = `${columnLabel(index)} - ${rawHeaders[index] || ''}`;
             raw.title = rawHeaders[index] || '';
 
-            row.append(useColumn, name, raw);
+            row.append(useColumn, name, unit, raw);
             wrap.appendChild(row);
         });
         return wrap;
@@ -2069,7 +2110,14 @@ export default class CsvParsingPreviewDialog {
 
         const parsedCell = document.createElement('td');
         parsedCell.className = 'csv-preview-parsed-cell';
-        parsedCell.textContent = parsedColumnFormatLabel(this.resultProfile?.timeSource);
+        // The time source carries the unit once one is set on its column, so
+        // this cell shows THAT rather than going on saying seconds under a
+        // header the reader has just corrected to minutes.
+        parsedCell.textContent = unitTextFromDescription(this.resultProfile?.timeSource?.description)
+            && this.resultProfile?.timeSource?.kind === 'numeric'
+            && /^\[[^\]]+\]$/.test(String(this.resultProfile.timeSource.description || '').trim())
+            ? String(this.resultProfile.timeSource.description).trim()
+            : parsedColumnFormatLabel(this.resultProfile?.timeSource);
         parsedCell.title = parsedCell.textContent;
         tr.appendChild(parsedCell);
 

@@ -400,7 +400,11 @@ export function analyzeSampling(times, options = {}) {
         dt,
         sampleRate: 1 / dt,
         maxRelativeError,
-        frequencyUnit: timeKind === 'datetime' ? 'Hz' : '1/x-unit',
+        // Seconds either way: a datetime axis stores milliseconds and is
+        // scaled to seconds before it gets here, and a numeric one IS elapsed
+        // seconds by the app's standing reading of it (#43). The caller
+        // overrides this when the column declares a unit of its own.
+        frequencyUnit: 'Hz',
     };
 }
 

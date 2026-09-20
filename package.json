@@ -91,6 +91,7 @@
     "test:loading-cancel-button": "node scripts/test-loading-cancel-button.mjs",
     "test:csv-export-progress": "node scripts/test-csv-export-progress.mjs",
     "test:variable-range-selection": "node scripts/test-variable-range-selection.mjs",
+    "test:column-units": "node scripts/test-column-units.mjs",
     "test:load-error-dialog": "node scripts/test-load-error-dialog.mjs",
     "test:load-error-messages": "node scripts/test-load-error-messages.mjs",
     "test:crash-reporting": "node scripts/test-crash-reporting.mjs",
