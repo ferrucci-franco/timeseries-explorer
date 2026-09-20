@@ -115,6 +115,7 @@
     "test:panel-detach-on-render": "node scripts/test-panel-detach-on-render.mjs",
     "test:sampling-gaps": "node scripts/test-sampling-gaps.mjs",
     "test:histogram": "node scripts/test-histogram.mjs",
+    "test:histogram-bar-modes": "node scripts/test-histogram-bar-modes.mjs",
     "test:temporal-profile": "node scripts/test-temporal-profile.mjs",
     "test:definite-integral": "node scripts/test-definite-integral.mjs",
     "test:integral-analysis": "node scripts/test-integral-analysis.mjs",
