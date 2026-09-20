@@ -1219,6 +1219,9 @@ proto._applyLazyDataToolCreateMode = async function(context, config, options = {
     const variable = {
         ...sourceVariable,
         name: outputName,
+        // The output is a new variable, so it shows its own name (see
+        // _baseDataToolVariable).
+        displayName: outputName,
         data: this._replaceOutliersWithNaN(
             Array.from(sourceVariable.data || []),
             this._detectBoundsOutliers(sourceVariable.data || [], config.params)
@@ -2025,6 +2028,13 @@ proto._baseDataToolVariable = function(sourceValues, sourceVariable, config, val
         ...sourceVariable,
         name: config.targetName,
         data: values,
+        // A display name belongs to the variable that carries it. Formats that
+        // set one — pandas pickles, netCDF, audio — were having it copied onto
+        // the tool's OUTPUT by the spread above, so a signal the user had just
+        // named appeared in the tree and the legend under the name of the
+        // signal it came from. Modifying a variable in place keeps its label;
+        // writing a new one gives it the name the user typed.
+        displayName: config.targetMode === 'create' ? config.targetName : sourceVariable.displayName,
         description: config.targetMode === 'create'
             ? this._dataToolDescription(config)
             : sourceVariable.description,
@@ -2760,6 +2770,9 @@ proto._reapplyDataToolDefinition = function(fileId, data, name, definition) {
                 data.variables[name] = {
                     ...sourceVariable,
                     name,
+                    // Its own name, not the source's label (see
+                    // _baseDataToolVariable).
+                    displayName: name,
                     data: this._replaceOutliersWithNaN(sourceVariable.data || [], this._detectBoundsOutliers(sourceVariable.data || [], definition.params)),
                     description: `Data tool: remove outliers from ${definition.sourceName}; ${this._outlierDetectorDescription(definition)}; nan`,
                     kind: 'variable',
