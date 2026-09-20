@@ -118,7 +118,7 @@ assert.match(manager, /if \(!uses && !panels\.has\(panelId\)\) continue;/,
     'a panel that just lost its last trace is redrawn even though it no longer uses the file');
 assert.match(manager, /return dropped;\s*\n\s*\}/, 'and hands the names back to the caller');
 assert.match(files, /const dropped = this\.plotManager\.updateFileData\(id, data\);/, 'which the reload keeps');
-assert.match(files, /if \(droppedTraces\?\.length\) this\._reportDroppedTraces\(droppedTraces\);/,
+assert.match(files, /this\._reportReloadOutcome\(droppedTraces, datasetFailures\);/,
     'and reports once the loading overlay is down, so the dialog is not behind it');
 for (const key of ['reloadDroppedTracesTitle', 'reloadDroppedTracesBody']) {
     assert.equal([...translations.matchAll(new RegExp(`${key}:`, 'g'))].length, 4, `${key} in four languages`);
