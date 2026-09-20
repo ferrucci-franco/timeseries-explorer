@@ -197,8 +197,12 @@ export function installFileMethods(TargetClass) {
 proto.loadFile = async function(file, options = {}) {
     let hideParquetOverlayAfterLoad = false;
     const isCancelled = () => options.loadToken?.cancelled === true;
+    // Declared out here because the catch below names it: a `let` inside the
+    // try is not in scope from the catch, so reading it there threw a
+    // ReferenceError over the top of the real failure and the user was shown
+    // nothing at all (#143). It has to outlive the block that assigns it.
+    let currentFile = file;
     try {
-        let currentFile = file;
         let extension;
         let buffer;
         let contentHash;
