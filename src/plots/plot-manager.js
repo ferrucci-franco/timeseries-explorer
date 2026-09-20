@@ -15,6 +15,7 @@ import { installPlotIntegralMethods } from './methods/integral-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
+import { dropMissingVariablesFromPanels } from '../utils/panel-variables.js';
 import { formatMissingCount, seriesStats } from '../utils/series-stats.js';
 
 /**
@@ -165,12 +166,17 @@ class PlotManager {
             Promise.resolve(stale._duckdb.source?.release?.(stale))
                 .catch(err => console.warn('Could not release the previous lazy dataset.', err));
         }
-        // Rebuild every panel that has at least one trace from this file
+        // What the new data no longer has cannot stay on a panel. Done before
+        // the rebuild below, so each panel is redrawn from what is really there.
+        const { dropped, panels } = this._dropTracesForMissingVariables(fileId, newData);
+        // Rebuild every panel that has at least one trace from this file — and
+        // every panel something was just taken off, which may no longer have
+        // one.
         for (const [panelId, plot] of this.plots) {
             const uses = plot.traces.some(t => t.fileId === fileId) ||
                          plot.phaseTraces.some(t => t.fileId === fileId) ||
                          plot.stateSlots?.fileId === fileId;
-            if (!uses) continue;
+            if (!uses && !panels.has(panelId)) continue;
             // The missing-data / sampling-gap overlays memoize by a time-only
             // signature, which does not change when a data tool alters a
             // variable's VALUES (e.g. NaN -> interpolated). Drop those caches so
@@ -219,6 +225,18 @@ class PlotManager {
                 : captured;
             this._rebuildPanel(panelId, { restoreView });
         }
+        return dropped;
+    }
+
+    // Thin wrapper: the rule itself is pure and lives in utils, so it can be
+    // checked without a browser.
+    _dropTracesForMissingVariables(fileId, data) {
+        const variables = data?.variables || {};
+        return dropMissingVariablesFromPanels(
+            this.plots,
+            fileId,
+            (name) => Object.prototype.hasOwnProperty.call(variables, name),
+        );
     }
 
     setFileTransform(fileId, transform, options = {}) {

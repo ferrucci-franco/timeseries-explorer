@@ -61,12 +61,18 @@ const DuckDbSource = (await import(new URL('../src/data/duckdb-source.js', impor
     const startMarker = '    updateFileData(fileId, newData, options = {}) {';
     const start = managerSource.indexOf(startMarker);
     assert.ok(start >= 0, 'updateFileData is present');
-    const end = managerSource.indexOf('\n    setFileTransform(', start);
+    // The method's own closing brace: the only `}` back at four spaces between
+    // here and the end of the class. Naming the NEXT method instead made the
+    // slice break the day one was inserted after this one — it swallowed a class
+    // body into a script context and threw a SyntaxError two tests later.
+    const endMarker = '\n    }';
+    const end = managerSource.indexOf(endMarker, start);
     assert.ok(end > start, 'method end located');
+    const method = managerSource.slice(start, end + endMarker.length);
     const vm = await import('node:vm');
     const proto = {};
     vm.runInNewContext(
-        managerSource.slice(start, end).replace(startMarker, 'proto.updateFileData = function(fileId, newData, options = {}) {'),
+        method.replace(startMarker, 'proto.updateFileData = function(fileId, newData, options = {}) {'),
         { proto, console },
     );
 
@@ -79,6 +85,10 @@ const DuckDbSource = (await import(new URL('../src/data/duckdb-source.js', impor
         setGlobalLiveViewPolicy: () => {},
         _rebuildPanel: () => {},
         _rebuildAllPanels: () => {},
+        // Pruning the traces of variables the new data no longer has is its own
+        // rule, covered by test-reload-dropped-traces.mjs; here it just has to
+        // answer, so this harness can stay about releasing the old dataset.
+        _dropTracesForMissingVariables: () => ({ dropped: [], panels: new Set() }),
     });
 
     // Reload / adjust-CSV: a brand-new lazy registration replaces the old one.
