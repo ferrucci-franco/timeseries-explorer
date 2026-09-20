@@ -662,6 +662,37 @@ proto._waitForNextPaint = function() {
     });
 };
 
+// The way out of a busy overlay, as a button.
+//
+// The Parquet conversion overlay has had one since it was written, and the
+// reason it gives applies word for word to every other job that blocks the
+// app: "Work that runs for tens of seconds behind a modal with no exit reads
+// as a hang, and Escape alone is not discoverable — the user has no reason to
+// guess it applies here." File loading only ever got the Escape hint, which is
+// what #47 is about. This is that button, in one place, so the two overlays
+// cannot drift apart.
+//
+// `onCancel` runs at most once: a second click while the first is still
+// unwinding would cancel something that is already cancelled, and the label
+// has to say that the request was heard even though the work has not stopped
+// yet.
+proto._buildOverlayCancelButton = function(onCancel) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'file-loading-cancel';
+    button.className = 'modal-btn modal-btn-cancel example-loading-cancel';
+    button.textContent = i18n.t('cancel');
+    let fired = false;
+    button.addEventListener('click', () => {
+        if (fired) return;
+        fired = true;
+        button.disabled = true;
+        button.textContent = i18n.t('cancellingConversion');
+        onCancel();
+    });
+    return button;
+};
+
 proto._showFileLoadingOverlay = function(total = 1, loadToken = null) {
     const existing = document.getElementById('file-loading-overlay');
     if (existing?.classList.contains('show')) {
@@ -670,6 +701,9 @@ proto._showFileLoadingOverlay = function(total = 1, loadToken = null) {
         this._updateFileLoadingOverlay(0, total, '');
         const cancelHint = document.getElementById('file-loading-cancel-hint');
         if (cancelHint) cancelHint.hidden = !loadToken;
+        // A reused overlay may have been shown without a way out, or with one
+        // belonging to work that has since finished. Rebuild it for this job.
+        this._syncFileLoadingCancelButton(existing, loadToken);
         this._installFileLoadingCancellation(loadToken);
         return;
     }
@@ -701,6 +735,7 @@ proto._showFileLoadingOverlay = function(total = 1, loadToken = null) {
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
     this._updateFileLoadingOverlay(0, total, '');
+    this._syncFileLoadingCancelButton(overlay, loadToken);
     this._installFileLoadingCancellation(loadToken);
     if (!loadToken) {
         cancelHint.hidden = true;
@@ -708,6 +743,40 @@ proto._showFileLoadingOverlay = function(total = 1, loadToken = null) {
     requestAnimationFrame(() => overlay.classList.add('show'));
     overlay.tabIndex = -1;
     overlay.focus({ preventScroll: true });
+};
+
+// Adds, replaces or removes the overlay's Cancel button to match the job it is
+// showing. Work with no token cannot be cancelled and gets no button: a button
+// that does nothing is worse than none, since it invites a second click and
+// then a third.
+proto._syncFileLoadingCancelButton = function(overlay, loadToken) {
+    overlay.querySelector('#file-loading-cancel')?.remove();
+    if (!loadToken) return;
+    const dialog = overlay.querySelector('.example-loading-dialog');
+    if (!dialog) return;
+    // Above the Escape hint, which now reads as a footnote to the button
+    // rather than as the only way out.
+    const hint = dialog.querySelector('#file-loading-cancel-hint');
+    const place = node => (hint ? dialog.insertBefore(node, hint) : dialog.append(node));
+    place(this._buildOverlayCancelButton(() => {
+        loadToken.cancelled = true;
+        // Deliberately NOT hiding the overlay here, unlike the Escape handler:
+        // the loop checks the token between files and takes the overlay down
+        // itself, and a window with no overlay and a file still being parsed
+        // behind it is the very confusion this button exists to end. The
+        // disabled "Cancelling…" label is what says the click was heard.
+        this._updateFileLoadingOverlayCancelling();
+    }));
+};
+
+// Once cancelled there is no count left to report — the current file finishes
+// or aborts and the loop stops — so the line that was counting says what is
+// happening instead.
+proto._updateFileLoadingOverlayCancelling = function() {
+    const title = document.getElementById('file-loading-title');
+    if (title) title.textContent = i18n.t('cancellingConversion');
+    const cancelHint = document.getElementById('file-loading-cancel-hint');
+    if (cancelHint) cancelHint.hidden = true;
 };
 
 proto._installFileLoadingCancellation = function(loadToken) {
@@ -724,9 +793,13 @@ proto._installFileLoadingCancellation = function(loadToken) {
         this._hideFileLoadingOverlay(loadToken);
     };
     document.addEventListener('keydown', this._fileLoadingEscHandler, true);
+
 };
 
 proto._updateFileLoadingOverlay = function(current, total, filename = '', size = null) {
+    // Cancelled: the overlay now says so, and the loop's next progress report
+    // would put the count back over it for the last file it was already on.
+    if (this._fileLoadingToken?.cancelled) return;
     const title = document.getElementById('file-loading-title');
     const hint = document.getElementById('file-loading-hint');
     if (title) {
@@ -2655,19 +2728,13 @@ proto._showParquetConversionOverlay = function(filename, { onCancel = null } = {
     // no exit reads as a hang, and Escape alone is not discoverable — the user
     // has no reason to guess it applies here.
     if (typeof onCancel === 'function') {
-        const cancel = document.createElement('button');
-        cancel.type = 'button';
-        cancel.id = 'file-loading-cancel';
-        cancel.className = 'modal-btn modal-btn-cancel example-loading-cancel';
-        cancel.textContent = i18n.t('cancel');
-        const finish = () => {
-            cancel.disabled = true;
-            cancel.textContent = i18n.t('cancellingConversion');
+        const cancel = this._buildOverlayCancelButton(() => {
             document.removeEventListener('keydown', onKey);
             onCancel();
-        };
-        const onKey = (event) => { if (event.key === 'Escape') finish(); };
-        cancel.addEventListener('click', finish);
+        });
+        // Escape reaches the same button rather than the callback, so the
+        // label changes either way and neither route can fire twice.
+        const onKey = (event) => { if (event.key === 'Escape') cancel.click(); };
         document.addEventListener('keydown', onKey);
         overlay.addEventListener('omv:overlay-removed', () => document.removeEventListener('keydown', onKey), { once: true });
         dialog.append(cancel);
