@@ -13,14 +13,18 @@ const source = readFileSync(
     new URL('../src/plots/methods/interaction-methods.js', import.meta.url),
     'utf8',
 );
-const marker = 'proto._cursorOverlayGeometry = function';
-const start = source.indexOf(marker);
-assert.ok(start >= 0, '_cursorOverlayGeometry is present');
-const end = source.indexOf('\nproto.', start + marker.length);
-const methodText = source.slice(start, end >= 0 ? end : source.length);
+const sliceMethod = (marker) => {
+    const start = source.indexOf(marker);
+    assert.ok(start >= 0, `${marker} is present`);
+    const end = source.indexOf('\nproto.', start + marker.length);
+    return source.slice(start, end >= 0 ? end : source.length);
+};
 
 const proto = {};
-vm.runInNewContext(methodText, { proto });
+vm.runInNewContext(sliceMethod('proto._cursorOverlayGeometry = function'), { proto });
+// The x mapping it leans on — Plotly's own for a log axis, the linear formula
+// otherwise (#108). The stub axes below have no d2p, so this is that formula.
+vm.runInNewContext(sliceMethod('proto._axisPixelForValue = function'), { proto });
 
 // Overlaying Y2: same plot-area offset/length as Y1, DIFFERENT range.
 const fullLayout = {
@@ -32,6 +36,7 @@ const fullLayout = {
 function makeHarness(interpolatedY) {
     return {
         _cursorOverlayGeometry: proto._cursorOverlayGeometry,
+        _axisPixelForValue: proto._axisPixelForValue,
         _viewDiv: () => ({ _fullLayout: fullLayout }),
         _coerceAxisValue: v => Number(v),
         _cursorSeriesForTrace: () => ({ times: [0, 10], values: [interpolatedY, interpolatedY] }),

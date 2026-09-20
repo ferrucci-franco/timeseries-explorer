@@ -58,8 +58,8 @@ for (const [label, args] of [
 // ─── How the panel asks ────────────────────────────────────────────
 const fft = readFileSync(new URL('../src/plots/methods/fft-methods.js', import.meta.url), 'utf8');
 
-assert.match(fft, /proto\._fftVisibleSpectrumYExtent = function\(plot\) \{[\s\S]*?_fullLayout\?\.xaxis\?\.range/,
-    'the window is the spectrum pane’s own frequency axis');
+assert.match(fft, /proto\._fftVisibleSpectrumYExtent = function\(plot\) \{[\s\S]{0,200}?this\._fftVisibleXRange\(plot\)/,
+    'the window is the spectrum pane’s own x axis, in data units whichever reading is on (#108)');
 assert.match(fft, /_fftSpectra \|\| \[\]\)\.filter\(trace => trace\?\.visible !== 'legendonly'\)/,
     'a trace hidden from the legend is not part of what the user is looking at');
 
