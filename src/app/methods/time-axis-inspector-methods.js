@@ -7,6 +7,7 @@ import {
     mergeTimeAxisSteps,
 } from '../../data/time-axis-diagnostics.js';
 import { formatTimeValue, pickTimeUnit } from '../../utils/time-unit-format.js';
+import { timeAxisViewsDiffer } from '../../utils/time-axis-transform-view.js';
 
 // ─── Time-axis inspector ──────────────────────────────────────────────────────
 // One dialog, three doors: the button in the file's "Time axis" panel, the clock
@@ -104,6 +105,79 @@ proto._computeEagerTimeAxisDiagnostics = function(fileId) {
     if (!timeVar?.data?.length) return null;
     const diagnostics = computeTimeAxisDiagnostics(timeVar.data, this._timeAxisSecondsScale(timeVar));
     return this._storeTimeAxisDiagnostics(fileId, diagnostics);
+};
+
+// ─── The axis the plots actually draw ─────────────────────────────────────────
+// Everything above measures the file's own time column. That is the right thing
+// to measure — it is the data — but it is not what the plots draw once the file
+// carries a time-axis transform, and a reindex does not just relabel that axis,
+// it replaces it: the stored timestamps are discarded and the axis steps by row.
+// Reporting the stored column alone made the dialog look frozen after a reindex
+// (#107). So the transformed axis gets measured too, and gets its own block
+// whenever the two disagree.
+
+// The values the transform feeds to Plotly are not always in the stored column's
+// units, so the scale cannot be reused: a reindex to a plain row index is a
+// count, a generated calendar is epoch-ms (except the high-resolution one, which
+// stays in seconds), and everything else is seconds. Read off the canonical
+// model rather than re-deriving the branches of _getTransformIndexData.
+proto._transformedTimeAxisScale = function(fileId) {
+    const model = this.plotManager._timeAxisModel(fileId);
+    if (model.semantic === 'count') return { secondsPerUnit: 1, unitless: true };
+    if (model.legacyKind === 'datetime' && !model.highResGeneratedCalendar) {
+        return { secondsPerUnit: 1e-3, unitless: false };
+    }
+    return { secondsPerUnit: 1, unitless: false };
+};
+
+// The stored-column key plus the three transform fields it leaves out because
+// they cannot change the stored column — but they do change the axis built from
+// it: the origin of a generated calendar, and the numeric show-as.
+proto._transformedTimeAxisKey = function(fileId) {
+    const base = this._timeAxisDiagnosticsKey(fileId);
+    if (!base) return null;
+    const transform = this.plotManager._fileTransform(fileId);
+    return JSON.stringify([
+        base,
+        transform.timeStepOriginMode || '',
+        transform.timeStepOriginDate || '',
+        transform.numericTimeDisplay || '',
+    ]);
+};
+
+// Lazy files are deliberately excluded: their stored-column verdict comes from a
+// full-column DuckDB scan while _getTransformedTimeData works off the loaded
+// overview, and putting an exact block next to an indicative one invites the
+// reader to compare two things that are not comparable.
+proto._transformedTimeAxisDiagnostics = function(fileId) {
+    const entry = this.plotManager.files.get(fileId);
+    const data = entry?.data;
+    if (!data || data._duckdb) return null;
+    const transform = this.plotManager._fileTransform(fileId);
+    if (!this.plotManager._isFileTransformActive(transform)) return null;
+
+    const key = this._transformedTimeAxisKey(fileId);
+    if (!key) return null;
+    const cached = this.transformedTimeAxisCache?.get(fileId);
+    if (cached && cached.key === key) return cached.value;
+
+    const times = this.plotManager._getTransformedTimeData(fileId);
+    const value = times?.length
+        ? computeTimeAxisDiagnostics(times, this._transformedTimeAxisScale(fileId))
+        : null;
+    if (!this.transformedTimeAxisCache) this.transformedTimeAxisCache = new Map();
+    this.transformedTimeAxisCache.set(fileId, { key, value });
+    return value;
+};
+
+// The pair the panel and the dialog both render: the stored column, and the
+// transformed axis only when it would not be recognised from the stored one.
+proto._timeAxisDiagnosticsPair = function(fileId, stored = null) {
+    const source = stored || this._timeAxisDiagnosticsForPanel(fileId);
+    const transformed = this._transformedTimeAxisDiagnostics(fileId);
+    return timeAxisViewsDiffer(source, transformed)
+        ? { source, transformed }
+        : { source, transformed: null };
 };
 
 // What the file's panel shows without asking for anything: the eager verdict,
@@ -221,6 +295,20 @@ proto._timeAxisSummaryLine = function(diagnostics) {
         .replace('{n}', String(n))
         .replace('{dt}', step)
         .replace('{anomalies}', anomalies.join(', '));
+};
+
+// What the file's "Time axis" panel prints under the inspect button. One line
+// while the plots draw the stored column; two once a transform has made them
+// different, because a single unlabelled line then answers the wrong question.
+proto._timeAxisPanelSummaryLines = function(fileId) {
+    const { source, transformed } = this._timeAxisDiagnosticsPair(fileId);
+    const stored = this._timeAxisSummaryLine(source);
+    if (!transformed) return stored ? [stored] : [];
+    const plotted = this._timeAxisSummaryLine(transformed);
+    const lines = [];
+    if (stored) lines.push(i18n.t('timeAxisSummaryStoredPrefix').replace('{summary}', stored));
+    if (plotted) lines.push(i18n.t('timeAxisSummaryPlottedPrefix').replace('{summary}', plotted));
+    return lines;
 };
 
 // ─── The dialog ───────────────────────────────────────────────────────────────
@@ -377,8 +465,34 @@ proto._openTimeAxisInspector = async function(fileId) {
     let controller = null;
 
     const heading = i18n.t('timeAxisDiagHeading').replace('{time}', timeVarName);
-    const render = (state = {}, value = diagnostics) =>
-        this._renderTimeAxisDiagnosticsBlock(block, value, { heading, ...state });
+    const storedHeading = i18n.t('timeAxisDiagHeadingStored').replace('{time}', timeVarName);
+    // Two <div>s inside the block the modal was handed, so the lazy path can keep
+    // re-rendering the first one without losing the second.
+    const render = (state = {}, value = diagnostics) => {
+        block.textContent = '';
+        const transformed = this._transformedTimeAxisDiagnostics(fileId);
+        const showBoth = timeAxisViewsDiffer(value, transformed);
+
+        const stored = document.createElement('div');
+        stored.className = 'time-axis-diag-section';
+        block.appendChild(stored);
+        this._renderTimeAxisDiagnosticsBlock(stored, value, {
+            heading: showBoth ? storedHeading : heading,
+            ...state,
+        });
+        if (!showBoth) return;
+
+        const plotted = document.createElement('div');
+        plotted.className = 'time-axis-diag-section';
+        block.appendChild(plotted);
+        this._renderTimeAxisDiagnosticsBlock(plotted, transformed, {
+            heading: i18n.t('timeAxisDiagHeadingPlotted'),
+        });
+        const note = document.createElement('div');
+        note.className = 'time-axis-diag-footnote';
+        note.textContent = i18n.t('timeAxisDiagPlottedNote');
+        plotted.appendChild(note);
+    };
 
     const runLazyDiagnostics = () => {
         controller?.abort();

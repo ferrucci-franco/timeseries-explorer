@@ -459,6 +459,15 @@
     text-align: left;
 }
 
+/* The two halves of a transformed file's diagnostic: the stored column, then the
+   axis the plots draw. Only the second one is ever added, so the rule is a
+   sibling gap rather than padding on both. */
+.time-axis-diag-section + .time-axis-diag-section {
+    margin-top: 1rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--border-color);
+}
+
 .time-axis-diag-footnote {
     margin-top: 0.4rem;
     font-size: 0.82rem;

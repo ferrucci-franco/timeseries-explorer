@@ -740,20 +740,38 @@
     line-height: 1.25;
 }
 
+/* Reads as a button, not as a section header: the label is centred and bold, the
+   border carries the accent on its own rather than leaning on the tint, and it
+   lifts and presses. Left-aligned over a faint wash, it was being read as one
+   more caption in a panel full of them (#107). */
 .file-transform-wide-action {
     grid-column: 1 / -1;
-    padding: 5px 7px;
-    border: 1px solid color-mix(in srgb, #2e7d6f 52%, var(--border-color));
-    border-radius: 4px;
-    background: color-mix(in srgb, #2e7d6f 14%, var(--bg-primary));
+    margin-top: 2px;
+    padding: 6px 10px;
+    border: 1px solid color-mix(in srgb, #2e7d6f 72%, var(--border-color));
+    border-radius: 5px;
+    background: color-mix(in srgb, #2e7d6f 16%, var(--bg-primary));
+    box-shadow: 0 1px 2px color-mix(in srgb, #2e7d6f 22%, transparent);
     color: var(--text-primary);
     cursor: pointer;
     font-size: 0.72rem;
-    text-align: left;
+    font-weight: 600;
+    text-align: center;
 }
 
 .file-transform-wide-action:hover {
-    background: color-mix(in srgb, #2e7d6f 22%, var(--bg-primary));
+    border-color: color-mix(in srgb, #2e7d6f 92%, var(--border-color));
+    background: color-mix(in srgb, #2e7d6f 26%, var(--bg-primary));
+}
+
+.file-transform-wide-action:active {
+    box-shadow: none;
+    transform: translateY(1px);
+}
+
+.file-transform-wide-action:focus-visible {
+    outline: 2px solid color-mix(in srgb, #2e7d6f 80%, var(--border-color));
+    outline-offset: 1px;
 }
 
 .file-entry-csv-parsing {

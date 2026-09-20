@@ -79,6 +79,7 @@
     "test:file-transform": "node scripts/test-file-transform-reset.mjs",
     "test:in-memory-file": "node scripts/test-in-memory-file.mjs",
     "test:reload-overlay": "node scripts/test-reload-overlay.mjs",
+    "test:time-axis-after-transform": "node scripts/test-time-axis-after-transform.mjs",
     "test:reset-layout": "node scripts/test-reset-layout-availability.mjs",
     "test:file-size-limits": "node scripts/test-file-size-limits.mjs",
     "test:load-error-messages": "node scripts/test-load-error-messages.mjs",
