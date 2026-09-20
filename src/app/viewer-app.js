@@ -35,6 +35,9 @@ class OpenModelicaViewer {
         this.dataToolVariablesByFile = new Map();
         this._suggestionIndex = 0;
         this.selectedVariables = new Set();
+        // Where a Shift+click range starts: the last variable clicked without
+        // Shift. Cleared with the selection (_clearVariableSelection).
+        this._selectionAnchor = null;
         this._expandedFileTransforms = new Set();
         this._exampleLoading = false;
         this._exampleLoadToken = null;
