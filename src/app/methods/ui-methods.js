@@ -1906,7 +1906,10 @@ proto.showFeedbackForm = function() {
         renderFiles();
         summary.control.focus();
     };
-    const renderFiles = () => {
+    // `highlightFrom` is the index the newly added attachments start at. The
+    // list is rebuilt from scratch on every call, so the marker class needs no
+    // cleanup: it only exists on the render that was passed one.
+    const renderFiles = ({ highlightFrom = -1 } = {}) => {
         if (!attachedFiles.length) {
             fileList.textContent = i18n.t('feedbackNoFiles');
             return;
@@ -1914,9 +1917,14 @@ proto.showFeedbackForm = function() {
         const total = attachedFiles.reduce((sum, attachment) => sum + attachment.file.size, 0);
         fileList.innerHTML = '';
         const list = document.createElement('ul');
+        let firstNewRow = null;
         attachedFiles.forEach((attachment, index) => {
             const file = attachment.file;
             const row = document.createElement('li');
+            if (highlightFrom >= 0 && index >= highlightFrom) {
+                row.classList.add('is-new');
+                if (!firstNewRow) firstNewRow = row;
+            }
             if (attachment.previewUrl) {
                 const preview = document.createElement('img');
                 preview.className = 'feedback-file-preview';
@@ -1956,8 +1964,14 @@ proto.showFeedbackForm = function() {
         totalLine.className = total > FEEDBACK_MAX_PACKAGE_BYTES ? 'feedback-total is-too-large' : 'feedback-total';
         totalLine.textContent = i18n.t('feedbackTotalSize').replace('{size}', this._formatBytes(total));
         fileList.appendChild(totalLine);
+        // The attachment list sits at the bottom of a form taller than its own
+        // scroll box, so a dropped screenshot landed out of sight and the drag
+        // read as having done nothing at all (#44). Bring the first new row
+        // into view — `nearest` scrolls the form, never the page behind it.
+        firstNewRow?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     };
     const addFiles = (files, source = 'file') => {
+        const firstNew = attachedFiles.length;
         Array.from(files || []).forEach((file, index) => {
             if (!file) return;
             const name = this._feedbackAttachmentName(file, attachedFiles, { source, index });
@@ -1967,7 +1981,7 @@ proto.showFeedbackForm = function() {
                 previewUrl: wrappedFile.type.startsWith('image/') ? URL.createObjectURL(wrappedFile) : '',
             });
         });
-        renderFiles();
+        renderFiles({ highlightFrom: attachedFiles.length > firstNew ? firstNew : -1 });
     };
     const collectFeedback = () => ({
         contact: contact.control.value.trim(),
@@ -2067,13 +2081,19 @@ proto.showFeedbackForm = function() {
     pasteZone.addEventListener('paste', (event) => {
         addFiles(event.clipboardData?.files || [], 'paste');
     });
+    // stopPropagation, not just preventDefault: the app has its own drop
+    // handler on `document` that loads whatever is dropped as a data file. A
+    // screenshot dropped here therefore ALSO went to the parser, which failed
+    // on it — an attachment that works, plus an error nobody asked for.
     pasteZone.addEventListener('dragover', (event) => {
         event.preventDefault();
+        event.stopPropagation();
         pasteZone.classList.add('is-dragover');
     });
     pasteZone.addEventListener('dragleave', () => pasteZone.classList.remove('is-dragover'));
     pasteZone.addEventListener('drop', (event) => {
         event.preventDefault();
+        event.stopPropagation();
         pasteZone.classList.remove('is-dragover');
         addFiles(event.dataTransfer?.files || []);
     });
