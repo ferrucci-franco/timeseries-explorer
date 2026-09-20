@@ -975,6 +975,7 @@ proto.reloadActiveFile = async function() {
     // above it.
     this._showFileLoadingOverlay(1);
     this._updateFileLoadingOverlay(1, 1, this._fileDisplayName(entry), entry.file?.size || entry.buffer?.byteLength);
+    let droppedTraces = null;
     try {
         await this._waitForNextPaint();
         const streamable = this._canParseFromFile(entry.file, entry.extension);
@@ -996,7 +997,7 @@ proto.reloadActiveFile = async function() {
         entry.buffer = buffer;
         entry.contentHash = contentHash;
         this._adoptExcelCsvCache(entry, data);
-        this.plotManager.updateFileData(id, data);
+        const dropped = this.plotManager.updateFileData(id, data);
         // A dataset derived from this file was computed from the rows that were
         // just replaced; it follows the source, as the derived variables did.
         await this._recomputeDerivedDatasetsOf?.(id, { deferUi: true });
@@ -1004,9 +1005,25 @@ proto.reloadActiveFile = async function() {
         this._clearVariableSelection();
         this.renderVariablesTree(data.tree);
         this._renderFilesList();
+        // A signal that disappeared from the file is worth a sentence. Said
+        // after the overlay is down, so the dialog is not behind it.
+        droppedTraces = dropped;
     } finally {
         this._hideFileLoadingOverlay();
     }
+    if (droppedTraces?.length) this._reportDroppedTraces(droppedTraces);
+};
+
+// The signals a reload took off the panels, listed once. Same shape as the
+// overlay summary: one name per line, because a row of comma-separated
+// variable names is unreadable exactly when there are several.
+proto._reportDroppedTraces = function(names) {
+    const escape = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[ch]));
+    const body = `<p>${escape(i18n.t('reloadDroppedTracesBody'))}</p>`
+        + `<ul>${names.map(name => `<li>${escape(name)}</li>`).join('')}</ul>`;
+    Modal.alert(i18n.t('reloadDroppedTracesTitle'), body, { html: true, icon: '⚠' });
 };
 
 proto.adjustMatlabArrays = async function(fileId) {
