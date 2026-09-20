@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
+import { isTouchCapable } from '../../ui/touch-drag.js';
 import {
     SLIDER_WHEEL_CHANGE_DELAY_MS,
     SLIDER_WHEEL_DWELL_MS,
@@ -912,6 +913,38 @@ proto._flashExampleAction = async function(button, message = '') {
     if (message) this._showTransientStatus(message);
     await new Promise(resolve => setTimeout(resolve, 220));
     setTimeout(() => button?.classList.remove('action-feedback'), 520);
+};
+
+// What a finger can do here, said once (#110).
+//
+// Every affordance the app was built around is a mouse's: a variable goes onto
+// a panel by dragging it, and dragging is something a finger does differently
+// — press and hold first, or the list just scrolls. Nothing on screen says so,
+// and a reader who does not know it is left with an app that appears to ignore
+// them. So a touch device is told, on its first run, and never again.
+const TOUCH_HINT_KEY = 'omv_touch_hint_seen';
+
+proto._showTouchHintIfNeeded = function() {
+    if (!isTouchCapable()) return;
+    // A laptop with a touch screen has a mouse too, and knows all of this.
+    if (typeof window !== 'undefined' && !window.matchMedia?.('(pointer: coarse)')?.matches) return;
+    let seen = false;
+    try {
+        seen = globalThis.localStorage?.getItem(TOUCH_HINT_KEY) === '1';
+    } catch (_) { /* private mode: say it again rather than not at all */ }
+    if (seen) return;
+    try {
+        globalThis.localStorage?.setItem(TOUCH_HINT_KEY, '1');
+    } catch (_) { /* nothing to remember it with */ }
+    const escape = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[ch]));
+    const body = `<ul>${[
+        i18n.t('touchHintDrag'),
+        i18n.t('touchHintZoom'),
+        i18n.t('touchHintReset'),
+    ].map(line => `<li>${escape(line)}</li>`).join('')}</ul>`;
+    Modal.alert(i18n.t('touchHintTitle'), body, { html: true, icon: '\u261d', className: 'modal-dialog-wide' });
 };
 
 proto._showTransientStatus = function(message) {

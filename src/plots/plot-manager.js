@@ -998,6 +998,11 @@ class PlotManager {
             }
         };
 
+        // The same two, for a drag that has no DataTransfer behind it: a finger
+        // (#110). Kept on the element so the touch path shows the panel exactly
+        // the hint a mouse drag does, rather than a second one of its own.
+        panelEl._dropHint = { show: showDragHint, hide: hideDragHint };
+
         panelEl.addEventListener('dragover', (e) => {
             if (!this.data) return;
             e.preventDefault();
@@ -1018,6 +1023,52 @@ class PlotManager {
             const fileId = this._getDroppedFileId(e.dataTransfer);
             this._handleVariableDrop(panelId, varNames, panelEl, { axis, fileId });
         });
+    }
+
+    // ─── The same drop, from a finger ──────────────────────────────
+    //
+    // A touch drag carries its payload in hand rather than in a DataTransfer,
+    // and knows only where the finger is — so these two take a point and do
+    // the hit test themselves. Everything after that is the mouse path.
+
+    /** The panel under a point, or null when the finger is somewhere else. */
+    _panelAtPoint(point) {
+        const element = point?.target || (typeof document !== 'undefined' && document.elementFromPoint
+            ? document.elementFromPoint(point?.clientX ?? -1, point?.clientY ?? -1)
+            : null);
+        const panelEl = element?.closest?.('.layout-panel') || null;
+        const panelId = panelEl?.dataset?.id || null;
+        return panelId && this.plots.has(panelId) ? { panelId, panelEl } : null;
+    }
+
+    /** Highlight the panel a finger is over, and un-highlight the others. */
+    showTouchDropHint(point) {
+        const over = this._panelAtPoint(point);
+        for (const panelEl of document.querySelectorAll('.layout-panel')) {
+            if (panelEl === over?.panelEl) continue;
+            panelEl._dropHint?.hide();
+        }
+        if (!over || !this.data) return;
+        over.panelEl._dropHint?.show({ clientX: point.clientX, clientY: point.clientY });
+    }
+
+    clearTouchDropHints() {
+        for (const panelEl of document.querySelectorAll('.layout-panel')) panelEl._dropHint?.hide();
+    }
+
+    /**
+     * Drop what a finger was carrying wherever it let go.
+     * @returns {boolean} false when it let go over nothing.
+     */
+    dropVariablesAtPoint(payload, point) {
+        this.clearTouchDropHints();
+        const names = (payload?.names || []).filter(Boolean);
+        const over = this._panelAtPoint(point);
+        if (!names.length || !over || !this.data) return false;
+        const axis = this._timeseriesDropAxis(over.panelId, over.panelEl, point);
+        const fileId = payload.fileId && this.files.has(payload.fileId) ? payload.fileId : null;
+        this._handleVariableDrop(over.panelId, names, over.panelEl, { axis, fileId });
+        return true;
     }
 
     // Dispatch a set of dropped variable names to the panel. A dragged time axis

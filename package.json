@@ -86,6 +86,7 @@
     "test:repeated-timestamps": "node scripts/test-repeated-timestamps.mjs",
     "test:collapse-repeats": "node scripts/test-collapse-repeats.mjs",
     "test:data-tool-preview": "node scripts/test-data-tool-preview-in-place.mjs",
+    "test:touch-drag": "node scripts/test-touch-drag.mjs",
     "test:fft-clean-range": "node scripts/test-fft-clean-range.mjs",
     "test:time-axis-after-transform": "node scripts/test-time-axis-after-transform.mjs",
     "test:time-axis-reload-cache": "node scripts/test-time-axis-reload-cache.mjs",

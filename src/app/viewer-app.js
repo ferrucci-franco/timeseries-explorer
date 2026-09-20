@@ -77,6 +77,10 @@ class OpenModelicaViewer {
         this._applyReloadModeUI();
         this._applyCapabilitiesToUi();
         this._refreshCapabilities();
+        // Said once, on a device where it is the difference between a usable
+        // app and a blank one: how to put a variable on a panel with a finger
+        // (#110). After the first paint, so it does not hold the app up.
+        setTimeout(() => this._showTouchHintIfNeeded?.(), 800);
     }
 
     // ─── File management ───────────────────────────────────────────
