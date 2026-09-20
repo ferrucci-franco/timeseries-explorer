@@ -59,6 +59,7 @@
     "test:parquet-pandas": "node scripts/test-parquet-pandas-metadata.mjs",
     "test:parquet-loading": "node scripts/test-parquet-loading-mode.mjs",
     "test:data-tools": "node scripts/test-data-tools.mjs",
+    "test:datatool-display-name": "node scripts/test-datatool-display-name.mjs",
     "test:compute-kernels": "node scripts/test-compute-kernels.mjs",
     "test:resample-kernel": "node scripts/test-resample-kernel.mjs",
     "test:interpolate-regrid": "node scripts/test-interpolate-regrid.mjs",

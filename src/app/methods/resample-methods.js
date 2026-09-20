@@ -663,6 +663,12 @@ proto._buildResampledData = function(sourceData, time, config, names, resampled)
         variables[names[i]] = {
             name: names[i],
             data: values,
+            // Same variable, same label: a resampled copy keeps the name the
+            // user reads. Built fresh rather than spread, this used to drop the
+            // display name a pandas pickle or a netCDF gives its columns, so
+            // the copy appeared under the raw key beside an original that did
+            // not.
+            displayName: source?.displayName || names[i],
             description: source?.description || '',
             kind: 'variable',
             dataType: this.parser._detectDataType(values, 'variable'),
