@@ -62,6 +62,7 @@ class OpenModelicaViewer {
         this.initDragAndDrop();
         this.initSidebarResize();
         i18n.setLanguage('en');
+        this._syncSpellcheckLanguage();
         this._setDropZoneStatus(false);
 
         this.layoutManager.render();
@@ -82,6 +83,26 @@ class OpenModelicaViewer {
         return hour >= 7 && hour < 18 ? 'light' : 'dark';
     }
 
+    // The spellchecker follows the app's language until the user picks a
+    // dictionary by hand from the desktop right-click menu (#41). The labels
+    // travel with it because the main process has no i18n of its own, and the
+    // four translations belong in src/i18n where one guard covers them all.
+    _syncSpellcheckLanguage() {
+        try {
+            // Also the web build's business: it is what tells Chrome which
+            // dictionary to use in a textarea, and what a screen reader reads.
+            document.documentElement.lang = i18n.currentLang;
+        } catch (_) { /* no document: nothing to label */ }
+        window.omvDesktop?.setSpellcheck?.({
+            uiLanguage: i18n.currentLang,
+            labels: {
+                spellcheckLanguageMenu: i18n.t('spellcheckLanguageMenu'),
+                spellcheckAddToDictionary: i18n.t('spellcheckAddToDictionary'),
+                spellcheckNoSuggestions: i18n.t('spellcheckNoSuggestions'),
+            },
+        });
+    }
+
     setLanguage(lang) {
         this.plotManager.preserveViewsForNextRender();
         i18n.setLanguage(lang);
@@ -93,6 +114,7 @@ class OpenModelicaViewer {
         this._applyReloadModeUI();
         this._applyCapabilitiesToUi();
         this._syncSidebarEdgeToggle?.();
+        this._syncSpellcheckLanguage();
         this._updateLiveUpdateTopBar?.();
         if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();
         if (typeof this._syncHoverCornerPicker === 'function') this._syncHoverCornerPicker();
