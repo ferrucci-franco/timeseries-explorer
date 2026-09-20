@@ -122,7 +122,8 @@ assert.match(fft, /proto\._appendFftExportColumns = function\(plot, headers, col
 // like the legend does.
 assert.match(fft, /nameFor: \(entry\) => \(entry\.varName[\s\S]{0,120}?_traceName\(entry\.varName, entry\.fileId, \{ units: false \}\)/,
     'headed by the trace name');
-assert.match(fft, /fileId: trace\.fileId,\n\s*varName: trace\.varName,/,
+// \s* rather than \n: on a CRLF checkout there is a \r to absorb.
+assert.match(fft, /fileId: trace\.fileId,\s*varName: trace\.varName,/,
     'which means each spectrum remembers which signal it is');
 
 // An empty spectrum used to be impossible (the time series was always there).
