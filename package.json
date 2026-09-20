@@ -87,6 +87,7 @@
     "test:time-axis-reload-cache": "node scripts/test-time-axis-reload-cache.mjs",
     "test:reset-layout": "node scripts/test-reset-layout-availability.mjs",
     "test:file-size-limits": "node scripts/test-file-size-limits.mjs",
+    "test:dropped-traces-batch": "node scripts/test-dropped-traces-batch.mjs",
     "test:load-error-dialog": "node scripts/test-load-error-dialog.mjs",
     "test:load-error-messages": "node scripts/test-load-error-messages.mjs",
     "test:crash-reporting": "node scripts/test-crash-reporting.mjs",
