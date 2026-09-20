@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import { namesBetween } from '../../utils/selection-range.js';
 
 export function transposeMatrixSeries(series) {
     if (!Array.isArray(series) || !series.length) return [];
@@ -34,14 +35,20 @@ proto._renderFilteredTree = function() {
 };
 
 proto._clearVariableSelection = function() {
+    // The anchor goes even when the set was already empty: it is the one thing
+    // that outlives a cleared selection, and a range starting from a variable
+    // the user last touched three files ago is not a range they asked for.
+    this._selectionAnchor = null;
     if (!this.selectedVariables || this.selectedVariables.size === 0) return;
     this.selectedVariables.clear();
     this._syncVariableSelectionUI();
 };
 
 proto._retainVariableSelectionForData = function(data) {
+    const present = data?.variables || {};
+    if (this._selectionAnchor && !present[this._selectionAnchor]) this._selectionAnchor = null;
     if (!this.selectedVariables || this.selectedVariables.size === 0) return;
-    const variables = data?.variables || {};
+    const variables = present;
     let changed = false;
     for (const name of [...this.selectedVariables]) {
         if (!variables[name]) {
@@ -58,6 +65,40 @@ proto._toggleVariableSelection = function(varName) {
     } else {
         this.selectedVariables.add(varName);
     }
+    // Every click that is not a Shift+click sets where the next range starts.
+    this._selectionAnchor = varName;
+    this._syncVariableSelectionUI();
+};
+
+// The selectable leaves, in the order they are shown.
+//
+// Read from the DOM rather than from the data, because "contiguous" is a
+// question about what the user is looking at: the tree's own order, with
+// collapsed groups and filtered-out variables absent. `offsetParent` is null
+// for anything inside a `display: none` ancestor, which is what a collapsed
+// group is.
+//
+// The selector is the one _syncVariableSelectionUI uses — active file only, no
+// foreign leaves — plus the class that marks a leaf Ctrl+click would refuse.
+proto._visibleSelectableVariableNames = function() {
+    return [...document.querySelectorAll(
+        '.tree-item[data-var-name]:not([data-file-id]):not(.tree-item-nonplottable)')]
+        .filter(item => item.offsetParent !== null)
+        .map(item => item.dataset.varName);
+};
+
+// Shift+click: everything from the anchor to here. The anchor stays where it
+// is, so a second Shift+click re-ranges from the same starting point instead
+// of walking away from it — that is what makes "click, shift-click, shift-click
+// a bit further" behave the way it does everywhere else.
+proto._selectVariableRange = function(varName, { add = false } = {}) {
+    const range = namesBetween(this._visibleSelectableVariableNames(), this._selectionAnchor, varName);
+    if (!range.length) return;
+    if (!add) this.selectedVariables.clear();
+    for (const name of range) this.selectedVariables.add(name);
+    // No anchor yet (a Shift+click out of nowhere): this click becomes one, so
+    // the next Shift+click has somewhere to range from.
+    if (!this._selectionAnchor) this._selectionAnchor = varName;
     this._syncVariableSelectionUI();
 };
 
@@ -632,11 +673,22 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             // Multi-selection is a set of names of the active file. A foreign leaf
             // is dragged on its own; it neither joins nor clears that set.
             if (foreign) return;
-            if (e.ctrlKey || e.metaKey) {
+            if (e.shiftKey) {
+                // Shift+click extends the browser's own text selection, which
+                // would streak the sidebar blue behind the range.
+                e.preventDefault();
+                window.getSelection?.()?.removeAllRanges();
+                this._selectVariableRange(variable.name, { add: e.ctrlKey || e.metaKey });
+            } else if (e.ctrlKey || e.metaKey) {
                 e.preventDefault();
                 this._toggleVariableSelection(variable.name);
             } else if (this.selectedVariables.size > 0) {
                 this._clearVariableSelection();
+            } else {
+                // A plain click on an empty selection selects nothing, as
+                // before — but it is still where a following Shift+click
+                // should range from.
+                this._selectionAnchor = variable.name;
             }
         });
         itemDiv.addEventListener('dragstart', (e) => {
