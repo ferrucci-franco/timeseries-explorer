@@ -1675,7 +1675,14 @@ proto._fftFrequencyAxisTitle = function(plot) {
         // 'duration' instead of 's' and the axis fell back to the generic
         // 1/x-unit for a file that says Hz in every other format.
         || this._isNumericDurationAxis(trace.fileId, timeVar)
-        || unit === 's') {
+        || unit === 's'
+        // A numeric time column that declares no unit at all. The app has
+        // already decided what those numbers mean — _timeAxisModel calls the
+        // axis 'elapsed' seconds, which is what lets it overlay a datetime
+        // file — so falling back to "1/x-unit" here contradicted the app's own
+        // reading of the same column (#43). The unit box in the CSV parsing
+        // dialog is how a file that is NOT in seconds says so.
+        || (kind === 'numeric' && !unit)) {
         return i18n.t('fftFrequencyHz');
     }
     return i18n.t('fftFrequencyGeneric');
