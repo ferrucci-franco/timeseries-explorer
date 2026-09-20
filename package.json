@@ -90,6 +90,7 @@
     "test:large-files-help": "node scripts/test-large-files-help.mjs",
     "test:export-dialog": "node scripts/test-export-dialog.mjs",
     "test:csv-export": "node scripts/test-csv-export-time-columns.mjs",
+    "test:fft-csv-export": "node scripts/test-fft-csv-export.mjs",
     "test:csv-elapsed": "node scripts/test-csv-elapsed-format.mjs",
     "test:csv-units-mode": "node scripts/test-csv-units-mode.mjs",
     "test:cursor-y2": "node scripts/test-cursor-y2.mjs",

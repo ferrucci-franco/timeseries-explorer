@@ -21,6 +21,7 @@ import {
     FFT_MAX_POINTS_WEB,
     FFT_WORKER_THRESHOLD_POINTS,
 } from '../../utils/fft.js';
+import { buildFftExportColumns } from '../../utils/fft-export.js';
 import { detectNaNRuns, detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import Plotly from '../../vendor/plotly.js';
 
@@ -777,6 +778,29 @@ proto._fftAmplitudeUnitSuffix = function(plot) {
     return '';
 };
 
+/**
+ * The FFT panel's data table: the spectrum.
+ *
+ * It used to hand back the time series, because the CSV branch read
+ * `mode === 'timeseries' || mode === 'fft'` and stopped there. But the samples
+ * are the file's own — a time-series panel exports them, and so does the source
+ * file — while the spectrum exists nowhere but here. Same reading as the other
+ * analysis modes: Integral exports its totals, Correlation its per-pair
+ * results, FFT its bins.
+ */
+proto._appendFftExportColumns = function(plot, headers, columns) {
+    const table = buildFftExportColumns(plot?._fftSpectraFull || [], {
+        frequencyUnit: this._fftFrequencyUnitSuffix(plot),
+        amplitudeScaleUnit: this._fftAmplitudeUnitSuffix(plot),
+        nameFor: (entry) => (entry.varName
+            ? this._traceName(entry.varName, entry.fileId, { units: false })
+            : entry.name),
+        unitFor: (entry) => (entry.varName ? this._varUnit(entry.varName, entry.fileId) : ''),
+    });
+    headers.push(...table.headers);
+    columns.push(...table.columns);
+};
+
 proto._fftAxisLimitLabel = function(plot, key) {
     if (key === 'fMin') return `${i18n.t('fftFMin')}${this._fftFrequencyUnitSuffix(plot)}`;
     if (key === 'fMax') return `${i18n.t('fftFMax')}${this._fftFrequencyUnitSuffix(plot)}`;
@@ -1190,6 +1214,11 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
         fullEntries.push({
             index: fullEntries.length,
             name: this._traceName(trace.varName, trace.fileId),
+            // Which signal this spectrum belongs to. The drawn trace needs only
+            // the name; the CSV export needs the variable back, to head its
+            // column with the signal's own unit.
+            fileId: trace.fileId,
+            varName: trace.varName,
             color: trace.color,
             visible: trace.visible ?? true,
             frequencies: spectrum.frequencies,
