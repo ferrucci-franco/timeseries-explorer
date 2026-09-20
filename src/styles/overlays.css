@@ -3586,6 +3586,14 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
     min-width: 8rem;
 }
 
+/* The Escape hint is a footnote to the button above it, not a paragraph of
+   its own: close enough to read as one thing, and out of the way. */
+.example-loading-cancel + #file-loading-cancel-hint {
+    margin-top: 0.45rem;
+    font-size: 0.76rem;
+    opacity: 0.85;
+}
+
 /* ── Panel export dialog ─────────────────────────────────────────────────
    One dialog for the three ways out of a panel: the data as CSV, the plot as
    a PNG image, the plot as an SVG drawing. Options that do not apply to the
