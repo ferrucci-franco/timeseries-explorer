@@ -25,7 +25,11 @@ export const HISTOGRAM_RECOMPUTE_DEBOUNCE_MS = 150;
 export const HISTOGRAM_EXACT_QUANTILE_MAX_N = 2_000_000;
 
 export const HISTOGRAM_NORMALIZATIONS = new Set(['count', 'percent', 'density']);
-export const HISTOGRAM_BAR_MODES = new Set(['overlay', 'grouped', 'stacked']);
+// Overlay and Stacked. 'grouped' was removed: side-by-side bars answer no
+// question the other two do not, and with more than a handful of bins the
+// slivers are unreadable. A saved view that still names it falls back to
+// 'overlay' through the two normalizers below, which is what it now means.
+export const HISTOGRAM_BAR_MODES = new Set(['overlay', 'stacked']);
 export const HISTOGRAM_Y_SCALES = new Set(['linear', 'log']);
 export const HISTOGRAM_BIN_MODES = new Set(['auto', 'count', 'width']);
 export const HISTOGRAM_VALUE_RANGE_MODES = new Set(['auto', 'manual']);

@@ -452,7 +452,7 @@ proto._buildHistogramBarLayout = function(plot) {
         font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
         showlegend: this.legendPosition !== 'hidden',
         legend: this._legendConfig(legendBg, gridColor),
-        barmode: state.barMode === 'grouped' ? 'group' : state.barMode === 'stacked' ? 'stack' : 'overlay',
+        barmode: state.barMode === 'stacked' ? 'stack' : 'overlay',
         bargap: 0,
         xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false, title: { text: xTitle, font: { size: 10 } } },
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false, rangemode: 'tozero', title: { text: yTitle, font: { size: 10 } } },
@@ -646,17 +646,14 @@ proto._recomputeHistogram = function(panelId, plot = this.plots.get(panelId)) {
             width: Array.from(widths),
             name,
             visible: trace.visible ?? true,
-            // Grouped uses solid bars; Overlay and Stacked share the softer
-            // semi-transparent look.
-            marker: { color: trace.color, opacity: state.barMode === 'grouped' ? 1 : HISTOGRAM_DEFAULT_OPACITY, line: { color: trace.color, width: 1 } },
+            // Semi-transparent, so overlaid distributions read through each
+            // other and a stack still shows its parts.
+            marker: { color: trace.color, opacity: HISTOGRAM_DEFAULT_OPACITY, line: { color: trace.color, width: 1 } },
             customdata,
             hovertemplate: `<b>%{fullData.name}</b><br>[%{customdata[0]:.6g}, %{customdata[1]:.6g})<br>${i18n.t('histogramCount')} = %{customdata[2]}<br>${i18n.t('histogramPercent')} = %{customdata[3]:.3g}%<extra></extra>`,
         });
         if (visible) summary.push({ name, nFinite: stat.nFinite, nInvalid: stat.nInvalid, nBinned: counted.nBinned, underflow: counted.underflow, overflow: counted.overflow });
     }
-
-    // Soft advice: overlay reads better than grouped with many bars.
-    if (state.barMode === 'grouped' && spec.k * bars.length > 2000) warnings.push(i18n.t('histogramGroupedManyBars'));
 
     state.warnings = warnings;
     plot._histSummary = summary;
@@ -1184,7 +1181,6 @@ proto._renderHistogramOptionsPanel = function(panelId, plot) {
     options.appendChild(segmented(
         [
             { label: i18n.t('histogramOverlay'), value: 'overlay' },
-            { label: i18n.t('histogramGrouped'), value: 'grouped' },
             { label: i18n.t('histogramStacked'), value: 'stacked', title: i18n.t('histogramStackedTip'), disabled: visibleCount < 2 },
         ],
         state.barMode,
