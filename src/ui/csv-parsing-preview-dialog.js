@@ -670,6 +670,9 @@ function parseInlineUnitHeader(rawHeader, index, format = 'auto') {
     return { name: raw || fallback, description: '', unit: '' };
 }
 
+// No collision guard here, unlike the parser's _makeUniqueHeaders: this runs
+// only once "Units: inline" has been chosen, which is the reader saying the
+// parentheses hold units.
 function makeUniqueInlineHeaders(rawHeaders, format) {
     const seen = new Map();
     return rawHeaders.map((raw, index) => {

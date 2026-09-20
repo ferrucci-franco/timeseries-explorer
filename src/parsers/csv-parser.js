@@ -13,6 +13,7 @@
  */
 import MatParser from './mat-parser.js';
 import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
+import { inlineUnitSplitCollides } from '../utils/inline-unit-headers.js';
 
 const NUMERIC_COLUMN_MIN_RATIO = 0.5;
 
@@ -931,10 +932,29 @@ export default class CsvParser {
         return unitish / cells.length >= 0.7;
     }
 
-    _makeUniqueHeaders(rawHeaders) {
+    /**
+     * @param {object} [options]
+     * @param {boolean} [options.guardNameCollisions] true when this is a fresh
+     *        look at a file and nothing has said how units are written. A split
+     *        that collapses distinct headers is then read as names, not units:
+     *        `v(V1)`, `v(OUT_1)`, `v(OUT_2)` are three signals, and cutting the
+     *        parentheses off leaves three columns called `v` for the
+     *        deduplicator to rename `v`, `v_2`, `v_3` — the file's own names
+     *        gone and the thing that carried them filed as a unit (#53).
+     *
+     *        False when a SAVED profile is being replayed. Its owner may have a
+     *        view that names `Voltage_2`, and quietly deciding those parentheses
+     *        were a name after all would break that reference. They can say so
+     *        in the parsing dialog; nothing should say it for them.
+     */
+    _makeUniqueHeaders(rawHeaders, { guardNameCollisions = true } = {}) {
+        const split = rawHeaders.map((raw, index) => this._parseHeader(raw, index));
+        if (guardNameCollisions && inlineUnitSplitCollides(rawHeaders, split)) {
+            return this._makeUniquePlainHeaders(rawHeaders);
+        }
         const seen = new Map();
         return rawHeaders.map((raw, index) => {
-            const parsed = this._parseHeader(raw, index);
+            const parsed = split[index];
             const base = parsed.name;
             const count = (seen.get(base) || 0) + 1;
             seen.set(base, count);
@@ -971,7 +991,8 @@ export default class CsvParser {
             ? this._makeUniqueInlineHeaders(rawHeaders, profile.inlineUnitFormat || 'auto')
             : (profile?.unitsMode === 'none' || profile?.unitsMode === 'row')
                 ? this._makeUniquePlainHeaders(rawHeaders)
-                : this._makeUniqueHeaders(rawHeaders);
+                // A profile saved before unitsMode existed. Replay it exactly.
+                : this._makeUniqueHeaders(rawHeaders, { guardNameCollisions: false });
         if (!Array.isArray(headers) || !headers.length) return fallback;
         return rawHeaders.map((raw, index) => {
             const header = headers[index];
@@ -990,6 +1011,10 @@ export default class CsvParser {
         });
     }
 
+    // No collision guard here, unlike _makeUniqueHeaders: reaching this means
+    // the reader SET "Units: inline", and that is them saying the parentheses
+    // hold units. Two columns that then collapse to one name are their call to
+    // make, and test-csv-units-mode.mjs pins it.
     _makeUniqueInlineHeaders(rawHeaders, format = 'auto') {
         const seen = new Map();
         return rawHeaders.map((raw, index) => {
@@ -1007,7 +1032,7 @@ export default class CsvParser {
     _parseInlineUnitHeader(rawHeader, index, format = 'auto') {
         const fallback = index === 0 ? 'time' : `column_${index + 1}`;
         const raw = String(rawHeader || '').trim();
-        if (!raw) return { name: fallback, description: '' };
+        if (!raw) return { name: fallback, description: '', unit: '' };
 
         const patterns = [
             { key: 'paren', re: /^(.*?)\s*\(([^)]+)\)\s*$/ },
@@ -1024,21 +1049,24 @@ export default class CsvParser {
             if (!match) continue;
             const name = this._sanitizeHeaderName(match[1], fallback);
             const unit = String(match[2] || '').trim();
-            if (unit) return { name, description: `[${unit}]` };
+            // `unit` travels alongside the description so the caller can ask
+            // whether a unit was taken at all (inlineUnitSplitCollides).
+            if (unit) return { name, description: `[${unit}]`, unit };
         }
-        return { name: this._sanitizeHeaderName(raw, fallback), description: '' };
+        return { name: this._sanitizeHeaderName(raw, fallback), description: '', unit: '' };
     }
 
     _parseHeader(rawHeader, index) {
         const fallback = index === 0 ? 'time' : `column_${index + 1}`;
         const raw = String(rawHeader || '').trim();
-        if (!raw) return { name: fallback, description: '' };
+        if (!raw) return { name: fallback, description: '', unit: '' };
 
         const bracketUnit = raw.match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
         if (bracketUnit) {
             return {
                 name: this._sanitizeHeaderName(bracketUnit[1], fallback),
-                description: `[${bracketUnit[2].trim()}]`
+                description: `[${bracketUnit[2].trim()}]`,
+                unit: bracketUnit[2].trim(),
             };
         }
 
@@ -1046,11 +1074,12 @@ export default class CsvParser {
         if (parenUnit) {
             return {
                 name: this._sanitizeHeaderName(parenUnit[1], fallback),
-                description: `[${parenUnit[2].trim()}]`
+                description: `[${parenUnit[2].trim()}]`,
+                unit: parenUnit[2].trim(),
             };
         }
 
-        return { name: this._sanitizeHeaderName(raw, fallback), description: '' };
+        return { name: this._sanitizeHeaderName(raw, fallback), description: '', unit: '' };
     }
 
     _sanitizeHeaderName(name, fallback) {
