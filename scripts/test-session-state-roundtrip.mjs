@@ -29,6 +29,7 @@ class StateHarness {
             setSyncHover(value) { this.syncHover = !!value; },
             setHoverInfoCorner(value) { this.hoverInfoCorner = value; },
             setHoverProximity(value) { this.hoverProximity = !!value; },
+            setHoverRunParameters(value) { this.hoverRunParameters = !!value; },
             setLegendPosition(value) { this.legendPosition = value; },
             setLegendOverlayCorner(value) { this.legendOverlayCorner = value; },
             setMouseWheelZoom(value) { this.mouseWheelZoom = !!value; },

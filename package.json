@@ -93,6 +93,7 @@
     "test:variable-range-selection": "node scripts/test-variable-range-selection.mjs",
     "test:column-units": "node scripts/test-column-units.mjs",
     "test:inline-unit-names": "node scripts/test-inline-unit-names.mjs",
+    "test:run-parameters": "node scripts/test-run-parameters.mjs",
     "test:load-error-dialog": "node scripts/test-load-error-dialog.mjs",
     "test:load-error-messages": "node scripts/test-load-error-messages.mjs",
     "test:crash-reporting": "node scripts/test-crash-reporting.mjs",

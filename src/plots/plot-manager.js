@@ -51,6 +51,10 @@ class PlotManager {
         this.syncHover      = false;
         this.hoverInfoCorner = 'bl';
         this.hoverProximity = true;
+        // Name in the hover the parameters that tell one run from another (#51).
+        // Costs nothing until two files are loaded and something actually
+        // differs between them, so it is on.
+        this.hoverRunParameters = true;
         this.mouseWheelZoom = true;
         this.legendUnits    = false;
         this.liveViewDefaults = {
@@ -633,6 +637,14 @@ class PlotManager {
             if (box) this._applyHoverInfoBoxPosition(box);
         }
     }
+    setHoverRunParameters(v) {
+        const next = !!v;
+        if (this.hoverRunParameters === next) return;
+        this.hoverRunParameters = next;
+        this._runParameterCache = null;
+        this._rebuildAllPanels();
+    }
+
     setHoverProximity(v) {
         const next = !!v;
         if (this.hoverProximity === next) return;
