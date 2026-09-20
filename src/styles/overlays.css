@@ -1653,6 +1653,32 @@ textarea.feedback-control {
     background: var(--bg-secondary);
 }
 
+/* An attachment that has just arrived. The scroll brings it into view; this
+   says which row is the new one when several land at once, and answers the
+   drag even when the list was already visible and nothing had to move. */
+.feedback-file-list li.is-new {
+    animation: feedback-file-added 1.3s ease-out;
+}
+
+@keyframes feedback-file-added {
+    from {
+        border-color: var(--primary-color);
+        background: color-mix(in srgb, var(--primary-color) 22%, var(--bg-secondary));
+    }
+    to {
+        border-color: var(--border-color);
+        background: var(--bg-secondary);
+    }
+}
+
+/* Someone who asked not to see motion still gets the colour, just not the fade. */
+@media (prefers-reduced-motion: reduce) {
+    .feedback-file-list li.is-new {
+        animation-duration: 1ms;
+        border-color: var(--primary-color);
+    }
+}
+
 .feedback-file-preview,
 .feedback-file-generic {
     width: 3.4rem;
