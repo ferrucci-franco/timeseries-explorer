@@ -35,6 +35,7 @@ import {
 import { normalizeFilterDesign } from '../../compute/kernels/filter-design.js';
 import { FILTER_DESIGN_FIELD_IDS, formatCoefficientBox } from './filter-methods.js';
 import { XCORR_FIELD_IDS } from './xcorr-methods.js';
+import { COLLAPSE_FIELD_IDS } from './collapse-methods.js';
 // Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
 // the two features spell a duration the same way.
 import { formatNaturalDuration } from '../../utils/fft.js';
@@ -50,7 +51,7 @@ const DATA_TOOLS = new Set([
 // the source file — see resample-methods.js. These are selectable in the picker
 // and share the form, but never enter the definition registry, the
 // transformations table, the editing state or the preview.
-const FILE_DATA_TOOLS = new Set(['resample', 'xcorr']);
+const FILE_DATA_TOOLS = new Set(['resample', 'xcorr', 'collapse']);
 // The resample source picker's "every variable" entry. Deliberately not a legal
 // variable name, so it can never collide with a real one.
 export const RESAMPLE_ALL_VARIABLES = '__all_variables__';
@@ -208,6 +209,7 @@ proto.initDataTools = function() {
 
     this.initResampleTool?.();
     this.initXcorrTool?.();
+    this.initCollapseTool?.();
     this.initFilterTool?.();
 
     this._dataToolParameterInputs().forEach(input => {
@@ -391,12 +393,14 @@ proto._syncDataTools = function() {
     this._syncInterpolateStatus();
     this._syncDetrendControls();
     this._syncResampleControls?.();
+    this._syncCollapseControls?.();
     this._syncFilterControls?.();
 
     const fileTool = this._isFileDataTool(tool);
-    // Only the resampler takes the whole file at once; the other file tool
-    // (cross-correlation) picks one signal here and a second one of its own.
-    const wholeFileTool = tool === 'resample';
+    // The resampler and the collapse tool take the whole file at once; the
+    // third file tool (cross-correlation) picks one signal here and a second
+    // one of its own.
+    const wholeFileTool = tool === 'resample' || tool === 'collapse';
     const previous = sourceSelect.value;
     const entries = hasTool && allowed ? this._getDataToolSourceEntries(data, tool, editing?.name) : [];
 
@@ -497,6 +501,9 @@ proto._syncDataTools = function() {
     for (const id of XCORR_FIELD_IDS) {
         document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'xcorr');
     }
+    for (const id of COLLAPSE_FIELD_IDS) {
+        document.getElementById(id)?.toggleAttribute('disabled', !hasSource || tool !== 'collapse');
+    }
     document.querySelectorAll('input[name="outlier-replacement"]').forEach(input => {
         input.disabled = !hasSource || tool !== 'removeOutliers' || lazy;
         if (lazy && input.value === 'nan') input.checked = true;
@@ -537,6 +544,10 @@ proto._dataToolCommitBlocker = function({ hasSource, hasValidConfig, editing, fi
         // way this tool can be misconfigured, and the summary already says which.
         if (tool === 'xcorr') {
             const plan = this._xcorrPlan(data);
+            return plan.ok ? '' : (plan.code || 'dataToolFixParameters');
+        }
+        if (tool === 'collapse') {
+            const plan = this._collapsePlan(data);
             return plan.ok ? '' : (plan.code || 'dataToolFixParameters');
         }
         return this._resamplePlan(data).ok ? '' : 'dataToolFixParameters';
@@ -947,6 +958,7 @@ proto._suggestOutlierOutputName = function(sourceName) {
 };
 
 proto._suggestDataToolOutputName = function(sourceName, tool = this._getSelectedDataTool()) {
+    if (tool === 'collapse') return this._suggestCollapseFileName();
     if (tool === 'xcorr') return this._suggestXcorrFileName(sourceName);
     if (this._isFileDataTool(tool)) return this._suggestResampleFileName();
     if (!sourceName) return '';
@@ -1038,9 +1050,10 @@ proto._commitDataToolNow = async function(options = {}) {
     // Resampling writes a file, not a variable, so it does not pass through the
     // create/update/definition machinery below at all.
     if (this._isFileDataTool()) {
-        return this._getSelectedDataTool() === 'xcorr'
-            ? this.commitXcorrTool(options)
-            : this.commitResampleTool(options);
+        const fileTool = this._getSelectedDataTool();
+        if (fileTool === 'xcorr') return this.commitXcorrTool(options);
+        if (fileTool === 'collapse') return this.commitCollapseTool(options);
+        return this.commitResampleTool(options);
     }
 
     const editing = this._dataToolEditing;
@@ -1412,6 +1425,7 @@ proto._resetDataToolParameters = function() {
     const tool = this._getSelectedDataTool?.();
     if (tool === 'resample') this._seedResampleDefaults?.();
     if (tool === 'xcorr') this._seedXcorrDefaults?.();
+    if (tool === 'collapse') this._seedCollapseDefaults?.();
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
@@ -1847,6 +1861,7 @@ proto._dataToolLabel = function(tool) {
         filter: 'dataToolFilter',
         resample: 'dataToolResample',
         xcorr: 'dataToolXcorr',
+        collapse: 'dataToolCollapse',
     }[tool] || 'dataTools');
 };
 
@@ -2524,6 +2539,7 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     if (tool === 'filter') return this._getFilterConfig();
     if (tool === 'resample') return this._getResampleConfig();
     if (tool === 'xcorr') return this._getXcorrConfig();
+    if (tool === 'collapse') return this._getCollapseConfig();
 
     const method = this._getOutlierDetectorMethod();
     if (lazy && method !== 'bounds') throw new Error(i18n.t('dataToolLazyBoundsOnly'));

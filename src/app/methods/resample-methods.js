@@ -644,8 +644,8 @@ proto._buildResampledData = function(sourceData, time, config, names, resampled)
     };
     if (kind === 'datetime') {
         abscissa.timeKind = 'datetime';
-        // The grid is uniform by construction, so the "stalled axis" fallback that
-        // pushes an irregular datetime column to an index display cannot apply.
+        // The grid is uniform by construction: no two rows of it share an
+        // instant, whatever the source did (#154).
         abscissa.timeDisplayMode = 'calendar';
         abscissa.timeOriginMs = grid[0];
         abscissa.description = abscissa.description || '[datetime]';
