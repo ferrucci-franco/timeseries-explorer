@@ -192,7 +192,10 @@ export function installPlotExportMethods(TargetClass) {
         if (!result) return;
 
         if (result.format === 'csv') {
-            this._exportCSV(panelId, { fileName: result.fileName, baseName: result.baseName });
+            // Awaited: a large table is now written in chunks, and the caller
+            // going on while it does would leave the dialog's own teardown
+            // racing the overlay that reports it.
+            await this._exportCSV(panelId, { fileName: result.fileName, baseName: result.baseName });
             return;
         }
         const chart = charts.find(entry => entry.id === result.chartId) || charts[0];

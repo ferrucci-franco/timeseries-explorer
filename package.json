@@ -88,6 +88,7 @@
     "test:reset-layout": "node scripts/test-reset-layout-availability.mjs",
     "test:file-size-limits": "node scripts/test-file-size-limits.mjs",
     "test:loading-cancel-button": "node scripts/test-loading-cancel-button.mjs",
+    "test:csv-export-progress": "node scripts/test-csv-export-progress.mjs",
     "test:load-error-dialog": "node scripts/test-load-error-dialog.mjs",
     "test:load-error-messages": "node scripts/test-load-error-messages.mjs",
     "test:crash-reporting": "node scripts/test-crash-reporting.mjs",

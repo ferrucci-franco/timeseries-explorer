@@ -72,6 +72,10 @@ class PlotManager {
         // plotted as a trace. Kept as a hook (rather than a plain filter) so the
         // drop still has a chance to react. When absent, drops are ignored.
         this.onTimeAxisVariableDrop = null;
+        // Optional app hook for work that blocks long enough to need saying so.
+        // Given { title, hint, token }, returns { progress(text), close() }.
+        // When absent the work still runs; it just runs silently.
+        this.onBusyOverlay = null;
     }
 
     // ─── Public API ────────────────────────────────────────────────
@@ -2520,20 +2524,77 @@ class PlotManager {
         }
 
         if (!columns.length) return;
+        return this._writeCsvFile(headers, columns, options.fileName || `${plot.mode}_export.csv`);
+    }
 
+    /**
+     * Join the columns into a CSV file and hand it to the browser.
+     *
+     * The whole table used to be built in one synchronous pass: a string per
+     * row, then one join over all of them, then a Blob. Nothing repainted
+     * while that ran, so a 400 MB table simply froze the window — no cursor,
+     * no message — until the save dialog appeared a minute later (#132).
+     *
+     * It now goes a chunk at a time, yielding between chunks so the browser
+     * can paint and so a cancel can be noticed. The chunks are handed to the
+     * Blob as an array rather than joined first: that giant intermediate
+     * string is a second full copy of the file, at exactly the size where a
+     * second copy is what there is no room for.
+     */
+    async _writeCsvFile(headers, columns, fileName) {
         const nRows = Math.max(...columns.map(c => c.length));
-        const rows  = [headers.join(',')];
-        for (let i = 0; i < nRows; i++) {
-            rows.push(columns.map(c => (c[i] !== undefined ? c[i] : '')).join(','));
-        }
+        // Below this the whole thing is a few milliseconds and an overlay
+        // would be a flash with nothing to read. Measured per cell rather than
+        // per row: sixty columns of ten thousand rows is not a small export.
+        const CELLS_BEFORE_REPORTING = 400000;
+        // Big enough that yielding costs nothing measurable, small enough that
+        // the window stays responsive between them.
+        const ROWS_PER_CHUNK = 20000;
+        const token = { cancelled: false };
+        const overlay = nRows * columns.length >= CELLS_BEFORE_REPORTING
+            ? this.onBusyOverlay?.({ title: i18n.t('csvExportBuilding'), token })
+            : null;
 
-        const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const chunks = [headers.join(',')];
+        let pending = [];
+        for (let i = 0; i < nRows; i++) {
+            const row = new Array(columns.length);
+            for (let c = 0; c < columns.length; c++) {
+                const value = columns[c][i];
+                row[c] = value !== undefined ? value : '';
+            }
+            pending.push(row.join(','));
+            if (pending.length < ROWS_PER_CHUNK) continue;
+            chunks.push('\n' + pending.join('\n'));
+            pending = [];
+            if (overlay) {
+                overlay.progress(i18n.t('csvExportProgress')
+                    .replace('{done}', i18n.formatNumber(i + 1))
+                    .replace('{total}', i18n.formatNumber(nRows)));
+            }
+            await this._yieldToPaint();
+            // Abandoned: nothing has been written anywhere yet, so there is
+            // nothing to undo — the file simply never appears.
+            if (token.cancelled) { overlay?.close(); return null; }
+        }
+        if (pending.length) chunks.push('\n' + pending.join('\n'));
+
+        const blob = new Blob(chunks, { type: 'text/csv;charset=utf-8;' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
-        a.download = options.fileName || `${plot.mode}_export.csv`;
+        a.download = fileName;
         a.click();
         URL.revokeObjectURL(url);
+        overlay?.close();
+        return fileName;
+    }
+
+    // A real frame, not a microtask: setTimeout(0) alone lets the loop continue
+    // without the browser having drawn anything, which is the state this is
+    // meant to get out of.
+    _yieldToPaint() {
+        return new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
     }
 
     // Build the time-series / FFT export columns. A single shared time column is

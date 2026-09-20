@@ -35,7 +35,8 @@ assert.match(builderBody, /button\.textContent = i18n\.t\('cancellingConversion'
     'and the label says the request was heard');
 
 const users = [...files.matchAll(/this\._buildOverlayCancelButton\(/g)];
-assert.equal(users.length, 2, 'both overlays call it — file loading and Parquet conversion');
+assert.equal(users.length, 3,
+    'every overlay calls it — file loading, Parquet conversion, and the busy overlay (#132)');
 
 // ── The file-loading overlay uses it ────────────────────────────────────────
 assert.match(files, /_showFileLoadingOverlay = function[\s\S]*?_syncFileLoadingCancelButton\(overlay, loadToken\)/,
