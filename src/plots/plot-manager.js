@@ -2397,8 +2397,12 @@ class PlotManager {
         const headers = [];
         const columns = [];
 
-        if (plot.mode === 'timeseries' || plot.mode === 'fft') {
+        if (plot.mode === 'timeseries') {
             this._appendTimeseriesExportColumns(plot, headers, columns);
+        } else if (plot.mode === 'fft') {
+            // The spectrum, not the samples under it: see
+            // _appendFftExportColumns.
+            this._appendFftExportColumns(plot, headers, columns);
         } else if (plot.mode === 'phase2dt') {
             for (const pt of plot.phaseTraces) {
                 this._appendPhaseCSVTrace(headers, columns, pt, ['x', 'y']);

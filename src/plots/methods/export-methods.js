@@ -136,6 +136,11 @@ export function installPlotExportMethods(TargetClass) {
     proto._csvExportBlockedReason = function(plot) {
         if (!plot) return '';
         if (plot.mode === 'heatmap') return i18n.t('heatmapExportPending');
+        // Until now FFT always had "data" to give, because it was giving the
+        // time series. The spectrum can genuinely not be there yet — still
+        // computing, or refused for a signal it cannot transform — and the
+        // dialog says so instead of writing an empty file.
+        if (plot.mode === 'fft' && !plot._fftSpectraFull?.length) return i18n.t('exportCsvUnavailableSpectrum');
         if (plot.mode === 'temporal-profile') return i18n.t('exportCsvUnavailableProfile');
         // The Integral table IS its analysis, so it is only unavailable while
         // there is no result yet — an empty click on Download would otherwise
