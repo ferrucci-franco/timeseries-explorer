@@ -3798,3 +3798,39 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
     font-size: 0.9rem;
     color: var(--text-secondary);
 }
+
+/* ============================================
+   Dragging with a finger (#110)
+   ============================================ */
+
+/* What the finger carries. Positioned above the touch point rather than under
+   it: a chip under the finger is a chip nobody can see, and the panel it is
+   aimed at is the one that matters. */
+.touch-drag-chip {
+    position: fixed;
+    z-index: 6000;
+    transform: translate(-50%, calc(-100% - 14px));
+    pointer-events: none;
+    max-width: 60vw;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--primary-color);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.tree-item.touch-dragging {
+    opacity: 0.55;
+}
+
+/* A finger on the tree scrolls it vertically and does nothing horizontally:
+   the horizontal swipe is the browser's back gesture, and a drag towards a
+   panel is exactly that shape. */
+.tree-item {
+    touch-action: pan-y;
+}

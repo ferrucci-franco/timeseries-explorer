@@ -1,6 +1,7 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import { namesBetween } from '../../utils/selection-range.js';
+import { installTouchDragSource, isTouchCapable } from '../../ui/touch-drag.js';
 
 export function transposeMatrixSeries(series) {
     if (!Array.isArray(series) || !series.length) return [];
@@ -714,6 +715,27 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         itemDiv.addEventListener('dragend', () => {
             document.querySelectorAll('.tree-item.dragging').forEach(item => item.classList.remove('dragging'));
         });
+        // The same drag, for a finger. dragstart is a mouse event and never
+        // fires for a touch, so without this the tree could put nothing on a
+        // panel at all on a tablet (#110).
+        if (isTouchCapable()) {
+            installTouchDragSource(itemDiv, {
+                canDrag: () => canPlot,
+                payload: () => {
+                    const names = foreign ? [variable.name] : this._selectedVariableNamesForDrag(variable.name);
+                    if (!names.length) return null;
+                    const label = variable.displayName || variable.name;
+                    return { names, label, ...(foreign ? { fileId: leafFileId } : {}) };
+                },
+                onStart: () => itemDiv.classList.add('dragging'),
+                onMove: point => this.plotManager.showTouchDropHint(point),
+                onDrop: (payload, point) => this.plotManager.dropVariablesAtPoint(payload, point),
+                onEnd: () => {
+                    itemDiv.classList.remove('dragging');
+                    this.plotManager.clearTouchDropHints();
+                },
+            });
+        }
 
         parentElement.appendChild(nodeDiv);
     }

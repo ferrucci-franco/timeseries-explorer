@@ -74,6 +74,16 @@
     box-sizing: border-box;
 }
 
+/* A swipe is a gesture this app wants, not a page navigation.
+   On a touch screen, dragging left-to-right across the window is the browser's
+   "back" gesture: dragging a variable towards a panel took the whole app with
+   it — beforeunload, then about:blank, every file and panel gone (#110). The
+   app is a single page with nothing to go back to, so the gesture has nothing
+   to offer and everything to cost. */
+html, body {
+    overscroll-behavior: none;
+}
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     background-color: var(--bg-primary);
