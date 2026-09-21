@@ -1,39 +1,87 @@
-// What a finger means on a plot.
+// What a finger means on a plot, and when the plot stops asking Plotly.
 //
-// Plotly answers that for a whole plot at once, with one layout attribute. In
-// `zoom`, its default, every drag draws a rectangle and the plot zooms into it;
-// in `pan`, every drag moves the view. With a mouse the box is the better
-// default, because panning is one modebar click away. With a finger there is no
-// second button and no modebar worth hitting, so a plot left in `zoom` cannot be
-// panned at all — every drag is a zoom, and the only way back is a double tap.
+// Plotly answers "what does a drag do" for a whole plot at once, with one
+// layout attribute: `zoom` draws a rectangle, `pan` moves the view. With a
+// mouse the box is the better default, because panning is a modebar click
+// away. With a finger there is no second button, and a plot left in `zoom`
+// cannot be panned at all.
 //
-// The first attempt at this (#110) asked the DEVICE, and wrote `pan` into the
-// layout of a device whose primary pointer was coarse. That was wrong twice:
+// Two attempts at borrowing Plotly's `pan` for the length of a touch got this
+// far and no further:
 //
-//   * a laptop or a Surface with a touch screen has a FINE primary pointer, so
-//     it was never given the mode, and a finger on it went on drawing boxes;
-//   * a layout attribute lasts until the next Plotly.react, which is how every
-//     analysis pane in this app redraws — the mode went quietly back to `zoom`.
+//   * #110 asked the DEVICE — `(pointer: coarse)` — which left out every touch
+//     screen with a mouse beside it, and was undone by the next Plotly.react.
+//   * #160 asked the GESTURE and borrowed the mode as the finger landed. One
+//     finger panned, and two fingers pinched — but only when they landed
+//     together. A second finger arriving even slightly late found Plotly
+//     already panning from the first one, and the two handlers fought: the
+//     pinch was not recognised and the pan glitched.
 //
-// So the question is asked of the GESTURE instead. A touch landing on a plot
-// borrows `pan` for as long as that touch lasts, and a mouse on the same screen
-// keeps the box it always had. Measured on this Plotly build: the drag mode is
-// read from `_fullLayout` when a drag begins, so a switch made as the finger
-// lands governs the very gesture that finger is starting.
+// So the plot no longer hands the gesture to Plotly at all. A touch that lands
+// on the plot surface is the app's, start to finish: one finger pans, two
+// pinch, and the arithmetic is the same either way (utils/pinch-zoom.js). The
+// hand can change mid-gesture — a second finger arriving a second later, one
+// of them lifting — and the gesture simply starts again from where the plot is
+// now, so there is no moment at which the fingers have to agree.
+//
+// What is still Plotly's: a tap, which becomes a click, and two taps, which
+// become its own reset. Those are not drags and nothing here touches them.
 
-export const TOUCH_DRAG_MODE = 'pan';
+/** How far a finger may wander before the touch is a drag and not a tap. */
+export const TOUCH_GESTURE_SLOP_PX = 6;
 
 /**
- * The drag mode a finger needs, or null to leave the plot as it is.
+ * Is this plot's drag mode ours to take over?
  *
- * Only the box zoom is overruled. `select`, `lasso`, a drawing mode and a `pan`
- * already in place are deliberate answers to this same question, and a gesture
- * is not the place to overrule them.
+ * `zoom` is the default nobody chose, and `pan` is what a finger wants anyway.
+ * `select`, `lasso` and the drawing modes are deliberate answers to the same
+ * question, and a gesture is not the place to overrule them.
  *
- * @param {string|undefined} dragmode what the plot is in now
- * @returns {string|null}
+ * @param {string|undefined} dragmode
+ * @returns {boolean}
  */
-export function touchDragModeFor(dragmode) {
-    if (dragmode && dragmode !== 'zoom') return null;
-    return TOUCH_DRAG_MODE;
+export function touchGestureOwnsDrag(dragmode) {
+    if (!dragmode) return true;
+    return dragmode === 'zoom' || dragmode === 'pan';
+}
+
+/**
+ * The point a gesture is about: one finger, or the midpoint of two.
+ *
+ * @param {Array<{x: number, y: number}>} points
+ * @returns {{x: number, y: number}|null}
+ */
+export function gestureCentre(points) {
+    if (!Array.isArray(points) || points.length === 0) return null;
+    let sumX = 0;
+    let sumY = 0;
+    for (const point of points) {
+        sumX += Number(point?.x);
+        sumY += Number(point?.y);
+    }
+    const centre = { x: sumX / points.length, y: sumY / points.length };
+    return Number.isFinite(centre.x) && Number.isFinite(centre.y) ? centre : null;
+}
+
+/**
+ * Has the hand moved far enough to mean it?
+ *
+ * A tap is never perfectly still, and a touch that has not travelled this far
+ * is left alone so it can still become a click — which is how a cursor is
+ * placed and how Plotly's own double-tap reset is recognised.
+ *
+ * @param {Array<{x: number, y: number}>} from where the fingers landed
+ * @param {Array<{x: number, y: number}>} to where they are now
+ * @param {number} [slop]
+ * @returns {boolean}
+ */
+export function movedBeyondSlop(from, to, slop = TOUCH_GESTURE_SLOP_PX) {
+    if (!Array.isArray(from) || !Array.isArray(to)) return false;
+    const count = Math.min(from.length, to.length);
+    for (let i = 0; i < count; i += 1) {
+        const dx = Number(to[i]?.x) - Number(from[i]?.x);
+        const dy = Number(to[i]?.y) - Number(from[i]?.y);
+        if (Number.isFinite(dx) && Number.isFinite(dy) && Math.hypot(dx, dy) > slop) return true;
+    }
+    return false;
 }
