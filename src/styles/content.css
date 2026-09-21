@@ -3030,6 +3030,13 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     transform: translateX(-1px);
 }
 
+/* Both cursors moving together, from a finger held on one of them (#110).
+ * With a mouse that gesture is Ctrl and drag, and the pointer says so; a
+ * finger has nothing to show, so the lines themselves do. */
+body.cursor-pair-dragging .cursor-overlay-line {
+    border-left-width: 4px;
+}
+
 .cursor-secant-svg {
     position: absolute;
     inset: 0;

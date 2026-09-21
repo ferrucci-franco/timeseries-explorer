@@ -40,6 +40,33 @@ const onPlotSurface = (target) => typeof target?.closest === 'function' && !!tar
 const GESTURE_CLASS = 'touch-gesture';
 
 /**
+ * Speak for a touch on this plot, before its own gestures act on it.
+ *
+ * A measurement cursor being grabbed, an analysis band being dragged: each is
+ * a drag of its own on the same pixels, and each says so here. The gesture
+ * handler asks every claim before it pans, and a claim that says yes keeps the
+ * whole touch — Plotly included, since it would read a second finger arriving
+ * mid-drag as a pinch.
+ *
+ * @param {HTMLElement} div a Plotly graph div
+ * @param {(event: TouchEvent) => boolean} claim
+ * @returns {() => void} withdraws it again
+ */
+export function claimTouchGestures(div, claim) {
+    if (!div || typeof claim !== 'function') return () => {};
+    const claims = div._touchGestureClaims || (div._touchGestureClaims = new Set());
+    claims.add(claim);
+    return () => claims.delete(claim);
+}
+
+const spokenFor = (div, event) => {
+    for (const claim of div._touchGestureClaims || []) {
+        if (claim(event)) return true;
+    }
+    return false;
+};
+
+/**
  * The data value under a pixel, in the units Plotly keeps the range in.
  *
  * `vertical` picks which edge of the plot the pixel is measured from — a y
@@ -152,7 +179,7 @@ export function installTouchPlotGestures(div, plotly) {
         // landed on a measurement cursor is grabbing it, not panning the plot.
         // It is not Plotly's either — a second finger arriving mid-drag would
         // be read as a pinch and zoom the plot out from under the cursor.
-        if (div._touchGestureClaim?.(event)) {
+        if (spokenFor(div, event)) {
             claimed = true;
             gesture = null;
             event.stopPropagation();

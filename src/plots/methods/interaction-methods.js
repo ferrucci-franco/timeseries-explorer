@@ -3,6 +3,8 @@ import Plotly from '../../vendor/plotly.js';
 import { formatSpectrumPeriod, spectrumCursorMeasurements } from '../../utils/fft.js';
 import { missingBucketsToIntervals } from '../../data/missing-buckets-sql.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
+import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
+import { movedBeyondSlop } from '../../utils/touch-plot-gestures.js';
 
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -3374,6 +3376,86 @@ const pointerPoint = (event) => {
 const CURSOR_GRAB_PX = 5;
 const CURSOR_TOUCH_GRAB_PX = 18;
 
+// Ctrl and drag slides both cursors at once, keeping the distance between them
+// — the measurement itself, moved along the signal. A touch screen has no
+// modifier, so the finger asks for it the way a finger asks for anything else:
+// by staying put. Long enough to be a decision, short enough not to feel stuck.
+const CURSOR_PAIR_HOLD_MS = 450;
+const CURSOR_PAIR_HOLD_SLOP_PX = 10;
+
+/**
+ * A drag written for a mouse, given a finger as well.
+ *
+ * Every analysis mode owns a selection band on its time pane, and every one of
+ * them drags it the same way: a mousedown on the pane, then mousemove and
+ * mouseup on the document. None of them heard a finger — so once a panel was
+ * in FFT, histogram, correlation or any of the others, the range it analyses
+ * could not be changed by hand at all, and with the plot's own touch gestures
+ * in place (ui/plot-touch-gestures.js) a finger reaching for a band edge
+ * panned the plot instead.
+ *
+ * Rather than seven copies of the same plumbing, each hands its three handlers
+ * here. The touch is described as the mouse event they already understand —
+ * the same point, a left button, and a preventDefault that reaches the real
+ * event — and the plot is told the touch is spoken for.
+ *
+ * @param {HTMLElement} div the pane the band is drawn on
+ * @param {object} plot the panel's plot state, which remembers the binding
+ * @param {string} key where on it to remember
+ * @param {{hitTest: Function, onDown: Function, onMove: Function, onUp: Function}} handlers
+ */
+proto._alsoDragWithTouch = function(div, plot, key, { hitTest, onDown, onMove, onUp }) {
+    if (!div || !plot || plot[key] === div) return;
+    plot[key] = div;
+    let active = false;
+
+    const asMouse = (event) => {
+        const point = pointerPoint(event);
+        return {
+            button: 0,
+            buttons: 1,
+            clientX: point.clientX,
+            clientY: point.clientY,
+            target: event.target,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: false,
+            metaKey: false,
+            preventDefault: () => event.preventDefault(),
+            stopPropagation: () => event.stopPropagation(),
+            stopImmediatePropagation: () => event.stopImmediatePropagation?.(),
+        };
+    };
+
+    div.addEventListener('touchstart', (event) => {
+        if (event.touches.length !== 1) return;
+        const described = asMouse(event);
+        if (!hitTest(described)) return;
+        active = true;
+        onDown(described);
+    }, { capture: true, passive: false });
+
+    const onTouchMove = (event) => {
+        if (!active) return;
+        // The band follows the finger instead of the page scrolling under it.
+        event.preventDefault();
+        onMove(asMouse(event));
+    };
+    const onTouchEnd = () => {
+        if (!active) return;
+        active = false;
+        onUp();
+    };
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd);
+    document.addEventListener('touchcancel', onTouchEnd);
+
+    // A drag under way keeps the touch whatever else lands: a second finger
+    // would otherwise be read as a pinch and zoom the plot out from under it.
+    claimTouchGestures(div, event => active
+        || (event.touches?.length === 1 && !!hitTest(asMouse(event))));
+};
+
 proto._installCursorViewHandlers = function(view) {
     const { panelId, plot } = view;
     const div = this._viewDiv(view);
@@ -3438,16 +3520,40 @@ proto._installCursorViewHandlers = function(view) {
     // They ask here first, and a finger that landed on a cursor is not a pan.
     // A drag already under way keeps the claim whatever else lands: a second
     // finger arriving mid-drag would otherwise start a pinch on top of it.
-    div._touchGestureClaim = (event) => !!dragging
-        || (event.touches?.length === 1 && !!cursorNearPointer(event, CURSOR_TOUCH_GRAB_PX));
+    claimTouchGestures(div, (event) => !!dragging
+        || (event.touches?.length === 1 && !!cursorNearPointer(event, CURSOR_TOUCH_GRAB_PX)));
+
+    let holdTimer = null;
+    let holdFrom = null;     // where the finger landed, in pixels
+    let lastPointerX = NaN;  // where it is now, in data units
+    const clearHold = () => {
+        if (holdTimer) clearTimeout(holdTimer);
+        holdTimer = null;
+        holdFrom = null;
+    };
 
     div.addEventListener('touchstart', (event) => {
         if (event.touches.length !== 1) return;
         const hit = cursorNearPointer(event, CURSOR_TOUCH_GRAB_PX);
         if (!hit) return;
-        // No pair slide: there is no modifier on a touch screen, and the one
-        // cursor under the finger is the one it came for.
+        const point = pointerPoint(event);
         dragging = { mode: 'single', which: hit };
+        lastPointerX = this._eventToXValue(div, point);
+        holdFrom = { x: point.clientX, y: point.clientY };
+        clearTimeout(holdTimer);
+        // Held still on a cursor: the reader is asking for the pair, which is
+        // what Ctrl and drag does for a mouse.
+        holdTimer = setTimeout(() => {
+            holdTimer = null;
+            if (!dragging || dragging.mode === 'pair') return;
+            const held = this._viewCursors(view);
+            if (!Number.isFinite(lastPointerX) || !Number.isFinite(held.a) || !Number.isFinite(held.b)) return;
+            dragging = { mode: 'pair', which: hit, startPointerX: lastPointerX, startA: held.a, startB: held.b };
+            document.body.classList.add('cursor-pair-dragging');
+            // Something has to say the gesture changed under a finger that has
+            // not moved. Where there is nothing to feel, the lines thicken.
+            try { navigator.vibrate?.(12); } catch (_) { /* not every device has one */ }
+        }, CURSOR_PAIR_HOLD_MS);
         // Nothing synthesises a click out of this, and nothing scrolls.
         event.preventDefault();
         event.stopPropagation();
@@ -3471,6 +3577,7 @@ proto._installCursorViewHandlers = function(view) {
         const cursors = this._viewCursors(view);
         const x = this._eventToXValue(div, pointerPoint(event));
         if (!Number.isFinite(x)) return;
+        lastPointerX = x;
         if (dragging.mode === 'pair') {
             const delta = this._cursorPairSlideDelta(view, dragging.startA, dragging.startB, x - dragging.startPointerX);
             cursors.a = this._clampCursorX(view, 'a', dragging.startA + delta);
@@ -3486,12 +3593,19 @@ proto._installCursorViewHandlers = function(view) {
     };
     const onDocUp = () => {
         if (!dragging) return;
+        clearHold();
         dragging = null;
-        document.body.classList.remove('cursor-dragging');
+        document.body.classList.remove('cursor-dragging', 'cursor-pair-dragging');
         div?.closest('.layout-panel')?.classList.remove('cursor-near');
     };
     const onDocTouchMove = (event) => {
         if (!dragging) return;
+        // A finger that travels is dragging one cursor; only one that stays
+        // put is asking for both.
+        const point = pointerPoint(event);
+        if (holdFrom && movedBeyondSlop([holdFrom], [{ x: point.clientX, y: point.clientY }], CURSOR_PAIR_HOLD_SLOP_PX)) {
+            clearHold();
+        }
         // The cursor follows the finger instead of the page scrolling under it.
         event.preventDefault();
         onDocMove(event);
@@ -3643,7 +3757,11 @@ proto._updateCursorBox = function(view) {
     const zeroTitle = this._escapeHTML(i18n.t('cursorNextZero'));
     const sampleTitle = this._escapeHTML(i18n.t('cursorNextValue'));
     const shiftHint = this._escapeHTML(i18n.t('cursorShiftPreviousHint'));
-    const slideHint = this._escapeHTML(i18n.t('cursorSlideBothHint'));
+    // Ctrl is not a thing a finger has. Where the pointer IS a finger, the hint
+    // names the gesture that reader can actually make (#110).
+    const slideHint = this._escapeHTML(i18n.t(
+        globalThis.matchMedia?.('(pointer: coarse)')?.matches ? 'cursorSlideBothHintTouch' : 'cursorSlideBothHint',
+    ));
     const labelX = this._escapeHTML(i18n.t('cursorLabelX'));
     const labelY = this._escapeHTML(i18n.t('cursorLabelY'));
     const labelDx = this._escapeHTML(i18n.t('cursorLabelDeltaX'));
