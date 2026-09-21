@@ -875,7 +875,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             timeDiv.classList.toggle('fft-cursor-ew', hit === 'left' || hit === 'right');
             timeDiv.classList.toggle('fft-cursor-grab', hit === 'move');
         });
-        timeDiv.addEventListener('mousedown', event => {
+        const onDown = (event) => {
             if (event.button !== 0) return;
             const hit = hitTest(event);
             if (!hit) return;
@@ -886,7 +886,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             event.stopPropagation();
             event.stopImmediatePropagation?.();
             document.body.classList.add('fft-selection-dragging');
-        }, true);
+        };
+        timeDiv.addEventListener('mousedown', onDown, true);
         const onMove = event => {
             if (!dragging || !timeDiv) return;
             const domain = this._phase2dFitDomain(plot);
@@ -919,6 +920,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
         plot._phase2dFitSelectionDocListeners = { move: onMove, up: onUp };
+        // A finger drags the same band: see _alsoDragWithTouch (#110).
+        this._alsoDragWithTouch(timeDiv, plot, '_phase2dFitSelectionTouchDiv', { hitTest, onDown, onMove, onUp });
     };
 
     proto._installPhase2dFitSplitterHandlers = function(panelId, plot) {

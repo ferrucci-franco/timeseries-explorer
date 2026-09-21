@@ -1093,7 +1093,7 @@ proto._installTemporalProfileSelectionHandlers = function(panelId, plot) {
     };
     plot.div.addEventListener('mousemove', event => { if (!dragging) setCursorHint(hitTest(event)); });
     plot.div.addEventListener('mouseleave', () => { if (!dragging && plot.div) setCursorHint(null); });
-    plot.div.addEventListener('mousedown', event => {
+    const onDown = (event) => {
         if (event.button !== 0) return;
         const hit = hitTest(event);
         if (!hit) return;
@@ -1105,7 +1105,8 @@ proto._installTemporalProfileSelectionHandlers = function(panelId, plot) {
         event.stopImmediatePropagation?.();
         document.body.classList.add('fft-selection-dragging');
         document.body.classList.toggle('fft-selection-moving', hit === 'move');
-    }, true);
+    };
+    plot.div.addEventListener('mousedown', onDown, true);
     const onMove = (event) => {
         if (!dragging || !plot.div) return;
         const domain = this._temporalProfileDomain(plot);
@@ -1140,6 +1141,8 @@ proto._installTemporalProfileSelectionHandlers = function(panelId, plot) {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     plot._temporalProfileSelectionDocListeners = { move: onMove, up: onUp };
+    // A finger drags the same band: see _alsoDragWithTouch (#110).
+    this._alsoDragWithTouch(plot.div, plot, '_temporalProfileSelectionTouchDiv', { hitTest, onDown, onMove, onUp });
 };
 
 proto._setTemporalProfileRangeMode = function(panelId, full) {

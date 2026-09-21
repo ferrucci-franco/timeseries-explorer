@@ -545,7 +545,7 @@ export function installPlotCorrelationMethods(TargetClass) {
             plot.div.classList.toggle('fft-cursor-ew', hit === 'left' || hit === 'right');
             plot.div.classList.toggle('fft-cursor-grab', hit === 'move');
         });
-        plot.div.addEventListener('mousedown', event => {
+        const onDown = (event) => {
             if (event.button !== 0) return;
             const hit = hitTest(event);
             if (!hit) return;
@@ -556,7 +556,8 @@ export function installPlotCorrelationMethods(TargetClass) {
             event.stopPropagation();
             event.stopImmediatePropagation?.();
             document.body.classList.add('fft-selection-dragging');
-        }, true);
+        };
+        plot.div.addEventListener('mousedown', onDown, true);
         const onMove = event => {
             if (!dragging || !plot.div) return;
             const domain = this._correlationDomain(plot);
@@ -590,6 +591,8 @@ export function installPlotCorrelationMethods(TargetClass) {
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
         plot._correlationSelectionDocListeners = { move: onMove, up: onUp };
+        // A finger drags the same band: see _alsoDragWithTouch (#110).
+        this._alsoDragWithTouch(plot.div, plot, '_correlationSelectionTouchDiv', { hitTest, onDown, onMove, onUp });
     };
 
     proto._installCorrelationSplitterHandlers = function(panelId, plot) {

@@ -803,7 +803,7 @@ proto._installCalendarHeatmapSelectionHandlers = function(panelId, plot) {
     };
     plot.div.addEventListener('mousemove', event => { if (!dragging) setCursor(hitTest(event)); });
     plot.div.addEventListener('mouseleave', () => { if (!dragging && plot.div) setCursor(null); });
-    plot.div.addEventListener('mousedown', (event) => {
+    const onDown = (event) => {
         if (event.button !== 0) return;
         const hit = hitTest(event);
         if (!hit) return;
@@ -815,7 +815,8 @@ proto._installCalendarHeatmapSelectionHandlers = function(panelId, plot) {
         event.stopImmediatePropagation?.();
         document.body.classList.add('heatmap-selection-dragging');
         document.body.classList.toggle('heatmap-selection-moving', hit === 'move');
-    }, true);
+    };
+    plot.div.addEventListener('mousedown', onDown, true);
     const onMove = (event) => {
         if (!dragging || !plot.div) return;
         const domain = this._calendarHeatmapDomain(plot);
@@ -853,6 +854,8 @@ proto._installCalendarHeatmapSelectionHandlers = function(panelId, plot) {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     plot._calendarHeatmapSelectionDocListeners = { move: onMove, up: onUp };
+    // A finger drags the same band: see _alsoDragWithTouch (#110).
+    this._alsoDragWithTouch(plot.div, plot, '_calendarHeatmapSelectionTouchDiv', { hitTest, onDown, onMove, onUp });
 };
 
 proto._setCalendarHeatmapRangeMode = function(panelId, full) {

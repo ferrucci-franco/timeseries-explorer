@@ -145,7 +145,10 @@ assert.match(installer, /requestAnimationFrame\(apply\)/, 'and the plot is asked
 
 // Something else on the plot can want the touch: a finger that landed on a
 // measurement cursor is grabbing it (see methods/interaction-methods.js).
-assert.match(installer, /if \(div\._touchGestureClaim\?\.\(event\)\) \{/, 'the plot asks before it pans');
+assert.match(installer, /if \(spokenFor\(div, event\)\) \{/, 'the plot asks before it pans');
+assert.match(installer, /export function claimTouchGestures\(div, claim\) \{/,
+    'and more than one thing can answer: the cursors and the analysis band are both drags of their own');
+assert.match(installer, /const claims = div\._touchGestureClaims \|\| \(div\._touchGestureClaims = new Set\(\)\);/);
 assert.match(installer, /claimed = true;/, 'and stands aside for the whole touch, not just its first event');
 assert.match(installer, /if \(claimed\) return;/,
     'without stopping it: the drag that claimed it follows the finger on document listeners');
