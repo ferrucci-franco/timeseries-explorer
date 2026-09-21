@@ -34,6 +34,11 @@ import { isTouchCapable } from './touch-drag.js';
 // handles belongs to what it landed on, and none of this applies to it.
 const onPlotSurface = (target) => typeof target?.closest === 'function' && !!target.closest('.draglayer');
 
+// While this class is on a plot, its hover label is hidden (see content.css).
+// The label belongs to the last tap, and a redraw brings it back mid-gesture,
+// at a point nobody is touching.
+const GESTURE_CLASS = 'touch-gesture';
+
 /**
  * The data value under a pixel, in the units Plotly keeps the range in.
  *
@@ -67,6 +72,9 @@ export function installTouchPlotGestures(div, plotly) {
     div._touchGesturesInstalled = true;
 
     let gesture = null;
+    // Something else on this plot has the touch in hand — a measurement cursor
+    // being dragged — and for as long as it does, nothing else may act on it.
+    let claimed = false;
     let frame = 0;
     let frameIsAnimation = false;
     let pending = null;
@@ -129,9 +137,27 @@ export function installTouchPlotGestures(div, plotly) {
         };
     };
 
+    const settle = (moved) => {
+        div.classList.remove(GESTURE_CLASS);
+        // A finger never leaves the plot, so nothing ever takes the hover
+        // label away by itself. After a gesture it is about somewhere the
+        // reader has not been for a while.
+        if (moved) plotly.Fx?.unhover?.(div);
+    };
+
     const onTouchStart = (event) => {
         if (!onPlotSurface(event.target)) return;
         if (!touchGestureOwnsDrag(div._fullLayout?.dragmode)) { gesture = null; return; }
+        // Something on this plot may want this touch for itself: a finger that
+        // landed on a measurement cursor is grabbing it, not panning the plot.
+        // It is not Plotly's either — a second finger arriving mid-drag would
+        // be read as a pinch and zoom the plot out from under the cursor.
+        if (div._touchGestureClaim?.(event)) {
+            claimed = true;
+            gesture = null;
+            event.stopPropagation();
+            return;
+        }
         const points = gestureTouches(event);
         if (!points.length) return;
         // Plotly is not told: one gesture, one handler, whatever the hand does
@@ -141,6 +167,9 @@ export function installTouchPlotGestures(div, plotly) {
     };
 
     const onTouchMove = (event) => {
+        // Only stepping aside: the drag that claimed this touch follows it on
+        // document listeners, and stopping the event here would starve them.
+        if (claimed) return;
         if (!gesture) return;
         const points = gestureTouches(event);
         if (!points.length) { gesture = null; return; }
@@ -150,7 +179,10 @@ export function installTouchPlotGestures(div, plotly) {
         // click. Nothing scrolls in the meantime — the plot's touch-action says
         // the browser has no gesture of its own here.
         if (!gesture.moved && !movedBeyondSlop(gesture.points, points)) return;
-        gesture.moved = true;
+        if (!gesture.moved) {
+            gesture.moved = true;
+            div.classList.add(GESTURE_CLASS);
+        }
         event.preventDefault();
         const centre = gestureCentre(points);
         if (!centre) return;
@@ -182,6 +214,10 @@ export function installTouchPlotGestures(div, plotly) {
     };
 
     const onTouchEnd = (event) => {
+        if (claimed) {
+            if ((event.touches?.length || 0) === 0) claimed = false;
+            return;
+        }
         if (!gesture) return;
         const points = gestureTouches(event);
         if (points.length) {
@@ -190,16 +226,22 @@ export function installTouchPlotGestures(div, plotly) {
             gesture = baseline(points, gesture.moved);
             return;
         }
+        const { moved } = gesture;
         gesture = null;
         flush();
+        settle(moved);
     };
 
     // A cancelled touch is not the end of the gesture — a palm can be rejected,
     // or the browser can take one finger back — so what is left carries on.
     const onTouchCancel = (event) => {
-        const points = gesture ? gestureTouches(event) : [];
-        gesture = points.length ? baseline(points, gesture.moved) : null;
+        if ((event.touches?.length || 0) === 0) claimed = false;
+        if (!gesture) return;
+        const points = gestureTouches(event);
+        const { moved } = gesture;
+        gesture = points.length ? baseline(points, moved) : null;
         flush();
+        if (!gesture) settle(moved);
     };
 
     // Capture, so this is decided before Plotly's own handlers see anything.
