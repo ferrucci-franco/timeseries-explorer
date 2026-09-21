@@ -911,6 +911,22 @@ proto._fftPeriodTicks = function(plot, dataRange = null) {
     return { tickvals, ticktext: periodTickText(tickvals) };
 };
 
+/**
+ * Say the axis in the unit that is chosen now, and change nothing else.
+ *
+ * The ticks and the title are the whole of it: the same spectrum, the same
+ * window, the same curve — read in seconds or read as durations.
+ */
+proto._applyFftPeriodUnit = function(plot) {
+    if (!plot?.fftDiv) return;
+    // Recomputed at the next zoom rather than compared against a stale one.
+    plot._fftPeriodTickSignature = null;
+    Plotly.relayout(plot.fftDiv, {
+        ...this._fftPeriodTickPatch(plot),
+        'xaxis.title.text': this._fftSpectrumXAxisTitle(plot),
+    }).catch(() => {});
+};
+
 /** The same, as a relayout patch — which also has to clear them again. */
 proto._fftPeriodTickPatch = function(plot, dataRange = null) {
     const ticks = this._fftPeriodTicks(plot, dataRange);
@@ -1468,7 +1484,11 @@ proto._refreshFftSpectrumPlot = async function(panelId, plot = this.plots.get(pa
     let displayRange = null;
     if (Array.isArray(pending?.xRange)) displayRange = pending.xRange;
     else if (view.preserveX !== false && liveXAxis && liveXAxis.autorange === false && Array.isArray(liveXAxis.range)) {
-        displayRange = liveXAxis.range;
+        // Through the converting reader: a period axis is logarithmic, so what
+        // the layout reports is log10 of the window. Windowing the drawn points
+        // with those numbers read as seconds left one bin of a 76-point curve
+        // on screen — every recompute while zoomed, not just this one (#108).
+        displayRange = this._fftAxisDataRange(plot, liveXAxis.range);
     }
     const builtByName = new Map();
     for (const entry of fullEntries) {
@@ -2824,11 +2844,11 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
                 return;
             }
             if (key === 'periodUnit') {
-                // Nothing about the spectrum changes — only what the ticks are
-                // called — so the transform is left alone.
+                // Only the labels change. Nothing is redrawn and nothing is
+                // refitted: the curve and the window it is seen through are the
+                // same either way, so a reader zoomed in on a peak keeps it.
                 this._ensureFftState(plot).periodUnit = normalizePeriodUnitMode(select.value);
-                Promise.resolve(this._refreshFftSpectrumPlot(panelId, plot))
-                    .then(() => Plotly.relayout(plot.fftDiv, this._fftPeriodTickPatch(plot)).catch(() => {}));
+                this._applyFftPeriodUnit(plot);
                 this._syncFftOptionsPanel(plot);
                 return;
             }
