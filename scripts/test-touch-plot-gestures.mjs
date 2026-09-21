@@ -131,7 +131,7 @@ assert.match(installer, /gesture = baseline\(points, gesture\?\.moved \?\? false
     'a finger arriving starts the gesture again from where the plot is now, however late it is');
 assert.match(installer, /if \(points\.length !== gesture\.points\.length\) \{ gesture = baseline\(points, gesture\.moved\); return; \}/,
     'and so does one leaving');
-assert.match(installer, /gesture = points\.length \? baseline\(points, gesture\.moved\) : null;/,
+assert.match(installer, /gesture = points\.length \? baseline\(points, moved\) : null;/,
     'a cancelled touch leaves the rest of the hand on the glass');
 assert.match(installer, /if \(!gesture\.moved && !movedBeyondSlop\(gesture\.points, points\)\) return;/,
     'a tap is left alone, so it still reaches Plotly as a click');
@@ -143,11 +143,28 @@ assert.match(installer, /put\('yaxis2', y2, gesture\.ranges\.y2, gesture\.anchor
     'the right-hand axis is under the same fingers as the left one');
 assert.match(installer, /requestAnimationFrame\(apply\)/, 'and the plot is asked to redraw once a frame, not once an event');
 
+// Something else on the plot can want the touch: a finger that landed on a
+// measurement cursor is grabbing it (see methods/interaction-methods.js).
+assert.match(installer, /if \(div\._touchGestureClaim\?\.\(event\)\) \{/, 'the plot asks before it pans');
+assert.match(installer, /claimed = true;/, 'and stands aside for the whole touch, not just its first event');
+assert.match(installer, /if \(claimed\) return;/,
+    'without stopping it: the drag that claimed it follows the finger on document listeners');
+assert.match(installer, /if \(\(event\.touches\?\.length \|\| 0\) === 0\) claimed = false;/,
+    'and takes it back when the last finger lifts');
+
+// The hover label a tap leaves behind, which nothing on a touch screen ever
+// clears, and which a redraw brings back in the middle of a gesture.
+assert.match(installer, /div\.classList\.add\(GESTURE_CLASS\);/, 'a moving gesture hides the hover label');
+assert.match(installer, /if \(moved\) plotly\.Fx\?\.unhover\?\.\(div\);/, 'and clears it when it is over');
+assert.doesNotMatch(installer, /if \(!moved\) plotly/, 'a tap is left to put one there, which is how a finger reads a value');
+
 // The browser must not be able to claim the gesture first: that is what made a
 // late second finger arrive as a touchcancel instead of a pinch.
 const content = readFileSync(new URL('../src/styles/content.css', import.meta.url), 'utf8');
 assert.match(content, /\.js-plotly-plot \{\s+touch-action: none;/,
     'every plot tells the browser it has no gesture of its own here');
+assert.match(content, /\.js-plotly-plot\.touch-gesture \.hoverlayer \{\s+display: none;/,
+    'and hides the label left over from the last tap while it is being moved');
 
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const line of translations.split('\n')) {

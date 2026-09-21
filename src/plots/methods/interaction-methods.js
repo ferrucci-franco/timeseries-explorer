@@ -3361,6 +3361,19 @@ proto._installCursorHandlers = function(panelId, plot) {
     }
 };
 
+// A finger is a pointer too, and everything below was written for a mouse.
+// All any of it wants is the point the event happened at.
+const pointerPoint = (event) => {
+    const touch = event.touches?.[0] || event.changedTouches?.[0];
+    return touch ? { clientX: touch.clientX, clientY: touch.clientY } : event;
+};
+
+// A mouse is placed to the pixel and can see what it is over; a finger covers
+// about forty of them and hides the line it is reaching for. So the reach to
+// grab a cursor is not the same for both.
+const CURSOR_GRAB_PX = 5;
+const CURSOR_TOUCH_GRAB_PX = 18;
+
 proto._installCursorViewHandlers = function(view) {
     const { panelId, plot } = view;
     const div = this._viewDiv(view);
@@ -3370,24 +3383,27 @@ proto._installCursorViewHandlers = function(view) {
     if (plot[docKey]) {
         document.removeEventListener('mousemove', plot[docKey].move);
         document.removeEventListener('mouseup',   plot[docKey].up);
+        document.removeEventListener('touchmove', plot[docKey].touchMove);
+        document.removeEventListener('touchend',  plot[docKey].up);
+        document.removeEventListener('touchcancel', plot[docKey].up);
         plot[docKey] = null;
     }
     plot[guardKey] = div;
 
     let dragging = null;
-    const cursorNearPointer = (event) => {
+    const cursorNearPointer = (event, reachPx = CURSOR_GRAB_PX) => {
         const cursors = this._viewCursors(view);
         if (!cursors.enabled || !this._plotSupportsCursors(plot)) return null;
         const xa = div?._fullLayout?.xaxis;
         if (!xa || !Number.isFinite(cursors.a) || !Number.isFinite(cursors.b)) return null;
-        const x = this._eventToXValue(div, event);
+        const x = this._eventToXValue(div, pointerPoint(event));
         if (!Number.isFinite(x)) return null;
         const range = xa.range;
         const r0 = this._coerceAxisValue(range?.[0]);
         const r1 = this._coerceAxisValue(range?.[1]);
         const span = Math.abs(r1 - r0) || 1;
         const xLen = Math.abs(xa._length) || 1;
-        const tolerance = (5 / xLen) * span;
+        const tolerance = (reachPx / xLen) * span;
         const da = Math.abs(x - cursors.a);
         const db = Math.abs(x - cursors.b);
         const near = Math.min(da, db);
@@ -3417,6 +3433,27 @@ proto._installCursorViewHandlers = function(view) {
         document.body.classList.add('cursor-dragging');
     }, true);
 
+    // The plot's own touch gestures are installed before this (see
+    // ui/plot-touch-gestures.js) and would pan the plot from under the finger.
+    // They ask here first, and a finger that landed on a cursor is not a pan.
+    // A drag already under way keeps the claim whatever else lands: a second
+    // finger arriving mid-drag would otherwise start a pinch on top of it.
+    div._touchGestureClaim = (event) => !!dragging
+        || (event.touches?.length === 1 && !!cursorNearPointer(event, CURSOR_TOUCH_GRAB_PX));
+
+    div.addEventListener('touchstart', (event) => {
+        if (event.touches.length !== 1) return;
+        const hit = cursorNearPointer(event, CURSOR_TOUCH_GRAB_PX);
+        if (!hit) return;
+        // No pair slide: there is no modifier on a touch screen, and the one
+        // cursor under the finger is the one it came for.
+        dragging = { mode: 'single', which: hit };
+        // Nothing synthesises a click out of this, and nothing scrolls.
+        event.preventDefault();
+        event.stopPropagation();
+        document.body.classList.add('cursor-dragging');
+    }, true);
+
     div.addEventListener('mousemove', (event) => {
         if (dragging || !this._viewCursors(view).enabled) return;
         const near = !!cursorNearPointer(event);
@@ -3432,7 +3469,7 @@ proto._installCursorViewHandlers = function(view) {
     const onDocMove = (event) => {
         if (!dragging || !div) return;
         const cursors = this._viewCursors(view);
-        const x = this._eventToXValue(div, event);
+        const x = this._eventToXValue(div, pointerPoint(event));
         if (!Number.isFinite(x)) return;
         if (dragging.mode === 'pair') {
             const delta = this._cursorPairSlideDelta(view, dragging.startA, dragging.startB, x - dragging.startPointerX);
@@ -3453,9 +3490,18 @@ proto._installCursorViewHandlers = function(view) {
         document.body.classList.remove('cursor-dragging');
         div?.closest('.layout-panel')?.classList.remove('cursor-near');
     };
+    const onDocTouchMove = (event) => {
+        if (!dragging) return;
+        // The cursor follows the finger instead of the page scrolling under it.
+        event.preventDefault();
+        onDocMove(event);
+    };
     document.addEventListener('mousemove', onDocMove);
     document.addEventListener('mouseup',   onDocUp);
-    plot[docKey] = { move: onDocMove, up: onDocUp };
+    document.addEventListener('touchmove', onDocTouchMove, { passive: false });
+    document.addEventListener('touchend',  onDocUp);
+    document.addEventListener('touchcancel', onDocUp);
+    plot[docKey] = { move: onDocMove, up: onDocUp, touchMove: onDocTouchMove };
 };
 
 proto._eventToXValue = function(div, event) {
@@ -3902,7 +3948,7 @@ proto._ensureCursorBoxDrag = function(view, box = null) {
     box._dragBound = true;
     let drag = null;
 
-    box.addEventListener('mousedown', (event) => {
+    const startBoxDrag = (event, point) => {
         if (!event.target.closest('.cursor-info-header')) return;
         if (event.target.closest('.cursor-close-btn')) return; // let the close click through
         event.preventDefault();
@@ -3917,29 +3963,46 @@ proto._ensureCursorBoxDrag = function(view, box = null) {
         const panelRect = panelEl.getBoundingClientRect();
         const boxRect = box.getBoundingClientRect();
         drag = {
-            offsetX: event.clientX - boxRect.left,
-            offsetY: event.clientY - boxRect.top,
+            offsetX: point.clientX - boxRect.left,
+            offsetY: point.clientY - boxRect.top,
             panelRect,
         };
         document.body.classList.add('cursor-box-dragging');
-    });
+    };
 
-    document.addEventListener('mousemove', (event) => {
+    const moveBox = (point) => {
         if (!drag) return;
         const rect = panelEl.getBoundingClientRect();
         const maxX = Math.max(0, rect.width - box.offsetWidth - 6);
         const maxY = Math.max(0, rect.height - box.offsetHeight - 6);
-        const x = Math.max(6, Math.min(maxX, event.clientX - rect.left - drag.offsetX));
-        const y = Math.max(6, Math.min(maxY, event.clientY - rect.top - drag.offsetY));
+        const x = Math.max(6, Math.min(maxX, point.clientX - rect.left - drag.offsetX));
+        const y = Math.max(6, Math.min(maxY, point.clientY - rect.top - drag.offsetY));
         this._viewCursors(view).boxPos = { x, y };
         this._applyCursorBoxPosition(panelEl, box, view);
-    });
+    };
 
-    document.addEventListener('mouseup', () => {
+    const endBoxDrag = () => {
         if (!drag) return;
         drag = null;
         document.body.classList.remove('cursor-box-dragging');
-    });
+    };
+
+    // The readout box is moved out of the way of the curve it is about, which
+    // a finger needs at least as much as a mouse does.
+    box.addEventListener('mousedown', event => startBoxDrag(event, event));
+    box.addEventListener('touchstart', (event) => {
+        if (event.touches.length !== 1) return;
+        startBoxDrag(event, pointerPoint(event));
+    }, { passive: false });
+    document.addEventListener('mousemove', event => moveBox(event));
+    document.addEventListener('touchmove', (event) => {
+        if (!drag) return;
+        event.preventDefault();
+        moveBox(pointerPoint(event));
+    }, { passive: false });
+    document.addEventListener('mouseup', endBoxDrag);
+    document.addEventListener('touchend', endBoxDrag);
+    document.addEventListener('touchcancel', endBoxDrag);
 };
 
 proto._hideCursorViewBox = function(panelEl, viewId) {

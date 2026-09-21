@@ -2207,6 +2207,16 @@ body.cursor-box-dragging {
     touch-action: none;
 }
 
+/* A hover label put there by a tap, while the plot is being moved (#110).
+ *
+ * A finger never leaves the plot, so nothing ever fires the mouseout that
+ * would take the label away — and a redraw mid-gesture brings it back at a
+ * point nobody is touching. It blinks in and out while the plot moves under
+ * it. The gesture hides it; what put it there gets it back afterwards. */
+.js-plotly-plot.touch-gesture .hoverlayer {
+    display: none;
+}
+
 .plotly-container .plotly {
     height: 100% !important;
 }
