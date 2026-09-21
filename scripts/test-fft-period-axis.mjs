@@ -16,6 +16,7 @@ import {
     normalizeFftXAxisMode,
     periodSeriesFromSpectrum,
 } from '../src/utils/fft-period-axis.js';
+import { axisSliderPosition, axisSliderValue } from '../src/utils/fft-period-axis.js';
 import { buildFftExportColumns } from '../src/utils/fft-export.js';
 
 // ── The two readings ────────────────────────────────────────────────────────
@@ -44,6 +45,23 @@ assert.deepEqual(convertFftAxisLimits(null, null), { min: null, max: null }, 'un
 assert.deepEqual(convertFftAxisLimits(0.25, null), { min: null, max: 4 },
     'a lower frequency bound is an upper period bound');
 assert.deepEqual(convertFftAxisLimits('', 2), { min: 0.5, max: null });
+
+// ── A slider that moves in ratios ───────────────────────────────────────────
+// A period axis spans decades, and a slider laid out linearly over 0.02 s to
+// 10 s spends nine tenths of its travel above one second — every short period
+// crammed into the first millimetre, which is where the detail is.
+assert.equal(axisSliderPosition(100, true), 2, 'a position is the log10 of the value');
+assert.equal(axisSliderValue(2, true), 100, 'and back again');
+assert.equal(axisSliderPosition(5, false), 5, 'frequency keeps its linear slider');
+assert.equal(axisSliderValue(5, false), 5);
+{
+    const lo = axisSliderPosition(0.02, true);
+    const hi = axisSliderPosition(100, true);
+    const middle = axisSliderValue(lo + (hi - lo) / 2, true);
+    assert.ok(Math.abs(middle - Math.sqrt(0.02 * 100)) < 1e-9,
+        'halfway along is the geometric middle — 1.41 s, where a linear slider would have said 50');
+}
+assert.ok(Number.isFinite(axisSliderPosition(0, true)), 'a zero cannot be logged, and does not throw either');
 
 // ── The series ──────────────────────────────────────────────────────────────
 const frequencies = Float64Array.from([0, 0.25, 0.5, 2]);
@@ -93,6 +111,17 @@ assert.equal((fft.match(/fftDiv\?\._fullLayout\?\.xaxis\?\.range/g) || []).lengt
     'one reader of the spectrum x range, and it converts');
 assert.match(fft, /proto\._fftVisibleXRange = function\(plot\) \{\s*\n\s*return this\._fftAxisDataRange\(plot, plot\?\.fftDiv\?\._fullLayout\?\.xaxis\?\.range\);/,
     'and that reader is the one');
+
+// Switching the reading fits the axis: the two do not share a scale, so the
+// window that was on screen means nothing on the other one (#108).
+assert.match(fft, /proto\._fitFftXAxis = function\(plot\) \{/, 'one place fits the spectrum x axis');
+assert.match(fft, /Promise\.resolve\(this\._refreshFftSpectrumPlot\(panelId, plot\)\)\.then\(\(\) => this\._fitFftXAxis\(plot\)\);/,
+    'and the switch waits for the redraw before it fits');
+assert.match(fft, /const manual = this\._fftResolvedAxisLimitRange\(plot, 'fMin', 'fMax'\);/,
+    'a limit someone typed still governs: fitting is what happens when nobody said otherwise');
+assert.match(fft, /proto\._fftAxisLimitSliderIsLog = function\(plot, key\) \{/, 'the x sliders know which scale they are on');
+assert.match(fft, /const n = axisSliderValue\(Number\(input\.value\), input\.dataset\.fftLogSlider === 'true'\);/,
+    'and read their position back through the same mapping');
 
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const key of ['fftXAxis', 'fftXAxisFrequency', 'fftXAxisPeriod', 'fftXAxisTooltip',

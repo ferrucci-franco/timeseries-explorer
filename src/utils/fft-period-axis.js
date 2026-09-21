@@ -89,3 +89,28 @@ export function convertFftAxisLimits(min, max) {
     );
     return { min: inverted.lo, max: inverted.hi };
 }
+
+/**
+ * Where a value sits on its slider, and what a slider position means.
+ *
+ * A period axis spans decades — a 1024-point spectrum at 100 Hz runs from
+ * 0.02 s to 10 s — and a slider laid out linearly over that spends nine tenths
+ * of its travel above one second. Every short period is crammed into the first
+ * millimetre, which is where the detail is. On a logarithmic slider a
+ * millimetre is the same *ratio* everywhere, which is how the axis itself is
+ * drawn (#108).
+ *
+ * Frequency keeps its linear slider: it spans one decade at most, from zero.
+ */
+export function axisSliderPosition(value, logarithmic) {
+    const number = Number(value);
+    if (!logarithmic) return number;
+    return number > 0 ? Math.log10(number) : Math.log10(Number.MIN_VALUE);
+}
+
+/** @returns {number} the value a slider at this position stands for */
+export function axisSliderValue(position, logarithmic) {
+    const number = Number(position);
+    if (!logarithmic) return number;
+    return Number.isFinite(number) ? 10 ** number : NaN;
+}

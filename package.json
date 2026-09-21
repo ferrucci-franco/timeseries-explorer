@@ -161,6 +161,7 @@
     "test:audio": "node scripts/test-audio-parser.mjs",
     "test:audio-player": "node scripts/test-audio-player.mjs",
     "test:alac": "node scripts/test-alac-decoder.mjs",
+    "test:period-units": "node scripts/test-period-units.mjs",
     "test:pickle": "node scripts/test-pickle-parser.mjs",
     "test:netcdf": "node scripts/test-generic-netcdf-parser.mjs",
     "verify:netcdf-corpus": "node scripts/verify-netcdf-corpus.mjs",

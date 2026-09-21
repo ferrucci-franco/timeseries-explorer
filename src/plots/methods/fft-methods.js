@@ -27,8 +27,16 @@ import {
     invertAxisValue,
     invertAxisWindow,
     normalizeFftXAxisMode,
+    axisSliderPosition,
+    axisSliderValue,
     periodSeriesFromSpectrum,
 } from '../../utils/fft-period-axis.js';
+import {
+    PERIOD_UNIT_DEFAULT,
+    normalizePeriodUnitMode,
+    periodTickText,
+    periodTickValues,
+} from '../../utils/period-units.js';
 import { largestClearInterval } from '../../utils/largest-clear-interval.js';
 import { detectNaNRuns, detectSamplingGaps } from '../../utils/sampling-gaps.js';
 import Plotly from '../../vendor/plotly.js';
@@ -72,6 +80,7 @@ proto._defaultFftState = function() {
         zeroPaddingFactor: 1,
         amplitudeScale: 'normal',
         xAxisMode: 'frequency',
+        periodUnit: PERIOD_UNIT_DEFAULT,
         fMin: null,
         fMax: null,
         yMin: null,
@@ -114,6 +123,7 @@ proto._normalizeFftState = function(raw = {}) {
         zeroPaddingFactor: normalizeZeroPaddingFactor(raw.zeroPaddingFactor),
         amplitudeScale: normalizeFftScale(raw.amplitudeScale),
         xAxisMode: normalizeFftXAxisMode(raw.xAxisMode),
+        periodUnit: normalizePeriodUnitMode(raw.periodUnit),
         fMin: finiteOrNull(raw.fMin),
         fMax: finiteOrNull(raw.fMax),
         yMin: finiteOrNull(raw.yMin),
@@ -424,6 +434,16 @@ proto._installFftPlotHandlers = function(panelId, plot) {
             || ed['xaxis.range[1]'] !== undefined
         );
         if (!touchesX) return;
+        // Durations are chosen for the window on screen, so a zoom picks new
+        // ones. This relayout names no range, so it does not come back here.
+        const ticks = this._fftPeriodTickPatch(plot);
+        const signature = JSON.stringify(ticks['xaxis.ticktext']);
+        if (signature !== plot._fftPeriodTickSignature) {
+            plot._fftPeriodTickSignature = signature;
+            if (ticks['xaxis.tickvals'] || plot.fftDiv?._fullLayout?.xaxis?.tickvals) {
+                Plotly.relayout(plot.fftDiv, ticks).catch(() => {});
+            }
+        }
         const doWindow = () => {
             this._refreshFftSpectrumWindow(panelId, plot, this._fftVisibleXRange(plot));
         };
@@ -685,6 +705,10 @@ proto._buildFftSpectrumLayout = function(plot) {
             // crowd into the short end: linear, everything but the slowest few
             // would sit on top of each other (#108).
             ...(this._fftXAxisIsPeriod(plot) ? { type: 'log' } : { type: 'linear' }),
+            // Labelled as durations where the reader asked for that (#108):
+            // the round numbers of a calendar are not the round numbers of a
+            // decade, and Plotly only knows the second kind.
+            ...(this._fftPeriodTicks(plot, this._fftResolvedAxisLimitRange(plot, 'fMin', 'fMax')) || {}),
             ...(xRange ? { range: xRange, autorange: false } : {}),
         },
         yaxis: {
@@ -758,8 +782,13 @@ proto._setFftXAxisMode = function(panelId, mode) {
         const value = plot.cursorsSpectrum?.[key];
         if (value !== null && value !== undefined) plot.cursorsSpectrum[key] = invertAxisValue(value);
     }
-    this._refreshFftSpectrumPlot(panelId, plot);
-    this._syncFftOptionsPanel(plot);
+    // The two readings do not share a scale, so whatever window was on screen
+    // means nothing on the other axis. Fit it rather than leave the reader to
+    // find the double tap (#108).
+    Promise.resolve(this._refreshFftSpectrumPlot(panelId, plot)).then(() => this._fitFftXAxis(plot));
+    // Rebuilt, not just re-read: the limit labels change with the reading, and
+    // the period unit is a control that only one of the two readings has.
+    this._renderFftOptionsPanel(panelId, plot);
 };
 
 proto._fftAxisRange = function(a, b) {
@@ -847,8 +876,78 @@ proto._fftAxisLimitDisplayValue = function(plot, key, domain = null) {
  * hover's T — seconds for a calendar or seconds-based file, samples when the
  * file has no time axis of its own.
  */
+/**
+ * Is this panel reading periods as durations?
+ *
+ * Only where the x axis is seconds. A file with no time axis of its own counts
+ * in samples, and a sample has no hours in it.
+ */
+proto._fftPeriodShowsDurations = function(plot) {
+    if (!this._fftXAxisIsPeriod(plot)) return false;
+    if (this._ensureFftState(plot).periodUnit !== 'calendar') return false;
+    return this._fftCursorPeriodUnit(plot) === 's';
+};
+
+/**
+ * The tick positions and labels for a period axis read as durations, as a
+ * relayout patch. Plotly is given the ticks explicitly because the round
+ * numbers of a calendar — a quarter of an hour, six hours, a week — are not
+ * the round numbers of a decade, and it only knows the second kind.
+ *
+ * Off the calendar reading, the patch clears them again.
+ */
+proto._fftPeriodTicks = function(plot, dataRange = null) {
+    if (!this._fftPeriodShowsDurations(plot)) return null;
+    let range = dataRange || this._fftVisibleXRange(plot);
+    if (!range) {
+        const extent = this._fftSpectrumExtent(plot, 'x');
+        range = extent && Number.isFinite(extent.min) && Number.isFinite(extent.max)
+            ? [extent.min, extent.max]
+            : null;
+    }
+    if (!range) return null;
+    const tickvals = periodTickValues(range[0], range[1]);
+    if (!tickvals.length) return null;
+    return { tickvals, ticktext: periodTickText(tickvals) };
+};
+
+/** The same, as a relayout patch — which also has to clear them again. */
+proto._fftPeriodTickPatch = function(plot, dataRange = null) {
+    const ticks = this._fftPeriodTicks(plot, dataRange);
+    return {
+        'xaxis.tickvals': ticks ? ticks.tickvals : null,
+        'xaxis.ticktext': ticks ? ticks.ticktext : null,
+    };
+};
+
+/**
+ * Fit the spectrum's x axis to what there is to see.
+ *
+ * The drawn trace is windowed to the visible range, so Plotly's own autorange
+ * would fit the slice already on screen and nothing more — the full extent has
+ * to be asked for. A manual fMin/fMax still governs; fitting is what happens
+ * when nobody has said otherwise.
+ */
+proto._fitFftXAxis = function(plot) {
+    if (!plot?.fftDiv) return;
+    const manual = this._fftResolvedAxisLimitRange(plot, 'fMin', 'fMax');
+    const extent = this._fftSpectrumExtent(plot, 'x');
+    const full = (extent && Number.isFinite(extent.min) && Number.isFinite(extent.max) && extent.min !== extent.max)
+        ? [extent.min, extent.max]
+        : null;
+    const data = manual || full;
+    const range = this._fftAxisLayoutRange(plot, data);
+    const patch = range
+        ? { 'xaxis.range': range, 'xaxis.autorange': false }
+        : { 'xaxis.autorange': true };
+    Plotly.relayout(plot.fftDiv, { ...patch, ...this._fftPeriodTickPatch(plot, data) });
+};
+
 proto._fftSpectrumXAxisTitle = function(plot) {
     if (!this._fftXAxisIsPeriod(plot)) return this._fftFrequencyAxisTitle(plot);
+    // Read as durations, each tick says its own unit and a title unit would
+    // contradict half of them.
+    if (this._fftPeriodShowsDurations(plot)) return i18n.t('fftPeriod');
     const unit = this._fftCursorPeriodUnit(plot);
     return unit ? `${i18n.t('fftPeriod')} [${unit}]` : i18n.t('fftPeriod');
 };
@@ -907,13 +1006,28 @@ proto._fftAxisLimitLabel = function(plot, key) {
     return key;
 };
 
+/**
+ * Does this slider move in ratios rather than in steps?
+ *
+ * Only the x pair, and only on a period axis: that is the one that spans
+ * decades, and the one drawn logarithmically.
+ */
+proto._fftAxisLimitSliderIsLog = function(plot, key) {
+    return (key === 'fMin' || key === 'fMax') && this._fftXAxisIsPeriod(plot);
+};
+
 proto._configureFftAxisLimitSlider = function(input, plot, key) {
     const fmt = value => Number.isFinite(Number(value)) ? String(Number(Number(value).toPrecision(12))) : '';
     const domain = this._fftAxisLimitSliderDomain(plot, key);
-    input.min = fmt(domain.min);
-    input.max = fmt(domain.max);
+    const logarithmic = this._fftAxisLimitSliderIsLog(plot, key);
+    // A logarithm needs something positive to take hold of; a period always is,
+    // but a domain built from an empty spectrum need not be.
+    const low = logarithmic && !(domain.min > 0) ? Math.max(domain.max, 1) / 1e6 : domain.min;
+    input.dataset.fftLogSlider = logarithmic ? 'true' : 'false';
+    input.min = fmt(axisSliderPosition(low, logarithmic));
+    input.max = fmt(axisSliderPosition(domain.max, logarithmic));
     input.step = 'any';
-    input.value = fmt(this._fftAxisLimitDisplayValue(plot, key, domain));
+    input.value = fmt(axisSliderPosition(this._fftAxisLimitDisplayValue(plot, key, domain), logarithmic));
     input.title = this._fftAxisLimitTooltip(key);
 };
 
@@ -2686,7 +2800,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         this._configureFftAxisLimitSlider(input, plot, key);
         input.addEventListener('input', () => {
             const state = this._ensureFftState(plot);
-            const n = Number(input.value);
+            const n = axisSliderValue(Number(input.value), input.dataset.fftLogSlider === 'true');
             state[key] = Number.isFinite(n) ? n : null;
             this._applyFftAxisLimits(plot);
             this._syncFftOptionsPanel(plot);
@@ -2707,7 +2821,15 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         select.addEventListener('change', () => {
             if (key === 'xAxisMode') {
                 this._setFftXAxisMode(panelId, select.value);
-                this._renderFftOptionsPanel(panelId, plot);
+                return;
+            }
+            if (key === 'periodUnit') {
+                // Nothing about the spectrum changes — only what the ticks are
+                // called — so the transform is left alone.
+                this._ensureFftState(plot).periodUnit = normalizePeriodUnitMode(select.value);
+                Promise.resolve(this._refreshFftSpectrumPlot(panelId, plot))
+                    .then(() => Plotly.relayout(plot.fftDiv, this._fftPeriodTickPatch(plot)).catch(() => {}));
+                this._syncFftOptionsPanel(plot);
                 return;
             }
             const state = this._ensureFftState(plot);
@@ -2877,6 +2999,16 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         { value: 'period', label: i18n.t('fftXAxisPeriod') },
     ]), i18n.t('fftXAxisTooltip')));
 
+    // A period of 86400 is a day, and a series that oscillates with the day is
+    // exactly what a period axis is for. Offered only where the axis is in
+    // seconds: a file counted in samples has no hours in it.
+    if (this._fftXAxisIsPeriod(plot) && this._fftCursorPeriodUnit(plot) === 's') {
+        options.appendChild(makeRow(i18n.t('fftPeriodUnit'), makeSelect('periodUnit', [
+            { value: 'seconds', label: i18n.t('fftPeriodUnitSeconds') },
+            { value: 'calendar', label: i18n.t('fftPeriodUnitCalendar') },
+        ]), i18n.t('fftPeriodUnitTooltip')));
+    }
+
     const axesTitle = document.createElement('div');
     axesTitle.className = 'fft-options-subtitle';
     axesTitle.textContent = i18n.t('fftAxisLimits');
@@ -2925,20 +3057,7 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         const state = this._ensureFftState(plot);
         state.fMin = null;
         state.fMax = null;
-        // Reset to the FULL frequency span. The drawn trace is windowed, so
-        // Plotly autorange would only fit the visible slice — use the full
-        // extent explicitly (the relayout then re-windows back to full).
-        if (plot.fftDiv) {
-            const ext = this._fftSpectrumExtent(plot, 'x');
-            const range = (ext && Number.isFinite(ext.min) && Number.isFinite(ext.max) && ext.min !== ext.max)
-                ? this._fftAxisLayoutRange(plot, [ext.min, ext.max])
-                : null;
-            if (range) {
-                Plotly.relayout(plot.fftDiv, { 'xaxis.range': range, 'xaxis.autorange': false });
-            } else {
-                Plotly.relayout(plot.fftDiv, { 'xaxis.autorange': true });
-            }
-        }
+        this._fitFftXAxis(plot);
         this._syncFftOptionsPanel(plot);
     });
     options.appendChild(autoXRangeBtn);
