@@ -114,6 +114,7 @@
     "test:fft-period-axis": "node scripts/test-fft-period-axis.mjs",
     "test:csv-elapsed": "node scripts/test-csv-elapsed-format.mjs",
     "test:csv-units-mode": "node scripts/test-csv-units-mode.mjs",
+    "test:cursor-spectrum": "node scripts/test-cursor-spectrum.mjs",
     "test:cursor-touch": "node scripts/test-cursor-touch.mjs",
     "test:cursor-y2": "node scripts/test-cursor-y2.mjs",
     "test:autoscale-axis": "node scripts/test-autoscale-axis.mjs",
