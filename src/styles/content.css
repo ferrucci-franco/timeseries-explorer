@@ -2193,6 +2193,20 @@ body.cursor-box-dragging {
     position: relative;
 }
 
+/* A finger on a plot belongs to the plot (#110).
+ *
+ * Without this the browser keeps the right to read a touch as one of its own
+ * gestures — a page scroll, a pinch zoom — and it decides while the fingers
+ * are still landing. A two-finger gesture whose fingers do not touch down at
+ * the same instant is claimed by the browser before the app's handler has said
+ * anything, and what the plot gets instead is a touchcancel in the middle of a
+ * gesture. `none` answers the question before it is asked.
+ *
+ * Every Plotly plot carries this class, so this covers the analysis panes too. */
+.js-plotly-plot {
+    touch-action: none;
+}
+
 .plotly-container .plotly {
     height: 100% !important;
 }
