@@ -41,7 +41,8 @@ const grab = (name) => Number(source.match(new RegExp(`const ${name} = (\\d+);`)
 assert.equal(grab('CURSOR_GRAB_PX'), 5, 'the mouse reach is what it always was');
 assert.ok(grab('CURSOR_TOUCH_GRAB_PX') > grab('CURSOR_GRAB_PX') * 3,
     'a finger covers about forty pixels and hides the line it is reaching for');
-assert.match(source, /const tolerance = \(reachPx \/ xLen\) \* span;/, 'and the hit test takes the reach it is given');
+assert.match(source, /if \(Math\.min\(da, db\) > reachPx\) return null;/,
+    'and the hit test takes the reach it is given — in pixels, which is what it always was (#108)');
 
 // ── The touch path ──────────────────────────────────────────────────────────
 assert.match(source, /const hit = cursorNearPointer\(event, CURSOR_TOUCH_GRAB_PX\);/,

@@ -959,6 +959,34 @@ proto._fitFftXAxis = function(plot) {
     Plotly.relayout(plot.fftDiv, { ...patch, ...this._fftPeriodTickPatch(plot, data) });
 };
 
+/**
+ * How far a spectrum cursor may travel: the WHOLE spectrum, in the reading the
+ * axis is in now.
+ *
+ * Not the drawn series, which is what the cursors used to ask. That one is
+ * windowed to the slice on screen and rebuilt a frame late, so a cursor was
+ * clamped to whatever happened to be visible — and for the moment after a
+ * switch of reading, to the OTHER axis's numbers. That is how two cursors at
+ * 12.5 and 37.5 Hz both ended up on 1.07 Hz (#108).
+ */
+proto._fftSpectrumCursorBounds = function(plot, trace) {
+    if (!plot || !trace) return null;
+    const name = this._traceName(trace.varName, trace.fileId);
+    const entry = (plot._fftSpectraFull || []).find(item => item.name === name);
+    const frequencies = entry?.frequencies;
+    if (!frequencies?.length) return null;
+    if (this._fftXAxisIsPeriod(plot)) {
+        const extent = periodExtentOf(frequencies);
+        const start = Number(extent.xMin);
+        const end = Number(extent.xMax);
+        return Number.isFinite(start) && Number.isFinite(end) && start < end ? { start, end } : null;
+    }
+    const start = Number(frequencies[0]);
+    const end = Number(frequencies[frequencies.length - 1]);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start === end) return null;
+    return start <= end ? { start, end } : { start: end, end: start };
+};
+
 proto._fftSpectrumXAxisTitle = function(plot) {
     if (!this._fftXAxisIsPeriod(plot)) return this._fftFrequencyAxisTitle(plot);
     // Read as durations, each tick says its own unit and a title unit would

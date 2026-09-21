@@ -2060,6 +2060,20 @@ proto._onUnhover = function(sourcePanelId) {
  * log10 (the spectrum's period axis is the first of those, #108). Plotly's
  * `d2p` handles both, so it is asked when it is there.
  */
+/**
+ * An axis's visible range, in the units its DATA is in.
+ *
+ * A logarithmic axis reports [4.6, 5.3] for a window of 40 ks to 200 ks, and
+ * a reader that takes those for seconds has compared a number against its own
+ * logarithm. The spectrum's period axis is the one that does this (#108).
+ */
+proto._axisDataRange = function(axis) {
+    const lo = this._coerceAxisValue(axis?.range?.[0]);
+    const hi = this._coerceAxisValue(axis?.range?.[1]);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+    return axis?.type === 'log' ? [10 ** lo, 10 ** hi] : [lo, hi];
+};
+
 proto._axisPixelForValue = function(axis, value, range = null) {
     const offset = axis?._offset || 0;
     if (!range && typeof axis?.d2p === 'function') {
@@ -2325,6 +2339,9 @@ proto._cursorTraceBounds = function(view, trace) {
     if (!trace) return null;
     let times;
     if (view.isSpectrum) {
+        // The whole spectrum, not the windowed slice that happens to be drawn.
+        const full = this._fftSpectrumCursorBounds?.(view.plot, trace);
+        if (full) return full;
         times = this._fftSpectrumSeriesForTrace(view.plot, trace)?.times;
     } else {
         times = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
@@ -2339,7 +2356,7 @@ proto._cursorTraceBounds = function(view, trace) {
 proto._cursorViewBounds = function(view, trace) {
     const traceBounds = this._cursorTraceBounds(view, trace);
     if (!traceBounds) return null;
-    const range = this._viewDiv(view)?._fullLayout?.xaxis?.range;
+    const range = this._axisDataRange(this._viewDiv(view)?._fullLayout?.xaxis);
     const range0 = this._coerceAxisValue(range?.[0]);
     const range1 = this._coerceAxisValue(range?.[1]);
     const viewStart = Number.isFinite(range0) ? range0 : traceBounds.start;
@@ -3478,18 +3495,21 @@ proto._installCursorViewHandlers = function(view) {
         if (!cursors.enabled || !this._plotSupportsCursors(plot)) return null;
         const xa = div?._fullLayout?.xaxis;
         if (!xa || !Number.isFinite(cursors.a) || !Number.isFinite(cursors.b)) return null;
-        const x = this._eventToXValue(div, pointerPoint(event));
-        if (!Number.isFinite(x)) return null;
-        const range = xa.range;
-        const r0 = this._coerceAxisValue(range?.[0]);
-        const r1 = this._coerceAxisValue(range?.[1]);
-        const span = Math.abs(r1 - r0) || 1;
-        const xLen = Math.abs(xa._length) || 1;
-        const tolerance = (reachPx / xLen) * span;
-        const da = Math.abs(x - cursors.a);
-        const db = Math.abs(x - cursors.b);
-        const near = Math.min(da, db);
-        if (near > tolerance) return null;
+        // In pixels, not in data units. The reach is a number of pixels to
+        // begin with, and on a logarithmic axis the same few pixels are a
+        // different number of seconds at each end of it — while the span this
+        // used to scale by was, on that axis, the span of its LOGARITHMS: a
+        // tolerance of 0.7 against cursors in the tens of thousands (#108).
+        const point = pointerPoint(event);
+        const pointer = Number(point.clientX) - div.getBoundingClientRect().left;
+        if (!Number.isFinite(pointer)) return null;
+        const distance = (value) => {
+            const pixel = this._axisPixelForValue(xa, value);
+            return Number.isFinite(pixel) ? Math.abs(pointer - pixel) : Infinity;
+        };
+        const da = distance(cursors.a);
+        const db = distance(cursors.b);
+        if (Math.min(da, db) > reachPx) return null;
         return da <= db ? 'a' : 'b';
     };
 
