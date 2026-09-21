@@ -1,20 +1,30 @@
-// Two fingers on a plot, zooming it.
+// A finger on a plot: pan with one, zoom with two.
 //
-// Installed on every chart the app creates (see vendor/plotly.js), and only on
-// a device whose primary pointer is a finger. One finger stays Plotly's — it
-// pans, which is the gesture that has no alternative — and the second finger
-// is where this takes over: Plotly's pan handler is told nothing more about
-// the gesture, and the axes are relaid out from the pinch instead.
+// Installed on every chart the app creates (see vendor/plotly.js), on any
+// device that has a touch screen at all — including one that also has a mouse,
+// which keeps every gesture it had, because nothing here listens to a mouse.
 //
-// The arithmetic is in utils/pinch-zoom.js; what is here is the plumbing: who
-// gets the events, which axes the fingers are over, and how often the plot is
-// asked to redraw.
+// Two things happen from here. A touch that lands on the plot surface borrows
+// Plotly's `pan` drag mode for as long as that touch lasts, so one finger moves
+// the view instead of drawing a zoom box; utils/touch-plot-gestures.js says why
+// that is decided per gesture rather than written into the layout. And a second
+// finger takes the gesture over completely: Plotly has no pinch to offer while
+// it is panning, so the axes are relaid out from the fingers' own arithmetic in
+// utils/pinch-zoom.js.
 
 import { panZoomRange, pinchScales } from '../utils/pinch-zoom.js';
-import { prefersTouchGestures } from '../utils/touch-plot-gestures.js';
+import { TOUCH_DRAG_MODE, touchDragModeFor } from '../utils/touch-plot-gestures.js';
+import { isTouchCapable } from './touch-drag.js';
 
 const touchPoint = (touch) => ({ x: touch.clientX, y: touch.clientY });
 const pairFrom = (touches) => [touchPoint(touches[0]), touchPoint(touches[1])];
+
+// Plotly's drag layer is the set of invisible rectangles it lays over the plot
+// area and its axes to catch drags, and it is above everything a reader might
+// want to touch for another reason. So a touch inside it is a touch on the plot
+// itself; a touch on the legend, on the modebar or on one of the app's own
+// cursor handles belongs to what it landed on, and none of this applies to it.
+const onPlotSurface = (target) => typeof target?.closest === 'function' && !!target.closest('.draglayer');
 
 /**
  * The data value under a pixel, in the units Plotly keeps the range in.
@@ -43,12 +53,13 @@ function axisValueAt(axis, clientPixel, rect, vertical = false) {
  * @param {{relayout: Function}} plotly
  * @returns {boolean} whether it was installed
  */
-export function installPinchZoom(div, plotly) {
-    if (!div || div._pinchZoomInstalled || !prefersTouchGestures()) return false;
+export function installTouchPlotGestures(div, plotly) {
+    if (!div || div._touchGesturesInstalled || !isTouchCapable()) return false;
     if (typeof div.addEventListener !== 'function' || !plotly?.relayout) return false;
-    div._pinchZoomInstalled = true;
+    div._touchGesturesInstalled = true;
 
-    let start = null;   // the finger pair the gesture began with
+    let start = null;         // the finger pair a pinch began with
+    let borrowedFrom = null;  // the drag mode to give back when the touch ends
     let frame = 0;
     let pending = null;
 
@@ -56,6 +67,32 @@ export function installPinchZoom(div, plotly) {
         const layout = div._fullLayout;
         return { x: layout?.xaxis, y: layout?.yaxis, y2: layout?.yaxis2 };
     };
+
+    // ── One finger: Plotly's own pan, borrowed for the length of the touch ──
+
+    const borrowDragMode = () => {
+        const layout = div._fullLayout;
+        if (!layout || borrowedFrom !== null) return;
+        const wanted = touchDragModeFor(layout.dragmode);
+        if (!wanted) return;
+        borrowedFrom = layout.dragmode || 'zoom';
+        layout.dragmode = wanted;
+    };
+
+    const returnDragMode = () => {
+        if (borrowedFrom === null) return;
+        const mode = borrowedFrom;
+        borrowedFrom = null;
+        // Not in this event: Plotly is still finishing the drag the touchend
+        // ended, and reads the mode again while it does.
+        setTimeout(() => {
+            const layout = div._fullLayout;
+            // A redraw since then has already answered the question itself.
+            if (layout && layout.dragmode === TOUCH_DRAG_MODE) layout.dragmode = mode;
+        }, 0);
+    };
+
+    // ── Two fingers: the pinch Plotly does not have ──
 
     const apply = () => {
         frame = 0;
@@ -73,6 +110,8 @@ export function installPinchZoom(div, plotly) {
     };
 
     const onTouchStart = (event) => {
+        if (!onPlotSurface(event.target)) return;
+        borrowDragMode();
         if (event.touches.length !== 2) { start = null; return; }
         const pair = pairFrom(event.touches);
         const rect = div.getBoundingClientRect();
@@ -134,6 +173,9 @@ export function installPinchZoom(div, plotly) {
     };
 
     const onTouchEnd = (event) => {
+        // The last finger off the glass is the end of the gesture, whatever it
+        // turned out to be.
+        if ((event.touches?.length || 0) === 0) returnDragMode();
         if (!start) return;
         // Still two fingers down means this was a third arriving and leaving.
         if (event.touches.length >= 2) return;
@@ -145,6 +187,6 @@ export function installPinchZoom(div, plotly) {
     div.addEventListener('touchstart', onTouchStart, { capture: true, passive: false });
     div.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
     div.addEventListener('touchend', onTouchEnd, { capture: true });
-    div.addEventListener('touchcancel', () => { start = null; }, { capture: true });
+    div.addEventListener('touchcancel', () => { start = null; returnDragMode(); }, { capture: true });
     return true;
 }
