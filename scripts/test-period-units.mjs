@@ -85,6 +85,23 @@ assert.match(fft, /if \(signature !== plot\._fftPeriodTickSignature\) \{/, 'a zo
 assert.match(fft, /if \(this\._fftPeriodShowsDurations\(plot\)\) return i18n\.t\('fftPeriod'\);/,
     'and the title drops the unit, because every tick carries its own');
 
+// A unit is a label. Changing it redraws nothing and refits nothing, so a
+// reader zoomed in on a peak keeps the peak.
+const unitBranch = fft.slice(fft.indexOf("if (key === 'periodUnit')"), fft.indexOf("if (key === 'periodUnit')") + 700);
+assert.ok(unitBranch.length > 100, 'the branch is there to read');
+assert.match(unitBranch, /this\._applyFftPeriodUnit\(plot\);/, 'the ticks and the title, and nothing else');
+assert.doesNotMatch(unitBranch, /_refreshFftSpectrumPlot|_fitFftXAxis/,
+    'no redraw and no refit: the same curve, through the same window');
+assert.match(fft, /'xaxis\.title\.text': this\._fftSpectrumXAxisTitle\(plot\),/,
+    'the title follows, since it carries the unit in one reading and not the other');
+
+// Every window handed to the drawn trace is in DATA units. A log axis reports
+// its range in log10, and the one reader that forgot windowed a 76-point curve
+// down to a single bin — on every recompute while zoomed, not just this one.
+assert.match(fft, /displayRange = this\._fftAxisDataRange\(plot, liveXAxis\.range\);/,
+    'the preserved zoom is converted before it windows anything');
+assert.doesNotMatch(fft, /displayRange = liveXAxis\.range;/);
+
 const translations = readFileSync(new URL('../src/i18n/translations.js', import.meta.url), 'utf8');
 for (const key of ['fftPeriodUnit', 'fftPeriodUnitSeconds', 'fftPeriodUnitCalendar', 'fftPeriodUnitTooltip']) {
     assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} in four languages`);
