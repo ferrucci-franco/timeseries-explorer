@@ -1,15 +1,17 @@
 // Pan, zoom and reset, with fingers (#110 follow-up).
 //
-// Plotly gives a touch screen one gesture or the other, never both. Measured
-// on a touch context, before any of this:
+// Plotly gives a plot one drag gesture or the other, never both. Measured on a
+// touch context, before any of this:
 //
 //   dragmode 'zoom' (Plotly's default)   dragmode 'pan'
 //     one finger   zooms a box             one finger   pans
 //     pinch        zooms                   pinch        does nothing at all
 //     two fingers  zoom (read as a pinch)  two fingers  pan by one of them
 //
-// So the app asks for `pan`, which is the gesture with no alternative, and
-// brings the pinch itself. The arithmetic of that pinch is what this pins.
+// So a finger needs `pan`, and a pinch has to be brought along. The first
+// attempt wrote `pan` into the layout of any device with a coarse pointer,
+// which left out every touch screen with a mouse beside it and was undone by
+// the next Plotly.react. It is now asked per gesture, of the plot being touched.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
@@ -20,29 +22,17 @@ import {
     pinchScales,
     zoomRangeAbout,
 } from '../src/utils/pinch-zoom.js';
-import {
-    TOUCH_DRAG_MODE,
-    prefersTouchGestures,
-    withTouchDragMode,
-} from '../src/utils/touch-plot-gestures.js';
+import { TOUCH_DRAG_MODE, touchDragModeFor } from '../src/utils/touch-plot-gestures.js';
 
-// ── Who gets the touch drag mode ────────────────────────────────────────────
-const win = (maxTouchPoints, coarse) => ({
-    navigator: { maxTouchPoints },
-    matchMedia: (query) => ({ matches: query === '(pointer: coarse)' ? coarse : false }),
-});
-assert.equal(prefersTouchGestures(win(5, true)), true, 'a tablet');
-assert.equal(prefersTouchGestures(win(5, false)), false,
-    'a laptop with a touch screen has a pointer too, and the zoom box is worth more to it');
-assert.equal(prefersTouchGestures(win(0, true)), false, 'no touch, no touch gestures');
-assert.equal(prefersTouchGestures(null), false, 'and no window, no answer');
-
-assert.deepEqual(withTouchDragMode({ title: 'x' }, true), { title: 'x', dragmode: TOUCH_DRAG_MODE });
+// ── What a touch does to the drag mode ──────────────────────────────────────
 assert.equal(TOUCH_DRAG_MODE, 'pan', 'because panning is the gesture with no alternative');
-assert.deepEqual(withTouchDragMode({ title: 'x' }, false), { title: 'x' }, 'a mouse keeps the zoom box');
-assert.deepEqual(withTouchDragMode({ dragmode: 'select' }, true), { dragmode: 'select' },
-    'a layout that asked for something keeps it');
-assert.equal(withTouchDragMode(null, true), null);
+assert.equal(touchDragModeFor('zoom'), 'pan', 'the box zoom is what a finger cannot use');
+assert.equal(touchDragModeFor(undefined), 'pan', 'and so is the default, which is that same box');
+assert.equal(touchDragModeFor(''), 'pan');
+assert.equal(touchDragModeFor('pan'), null, 'a plot already panning needs nothing');
+assert.equal(touchDragModeFor('select'), null, 'and a mode someone chose is not a gesture to overrule');
+assert.equal(touchDragModeFor('lasso'), null);
+assert.equal(touchDragModeFor('drawrect'), null);
 
 // ── How far the fingers spread ──────────────────────────────────────────────
 const pair = (ax, ay, bx, by) => [{ x: ax, y: ay }, { x: bx, y: by }];
@@ -94,13 +84,23 @@ assert.equal(panZoomRange([0, 10], 5, 0.5, 0), null, 'a scale of nothing is not 
 
 // ── Wired in once, for every plot the app makes ─────────────────────────────
 const vendor = readFileSync(new URL('../src/vendor/plotly.js', import.meta.url), 'utf8');
-assert.match(vendor, /nativeNewPlot\(div, traces, withTouchDragMode\(layout\), config\)/,
-    'every plot is created with the drag mode its device needs');
-assert.match(vendor, /installPinchZoom\(graphDiv \|\| div, Plotly\);/, 'and with the pinch Plotly does not have');
+assert.match(vendor, /Plotly\.newPlot = \(div, \.\.\.rest\) => nativeNewPlot\(div, \.\.\.rest\)\.then\(drawn => withTouchGestures\(drawn, div\)\);/,
+    'a plot created with newPlot gets the gestures');
+assert.match(vendor, /Plotly\.react = \(div, \.\.\.rest\) => nativeReact\(div, \.\.\.rest\)\.then\(drawn => withTouchGestures\(drawn, div\)\);/,
+    'and so does a pane that only ever exists through react, which is how the analysis panes redraw');
+assert.doesNotMatch(vendor, /withTouchDragMode|dragmode/,
+    'the drag mode is no longer written into the layout: react would drop it again');
 
-const installer = readFileSync(new URL('../src/ui/plot-pinch-zoom.js', import.meta.url), 'utf8');
-assert.match(installer, /if \(!div \|\| div\._pinchZoomInstalled \|\| !prefersTouchGestures\(\)\) return false;/,
-    'installed once per plot, and only where a finger is the pointer');
+const installer = readFileSync(new URL('../src/ui/plot-touch-gestures.js', import.meta.url), 'utf8');
+assert.match(installer, /if \(!div \|\| div\._touchGesturesInstalled \|\| !isTouchCapable\(\)\) return false;/,
+    'installed once per plot, on any device that has a finger — a touch screen with a mouse has both');
+assert.doesNotMatch(installer, /pointer: coarse/,
+    'which is the question the first attempt got wrong');
+assert.match(installer, /const wanted = touchDragModeFor\(layout\.dragmode\);/, 'a touch borrows the mode it needs');
+assert.match(installer, /if \(layout && layout\.dragmode === TOUCH_DRAG_MODE\) layout\.dragmode = mode;/,
+    'and gives it back afterwards, unless a redraw has already answered');
+assert.match(installer, /const onPlotSurface = \(target\) => typeof target\?\.closest === 'function' && !!target\.closest\('\.draglayer'\);/,
+    'only touches on the plot itself: the legend and the modebar keep their taps');
 assert.match(installer, /div\.addEventListener\('touchstart', onTouchStart, \{ capture: true, passive: false \}\);/,
     'in the capture phase, before Plotly sees the second finger');
 assert.match(installer, /event\.stopPropagation\(\);/, 'so the pan it started does not continue underneath');
