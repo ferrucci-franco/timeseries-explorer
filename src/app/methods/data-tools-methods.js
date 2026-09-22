@@ -3026,6 +3026,12 @@ proto._normalizeDataToolParams = function(tool, params = {}) {
         // the panel reopens with. A list that does not describe a cascade
         // demotes the definition to its b/a, which is at worst the identity.
         if (params.source === 'design' && Array.isArray(params.sos) && params.design) {
+            // A design anchors nothing (#121). A definition saved while the
+            // causality picker was still on screen in design mode could carry
+            // an advance nobody meant, and it would shift the output.
+            normalized.advanceA = 0;
+            normalized.advanceB = 0;
+            normalized.advance = 0;
             try {
                 normalized.sos = normalizeSos(params.sos).map(({ b, a }) => [b[0], b[1], b[2], a[0], a[1], a[2]]);
                 const design = normalizeFilterDesign(params.design);
