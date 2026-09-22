@@ -84,6 +84,7 @@
     "test:reload-dropped-traces": "node scripts/test-reload-dropped-traces.mjs",
     "test:reload-report": "node scripts/test-reload-report.mjs",
     "test:repeated-timestamps": "node scripts/test-repeated-timestamps.mjs",
+    "test:autoscale-echo": "node scripts/test-autoscale-echo.mjs",
     "test:collapse-repeats": "node scripts/test-collapse-repeats.mjs",
     "test:data-tool-preview": "node scripts/test-data-tool-preview-in-place.mjs",
     "test:touch-drag": "node scripts/test-touch-drag.mjs",

@@ -3446,6 +3446,10 @@ proto._autoScaleFftPanel = function(panelId, plot = this.plots.get(panelId)) {
 proto._autoScalePlotTimeOnly = function(plot) {
     if (!plot?.div) return Promise.resolve();
     const visibleTraces = (plot.traces || []).filter(t => this._isVisible(t));
+    // Nothing visible is nothing to scale to. It used to end in
+    // `xaxis.autorange: true`, which the app hears as a fresh request to
+    // autoscale — and answers with another one, for ever (#167).
+    if (!visibleTraces.length) return Promise.resolve();
     // A large FFT time pane shows a cached full-series screen overview. Its
     // full X domain is known from the edge samples, and its Y extent is known
     // from that cached envelope. Autoscale must restore the complete signal,
