@@ -146,7 +146,12 @@ proto._filterAnchors = function() {
     const number = id => Number(document.getElementById(id)?.value);
     const causal = (document.getElementById('filter-causality')?.value || 'causal') !== 'nonCausal';
     const zeroPhase = document.getElementById('filter-mode')?.value === 'zeroPhase';
-    if (causal || zeroPhase) return { causal: true, advanceA: 0, advanceB: 0, advance: 0 };
+    // An anchor says where the reader wrote each side of an equation they typed
+    // themselves. A design writes it for them — the coefficient boxes are even
+    // read-only there — so there is nothing to anchor, and Forward and back
+    // already runs the response the other way for whoever wants the future.
+    const design = this._filterSource() === 'design';
+    if (causal || zeroPhase || design) return { causal: true, advanceA: 0, advanceB: 0, advance: 0 };
     const advanceA = Number.isFinite(number('filter-advance-a')) ? Math.trunc(number('filter-advance-a')) : 0;
     const advanceB = Number.isFinite(number('filter-advance-b')) ? Math.trunc(number('filter-advance-b')) : 0;
     return { causal: false, advanceA, advanceB, advance: resolveFilterAdvance(advanceB, advanceA) };
@@ -699,7 +704,10 @@ proto._syncFilterControls = function() {
     // keystroke behind the box above it is worse than no equation.
     const zeroPhase = document.getElementById('filter-mode')?.value === 'zeroPhase';
     const anchors = this._filterAnchors();
-    document.getElementById('filter-causality-wrap')?.classList.toggle('collapsed', zeroPhase);
+    // Hidden where it would decide nothing: a zero-phase run passes the signal
+    // both ways whatever the anchors say, and a designed filter has no typed
+    // equation to anchor (#121).
+    document.getElementById('filter-causality-wrap')?.classList.toggle('collapsed', zeroPhase || design);
     document.getElementById('filter-anchor-wrap')?.classList.toggle('collapsed', anchors.causal);
     this._renderFilterEquation(b.values, a.values, anchors);
     const anchorHint = document.getElementById('filter-anchor-hint');

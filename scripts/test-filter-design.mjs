@@ -576,4 +576,48 @@ const designDom = (fields = {}) => fakeDocument({
     });
 }
 
+// The causality picker is not part of a design (#121).
+//
+// It anchors each side of an equation the reader typed — which is why its help
+// talks about where b0 and a0 sit. A design writes that equation itself (the
+// coefficient boxes are read-only while it owns them), so there is nothing to
+// anchor, and the future is already reachable the way a designed filter
+// reaches it: Forward and back.
+{
+    const h = new Harness();
+    addFile(h, { step: 0.001 });
+    withDocument(designDom({ 'filter-causality': 'nonCausal', 'filter-advance-a': '1', 'filter-advance-b': '3' }), () => {
+        h._syncFilterControls();
+        assert.equal(document.getElementById('filter-causality-wrap').classList.contains('collapsed'), true,
+            'the picker is off screen while a specification owns the coefficients');
+        assert.deepEqual({ ...h._filterAnchors() }, { causal: true, advanceA: 0, advanceB: 0, advance: 0 },
+            'and the numbers left behind in its boxes reach nothing');
+        const config = h._getDataToolConfig('filter');
+        assert.equal(config.params.advance, 0, 'so the definition carries no advance');
+        assert.equal(config.params.advanceB, 0);
+    });
+
+    // Typing b and a is where an anchor means something, and there it still does.
+    withDocument(designDom({
+        'filter-source': 'manual', 'filter-b': '1', 'filter-a': '1',
+        'filter-causality': 'nonCausal', 'filter-advance-a': '1', 'filter-advance-b': '3',
+    }), () => {
+        h._syncFilterControls();
+        assert.equal(document.getElementById('filter-causality-wrap').classList.contains('collapsed'), false,
+            'the picker comes back for a typed equation');
+        assert.equal(h._getDataToolConfig('filter').params.advance, 2);
+    });
+
+    // A definition saved while the picker was still on screen in design mode
+    // carried an advance that would shift the output. Reading it back drops it.
+    const designed = withDocument(designDom(), () => h._getDataToolConfig('filter'));
+    const stale = h._normalizeDataToolParams('filter', {
+        ...JSON.parse(JSON.stringify(designed.params)), advanceA: 0, advanceB: 4, advance: 4,
+    });
+    assert.equal(stale.source, 'design', 'still a design');
+    assert.equal(stale.advance, 0, 'which anchors nothing, whatever the session says');
+    assert.equal(stale.advanceA, 0);
+    assert.equal(stale.advanceB, 0);
+}
+
 console.log('filter design tests passed');
