@@ -3401,7 +3401,11 @@ class PlotManager {
         const update = {};
         if (axis === 'x') {
             const xExtent = this._finiteExtent(xArrays);
-            if (!xExtent) { update['xaxis.autorange'] = true; return update; }
+            // Nothing finite to fit — every trace hidden, or every value NaN.
+            // Asking Plotly for autorange here is the app asking ITSELF for an
+            // autoscale, and answering, for ever (#167). An empty update is a
+            // relayout that does not happen.
+            if (!xExtent) return update;
             if (fromTimeTraces) {
                 const timeVar = this._getTimeVar(primaryFileId);
                 const isCalendar = this._timeDisplayModeForVar(primaryFileId, timeVar) === 'calendar';
@@ -3417,11 +3421,9 @@ class PlotManager {
         const xRange = Array.isArray(fl.xaxis?.range) ? fl.xaxis.range : null;
         const yExtent = this._timeseriesYExtentForSeries(plot, series, yArrays, xRange);
         if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
-        else update['yaxis.autorange'] = true;
         if (fromTimeTraces && plot.timeseriesY2Enabled) {
             const y2Extent = this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, seriesY2, y2Arrays, xRange);
             if (y2Extent) update['yaxis2.range'] = this._padRange(y2Extent.min, y2Extent.max);
-            else update['yaxis2.autorange'] = true;
         }
         return update;
     }
@@ -3430,6 +3432,9 @@ class PlotManager {
         if (!plot?.div) return Promise.resolve();
         if (plot.mode === 'timeseries' || plot.mode === 'phase2d') {
             const update = this._autoScaleAxisUpdate(plot, axis);
+            // Nothing to fit: the axis keeps what it is showing, and the app
+            // does not start a conversation with its own relayout (#167).
+            if (!Object.keys(update).length) return Promise.resolve();
             return Plotly.relayout(plot.div, update)
                 .then(() => { if (plot.mode === 'timeseries') this._refreshElapsedDateTimeAxisTicks(plot); });
         }
@@ -3480,10 +3485,14 @@ class PlotManager {
         if (plot.mode === 'timeseries') {
             const visibleTraces = plot.traces.filter(t => this._isVisible(t));
             if (!visibleTraces.length) {
-                const update = { 'xaxis.autorange': true, 'yaxis.autorange': true };
-                if (plot.timeseriesY2Enabled) update['yaxis2.autorange'] = true;
-                return Plotly.relayout(plot.div, update)
-                    .then(() => this._refreshElapsedDateTimeAxisTicks(plot));
+                // Nothing on screen, nothing to scale to — and above all,
+                // nothing to ask Plotly for. Asking for autorange here put the
+                // app in a conversation with itself: the relayout it caused
+                // carries `autorange: true`, which is exactly how a reader
+                // asks for an autoscale, so the answer was another autoscale,
+                // for as long as the tab lived (#167). The axes keep what they
+                // were showing, which is what the reader is looking at anyway.
+                return Promise.resolve();
             }
 
             const xArrays = [];
@@ -3521,7 +3530,10 @@ class PlotManager {
                 update['xaxis.range'] = isCalendarAxis ? this._plotlyTimeArray(primaryFileId, xRange, timeVar) : xRange;
                 update['xaxis.autorange'] = false;
             }
-            else update['xaxis.autorange'] = true;
+            // No finite time to fit — every value NaN, say. The axis keeps what
+            // it shows: asking Plotly for autorange is how the app ends up
+            // answering its own relayout for ever (#167), and the y axis below
+            // has been avoiding a cousin of that since before it had a number.
             if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
             else {
                 // Plotly can loop indefinitely while autoranging an all-NaN

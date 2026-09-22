@@ -35,7 +35,9 @@ proto._onRelayout = function(sourcePanelId, eventData) {
         const autorangeRequested = update['xaxis.autorange'] === true
             || eventData?.['yaxis.autorange'] === true
             || eventData?.['yaxis2.autorange'] === true;
-        if (autorangeRequested) {
+        if (autorangeRequested && this._autorangeRequestIsAnEcho(plot)) {
+            // Answered already; see below.
+        } else if (autorangeRequested) {
             // FFT: the relayout comes from the time sub-plot; leave the
             // spectrum axes (and manual fMin/fMax/yMin/yMax) untouched.
             if (plot.mode === 'fft') {
@@ -1742,6 +1744,35 @@ proto._lazyMissingBucketCount = function(data, sourceLo, sourceHi, pxWidth) {
         estimate = totalRows * (overlap / (dataEnd - dataStart));
     }
     return Math.max(1, Math.min(pxWidth, Math.ceil(estimate)));
+};
+
+/**
+ * Is this autorange request the app answering itself?
+ *
+ * An autoscale ends in a relayout, and a relayout that carries
+ * `autorange: true` is exactly how a reader asks for an autoscale — so the two
+ * can answer each other for as long as the tab lives. That is what happened
+ * with every trace hidden (#167): 31 rounds in 2.5 seconds, each a full
+ * relayout, and the page stopped responding.
+ *
+ * The cause is fixed where it was — an autoscale with nothing to scale to now
+ * does nothing — and this is the bound that holds whatever else asks. A hand
+ * does not ask eight times in a row without pausing 400 ms somewhere; an echo
+ * never pauses.
+ */
+proto._autorangeRequestIsAnEcho = function(plot) {
+    if (!plot) return false;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const gap = now - (plot._lastAutorangeRequestAt || 0);
+    plot._lastAutorangeRequestAt = now;
+    if (gap > 400) plot._autorangeRequestRun = 0;
+    plot._autorangeRequestRun = (plot._autorangeRequestRun || 0) + 1;
+    if (plot._autorangeRequestRun <= 8) return false;
+    if (!plot._autorangeEchoWarned) {
+        plot._autorangeEchoWarned = true;
+        console.warn('[plots] ignoring an autorange request that is answering itself');
+    }
+    return true;
 };
 
 proto._refreshElapsedDateTimeAxisTicks = function(plot, range = null) {
