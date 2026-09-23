@@ -1026,17 +1026,42 @@ proto._formatTimeValue = function(fileId, value) {
     return `${year}-${month}-${day} ${pad2(d.getUTCHours())}:${minute}:${second} UTC`;
 };
 
-proto._formatTimeForExport = function(fileId, value) {
-    if (!Number.isFinite(value)) return value;
-    if (this._isGeneratedCalendarTime(fileId)) return this._formatGeneratedCalendarDateTime(fileId, value);
-    if (this._isGeneratedDurationTime(fileId)) return this._formatElapsedDateTime(value, this._durationFractionDigits(fileId));
-    if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return this._formatElapsedDateTime(value);
-    if (!this._isCalendarTime(fileId)) return value;
-    return new Date(value).toISOString();
+// How a file's time values are written to a CSV, decided once: a function for
+// a finite value, or null when the value goes out as the number it is. The
+// answer depends only on the file (its axis and transform), and working it out
+// is several lookups deep — asked once per sample, as it used to be, it cost
+// tens of millions of lookups on an audio channel and froze the window for
+// half a minute before the export's progress could even appear.
+proto._timeExportFormatter = function(fileId) {
+    if (this._isGeneratedCalendarTime(fileId)) {
+        const timeVar = this._getTimeVar(fileId);
+        const calendarTimeFormat = this._calendarTimeFormat(fileId, timeVar);
+        return value => this._formatGeneratedCalendarDateTime(fileId, value, timeVar, calendarTimeFormat);
+    }
+    if (this._isGeneratedDurationTime(fileId)) {
+        const digits = this._durationFractionDigits(fileId);
+        return value => this._formatElapsedDateTime(value, digits);
+    }
+    if (this._timeDisplayMode(fileId) === 'elapsedDateTime') return value => this._formatElapsedDateTime(value);
+    if (!this._isCalendarTime(fileId)) return null;
+    return value => new Date(value).toISOString();
 };
 
+proto._formatTimeForExport = function(fileId, value) {
+    if (!Number.isFinite(value)) return value;
+    const format = this._timeExportFormatter(fileId);
+    return format ? format(value) : value;
+};
+
+// Formatted times come back as a plain array of strings (never written into a
+// typed array, where a string would turn into NaN); a non-finite value goes out
+// as it is, as it always has. Times that go out as numbers are handed back
+// untouched: the CSV writer only reads them, and copying millions of samples
+// into a new array was most of what was left of the wait.
 proto._formatTimeColumnForExport = function(fileId, values) {
-    return Array.from(values || [], value => this._formatTimeForExport(fileId, value));
+    const format = this._timeExportFormatter(fileId);
+    if (!format) return values || [];
+    return Array.from(values || [], value => (Number.isFinite(value) ? format(value) : value));
 };
 
 proto._formatDuration = function(value, unit = 's') {
