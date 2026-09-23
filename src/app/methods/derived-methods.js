@@ -87,10 +87,27 @@ proto.createDerivedVariable = function() {
             throw new Error(`Variable "${name}" already exists.`);
         }
 
+        // Only the name changed: same formula, same values, same curves. The
+        // rename relabels whatever is drawn in place instead of recomputing and
+        // redrawing it.
+        if (editing && name !== editing.name
+            && formula === this.derivedByFile.get(fileId).get(editing.name).formula) {
+            this._renameVariable(fileId, data, editing.name, name);
+            nameInput.value = '';
+            formulaInput.value = '';
+            this._hideDerivedSuggestions();
+            this._toggleDerivedForm(false);
+            this._renderFilteredTree();
+            this._syncDataTools?.();
+            this._setDerivedMessage(i18n.t('derivedUpdated').replace('{name}', name), 'ok');
+            return;
+        }
+
         const result = this._evaluateDerivedFormula(formula, data);
         // Renamed only once the new values are in hand, so a formula that throws
-        // leaves the variable exactly as it was.
-        if (editing && name !== editing.name) this._renameVariable(fileId, data, editing.name, name);
+        // leaves the variable exactly as it was. Not redrawn here: everything
+        // is redrawn from the new values below.
+        if (editing && name !== editing.name) this._renameVariable(fileId, data, editing.name, name, { redraw: false });
         const variable = this._formulaDerivedVariable(name, formula, result);
         data.variables[name] = variable;
         if (!this.derivedByFile.has(fileId)) this.derivedByFile.set(fileId, new Map());

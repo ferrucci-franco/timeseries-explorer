@@ -1123,6 +1123,34 @@ proto._createDataToolVariable = async function(context, config) {
     }
 };
 
+// Whether committing `config` would recompute exactly what `definition` already
+// holds: same tool, source and settings. Key order does not matter; anything
+// uncertain counts as changed, which only costs a recompute.
+proto._dataToolConfigUnchanged = function(definition, config, sourceName, tool) {
+    if (!definition || !config) return false;
+    const stable = (value) => {
+        if (Array.isArray(value)) return value.map(stable);
+        if (value && typeof value === 'object') {
+            return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]));
+        }
+        return value;
+    };
+    const pick = (from) => JSON.stringify(stable({
+        method: from.method ?? null,
+        params: from.params ?? null,
+        replacement: from.replacement || '',
+        steps: from.steps ?? null,
+    }));
+    try {
+        return definition.tool === tool
+            && definition.sourceName === sourceName
+            && (definition.targetMode || 'create') === 'create'
+            && pick(definition) === pick(config);
+    } catch (_) {
+        return false;
+    }
+};
+
 // Recompute an existing row in place, optionally under a new name, then refresh
 // whatever was built on top of it.
 proto._updateDataToolVariable = async function(context, config, editing) {
@@ -1140,10 +1168,23 @@ proto._updateDataToolVariable = async function(context, config, editing) {
         }
         if (outputName === sourceName) throw new Error(i18n.t('outlierOutputSameAsSource'));
 
+        // Only the name changed: the values are the ones already drawn, so there
+        // is nothing to recompute and no curve to redraw — the rename relabels
+        // the legend in place (see _renameVariable).
+        if (!context.lazy && outputName !== oldName
+            && this._dataToolConfigUnchanged(definitions.get(oldName), config, sourceName, tool)) {
+            // A live preview under these same settings wrote these same values;
+            // the backup it kept is dropped by the commit, never put back.
+            this._renameVariable(fileId, data, oldName, outputName);
+            this._renderFilteredTree();
+            this._setOutlierMessage(() => i18n.t('dataToolRenamed').replace('{old}', oldName).replace('{name}', outputName), 'ok');
+            return { name: outputName, tool, renamed: true };
+        }
+
         // A lazy file's variable is a DuckDB column reference, not an array. It
         // has to be rebuilt by the lazy path or it loses that binding.
         if (context.lazy) {
-            if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName);
+            if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName, { redraw: false });
             return await this._applyLazyDataToolCreateMode(context, config, {});
         }
 
@@ -1155,7 +1196,7 @@ proto._updateDataToolVariable = async function(context, config, editing) {
         }, data);
         // Renamed only once the new values are in hand, so a recompute that
         // throws leaves the row exactly as it was.
-        if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName);
+        if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName, { redraw: false });
         data.variables[outputName] = result.variable;
         this._storeDataToolDefinition(fileId, outputName, {
             name: outputName,
@@ -1188,13 +1229,22 @@ proto._updateDataToolVariable = async function(context, config, editing) {
 // the selection, and any trace already drawing it. Data Tools and the formula
 // editor both rename through here, so neither can leave the other's
 // references pointing at a name that no longer exists.
-proto._renameVariable = function(fileId, data, oldName, newName) {
+// `options.redraw: false` is for a caller about to recompute the values and
+// redraw every panel of the file anyway (updateFileData): relabelling or
+// rebuilding here first would only be work thrown away.
+proto._renameVariable = function(fileId, data, oldName, newName, options = {}) {
     if (!oldName || !newName || oldName === newName) return;
+    const redraw = options.redraw !== false;
+    // Taken while the old name still resolves: which drawn curves carry it.
+    const relabel = redraw ? (this.plotManager.captureTimeseriesLabels?.(fileId, oldName) || new Map()) : new Map();
     const variable = data.variables[oldName];
     if (variable) {
         variable.name = newName;
+        // A label that was just the name follows it; one of its own stays.
+        if (variable.displayName === oldName) variable.displayName = newName;
         data.variables[newName] = variable;
         delete data.variables[oldName];
+        this.plotManager.renameTransformCacheEntries?.(fileId, oldName, newName);
     }
 
     const definitions = this.dataToolVariablesByFile?.get(fileId);
@@ -1244,14 +1294,19 @@ proto._renameVariable = function(fileId, data, oldName, newName) {
                 if (trace[axis] === oldName) { trace[axis] = newName; touched = true; }
             }
         }
-        // A rename changes a label, not the data: there is no reason for the view
-        // to jump.
-        if (touched) this.plotManager._rebuildPanel(panelId, { preserveView: true });
+        if (!touched || !redraw) continue;
+        // A rename changes a label, not the data: where the curves are drawn as
+        // timeseries only the legend and hover text change. Anything else is
+        // rebuilt, keeping the view.
+        const captured = relabel.get(panelId);
+        if (captured && this.plotManager.relabelTimeseriesTraces?.(panelId, captured, fileId, newName)) continue;
+        this.plotManager._rebuildPanel(panelId, { preserveView: true });
     }
+
 };
 
-proto._renameDataToolVariable = function(fileId, data, oldName, newName) {
-    this._renameVariable(fileId, data, oldName, newName);
+proto._renameDataToolVariable = function(fileId, data, oldName, newName, options = {}) {
+    this._renameVariable(fileId, data, oldName, newName, options);
 };
 
 proto._applyLazyDataToolCreateMode = async function(context, config, options = {}) {

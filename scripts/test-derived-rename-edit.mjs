@@ -311,4 +311,68 @@ const values = (data, name) => Array.from(data.variables[name].data);
     check(() => assert.match(el('derived-notice-text').textContent, /built from a: b, b10/));
 }
 
+// A plotted variable renamed: the legend is relabelled in place, never rebuilt;
+// a name-only edit recomputes nothing.
+{
+    const { h, data } = setup();
+    addTool(h, data, 'x', 'u');
+    data.variables.x.displayName = 'x';
+    createFormula(h, 'd', 'x + 1');
+    h.plotManager.plots.set('p1', { mode: 'timeseries', traces: [{ fileId: 'f1', varName: 'x' }, { fileId: 'f1', varName: 'd' }], phaseTraces: [] });
+    h.plotManager.plots.set('p2', { mode: 'fft', traces: [{ fileId: 'f1', varName: 'x' }], phaseTraces: [] });
+    const relabelled = [];
+    const transformSeries = new Map([['x\u0000n\u00001', 'cached'], ['xx\u0000n\u00001', 'other']]);
+    h.plotManager.files.get('f1')._transformCache = { series: transformSeries };
+    h.plotManager.captureTimeseriesLabels = (fileId, name) => new Map([['p1', { oldLabel: name }]]);
+    h.plotManager.relabelTimeseriesTraces = (panelId, captured, fileId, newName) => { relabelled.push([panelId, captured.oldLabel, newName]); return true; };
+    h.plotManager.renameTransformCacheEntries = function(fileId, oldName, newName) {
+        // The real one, on this stub's files map.
+        const series = this.files.get(fileId)?._transformCache?.series;
+        for (const [key, value] of [...series]) {
+            if (!key.startsWith(`${oldName}\u0000`)) continue;
+            series.delete(key);
+            series.set(`${newName}\u0000${key.slice(oldName.length + 1)}`, value);
+        }
+    };
+    h.rebuiltPanels.length = 0;
+
+    h._renameDataToolVariable('f1', data, 'x', 'y');
+    check(() => assert.deepEqual(relabelled, [['p1', 'x', 'y']]));
+    check(() => assert.deepEqual(h.rebuiltPanels, ['p2']));             // not a timeseries: rebuilt
+    check(() => assert.equal(data.variables.y.displayName, 'y'));
+    check(() => assert.deepEqual([...transformSeries.keys()].sort(), ['xx\u0000n\u00001', 'y\u0000n\u00001']));
+
+    // The formula editor, name only: relabel, no recompute, no redraw.
+    const before = data.variables.d;
+    const updates = h.plotManager.updates;
+    h._editDerivedVariable('d');
+    el('derived-name').value = 'e';
+    h.createDerivedVariable();
+    check(() => assert.equal(data.variables.e, before));
+    check(() => assert.equal(h.plotManager.updates, updates));
+    check(() => assert.deepEqual(relabelled.at(-1), ['p1', 'd', 'e']));
+
+    // Name and formula: no relabel (the redraw below covers it), one update.
+    const count = relabelled.length;
+    h._editDerivedVariable('e');
+    el('derived-name').value = 'f';
+    el('derived-formula').value = 'y * 3';
+    h.createDerivedVariable();
+    check(() => assert.equal(relabelled.length, count));
+    check(() => assert.equal(h.plotManager.updates, updates + 1));
+    check(() => assert.deepEqual(values(data, 'f'), [30, 60, 90]));
+}
+
+// Only a rename, as far as the Data Tools panel can tell.
+{
+    const { h } = setup();
+    const definition = { tool: 'movingAverage', sourceName: 'u', targetMode: 'create', params: { window: 5, extra: { b: 1, a: 2 } } };
+    const same = (config, source = 'u', tool = 'movingAverage') => h._dataToolConfigUnchanged(definition, config, source, tool);
+    check(() => assert.equal(same({ tool: 'movingAverage', params: { extra: { a: 2, b: 1 }, window: 5 } }), true));
+    check(() => assert.equal(same({ tool: 'movingAverage', params: { window: 7, extra: { a: 2, b: 1 } } }), false));
+    check(() => assert.equal(same({ tool: 'movingAverage', params: definition.params }, 'v'), false));
+    check(() => assert.equal(same({ tool: 'derivative', params: definition.params }, 'u', 'derivative'), false));
+    check(() => assert.equal(h._dataToolConfigUnchanged(null, {}, 'u', 'x'), false));
+}
+
 console.log(`derived rename/edit: ${checks} checks passed`);
