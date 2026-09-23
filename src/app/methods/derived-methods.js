@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import { emphasize, emphasizeList, emphasizedToHtml, setEmphasizedText } from '../../ui/emphasis.js';
 import { DERIVED_CONSTANTS, DERIVED_FUNCTIONS } from '../constants.js';
 import { getCompiledFormula } from '../../expr/compile.js';
 import { normalizeFunctionName, parse as parseExpression, tokenize as tokenizeExpression } from '../../expr/parse.js';
@@ -15,9 +16,55 @@ export const TIME_AXIS_VARIABLE_KINDS = ['index', 'delta'];
 // and offer nothing. A backticked name is left alone, since inside backticks a
 // bracket really is a character of the name.
 export function derivedNameToken(left) {
+    // Inside an open backtick the name may hold anything but a backtick —
+    // spaces included (`d squared`) — so the token runs back to that backtick.
+    const ticks = (left.match(/`/g) || []).length;
+    if (ticks % 2 === 1) return left.slice(left.lastIndexOf('`'));
     const match = left.match(/`?[A-Za-z0-9_.\[\]]*$/);
     const token = match ? match[0] : '';
     return token.startsWith('`') ? token : token.replace(/^\[+/, '');
+}
+
+// What is wrong with a name for a new variable, as an i18n key, or '' when it is
+// usable. Any text will do — spaces, units, symbols, as Data Tools has always
+// allowed — because a formula can quote it in backticks (`d squared`). The one
+// character it cannot hold is the backtick itself: nothing could quote it.
+export function variableNameProblem(name) {
+    const trimmed = String(name ?? '').trim();
+    if (!trimmed) return 'dataToolNameEmpty';
+    if (trimmed.includes('`')) return 'variableNameBacktick';
+    return '';
+}
+
+// How a name is written into a formula: bare when the tokenizer would read it
+// back as that one name, in backticks otherwise (the same rule the autocomplete
+// applies on insertion).
+export function formulaNameLiteral(name) {
+    return /^[A-Za-z_][A-Za-z0-9_.\[\]]*$/.test(name) ? name : `\`${name}\``;
+}
+
+// `formula` with every reference to `oldName` rewritten to `newName`. Only real
+// name tokens are touched, so `x` inside `max_x`, `x.y` or a function name stays
+// as it is. `variables` is the file's variable map; `oldName` counts as present
+// whether or not it still is, because a rename has usually moved it already. A
+// formula that no longer parses is handed back unchanged.
+export function renameFormulaReference(formula, variables, oldName, newName) {
+    if (!formula || oldName === newName) return formula;
+    let tokens;
+    try {
+        tokens = tokenizeExpression(formula, { ...variables, [oldName]: variables?.[oldName] || {} });
+    } catch (_) {
+        return formula;
+    }
+    const hits = tokens.filter(token => token.type === 'name' && token.value === oldName && Number.isInteger(token.start));
+    if (!hits.length) return formula;
+    let out = '';
+    let cursor = 0;
+    for (const token of hits) {
+        out += formula.slice(cursor, token.start) + formulaNameLiteral(newName);
+        cursor = token.end;
+    }
+    return out + formula.slice(cursor);
 }
 
 const TIME_AXIS_KIND_META = {
@@ -34,42 +81,117 @@ proto.createDerivedVariable = function() {
     const formulaInput = document.getElementById('derived-formula');
     const name = nameInput.value.trim();
     const formula = formulaInput.value.trim();
+    const editing = this._derivedEditing || null;
 
     try {
         if (!data) throw new Error('Load a result or text file first.');
-        if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) throw new Error('Use a simple name, for example slip or motor.slip.');
+        if (editing && (editing.fileId !== fileId || !this.derivedByFile.get(fileId)?.get(editing.name)?.formula)) {
+            throw new Error(i18n.t('derivedEditGone').replace('{name}', editing.name));
+        }
+        const nameProblem = variableNameProblem(name);
+        if (nameProblem) throw new Error(i18n.t(nameProblem));
         if (!formula) throw new Error('Enter a formula.');
         const existing = data.variables[name];
-        if (existing && !existing.derived) throw new Error(`Variable "${name}" already exists.`);
+        if (editing) {
+            if (name !== editing.name && existing) throw new Error(i18n.t('derivedNameTaken').replace('{name}', name));
+            // A formula that reads the variable itself, or anything built on it,
+            // would have no order to be computed in.
+            const blocked = new Set([editing.name, name, ...this._variableDependents(fileId, data, editing.name)]);
+            const references = this._derivedFormulaReferences(formula, Object.keys(data.variables));
+            const loop = references.find(reference => blocked.has(reference));
+            if (loop) throw new Error(i18n.t('derivedCircular').replace('{name}', editing.name).replace('{ref}', loop));
+        } else if (existing && !existing.derived) {
+            throw new Error(`Variable "${name}" already exists.`);
+        }
+
+        // Only the name changed: same formula, same values, same curves. The
+        // rename relabels whatever is drawn in place instead of recomputing and
+        // redrawing it.
+        if (editing && name !== editing.name
+            && formula === this.derivedByFile.get(fileId).get(editing.name).formula) {
+            this._renameVariable(fileId, data, editing.name, name);
+            nameInput.value = '';
+            formulaInput.value = '';
+            this._hideDerivedSuggestions();
+            this._toggleDerivedForm(false);
+            this._renderFilteredTree();
+            this._syncDataTools?.();
+            this._setDerivedMessage(i18n.t('derivedUpdated').replace('{name}', emphasize(name)), 'ok');
+            return;
+        }
 
         const result = this._evaluateDerivedFormula(formula, data);
-        const variable = {
-            name,
-            data: result.values,
-            description: `Derived: ${formula}`,
-            kind: 'variable',
-            dataType: this.parser._detectDataType(result.values, 'variable'),
-            isConstant: this.parser._isConstantValues(result.values),
-            interpolation: 'linear',
-            derived: true,
-            formula,
-            ...(result.independentIndex ? { independentIndex: true, sampleIndexLength: result.values.length } : {}),
-        };
-
+        // Renamed only once the new values are in hand, so a formula that throws
+        // leaves the variable exactly as it was. Not redrawn here: everything
+        // is redrawn from the new values below.
+        if (editing && name !== editing.name) this._renameVariable(fileId, data, editing.name, name, { redraw: false });
+        const variable = this._formulaDerivedVariable(name, formula, result);
         data.variables[name] = variable;
         if (!this.derivedByFile.has(fileId)) this.derivedByFile.set(fileId, new Map());
         this.derivedByFile.get(fileId).set(name, { name, formula, variable });
 
-        this._setDerivedMessage(`Created ${name}`, 'ok');
         nameInput.value = '';
         formulaInput.value = '';
         this._hideDerivedSuggestions();
-        this._renderFilteredTree();
         this._toggleDerivedForm(false);
-        this._rebuildPlotsUsingVariable(fileId, name);
+        if (editing) {
+            // Whatever was built on the old values — a Data Tools edit in place,
+            // other formulas, Data Tools outputs — is recomputed from the new ones.
+            this._reapplyInPlaceDataTool(fileId, data, name);
+            this._refreshVariableDependents(fileId, data, name);
+            this.plotManager.updateFileData(fileId, data);
+            this._renderFilteredTree();
+            this._setDerivedMessage(i18n.t('derivedUpdated').replace('{name}', emphasize(name)), 'ok');
+        } else {
+            this._renderFilteredTree();
+            this._rebuildPlotsUsingVariable(fileId, name);
+            this._setDerivedMessage(`Created ${name}`, 'ok');
+        }
     } catch (err) {
         this._setDerivedMessage(err?.message || String(err), 'error');
     }
+};
+
+proto._formulaDerivedVariable = function(name, formula, result) {
+    return {
+        name,
+        data: result.values,
+        description: `Derived: ${formula}`,
+        kind: 'variable',
+        dataType: this.parser._detectDataType(result.values, 'variable'),
+        isConstant: this.parser._isConstantValues(result.values),
+        interpolation: 'linear',
+        derived: true,
+        formula,
+        ...(result.independentIndex ? { independentIndex: true, sampleIndexLength: result.values.length } : {}),
+    };
+};
+
+// Open the form on an existing formula variable: same fields, same autocomplete,
+// but the button updates it (name included) instead of creating another.
+proto._editDerivedVariable = function(name) {
+    const fileId = this.activeFileId;
+    const entry = fileId ? this.derivedByFile.get(fileId)?.get(name) : null;
+    if (!entry?.formula) return;
+    this._derivedEditing = { fileId, name };
+    document.getElementById('derived-name').value = name;
+    document.getElementById('derived-formula').value = entry.formula;
+    this._toggleDerivedForm(true, { keepEditing: true });
+    this._setDerivedMessage(i18n.t('derivedEditing').replace('{name}', emphasize(name)), '');
+    const formulaInput = document.getElementById('derived-formula');
+    formulaInput.focus({ preventScroll: true });
+    formulaInput.setSelectionRange(formulaInput.value.length, formulaInput.value.length);
+    // The row being edited can sit far below the form in a long sidebar; bring
+    // the section's top into view so the open form is what the user sees.
+    this._scrollToDerivedSection();
+};
+
+proto._scrollToDerivedSection = function() {
+    const section = document.getElementById('derived-form')?.closest?.('.derived-section');
+    if (typeof section?.scrollIntoView !== 'function') return;
+    let reduceMotion = false;
+    try { reduceMotion = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches; } catch (_) { /* no media queries */ }
+    section.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' });
 };
 
 // A name is a scalar operand if it is a parameter or holds a single sample —
@@ -344,18 +466,7 @@ proto._reapplyDerivedVariable = function(fileId, data, name, entry) {
             return true;
         }
         const result = this._evaluateDerivedFormula(entry.formula, data);
-        const variable = {
-            name,
-            data: result.values,
-            description: `Derived: ${entry.formula}`,
-            kind: 'variable',
-            dataType: this.parser._detectDataType(result.values, 'variable'),
-            isConstant: this.parser._isConstantValues(result.values),
-            interpolation: 'linear',
-            derived: true,
-            formula: entry.formula,
-            ...(result.independentIndex ? { independentIndex: true, sampleIndexLength: result.values.length } : {}),
-        };
+        const variable = this._formulaDerivedVariable(name, entry.formula, result);
         data.variables[name] = variable;
         entry.variable = variable;
         return true;
@@ -365,15 +476,60 @@ proto._reapplyDerivedVariable = function(fileId, data, name, entry) {
     }
 };
 
-proto._removeDerivedVariable = function(name) {
+// Removing a derived variable always asks first, saying exactly what goes: the
+// variable, the Data Tools transformation it is the output of (if it is one),
+// and whatever was built on it — formulas reading it, Data Tools outputs
+// sourced from it — since none of those can be recomputed without it.
+proto._removeDerivedVariable = async function(name, options = {}) {
     const fileId = this.activeFileId;
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
-    if (!fileId || !data) return;
+    if (!fileId || !data) return false;
+    const dependents = this._variableDependents(fileId, data, name);
+    if (!options.confirmed) {
+        const ok = await Modal.confirm(emphasizedToHtml(this._derivedRemovalQuestion(fileId, name, dependents)), {
+            html: true,
+            icon: '🗑️',
+            title: i18n.t('derivedDeleteTitle'),
+            confirmText: i18n.t('derivedDeleteButton'),
+        });
+        if (!ok) return false;
+    }
+    // Deepest first, so nothing is briefly left reading a missing variable.
+    for (const removed of [name, ...dependents].reverse()) this._removeGeneratedVariable(fileId, data, removed);
+    this._refreshPlotsAfterVariableRemoval?.(fileId, data);
+    if (this._derivedEditing?.fileId === fileId && [name, ...dependents].includes(this._derivedEditing.name)) {
+        this._toggleDerivedForm(false);
+    }
+    this._renderFilteredTree();
+    this._syncDataTools?.();
+    return true;
+};
+
+// The confirmation's text, names marked for emphasis (see ui/emphasis.js).
+proto._derivedRemovalQuestion = function(fileId, name, dependents = []) {
+    const parts = [];
+    const isTool = !!this.dataToolVariablesByFile?.get(fileId)?.get(name);
+    parts.push(i18n.t(isTool ? 'derivedDeleteTool' : 'derivedDeleteConfirm').replace('{name}', emphasize(name)));
+    if (dependents.length) {
+        parts.push(i18n.t(dependents.length === 1 ? 'derivedDeleteDependentsOne' : 'derivedDeleteDependents')
+            .replace('{count}', String(dependents.length))
+            .replace('{names}', emphasizeList(dependents)));
+    }
+    return parts.join(' ');
+};
+
+// One generated variable out of every registry and every panel. Data Tools has
+// the lift-one-trace-off path, so it is used when installed.
+proto._removeGeneratedVariable = function(fileId, data, name) {
+    if (typeof this._removeDataToolVariable === 'function') {
+        this._removeDataToolVariable(fileId, data, name);
+        return;
+    }
     this.derivedByFile.get(fileId)?.delete(name);
-    const dataToolDefinitions = this.dataToolVariablesByFile?.get(fileId);
-    dataToolDefinitions?.delete(name);
-    if (dataToolDefinitions && !dataToolDefinitions.size) this.dataToolVariablesByFile.delete(fileId);
     delete data.variables[name];
+    this.plotManager.forgetVariableCache?.(fileId, name);
+    this.plotManager.files?.get(fileId)?.invertedVariables?.delete(name);
+    this.selectedVariables?.delete(name);
     for (const [panelId, plot] of this.plotManager.plots) {
         const beforeTs = plot.traces.length;
         const beforePh = plot.phaseTraces.length;
@@ -381,7 +537,83 @@ proto._removeDerivedVariable = function(name) {
         plot.phaseTraces = plot.phaseTraces.filter(t => !(t.fileId === fileId && (t.x === name || t.y === name || t.z === name)));
         if (beforeTs !== plot.traces.length || beforePh !== plot.phaseTraces.length) this.plotManager._rebuildPanel(panelId);
     }
-    this._renderFilteredTree();
+};
+
+// What each generated variable of a file is computed from: a formula's
+// references, a Data Tools output's source. A Data Tools edit in place reads its
+// own variable, which is not a dependency on anything else.
+proto._generatedVariableInputs = function(fileId, data) {
+    const inputs = new Map();
+    const add = (name, sources) => {
+        if (!inputs.has(name)) inputs.set(name, new Set());
+        for (const source of sources) if (source !== name) inputs.get(name).add(source);
+    };
+    const names = Object.keys(data.variables || {});
+    for (const [name, entry] of this.derivedByFile.get(fileId) || []) {
+        if (!entry.formula) continue;
+        let references = [];
+        try { references = this._derivedFormulaReferences(entry.formula, names); } catch (_) { /* broken formula: no inputs */ }
+        add(name, references);
+    }
+    for (const [name, definition] of this.dataToolVariablesByFile?.get(fileId) || []) {
+        add(name, definition.sourceName ? [definition.sourceName] : []);
+    }
+    return inputs;
+};
+
+// Every generated variable built, directly or not, on top of `name`, ordered so
+// each comes after everything it reads.
+proto._variableDependents = function(fileId, data, name) {
+    const inputs = this._generatedVariableInputs(fileId, data);
+    const dependents = new Set();
+    for (let grew = true; grew;) {
+        grew = false;
+        for (const [candidate, sources] of inputs) {
+            if (candidate === name || dependents.has(candidate)) continue;
+            if (sources.has(name) || [...sources].some(source => dependents.has(source))) {
+                dependents.add(candidate);
+                grew = true;
+            }
+        }
+    }
+    const ordered = [];
+    const visited = new Set();
+    const visit = (candidate, trail = new Set()) => {
+        if (visited.has(candidate) || trail.has(candidate)) return;
+        trail.add(candidate);
+        for (const source of inputs.get(candidate) || []) if (dependents.has(source)) visit(source, trail);
+        trail.delete(candidate);
+        visited.add(candidate);
+        ordered.push(candidate);
+    };
+    for (const candidate of dependents) visit(candidate);
+    return ordered;
+};
+
+// A Data Tools edit in place remembers the values it was applied to. Once the
+// formula underneath has produced new ones, those are what it must start from.
+proto._reapplyInPlaceDataTool = function(fileId, data, name) {
+    const definition = this.dataToolVariablesByFile?.get(fileId)?.get(name);
+    if (!definition || (definition.targetMode || 'create') !== 'modify') return false;
+    delete definition.originalData;
+    return this._reapplyDataToolDefinition?.(fileId, data, name, definition) || false;
+};
+
+// Recompute everything built on `name` after its values changed, in dependency
+// order, so a formula that reads both `name` and a Data Tools output of it sees
+// the refreshed output.
+proto._refreshVariableDependents = function(fileId, data, name) {
+    const dependents = this._variableDependents(fileId, data, name);
+    for (const dependent of dependents) {
+        const entry = this.derivedByFile.get(fileId)?.get(dependent);
+        if (entry?.formula) {
+            if (this._reapplyDerivedVariable(fileId, data, dependent, entry)) this._reapplyInPlaceDataTool(fileId, data, dependent);
+            continue;
+        }
+        const definition = this.dataToolVariablesByFile?.get(fileId)?.get(dependent);
+        if (definition) this._reapplyDataToolDefinition?.(fileId, data, dependent, definition);
+    }
+    return dependents;
 };
 
 proto._rebuildPlotsUsingVariable = function(fileId, name) {
@@ -392,11 +624,27 @@ proto._rebuildPlotsUsingVariable = function(fileId, name) {
     }
 };
 
-proto._toggleDerivedForm = function(show) {
+proto._toggleDerivedForm = function(show, options = {}) {
     const form = document.getElementById('derived-form');
+    // Opening the form any other way than through a row's edit button starts a
+    // new variable; closing it always ends an edit.
+    if (!show || !options.keepEditing) {
+        if (this._derivedEditing) {
+            document.getElementById('derived-name').value = '';
+            document.getElementById('derived-formula').value = '';
+        }
+        this._derivedEditing = null;
+    }
+    const editing = !!this._derivedEditing;
     form.classList.toggle('collapsed', !show);
+    form.classList.toggle('editing', editing);
+    const submit = document.getElementById('derived-create');
+    if (submit) submit.textContent = i18n.t(editing ? 'derivedUpdate' : 'derivedCreate');
     if (show) {
-        document.getElementById('derived-name').focus();
+        this._setDerivedMessage('', '');
+        // An edit scrolls the section into view itself (_scrollToDerivedSection);
+        // letting focus scroll first would make the sidebar jump twice.
+        document.getElementById('derived-name').focus(options.keepEditing ? { preventScroll: true } : undefined);
     }
     else {
         this._setDerivedMessage('', '');
@@ -406,7 +654,7 @@ proto._toggleDerivedForm = function(show) {
 
 proto._setDerivedMessage = function(message, type) {
     const el = document.getElementById('derived-message');
-    el.textContent = message;
+    setEmphasizedText(el, message);
     el.className = `derived-message${type ? ' ' + type : ''}`;
 };
 
@@ -522,8 +770,13 @@ proto._insertDerivedSuggestion = function(suggestion) {
     const start = input.selectionStart;
     const end = input.selectionEnd;
     const left = input.value.slice(0, start);
-    const right = input.value.slice(end);
-    const replaceStart = start - derivedNameToken(left).length;
+    const token = derivedNameToken(left);
+    // Completing inside `…` whose closing backtick is already typed: the
+    // inserted name brings its own, so that one is replaced, not doubled.
+    const right = token.startsWith('`') && input.value.slice(end).startsWith('`')
+        ? input.value.slice(end + 1)
+        : input.value.slice(end);
+    const replaceStart = start - token.length;
     const name = suggestion?.name || '';
     const isFunction = suggestion?.type === 'function';
     const insert = isFunction

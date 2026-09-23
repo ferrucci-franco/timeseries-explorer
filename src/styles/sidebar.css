@@ -1562,6 +1562,10 @@
     width: 20px;
     height: 20px;
     flex: 0 0 20px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border-radius: 4px;
     border: 1px solid var(--border-color);
     background-color: var(--bg-primary);
@@ -1574,6 +1578,64 @@
 .tree-derived-remove:hover {
     background-color: var(--hover-bg);
     color: var(--danger-color);
+}
+
+.tree-derived-edit {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    margin-right: 4px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.75rem;
+    line-height: 1;
+}
+
+.tree-derived-edit:hover {
+    background-color: var(--hover-bg);
+    color: var(--primary-color);
+}
+
+/* A derived row carries up to three buttons; the point count gives way before
+   the name does. The name keeps its full width (up to most of the row, then
+   ellipsis); the count takes what is left and is cut first. */
+.tree-item-derived .tree-label {
+    flex: 0 0 auto;
+    max-width: 60%;
+    min-width: 0;
+}
+
+.tree-item-derived .tree-info {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Under a derived variable's name, always shown: its formula, or where it came
+   from for a Data Tools output. Read-only — editing is the ✎ button. */
+.tree-derived-formula {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tree-derived-origin {
+    font-size: 0.72rem;
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* A derived dataset's row in its source's tree: the name of a file, followed by

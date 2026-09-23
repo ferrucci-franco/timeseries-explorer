@@ -23,15 +23,19 @@ const tools = readFileSync(new URL('../src/app/methods/data-tools-methods.js', i
 // ── refreshTraceValues decides what it can answer for ───────────────────────
 // Sliced out of the class and run against doubles: what matters here is which
 // panel shapes it refuses, and that it drops the caches before restyling.
-const marker = '    refreshTraceValues(fileId, varName) {';
-const start = manager.indexOf(marker);
-assert.ok(start >= 0, 'refreshTraceValues is present');
-const endMarker = '\n    }';
-const end = manager.indexOf(endMarker, start);
-const body = manager.slice(start + marker.length, end);
+// The check lives in canRefreshTraceValues (a caller with several variables
+// asks it first), so both methods are sliced out.
+const sliceMethod = (name) => {
+    const marker = `    ${name}(fileId, varName) {`;
+    const start = manager.indexOf(marker);
+    assert.ok(start >= 0, `${name} is present`);
+    const end = manager.indexOf('\n    }', start);
+    return manager.slice(start + marker.length, end);
+};
 const sandbox = { out: {} };
-vm.runInNewContext(`out.refreshTraceValues = function(fileId, varName) {${body}\n};`, sandbox);
-const refreshTraceValues = sandbox.out.refreshTraceValues;
+vm.runInNewContext(`out.canRefreshTraceValues = function(fileId, varName) {${sliceMethod('canRefreshTraceValues')}\n};
+out.refreshTraceValues = function(fileId, varName) {${sliceMethod('refreshTraceValues')}\n};`, sandbox);
+const { canRefreshTraceValues, refreshTraceValues } = sandbox.out;
 
 const timeseriesPanel = (traces) => ({
     mode: 'timeseries', div: { _fullLayout: {} }, traces, phaseTraces: [], stateSlots: null,
@@ -45,6 +49,7 @@ const harness = (plots, variables = { v: {} }) => {
         self: {
             files: new Map([['f1', entry]]),
             plots: new Map(plots),
+            canRefreshTraceValues,
             refreshTraceValues,
             _refreshTimeseriesVisuals(panelId) { refreshed.push(panelId); },
         },
@@ -105,6 +110,15 @@ for (const [label, plot] of [
     assert.deepEqual(h.refreshed, [], 'nothing is restyled when the answer is no');
 }
 
+{
+    // The question alone never restyles anything.
+    const h = harness([['p1', timeseriesPanel([{ fileId: 'f1', varName: 'v' }])]]);
+    assert.equal(h.self.canRefreshTraceValues('f1', 'v'), true);
+    assert.equal(h.self.canRefreshTraceValues('f1', 'missing'), false);
+    assert.deepEqual(h.refreshed, [], 'asking is free');
+    assert.deepEqual(h.entry._transformCache, { stale: true }, 'and drops no cache');
+}
+
 // ── How the preview uses it ─────────────────────────────────────────────────
 assert.match(tools, /if \(!this\.plotManager\.refreshTraceValues\(fileId, name\)\) \{\s*\n\s*this\.plotManager\.updateFileData\(fileId, data\);/,
     'an existing preview trace is restyled, with updateFileData as the fallback');
@@ -115,8 +129,10 @@ assert.doesNotMatch(tools.slice(tools.indexOf('proto._drawDataToolPreviewTrace')
     'so the second rebuild is gone');
 assert.match(tools, /if \(inPlace\) this\.plotManager\.invalidateTransformCache\(preview\.fileId\);/,
     'and taking the preview down needs no rebuild either when the curve came off in place');
-assert.match(tools, /const names = \[editing\.name, \.\.\.\(dependents \|\| \[\]\)\];/,
-    'the edit preview covers the variables that ride along with it');
+assert.match(tools, /const names = \[editing\.name, \.\.\.\(dependents \|\| \[\]\)\]\s*\n\s*\.filter\(varName => this\._isDataToolVariablePlotted\(fileId, varName\)\);/,
+    'the edit preview covers the drawn variables that ride along with it');
+assert.match(tools, /if \(names\.every\(varName => this\.plotManager\.canRefreshTraceValues\?\.\(fileId, varName\)\)\) \{\s*\n\s*for \(const varName of names\) this\.plotManager\.refreshTraceValues\(fileId, varName\);\s*\n\s*\} else \{\s*\n\s*this\.plotManager\.updateFileData\(fileId, data\);/,
+    'and restyles all of them or rebuilds once — never some of each');
 
 // ── The manager's side ──────────────────────────────────────────────────────
 assert.match(manager, /removeTrace\(panelId, varName, fileId = null\) \{/,

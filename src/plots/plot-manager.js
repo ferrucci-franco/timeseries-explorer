@@ -2201,11 +2201,21 @@ class PlotManager {
             if (key.startsWith('_cursorDocListeners')) {
                 const listeners = plot[key];
                 if (listeners) {
+                    // Every listener _installCursorViewHandlers put on document,
+                    // the touch ones included: each holds the view, so one left
+                    // behind kept every rebuilt chart's closure alive.
                     document.removeEventListener('mousemove', listeners.move);
                     document.removeEventListener('mouseup',   listeners.up);
+                    document.removeEventListener('touchmove', listeners.touchMove);
+                    document.removeEventListener('touchend',  listeners.up);
+                    document.removeEventListener('touchcancel', listeners.up);
                 }
                 plot[key] = null;
             } else if (key.startsWith('_cursorHandlersDiv')) {
+                delete plot[key];
+            } else if (key.startsWith('_touchDragDocListeners')) {
+                // Same for the touch drag of a selection band (_alsoDragWithTouch).
+                this._removeTouchDragDocListeners?.(plot[key]);
                 delete plot[key];
             }
         }
@@ -3179,7 +3189,112 @@ class PlotManager {
         if (entry) entry._transformCache = null;
     }
 
-    refreshTraceValues(fileId, varName) {
+    /**
+     * A variable is about to be renamed and nothing else about it changes: its
+     * curves keep every sample, only their labels move. Records, per timeseries
+     * panel drawing it, which Plotly traces carry its current label, so that
+     * `relabelTimeseriesTraces` can restyle just the legend name and the hover
+     * afterwards instead of rebuilding the chart (which re-decimates and redraws
+     * every curve — seconds on long records).
+     *
+     * Panels this cannot answer for (another mode, a phase pair, a chart not yet
+     * drawn) are left out; the caller rebuilds those.
+     *
+     * @returns {Map<string, {oldLabel: string, oldHover: string, indices: number[]}>}
+     */
+    captureTimeseriesLabels(fileId, varName) {
+        const captured = new Map();
+        const oldLabel = this._traceName(varName, fileId);
+        const oldHover = this._escapeHTML(this._traceName(varName, fileId, { units: false }));
+        for (const [panelId, plot] of this.plots) {
+            if (!plot.traces.some(t => t.fileId === fileId && t.varName === varName)) continue;
+            if (plot.mode !== 'timeseries' || !plot.div?._fullLayout) continue;
+            if (plot.phaseTraces.some(t => t.fileId === fileId && (t.x === varName || t.y === varName || t.z === varName))) continue;
+            // Every Plotly trace under that label: the curve and any companion
+            // drawn for it (stack padding, markers) share its name.
+            const indices = [];
+            (plot.div.data || []).forEach((trace, index) => { if (trace?.name === oldLabel) indices.push(index); });
+            if (indices.length) captured.set(panelId, { oldLabel, oldHover, indices });
+        }
+        return captured;
+    }
+
+    /**
+     * The second half of `captureTimeseriesLabels`, once the variable carries its
+     * new name: legend entry and hover label restyled in place, overlays that
+     * print trace names (cursor read-outs, stats) refreshed. No data moves.
+     */
+    relabelTimeseriesTraces(panelId, captured, fileId, newName) {
+        const plot = this.plots.get(panelId);
+        if (!plot?.div?._fullLayout || !captured?.indices?.length) return false;
+        const name = this._traceName(newName, fileId);
+        const hover = this._escapeHTML(this._traceName(newName, fileId, { units: false }));
+        const hovertemplate = captured.indices.map(index => {
+            const template = plot.div.data[index]?.hovertemplate;
+            return typeof template === 'string'
+                ? template.split(`<b>${captured.oldHover}</b>`).join(`<b>${hover}</b>`)
+                : template;
+        });
+        const div = plot.div;
+        // Still this panel's live chart: a rebuild that replaced it has already
+        // drawn the new name, and a purged one has nothing left to update.
+        const current = () => this.plots.get(panelId)?.div === div && !!div._fullLayout;
+        let restyled;
+        try {
+            restyled = Plotly.restyle(div, { name, hovertemplate }, captured.indices);
+        } catch (err) {
+            restyled = Promise.reject(err);
+        }
+        Promise.resolve(restyled)
+            .then(() => {
+                if (!current()) return;
+                this._syncCursorDisplay?.(panelId, plot);
+                this._refreshPanelDomOverlays(plot);
+            })
+            .catch(err => {
+                if (!current()) return;
+                console.warn('Could not relabel the renamed trace in place; rebuilding the panel.', err);
+                this._rebuildPanel(panelId, { preserveView: true });
+            });
+        return true;
+    }
+
+    /**
+     * The transform cache keys a variable's series by its name. On a rename the
+     * entries move with it: kept, nothing is recomputed; left under the old key,
+     * a variable created later under that name would be served these values.
+     */
+    renameTransformCacheEntries(fileId, oldName, newName) {
+        const series = this.files.get(fileId)?._transformCache?.series;
+        if (!series) return;
+        const prefix = `${oldName}\u0000`;
+        for (const [key, value] of [...series]) {
+            if (!key.startsWith(prefix)) continue;
+            series.delete(key);
+            series.set(`${newName}\u0000${key.slice(prefix.length)}`, value);
+        }
+    }
+
+    /**
+     * A variable is gone: drop its transformed series from the cache. They hold
+     * (or are) its full-length arrays, so leaving them keyed under a name nobody
+     * reads again would keep that memory for as long as the file is open.
+     */
+    forgetVariableCache(fileId, varName) {
+        const series = this.files.get(fileId)?._transformCache?.series;
+        if (!series) return;
+        const prefix = `${varName}\u0000`;
+        for (const key of [...series.keys()]) if (key.startsWith(prefix)) series.delete(key);
+    }
+
+    /**
+     * Whether `refreshTraceValues` would take this variable: drawn somewhere,
+     * and only by timeseries panels that are on screen. Asked first by a caller
+     * with several variables, so it can choose between restyling all of them
+     * and one rebuild — restyling some and then rebuilding purges charts that
+     * still have the restyle's redraw queued.
+     */
+    canRefreshTraceValues(fileId, varName) {
         const entry = this.files.get(fileId);
         if (!entry?.data?.variables?.[varName]) return false;
         const drawsIt = plot => plot.traces.some(t => t.fileId === fileId && t.varName === varName);
@@ -3194,7 +3309,13 @@ class PlotManager {
             if (plot.mode !== 'timeseries' || !plot.div?._fullLayout) return false;
             found = true;
         }
-        if (!found) return false;
+        return found;
+    }
+
+    refreshTraceValues(fileId, varName) {
+        if (!this.canRefreshTraceValues(fileId, varName)) return false;
+        const entry = this.files.get(fileId);
+        const drawsIt = plot => plot.traces.some(t => t.fileId === fileId && t.varName === varName);
         // The values are read through the transform cache, which still holds the
         // previous ones.
         entry._transformCache = null;

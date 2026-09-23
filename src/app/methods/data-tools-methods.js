@@ -1,4 +1,6 @@
 import i18n from '../../i18n/index.js';
+import { renameFormulaReference, variableNameProblem } from './derived-methods.js';
+import { emphasize, emphasizeList, emphasizedToPlain, setEmphasizedText } from '../../ui/emphasis.js';
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
 import {
     applyFilter,
@@ -625,7 +627,7 @@ proto._syncDataToolLiveChainToggle = function(editing, fileId) {
     const wrap = document.getElementById('data-tool-live-chain-wrap');
     const label = document.getElementById('data-tool-live-chain-label');
     if (!wrap) return;
-    const dependents = editing ? this._dataToolDependents(fileId, editing.name) : [];
+    const dependents = editing ? this._dataToolChainDependents(fileId, editing.name) : [];
     const count = dependents.length;
     wrap.hidden = count === 0;
     if (count === 0) return;
@@ -635,7 +637,7 @@ proto._syncDataToolLiveChainToggle = function(editing, fileId) {
     }
     // "Live-update chain" says nothing on its own; the tooltip names the actual
     // variables that ride along with each parameter change.
-    wrap.title = i18n.t('dataToolLiveChainHelp').replace('{names}', dependents.join(', '));
+    wrap.title = emphasizedToPlain(i18n.t('dataToolLiveChainHelp').replace('{names}', emphasizeList(dependents)));
 };
 
 proto._syncDataToolPickerOptions = function(lazy) {
@@ -930,7 +932,7 @@ proto._handleOutlierLiveChange = function(options = {}) {
 proto._getDataToolSourceEntries = function(data, tool = this._getSelectedDataTool(), excludeName = '') {
     const lazy = this._isDataToolLazyData(data);
     const excluded = excludeName
-        ? new Set([excludeName, ...this._dataToolDependents(this.activeFileId, excludeName)])
+        ? new Set([excludeName, ...this._dataToolChainDependents(this.activeFileId, excludeName)])
         : null;
     return Object.entries(data?.variables || {})
         .filter(([name, variable]) => {
@@ -1122,6 +1124,34 @@ proto._createDataToolVariable = async function(context, config) {
     }
 };
 
+// Whether committing `config` would recompute exactly what `definition` already
+// holds: same tool, source and settings. Key order does not matter; anything
+// uncertain counts as changed, which only costs a recompute.
+proto._dataToolConfigUnchanged = function(definition, config, sourceName, tool) {
+    if (!definition || !config) return false;
+    const stable = (value) => {
+        if (Array.isArray(value)) return value.map(stable);
+        if (value && typeof value === 'object') {
+            return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]));
+        }
+        return value;
+    };
+    const pick = (from) => JSON.stringify(stable({
+        method: from.method ?? null,
+        params: from.params ?? null,
+        replacement: from.replacement || '',
+        steps: from.steps ?? null,
+    }));
+    try {
+        return definition.tool === tool
+            && definition.sourceName === sourceName
+            && (definition.targetMode || 'create') === 'create'
+            && pick(definition) === pick(config);
+    } catch (_) {
+        return false;
+    }
+};
+
 // Recompute an existing row in place, optionally under a new name, then refresh
 // whatever was built on top of it.
 proto._updateDataToolVariable = async function(context, config, editing) {
@@ -1139,10 +1169,23 @@ proto._updateDataToolVariable = async function(context, config, editing) {
         }
         if (outputName === sourceName) throw new Error(i18n.t('outlierOutputSameAsSource'));
 
+        // Only the name changed: the values are the ones already drawn, so there
+        // is nothing to recompute and no curve to redraw — the rename relabels
+        // the legend in place (see _renameVariable).
+        if (!context.lazy && outputName !== oldName
+            && this._dataToolConfigUnchanged(definitions.get(oldName), config, sourceName, tool)) {
+            // A live preview under these same settings wrote these same values;
+            // the backup it kept is dropped by the commit, never put back.
+            this._renameVariable(fileId, data, oldName, outputName);
+            this._renderFilteredTree();
+            this._setOutlierMessage(() => i18n.t('dataToolRenamed').replace('{old}', oldName).replace('{name}', outputName), 'ok');
+            return { name: outputName, tool, renamed: true };
+        }
+
         // A lazy file's variable is a DuckDB column reference, not an array. It
         // has to be rebuilt by the lazy path or it loses that binding.
         if (context.lazy) {
-            if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName);
+            if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName, { redraw: false });
             return await this._applyLazyDataToolCreateMode(context, config, {});
         }
 
@@ -1154,7 +1197,7 @@ proto._updateDataToolVariable = async function(context, config, editing) {
         }, data);
         // Renamed only once the new values are in hand, so a recompute that
         // throws leaves the row exactly as it was.
-        if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName);
+        if (outputName !== oldName) this._renameDataToolVariable(fileId, data, oldName, outputName, { redraw: false });
         data.variables[outputName] = result.variable;
         this._storeDataToolDefinition(fileId, outputName, {
             name: outputName,
@@ -1166,8 +1209,7 @@ proto._updateDataToolVariable = async function(context, config, editing) {
             replacement: config.replacement,
             variable: result.variable,
         });
-        const dependents = this._dataToolDependents(fileId, outputName);
-        this._reapplyDataToolDependents(fileId, data, outputName);
+        const dependents = this._reapplyDataToolDependents(fileId, data, outputName);
 
         // One rebuild, from updateFileData, which restores each panel's view.
         // Rebuilding again here would capture the not-yet-restored view and pin
@@ -1182,26 +1224,67 @@ proto._updateDataToolVariable = async function(context, config, editing) {
     }
 };
 
-// Moving the key: the variable map, the definition registry, every definition
-// that names it as a source, and any trace already drawing it.
-proto._renameDataToolVariable = function(fileId, data, oldName, newName) {
-    const definitions = this.dataToolVariablesByFile?.get(fileId);
+// Moving a variable to a new name, and every place that refers to it by name:
+// the variable map, the formula and Data Tools registries (their keys, the
+// formulas that read it, the transformations sourced from it), the sign toggle,
+// the selection, and any trace already drawing it. Data Tools and the formula
+// editor both rename through here, so neither can leave the other's
+// references pointing at a name that no longer exists.
+// `options.redraw: false` is for a caller about to recompute the values and
+// redraw every panel of the file anyway (updateFileData): relabelling or
+// rebuilding here first would only be work thrown away.
+proto._renameVariable = function(fileId, data, oldName, newName, options = {}) {
+    if (!oldName || !newName || oldName === newName) return;
+    const redraw = options.redraw !== false;
+    // Taken while the old name still resolves: which drawn curves carry it.
+    const relabel = redraw ? (this.plotManager.captureTimeseriesLabels?.(fileId, oldName) || new Map()) : new Map();
     const variable = data.variables[oldName];
     if (variable) {
         variable.name = newName;
+        // A label that was just the name follows it; one of its own stays.
+        if (variable.displayName === oldName) variable.displayName = newName;
         data.variables[newName] = variable;
         delete data.variables[oldName];
+        this.plotManager.renameTransformCacheEntries?.(fileId, oldName, newName);
     }
+
+    const definitions = this.dataToolVariablesByFile?.get(fileId);
     if (definitions?.has(oldName)) {
         const definition = definitions.get(oldName);
         definition.name = newName;
         definitions.delete(oldName);
         definitions.set(newName, definition);
-        for (const other of definitions.values()) {
-            if (other.sourceName === oldName) other.sourceName = newName;
+    }
+    for (const definition of definitions?.values() || []) {
+        if (definition.sourceName === oldName) definition.sourceName = newName;
+    }
+
+    const derived = this.derivedByFile?.get(fileId);
+    if (derived?.has(oldName)) {
+        const entry = derived.get(oldName);
+        entry.name = newName;
+        derived.delete(oldName);
+        derived.set(newName, entry);
+    }
+    for (const entry of derived?.values() || []) {
+        if (!entry.formula) continue;
+        const formula = renameFormulaReference(entry.formula, data.variables, oldName, newName);
+        if (formula === entry.formula) continue;
+        entry.formula = formula;
+        // Same values, new spelling: nothing to recompute, only the text that
+        // shows the formula (tree row, tooltip, saved session).
+        for (const target of new Set([entry.variable, data.variables[entry.name]])) {
+            if (!target?.derived || target.formula === undefined) continue;
+            target.formula = formula;
+            target.description = `Derived: ${formula}`;
         }
     }
-    for (const [panelId, plot] of this.plotManager.plots) {
+
+    const inverted = this.plotManager.files?.get(fileId)?.invertedVariables;
+    if (inverted?.delete(oldName)) inverted.add(newName);
+    if (fileId === this.activeFileId && this.selectedVariables?.delete(oldName)) this.selectedVariables.add(newName);
+
+    for (const [panelId, plot] of this.plotManager.plots || []) {
         let touched = false;
         for (const trace of plot.traces) {
             if (trace.fileId === fileId && trace.varName === oldName) { trace.varName = newName; touched = true; }
@@ -1212,10 +1295,19 @@ proto._renameDataToolVariable = function(fileId, data, oldName, newName) {
                 if (trace[axis] === oldName) { trace[axis] = newName; touched = true; }
             }
         }
-        // A rename changes a label, not the data: there is no reason for the view
-        // to jump.
-        if (touched) this.plotManager._rebuildPanel(panelId, { preserveView: true });
+        if (!touched || !redraw) continue;
+        // A rename changes a label, not the data: where the curves are drawn as
+        // timeseries only the legend and hover text change. Anything else is
+        // rebuilt, keeping the view.
+        const captured = relabel.get(panelId);
+        if (captured && this.plotManager.relabelTimeseriesTraces?.(panelId, captured, fileId, newName)) continue;
+        this.plotManager._rebuildPanel(panelId, { preserveView: true });
     }
+
+};
+
+proto._renameDataToolVariable = function(fileId, data, oldName, newName, options = {}) {
+    this._renameVariable(fileId, data, oldName, newName, options);
 };
 
 proto._applyLazyDataToolCreateMode = async function(context, config, options = {}) {
@@ -1607,7 +1699,9 @@ proto._dataToolNameHint = function() {
         }
         return '';
     }
-    if (!name) return 'dataToolNameEmpty';
+    // Same rule as a formula variable's name (see variableNameProblem).
+    const nameProblem = variableNameProblem(name);
+    if (nameProblem) return nameProblem;
     if (name === sourceName) return 'outlierOutputSameAsSource';
     if (data?.variables?.[name] && name !== this._dataToolEditing?.name) return 'dataToolNameTaken';
     return '';
@@ -1632,6 +1726,8 @@ proto._isDataToolVariablePlotted = function(fileId, name) {
         if (plot.traces?.some(trace => trace.fileId === fileId && trace.varName === name)) return true;
         if (plot.phaseTraces?.some(trace => trace.fileId === fileId
             && (trace.x === name || trace.y === name || trace.z === name))) return true;
+        if (plot.stateSlots?.fileId === fileId
+            && ['x', 'y', 'z'].some(axis => (plot.stateSlots[axis] || []).includes(name))) return true;
     }
     return false;
 };
@@ -1652,37 +1748,74 @@ proto._dataToolDependents = function(fileId, name) {
     return found;
 };
 
+// Everything recomputed when `name` changes: the Data Tools chain and, with the
+// formula machinery installed, the derived formulas reading any of it. This is
+// what an edit refreshes, so it is also what the live-chain toggle counts and
+// what can no longer serve as the edited variable's source.
+proto._dataToolChainDependents = function(fileId, name) {
+    const data = fileId ? this.plotManager?.files?.get(fileId)?.data : null;
+    if (data && typeof this._variableDependents === 'function') return this._variableDependents(fileId, data, name);
+    return this._dataToolDependents(fileId, name);
+};
+
 // Deletes without asking: the table arms the row and asks there, in place, so
 // this runs only once the answer is yes.
 proto._deleteDataToolVariable = function(fileId, name) {
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
     if (!data) return false;
-    const dependents = this._dataToolDependents(fileId, name);
+    // Formulas reading it go too: they cannot be recomputed without it.
+    const dependents = this._dataToolChainDependents(fileId, name);
 
     // Deepest first, so nothing is briefly left pointing at a missing source.
     for (const dependent of [...dependents].reverse()) this._removeDataToolVariable(fileId, data, dependent);
     this._removeDataToolVariable(fileId, data, name);
 
-    if (data?._duckdb?.source?.refreshOverview) {
+    this._refreshPlotsAfterVariableRemoval(fileId, data);
+    this._clearVariableSelection?.();
+    this._renderFilteredTree();
+    // The count names the variables that came DOWN WITH it, not including it.
+    // One message, where the delete was asked for, naming everything that went
+    // (derived formulas included: they vanish from their own section otherwise
+    // unexplained).
+    this._setOutlierMessage(() => (dependents.length
+        ? i18n.t(dependents.length === 1 ? 'dataToolDeletedWithChainOne' : 'dataToolDeletedWithChain')
+            .replace('{name}', emphasize(name))
+            .replace('{count}', String(dependents.length))
+            .replace('{names}', emphasizeList(dependents))
+        : i18n.t('dataToolDeleted').replace('{name}', emphasize(name))), 'ok');
+    this._syncDataTools();
+    return true;
+};
+
+// After generated variables were removed. Their curves are already off every
+// panel (_removeDataToolVariableFromPlots lifts a lone timeseries curve in place
+// and rebuilds the rest), so an in-memory file needs nothing more: rebuilding
+// every panel of the file on top of that redrew the untouched ones, and purged
+// charts Plotly still had the lift's redraw queued for, which then threw.
+// A lazy file's overview does carry the variables, so it is refreshed and
+// redrawn as before.
+proto._refreshPlotsAfterVariableRemoval = function(fileId, data) {
+    if (!data?._duckdb) {
+        // Whatever still names a removed variable beyond plain traces (a state
+        // animation's slots, say) is dropped, and only those panels rebuilt.
+        const { panels } = this.plotManager._dropTracesForMissingVariables?.(fileId, data) || {};
+        for (const panelId of panels || []) this.plotManager._rebuildPanel(panelId, { preserveView: true });
+        return;
+    }
+    if (data._duckdb.source?.refreshOverview) {
         data._duckdb.source.refreshOverview(data).catch(err =>
             console.warn('[duckdb] could not refresh overview after data-tool delete:', err?.message || err)
         );
     }
     this.plotManager.updateFileData(fileId, data);
-    this._clearVariableSelection?.();
-    this._renderFilteredTree();
-    // The count names the variables that came DOWN WITH it, not including it.
-    this._setOutlierMessage(() => (dependents.length
-        ? i18n.t(dependents.length === 1 ? 'dataToolDeletedWithChainOne' : 'dataToolDeletedWithChain')
-            .replace('{name}', name)
-            .replace('{count}', String(dependents.length))
-        : i18n.t('dataToolDeleted').replace('{name}', name)), 'ok');
-    this._syncDataTools();
-    return true;
 };
 
 proto._removeDataToolVariable = function(fileId, data, name) {
     delete data.variables[name];
+    this.plotManager.forgetVariableCache?.(fileId, name);
+    // A later variable of the same name must not inherit this one's sign flip.
+    this.plotManager.files?.get(fileId)?.invertedVariables?.delete(name);
+    this.selectedVariables?.delete(name);
     this.derivedByFile?.get(fileId)?.delete(name);
     this._deleteDataToolDefinition(fileId, name);
     this._removeDataToolVariableFromPlots(fileId, name);
@@ -1810,7 +1943,7 @@ proto._dataToolRowActions = function(definition) {
 // the question belongs next to the thing being deleted, and a full dialog for one
 // derived variable is heavier than the action deserves.
 proto._dataToolRowConfirm = function(fileId, name) {
-    const dependents = this._dataToolDependents(fileId, name);
+    const dependents = this._dataToolChainDependents(fileId, name);
     const bottom = document.createElement('div');
     bottom.className = 'data-tool-row-bottom';
 
@@ -1821,10 +1954,10 @@ proto._dataToolRowConfirm = function(fileId, name) {
         : i18n.t('dataToolDeleteConfirm');
     // The chain is named in full on hover; the inline line only has room for a count.
     if (dependents.length) {
-        question.title = i18n.t(dependents.length === 1 ? 'dataToolDeleteCascadeOne' : 'dataToolDeleteCascade')
-            .replace('{name}', name)
+        question.title = emphasizedToPlain(i18n.t(dependents.length === 1 ? 'dataToolDeleteCascadeOne' : 'dataToolDeleteCascade')
+            .replace('{name}', emphasize(name))
             .replace('{count}', String(dependents.length))
-            .replace('{names}', dependents.join(', '));
+            .replace('{names}', emphasizeList(dependents)));
     }
 
     const actions = document.createElement('span');
@@ -2736,13 +2869,26 @@ proto._reapplyDataToolVariables = function(fileId, data) {
     }
 };
 
+// Recompute what was built on `changedName` after its values moved, and name
+// what was recomputed. With the formula machinery installed that includes the
+// derived formulas reading it (and whatever those feed), in dependency order —
+// otherwise editing a filter left every formula on top of it stale until the
+// next reload.
 proto._reapplyDataToolDependents = function(fileId, data, changedName) {
-    if (!changedName) return;
+    if (!changedName) return [];
+    if (typeof this._refreshVariableDependents === 'function') {
+        return this._refreshVariableDependents(fileId, data, changedName);
+    }
     const changed = new Set([changedName]);
+    const recomputed = [];
     for (const [name, definition] of this._orderedDataToolDefinitions(fileId)) {
         if (name === changedName || !changed.has(definition.sourceName)) continue;
-        if (this._reapplyDataToolDefinition(fileId, data, name, definition)) changed.add(name);
+        if (this._reapplyDataToolDefinition(fileId, data, name, definition)) {
+            changed.add(name);
+            recomputed.push(name);
+        }
     }
+    return recomputed;
 };
 
 proto._orderedDataToolDefinitions = function(fileId) {
@@ -3218,8 +3364,7 @@ proto._previewEditedVariable = function(context, editing, result) {
 
     const dependents = document.getElementById('data-tool-live-chain')?.checked === false
         ? []
-        : this._dataToolDependents(fileId, editing.name);
-    if (dependents.length) this._reapplyDataToolDependents(fileId, data, editing.name);
+        : this._reapplyDataToolDependents(fileId, data, editing.name);
 
     // Same as the draft preview: the values moved and nothing else did, so the
     // traces are restyled in place when every panel drawing them can take that
@@ -3228,8 +3373,15 @@ proto._previewEditedVariable = function(context, editing, result) {
     // the zoom, since the second capture ran before the first restore had been
     // applied and pinned the autoranged view. The point of a live preview is to
     // watch a parameter's effect where you zoomed in.
-    const names = [editing.name, ...(dependents || [])];
-    if (!names.every(varName => this.plotManager.refreshTraceValues(fileId, varName))) {
+    // Only what is drawn needs redrawing — a formula or transformation built on
+    // this one but not plotted anywhere is no reason to rebuild every panel.
+    // All of it is restyled, or there is one rebuild; never some of each, since
+    // the rebuild would purge charts with the restyle's redraw still queued.
+    const names = [editing.name, ...(dependents || [])]
+        .filter(varName => this._isDataToolVariablePlotted(fileId, varName));
+    if (names.every(varName => this.plotManager.canRefreshTraceValues?.(fileId, varName))) {
+        for (const varName of names) this.plotManager.refreshTraceValues(fileId, varName);
+    } else {
         this.plotManager.updateFileData(fileId, data);
     }
 };
@@ -3424,7 +3576,7 @@ proto._renderDataToolMessage = function() {
     const el = document.getElementById('outlier-message');
     if (!el) return;
     const { message, type } = this._dataToolMessage || {};
-    el.textContent = (typeof message === 'function' ? message() : message) || '';
+    setEmphasizedText(el, (typeof message === 'function' ? message() : message) || '');
     el.className = `derived-message data-tool-message${type ? ' ' + type : ''}`;
 };
 

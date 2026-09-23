@@ -3455,6 +3455,11 @@ const CURSOR_PAIR_HOLD_SLOP_PX = 10;
 proto._alsoDragWithTouch = function(div, plot, key, { hitTest, onDown, onMove, onUp }) {
     if (!div || !plot || plot[key] === div) return;
     plot[key] = div;
+    // The document listeners of the previous chart go before this one's are
+    // added (and _destroyChart sweeps them): each closes over its chart, so
+    // one left on document keeps a discarded chart alive for the session.
+    const docKey = `_touchDragDocListeners${key}`;
+    this._removeTouchDragDocListeners(plot[docKey]);
     let active = false;
 
     const asMouse = (event) => {
@@ -3497,11 +3502,19 @@ proto._alsoDragWithTouch = function(div, plot, key, { hitTest, onDown, onMove, o
     document.addEventListener('touchmove', onTouchMove, { passive: false });
     document.addEventListener('touchend', onTouchEnd);
     document.addEventListener('touchcancel', onTouchEnd);
+    plot[docKey] = { move: onTouchMove, end: onTouchEnd };
 
     // A drag under way keeps the touch whatever else lands: a second finger
     // would otherwise be read as a pinch and zoom the plot out from under it.
     claimTouchGestures(div, event => active
         || (event.touches?.length === 1 && !!hitTest(asMouse(event))));
+};
+
+proto._removeTouchDragDocListeners = function(listeners) {
+    if (!listeners) return;
+    document.removeEventListener('touchmove', listeners.move, { passive: false });
+    document.removeEventListener('touchend', listeners.end);
+    document.removeEventListener('touchcancel', listeners.end);
 };
 
 proto._installCursorViewHandlers = function(view) {
