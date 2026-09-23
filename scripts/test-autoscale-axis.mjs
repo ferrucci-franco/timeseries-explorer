@@ -108,6 +108,48 @@ h._y = { A: [100, 20, 5, 30, 15], B: [-50, -5, 8, 2, 1], C: [1000, 200, 300, 400
         'without the option the mode decides, and fft has no phase traces');
 }
 
+// ── Lazy files: Fit Y fits the curve on screen, not the overview (#172) ──────
+// A lazy file's variable data is an overview of the whole record; after a zoom
+// the chart draws the viewport detail DuckDB sent. Fit Y must fit that.
+{
+    const drawnStart = source.indexOf('    _drawnLazySeries(plot, trace, index) {');
+    assert.ok(drawnStart >= 0, '_drawnLazySeries is present');
+    const drawnEnd = source.indexOf('\n    }', drawnStart) + '\n    }'.length;
+    const drawnText = source.slice(drawnStart, drawnEnd)
+        .replace('    _drawnLazySeries(plot, trace, index) {', 'proto._drawnLazySeries = function(plot, trace, index) {');
+    vm.runInNewContext(drawnText, { proto });
+
+    const lazy = new Harness();
+    lazy._drawnLazySeries = proto._drawnLazySeries;
+    lazy._traceName = (varName) => varName;
+    lazy.files = new Map([['f', { data: { _duckdb: {}, variables: { A: {}, B: {} } } }]]);
+    // The overview never saw the spike at x=2.
+    lazy._x = { A: [0, 1, 2, 3, 4], B: [0, 1, 2, 3, 4] };
+    lazy._y = { A: [0, 1, 1, 1, 0], B: [0, 1, 1, 1, 0] };
+    const plot = tsPlot([1.5, 2.5]);
+    plot.traces = [{ fileId: 'f', varName: 'A' }];
+    // What the chart draws for the zoom: the detail, spike included.
+    plot.div.data = [{ name: 'A', x: [1.5, 1.8, 2, 2.2, 2.5], y: [1, 1.2, 50, 1.1, 1] }];
+
+    let u = lazy._autoScaleAxisUpdate(plot, 'y');
+    assert.deepEqual(u['yaxis.range'], [1, 50], 'Fit Y fits the drawn detail, spike included');
+
+    // Fit X still spans the whole record, not the zoomed detail.
+    u = lazy._autoScaleAxisUpdate(plot, 'x');
+    assert.deepEqual(u['xaxis.range'], [0, 4], 'Fit X keeps the full extent');
+
+    // A chart that does not hold this trace where expected: the file's values.
+    plot.div.data = [{ name: 'something else', x: [2], y: [50] }];
+    u = lazy._autoScaleAxisUpdate(plot, 'y');
+    assert.deepEqual(u['yaxis.range'], [1, 1], 'falls back to the file\'s values');
+
+    // An in-memory file is never read from the chart: its own values are exact.
+    lazy.files = new Map([['f', { data: { variables: { A: {} } } }]]);
+    plot.div.data = [{ name: 'A', x: [2], y: [50] }];
+    u = lazy._autoScaleAxisUpdate(plot, 'y');
+    assert.deepEqual(u['yaxis.range'], [1, 1], 'eager files fit their own data');
+}
+
 // ── Per-axis auto-fit is wired for the split analysis modes (source checks) ───
 // The update-builder above only covers timeseries/phase2d; the analysis modes
 // dispatch to their own pane-specific methods and each renders its own buttons.

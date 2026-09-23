@@ -3497,6 +3497,21 @@ class PlotManager {
         return found ? { min, max } : null;
     }
 
+    /**
+     * The values a lazy (DuckDB-backed) trace is drawn with right now: the
+     * viewport detail fetched for the current zoom, already transformed (gain,
+     * offset, sign) as it is on screen. Null for an in-memory file — its own
+     * values are exact — or when the chart does not hold this trace's curve
+     * where expected (the caller then falls back to the file's values).
+     */
+    _drawnLazySeries(plot, trace, index) {
+        if (!this.files.get(trace?.fileId)?.data?._duckdb) return null;
+        const drawn = plot?.div?.data?.[index];
+        if (!drawn?.y?.length || !drawn?.x?.length) return null;
+        if (drawn.name !== this._traceName(trace.varName, trace.fileId)) return null;
+        return { x: drawn.x, y: drawn.y };
+    }
+
     // Build the Plotly relayout update for a SINGLE axis, leaving the other axis
     // untouched (timeseries and 2D only):
     //   axis 'x' → fit X to the full data extent ("show all X").
@@ -3519,16 +3534,23 @@ class PlotManager {
         const fromTimeTraces = options.treatAsTimeseries || plot.mode === 'timeseries';
 
         if (fromTimeTraces) {
-            for (const t of plot.traces.filter(tr => this._isVisible(tr))) {
+            plot.traces.forEach((t, index) => {
+                if (!this._isVisible(t)) return;
                 const v = this.files.get(t.fileId)?.data?.variables?.[t.varName];
-                if (!v) continue;
+                if (!v) return;
                 if (primaryFileId === null) primaryFileId = t.fileId;
-                const x = this._getTransformedTimeDataForVariable(t.fileId, t.varName);
-                const y = this._getTransformedVariableData(t.fileId, t.varName);
+                // Fit Y fits what is on screen. For a lazy file that is the
+                // viewport detail DuckDB sent for this zoom, not the in-memory
+                // overview (a few thousand points for the whole file), whose
+                // extent in a narrow window can miss everything that matters
+                // there (#172). Fit X still spans the whole record.
+                const drawn = axis === 'y' ? this._drawnLazySeries?.(plot, t, index) : null;
+                const x = drawn?.x ?? this._getTransformedTimeDataForVariable(t.fileId, t.varName);
+                const y = drawn?.y ?? this._getTransformedVariableData(t.fileId, t.varName);
                 xArrays.push(x);
                 if (this._traceYAxis(t, plot) === 'y2') { seriesY2.push({ x, y }); y2Arrays.push(y); }
                 else { series.push({ x, y }); yArrays.push(y); }
-            }
+            });
         } else {
             for (const pt of plot.phaseTraces.filter(p => this._isVisible(p))) {
                 const visual = this._phaseVisualDataForTrace(plot, pt);
