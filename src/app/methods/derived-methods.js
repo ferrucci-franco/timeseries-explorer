@@ -162,8 +162,19 @@ proto._editDerivedVariable = function(name) {
     this._toggleDerivedForm(true, { keepEditing: true });
     this._setDerivedMessage(i18n.t('derivedEditing').replace('{name}', name), '');
     const formulaInput = document.getElementById('derived-formula');
-    formulaInput.focus();
+    formulaInput.focus({ preventScroll: true });
     formulaInput.setSelectionRange(formulaInput.value.length, formulaInput.value.length);
+    // The row being edited can sit far below the form in a long sidebar; bring
+    // the section's top into view so the open form is what the user sees.
+    this._scrollToDerivedSection();
+};
+
+proto._scrollToDerivedSection = function() {
+    const section = document.getElementById('derived-form')?.closest?.('.derived-section');
+    if (typeof section?.scrollIntoView !== 'function') return;
+    let reduceMotion = false;
+    try { reduceMotion = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches; } catch (_) { /* no media queries */ }
+    section.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' });
 };
 
 // A name is a scalar operand if it is a parameter or holds a single sample —
@@ -619,7 +630,9 @@ proto._toggleDerivedForm = function(show, options = {}) {
     if (submit) submit.textContent = i18n.t(editing ? 'derivedUpdate' : 'derivedCreate');
     if (show) {
         this._setDerivedMessage('', '');
-        document.getElementById('derived-name').focus();
+        // An edit scrolls the section into view itself (_scrollToDerivedSection);
+        // letting focus scroll first would make the sidebar jump twice.
+        document.getElementById('derived-name').focus(options.keepEditing ? { preventScroll: true } : undefined);
     }
     else {
         this._setDerivedMessage('', '');
