@@ -323,7 +323,7 @@ const values = (data, name) => Array.from(data.variables[name].data);
     check(() => assert.equal(ask('lone'), 'Delete “lone”?'));
     check(() => assert.equal(ask('a'), 'Delete “a”? These 2 variables are computed from it and will be deleted too: “b”, “c”.'));
     check(() => assert.equal(ask('lp'),
-        '“lp” is the output of a Data Tools transformation: deleting it also deletes the transformation. “dl” is computed from it and will be deleted too.'));
+        '“lp” is the output of a Data tools transformation: deleting it also deletes the transformation. “dl” is computed from it and will be deleted too.'));
 }
 
 // Names set apart without letting them inject markup.

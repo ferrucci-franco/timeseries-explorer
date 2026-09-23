@@ -1620,18 +1620,22 @@
     white-space: nowrap;
 }
 
-/* The formula of a derived variable, always shown under its name. Click to edit. */
+/* Under a derived variable's name, always shown: its formula, or where it came
+   from for a Data Tools output. Read-only — editing is the ✎ button. */
 .tree-derived-formula {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.72rem;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    cursor: pointer;
 }
 
-.tree-derived-formula:hover {
-    color: var(--text-primary);
+.tree-derived-origin {
+    font-size: 0.72rem;
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* A derived dataset's row in its source's tree: the name of a file, followed by

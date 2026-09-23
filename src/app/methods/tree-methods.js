@@ -683,16 +683,27 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             itemDiv.appendChild(remove);
         }
 
+        // A Data Tools output shares this section with the formulas, so it says
+        // where it came from; its recipe is edited in the Data Tools panel.
+        const toolOutput = options.derivedActions && !formulaEntry?.formula
+            && !!this.dataToolVariablesByFile?.get(leafFileId)?.get(variable.name);
         if (editFormula) {
             // The formula is what a derived variable IS, so it is always on show
             // under the name rather than tucked into a tooltip — and it is read
-            // from the registry, which a rename of an operand rewrites.
+            // from the registry, which a rename of an operand rewrites. Read-only:
+            // editing goes through the ✎ button, never a stray click on the text.
             const formulaDiv = document.createElement('div');
             formulaDiv.className = 'tree-description tree-derived-formula show';
             formulaDiv.textContent = `= ${formulaEntry.formula}`;
-            formulaDiv.title = `${formulaEntry.formula}\n${i18n.t('derivedEdit')}`;
-            formulaDiv.addEventListener('click', editFormula);
+            formulaDiv.title = formulaEntry.formula;
             nodeDiv.append(itemDiv, formulaDiv);
+        } else if (toolOutput) {
+            const originDiv = document.createElement('div');
+            originDiv.className = 'tree-description tree-derived-origin show';
+            originDiv.textContent = i18n.t('derivedFromDataTools');
+            // The full recipe, for whoever wants it.
+            if (variable.description) originDiv.title = variable.description;
+            nodeDiv.append(itemDiv, originDiv);
         } else if (variable.description) {
             const descDiv = document.createElement('div');
             descDiv.className = 'tree-description' + (this.showDescriptions ? ' show' : '');
@@ -779,7 +790,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 };
 
 proto.toggleDescriptions = function(show) {
-    document.querySelectorAll('.tree-description:not(.tree-derived-formula)').forEach(d => d.classList.toggle('show', show));
+    document.querySelectorAll('.tree-description:not(.tree-derived-formula):not(.tree-derived-origin)').forEach(d => d.classList.toggle('show', show));
 };
 
 proto.expandAllTree = function() {
