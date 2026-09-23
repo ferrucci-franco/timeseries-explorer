@@ -626,7 +626,7 @@ proto._syncDataToolLiveChainToggle = function(editing, fileId) {
     const wrap = document.getElementById('data-tool-live-chain-wrap');
     const label = document.getElementById('data-tool-live-chain-label');
     if (!wrap) return;
-    const dependents = editing ? this._dataToolDependents(fileId, editing.name) : [];
+    const dependents = editing ? this._dataToolChainDependents(fileId, editing.name) : [];
     const count = dependents.length;
     wrap.hidden = count === 0;
     if (count === 0) return;
@@ -931,7 +931,7 @@ proto._handleOutlierLiveChange = function(options = {}) {
 proto._getDataToolSourceEntries = function(data, tool = this._getSelectedDataTool(), excludeName = '') {
     const lazy = this._isDataToolLazyData(data);
     const excluded = excludeName
-        ? new Set([excludeName, ...this._dataToolDependents(this.activeFileId, excludeName)])
+        ? new Set([excludeName, ...this._dataToolChainDependents(this.activeFileId, excludeName)])
         : null;
     return Object.entries(data?.variables || {})
         .filter(([name, variable]) => {
@@ -1167,8 +1167,7 @@ proto._updateDataToolVariable = async function(context, config, editing) {
             replacement: config.replacement,
             variable: result.variable,
         });
-        const dependents = this._dataToolDependents(fileId, outputName);
-        this._reapplyDataToolDependents(fileId, data, outputName);
+        const dependents = this._reapplyDataToolDependents(fileId, data, outputName);
 
         // One rebuild, from updateFileData, which restores each panel's view.
         // Rebuilding again here would capture the not-yet-restored view and pin
@@ -1687,6 +1686,16 @@ proto._dataToolDependents = function(fileId, name) {
         found.push(candidate);
     }
     return found;
+};
+
+// Everything recomputed when `name` changes: the Data Tools chain and, with the
+// formula machinery installed, the derived formulas reading any of it. This is
+// what an edit refreshes, so it is also what the live-chain toggle counts and
+// what can no longer serve as the edited variable's source.
+proto._dataToolChainDependents = function(fileId, name) {
+    const data = fileId ? this.plotManager?.files?.get(fileId)?.data : null;
+    if (data && typeof this._variableDependents === 'function') return this._variableDependents(fileId, data, name);
+    return this._dataToolDependents(fileId, name);
 };
 
 // Deletes without asking: the table arms the row and asks there, in place, so
@@ -2773,13 +2782,26 @@ proto._reapplyDataToolVariables = function(fileId, data) {
     }
 };
 
+// Recompute what was built on `changedName` after its values moved, and name
+// what was recomputed. With the formula machinery installed that includes the
+// derived formulas reading it (and whatever those feed), in dependency order —
+// otherwise editing a filter left every formula on top of it stale until the
+// next reload.
 proto._reapplyDataToolDependents = function(fileId, data, changedName) {
-    if (!changedName) return;
+    if (!changedName) return [];
+    if (typeof this._refreshVariableDependents === 'function') {
+        return this._refreshVariableDependents(fileId, data, changedName);
+    }
     const changed = new Set([changedName]);
+    const recomputed = [];
     for (const [name, definition] of this._orderedDataToolDefinitions(fileId)) {
         if (name === changedName || !changed.has(definition.sourceName)) continue;
-        if (this._reapplyDataToolDefinition(fileId, data, name, definition)) changed.add(name);
+        if (this._reapplyDataToolDefinition(fileId, data, name, definition)) {
+            changed.add(name);
+            recomputed.push(name);
+        }
     }
+    return recomputed;
 };
 
 proto._orderedDataToolDefinitions = function(fileId) {
@@ -3255,8 +3277,7 @@ proto._previewEditedVariable = function(context, editing, result) {
 
     const dependents = document.getElementById('data-tool-live-chain')?.checked === false
         ? []
-        : this._dataToolDependents(fileId, editing.name);
-    if (dependents.length) this._reapplyDataToolDependents(fileId, data, editing.name);
+        : this._reapplyDataToolDependents(fileId, data, editing.name);
 
     // Same as the draft preview: the values moved and nothing else did, so the
     // traces are restyled in place when every panel drawing them can take that

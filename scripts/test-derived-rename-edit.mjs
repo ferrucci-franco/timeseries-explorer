@@ -227,4 +227,48 @@ const values = (data, name) => Array.from(data.variables[name].data);
     check(() => assert.deepEqual(values(data, 'a'), [10, 20, 30]));
 }
 
+// Editing a Data Tools variable (a filter's cutoff, say) recomputes the formulas
+// built on it: on Update, live while previewing, and back again on Cancel.
+{
+    const { h, data } = setup();
+    addTool(h, data, 'x', 'u');                      // [10, 20, 30]
+    createFormula(h, 'd', 'x + 1');                  // [11, 21, 31]
+    createFormula(h, 'e', 'd * 2');                  // [22, 42, 62]
+    addTool(h, data, 'e10', 'e');                    // a tool on top of the formula
+
+    // The chain an edit of x refreshes, in order: what the live toggle counts.
+    check(() => assert.deepEqual(h._dataToolChainDependents('f1', 'x'), ['d', 'e', 'e10']));
+    // None of it may become x's own source.
+    const sources = h._getDataToolSourceEntries(data, 'removeOutliers', 'x').map(([name]) => name);
+    check(() => assert.ok(!sources.some(name => ['x', 'd', 'e', 'e10'].includes(name)), sources.join(',')));
+
+    // Stand-in tool run: the "parameter" is the factor.
+    const run = (factor) => async (values) => ({ variable: { name: 'x', kind: 'variable', derived: true, data: Float64Array.from(values, v => v * factor) } });
+    h._setOutlierMessage = (message, type) => { h.lastToolMessage = [typeof message === 'function' ? message() : message, type]; };
+    h.plotManager.refreshTraceValues = () => true;
+    const context = { fileId: 'f1', data, sourceName: 'u', sourceVariable: data.variables.u, outputName: 'x', tool: 'scale' };
+    const config = { method: 'bounds', params: {}, replacement: 'nan' };
+
+    // Live preview of a new parameter value.
+    h._previewEditedVariable(context, { name: 'x' }, await run(100)(data.variables.u.data));
+    check(() => assert.deepEqual(values(data, 'x'), [100, 200, 300]));
+    check(() => assert.deepEqual(values(data, 'd'), [101, 201, 301]));
+    check(() => assert.deepEqual(values(data, 'e10'), [2020, 4020, 6020]));
+    // Cancel puts the formulas back with the variable.
+    h._restoreEditedTraceValues();
+    check(() => assert.deepEqual(values(data, 'x'), [10, 20, 30]));
+    check(() => assert.deepEqual(values(data, 'e'), [22, 42, 62]));
+
+    // Update.
+    h._buildDataToolResultOffThread = run(5);
+    const updates = h.plotManager.updates;
+    await h._updateDataToolVariable(context, config, { name: 'x' });
+    check(() => assert.deepEqual(values(data, 'x'), [5, 10, 15]));
+    check(() => assert.deepEqual(values(data, 'd'), [6, 11, 16]));
+    check(() => assert.deepEqual(values(data, 'e'), [12, 22, 32]));
+    check(() => assert.deepEqual(values(data, 'e10'), [120, 220, 320]));
+    check(() => assert.equal(h.plotManager.updates, updates + 1));
+    check(() => assert.match(h.lastToolMessage[0], /3/));
+}
+
 console.log(`derived rename/edit: ${checks} checks passed`);
