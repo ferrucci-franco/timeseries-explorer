@@ -669,8 +669,12 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         if (options.derivedActions) {
             const remove = document.createElement('button');
             remove.className = 'tree-derived-remove';
-            remove.textContent = 'x';
-            remove.title = 'Remove';
+            remove.type = 'button';
+            // The multiplication sign, not the letter: an "x" sits on the text
+            // baseline and reads low in the square button.
+            remove.textContent = '×';
+            remove.title = i18n.t('derivedDeleteTitle');
+            remove.setAttribute('aria-label', i18n.t('derivedDeleteTitle'));
             remove.addEventListener('click', (e) => {
                 e.stopPropagation();
                 void this._removeDerivedVariable(variable.name);

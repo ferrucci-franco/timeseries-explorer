@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import { renameFormulaReference } from './derived-methods.js';
+import { emphasize, emphasizeList, emphasizedToPlain, setEmphasizedText } from '../../ui/emphasis.js';
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
 import {
     applyFilter,
@@ -636,7 +637,7 @@ proto._syncDataToolLiveChainToggle = function(editing, fileId) {
     }
     // "Live-update chain" says nothing on its own; the tooltip names the actual
     // variables that ride along with each parameter change.
-    wrap.title = i18n.t('dataToolLiveChainHelp').replace('{names}', dependents.join(', '));
+    wrap.title = emphasizedToPlain(i18n.t('dataToolLiveChainHelp').replace('{names}', emphasizeList(dependents)));
 };
 
 proto._syncDataToolPickerOptions = function(lazy) {
@@ -1762,7 +1763,6 @@ proto._deleteDataToolVariable = function(fileId, name) {
     if (!data) return false;
     // Formulas reading it go too: they cannot be recomputed without it.
     const dependents = this._dataToolChainDependents(fileId, name);
-    const formulas = new Set(dependents.filter(dependent => this.derivedByFile?.get(fileId)?.get(dependent)?.formula));
 
     // Deepest first, so nothing is briefly left pointing at a missing source.
     for (const dependent of [...dependents].reverse()) this._removeDataToolVariable(fileId, data, dependent);
@@ -1772,19 +1772,15 @@ proto._deleteDataToolVariable = function(fileId, name) {
     this._clearVariableSelection?.();
     this._renderFilteredTree();
     // The count names the variables that came DOWN WITH it, not including it.
-    // A formula disappearing from the Derived variables list is the part that is
-    // easy to miss, so it is named — here and in that section — as a warning.
-    this._setOutlierMessage(() => {
-        const base = dependents.length
-            ? i18n.t(dependents.length === 1 ? 'dataToolDeletedWithChainOne' : 'dataToolDeletedWithChain')
-                .replace('{name}', name)
-                .replace('{count}', String(dependents.length))
-            : i18n.t('dataToolDeleted').replace('{name}', name);
-        return formulas.size
-            ? `${base} ${i18n.t('derivedRemovedBecause').replace('{name}', name).replace('{names}', [...formulas].join(', '))}`
-            : base;
-    }, formulas.size ? 'warn' : 'ok');
-    if (formulas.size) this._showDerivedRemovalNotice?.(name, [...formulas]);
+    // One message, where the delete was asked for, naming everything that went
+    // (derived formulas included: they vanish from their own section otherwise
+    // unexplained).
+    this._setOutlierMessage(() => (dependents.length
+        ? i18n.t(dependents.length === 1 ? 'dataToolDeletedWithChainOne' : 'dataToolDeletedWithChain')
+            .replace('{name}', emphasize(name))
+            .replace('{count}', String(dependents.length))
+            .replace('{names}', emphasizeList(dependents))
+        : i18n.t('dataToolDeleted').replace('{name}', emphasize(name))), 'ok');
     this._syncDataTools();
     return true;
 };
@@ -1956,10 +1952,10 @@ proto._dataToolRowConfirm = function(fileId, name) {
         : i18n.t('dataToolDeleteConfirm');
     // The chain is named in full on hover; the inline line only has room for a count.
     if (dependents.length) {
-        question.title = i18n.t(dependents.length === 1 ? 'dataToolDeleteCascadeOne' : 'dataToolDeleteCascade')
-            .replace('{name}', name)
+        question.title = emphasizedToPlain(i18n.t(dependents.length === 1 ? 'dataToolDeleteCascadeOne' : 'dataToolDeleteCascade')
+            .replace('{name}', emphasize(name))
             .replace('{count}', String(dependents.length))
-            .replace('{names}', dependents.join(', '));
+            .replace('{names}', emphasizeList(dependents)));
     }
 
     const actions = document.createElement('span');
@@ -3578,7 +3574,7 @@ proto._renderDataToolMessage = function() {
     const el = document.getElementById('outlier-message');
     if (!el) return;
     const { message, type } = this._dataToolMessage || {};
-    el.textContent = (typeof message === 'function' ? message() : message) || '';
+    setEmphasizedText(el, (typeof message === 'function' ? message() : message) || '');
     el.className = `derived-message data-tool-message${type ? ' ' + type : ''}`;
 };
 

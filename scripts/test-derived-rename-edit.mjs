@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { installDerivedMethods, renameFormulaReference, formulaNameLiteral } from '../src/app/methods/derived-methods.js';
 import { installDataToolsMethods } from '../src/app/methods/data-tools-methods.js';
 import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
+import { emphasize, emphasizeList, emphasizedToHtml, emphasizedToPlain } from '../src/ui/emphasis.js';
 
 let checks = 0;
 const check = (fn) => { fn(); checks++; };
@@ -290,12 +291,10 @@ const values = (data, name) => Array.from(data.variables[name].data);
     }
     check(() => assert.ok(!h.derivedByFile.get('f1').has('d') && !h.derivedByFile.get('f1').has('e')));
     check(() => assert.ok(data.variables.keep && h.derivedByFile.get('f1').has('keep')));
-    check(() => assert.equal(h.lastToolMessage[1], 'warn'));
-    check(() => assert.match(h.lastToolMessage[0], /d, e/));
-    check(() => assert.equal(el('derived-notice').hidden, false));
-    check(() => assert.match(el('derived-notice-text').textContent, /built from x: d, e/));
-    h._showDerivedRemovalNotice('');
-    check(() => assert.equal(el('derived-notice').hidden, true));
+    // One message, where the delete happened, every removed name set apart.
+    check(() => assert.equal(h.lastToolMessage[1], 'ok'));
+    check(() => assert.equal(emphasizedToPlain(h.lastToolMessage[0]),
+        'Removed “x”, and the 3 variables built from it: “d”, “e”, “x2”.'));
 }
 
 // Removing a formula variable from its row takes its chain along (once confirmed).
@@ -309,7 +308,32 @@ const values = (data, name) => Array.from(data.variables[name].data);
     check(() => assert.equal(removed, true));
     check(() => assert.ok(!data.variables.a && !data.variables.b && !data.variables.b10));
     check(() => assert.ok(!h.dataToolVariablesByFile.get('f1')?.has('b10')));
-    check(() => assert.match(el('derived-notice-text').textContent, /built from a: b, b10/));
+}
+
+// What the × asks before deleting: always something, and exactly what goes.
+{
+    const { h, data } = setup();
+    addTool(h, data, 'lp', 'u');
+    createFormula(h, 'a', 'u + 1');
+    createFormula(h, 'b', 'a * 2');
+    createFormula(h, 'c', 'a * 3');
+    createFormula(h, 'lone', 'u - 1');
+    createFormula(h, 'dl', 'lp * 2');
+    const ask = (name) => emphasizedToPlain(h._derivedRemovalQuestion('f1', name, h._variableDependents('f1', data, name)));
+    check(() => assert.equal(ask('lone'), 'Delete “lone”?'));
+    check(() => assert.equal(ask('a'), 'Delete “a”? These 2 variables are computed from it and will be deleted too: “b”, “c”.'));
+    check(() => assert.equal(ask('lp'),
+        '“lp” is the output of a Data Tools transformation: deleting it also deletes the transformation. “dl” is computed from it and will be deleted too.'));
+}
+
+// Names set apart without letting them inject markup.
+{
+    const text = `Delete ${emphasize('<img src=x onerror=alert(1)>')} and ${emphasizeList(['a&b', 'c'])}?`;
+    check(() => assert.equal(emphasizedToHtml(text),
+        'Delete <strong>&lt;img src=x onerror=alert(1)&gt;</strong> and <strong>a&amp;b</strong>, <strong>c</strong>?'));
+    check(() => assert.equal(emphasizedToPlain(text), 'Delete “<img src=x onerror=alert(1)>” and “a&b”, “c”?'));
+    // A name cannot close its own emphasis early.
+    check(() => assert.equal(emphasizedToPlain(emphasize('a\u0001b')), '“ab”'));
 }
 
 // A plotted variable renamed: the legend is relabelled in place, never rebuilt;

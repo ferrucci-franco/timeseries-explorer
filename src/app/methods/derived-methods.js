@@ -1,5 +1,6 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import { emphasize, emphasizeList, emphasizedToHtml, setEmphasizedText } from '../../ui/emphasis.js';
 import { DERIVED_CONSTANTS, DERIVED_FUNCTIONS } from '../constants.js';
 import { getCompiledFormula } from '../../expr/compile.js';
 import { normalizeFunctionName, parse as parseExpression, tokenize as tokenizeExpression } from '../../expr/parse.js';
@@ -99,7 +100,7 @@ proto.createDerivedVariable = function() {
             this._toggleDerivedForm(false);
             this._renderFilteredTree();
             this._syncDataTools?.();
-            this._setDerivedMessage(i18n.t('derivedUpdated').replace('{name}', name), 'ok');
+            this._setDerivedMessage(i18n.t('derivedUpdated').replace('{name}', emphasize(name)), 'ok');
             return;
         }
 
@@ -124,7 +125,7 @@ proto.createDerivedVariable = function() {
             this._refreshVariableDependents(fileId, data, name);
             this.plotManager.updateFileData(fileId, data);
             this._renderFilteredTree();
-            this._setDerivedMessage(i18n.t('derivedUpdated').replace('{name}', name), 'ok');
+            this._setDerivedMessage(i18n.t('derivedUpdated').replace('{name}', emphasize(name)), 'ok');
         } else {
             this._renderFilteredTree();
             this._rebuildPlotsUsingVariable(fileId, name);
@@ -160,7 +161,7 @@ proto._editDerivedVariable = function(name) {
     document.getElementById('derived-name').value = name;
     document.getElementById('derived-formula').value = entry.formula;
     this._toggleDerivedForm(true, { keepEditing: true });
-    this._setDerivedMessage(i18n.t('derivedEditing').replace('{name}', name), '');
+    this._setDerivedMessage(i18n.t('derivedEditing').replace('{name}', emphasize(name)), '');
     const formulaInput = document.getElementById('derived-formula');
     formulaInput.focus({ preventScroll: true });
     formulaInput.setSelectionRange(formulaInput.value.length, formulaInput.value.length);
@@ -459,23 +460,22 @@ proto._reapplyDerivedVariable = function(fileId, data, name, entry) {
     }
 };
 
-// Removing a derived variable takes down whatever was built on it — formulas
-// reading it, Data Tools outputs sourced from it — since none of those can be
-// recomputed without it. When there is such a chain it is named and confirmed
-// first, and named again afterwards in the section's notice.
+// Removing a derived variable always asks first, saying exactly what goes: the
+// variable, the Data Tools transformation it is the output of (if it is one),
+// and whatever was built on it — formulas reading it, Data Tools outputs
+// sourced from it — since none of those can be recomputed without it.
 proto._removeDerivedVariable = async function(name, options = {}) {
     const fileId = this.activeFileId;
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
     if (!fileId || !data) return false;
     const dependents = this._variableDependents(fileId, data, name);
-    if (dependents.length && !options.confirmed) {
-        const ok = await Modal.confirm(
-            i18n.t(dependents.length === 1 ? 'derivedRemoveCascadeOne' : 'derivedRemoveCascade')
-                .replace('{name}', name)
-                .replace('{count}', String(dependents.length))
-                .replace('{names}', dependents.join(', ')),
-            { icon: '🗑️' },
-        );
+    if (!options.confirmed) {
+        const ok = await Modal.confirm(emphasizedToHtml(this._derivedRemovalQuestion(fileId, name, dependents)), {
+            html: true,
+            icon: '🗑️',
+            title: i18n.t('derivedDeleteTitle'),
+            confirmText: i18n.t('derivedDeleteButton'),
+        });
         if (!ok) return false;
     }
     // Deepest first, so nothing is briefly left reading a missing variable.
@@ -486,8 +486,20 @@ proto._removeDerivedVariable = async function(name, options = {}) {
     }
     this._renderFilteredTree();
     this._syncDataTools?.();
-    this._showDerivedRemovalNotice(name, dependents);
     return true;
+};
+
+// The confirmation's text, names marked for emphasis (see ui/emphasis.js).
+proto._derivedRemovalQuestion = function(fileId, name, dependents = []) {
+    const parts = [];
+    const isTool = !!this.dataToolVariablesByFile?.get(fileId)?.get(name);
+    parts.push(i18n.t(isTool ? 'derivedDeleteTool' : 'derivedDeleteConfirm').replace('{name}', emphasize(name)));
+    if (dependents.length) {
+        parts.push(i18n.t(dependents.length === 1 ? 'derivedDeleteDependentsOne' : 'derivedDeleteDependents')
+            .replace('{count}', String(dependents.length))
+            .replace('{names}', emphasizeList(dependents)));
+    }
+    return parts.join(' ');
 };
 
 // One generated variable out of every registry and every panel. Data Tools has
@@ -509,26 +521,6 @@ proto._removeGeneratedVariable = function(fileId, data, name) {
         plot.phaseTraces = plot.phaseTraces.filter(t => !(t.fileId === fileId && (t.x === name || t.y === name || t.z === name)));
         if (beforeTs !== plot.traces.length || beforePh !== plot.phaseTraces.length) this.plotManager._rebuildPanel(panelId);
     }
-};
-
-// A variable vanishing from the Derived variables list because something it
-// read was deleted is easy to miss, so the section says so, in the warning
-// colour, until dismissed or replaced. An empty list clears it.
-proto._showDerivedRemovalNotice = function(sourceName, removedNames = []) {
-    const notice = document.getElementById('derived-notice');
-    if (!notice) return;
-    const text = document.getElementById('derived-notice-text');
-    if (!removedNames.length) {
-        notice.hidden = true;
-        if (text) text.textContent = '';
-        return;
-    }
-    const message = i18n.t('derivedRemovedBecause')
-        .replace('{name}', sourceName)
-        .replace('{names}', removedNames.join(', '));
-    if (text) text.textContent = message;
-    else notice.textContent = message;
-    notice.hidden = false;
 };
 
 // What each generated variable of a file is computed from: a formula's
@@ -646,7 +638,7 @@ proto._toggleDerivedForm = function(show, options = {}) {
 
 proto._setDerivedMessage = function(message, type) {
     const el = document.getElementById('derived-message');
-    el.textContent = message;
+    setEmphasizedText(el, message);
     el.className = `derived-message${type ? ' ' + type : ''}`;
 };
 

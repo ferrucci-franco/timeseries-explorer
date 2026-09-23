@@ -146,7 +146,6 @@ proto.initEventListeners = function() {
     document.getElementById('derived-toggle').addEventListener('click', () => this._toggleDerivedForm(true));
     document.getElementById('derived-cancel').addEventListener('click', () => this._toggleDerivedForm(false));
     document.getElementById('derived-create').addEventListener('click', () => this.createDerivedVariable());
-    document.getElementById('derived-notice-dismiss')?.addEventListener('click', () => this._showDerivedRemovalNotice(''));
     document.getElementById('derived-formula').addEventListener('input', (e) => this._updateDerivedSuggestions(e));
     document.getElementById('derived-formula').addEventListener('keydown', (e) => this._handleDerivedFormulaKeydown(e));
     document.getElementById('derived-name').addEventListener('keydown', (e) => {
