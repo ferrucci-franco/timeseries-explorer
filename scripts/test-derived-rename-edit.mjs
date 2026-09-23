@@ -13,6 +13,7 @@
 import assert from 'node:assert/strict';
 import { installDerivedMethods, renameFormulaReference, formulaNameLiteral } from '../src/app/methods/derived-methods.js';
 import { installDataToolsMethods } from '../src/app/methods/data-tools-methods.js';
+import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
 
 let checks = 0;
 const check = (fn) => { fn(); checks++; };
@@ -373,6 +374,43 @@ const values = (data, name) => Array.from(data.variables[name].data);
     check(() => assert.equal(same({ tool: 'movingAverage', params: definition.params }, 'v'), false));
     check(() => assert.equal(same({ tool: 'derivative', params: definition.params }, 'u', 'derivative'), false));
     check(() => assert.equal(h._dataToolConfigUnchanged(null, {}, 'u', 'x'), false));
+}
+
+// Memory and staleness: the transform cache is keyed by name. A variable that is
+// recomputed or removed must neither be served from, nor stay pinned in, it.
+{
+    class PlotData { constructor() { this.files = new Map(); this.plots = new Map(); } }
+    installPlotDataMethods(PlotData);
+    const pm = new PlotData();
+    // The time axis is not what is under test: no crop, no reindex.
+    pm._getTransformIndexDataForVariable = () => ({ indexes: null, times: [0, 1, 2] });
+    const variables = {
+        time: { name: 'time', kind: 'abscissa', data: Float64Array.from([0, 1, 2]) },
+        v: { name: 'v', kind: 'variable', data: Float64Array.from([1, 2, 3]) },
+    };
+    pm.files.set('f1', { data: { variables }, transform: { gain: 2 } });
+    const read = () => Array.from(pm._getTransformedVariableData('f1', 'v'));
+    check(() => assert.deepEqual(read(), [2, 4, 6]));
+    // Same name, new array (a recomputed formula, or a variable created again
+    // under a removed one's name): the new values, not the cached ones.
+    variables.v = { name: 'v', kind: 'variable', data: Float64Array.from([10, 20, 30]) };
+    check(() => assert.deepEqual(read(), [20, 40, 60]));
+
+    // Removal takes the cached series with it, and the sign flip.
+    const { h, data } = setup();
+    addTool(h, data, 'x', 'u');
+    const series = new Map([['x\u0000y\u00001', { values: 'pinned' }], ['u\u0000y\u00001', { values: 'kept' }]]);
+    const entry = h.plotManager.files.get('f1');
+    entry._transformCache = { series };
+    entry.invertedVariables.add('x');
+    h.plotManager.forgetVariableCache = function(fileId, name) {
+        for (const key of [...series.keys()]) if (key.startsWith(`${name}\u0000`)) series.delete(key);
+    };
+    h._syncDataTools = () => {};
+    h._setOutlierMessage = () => {};
+    h._deleteDataToolVariable('f1', 'x');
+    check(() => assert.deepEqual([...series.keys()], ['u\u0000y\u00001']));
+    check(() => assert.ok(!entry.invertedVariables.has('x')));
 }
 
 console.log(`derived rename/edit: ${checks} checks passed`);

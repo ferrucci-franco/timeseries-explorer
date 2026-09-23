@@ -1723,6 +1723,8 @@ proto._isDataToolVariablePlotted = function(fileId, name) {
         if (plot.traces?.some(trace => trace.fileId === fileId && trace.varName === name)) return true;
         if (plot.phaseTraces?.some(trace => trace.fileId === fileId
             && (trace.x === name || trace.y === name || trace.z === name))) return true;
+        if (plot.stateSlots?.fileId === fileId
+            && ['x', 'y', 'z'].some(axis => (plot.stateSlots[axis] || []).includes(name))) return true;
     }
     return false;
 };
@@ -1766,12 +1768,7 @@ proto._deleteDataToolVariable = function(fileId, name) {
     for (const dependent of [...dependents].reverse()) this._removeDataToolVariable(fileId, data, dependent);
     this._removeDataToolVariable(fileId, data, name);
 
-    if (data?._duckdb?.source?.refreshOverview) {
-        data._duckdb.source.refreshOverview(data).catch(err =>
-            console.warn('[duckdb] could not refresh overview after data-tool delete:', err?.message || err)
-        );
-    }
-    this.plotManager.updateFileData(fileId, data);
+    this._refreshPlotsAfterVariableRemoval(fileId, data);
     this._clearVariableSelection?.();
     this._renderFilteredTree();
     // The count names the variables that came DOWN WITH it, not including it.
@@ -1792,8 +1789,35 @@ proto._deleteDataToolVariable = function(fileId, name) {
     return true;
 };
 
+// After generated variables were removed. Their curves are already off every
+// panel (_removeDataToolVariableFromPlots lifts a lone timeseries curve in place
+// and rebuilds the rest), so an in-memory file needs nothing more: rebuilding
+// every panel of the file on top of that redrew the untouched ones, and purged
+// charts Plotly still had the lift's redraw queued for, which then threw.
+// A lazy file's overview does carry the variables, so it is refreshed and
+// redrawn as before.
+proto._refreshPlotsAfterVariableRemoval = function(fileId, data) {
+    if (!data?._duckdb) {
+        // Whatever still names a removed variable beyond plain traces (a state
+        // animation's slots, say) is dropped, and only those panels rebuilt.
+        const { panels } = this.plotManager._dropTracesForMissingVariables?.(fileId, data) || {};
+        for (const panelId of panels || []) this.plotManager._rebuildPanel(panelId, { preserveView: true });
+        return;
+    }
+    if (data._duckdb.source?.refreshOverview) {
+        data._duckdb.source.refreshOverview(data).catch(err =>
+            console.warn('[duckdb] could not refresh overview after data-tool delete:', err?.message || err)
+        );
+    }
+    this.plotManager.updateFileData(fileId, data);
+};
+
 proto._removeDataToolVariable = function(fileId, data, name) {
     delete data.variables[name];
+    this.plotManager.forgetVariableCache?.(fileId, name);
+    // A later variable of the same name must not inherit this one's sign flip.
+    this.plotManager.files?.get(fileId)?.invertedVariables?.delete(name);
+    this.selectedVariables?.delete(name);
     this.derivedByFile?.get(fileId)?.delete(name);
     this._deleteDataToolDefinition(fileId, name);
     this._removeDataToolVariableFromPlots(fileId, name);
@@ -3351,8 +3375,15 @@ proto._previewEditedVariable = function(context, editing, result) {
     // the zoom, since the second capture ran before the first restore had been
     // applied and pinned the autoranged view. The point of a live preview is to
     // watch a parameter's effect where you zoomed in.
-    const names = [editing.name, ...(dependents || [])];
-    if (!names.every(varName => this.plotManager.refreshTraceValues(fileId, varName))) {
+    // Only what is drawn needs redrawing — a formula or transformation built on
+    // this one but not plotted anywhere is no reason to rebuild every panel.
+    // All of it is restyled, or there is one rebuild; never some of each, since
+    // the rebuild would purge charts with the restyle's redraw still queued.
+    const names = [editing.name, ...(dependents || [])]
+        .filter(varName => this._isDataToolVariablePlotted(fileId, varName));
+    if (names.every(varName => this.plotManager.canRefreshTraceValues?.(fileId, varName))) {
+        for (const varName of names) this.plotManager.refreshTraceValues(fileId, varName);
+    } else {
         this.plotManager.updateFileData(fileId, data);
     }
 };

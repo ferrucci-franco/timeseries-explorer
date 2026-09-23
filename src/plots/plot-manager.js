@@ -2201,11 +2201,21 @@ class PlotManager {
             if (key.startsWith('_cursorDocListeners')) {
                 const listeners = plot[key];
                 if (listeners) {
+                    // Every listener _installCursorViewHandlers put on document,
+                    // the touch ones included: each holds the view, so one left
+                    // behind kept every rebuilt chart's closure alive.
                     document.removeEventListener('mousemove', listeners.move);
                     document.removeEventListener('mouseup',   listeners.up);
+                    document.removeEventListener('touchmove', listeners.touchMove);
+                    document.removeEventListener('touchend',  listeners.up);
+                    document.removeEventListener('touchcancel', listeners.up);
                 }
                 plot[key] = null;
             } else if (key.startsWith('_cursorHandlersDiv')) {
+                delete plot[key];
+            } else if (key.startsWith('_touchDragDocListeners')) {
+                // Same for the touch drag of a selection band (_alsoDragWithTouch).
+                this._removeTouchDragDocListeners?.(plot[key]);
                 delete plot[key];
             }
         }
@@ -3265,7 +3275,26 @@ class PlotManager {
         }
     }
 
-    refreshTraceValues(fileId, varName) {
+    /**
+     * A variable is gone: drop its transformed series from the cache. They hold
+     * (or are) its full-length arrays, so leaving them keyed under a name nobody
+     * reads again would keep that memory for as long as the file is open.
+     */
+    forgetVariableCache(fileId, varName) {
+        const series = this.files.get(fileId)?._transformCache?.series;
+        if (!series) return;
+        const prefix = `${varName}\u0000`;
+        for (const key of [...series.keys()]) if (key.startsWith(prefix)) series.delete(key);
+    }
+
+    /**
+     * Whether `refreshTraceValues` would take this variable: drawn somewhere,
+     * and only by timeseries panels that are on screen. Asked first by a caller
+     * with several variables, so it can choose between restyling all of them
+     * and one rebuild — restyling some and then rebuilding purges charts that
+     * still have the restyle's redraw queued.
+     */
+    canRefreshTraceValues(fileId, varName) {
         const entry = this.files.get(fileId);
         if (!entry?.data?.variables?.[varName]) return false;
         const drawsIt = plot => plot.traces.some(t => t.fileId === fileId && t.varName === varName);
@@ -3280,7 +3309,13 @@ class PlotManager {
             if (plot.mode !== 'timeseries' || !plot.div?._fullLayout) return false;
             found = true;
         }
-        if (!found) return false;
+        return found;
+    }
+
+    refreshTraceValues(fileId, varName) {
+        if (!this.canRefreshTraceValues(fileId, varName)) return false;
+        const entry = this.files.get(fileId);
+        const drawsIt = plot => plot.traces.some(t => t.fileId === fileId && t.varName === varName);
         // The values are read through the transform cache, which still holds the
         // previous ones.
         entry._transformCache = null;

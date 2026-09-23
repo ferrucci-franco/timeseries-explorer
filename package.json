@@ -72,6 +72,7 @@
     "test:derived-min-max": "node scripts/test-derived-min-max.mjs",
     "test:derived-trig-constants": "node scripts/test-derived-trig-constants.mjs",
     "test:derived-rename-edit": "node scripts/test-derived-rename-edit.mjs",
+    "test:document-listener-cleanup": "node scripts/test-document-listener-cleanup.mjs",
     "test:xcorr": "node scripts/test-xcorr.mjs",
     "test:data-tools-sampling": "node scripts/test-data-tools-sampling.mjs",
     "test:data-tool-panel-layout": "node scripts/test-data-tool-panel-layout.mjs",

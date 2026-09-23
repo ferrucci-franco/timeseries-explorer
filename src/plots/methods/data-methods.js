@@ -1284,7 +1284,11 @@ proto._getTransformedVariableData = function(fileId, varName, options = {}) {
     const indexData = this._getTransformIndexDataForVariable(fileId, varName);
     const cache = this._transformCache(fileId);
     const cacheKey = `${varName}\u0000${includeYOffset ? 'y' : 'n'}\u0000${gain}`;
-    if (cache?.series.has(cacheKey)) return cache.series.get(cacheKey);
+    // Keyed by name, but only good for the array it was computed from: a
+    // variable recomputed, or removed and created again under the same name,
+    // holds a new one, and must not be served the old values.
+    const cached = cache?.series.get(cacheKey);
+    if (cached && cached.source === variable.data && cached.length === variable.data?.length) return cached.values;
 
     const transformValue = (value) => Number.isFinite(value) ? value * gain + yOffset : value;
 
@@ -1302,7 +1306,7 @@ proto._getTransformedVariableData = function(fileId, varName, options = {}) {
         values = indexData.indexes.map(i => transformValue(variable.data[i]));
     }
 
-    if (cache) cache.series.set(cacheKey, values);
+    if (cache) cache.series.set(cacheKey, { source: variable.data, length: variable.data?.length, values });
     return values;
 };
 

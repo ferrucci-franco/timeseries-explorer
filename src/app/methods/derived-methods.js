@@ -480,6 +480,7 @@ proto._removeDerivedVariable = async function(name, options = {}) {
     }
     // Deepest first, so nothing is briefly left reading a missing variable.
     for (const removed of [name, ...dependents].reverse()) this._removeGeneratedVariable(fileId, data, removed);
+    this._refreshPlotsAfterVariableRemoval?.(fileId, data);
     if (this._derivedEditing?.fileId === fileId && [name, ...dependents].includes(this._derivedEditing.name)) {
         this._toggleDerivedForm(false);
     }
@@ -498,6 +499,9 @@ proto._removeGeneratedVariable = function(fileId, data, name) {
     }
     this.derivedByFile.get(fileId)?.delete(name);
     delete data.variables[name];
+    this.plotManager.forgetVariableCache?.(fileId, name);
+    this.plotManager.files?.get(fileId)?.invertedVariables?.delete(name);
+    this.selectedVariables?.delete(name);
     for (const [panelId, plot] of this.plotManager.plots) {
         const beforeTs = plot.traces.length;
         const beforePh = plot.phaseTraces.length;
