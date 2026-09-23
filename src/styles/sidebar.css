@@ -1576,6 +1576,55 @@
     color: var(--danger-color);
 }
 
+.tree-derived-edit {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    margin-right: 4px;
+    padding: 0;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.75rem;
+    line-height: 1;
+}
+
+.tree-derived-edit:hover {
+    background-color: var(--hover-bg);
+    color: var(--primary-color);
+}
+
+/* A derived row carries up to three buttons; the point count gives way before
+   the name does. */
+.tree-item-derived .tree-label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.tree-item-derived .tree-info {
+    flex: 0 100 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The formula of a derived variable, always shown under its name. Click to edit. */
+.tree-derived-formula {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.tree-derived-formula:hover {
+    color: var(--text-primary);
+}
+
 /* A derived dataset's row in its source's tree: the name of a file, followed by
    what one does with a dataset — edit its recipe, save it to disk, close it.
    Same footprint as the derived-variable remove button so the rows line up. */

@@ -1,4 +1,5 @@
 import i18n from '../../i18n/index.js';
+import { renameFormulaReference } from './derived-methods.js';
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
 import {
     applyFilter,
@@ -1182,26 +1183,58 @@ proto._updateDataToolVariable = async function(context, config, editing) {
     }
 };
 
-// Moving the key: the variable map, the definition registry, every definition
-// that names it as a source, and any trace already drawing it.
-proto._renameDataToolVariable = function(fileId, data, oldName, newName) {
-    const definitions = this.dataToolVariablesByFile?.get(fileId);
+// Moving a variable to a new name, and every place that refers to it by name:
+// the variable map, the formula and Data Tools registries (their keys, the
+// formulas that read it, the transformations sourced from it), the sign toggle,
+// the selection, and any trace already drawing it. Data Tools and the formula
+// editor both rename through here, so neither can leave the other's
+// references pointing at a name that no longer exists.
+proto._renameVariable = function(fileId, data, oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
     const variable = data.variables[oldName];
     if (variable) {
         variable.name = newName;
         data.variables[newName] = variable;
         delete data.variables[oldName];
     }
+
+    const definitions = this.dataToolVariablesByFile?.get(fileId);
     if (definitions?.has(oldName)) {
         const definition = definitions.get(oldName);
         definition.name = newName;
         definitions.delete(oldName);
         definitions.set(newName, definition);
-        for (const other of definitions.values()) {
-            if (other.sourceName === oldName) other.sourceName = newName;
+    }
+    for (const definition of definitions?.values() || []) {
+        if (definition.sourceName === oldName) definition.sourceName = newName;
+    }
+
+    const derived = this.derivedByFile?.get(fileId);
+    if (derived?.has(oldName)) {
+        const entry = derived.get(oldName);
+        entry.name = newName;
+        derived.delete(oldName);
+        derived.set(newName, entry);
+    }
+    for (const entry of derived?.values() || []) {
+        if (!entry.formula) continue;
+        const formula = renameFormulaReference(entry.formula, data.variables, oldName, newName);
+        if (formula === entry.formula) continue;
+        entry.formula = formula;
+        // Same values, new spelling: nothing to recompute, only the text that
+        // shows the formula (tree row, tooltip, saved session).
+        for (const target of new Set([entry.variable, data.variables[entry.name]])) {
+            if (!target?.derived || target.formula === undefined) continue;
+            target.formula = formula;
+            target.description = `Derived: ${formula}`;
         }
     }
-    for (const [panelId, plot] of this.plotManager.plots) {
+
+    const inverted = this.plotManager.files?.get(fileId)?.invertedVariables;
+    if (inverted?.delete(oldName)) inverted.add(newName);
+    if (fileId === this.activeFileId && this.selectedVariables?.delete(oldName)) this.selectedVariables.add(newName);
+
+    for (const [panelId, plot] of this.plotManager.plots || []) {
         let touched = false;
         for (const trace of plot.traces) {
             if (trace.fileId === fileId && trace.varName === oldName) { trace.varName = newName; touched = true; }
@@ -1216,6 +1249,10 @@ proto._renameDataToolVariable = function(fileId, data, oldName, newName) {
         // to jump.
         if (touched) this.plotManager._rebuildPanel(panelId, { preserveView: true });
     }
+};
+
+proto._renameDataToolVariable = function(fileId, data, oldName, newName) {
+    this._renameVariable(fileId, data, oldName, newName);
 };
 
 proto._applyLazyDataToolCreateMode = async function(context, config, options = {}) {

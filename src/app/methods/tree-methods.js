@@ -643,6 +643,29 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             inspect.addEventListener('dragstart', event => event.preventDefault());
             itemDiv.appendChild(inspect);
         }
+        // A formula variable (not a Data Tools output or a time-axis signal,
+        // which share this section) is edited in the formula form.
+        const formulaEntry = options.derivedActions
+            ? this.derivedByFile?.get(leafFileId)?.get(variable.name)
+            : null;
+        const editFormula = formulaEntry?.formula
+            ? (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this._editDerivedVariable(variable.name);
+            }
+            : null;
+        if (editFormula) {
+            const edit = document.createElement('button');
+            edit.type = 'button';
+            edit.className = 'tree-derived-edit';
+            edit.textContent = '✎';
+            edit.title = i18n.t('derivedEdit');
+            edit.setAttribute('aria-label', i18n.t('derivedEdit'));
+            edit.addEventListener('click', editFormula);
+            edit.addEventListener('dragstart', (e) => e.preventDefault());
+            itemDiv.appendChild(edit);
+        }
         if (options.derivedActions) {
             const remove = document.createElement('button');
             remove.className = 'tree-derived-remove';
@@ -656,7 +679,17 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             itemDiv.appendChild(remove);
         }
 
-        if (variable.description) {
+        if (editFormula) {
+            // The formula is what a derived variable IS, so it is always on show
+            // under the name rather than tucked into a tooltip — and it is read
+            // from the registry, which a rename of an operand rewrites.
+            const formulaDiv = document.createElement('div');
+            formulaDiv.className = 'tree-description tree-derived-formula show';
+            formulaDiv.textContent = `= ${formulaEntry.formula}`;
+            formulaDiv.title = `${formulaEntry.formula}\n${i18n.t('derivedEdit')}`;
+            formulaDiv.addEventListener('click', editFormula);
+            nodeDiv.append(itemDiv, formulaDiv);
+        } else if (variable.description) {
             const descDiv = document.createElement('div');
             descDiv.className = 'tree-description' + (this.showDescriptions ? ' show' : '');
             descDiv.textContent = variable.description;
@@ -666,7 +699,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
         }
 
         itemDiv.addEventListener('click', (e) => {
-            if (e.target.closest('.tree-derived-remove, .tree-sign-toggle')) return;
+            if (e.target.closest('.tree-derived-remove, .tree-derived-edit, .tree-sign-toggle')) return;
             if (!canPlot) {
                 if (this.selectedVariables.size > 0) this._clearVariableSelection();
                 return;
@@ -742,7 +775,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 };
 
 proto.toggleDescriptions = function(show) {
-    document.querySelectorAll('.tree-description').forEach(d => d.classList.toggle('show', show));
+    document.querySelectorAll('.tree-description:not(.tree-derived-formula)').forEach(d => d.classList.toggle('show', show));
 };
 
 proto.expandAllTree = function() {

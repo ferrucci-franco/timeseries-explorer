@@ -31,7 +31,7 @@ export function tokenize(formula, variables) {
             if (end < 0) throw new Error('Missing closing backtick.');
             const name = formula.slice(i + 1, end);
             if (!variables[name]) throw new Error(`Unknown variable "${name}".`);
-            tokens.push({ type: 'name', value: name });
+            tokens.push({ type: 'name', value: name, start: i, end: end + 1, quoted: true });
             i = end + 1;
             continue;
         }
@@ -82,7 +82,7 @@ export function tokenize(formula, variables) {
                 }
                 throw new Error(`Unknown variable "${name}".`);
             }
-            tokens.push({ type: 'name', value: name });
+            tokens.push({ type: 'name', value: name, start: i, end: j, quoted: false });
             i = j;
             continue;
         }
