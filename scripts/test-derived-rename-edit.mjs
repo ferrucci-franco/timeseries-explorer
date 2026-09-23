@@ -11,7 +11,7 @@
 // its formula; whatever was built on it is recomputed in dependency order.
 
 import assert from 'node:assert/strict';
-import { installDerivedMethods, renameFormulaReference, formulaNameLiteral } from '../src/app/methods/derived-methods.js';
+import { installDerivedMethods, renameFormulaReference, formulaNameLiteral, variableNameProblem } from '../src/app/methods/derived-methods.js';
 import { installDataToolsMethods } from '../src/app/methods/data-tools-methods.js';
 import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
 import { emphasize, emphasizeList, emphasizedToHtml, emphasizedToPlain } from '../src/ui/emphasis.js';
@@ -435,6 +435,34 @@ const values = (data, name) => Array.from(data.variables[name].data);
     h._deleteDataToolVariable('f1', 'x');
     check(() => assert.deepEqual([...series.keys()], ['u\u0000y\u00001']));
     check(() => assert.ok(!entry.invertedVariables.has('x')));
+}
+
+// Any name a Data Tools output may have, a formula variable may have too, and a
+// formula reaches it in backticks. Only a backtick itself is refused.
+{
+    check(() => assert.equal(variableNameProblem('d squared'), ''));
+    check(() => assert.equal(variableNameProblem('P [kW] (phase 1)'), ''));
+    check(() => assert.equal(variableNameProblem('   '), 'dataToolNameEmpty'));
+    check(() => assert.equal(variableNameProblem('a`b'), 'variableNameBacktick'));
+
+    const { h, data } = setup();
+    createFormula(h, 'd squared', 'u * u');
+    check(() => assert.deepEqual(values(data, 'd squared'), [1, 4, 9]));
+    createFormula(h, 'half', '`d squared` / 2');
+    check(() => assert.deepEqual(values(data, 'half'), [0.5, 2, 4.5]));
+    // Renamed to another spaced name, the formula keeps quoting it.
+    h._editDerivedVariable('d squared');
+    el('derived-name').value = 'u squared';
+    h.createDerivedVariable();
+    check(() => assert.equal(h.derivedByFile.get('f1').get('half').formula, '`u squared` / 2'));
+    // The backtick is refused with a reason, and nothing is created.
+    h._toggleDerivedForm(true);
+    el('derived-name').value = 'bad`name';
+    el('derived-formula').value = 'u';
+    h.createDerivedVariable();
+    check(() => assert.equal(el('derived-message').className, 'derived-message error'));
+    check(() => assert.ok(!data.variables['bad`name']));
+    h._toggleDerivedForm(false);
 }
 
 console.log(`derived rename/edit: ${checks} checks passed`);

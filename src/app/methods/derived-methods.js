@@ -16,9 +16,24 @@ export const TIME_AXIS_VARIABLE_KINDS = ['index', 'delta'];
 // and offer nothing. A backticked name is left alone, since inside backticks a
 // bracket really is a character of the name.
 export function derivedNameToken(left) {
+    // Inside an open backtick the name may hold anything but a backtick —
+    // spaces included (`d squared`) — so the token runs back to that backtick.
+    const ticks = (left.match(/`/g) || []).length;
+    if (ticks % 2 === 1) return left.slice(left.lastIndexOf('`'));
     const match = left.match(/`?[A-Za-z0-9_.\[\]]*$/);
     const token = match ? match[0] : '';
     return token.startsWith('`') ? token : token.replace(/^\[+/, '');
+}
+
+// What is wrong with a name for a new variable, as an i18n key, or '' when it is
+// usable. Any text will do — spaces, units, symbols, as Data Tools has always
+// allowed — because a formula can quote it in backticks (`d squared`). The one
+// character it cannot hold is the backtick itself: nothing could quote it.
+export function variableNameProblem(name) {
+    const trimmed = String(name ?? '').trim();
+    if (!trimmed) return 'dataToolNameEmpty';
+    if (trimmed.includes('`')) return 'variableNameBacktick';
+    return '';
 }
 
 // How a name is written into a formula: bare when the tokenizer would read it
@@ -73,7 +88,8 @@ proto.createDerivedVariable = function() {
         if (editing && (editing.fileId !== fileId || !this.derivedByFile.get(fileId)?.get(editing.name)?.formula)) {
             throw new Error(i18n.t('derivedEditGone').replace('{name}', editing.name));
         }
-        if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) throw new Error('Use a simple name, for example slip or motor.slip.');
+        const nameProblem = variableNameProblem(name);
+        if (nameProblem) throw new Error(i18n.t(nameProblem));
         if (!formula) throw new Error('Enter a formula.');
         const existing = data.variables[name];
         if (editing) {
@@ -754,8 +770,13 @@ proto._insertDerivedSuggestion = function(suggestion) {
     const start = input.selectionStart;
     const end = input.selectionEnd;
     const left = input.value.slice(0, start);
-    const right = input.value.slice(end);
-    const replaceStart = start - derivedNameToken(left).length;
+    const token = derivedNameToken(left);
+    // Completing inside `…` whose closing backtick is already typed: the
+    // inserted name brings its own, so that one is replaced, not doubled.
+    const right = token.startsWith('`') && input.value.slice(end).startsWith('`')
+        ? input.value.slice(end + 1)
+        : input.value.slice(end);
+    const replaceStart = start - token.length;
     const name = suggestion?.name || '';
     const isFunction = suggestion?.type === 'function';
     const insert = isFunction

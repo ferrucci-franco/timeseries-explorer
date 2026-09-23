@@ -373,6 +373,11 @@ for (const n of [1, 2, 3, 40, 5000]) {
         ['', ''],
         // Inside backticks a bracket really is part of the name.
         ['`[odd', '`[odd'],
+        // …and so is a space: the token runs back to the open backtick.
+        ['x + `d sq', '`d sq'],
+        ['min([`motor speed', '`motor speed'],
+        // A closed pair is not open: back to the ordinary scan.
+        ['`d squared` + y', 'y'],
     ];
     for (const [left, expected] of cases) {
         assert.equal(derivedNameToken(left), expected, `prefix under the cursor for "${left}"`);

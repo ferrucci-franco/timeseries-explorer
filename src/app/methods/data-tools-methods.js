@@ -1,5 +1,5 @@
 import i18n from '../../i18n/index.js';
-import { renameFormulaReference } from './derived-methods.js';
+import { renameFormulaReference, variableNameProblem } from './derived-methods.js';
 import { emphasize, emphasizeList, emphasizedToPlain, setEmphasizedText } from '../../ui/emphasis.js';
 import WorkerPool, { canUseWorkers } from '../../core/worker-pool.js';
 import {
@@ -1699,7 +1699,9 @@ proto._dataToolNameHint = function() {
         }
         return '';
     }
-    if (!name) return 'dataToolNameEmpty';
+    // Same rule as a formula variable's name (see variableNameProblem).
+    const nameProblem = variableNameProblem(name);
+    if (nameProblem) return nameProblem;
     if (name === sourceName) return 'outlierOutputSameAsSource';
     if (data?.variables?.[name] && name !== this._dataToolEditing?.name) return 'dataToolNameTaken';
     return '';
