@@ -271,4 +271,44 @@ const values = (data, name) => Array.from(data.variables[name].data);
     check(() => assert.match(h.lastToolMessage[0], /3/));
 }
 
+// Deleting a Data Tools variable takes the formulas reading it down with it, and
+// says so; renaming one (above) rewrites them instead.
+{
+    const { h, data } = setup();
+    addTool(h, data, 'x', 'u');
+    createFormula(h, 'd', 'x + 1');
+    createFormula(h, 'e', 'd * 2');
+    createFormula(h, 'keep', 'u * 2');
+    addTool(h, data, 'x2', 'x');
+    h._syncDataTools = () => {};
+    h._setOutlierMessage = (message, type) => { h.lastToolMessage = [typeof message === 'function' ? message() : message, type]; };
+
+    check(() => assert.equal(h._deleteDataToolVariable('f1', 'x'), true));
+    for (const gone of ['x', 'd', 'e', 'x2']) {
+        check(() => assert.ok(!data.variables[gone], `${gone} should be gone`));
+    }
+    check(() => assert.ok(!h.derivedByFile.get('f1').has('d') && !h.derivedByFile.get('f1').has('e')));
+    check(() => assert.ok(data.variables.keep && h.derivedByFile.get('f1').has('keep')));
+    check(() => assert.equal(h.lastToolMessage[1], 'warn'));
+    check(() => assert.match(h.lastToolMessage[0], /d, e/));
+    check(() => assert.equal(el('derived-notice').hidden, false));
+    check(() => assert.match(el('derived-notice-text').textContent, /built from x: d, e/));
+    h._showDerivedRemovalNotice('');
+    check(() => assert.equal(el('derived-notice').hidden, true));
+}
+
+// Removing a formula variable from its row takes its chain along (once confirmed).
+{
+    const { h, data } = setup();
+    createFormula(h, 'a', 'u + 1');
+    createFormula(h, 'b', 'a * 2');
+    addTool(h, data, 'b10', 'b');
+    h._syncDataTools = () => {};
+    const removed = await h._removeDerivedVariable('a', { confirmed: true });
+    check(() => assert.equal(removed, true));
+    check(() => assert.ok(!data.variables.a && !data.variables.b && !data.variables.b10));
+    check(() => assert.ok(!h.dataToolVariablesByFile.get('f1')?.has('b10')));
+    check(() => assert.match(el('derived-notice-text').textContent, /built from a: b, b10/));
+}
+
 console.log(`derived rename/edit: ${checks} checks passed`);

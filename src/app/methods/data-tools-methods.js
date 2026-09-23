@@ -1703,7 +1703,9 @@ proto._dataToolChainDependents = function(fileId, name) {
 proto._deleteDataToolVariable = function(fileId, name) {
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
     if (!data) return false;
-    const dependents = this._dataToolDependents(fileId, name);
+    // Formulas reading it go too: they cannot be recomputed without it.
+    const dependents = this._dataToolChainDependents(fileId, name);
+    const formulas = new Set(dependents.filter(dependent => this.derivedByFile?.get(fileId)?.get(dependent)?.formula));
 
     // Deepest first, so nothing is briefly left pointing at a missing source.
     for (const dependent of [...dependents].reverse()) this._removeDataToolVariable(fileId, data, dependent);
@@ -1718,11 +1720,19 @@ proto._deleteDataToolVariable = function(fileId, name) {
     this._clearVariableSelection?.();
     this._renderFilteredTree();
     // The count names the variables that came DOWN WITH it, not including it.
-    this._setOutlierMessage(() => (dependents.length
-        ? i18n.t(dependents.length === 1 ? 'dataToolDeletedWithChainOne' : 'dataToolDeletedWithChain')
-            .replace('{name}', name)
-            .replace('{count}', String(dependents.length))
-        : i18n.t('dataToolDeleted').replace('{name}', name)), 'ok');
+    // A formula disappearing from the Derived variables list is the part that is
+    // easy to miss, so it is named — here and in that section — as a warning.
+    this._setOutlierMessage(() => {
+        const base = dependents.length
+            ? i18n.t(dependents.length === 1 ? 'dataToolDeletedWithChainOne' : 'dataToolDeletedWithChain')
+                .replace('{name}', name)
+                .replace('{count}', String(dependents.length))
+            : i18n.t('dataToolDeleted').replace('{name}', name);
+        return formulas.size
+            ? `${base} ${i18n.t('derivedRemovedBecause').replace('{name}', name).replace('{names}', [...formulas].join(', '))}`
+            : base;
+    }, formulas.size ? 'warn' : 'ok');
+    if (formulas.size) this._showDerivedRemovalNotice?.(name, [...formulas]);
     this._syncDataTools();
     return true;
 };
@@ -1856,7 +1866,7 @@ proto._dataToolRowActions = function(definition) {
 // the question belongs next to the thing being deleted, and a full dialog for one
 // derived variable is heavier than the action deserves.
 proto._dataToolRowConfirm = function(fileId, name) {
-    const dependents = this._dataToolDependents(fileId, name);
+    const dependents = this._dataToolChainDependents(fileId, name);
     const bottom = document.createElement('div');
     bottom.className = 'data-tool-row-bottom';
 

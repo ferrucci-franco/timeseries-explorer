@@ -753,6 +753,42 @@
     color: var(--warning-color);
 }
 
+/* Derived variables removed because something they read was deleted. */
+.derived-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid color-mix(in srgb, var(--warning-color) 45%, var(--border-color));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--warning-color) 10%, var(--bg-primary));
+    color: var(--warning-color);
+    font-size: 0.74rem;
+    line-height: 1.3;
+}
+
+.derived-notice[hidden] {
+    display: none;
+}
+
+.derived-notice > span {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.derived-notice-dismiss {
+    flex: 0 0 auto;
+    padding: 0 0.2rem;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
 .derived-actions {
     display: flex;
     gap: 0.4rem;

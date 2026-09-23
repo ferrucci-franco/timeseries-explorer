@@ -673,7 +673,7 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
             remove.title = 'Remove';
             remove.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._removeDerivedVariable(variable.name);
+                void this._removeDerivedVariable(variable.name);
             });
             remove.addEventListener('dragstart', (e) => e.preventDefault());
             itemDiv.appendChild(remove);

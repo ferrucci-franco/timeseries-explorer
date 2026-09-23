@@ -431,14 +431,44 @@ proto._reapplyDerivedVariable = function(fileId, data, name, entry) {
     }
 };
 
-proto._removeDerivedVariable = function(name) {
+// Removing a derived variable takes down whatever was built on it — formulas
+// reading it, Data Tools outputs sourced from it — since none of those can be
+// recomputed without it. When there is such a chain it is named and confirmed
+// first, and named again afterwards in the section's notice.
+proto._removeDerivedVariable = async function(name, options = {}) {
     const fileId = this.activeFileId;
     const data = fileId ? this.plotManager.files.get(fileId)?.data : null;
-    if (!fileId || !data) return;
+    if (!fileId || !data) return false;
+    const dependents = this._variableDependents(fileId, data, name);
+    if (dependents.length && !options.confirmed) {
+        const ok = await Modal.confirm(
+            i18n.t(dependents.length === 1 ? 'derivedRemoveCascadeOne' : 'derivedRemoveCascade')
+                .replace('{name}', name)
+                .replace('{count}', String(dependents.length))
+                .replace('{names}', dependents.join(', ')),
+            { icon: '🗑️' },
+        );
+        if (!ok) return false;
+    }
+    // Deepest first, so nothing is briefly left reading a missing variable.
+    for (const removed of [name, ...dependents].reverse()) this._removeGeneratedVariable(fileId, data, removed);
+    if (this._derivedEditing?.fileId === fileId && [name, ...dependents].includes(this._derivedEditing.name)) {
+        this._toggleDerivedForm(false);
+    }
+    this._renderFilteredTree();
+    this._syncDataTools?.();
+    this._showDerivedRemovalNotice(name, dependents);
+    return true;
+};
+
+// One generated variable out of every registry and every panel. Data Tools has
+// the lift-one-trace-off path, so it is used when installed.
+proto._removeGeneratedVariable = function(fileId, data, name) {
+    if (typeof this._removeDataToolVariable === 'function') {
+        this._removeDataToolVariable(fileId, data, name);
+        return;
+    }
     this.derivedByFile.get(fileId)?.delete(name);
-    const dataToolDefinitions = this.dataToolVariablesByFile?.get(fileId);
-    dataToolDefinitions?.delete(name);
-    if (dataToolDefinitions && !dataToolDefinitions.size) this.dataToolVariablesByFile.delete(fileId);
     delete data.variables[name];
     for (const [panelId, plot] of this.plotManager.plots) {
         const beforeTs = plot.traces.length;
@@ -447,7 +477,26 @@ proto._removeDerivedVariable = function(name) {
         plot.phaseTraces = plot.phaseTraces.filter(t => !(t.fileId === fileId && (t.x === name || t.y === name || t.z === name)));
         if (beforeTs !== plot.traces.length || beforePh !== plot.phaseTraces.length) this.plotManager._rebuildPanel(panelId);
     }
-    this._renderFilteredTree();
+};
+
+// A variable vanishing from the Derived variables list because something it
+// read was deleted is easy to miss, so the section says so, in the warning
+// colour, until dismissed or replaced. An empty list clears it.
+proto._showDerivedRemovalNotice = function(sourceName, removedNames = []) {
+    const notice = document.getElementById('derived-notice');
+    if (!notice) return;
+    const text = document.getElementById('derived-notice-text');
+    if (!removedNames.length) {
+        notice.hidden = true;
+        if (text) text.textContent = '';
+        return;
+    }
+    const message = i18n.t('derivedRemovedBecause')
+        .replace('{name}', sourceName)
+        .replace('{names}', removedNames.join(', '));
+    if (text) text.textContent = message;
+    else notice.textContent = message;
+    notice.hidden = false;
 };
 
 // What each generated variable of a file is computed from: a formula's
