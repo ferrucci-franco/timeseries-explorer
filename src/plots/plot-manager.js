@@ -2713,23 +2713,42 @@ class PlotManager {
         // Big enough that yielding costs nothing measurable, small enough that
         // the window stays responsive between them.
         const ROWS_PER_CHUNK = 20000;
+        // Text written so far is handed to a Blob every this many characters.
+        // A Blob's bytes live with the browser, outside the JavaScript heap
+        // (and can go to disk), so the strings can be collected: an audio
+        // channel of minutes is a CSV of a gigabyte, and holding all of it as
+        // strings until the end is what ran the tab out of memory.
+        const SPILL_CHARS = 32 * 1024 * 1024;
         const token = { cancelled: false };
         const overlay = nRows * columns.length >= CELLS_BEFORE_REPORTING
             ? this.onBusyOverlay?.({ title: i18n.t('csvExportBuilding'), token })
             : null;
 
-        const chunks = [headers.join(',')];
+        const nColumns = columns.length;
+        const spilled = [];
+        let chunks = [headers.join(',')];
+        let chunkChars = chunks[0].length;
         let pending = [];
         for (let i = 0; i < nRows; i++) {
-            const row = new Array(columns.length);
-            for (let c = 0; c < columns.length; c++) {
+            // Concatenated, not an array joined per row: the same text, without
+            // allocating a row array millions of times.
+            const first = columns[0][i];
+            let line = first !== undefined ? String(first) : '';
+            for (let c = 1; c < nColumns; c++) {
                 const value = columns[c][i];
-                row[c] = value !== undefined ? value : '';
+                line += value !== undefined ? `,${value}` : ',';
             }
-            pending.push(row.join(','));
+            pending.push(line);
             if (pending.length < ROWS_PER_CHUNK) continue;
-            chunks.push('\n' + pending.join('\n'));
+            const chunk = '\n' + pending.join('\n');
+            chunks.push(chunk);
+            chunkChars += chunk.length;
             pending = [];
+            if (chunkChars >= SPILL_CHARS) {
+                spilled.push(new Blob(chunks));
+                chunks = [];
+                chunkChars = 0;
+            }
             if (overlay) {
                 overlay.progress(i18n.t('csvExportProgress')
                     .replace('{done}', i18n.formatNumber(i + 1))
@@ -2742,7 +2761,7 @@ class PlotManager {
         }
         if (pending.length) chunks.push('\n' + pending.join('\n'));
 
-        const blob = new Blob(chunks, { type: 'text/csv;charset=utf-8;' });
+        const blob = new Blob([...spilled, ...chunks], { type: 'text/csv;charset=utf-8;' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
@@ -2803,7 +2822,8 @@ class PlotManager {
                 ));
             }
             headers.push(csvTextCell(u ? `${name} [${u}]` : name));
-            columns.push(Array.from(this._getTransformedVariableData(t.fileId, t.varName)));
+            // Read, never written: no copy of what may be millions of samples.
+            columns.push(this._getTransformedVariableData(t.fileId, t.varName));
         }
     }
 

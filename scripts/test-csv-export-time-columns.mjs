@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { csvCell, csvTextCell, csvValueCell } from '../src/utils/csv-cell.js';
+import { installPlotDataMethods } from '../src/plots/methods/data-methods.js';
 
 const plotManagerSource = readFileSync(
     new URL('../src/plots/plot-manager.js', import.meta.url),
@@ -164,6 +165,49 @@ Harness.prototype._appendTimeseriesExportColumns = proto._appendTimeseriesExport
     assert.equal(csvCell(-1.5), '-1.5', 'a negative number stays a number');
     assert.equal(csvValueCell(-1.5), '-1.5', 'a typed number is not treated as a formula');
     assert.equal(csvValueCell('-signal'), "'-signal", 'a string that looks like a formula is defused');
+}
+
+// ── The time format is decided once per column, not once per sample ─────────
+// Deciding it is several lookups deep (axis kind, transform, display mode). Per
+// sample, a few minutes of audio made that tens of millions of lookups: half a
+// minute of frozen window before the export's progress could even appear.
+{
+    class PlotData { constructor() { this.files = new Map(); } }
+    installPlotDataMethods(PlotData);
+    const pm = new PlotData();
+    const lookups = { n: 0 };
+    const counted = (value) => () => { lookups.n++; return value; };
+    const configure = ({ calendar = false, duration = false, mode = 'numeric' }) => {
+        pm._isGeneratedCalendarTime = counted(false);
+        pm._isGeneratedDurationTime = counted(duration);
+        pm._durationFractionDigits = counted(3);
+        pm._timeDisplayMode = counted(mode);
+        pm._isCalendarTime = counted(calendar);
+        lookups.n = 0;
+    };
+    const times = Float64Array.from({ length: 100000 }, (_, i) => i / 44100);
+
+    configure({});
+    const plain = pm._formatTimeColumnForExport('f1', times);
+    assert.ok(lookups.n <= 5, `numeric seconds: ${lookups.n} lookups for 100000 samples`);
+    assert.equal(plain, times, 'and the samples go out as they are, uncopied');
+
+    configure({ calendar: true, mode: 'calendar' });
+    const dates = pm._formatTimeColumnForExport('f1', Float64Array.from([0, 1000, NaN]));
+    assert.ok(lookups.n <= 5, `calendar: ${lookups.n} lookups`);
+    assert.ok(Array.isArray(dates), 'formatted times are a plain array (a string in a typed array is NaN)');
+    assert.equal(dates[0], '1970-01-01T00:00:00.000Z');
+    assert.equal(dates[1], '1970-01-01T00:00:01.000Z');
+    assert.ok(Number.isNaN(dates[2]), 'a missing time stays missing');
+
+    configure({ duration: true });
+    const elapsed = pm._formatTimeColumnForExport('f1', [0, 61.5]);
+    assert.ok(lookups.n <= 5, `duration: ${lookups.n} lookups`);
+    assert.deepEqual(elapsed, ['00:00:00', '00:01:01.500']);
+
+    // The single-value form answers exactly as the column does.
+    configure({ duration: true });
+    assert.equal(pm._formatTimeForExport('f1', 61.5), '00:01:01.500');
 }
 
 console.log('CSV export time-column tests passed.');

@@ -28,13 +28,22 @@ const method = source.slice(start, end + endMarker.length)
 const proto = {};
 let written = null;
 let downloaded = null;
+let blobs = [];
 vm.runInNewContext(method, {
     proto,
     console,
     i18n: { t: key => key, formatNumber: value => String(value) },
     // The real Blob is handed an ARRAY of chunks; recording the parts is what
     // lets the test see that it was never joined into one giant string first.
-    Blob: class { constructor(parts, opts) { written = { parts: Array.from(parts), type: opts?.type }; } },
+    // Text already spilled into an earlier Blob comes back as that Blob's text.
+    Blob: class {
+        constructor(parts, opts) {
+            this.text = Array.from(parts, part => (typeof part === 'string' ? part : part.text)).join('');
+            this.parts = Array.from(parts);
+            blobs.push(this);
+            written = { parts: this.parts.map(part => (typeof part === 'string' ? part : part.text)), rawParts: this.parts, type: opts?.type };
+        }
+    },
     URL: { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} },
     document: { createElement: () => ({ click() { downloaded = this.download; } }) },
 });
@@ -46,7 +55,7 @@ const makeHost = ({ overlay = null } = {}) => ({
     _yieldToPaint() { this.yields++; return Promise.resolve(); },
 });
 const column = (n, prefix = 'x') => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
-const reset = () => { written = null; downloaded = null; };
+const reset = () => { written = null; downloaded = null; blobs = []; };
 
 // ── The file that comes out ─────────────────────────────────────────────────
 {
@@ -123,6 +132,36 @@ const reset = () => { written = null; downloaded = null; };
     assert.equal(progress[0], 'csvExportProgress', 'through a translated string');
     assert.equal(closed, 1, 'and is taken down exactly once');
     assert.equal(downloaded, 'big.csv');
+}
+
+// ── Spilled into Blobs as it goes ───────────────────────────────────────────
+// Past a few tens of megabytes the text written so far goes into a Blob, so
+// the whole file is never held as strings: minutes of audio are a CSV of a
+// gigabyte, and keeping all of it until the end ran the tab out of memory.
+{
+    reset();
+    const host = makeHost();
+    const rows = 1200000;
+    const pad = 'y'.repeat(24);
+    const wide = Array.from({ length: rows }, (_, i) => `${pad}${i}`);
+    await host.write(['v'], [wide], 'huge.csv');
+    assert.ok(blobs.length >= 2, `intermediate Blobs were made (got ${blobs.length})`);
+    assert.ok(written.rawParts.some(part => typeof part !== 'string'),
+        'the file is assembled from the spilled Blobs');
+    assert.ok(written.rawParts.filter(part => typeof part === 'string').join('').length < 32 * 1024 * 1024,
+        'and never from more than one spill of loose text');
+    const text = written.parts.join('');
+    assert.equal(text.length, 'v'.length + wide.reduce((n, cell) => n + 1 + cell.length, 0),
+        'every row is there, once');
+    assert.ok(text.startsWith(`v\n${pad}0\n`) && text.endsWith(`\n${pad}${rows - 1}`), 'in order'); // crlf-ok: built in memory
+}
+
+// Numbers and missing cells come out as they always did.
+{
+    reset();
+    const host = makeHost();
+    await host.write(['t', 'v'], [[0, 0.5, 1], [1.25, NaN]], 'n.csv');
+    assert.equal(written.parts.join(''), 't,v\n0,1.25\n0.5,NaN\n1,'); // crlf-ok: built in memory
 }
 
 // ── Cancelling ──────────────────────────────────────────────────────────────
