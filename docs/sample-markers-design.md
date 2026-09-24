@@ -1,21 +1,21 @@
 # Sample Markers Design ("Samples" toggle)
 
-Status: specified, not built.
+Status: specified, not built. Build this first; the **Repeated** toggle
+([repeated-timestamps-indicator-design.md](repeated-timestamps-indicator-design.md))
+builds on it.
 
-Context: bug report on *Collapse repeated timestamps*. Points (a)–(c) of that report
-(the tool writes every variable, "Create and plot" opens a new panel, no way to see
-where the repeats are) are tracked separately. This document specifies point (d), the
-prerequisite: a way to see every real sample as a dot, so that repeated timestamps —
-and sampling in general — can be read straight off the time-series panel.
+Context: bug report on *Collapse repeated timestamps*. Points (a) and (b) of that report
+(the tool writes every variable; "Create and plot" opens a new panel) are tracked
+separately. Point (c), locating repeated timestamps, is the **Repeated** toggle. This
+document specifies point (d): a way to see every real sample as a dot.
 
 ## Goal
 
 A drawn line says nothing about where the data is. Between two samples the line is
 interpolation; at a repeated timestamp it is a vertical segment that looks exactly like
-a steep edge. Drawing each sample as a dot makes both visible:
-
-- where the samples are, and how dense they are;
-- where several samples share one instant (a vertical column of dots at one x).
+a steep edge. Drawing each sample as a dot shows where the samples are and how dense
+they are — and, as a side effect, several samples with different y at one instant show
+as a vertical column of dots.
 
 The dots must never lie: a dot is drawn only on a real sample, never on a decimated
 envelope point, and only when there is room on screen to tell dots apart.
@@ -26,8 +26,7 @@ envelope point, and only when there is room on screen to tell dots apart.
   (`timeseries-missing-btn` in `src/plots/methods/interaction-methods.js`).
   - Labels: EN *Samples*, ES *Muestras*, FR *Échantillons* (other locales follow the
     existing i18n table).
-  - Tooltip (EN): *Show every sample as a dot when zoomed in enough; highlights
-    repeated timestamps.*
+  - Tooltip (EN): *Show every sample as a dot when zoomed in enough.*
 - **Off by default.** State lives on the plot as `plot.showSamples` and is saved and
   restored with the session, exactly like `showMissingData`
   (`src/app/methods/session-methods.js`).
@@ -101,27 +100,20 @@ also bounds the rendering cost (see Performance).
 - Stepped traces: the dot sits at each sample, i.e. at the start of each step.
 - PNG/SVG export: what is on screen.
 
-## Repeated timestamps (highlighted in this feature)
+## Repeated timestamps
 
-With plain dots, samples at one instant with **different y** already show as a vertical
-column. Samples at one instant with the **same y** overlap exactly and are invisible —
-so repeats are highlighted explicitly:
+Not this feature's job. Where a file repeats timestamps is a property of the file and
+must be findable at any zoom, whereas dots exist only when zoomed in. That is specified
+in [repeated-timestamps-indicator-design.md](repeated-timestamps-indicator-design.md)
+(the **Repeated** toggle).
 
-- A sample is *repeated* when its x equals the x of the previous or next sample of the
-  same trace. Same equality rule as `repeatedTimestampSummary`
-  (`src/utils/repeated-timestamps.js`): exact equality, a non-finite x breaks a run.
-  Add a helper there that returns the run structure for a `[start, end)` slice; it runs
-  only over the visible raw slice (≤ budget), so it is cheap.
-- Repeated samples are drawn with a distinct marker via per-point marker arrays:
-  open ring, larger (≈ 10 px), contrasting colour (one fixed "warning" colour valid in
-  light and dark themes), drawn over the normal dot. A burst of identical (x, y) thus
-  still shows as one ring even though the dots overlap.
-- Hover on a repeated sample appends *×k at this instant* (k = run length), carried in
-  `customdata`. This matters because Plotly's hover picks only one of the coincident
-  points.
-- The highlight follows the same two conditions: no rings when dots are not drawn.
-  Locating repeats at coarser zoom is point (c) of the bug report and out of scope here;
-  this helper is designed to be reused by it.
+The two toggles meet in one place: when both are on and a trace has dots, the
+**Repeated** feature draws its ring on the repeated samples. *Samples* alone draws only
+plain dots — with different y, repeats already show as a vertical column of dots; with
+identical y they overlap, which is why the ring belongs to **Repeated**.
+
+The only contract *Samples* owes **Repeated**: expose, per trace, whether dots are
+currently drawn and the visible raw slice `[start, end)` they were drawn from.
 
 ## Scope
 
@@ -148,8 +140,7 @@ To verify before building:
 - Dots are only ever drawn on ≤ ~width/P points per trace, so SVG `scatter` is fine.
   GL is already not used at that size (`GL_POINT_THRESHOLD = 50000`), so no
   `scatter ↔ scattergl` switching is introduced.
-- The per-trace decision is a binary search plus a division; the repeat scan is linear
-  in the visible raw slice only.
+- The per-trace decision is a binary search plus a division.
 - Crossing the threshold changes `mode`/`marker` of the affected traces; prefer a
   `Plotly.restyle` on those trace indexes over a full rebuild when possible.
 
@@ -157,9 +148,8 @@ To verify before building:
 
 - Unit: the decision function (conditions 1 and 2, hysteresis on/off, per-trace
   independence, downsampling off).
-- Unit: the repeated-run helper on a slice (runs at slice edges, NaN breaking a run,
-  identical (x, y) bursts).
-- A fixture with repeated timestamps (reuse the collapse-repeated-timestamps test file)
-  showing rings at the repeats once zoomed in.
+- A fixture with repeated timestamps with different y (reuse the
+  collapse-repeated-timestamps test file) showing a vertical column of dots once
+  zoomed in.
 - i18n keys present in every locale.
 - Session save/restore of `showSamples`.
