@@ -42,6 +42,15 @@ jobs:
       - name: Run release test suite
         run: npm run test:release
 
+      # The unit suite runs the code against hand-made stubs, in UTC. What only
+      # a real browser shows -- Plotly's own behaviour, the browser clock in
+      # another time zone (#176) -- is checked here.
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser end-to-end checks
+        run: npm run e2e
+
       # The web bundle is what main deploys, so a build failure has to be caught
       # here rather than by the Pages workflow after the merge.
       - name: Build web bundle

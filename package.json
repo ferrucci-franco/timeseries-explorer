@@ -183,6 +183,8 @@
     "inspect:pypsa": "node scripts/inspect-pypsa-netcdf.mjs",
     "test:phase2d": "node scripts/test-phase2d.mjs",
     "test:release": "node scripts/run-release-tests.mjs",
+    "e2e": "npm run e2e:cursor-timezone",
+    "e2e:cursor-timezone": "node scripts/e2e-cursor-timezone.mjs",
     "bench:data-tools": "node scripts/bench-data-tools.mjs",
     "bench:zoom": "node scripts/bench-zoom.mjs",
     "bench:parse": "node --max-old-space-size=8192 scripts/bench-parse.mjs",
@@ -201,6 +203,7 @@
     "electron": "^42.4.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.5",
+    "playwright": "1.56.1",
     "sharp": "^0.35.2",
     "vite": "^5.4.19"
   },
