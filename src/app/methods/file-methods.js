@@ -631,12 +631,19 @@ proto._showDatetimeAxisWarningIfNeeded = async function(fileId, data) {
     this._datetimeAxisWarningShownFileIds.add(fileId);
     const entry = this.files.get(fileId);
     const fileName = entry?.name || data?.filename || 'file';
-    const body = i18n.t('datetimeAxisRepeatedDialogBody')
-        .replace('{file}', fileName)
+    // The text marks the file name and the two counts with **…**, so the
+    // figures the user came for stand out of the paragraph.
+    const escapeHtml = (text) => String(text)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const body = escapeHtml(i18n.t('datetimeAxisRepeatedDialogBody'))
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace('{file}', () => escapeHtml(fileName))
         .replace('{count}', i18n.formatNumber(summary.repeated))
         .replace('{run}', i18n.formatNumber(summary.longestRun));
     await Modal.alert(i18n.t('datetimeAxisRepeatedDialogTitle'), body, {
         icon: '⚠️',
+        html: true,
+        className: 'modal-dialog-wide',
     });
 };
 
