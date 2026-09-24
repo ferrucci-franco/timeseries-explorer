@@ -4,9 +4,11 @@
 // far enough, and says so when it is not.
 //
 // Scenario: one CSV, numeric time, 10 000 rows, with a burst of three rows at a
-// single instant. The panel starts zoomed out (decimated, no dots, "zoom in"
-// pill), is zoomed onto ~60 samples (dots, no pill, the burst's three rows all
-// drawn), then zoomed back out (dots gone). Stacking disables the button.
+// single instant. The panel starts zoomed out: turning Samples on draws no dots,
+// shows the "zoom in" pill once for ~3 s and leaves the button pressed but
+// "waiting". Zoomed onto ~60 samples: dots, the burst's three rows all drawn,
+// button no longer waiting. Zoomed back out: dots gone, button waiting again,
+// and no pill this time. Stacking disables the button.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:sample-markers`.
 // Not part of test:release, which stays offline and browser-free.
@@ -42,6 +44,8 @@ async function state(page, panelId) {
             dots: plot.div.querySelectorAll('.scatterlayer .trace .points path').length,
             pill: pill ? pill.textContent : null,
             pressed: btn?.getAttribute('aria-pressed'),
+            waiting: !!btn?.classList.contains('samples-waiting'),
+            title: btn?.title,
             disabled: !!btn?.disabled,
         };
     }, panelId);
@@ -88,13 +92,21 @@ try {
     s = await state(page, panelId);
     assert.equal(s.pressed, 'true', 'Samples turned on');
     assert.equal(s.mode, 'lines', 'zoomed out: 10 000 samples are decimated, so no dots');
-    assert.ok(s.pill, 'zoomed out: the pill says to zoom in');
+    assert.ok(s.pill, 'right after the click: the pill says to zoom in');
+    assert.equal(s.waiting, true, 'and the button reads as waiting');
+    assert.equal(s.title, s.pill, 'with the same reason in its tooltip');
     if (shots) await page.screenshot({ path: `${shots}/samples-zoomed-out.png` });
+    await page.waitForTimeout(3200);
+    s = await state(page, panelId);
+    assert.equal(s.pill, null, 'the pill goes by itself');
+    assert.equal(s.waiting, true, 'the button keeps saying it is waiting');
+    if (shots) await page.screenshot({ path: `${shots}/samples-waiting.png` });
 
     await zoom(page, panelId, [50.0, 50.6]);
     s = await state(page, panelId);
     assert.equal(s.mode, 'lines+markers', 'zoomed onto ~60 samples: dots');
     assert.equal(s.pill, null, 'no pill once dots are on screen');
+    assert.equal(s.waiting, false, 'button no longer waiting');
     assert.equal(s.burstRows, 3, 'all three rows at the repeated instant are drawn');
     assert.ok(s.dots >= 60, `one dot per sample (${s.dots})`);
     if (shots) await page.screenshot({ path: `${shots}/samples-zoomed-in.png` });
@@ -102,7 +114,8 @@ try {
     await zoom(page, panelId, [0, 99.99]);
     s = await state(page, panelId);
     assert.equal(s.mode, 'lines', 'zoomed back out: dots gone');
-    assert.ok(s.pill, 'and the pill is back');
+    assert.equal(s.waiting, true, 'the button is waiting again');
+    assert.equal(s.pill, null, 'but the pill does not come back on a zoom');
 
     await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-stack-btn`).click();
     await page.waitForTimeout(600);

@@ -214,6 +214,7 @@ vm.runInNewContext([
     methodAssignment('_injectModeButtons'),
     methodAssignment('_toggleTimeseriesAnalysisMode'),
     methodAssignment('_requestModeChange'),
+    methodAssignment('_applySamplesButtonState'),
 ].join('\n'), sandbox);
 
 class TemporalStateHarness {}
@@ -526,6 +527,32 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
         assert.ok(button.classList.contains('active'), `${selector}: enabled option renders pressed`);
         assert.equal(button.getAttribute('aria-pressed'), 'true', `${selector}: enabled option reports pressed`);
     }
+}
+
+// Samples switched on with nothing on screen to dot: the button stays pressed
+// but reads as waiting, and its tooltip says why — no pill over the plot.
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: 'zoom' });
+    const button = toolbar.querySelector('.timeseries-samples-btn');
+    assert.ok(button.classList.contains('active'), 'waiting Samples is still pressed');
+    assert.ok(button.classList.contains('samples-waiting'), 'and marked as waiting');
+    assert.equal(button.title, 'timeseriesSamplesZoomIn', 'its tooltip asks to zoom in');
+}
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: 'lazy' });
+    assert.equal(toolbar.querySelector('.timeseries-samples-btn').title, 'timeseriesSamplesLazy',
+        'a memory-saving file gets its own reason');
+}
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: null });
+    const button = toolbar.querySelector('.timeseries-samples-btn');
+    assert.equal(button.classList.contains('samples-waiting'), false, 'dots on screen: not waiting');
+    assert.equal(button.title, 'timeseriesSamplesToggle');
+}
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: false, _samplesWaiting: 'zoom' });
+    assert.equal(toolbar.querySelector('.timeseries-samples-btn').classList.contains('samples-waiting'), false,
+        'switched off: never waiting, whatever was left behind');
 }
 
 {

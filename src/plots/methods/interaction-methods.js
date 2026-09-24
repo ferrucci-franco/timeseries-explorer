@@ -4617,6 +4617,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         samplesBtn.title = i18n.t('timeseriesSamplesToggle');
         samplesBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries' && !plot?.timeseriesStacked);
         samplesBtn.setAttribute('aria-pressed', plot?.showSamples ? 'true' : 'false');
+        this._applySamplesButtonState(plot, samplesBtn);
         samplesBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             this._toggleSamples(panelId);
@@ -5057,12 +5058,17 @@ proto._toggleSamples = function(panelId) {
     const capturedView = plot.div ? this._capturePlotView(plot) : null;
     plot.showSamples = !plot.showSamples;
     plot._sampleMarkerState = null;
+    plot._samplesWaiting = null;
+    // The pill is shown once, for the refresh this click causes — never on a
+    // later zoom. See _refreshSamplesNotice.
+    plot._samplesHintPending = !!plot.showSamples;
 
     const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
     const btn = panelEl?.querySelector('.timeseries-samples-btn');
     if (btn) {
         btn.classList.toggle('active', !!plot.showSamples);
         btn.setAttribute('aria-pressed', plot.showSamples ? 'true' : 'false');
+        this._applySamplesButtonState(plot, btn);
     }
     if (!plot.showSamples) this._setSamplesNotice(plot, null);
 
@@ -5072,10 +5078,34 @@ proto._toggleSamples = function(panelId) {
     else this._refreshActionBtns(panelId);
 };
 
-// The Samples toggle's pill. `state`: null → hide; 'zoom' → no trace has room
-// for its dots here; 'lazy' → every candidate trace comes from a large file
-// opened in lazy mode, where zooming would not help.
+// How long the Samples pill stays after the click that turned the toggle on.
+const SAMPLES_HINT_MS = 3000;
+
+// Why a switched-on Samples toggle has nothing on screen lives on the button,
+// not over the plot: a pill that stayed for as long as the view was zoomed out
+// covered the curve the user was looking at. `plot._samplesWaiting` is null
+// (dots shown, or toggle off), 'zoom' (zoom in to see them) or 'lazy' (a
+// memory-saving file: zooming would not help). The button stays pressed but
+// reads as "waiting", and its tooltip gives the reason.
+proto._applySamplesButtonState = function(plot, btn) {
+    if (!btn) return;
+    const waiting = plot?.showSamples ? plot._samplesWaiting : null;
+    btn.classList.toggle('samples-waiting', !!waiting);
+    const label = waiting
+        ? i18n.t(waiting === 'lazy' ? 'timeseriesSamplesLazy' : 'timeseriesSamplesZoomIn')
+        : i18n.t('timeseriesSamplesToggle');
+    btn.title = label;
+    if (waiting) btn.setAttribute('aria-description', label);
+    else btn.removeAttribute?.('aria-description');
+};
+
+// The Samples pill. `state`: null → hide; 'zoom' / 'lazy' → as above. Shown
+// only right after the click, and it goes by itself after SAMPLES_HINT_MS.
 proto._setSamplesNotice = function(plot, state) {
+    if (plot?._samplesHintTimer) {
+        clearTimeout(plot._samplesHintTimer);
+        plot._samplesHintTimer = 0;
+    }
     const panelEl = plot?.div?.closest('.layout-panel');
     if (!panelEl) return;
     let pill = panelEl.querySelector('.samples-zoom-indicator');
@@ -5093,17 +5123,26 @@ proto._setSamplesNotice = function(plot, state) {
         pill.title = label;
         pill.setAttribute('aria-label', label);
         pill.classList.add('active');
+        plot._samplesHintTimer = setTimeout(() => {
+            plot._samplesHintTimer = 0;
+            this._setSamplesNotice(plot, null);
+        }, SAMPLES_HINT_MS);
     } else if (pill) {
         pill.classList.remove('active');
         pill.remove();
     }
 };
 
-// After a refresh: say why no dots are on screen, if none are. Traces the
-// legend hides do not count, and neither do those that can never have dots
-// unless they are all there is (then the reason is the lazy file, not zoom).
+// After a refresh: work out why no dots are on screen, if none are, and show
+// it on the button. Traces the legend hides do not count, and neither do those
+// that can never have dots — unless they are all there is (then the reason is
+// the memory-saving file, not the zoom).
 proto._refreshSamplesNotice = function(plot) {
+    const panelEl = plot?.div?.closest('.layout-panel');
+    const btn = panelEl?.querySelector('.timeseries-samples-btn');
     if (!this._timeseriesSamplesEnabled?.(plot)) {
+        if (plot) plot._samplesWaiting = null;
+        this._applySamplesButtonState(plot, btn);
         this._setSamplesNotice(plot, null);
         return;
     }
@@ -5116,7 +5155,18 @@ proto._refreshSamplesNotice = function(plot) {
         if (eligible.length) state = 'zoom';
         else if (anyLazy) state = 'lazy';
     }
-    this._setSamplesNotice(plot, state);
+    plot._samplesWaiting = state;
+    this._applySamplesButtonState(plot, btn);
+
+    // The one-off pill: consumed by the first refresh that could judge the
+    // dots — one with a laid-out axis, since before that nothing qualifies and
+    // the pill would flash while the dots were about to appear.
+    if (plot._samplesHintPending && plot.div?._fullLayout?.xaxis?._length > 0) {
+        plot._samplesHintPending = false;
+        this._setSamplesNotice(plot, state);
+    } else if (!state) {
+        this._setSamplesNotice(plot, null);
+    }
 };
 
 proto._toggleTimeseriesY2 = function(panelId) {

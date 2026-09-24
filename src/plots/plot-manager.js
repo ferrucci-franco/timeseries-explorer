@@ -2562,6 +2562,7 @@ class PlotManager {
             samplesBtn.disabled = !enabled;
             samplesBtn.classList.toggle('active', !!plot?.showSamples);
             samplesBtn.setAttribute('aria-pressed', plot?.showSamples ? 'true' : 'false');
+            this._applySamplesButtonState?.(plot, samplesBtn);
         }
         panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
             const active = btn.dataset.mode === plot?.mode;

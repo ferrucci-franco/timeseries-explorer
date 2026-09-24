@@ -33,10 +33,23 @@ envelope point, and only when there is room on screen to tell dots apart.
 - Toggling rebuilds the panel while keeping the view (`_capturePlotView` +
   `_rebuildPanel`), the same pattern as `_toggleMissingData`.
 - When the toggle is on but **no** visible trace qualifies (section "When dots are
-  drawn"), a discreet notice is shown in the panel: *Zoom in to see the samples*
-  (reuse the mechanism of the Missing/NaN "too dense" notice,
-  `_setMissingDensityNotice`). If only some traces qualify, those get dots and the rest
-  stay plain lines — no notice.
+  drawn"), the panel says so in two ways (changed after first use — see below):
+  - **The button waits.** It stays pressed but is drawn with a dashed border and no
+    fill (`.samples-waiting`), and its tooltip gives the reason: *Zoom in to see the
+    samples*. This lasts for as long as the reason does, and never covers the plot.
+  - **A pill, once.** Right after the click that turns the toggle on, if nothing
+    qualifies, the pill *Zoom in to see the samples* appears for 3 s
+    (`SAMPLES_HINT_MS`) so the click visibly did something, then goes. Later zooms
+    never bring it back; the button carries the state from then on.
+
+  If only some traces qualify, those get dots and the rest stay plain lines — the
+  button is not waiting.
+
+  First version: the pill stayed for as long as the view was zoomed out. In use it
+  sat over the curve most of the time, since zoomed out is where a panel spends most
+  of it — it was annoying. Options weighed: a pill that fades by itself; the state on
+  the button only; both; a small corner badge. Chosen: both — the pill explains the
+  first time, the button remembers.
 
 ## When dots are drawn
 
@@ -155,8 +168,9 @@ Lazy (DuckDB, "memory-saving mode") files — checked, and left out of v1:
   `_applyBatchedTimeseriesRestyle` as the `exact` flag, with the visible count from
   the returned rows.
 - Until then a lazy trace never gets dots. If every candidate trace on the panel is
-  lazy, the pill says so (*Samples are not shown yet for files loaded in
-  memory-saving mode*) instead of asking the user to zoom in, which would not help.
+  lazy, the button's tooltip (and the one-off pill) say so (*Samples are not shown yet
+  for files loaded in memory-saving mode*) instead of asking the user to zoom in,
+  which would not help.
 
 ## Performance
 
