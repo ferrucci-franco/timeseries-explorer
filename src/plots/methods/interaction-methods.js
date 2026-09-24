@@ -2107,7 +2107,11 @@ proto._axisDataRange = function(axis) {
 
 proto._axisPixelForValue = function(axis, value, range = null) {
     const offset = axis?._offset || 0;
-    if (!range && typeof axis?.d2p === 'function') {
+    // Not on a date axis: there d2p reads a number of ms as a JS Date, in the
+    // browser's local zone, while our times are floating (wall clock read as
+    // UTC). Outside UTC the line lands hours away from its sample (#176). A
+    // date axis is linear in ms, so the formula below is exact.
+    if (!range && axis?.type !== 'date' && typeof axis?.d2p === 'function') {
         const pixel = axis.d2p(value);
         if (Number.isFinite(pixel)) return offset + pixel;
     }
@@ -2319,6 +2323,7 @@ proto._toggleCursors = function(panelId) {
     }
     if (enabled) {
         for (const view of this._cursorViews(panelId, plot)) {
+            this._pickCursorTracesInView(view);
             this._initializeCursorPositionsInView(view);
         }
         this._installCursorHandlers(panelId, plot);
@@ -2354,6 +2359,32 @@ proto._closeCursorView = function(panelId, plot, view) {
         panelEl?.classList.remove('cursor-near');
     }
     this._refreshActionBtns(panelId);
+};
+
+// Turning cursors on: A and B read traces that have data in the current view.
+// With one variable continued across several files (one trace per file), the
+// first ones in the legend are usually files that are not on screen, and the
+// cursors would be clamped to their time span, off-screen (#176). A remembered
+// choice that is still in view is kept.
+proto._pickCursorTracesInView = function(view) {
+    if (view.isSpectrum) return;
+    const range = this._axisDataRange(this._viewDiv(view)?._fullLayout?.xaxis);
+    if (!range) return;
+    const lo = Math.min(range[0], range[1]);
+    const hi = Math.max(range[0], range[1]);
+    const inView = (view.plot.traces || []).filter(t => {
+        if (t.visible === false || t.visible === 'legendonly') return false;
+        const bounds = this._cursorTraceBounds(view, t);
+        return !!bounds && bounds.start <= hi && bounds.end >= lo;
+    });
+    if (!inView.length) return;
+    const cursors = this._viewCursors(view);
+    const ref = t => ({ fileId: t.fileId, varName: t.varName });
+    const shown = choice => !!choice && inView.some(t => this._sameCursorTrace(t, choice));
+    if (!shown(cursors.traceA)) cursors.traceA = ref(inView[0]);
+    if (!shown(cursors.traceB)) {
+        cursors.traceB = ref(inView.find(t => !this._sameCursorTrace(t, cursors.traceA)) || inView[0]);
+    }
 };
 
 proto._ensureCursorPositions = function(view) {
