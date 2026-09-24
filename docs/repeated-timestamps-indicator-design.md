@@ -1,7 +1,10 @@
 # Repeated Timestamps Indicator Design ("Repeated" toggle)
 
-Status: specified, not built. Build after the **Samples** toggle
-([sample-markers-design.md](sample-markers-design.md)), which it uses when zoomed in.
+Status: v1 built for in-memory files. Memory-saving (DuckDB) files are not marked
+yet (see "Lazy (DuckDB) files"). Uses the **Samples** toggle
+([sample-markers-design.md](sample-markers-design.md)) for the rings when zoomed in.
+
+Where the build departs from the first draft of this spec, the section says so.
 
 Context: bug report on *Collapse repeated timestamps*, point (c): the user has no way to
 see *where* a file repeats timestamps, so cannot judge what the collapse tool will do,
@@ -43,18 +46,23 @@ A **repeat run** is a maximal sequence of ≥ 2 consecutive rows with the same t
 
 ## UI
 
-- A toggle button **Repeated** in the time-series panel toolbar, right after
-  **Missing/NaN**.
-  - Labels: EN *Repeated*, ES *Repetidos*, FR *Répétés* (other locales follow the
-    existing i18n table).
+- A toggle button **Repeated** in the time-series panel toolbar, after **Samples**
+  (order: Missing/NaN, Samples, Repeated).
+  - Labels: EN *Repeated*, ES *Repetidos*, FR *Répétés*, IT *Ripetuti*.
   - Tooltip (EN): *Mark instants where the time axis repeats (several rows at the same
     time).*
 - **Off by default.** State `plot.showRepeated`, saved/restored with the session like
   `showMissingData`.
-- **Disabled** (with a tooltip saying why) when no file in the panel has a repeat run,
-  so the button itself answers "are there any?". The per-file count is known at load
-  (see Data).
+- **Disabled** when no file on the panel has a repeat run, with the tooltip *No
+  repeated timestamps in the files on this panel* — the button itself answers "are
+  there any?". Runs are computed on first need and cached per time array
+  (`_repeatedRunsForTimes`), so this costs one O(n) scan per file.
 - Toggling rebuilds the panel keeping the view, same pattern as `_toggleMissingData`.
+- **Same convention as Samples** for "nothing to draw here": the button stays pressed
+  but *waits* (dashed border, `.repeated-waiting`) with the reason in its tooltip —
+  too dense here, or memory-saving files only — and a pill with that reason appears
+  **once**, for 3 s, after the click that turns the toggle on. Later zooms never bring
+  the pill back.
 
 ## Presentation
 
@@ -69,36 +77,44 @@ cover the data.
   `_adaptiveGapBandShapes` does, so the marks line up with what is on screen.
 - Hover on a mark: *12 repeated instants, longest ×4* (and the file name when the panel
   holds several files).
-- **Dense view**: when more than half of the pixel columns carry a mark (same rule as
-  `_missingViewIsDense`), individual marks carry no information. Draw a faint wash on
-  the strip only over the regions that hold repeats, and show the notice *Repeated
-  timestamps too dense to resolve here — zoom in for detail* (reuse
-  `_setMissingDensityNotice`'s mechanism with its own text).
-- Cap: at most one mark per pixel column, so the count is bounded by the plot width.
+- **Dense view**: when more than half of the columns carry a mark, individual marks
+  carry no information. A thin wash on the strip covers the stretches that hold repeats
+  (adjacent marked columns merged), and the button waits with *Repeated timestamps too
+  dense to resolve here — zoom in for detail* (see UI).
+- Columns are 3 px wide (`REPEATED_MARK_COLUMN_PX`): at most one mark per column, so the
+  count is bounded by the plot width.
 
 ### Zoomed in (runs are resolved individually)
 
 - One mark per run, at its exact time, hover *×k at this instant* (+ file name).
 - A faint thin vertical guide line from the mark down through the plot area, drawn
-  below the traces, so the eye finds the matching place on the curve.
+  below the traces, so the eye finds the matching place on the curve — only while there
+  are at most `REPEATED_GUIDE_MAX` (10) marks. A logger that repeats every second would
+  otherwise put a line on every second, which hides the curve (first value was 40).
 - If **Samples** is also on and the trace has dots (both of its conditions hold), the
   repeated samples of that trace get a **ring**: open circle, ≈ 10 px, one fixed
-  contrasting colour valid in light and dark themes, drawn over the dot. A burst of
+  contrasting colour valid in light and dark themes (symbol `circle-open-dot`, which
+  replaces the dot with a ring around a centre dot). A burst of
   identical (x, y) is thus visible even though its dots overlap exactly. Hover on the
   sample appends *×k at this instant* — needed because Plotly's hover picks only one of
   several coincident points.
 
 ### Marks: rendering
 
-- Marks are markers (e.g. `triangle-down`) in one helper trace per panel, placed on an
-  overlaying y axis with fixed range `[0, 1]`, no ticks, no legend entry; the strip is
-  the top few pixels of that axis. A trace (not layout shapes) because marks need
-  hover. Colour per file when the panel holds several files, else the fixed
-  contrasting colour.
-- Guide lines are layout shapes (`xref: 'x'`, `yref: 'paper'`, `layer: 'below'`).
-- **Risk to handle:** code that maps a Plotly trace index back to `plot.traces` must
-  skip the helper trace — the same care the phase-2D fit curves need. Append it after
-  all data traces and tag it (e.g. `meta: { role: 'repeated-marks' }`).
+- **Changed from the draft:** marks are layout **annotations** (`▼`, anchored to the top
+  of the plot area, `yref: 'paper'`) with `hovertext`, not a helper trace. Annotations
+  carry a hover just as well, and a helper trace would have had to be skipped by every
+  piece of code that maps Plotly trace indexes back to `plot.traces` (hover, cursors,
+  autoscale, export). The panel owns `layout.annotations` for this; nothing else in the
+  time-series panel uses them.
+- Colour: magenta (`_repeatedColor`), apart from the amber of Missing/NaN. With several
+  files on the panel, a mark from one file takes that file's trace colour and its hover
+  names the file(s).
+- Guide lines and the dense wash are layout shapes. They share `layout.shapes` with the
+  Missing/NaN bands, so every place that relayouts the bands appends
+  `plot._repeatedShapes`, and the refresh sends both in one relayout.
+- Updated wherever the panel's visual data is refreshed (`_refreshTimeseriesVisuals`,
+  eager and lazy paths).
 
 ## Data
 
@@ -120,6 +136,13 @@ cover the data.
 
 ### Lazy (DuckDB) files
 
+**Not built in v1.** A memory-saving file keeps an overview sample in memory, not its
+rows, so its repeats cannot be read there. Such a file is skipped: if it is the only
+reason the button could have something to show, the button waits with *Repeated
+timestamps are not marked yet for files loaded in memory-saving mode*.
+
+The plan for it stands:
+
 - Same idea as `missing-buckets-sql.js`: one aggregate query over the visible range,
   bucketed at ~one bucket per pixel, returning per bucket the number of repeated
   instants and the longest run:
@@ -137,15 +160,16 @@ cover the data.
   Put the builder in a pure module (e.g. `src/data/repeated-buckets-sql.js`) so it is
   unit-testable in Node, as the Missing/NaN one is. Note: `GROUP BY t` counts rows at an
   instant anywhere in the file, not only consecutive ones — identical for a sorted time
-  column; for an unsorted one, state it in the hover, or disable the toggle as
-  Missing/NaN does for unsorted time.
+  column; for an unsorted one, state it in the hover.
 - Zoomed in far enough that the window holds few runs, return the runs themselves
   (`t`, `c`) instead of buckets.
 - Cancel/refresh on relayout with a token, like `_refreshLazyMissingBands`.
+- The buckets map straight onto `repeatedMarksForView`'s output (one mark per column),
+  so the drawing code does not change.
 
 ## Scope
 
-In: time-series panels, Y and Y2, eager and lazy files.
+In: time-series panels, Y and Y2, in-memory files. Memory-saving files: see above.
 
 Out, v1: stacked mode (marks are fine, but rings are not — they follow *Samples*, which
 is off in stacked mode); time panes of FFT / Histogram / Heatmap / Temporal profile /
@@ -159,11 +183,15 @@ the comparison point (b) of the bug report wants in the same panel.
 
 ## Tests
 
-- Unit: `repeatedTimestampRuns` — runs at the start/end of the vector, NaN breaking a
-  run, runs of 2 vs 3+, `REPEATED_MARK_MIN_RUN` filter, agreement with
-  `repeatedTimestampSummary` (count and longest run).
-- Unit: per-pixel coalescing and the dense rule.
-- Unit: the lazy SQL builder and its result reducer.
-- Fixture: the collapse-repeated-timestamps test file — marks at zoom out, individual
-  marks + rings (with *Samples* on) at zoom in; button disabled on the collapsed result.
-- i18n keys present in every locale; session save/restore of `showRepeated`.
+- `npm run test:repeated-marks`: `repeatedTimestampRuns` (edges, NaN ending a run,
+  unsorted columns, the minimum run, agreement with `repeatedTimestampSummary`),
+  `repeatedMarksForView` (per-column grouping, the dense rule and its wash regions,
+  bounded by width, several files), and the panel overlay through the real mixin
+  (marks, guides, dense state, availability, rings with runs cut by the window edge).
+- `test:mode-toolbar`: the button — placement, disabled with no repeats, waiting states.
+- `test:session-state-roundtrip`: `showRepeated` saved and restored.
+- `npm run e2e:repeated-marks` (Chromium): a clean file disables the button; numeric
+  bursts get one mark each with a working hover, a guide when zoomed in, and rings with
+  Samples on; a datetime logger stamped to the second (ten rows a second) is too dense
+  zoomed out — wash, waiting button, pill once — and gets one mark per second on the
+  date axis when zoomed in, without guide lines.

@@ -146,6 +146,7 @@ source.plotManager.plots.set('panel-1', {
     timeseriesY2Enabled: false,
     showMissingData: true,
     showSamples: true,
+    showRepeated: true,
     animPlaying: true,
     _modeViews: { fft: { mode: '2d', xRange: [10, 20], fftSpectrum: { xRange: [1, 5] } } },
 });
@@ -159,6 +160,7 @@ assert.equal(snapshot.plots[0].temporalProfile.period, 'month');
 assert.equal(snapshot.plots[0].temporalProfile.discardIncomplete, true);
 assert.equal(snapshot.plots[0].showMissingData, true);
 assert.equal(snapshot.plots[0].showSamples, true);
+assert.equal(snapshot.plots[0].showRepeated, true);
 assert.equal(snapshot.plots[0].animPlaying, true);
 assert.deepEqual(snapshot.plots[0].modeViews.fft.xRange, [10, 20]);
 
@@ -182,6 +184,7 @@ assert.equal(restoredPlot.temporalProfile.dayGrouping, 'all');
 assert.equal(restoredPlot.temporalProfile.yearResolution, 'month');
 assert.equal(restoredPlot.showMissingData, true);
 assert.equal(restoredPlot.showSamples, true);
+assert.equal(restoredPlot.showRepeated, true);
 assert.equal(restoredPlot.autoPlayOnRender, true);
 assert.deepEqual(restoredPlot._modeViews.fft.fftSpectrum.xRange, [1, 5]);
 assert.deepEqual(restoredPlot.phasePending, { x: 'x', y: 'y', z: null, fileId: 'f99' });

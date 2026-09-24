@@ -327,6 +327,8 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     const cds = [];
     const modes = [];
     const markers = [];
+    const texts = [];
+    const hovers = [];
     const indices = [];
     let anyCustomdata = false;
     // Samples toggle: whether a trace has dots depends on the zoom, so `mode`
@@ -368,6 +370,8 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
         if (built.customdata) anyCustomdata = true;
         modes.push(built.mode || 'lines');
         markers.push(built.marker || this._timeseriesSampleMarker(t));
+        texts.push(built.text ?? null);
+        hovers.push(built.hovertemplate);
         indices.push(idx);
     });
     if (indices.length) {
@@ -376,6 +380,11 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
         if (samplesEnabled) {
             update.mode = modes;
             update.marker = markers;
+            // Rings of the Repeated toggle carry their own hover line.
+            if (plot.showRepeated) {
+                update.text = texts;
+                update.hovertemplate = hovers;
+            }
         }
         Plotly.restyle(plot.div, update, indices);
     }
@@ -384,13 +393,26 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     // relayout is ignored by _onRelayout (no x-axis change), so this cannot loop.
     // _missingDataBandShapes sets plot._missingTooDense for the current view;
     // surface the "zoom in" hint accordingly.
+    // Repeated marks share layout.shapes with the bands, so both go in one
+    // relayout, and the marks themselves are annotations.
+    const repeatedUpdate = plot.div ? this._repeatedOverlayUpdate(plot) : null;
+    if ((showMissing || repeatedUpdate) && plot.div) {
+        const update = {
+            shapes: [
+                ...(showMissing ? this._missingDataBandShapes(plot) : []),
+                ...(repeatedUpdate?.shapes || []),
+            ],
+        };
+        if (repeatedUpdate) update.annotations = repeatedUpdate.annotations;
+        Plotly.relayout(plot.div, update);
+    }
     if (showMissing && plot.div) {
-        Plotly.relayout(plot.div, { shapes: this._missingDataBandShapes(plot) });
         // A file with no nominal step marks no sampling gaps at all, so "zoom in
         // for detail" would be a lie: zooming reveals nothing. Explain the
         // absence instead — it outranks the density hint.
         this._setMissingDensityNotice(plot, this._missingStepNotice(missInfo.stepIssues) || missDense);
     }
+    if (plot.mode === 'timeseries') this._refreshRepeatedNotice(plot);
     this._refreshElapsedDateTimeAxisTicks(plot, range);
 };
 
@@ -536,7 +558,20 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     }
     if (lazyQueryCount > 0) this._setLazyDetailLoading(plot, true, targetInfo);
     else this._setLazyDetailLoading(plot, false);
-    if (plot.mode === 'timeseries') this._refreshSamplesNotice(plot);
+    if (plot.mode === 'timeseries') {
+        this._refreshSamplesNotice(plot);
+        const repeatedUpdate = this._repeatedOverlayUpdate(plot);
+        if (repeatedUpdate && plot.div) {
+            Plotly.relayout(plot.div, {
+                annotations: repeatedUpdate.annotations,
+                shapes: [
+                    ...(plot.showMissingData ? this._lazyMissingShapes(plot) : []),
+                    ...repeatedUpdate.shapes,
+                ],
+            });
+        }
+        this._refreshRepeatedNotice(plot);
+    }
     this._refreshElapsedDateTimeAxisTicks(plot, range);
     if (lazyQueryCount === 0) {
         const settledNoQuery = Promise.resolve(immediateResults);
@@ -1649,7 +1684,12 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
             return;
         }
         if (!plot.showMissingData) return;
-        Plotly.relayout(plot.div, { shapes: this._lazyMissingShapes(plot) });
+        Plotly.relayout(plot.div, {
+            shapes: [
+                ...this._lazyMissingShapes(plot),
+                ...(plot.showRepeated ? (plot._repeatedShapes || []) : []),
+            ],
+        });
         this._setMissingDensityNotice(plot, this._missingStepNotice(eagerInfo.stepIssues) || dense);
     };
 
@@ -4624,6 +4664,17 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         });
         timeseriesToolsGroup.appendChild(samplesBtn);
 
+        const repeatedBtn = document.createElement('button');
+        repeatedBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-repeated-btn' + (plot?.showRepeated ? ' active' : '');
+        repeatedBtn.textContent = i18n.t('timeseriesRepeatedLabel');
+        repeatedBtn.setAttribute('aria-pressed', plot?.showRepeated ? 'true' : 'false');
+        this._applyRepeatedButtonState(plot, repeatedBtn, this._hasContent(plot) && plot?.mode === 'timeseries');
+        repeatedBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleRepeated(panelId);
+        });
+        timeseriesToolsGroup.appendChild(repeatedBtn);
+
         const analysisModes = [
             { id: 'fft', label: 'Fourier', titleKey: 'modeFFT', className: 'timeseries-fourier-btn' },
             { id: 'histogram', label: i18n.t('modeHistogramLabel'), titleKey: 'modeHistogram', className: 'timeseries-histogram-btn' },
@@ -5166,6 +5217,121 @@ proto._refreshSamplesNotice = function(plot) {
         this._setSamplesNotice(plot, state);
     } else if (!state) {
         this._setSamplesNotice(plot, null);
+    }
+};
+
+proto._toggleRepeated = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'timeseries') return;
+    const capturedView = plot.div ? this._capturePlotView(plot) : null;
+    plot.showRepeated = !plot.showRepeated;
+    plot._repeatedWaiting = null;
+    plot._repeatedShapes = [];
+    plot._repeatedHintPending = !!plot.showRepeated;
+
+    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+    const btn = panelEl?.querySelector('.timeseries-repeated-btn');
+    if (btn) {
+        btn.classList.toggle('active', !!plot.showRepeated);
+        btn.setAttribute('aria-pressed', plot.showRepeated ? 'true' : 'false');
+        this._applyRepeatedButtonState(plot, btn);
+    }
+    if (!plot.showRepeated) this._setRepeatedNotice(plot, null);
+
+    // Rebuild, like Samples: the marks are laid out against the settled axis
+    // by the refresh that follows, and the rings are part of the traces.
+    if (plot.div) this._rebuildPanel(panelId, { restoreView: capturedView });
+    else this._refreshActionBtns(panelId);
+};
+
+// Same convention as Samples: the button carries the state. Disabled when no
+// file on the panel repeats an instant — the button itself then answers "are
+// there any?" — and "waiting" (pressed, dashed, reason in the tooltip) while
+// the marks are too dense to draw or only memory-saving files are on the panel.
+// `enabledBase` is the caller's own condition (content, time-series mode); the
+// panel's files are checked here.
+proto._applyRepeatedButtonState = function(plot, btn, enabledBase = null) {
+    if (!btn) return;
+    const base = enabledBase ?? (this._hasContent?.(plot) && plot?.mode === 'timeseries');
+    const availability = base ? this._repeatedAvailability(plot) : 'some';
+    btn.disabled = !base || availability === 'none';
+    const waiting = plot?.showRepeated && !btn.disabled
+        ? (plot._repeatedWaiting || (availability === 'lazy' ? 'lazy' : null))
+        : null;
+    btn.classList.toggle('repeated-waiting', !!waiting);
+    let key = 'timeseriesRepeatedToggle';
+    if (base && availability === 'none') key = 'timeseriesRepeatedNone';
+    else if (waiting === 'dense') key = 'timeseriesRepeatedDense';
+    else if (waiting === 'lazy') key = 'timeseriesRepeatedLazy';
+    const label = i18n.t(key);
+    btn.title = label;
+    if (waiting) btn.setAttribute('aria-description', label);
+    else btn.removeAttribute?.('aria-description');
+};
+
+// The Repeated one-off pill, shown after the click that turns it on when the
+// marks cannot be drawn (too dense here, or a memory-saving file).
+proto._setRepeatedNotice = function(plot, state) {
+    if (plot?._repeatedHintTimer) {
+        clearTimeout(plot._repeatedHintTimer);
+        plot._repeatedHintTimer = 0;
+    }
+    const panelEl = plot?.div?.closest('.layout-panel');
+    if (!panelEl) return;
+    let pill = panelEl.querySelector('.repeated-hint-indicator');
+    if (state === 'dense' || state === 'lazy') {
+        if (!pill) {
+            pill = document.createElement('div');
+            pill.className = 'lazy-detail-indicator repeated-hint-indicator';
+            pill.setAttribute('aria-live', 'polite');
+            pill.innerHTML = '<span class="lazy-detail-text"></span>';
+            panelEl.appendChild(pill);
+        }
+        const label = i18n.t(state === 'lazy' ? 'timeseriesRepeatedLazy' : 'timeseriesRepeatedDense');
+        const text = pill.querySelector('.lazy-detail-text');
+        if (text) text.textContent = label;
+        pill.title = label;
+        pill.setAttribute('aria-label', label);
+        pill.classList.add('active');
+        plot._repeatedHintTimer = setTimeout(() => {
+            plot._repeatedHintTimer = 0;
+            this._setRepeatedNotice(plot, null);
+        }, SAMPLES_HINT_MS);
+    } else if (pill) {
+        pill.classList.remove('active');
+        pill.remove();
+    }
+};
+
+// Compute the Repeated overlay for the current view and remember its shapes
+// (they share layout.shapes with the Missing/NaN bands, which are recomputed
+// on their own schedule). Returns the relayout fragment, or null when off.
+proto._repeatedOverlayUpdate = function(plot) {
+    if (plot?.mode !== 'timeseries' || !plot.showRepeated) {
+        if (plot) plot._repeatedShapes = [];
+        return null;
+    }
+    const overlay = this._repeatedOverlay(plot);
+    plot._repeatedShapes = overlay.shapes;
+    plot._repeatedWaiting = overlay.state;
+    return { annotations: overlay.annotations, shapes: overlay.shapes };
+};
+
+proto._refreshRepeatedNotice = function(plot) {
+    const panelEl = plot?.div?.closest('.layout-panel');
+    const btn = panelEl?.querySelector('.timeseries-repeated-btn');
+    this._applyRepeatedButtonState(plot, btn);
+    if (plot?.mode !== 'timeseries' || !plot.showRepeated) {
+        this._setRepeatedNotice(plot, null);
+        return;
+    }
+    const state = plot._repeatedWaiting
+        || (this._repeatedAvailability(plot) === 'lazy' ? 'lazy' : null);
+    if (plot._repeatedHintPending && plot.div?._fullLayout?.xaxis?._length > 0) {
+        plot._repeatedHintPending = false;
+        this._setRepeatedNotice(plot, state);
+    } else if (!state) {
+        this._setRepeatedNotice(plot, null);
     }
 };
 

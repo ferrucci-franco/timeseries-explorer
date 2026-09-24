@@ -323,6 +323,7 @@ proto._capturePlotSessions = function() {
             timeseriesY2Enabled: !!plot.timeseriesY2Enabled,
             showMissingData: !!plot.showMissingData,
             showSamples: !!plot.showSamples,
+            showRepeated: !!plot.showRepeated,
             modeViews: this._cloneSerializable(plot._modeViews || {}),
             view: this.plotManager._capturePlotView(plot),
         });
@@ -1008,6 +1009,7 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.timeseriesY2Enabled = !!saved.timeseriesY2Enabled;
         plot.showMissingData = !!saved.showMissingData;
         plot.showSamples = !!saved.showSamples;
+        plot.showRepeated = !!saved.showRepeated;
         plot._modeViews = this._cloneSerializable(saved.modeViews || {});
         if (!plot.timeseriesY2Enabled) plot.traces.forEach(trace => { trace.axis = 'y'; });
         plot.stateSlots = this._mappedStateSlots(saved.stateSlots, fileMap);

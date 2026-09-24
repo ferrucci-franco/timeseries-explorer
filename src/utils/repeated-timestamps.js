@@ -62,3 +62,52 @@ export const REPEATED_TIMESTAMP_RUN_NOTICE = 3;
 export function repeatedTimestampsWorthSaying(summary) {
     return Number(summary?.longestRun) >= REPEATED_TIMESTAMP_RUN_NOTICE;
 }
+
+/**
+ * Where the repeats are, for the Repeated toggle
+ * (docs/repeated-timestamps-indicator-design.md). A run is a maximal sequence
+ * of consecutive rows at one instant, with the same rules as the summary above:
+ * exact equality, and a non-finite stamp ends a run.
+ *
+ * Runs are found by index, not by searching for the value, so a column that is
+ * not in chronological order is still read correctly.
+ *
+ * @param {ArrayLike<number>|null|undefined} values  a time column
+ * @param {number} [minRun=2]  shortest run worth reporting
+ * @returns {{starts: Int32Array, lengths: Int32Array, count: number}}
+ *   `starts[i]` is the first row of run i and `lengths[i]` its rows; the
+ *   instant is `values[starts[i]]`, which is not copied.
+ */
+export function repeatedTimestampRuns(values, minRun = 2) {
+    const empty = { starts: new Int32Array(0), lengths: new Int32Array(0), count: 0 };
+    if (!values || typeof values.length !== 'number' || values.length < 2) return empty;
+    const threshold = Math.max(2, Math.floor(Number(minRun) || 2));
+    let starts = new Int32Array(64);
+    let lengths = new Int32Array(64);
+    let count = 0;
+    const push = (start, length) => {
+        if (length < threshold) return;
+        if (count === starts.length) {
+            const grownStarts = new Int32Array(starts.length * 2);
+            const grownLengths = new Int32Array(lengths.length * 2);
+            grownStarts.set(starts);
+            grownLengths.set(lengths);
+            starts = grownStarts;
+            lengths = grownLengths;
+        }
+        starts[count] = start;
+        lengths[count] = length;
+        count += 1;
+    };
+    const n = values.length;
+    let runStart = 0;
+    let previous = Number(values[0]);
+    for (let i = 1; i <= n; i++) {
+        const value = i < n ? Number(values[i]) : NaN;
+        if (Number.isFinite(value) && value === previous) continue;
+        if (Number.isFinite(previous)) push(runStart, i - runStart);
+        runStart = i;
+        previous = value;
+    }
+    return { starts: starts.slice(0, count), lengths: lengths.slice(0, count), count };
+}

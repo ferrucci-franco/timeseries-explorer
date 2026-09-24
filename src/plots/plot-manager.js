@@ -5,6 +5,7 @@ import { getPlotlyLocale, normalizeAppLanguage } from './plotly-locale.js';
 import { expandedAxisRangeForExtent, installPlotDataMethods } from './methods/data-methods.js';
 import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';
+import { installPlotRepeatedMethods } from './methods/repeated-methods.js';
 import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
@@ -18,6 +19,7 @@ import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 import { dropMissingVariablesFromPanels } from '../utils/panel-variables.js';
 import { formatMissingCount, seriesStats } from '../utils/series-stats.js';
 import { SAMPLE_MARKERS_MIN_PX_ON, SAMPLE_MARKERS_MIN_PX_OFF } from '../utils/sample-markers.js';
+import { REPEATED_MARK_MIN_RUN } from '../utils/repeated-marks.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -886,6 +888,7 @@ class PlotManager {
         plot.timeseriesY2Enabled = false;
         plot.showMissingData = false;
         plot.showSamples = false;
+        plot.showRepeated = false;
         plot.traces.forEach(trace => { trace.axis = 'y'; });
         // Preserve per-mode config (FFT, histogram, calendar heatmap and temporal profile options,
         // selection, cursors) when switching inside the time-series family, so
@@ -2441,6 +2444,7 @@ class PlotManager {
             existing.timeseriesY2Enabled = false;
             existing.showMissingData = false;
             existing.showSamples = false;
+            existing.showRepeated = false;
             existing.fft = this._defaultFftState?.() || existing.fft;
             existing._fftSpectrumCache = null;
             existing.heatmap = this._defaultHeatmapState?.() || existing.heatmap;
@@ -2563,6 +2567,12 @@ class PlotManager {
             samplesBtn.classList.toggle('active', !!plot?.showSamples);
             samplesBtn.setAttribute('aria-pressed', plot?.showSamples ? 'true' : 'false');
             this._applySamplesButtonState?.(plot, samplesBtn);
+        }
+        const repeatedBtn = panelEl.querySelector('.timeseries-repeated-btn');
+        if (repeatedBtn) {
+            repeatedBtn.classList.toggle('active', !!plot?.showRepeated);
+            repeatedBtn.setAttribute('aria-pressed', plot?.showRepeated ? 'true' : 'false');
+            this._applyRepeatedButtonState?.(plot, repeatedBtn, has && plot?.mode === 'timeseries');
         }
         panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
             const active = btn.dataset.mode === plot?.mode;
@@ -3877,6 +3887,7 @@ class PlotManager {
             timeseriesY2Enabled: false,
             showMissingData: false,
             showSamples: false,
+            showRepeated: false,
             equalAspect2D: false,
             resizeObserver: null,
             fftDiv: null,
@@ -4457,6 +4468,8 @@ class PlotManager {
     static SAMPLE_MARKERS_MIN_PX_ON = SAMPLE_MARKERS_MIN_PX_ON;
     static SAMPLE_MARKERS_MIN_PX_OFF = SAMPLE_MARKERS_MIN_PX_OFF;
     static SAMPLE_MARKER_SIZE = 5;
+    // Repeated toggle: shortest run of rows at one instant that gets a mark.
+    static REPEATED_MARK_MIN_RUN = REPEATED_MARK_MIN_RUN;
     static DEFAULT_VISUAL_MAX_POINTS_PHASE = 4000;
     static MAX_MENU_VISUAL_POINTS = 10000;
     static LIVE_RELAYOUT_MAX_SOURCE_POINTS = 500000;
@@ -4483,6 +4496,7 @@ class PlotManager {
 installPlotDataMethods(PlotManager);
 installPlotStateMethods(PlotManager);
 installPlotInteractionMethods(PlotManager);
+installPlotRepeatedMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotCorrelationMethods(PlotManager);

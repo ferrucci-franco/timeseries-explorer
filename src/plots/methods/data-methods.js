@@ -2028,6 +2028,10 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     }
     const visual = this._applyTimeseriesStackZeroPadding(plot, t, baseVisual);
     const showSampleDots = this._timeseriesSampleMarkersShown(plot, t, baseVisual);
+    // Repeated toggle on top of Samples: rings on the dots that share an instant.
+    const repeatedDecoration = showSampleDots && plot?.showRepeated && this._repeatedSampleDecoration
+        ? this._repeatedSampleDecoration(t, this._repeatedRunLengthsForPoints(timeData, baseVisual.x))
+        : null;
     // WebGL earns its keep when there are a lot of points ON SCREEN, and what
     // reaches Plotly is the decimated trace — ~2,000 points for the visible
     // window, whatever the file holds. Judging by the SOURCE length instead
@@ -2081,14 +2085,17 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         line,
         // Carried whenever the Samples toggle is on, dots or not, so the zoom
         // restyle can switch `mode` alone and every trace has a marker to show.
-        ...(this._timeseriesSamplesEnabled(plot) ? { marker: this._timeseriesSampleMarker(t) } : {}),
+        ...(this._timeseriesSamplesEnabled(plot)
+            ? { marker: repeatedDecoration?.marker || this._timeseriesSampleMarker(t) }
+            : {}),
+        ...(repeatedDecoration ? { text: repeatedDecoration.text } : {}),
         ...stackAttrs,
         ...(customdata ? { customdata } : {}),
         // Numeric, pre-Plotly x aligned 1:1 with y — the FFT pane uses it to
         // locate sampling gaps for line breaks, then strips it before Plotly
         // sees the trace. Never emitted in timeseries mode.
         ...(options.attachSourceX ? { __srcX: visual.x } : {}),
-        hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${runSuffix}<extra></extra>`,
+        hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${repeatedDecoration ? '%{text}' : ''}${runSuffix}<extra></extra>`,
     };
 };
 

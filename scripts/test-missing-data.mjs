@@ -378,7 +378,7 @@ assert.match(
 );
 assert.match(
     interactionMethodsSource,
-    /if \(showMissing && plot\.div\) \{\s*Plotly\.relayout\(plot\.div, \{ shapes: this\._missingDataBandShapes\(plot\) \}\);/,
+    /\.\.\.\(showMissing \? this\._missingDataBandShapes\(plot\) : \[\]\),/,
     'restyle re-applies bands (adaptive width) only when the flag is on',
 );
 
