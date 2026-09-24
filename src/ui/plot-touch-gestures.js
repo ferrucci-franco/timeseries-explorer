@@ -67,6 +67,27 @@ const spokenFor = (div, event) => {
 };
 
 /**
+ * An axis range as numbers the arithmetic can move, and back.
+ *
+ * Plotly keeps a date axis's range as date strings ('2024-03-01 12:00'), which
+ * are not numbers: every pan and pinch of the time axis came out NaN and was
+ * dropped, so on a file with calendar time a finger moved the amplitude and
+ * nothing else. Its linearised form is ms (and log10 on a log axis, where the
+ * range already is), and l2r writes a result back the way the axis keeps it.
+ */
+export function rangeToLinear(axis) {
+    const range = axis?.range;
+    if (!Array.isArray(range) || range.length < 2) return null;
+    const toLinear = typeof axis.r2l === 'function' ? (value) => axis.r2l(value) : Number;
+    const linear = [Number(toLinear(range[0])), Number(toLinear(range[1]))];
+    return linear.every(Number.isFinite) ? linear : null;
+}
+
+export function rangeFromLinear(axis, linear) {
+    return typeof axis?.l2r === 'function' ? linear.map(value => axis.l2r(value)) : linear;
+}
+
+/**
  * The data value under a pixel, in the units Plotly keeps the range in.
  *
  * `vertical` picks which edge of the plot the pixel is measured from — a y
@@ -77,12 +98,12 @@ function axisValueAt(axis, clientPixel, rect, vertical = false) {
     if (!axis || !rect) return NaN;
     const offset = axis._offset || 0;
     const local = clientPixel - (vertical ? rect.top : rect.left) - offset;
-    // p2c, deliberately: a log axis keeps its RANGE in log10, so the anchor has
-    // to be in the same units as the range it anchors. It also knows that a y
-    // axis runs the other way.
-    if (typeof axis.p2c === 'function') return Number(axis.p2c(local));
-    const lo = Number(axis.range?.[0]);
-    const hi = Number(axis.range?.[1]);
+    // p2l, deliberately: the anchor has to be in the same units as the range
+    // it anchors, and those are Plotly's linearised ones — log10 on a log axis,
+    // ms on a date axis (see rangeToLinear). It also knows that a y axis runs
+    // the other way. p2c is not it: on a log axis it answers in data values.
+    if (typeof axis.p2l === 'function') return Number(axis.p2l(local));
+    const [lo, hi] = rangeToLinear(axis) || [NaN, NaN];
     const length = axis._length || (vertical ? rect.height : rect.width) || 1;
     const fraction = vertical ? 1 - (local / length) : local / length;
     return lo + fraction * (hi - lo);
@@ -153,7 +174,7 @@ export function installTouchPlotGestures(div, plotly) {
             points,
             rect,
             moved,
-            ranges: { x: x?.range?.slice?.(), y: y?.range?.slice?.(), y2: y2?.range?.slice?.() },
+            ranges: { x: rangeToLinear(x), y: rangeToLinear(y), y2: rangeToLinear(y2) },
             // What the hand came down on. Everything after this is about
             // keeping these values under it.
             anchors: {
@@ -229,7 +250,7 @@ export function installTouchPlotGestures(div, plotly) {
             if (!range || !Number.isFinite(anchor)) return;
             const next = panZoomRange(range, anchor, fractionOf(axis, vertical ? centre.y : centre.x, vertical), scale || 1);
             if (!next) return;
-            update[`${key}.range`] = next;
+            update[`${key}.range`] = rangeFromLinear(axis, next);
             update[`${key}.autorange`] = false;
         };
         put('xaxis', x, gesture.ranges.x, gesture.anchors.x, scales.x, false);
