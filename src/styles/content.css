@@ -2138,11 +2138,53 @@
     margin-top: 2px;
 }
 
-.cursor-secant-toggle {
+.cursor-options-row {
     display: flex;
     align-items: center;
     gap: 6px;
     margin: 2px 0 6px;
+}
+
+.cursor-copy-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 20px;
+    margin-left: auto;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    line-height: 0;
+}
+
+.cursor-copy-btn:hover {
+    background: var(--bg-secondary, rgba(127,127,127,0.15));
+    color: var(--text-primary);
+}
+
+.cursor-copy-btn.copied {
+    color: #2e9d4f;
+    border-color: #2e9d4f;
+}
+
+.cursor-copy-btn.copy-failed {
+    color: #d64545;
+    border-color: #d64545;
+}
+
+.cursor-copy-btn svg {
+    pointer-events: none;
+}
+
+.cursor-secant-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     color: var(--text-secondary);
     font-size: 0.72rem;
     line-height: 1.2;

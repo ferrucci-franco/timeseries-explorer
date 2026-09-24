@@ -5,6 +5,10 @@ import { missingBucketsToIntervals } from '../../data/missing-buckets-sql.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
 import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
 import { movedBeyondSlop } from '../../utils/touch-plot-gestures.js';
+import { copyTextToClipboard, cursorReadoutText } from '../../utils/clipboard.js';
+
+const CURSOR_COPY_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2"/></svg>`;
+const CURSOR_COPIED_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 export function installPlotInteractionMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -3889,6 +3893,16 @@ proto._updateCursorBox = function(view) {
             <span>${secantLabel}</span>
         </label>
     `;
+    // The copy button shares the A-B line's row, outside its label so a
+    // click on it never toggles the checkbox. The spectrum box has no A-B
+    // line; there the row holds the button alone (#178).
+    const copyTitle = this._escapeHTML(i18n.t('cursorCopy'));
+    const optionsHTML = `
+        <div class="cursor-options-row">
+            ${view.isSpectrum ? '' : secantHTML}
+            <button type="button" class="cursor-copy-btn" title="${copyTitle}" aria-label="${copyTitle}">${CURSOR_COPY_ICON}</button>
+        </div>
+    `;
     const moveIcon = `<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>`;
     // Spectrum view: x is frequency; each cursor also reads its own period
     // T = 1/|f|. Δf is the absolute cursor separation, and 1/Δf is presented
@@ -3967,7 +3981,7 @@ proto._updateCursorBox = function(view) {
             <button type="button" class="cursor-close-btn" title="${this._escapeHTML(i18n.t('cursorClose'))}" aria-label="${this._escapeHTML(i18n.t('cursorClose'))}">×</button>
         </div>
         ${selectorsHTML}
-        ${view.isSpectrum ? '' : secantHTML}
+        ${optionsHTML}
         <div class="cursor-info-hint">
             <div>${shiftHint}</div>
             <div>${slideHint}</div>
@@ -4015,6 +4029,33 @@ proto._positionCursorHelpPopover = function(box) {
     }
     popover.style.left = `${left}px`;
     popover.style.top = `${top}px`;
+};
+
+// Copies what the box reads to the clipboard (#178), then shows a check mark
+// on the button for a moment. The values area is re-rendered while cursors
+// move, but the button is not, so the confirmation survives a drag.
+proto._copyCursorReadout = async function(box, btn) {
+    const traceLines = Array.from(box.querySelectorAll('.cursor-trace-select')).map(label => {
+        const select = label.querySelector('select');
+        const name = select?.options[select.selectedIndex]?.textContent || '';
+        return name ? `${String(label.dataset.cursor || '').toUpperCase()}: ${name}` : '';
+    });
+    const text = cursorReadoutText(box.querySelector('.cursor-info-values'), traceLines);
+    const copied = text ? await copyTextToClipboard(text) : false;
+    const label = i18n.t(copied ? 'cursorCopied' : 'cursorCopyFailed');
+    clearTimeout(btn._copiedTimer);
+    btn.classList.toggle('copied', copied);
+    btn.classList.toggle('copy-failed', !copied);
+    btn.innerHTML = copied ? CURSOR_COPIED_ICON : CURSOR_COPY_ICON;
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn._copiedTimer = setTimeout(() => {
+        const idle = i18n.t('cursorCopy');
+        btn.classList.remove('copied', 'copy-failed');
+        btn.innerHTML = CURSOR_COPY_ICON;
+        btn.title = idle;
+        btn.setAttribute('aria-label', idle);
+    }, 1500);
 };
 
 proto._cursorViewBoxElement = function(panelEl, viewId) {
@@ -4086,7 +4127,7 @@ proto._showCursorBox = function(view, html) {
         // the extremum buttons stop it): without this, the button is replaced
         // before its click event ever fires.
         box.addEventListener('mousedown', (e) => {
-            if (e.target.closest('.cursor-help-btn') || e.target.closest('.cursor-help-popover') || e.target.closest('.cursor-close-btn')) {
+            if (e.target.closest('.cursor-help-btn') || e.target.closest('.cursor-help-popover') || e.target.closest('.cursor-close-btn') || e.target.closest('.cursor-copy-btn')) {
                 e.stopPropagation();
             }
         });
@@ -4095,6 +4136,13 @@ proto._showCursorBox = function(view, html) {
                 e.preventDefault();
                 e.stopPropagation();
                 this._closeCursorView(panelId, plot, view);
+                return;
+            }
+            const copyBtn = e.target.closest('.cursor-copy-btn');
+            if (copyBtn) {
+                e.preventDefault();
+                e.stopPropagation();
+                this._copyCursorReadout(box, copyBtn);
                 return;
             }
             const helpBtn = e.target.closest('.cursor-help-btn');

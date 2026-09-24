@@ -2,6 +2,7 @@ import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import { createEdgeToggle, syncEdgeToggle } from '../../ui/edge-toggle.js';
 import { isTouchCapable } from '../../ui/touch-drag.js';
+import { copyTextToClipboard } from '../../utils/clipboard.js';
 import {
     SLIDER_WHEEL_CHANGE_DELAY_MS,
     SLIDER_WHEEL_DWELL_MS,
@@ -623,28 +624,8 @@ proto._formatTempPathModalBody = function(template, path) {
         .join('');
 };
 
-proto._copyTextToClipboard = async function(text) {
-    if (navigator.clipboard?.writeText) {
-        try {
-            await navigator.clipboard.writeText(text);
-            return true;
-        } catch (_) {}
-    }
-
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    textArea.setAttribute('readonly', '');
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-9999px';
-    document.body.appendChild(textArea);
-    textArea.select();
-    try {
-        return document.execCommand('copy');
-    } catch (_) {
-        return false;
-    } finally {
-        document.body.removeChild(textArea);
-    }
+proto._copyTextToClipboard = function(text) {
+    return copyTextToClipboard(text);
 };
 
 proto._getOpenModelicaTempCandidates = function() {
