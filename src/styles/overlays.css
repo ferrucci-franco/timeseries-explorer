@@ -3679,6 +3679,66 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
         min-height: 0;
     }
 
+    /* One column of plots, whatever the layout says: every split stacks, each
+       panel keeps a height worth reading, and the plot area scrolls down. The
+       layout tree itself is untouched, so a wider window gets the grid back.
+       The ratios and heights the layout writes inline do not apply, and
+       neither do the dividers that would drag them. */
+    .plots-area {
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    .plots-area > .layout-split {
+        flex: 0 0 auto;
+        width: 100%;
+        height: auto !important;
+        min-height: 0 !important;
+    }
+
+    .plots-area .layout-split {
+        flex-direction: column;
+    }
+
+    .plots-area .layout-split-child {
+        flex: 0 0 auto !important;
+        flex-direction: column;
+    }
+
+    .plots-area .layout-split .layout-panel {
+        flex: 0 0 auto;
+        height: clamp(280px, 55svh, 520px);
+    }
+
+    .plots-area .layout-resize-handle,
+    .plots-area .layout-scroll-resize-handle {
+        display: none;
+    }
+
+    /* Plotly's button bar lands on top of the legend and the axis labels
+       at this size. A finger already pans, pinches to zoom and double-taps
+       to reset, and the panel's own toolbar exports. */
+    .plots-area .modebar-container {
+        display: none;
+    }
+
+    /* A panel toolbar wider than the panel scrolls sideways; fade the edge it
+       continues past, so a button cut in half reads as "more this way". */
+    .layout-panel-toolbar.can-scroll-right {
+        -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+        mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+    }
+
+    .layout-panel-toolbar.can-scroll-left {
+        -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+        mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+    }
+
+    .layout-panel-toolbar.can-scroll-left.can-scroll-right {
+        -webkit-mask-image: linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+        mask-image: linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+    }
+
     /* With the sidebar above the plots, its pill lies flat on the border
        between them, like the top bar's. Off-centre, so that with both panels
        folded the two pills do not land on top of each other. */
@@ -3695,7 +3755,14 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
         transform: translate(-50%, -50%);
     }
 
+    /* Folded, it stays on the top bar's border rather than hanging over the
+       first panel's toolbar, unless the top bar is folded too and that border
+       is the window's edge. */
     .main-container > .edge-toggle-rail-left .edge-toggle.is-collapsed {
+        transform: translate(-50%, -50%);
+    }
+
+    .top-bar.hidden ~ .main-container > .edge-toggle-rail-left .edge-toggle.is-collapsed {
         transform: translate(-50%, 0);
     }
 
