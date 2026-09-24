@@ -3895,14 +3895,19 @@ proto._updateCursorBox = function(view) {
     `;
     // The copy button shares the A-B line's row, outside its label so a
     // click on it never toggles the checkbox. The spectrum box has no A-B
-    // line; there the row holds the button alone (#178).
+    // line, and a row for the button alone would only make the box taller:
+    // there it sits beside the hints (#178).
     const copyTitle = this._escapeHTML(i18n.t('cursorCopy'));
-    const optionsHTML = `
-        <div class="cursor-options-row">
-            ${view.isSpectrum ? '' : secantHTML}
-            <button type="button" class="cursor-copy-btn" title="${copyTitle}" aria-label="${copyTitle}">${CURSOR_COPY_ICON}</button>
+    const copyBtnHTML = `<button type="button" class="cursor-copy-btn" title="${copyTitle}" aria-label="${copyTitle}">${CURSOR_COPY_ICON}</button>`;
+    const hintHTML = `
+        <div class="cursor-info-hint">
+            <div>${shiftHint}</div>
+            <div>${slideHint}</div>
         </div>
     `;
+    const optionsHTML = view.isSpectrum
+        ? `<div class="cursor-options-row cursor-options-row-hint">${hintHTML}${copyBtnHTML}</div>`
+        : `<div class="cursor-options-row">${secantHTML}${copyBtnHTML}</div>${hintHTML}`;
     const moveIcon = `<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>`;
     // Spectrum view: x is frequency; each cursor also reads its own period
     // T = 1/|f|. Δf is the absolute cursor separation, and 1/Δf is presented
@@ -3982,10 +3987,6 @@ proto._updateCursorBox = function(view) {
         </div>
         ${selectorsHTML}
         ${optionsHTML}
-        <div class="cursor-info-hint">
-            <div>${shiftHint}</div>
-            <div>${slideHint}</div>
-        </div>
         <div class="cursor-info-values">
             ${valuesHTML}
         </div>

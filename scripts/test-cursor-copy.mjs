@@ -57,10 +57,12 @@ assert.equal(
 assert.equal(cursorReadoutText(null), '');
 assert.equal(cursorReadoutText(values(el('  ')), ['', '  ']), '');
 
-// ── The box offers the button, on the A-B line's row ───────────────────────
+// ── Where the button sits: never on a row of its own ────────────────────────
 const interaction = readFileSync(new URL('../src/plots/methods/interaction-methods.js', import.meta.url), 'utf8');
-assert.match(interaction, /<div class="cursor-options-row">\s*\$\{view\.isSpectrum \? '' : secantHTML\}\s*<button type="button" class="cursor-copy-btn"/,
-    'the copy button sits after the A-B checkbox, and alone on the spectrum box');
+assert.match(interaction, /`<div class="cursor-options-row">\$\{secantHTML\}\$\{copyBtnHTML\}<\/div>\$\{hintHTML\}`/,
+    'time pane: after the A-B checkbox, on its row');
+assert.match(interaction, /`<div class="cursor-options-row cursor-options-row-hint">\$\{hintHTML\}\$\{copyBtnHTML\}<\/div>`/,
+    'spectrum pane (no A-B line): beside the hints, so the box does not grow');
 assert.ok(!/<label class="cursor-secant-toggle">[^]*cursor-copy-btn[^]*<\/label>/.test(interaction.slice(
     interaction.indexOf('const secantHTML'), interaction.indexOf('const optionsHTML'))),
     'outside the checkbox label, so a click on it never toggles the line');
