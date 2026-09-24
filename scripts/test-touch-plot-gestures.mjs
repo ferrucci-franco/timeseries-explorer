@@ -33,6 +33,7 @@ import {
     movedBeyondSlop,
     touchGestureOwnsDrag,
 } from '../src/utils/touch-plot-gestures.js';
+import { rangeFromLinear, rangeToLinear } from '../src/ui/plot-touch-gestures.js';
 
 // ── Whose gesture is it ─────────────────────────────────────────────────────
 assert.equal(touchGestureOwnsDrag('zoom'), true, 'the box zoom is the default nobody chose');
@@ -160,6 +161,30 @@ assert.match(installer, /if \(\(event\.touches\?\.length \|\| 0\) === 0\) claime
 assert.match(installer, /div\.classList\.add\(GESTURE_CLASS\);/, 'a moving gesture hides the hover label');
 assert.match(installer, /if \(moved\) plotly\.Fx\?\.unhover\?\.\(div\);/, 'and clears it when it is over');
 assert.doesNotMatch(installer, /if \(!moved\) plotly/, 'a tap is left to put one there, which is how a finger reads a value');
+
+// ── Every kind of axis moves, the calendar one included ─────────────────────
+// Plotly keeps a date axis's range as strings. Read as numbers they were NaN,
+// every x update was dropped, and on a file with calendar time a finger moved
+// the amplitude and nothing else: no sideways pan, no horizontal pinch.
+const hour = 3600e3;
+const dateAxis = {
+    range: ['1970-01-01', '1970-01-05 03:00'],
+    r2l: (v) => Date.parse(`${String(v).replace(' ', 'T')}Z`),
+    l2r: (ms) => `ms:${ms}`,
+};
+assert.deepEqual(rangeToLinear(dateAxis), [0, 99 * hour], 'a date range is read in ms');
+const panned = panZoomRange(rangeToLinear(dateAxis), 0, 0.25, 1);
+assert.deepEqual(rangeFromLinear(dateAxis, panned), [`ms:${-24.75 * hour}`, `ms:${74.25 * hour}`],
+    'and written back the way the axis keeps it');
+assert.deepEqual(rangeToLinear({ range: [-1, 2] }), [-1, 2], 'a plain numeric range is itself');
+assert.deepEqual(rangeFromLinear({ range: [-1, 2] }, [0, 1]), [0, 1]);
+assert.equal(rangeToLinear({ range: ['not a date', 'either'], r2l: () => NaN }), null,
+    'and one that cannot be read is left alone');
+assert.equal(rangeToLinear({}), null);
+assert.match(installer, /if \(typeof axis\.p2l === 'function'\) return Number\(axis\.p2l\(local\)\);/,
+    'the anchor is linearised too: p2c answers in data values on a log axis, not the log10 its range is in');
+assert.match(installer, /ranges: \{ x: rangeToLinear\(x\), y: rangeToLinear\(y\), y2: rangeToLinear\(y2\) \},/);
+assert.match(installer, /update\[`\$\{key\}\.range`\] = rangeFromLinear\(axis, next\);/);
 
 // The browser must not be able to claim the gesture first: that is what made a
 // late second finger arrive as a touchcancel instead of a pinch.
