@@ -68,6 +68,7 @@ class OpenModelicaViewer {
         this.initEventListeners();
         this.initDragAndDrop();
         this.initSidebarResize();
+        this.initTopBarToggle();
         i18n.setLanguage('en');
         this._syncSpellcheckLanguage();
         this._setDropZoneStatus(false);
@@ -125,6 +126,7 @@ class OpenModelicaViewer {
         this._applyReloadModeUI();
         this._applyCapabilitiesToUi();
         this._syncSidebarEdgeToggle?.();
+        this._syncTopBarEdgeToggle?.();
         this._syncSpellcheckLanguage();
         this._updateLiveUpdateTopBar?.();
         if (typeof this._syncLegendCornerPicker === 'function') this._syncLegendCornerPicker();

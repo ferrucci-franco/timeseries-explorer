@@ -3,7 +3,8 @@
  *
  * Both panels it serves could already be collapsed — the sidebar from the top
  * bar, an analysis options panel from its toolbar — but only from somewhere
- * else on screen. The hand is at the panel's border, having just resized it or
+ * else on screen. The top bar itself has no other control: once it is gone,
+ * the pill on its lower edge is the only way back. The hand is at the panel's border, having just resized it or
  * just read the last control in it, and had to travel to a toolbar to put the
  * panel away.
  *
@@ -32,7 +33,7 @@ function applyState(button, collapsed) {
 
 /**
  * @param {object} options
- * @param {'left'|'right'} options.side which side of the rail the panel is on
+ * @param {'left'|'right'|'top'} options.side which side of the rail the panel is on
  * @param {boolean} options.collapsed the panel's state right now
  * @param {string} options.hideKey translation key for the collapsing action
  * @param {string} options.showKey translation key for the restoring action
@@ -41,7 +42,8 @@ function applyState(button, collapsed) {
  */
 export function createEdgeToggle({ side, collapsed = false, hideKey, showKey, onToggle }) {
     const rail = document.createElement('div');
-    rail.className = `edge-toggle-rail edge-toggle-rail-${side === 'right' ? 'right' : 'left'}`;
+    const railSide = side === 'right' || side === 'top' ? side : 'left';
+    rail.className = `edge-toggle-rail edge-toggle-rail-${railSide}`;
 
     const button = document.createElement('button');
     button.type = 'button';
