@@ -3,7 +3,7 @@ import { getCalendarDateTickFormat } from '../plotly-locale.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
 import { hoverNumberFormat } from '../../utils/hover-precision.js';
 import { distinguishingParameterNames, runParameterLabel } from '../../utils/run-parameters.js';
-import { sampleMarkersVisible } from '../../utils/sample-markers.js';
+import { countDistinctPositions, sampleMarkersVisible, SAMPLE_POSITION_SCAN_LIMIT } from '../../utils/sample-markers.js';
 
 const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
 
@@ -1440,27 +1440,34 @@ proto._buildSparseVisualData = function(timeData, values) {
 // decimated stepped traces this way all along; this was the eager path's own
 // exception.
 //
-// The result also carries `sampleWindow: { exact, visibleCount }` for the
-// Samples toggle: `exact` is read off what this function actually produced (the
-// window came back at full length, so nothing was decimated) and
-// `visibleCount` is how many samples lie inside the visible range. Dots are
-// drawn only on an exact window — the same one that makes stairs exact.
+// The result also carries `sampleWindow: { exact, visibleCount, visiblePositions }`
+// for the Samples toggle: `exact` is read off what this function actually
+// produced (the window came back at full length, so nothing was decimated),
+// `visibleCount` is how many samples lie inside the visible range and
+// `visiblePositions` how many distinct instants they sit at. Dots are drawn
+// only on an exact window — the same one that makes stairs exact — and their
+// room on screen is judged by positions (see countDistinctPositions).
 proto._buildTimeseriesVisualData = function(timeData, values, visibleRange = null) {
     const n = Math.min(timeData?.length || 0, values?.length || 0);
-    const withWindow = (visual, windowLength, visibleCount) => {
-        visual.sampleWindow = {
-            exact: Math.max(visual.x?.length || 0, visual.y?.length || 0) === windowLength,
-            visibleCount,
-        };
+    const withWindow = (visual, windowLength, visibleStart, visibleEnd) => {
+        const exact = Math.max(visual.x?.length || 0, visual.y?.length || 0) === windowLength;
+        const visibleCount = Math.max(0, visibleEnd - visibleStart);
+        // Positions are only worth counting where dots could be drawn, and the
+        // scan is bounded: an exact window is at most the visual budget, except
+        // with downsampling off, where the row count stands in past the limit.
+        const visiblePositions = exact && visibleCount <= SAMPLE_POSITION_SCAN_LIMIT
+            ? countDistinctPositions(timeData, visibleStart, visibleEnd)
+            : visibleCount;
+        visual.sampleWindow = { exact, visibleCount, visiblePositions };
         return visual;
     };
-    if (n <= 0) return withWindow({ x: timeData || [], y: values || [] }, 0, 0);
+    if (n <= 0) return withWindow({ x: timeData || [], y: values || [] }, 0, 0, 0);
     const target = this.timeseriesVisualMaxPoints;
     if (!visibleRange || visibleRange[0] == null || visibleRange[1] == null) {
         const visual = target == null
             ? { x: timeData, y: values }
             : this._downsampleTimeseries(timeData, values, target);
-        return withWindow({ x: visual.x, y: visual.y }, n, n);
+        return withWindow({ x: visual.x, y: visual.y }, n, 0, n);
     }
 
     let [minX, maxX] = visibleRange.map(value => {
@@ -1481,21 +1488,20 @@ proto._buildTimeseriesVisualData = function(timeData, values, visibleRange = nul
         const visual = target == null
             ? { x: timeData, y: values }
             : this._downsampleTimeseries(timeData, values, target);
-        return withWindow({ x: visual.x, y: visual.y }, n, n);
+        return withWindow({ x: visual.x, y: visual.y }, n, 0, n);
     }
     if (minX > maxX) [minX, maxX] = [maxX, minX];
     const visibleStart = this._lowerBound(timeData, minX);
-    const visibleEnd = this._upperBound(timeData, maxX);
-    const visibleCount = Math.max(0, Math.min(n, visibleEnd) - visibleStart);
-    if (target == null) return withWindow({ x: timeData, y: values }, n, visibleCount);
+    const visibleEnd = Math.max(visibleStart, Math.min(n, this._upperBound(timeData, maxX)));
+    if (target == null) return withWindow({ x: timeData, y: values }, n, visibleStart, visibleEnd);
     const start = Math.max(0, visibleStart - 1);
     const end = Math.min(n, visibleEnd + 1);
-    if (end - start <= 0) return withWindow({ x: timeData, y: values }, n, visibleCount);
+    if (end - start <= 0) return withWindow({ x: timeData, y: values }, n, visibleStart, visibleEnd);
 
     // Decimate straight out of the source over [start, end). This used to slice
     // both arrays first, which on a zoomed-in multi-million-point trace copied
     // millions of elements per relayout event just to keep 2000 of them.
-    return withWindow(visualPairForRange(timeData, values, start, end, target), end - start, visibleCount);
+    return withWindow(visualPairForRange(timeData, values, start, end, target), end - start, visibleStart, visibleEnd);
 };
 
 proto._buildPhaseVisualSeries = function(seriesList) {
@@ -2115,7 +2121,7 @@ proto._timeseriesSampleMarkersShown = function(plot, t, visual) {
     if (!plot._sampleMarkerState) plot._sampleMarkerState = new WeakMap();
     const shown = sampleMarkersVisible({
         exact: !!visual?.sampleWindow?.exact,
-        visibleCount: visual?.sampleWindow?.visibleCount,
+        visiblePositions: visual?.sampleWindow?.visiblePositions,
         plotWidthPx: plot.div?._fullLayout?.xaxis?._length,
         wasShown: plot._sampleMarkerState.get(t) === true,
         minPxOn: PlotManager.SAMPLE_MARKERS_MIN_PX_ON,

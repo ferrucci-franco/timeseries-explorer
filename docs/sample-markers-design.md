@@ -64,26 +64,39 @@ always holds and condition 2 alone decides.
 
 ### Condition 2 — legibility (new; stairs do not have it)
 
-Mean horizontal spacing between visible samples must be at least **P pixels**:
+Mean horizontal spacing between visible **positions** (distinct x values) must be at
+least **P pixels**:
 
 ```
-pxPerSample = plotAreaWidthPx / visibleSampleCount   (per trace)
+pxPerPosition = plotAreaWidthPx / visiblePositions   (per trace)
 ```
 
 - `plotAreaWidthPx` = `div._fullLayout.xaxis._length`.
-- `visibleSampleCount` = samples whose x lies in the current x range, obtained by
-  binary search on the time vector (`_lowerBound` / `_upperBound`), so the test is
-  O(log n) per trace.
+- `visiblePositions` = distinct x values among the samples inside the current x range
+  (`countDistinctPositions` in `src/utils/sample-markers.js`). The range itself comes
+  from a binary search on the time vector (`_lowerBound` / `_upperBound`); the count is
+  a linear scan of that range, done only when the window is exact (so at most the
+  visual budget, 2000 by default) and skipped past `SAMPLE_POSITION_SCAN_LIMIT`
+  samples (downsampling off), where the row count stands in.
+- **Why positions and not rows** (changed after first use): rows that share one instant
+  sit in one column and take no extra horizontal room. A logger that stamps to the
+  second under a 10 Hz loop puts ten rows at each position; counting rows kept its dots
+  off until the view was zoomed ten times further than any other file needed, and they
+  then appeared ~40 px apart.
 - **Hysteresis** to avoid flicker when zooming around the threshold: dots turn **on**
-  at `pxPerSample ≥ P_ON` and turn **off** at `pxPerSample < P_OFF`.
+  at `pxPerPosition ≥ P_ON` and turn **off** at `pxPerPosition < P_OFF`.
 
-Internal flags, one place, easy to change (static fields on `PlotManager`, next to
-`DEFAULT_VISUAL_MAX_POINTS_TIMESERIES`):
+Internal flags, one place, easy to change (`src/utils/sample-markers.js`, exposed as
+static fields on `PlotManager`):
 
 ```js
-static SAMPLE_MARKERS_MIN_PX_ON  = 4;   // dots appear at ≥ 4 px per sample
-static SAMPLE_MARKERS_MIN_PX_OFF = 3;   // and disappear below 3 px
+SAMPLE_MARKERS_MIN_PX_ON  = 8;   // dots appear at ≥ 8 px per position
+SAMPLE_MARKERS_MIN_PX_OFF = 6;   // and disappear below 6 px
 ```
+
+The first values were 4 / 3 px. Spacing is measured centre to centre, so it has to
+clear the 5 px dot itself: at 4 px the dots touched and a trace read as a thick bead
+necklace. 8 px leaves a visible gap of about 3 px.
 
 Not exposed in Preferences.
 
@@ -91,7 +104,7 @@ Why stairs can do without condition 2 and dots cannot: a staircase squeezed belo
 pixel per step degrades into something that looks like the line — harmless. Dots do not
 degrade; they pile up into a smear that hides the curve.
 
-With P = 4 px a trace carries at most ~width/4 dots (≈ 250–500 on a normal panel), which
+With P = 8 px a trace carries at most ~width/8 positions (≈ 125–250 on a normal panel), which
 also bounds the rendering cost (see Performance).
 
 ## Appearance
@@ -147,7 +160,8 @@ Lazy (DuckDB, "memory-saving mode") files — checked, and left out of v1:
 
 ## Performance
 
-- Dots are only ever drawn on ≤ ~width/P points per trace, so SVG `scatter` is fine.
+- Dots are only ever drawn on ≤ ~width/P positions per trace (more rows only where rows
+  share an instant, and never more than the visual budget), so SVG `scatter` is fine.
   GL is already not used at that size (`GL_POINT_THRESHOLD = 50000`), so no
   `scatter ↔ scattergl` switching is introduced.
 - The per-trace decision is a binary search plus a division.
