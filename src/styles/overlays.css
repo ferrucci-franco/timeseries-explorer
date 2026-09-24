@@ -3585,6 +3585,129 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
     }
 }
 
+/* Phones (portrait). A first pass: nothing may make the page wider than the
+   screen, and the plots must get the full width. */
+@media (max-width: 600px) {
+    /* The title and a dozen buttons do not fit side by side. The title goes,
+       and the buttons become a strip that scrolls sideways instead of pushing
+       the page wider than the screen. Its menus would be clipped by that
+       strip, so they hang from the window instead. */
+    .top-bar {
+        --top-bar-control-height: 36px;
+        padding: 0.5rem;
+    }
+
+    .top-bar-left {
+        display: none;
+    }
+
+    .top-bar-right {
+        flex: 1 1 auto;
+        min-width: 0;
+        gap: 0.35rem;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+    }
+
+    .top-bar-right::-webkit-scrollbar {
+        display: none;
+    }
+
+    .top-bar-right > * {
+        flex-shrink: 0;
+    }
+
+    .language-selector {
+        margin-right: 0.25rem;
+    }
+
+    .lang-btn {
+        padding: 0.3rem 0.45rem;
+    }
+
+    .top-bar .icon-btn {
+        padding: 0.4rem 0.55rem;
+    }
+
+    .top-bar .example-menu {
+        position: fixed;
+        top: 56px;
+        right: 0.5rem;
+        max-width: calc(100vw - 1rem);
+        max-height: calc(100dvh - 72px);
+        overflow-y: auto;
+    }
+
+    /* A 320px sidebar beside the plots, or floating over them, leaves them
+       almost nothing. Stack it above them instead, at most a good third of
+       the height, folding up to nothing. A width dragged on a wider window
+       does not apply here, and neither does the drag. */
+    .main-container {
+        flex-direction: column;
+    }
+
+    .sidebar {
+        position: relative;
+        width: auto !important;
+        min-width: 0;
+        max-width: none;
+        height: auto;
+        max-height: 40vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        box-shadow: none;
+        transition: max-height 0.3s ease;
+    }
+
+    .sidebar.hidden {
+        width: auto !important;
+        max-height: 0;
+        border-bottom: none;
+    }
+
+    .sidebar::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    .sidebar-resize-handle,
+    .sidebar-resize-proxy {
+        display: none !important;
+    }
+
+    .content-area {
+        min-height: 0;
+    }
+
+    /* With the sidebar above the plots, its pill lies flat on the border
+       between them, like the top bar's. Off-centre, so that with both panels
+       folded the two pills do not land on top of each other. */
+    .main-container > .edge-toggle-rail-left {
+        width: auto;
+        height: 0;
+    }
+
+    .main-container > .edge-toggle-rail-left .edge-toggle {
+        top: 0;
+        left: 25%;
+        width: 46px;
+        height: 14px;
+        transform: translate(-50%, -50%);
+    }
+
+    .main-container > .edge-toggle-rail-left .edge-toggle.is-collapsed {
+        transform: translate(-50%, 0);
+    }
+
+    .main-container > .edge-toggle-rail-left .edge-toggle-chevron {
+        transform: rotate(90deg);
+    }
+
+    .main-container > .edge-toggle-rail-left .is-collapsed .edge-toggle-chevron {
+        transform: rotate(-90deg);
+    }
+}
+
 /* Cancel inside the conversion overlay. Work that runs for tens of seconds
    behind a modal with no exit reads as a hang, so the way out has to be
    visible — Escape alone is not something a user has any reason to try here. */
