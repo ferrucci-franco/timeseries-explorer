@@ -285,6 +285,7 @@ proto._captureSessionSettings = function() {
         variableFilterText: this._filterText || '',
         sidebarHidden: !!sidebar?.classList.contains('hidden'),
         sidebarWidth: sidebar?.style.width || '',
+        topBarHidden: !!document.querySelector('.top-bar')?.classList.contains('hidden'),
     };
 };
 
@@ -642,6 +643,7 @@ proto._applySessionSettings = function(settings) {
     this._filterText = String(settings.variableFilterText || '').trim().toLowerCase();
     this._sessionSidebarHidden = !!settings.sidebarHidden;
     this._sessionSidebarWidth = typeof settings.sidebarWidth === 'string' ? settings.sidebarWidth : '';
+    this._sessionTopBarHidden = !!settings.topBarHidden;
     if (settings.advancedSettings && this._normalizeAdvancedSettings) {
         this.advancedSettings = this._normalizeAdvancedSettings(settings.advancedSettings);
         this._saveAdvancedSettings?.(this.advancedSettings);
@@ -747,6 +749,8 @@ proto._syncSessionSettingsUI = function() {
     // A restored view sets the class directly, so the control on the sidebar's
     // edge has to be told where the sidebar ended up.
     this._syncSidebarEdgeToggle?.();
+    document.querySelector('.top-bar')?.classList.toggle('hidden', !!this._sessionTopBarHidden);
+    this._syncTopBarEdgeToggle?.();
     this._applyReloadModeUI?.();
     this._syncLegendCornerPicker?.();
     this._syncHoverCornerPicker?.();

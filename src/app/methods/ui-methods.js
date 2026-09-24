@@ -3074,6 +3074,40 @@ proto.initDragAndDrop = function() {
     });
 };
 
+// ─── Top bar collapse ──────────────────────────────────────────
+
+// The same pill the sidebar has, on the top bar's lower edge. It is the only
+// control that brings the bar back, so it has to stay in the window either way.
+proto.toggleTopBar = function() {
+    const topBar = document.querySelector('.top-bar');
+    if (!topBar) return;
+    topBar.classList.toggle('hidden');
+    this._syncTopBarEdgeToggle();
+    setTimeout(() => this.plotManager.resizeAll(), 320);
+};
+
+proto._syncTopBarEdgeToggle = function() {
+    if (!this._topBarEdgeToggle) return;
+    const topBar = document.querySelector('.top-bar');
+    const hidden = !!topBar?.classList.contains('hidden');
+    // Collapsed controls must not be reachable by Tab.
+    topBar?.toggleAttribute('inert', hidden);
+    syncEdgeToggle(this._topBarEdgeToggle, hidden);
+};
+
+proto.initTopBarToggle = function() {
+    const topBar = document.querySelector('.top-bar');
+    if (!topBar) return;
+    this._topBarEdgeToggle = createEdgeToggle({
+        side: 'top',
+        collapsed: topBar.classList.contains('hidden'),
+        hideKey: 'edgeHideTopBar',
+        showKey: 'edgeShowTopBar',
+        onToggle: () => this.toggleTopBar(),
+    });
+    topBar.insertAdjacentElement('afterend', this._topBarEdgeToggle);
+};
+
 // ─── Sidebar resize ────────────────────────────────────────────
 
 // One place to put the sidebar away, so the top-bar button and the control on

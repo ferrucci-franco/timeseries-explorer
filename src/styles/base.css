@@ -109,6 +109,16 @@ body {
     flex-shrink: 0;
     position: relative;
     z-index: 1300;
+    /* Collapsing slides the bar up out of the window rather than squeezing
+       its height: the controls keep their layout and nothing spills over the
+       plots while it moves. */
+    transition: margin-top 0.3s ease, visibility 0s linear 0s;
+}
+
+.top-bar.hidden {
+    margin-top: -60px;
+    visibility: hidden;
+    transition: margin-top 0.3s ease, visibility 0s linear 0.3s;
 }
 
 .top-bar-left {
@@ -1228,6 +1238,31 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 .edge-toggle-rail-right .edge-toggle-chevron { transform: rotate(180deg); }
 .edge-toggle-rail-left .is-collapsed .edge-toggle-chevron { transform: rotate(180deg); }
 .edge-toggle-rail-right .is-collapsed .edge-toggle-chevron { transform: rotate(0deg); }
+
+/* The top bar's rail lies flat between the bar and the main area: full
+   width, zero height. It sits above the bar's own layer (1300) so the half of
+   the pill that overlaps the bar is not covered by it. */
+.edge-toggle-rail-top {
+    flex: 0 0 0;
+    width: auto;
+    height: 0;
+    z-index: 1310;
+}
+
+.edge-toggle-rail-top .edge-toggle {
+    top: 0;
+    left: 50%;
+    width: 46px;
+    height: 14px;
+}
+
+/* Collapsed, the pill drops fully below the window's top edge. */
+.edge-toggle-rail-top .edge-toggle.is-collapsed {
+    transform: translate(-50%, 0);
+}
+
+.edge-toggle-rail-top .edge-toggle-chevron { transform: rotate(90deg); }
+.edge-toggle-rail-top .is-collapsed .edge-toggle-chevron { transform: rotate(-90deg); }
 
 /* Narrow screens stack an analysis workspace, so the border the rail sits on
    turns horizontal and the pill turns with it. */
