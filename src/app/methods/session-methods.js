@@ -261,6 +261,7 @@ proto._createSessionSnapshot = function(options = {}) {
 
 proto._captureSessionSettings = function() {
     const sidebar = typeof document !== 'undefined' ? document.getElementById('sidebar') : null;
+    const topBar = typeof document !== 'undefined' ? document.querySelector('.top-bar') : null;
     return {
         theme: this.theme,
         language: this.language,
@@ -285,7 +286,7 @@ proto._captureSessionSettings = function() {
         variableFilterText: this._filterText || '',
         sidebarHidden: !!sidebar?.classList.contains('hidden'),
         sidebarWidth: sidebar?.style.width || '',
-        topBarHidden: !!document.querySelector('.top-bar')?.classList.contains('hidden'),
+        topBarHidden: !!topBar?.classList.contains('hidden'),
     };
 };
 
