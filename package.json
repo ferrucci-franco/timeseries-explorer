@@ -121,6 +121,7 @@
     "test:cursor-touch": "node scripts/test-cursor-touch.mjs",
     "test:cursor-y2": "node scripts/test-cursor-y2.mjs",
     "test:cursor-date-axis": "node scripts/test-cursor-date-axis.mjs",
+    "test:cursor-copy": "node scripts/test-cursor-copy.mjs",
     "test:autoscale-axis": "node scripts/test-autoscale-axis.mjs",
     "test:i18n-consistency": "node scripts/test-i18n-consistency.mjs",
     "test:source-encoding": "node scripts/test-source-encoding.mjs",
