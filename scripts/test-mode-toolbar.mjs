@@ -475,6 +475,10 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.ok(y2Btn, `${mode}: Y shares the contextual group`);
     const missingBtn = tools.querySelector('.timeseries-missing-btn');
     assert.ok(missingBtn, `${mode}: Missing-data toggle shares the contextual group`);
+    const samplesBtn = tools.querySelector('.timeseries-samples-btn');
+    assert.ok(samplesBtn, `${mode}: Samples toggle shares the contextual group`);
+    assert.equal(tools.children.indexOf(samplesBtn), tools.children.indexOf(missingBtn) + 1, `${mode}: Samples sits right after Missing/NaN`);
+    assert.equal(samplesBtn.getAttribute('aria-pressed'), 'false', `${mode}: Samples is off by default`);
 
     const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
     assert.deepEqual(
@@ -482,7 +486,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
         ['fft', 'heatmap', 'histogram', 'integral', 'temporal-profile'],
         `${mode}: all time-series analyses share the contextual group beside Stack/Y`,
     );
-    for (const button of [stackBtn, y2Btn, missingBtn, ...analysisButtons]) {
+    for (const button of [stackBtn, y2Btn, missingBtn, samplesBtn, ...analysisButtons]) {
         assert.ok(
             button.classList.contains('panel-toggle-btn'),
             `${mode}: ${button.textContent} uses the common pressed/unpressed button treatment`,
@@ -515,8 +519,9 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
         timeseriesStacked: true,
         timeseriesY2Enabled: true,
         showMissingData: true,
+        showSamples: true,
     });
-    for (const selector of ['.timeseries-stack-btn', '.timeseries-y2-btn', '.timeseries-missing-btn']) {
+    for (const selector of ['.timeseries-stack-btn', '.timeseries-y2-btn', '.timeseries-missing-btn', '.timeseries-samples-btn']) {
         const button = toolbar.querySelector(selector);
         assert.ok(button.classList.contains('active'), `${selector}: enabled option renders pressed`);
         assert.equal(button.getAttribute('aria-pressed'), 'true', `${selector}: enabled option reports pressed`);

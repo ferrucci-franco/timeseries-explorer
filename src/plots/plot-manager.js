@@ -17,6 +17,7 @@ import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 import { dropMissingVariablesFromPanels } from '../utils/panel-variables.js';
 import { formatMissingCount, seriesStats } from '../utils/series-stats.js';
+import { SAMPLE_MARKERS_MIN_PX_ON, SAMPLE_MARKERS_MIN_PX_OFF } from '../utils/sample-markers.js';
 
 /**
  * PlotManager — Plotly chart lifecycle tied to the dynamic layout
@@ -884,6 +885,7 @@ class PlotManager {
         plot.timeseriesStacked = false;
         plot.timeseriesY2Enabled = false;
         plot.showMissingData = false;
+        plot.showSamples = false;
         plot.traces.forEach(trace => { trace.axis = 'y'; });
         // Preserve per-mode config (FFT, histogram, calendar heatmap and temporal profile options,
         // selection, cursors) when switching inside the time-series family, so
@@ -2438,6 +2440,7 @@ class PlotManager {
             existing.timeseriesStacked = false;
             existing.timeseriesY2Enabled = false;
             existing.showMissingData = false;
+            existing.showSamples = false;
             existing.fft = this._defaultFftState?.() || existing.fft;
             existing._fftSpectrumCache = null;
             existing.heatmap = this._defaultHeatmapState?.() || existing.heatmap;
@@ -2551,6 +2554,14 @@ class PlotManager {
             missingBtn.disabled = !enabled;
             missingBtn.classList.toggle('active', !!plot?.showMissingData);
             missingBtn.setAttribute('aria-pressed', plot?.showMissingData ? 'true' : 'false');
+        }
+        const samplesBtn = panelEl.querySelector('.timeseries-samples-btn');
+        if (samplesBtn) {
+            // Stacked panels draw cumulative y, so a dot would not be the sample.
+            const enabled = has && plot?.mode === 'timeseries' && !plot?.timeseriesStacked;
+            samplesBtn.disabled = !enabled;
+            samplesBtn.classList.toggle('active', !!plot?.showSamples);
+            samplesBtn.setAttribute('aria-pressed', plot?.showSamples ? 'true' : 'false');
         }
         panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
             const active = btn.dataset.mode === plot?.mode;
@@ -3864,6 +3875,7 @@ class PlotManager {
             timeseriesStacked: false,
             timeseriesY2Enabled: false,
             showMissingData: false,
+            showSamples: false,
             equalAspect2D: false,
             resizeObserver: null,
             fftDiv: null,
@@ -4440,6 +4452,10 @@ class PlotManager {
     ];
     static GL_POINT_THRESHOLD = 50000;
     static DEFAULT_VISUAL_MAX_POINTS_TIMESERIES = 2000;
+    // Samples toggle: dots appear at ≥ ON px per sample and go below OFF px.
+    static SAMPLE_MARKERS_MIN_PX_ON = SAMPLE_MARKERS_MIN_PX_ON;
+    static SAMPLE_MARKERS_MIN_PX_OFF = SAMPLE_MARKERS_MIN_PX_OFF;
+    static SAMPLE_MARKER_SIZE = 5;
     static DEFAULT_VISUAL_MAX_POINTS_PHASE = 4000;
     static MAX_MENU_VISUAL_POINTS = 10000;
     static LIVE_RELAYOUT_MAX_SOURCE_POINTS = 500000;

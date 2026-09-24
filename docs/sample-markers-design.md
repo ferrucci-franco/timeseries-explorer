@@ -1,6 +1,6 @@
 # Sample Markers Design ("Samples" toggle)
 
-Status: specified, not built. Build this first; the **Repeated** toggle
+Status: v1 built (eager files). The **Repeated** toggle
 ([repeated-timestamps-indicator-design.md](repeated-timestamps-indicator-design.md))
 builds on it.
 
@@ -40,9 +40,11 @@ envelope point, and only when there is room on screen to tell dots apart.
 
 ## When dots are drawn
 
-Decided **per trace** (two files in one panel may be sampled very differently), on each
-settled relayout (`plotly_relayout` → `_onRelayout`), not during a drag
-(`plotly_relayouting`). Both conditions must hold:
+Decided **per trace** (two files in one panel may be sampled very differently),
+wherever the panel's visual data is refreshed (`_refreshTimeseriesVisuals`: after
+creation, on each zoom or pan, and during a live drag when that refresh runs). The
+test is a binary search and a division, and the hysteresis keeps it steady, so there
+is no need to hold it back until the drag settles. Both conditions must hold:
 
 ### Condition 1 — exact data (same branch as stairs)
 
@@ -129,11 +131,19 @@ Out, v1:
 - time panes of FFT, Histogram, Heatmap, Temporal profile, Integral;
 - the data-tool preview trace (`markersOnly`), which already draws its own markers.
 
-To verify before building:
+Lazy (DuckDB, "memory-saving mode") files — checked, and left out of v1:
 
-- **Lazy (DuckDB) files.** Check whether a small visible window returns raw rows or
-  buckets. If raw rows, the same two conditions apply; if buckets, no dots (condition 1
-  fails) and the notice is shown.
+- Zoomed out, the time-series panel draws a lazy trace from the in-memory overview,
+  a sample of the file that is not its rows, so condition 1 can never hold there.
+- Zoomed in, `DuckDbSource._queryColumnsRange` does have a `raw` mode: when the
+  estimated rows in the window are ≤ ~1.2 × the budget it returns the rows
+  themselves rather than min/max buckets (`_perf.mode === 'raw'`). Dots on lazy
+  files are therefore possible as a follow-up: carry that mode to
+  `_applyBatchedTimeseriesRestyle` as the `exact` flag, with the visible count from
+  the returned rows.
+- Until then a lazy trace never gets dots. If every candidate trace on the panel is
+  lazy, the pill says so (*Samples are not shown yet for files loaded in
+  memory-saving mode*) instead of asking the user to zoom in, which would not help.
 
 ## Performance
 

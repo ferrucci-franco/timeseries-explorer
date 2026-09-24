@@ -325,8 +325,13 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     const xs = [];
     const ys = [];
     const cds = [];
+    const modes = [];
+    const markers = [];
     const indices = [];
     let anyCustomdata = false;
+    // Samples toggle: whether a trace has dots depends on the zoom, so `mode`
+    // travels with the data. Off, the restyle stays exactly what it was.
+    const samplesEnabled = this._timeseriesSamplesEnabled(plot);
     // Line breaks across missing data must be re-applied here: this restyle is
     // the authoritative data path (runs after create and on every zoom), so it
     // would otherwise overwrite the breaks. The FFT pane always breaks across
@@ -361,13 +366,20 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
         ys.push(built.y);
         cds.push(built.customdata ?? null);
         if (built.customdata) anyCustomdata = true;
+        modes.push(built.mode || 'lines');
+        markers.push(built.marker || this._timeseriesSampleMarker(t));
         indices.push(idx);
     });
     if (indices.length) {
         const update = { x: xs, y: ys };
         if (anyCustomdata) update.customdata = cds;
+        if (samplesEnabled) {
+            update.mode = modes;
+            update.marker = markers;
+        }
         Plotly.restyle(plot.div, update, indices);
     }
+    if (plot.mode === 'timeseries') this._refreshSamplesNotice(plot);
     // Keep the bands' adaptive width in step with the zoom. A shapes-only
     // relayout is ignored by _onRelayout (no x-axis change), so this cannot loop.
     // _missingDataBandShapes sets plot._missingTooDense for the current view;
@@ -431,7 +443,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         if (!lazyMeta) {
             // Mixed lazy/eager: fall back to the sync path for this trace.
             const built = this._buildTimeTrace(t, range, plot, idx);
-            if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
+            if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, mode: built.mode, marker: built.marker, prepared: true });
             if (perf) perf.eagerTraces++;
             return;
         }
@@ -443,7 +455,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         const droppedVar = data?.variables?.[t.varName];
         if (droppedVar?.derived && !droppedVar._duckdbCol) {
             const built = this._buildTimeTrace(t, range, plot, idx);
-            if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
+            if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, mode: built.mode, marker: built.marker, prepared: true });
             if (perf) perf.eagerTraces++;
             return;
         }
@@ -452,7 +464,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
         const sourceViewportRange = this._sourceRangeForDisplayRange(t.fileId, [t0, t1], timeVar);
         if (!sourceViewportRange || !sourceViewportRange.every(Number.isFinite)) {
             const built = this._buildTimeTrace(t, range, plot, idx);
-            if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
+            if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, mode: built.mode, marker: built.marker, prepared: true });
             if (perf) perf.overviewTraces++;
             return;
         }
@@ -478,7 +490,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
             if (overviewPtsInView >= target * 1.25) {
                 // Overview is enough — use the sync path (slice + downsample in JS).
                 const built = this._buildTimeTrace(t, range, plot, idx);
-                if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, prepared: true });
+                if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, mode: built.mode, marker: built.marker, prepared: true });
                 if (perf) perf.overviewTraces++;
                 return;
             }
@@ -524,6 +536,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     }
     if (lazyQueryCount > 0) this._setLazyDetailLoading(plot, true, targetInfo);
     else this._setLazyDetailLoading(plot, false);
+    if (plot.mode === 'timeseries') this._refreshSamplesNotice(plot);
     this._refreshElapsedDateTimeAxisTicks(plot, range);
     if (lazyQueryCount === 0) {
         const settledNoQuery = Promise.resolve(immediateResults);
@@ -1017,7 +1030,10 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     const xs = [];
     const ys = [];
     const cds = [];
+    const modes = [];
+    const markers = [];
     let anyCustomdata = false;
+    const samplesEnabled = this._timeseriesSamplesEnabled?.(plot);
     // Cut the min/max envelope across real time gaps (empty buckets) so it never
     // draws a diagonal across a hole — same intent as the eager line breaks.
     // FFT pane: always; timeseries: only under the Missing/NaN opt-in.
@@ -1031,9 +1047,21 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
         ys.push(prepared.y);
         cds.push(prepared.customdata ?? null);
         if (prepared.customdata) anyCustomdata = true;
+        // Lazy detail is never raw samples to dot; an eager trace sharing the
+        // panel brings its own decision along with its data.
+        // A markers-only preview keeps what it is drawn with.
+        const current = plot.div.data?.[result.idx];
+        const keepMarkers = current?.mode === 'markers';
+        modes.push(result.prepared && result.mode ? result.mode : (keepMarkers ? 'markers' : 'lines'));
+        markers.push(result.marker || (keepMarkers && current?.marker)
+            || (samplesEnabled ? this._timeseriesSampleMarker(trace) : null));
     }
     const update = { x: xs, y: ys };
     if (anyCustomdata) update.customdata = cds;
+    if (samplesEnabled) {
+        update.mode = modes;
+        update.marker = markers;
+    }
     return Plotly.restyle(plot.div, update, valid.map(result => result.idx));
 };
 
@@ -4583,6 +4611,18 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         });
         timeseriesToolsGroup.appendChild(missingBtn);
 
+        const samplesBtn = document.createElement('button');
+        samplesBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-samples-btn' + (plot?.showSamples ? ' active' : '');
+        samplesBtn.textContent = i18n.t('timeseriesSamplesLabel');
+        samplesBtn.title = i18n.t('timeseriesSamplesToggle');
+        samplesBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries' && !plot?.timeseriesStacked);
+        samplesBtn.setAttribute('aria-pressed', plot?.showSamples ? 'true' : 'false');
+        samplesBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleSamples(panelId);
+        });
+        timeseriesToolsGroup.appendChild(samplesBtn);
+
         const analysisModes = [
             { id: 'fft', label: 'Fourier', titleKey: 'modeFFT', className: 'timeseries-fourier-btn' },
             { id: 'histogram', label: i18n.t('modeHistogramLabel'), titleKey: 'modeHistogram', className: 'timeseries-histogram-btn' },
@@ -5009,6 +5049,74 @@ proto._toggleMissingData = function(panelId) {
     // bands (layout shapes) and reconnect the line (drop the NaN breaks).
     if (plot.div) this._rebuildPanel(panelId, { restoreView: capturedView });
     else this._refreshActionBtns(panelId);
+};
+
+proto._toggleSamples = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'timeseries') return;
+    const capturedView = plot.div ? this._capturePlotView(plot) : null;
+    plot.showSamples = !plot.showSamples;
+    plot._sampleMarkerState = null;
+
+    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
+    const btn = panelEl?.querySelector('.timeseries-samples-btn');
+    if (btn) {
+        btn.classList.toggle('active', !!plot.showSamples);
+        btn.setAttribute('aria-pressed', plot.showSamples ? 'true' : 'false');
+    }
+    if (!plot.showSamples) this._setSamplesNotice(plot, null);
+
+    // Rebuild rather than restyle, like Missing/NaN: the rebuilt panel runs the
+    // authoritative refresh, which decides the dots against the laid-out axis.
+    if (plot.div) this._rebuildPanel(panelId, { restoreView: capturedView });
+    else this._refreshActionBtns(panelId);
+};
+
+// The Samples toggle's pill. `state`: null → hide; 'zoom' → no trace has room
+// for its dots here; 'lazy' → every candidate trace comes from a large file
+// opened in lazy mode, where zooming would not help.
+proto._setSamplesNotice = function(plot, state) {
+    const panelEl = plot?.div?.closest('.layout-panel');
+    if (!panelEl) return;
+    let pill = panelEl.querySelector('.samples-zoom-indicator');
+    if (state === 'zoom' || state === 'lazy') {
+        if (!pill) {
+            pill = document.createElement('div');
+            pill.className = 'lazy-detail-indicator samples-zoom-indicator';
+            pill.setAttribute('aria-live', 'polite');
+            pill.innerHTML = '<span class="lazy-detail-text"></span>';
+            panelEl.appendChild(pill);
+        }
+        const label = i18n.t(state === 'lazy' ? 'timeseriesSamplesLazy' : 'timeseriesSamplesZoomIn');
+        const text = pill.querySelector('.lazy-detail-text');
+        if (text) text.textContent = label;
+        pill.title = label;
+        pill.setAttribute('aria-label', label);
+        pill.classList.add('active');
+    } else if (pill) {
+        pill.classList.remove('active');
+        pill.remove();
+    }
+};
+
+// After a refresh: say why no dots are on screen, if none are. Traces the
+// legend hides do not count, and neither do those that can never have dots
+// unless they are all there is (then the reason is the lazy file, not zoom).
+proto._refreshSamplesNotice = function(plot) {
+    if (!this._timeseriesSamplesEnabled?.(plot)) {
+        this._setSamplesNotice(plot, null);
+        return;
+    }
+    const visible = plot.traces.filter(t => t.visible !== false && t.visible !== 'legendonly');
+    const eligible = visible.filter(t => this._timeseriesSampleMarkersEligible(plot, t));
+    const anyShown = eligible.some(t => plot._sampleMarkerState?.get(t) === true);
+    const anyLazy = visible.some(t => !!this.files.get(t.fileId)?.data?._duckdb);
+    let state = null;
+    if (!anyShown) {
+        if (eligible.length) state = 'zoom';
+        else if (anyLazy) state = 'lazy';
+    }
+    this._setSamplesNotice(plot, state);
 };
 
 proto._toggleTimeseriesY2 = function(panelId) {

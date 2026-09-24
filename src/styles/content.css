@@ -3056,6 +3056,16 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
     top: 88px;
 }
 
+/* The Samples pill is its own lifecycle too. It takes the next free slot below
+   whichever of the other two pills are showing. */
+.layout-panel:has(.missing-dense-indicator.active) .samples-zoom-indicator.active,
+.layout-panel:has(.lazy-data-detail-indicator.active) .samples-zoom-indicator.active {
+    top: 88px;
+}
+.layout-panel:has(.missing-dense-indicator.active):has(.lazy-data-detail-indicator.active) .samples-zoom-indicator.active {
+    top: 130px;
+}
+
 @keyframes lazy-detail-spin {
     to { transform: rotate(360deg); }
 }
