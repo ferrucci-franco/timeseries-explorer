@@ -111,6 +111,17 @@ Recommended smoke tests:
 4. Toggle theme and language
 5. Open help or example menu if the change touched UI behavior
 
+## Automated tests
+
+- `npm run test:release` runs the offline unit suite (every `test:*` script). It
+  runs the code against hand-made stubs and needs no browser.
+- `npm run e2e` drives the real app in Chromium through Playwright. It covers
+  what the stubs cannot show: Plotly's own behaviour and a browser clock in a
+  time zone other than UTC (the A|B cursors on a date axis, #176). Install the
+  browser once with `npx playwright install chromium`.
+
+CI runs both on every pull request and on every push to `main`.
+
 ## Build check
 
 Before publishing:
