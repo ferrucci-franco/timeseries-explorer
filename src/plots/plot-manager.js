@@ -2472,6 +2472,7 @@ class PlotManager {
             existing.integral = this._defaultIntegralState?.() || existing.integral;
             existing.correlation = this._defaultCorrelationState?.() || existing.correlation;
             existing.phase2d = this._defaultPhase2dState?.() || existing.phase2d;
+            existing.pairDisplay3D = {};
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
             existing.cursors = this._defaultCursors();

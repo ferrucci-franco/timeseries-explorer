@@ -100,7 +100,13 @@ try {
         const cam = scene.getCamera();
         return { eye: cam.eye, aspect: scene.glplot.getAspectratio(), ortho: !!scene.camera._ortho };
     }, panelId);
+    const sceneClip = await page.evaluate(id => {
+        const r = window.app.plotManager.plots.get(id).div.getBoundingClientRect();
+        return { x: r.left, y: r.top, width: r.width, height: r.height };
+    }, panelId);
+    const sceneShot = () => page.screenshot({ clip: sceneClip });
     const before = await readView();
+    const beforeShot = await sceneShot();
     const cdp = await context.newCDPSession(page);
     const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', {
         type, touchPoints: points.map((p, i) => ({ x: p[0], y: p[1], id: i })),
@@ -114,6 +120,11 @@ try {
         await touch('touchMove', [[box.cx - d, box.cy], [box.cx + d - 6, box.cy + 5]]);
         await touch('touchMove', [[box.cx - d, box.cy], [box.cx + d, box.cy + 5]]);
     }
+    // Both fingers still down: the zoom has to be on screen already, not only
+    // once they lift (an orthographic aspect change used to wait for a redraw).
+    await page.waitForTimeout(150);
+    const midShot = await sceneShot();
+    assert.notDeepEqual(midShot, beforeShot, 'the pinch zoom is drawn while the fingers are still down');
     await touch('touchEnd', [[box.cx + 160, box.cy + 5]]);
     // The remaining finger drifts before lifting: it must not rotate either.
     await touch('touchMove', [[box.cx + 190, box.cy + 40]]);
@@ -135,10 +146,20 @@ try {
 
     // ── Wheel: proportional, many small ctrl-wheel events (a trackpad pinch) ──
     const beforeWheel = await readView();
+    // Count the scene's redraws: the wheel zoom must be drawn as it happens,
+    // well before the layout is synced once the wheel settles.
+    await page.evaluate(id => {
+        const glplot = window.app.plotManager.plots.get(id).div._fullLayout.scene._scene.glplot;
+        const redraw = glplot.redraw.bind(glplot);
+        window.__redraws = 0;
+        glplot.redraw = (...args) => { window.__redraws += 1; return redraw(...args); };
+    }, panelId);
     await page.mouse.move(box.cx, box.cy);
     await page.keyboard.down('Control');
     for (let i = 0; i < 20; i++) await page.mouse.wheel(0, -2);
+    const redrawsDuring = await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve(window.__redraws))));
     await page.keyboard.up('Control');
+    assert.ok(redrawsDuring > 0, `the wheel zoom is drawn during the gesture (${redrawsDuring} redraws)`);
     await page.waitForTimeout(400);
     const afterWheel = await readView();
     const ratio = afterWheel.ortho ? afterWheel.aspect.x / beforeWheel.aspect.x : 1;
@@ -163,6 +184,32 @@ try {
     const cosP = dir(beforePersp.eye).reduce((acc, c, i) => acc + c * dir(afterPersp.eye)[i], 0);
     assert.ok(cosP > 0.999, `perspective: no rotation (cos = ${cosP})`);
     assert.ok(dist(afterPersp) < dist(beforePersp) / 1.5, `perspective: the camera moved closer (${dist(beforePersp).toFixed(2)} → ${dist(afterPersp).toFixed(2)})`);
+
+    // ── Each pair mode keeps its own display, and starts on Lines ──
+    const displayOf = (mode) => page.evaluate(({ id, mode }) => {
+        const pm = window.app.plotManager;
+        return pm._pairDisplayState(pm.plots.get(id), mode).displayMode;
+    }, { id: panelId, mode });
+    assert.equal(await displayOf('phase3d'), 'lines+markers', '3D keeps Lines+points');
+    assert.equal(await displayOf('phase2dt'), 'lines', '2D+t starts on Lines');
+    assert.equal(await displayOf('phase2d'), 'lines', '2D starts on Lines');
+    await page.evaluate(id => {
+        const pm = window.app.plotManager;
+        const panelEl = document.querySelector(`.layout-panel[data-id="${id}"]`);
+        pm._setMode(id, 'phase2dt');
+        if (!pm.plots.get(id).phaseTraces?.length) {
+            pm.addTrace(id, 'x', panelEl);
+            pm.addTrace(id, 'y', panelEl);
+        }
+    }, panelId);
+    await page.waitForFunction(id => window.app.plotManager.plots.get(id)?.div?.data?.some(d => d.type === 'scatter3d' && d.x?.length > 100), panelId, { timeout: 30000 });
+    await page.waitForTimeout(500);
+    const modes2dt = await page.evaluate(id => window.app.plotManager.plots.get(id).div.data
+        .filter(d => d.type === 'scatter3d' && !String(d.name).startsWith('__')).map(d => d.mode), panelId);
+    assert.ok(modes2dt.every(m => m === 'lines'), `2D+t draws lines (${modes2dt})`);
+    await openView();
+    assert.equal(await viewMenu.locator('.marks-display-lines.checked').count(), 1, 'the 2D+t View menu shows Lines');
+    await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, [], 'no page errors');
     console.log('3D display and pinch end-to-end checks passed.');
