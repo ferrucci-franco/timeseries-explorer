@@ -113,6 +113,37 @@ function commit(div, scene) {
     } catch (_) { /* the scene was replaced mid-gesture: nothing to sync */ }
 }
 
+// Every full redraw of a scene re-applies its turntable drag mode, and Plotly's
+// camera answers that by scheduling a 500 ms transition to "z up" — even when
+// z is already up. Until that keyframe's time has passed, whatever the mouse
+// does to the camera is overridden by it. A plot redrawn every frame (the 3D
+// state animation) keeps it permanently 500 ms ahead, so a drag started while
+// it plays did nothing for half a second. This drops the pending keyframes and
+// lands the camera, now, on the state they were heading to.
+function settleFilteredVector(fv, now) {
+    const time = fv?._time;
+    if (!Array.isArray(time) || !(time[time.length - 1] > now)) return;
+    // The keyframes keep their states; they are only moved to the present,
+    // so the camera is already where the transition was heading.
+    for (let i = time.length - 1; i >= 0 && time[i] > now; i--) time[i] = now;
+}
+
+export function settleSceneCamera(div) {
+    const layout = div?._fullLayout;
+    if (!layout) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    for (const key of Object.keys(layout)) {
+        if (!key.startsWith('scene')) continue;
+        const view = layout[key]?._scene?.camera?.view;
+        if (!view?._controllerList) continue;
+        try {
+            for (const controller of view._controllerList) {
+                for (const value of Object.values(controller)) settleFilteredVector(value, now);
+            }
+        } catch (_) { /* a camera shaped differently: leave it be */ }
+    }
+}
+
 // Fired on the graph div when a hand starts or stops working a scene (any
 // touch on it, or a burst of wheel events), so a view that redraws itself
 // every frame — the 3D state animation — can stand still meanwhile instead
