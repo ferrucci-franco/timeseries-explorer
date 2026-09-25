@@ -932,7 +932,7 @@ export function installPlotMarksMethods(TargetClass) {
 
     // Where the user dragged the panel, in px from the panel's top-left
     // (plot._gapsPanelPos), clamped so it stays inside the panel. Absent: the
-    // CSS default, top right under the modebar.
+    // CSS default, top right.
     proto._applyGapsPanelPosition = function(panelId, panel) {
         const pos = this.plots.get(panelId)?._gapsPanelPos;
         const host = panel?.parentElement;

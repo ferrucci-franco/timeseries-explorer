@@ -1887,11 +1887,11 @@
     color: var(--primary-color);
 }
 
-/* Gaps settings: Δt and threshold per file, over the top-right of the plot,
-   below Plotly's modebar. */
+/* Gaps settings: Δt and threshold per file, over the top-right of the plot
+   until the user drags it elsewhere. */
 .gaps-panel {
     position: absolute;
-    top: 76px;
+    top: 44px;
     right: 12px;
     z-index: 9;
     width: max-content;
