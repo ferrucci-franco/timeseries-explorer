@@ -21,11 +21,20 @@ import {
     runCollapseRepeats,
     timestampRuns,
 } from '../../compute/kernels/collapse-repeats.js';
+import { RESAMPLE_ALL_VARIABLES } from './data-tools-methods.js';
 
 export const COLLAPSE_FIELD_IDS = ['collapse-aggregate'];
 
 export function installCollapseMethods(TargetClass) {
     const proto = TargetClass.prototype;
+
+// Which variables the tool works on: what the Variable picker says, as the
+// resampler reads it — "All variables (N)" or one of them. The picker used to
+// be shown and then ignored here, so choosing one variable still wrote a copy
+// of the whole file.
+proto._collapseSelection = function() {
+    return document.getElementById('outlier-variable')?.value || RESAMPLE_ALL_VARIABLES;
+};
 
 proto.initCollapseTool = function() {
     document.getElementById('collapse-aggregate')?.addEventListener('change', () => {
@@ -38,9 +47,9 @@ proto.initCollapseTool = function() {
  * What the tool would do to this file, and whether it can.
  * @returns {{ok: boolean, code: string, names: string[], samples: number, groups: number, collapsed: number}}
  */
-proto._collapsePlan = function(data) {
+proto._collapsePlan = function(data, selection = this._collapseSelection()) {
     const time = this._resampleTimeContext?.(data) || { values: null, kind: 'index' };
-    const names = this._resampleTargetNames?.(data, '') || [];
+    const names = this._resampleTargetNames?.(data, selection) || [];
     const blank = { ok: false, code: '', names, samples: 0, groups: 0, collapsed: 0 };
     if (!data || !names.length) return { ...blank, code: 'outlierNoVariables' };
     // A row index counts rows: it cannot repeat, and collapsing it would mean
@@ -85,7 +94,7 @@ proto._syncCollapseControls = function() {
 
 proto._computeCollapseDataset = async function(sourceFileId, sourceData, recipe) {
     const time = this._resampleTimeContext(sourceData);
-    const names = this._resampleTargetNames(sourceData, '');
+    const names = this._resampleTargetNames(sourceData, recipe?.sourceName || RESAMPLE_ALL_VARIABLES);
     if (!names.length) {
         const err = new Error('No variables to collapse');
         err.code = 'outlierNoVariables';
@@ -186,13 +195,21 @@ proto.commitCollapseTool = async function(options = {}) {
         this._setOutlierMessage(() => i18n.t('dataToolLazyDisabled'), 'error');
         return null;
     }
-    const plan = this._collapsePlan(data);
+    const selection = this._collapseSelection();
+    const plan = this._collapsePlan(data, selection);
     if (!plan.ok) {
         this._setOutlierMessage(() => i18n.t(plan.code || 'dataToolFixParameters'), 'error');
         return null;
     }
     const config = this._getCollapseConfig();
-    const recipe = { tool: 'collapse', sourceFileId: fileId, sourceName: '', params: config.params };
+    // The selection goes into the recipe, so editing, reloading and sessions
+    // rebuild the same variables.
+    const recipe = {
+        tool: 'collapse',
+        sourceFileId: fileId,
+        sourceName: selection === RESAMPLE_ALL_VARIABLES ? '' : selection,
+        params: config.params,
+    };
     let computed;
     try {
         computed = await this._computeCollapseDataset(fileId, data, recipe);
@@ -209,7 +226,16 @@ proto.commitCollapseTool = async function(options = {}) {
         deferRebuild: !!options.plot,
     });
     this._exitDerivedDatasetEditing?.();
-    if (options.plot) this._plotDerivedDatasetVariable(target.fileId, names[0]);
+    // "and plot" draws the collapsed version next to the original, on the panel
+    // that already shows it: the time axis means the same thing — only with one
+    // row per instant — and comparing the two is the point. It used to go onto
+    // an empty panel, opened for it when there was none. Of several variables,
+    // the one the user is already looking at goes, as the resampler does.
+    if (options.plot) {
+        const plotted = names.find(name => this._isDataToolVariablePlotted(fileId, name));
+        const name = plotted || names[0];
+        this._plotDerivedDatasetVariable(target.fileId, name, { alongside: { fileId, name } });
+    }
 
     this._setOutlierMessage(() => {
         const base = i18n.t(target.replaced ? 'dataToolCollapseUpdated' : 'dataToolCollapseCreated')
@@ -228,6 +254,8 @@ proto.commitCollapseTool = async function(options = {}) {
 
 /** Push a recipe back into the form, for editing. */
 proto._writeCollapseForm = function(recipe, name) {
+    const picker = document.getElementById('outlier-variable');
+    if (picker) picker.value = recipe?.sourceName || RESAMPLE_ALL_VARIABLES;
     const nameField = document.getElementById('outlier-output-name');
     if (nameField) nameField.value = name || '';
     const aggregate = document.getElementById('collapse-aggregate');
@@ -237,7 +265,8 @@ proto._writeCollapseForm = function(recipe, name) {
 /** One line naming what a collapse recipe does, for the transformations table. */
 proto._collapseRecipeDescription = function(recipe) {
     const aggregate = normalizeCollapseAggregate(recipe?.params?.aggregate);
-    return `repeated timestamps → ${aggregate}`;
+    const what = recipe?.sourceName ? `${recipe.sourceName}: ` : '';
+    return `${what}repeated timestamps → ${aggregate}`;
 };
 
 proto._suggestCollapseFileName = function() {
