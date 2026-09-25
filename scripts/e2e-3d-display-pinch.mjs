@@ -240,6 +240,15 @@ try {
         return { playing: !!plot.animPlaying, frame: plot.animFrame, aspect: scene.glplot.getAspectratio().x };
     }, panelId);
     assert.ok((await animState()).playing, 'the 3D animation is playing');
+    // Each frame's redraw re-applies the turntable mode, which parks Plotly's
+    // camera 500 ms in the future: a drag started while playing then did
+    // nothing for half a second. The animation settles it after every frame.
+    await page.waitForTimeout(400);
+    const cameraAhead = await page.evaluate(id => {
+        const view = window.app.plotManager.plots.get(id).div._fullLayout.scene._scene.camera.view;
+        return view.lastT() - performance.now();
+    }, panelId);
+    assert.ok(cameraAhead < 100, `the camera is not parked in the future while playing (${Math.round(cameraAhead)} ms ahead)`);
     const animBox = await page.evaluate(id => {
         const r = window.app.plotManager.plots.get(id).div._fullLayout.scene._scene.container.getBoundingClientRect();
         return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };

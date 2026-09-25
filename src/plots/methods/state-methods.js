@@ -2,7 +2,7 @@
 
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
-import { SCENE_GESTURE_END, SCENE_GESTURE_START } from '../../ui/plot-3d-gestures.js';
+import { SCENE_GESTURE_END, SCENE_GESTURE_START, settleSceneCamera } from '../../ui/plot-3d-gestures.js';
 
 export function installPlotStateMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -522,7 +522,11 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
             }
         }
 
-        Plotly.redraw(plot.div);
+        // The redraw re-applies the turntable mode, which parks the camera
+        // half a second in the future; settle it, or a drag started while the
+        // animation plays waits that long to move anything.
+        const div = plot.div;
+        Promise.resolve(Plotly.redraw(div)).then(() => settleSceneCamera(div)).catch(() => {});
 
     } else {
         // ── 2D path ──
