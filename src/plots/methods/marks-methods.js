@@ -1012,9 +1012,9 @@ export function installPlotMarksMethods(TargetClass) {
             return { key: 'aspect', label: 'viewEqualAspect', title: allowed ? 'equalAspect2D' : 'equalAspect2DMixedLog', checked: !!plot.equalAspect2D, disabled: !has || !allowed, run: () => this._toggleEqualAspect2D(panelId) };
         };
         // Lines / Points / Lines+points, and the marker size and opacity while
-        // points are drawn. The 2D and 3D pair views share this (plot.phase2d).
+        // points are drawn. Each pair mode keeps its own (_pairDisplayState).
         const displayItems = () => {
-            const state = this._ensurePhase2dState(plot);
+            const state = this._pairDisplayState(plot);
             const items = [{
                 key: 'display', radio: true, label: 'phase2dDisplayLabel', value: state.displayMode, disabled: !has,
                 options: [

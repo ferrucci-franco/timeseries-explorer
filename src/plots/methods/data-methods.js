@@ -2416,11 +2416,10 @@ proto._buildPhase3DTraces = function(plot) {
     }).filter(Boolean);
 };
 
-// Trace type/mode/line/marker for a 3D pair trace. The Lines / Points /
-// Lines+points display and the marker size/opacity are shared with 2D
-// (plot.phase2d), so the choice follows the panel across modes.
+// Trace type/mode/line/marker for a 3D pair trace. 2D+t and 3D each keep
+// their own Lines / Points / Lines+points display (see _pairDisplayState).
 proto._phase3dDisplayProps = function(plot, color) {
-    const state = this._ensurePhase2dState ? this._ensurePhase2dState(plot) : null;
+    const state = this._pairDisplayState ? this._pairDisplayState(plot) : null;
     const mode = this._phase2dPlotlyMode ? this._phase2dPlotlyMode(state) : 'lines';
     const showMarkers = this._phase2dShowsMarkers ? this._phase2dShowsMarkers(state) : false;
     const props = { type: 'scatter3d', mode, line: { color, width: 3 } };

@@ -221,6 +221,13 @@ class ToolbarHarness {
         plot.phase2d = { displayMode: 'lines', markerSize: 4, markerOpacity: 0.65, ...(plot.phase2d || {}) };
         return plot.phase2d;
     }
+    // 2D keeps its display in plot.phase2d; 2D+t and 3D each have their own.
+    _pairDisplayState(plot, mode = plot?.mode) {
+        if (mode === 'phase2d') return this._ensurePhase2dState(plot);
+        plot.pairDisplay3D = plot.pairDisplay3D || {};
+        plot.pairDisplay3D[mode] = { displayMode: 'lines', markerSize: 4, markerOpacity: 0.65, ...(plot.pairDisplay3D[mode] || {}) };
+        return plot.pairDisplay3D[mode];
+    }
     _phase2dShowsMarkers(state) { return state.displayMode !== 'lines'; }
     _equalAspectAllowed(plot) { return plot?.mode !== 'phase2d' || !!plot.phase2dXLog === !!plot.phase2dYLog; }
     _ensureHistogramState(plot) { return plot.histogram; }
