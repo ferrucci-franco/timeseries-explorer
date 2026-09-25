@@ -206,8 +206,8 @@ try {
     assert.equal(s.panel, null, 'the second time the panel stays closed');
     assert.equal(s.bands.length, 2);
 
-    // Line shape: Stairs for every trace, then Auto.
-    await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-marks-btn`).click();
+    // Line shape (View menu): Stairs for every trace, then Auto.
+    await page.locator(`.layout-panel[data-id="${panelId}"] .panel-view-btn`).click();
     await page.locator(`.timeseries-marks-menu[data-panel-id="${panelId}"] .marks-line-hv`).click();
     await page.waitForTimeout(700);
     s = await state(page, panelId);

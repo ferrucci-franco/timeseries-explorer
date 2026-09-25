@@ -25,6 +25,8 @@ vm.runInNewContext(sliceMethod('proto._cursorOverlayGeometry = function'), { pro
 // The x mapping it leans on — Plotly's own for a log axis, the linear formula
 // otherwise (#108). The stub axes below have no d2p, so this is that formula.
 vm.runInNewContext(sliceMethod('proto._axisPixelForValue = function'), { proto });
+// And the y mapping, which takes a value to log10 first on a log axis.
+vm.runInNewContext(sliceMethod('proto._axisPixelForYValue = function'), { proto });
 
 // Overlaying Y2: same plot-area offset/length as Y1, DIFFERENT range.
 const fullLayout = {
@@ -37,6 +39,7 @@ function makeHarness(interpolatedY) {
     return {
         _cursorOverlayGeometry: proto._cursorOverlayGeometry,
         _axisPixelForValue: proto._axisPixelForValue,
+        _axisPixelForYValue: proto._axisPixelForYValue,
         _viewDiv: () => ({ _fullLayout: fullLayout }),
         _coerceAxisValue: v => Number(v),
         _cursorSeriesForTrace: () => ({ times: [0, 10], values: [interpolatedY, interpolatedY] }),
@@ -81,6 +84,23 @@ const pixelFor = (value, [lo, hi]) => topAxis + (1 - ((value - lo) / (hi - lo)))
     const trace = { axis: 'y2', fileId: 'f', varName: 'v' };
     const g = h._cursorOverlayGeometry(view, trace, 5, {});
     assert.equal(g.top, pixelFor(25, [0, 100]), 'no Y2 ⇒ primary axis');
+}
+
+// ── A log Y axis keeps its range in log10: the dot is placed in decades ─────
+{
+    const h = makeHarness(100);
+    const saved = fullLayout.yaxis;
+    fullLayout.yaxis = { type: 'log', range: [0, 4], _length: 200, _offset: 20 }; // 1 … 10 000
+    try {
+        const trace = { axis: 'y', fileId: 'f', varName: 'v' };
+        const g = h._cursorOverlayGeometry({ plot: {} }, trace, 5, {});
+        assert.equal(g.top, pixelFor(2, [0, 4]), 'log Y: 100 sits two decades up, halfway');
+        const h0 = makeHarness(0);
+        assert.ok(Number.isNaN(h0._cursorOverlayGeometry({ plot: {} }, trace, 5, {}).top),
+            'log Y: 0 has no place on the axis, so no dot');
+    } finally {
+        fullLayout.yaxis = saved;
+    }
 }
 
 console.log('Cursor Y2 geometry tests passed.');

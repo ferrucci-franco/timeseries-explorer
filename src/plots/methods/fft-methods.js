@@ -80,6 +80,9 @@ proto._defaultFftState = function() {
         zeroPaddingFactor: 1,
         amplitudeScale: 'normal',
         xAxisMode: 'frequency',
+        // Frequency read on a log axis (decades, as in a Bode plot). The
+        // period reading is always logarithmic, so this only matters there.
+        freqLog: false,
         periodUnit: PERIOD_UNIT_DEFAULT,
         fMin: null,
         fMax: null,
@@ -123,6 +126,7 @@ proto._normalizeFftState = function(raw = {}) {
         zeroPaddingFactor: normalizeZeroPaddingFactor(raw.zeroPaddingFactor),
         amplitudeScale: normalizeFftScale(raw.amplitudeScale),
         xAxisMode: normalizeFftXAxisMode(raw.xAxisMode),
+        freqLog: raw.freqLog === true,
         periodUnit: normalizePeriodUnitMode(raw.periodUnit),
         fMin: finiteOrNull(raw.fMin),
         fMax: finiteOrNull(raw.fMax),
@@ -704,7 +708,8 @@ proto._buildFftSpectrumLayout = function(plot) {
             // Bins are evenly spaced in frequency, so on a period axis they
             // crowd into the short end: linear, everything but the slowest few
             // would sit on top of each other (#108).
-            ...(this._fftXAxisIsPeriod(plot) ? { type: 'log' } : { type: 'linear' }),
+            // Frequency can be read on a log axis too, from the View menu.
+            ...(this._fftXAxisIsLog(plot) ? { type: 'log' } : { type: 'linear' }),
             // Labelled as durations where the reader asked for that (#108):
             // the round numbers of a calendar are not the round numbers of a
             // decade, and Plotly only knows the second kind.
@@ -731,6 +736,41 @@ proto._fftXAxisIsPeriod = function(plot) {
     return this._ensureFftState(plot).xAxisMode === 'period';
 };
 
+/** Whether the spectrum's x axis is logarithmic: always for period, on request for frequency. */
+proto._fftXAxisIsLog = function(plot) {
+    const state = this._ensureFftState(plot);
+    return state.xAxisMode === 'period' || !!state.freqLog;
+};
+
+/**
+ * The lowest frequency a log axis can show: the first bin above DC. Nothing
+ * computed yet, nothing to say.
+ */
+proto._fftLowestPositiveFrequency = function(plot) {
+    let lowest = Infinity;
+    for (const entry of plot?._fftSpectraFull || []) {
+        const frequencies = entry?.frequencies;
+        if (!frequencies?.length) continue;
+        for (let i = 0; i < frequencies.length; i++) {
+            const f = Number(frequencies[i]);
+            if (f > 0) { if (f < lowest) lowest = f; break; }
+        }
+    }
+    return Number.isFinite(lowest) ? lowest : null;
+};
+
+/** Toggle the log frequency axis (View menu). The window is refitted: a linear zoom means nothing in decades. */
+proto._toggleFftFrequencyLog = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'fft') return;
+    const state = this._ensureFftState(plot);
+    state.freqLog = !state.freqLog;
+    // The live window is in the other scale's units: do not carry it over.
+    plot._fftRecomputeView = { ...(plot._fftRecomputeView || {}), preserveX: false };
+    Promise.resolve(this._refreshFftSpectrumPlot(panelId, plot)).then(() => this._fitFftXAxis(plot));
+    this._syncMarksControls?.(panelId);
+};
+
 /**
  * Plotly reports and takes a LOG axis's range in log10 units, and the period
  * axis is logarithmic — the bins are evenly spaced in frequency, so they crowd
@@ -742,14 +782,20 @@ proto._fftAxisDataRange = function(plot, range) {
     const lo = this._coerceAxisValue(range[0]);
     const hi = this._coerceAxisValue(range[1]);
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
-    return this._fftXAxisIsPeriod(plot) ? [10 ** lo, 10 ** hi] : [lo, hi];
+    return this._fftXAxisIsLog(plot) ? [10 ** lo, 10 ** hi] : [lo, hi];
 };
 
 proto._fftAxisLayoutRange = function(plot, range) {
     if (!Array.isArray(range) || range.length < 2) return null;
-    if (!this._fftXAxisIsPeriod(plot)) return range;
-    const lo = Number(range[0]);
+    if (!this._fftXAxisIsLog(plot)) return range;
+    let lo = Number(range[0]);
     const hi = Number(range[1]);
+    // On a log frequency axis the spectrum starts at DC, which has no place
+    // there: the window starts at the first bin above it instead.
+    if (!this._fftXAxisIsPeriod(plot) && !(lo > 0) && hi > 0) {
+        const lowest = this._fftLowestPositiveFrequency(plot);
+        if (lowest !== null && lowest < hi) lo = lowest;
+    }
     // A period is positive by construction; a limit that is not (a leftover
     // frequency bound of 0, say) has no place on a log axis.
     if (!(lo > 0) || !(hi > 0)) return null;

@@ -7,6 +7,15 @@ a time-series panel into one **Marks** dropdown.
 Related: [repeated-timestamps-indicator-design.md](repeated-timestamps-indicator-design.md),
 [sample-markers-design.md](sample-markers-design.md).
 
+**Later split.** When log scales arrived, Marks kept only what is drawn *on* the
+data (NaN/Inf, Gaps, Repeated, Samples). Stack, Y2 and the line shape moved to a
+**View** dropdown beside it (EN *View*, FR *Vue*, ES/IT *Vista*), together with
+the log scales: log Y / log Y2 in the time series, log X / log Y in 2D, log
+frequency in Fourier and log counts in the histogram. A log axis applies to every
+signal on it and only changes the view; values ≤ 0 are not drawn, and a note in
+the panel's corner counts them and points at `abs(x)` as a derived variable. The
+sections below describe the menu before that split.
+
 ## Why
 
 User feedback on Missing/NaN:

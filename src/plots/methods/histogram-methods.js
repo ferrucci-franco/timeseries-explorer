@@ -455,7 +455,12 @@ proto._buildHistogramBarLayout = function(plot) {
         barmode: state.barMode === 'stacked' ? 'stack' : 'overlay',
         bargap: 0,
         xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false, title: { text: xTitle, font: { size: 10 } } },
-        yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false, rangemode: 'tozero', title: { text: yTitle, font: { size: 10 } } },
+        yaxis: {
+            gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
+            // Log counts (View menu) bring the tails of a distribution into view.
+            ...(state.yScale === 'log' ? { type: 'log' } : { type: 'linear', rangemode: 'tozero' }),
+            title: { text: yTitle, font: { size: 10 } },
+        },
         margin: { l: 58, r: 16, t: 8, b: 46 },
         autosize: true,
         hovermode: 'closest',
@@ -926,6 +931,23 @@ proto._autoScaleHistogramPanel = function(panelId, plot = this.plots.get(panelId
         ? Plotly.relayout(plot.histogramDiv, { 'xaxis.autorange': true, 'yaxis.autorange': true })
         : Promise.resolve();
     return Promise.all([timePromise, histogramPromise]);
+};
+
+/** Toggle log counts (View menu). The Y window is refitted in the new scale. */
+proto._toggleHistogramLogY = function(panelId) {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'histogram') return;
+    const state = this._ensureHistogramState(plot);
+    state.yScale = state.yScale === 'log' ? 'linear' : 'log';
+    if (plot.histogramDiv) {
+        const log = state.yScale === 'log';
+        Plotly.relayout(plot.histogramDiv, {
+            'yaxis.type': log ? 'log' : 'linear',
+            'yaxis.rangemode': log ? 'normal' : 'tozero',
+            'yaxis.autorange': true,
+        });
+    }
+    this._syncMarksControls?.(panelId);
 };
 
 // Per-axis auto-fit for the histogram pane (X = values, Y = counts/density).

@@ -1887,6 +1887,28 @@
     color: var(--primary-color);
 }
 
+/* Log axis (View menu): how many values ≤ 0 it cannot draw. A small note in
+   the panel's bottom-left corner rather than a pill in the middle — it stays
+   for as long as the log axis does. The tooltip points at abs(). */
+.log-axis-notice {
+    position: absolute;
+    left: 8px;
+    bottom: 6px;
+    z-index: 7;
+    max-width: calc(100% - 16px);
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: linear-gradient(rgba(255, 193, 7, 0.18), rgba(255, 193, 7, 0.18)), var(--bg-primary);
+    border: 1px solid rgba(230, 145, 0, 0.75);
+    color: var(--text-primary);
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: help;
+}
+
 /* Gaps settings: Δt and threshold per file, over the top-right of the plot
    until the user drags it elsewhere. */
 .gaps-panel {

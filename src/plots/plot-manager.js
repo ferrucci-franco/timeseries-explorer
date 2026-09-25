@@ -477,7 +477,8 @@ class PlotManager {
         if (!changedTrace) return;
         const plotLike = plot.mode === 'timeseries'
             ? plot
-            : { ...plot, traces: descriptors, timeseriesStacked: false, timeseriesY2Enabled: false };
+            // The analysis modes' time panes are linear whatever the 2D axes are.
+            : { ...plot, traces: descriptors, timeseriesStacked: false, timeseriesY2Enabled: false, phase2dXLog: false, phase2dYLog: false };
         const axis = this._traceYAxis(changedTrace, plotLike);
         const rangeKey = axis === 'y2' ? 'y2Range' : 'yRange';
         const currentRange = timeView[rangeKey];
@@ -494,6 +495,7 @@ class PlotManager {
             series,
             series.map(item => item.y),
             timeView.xRange,
+            axis,
         );
         const expanded = expandedAxisRangeForExtent(currentRange, extent);
         if (expanded) timeView[rangeKey] = expanded;
@@ -1560,7 +1562,8 @@ class PlotManager {
         // Plotly already expands an autoranged axis. This helper is only for a
         // user-controlled Y view, where addTraces intentionally preserves zoom.
         if (!axisLayout || axisLayout.autorange !== false) return Promise.resolve();
-        const extent = this._finiteExtent([builtTrace.y]);
+        const isLog = axisLayout.type === 'log';
+        const extent = this._extentInAxisUnits(this._finiteExtent([builtTrace.y], { positive: isLog }), isLog);
         const range = expandedAxisRangeForExtent(axisLayout.range, extent);
         if (!range) return Promise.resolve();
         return Plotly.relayout(plot.div, {
@@ -2448,6 +2451,10 @@ class PlotManager {
             existing.markerTraceIdx = null;
             existing.timeseriesStacked = false;
             existing.timeseriesY2Enabled = false;
+            existing.timeseriesYLog = false;
+            existing.timeseriesY2Log = false;
+            existing.phase2dXLog = false;
+            existing.phase2dYLog = false;
             existing.showNaN = false;
             existing.showGaps = false;
             existing.showSamples = false;
@@ -2545,7 +2552,7 @@ class PlotManager {
             cursorBtn.disabled = !enabled;
             cursorBtn.classList.toggle('active', !!this._anyCursorEnabled?.(plot));
         }
-        // Stack, Y2, NaN/Inf, Gaps, Repeated, Samples: the Marks dropdown.
+        // NaN/Inf, Gaps, Repeated, Samples (Marks); log axes, Stack, Y2 (View).
         this._syncMarksControls?.(panelId);
         panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
             const active = btn.dataset.mode === plot?.mode;
@@ -3434,13 +3441,20 @@ class PlotManager {
         return [min, max];
     }
 
-    _finiteExtent(arrays) {
+    /**
+     * @param {object} [options]
+     * @param {boolean} [options.positive] only values > 0 count — what a
+     *   logarithmic axis can show.
+     */
+    _finiteExtent(arrays, options = {}) {
+        const positive = !!options.positive;
         let min = Infinity;
         let max = -Infinity;
         for (const arr of arrays) {
             if (!arr) continue;
             for (const value of arr) {
                 if (!Number.isFinite(value)) continue;
+                if (positive && !(value > 0)) continue;
                 if (value < min) min = value;
                 if (value > max) max = value;
             }
@@ -3448,16 +3462,67 @@ class PlotManager {
         return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
     }
 
-    _timeseriesYExtentForSeries(plot, traceSeries, yArrays, xRange = null) {
-        if (plot?.timeseriesStacked) {
-            return this._finiteStackedYExtentInXRange(traceSeries, xRange);
+    /**
+     * Whether a panel draws `axis` ('x', 'y' or 'y2') on a logarithmic scale.
+     * Each mode keeps its own flag, so a switch of mode never carries a log
+     * axis into a view that did not ask for one.
+     */
+    _axisIsLog(plot, axis = 'y') {
+        if (!plot) return false;
+        if (plot.mode === 'timeseries') {
+            if (axis === 'y') return !!plot.timeseriesYLog;
+            if (axis === 'y2') return !!(plot.timeseriesY2Enabled && plot.timeseriesY2Log);
+            return false;
         }
-        return xRange
-            ? this._finiteYExtentInXRange(traceSeries, xRange)
-            : this._finiteExtent(yArrays);
+        if (plot.mode === 'phase2d') {
+            if (axis === 'x') return !!plot.phase2dXLog;
+            if (axis === 'y') return !!plot.phase2dYLog;
+        }
+        return false;
     }
 
-    _finiteStackedYExtentInXRange(series, xRange = null) {
+    /**
+     * An extent in data units, read in the units the axis keeps its range in.
+     * Plotly holds a log axis's range as log10 of the window, so an extent
+     * that is to become a range (padded, expanded, compared with one) has to
+     * be taken to log10 first. `extent` must already hold positive values
+     * only (see `positive` in _finiteExtent).
+     */
+    _extentInAxisUnits(extent, isLog) {
+        if (!extent || !isLog) return extent;
+        if (!(extent.min > 0) || !(extent.max > 0)) return null;
+        return { min: Math.log10(extent.min), max: Math.log10(extent.max) };
+    }
+
+    /**
+     * The Y extent of a time plot, in the units of its axis range: data units
+     * on a linear axis, log10 of the positive values on a log one.
+     */
+    _timeseriesYExtentForSeries(plot, traceSeries, yArrays, xRange = null, axis = 'y') {
+        const isLog = this._axisIsLog(plot, axis);
+        const options = { positive: isLog };
+        let extent;
+        if (plot?.timeseriesStacked) {
+            extent = this._finiteStackedYExtentInXRange(traceSeries, xRange, options);
+        } else {
+            extent = xRange
+                ? this._finiteYExtentInXRange(traceSeries, xRange, options)
+                : this._finiteExtent(yArrays, options);
+        }
+        return this._extentInAxisUnits(extent, isLog);
+    }
+
+    /** The padded range of an extent already in axis units (see above). */
+    _padAxisRange(extent, isLog) {
+        if (!extent) return null;
+        if (isLog && extent.min === extent.max) {
+            // A flat positive signal: half a decade either side.
+            return [extent.min - 0.5, extent.max + 0.5];
+        }
+        return this._padRange(extent.min, extent.max);
+    }
+
+    _finiteStackedYExtentInXRange(series, xRange = null, options = {}) {
         const items = (series || []).filter(item => item?.x?.length && item?.y?.length);
         if (!items.length) return null;
         const hasRange = Array.isArray(xRange);
@@ -3465,9 +3530,12 @@ class PlotManager {
         const b = hasRange ? this._coerceAxisValue(xRange[1]) : null;
         const minX = hasRange && Number.isFinite(a) && Number.isFinite(b) ? Math.min(a, b) : -Infinity;
         const maxX = hasRange && Number.isFinite(a) && Number.isFinite(b) ? Math.max(a, b) : Infinity;
+        const positiveOnly = !!options.positive;
         let min = 0;
         let max = 0;
         let found = false;
+        // On a log axis a stack starts at its lowest positive layer, not at 0.
+        let minPositive = Infinity;
         const count = Math.max(...items.map(item => Math.min(item.x.length, item.y.length)));
         for (let i = 0; i < count; i++) {
             let positive = 0;
@@ -3482,12 +3550,16 @@ class PlotManager {
                 if (!Number.isFinite(yv)) continue;
                 if (yv >= 0) positive += yv;
                 else negative += yv;
+                if (yv > 0 && yv < minPositive) minPositive = yv;
                 any = true;
             }
             if (!any) continue;
             found = true;
             if (negative < min) min = negative;
             if (positive > max) max = positive;
+        }
+        if (positiveOnly) {
+            return found && max > 0 && Number.isFinite(minPositive) ? { min: minPositive, max } : null;
         }
         return found ? { min, max } : null;
     }
@@ -3558,7 +3630,8 @@ class PlotManager {
 
         const update = {};
         if (axis === 'x') {
-            const xExtent = this._finiteExtent(xArrays);
+            const xLog = !fromTimeTraces && this._axisIsLog(plot, 'x');
+            const xExtent = this._extentInAxisUnits(this._finiteExtent(xArrays, { positive: xLog }), xLog);
             // Nothing finite to fit — every trace hidden, or every value NaN.
             // Asking Plotly for autorange here is the app asking ITSELF for an
             // autoscale, and answering, for ever (#167). An empty update is a
@@ -3570,18 +3643,22 @@ class PlotManager {
                 const xRange = this._exactRange(xExtent.min, xExtent.max);
                 update['xaxis.range'] = isCalendar ? this._plotlyTimeArray(primaryFileId, xRange, timeVar) : xRange;
             } else {
-                update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+                update['xaxis.range'] = this._padAxisRange(xExtent, xLog);
             }
             update['xaxis.autorange'] = false;
             return update;
         }
 
-        const xRange = Array.isArray(fl.xaxis?.range) ? fl.xaxis.range : null;
+        // The visible X window, in data units: a log X axis (2D) reports log10.
+        const xRange = Array.isArray(fl.xaxis?.range)
+            ? (fl.xaxis.type === 'log' ? this._axisDataRange(fl.xaxis) : fl.xaxis.range)
+            : null;
+        const yLog = this._axisIsLog(plot, 'y');
         const yExtent = this._timeseriesYExtentForSeries(plot, series, yArrays, xRange);
-        if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+        if (yExtent) update['yaxis.range'] = this._padAxisRange(yExtent, yLog);
         if (fromTimeTraces && plot.timeseriesY2Enabled) {
-            const y2Extent = this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, seriesY2, y2Arrays, xRange);
-            if (y2Extent) update['yaxis2.range'] = this._padRange(y2Extent.min, y2Extent.max);
+            const y2Extent = this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, seriesY2, y2Arrays, xRange, 'y2');
+            if (y2Extent) update['yaxis2.range'] = this._padAxisRange(y2Extent, this._axisIsLog(plot, 'y2'));
         }
         return update;
     }
@@ -3677,7 +3754,7 @@ class PlotManager {
             const xExtent = this._finiteExtent(xArrays);
             const yExtent = this._timeseriesYExtentForSeries(plot, traceSeries, yArrays);
             const y2Extent = plot.timeseriesY2Enabled
-                ? this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, traceSeriesY2, y2Arrays)
+                ? this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, traceSeriesY2, y2Arrays, null, 'y2')
                 : null;
             const update = {};
             if (xExtent) {
@@ -3692,16 +3769,17 @@ class PlotManager {
             // it shows: asking Plotly for autorange is how the app ends up
             // answering its own relayout for ever (#167), and the y axis below
             // has been avoiding a cousin of that since before it had a number.
-            if (yExtent) update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+            if (yExtent) update['yaxis.range'] = this._padAxisRange(yExtent, this._axisIsLog(plot, 'y'));
             else {
                 // Plotly can loop indefinitely while autoranging an all-NaN
                 // trace. An explicit empty range is safe and deterministic.
+                // (On a log axis the same numbers are 0.1 to 10.)
                 update['yaxis.range'] = [-1, 1];
                 update['yaxis.autorange'] = false;
             }
             if (plot.timeseriesY2Enabled) {
                 if (y2Extent) {
-                    update['yaxis2.range'] = this._padRange(y2Extent.min, y2Extent.max);
+                    update['yaxis2.range'] = this._padAxisRange(y2Extent, this._axisIsLog(plot, 'y2'));
                     update['yaxis2.autorange'] = false;
                 } else {
                     update['yaxis2.range'] = [-1, 1];
@@ -3728,16 +3806,18 @@ class PlotManager {
                 yArrays.push(visual.y);
             }
 
-            const xExtent = this._finiteExtent(xArrays);
-            const yExtent = this._finiteExtent(yArrays);
+            const xLog = this._axisIsLog(plot, 'x');
+            const yLog = this._axisIsLog(plot, 'y');
+            const xExtent = this._extentInAxisUnits(this._finiteExtent(xArrays, { positive: xLog }), xLog);
+            const yExtent = this._extentInAxisUnits(this._finiteExtent(yArrays, { positive: yLog }), yLog);
             const update = {};
             if (xExtent) {
-                update['xaxis.range'] = this._padRange(xExtent.min, xExtent.max);
+                update['xaxis.range'] = this._padAxisRange(xExtent, xLog);
                 update['xaxis.autorange'] = false;
             }
             else update['xaxis.autorange'] = true;
             if (yExtent) {
-                update['yaxis.range'] = this._padRange(yExtent.min, yExtent.max);
+                update['yaxis.range'] = this._padAxisRange(yExtent, yLog);
                 update['yaxis.autorange'] = false;
             }
             else update['yaxis.autorange'] = true;
@@ -3858,6 +3938,10 @@ class PlotManager {
             markerTraceIdx: null,                          // index of the hover-marker trace in plot.div.data
             timeseriesStacked: false,
             timeseriesY2Enabled: false,
+            timeseriesYLog: false,
+            timeseriesY2Log: false,
+            phase2dXLog: false,
+            phase2dYLog: false,
             showNaN: false,
             showGaps: false,
             showSamples: false,
@@ -4078,9 +4162,7 @@ class PlotManager {
                 ? this._timeseriesYExtentForSeries(plot, traceSeries, yArrays, nextView.xRange)
                 : this._timeseriesYExtentForSeries(plot, traceSeries, yArrays);
             const y2Extent = plot.timeseriesY2Enabled
-                ? (nextView.xRange
-                    ? this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, traceSeriesY2, y2Arrays, nextView.xRange)
-                    : this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, traceSeriesY2, y2Arrays))
+                ? this._timeseriesYExtentForSeries({ ...plot, timeseriesStacked: false }, traceSeriesY2, y2Arrays, nextView.xRange || null, 'y2')
                 : null;
             const oldRange = captured.yRange?.map(Number);
             if (!yExtent) {
@@ -4093,9 +4175,9 @@ class PlotManager {
                 const expanded = min === oldMin && max === oldMax
                     ? captured.yRange
                     : (oldRange[0] <= oldRange[1] ? [min, max] : [max, min]);
-                nextView.yRange = min === max ? this._padRange(min, max) : expanded;
+                nextView.yRange = min === max ? this._padAxisRange({ min, max }, this._axisIsLog(plot, 'y')) : expanded;
             } else {
-                nextView.yRange = this._padRange(yExtent.min, yExtent.max);
+                nextView.yRange = this._padAxisRange(yExtent, this._axisIsLog(plot, 'y'));
             }
             if (plot.timeseriesY2Enabled) {
                 const oldY2Range = captured.y2Range?.map(Number);
@@ -4106,9 +4188,9 @@ class PlotManager {
                     const oldMax = Math.max(oldY2Range[0], oldY2Range[1]);
                     const min = Math.min(oldMin, y2Extent.min);
                     const max = Math.max(oldMax, y2Extent.max);
-                    nextView.y2Range = min === max ? this._padRange(min, max) : (oldY2Range[0] <= oldY2Range[1] ? [min, max] : [max, min]);
+                    nextView.y2Range = min === max ? this._padAxisRange({ min, max }, this._axisIsLog(plot, 'y2')) : (oldY2Range[0] <= oldY2Range[1] ? [min, max] : [max, min]);
                 } else {
-                    nextView.y2Range = this._padRange(y2Extent.min, y2Extent.max);
+                    nextView.y2Range = this._padAxisRange(y2Extent, this._axisIsLog(plot, 'y2'));
                 }
             }
         } else {
@@ -4119,7 +4201,8 @@ class PlotManager {
         return nextView;
     }
 
-    _finiteYExtentInXRange(series, xRange) {
+    _finiteYExtentInXRange(series, xRange, options = {}) {
+        const positive = !!options.positive;
         const a = this._coerceAxisValue(xRange?.[0]);
         const b = this._coerceAxisValue(xRange?.[1]);
         if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
@@ -4136,6 +4219,7 @@ class PlotManager {
                 if (!Number.isFinite(xv) || xv < minX || xv > maxX) continue;
                 const yv = Number(y[i]);
                 if (!Number.isFinite(yv)) continue;
+                if (positive && !(yv > 0)) continue;
                 if (yv < min) min = yv;
                 if (yv > max) max = yv;
             }

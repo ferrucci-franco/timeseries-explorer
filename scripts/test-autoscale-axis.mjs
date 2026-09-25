@@ -20,6 +20,15 @@ const methodText = source.slice(start, end)
 const proto = {};
 vm.runInNewContext(methodText, { proto });
 
+// The log-axis helpers the builder leans on, sliced the same way.
+const classMethod = (name) => {
+    const sig = source.match(new RegExp(`^ {4}${name}\\(([^)]*)\\) \\{$`, 'm'));
+    assert.ok(sig, `${name} is present`);
+    const stop = source.indexOf('\n    }', sig.index) + '\n    }'.length;
+    return source.slice(sig.index, stop).replace(sig[0], `proto.${name} = function(${sig[1]}) {`);
+};
+vm.runInNewContext(['_axisIsLog', '_extentInAxisUnits', '_padAxisRange'].map(classMethod).join('\n'), { proto });
+
 class Harness {
     constructor() {
         this.files = new Map([['f', { data: { variables: { A: {}, B: {}, C: {} } } }]]);
@@ -56,6 +65,13 @@ class Harness {
     }
 }
 Harness.prototype._autoScaleAxisUpdate = proto._autoScaleAxisUpdate;
+Harness.prototype._axisIsLog = proto._axisIsLog;
+Harness.prototype._extentInAxisUnits = proto._extentInAxisUnits;
+Harness.prototype._padAxisRange = proto._padAxisRange;
+Harness.prototype._axisDataRange = function(axis) {
+    const [lo, hi] = axis.range.map(Number);
+    return axis.type === 'log' ? [10 ** lo, 10 ** hi] : [lo, hi];
+};
 
 function tsPlot(range, { y2 = false } = {}) {
     const traces = [{ fileId: 'f', varName: 'A' }, { fileId: 'f', varName: 'B' }];
@@ -94,6 +110,35 @@ h._y = { A: [100, 20, 5, 30, 15], B: [-50, -5, 8, 2, 1], C: [1000, 200, 300, 400
     const u = h._autoScaleAxisUpdate(tsPlot([1, 3], { y2: true }), 'y');
     assert.deepEqual(u['yaxis.range'], [-5, 30], 'primary Y from A/B in window');
     assert.deepEqual(u['yaxis2.range'], [200, 400], 'Y2 from C in window [1,3]');
+}
+
+// ── Log axes: ranges in log10, fitted to the positive values only ────────────
+// Plotly keeps a log axis's range as log10 of the window. The builder answers
+// in those units, from the values a log axis can draw (> 0).
+{
+    const logH = new Harness();
+    logH._x = { A: [0, 1, 2, 3], B: [0, 1, 2, 3], C: [0, 1, 2, 3] };
+    logH._y = { A: [-3, 10, 1000, 0], B: [0, 0, 0, 0], C: [0.01, 0.1, 1, 10] };
+    logH._timeseriesYExtentForSeries = function(plot, series, _yArrays, _xRange, axis = 'y') {
+        const isLog = this._axisIsLog(plot, axis);
+        const all = series.flatMap(item => Array.from(item.y));
+        return this._extentInAxisUnits(this._finiteExtent([all.filter(v => !isLog || v > 0)]), isLog);
+    };
+    const plot = tsPlot([0, 3], { y2: true });
+    plot.timeseriesYLog = true;
+    plot.timeseriesY2Log = true;
+    const u = logH._autoScaleAxisUpdate(plot, 'y');
+    assert.deepEqual(u['yaxis.range'], [1, 3], 'log Y: 10…1000 is 1…3 decades; 0 and -3 are left out');
+    assert.deepEqual(u['yaxis2.range'], [-2, 1], 'log Y2 fits its own traces, in decades');
+
+    plot.timeseriesY2Enabled = false;
+    assert.equal(logH._axisIsLog(plot, 'y2'), false, 'a Y2 log flag means nothing while Y2 is off');
+
+    // 2D: log X is fitted in decades too, and a log X window is read back to
+    // data units before the Y fit looks at which points are inside it.
+    const flat = Array.from(logH._padAxisRange({ min: 2, max: 2 }, true)); // from the vm realm
+    assert.deepEqual(flat, [1.5, 2.5], 'a flat positive signal gets half a decade either side');
+    assert.equal(logH._extentInAxisUnits({ min: -1, max: 5 }, true), null, 'a non-positive extent has no log range');
 }
 
 // ── An analysis panel can borrow the builder for its time pane ───────────────

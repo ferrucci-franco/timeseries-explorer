@@ -2159,6 +2159,22 @@ proto._axisPixelForValue = function(axis, value, range = null) {
     return offset + ((value - r0) / span) * (axis?._length || 0);
 };
 
+/**
+ * Where a data value sits on a Y axis, in pixels from the plot's top edge.
+ * Linear in the axis range, which on a log axis is log10 of the window: the
+ * value is taken there first. A value a log axis cannot show (0 or below)
+ * has no pixel.
+ */
+proto._axisPixelForYValue = function(ya, y) {
+    const y0 = Number(ya?.range?.[0]);
+    const y1 = Number(ya?.range?.[1]);
+    const ry = y1 - y0;
+    if (!Number.isFinite(y) || !Number.isFinite(y0) || !Number.isFinite(y1) || ry === 0) return NaN;
+    const value = ya?.type === 'log' ? (y > 0 ? Math.log10(y) : NaN) : y;
+    if (!Number.isFinite(value)) return NaN;
+    return (ya._offset || 0) + (1 - ((value - y0) / ry)) * (ya._length || 0);
+};
+
 proto._hoverOverlayGeometry = function(plot, x, y = null, axis = 'y') {
     if (!plot?.div) return null;
     const xValue = this._coerceAxisValue(x);
@@ -2178,12 +2194,7 @@ proto._hoverOverlayGeometry = function(plot, x, y = null, axis = 'y') {
     const rightAxis = leftAxis + xa._length;
     const topAxis = ya._offset || 0;
     const bottomAxis = topAxis + ya._length;
-    const y0 = Number(ya.range[0]);
-    const y1 = Number(ya.range[1]);
-    const ry = y1 - y0;
-    const top = Number.isFinite(y) && Number.isFinite(y0) && Number.isFinite(y1) && ry !== 0
-        ? topAxis + (1 - ((y - y0) / ry)) * ya._length
-        : NaN;
+    const top = this._axisPixelForYValue(ya, y);
 
     return { left, leftAxis, rightAxis, top, topAxis, bottomAxis };
 };
@@ -2905,18 +2916,12 @@ proto._cursorOverlayGeometry = function(view, trace, x, options = {}) {
             ? this._interpolateAt(series.times, series.values, x, this._cursorInterpolationMode(view, trace))
             : NaN;
     }
-    const y0 = Number(ya.range[0]);
-    const y1 = Number(ya.range[1]);
-    const ry = y1 - y0;
-
     const left = this._axisPixelForValue(xa, x, Array.isArray(options.range) ? range : null);
     const leftAxis = xa._offset || 0;
     const rightAxis = leftAxis + xa._length;
     const topAxis = ya._offset || 0;
     const bottomAxis = topAxis + ya._length;
-    const top = Number.isFinite(y) && Number.isFinite(y0) && Number.isFinite(y1) && ry !== 0
-        ? topAxis + (1 - ((y - y0) / ry)) * ya._length
-        : NaN;
+    const top = this._axisPixelForYValue(ya, y);
 
     return { left, leftAxis, rightAxis, top, topAxis, bottomAxis, y };
 };
@@ -4580,9 +4585,11 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
             timeseriesToolsGroup.appendChild(createAutoscaleAxisButton('y'));
         }
 
-        // Stack, Y2, NaN/Inf, Gaps, Repeated, Samples and the line shape live in
-        // one dropdown (docs/marks-menu-nan-gaps-design.md).
+        // NaN/Inf, Gaps, Repeated and Samples live in the Marks dropdown
+        // (docs/marks-menu-nan-gaps-design.md); how the axes read the data —
+        // log scales, Stack, Y2, the line shape — in the View one beside it.
         timeseriesToolsGroup.appendChild(this._createMarksButton(panelId, plot));
+        timeseriesToolsGroup.appendChild(this._createViewButton(panelId, plot));
 
         const analysisModes = [
             { id: 'fft', label: 'Fourier', titleKey: 'modeFFT', className: 'timeseries-fourier-btn' },
@@ -4638,6 +4645,9 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         });
         viewGroup.appendChild(equalAspectBtn);
     }
+    // 2D: log X / log Y (View menu). Correlation's and the state
+    // animation's axes are fixed by what they show.
+    if (currentMode === 'phase2d') viewGroup.appendChild(this._createViewButton(panelId, plot));
 
     // Correlation is an analysis toggle of the 2D/pair family (shares the pair
     // list). Appended AFTER the 2D Display controls (below) so it reads as its
@@ -4954,7 +4964,7 @@ proto._toggleTimeseriesStack = function(panelId) {
         const yExtent = this._timeseriesYExtentForSeries(plot, traceSeries, yArrays, capturedView.xRange);
         restoreView = {
             ...capturedView,
-            yRange: yExtent ? this._padRange(yExtent.min, yExtent.max) : null,
+            yRange: this._padAxisRange(yExtent, this._axisIsLog(plot, 'y')),
         };
     }
 
@@ -4965,6 +4975,142 @@ proto._toggleTimeseriesStack = function(panelId) {
         this._refreshActionBtns(panelId);
     }
     this._syncMarksControls(panelId);
+};
+
+/**
+ * Log Y (or log Y2) on a time plot. The X window stays; the toggled axis is
+ * refitted to what that window shows, because a range kept in data units
+ * means nothing in decades and back. Values a log axis cannot show (0 and
+ * below) are left out of the fit and counted in the notice.
+ */
+proto._toggleTimeseriesLogAxis = function(panelId, axis = 'y') {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'timeseries') return;
+    if (axis === 'y2' && !plot.timeseriesY2Enabled) return;
+    const key = axis === 'y2' ? 'timeseriesY2Log' : 'timeseriesYLog';
+    const capturedView = plot.div ? this._capturePlotView(plot) : null;
+    plot[key] = !plot[key];
+    let restoreView = capturedView;
+    if (capturedView?.mode === '2d') {
+        const traceSeries = [];
+        const yArrays = [];
+        for (const trace of plot.traces.filter(t => this._isVisible(t) && this._traceYAxis(t, plot) === axis)) {
+            const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+            if (!variable || variable.kind === 'parameter') continue;
+            const x = this._getTransformedTimeDataForVariable(trace.fileId, trace.varName);
+            const y = this._getTransformedVariableData(trace.fileId, trace.varName);
+            traceSeries.push({ x, y });
+            yArrays.push(y);
+        }
+        const plotLike = axis === 'y2' ? { ...plot, timeseriesStacked: false } : plot;
+        const extent = this._timeseriesYExtentForSeries(plotLike, traceSeries, yArrays, capturedView.xRange, axis);
+        const isLog = this._axisIsLog(plot, axis);
+        const rangeKey = axis === 'y2' ? 'y2Range' : 'yRange';
+        // Nothing positive in the window: 0.1 to 10 rather than an autorange
+        // over values a log axis cannot draw.
+        restoreView = {
+            ...capturedView,
+            [rangeKey]: this._padAxisRange(extent, isLog) || (isLog ? [-1, 1] : null),
+        };
+    }
+    if (plot.div) this._rebuildPanel(panelId, { restoreView });
+    else this._refreshActionBtns(panelId);
+    this._syncMarksControls(panelId);
+};
+
+/** Log X / log Y on the 2D view. Both axes are refitted, in the new scales. */
+proto._togglePhase2dLogAxis = function(panelId, axis = 'y') {
+    const plot = this.plots.get(panelId);
+    if (!plot || plot.mode !== 'phase2d') return;
+    const key = axis === 'x' ? 'phase2dXLog' : 'phase2dYLog';
+    plot[key] = !plot[key];
+    if (plot.div) this._rebuildPanel(panelId);
+    else this._refreshActionBtns(panelId);
+    this._syncMarksControls(panelId);
+};
+
+/**
+ * How many finite values the panel's log axes cannot draw (0 or below), over
+ * everything the panel shows. The data is not changed; the notice says so
+ * and points at abs() for the magnitude.
+ */
+proto._logAxisHiddenCount = function(plot) {
+    if (!plot) return 0;
+    const countNonPositive = (values) => {
+        let n = 0;
+        if (!values) return 0;
+        for (const value of values) {
+            const v = Number(value);
+            if (Number.isFinite(v) && v <= 0) n++;
+        }
+        return n;
+    };
+    let hidden = 0;
+    if (plot.mode === 'timeseries') {
+        for (const trace of plot.traces || []) {
+            if (!this._isVisible(trace)) continue;
+            if (!this._axisIsLog(plot, this._traceYAxis(trace, plot))) continue;
+            const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
+            if (!variable || variable.kind === 'parameter') continue;
+            hidden += countNonPositive(this._getTransformedVariableData(trace.fileId, trace.varName));
+        }
+    } else if (plot.mode === 'phase2d') {
+        const xLog = this._axisIsLog(plot, 'x');
+        const yLog = this._axisIsLog(plot, 'y');
+        if (!xLog && !yLog) return 0;
+        for (const pt of plot.phaseTraces || []) {
+            if (!this._isVisible(pt)) continue;
+            // Every row, not the drawn (decimated) points: the note counts values.
+            const xs = this._getTransformedVariableData(pt.fileId, pt.x);
+            const ys = this._getTransformedVariableData(pt.fileId, pt.y);
+            const n = Math.min(xs?.length || 0, ys?.length || 0);
+            for (let i = 0; i < n; i++) {
+                const x = Number(xs[i]);
+                const y = Number(ys[i]);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                if ((xLog && x <= 0) || (yLog && y <= 0)) hidden++;
+            }
+        }
+    }
+    return hidden;
+};
+
+/**
+ * The "N values ≤ 0 not shown" pill over a panel with a log axis. Called from
+ * every time-series refresh, so the count is only taken again when what it
+ * depends on — the log axes, the traces on them, their data — has changed.
+ */
+proto._refreshLogAxisNotice = function(plot) {
+    const panelEl = plot?.div?.closest?.('.layout-panel');
+    if (!panelEl) return;
+    const onLog = (plot.mode === 'timeseries'
+        ? (plot.traces || []).filter(t => this._isVisible(t) && this._axisIsLog(plot, this._traceYAxis(t, plot)))
+            .map(t => `${t.fileId}/${t.varName}:${this._getTransformedVariableData(t.fileId, t.varName)?.length ?? 0}`)
+        : (plot.mode === 'phase2d' && (this._axisIsLog(plot, 'x') || this._axisIsLog(plot, 'y'))
+            ? [`x${+this._axisIsLog(plot, 'x')}y${+this._axisIsLog(plot, 'y')}`,
+                ...(plot.phaseTraces || []).filter(pt => this._isVisible(pt)).map(pt => `${pt.fileId}/${pt.x}/${pt.y}`)]
+            : []));
+    const signature = `${plot.mode}|${onLog.join(',')}`;
+    if (plot._logAxisNotice?.signature !== signature) {
+        plot._logAxisNotice = { signature, hidden: onLog.length ? this._logAxisHiddenCount(plot) : 0 };
+    }
+    const hidden = plot._logAxisNotice.hidden;
+    let pill = panelEl.querySelector('.log-axis-notice');
+    if (!hidden) {
+        pill?.remove();
+        return;
+    }
+    if (!pill) {
+        pill = document.createElement('div');
+        pill.className = 'log-axis-notice';
+        pill.setAttribute('role', 'status');
+        panelEl.appendChild(pill);
+    }
+    const text = hidden === 1
+        ? i18n.t('logAxisHiddenValue')
+        : i18n.t('logAxisHiddenValues').replace('{count}', i18n.formatNumber(hidden));
+    pill.textContent = text;
+    pill.title = `${text}. ${i18n.t('logAxisHiddenHint')}`;
 };
 
 proto._toggleCorrelationMode = function(panelId) {
@@ -5046,6 +5192,8 @@ proto._setSamplesNotice = function(plot, state) {
 // that can never have dots — unless they are all there is (then the reason is
 // the memory-saving file, not the zoom).
 proto._refreshSamplesNotice = function(plot) {
+    // Same refresh, same moment: the log axes' "values ≤ 0" count.
+    this._refreshLogAxisNotice(plot);
     if (!this._timeseriesSamplesEnabled?.(plot)) {
         if (plot) plot._samplesWaiting = null;
         this._syncMarksControlsForPlot(plot);

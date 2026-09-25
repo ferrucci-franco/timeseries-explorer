@@ -99,9 +99,11 @@ assert.match(fft, /const limits = convertFftAxisLimits\(state\.fMin, state\.fMax
 assert.match(fft, /plot\.cursorsSpectrum\[key\] = invertAxisValue\(value\)/,
     'and the cursors, which mark bins rather than numbers');
 // Plotly takes and reports a log axis in log10; nothing else in the panel does.
-assert.match(fft, /\.\.\.\(this\._fftXAxisIsPeriod\(plot\) \? \{ type: 'log' \} : \{ type: 'linear' \}\)/,
+assert.match(fft, /\.\.\.\(this\._fftXAxisIsLog\(plot\) \? \{ type: 'log' \} : \{ type: 'linear' \}\)/,
     'the period axis is logarithmic — the bins crowd into its short end otherwise');
-assert.match(fft, /return this\._fftXAxisIsPeriod\(plot\) \? \[10 \*\* lo, 10 \*\* hi\] : \[lo, hi\];/,
+assert.match(fft, /return state\.xAxisMode === 'period' \|\| !!state\.freqLog;/,
+    'period is always log; frequency on request (View menu)');
+assert.match(fft, /return this\._fftXAxisIsLog\(plot\) \? \[10 \*\* lo, 10 \*\* hi\] : \[lo, hi\];/,
     'a range read back from the layout comes home in data units');
 assert.match(fft, /return \[Math\.log10\(lo\), Math\.log10\(hi\)\];/, 'and a range written out goes in log10');
 // The spectrum pane's own range is read in exactly one place — the reader that
