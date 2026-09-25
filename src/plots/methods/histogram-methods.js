@@ -251,6 +251,8 @@ proto._createHistogramChart = function(panelId, panelEl) {
             this._refreshTimeseriesVisuals(panelId, plot);
             // After any restored view is applied, so the focus is not undone.
             this._applyPendingAnalysisFocus(plot);
+            // Ctrl+Z, on both panes; this opening view is the baseline.
+            this._bindViewHistory(panelId, plot);
         });
         this._installHistogramPlotHandlers(panelId, plot);
         // Cursor capture handlers before selection handlers, so an enabled

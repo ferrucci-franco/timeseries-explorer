@@ -1086,15 +1086,21 @@ export function installPlotMarksMethods(TargetClass) {
             const state = this._ensureFftState(plot);
             const period = state.xAxisMode === 'period';
             return [
+                lastView,
+                { divider: true },
                 { key: 'freqlog', label: 'viewLogFrequency', title: period ? 'viewLogFrequencyPeriod' : 'viewLogFrequencyTitle', checked: period || !!state.freqLog, disabled: !has || period, run: () => this._toggleFftFrequencyLog(panelId) },
             ];
         }
         if (mode === 'histogram') {
             const state = this._ensureHistogramState(plot);
             return [
+                lastView,
+                { divider: true },
                 { key: 'countlog', label: 'viewLogCounts', title: 'viewLogCountsTitle', checked: state.yScale === 'log', disabled: !has, run: () => this._toggleHistogramLogY(panelId) },
             ];
         }
+        // Heatmap, Profile, Integral, Correlation: nothing but going back.
+        if (['heatmap', 'temporal-profile', 'integral', 'correlation'].includes(mode)) return [lastView];
         return [];
     };
 

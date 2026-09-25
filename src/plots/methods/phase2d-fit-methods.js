@@ -643,6 +643,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 Promise.resolve(this._restore2DViewToDiv?.(timeDiv, timeRestoreView)).then(() => {
                     const range = timeDiv?._fullLayout?.xaxis?.range;
                     this._refreshPhase2dFitTimeVisuals(panelId, plot, Array.isArray(range) ? range : null);
+                    // Ctrl+Z, on the 2D chart and this time pane together.
+                    this._bindViewHistory(panelId, plot);
                 });
                 Plotly.Plots.resize(div);
             });

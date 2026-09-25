@@ -543,6 +543,8 @@ proto._createCalendarHeatmapChart = function(panelId, panelEl) {
             this._refreshTimeseriesVisuals(panelId, plot);
             // After any restored view is applied, so the focus is not undone.
             this._applyPendingAnalysisFocus(plot);
+            // Ctrl+Z, on both panes; this opening view is the baseline.
+            this._bindViewHistory(panelId, plot);
         });
         this._installCalendarHeatmapPlotHandlers(panelId, plot);
         // Cursor capture handlers must be registered before selection handlers,
@@ -1502,7 +1504,10 @@ proto._renderCalendarHeatmapModels = function(panelId, plot = this.plots.get(pan
     const config = this._getPlotlyConfig();
     const drawn = colorModeChanged
         ? Plotly.newPlot(plot.heatmapDiv, built.traces, built.layout, config)
-            .then(() => this._installCalendarHeatmapAnalysisHandlers(plot))
+            .then(() => {
+                this._installCalendarHeatmapAnalysisHandlers(plot);
+                this._bindViewHistory(panelId, plot, { baseline: false });
+            })
         : Plotly.react(plot.heatmapDiv, built.traces, built.layout, config);
     return drawn
         .then(() => {

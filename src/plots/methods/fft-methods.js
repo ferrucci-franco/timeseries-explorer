@@ -325,6 +325,8 @@ proto._createFftChart = function(panelId, panelEl) {
             if (hasLazyTrace || zoomed) this._refreshTimeseriesVisuals(panelId, plot);
             // After any restored view is applied, so the focus is not undone.
             this._applyPendingAnalysisFocus(plot, 'fft');
+            // Ctrl+Z, on both panes; this opening view is the baseline.
+            this._bindViewHistory(panelId, plot);
         });
         this._installFftPlotHandlers(panelId, plot);
         // Cursor handlers first: their capture listeners must run before the
