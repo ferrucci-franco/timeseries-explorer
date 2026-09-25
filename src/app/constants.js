@@ -85,6 +85,7 @@ const DERIVED_FUNCTIONS = [
     { name: 'power', arity: 2 },
     { name: 'root', arity: 2 },
     { name: 'diff', arity: 1 },
+    { name: 'cumsum', arity: 1 },
 ];
 
 const DERIVED_FUNCTION_ALIASES = new Map([

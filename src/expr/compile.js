@@ -10,8 +10,10 @@
 // scalars, and writes one Float64Array. Intermediates never exist.
 //
 // Semantics are unchanged, including the awkward corners:
-//   * `diff()` is a neighbour op, not elementwise, so it gets its own pass
-//     (see lowerDiffs below) and keeps the forward-difference first sample.
+//   * `diff()` and `cumsum()` are neighbour ops, not elementwise, so each gets
+//     its own pass (see lowerDiffs below). diff keeps the forward-difference
+//     first sample; cumsum is NumPy's running sum, and a NaN poisons every
+//     later value, exactly as it would in an accumulator.
 //   * `root()` keeps the odd-negative-degree branch and the integer snapping of
 //     the original `_nthRoot` / `_cleanDerivedNumber`.
 //   * A formula referring only to scalars still produces a full-length series.
@@ -62,7 +64,7 @@ const UNARY_MATH = {
 };
 
 const ARITY = {
-    sqrt: 1, abs: 1, log: 1, log10: 1, square: 1, diff: 1, root: 2, power: 2,
+    sqrt: 1, abs: 1, log: 1, log10: 1, square: 1, diff: 1, cumsum: 1, root: 2, power: 2,
     sin: 1, cos: 1, tan: 1, asin: 1, acos: 1, atan: 1,
     sinh: 1, cosh: 1, tanh: 1, sign: 1, step: 1,
 };
@@ -132,11 +134,13 @@ function flattenLists(node) {
     }
 }
 
-// ─── Pass 1: pull `diff()` out into its own temporaries ───────────────────
+// ─── Pass 1: pull `diff()` / `cumsum()` out into their own temporaries ────
 //
 // Everything else fuses into one loop, but a neighbour op cannot: it needs its
-// operand fully materialized. Each diff becomes a temp array, and the node is
+// operand fully materialized. Each diff or cumsum becomes a temp array, and the node is
 // replaced by a reference to it, so the remaining tree is purely elementwise.
+
+const NEIGHBOUR_OPS = new Set(['diff', 'cumsum']);
 
 function lowerDiffs(node, passes) {
     switch (node.type) {
@@ -151,9 +155,9 @@ function lowerDiffs(node, passes) {
         case 'func': {
             requireArity(node.name, node.args.length);
             const args = node.args.map(arg => lowerDiffs(arg, passes));
-            if (node.name !== 'diff') return { ...node, args };
+            if (!NEIGHBOUR_OPS.has(node.name)) return { ...node, args };
             const index = passes.length;
-            passes.push({ source: args[0] });
+            passes.push({ op: node.name, source: args[0] });
             return { type: 'temp', index };
         }
         default:
@@ -283,7 +287,7 @@ export function compileFormula(formula, variables, classify) {
     const chunks = [...buildBindings(names, classify)];
     passes.forEach((pass, index) => {
         // `diff(scalar)` is a zero series in the original, and stays one.
-        if (!hasSeries(pass.source, classify)) {
+        if (pass.op === 'diff' && !hasSeries(pass.source, classify)) {
             chunks.push(`const t${index} = new Float64Array(n);`);
             return;
         }
@@ -296,6 +300,14 @@ export function compileFormula(formula, variables, classify) {
         if (!bare) {
             chunks.push(`const ${src} = new Float64Array(n);`);
             chunks.push(buildLoop(pass.source, classify, src));
+        }
+        if (pass.op === 'cumsum') {
+            chunks.push([
+                `const t${index} = new Float64Array(n);`,
+                `let acc${index} = 0;`,
+                `for (let i = 0; i < n; i++) { acc${index} += ${src}[i]; t${index}[i] = acc${index}; }`,
+            ].join('\n'));
+            return;
         }
         chunks.push([
             `const t${index} = new Float64Array(n);`,
