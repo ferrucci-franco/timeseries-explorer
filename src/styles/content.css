@@ -1458,62 +1458,6 @@
     color: white;
 }
 
-/* 2D-mode Display + marker controls (TODO 10). */
-.phase2d-tools-group {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 0 0 auto;
-}
-
-.phase2d-display-select {
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-size: 0.7rem;
-    padding: 2px 4px;
-    cursor: pointer;
-}
-
-.phase2d-marker-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.phase2d-marker-controls[hidden] {
-    display: none;
-}
-
-.phase2d-marker-field {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.66rem;
-    color: var(--text-secondary);
-    white-space: nowrap;
-}
-
-.phase2d-marker-input {
-    width: 58px;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-size: 0.7rem;
-    /* No right padding so the native spinner sits flush against the border
-       (removes the white gap); the extra width keeps a two-decimal value like
-       0.65 from colliding with the arrows. */
-    padding: 2px 0 2px 5px;
-}
-
-.phase2d-marker-input::-webkit-inner-spin-button,
-.phase2d-marker-input::-webkit-outer-spin-button {
-    margin: 0;
-    opacity: 1;
-}
-
 /* Analysis toggles (Correlation + Curve Fit) group — its own coloured divider,
    distinct from the green mode divider and the blue tools divider. */
 .phase2d-analysis-group {
@@ -1928,6 +1872,38 @@
     overflow: hidden;
     text-overflow: ellipsis;
     cursor: help;
+}
+
+/* Analysis: one analysis at a time, so its marks are round, like radios. */
+.panel-analysis-menu .marks-menu-check {
+    border-radius: 50%;
+}
+
+/* A numeric setting in the View menu (2D marker size / opacity). */
+.marks-menu-number-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 4px 2px 8px;
+}
+
+.marks-menu-number {
+    width: 64px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    /* No right padding so the native spinner sits flush against the border;
+       the width keeps a two-decimal value like 0.65 clear of the arrows. */
+    padding: 2px 0 2px 5px;
+}
+
+.marks-menu-number::-webkit-inner-spin-button,
+.marks-menu-number::-webkit-outer-spin-button {
+    margin: 0;
+    opacity: 1;
 }
 
 /* Gaps settings: Δt and threshold per file, over the top-right of the plot

@@ -527,8 +527,9 @@ const flat = (name, unit, value, count = 25) => ({ name, unit, values: new Array
     ok(plotManager.includes("plot.mode === 'integral'"), 'the mode is dispatched on');
     ok(plotManager.includes('this._integralExportTable?.(plot)'), 'CSV export goes through the result table');
 
-    ok(interaction.includes("{ id: 'integral', label: i18n.t('integralModeLabel')"),
-        'the toolbar offers the analysis button');
+    const marks = read('src/plots/methods/marks-methods.js');
+    ok(marks.includes("{ id: 'integral', label: 'analysisItemIntegral', title: 'integralMode'"),
+        'the Analysis menu offers it');
     ok(/_toggleTimeseriesAnalysisMode[\s\S]{0,240}'integral'/.test(interaction),
         'and the analysis toggle accepts it');
 

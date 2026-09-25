@@ -4423,7 +4423,7 @@ proto._setCamera = function(panelId, preset) {
     Plotly.relayout(plot.div, layoutUpdate).then(() => this._updateCameraOverlay(plot));
 };
 
-proto._toggleProjection = function(panelId, panelEl) {
+proto._toggleProjection = function(panelId) {
     const plot = this.plots.get(panelId);
     if (!plot) return;
     plot.projection = plot.projection === 'orthographic' ? 'perspective' : 'orthographic';
@@ -4431,12 +4431,8 @@ proto._toggleProjection = function(panelId, panelEl) {
         Plotly.relayout(plot.div, { 'scene.camera.projection.type': plot.projection })
             .then(() => this._updateCameraOverlay(plot));
     }
-    const projBtn = panelEl.querySelector('.proj-btn');
-    if (projBtn) {
-        const isOrtho = plot.projection === 'orthographic';
-        projBtn.classList.toggle('active', isOrtho);
-        projBtn.title = i18n.t(isOrtho ? 'projIsometric' : 'projPerspective');
-    }
+    // Iso / Persp is a View-menu setting now.
+    this._syncMarksControls?.(panelId);
 };
 
 /**
@@ -4497,7 +4493,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     // Remove existing mode buttons if any (re-render case). The analysis group
     // wraps action buttons, so it must be removed too — otherwise its empty
     // shell (with margin/border) accumulates on every toolbar rebuild.
-    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group, .phase2d-tools-group, .phase2d-analysis-group').forEach(el => el.remove());
+    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group, .phase2d-analysis-group').forEach(el => el.remove());
     toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
 
     const plot = this.plots.get(panelId);
@@ -4591,27 +4587,9 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         timeseriesToolsGroup.appendChild(this._createMarksButton(panelId, plot));
         timeseriesToolsGroup.appendChild(this._createViewButton(panelId, plot));
 
-        const analysisModes = [
-            { id: 'fft', label: 'Fourier', titleKey: 'modeFFT', className: 'timeseries-fourier-btn' },
-            { id: 'histogram', label: i18n.t('modeHistogramLabel'), titleKey: 'modeHistogram', className: 'timeseries-histogram-btn' },
-            { id: 'heatmap', label: i18n.t('modeHeatmapLabel'), titleKey: 'modeHeatmap', className: 'timeseries-heatmap-btn' },
-            { id: 'temporal-profile', label: i18n.t('temporalProfileModeLabel'), titleKey: 'temporalProfileMode', className: 'timeseries-temporal-profile-btn' },
-            { id: 'integral', label: i18n.t('integralModeLabel'), titleKey: 'integralMode', className: 'timeseries-integral-btn' },
-        ];
-        analysisModes.forEach(({ id, label, titleKey, className }) => {
-            const active = currentMode === id;
-            const button = document.createElement('button');
-            button.className = `layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-analysis-btn ${className}${active ? ' active' : ''}`;
-            button.textContent = label;
-            button.title = i18n.t(titleKey);
-            button.dataset.mode = id;
-            button.setAttribute('aria-pressed', String(active));
-            button.addEventListener('click', (event) => {
-                event.stopPropagation();
-                this._toggleTimeseriesAnalysisMode(panelId, id);
-            });
-            timeseriesToolsGroup.appendChild(button);
-        });
+        // Fourier, Histogram, Heatmap, Profile and Integral: one Analysis
+        // dropdown, whose button names the analysis that is on.
+        timeseriesToolsGroup.appendChild(this._createAnalysisButton(panelId, plot));
         toolbar.appendChild(timeseriesToolsGroup);
     }
 
@@ -4633,21 +4611,12 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         }
     }
 
-    if (supportsEqualAspect2D) {
-        const equalAspectBtn = document.createElement('button');
-        equalAspectBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn equal-aspect-btn' + (plot?.equalAspect2D ? ' active' : '');
-        equalAspectBtn.textContent = '1:1';
-        equalAspectBtn.title = i18n.t('equalAspect2D');
-        equalAspectBtn.setAttribute('aria-pressed', String(!!plot?.equalAspect2D));
-        equalAspectBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._toggleEqualAspect2D(panelId);
-        });
-        viewGroup.appendChild(equalAspectBtn);
+    // How the view reads the data — 2D: display, marker size/opacity, 1:1, log
+    // axes; 2D animation: 1:1; 3D: projection, camera presets, rotations — all
+    // live in the View menu. Correlation's axes are fixed by what it shows.
+    if (currentMode === 'phase2d' || currentMode === 'state-anim' || this._is3D(currentMode)) {
+        viewGroup.appendChild(this._createViewButton(panelId, plot));
     }
-    // 2D: log X / log Y (View menu). Correlation's and the state
-    // animation's axes are fixed by what they show.
-    if (currentMode === 'phase2d') viewGroup.appendChild(this._createViewButton(panelId, plot));
 
     // Correlation is an analysis toggle of the 2D/pair family (shares the pair
     // list). Appended AFTER the 2D Display controls (below) so it reads as its
@@ -4666,62 +4635,8 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         });
     }
 
-    const is2dt = currentMode === 'phase2dt';
-    const views = [
-        { preset: 'top',   label: is2dt ? 'x vs t' : 'XY', titleKey: is2dt ? 'view2dtXt' : 'viewTop'   },
-        { preset: 'front', label: is2dt ? 'y vs t' : 'XZ', titleKey: is2dt ? 'view2dtYt' : 'viewFront' },
-        { preset: 'yz',    label: is2dt ? 'y vs x' : 'YZ', titleKey: is2dt ? 'view2dtXY' : 'viewSide'  },
-    ];
-
-    views.forEach(v => {
-        const btn = document.createElement('button');
-        btn.className = 'layout-toolbar-btn view-btn view-btn-3d-only';
-        btn.textContent = v.label;
-        btn.title = i18n.t(v.titleKey);
-        btn.style.display = show3DControls ? '' : 'none';
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._setCamera(panelId, v.preset === 'yz' ? 'yz' : v.preset);
-        });
-        viewGroup.appendChild(btn);
-    });
-
-    // Projection toggle button (Iso / Persp)
-    const isOrtho = !plot || plot.projection === 'orthographic';
-    const projBtn = document.createElement('button');
-    projBtn.className = 'layout-toolbar-btn view-btn proj-btn view-btn-3d-only' + (isOrtho ? ' active' : '');
-    projBtn.textContent = 'Iso';
-    projBtn.title = i18n.t(isOrtho ? 'projIsometric' : 'projPerspective');
-    projBtn.style.display = show3DControls ? '' : 'none';
-    projBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._toggleProjection(panelId, panelEl);
-    });
-    viewGroup.appendChild(projBtn);
-
-    // Rotation buttons (90° animated rotation around each axis)
-    const rotAxes = [
-        { axis: 'z', label: '⟳Z', title: 'Rotate 90° around Z' },
-        { axis: 'x', label: '⟳X', title: 'Rotate 90° around X' },
-        { axis: 'y', label: '⟳Y', title: 'Rotate 90° around Y' },
-    ];
-    rotAxes.forEach(r => {
-        const btn = document.createElement('button');
-        btn.className = 'layout-toolbar-btn view-btn view-btn-3d-only rot-btn';
-        btn.textContent = r.label;
-        btn.title = r.title;
-        btn.style.display = show3DControls ? '' : 'none';
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._animateRotation(panelId, r.axis, Math.PI / 2, 400);
-        });
-        viewGroup.appendChild(btn);
-    });
-
     toolbar.appendChild(viewGroup);
 
-    // 2D-only Display (Lines / Points / Lines+points) + marker controls (TODO 10).
-    this._injectPhase2dDisplayControls?.(panelId, toolbar, plot);
     // Analysis toggles (Correlation + Curve Fit) grouped behind their own
     // coloured separator so they read as analyses, not Display options.
     if (isPhase2dFamily) {
@@ -4927,11 +4842,7 @@ proto._updateModeButtons = function(panelEl, activeMode) {
         const dim = btn.dataset.stateAnimDim ? Number(btn.dataset.stateAnimDim) : null;
         btn.classList.toggle('active', mode === activePrimaryMode && (!dim || dim === (plot?.stateAnimDim || 2)));
     });
-    panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
-        const active = btn.dataset.mode === activeMode;
-        btn.classList.toggle('active', active);
-        btn.setAttribute('aria-pressed', String(active));
-    });
+    this._applyAnalysisButtonState(plot, panelEl.querySelector('.timeseries-analysis-menu-btn'));
 };
 
 proto._toggle3DViewButtons = function(panelEl, show) {
@@ -5024,6 +4935,8 @@ proto._togglePhase2dLogAxis = function(panelId, axis = 'y') {
     if (!plot || plot.mode !== 'phase2d') return;
     const key = axis === 'x' ? 'phase2dXLog' : 'phase2dYLog';
     plot[key] = !plot[key];
+    // 1:1 cannot hold between a log axis and a linear one.
+    if (plot.equalAspect2D && !this._equalAspectAllowed(plot)) plot.equalAspect2D = false;
     if (plot.div) this._rebuildPanel(panelId);
     else this._refreshActionBtns(panelId);
     this._syncMarksControls(panelId);
@@ -5033,68 +4946,139 @@ proto._togglePhase2dLogAxis = function(panelId, axis = 'y') {
  * How many finite values the panel's log axes cannot draw (0 or below), over
  * everything the panel shows. The data is not changed; the notice says so
  * and points at abs() for the magnitude.
+ *
+ * In-memory files are counted here. A memory-saving (DuckDB) file only holds
+ * an overview sample in memory, so its rows are returned as `lazy` items for
+ * an exact count in SQL (see _refreshLogAxisNotice); `approx` is what the
+ * overview says, the fallback when that query cannot run.
  */
 proto._logAxisHiddenCount = function(plot) {
-    if (!plot) return 0;
-    const countNonPositive = (values) => {
-        let n = 0;
-        if (!values) return 0;
-        for (const value of values) {
-            const v = Number(value);
-            if (Number.isFinite(v) && v <= 0) n++;
-        }
-        return n;
+    const out = { hidden: 0, approx: 0, lazy: new Map() };
+    if (!plot) return out;
+    const sign = (fileId, name) => (this.isVariableSignInverted?.(fileId, name) ? -1 : 1);
+    const lazyItem = (fileId, item) => {
+        if (!out.lazy.has(fileId)) out.lazy.set(fileId, []);
+        out.lazy.get(fileId).push(item);
     };
-    let hidden = 0;
+    const isLazy = (fileId) => !!this.files.get(fileId)?.data?._duckdb;
     if (plot.mode === 'timeseries') {
         for (const trace of plot.traces || []) {
             if (!this._isVisible(trace)) continue;
             if (!this._axisIsLog(plot, this._traceYAxis(trace, plot))) continue;
             const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
             if (!variable || variable.kind === 'parameter') continue;
-            hidden += countNonPositive(this._getTransformedVariableData(trace.fileId, trace.varName));
+            const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+            let n = 0;
+            for (const value of values || []) {
+                const v = Number(value);
+                if (Number.isFinite(v) && v <= 0) n++;
+            }
+            if (isLazy(trace.fileId)) {
+                out.approx += n;
+                const term = { name: trace.varName, sign: sign(trace.fileId, trace.varName) };
+                lazyItem(trace.fileId, { finite: [term], nonPositive: [term] });
+            } else {
+                out.hidden += n;
+            }
         }
     } else if (plot.mode === 'phase2d') {
         const xLog = this._axisIsLog(plot, 'x');
         const yLog = this._axisIsLog(plot, 'y');
-        if (!xLog && !yLog) return 0;
+        if (!xLog && !yLog) return out;
         for (const pt of plot.phaseTraces || []) {
             if (!this._isVisible(pt)) continue;
             // Every row, not the drawn (decimated) points: the note counts values.
             const xs = this._getTransformedVariableData(pt.fileId, pt.x);
             const ys = this._getTransformedVariableData(pt.fileId, pt.y);
             const n = Math.min(xs?.length || 0, ys?.length || 0);
+            let count = 0;
             for (let i = 0; i < n; i++) {
                 const x = Number(xs[i]);
                 const y = Number(ys[i]);
                 if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-                if ((xLog && x <= 0) || (yLog && y <= 0)) hidden++;
+                if ((xLog && x <= 0) || (yLog && y <= 0)) count++;
+            }
+            if (isLazy(pt.fileId)) {
+                out.approx += count;
+                const tx = { name: pt.x, sign: sign(pt.fileId, pt.x) };
+                const ty = { name: pt.y, sign: sign(pt.fileId, pt.y) };
+                lazyItem(pt.fileId, {
+                    finite: [tx, ty],
+                    nonPositive: [...(xLog ? [tx] : []), ...(yLog ? [ty] : [])],
+                });
+            } else {
+                out.hidden += count;
             }
         }
     }
-    return hidden;
+    return out;
 };
 
 /**
  * The "N values ≤ 0 not shown" pill over a panel with a log axis. Called from
  * every time-series refresh, so the count is only taken again when what it
  * depends on — the log axes, the traces on them, their data — has changed.
+ * A memory-saving file is counted exactly in DuckDB; until that answer is in
+ * (or if the query cannot run) the overview's count is shown as approximate.
  */
 proto._refreshLogAxisNotice = function(plot) {
     const panelEl = plot?.div?.closest?.('.layout-panel');
     if (!panelEl) return;
+    const signOf = (fileId, name) => (this.isVariableSignInverted?.(fileId, name) ? '-' : '+');
     const onLog = (plot.mode === 'timeseries'
         ? (plot.traces || []).filter(t => this._isVisible(t) && this._axisIsLog(plot, this._traceYAxis(t, plot)))
-            .map(t => `${t.fileId}/${t.varName}:${this._getTransformedVariableData(t.fileId, t.varName)?.length ?? 0}`)
+            .map(t => `${t.fileId}/${t.varName}:${this._getTransformedVariableData(t.fileId, t.varName)?.length ?? 0}:${signOf(t.fileId, t.varName)}`)
         : (plot.mode === 'phase2d' && (this._axisIsLog(plot, 'x') || this._axisIsLog(plot, 'y'))
             ? [`x${+this._axisIsLog(plot, 'x')}y${+this._axisIsLog(plot, 'y')}`,
-                ...(plot.phaseTraces || []).filter(pt => this._isVisible(pt)).map(pt => `${pt.fileId}/${pt.x}/${pt.y}`)]
+                ...(plot.phaseTraces || []).filter(pt => this._isVisible(pt))
+                    .map(pt => `${pt.fileId}/${pt.x}${signOf(pt.fileId, pt.x)}/${pt.y}${signOf(pt.fileId, pt.y)}`)]
             : []));
-    const signature = `${plot.mode}|${onLog.join(',')}`;
+    // A transform (gain, offset, sign) changes which values are ≤ 0.
+    const transforms = [...new Set((plot.traces || []).map(t => t.fileId).concat((plot.phaseTraces || []).map(p => p.fileId)))]
+        .map(fileId => JSON.stringify(this._fileTransform?.(fileId) || null));
+    const signature = `${plot.mode}|${onLog.join(',')}|${transforms.join(',')}`;
     if (plot._logAxisNotice?.signature !== signature) {
-        plot._logAxisNotice = { signature, hidden: onLog.length ? this._logAxisHiddenCount(plot) : 0 };
+        const counted = onLog.length ? this._logAxisHiddenCount(plot) : { hidden: 0, approx: 0, lazy: new Map() };
+        const notice = {
+            signature,
+            hidden: counted.hidden + counted.approx,
+            approximate: counted.lazy.size > 0,
+        };
+        plot._logAxisNotice = notice;
+        if (counted.lazy.size) this._countLazyLogAxisHidden(plot, notice, counted);
     }
-    const hidden = plot._logAxisNotice.hidden;
+    this._renderLogAxisNotice(plot);
+};
+
+// The exact count for memory-saving files, one query per file. Only lands if
+// nothing changed in the meantime.
+proto._countLazyLogAxisHidden = function(plot, notice, counted) {
+    const jobs = [...counted.lazy.entries()].map(([fileId, items]) => {
+        const data = this.files.get(fileId)?.data;
+        const source = data?._duckdb?.source;
+        if (!source?.countNonPositiveRows) return Promise.reject(new Error('noSql'));
+        const transform = this._fileTransform?.(fileId) || {};
+        // A crop narrows the rows the plot shows; the whole-table count would
+        // overstate it, so a cropped file keeps the overview's estimate.
+        if (transform.cropStart !== null && transform.cropStart !== undefined) return Promise.reject(new Error('cropped'));
+        if (transform.cropEnd !== null && transform.cropEnd !== undefined) return Promise.reject(new Error('cropped'));
+        return source.countNonPositiveRows(data, items, { gain: transform.gain, yOffset: transform.yOffset })
+            .then(counts => counts.reduce((sum, n) => sum + n, 0));
+    });
+    Promise.all(jobs).then((sums) => {
+        if (plot._logAxisNotice !== notice) return;
+        notice.hidden = counted.hidden + sums.reduce((sum, n) => sum + n, 0);
+        notice.approximate = false;
+        this._renderLogAxisNotice(plot);
+    }).catch(() => {
+        // The overview's count stays, marked as approximate.
+    });
+};
+
+proto._renderLogAxisNotice = function(plot) {
+    const panelEl = plot?.div?.closest?.('.layout-panel');
+    if (!panelEl) return;
+    const { hidden = 0, approximate = false } = plot._logAxisNotice || {};
     let pill = panelEl.querySelector('.log-axis-notice');
     if (!hidden) {
         pill?.remove();
@@ -5106,11 +5090,13 @@ proto._refreshLogAxisNotice = function(plot) {
         pill.setAttribute('role', 'status');
         panelEl.appendChild(pill);
     }
-    const text = hidden === 1
+    const count = `${approximate ? '≈ ' : ''}${i18n.formatNumber(hidden)}`;
+    const text = hidden === 1 && !approximate
         ? i18n.t('logAxisHiddenValue')
-        : i18n.t('logAxisHiddenValues').replace('{count}', i18n.formatNumber(hidden));
+        : i18n.t('logAxisHiddenValues').replace('{count}', count);
     pill.textContent = text;
-    pill.title = `${text}. ${i18n.t('logAxisHiddenHint')}`;
+    pill.title = `${text}. ${i18n.t('logAxisHiddenHint')}`
+        + (approximate ? ` ${i18n.t('logAxisHiddenApprox')}` : '');
 };
 
 proto._toggleCorrelationMode = function(panelId) {
@@ -5358,9 +5344,20 @@ proto._supportsEqualAspect2D = function(plot) {
     return !!plot && (plot.mode === 'phase2d' || (plot.mode === 'state-anim' && (plot.stateAnimDim || 2) === 2));
 };
 
+/**
+ * 1:1 needs the two axes on the same scale. Both linear: a unit is a unit.
+ * Both log: a decade is a decade — slopes then read true in a log-log plot.
+ * One of each has no common scale.
+ */
+proto._equalAspectAllowed = function(plot) {
+    if (plot?.mode !== 'phase2d') return true;
+    return !!plot.phase2dXLog === !!plot.phase2dYLog;
+};
+
 proto._toggleEqualAspect2D = function(panelId) {
     const plot = this.plots.get(panelId);
     if (!this._supportsEqualAspect2D(plot)) return;
+    if (!plot.equalAspect2D && !this._equalAspectAllowed(plot)) return;
     plot.equalAspect2D = !plot.equalAspect2D;
     if (plot.div) {
         const update = plot.equalAspect2D
@@ -5368,12 +5365,8 @@ proto._toggleEqualAspect2D = function(panelId) {
             : { 'yaxis.scaleanchor': null, 'yaxis.scaleratio': null, 'xaxis.autorange': true, 'yaxis.autorange': true };
         Plotly.relayout(plot.div, update);
     }
-    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-    const btn = panelEl?.querySelector('.equal-aspect-btn');
-    if (btn) {
-        btn.classList.toggle('active', plot.equalAspect2D);
-        btn.setAttribute('aria-pressed', String(plot.equalAspect2D));
-    }
+    // 1:1 is a View-menu setting: the button count and the open menu follow.
+    this._syncMarksControls?.(panelId);
 };
 
 // ─── Placeholder text ──────────────────────────────────────────

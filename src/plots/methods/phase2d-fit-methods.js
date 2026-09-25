@@ -79,65 +79,6 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return phase2dShowsMarkers(state);
     };
 
-    // ── Display + marker toolbar controls (phase2d only) ────────────
-    proto._injectPhase2dDisplayControls = function(panelId, toolbar, plot) {
-        if (!toolbar || plot?.mode !== 'phase2d') return;
-        const state = this._ensurePhase2dState(plot);
-
-        const group = document.createElement('div');
-        group.className = 'phase2d-tools-group';
-
-        // Display: Lines / Points / Lines+points as a compact select.
-        const displaySelect = document.createElement('select');
-        displaySelect.className = 'phase2d-display-select';
-        displaySelect.title = i18n.t('phase2dDisplayTooltip');
-        displaySelect.setAttribute('aria-label', i18n.t('phase2dDisplayLabel'));
-        [
-            ['lines', i18n.t('phase2dDisplayLines')],
-            ['markers', i18n.t('phase2dDisplayPoints')],
-            ['lines+markers', i18n.t('phase2dDisplayLinesPoints')],
-        ].forEach(([value, label]) => {
-            const opt = document.createElement('option');
-            opt.value = value;
-            opt.textContent = label;
-            if (value === state.displayMode) opt.selected = true;
-            displaySelect.appendChild(opt);
-        });
-        displaySelect.addEventListener('change', () => this._setPhase2dDisplayMode(panelId, displaySelect.value));
-        group.appendChild(displaySelect);
-
-        // Compact marker size / opacity — only when points are shown.
-        const markerWrap = document.createElement('div');
-        markerWrap.className = 'phase2d-marker-controls';
-        markerWrap.hidden = !this._phase2dShowsMarkers(state);
-
-        const makeNumber = (key, labelKey, min, max, step, value) => {
-            const label = document.createElement('label');
-            label.className = 'phase2d-marker-field';
-            label.title = i18n.t(labelKey);
-            const span = document.createElement('span');
-            span.textContent = i18n.t(labelKey);
-            const input = document.createElement('input');
-            input.type = 'number';
-            input.className = 'phase2d-marker-input';
-            input.min = String(min);
-            input.max = String(max);
-            input.step = String(step);
-            input.value = String(value);
-            input.setAttribute('aria-label', i18n.t(labelKey));
-            input.addEventListener('change', () => this._setPhase2dMarkerSetting(panelId, key, input.value));
-            label.append(span, input);
-            return label;
-        };
-        markerWrap.append(
-            makeNumber('markerSize', 'phase2dMarkerSize', MARKER_SIZE_MIN, MARKER_SIZE_MAX, 1, state.markerSize),
-            makeNumber('markerOpacity', 'phase2dMarkerOpacity', MARKER_OPACITY_MIN, MARKER_OPACITY_MAX, 0.05, state.markerOpacity),
-        );
-        group.appendChild(markerWrap);
-
-        toolbar.appendChild(group);
-    };
-
     // "Curve Fit" toolbar toggle (TODO 10) — a press/release button like the
     // Correlation toggle (blue when active), not a dropdown. Turning it on opens
     // the FFT-like fit workspace; the per-pair model lives inside the drawer.
@@ -171,11 +112,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (!plot || plot.mode !== 'phase2d') return;
         const state = this._ensurePhase2dState(plot);
         state.displayMode = PHASE2D_DISPLAY_MODES.has(displayMode) ? displayMode : 'lines';
-        // Show/hide the compact marker controls without a full toolbar rebuild.
-        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-        const markerWrap = panelEl?.querySelector('.phase2d-marker-controls');
-        if (markerWrap) markerWrap.hidden = !this._phase2dShowsMarkers(state);
         this._restylePhase2dDisplay(panelId, plot);
+        // The View menu shows marker size and opacity only while points are drawn.
+        this._syncMarksControls?.(panelId);
     };
 
     proto._setPhase2dMarkerSetting = function(panelId, key, rawValue) {
@@ -186,6 +125,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         else if (key === 'markerOpacity') state.markerOpacity = clampNumber(rawValue, MARKER_OPACITY_MIN, MARKER_OPACITY_MAX, state.markerOpacity);
         else return;
         this._restylePhase2dDisplay(panelId, plot);
+        // The View menu shows the value as clamped.
+        this._syncMarksControls?.(panelId);
     };
 
     // Display change is a pure restyle over the SAME visual data — no query, no
@@ -258,6 +199,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._computePhase2dFits = function(plot) {
         const state = this._ensurePhase2dState(plot);
         if (!state.fitEnabled) { plot._phase2dFits = []; return plot._phase2dFits; }
+        // On a log X axis the curve is sampled in decades, or its first decade
+        // would be drawn from a couple of points.
+        const curveOptions = { logX: !!this._axisIsLog?.(plot, 'x') };
         const results = [];
         (plot.phaseTraces || []).forEach((pair, index) => {
             if (pair.visible === false) return;
@@ -276,7 +220,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 const key = this._phase2dLazyFitKey(plot, pair);
                 const cached = plot._phase2dLazyFits?.get(this._phase2dPairId(pair));
                 if (cached && cached.key === key && cached.fit) {
-                    const curve = cached.fit.status === 'ok' ? buildFitCurve(cached.fit) : { x: [], y: [] };
+                    const curve = cached.fit.status === 'ok' ? buildFitCurve(cached.fit, undefined, curveOptions) : { x: [], y: [] };
                     results.push({ pair, index, label, model, fit: cached.fit, curve, nScope: cached.nScope, lazy: true });
                 } else {
                     results.push({ pair, index, label, model, fit: null, curve: null, nScope: NaN, lazy: true, lazyStatus: cached?.status });
@@ -285,7 +229,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             }
             const series = this._phase2dPairSeries(plot, pair);
             const fit = fitPair(model, series.x, series.y);
-            const curve = fit && fit.status === 'ok' ? buildFitCurve(fit) : { x: [], y: [] };
+            const curve = fit && fit.status === 'ok' ? buildFitCurve(fit, undefined, curveOptions) : { x: [], y: [] };
             results.push({ pair, index, label, model, fit, curve, nScope: series.nScope, lazy: false });
         });
         plot._phase2dFits = results;
@@ -394,8 +338,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const traces = [];
         for (const r of results) {
             if (!r.curve || !r.curve.x.length) continue;
-            const modelWord = r.model === 'quadratic'
-                ? i18n.t('phase2dFitQuadratic') : i18n.t('phase2dFitLinear');
+            const modelWord = r.model === 'quadratic' ? i18n.t('phase2dFitQuadratic')
+                : (r.model === 'power' ? i18n.t('phase2dFitPower') : i18n.t('phase2dFitLinear'));
             traces.push({
                 x: r.curve.x,
                 y: r.curve.y,
@@ -1122,6 +1066,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (fit.model === 'linear') {
             return { generic: 'y = a·x + b', coeffs: [['a', g(fit.b1)], ['b', g(fit.b0)]] };
         }
+        if (fit.model === 'power') {
+            // b is the slope of the line a log-log plot shows.
+            return { generic: 'y = a·xᵇ', coeffs: [['a', g(fit.a)], ['b', g(fit.b)]] };
+        }
         return { generic: 'y = a·x² + b·x + c', coeffs: [['a', g(fit.a)], ['b', g(fit.b)], ['c', g(fit.c)]] };
     };
 
@@ -1350,7 +1298,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const typeSelect = document.createElement('select');
         typeSelect.className = 'phase2d-fit-type-select';
         typeSelect.setAttribute('aria-label', i18n.t('phase2dFitType'));
-        [['none', 'phase2dFitOff'], ['linear', 'phase2dFitLinear'], ['quadratic', 'phase2dFitQuadratic']].forEach(([m, key]) => {
+        [['none', 'phase2dFitOff'], ['linear', 'phase2dFitLinear'], ['quadratic', 'phase2dFitQuadratic'], ['power', 'phase2dFitPower']].forEach(([m, key]) => {
             const opt = document.createElement('option');
             opt.value = m;
             opt.textContent = i18n.t(key);
@@ -1422,9 +1370,12 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             const stats = document.createElement('dl');
             stats.className = 'phase2d-fit-stats';
             const rows = [];
-            if (r.fit.model === 'linear') rows.push([i18n.t('phase2dFitPearsonR'), fmt(r.fit.r)]);
-            rows.push([i18n.t('phase2dFitRSquared'), fmt(r.fit.r2)]);
-            rows.push([i18n.t('phase2dFitRmse'), fmt(r.fit.rmse)]);
+            // A power fit is a line in log-log: its r, R² and RMSE are that
+            // line's, and say so (RMSE in decades).
+            const logLog = r.fit.model === 'power';
+            if (r.fit.model === 'linear' || logLog) rows.push([i18n.t(logLog ? 'phase2dFitPearsonRLog' : 'phase2dFitPearsonR'), fmt(r.fit.r)]);
+            rows.push([i18n.t(logLog ? 'phase2dFitRSquaredLog' : 'phase2dFitRSquared'), fmt(r.fit.r2)]);
+            rows.push([i18n.t(logLog ? 'phase2dFitRmseLog' : 'phase2dFitRmse'), fmt(r.fit.rmse)]);
             rows.push([i18n.t('phase2dFitN'), `${r.fit.n}${r.fit.nExcluded ? ` (−${r.fit.nExcluded})` : ''}`]);
             for (const [k, v] of rows) {
                 const dt = document.createElement('dt'); dt.textContent = k;
@@ -1563,9 +1514,12 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             ['quadratic_a', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'a')) : '')],
             ['quadratic_b', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'b')) : '')],
             ['quadratic_c', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'c')) : '')],
+            ['power_a', (r) => (r.model === 'power' ? num(fitOf(r, 'a')) : '')],
+            ['power_b', (r) => (r.model === 'power' ? num(fitOf(r, 'b')) : '')],
             ['center_x', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'centerX')) : '')],
             ['scale_x', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'scaleX')) : '')],
-            ['pearson_r', (r) => (r.model === 'linear' ? num(fitOf(r, 'r')) : '')],
+            // For a power fit, r / R² / RMSE are those of the log-log line.
+            ['pearson_r', (r) => (r.model === 'linear' || r.model === 'power' ? num(fitOf(r, 'r')) : '')],
             ['r_squared', (r) => num(fitOf(r, 'r2'))],
             ['rmse', (r) => num(fitOf(r, 'rmse'))],
             ['status', (r) => (r.lazy ? 'lazy-unsupported' : (r.model === 'none' ? 'none' : (r.fit?.status ?? ''))),],

@@ -13,6 +13,12 @@
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
 import {
+    MARKER_SIZE_MIN,
+    MARKER_SIZE_MAX,
+    MARKER_OPACITY_MIN,
+    MARKER_OPACITY_MAX,
+} from '../phase2d-state.js';
+import {
     GAP_DEFAULT_FACTOR,
     GAP_STEP_MIN_AGREEMENT,
     detectGapIndices,
@@ -728,16 +734,16 @@ export function installPlotMarksMethods(TargetClass) {
     };
 
     proto._marksMenuEl = function(panelId) {
-        return document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu)`);
+        return document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu):not(.panel-analysis-menu)`);
     };
 
-    // Closes whichever panel dropdown is open — Marks or View; one at a time.
+    // Closes whichever panel dropdown is open — Marks, View or Analysis; one at a time.
     proto._closeMarksMenu = function() {
         const menu = document.querySelector('.timeseries-marks-menu');
         if (!menu) return;
         menu._cleanup?.();
         menu.remove();
-        document.querySelectorAll('.timeseries-marks-btn[aria-expanded="true"], .panel-view-btn[aria-expanded="true"]')
+        document.querySelectorAll('.timeseries-marks-btn[aria-expanded="true"], .panel-view-btn[aria-expanded="true"], .timeseries-analysis-menu-btn[aria-expanded="true"]')
             .forEach(button => button.setAttribute('aria-expanded', 'false'));
     };
 
@@ -745,20 +751,22 @@ export function installPlotMarksMethods(TargetClass) {
         this._openPanelDropdown(panelId, anchor, 'marks');
     };
 
-    // Shared by Marks and View: the menu is positioned under its button, stays
-    // open while toggling, and Escape or a click outside closes it.
+    // Shared by Marks, View and Analysis: the menu is positioned under its
+    // button, stays open while toggling, and Escape or a click outside closes it.
     proto._openPanelDropdown = function(panelId, anchor, kind) {
         this._closeMarksMenu();
         const plot = this.plots.get(panelId);
         if (!plot) return;
-        const isView = kind === 'view';
+        const extraClass = { view: ' panel-view-menu', analysis: ' panel-analysis-menu' }[kind] || '';
+        const labelKey = { view: 'viewMenuLabel', analysis: 'analysisMenuLabel' }[kind] || 'marksMenuLabel';
         const menu = document.createElement('div');
-        menu.className = isView ? 'timeseries-marks-menu panel-view-menu' : 'timeseries-marks-menu';
+        menu.className = `timeseries-marks-menu${extraClass}`;
         menu.dataset.panelId = String(panelId);
         menu.setAttribute('role', 'menu');
-        menu.setAttribute('aria-label', i18n.t(isView ? 'viewMenuLabel' : 'marksMenuLabel'));
+        menu.setAttribute('aria-label', i18n.t(labelKey));
         document.body.appendChild(menu);
-        if (isView) this._renderViewMenu(panelId, menu);
+        if (kind === 'view') this._renderViewMenu(panelId, menu);
+        else if (kind === 'analysis') this._renderAnalysisMenu(panelId, menu);
         else this._renderMarksMenu(panelId, menu);
         anchor?.setAttribute('aria-expanded', 'true');
         const rect = anchor?.getBoundingClientRect?.();
@@ -770,7 +778,7 @@ export function installPlotMarksMethods(TargetClass) {
         const onPointer = (event) => {
             // The button toggles the menu itself (a rebuilt toolbar may have
             // replaced `anchor` since the menu opened).
-            if (menu.contains(event.target) || event.target?.closest?.('.timeseries-marks-btn, .panel-view-btn')) return;
+            if (menu.contains(event.target) || event.target?.closest?.('.timeseries-marks-btn, .panel-view-btn, .timeseries-analysis-menu-btn')) return;
             this._closeMarksMenu();
         };
         const onKey = (event) => {
@@ -819,24 +827,28 @@ export function installPlotMarksMethods(TargetClass) {
                 caption.className = 'marks-menu-radio-caption';
                 caption.textContent = i18n.t(item.label);
                 row.appendChild(caption);
-                for (const [value, key, title] of [
+                // The line shape is the radio this renderer started with; the
+                // others (2D display, 3D projection) bring their own options.
+                const options = item.options || [
                     ['auto', 'lineShapeAuto', 'lineShapeAutoTitle'],
                     ['linear', 'lineShapeLinear', 'lineShapeLinearTitle'],
                     ['hv', 'lineShapeStairs', 'lineShapeStairsTitle'],
-                ]) {
+                ];
+                const select = item.onSelect || ((value) => this._setPanelLineShape(panelId, value));
+                for (const [value, key, title] of options) {
                     const option = document.createElement('button');
                     option.type = 'button';
-                    option.className = `marks-menu-radio marks-line-${value}`;
+                    option.className = `marks-menu-radio marks-${item.key}-${value}`;
                     option.setAttribute('role', 'menuitemradio');
                     const checked = item.value === value;
                     option.setAttribute('aria-checked', String(checked));
                     option.classList.toggle('checked', checked);
                     option.textContent = i18n.t(key);
-                    option.title = i18n.t(title);
+                    if (title) option.title = i18n.t(title);
                     option.disabled = !!item.disabled;
                     option.addEventListener('click', (event) => {
                         event.stopPropagation();
-                        this._setPanelLineShape(panelId, value);
+                        select(value);
                     });
                     row.appendChild(option);
                 }
@@ -846,7 +858,7 @@ export function installPlotMarksMethods(TargetClass) {
             if (item.action) {
                 const button = document.createElement('button');
                 button.type = 'button';
-                button.className = `marks-menu-item marks-menu-action marks-item-${item.key}`;
+                button.className = `marks-menu-item marks-menu-command marks-item-${item.key}`;
                 button.dataset.mark = item.key;
                 button.setAttribute('role', 'menuitem');
                 button.disabled = !!item.disabled;
@@ -873,6 +885,56 @@ export function installPlotMarksMethods(TargetClass) {
                 const row = document.createElement('div');
                 row.className = 'marks-menu-row';
                 row.appendChild(button);
+                menu.appendChild(row);
+                continue;
+            }
+            if (item.number) {
+                // A small numeric setting (2D marker size / opacity), applied on change.
+                const row = document.createElement('label');
+                row.className = `marks-menu-number-row marks-item-${item.key}`;
+                row.title = i18n.t(item.label);
+                const caption = document.createElement('span');
+                caption.className = 'marks-menu-radio-caption';
+                caption.textContent = i18n.t(item.label);
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.className = 'marks-menu-number';
+                input.min = String(item.min);
+                input.max = String(item.max);
+                input.step = String(item.step);
+                input.value = String(item.value);
+                input.disabled = !!item.disabled;
+                input.setAttribute('aria-label', i18n.t(item.label));
+                input.addEventListener('change', () => item.onChange(input.value));
+                row.append(caption, input);
+                menu.appendChild(row);
+                continue;
+            }
+            if (item.actions) {
+                // One-shot actions (3D camera presets, rotations): buttons that do
+                // something, not settings that stay checked.
+                const row = document.createElement('div');
+                row.className = 'marks-menu-radio-row marks-menu-actions';
+                row.setAttribute('role', 'group');
+                row.setAttribute('aria-label', i18n.t(item.label));
+                const caption = document.createElement('span');
+                caption.className = 'marks-menu-radio-caption';
+                caption.textContent = i18n.t(item.label);
+                row.appendChild(caption);
+                for (const action of item.actions) {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = `marks-menu-radio marks-menu-action marks-action-${item.key}-${action.id}`;
+                    button.setAttribute('role', 'menuitem');
+                    button.textContent = action.text;
+                    button.title = action.title;
+                    button.disabled = !!item.disabled;
+                    button.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        action.run();
+                    });
+                    row.appendChild(button);
+                }
                 menu.appendChild(row);
                 continue;
             }
@@ -937,20 +999,82 @@ export function installPlotMarksMethods(TargetClass) {
                 { key: 'ylog', label: 'viewLogY', title: 'viewLogYTitle', checked: !!plot.timeseriesYLog, disabled: !has, run: () => this._toggleTimeseriesLogAxis(panelId, 'y') },
                 { key: 'y2log', label: 'viewLogY2', title: plot.timeseriesY2Enabled ? 'viewLogY2Title' : 'viewLogY2Off', checked: !!(plot.timeseriesY2Enabled && plot.timeseriesY2Log), disabled: !has || !plot.timeseriesY2Enabled, run: () => this._toggleTimeseriesLogAxis(panelId, 'y2') },
                 { divider: true },
-                { key: 'stack', label: 'timeseriesStackLabel', title: 'timeseriesStackToggle', checked: !!plot.timeseriesStacked, disabled: !has, run: () => this._toggleTimeseriesStack(panelId) },
+                // On a log axis a band's thickness no longer reads as its signal: say so.
+                { key: 'stack', label: 'timeseriesStackLabel', title: plot.timeseriesYLog ? 'timeseriesStackLogTitle' : 'timeseriesStackToggle', checked: !!plot.timeseriesStacked, disabled: !has, run: () => this._toggleTimeseriesStack(panelId) },
                 { key: 'y2', label: 'timeseriesY2Label', title: 'timeseriesY2Toggle', checked: !!plot.timeseriesY2Enabled, disabled: !has, run: () => this._toggleTimeseriesY2(panelId) },
                 { divider: true },
                 { key: 'line', radio: true, label: 'lineShapeLabel', value: this._panelLineShapeState(plot), disabled: !has },
             ];
         }
+        // 1:1 for the 2D views: both axes on one scale (see _equalAspectAllowed).
+        const aspectItem = () => {
+            const allowed = this._equalAspectAllowed?.(plot) !== false;
+            return { key: 'aspect', label: 'viewEqualAspect', title: allowed ? 'equalAspect2D' : 'equalAspect2DMixedLog', checked: !!plot.equalAspect2D, disabled: !has || !allowed, run: () => this._toggleEqualAspect2D(panelId) };
+        };
         if (mode === 'phase2d') {
-            return [
+            const state = this._ensurePhase2dState(plot);
+            const items = [
                 lastView,
+                { divider: true },
+                {
+                    key: 'display', radio: true, label: 'phase2dDisplayLabel', value: state.displayMode, disabled: !has,
+                    options: [
+                        ['lines', 'phase2dDisplayLines', 'phase2dDisplayTooltip'],
+                        ['markers', 'phase2dDisplayPoints', 'phase2dDisplayTooltip'],
+                        ['lines+markers', 'phase2dDisplayLinesPoints', 'phase2dDisplayTooltip'],
+                    ],
+                    onSelect: (value) => this._setPhase2dDisplayMode(panelId, value),
+                },
+            ];
+            // Marker size and opacity only mean something while points are drawn.
+            if (this._phase2dShowsMarkers(state)) {
+                items.push(
+                    { key: 'marker-size', number: true, label: 'phase2dMarkerSize', min: MARKER_SIZE_MIN, max: MARKER_SIZE_MAX, step: 1, value: state.markerSize, disabled: !has, onChange: (value) => this._setPhase2dMarkerSetting(panelId, 'markerSize', value) },
+                    { key: 'marker-opacity', number: true, label: 'phase2dMarkerOpacity', min: MARKER_OPACITY_MIN, max: MARKER_OPACITY_MAX, step: 0.05, value: state.markerOpacity, disabled: !has, onChange: (value) => this._setPhase2dMarkerSetting(panelId, 'markerOpacity', value) },
+                );
+            }
+            items.push(
+                { divider: true },
+                aspectItem(),
                 { divider: true },
                 { key: 'xlog', label: 'viewLogX', title: 'viewLogXTitle', checked: !!plot.phase2dXLog, disabled: !has, run: () => this._togglePhase2dLogAxis(panelId, 'x') },
                 { key: 'ylog', label: 'viewLogY', title: 'viewLogYTitle', checked: !!plot.phase2dYLog, disabled: !has, run: () => this._togglePhase2dLogAxis(panelId, 'y') },
+            );
+            return items;
+        }
+        const is3D = this._is3D?.(mode) || this._isStateAnim3D?.(plot);
+        if (is3D) {
+            const is2dt = mode === 'phase2dt';
+            const presets = [
+                { id: 'top', text: is2dt ? 'x vs t' : 'XY', title: i18n.t(is2dt ? 'view2dtXt' : 'viewTop'), run: () => this._setCamera(panelId, 'top') },
+                { id: 'front', text: is2dt ? 'y vs t' : 'XZ', title: i18n.t(is2dt ? 'view2dtYt' : 'viewFront'), run: () => this._setCamera(panelId, 'front') },
+                { id: 'yz', text: is2dt ? 'y vs x' : 'YZ', title: i18n.t(is2dt ? 'view2dtXY' : 'viewSide'), run: () => this._setCamera(panelId, 'yz') },
+            ];
+            const rotations = ['z', 'x', 'y'].map(axis => ({
+                id: axis,
+                text: `⟳${axis.toUpperCase()}`,
+                title: i18n.t('viewRotateAround').replace('{axis}', axis.toUpperCase()),
+                run: () => this._animateRotation(panelId, axis, Math.PI / 2, 400),
+            }));
+            // The camera is part of the view: Ctrl+Z brings the last one back
+            // (the state animation builds its chart elsewhere, without history).
+            const undo = (mode === 'phase2dt' || mode === 'phase3d') ? [lastView, { divider: true }] : [];
+            return [
+                ...undo,
+                {
+                    key: 'proj', radio: true, label: 'viewProjection', value: plot.projection === 'perspective' ? 'perspective' : 'orthographic', disabled: !has,
+                    options: [
+                        ['orthographic', 'viewProjectionIso', 'projIsometric'],
+                        ['perspective', 'viewProjectionPersp', 'projPerspective'],
+                    ],
+                    onSelect: (value) => { if ((plot.projection === 'perspective' ? 'perspective' : 'orthographic') !== value) this._toggleProjection(panelId); },
+                },
+                { divider: true },
+                { key: 'camera', actions: presets, label: 'viewCamera', disabled: !has },
+                { key: 'rotate', actions: rotations, label: 'viewRotate', disabled: !has },
             ];
         }
+        if (mode === 'state-anim') return [aspectItem()];
         if (mode === 'fft') {
             const state = this._ensureFftState(plot);
             const period = state.xAxisMode === 'period';
@@ -1008,12 +1132,86 @@ export function installPlotMarksMethods(TargetClass) {
         this._renderPanelMenuItems(panelId, menu, this._viewMenuModel(panelId, plot));
     };
 
+    // ── Analysis menu ──
+
+    // The analyses of the time-series family. Picking one switches the panel to
+    // it; picking the one that is on (or None) goes back to the time series —
+    // the same toggle the separate buttons used to be.
+    proto._analysisModes = function() {
+        return [
+            { id: 'fft', label: 'analysisItemFft', title: 'modeFFT', short: 'Fourier' },
+            { id: 'histogram', label: 'analysisItemHistogram', title: 'modeHistogram', short: 'analysisItemHistogram' },
+            { id: 'heatmap', label: 'analysisItemHeatmap', title: 'modeHeatmap', short: 'modeHeatmapLabel' },
+            { id: 'temporal-profile', label: 'analysisItemProfile', title: 'temporalProfileMode', short: 'temporalProfileModeLabel' },
+            { id: 'integral', label: 'analysisItemIntegral', title: 'integralMode', short: 'integralModeLabel' },
+        ];
+    };
+
+    proto._analysisMenuModel = function(panelId, plot) {
+        const mode = plot?.mode;
+        const pick = (id) => {
+            this._closeMarksMenu();
+            if (id === 'timeseries') {
+                if (mode !== 'timeseries') this._requestModeChange(panelId, 'timeseries');
+                return;
+            }
+            this._toggleTimeseriesAnalysisMode(panelId, id);
+        };
+        return [
+            { key: 'timeseries', label: 'analysisItemNone', title: 'analysisItemNoneTitle', checked: mode === 'timeseries', run: () => pick('timeseries') },
+            { divider: true },
+            ...this._analysisModes().map(({ id, label, title }) => (
+                { key: id, label, title, checked: mode === id, run: () => pick(id) }
+            )),
+        ];
+    };
+
+    proto._createAnalysisButton = function(panelId, plot) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-analysis-menu-btn';
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', 'false');
+        this._applyAnalysisButtonState(plot, button);
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (this._analysisMenuEl(panelId)) this._closeMarksMenu();
+            else this._openPanelDropdown(panelId, button, 'analysis');
+        });
+        return button;
+    };
+
+    // The button names the analysis that is on, pressed; otherwise "Analysis".
+    proto._applyAnalysisButtonState = function(plot, button) {
+        if (!button) return;
+        const active = this._analysisModes().find(item => item.id === plot?.mode);
+        const label = active ? i18n.t(active.short) : i18n.t('analysisMenuLabel');
+        button.textContent = `${label} ▾`;
+        button.dataset.mode = active ? active.id : 'timeseries';
+        button.classList.toggle('active', !!active);
+        button.setAttribute('aria-pressed', String(!!active));
+        button.title = active ? i18n.t(active.title) : i18n.t('analysisMenuTitle');
+    };
+
+    proto._analysisMenuEl = function(panelId) {
+        return document.querySelector(`.panel-analysis-menu[data-panel-id="${panelId}"]`);
+    };
+
+    proto._renderAnalysisMenu = function(panelId, menu = this._analysisMenuEl(panelId)) {
+        if (!menu) return;
+        const plot = this.plots.get(panelId);
+        this._renderPanelMenuItems(panelId, menu, this._analysisMenuModel(panelId, plot));
+        // One of them is on at a time: radio semantics for assistive technology.
+        menu.querySelectorAll('.marks-menu-item').forEach(item => item.setAttribute('role', 'menuitemradio'));
+    };
+
     // Toolbar buttons and (when open) the menus, from the plot state.
     proto._syncMarksControls = function(panelId) {
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         const plot = this.plots.get(panelId);
         this._applyMarksButtonState(plot, panelEl?.querySelector('.timeseries-marks-btn'));
         this._applyViewButtonState(plot, panelEl?.querySelector('.panel-view-btn'));
+        this._applyAnalysisButtonState(plot, panelEl?.querySelector('.timeseries-analysis-menu-btn'));
         this._renderMarksMenu(panelId);
         this._renderViewMenu(panelId);
         // A mode change or a cleared panel turns Gaps off without its toggle.
@@ -1027,7 +1225,7 @@ export function installPlotMarksMethods(TargetClass) {
     proto._syncMarksControlsForPlot = function(plot) {
         const panelId = plot?.div?.closest?.('.layout-panel')?.dataset?.id;
         if (panelId === undefined || panelId === null) return;
-        const menu = document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu)`);
+        const menu = this._marksMenuEl(panelId);
         if (menu) this._renderMarksMenu(panelId, menu);
     };
 
