@@ -221,6 +221,13 @@ class ToolbarHarness {
         plot.phase2d = { displayMode: 'lines', markerSize: 4, markerOpacity: 0.65, ...(plot.phase2d || {}) };
         return plot.phase2d;
     }
+    // 2D keeps its display in plot.phase2d; 2D+t and 3D each have their own.
+    _pairDisplayState(plot, mode = plot?.mode) {
+        if (mode === 'phase2d') return this._ensurePhase2dState(plot);
+        plot.pairDisplay3D = plot.pairDisplay3D || {};
+        plot.pairDisplay3D[mode] = { displayMode: 'lines', markerSize: 4, markerOpacity: 0.65, ...(plot.pairDisplay3D[mode] || {}) };
+        return plot.pairDisplay3D[mode];
+    }
     _phase2dShowsMarkers(state) { return state.displayMode !== 'lines'; }
     _equalAspectAllowed(plot) { return plot?.mode !== 'phase2d' || !!plot.phase2dXLog === !!plot.phase2dYLog; }
     _ensureHistogramState(plot) { return plot.histogram; }
@@ -550,8 +557,8 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(tools.children[tools.children.indexOf(marksBtn) + 1], viewBtn, `${mode}: View follows Marks`);
     assert.equal(viewBtn.getAttribute('aria-haspopup'), 'menu', `${mode}: View announces its popup`);
     assert.equal(viewBtn.textContent, 'viewMenuLabel ▾', `${mode}: nothing on, no count`);
-    assert.equal(viewBtn.disabled, !['timeseries', 'histogram'].includes(mode),
-        `${mode}: View is enabled where it has something to offer`);
+    // Every mode can go back to its last view, so View is always there.
+    assert.equal(viewBtn.disabled, false, `${mode}: View is enabled (Last view at least)`);
     assert.equal(autoscaleBtn.textContent, globalAutoscaleIcon, `${mode}: contextual Autoscale reuses the global icon`);
     autoscaleBtn.click();
     assert.equal(manager.autoscaleCalls.length, 1, `${mode}: contextual Autoscale triggers one autoscale`);
@@ -676,16 +683,16 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
 // View in the analysis modes: what each has to offer. Fourier's log frequency
 // sits in its own options panel, beside the X axis reading, not here.
 {
-    const { manager, toolbar } = renderToolbar('fft', 2, {});
+    const { manager } = renderToolbar('fft', 2, {});
     manager.plot.fft = { xAxisMode: 'frequency', freqLog: true };
-    assert.equal(renderViewMenu(manager).querySelectorAll('.marks-menu-item').length, 0, 'Fourier: nothing in View');
-    assert.equal(toolbar.querySelector('.panel-view-btn').disabled, true, 'so its View button is disabled');
+    assert.deepEqual(renderViewMenu(manager).querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview'],
+        'Fourier: only Last view (log frequency is in its options panel)');
 }
 {
     const { manager } = renderToolbar('histogram', 2, {});
     manager.plot.histogram = { yScale: 'log' };
     const view = renderViewMenu(manager);
-    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['countlog'], 'Histogram: log counts');
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview', 'countlog'], 'Histogram: Last view, log counts');
     assert.equal(marksItem(view, 'countlog').getAttribute('aria-checked'), 'true');
 }
 {
@@ -702,9 +709,11 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.deepEqual(calls, ['x', 'y'], 'each toggles its own axis');
 }
 {
-    // Correlation's axes are fixed by what it shows (r from -1 to 1, pairs).
-    const { toolbar } = renderToolbar('correlation');
-    assert.equal(toolbar.querySelector('.panel-view-btn'), null, 'correlation: no View menu');
+    // Correlation's axes are fixed by what it shows (r from -1 to 1, pairs):
+    // its View menu only goes back to the last view.
+    const { manager, toolbar } = renderToolbar('correlation');
+    assert.ok(toolbar.querySelector('.panel-view-btn'), 'correlation: a View menu');
+    assert.deepEqual(renderViewMenu(manager).querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview'], 'correlation: Last view only');
 }
 
 // Line shape: a panel-level radio derived from the traces' overrides.

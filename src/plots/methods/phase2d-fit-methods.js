@@ -79,9 +79,37 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return phase2dShowsMarkers(state);
     };
 
-    // Modes that offer the Lines / Points / Lines+points display. The 3D views
-    // share the 2D state (plot.phase2d), so the choice carries across modes.
+    // Modes that offer the Lines / Points / Lines+points display. Each keeps its
+    // own setting and starts on Lines: 2D in plot.phase2d (with the fit state),
+    // 2D+t and 3D in plot.pairDisplay3D[mode].
     const DISPLAY_MODES = new Set(['phase2d', 'phase2dt', 'phase3d']);
+
+    const normalizeDisplay = (raw = {}) => {
+        const defaults = defaultPhase2dState();
+        return {
+            displayMode: PHASE2D_DISPLAY_MODES.has(raw.displayMode) ? raw.displayMode : defaults.displayMode,
+            markerSize: clampNumber(raw.markerSize, MARKER_SIZE_MIN, MARKER_SIZE_MAX, defaults.markerSize),
+            markerOpacity: clampNumber(raw.markerOpacity, MARKER_OPACITY_MIN, MARKER_OPACITY_MAX, defaults.markerOpacity),
+        };
+    };
+
+    proto._normalizePairDisplay3D = function(raw) {
+        const out = {};
+        for (const mode of ['phase2dt', 'phase3d']) {
+            if (raw && typeof raw === 'object' && raw[mode]) out[mode] = normalizeDisplay(raw[mode]);
+        }
+        return out;
+    };
+
+    // The display state ({ displayMode, markerSize, markerOpacity }) of the
+    // panel's current pair mode.
+    proto._pairDisplayState = function(plot, mode = plot?.mode) {
+        if (mode === 'phase2d') return this._ensurePhase2dState(plot);
+        if (!plot || (mode !== 'phase2dt' && mode !== 'phase3d')) return normalizeDisplay();
+        if (!plot.pairDisplay3D || typeof plot.pairDisplay3D !== 'object') plot.pairDisplay3D = {};
+        plot.pairDisplay3D[mode] = normalizeDisplay(plot.pairDisplay3D[mode]);
+        return plot.pairDisplay3D[mode];
+    };
 
     // "Curve Fit" toolbar toggle (TODO 10) — a press/release button like the
     // Correlation toggle (blue when active), not a dropdown. Turning it on opens
@@ -114,7 +142,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._setPhase2dDisplayMode = function(panelId, displayMode) {
         const plot = this.plots.get(panelId);
         if (!plot || !DISPLAY_MODES.has(plot.mode)) return;
-        const state = this._ensurePhase2dState(plot);
+        const state = this._pairDisplayState(plot);
         state.displayMode = PHASE2D_DISPLAY_MODES.has(displayMode) ? displayMode : 'lines';
         this._restylePhase2dDisplay(panelId, plot);
         // The View menu shows marker size and opacity only while points are drawn.
@@ -124,7 +152,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._setPhase2dMarkerSetting = function(panelId, key, rawValue) {
         const plot = this.plots.get(panelId);
         if (!plot || !DISPLAY_MODES.has(plot.mode)) return;
-        const state = this._ensurePhase2dState(plot);
+        const state = this._pairDisplayState(plot);
         if (key === 'markerSize') state.markerSize = clampNumber(rawValue, MARKER_SIZE_MIN, MARKER_SIZE_MAX, state.markerSize);
         else if (key === 'markerOpacity') state.markerOpacity = clampNumber(rawValue, MARKER_OPACITY_MIN, MARKER_OPACITY_MAX, state.markerOpacity);
         else return;
@@ -138,7 +166,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._restylePhase2dDisplay = function(panelId, plot = this.plots.get(panelId)) {
         if (!plot?.div || !DISPLAY_MODES.has(plot.mode)) return;
         const is3d = plot.mode !== 'phase2d';
-        const state = this._ensurePhase2dState(plot);
+        const state = this._pairDisplayState(plot);
         const mode = this._phase2dPlotlyMode(state);
         const showMarkers = this._phase2dShowsMarkers(state);
         const data = plot.div.data || [];
@@ -615,6 +643,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 Promise.resolve(this._restore2DViewToDiv?.(timeDiv, timeRestoreView)).then(() => {
                     const range = timeDiv?._fullLayout?.xaxis?.range;
                     this._refreshPhase2dFitTimeVisuals(panelId, plot, Array.isArray(range) ? range : null);
+                    // Ctrl+Z, on the 2D chart and this time pane together.
+                    this._bindViewHistory(panelId, plot);
                 });
                 Plotly.Plots.resize(div);
             });

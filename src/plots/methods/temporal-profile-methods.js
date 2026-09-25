@@ -435,6 +435,8 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
             this._refreshTimeseriesVisuals(panelId, plot);
             // After any restored view is applied, so the focus is not undone.
             this._applyPendingAnalysisFocus(plot);
+            // Ctrl+Z, on both panes; this opening view is the baseline.
+            this._bindViewHistory(panelId, plot);
         });
         this._installTemporalProfilePlotHandlers(panelId, plot);
         this._installCursorHandlers?.(panelId, plot);

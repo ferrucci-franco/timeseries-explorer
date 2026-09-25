@@ -985,8 +985,8 @@ export function installPlotMarksMethods(TargetClass) {
     // ── View menu ──
 
     // How the panel's axes read its data: log scales, stacking, the right
-    // axis, the line shape. Each mode lists what applies to it; the modes with
-    // nothing to offer (Fourier — its log frequency is in its options panel —, heatmap, profile, integral) get a disabled button.
+    // axis, the line shape. Each mode lists what applies to it; every mode that
+    // has a zoom offers the way back to the previous one (Last view).
     proto._viewMenuModel = function(panelId, plot) {
         const mode = plot?.mode;
         const has = !!this._hasContent?.(plot);
@@ -1012,9 +1012,9 @@ export function installPlotMarksMethods(TargetClass) {
             return { key: 'aspect', label: 'viewEqualAspect', title: allowed ? 'equalAspect2D' : 'equalAspect2DMixedLog', checked: !!plot.equalAspect2D, disabled: !has || !allowed, run: () => this._toggleEqualAspect2D(panelId) };
         };
         // Lines / Points / Lines+points, and the marker size and opacity while
-        // points are drawn. The 2D and 3D pair views share this (plot.phase2d).
+        // points are drawn. Each pair mode keeps its own (_pairDisplayState).
         const displayItems = () => {
-            const state = this._ensurePhase2dState(plot);
+            const state = this._pairDisplayState(plot);
             const items = [{
                 key: 'display', radio: true, label: 'phase2dDisplayLabel', value: state.displayMode, disabled: !has,
                 options: [
@@ -1082,12 +1082,19 @@ export function installPlotMarksMethods(TargetClass) {
             ];
         }
         if (mode === 'state-anim') return [aspectItem()];
+        // Fourier's log frequency is in its options panel, beside the X axis
+        // reading; View keeps only the view history there.
+        if (mode === 'fft') return [lastView];
         if (mode === 'histogram') {
             const state = this._ensureHistogramState(plot);
             return [
+                lastView,
+                { divider: true },
                 { key: 'countlog', label: 'viewLogCounts', title: 'viewLogCountsTitle', checked: state.yScale === 'log', disabled: !has, run: () => this._toggleHistogramLogY(panelId) },
             ];
         }
+        // Heatmap, Profile, Integral, Correlation: nothing but going back.
+        if (['heatmap', 'temporal-profile', 'integral', 'correlation'].includes(mode)) return [lastView];
         return [];
     };
 

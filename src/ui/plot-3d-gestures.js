@@ -64,12 +64,30 @@ function zoomBase(scene) {
     return Number.isFinite(distance) && distance > 0 ? { ortho: false, distance } : null;
 }
 
+// A new aspect ratio is only drawn at the scene's next redraw, and nothing
+// asks for one until the camera moves or the layout is saved — so without
+// this an orthographic zoom stayed invisible until the fingers lifted. One
+// redraw per frame, however many touch or wheel events arrive in it.
+const pendingRedraw = new WeakSet();
+function requestRedraw(scene) {
+    if (pendingRedraw.has(scene)) return;
+    pendingRedraw.add(scene);
+    const run = () => {
+        pendingRedraw.delete(scene);
+        try { scene.glplot?.redraw?.(); } catch (_) { /* scene disposed mid-gesture */ }
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
+}
+
 /** Apply `scale` (>1 zooms in) relative to `base`. */
 function applyZoom(scene, base, scale) {
     if (!base || !Number.isFinite(scale) || scale <= 0) return;
     if (base.ortho) {
         scene.glplot.setAspectratio({ x: base.aspect.x * scale, y: base.aspect.y * scale, z: base.aspect.z * scale });
+        requestRedraw(scene);
     } else {
+        // A camera move is picked up by the scene's own render loop.
         scene.camera.distance = base.distance / scale;
     }
 }

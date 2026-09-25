@@ -1,10 +1,18 @@
+import Plotly from '../../vendor/plotly.js';
+
 // Ctrl+Z (⌘Z) goes back to the previous zoom/pan view of a panel. Only the
 // view: axis ranges and the 3D camera, nothing else.
 //
-// Each panel keeps a stack of the views it had. Changes are recorded when the
-// relayouts settle, so a burst of them (wheel ticks, the Y re-fit that follows
-// an X zoom, the other panels following an axis sync) makes one step. Panels
-// that moved in the same step share its id, and are restored together.
+// Each panel keeps a stack of the views it had. A view covers every chart of
+// the panel: the analysis modes have a time pane and a result chart (spectrum,
+// bars, calendar, profile, integral, correlation), the 2D curve fit a time
+// pane beside the 2D chart. Changes are recorded when the relayouts settle, so
+// a burst of them (wheel ticks, the Y re-fit that follows an X zoom, the other
+// panels following an axis sync) makes one step. Panels that moved in the
+// same step share its id, and are restored together.
+//
+// The state animation is left out: while it plays it rewrites its own ranges
+// on every frame (dynamic zoom), and each frame would read as a step.
 
 const SETTLE_MS = 350;
 const MAX_STEPS = 50;
@@ -21,33 +29,117 @@ export function installPlotViewHistoryMethods(TargetClass) {
 
     proto._viewUndoShortcutLabel = viewUndoShortcutLabel;
 
-    // What a view is restored to: the main chart's ranges (or 3D camera).
-    // `sig` names how the axes read those ranges — a log axis keeps its range
-    // in log10, so a step taken on another scale cannot be restored.
-    proto._viewHistorySnapshot = function(plot) {
-        const fl = plot?.div?._fullLayout;
-        if (!fl) return null;
-        const captured = this._capturePlotView(plot);
-        if (!captured) return null;
-        const view = captured.mode === '3d'
-            ? { mode: '3d', camera: captured.camera, xRange: captured.xRange, yRange: captured.yRange, zRange: captured.zRange }
-            : { mode: '2d', xRange: captured.xRange, yRange: captured.yRange, y2Range: captured.y2Range };
-        const sig = [
-            plot.mode,
-            fl.xaxis?.type, fl.yaxis?.type,
-            plot.timeseriesY2Enabled ? fl.yaxis2?.type : '',
-            plot.timeseriesStacked ? 'stack' : '',
-        ].join('|');
-        return { view, sig, key: JSON.stringify(view) };
+    // The charts of a panel whose view Ctrl+Z restores, by name. Only the ones
+    // the current mode shows: a mode left behind can keep its div around.
+    proto._viewHistorySurfaces = function(plot) {
+        if (!plot?.div || plot.mode === 'state-anim') return [];
+        const second = {
+            fft: plot.fftDiv,
+            histogram: plot.histogramDiv,
+            heatmap: plot.heatmapDiv,
+            'temporal-profile': plot.temporalProfileDiv,
+            integral: plot.integralDiv,
+            correlation: plot.correlationDiv,
+            phase2d: plot.phase2d?.fitEnabled ? plot.phase2dFitTimeDiv : null,
+        }[plot.mode];
+        return [['main', plot.div], ['second', second]]
+            .filter(([, div]) => div?._fullLayout && div.isConnected !== false);
     };
 
-    // Called for every chart built by _createChart. The history lives on the
-    // plot, so it outlives rebuilds; a new chart only sets a fresh baseline.
-    proto._installViewHistory = function(panelId, plot, div) {
-        if (!div?.on) return;
+    // One chart's view: every 2D axis (subplots and the right axis included),
+    // or the 3D scene. An axis on autorange is kept as autorange, not as the
+    // range it happened to have: the data under it can change.
+    const surfaceView = (div) => {
+        const fl = div._fullLayout;
+        if (fl.scene && !fl.xaxis) {
+            const scene = fl.scene;
+            const range = axis => (Array.isArray(axis?.range) ? [...axis.range] : null);
+            return {
+                scene: {
+                    camera: scene.camera ? JSON.parse(JSON.stringify(scene.camera)) : null,
+                    x: range(scene.xaxis), y: range(scene.yaxis), z: range(scene.zaxis),
+                },
+            };
+        }
+        const axes = {};
+        for (const name of Object.keys(fl).filter(key => /^[xy]axis\d*$/.test(key)).sort()) {
+            const axis = fl[name];
+            if (!axis || typeof axis !== 'object') continue;
+            const auto = axis.autorange === undefined ? false : axis.autorange;
+            axes[name] = {
+                type: axis.type,
+                auto,
+                range: auto === false && Array.isArray(axis.range) ? [...axis.range] : null,
+            };
+        }
+        return { axes };
+    };
+
+    // What a view is restored to, per chart. `sig` names how the axes read
+    // their ranges — a log axis keeps its range in log10 — and which axes
+    // there are, so a step taken on another scale or layout is not restored.
+    proto._viewHistorySnapshot = function(plot) {
+        const surfaces = this._viewHistorySurfaces(plot);
+        if (!surfaces.length) return null;
+        const view = {};
+        const sig = [plot.mode, plot.timeseriesStacked ? 'stack' : ''];
+        for (const [name, div] of surfaces) {
+            view[name] = surfaceView(div);
+            sig.push(name, view[name].scene ? '3d' : Object.entries(view[name].axes).map(([axis, v]) => `${axis}:${v.type}`).join(','));
+        }
+        return { view, sig: sig.join('|'), key: JSON.stringify(view) };
+    };
+
+    // The relayout that takes one chart from `now` back to `saved`, touching
+    // only what differs.
+    const surfaceRestoreUpdate = (saved, now) => {
+        const update = {};
+        if (saved.scene) {
+            const was = saved.scene;
+            if (JSON.stringify(was) === JSON.stringify(now?.scene)) return update;
+            for (const axis of ['x', 'y', 'z']) {
+                if (was[axis]) { update[`scene.${axis}axis.range`] = was[axis]; update[`scene.${axis}axis.autorange`] = false; }
+            }
+            if (was.camera) update['scene.camera'] = was.camera;
+            return update;
+        }
+        for (const [name, was] of Object.entries(saved.axes || {})) {
+            const is = now?.axes?.[name];
+            if (!is || JSON.stringify(was) === JSON.stringify(is)) continue;
+            if (was.auto !== false) update[`${name}.autorange`] = was.auto;
+            else if (was.range) { update[`${name}.range`] = was.range; update[`${name}.autorange`] = false; }
+        }
+        return update;
+    };
+
+    proto._restoreViewHistoryEntry = function(plot, view) {
+        const now = this._viewHistorySnapshot(plot)?.view || {};
+        const restores = this._viewHistorySurfaces(plot).map(([name, div]) => {
+            if (!view[name]) return null;
+            const update = surfaceRestoreUpdate(view[name], now[name]);
+            if (!Object.keys(update).length) return null;
+            return Plotly.relayout(div, update).catch(() => {});
+        });
+        return Promise.all(restores).then(() => this._updateCameraOverlay?.(plot));
+    };
+
+    // Listens to every chart of the panel. Called whenever a mode builds its
+    // charts (a Plotly.newPlot drops the listeners of the div it draws into).
+    // The history lives on the plot, so it outlives rebuilds; new charts only
+    // set a fresh baseline — the view they open with is not a step.
+    proto._bindViewHistory = function(panelId, plot, { baseline = true } = {}) {
+        if (!plot) return;
         plot._viewHistory ||= [];
-        plot._viewCurrent = null;
-        div.on('plotly_relayout', () => this._markViewHistoryDirty(panelId));
+        for (const [, div] of this._viewHistorySurfaces(plot)) {
+            if (!div.on) continue;
+            if (div._viewHistoryHandler) div.removeListener?.('plotly_relayout', div._viewHistoryHandler);
+            div._viewHistoryHandler = () => this._markViewHistoryDirty(panelId);
+            div.on('plotly_relayout', div._viewHistoryHandler);
+        }
+        if (baseline) {
+            plot._viewCurrent = null;
+            this._markViewHistoryDirty(panelId);
+        }
     };
 
     proto._markViewHistoryDirty = function(panelId) {
@@ -128,7 +220,7 @@ export function installPlotViewHistoryMethods(TargetClass) {
         const restores = targets.map(([id, other, view]) => {
             this._viewHistoryDirty ||= new Set();
             this._viewHistoryDirty.add(id);
-            return this._restorePlotView(other, view).catch(() => {});
+            return this._restoreViewHistoryEntry(other, view).catch(() => {});
         });
         // Settle once they are in, whether or not Plotly reported a relayout.
         Promise.all(restores).then(() => {

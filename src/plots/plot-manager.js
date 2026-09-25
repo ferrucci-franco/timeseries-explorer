@@ -1711,7 +1711,6 @@ class PlotManager {
         const config = this._getPlotlyConfig();
 
         Plotly.newPlot(div, traces, layout, config).then(() => {
-            this._installViewHistory(panelId, plot, div);
             if (plot._eagerInitialDetailReady) {
                 delete plot._eagerInitialDetailReady;
                 plot._eagerInitialDetailToken = null;
@@ -1741,8 +1740,8 @@ class PlotManager {
                     }
                 }
                 finish3DSetup();
-                // The view the chart opens with is the baseline, not a step.
-                this._markViewHistoryDirty(panelId);
+                // Ctrl+Z: the view the chart opens with is the baseline.
+                this._bindViewHistory(panelId, plot);
             });
             if (plot.mode !== 'timeseries') {
                 div.on('plotly_doubleclick', () => {
@@ -2472,6 +2471,7 @@ class PlotManager {
             existing.integral = this._defaultIntegralState?.() || existing.integral;
             existing.correlation = this._defaultCorrelationState?.() || existing.correlation;
             existing.phase2d = this._defaultPhase2dState?.() || existing.phase2d;
+            existing.pairDisplay3D = {};
             existing.stateSlots    = { x: [], dx: [], fileId: null };
             existing.equalAspect2D = false;
             existing.cursors = this._defaultCursors();
