@@ -986,7 +986,7 @@ export function installPlotMarksMethods(TargetClass) {
 
     // How the panel's axes read its data: log scales, stacking, the right
     // axis, the line shape. Each mode lists what applies to it; the modes with
-    // nothing to offer (heatmap, profile, integral) get a disabled button.
+    // nothing to offer (Fourier — its log frequency is in its options panel —, heatmap, profile, integral) get a disabled button.
     proto._viewMenuModel = function(panelId, plot) {
         const mode = plot?.mode;
         const has = !!this._hasContent?.(plot);
@@ -1082,13 +1082,6 @@ export function installPlotMarksMethods(TargetClass) {
             ];
         }
         if (mode === 'state-anim') return [aspectItem()];
-        if (mode === 'fft') {
-            const state = this._ensureFftState(plot);
-            const period = state.xAxisMode === 'period';
-            return [
-                { key: 'freqlog', label: 'viewLogFrequency', title: period ? 'viewLogFrequencyPeriod' : 'viewLogFrequencyTitle', checked: period || !!state.freqLog, disabled: !has || period, run: () => this._toggleFftFrequencyLog(panelId) },
-            ];
-        }
         if (mode === 'histogram') {
             const state = this._ensureHistogramState(plot);
             return [

@@ -550,7 +550,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(tools.children[tools.children.indexOf(marksBtn) + 1], viewBtn, `${mode}: View follows Marks`);
     assert.equal(viewBtn.getAttribute('aria-haspopup'), 'menu', `${mode}: View announces its popup`);
     assert.equal(viewBtn.textContent, 'viewMenuLabel ▾', `${mode}: nothing on, no count`);
-    assert.equal(viewBtn.disabled, !['timeseries', 'fft', 'histogram'].includes(mode),
+    assert.equal(viewBtn.disabled, !['timeseries', 'histogram'].includes(mode),
         `${mode}: View is enabled where it has something to offer`);
     assert.equal(autoscaleBtn.textContent, globalAutoscaleIcon, `${mode}: contextual Autoscale reuses the global icon`);
     autoscaleBtn.click();
@@ -673,22 +673,13 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(marksItem(view, 'y2log').getAttribute('aria-checked'), 'true', 'log Y2 renders checked');
 }
 
-// View in the analysis modes: what each has to offer.
+// View in the analysis modes: what each has to offer. Fourier's log frequency
+// sits in its own options panel, beside the X axis reading, not here.
 {
-    const { manager } = renderToolbar('fft', 2, {});
-    manager.plot.fft = { xAxisMode: 'frequency', freqLog: false };
-    let view = renderViewMenu(manager);
-    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['freqlog'], 'Fourier: log frequency');
-    assert.equal(marksItem(view, 'freqlog').disabled, false);
-    const calls = [];
-    manager._toggleFftFrequencyLog = (panelId) => calls.push(panelId);
-    marksItem(view, 'freqlog').click();
-    assert.deepEqual(calls, ['panel'], 'it toggles the spectrum axis');
-    manager.plot.fft = { xAxisMode: 'period', freqLog: false };
-    view = renderViewMenu(manager);
-    assert.equal(marksItem(view, 'freqlog').getAttribute('aria-checked'), 'true', 'a period axis is always log');
-    assert.equal(marksItem(view, 'freqlog').disabled, true, 'and cannot be switched off');
-    assert.equal(marksItem(view, 'freqlog').title, 'viewLogFrequencyPeriod');
+    const { manager, toolbar } = renderToolbar('fft', 2, {});
+    manager.plot.fft = { xAxisMode: 'frequency', freqLog: true };
+    assert.equal(renderViewMenu(manager).querySelectorAll('.marks-menu-item').length, 0, 'Fourier: nothing in View');
+    assert.equal(toolbar.querySelector('.panel-view-btn').disabled, true, 'so its View button is disabled');
 }
 {
     const { manager } = renderToolbar('histogram', 2, {});
