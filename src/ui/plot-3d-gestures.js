@@ -113,6 +113,17 @@ function commit(div, scene) {
     } catch (_) { /* the scene was replaced mid-gesture: nothing to sync */ }
 }
 
+// Fired on the graph div when a hand starts or stops working a scene (any
+// touch on it, or a burst of wheel events), so a view that redraws itself
+// every frame — the 3D state animation — can stand still meanwhile instead
+// of fighting the gesture. Every start is followed by exactly one end.
+export const SCENE_GESTURE_START = 'scene-gesture-start';
+export const SCENE_GESTURE_END = 'scene-gesture-end';
+
+const announce = (div, type) => {
+    try { div.dispatchEvent(new CustomEvent(type)); } catch (_) { /* no CustomEvent: nothing listens */ }
+};
+
 /**
  * @param {HTMLElement} div a Plotly graph div
  * @returns {boolean} whether it was installed
@@ -120,6 +131,30 @@ function commit(div, scene) {
 export function install3DSceneGestures(div) {
     if (!div || div._sceneGesturesInstalled || typeof div.addEventListener !== 'function') return false;
     div._sceneGesturesInstalled = true;
+
+    // The scene a touch sequence is working on, from its first finger to its
+    // last. One finger orbits (Plotly), two zoom (below).
+    let touchScene = null;
+    const onTouchSessionStart = (event) => {
+        if (touchScene) return;
+        const scene = sceneAt(div, event.target);
+        if (!scene) return;
+        touchScene = scene;
+        announce(div, SCENE_GESTURE_START);
+    };
+    const onTouchSessionEnd = (event) => {
+        if (!touchScene || (event.touches?.length || 0) > 0) return;
+        const scene = touchScene;
+        touchScene = null;
+        // A one-finger orbit is Plotly's, and it only writes the camera back to
+        // the layout on a mouseup: without this, the next full redraw (the
+        // animation resuming) would put the old camera back. A tap moved
+        // nothing, and says nothing.
+        let changed = true;
+        try { changed = scene.isCameraChanged(div.layout) || scene.isAspectChanged(div.layout); } catch (_) { /* keep true */ }
+        if (changed) commit(div, scene);
+        announce(div, SCENE_GESTURE_END);
+    };
 
     // Two fingers are down (or were, and not all have lifted yet).
     let pinch = null;
@@ -189,22 +224,28 @@ export function install3DSceneGestures(div) {
         event.preventDefault();
         const perPx = event.ctrlKey ? PINCH_WHEEL_ZOOM_PER_PX : WHEEL_ZOOM_PER_PX;
         const scale = clamp(Math.exp(-delta * perPx), 0.5, 2);
+        if (!wheelScene) announce(div, SCENE_GESTURE_START);
         applyZoom(scene, zoomBase(scene), scale);
         wheelScene = scene;
         clearTimeout(wheelTimer);
         wheelTimer = setTimeout(() => {
             wheelTimer = 0;
-            if (wheelScene) commit(div, wheelScene);
+            const settled = wheelScene;
             wheelScene = null;
+            if (settled) commit(div, settled);
+            announce(div, SCENE_GESTURE_END);
         }, WHEEL_SETTLE_MS);
     };
 
     // Capture, so this is decided before Plotly's camera listeners (on the
     // scene container, below this div) see anything.
+    div.addEventListener('touchstart', onTouchSessionStart, { capture: true });
     div.addEventListener('touchstart', onTouchStart, { capture: true, passive: false });
     div.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
     div.addEventListener('touchend', onTouchEnd, { capture: true });
     div.addEventListener('touchcancel', onTouchEnd, { capture: true });
+    div.addEventListener('touchend', onTouchSessionEnd, { capture: true });
+    div.addEventListener('touchcancel', onTouchSessionEnd, { capture: true });
     div.addEventListener('wheel', onWheel, { capture: true, passive: false });
     return true;
 }

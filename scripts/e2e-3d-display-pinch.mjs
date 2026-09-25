@@ -211,6 +211,66 @@ try {
     assert.equal(await viewMenu.locator('.marks-display-lines.checked').count(), 1, 'the 2D+t View menu shows Lines');
     await page.keyboard.press('Escape');
 
+    // ── 3D state animation: a zoom pauses playback, then resumes it ──
+    // Each frame redraws the whole scene from the layout, so a zoom made while
+    // it plays was put back on the next frame: the two fought on screen.
+    await page.evaluate(id => {
+        const pm = window.app.plotManager;
+        const panelEl = document.querySelector(`.layout-panel[data-id="${id}"]`);
+        // Back to the default orthographic projection (perspective was tried above).
+        pm.plots.get(id).projection = 'orthographic';
+        pm._setMode(id, 'state-anim', 3);
+        const plot = pm.plots.get(id);
+        if ((plot.stateSlots?.x?.length || 0) < 3) {
+            pm.addTrace(id, 'x', panelEl);
+            pm.addTrace(id, 'y', panelEl);
+            pm.addTrace(id, 'z', panelEl);
+        }
+    }, panelId);
+    await page.waitForFunction(id => {
+        const plot = window.app.plotManager.plots.get(id);
+        return plot?.mode === 'state-anim' && plot.div?._fullLayout?.scene?._scene && plot._stateAnimDocListeners;
+    }, panelId, { timeout: 30000 });
+    await page.waitForTimeout(500);
+    await page.evaluate(id => { const pm = window.app.plotManager; if (!pm.plots.get(id).animPlaying) pm._stateAnimTogglePlay(id); }, panelId);
+    await page.waitForTimeout(300);
+    const animState = () => page.evaluate(id => {
+        const plot = window.app.plotManager.plots.get(id);
+        const scene = plot.div._fullLayout.scene._scene;
+        return { playing: !!plot.animPlaying, frame: plot.animFrame, aspect: scene.glplot.getAspectratio().x };
+    }, panelId);
+    assert.ok((await animState()).playing, 'the 3D animation is playing');
+    const animBox = await page.evaluate(id => {
+        const r = window.app.plotManager.plots.get(id).div._fullLayout.scene._scene.container.getBoundingClientRect();
+        return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+    }, panelId);
+    const animBefore = await animState();
+    await page.mouse.move(animBox.cx, animBox.cy);
+    await page.keyboard.down('Control');
+    for (let i = 0; i < 10; i++) await page.mouse.wheel(0, -4);
+    const during = await animState();
+    await page.keyboard.up('Control');
+    assert.equal(during.playing, false, 'a wheel/trackpad zoom pauses the animation');
+    await page.waitForTimeout(800);
+    const afterWheelAnim = await animState();
+    assert.ok(afterWheelAnim.playing, 'and it resumes once the zoom settles');
+    assert.ok(afterWheelAnim.aspect > animBefore.aspect * 1.2, `the zoom survives the animation's redraws (${animBefore.aspect} → ${afterWheelAnim.aspect})`);
+
+    // Touch: a pinch pauses it the same way, from the first finger to the last.
+    await touch('touchStart', [[animBox.cx - 40, animBox.cy], [animBox.cx + 40, animBox.cy]]);
+    for (let step = 1; step <= 5; step++) {
+        const d = 40 + step * 12;
+        await touch('touchMove', [[animBox.cx - d, animBox.cy], [animBox.cx + d, animBox.cy]]);
+    }
+    const pinching = await animState();
+    assert.equal(pinching.playing, false, 'a pinch pauses the animation');
+    await touch('touchEnd', []);
+    await page.waitForTimeout(500);
+    const afterPinchAnim = await animState();
+    assert.ok(afterPinchAnim.playing, 'and it resumes when the fingers lift');
+    assert.ok(afterPinchAnim.aspect > afterWheelAnim.aspect * 1.2, `the pinch zoom survives too (${afterWheelAnim.aspect} → ${afterPinchAnim.aspect})`);
+    await page.evaluate(id => { const pm = window.app.plotManager; if (pm.plots.get(id).animPlaying) pm._stateAnimTogglePlay(id); }, panelId);
+
     assert.deepEqual(errors, [], 'no page errors');
     console.log('3D display and pinch end-to-end checks passed.');
 } finally {

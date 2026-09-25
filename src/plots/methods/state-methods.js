@@ -2,6 +2,7 @@
 
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
+import { SCENE_GESTURE_END, SCENE_GESTURE_START } from '../../ui/plot-3d-gestures.js';
 
 export function installPlotStateMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -231,6 +232,14 @@ proto._createStateAnimChart = function(panelId, panelEl) {
             this._cleanupStateAnimDocListeners(plot);
             const onInteractionUp = () => this._stateAnimEndInteraction(panelId, plot);
             div.addEventListener('mousedown', () => this._stateAnimBeginInteraction(plot), { capture: true });
+            // 3D: a touch (orbit or pinch) or a wheel/trackpad zoom has no
+            // mousedown, and every frame's full redraw would put the old view
+            // back under it. The scene gestures say when they start and end
+            // (ui/plot-3d-gestures.js).
+            if (is3D) {
+                div.addEventListener(SCENE_GESTURE_START, () => this._stateAnimBeginInteraction(plot));
+                div.addEventListener(SCENE_GESTURE_END, () => this._stateAnimEndInteraction(panelId, plot));
+            }
             document.addEventListener('mouseup', onInteractionUp);
             plot._stateAnimDocListeners = { up: onInteractionUp };
 
