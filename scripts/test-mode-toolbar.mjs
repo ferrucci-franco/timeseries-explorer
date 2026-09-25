@@ -232,6 +232,7 @@ class ToolbarHarness {
     _autoScalePlot(panelId, plot) { this.autoscaleCalls.push({ panelId, plot }); }
     _runWithEagerDetailLoading(_panelId, work) { return work(); }
     _dismissModeChangeWarning() {}
+    _closeMarksMenu() {}
     _showModeChangeWarning(panelId, mode) { this.warnings.push({ panelId, mode }); }
     _setMode(panelId, mode, stateAnimDim, options) {
         this.modeChanges.push({ panelId, mode, stateAnimDim, options });
@@ -264,7 +265,20 @@ vm.runInNewContext([
     marksMethodAssignment('_createViewButton'),
     marksMethodAssignment('_applyViewButtonState'),
     marksMethodAssignment('_renderViewMenu'),
+    marksMethodAssignment('_analysisModes'),
+    marksMethodAssignment('_analysisMenuModel'),
+    marksMethodAssignment('_createAnalysisButton'),
+    marksMethodAssignment('_applyAnalysisButtonState'),
+    marksMethodAssignment('_renderAnalysisMenu'),
 ].join('\n'), sandbox);
+
+// The Analysis menu of a rendered toolbar, and a pick in it.
+const renderAnalysisMenu = (manager) => {
+    const menu = new FakeElement('div');
+    manager._renderAnalysisMenu('panel', menu);
+    return menu;
+};
+const pickAnalysis = (manager, mode) => marksItem(renderAnalysisMenu(manager), mode).click();
 
 // The Marks menu of a rendered toolbar, rendered into a detached element the
 // way _openMarksMenu does it (minus positioning, which needs a real layout).
@@ -553,35 +567,31 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(marksBtn.classList.contains('active'), false, `${mode}: nothing on, not active`);
     assert.equal(marksBtn.disabled, mode !== 'timeseries', `${mode}: Marks is for the time-series view`);
 
-    const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
-    assert.deepEqual(
-        analysisButtons.map(button => button.dataset.mode).sort(),
-        ['fft', 'heatmap', 'histogram', 'integral', 'temporal-profile'],
-        `${mode}: all time-series analyses share the contextual group beside Marks`,
-    );
-    for (const button of analysisButtons) {
-        assert.ok(
-            button.classList.contains('panel-toggle-btn'),
-            `${mode}: ${button.textContent} uses the common pressed/unpressed button treatment`,
-        );
-        assert.notEqual(
-            button.getAttribute('aria-pressed'),
-            null,
-            `${mode}: ${button.textContent} always exposes its toggle state`,
-        );
-    }
-    for (const button of analysisButtons) {
-        const expectedPressed = button.dataset.mode === mode;
-        assert.equal(
-            button.classList.contains('active'),
-            expectedPressed,
-            `${mode}: ${button.dataset.mode} active class reflects the selected analysis`,
-        );
-        assert.equal(
-            button.getAttribute('aria-pressed'),
-            String(expectedPressed),
-            `${mode}: ${button.dataset.mode} exposes its sticky state to assistive technology`,
-        );
+    // Fourier, Histogram, Heatmap, Profile and Integral: one Analysis dropdown
+    // after View, whose button names the analysis that is on.
+    assert.equal(tools.querySelectorAll('.timeseries-analysis-btn').length, 0, `${mode}: no separate analysis buttons`);
+    const analysisBtn = tools.querySelector('.timeseries-analysis-menu-btn');
+    assert.ok(analysisBtn, `${mode}: the Analysis dropdown shares the contextual group`);
+    assert.equal(tools.children[tools.children.indexOf(tools.querySelector('.panel-view-btn')) + 1], analysisBtn, `${mode}: Analysis follows View`);
+    assert.equal(tools.children[tools.children.length - 1], analysisBtn, `${mode}: and closes the group`);
+    assert.equal(analysisBtn.getAttribute('aria-haspopup'), 'menu', `${mode}: Analysis announces its popup`);
+    const on = mode !== 'timeseries';
+    assert.equal(analysisBtn.classList.contains('active'), on, `${mode}: pressed while an analysis is on`);
+    assert.equal(analysisBtn.getAttribute('aria-pressed'), String(on), `${mode}: and says so`);
+    assert.equal(analysisBtn.dataset.mode, mode, `${mode}: the button knows which analysis is on`);
+    const expectedLabel = {
+        timeseries: 'analysisMenuLabel', fft: 'Fourier', histogram: 'analysisItemHistogram',
+        heatmap: 'modeHeatmapLabel', 'temporal-profile': 'temporalProfileModeLabel', integral: 'integralModeLabel',
+    }[mode];
+    assert.equal(analysisBtn.textContent, `${expectedLabel} ▾`, `${mode}: the button names it`);
+    const menu = renderAnalysisMenu(manager);
+    const items = menu.querySelectorAll('.marks-menu-item');
+    assert.deepEqual(items.map(item => item.dataset.mark),
+        ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'],
+        `${mode}: None, then every analysis of the family`);
+    for (const item of items) {
+        assert.equal(item.getAttribute('role'), 'menuitemradio', `${mode}: ${item.dataset.mark} is a radio item`);
+        assert.equal(item.getAttribute('aria-checked'), String(item.dataset.mark === mode), `${mode}: ${item.dataset.mark} checked only when on`);
     }
 }
 
@@ -780,11 +790,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
 {
     const { toolbar } = renderToolbar('phase2d');
     assert.equal(toolbar.querySelector('.timeseries-tools-group'), null, 'non-time-series plots hide the contextual options group');
-    assert.equal(findModeButton(toolbar, 'fft'), undefined, 'non-time-series plots do not expose Fourier');
-    assert.equal(findModeButton(toolbar, 'histogram'), undefined, 'non-time-series plots do not expose Histogram');
-    assert.equal(findModeButton(toolbar, 'heatmap'), undefined, 'non-time-series plots do not expose Heatmap');
-    assert.equal(findModeButton(toolbar, 'temporal-profile'), undefined, 'non-time-series plots do not expose Temporal Profile');
-    assert.equal(findModeButton(toolbar, 'integral'), undefined, 'non-time-series plots do not expose Integral');
+    assert.equal(toolbar.querySelector('.timeseries-analysis-menu-btn'), null, 'non-time-series plots do not expose the Analysis menu (Fourier, Histogram, Heatmap, Profile, Integral)');
 }
 
 // Phase/state views use the same contextual Autoscale action, first in the
@@ -907,8 +913,8 @@ for (const [mode, dim, cameras] of [['phase3d', 2, ['XY', 'XZ', 'YZ']], ['phase2
     );
     assert.match(
         refreshSource,
-        /querySelectorAll\('\.timeseries-analysis-btn'\)[\s\S]*?btn\.dataset\.mode === plot\?\.mode[\s\S]*?aria-pressed/,
-        'toolbar refresh keeps sticky analysis state synchronized after redraws',
+        /_applyAnalysisButtonState\?\.\(plot, panelEl\.querySelector\('\.timeseries-analysis-menu-btn'\)\)/,
+        'toolbar refresh keeps the Analysis button (which analysis is on) synchronized after redraws',
     );
     assert.match(
         refreshSource,
@@ -926,9 +932,9 @@ for (const [mode, dim, cameras] of [['phase3d', 2, ['XY', 'XZ', 'YZ']], ['phase2
     );
 }
 
-// A pressed analysis button returns to the original time-series view. The
-// other analysis button switches directly, and every family transition keeps
-// using the established preserveTimeTraces path.
+// Picking the analysis that is on (or None) returns to the original
+// time-series view. Another analysis switches directly, and every family
+// transition keeps using the established preserveTimeTraces path.
 for (const [from, clicked, expected] of [
     ['timeseries', 'fft', 'fft'],
     ['timeseries', 'histogram', 'histogram'],
@@ -951,13 +957,15 @@ for (const [from, clicked, expected] of [
     ['integral', 'temporal-profile', 'temporal-profile'],
     ['temporal-profile', 'integral', 'integral'],
     ['fft', 'integral', 'integral'],
+    ['fft', 'timeseries', 'timeseries'],
+    ['heatmap', 'timeseries', 'timeseries'],
 ]) {
     const { manager, toolbar } = renderToolbar(from);
     const fftConfig = manager.plot.fft;
     const histogramConfig = manager.plot.histogram;
     const heatmapConfig = manager.plot.heatmap;
     const temporalProfileConfig = manager.plot.temporalProfile;
-    findModeButton(toolbar, clicked).click();
+    pickAnalysis(manager, clicked);
     assert.equal(manager.modeChanges.length, 1, `${from} -> ${clicked}: exactly one mode change is requested`);
     assert.equal(manager.modeChanges[0].mode, expected, `${from} -> ${clicked}: resolves to ${expected}`);
     assert.equal(

@@ -2549,11 +2549,7 @@ class PlotManager {
         }
         // NaN/Inf, Gaps, Repeated, Samples (Marks); how the axes and camera read the data (View).
         this._syncMarksControls?.(panelId);
-        panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
-            const active = btn.dataset.mode === plot?.mode;
-            btn.classList.toggle('active', active);
-            btn.setAttribute('aria-pressed', String(active));
-        });
+        this._applyAnalysisButtonState?.(plot, panelEl.querySelector('.timeseries-analysis-menu-btn'));
         panelEl.querySelectorAll('.panel-autoscale-btn, .panel-autoscale-axis-btn').forEach(btn => {
             btn.disabled = !has;
         });

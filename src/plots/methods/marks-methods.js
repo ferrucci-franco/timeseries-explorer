@@ -734,16 +734,16 @@ export function installPlotMarksMethods(TargetClass) {
     };
 
     proto._marksMenuEl = function(panelId) {
-        return document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu)`);
+        return document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu):not(.panel-analysis-menu)`);
     };
 
-    // Closes whichever panel dropdown is open — Marks or View; one at a time.
+    // Closes whichever panel dropdown is open — Marks, View or Analysis; one at a time.
     proto._closeMarksMenu = function() {
         const menu = document.querySelector('.timeseries-marks-menu');
         if (!menu) return;
         menu._cleanup?.();
         menu.remove();
-        document.querySelectorAll('.timeseries-marks-btn[aria-expanded="true"], .panel-view-btn[aria-expanded="true"]')
+        document.querySelectorAll('.timeseries-marks-btn[aria-expanded="true"], .panel-view-btn[aria-expanded="true"], .timeseries-analysis-menu-btn[aria-expanded="true"]')
             .forEach(button => button.setAttribute('aria-expanded', 'false'));
     };
 
@@ -751,20 +751,22 @@ export function installPlotMarksMethods(TargetClass) {
         this._openPanelDropdown(panelId, anchor, 'marks');
     };
 
-    // Shared by Marks and View: the menu is positioned under its button, stays
-    // open while toggling, and Escape or a click outside closes it.
+    // Shared by Marks, View and Analysis: the menu is positioned under its
+    // button, stays open while toggling, and Escape or a click outside closes it.
     proto._openPanelDropdown = function(panelId, anchor, kind) {
         this._closeMarksMenu();
         const plot = this.plots.get(panelId);
         if (!plot) return;
-        const isView = kind === 'view';
+        const extraClass = { view: ' panel-view-menu', analysis: ' panel-analysis-menu' }[kind] || '';
+        const labelKey = { view: 'viewMenuLabel', analysis: 'analysisMenuLabel' }[kind] || 'marksMenuLabel';
         const menu = document.createElement('div');
-        menu.className = isView ? 'timeseries-marks-menu panel-view-menu' : 'timeseries-marks-menu';
+        menu.className = `timeseries-marks-menu${extraClass}`;
         menu.dataset.panelId = String(panelId);
         menu.setAttribute('role', 'menu');
-        menu.setAttribute('aria-label', i18n.t(isView ? 'viewMenuLabel' : 'marksMenuLabel'));
+        menu.setAttribute('aria-label', i18n.t(labelKey));
         document.body.appendChild(menu);
-        if (isView) this._renderViewMenu(panelId, menu);
+        if (kind === 'view') this._renderViewMenu(panelId, menu);
+        else if (kind === 'analysis') this._renderAnalysisMenu(panelId, menu);
         else this._renderMarksMenu(panelId, menu);
         anchor?.setAttribute('aria-expanded', 'true');
         const rect = anchor?.getBoundingClientRect?.();
@@ -776,7 +778,7 @@ export function installPlotMarksMethods(TargetClass) {
         const onPointer = (event) => {
             // The button toggles the menu itself (a rebuilt toolbar may have
             // replaced `anchor` since the menu opened).
-            if (menu.contains(event.target) || event.target?.closest?.('.timeseries-marks-btn, .panel-view-btn')) return;
+            if (menu.contains(event.target) || event.target?.closest?.('.timeseries-marks-btn, .panel-view-btn, .timeseries-analysis-menu-btn')) return;
             this._closeMarksMenu();
         };
         const onKey = (event) => {
@@ -1087,12 +1089,86 @@ export function installPlotMarksMethods(TargetClass) {
         this._renderPanelMenuItems(panelId, menu, this._viewMenuModel(panelId, plot));
     };
 
+    // ── Analysis menu ──
+
+    // The analyses of the time-series family. Picking one switches the panel to
+    // it; picking the one that is on (or None) goes back to the time series —
+    // the same toggle the separate buttons used to be.
+    proto._analysisModes = function() {
+        return [
+            { id: 'fft', label: 'analysisItemFft', title: 'modeFFT', short: 'Fourier' },
+            { id: 'histogram', label: 'analysisItemHistogram', title: 'modeHistogram', short: 'analysisItemHistogram' },
+            { id: 'heatmap', label: 'analysisItemHeatmap', title: 'modeHeatmap', short: 'modeHeatmapLabel' },
+            { id: 'temporal-profile', label: 'analysisItemProfile', title: 'temporalProfileMode', short: 'temporalProfileModeLabel' },
+            { id: 'integral', label: 'analysisItemIntegral', title: 'integralMode', short: 'integralModeLabel' },
+        ];
+    };
+
+    proto._analysisMenuModel = function(panelId, plot) {
+        const mode = plot?.mode;
+        const pick = (id) => {
+            this._closeMarksMenu();
+            if (id === 'timeseries') {
+                if (mode !== 'timeseries') this._requestModeChange(panelId, 'timeseries');
+                return;
+            }
+            this._toggleTimeseriesAnalysisMode(panelId, id);
+        };
+        return [
+            { key: 'timeseries', label: 'analysisItemNone', title: 'analysisItemNoneTitle', checked: mode === 'timeseries', run: () => pick('timeseries') },
+            { divider: true },
+            ...this._analysisModes().map(({ id, label, title }) => (
+                { key: id, label, title, checked: mode === id, run: () => pick(id) }
+            )),
+        ];
+    };
+
+    proto._createAnalysisButton = function(panelId, plot) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-analysis-menu-btn';
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', 'false');
+        this._applyAnalysisButtonState(plot, button);
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (this._analysisMenuEl(panelId)) this._closeMarksMenu();
+            else this._openPanelDropdown(panelId, button, 'analysis');
+        });
+        return button;
+    };
+
+    // The button names the analysis that is on, pressed; otherwise "Analysis".
+    proto._applyAnalysisButtonState = function(plot, button) {
+        if (!button) return;
+        const active = this._analysisModes().find(item => item.id === plot?.mode);
+        const label = active ? i18n.t(active.short) : i18n.t('analysisMenuLabel');
+        button.textContent = `${label} ▾`;
+        button.dataset.mode = active ? active.id : 'timeseries';
+        button.classList.toggle('active', !!active);
+        button.setAttribute('aria-pressed', String(!!active));
+        button.title = active ? i18n.t(active.title) : i18n.t('analysisMenuTitle');
+    };
+
+    proto._analysisMenuEl = function(panelId) {
+        return document.querySelector(`.panel-analysis-menu[data-panel-id="${panelId}"]`);
+    };
+
+    proto._renderAnalysisMenu = function(panelId, menu = this._analysisMenuEl(panelId)) {
+        if (!menu) return;
+        const plot = this.plots.get(panelId);
+        this._renderPanelMenuItems(panelId, menu, this._analysisMenuModel(panelId, plot));
+        // One of them is on at a time: radio semantics for assistive technology.
+        menu.querySelectorAll('.marks-menu-item').forEach(item => item.setAttribute('role', 'menuitemradio'));
+    };
+
     // Toolbar buttons and (when open) the menus, from the plot state.
     proto._syncMarksControls = function(panelId) {
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         const plot = this.plots.get(panelId);
         this._applyMarksButtonState(plot, panelEl?.querySelector('.timeseries-marks-btn'));
         this._applyViewButtonState(plot, panelEl?.querySelector('.panel-view-btn'));
+        this._applyAnalysisButtonState(plot, panelEl?.querySelector('.timeseries-analysis-menu-btn'));
         this._renderMarksMenu(panelId);
         this._renderViewMenu(panelId);
         // A mode change or a cleared panel turns Gaps off without its toggle.
@@ -1106,7 +1182,7 @@ export function installPlotMarksMethods(TargetClass) {
     proto._syncMarksControlsForPlot = function(plot) {
         const panelId = plot?.div?.closest?.('.layout-panel')?.dataset?.id;
         if (panelId === undefined || panelId === null) return;
-        const menu = document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu)`);
+        const menu = this._marksMenuEl(panelId);
         if (menu) this._renderMarksMenu(panelId, menu);
     };
 

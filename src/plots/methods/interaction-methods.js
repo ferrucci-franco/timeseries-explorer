@@ -4587,27 +4587,9 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         timeseriesToolsGroup.appendChild(this._createMarksButton(panelId, plot));
         timeseriesToolsGroup.appendChild(this._createViewButton(panelId, plot));
 
-        const analysisModes = [
-            { id: 'fft', label: 'Fourier', titleKey: 'modeFFT', className: 'timeseries-fourier-btn' },
-            { id: 'histogram', label: i18n.t('modeHistogramLabel'), titleKey: 'modeHistogram', className: 'timeseries-histogram-btn' },
-            { id: 'heatmap', label: i18n.t('modeHeatmapLabel'), titleKey: 'modeHeatmap', className: 'timeseries-heatmap-btn' },
-            { id: 'temporal-profile', label: i18n.t('temporalProfileModeLabel'), titleKey: 'temporalProfileMode', className: 'timeseries-temporal-profile-btn' },
-            { id: 'integral', label: i18n.t('integralModeLabel'), titleKey: 'integralMode', className: 'timeseries-integral-btn' },
-        ];
-        analysisModes.forEach(({ id, label, titleKey, className }) => {
-            const active = currentMode === id;
-            const button = document.createElement('button');
-            button.className = `layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-analysis-btn ${className}${active ? ' active' : ''}`;
-            button.textContent = label;
-            button.title = i18n.t(titleKey);
-            button.dataset.mode = id;
-            button.setAttribute('aria-pressed', String(active));
-            button.addEventListener('click', (event) => {
-                event.stopPropagation();
-                this._toggleTimeseriesAnalysisMode(panelId, id);
-            });
-            timeseriesToolsGroup.appendChild(button);
-        });
+        // Fourier, Histogram, Heatmap, Profile and Integral: one Analysis
+        // dropdown, whose button names the analysis that is on.
+        timeseriesToolsGroup.appendChild(this._createAnalysisButton(panelId, plot));
         toolbar.appendChild(timeseriesToolsGroup);
     }
 
@@ -4860,11 +4842,7 @@ proto._updateModeButtons = function(panelEl, activeMode) {
         const dim = btn.dataset.stateAnimDim ? Number(btn.dataset.stateAnimDim) : null;
         btn.classList.toggle('active', mode === activePrimaryMode && (!dim || dim === (plot?.stateAnimDim || 2)));
     });
-    panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
-        const active = btn.dataset.mode === activeMode;
-        btn.classList.toggle('active', active);
-        btn.setAttribute('aria-pressed', String(active));
-    });
+    this._applyAnalysisButtonState(plot, panelEl.querySelector('.timeseries-analysis-menu-btn'));
 };
 
 proto._toggle3DViewButtons = function(panelEl, show) {

@@ -1853,6 +1853,11 @@
     cursor: help;
 }
 
+/* Analysis: one analysis at a time, so its marks are round, like radios. */
+.panel-analysis-menu .marks-menu-check {
+    border-radius: 50%;
+}
+
 /* A numeric setting in the View menu (2D marker size / opacity). */
 .marks-menu-number-row {
     display: flex;
