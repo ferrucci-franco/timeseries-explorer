@@ -136,4 +136,23 @@ for (const n of [1, 2, 3, 25, 1000, 20_000]) {
     checks++;
 }
 
+// cumsum() is new, so the legacy evaluator has no reference for it: pin it
+// against a plain running sum, and check it is diff()'s inverse.
+{
+    const data = makeDataset(120, 5);
+    const x = data.variables.x.data;
+    const got = evaluate('cumsum(x)', data).values;
+    let acc = 0;
+    for (let i = 0; i < got.length; i++) { acc += Number(x[i]); assert.equal(got[i], acc, `cumsum(x)[${i}]`); }
+    const back = evaluate('diff(cumsum(x))', data).values;
+    // A NaN poisons the running sum from there on, like any accumulator.
+    const firstNaN = Array.from(x).findIndex(v => Number.isNaN(Number(v)));
+    assert.ok(firstNaN > 1 && got.slice(firstNaN).every(Number.isNaN), 'cumsum propagates NaN');
+    for (let i = 1; i < firstNaN; i++) assert.ok(Math.abs(back[i] - Number(x[i])) < 1e-9, `diff(cumsum(x))[${i}]`);
+    const scaled = evaluate('2*cumsum(x + 1)', data).values;
+    acc = 0;
+    for (let i = 0; i < firstNaN; i++) { acc += Number(x[i]) + 1; assert.ok(Math.abs(scaled[i] - 2 * acc) < 1e-9, `2*cumsum(x+1)[${i}]`); }
+    checks += 4;
+}
+
 console.log(`expression compiler: ${checks} exact comparisons passed`);

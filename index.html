@@ -161,7 +161,7 @@
                         </div>
                         <div class="derived-help-row">
                             <span class="derived-help-label" data-i18n="derivedHelpFunctions">Functions</span>
-                            <code>sqrt(x), abs(x), log(x), log10(x), power(x,n), root(x,n), diff(x), min(...), max(...)</code>
+                            <code>sqrt(x), abs(x), log(x), log10(x), power(x,n), root(x,n), diff(x), cumsum(x), min(...), max(...)</code>
                             <code>sin(x), cos(x), tan(x), asin(x), acos(x), atan(x)</code>
                             <span data-i18n="derivedHelpRadians">Angles are in radians.</span>
                             <code>sinh(x), cosh(x), tanh(x)</code>
@@ -176,6 +176,10 @@
                                 <div class="derived-help-example"><code>max(x, y)</code><span data-i18n="derivedHelpMinMaxPair">two variables</span></div>
                                 <div class="derived-help-example"><code>min([x, y, z])</code><span data-i18n="derivedHelpMinMaxList">a list of variables in square brackets</span></div>
                             </div>
+                        </div>
+                        <div class="derived-help-row">
+                            <span class="derived-help-label" data-i18n="derivedHelpDiffCumsum">diff / cumsum</span>
+                            <span data-i18n="derivedHelpDiffCumsumText">diff(x) is the step x[i] − x[i−1]; cumsum(x) is the running sum x[0] + … + x[i]. Neither uses Δt, and they undo each other: diff(cumsum(x)) gives x back from the second sample on.</span>
                         </div>
                         <div class="derived-help-row">
                             <span class="derived-help-label" data-i18n="derivedHelpTimeAxis">Time axis</span>
@@ -316,6 +320,7 @@
                             <select id="integral-method" class="data-tool-select">
                                 <option value="trapezoidal" selected data-i18n="dataToolIntegralTrapezoidal">Trapezoidal</option>
                                 <option value="rectangular" data-i18n="dataToolIntegralRectangular">Rectangular</option>
+                                <option value="sum" data-i18n="dataToolIntegralSum">Cumulative sum Σy (no ×Δt)</option>
                             </select>
                             <label class="options-subgroup-label" for="integral-initial" data-i18n="dataToolIntegralInitial">Initial condition</label>
                             <input id="integral-initial" class="derived-input data-tool-number-input" type="number" step="0.1" value="0">

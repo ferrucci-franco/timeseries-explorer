@@ -63,7 +63,7 @@ export const DATA_TOOL_PREVIEW_NAME = '__dataToolPreview__';
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
-const INTEGRAL_METHODS = new Set(['trapezoidal', 'rectangular']);
+const INTEGRAL_METHODS = kernelShared.CUMULATIVE_INTEGRAL_METHODS;
 const INTEGRAL_GAP_POLICIES = kernelShared.INTEGRAL_GAP_POLICIES;
 
 // One pool for the whole app. Created lazily so importing this module in a Node
@@ -2473,7 +2473,9 @@ proto._dataToolDescription = function(config) {
     if (config.tool === 'integrate') {
         const initial = config.params.initial || 0;
         const from = initial ? `; from ${initial}` : '';
-        return `Data tool: integral of ${config.sourceName}; ${config.params.method}${from}; missing data: ${config.params.gapPolicy}`;
+        const what = config.params.method === 'sum' ? 'cumulative sum' : 'integral';
+        const method = config.params.method === 'sum' ? '' : `; ${config.params.method}`;
+        return `Data tool: ${what} of ${config.sourceName}${method}${from}; missing data: ${config.params.gapPolicy}`;
     }
     if (config.tool === 'movingAverage') {
         return `Data tool: moving average of ${config.sourceName}; window ${config.params.window}`;
@@ -2507,6 +2509,7 @@ proto._detrendDescription = function(params = {}) {
 
 proto._dataToolStepLabel = function(step) {
     if (step.tool === 'derivative') return step.params.method === 'difference' ? 'difference' : `derivative (${step.params.method})`;
+    if (step.tool === 'integrate' && step.params.method === 'sum') return `cumulative sum (gaps: ${step.params.gapPolicy})`;
     if (step.tool === 'integrate') return `integral (${step.params.method}, gaps: ${step.params.gapPolicy})`;
     if (step.tool === 'movingAverage') return `moving average (window ${step.params.window})`;
     if (step.tool === 'interpolate') return `fill missing (${this._interpolateDescription(step.params)})`;

@@ -1,7 +1,7 @@
 import {
     asFloat64,
+    CUMULATIVE_INTEGRAL_METHODS,
     INTEGRAL_GAP_POLICIES,
-    INTEGRAL_METHODS,
     normalizeTimeContext,
     timeDelta,
 } from './shared.js';
@@ -53,7 +53,7 @@ export function bridgeNonFinite(values, ctx) {
 // spellings of "no data here" give the same number.
 //
 // params:
-//   method     'trapezoidal' | 'rectangular'
+//   method     'trapezoidal' | 'rectangular' | 'sum' (running sum, no ×Δt)
 //   gapPolicy  see INTEGRAL_GAP_POLICIES; defaults to 'zero'
 //   detectGaps set false to skip missing-row detection entirely. Then a gap is
 //              just a long dt and the quadrature runs straight across it, which
@@ -81,8 +81,9 @@ export function computeIntegral(sourceValues, time, params = {}) {
     if (!n) return empty;
 
     const ctx = normalizeTimeContext(time);
-    const method = INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
+    const method = CUMULATIVE_INTEGRAL_METHODS.has(params.method) ? params.method : 'trapezoidal';
     const policy = INTEGRAL_GAP_POLICIES.has(params.gapPolicy) ? params.gapPolicy : 'zero';
+    if (method === 'sum') return cumulativeSum(values, ctx, policy, params.initial);
     const rectangular = method === 'rectangular';
 
     // An index axis carries no timestamps, so every step is 1 by construction
@@ -166,5 +167,41 @@ export function computeIntegral(sourceValues, time, params = {}) {
         uncoveredTime,
         hasNominalStep,
         timeKind: ctx.kind,
+    };
+}
+
+// Plain running sum: out[i] = initial + Σ_{k≤i} y[k], NumPy's cumsum offset by
+// the initial condition. Time is never read, so duplicate or irregular
+// timestamps change nothing, and a skipped row is simply a sample that is not
+// there — only non-finite samples are holes, and the gap policy decides them.
+// It inverts the derivative's 'difference' method: summing Δy from the first
+// sample's value gives the signal back.
+function cumulativeSum(values, ctx, policy, initialParam) {
+    const n = values.length;
+    const out = new Float64Array(n);
+    const work = policy === 'interpolate' ? bridgeNonFinite(values, ctx) : values;
+    let acc = Number.isFinite(Number(initialParam)) ? Number(initialParam) : 0;
+    let nanSegmentCount = 0;
+    let uncoveredTime = 0;
+    for (let i = 0; i < n; i++) {
+        if (!Number.isFinite(values[i])) {
+            nanSegmentCount++;
+            uncoveredTime++;
+        }
+        const y = work[i];
+        if (Number.isFinite(y)) acc += y;
+        else if (policy === 'propagate') acc = NaN;
+        out[i] = acc;
+    }
+    // uncoveredTime counts missing SAMPLES here, whatever the axis, so it is
+    // reported with the index kind: formatting it as a duration would be false.
+    return {
+        values: out,
+        negativeDtCount: 0,
+        gapCount: 0,
+        nanSegmentCount,
+        uncoveredTime,
+        hasNominalStep: false,
+        timeKind: 'index',
     };
 }

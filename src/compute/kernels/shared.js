@@ -82,6 +82,11 @@ export function spikeParamsFromSensitivity(sensitivity) {
 
 export const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
 export const INTEGRAL_METHODS = new Set(['trapezoidal', 'rectangular']);
+// The cumulative Data Tools integral also offers 'sum': a plain running sum Σy
+// with no ×Δt, the counterpart of the derivative's 'difference'. It is kept out
+// of INTEGRAL_METHODS on purpose — the definite integral (an energy, an area)
+// has no meaning for a sum that ignores time.
+export const CUMULATIVE_INTEGRAL_METHODS = new Set([...INTEGRAL_METHODS, 'sum']);
 
 // What the integral does with a hole — a run of non-finite values, or a stretch
 // of time the file has no rows for. Each policy states a different CLAIM about

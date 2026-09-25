@@ -293,4 +293,18 @@ for (const n of SIZES) {
     checks += 4;
 }
 
+// Integral 'sum': a running sum Σy that never reads time, offset by initial.
+{
+    const values = [1, 2, NaN, 4, 5];
+    const time = { values: [0, 0, 7, 7.5, 100], kind: 'numeric' };
+    const zero = computeIntegral(values, time, { method: 'sum', gapPolicy: 'zero', initial: 10 });
+    assert.deepEqual(Array.from(zero.values), [11, 13, 13, 17, 22], 'sum/zero');
+    assert.equal(zero.nanSegmentCount, 1, 'sum/zero: one hole counted');
+    assert.equal(zero.negativeDtCount, 0, 'sum ignores time');
+    const interp = computeIntegral(values, time, { method: 'sum', gapPolicy: 'interpolate' });
+    assert.ok(Math.abs(interp.values[4] - (1 + 2 + (2 + (4 - 2) * 7 / 7.5) + 4 + 5)) < 1e-12, 'sum/interpolate bridges in time');
+    const prop = computeIntegral(values, time, { method: 'sum', gapPolicy: 'propagate' });
+    assert.deepEqual(Array.from(prop.values).map(v => (Number.isNaN(v) ? 'NaN' : v)), [1, 3, 'NaN', 'NaN', 'NaN'], 'sum/propagate');
+}
+
 console.log(`compute kernels: ${checks} bit-exact comparisons passed`);
