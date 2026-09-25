@@ -2,12 +2,16 @@
 // where a panel's time axis holds one instant on several consecutive rows, at
 // any zoom.
 //
-// Marks are layout annotations, not a trace. They need a hover (how many rows,
-// how many instants), and annotations carry one; a helper trace would also
-// carry one, but every piece of code that maps Plotly trace indexes back to
-// plot.traces — hover, cursors, autoscale, export — would then have to learn to
-// skip it. Guide lines and the dense wash are layout shapes, drawn next to the
-// Missing/NaN bands (the two share `layout.shapes`).
+// Marks are small layout shapes (triangles sized in pixels, anchored at their
+// instant), not a trace and not annotations. A helper trace would have to be
+// skipped by every piece of code that maps Plotly trace indexes back to
+// plot.traces — hover, cursors, autoscale, export. Annotations were the first
+// build: they carry a hover, but redrawing a hundred of them cost ~200 ms per
+// frame and made panning crawl. Shapes cost a fraction of that and, being
+// anchored in data coordinates, follow a pan by themselves, so they are only
+// recomputed when it settles. Their hover is a small label of our own
+// (_ensureRepeatedHover). Guide lines and the dense wash are shapes too; all of
+// them share `layout.shapes` with the Missing/NaN bands.
 import i18n from '../../i18n/index.js';
 import { repeatedTimestampRuns } from '../../utils/repeated-timestamps.js';
 import {
@@ -90,7 +94,7 @@ export function installPlotRepeatedMethods(TargetClass) {
     // (too many to resolve: a wash on the strip instead), 'lazy' (only
     // memory-saving files on the panel have unread repeats) or 'none'.
     proto._repeatedOverlay = function(plot) {
-        const empty = { annotations: [], shapes: [], state: null };
+        const empty = { shapes: [], hoverMarks: [], state: null };
         if (plot?.mode !== 'timeseries' || !plot.showRepeated || !plot.div) return empty;
         const xa = plot.div._fullLayout?.xaxis;
         if (!xa || !Array.isArray(xa.range) || !(xa._length > 0)) return empty;
@@ -106,8 +110,8 @@ export function installPlotRepeatedMethods(TargetClass) {
         const markColor = (mark) => (names && mark.keys.length === 1 && colorOf.get(mark.keys[0])) || this._repeatedColor(1);
         const xOf = (mark) => this._plotlyTimeValue(mark.keys[0], mark.t, this._getTimeVar(mark.keys[0]));
 
-        const annotations = [];
         const shapes = [];
+        const hoverMarks = [];
         if (view.dense) {
             // Individual marks would touch: shade the stretches of strip that
             // hold repeats, so it still shows where they are and where not.
@@ -125,25 +129,27 @@ export function installPlotRepeatedMethods(TargetClass) {
                 });
             }
         } else {
-            const bg = this.theme === 'dark' ? '#2a2a2a' : '#ffffff';
             for (const mark of view.marks) {
                 const color = markColor(mark);
-                annotations.push({
-                    xref: 'x', yref: 'paper',
-                    x: xOf(mark), y: 1,
-                    xanchor: 'center', yanchor: 'top',
-                    text: '▼',
-                    showarrow: false,
-                    font: { size: 10, color },
-                    hovertext: this._repeatedHoverText(mark, names),
-                    hoverlabel: { bgcolor: bg, bordercolor: color, font: { color } },
+                const x = xOf(mark);
+                // A small triangle hanging from the top edge, sized in pixels
+                // but anchored at its instant, so it rides along with a pan
+                // without being redrawn.
+                shapes.push({
+                    type: 'path', xref: 'x', yref: 'paper',
+                    xsizemode: 'pixel', ysizemode: 'pixel',
+                    xanchor: x, yanchor: 1,
+                    path: 'M-4.5,0 L4.5,0 L0,-8 Z',
+                    fillcolor: color,
+                    line: { width: 0 },
+                    layer: 'above',
                 });
+                hoverMarks.push({ x, color, text: this._repeatedHoverText(mark, names) });
             }
             // Zoomed in far enough that each mark is one instant, and few of
             // them: a faint line takes the eye from the mark down to the curve.
             if (view.resolved && view.marks.length <= REPEATED_GUIDE_MAX) {
-                for (const mark of view.marks) {
-                    const x = xOf(mark);
+                for (const { x } of hoverMarks) {
                     shapes.push({
                         type: 'line', xref: 'x', yref: 'paper',
                         x0: x, x1: x, y0: 0, y1: 1,
@@ -156,7 +162,50 @@ export function installPlotRepeatedMethods(TargetClass) {
         let state = null;
         if (view.dense) state = 'dense';
         else if (!view.marks.length && lazy && !sources.some(source => source.runs.count)) state = 'lazy';
-        return { annotations, shapes, state };
+        return { shapes, hoverMarks, state };
+    };
+
+    // Hover over the marks: Plotly gives shapes none, so a small label of our
+    // own follows the pointer along the top strip. Installed once per plot div.
+    proto._ensureRepeatedHover = function(plot) {
+        const div = plot?.div;
+        if (!div || div._repeatedHoverInstalled) return;
+        div._repeatedHoverInstalled = true;
+        let label = null;
+        const hide = () => { if (label) label.style.display = 'none'; };
+        div.addEventListener('mouseleave', hide);
+        div.addEventListener('mousemove', (event) => {
+            const marks = plot.showRepeated ? plot._repeatedHoverMarks : null;
+            const layout = div._fullLayout;
+            const xa = layout?.xaxis;
+            if (!marks?.length || !xa || !layout._size) return hide();
+            const rect = div.getBoundingClientRect();
+            const px = event.clientX - rect.left;
+            const py = event.clientY - rect.top;
+            const top = layout._size.t;
+            if (py < top - 2 || py > top + 12) return hide();
+            let best = null;
+            let bestDistance = 7;
+            for (const mark of marks) {
+                const markPx = xa._offset + xa.l2p(xa.d2l(mark.x));
+                const distance = Math.abs(markPx - px);
+                if (distance < bestDistance) {
+                    best = mark;
+                    bestDistance = distance;
+                }
+            }
+            if (!best) return hide();
+            if (!label) {
+                label = document.createElement('div');
+                label.className = 'repeated-hover-label';
+                document.body.appendChild(label);
+            }
+            label.innerHTML = best.text;
+            label.style.borderColor = best.color;
+            label.style.left = `${event.clientX + 12}px`;
+            label.style.top = `${event.clientY + 12}px`;
+            label.style.display = 'block';
+        });
     };
 
     // The rings the Repeated toggle puts on Samples dots: for each drawn point

@@ -124,15 +124,18 @@ installPlotRepeatedMethods(Manager);
 
     const overlay = m._repeatedOverlay(plot);
     assert.equal(overlay.state, null);
-    assert.deepEqual(overlay.annotations.map(a => a.x), [2, 5], 'one mark per repeated instant');
-    assert.equal(overlay.annotations[0].text, '▼');
-    assert.equal(overlay.annotations[0].yref, 'paper');
-    assert.ok(overlay.annotations[0].hovertext, 'each mark has a hover');
-    assert.equal(overlay.shapes.length, 2, 'zoomed in, few marks: a guide line each');
-    assert.equal(overlay.shapes[0].layer, 'below');
+    const markShapes = overlay.shapes.filter(shape => shape.type === 'path');
+    assert.deepEqual(markShapes.map(shape => shape.xanchor), [2, 5], 'one mark per repeated instant');
+    assert.equal(markShapes[0].xsizemode, 'pixel', 'marks are sized in pixels');
+    assert.equal(markShapes[0].yanchor, 1, 'and hang from the top edge');
+    assert.deepEqual(overlay.hoverMarks.map(mark => mark.x), [2, 5], 'each mark has a hover');
+    assert.ok(overlay.hoverMarks[0].text.length > 0);
+    const guides = overlay.shapes.filter(shape => shape.type === 'line');
+    assert.equal(guides.length, 2, 'zoomed in, few marks: a guide line each');
+    assert.equal(guides[0].layer, 'below');
 
-    assert.equal(m._repeatedOverlay({ ...plot, showRepeated: false }).annotations.length, 0, 'off: nothing');
-    assert.equal(m._repeatedOverlay({ ...plot, mode: 'fft' }).annotations.length, 0, 'time-series panels only');
+    assert.equal(m._repeatedOverlay({ ...plot, showRepeated: false }).shapes.length, 0, 'off: nothing');
+    assert.equal(m._repeatedOverlay({ ...plot, mode: 'fft' }).shapes.length, 0, 'time-series panels only');
 
     assert.equal(m._repeatedAvailability(plot), 'some');
     assert.equal(m._repeatedAvailability({ ...plot, traces: [{ fileId: 'clean' }] }), 'none', 'no repeats: none');
@@ -143,7 +146,7 @@ installPlotRepeatedMethods(Manager);
 
     // A hidden trace's file is not marked, but it still counts for the button.
     const hidden = { ...plot, traces: [{ fileId: 'a', visible: 'legendonly' }] };
-    assert.equal(m._repeatedOverlay(hidden).annotations.length, 0);
+    assert.equal(m._repeatedOverlay(hidden).shapes.length, 0);
     assert.equal(m._repeatedAvailability(hidden), 'some');
 
     // Rings on Samples dots: full run length even when the window cuts the run.
@@ -169,7 +172,7 @@ installPlotRepeatedMethods(Manager);
     };
     const overlay = m._repeatedOverlay(plot);
     assert.equal(overlay.state, 'dense');
-    assert.equal(overlay.annotations.length, 0);
+    assert.equal(overlay.hoverMarks.length, 0, 'no individual marks');
     assert.ok(overlay.shapes.length >= 1 && overlay.shapes.every(s => s.type === 'rect'), 'a wash on the strip');
 }
 

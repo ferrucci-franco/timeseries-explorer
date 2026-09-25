@@ -92,7 +92,10 @@ async function state(page, panelId) {
             waiting: !!btn?.classList.contains('repeated-waiting'),
             title: btn?.title,
             pill: pill ? pill.textContent : null,
-            marks: (layout.annotations || []).map(a => ({ x: a.x, text: a.text, hover: a.hovertext })),
+            marks: (layout.shapes || []).filter(sh => sh.type === 'path').map((sh) => ({
+                x: sh.xanchor,
+                hover: (plot._repeatedHoverMarks || []).find(m => m.x === sh.xanchor)?.text || '',
+            })),
             guides: (layout.shapes || []).filter(s => s.type === 'line').length,
             washes: (layout.shapes || []).filter(s => s.type === 'rect' && s.y0 > 0.9).length,
             rings: symbols.filter(s => s === 'circle-open-dot').length,
@@ -135,22 +138,31 @@ try {
     s = await state(page, panelId);
     assert.equal(s.pressed, 'true');
     assert.deepEqual(s.marks.map(m => m.x), [20, 70], 'zoomed out: one mark per burst, at its instant');
-    assert.ok(s.marks.every(m => m.text === '▼' && m.hover), 'marks are triangles with a hover');
+    assert.ok(s.marks.every(m => m.hover), 'every mark has a hover text');
     assert.ok(s.marks[1].hover.includes('4'), `the t = 70 mark says 4 rows (${s.marks[1].hover})`);
     assert.equal(s.waiting, false);
     assert.equal(s.pill, null, 'marks drawn: no pill');
     if (shots) await page.screenshot({ path: `${shots}/repeated-zoomed-out.png` });
 
-    // Hover over a mark shows its label.
+    // Hover over a mark shows its label (our own: shapes have no Plotly hover).
     const box = await page.evaluate((id) => {
-        const el = window.app.plotManager.plots.get(id).div.querySelector('.annotation');
-        const r = el.getBoundingClientRect();
-        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        const div = window.app.plotManager.plots.get(id).div;
+        const layout = div._fullLayout;
+        const xa = layout.xaxis;
+        const r = div.getBoundingClientRect();
+        return { x: r.left + xa._offset + xa.l2p(xa.d2l(20)), y: r.top + layout._size.t + 4 };
     }, panelId);
     await page.mouse.move(box.x, box.y);
-    await page.waitForTimeout(300);
-    const hoverText = await page.evaluate((id) => window.app.plotManager.plots.get(id).div.querySelector('.hoverlayer')?.textContent || '', panelId);
+    await page.waitForTimeout(200);
+    const hoverText = await page.evaluate(() => {
+        const label = document.querySelector('.repeated-hover-label');
+        return label && label.style.display !== 'none' ? label.textContent : '';
+    });
     assert.ok(hoverText.includes('3'), `hovering a mark shows its label (${hoverText})`);
+    await page.mouse.move(box.x, box.y + 200);
+    await page.waitForTimeout(100);
+    const hidden = await page.evaluate(() => document.querySelector('.repeated-hover-label')?.style.display);
+    assert.equal(hidden, 'none', 'and hides it away from the strip');
 
     await zoom(page, panelId, [19.7, 20.3]);
     s = await state(page, panelId);

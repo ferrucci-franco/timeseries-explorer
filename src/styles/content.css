@@ -1787,6 +1787,23 @@
     box-shadow: none;
 }
 
+/* Hover label of a Repeated mark (shapes have no Plotly hover of their own). */
+.repeated-hover-label {
+    position: fixed;
+    z-index: 1000;
+    display: none;
+    padding: 4px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1.35;
+    pointer-events: none;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
 .view-btn {
     font-size: 0.65rem;
     padding: 2px 5px;

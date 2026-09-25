@@ -158,7 +158,7 @@ proto._scheduleLiveRelayoutingRefresh = function(panelId, plot, range, options =
             this._scheduleRelayoutingRefresh(panelId, plot, latestRange);
             return;
         }
-        this._refreshTimeseriesVisuals(panelId, plot, latestRange);
+        this._refreshTimeseriesVisuals(panelId, plot, latestRange, { live: true });
     });
 };
 
@@ -190,7 +190,7 @@ proto._scheduleLivePanRefresh = function(panelId, plot, range) {
         const latest = plot._livePanRange;
         plot._livePanRange = null;
         if (!latest || this.plots.get(panelId) !== plot || !plot.div) return;
-        this._refreshTimeseriesVisuals(panelId, plot, latest);
+        this._refreshTimeseriesVisuals(panelId, plot, latest, { live: true });
     });
 };
 
@@ -300,7 +300,10 @@ proto._xAxisUpdateFromRelayout = function(eventData, plot = null) {
     return null;
 };
 
-proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelId), visibleRange = null) {
+// `options.live`: a frame of a pan or zoom still in progress. Work that only
+// needs doing once the view settles (the Repeated marks, which ride along with
+// the axis by themselves) is left for the settling call.
+proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelId), visibleRange = null, options = {}) {
     if (!plot?.div || !['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'].includes(plot.mode)) return;
     const range = visibleRange
         || plot.div._fullLayout?.xaxis?.range
@@ -313,7 +316,7 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     // in-memory overview.
     const hasLazy = plot.traces.some(t => this.files.get(t.fileId)?.data?._duckdb);
     if (hasLazy && range) {
-        this._refreshTimeseriesVisualsLazy(panelId, plot, range);
+        this._refreshTimeseriesVisualsLazy(panelId, plot, range, options);
         return;
     }
 
@@ -394,17 +397,16 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     // _missingDataBandShapes sets plot._missingTooDense for the current view;
     // surface the "zoom in" hint accordingly.
     // Repeated marks share layout.shapes with the bands, so both go in one
-    // relayout, and the marks themselves are annotations.
-    const repeatedUpdate = plot.div ? this._repeatedOverlayUpdate(plot) : null;
+    // relayout. The marks are shapes too (see repeated-methods.js).
+    const repeatedUpdate = plot.div && !options.live ? this._repeatedOverlayUpdate(plot) : null;
     if ((showMissing || repeatedUpdate) && plot.div) {
-        const update = {
+        Plotly.relayout(plot.div, {
             shapes: [
                 ...(showMissing ? this._missingDataBandShapes(plot) : []),
-                ...(repeatedUpdate?.shapes || []),
+                // Mid-pan, the marks already drawn stay: they follow the axis.
+                ...(repeatedUpdate?.shapes || (plot.showRepeated ? (plot._repeatedShapes || []) : [])),
             ],
-        };
-        if (repeatedUpdate) update.annotations = repeatedUpdate.annotations;
-        Plotly.relayout(plot.div, update);
+        });
     }
     if (showMissing && plot.div) {
         // A file with no nominal step marks no sampling gaps at all, so "zoom in
@@ -412,7 +414,7 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
         // absence instead — it outranks the density hint.
         this._setMissingDensityNotice(plot, this._missingStepNotice(missInfo.stepIssues) || missDense);
     }
-    if (plot.mode === 'timeseries') this._refreshRepeatedNotice(plot);
+    if (plot.mode === 'timeseries' && !options.live) this._refreshRepeatedNotice(plot);
     this._refreshElapsedDateTimeAxisTicks(plot, range);
 };
 
@@ -433,7 +435,7 @@ proto._refreshMissingOverlayForVisibility = function(panelId, plot) {
     this._refreshTimeseriesVisuals(panelId, plot);
 };
 
-proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
+proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {}) {
     if (!this._zoomTokens) this._zoomTokens = new Map();
     const token = (this._zoomTokens.get(panelId) || 0) + 1;
     this._zoomTokens.set(panelId, token);
@@ -560,17 +562,16 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range) {
     else this._setLazyDetailLoading(plot, false);
     if (plot.mode === 'timeseries') {
         this._refreshSamplesNotice(plot);
-        const repeatedUpdate = this._repeatedOverlayUpdate(plot);
+        const repeatedUpdate = options.live ? null : this._repeatedOverlayUpdate(plot);
         if (repeatedUpdate && plot.div) {
             Plotly.relayout(plot.div, {
-                annotations: repeatedUpdate.annotations,
                 shapes: [
                     ...(plot.showMissingData ? this._lazyMissingShapes(plot) : []),
                     ...repeatedUpdate.shapes,
                 ],
             });
         }
-        this._refreshRepeatedNotice(plot);
+        if (!options.live) this._refreshRepeatedNotice(plot);
     }
     this._refreshElapsedDateTimeAxisTicks(plot, range);
     if (lazyQueryCount === 0) {
@@ -5308,13 +5309,18 @@ proto._setRepeatedNotice = function(plot, state) {
 // on their own schedule). Returns the relayout fragment, or null when off.
 proto._repeatedOverlayUpdate = function(plot) {
     if (plot?.mode !== 'timeseries' || !plot.showRepeated) {
-        if (plot) plot._repeatedShapes = [];
+        if (plot) {
+            plot._repeatedShapes = [];
+            plot._repeatedHoverMarks = [];
+        }
         return null;
     }
     const overlay = this._repeatedOverlay(plot);
     plot._repeatedShapes = overlay.shapes;
+    plot._repeatedHoverMarks = overlay.hoverMarks;
     plot._repeatedWaiting = overlay.state;
-    return { annotations: overlay.annotations, shapes: overlay.shapes };
+    this._ensureRepeatedHover(plot);
+    return { shapes: overlay.shapes };
 };
 
 proto._refreshRepeatedNotice = function(plot) {

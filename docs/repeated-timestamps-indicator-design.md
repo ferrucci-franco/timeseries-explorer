@@ -101,20 +101,29 @@ cover the data.
 
 ### Marks: rendering
 
-- **Changed from the draft:** marks are layout **annotations** (`▼`, anchored to the top
-  of the plot area, `yref: 'paper'`) with `hovertext`, not a helper trace. Annotations
-  carry a hover just as well, and a helper trace would have had to be skipped by every
-  piece of code that maps Plotly trace indexes back to `plot.traces` (hover, cursors,
-  autoscale, export). The panel owns `layout.annotations` for this; nothing else in the
-  time-series panel uses them.
+- **Changed twice from the draft.** The draft had a helper trace; it would have had to
+  be skipped by every piece of code that maps Plotly trace indexes back to
+  `plot.traces` (hover, cursors, autoscale, export). The first build used layout
+  **annotations** (`▼` with `hovertext`) instead — but redrawing ~120 of them cost
+  ~230 ms per frame and made panning crawl. Marks are now small **path shapes**: a
+  triangle sized in pixels (`xsizemode`/`ysizemode: 'pixel'`) anchored at its instant
+  (`xanchor`) and hanging from the top edge (`yref: 'paper'`, `yanchor: 1`).
+- Their hover is a small label of our own (`_ensureRepeatedHover`, `.repeated-hover-label`):
+  Plotly gives shapes none. It follows the pointer along the top strip and names the
+  nearest mark within 7 px.
+- **Pan and zoom.** Being anchored in data coordinates, marks, guides and wash follow the
+  axis by themselves, so they are recomputed only when the view settles, not on every
+  frame of a drag (`_refreshTimeseriesVisuals(..., { live: true })`). Measured on a
+  60 000-row logger with ten rows a second, 2 min in view: 229 → 43 ms at settle,
+  229 → 31 ms per drag frame (16 ms with the toggle off). With Samples also on, the
+  ~1 200 dots and rings cost ~65 ms per drag frame; that is SVG drawing one element per
+  point (Samples alone: ~43 ms).
 - Colour: magenta (`_repeatedColor`), apart from the amber of Missing/NaN. With several
   files on the panel, a mark from one file takes that file's trace colour and its hover
   names the file(s).
-- Guide lines and the dense wash are layout shapes. They share `layout.shapes` with the
-  Missing/NaN bands, so every place that relayouts the bands appends
+- Guide lines and the dense wash are layout shapes as well. All share `layout.shapes`
+  with the Missing/NaN bands, so every place that relayouts the bands appends
   `plot._repeatedShapes`, and the refresh sends both in one relayout.
-- Updated wherever the panel's visual data is refreshed (`_refreshTimeseriesVisuals`,
-  eager and lazy paths).
 
 ## Data
 
