@@ -3,6 +3,7 @@ import { getCalendarDateTickFormat } from '../plotly-locale.js';
 import { visualPairForRange } from '../../compute/kernels/resample.js';
 import { hoverNumberFormat } from '../../utils/hover-precision.js';
 import { distinguishingParameterNames, runParameterLabel } from '../../utils/run-parameters.js';
+import { countDistinctPositions, sampleMarkersVisible, SAMPLE_POSITION_SCAN_LIMIT } from '../../utils/sample-markers.js';
 
 const DEFAULT_GENERATED_TIME_ORIGIN = '2026-01-01T00:00:00';
 
@@ -1438,13 +1439,35 @@ proto._buildSparseVisualData = function(timeData, values) {
 // linear traces beside it have always been given. The lazy DuckDB path has
 // decimated stepped traces this way all along; this was the eager path's own
 // exception.
+//
+// The result also carries `sampleWindow: { exact, visibleCount, visiblePositions }`
+// for the Samples toggle: `exact` is read off what this function actually
+// produced (the window came back at full length, so nothing was decimated),
+// `visibleCount` is how many samples lie inside the visible range and
+// `visiblePositions` how many distinct instants they sit at. Dots are drawn
+// only on an exact window — the same one that makes stairs exact — and their
+// room on screen is judged by positions (see countDistinctPositions).
 proto._buildTimeseriesVisualData = function(timeData, values, visibleRange = null) {
     const n = Math.min(timeData?.length || 0, values?.length || 0);
-    if (n <= 0) return { x: timeData || [], y: values || [] };
+    const withWindow = (visual, windowLength, visibleStart, visibleEnd) => {
+        const exact = Math.max(visual.x?.length || 0, visual.y?.length || 0) === windowLength;
+        const visibleCount = Math.max(0, visibleEnd - visibleStart);
+        // Positions are only worth counting where dots could be drawn, and the
+        // scan is bounded: an exact window is at most the visual budget, except
+        // with downsampling off, where the row count stands in past the limit.
+        const visiblePositions = exact && visibleCount <= SAMPLE_POSITION_SCAN_LIMIT
+            ? countDistinctPositions(timeData, visibleStart, visibleEnd)
+            : visibleCount;
+        visual.sampleWindow = { exact, visibleCount, visiblePositions };
+        return visual;
+    };
+    if (n <= 0) return withWindow({ x: timeData || [], y: values || [] }, 0, 0, 0);
     const target = this.timeseriesVisualMaxPoints;
-    if (target == null) return { x: timeData, y: values };
     if (!visibleRange || visibleRange[0] == null || visibleRange[1] == null) {
-        return this._downsampleTimeseries(timeData, values, target);
+        const visual = target == null
+            ? { x: timeData, y: values }
+            : this._downsampleTimeseries(timeData, values, target);
+        return withWindow({ x: visual.x, y: visual.y }, n, 0, n);
     }
 
     let [minX, maxX] = visibleRange.map(value => {
@@ -1461,18 +1484,24 @@ proto._buildTimeseriesVisualData = function(timeData, values, visibleRange = nul
         const ms = Date.parse(text);
         return Number.isFinite(ms) ? ms : NaN;
     });
-    if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return this._downsampleTimeseries(timeData, values, target);
+    if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
+        const visual = target == null
+            ? { x: timeData, y: values }
+            : this._downsampleTimeseries(timeData, values, target);
+        return withWindow({ x: visual.x, y: visual.y }, n, 0, n);
+    }
     if (minX > maxX) [minX, maxX] = [maxX, minX];
-    let start = this._lowerBound(timeData, minX);
-    let end = this._upperBound(timeData, maxX);
-    start = Math.max(0, start - 1);
-    end = Math.min(n, end + 1);
-    if (end - start <= 0) return { x: timeData, y: values };
+    const visibleStart = this._lowerBound(timeData, minX);
+    const visibleEnd = Math.max(visibleStart, Math.min(n, this._upperBound(timeData, maxX)));
+    if (target == null) return withWindow({ x: timeData, y: values }, n, visibleStart, visibleEnd);
+    const start = Math.max(0, visibleStart - 1);
+    const end = Math.min(n, visibleEnd + 1);
+    if (end - start <= 0) return withWindow({ x: timeData, y: values }, n, visibleStart, visibleEnd);
 
     // Decimate straight out of the source over [start, end). This used to slice
     // both arrays first, which on a zoomed-in multi-million-point trace copied
     // millions of elements per relayout event just to keep 2000 of them.
-    return visualPairForRange(timeData, values, start, end, target);
+    return withWindow(visualPairForRange(timeData, values, start, end, target), end - start, visibleStart, visibleEnd);
 };
 
 proto._buildPhaseVisualSeries = function(seriesList) {
@@ -1998,6 +2027,11 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
         });
     }
     const visual = this._applyTimeseriesStackZeroPadding(plot, t, baseVisual);
+    const showSampleDots = this._timeseriesSampleMarkersShown(plot, t, baseVisual);
+    // Repeated toggle on top of Samples: rings on the dots that share an instant.
+    const repeatedDecoration = showSampleDots && plot?.showRepeated && this._repeatedSampleDecoration
+        ? this._repeatedSampleDecoration(t, this._repeatedRunLengthsForPoints(timeData, baseVisual.x))
+        : null;
     // WebGL earns its keep when there are a lot of points ON SCREEN, and what
     // reaches Plotly is the decimated trace — ~2,000 points for the visible
     // window, whatever the file holds. Judging by the SOURCE length instead
@@ -2044,18 +2078,68 @@ proto._buildTimeTrace = function(t, visibleRange = null, plot = null, traceIndex
     }
     return {
         x: plotX, y: visual.y,
-        name, type: plot?.timeseriesStacked ? 'scatter' : (useGL ? 'scattergl' : 'scatter'), mode: 'lines',
+        name, type: plot?.timeseriesStacked ? 'scatter' : (useGL ? 'scattergl' : 'scatter'),
+        mode: showSampleDots ? 'lines+markers' : 'lines',
         visible: t.visible ?? true,
         yaxis,
         line,
+        // Carried whenever the Samples toggle is on, dots or not, so the zoom
+        // restyle can switch `mode` alone and every trace has a marker to show.
+        ...(this._timeseriesSamplesEnabled(plot)
+            ? { marker: repeatedDecoration?.marker || this._timeseriesSampleMarker(t) }
+            : {}),
+        ...(repeatedDecoration ? { text: repeatedDecoration.text } : {}),
         ...stackAttrs,
         ...(customdata ? { customdata } : {}),
         // Numeric, pre-Plotly x aligned 1:1 with y — the FFT pane uses it to
         // locate sampling gaps for line breaks, then strips it before Plotly
         // sees the trace. Never emitted in timeseries mode.
         ...(options.attachSourceX ? { __srcX: visual.x } : {}),
-        hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${runSuffix}<extra></extra>`,
+        hovertemplate: `${hoverX}<b>${hoverName}</b>${unitStr} = %{y:.4g}${repeatedDecoration ? '%{text}' : ''}${runSuffix}<extra></extra>`,
     };
+};
+
+// ── Samples toggle (docs/sample-markers-design.md) ──
+// Whether the panel asks for sample dots at all. Stacked panels do not: the
+// drawn y there is cumulative, so a dot would not sit on the sample.
+proto._timeseriesSamplesEnabled = function(plot) {
+    return plot?.mode === 'timeseries' && !!plot.showSamples && !plot.timeseriesStacked;
+};
+
+// Whether trace `t` can ever carry dots. A lazy (DuckDB) file draws from an
+// overview sample or from server-side buckets, neither of which are the file's
+// samples, so it never does — yet. A markers-only preview has its own markers,
+// and a parameter is a constant drawn as two points, not samples.
+proto._timeseriesSampleMarkersEligible = function(plot, t) {
+    if (!this._timeseriesSamplesEnabled(plot) || !t || t.markersOnly) return false;
+    const data = this.files.get(t.fileId)?.data;
+    if (!data || data._duckdb) return false;
+    return data.variables?.[t.varName]?.kind !== 'parameter';
+};
+
+// Decide, and remember, whether `t` shows dots for the window `visual` was
+// built from. The previous answer is kept per trace (a WeakMap, so it never
+// reaches a session file) because the threshold has hysteresis.
+proto._timeseriesSampleMarkersShown = function(plot, t, visual) {
+    if (!this._timeseriesSampleMarkersEligible(plot, t)) {
+        plot?._sampleMarkerState?.delete(t);
+        return false;
+    }
+    if (!plot._sampleMarkerState) plot._sampleMarkerState = new WeakMap();
+    const shown = sampleMarkersVisible({
+        exact: !!visual?.sampleWindow?.exact,
+        visiblePositions: visual?.sampleWindow?.visiblePositions,
+        plotWidthPx: plot.div?._fullLayout?.xaxis?._length,
+        wasShown: plot._sampleMarkerState.get(t) === true,
+        minPxOn: PlotManager.SAMPLE_MARKERS_MIN_PX_ON,
+        minPxOff: PlotManager.SAMPLE_MARKERS_MIN_PX_OFF,
+    });
+    plot._sampleMarkerState.set(t, shown);
+    return shown;
+};
+
+proto._timeseriesSampleMarker = function(t) {
+    return { color: t.color, size: PlotManager.SAMPLE_MARKER_SIZE };
 };
 
 proto._buildTimeLayout = function(plot, options = {}) {

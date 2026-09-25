@@ -1776,6 +1776,34 @@
     box-shadow: inset 0 1px 2px color-mix(in srgb, var(--primary-color) 20%, transparent);
 }
 
+/* Samples is on but nothing on screen can show its dots (zoomed out, or a
+   memory-saving file): still pressed, but waiting. The tooltip says why. */
+.panel-toggle-btn.active.samples-waiting,
+.panel-toggle-btn.active.samples-waiting:hover:not(:disabled),
+.panel-toggle-btn.active.repeated-waiting,
+.panel-toggle-btn.active.repeated-waiting:hover:not(:disabled) {
+    border-style: dashed;
+    background: var(--bg-primary);
+    box-shadow: none;
+}
+
+/* Hover label of a Repeated mark (shapes have no Plotly hover of their own). */
+.repeated-hover-label {
+    position: fixed;
+    z-index: 1000;
+    display: none;
+    padding: 4px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12px;
+    line-height: 1.35;
+    pointer-events: none;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
 .view-btn {
     font-size: 0.65rem;
     padding: 2px 5px;
@@ -3054,6 +3082,23 @@ body.cursor-dragging .plotly-mode-fft-spectrum .nsewdrag,
    below it so the two stack without overlapping. */
 .layout-panel:has(.missing-dense-indicator.active) .lazy-data-detail-indicator.active {
     top: 88px;
+}
+
+/* The Repeated one-off pill likewise takes the slot below the Missing/NaN or
+   Samples pill when either is showing. */
+.layout-panel:has(.missing-dense-indicator.active) .repeated-hint-indicator.active,
+.layout-panel:has(.samples-zoom-indicator.active) .repeated-hint-indicator.active {
+    top: 88px;
+}
+
+/* The Samples pill is its own lifecycle too. It takes the next free slot below
+   whichever of the other two pills are showing. */
+.layout-panel:has(.missing-dense-indicator.active) .samples-zoom-indicator.active,
+.layout-panel:has(.lazy-data-detail-indicator.active) .samples-zoom-indicator.active {
+    top: 88px;
+}
+.layout-panel:has(.missing-dense-indicator.active):has(.lazy-data-detail-indicator.active) .samples-zoom-indicator.active {
+    top: 130px;
 }
 
 @keyframes lazy-detail-spin {

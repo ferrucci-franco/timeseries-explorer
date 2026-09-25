@@ -7,6 +7,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import { installCollapseMethods } from '../src/app/methods/collapse-methods.js';
+import { RESAMPLE_ALL_VARIABLES } from '../src/app/methods/data-tools-methods.js';
 import {
     COLLAPSE_AGGREGATES,
     COLLAPSE_DEFAULT_AGGREGATE,
@@ -77,7 +79,7 @@ const app = readFileSync(new URL('../src/app/viewer-app.js', import.meta.url), '
 assert.match(tools, /const FILE_DATA_TOOLS = new Set\(\['resample', 'xcorr', 'collapse'\]\);/,
     'it makes a file, not a variable: the row count changes');
 assert.match(tools, /const wholeFileTool = tool === 'resample' \|\| tool === 'collapse';/,
-    'and it takes every variable, like the resampler');
+    'and its Variable picker offers "All variables", like the resampler');
 assert.match(tools, /if \(fileTool === 'collapse'\) return this\.commitCollapseTool\(options\);/, 'Create reaches it');
 assert.match(datasets, /if \(recipe\.tool === 'collapse'\) return this\._computeCollapseDataset\(/,
     'so a reload of the source recomputes it from its recipe');
@@ -103,6 +105,115 @@ for (const key of ['dataToolCollapse', 'dataToolCollapseAggregate', 'dataToolCol
     'dataToolCollapseCreated', 'dataToolCollapseNothing', 'dataToolCollapseNoTimeAxis',
     'dataToolCollapseFileSuffix', ...COLLAPSE_AGGREGATES.map(a => `dataToolCollapse${a[0].toUpperCase()}${a.slice(1)}`)]) {
     assert.equal([...translations.matchAll(new RegExp(`\\b${key}:`, 'g'))].length, 4, `${key} in four languages`);
+}
+
+// ── The Variable picker, and where "Create and plot" draws ─────────────────
+// Run the real methods against a small app: the picker used to be shown and
+// then ignored (every variable was written whatever it said), and the plot
+// used to land on a new, empty panel instead of beside the original.
+{
+    const fields = new Map();
+    globalThis.document = { getElementById: id => fields.get(id) || null };
+    const field = (id, value) => fields.set(id, { value });
+
+    class App {
+        constructor() {
+            this.activeFileId = 'src';
+            this.files = new Map([['src', { name: 'logger.csv' }]]);
+            this.plotted = [];
+            this.registered = [];
+            this.messages = [];
+            this.source = {
+                variables: {
+                    time: { kind: 'abscissa', data: [0, 1, 1, 2] },
+                    a: { kind: 'variable', data: [1, 2, 4, 5], description: '' },
+                    b: { kind: 'variable', data: [9, 8, 6, 5], description: '' },
+                    p: { kind: 'parameter', data: [7] },
+                },
+            };
+            this.plotManager = { files: new Map([['src', { data: this.source }]]) };
+            this.parser = { _detectDataType: () => 'real', _isConstantValues: () => false, _buildTree: () => ({}) };
+            this.onScreen = new Set();
+        }
+        _isDataToolLazyData() { return false; }
+        _resampleTimeContext() { return { values: [0, 1, 1, 2], kind: 'numeric', name: 'time' }; }
+        // The resampler's reading of the picker, reproduced: all, or the one named.
+        _resampleTargetNames(_data, selection) {
+            const all = ['a', 'b'];
+            if (selection && selection !== RESAMPLE_ALL_VARIABLES) return all.includes(selection) ? [selection] : [];
+            return all;
+        }
+        _setOutlierMessage(message, kind) { this.messages.push({ kind, text: typeof message === 'function' ? message() : message }); }
+        _registerDerivedDataset(recipe, name, data) {
+            this.registered.push({ recipe, name, data });
+            return { fileId: 'derived', replaced: false };
+        }
+        _exitDerivedDatasetEditing() {}
+        _isDataToolVariablePlotted(fileId, name) { return this.onScreen.has(`${fileId}|${name}`); }
+        _plotDerivedDatasetVariable(fileId, name, options) { this.plotted.push({ fileId, name, options }); }
+        _isInMemoryFile() { return false; }
+        _clearDataToolDraft() {}
+        _syncDataTools() {}
+    }
+    installCollapseMethods(App);
+
+    const run = async (selection, { plot = true, onScreen = [] } = {}) => {
+        const app = new App();
+        onScreen.forEach(key => app.onScreen.add(key));
+        field('outlier-variable', selection);
+        field('outlier-output-name', 'logger collapsed');
+        field('collapse-aggregate', 'mean');
+        const outcome = await app.commitCollapseTool({ plot });
+        return { app, outcome };
+    };
+
+    // One variable picked: only that one is written, and the recipe keeps it.
+    let { app } = await run('a');
+    let written = app.registered[0];
+    assert.deepEqual(Object.keys(written.data.variables).sort(), ['a', 'p', 'time'],
+        'one variable picked: the copy holds it (with the time axis and the parameters), not the whole file');
+    assert.deepEqual(Array.from(written.data.variables.a.data), [1, 3, 5], 'collapsed');
+    assert.equal(written.recipe.sourceName, 'a', 'the recipe remembers the pick, for edit / reload / sessions');
+    assert.equal(app._collapseRecipeDescription(written.recipe), 'a: repeated timestamps → mean');
+
+    // Recomputing from the recipe (a reload of the source) gives the same variables.
+    const again = await app._computeCollapseDataset('src', app.source, written.recipe);
+    assert.deepEqual(again.names, ['a']);
+
+    // "All variables": the whole file, as before.
+    ({ app } = await run(RESAMPLE_ALL_VARIABLES));
+    written = app.registered[0];
+    assert.deepEqual(Object.keys(written.data.variables).sort(), ['a', 'b', 'p', 'time']);
+    assert.equal(written.recipe.sourceName, '', 'all variables keeps the old recipe shape');
+    assert.equal(app._collapseRecipeDescription(written.recipe), 'repeated timestamps → mean');
+
+    // A picked variable that is not there is refused, not silently widened.
+    ({ app } = await run('nope', { plot: false }));
+    assert.equal(app.registered.length, 0);
+    assert.equal(app.messages.at(-1).kind, 'error');
+
+    // The plan the form reads follows the picker too.
+    field('outlier-variable', 'b');
+    assert.deepEqual(new App()._collapsePlan(new App().source).names, ['b']);
+
+    // "Create and plot" draws beside the original, on its panel.
+    ({ app } = await run('b'));
+    assert.deepEqual(app.plotted, [{ fileId: 'derived', name: 'b', options: { alongside: { fileId: 'src', name: 'b' } } }],
+        'the collapsed variable goes where the source variable is drawn');
+    ({ app } = await run(RESAMPLE_ALL_VARIABLES, { onScreen: ['src|b'] }));
+    assert.equal(app.plotted[0].name, 'b', 'of all variables, the one already on screen is plotted');
+    assert.deepEqual(app.plotted[0].options.alongside, { fileId: 'src', name: 'b' });
+    ({ app } = await run('a', { plot: false }));
+    assert.equal(app.plotted.length, 0, 'plain Create draws nothing');
+
+    // Editing puts the pick back in the picker.
+    const edit = new App();
+    field('outlier-variable', '');
+    edit._writeCollapseForm({ sourceName: 'b', params: { aggregate: 'max' } }, 'x');
+    assert.equal(fields.get('outlier-variable').value, 'b');
+    edit._writeCollapseForm({ sourceName: '', params: {} }, 'x');
+    assert.equal(fields.get('outlier-variable').value, RESAMPLE_ALL_VARIABLES, 'an all-variables recipe shows "All"');
+    delete globalThis.document;
 }
 
 console.log('Collapse-repeats checks passed.');

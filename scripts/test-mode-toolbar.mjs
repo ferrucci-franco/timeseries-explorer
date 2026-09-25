@@ -189,6 +189,9 @@ class ToolbarHarness {
     }
 
     _hasContent() { return true; }
+    // Which of the panel's files repeat an instant is the repeated-methods
+    // mixin's business; the toolbar only reads the verdict.
+    _repeatedAvailability(plot) { return plot?._testRepeatedAvailability || 'some'; }
     _is3D(mode) { return mode === 'phase2dt' || mode === 'phase3d'; }
     _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) >= 3; }
     _supportsEqualAspect2D(plot) { return plot?.mode === 'phase2d' || (plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) === 2); }
@@ -214,6 +217,8 @@ vm.runInNewContext([
     methodAssignment('_injectModeButtons'),
     methodAssignment('_toggleTimeseriesAnalysisMode'),
     methodAssignment('_requestModeChange'),
+    methodAssignment('_applySamplesButtonState'),
+    methodAssignment('_applyRepeatedButtonState'),
 ].join('\n'), sandbox);
 
 class TemporalStateHarness {}
@@ -475,6 +480,14 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.ok(y2Btn, `${mode}: Y shares the contextual group`);
     const missingBtn = tools.querySelector('.timeseries-missing-btn');
     assert.ok(missingBtn, `${mode}: Missing-data toggle shares the contextual group`);
+    const repeatedBtn = tools.querySelector('.timeseries-repeated-btn');
+    assert.ok(repeatedBtn, `${mode}: Repeated toggle shares the contextual group`);
+    const samplesBtn = tools.querySelector('.timeseries-samples-btn');
+    assert.ok(samplesBtn, `${mode}: Samples toggle shares the contextual group`);
+    assert.equal(tools.children.indexOf(samplesBtn), tools.children.indexOf(missingBtn) + 1, `${mode}: Samples sits right after Missing/NaN`);
+    assert.equal(samplesBtn.getAttribute('aria-pressed'), 'false', `${mode}: Samples is off by default`);
+    assert.equal(tools.children.indexOf(repeatedBtn), tools.children.indexOf(samplesBtn) + 1, `${mode}: Repeated follows Samples`);
+    assert.equal(repeatedBtn.getAttribute('aria-pressed'), 'false', `${mode}: Repeated is off by default`);
 
     const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
     assert.deepEqual(
@@ -482,7 +495,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
         ['fft', 'heatmap', 'histogram', 'integral', 'temporal-profile'],
         `${mode}: all time-series analyses share the contextual group beside Stack/Y`,
     );
-    for (const button of [stackBtn, y2Btn, missingBtn, ...analysisButtons]) {
+    for (const button of [stackBtn, y2Btn, missingBtn, samplesBtn, repeatedBtn, ...analysisButtons]) {
         assert.ok(
             button.classList.contains('panel-toggle-btn'),
             `${mode}: ${button.textContent} uses the common pressed/unpressed button treatment`,
@@ -515,12 +528,62 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
         timeseriesStacked: true,
         timeseriesY2Enabled: true,
         showMissingData: true,
+        showSamples: true,
+        showRepeated: true,
     });
-    for (const selector of ['.timeseries-stack-btn', '.timeseries-y2-btn', '.timeseries-missing-btn']) {
+    for (const selector of ['.timeseries-stack-btn', '.timeseries-y2-btn', '.timeseries-missing-btn', '.timeseries-samples-btn', '.timeseries-repeated-btn']) {
         const button = toolbar.querySelector(selector);
         assert.ok(button.classList.contains('active'), `${selector}: enabled option renders pressed`);
         assert.equal(button.getAttribute('aria-pressed'), 'true', `${selector}: enabled option reports pressed`);
     }
+}
+
+// Repeated: disabled when no file on the panel repeats an instant (the button
+// answers "are there any?"), waiting when only memory-saving files could hold them.
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { _testRepeatedAvailability: 'none' });
+    const button = toolbar.querySelector('.timeseries-repeated-btn');
+    assert.equal(button.disabled, true, 'no repeats anywhere: Repeated is disabled');
+    assert.equal(button.title, 'timeseriesRepeatedNone', 'and says why');
+}
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showRepeated: true, _testRepeatedAvailability: 'lazy' });
+    const button = toolbar.querySelector('.timeseries-repeated-btn');
+    assert.equal(button.disabled, false, 'a memory-saving file does not disable it');
+    assert.ok(button.classList.contains('repeated-waiting'), 'but it waits');
+    assert.equal(button.title, 'timeseriesRepeatedLazy');
+}
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showRepeated: true, _repeatedWaiting: null });
+    const button = toolbar.querySelector('.timeseries-repeated-btn');
+    assert.equal(button.classList.contains('repeated-waiting'), false, 'marks on screen: not waiting');
+    assert.equal(button.title, 'timeseriesRepeatedToggle');
+}
+
+// Samples switched on with nothing on screen to dot: the button stays pressed
+// but reads as waiting, and its tooltip says why — no pill over the plot.
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: 'zoom' });
+    const button = toolbar.querySelector('.timeseries-samples-btn');
+    assert.ok(button.classList.contains('active'), 'waiting Samples is still pressed');
+    assert.ok(button.classList.contains('samples-waiting'), 'and marked as waiting');
+    assert.equal(button.title, 'timeseriesSamplesZoomIn', 'its tooltip asks to zoom in');
+}
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: 'lazy' });
+    assert.equal(toolbar.querySelector('.timeseries-samples-btn').title, 'timeseriesSamplesLazy',
+        'a memory-saving file gets its own reason');
+}
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: null });
+    const button = toolbar.querySelector('.timeseries-samples-btn');
+    assert.equal(button.classList.contains('samples-waiting'), false, 'dots on screen: not waiting');
+    assert.equal(button.title, 'timeseriesSamplesToggle');
+}
+{
+    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: false, _samplesWaiting: 'zoom' });
+    assert.equal(toolbar.querySelector('.timeseries-samples-btn').classList.contains('samples-waiting'), false,
+        'switched off: never waiting, whatever was left behind');
 }
 
 {
