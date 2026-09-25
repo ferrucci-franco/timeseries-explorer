@@ -22,6 +22,10 @@ envelope point, and only when there is room on screen to tell dots apart.
 
 ## UI
 
+> Since the Marks menu ([marks-menu-nan-gaps-design.md](marks-menu-nan-gaps-design.md)),
+> Samples is an item of the **Marks** dropdown rather than a toolbar button; its states
+> (waiting, disabled while stacked) carry over to the item.
+
 - A toggle button **Samples** in the time-series panel toolbar, next to **Missing/NaN**
   (`timeseries-missing-btn` in `src/plots/methods/interaction-methods.js`).
   - Labels: EN *Samples*, ES *Muestras*, FR *Échantillons* (other locales follow the

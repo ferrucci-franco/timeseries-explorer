@@ -218,6 +218,7 @@ proto._createSessionSnapshot = function(options = {}) {
             ? this._serializeDataToolDefinitions(fileId)
             : [];
         const invertedVariables = [...(this.plotManager.files.get(fileId)?.invertedVariables || [])];
+        const gapSettings = this.plotManager.files.get(fileId)?.gapSettings;
 
         files.push({
             id: fileId,
@@ -237,6 +238,7 @@ proto._createSessionSnapshot = function(options = {}) {
             derived,
             dataTools,
             invertedVariables,
+            gapSettings: gapSettings ? this._cloneSerializable(gapSettings) : null,
             transformPanelExpanded: !!this._expandedFileTransforms?.has(fileId),
             archivePath,
             derivedDatasets: (this._derivedDatasetsOf?.(fileId) || [])
@@ -321,7 +323,8 @@ proto._capturePlotSessions = function() {
             animPlaying: !!plot.animPlaying,
             timeseriesStacked: !!plot.timeseriesStacked,
             timeseriesY2Enabled: !!plot.timeseriesY2Enabled,
-            showMissingData: !!plot.showMissingData,
+            showNaN: !!plot.showNaN,
+            showGaps: !!plot.showGaps,
             showSamples: !!plot.showSamples,
             showRepeated: !!plot.showRepeated,
             modeViews: this._cloneSerializable(plot._modeViews || {}),
@@ -772,6 +775,17 @@ proto._applySessionFileMetadata = async function(session, fileMap, options = {})
         this.plotManager.setFileTransform(fileId, entry.transform);
         const plotEntry = this.plotManager.files.get(fileId);
         if (plotEntry) plotEntry._transformCache = null;
+        if (plotEntry && meta.gapSettings) {
+            // Sanitized again when read (PlotManager._gapSettings).
+            const dt = Number(meta.gapSettings.dt);
+            const factor = Number(meta.gapSettings.factor);
+            const unit = Number(meta.gapSettings.unit);
+            plotEntry.gapSettings = {
+                dt: Number.isFinite(dt) && dt > 0 ? dt : null,
+                factor: Number.isFinite(factor) && factor > 1 ? factor : 1.5,
+                ...(Number.isFinite(unit) && unit >= 0 ? { unit } : {}),
+            };
+        }
         if (meta.csvProfile?.profileSource !== 'user') continue;
 
         const currentHash = entry.contentHash || '';
@@ -1007,7 +1021,10 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.autoPlayOnRender = !!saved.animPlaying;
         plot.timeseriesStacked = !!saved.timeseriesStacked && !saved.timeseriesY2Enabled;
         plot.timeseriesY2Enabled = !!saved.timeseriesY2Enabled;
-        plot.showMissingData = !!saved.showMissingData;
+        // Sessions saved before NaN/Inf and Gaps were split carry the single
+        // Missing/NaN flag: it meant both.
+        plot.showNaN = !!(saved.showNaN ?? saved.showMissingData);
+        plot.showGaps = !!(saved.showGaps ?? saved.showMissingData);
         plot.showSamples = !!saved.showSamples;
         plot.showRepeated = !!saved.showRepeated;
         plot._modeViews = this._cloneSerializable(saved.modeViews || {});

@@ -6,6 +6,7 @@ import { expandedAxisRangeForExtent, installPlotDataMethods } from './methods/da
 import { installPlotStateMethods } from './methods/state-methods.js';
 import { installPlotInteractionMethods } from './methods/interaction-methods.js';
 import { installPlotRepeatedMethods } from './methods/repeated-methods.js';
+import { installPlotMarksMethods } from './methods/marks-methods.js';
 import { installPlotFftMethods } from './methods/fft-methods.js';
 import { installPlotHistogramMethods } from './methods/histogram-methods.js';
 import { installPlotCorrelationMethods } from './methods/correlation-methods.js';
@@ -886,7 +887,8 @@ class PlotManager {
         plot.equalAspect2D = false;
         plot.timeseriesStacked = false;
         plot.timeseriesY2Enabled = false;
-        plot.showMissingData = false;
+        plot.showNaN = false;
+        plot.showGaps = false;
         plot.showSamples = false;
         plot.showRepeated = false;
         plot.traces.forEach(trace => { trace.axis = 'y'; });
@@ -1687,11 +1689,11 @@ class PlotManager {
             this._installEagerTimeseriesAutoscaleGuards(panelId, plot, div);
         }
 
-        // Missing/NaN toggling rebuilds the timeseries so line breaks can be
-        // added safely. Show its lazy-search pill on the first empty frame,
+        // NaN/Inf and Gaps toggling rebuilds the timeseries so line breaks can
+        // be added safely. Show their lazy-search pill on the first empty frame,
         // before Plotly initialization and before either DuckDB query starts.
         const initialLazyMissingSearch = plot.mode === 'timeseries'
-            && plot.showMissingData
+            && (plot.showNaN || plot.showGaps)
             && plot.traces.some(trace => !!this.files.get(trace.fileId)?.data?._duckdb?.viewMode);
         if (initialLazyMissingSearch) this._setMissingDensityNotice?.(plot, 'loading');
 
@@ -2442,7 +2444,8 @@ class PlotManager {
             existing.markerTraceIdx = null;
             existing.timeseriesStacked = false;
             existing.timeseriesY2Enabled = false;
-            existing.showMissingData = false;
+            existing.showNaN = false;
+            existing.showGaps = false;
             existing.showSamples = false;
             existing.showRepeated = false;
             existing.fft = this._defaultFftState?.() || existing.fft;
@@ -2538,42 +2541,8 @@ class PlotManager {
             cursorBtn.disabled = !enabled;
             cursorBtn.classList.toggle('active', !!this._anyCursorEnabled?.(plot));
         }
-        const stackBtn = panelEl.querySelector('.timeseries-stack-btn');
-        if (stackBtn) {
-            const enabled = has && plot?.mode === 'timeseries';
-            stackBtn.disabled = !enabled;
-            stackBtn.classList.toggle('active', !!plot?.timeseriesStacked);
-            stackBtn.setAttribute('aria-pressed', plot?.timeseriesStacked ? 'true' : 'false');
-        }
-        const y2Btn = panelEl.querySelector('.timeseries-y2-btn');
-        if (y2Btn) {
-            const enabled = has && plot?.mode === 'timeseries';
-            y2Btn.disabled = !enabled;
-            y2Btn.classList.toggle('active', !!plot?.timeseriesY2Enabled);
-            y2Btn.setAttribute('aria-pressed', plot?.timeseriesY2Enabled ? 'true' : 'false');
-        }
-        const missingBtn = panelEl.querySelector('.timeseries-missing-btn');
-        if (missingBtn) {
-            const enabled = has && plot?.mode === 'timeseries';
-            missingBtn.disabled = !enabled;
-            missingBtn.classList.toggle('active', !!plot?.showMissingData);
-            missingBtn.setAttribute('aria-pressed', plot?.showMissingData ? 'true' : 'false');
-        }
-        const samplesBtn = panelEl.querySelector('.timeseries-samples-btn');
-        if (samplesBtn) {
-            // Stacked panels draw cumulative y, so a dot would not be the sample.
-            const enabled = has && plot?.mode === 'timeseries' && !plot?.timeseriesStacked;
-            samplesBtn.disabled = !enabled;
-            samplesBtn.classList.toggle('active', !!plot?.showSamples);
-            samplesBtn.setAttribute('aria-pressed', plot?.showSamples ? 'true' : 'false');
-            this._applySamplesButtonState?.(plot, samplesBtn);
-        }
-        const repeatedBtn = panelEl.querySelector('.timeseries-repeated-btn');
-        if (repeatedBtn) {
-            repeatedBtn.classList.toggle('active', !!plot?.showRepeated);
-            repeatedBtn.setAttribute('aria-pressed', plot?.showRepeated ? 'true' : 'false');
-            this._applyRepeatedButtonState?.(plot, repeatedBtn, has && plot?.mode === 'timeseries');
-        }
+        // Stack, Y2, NaN/Inf, Gaps, Repeated, Samples: the Marks dropdown.
+        this._syncMarksControls?.(panelId);
         panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
             const active = btn.dataset.mode === plot?.mode;
             btn.classList.toggle('active', active);
@@ -3885,7 +3854,8 @@ class PlotManager {
             markerTraceIdx: null,                          // index of the hover-marker trace in plot.div.data
             timeseriesStacked: false,
             timeseriesY2Enabled: false,
-            showMissingData: false,
+            showNaN: false,
+            showGaps: false,
             showSamples: false,
             showRepeated: false,
             equalAspect2D: false,
@@ -4497,6 +4467,7 @@ installPlotDataMethods(PlotManager);
 installPlotStateMethods(PlotManager);
 installPlotInteractionMethods(PlotManager);
 installPlotRepeatedMethods(PlotManager);
+installPlotMarksMethods(PlotManager);
 installPlotFftMethods(PlotManager);
 installPlotHistogramMethods(PlotManager);
 installPlotCorrelationMethods(PlotManager);

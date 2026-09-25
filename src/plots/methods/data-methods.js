@@ -1692,12 +1692,14 @@ proto._buildPlotData = function(plot) {
         case 'phase3d':    return { traces: this._buildPhase3DTraces(plot),  layout: this._buildPhase3DLayout(plot, false) };
         case 'state-anim': return { traces: this._buildStateAnimTraces(plot), layout: this._buildStateAnimLayout(plot) };
         default: {
-            const showMissing = plot.mode === 'timeseries' && plot.showMissingData;
-            const missInfo = showMissing ? this._missingDataInfo(plot) : null;
+            // A time-series trace breaks across its own NaN runs (always) and its
+            // file's gaps (while Gaps is on); see _traceBreakIntervals.
+            const tsMode = plot.mode === 'timeseries';
             const traces = plot.traces
                 .map((t, idx) => {
-                    const built = this._buildTimeTrace(t, null, plot, idx, showMissing ? { attachSourceX: true } : {});
-                    if (built && showMissing) this._applyLineBreaks(built, missInfo.traceIntervals.get(this._missTraceKey(t)));
+                    const breaks = tsMode ? this._traceBreakIntervals(plot, t) : null;
+                    const built = this._buildTimeTrace(t, null, plot, idx, breaks ? { attachSourceX: true } : {});
+                    if (built && breaks) this._applyLineBreaks(built, breaks);
                     return built;
                 })
                 .filter(Boolean);
@@ -2232,10 +2234,13 @@ proto._buildTimeLayout = function(plot, options = {}) {
             title: y2Title ? { text: y2Title, font: { size: 10 } } : { text: '' },
         };
     }
-    // Opt-in "show missing data" bands (timeseries only; the FFT/histogram/
-    // heatmap panes that also call this builder set their own shapes afterward).
-    if (plot.mode === 'timeseries' && plot.showMissingData) {
-        layout.shapes = this._missingDataBandShapes(plot);
+    // Gap bands (timeseries only; the FFT/histogram/heatmap panes that also
+    // call this builder set their own shapes afterward). The NaN/Inf strip and
+    // the Repeated bars need the laid-out axis, so the refresh that follows the
+    // first draw adds them.
+    if (plot.mode === 'timeseries' && plot.showGaps) {
+        const { items, overflow } = this._gapBandItemsForView(plot, null);
+        if (!overflow) layout.shapes = this._adaptiveGapBandShapes(plot, items);
     }
     return layout;
 };

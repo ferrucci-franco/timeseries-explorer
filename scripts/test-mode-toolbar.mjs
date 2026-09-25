@@ -39,6 +39,21 @@ const indexHtml = readFileSync(
     'utf8',
 );
 
+const marksMethodsSource = readFileSync(
+    new URL('../src/plots/methods/marks-methods.js', import.meta.url),
+    'utf8',
+);
+
+// marks-methods.js defines its methods inside an installer function, indented
+// one level; a method runs until the next one.
+const marksMethodAssignment = (name) => {
+    const marker = `    proto.${name} = function`;
+    const start = marksMethodsSource.indexOf(marker);
+    assert.ok(start >= 0, `${name} marks method is present`);
+    const next = marksMethodsSource.indexOf('\n    proto.', start + marker.length);
+    return marksMethodsSource.slice(start, next >= 0 ? next : marksMethodsSource.length);
+};
+
 const methodAssignment = (name) => {
     const marker = `proto.${name} = function`;
     const start = interactionSource.indexOf(marker);
@@ -135,6 +150,15 @@ class FakeElement {
         return this.attributes.get(name) ?? null;
     }
 
+    removeAttribute(name) {
+        this.attributes.delete(name);
+    }
+
+    replaceChildren(...children) {
+        for (const child of [...this.children]) child.remove();
+        children.forEach(child => this.appendChild(child));
+    }
+
     addEventListener(type, handler) {
         const handlers = this.listeners.get(type) || [];
         handlers.push(handler);
@@ -217,9 +241,22 @@ vm.runInNewContext([
     methodAssignment('_injectModeButtons'),
     methodAssignment('_toggleTimeseriesAnalysisMode'),
     methodAssignment('_requestModeChange'),
-    methodAssignment('_applySamplesButtonState'),
-    methodAssignment('_applyRepeatedButtonState'),
+    marksMethodAssignment('_createMarksButton'),
+    marksMethodAssignment('_applyMarksButtonState'),
+    marksMethodAssignment('_marksActiveCount'),
+    marksMethodAssignment('_marksMenuModel'),
+    marksMethodAssignment('_renderMarksMenu'),
+    marksMethodAssignment('_panelLineShapeState'),
 ].join('\n'), sandbox);
+
+// The Marks menu of a rendered toolbar, rendered into a detached element the
+// way _openMarksMenu does it (minus positioning, which needs a real layout).
+const renderMarksMenu = (manager) => {
+    const menu = new FakeElement('div');
+    manager._renderMarksMenu('panel', menu);
+    return menu;
+};
+const marksItem = (menu, key) => menu.querySelector(`.marks-item-${key}`);
 
 class TemporalStateHarness {}
 
@@ -451,7 +488,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     const tools = toolbar.querySelector('.timeseries-tools-group');
     assert.ok(tools, `${mode}: time-series family exposes its contextual options group`);
     const autoscaleBtn = tools.querySelector('.panel-autoscale-btn');
-    const stackBtn = tools.querySelector('.timeseries-stack-btn');
+    const marksBtn = tools.querySelector('.timeseries-marks-btn');
     assert.ok(autoscaleBtn, `${mode}: Autoscale shares the contextual group`);
     assert.equal(toolbar.querySelectorAll('.panel-autoscale-btn').length, 1, `${mode}: toolbar has one Autoscale action`);
     assert.equal(tools.children[0], autoscaleBtn, `${mode}: Autoscale is the first contextual action`);
@@ -463,39 +500,35 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     if (mode === 'heatmap') {
         assert.equal(axisFitBtns.length, 1, `${mode}: heatmap gets Fit X only (fixed categorical Y)`);
         assert.equal(tools.children[1], axisFitBtns[0], `${mode}: Fit X follows Autoscale`);
-        assert.equal(tools.children[2], stackBtn, `${mode}: Stack follows the single per-axis fit`);
+        assert.equal(tools.children[2], marksBtn, `${mode}: Marks follows the single per-axis fit`);
     } else {
         assert.equal(axisFitBtns.length, 2, `${mode}: Fit X and Fit Y sit next to Autoscale`);
         assert.equal(tools.children[1], axisFitBtns[0], `${mode}: Fit X follows Autoscale`);
         assert.equal(tools.children[2], axisFitBtns[1], `${mode}: Fit Y follows Fit X`);
-        assert.equal(tools.children[3], stackBtn, `${mode}: Stack follows the per-axis fits`);
+        assert.equal(tools.children[3], marksBtn, `${mode}: Marks follows the per-axis fits`);
     }
     assert.equal(autoscaleBtn.textContent, globalAutoscaleIcon, `${mode}: contextual Autoscale reuses the global icon`);
     autoscaleBtn.click();
     assert.equal(manager.autoscaleCalls.length, 1, `${mode}: contextual Autoscale triggers one autoscale`);
     assert.equal(manager.autoscaleCalls[0].panelId, 'panel', `${mode}: contextual Autoscale targets its panel`);
     assert.equal(manager.autoscaleCalls[0].plot, manager.plot, `${mode}: contextual Autoscale passes the current plot`);
-    assert.ok(stackBtn, `${mode}: Stack shares the contextual group`);
-    const y2Btn = tools.querySelector('.timeseries-y2-btn');
-    assert.ok(y2Btn, `${mode}: Y shares the contextual group`);
-    const missingBtn = tools.querySelector('.timeseries-missing-btn');
-    assert.ok(missingBtn, `${mode}: Missing-data toggle shares the contextual group`);
-    const repeatedBtn = tools.querySelector('.timeseries-repeated-btn');
-    assert.ok(repeatedBtn, `${mode}: Repeated toggle shares the contextual group`);
-    const samplesBtn = tools.querySelector('.timeseries-samples-btn');
-    assert.ok(samplesBtn, `${mode}: Samples toggle shares the contextual group`);
-    assert.equal(tools.children.indexOf(samplesBtn), tools.children.indexOf(missingBtn) + 1, `${mode}: Samples sits right after Missing/NaN`);
-    assert.equal(samplesBtn.getAttribute('aria-pressed'), 'false', `${mode}: Samples is off by default`);
-    assert.equal(tools.children.indexOf(repeatedBtn), tools.children.indexOf(samplesBtn) + 1, `${mode}: Repeated follows Samples`);
-    assert.equal(repeatedBtn.getAttribute('aria-pressed'), 'false', `${mode}: Repeated is off by default`);
+    // Stack, Y2, NaN/Inf, Gaps, Samples and Repeated moved into the Marks menu.
+    assert.ok(marksBtn, `${mode}: the Marks dropdown shares the contextual group`);
+    for (const gone of ['.timeseries-stack-btn', '.timeseries-y2-btn', '.timeseries-missing-btn', '.timeseries-samples-btn', '.timeseries-repeated-btn']) {
+        assert.equal(toolbar.querySelector(gone), null, `${mode}: ${gone} is no longer a toolbar button`);
+    }
+    assert.equal(marksBtn.getAttribute('aria-haspopup'), 'menu', `${mode}: Marks announces its popup`);
+    assert.equal(marksBtn.textContent, 'marksMenuLabel ▾', `${mode}: nothing on, no count`);
+    assert.equal(marksBtn.classList.contains('active'), false, `${mode}: nothing on, not active`);
+    assert.equal(marksBtn.disabled, mode !== 'timeseries', `${mode}: Marks is for the time-series view`);
 
     const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
     assert.deepEqual(
         analysisButtons.map(button => button.dataset.mode).sort(),
         ['fft', 'heatmap', 'histogram', 'integral', 'temporal-profile'],
-        `${mode}: all time-series analyses share the contextual group beside Stack/Y`,
+        `${mode}: all time-series analyses share the contextual group beside Marks`,
     );
-    for (const button of [stackBtn, y2Btn, missingBtn, samplesBtn, repeatedBtn, ...analysisButtons]) {
+    for (const button of analysisButtons) {
         assert.ok(
             button.classList.contains('panel-toggle-btn'),
             `${mode}: ${button.textContent} uses the common pressed/unpressed button treatment`,
@@ -521,69 +554,125 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     }
 }
 
-// Stack and Y2 expose the same visual and accessibility state as the analysis
-// toggles when their stored option is already enabled.
+// The Marks menu: every toggle of the time-series panel, checked from the plot
+// state, with a count on the button so a closed menu still says something is on.
 {
-    const { toolbar } = renderToolbar('timeseries', 2, {
+    const { manager, toolbar } = renderToolbar('timeseries', 2, {
         timeseriesStacked: true,
         timeseriesY2Enabled: true,
-        showMissingData: true,
+        showNaN: true,
+        showGaps: true,
         showSamples: true,
         showRepeated: true,
     });
-    for (const selector of ['.timeseries-stack-btn', '.timeseries-y2-btn', '.timeseries-missing-btn', '.timeseries-samples-btn', '.timeseries-repeated-btn']) {
-        const button = toolbar.querySelector(selector);
-        assert.ok(button.classList.contains('active'), `${selector}: enabled option renders pressed`);
-        assert.equal(button.getAttribute('aria-pressed'), 'true', `${selector}: enabled option reports pressed`);
+    const button = toolbar.querySelector('.timeseries-marks-btn');
+    assert.equal(button.textContent, 'marksMenuLabel (6) ▾', 'the button counts the toggles that are on');
+    assert.ok(button.classList.contains('active'), 'and reads as active');
+    const menu = renderMarksMenu(manager);
+    const keys = menu.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark);
+    assert.deepEqual(keys, ['nan', 'gaps', 'repeated', 'samples', 'stack', 'y2'],
+        'NaN/Inf, Gaps, Repeated, Samples, then Stack and Y2');
+    for (const key of keys) {
+        const item = marksItem(menu, key);
+        assert.equal(item.getAttribute('role'), 'menuitemcheckbox', `${key}: a checkbox item`);
+        assert.equal(item.getAttribute('aria-checked'), 'true', `${key}: enabled option renders checked`);
+        assert.ok(item.classList.contains('checked'), `${key}: and styled so`);
     }
+    assert.equal(menu.querySelectorAll('.marks-menu-divider').length, 2, 'two groups plus the line shape');
+    assert.ok(menu.querySelector('.marks-menu-settings'), 'Gaps carries its settings button');
+}
+{
+    const { manager } = renderToolbar('timeseries', 2, {});
+    const menu = renderMarksMenu(manager);
+    for (const key of ['nan', 'gaps', 'repeated', 'samples', 'stack', 'y2']) {
+        assert.equal(marksItem(menu, key).getAttribute('aria-checked'), 'false', `${key}: off by default`);
+    }
+    // Clicking an item runs its toggle; the menu stays (it is re-rendered from
+    // the state by the toggle, see _syncMarksControls).
+    const calls = [];
+    for (const name of ['_toggleNaN', '_toggleGaps', '_toggleRepeated', '_toggleSamples', '_toggleTimeseriesStack', '_toggleTimeseriesY2']) {
+        manager[name] = (panelId) => calls.push([name, panelId]);
+    }
+    for (const key of ['nan', 'gaps', 'repeated', 'samples', 'stack', 'y2']) marksItem(menu, key).click();
+    assert.deepEqual(calls.map(([name]) => name),
+        ['_toggleNaN', '_toggleGaps', '_toggleRepeated', '_toggleSamples', '_toggleTimeseriesStack', '_toggleTimeseriesY2'],
+        'each item runs its own toggle');
+    assert.ok(calls.every(([, panelId]) => panelId === 'panel'), 'on its panel');
 }
 
-// Repeated: disabled when no file on the panel repeats an instant (the button
+// Line shape: a panel-level radio derived from the traces' overrides.
+{
+    const { manager } = renderToolbar('timeseries', 2, {});
+    const radios = (plotTraces) => {
+        manager.plot.traces = plotTraces;
+        const menu = renderMarksMenu(manager);
+        return menu.querySelectorAll('.marks-menu-radio')
+            .filter(r => r.getAttribute('aria-checked') === 'true')
+            .map(r => r.className.match(/marks-line-(\w+)/)[1]);
+    };
+    assert.deepEqual(radios([{ varName: 'a' }, { varName: 'b' }]), ['auto'], 'no overrides: Auto');
+    assert.deepEqual(radios([{ lineShape: 'hv' }, { lineShape: 'hv' }]), ['hv'], 'all stairs: Stairs');
+    assert.deepEqual(radios([{ lineShape: 'linear' }]), ['linear'], 'all linear: Linear');
+    assert.deepEqual(radios([{ lineShape: 'hv' }, {}]), [], 'mixed overrides: none checked');
+    const calls = [];
+    manager._setPanelLineShape = (panelId, shape) => calls.push(shape);
+    manager.plot.traces = [];
+    const menu = renderMarksMenu(manager);
+    menu.querySelectorAll('.marks-menu-radio').forEach(r => r.click());
+    assert.deepEqual(calls, ['auto', 'linear', 'hv'], 'each radio sets its shape');
+}
+
+// Repeated: disabled when no file on the panel repeats an instant (the item
 // answers "are there any?"), waiting when only memory-saving files could hold them.
 {
-    const { toolbar } = renderToolbar('timeseries', 2, { _testRepeatedAvailability: 'none' });
-    const button = toolbar.querySelector('.timeseries-repeated-btn');
-    assert.equal(button.disabled, true, 'no repeats anywhere: Repeated is disabled');
-    assert.equal(button.title, 'timeseriesRepeatedNone', 'and says why');
+    const { manager } = renderToolbar('timeseries', 2, { _testRepeatedAvailability: 'none' });
+    const item = marksItem(renderMarksMenu(manager), 'repeated');
+    assert.equal(item.disabled, true, 'no repeats anywhere: Repeated is disabled');
+    assert.equal(item.title, 'timeseriesRepeatedNone', 'and says why');
 }
 {
-    const { toolbar } = renderToolbar('timeseries', 2, { showRepeated: true, _testRepeatedAvailability: 'lazy' });
-    const button = toolbar.querySelector('.timeseries-repeated-btn');
-    assert.equal(button.disabled, false, 'a memory-saving file does not disable it');
-    assert.ok(button.classList.contains('repeated-waiting'), 'but it waits');
-    assert.equal(button.title, 'timeseriesRepeatedLazy');
+    const { manager } = renderToolbar('timeseries', 2, { showRepeated: true, _testRepeatedAvailability: 'lazy' });
+    const item = marksItem(renderMarksMenu(manager), 'repeated');
+    assert.equal(item.disabled, false, 'a memory-saving file does not disable it');
+    assert.ok(item.classList.contains('marks-waiting'), 'but it waits');
+    assert.equal(item.title, 'timeseriesRepeatedLazy');
 }
 {
-    const { toolbar } = renderToolbar('timeseries', 2, { showRepeated: true, _repeatedWaiting: null });
-    const button = toolbar.querySelector('.timeseries-repeated-btn');
-    assert.equal(button.classList.contains('repeated-waiting'), false, 'marks on screen: not waiting');
-    assert.equal(button.title, 'timeseriesRepeatedToggle');
+    const { manager } = renderToolbar('timeseries', 2, { showRepeated: true, _repeatedWaiting: null });
+    const item = marksItem(renderMarksMenu(manager), 'repeated');
+    assert.equal(item.classList.contains('marks-waiting'), false, 'marks on screen: not waiting');
+    assert.equal(item.title, 'timeseriesRepeatedToggle');
 }
 
-// Samples switched on with nothing on screen to dot: the button stays pressed
+// Samples switched on with nothing on screen to dot: the item stays checked
 // but reads as waiting, and its tooltip says why — no pill over the plot.
 {
-    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: 'zoom' });
-    const button = toolbar.querySelector('.timeseries-samples-btn');
-    assert.ok(button.classList.contains('active'), 'waiting Samples is still pressed');
-    assert.ok(button.classList.contains('samples-waiting'), 'and marked as waiting');
-    assert.equal(button.title, 'timeseriesSamplesZoomIn', 'its tooltip asks to zoom in');
+    const { manager } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: 'zoom' });
+    const item = marksItem(renderMarksMenu(manager), 'samples');
+    assert.equal(item.getAttribute('aria-checked'), 'true', 'waiting Samples is still checked');
+    assert.ok(item.classList.contains('marks-waiting'), 'and marked as waiting');
+    assert.equal(item.title, 'timeseriesSamplesZoomIn', 'its tooltip asks to zoom in');
 }
 {
-    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: 'lazy' });
-    assert.equal(toolbar.querySelector('.timeseries-samples-btn').title, 'timeseriesSamplesLazy',
+    const { manager } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: 'lazy' });
+    assert.equal(marksItem(renderMarksMenu(manager), 'samples').title, 'timeseriesSamplesLazy',
         'a memory-saving file gets its own reason');
 }
 {
-    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: null });
-    const button = toolbar.querySelector('.timeseries-samples-btn');
-    assert.equal(button.classList.contains('samples-waiting'), false, 'dots on screen: not waiting');
-    assert.equal(button.title, 'timeseriesSamplesToggle');
+    const { manager } = renderToolbar('timeseries', 2, { showSamples: true, _samplesWaiting: null });
+    const item = marksItem(renderMarksMenu(manager), 'samples');
+    assert.equal(item.classList.contains('marks-waiting'), false, 'dots on screen: not waiting');
+    assert.equal(item.title, 'timeseriesSamplesToggle');
 }
 {
-    const { toolbar } = renderToolbar('timeseries', 2, { showSamples: false, _samplesWaiting: 'zoom' });
-    assert.equal(toolbar.querySelector('.timeseries-samples-btn').classList.contains('samples-waiting'), false,
+    const { manager } = renderToolbar('timeseries', 2, { showSamples: false, _samplesWaiting: 'zoom' });
+    assert.equal(marksItem(renderMarksMenu(manager), 'samples').classList.contains('marks-waiting'), false,
         'switched off: never waiting, whatever was left behind');
+}
+{
+    const { manager } = renderToolbar('timeseries', 2, { timeseriesStacked: true });
+    assert.equal(marksItem(renderMarksMenu(manager), 'samples').disabled, true,
+        'stacked: Samples is disabled (a dot would not be the sample)');
 }
 
 {

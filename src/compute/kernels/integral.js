@@ -63,8 +63,9 @@ export function bridgeNonFinite(values, ctx) {
 // Missing rows are only detected where the time axis HAS a nominal step:
 // detectSamplingGaps returns no gaps for a genuinely irregular series, because
 // there a long dt is real sampling, not a hole. That is the same rule the
-// Missing/NaN overlay follows, so the two features never disagree about what
-// counts as missing.
+// FFT pane's missing-data bands follow. (The time-series Gaps tool is
+// different on purpose: the user sees and sets its step, and it marks
+// dropouts whatever the agreement — docs/marks-menu-nan-gaps-design.md.)
 export function computeIntegral(sourceValues, time, params = {}) {
     const values = asFloat64(sourceValues);
     const n = values.length;

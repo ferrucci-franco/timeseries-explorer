@@ -124,6 +124,8 @@ installSessionMethods(StateHarness);
 const source = new StateHarness('f1');
 source._expandedFileTransforms.add('f1');
 source.plotManager.files.get('f1').invertedVariables = new Set(['x']);
+// The Gaps tool's Δt and threshold belong to the file (Marks menu design).
+source.plotManager.files.get('f1').gapSettings = { dt: 250, factor: 3 };
 source.plotManager.plots.set('panel-1', {
     mode: 'histogram',
     traces: [{ fileId: 'f1', varName: 'x', axis: 'y' }],
@@ -144,7 +146,8 @@ source.plotManager.plots.set('panel-1', {
     cursorsSpectrum: {},
     timeseriesStacked: false,
     timeseriesY2Enabled: false,
-    showMissingData: true,
+    showNaN: true,
+    showGaps: false,
     showSamples: true,
     showRepeated: true,
     animPlaying: true,
@@ -158,7 +161,10 @@ assert.equal(snapshot.files[0].transformPanelExpanded, true);
 assert.equal(snapshot.plots[0].histogram.binCount, 77);
 assert.equal(snapshot.plots[0].temporalProfile.period, 'month');
 assert.equal(snapshot.plots[0].temporalProfile.discardIncomplete, true);
-assert.equal(snapshot.plots[0].showMissingData, true);
+assert.equal(snapshot.plots[0].showNaN, true);
+assert.equal(snapshot.plots[0].showGaps, false);
+assert.equal('showMissingData' in snapshot.plots[0], false, 'the split flags replace Missing/NaN');
+assert.deepEqual(snapshot.files[0].gapSettings, { dt: 250, factor: 3 });
 assert.equal(snapshot.plots[0].showSamples, true);
 assert.equal(snapshot.plots[0].showRepeated, true);
 assert.equal(snapshot.plots[0].animPlaying, true);
@@ -182,7 +188,9 @@ assert.equal(restoredPlot.temporalProfile.groupedBars, true);
 assert.equal(restoredPlot.temporalProfile.resolutionByPeriod.day, 5);
 assert.equal(restoredPlot.temporalProfile.dayGrouping, 'all');
 assert.equal(restoredPlot.temporalProfile.yearResolution, 'month');
-assert.equal(restoredPlot.showMissingData, true);
+assert.equal(restoredPlot.showNaN, true);
+assert.equal(restoredPlot.showGaps, false);
+assert.deepEqual(restored.plotManager.files.get('f99').gapSettings, { dt: 250, factor: 3 });
 assert.equal(restoredPlot.showSamples, true);
 assert.equal(restoredPlot.showRepeated, true);
 assert.equal(restoredPlot.autoPlayOnRender, true);
@@ -374,3 +382,21 @@ try {
 }
 
 console.log('Session state round-trip and transactional loading checks passed.');
+
+// A session saved before the split carries only `showMissingData`: it meant
+// both NaN/Inf and Gaps.
+{
+    const legacy = new StateHarness('f77');
+    legacy.plotManager.plots.set('panel-1', {
+        mode: 'timeseries', traces: [], phaseTraces: [], phasePending: {}, stateSlots: {}, stateConfig: {},
+        histogram: {}, fft: {}, heatmap: {}, temporalProfile: {}, correlation: {}, phase2d: {}, integral: {},
+    });
+    const plots = snapshot.plots.map(plot => {
+        const { showNaN, showGaps, ...rest } = plot;
+        return { ...rest, showMissingData: true };
+    });
+    await legacy._applySessionPlots(plots, new Map([['f1', 'f77']]));
+    const plot = legacy.plotManager.plots.get('panel-1');
+    assert.equal(plot.showNaN, true, 'legacy Missing/NaN turns NaN/Inf on');
+    assert.equal(plot.showGaps, true, 'legacy Missing/NaN turns Gaps on');
+}

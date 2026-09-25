@@ -271,3 +271,105 @@ export function missingBucketsToIntervals(buckets, {
         stepAgreement,
     };
 }
+
+// ── Gaps tool (docs/marks-menu-nan-gaps-design.md) ──
+
+// Step histogram of a whole lazy file, the SQL twin of stepHistogram() in
+// utils/sampling-gaps.js: positive steps binned on the same log scale, plus
+// the count of all positive steps. Ordered by time — a memory-saving file is
+// read as chronological everywhere else too (buckets, viewport queries). One
+// sort per file; the caller caches the result on the data object, so the
+// automatic step never depends on the viewport.
+export function buildStepHistogramSql(tExpr, tableName, binsPerEfold) {
+    const k = Math.max(1, Math.floor(Number(binsPerEfold) || 40));
+    return `
+        WITH v AS (SELECT ${tExpr} AS t FROM ${tableName}),
+        s AS (SELECT t - LAG(t) OVER (ORDER BY t) AS dt FROM v WHERE t IS NOT NULL)
+        SELECT CAST(ROUND(LN(dt) * ${k}) AS BIGINT) AS k,
+               COUNT(*)::BIGINT AS c,
+               SUM(dt)::DOUBLE AS s
+        FROM s
+        WHERE dt > 0 AND isfinite(dt)
+        GROUP BY k
+        ORDER BY k;
+    `;
+}
+
+// Gap count and missing-sample estimate over a whole lazy file for a given
+// step (source units), for the Gaps panel's result line.
+export function buildGapSummarySql(tExpr, tableName, lit, dt, factor) {
+    return `
+        WITH v AS (SELECT ${tExpr} AS t FROM ${tableName}),
+        s AS (SELECT t - LAG(t) OVER (ORDER BY t) AS dt FROM v WHERE t IS NOT NULL)
+        SELECT COUNT(*)::BIGINT AS gaps,
+               COALESCE(SUM(GREATEST(1, ROUND(dt / ${lit(dt)}) - 1)), 0)::DOUBLE AS missing
+        FROM s
+        WHERE dt > ${lit(dt * factor)};
+    `;
+}
+
+// Sampling gaps of one lazy view from the bucket rows, for a GIVEN step (the
+// file's Gaps setting, in source units) — no per-viewport estimate, no gate,
+// so the bands do not change with the zoom. Same two rules as
+// missingBucketsToIntervals: the distance between populated buckets, and a
+// row deficit inside a populated bucket (marks that pixel). Returns display
+// intervals (through `mapTime`).
+export function lazyGapsFromBuckets(buckets, {
+    t0,
+    t1,
+    nBuckets,
+    nominalStep,
+    factor = 1.5,
+    fileId = null,
+    timeVar = null,
+    mapTime = null,
+} = {}) {
+    const nb = Math.max(1, Math.floor(nBuckets));
+    const span = t1 - t0;
+    const step = Number(nominalStep);
+    const f = Number(factor) > 0 ? Number(factor) : 1.5;
+    if (!(span > 0) || !(step > 0) || !Array.isArray(buckets) || !buckets.length) return [];
+    const map = (value) => (typeof mapTime === 'function' ? Number(mapTime(value)) : value);
+    const interval = (a, b) => {
+        const x0 = map(a);
+        const x1 = map(b);
+        if (!Number.isFinite(x0) || !Number.isFinite(x1) || x0 === x1) return null;
+        return { fileId, timeVar, t0: Math.min(x0, x1), t1: Math.max(x0, x1) };
+    };
+    const rows = [];
+    for (const row of buckets) {
+        const b = Math.trunc(Number(row.b));
+        const n = Number(row.nTotal) || 0;
+        const lo = Number(row.tMin);
+        const hi = Number(row.tMax);
+        if (!(b >= 0 && b < nb) || n <= 0 || !Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) continue;
+        rows.push({ b, n, lo, hi });
+    }
+    rows.sort((p, q) => p.b - q.b);
+    const out = [];
+    const threshold = step * f;
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (i > 0) {
+            const prev = rows[i - 1];
+            if (row.lo - prev.hi > threshold) {
+                const gap = interval(prev.hi, row.lo);
+                if (gap) out.push(gap);
+            }
+        }
+        // n rows spanning more than (n - 1) steps plus the threshold's slack:
+        // at least one row is missing inside this pixel.
+        if (row.n > 1 && row.hi - row.lo > (row.n - 1) * step + (threshold - step)) {
+            const gap = interval(t0 + (row.b / nb) * span, t0 + ((row.b + 1) / nb) * span);
+            if (gap) out.push(gap);
+        }
+    }
+    out.sort((p, q) => p.t0 - q.t0);
+    const merged = [];
+    for (const it of out) {
+        const last = merged[merged.length - 1];
+        if (last && it.t0 <= last.t1) last.t1 = Math.max(last.t1, it.t1);
+        else merged.push({ ...it });
+    }
+    return merged;
+}

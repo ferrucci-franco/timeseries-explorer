@@ -47,6 +47,11 @@ A **repeat run** is a maximal sequence of ≥ 2 consecutive rows with the same t
 
 ## UI
 
+> Since the Marks menu ([marks-menu-nan-gaps-design.md](marks-menu-nan-gaps-design.md)),
+> Repeated is an item of the **Marks** dropdown rather than a toolbar button, and
+> Missing/NaN is split into **NaN/Inf** (a strip under the Repeated strip) and **Gaps**.
+> The disabled and waiting states described below carry over to the item.
+
 - A toggle button **Repeated** in the time-series panel toolbar, after **Samples**
   (order: Missing/NaN, Samples, Repeated).
   - Labels: EN *Repeated*, ES *Repetidos*, FR *Répétés*, IT *Ripetuti*.

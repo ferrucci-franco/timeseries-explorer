@@ -9,8 +9,8 @@
 // plot, with a hover label of our own (_ensureRepeatedHover): Plotly gives
 // shapes none.
 //
-// The bars are layout shapes, sharing `layout.shapes` with the Missing/NaN
-// bands. Earlier builds drew a triangle per repeat — first as annotations,
+// The bars are layout shapes, sharing `layout.shapes` with the NaN/Inf strip
+// (drawn just below them) and the Gaps bands. Earlier builds drew a triangle per repeat — first as annotations,
 // whose redraw cost ~230 ms a frame and made panning crawl, then as pixel
 // shapes — plus guide lines; the rings made both redundant. Being in data
 // coordinates, the bars follow a pan by themselves and are recomputed only
@@ -71,7 +71,8 @@ export function installPlotRepeatedMethods(TargetClass) {
         return lazy ? 'lazy' : 'none';
     };
 
-    // Red: apart from the amber of Missing/NaN, and readable on both themes.
+    // Red: apart from the amber of Gaps and the violet of NaN/Inf, and readable
+    // on both themes.
     proto._repeatedColor = function(alpha = 1) {
         return this.theme === 'dark'
             ? `rgba(255, 82, 82, ${alpha})`
