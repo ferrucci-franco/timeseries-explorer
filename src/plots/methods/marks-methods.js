@@ -36,6 +36,8 @@ import { TIME_UNITS, formatTimeValue, pickTimeUnit } from '../../utils/time-unit
 // materialized at all: they would be coalesced into a wall anyway, and a wrong
 // manual Δt can make every step of a multi-million-row file a "gap".
 const MAX_ITEMS_IN_VIEW = 200000;
+// Four-arrow "move" glyph, identical to the cursor readout's header icon.
+const MOVE_ICON_SVG = '<svg class="cursor-info-move-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13 6V11H18V7.75L22.25 12L18 16.25V13H13V18H16.25L12 22.25L7.75 18H11V13H6V16.25L1.75 12L6 7.75V11H11V6H7.75L12 1.75L16.25 6H13Z"/></svg>';
 // Pixel height of the Repeated strip's slot (paper 0.985–1 of the plot area) is
 // read from the laid-out plot; this is the fallback before layout.
 const REPEATED_STRIP_FRACTION = 0.015;
@@ -928,6 +930,62 @@ export function installPlotMarksMethods(TargetClass) {
         panel.querySelector('input')?.focus?.();
     };
 
+    // Where the user dragged the panel, in px from the panel's top-left
+    // (plot._gapsPanelPos), clamped so it stays inside the panel. Absent: the
+    // CSS default, top right under the modebar.
+    proto._applyGapsPanelPosition = function(panelId, panel) {
+        const pos = this.plots.get(panelId)?._gapsPanelPos;
+        const host = panel?.parentElement;
+        if (!pos || !host) return;
+        const maxX = Math.max(6, host.clientWidth - panel.offsetWidth - 6);
+        const maxY = Math.max(6, host.clientHeight - panel.offsetHeight - 6);
+        panel.style.left = `${Math.max(6, Math.min(maxX, pos.x))}px`;
+        panel.style.top = `${Math.max(6, Math.min(maxY, pos.y))}px`;
+        panel.style.right = 'auto';
+    };
+
+    // Drag by the header, like the cursor readout. Pointer capture keeps the
+    // move and release on the header itself, so nothing is bound to
+    // `document` (and nothing outlives the panel). Mouse, pen and touch alike.
+    proto._bindGapsPanelDrag = function(panelId, panel, header) {
+        let drag = null;
+        header.addEventListener('pointerdown', (event) => {
+            if (event.button !== undefined && event.button !== 0) return;
+            if (event.target.closest?.('.gaps-panel-close')) return;
+            const host = panel.parentElement;
+            if (!host) return;
+            event.preventDefault();
+            const rect = panel.getBoundingClientRect();
+            drag = { pointerId: event.pointerId, dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+            header.setPointerCapture?.(event.pointerId);
+            panel.classList.add('dragging');
+        });
+        // A pointerdown's default does not include text selection: the
+        // mousedown's does, and a drag would select the page around the panel.
+        header.addEventListener('mousedown', (event) => {
+            if (!event.target.closest?.('.gaps-panel-close')) event.preventDefault();
+        });
+        header.addEventListener('pointermove', (event) => {
+            if (!drag || event.pointerId !== drag.pointerId) return;
+            const plot = this.plots.get(panelId);
+            const hostRect = panel.parentElement?.getBoundingClientRect();
+            if (!plot || !hostRect) return;
+            plot._gapsPanelPos = {
+                x: event.clientX - hostRect.left - drag.dx,
+                y: event.clientY - hostRect.top - drag.dy,
+            };
+            this._applyGapsPanelPosition(panelId, panel);
+        });
+        const end = (event) => {
+            if (!drag || event.pointerId !== drag.pointerId) return;
+            drag = null;
+            header.releasePointerCapture?.(event.pointerId);
+            panel.classList.remove('dragging');
+        };
+        header.addEventListener('pointerup', end);
+        header.addEventListener('pointercancel', end);
+    };
+
     // The unit ladder the Δt input offers, largest first; the unit shown is the
     // largest one the value reaches.
     const inputUnits = TIME_UNITS.filter(unit => unit.factor >= 1e-6);
@@ -990,9 +1048,12 @@ export function installPlotMarksMethods(TargetClass) {
 
         const header = document.createElement('div');
         header.className = 'gaps-panel-header';
+        header.title = i18n.t('gapsPanelMove');
         const title = document.createElement('span');
         title.className = 'gaps-panel-title';
-        title.textContent = i18n.t('gapsPanelTitle');
+        // The same four-arrow glyph as the cursor readout: the header drags.
+        title.innerHTML = MOVE_ICON_SVG;
+        title.append(i18n.t('gapsPanelTitle'));
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'gaps-panel-close';
@@ -1002,6 +1063,7 @@ export function installPlotMarksMethods(TargetClass) {
         close.addEventListener('click', () => this._closeGapsPanel(panelId));
         header.append(title, close);
         panel.appendChild(header);
+        this._bindGapsPanelDrag(panelId, panel, header);
 
         const files = [];
         const seen = new Set();
@@ -1011,6 +1073,8 @@ export function installPlotMarksMethods(TargetClass) {
             files.push(t.fileId);
         }
         for (const fileId of files) panel.appendChild(this._gapsPanelFileBlock(fileId, files.length > 1));
+        // Once filled: the clamp needs the panel's final size.
+        this._applyGapsPanelPosition(panelId, panel);
     };
 
     proto._gapsPanelFileBlock = function(fileId, showName) {

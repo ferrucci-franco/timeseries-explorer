@@ -164,6 +164,9 @@ Gaps ─────────────────────────
  12 gaps · ~340 missing samples
 ```
 
+- It can be moved: drag it by its header, which carries the same four-arrow icon as the
+  cursor readout. It stays inside the plot panel and keeps its place (per panel) when
+  its settings change or it is reopened.
 - One block per file on the panel: Δt is a property of each file's time axis.
 - Calendar axes offer ms / s / min / h / d; other axes show a plain number in the axis
   units.

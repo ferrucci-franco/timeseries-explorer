@@ -162,6 +162,36 @@ try {
     assert.ok(Math.abs(Number(s.panel.step) - 1) < 0.01);
     await fill(page, panelId, '.gaps-panel-factor', 1.5);
 
+    // The panel drags by its header (four-arrow icon), like the cursor
+    // readout, stays inside the plot panel, and keeps its place on re-render.
+    const gapsPanel = page.locator(`.layout-panel[data-id="${panelId}"] .gaps-panel`);
+    assert.equal(await gapsPanel.locator('.gaps-panel-header .cursor-info-move-icon').count(), 1, 'the header shows the move icon');
+    const before = await gapsPanel.boundingBox();
+    const grip = await gapsPanel.locator('.gaps-panel-title').boundingBox();
+    const from = { x: grip.x + 5, y: grip.y + grip.height / 2 };
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x - 300, from.y + 250, { steps: 8 });
+    await page.mouse.up();
+    const after = await gapsPanel.boundingBox();
+    assert.ok(Math.abs(after.x - (before.x - 300)) < 2 && Math.abs(after.y - (before.y + 250)) < 2,
+        `dragging the header moves the panel (${JSON.stringify(before)} → ${JSON.stringify(after)})`);
+    await fill(page, panelId, '.gaps-panel-factor', 2);
+    const rerendered = await gapsPanel.boundingBox();
+    assert.ok(Math.abs(rerendered.x - after.x) < 1 && Math.abs(rerendered.y - after.y) < 1, 'a settings change keeps it there');
+    assert.equal(await page.evaluate(() => String(window.getSelection())), '', 'dragging selects no text');
+    const grip2 = await gapsPanel.locator('.gaps-panel-title').boundingBox();
+    await page.mouse.move(grip2.x + 20, grip2.y + grip2.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(-500, -500, { steps: 6 });
+    await page.mouse.up();
+    const clamped = await gapsPanel.boundingBox();
+    const host = await page.locator(`.layout-panel[data-id="${panelId}"]`).boundingBox();
+    assert.ok(clamped.x >= host.x && clamped.y >= host.y, 'it cannot leave the plot panel');
+    assert.equal(await page.evaluate(() => String(window.getSelection())), '', 'dragging selects no text');
+    if (shots) await page.screenshot({ path: `${shots}/gaps-panel-moved.png` });
+    await fill(page, panelId, '.gaps-panel-factor', 1.5);
+
     // Closing the panel keeps the tool on; turning Gaps off removes the bands.
     await page.locator(`.layout-panel[data-id="${panelId}"] .gaps-panel .gaps-panel-close`).click();
     s = await state(page, panelId);

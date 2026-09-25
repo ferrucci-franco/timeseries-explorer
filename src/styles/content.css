@@ -1912,6 +1912,19 @@
     justify-content: space-between;
     margin-bottom: 6px;
     font-weight: 600;
+    cursor: move;
+    user-select: none;
+    touch-action: none;
+}
+
+.gaps-panel-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.gaps-panel.dragging {
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28);
 }
 
 .gaps-panel-close,
