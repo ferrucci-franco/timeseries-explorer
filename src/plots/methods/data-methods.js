@@ -2206,6 +2206,10 @@ proto._buildTimeLayout = function(plot, options = {}) {
     };
     const yTitle = axisTitle(axisTraces.y);
     const y2Title = plot.timeseriesY2Enabled ? axisTitle(axisTraces.y2) : '';
+    // Log Y is a time-series view setting. The analysis modes (and the 2D
+    // fit's time pane) draw their time pane through this builder too, linear.
+    const timeLogY = plot.mode === 'timeseries' && !!this._axisIsLog?.(plot, 'y');
+    const timeLogY2 = plot.mode === 'timeseries' && !!this._axisIsLog?.(plot, 'y2');
     if (plot.timeseriesY2Enabled) margin.r = Math.max(margin.r || 0, 56);
 
     const layout = {
@@ -2217,6 +2221,7 @@ proto._buildTimeLayout = function(plot, options = {}) {
                  ...xRangeConfig,
                  title: { text: timeTitle, font: { size: 10 } } },
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
+                 type: timeLogY ? 'log' : 'linear',
                  title: yTitle ? { text: yTitle, font: { size: 10 } } : { text: '' } },
         legend: this._legendConfig(legendBg, gridColor),
         margin,
@@ -2231,6 +2236,7 @@ proto._buildTimeLayout = function(plot, options = {}) {
             linecolor: gridColor,
             tickcolor: gridColor,
             zeroline: false,
+            type: timeLogY2 ? 'log' : 'linear',
             title: y2Title ? { text: y2Title, font: { size: 10 } } : { text: '' },
         };
     }
@@ -2288,7 +2294,11 @@ proto._buildPhase2DTraces = function(plot) {
     if (state?.fitEnabled && this._buildPhase2dFitCurveTraces) {
         for (const fitTrace of this._buildPhase2dFitCurveTraces(plot)) traces.push(fitTrace);
     }
-    traces.push(this._originCross2D());
+    // A log axis has no 0, so the origin cross has nowhere to sit. It stays in
+    // the data (callers count it as the last trace) but is not drawn.
+    const origin = this._originCross2D();
+    if (this._axisIsLog?.(plot, 'x') || this._axisIsLog?.(plot, 'y')) origin.visible = false;
+    traces.push(origin);
     return traces;
 };
 
@@ -2322,19 +2332,23 @@ proto._buildPhase2DLayout = function(plot) {
         xArrays.push(visual.x);
         yArrays.push(visual.y);
     }
-    const xExtent = this._finiteExtent(xArrays);
-    const yExtent = this._finiteExtent(yArrays);
-    const xRangeConfig = xExtent ? { range: this._padRange(xExtent.min, xExtent.max), autorange: false } : {};
-    const yRangeConfig = yExtent ? { range: this._padRange(yExtent.min, yExtent.max), autorange: false } : {};
+    const xLog = this._axisIsLog(plot, 'x');
+    const yLog = this._axisIsLog(plot, 'y');
+    const xExtent = this._extentInAxisUnits(this._finiteExtent(xArrays, { positive: xLog }), xLog);
+    const yExtent = this._extentInAxisUnits(this._finiteExtent(yArrays, { positive: yLog }), yLog);
+    const xRangeConfig = xExtent ? { range: this._padAxisRange(xExtent, xLog), autorange: false } : {};
+    const yRangeConfig = yExtent ? { range: this._padAxisRange(yExtent, yLog), autorange: false } : {};
     return {
         paper_bgcolor: bg, plot_bgcolor: bg,
         font: { color: fontColor, size: 11, family: 'system-ui, sans-serif' },
         showlegend: true,
         legend: this._legendConfig(legendBg, gridColor),
         xaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
+                 type: xLog ? 'log' : 'linear',
                  ...xRangeConfig,
                  title: { text: multiTrace ? 'x' : (xu ? `${xLabel} [${xu}]` : (xLabel || 'X')), font: { size: 10 } } },
         yaxis: { gridcolor: gridColor, linecolor: gridColor, tickcolor: gridColor, zeroline: false,
+                 type: yLog ? 'log' : 'linear',
                  ...yRangeConfig,
                  title: { text: multiTrace ? 'y' : (yu ? `${yLabel} [${yu}]` : (yLabel || 'Y')), font: { size: 10 } },
                  ...(plot.equalAspect2D ? { scaleanchor: 'x', scaleratio: 1 } : {}) },

@@ -323,6 +323,10 @@ proto._capturePlotSessions = function() {
             animPlaying: !!plot.animPlaying,
             timeseriesStacked: !!plot.timeseriesStacked,
             timeseriesY2Enabled: !!plot.timeseriesY2Enabled,
+            timeseriesYLog: !!plot.timeseriesYLog,
+            timeseriesY2Log: !!plot.timeseriesY2Log,
+            phase2dXLog: !!plot.phase2dXLog,
+            phase2dYLog: !!plot.phase2dYLog,
             showNaN: !!plot.showNaN,
             showGaps: !!plot.showGaps,
             showSamples: !!plot.showSamples,
@@ -1021,6 +1025,12 @@ proto._applySessionPlots = async function(plotSessions, fileMap) {
         plot.autoPlayOnRender = !!saved.animPlaying;
         plot.timeseriesStacked = !!saved.timeseriesStacked && !saved.timeseriesY2Enabled;
         plot.timeseriesY2Enabled = !!saved.timeseriesY2Enabled;
+        // The saved view's ranges are in the units of these scales (log10 on
+        // a log axis), so they are restored together.
+        plot.timeseriesYLog = !!saved.timeseriesYLog;
+        plot.timeseriesY2Log = !!saved.timeseriesY2Log;
+        plot.phase2dXLog = !!saved.phase2dXLog;
+        plot.phase2dYLog = !!saved.phase2dYLog;
         // Sessions saved before NaN/Inf and Gaps were split carry the single
         // Missing/NaN flag: it meant both.
         plot.showNaN = !!(saved.showNaN ?? saved.showMissingData);

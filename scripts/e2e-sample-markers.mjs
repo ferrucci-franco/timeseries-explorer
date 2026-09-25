@@ -126,8 +126,9 @@ try {
     assert.equal(s.waiting, true, 'the button is waiting again');
     assert.equal(s.pill, null, 'but the pill does not come back on a zoom');
 
-    await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-marks-btn`).click();
-    await page.locator(`.timeseries-marks-menu[data-panel-id="${panelId}"] .marks-item-stack`).click();
+    // Stack is a View setting.
+    await page.locator(`.layout-panel[data-id="${panelId}"] .panel-view-btn`).click();
+    await page.locator(`.panel-view-menu[data-panel-id="${panelId}"] .marks-item-stack`).click();
     await page.keyboard.press('Escape');
     await page.waitForTimeout(600);
     s = await state(page, panelId);

@@ -382,7 +382,8 @@ const plotWith = (traces, extra = {}) => ({
 // Marks count and line shape state.
 {
     const h = new Harness();
-    assert.equal(h._marksActiveCount({ showNaN: true, showGaps: true, timeseriesStacked: true }), 3);
+    // Stack is a View setting now: Marks counts only what it draws.
+    assert.equal(h._marksActiveCount({ showNaN: true, showGaps: true, timeseriesStacked: true }), 2);
     assert.equal(h._panelLineShapeState({ traces: [] }), 'auto');
     assert.equal(h._panelLineShapeState({ traces: [{ lineShape: 'hv' }, { lineShape: 'linear' }] }), 'mixed');
 }

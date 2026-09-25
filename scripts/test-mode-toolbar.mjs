@@ -216,6 +216,8 @@ class ToolbarHarness {
     // Which of the panel's files repeat an instant is the repeated-methods
     // mixin's business; the toolbar only reads the verdict.
     _repeatedAvailability(plot) { return plot?._testRepeatedAvailability || 'some'; }
+    _ensureFftState(plot) { return plot.fft; }
+    _ensureHistogramState(plot) { return plot.histogram; }
     _is3D(mode) { return mode === 'phase2dt' || mode === 'phase3d'; }
     _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) >= 3; }
     _supportsEqualAspect2D(plot) { return plot?.mode === 'phase2d' || (plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) === 2); }
@@ -246,7 +248,12 @@ vm.runInNewContext([
     marksMethodAssignment('_marksActiveCount'),
     marksMethodAssignment('_marksMenuModel'),
     marksMethodAssignment('_renderMarksMenu'),
+    marksMethodAssignment('_renderPanelMenuItems'),
     marksMethodAssignment('_panelLineShapeState'),
+    marksMethodAssignment('_viewMenuModel'),
+    marksMethodAssignment('_createViewButton'),
+    marksMethodAssignment('_applyViewButtonState'),
+    marksMethodAssignment('_renderViewMenu'),
 ].join('\n'), sandbox);
 
 // The Marks menu of a rendered toolbar, rendered into a detached element the
@@ -257,6 +264,12 @@ const renderMarksMenu = (manager) => {
     return menu;
 };
 const marksItem = (menu, key) => menu.querySelector(`.marks-item-${key}`);
+// The View menu, the same way.
+const renderViewMenu = (manager) => {
+    const menu = new FakeElement('div');
+    manager._renderViewMenu('panel', menu);
+    return menu;
+};
 
 class TemporalStateHarness {}
 
@@ -507,6 +520,14 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
         assert.equal(tools.children[2], axisFitBtns[1], `${mode}: Fit Y follows Fit X`);
         assert.equal(tools.children[3], marksBtn, `${mode}: Marks follows the per-axis fits`);
     }
+    // View (log axes, Stack, Y2, line shape) sits right after Marks.
+    const viewBtn = tools.querySelector('.panel-view-btn');
+    assert.ok(viewBtn, `${mode}: the View dropdown shares the contextual group`);
+    assert.equal(tools.children[tools.children.indexOf(marksBtn) + 1], viewBtn, `${mode}: View follows Marks`);
+    assert.equal(viewBtn.getAttribute('aria-haspopup'), 'menu', `${mode}: View announces its popup`);
+    assert.equal(viewBtn.textContent, 'viewMenuLabel ▾', `${mode}: nothing on, no count`);
+    assert.equal(viewBtn.disabled, !['timeseries', 'fft', 'histogram'].includes(mode),
+        `${mode}: View is enabled where it has something to offer`);
     assert.equal(autoscaleBtn.textContent, globalAutoscaleIcon, `${mode}: contextual Autoscale reuses the global icon`);
     autoscaleBtn.click();
     assert.equal(manager.autoscaleCalls.length, 1, `${mode}: contextual Autoscale triggers one autoscale`);
@@ -566,38 +587,106 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
         showRepeated: true,
     });
     const button = toolbar.querySelector('.timeseries-marks-btn');
-    assert.equal(button.textContent, 'marksMenuLabel (6) ▾', 'the button counts the toggles that are on');
+    assert.equal(button.textContent, 'marksMenuLabel (4) ▾', 'the button counts the marks that are on');
     assert.ok(button.classList.contains('active'), 'and reads as active');
     const menu = renderMarksMenu(manager);
     const keys = menu.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark);
-    assert.deepEqual(keys, ['nan', 'gaps', 'repeated', 'samples', 'stack', 'y2'],
-        'NaN/Inf, Gaps, Repeated, Samples, then Stack and Y2');
+    assert.deepEqual(keys, ['nan', 'gaps', 'repeated', 'samples'],
+        'Marks holds what is drawn on the data: NaN/Inf, Gaps, Repeated, Samples');
     for (const key of keys) {
         const item = marksItem(menu, key);
         assert.equal(item.getAttribute('role'), 'menuitemcheckbox', `${key}: a checkbox item`);
         assert.equal(item.getAttribute('aria-checked'), 'true', `${key}: enabled option renders checked`);
         assert.ok(item.classList.contains('checked'), `${key}: and styled so`);
     }
-    assert.equal(menu.querySelectorAll('.marks-menu-divider').length, 2, 'two groups plus the line shape');
+    assert.equal(menu.querySelectorAll('.marks-menu-divider').length, 0, 'one group');
+    assert.equal(menu.querySelector('.marks-menu-radio'), null, 'the line shape moved to View');
     assert.ok(menu.querySelector('.marks-menu-settings'), 'Gaps carries its settings button');
+
+    const viewButton = toolbar.querySelector('.panel-view-btn');
+    assert.equal(viewButton.textContent, 'viewMenuLabel (2) ▾', 'View counts Stack and Y2');
+    const view = renderViewMenu(manager);
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark),
+        ['ylog', 'y2log', 'stack', 'y2'], 'View: log Y, log Y2, then Stack and Y2');
+    assert.equal(marksItem(view, 'stack').getAttribute('aria-checked'), 'true', 'Stack renders checked');
+    assert.equal(marksItem(view, 'y2').getAttribute('aria-checked'), 'true', 'Y2 renders checked');
+    assert.equal(marksItem(view, 'y2log').disabled, false, 'log Y2 is available with the right axis on');
+    assert.equal(view.querySelectorAll('.marks-menu-divider').length, 2, 'log scales, layout, line shape');
 }
 {
     const { manager } = renderToolbar('timeseries', 2, {});
     const menu = renderMarksMenu(manager);
-    for (const key of ['nan', 'gaps', 'repeated', 'samples', 'stack', 'y2']) {
+    for (const key of ['nan', 'gaps', 'repeated', 'samples']) {
         assert.equal(marksItem(menu, key).getAttribute('aria-checked'), 'false', `${key}: off by default`);
     }
+    const view = renderViewMenu(manager);
+    for (const key of ['ylog', 'y2log', 'stack', 'y2']) {
+        assert.equal(marksItem(view, key).getAttribute('aria-checked'), 'false', `${key}: off by default`);
+    }
+    assert.equal(marksItem(view, 'y2log').disabled, true, 'log Y2 waits for the right axis');
+    assert.equal(marksItem(view, 'y2log').title, 'viewLogY2Off', 'and says so');
     // Clicking an item runs its toggle; the menu stays (it is re-rendered from
     // the state by the toggle, see _syncMarksControls).
     const calls = [];
-    for (const name of ['_toggleNaN', '_toggleGaps', '_toggleRepeated', '_toggleSamples', '_toggleTimeseriesStack', '_toggleTimeseriesY2']) {
-        manager[name] = (panelId) => calls.push([name, panelId]);
+    for (const name of ['_toggleNaN', '_toggleGaps', '_toggleRepeated', '_toggleSamples', '_toggleTimeseriesStack', '_toggleTimeseriesY2', '_toggleTimeseriesLogAxis']) {
+        manager[name] = (panelId, arg) => calls.push([name, panelId, arg]);
     }
-    for (const key of ['nan', 'gaps', 'repeated', 'samples', 'stack', 'y2']) marksItem(menu, key).click();
+    for (const key of ['nan', 'gaps', 'repeated', 'samples']) marksItem(menu, key).click();
+    for (const key of ['ylog', 'stack', 'y2']) marksItem(view, key).click();
     assert.deepEqual(calls.map(([name]) => name),
-        ['_toggleNaN', '_toggleGaps', '_toggleRepeated', '_toggleSamples', '_toggleTimeseriesStack', '_toggleTimeseriesY2'],
+        ['_toggleNaN', '_toggleGaps', '_toggleRepeated', '_toggleSamples', '_toggleTimeseriesLogAxis', '_toggleTimeseriesStack', '_toggleTimeseriesY2'],
         'each item runs its own toggle');
     assert.ok(calls.every(([, panelId]) => panelId === 'panel'), 'on its panel');
+    assert.equal(calls[4][2], 'y', 'log Y toggles the primary axis');
+}
+{
+    const { manager, toolbar } = renderToolbar('timeseries', 2, { timeseriesY2Enabled: true, timeseriesYLog: true, timeseriesY2Log: true });
+    assert.equal(toolbar.querySelector('.panel-view-btn').textContent, 'viewMenuLabel (3) ▾', 'log Y, log Y2 and Y2 count');
+    const view = renderViewMenu(manager);
+    assert.equal(marksItem(view, 'ylog').getAttribute('aria-checked'), 'true', 'log Y renders checked');
+    assert.equal(marksItem(view, 'y2log').getAttribute('aria-checked'), 'true', 'log Y2 renders checked');
+}
+
+// View in the analysis modes: what each has to offer.
+{
+    const { manager } = renderToolbar('fft', 2, {});
+    manager.plot.fft = { xAxisMode: 'frequency', freqLog: false };
+    let view = renderViewMenu(manager);
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['freqlog'], 'Fourier: log frequency');
+    assert.equal(marksItem(view, 'freqlog').disabled, false);
+    const calls = [];
+    manager._toggleFftFrequencyLog = (panelId) => calls.push(panelId);
+    marksItem(view, 'freqlog').click();
+    assert.deepEqual(calls, ['panel'], 'it toggles the spectrum axis');
+    manager.plot.fft = { xAxisMode: 'period', freqLog: false };
+    view = renderViewMenu(manager);
+    assert.equal(marksItem(view, 'freqlog').getAttribute('aria-checked'), 'true', 'a period axis is always log');
+    assert.equal(marksItem(view, 'freqlog').disabled, true, 'and cannot be switched off');
+    assert.equal(marksItem(view, 'freqlog').title, 'viewLogFrequencyPeriod');
+}
+{
+    const { manager } = renderToolbar('histogram', 2, {});
+    manager.plot.histogram = { yScale: 'log' };
+    const view = renderViewMenu(manager);
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['countlog'], 'Histogram: log counts');
+    assert.equal(marksItem(view, 'countlog').getAttribute('aria-checked'), 'true');
+}
+{
+    const { manager, toolbar } = renderToolbar('phase2d', 2, { phase2dYLog: true });
+    const viewBtn = toolbar.querySelector('.view-btn-group').querySelector('.panel-view-btn');
+    assert.ok(viewBtn, '2D: View sits in the view group');
+    assert.equal(viewBtn.textContent, 'viewMenuLabel (1) ▾');
+    const view = renderViewMenu(manager);
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['xlog', 'ylog'], '2D: log X and log Y');
+    const calls = [];
+    manager._togglePhase2dLogAxis = (panelId, axis) => calls.push(axis);
+    marksItem(view, 'xlog').click();
+    marksItem(view, 'ylog').click();
+    assert.deepEqual(calls, ['x', 'y'], 'each toggles its own axis');
+}
+for (const mode of ['correlation', 'state-anim', 'phase3d']) {
+    const { toolbar } = renderToolbar(mode);
+    assert.equal(toolbar.querySelector('.panel-view-btn'), null, `${mode}: no View menu`);
 }
 
 // Line shape: a panel-level radio derived from the traces' overrides.
@@ -605,7 +694,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     const { manager } = renderToolbar('timeseries', 2, {});
     const radios = (plotTraces) => {
         manager.plot.traces = plotTraces;
-        const menu = renderMarksMenu(manager);
+        const menu = renderViewMenu(manager);
         return menu.querySelectorAll('.marks-menu-radio')
             .filter(r => r.getAttribute('aria-checked') === 'true')
             .map(r => r.className.match(/marks-line-(\w+)/)[1]);
@@ -617,7 +706,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     const calls = [];
     manager._setPanelLineShape = (panelId, shape) => calls.push(shape);
     manager.plot.traces = [];
-    const menu = renderMarksMenu(manager);
+    const menu = renderViewMenu(manager);
     menu.querySelectorAll('.marks-menu-radio').forEach(r => r.click());
     assert.deepEqual(calls, ['auto', 'linear', 'hv'], 'each radio sets its shape');
 }

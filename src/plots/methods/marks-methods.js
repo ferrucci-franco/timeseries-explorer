@@ -677,7 +677,8 @@ export function installPlotMarksMethods(TargetClass) {
 
     // ── Marks menu ──
 
-    // The items, from the plot state. `run` is what a click does.
+    // The items, from the plot state. `run` is what a click does. Marks are
+    // what is drawn ON the data; how the axes read it is the View menu's.
     proto._marksMenuModel = function(panelId, plot) {
         const has = this._hasContent?.(plot) && plot?.mode === 'timeseries';
         const repeatedAvailability = has ? this._repeatedAvailability(plot) : 'some';
@@ -692,17 +693,12 @@ export function installPlotMarksMethods(TargetClass) {
             { key: 'gaps', label: 'timeseriesGapsLabel', title: 'timeseriesGapsToggle', checked: !!plot?.showGaps, disabled: !has, run: () => this._toggleGaps(panelId), settings: () => this._openGapsPanel(panelId) },
             { key: 'repeated', label: 'timeseriesRepeatedLabel', title: repeatedTitle, checked: !!plot?.showRepeated, disabled: !has || repeatedAvailability === 'none', waiting: !!repeatedWaiting, run: () => this._toggleRepeated(panelId) },
             { key: 'samples', label: 'timeseriesSamplesLabel', title: samplesWaiting ? (samplesWaiting === 'lazy' ? 'timeseriesSamplesLazy' : 'timeseriesSamplesZoomIn') : 'timeseriesSamplesToggle', checked: !!plot?.showSamples, disabled: !has || !!plot?.timeseriesStacked, waiting: !!samplesWaiting, run: () => this._toggleSamples(panelId) },
-            { divider: true },
-            { key: 'stack', label: 'timeseriesStackLabel', title: 'timeseriesStackToggle', checked: !!plot?.timeseriesStacked, disabled: !has, run: () => this._toggleTimeseriesStack(panelId) },
-            { key: 'y2', label: 'timeseriesY2Label', title: 'timeseriesY2Toggle', checked: !!plot?.timeseriesY2Enabled, disabled: !has, run: () => this._toggleTimeseriesY2(panelId) },
-            { divider: true },
-            { key: 'line', radio: true, label: 'lineShapeLabel', value: this._panelLineShapeState(plot), disabled: !has },
         ];
     };
 
     proto._marksActiveCount = function(plot) {
         if (!plot) return 0;
-        return [plot.showNaN, plot.showGaps, plot.showRepeated, plot.showSamples, plot.timeseriesStacked, plot.timeseriesY2Enabled]
+        return [plot.showNaN, plot.showGaps, plot.showRepeated, plot.showSamples]
             .filter(Boolean).length;
     };
 
@@ -732,29 +728,38 @@ export function installPlotMarksMethods(TargetClass) {
     };
 
     proto._marksMenuEl = function(panelId) {
-        return document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]`);
+        return document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu)`);
     };
 
+    // Closes whichever panel dropdown is open — Marks or View; one at a time.
     proto._closeMarksMenu = function() {
         const menu = document.querySelector('.timeseries-marks-menu');
         if (!menu) return;
         menu._cleanup?.();
         menu.remove();
-        document.querySelectorAll('.timeseries-marks-btn[aria-expanded="true"]')
+        document.querySelectorAll('.timeseries-marks-btn[aria-expanded="true"], .panel-view-btn[aria-expanded="true"]')
             .forEach(button => button.setAttribute('aria-expanded', 'false'));
     };
 
     proto._openMarksMenu = function(panelId, anchor) {
+        this._openPanelDropdown(panelId, anchor, 'marks');
+    };
+
+    // Shared by Marks and View: the menu is positioned under its button, stays
+    // open while toggling, and Escape or a click outside closes it.
+    proto._openPanelDropdown = function(panelId, anchor, kind) {
         this._closeMarksMenu();
         const plot = this.plots.get(panelId);
         if (!plot) return;
+        const isView = kind === 'view';
         const menu = document.createElement('div');
-        menu.className = 'timeseries-marks-menu';
+        menu.className = isView ? 'timeseries-marks-menu panel-view-menu' : 'timeseries-marks-menu';
         menu.dataset.panelId = String(panelId);
         menu.setAttribute('role', 'menu');
-        menu.setAttribute('aria-label', i18n.t('marksMenuLabel'));
+        menu.setAttribute('aria-label', i18n.t(isView ? 'viewMenuLabel' : 'marksMenuLabel'));
         document.body.appendChild(menu);
-        this._renderMarksMenu(panelId, menu);
+        if (isView) this._renderViewMenu(panelId, menu);
+        else this._renderMarksMenu(panelId, menu);
         anchor?.setAttribute('aria-expanded', 'true');
         const rect = anchor?.getBoundingClientRect?.();
         if (rect) {
@@ -763,9 +768,9 @@ export function installPlotMarksMethods(TargetClass) {
             menu.style.top = `${Math.round(rect.bottom + 4)}px`;
         }
         const onPointer = (event) => {
-            // The Marks button toggles the menu itself (a rebuilt toolbar may
-            // have replaced `anchor` since the menu opened).
-            if (menu.contains(event.target) || event.target?.closest?.('.timeseries-marks-btn')) return;
+            // The button toggles the menu itself (a rebuilt toolbar may have
+            // replaced `anchor` since the menu opened).
+            if (menu.contains(event.target) || event.target?.closest?.('.timeseries-marks-btn, .panel-view-btn')) return;
             this._closeMarksMenu();
         };
         const onKey = (event) => {
@@ -789,8 +794,15 @@ export function installPlotMarksMethods(TargetClass) {
     proto._renderMarksMenu = function(panelId, menu = this._marksMenuEl(panelId)) {
         if (!menu) return;
         const plot = this.plots.get(panelId);
+        this._renderPanelMenuItems(panelId, menu, this._marksMenuModel(panelId, plot));
+    };
+
+    // Items: { divider } | { radio (line shape) } | a checkbox with an optional
+    // settings gear. Every one runs its own toggle; the menu is re-rendered from
+    // the plot state by the toggle (_syncMarksControls).
+    proto._renderPanelMenuItems = function(panelId, menu, items) {
         menu.replaceChildren();
-        for (const item of this._marksMenuModel(panelId, plot)) {
+        for (const item of items) {
             if (item.divider) {
                 const hr = document.createElement('div');
                 hr.className = 'marks-menu-divider';
@@ -875,14 +887,99 @@ export function installPlotMarksMethods(TargetClass) {
         }
     };
 
-    // Toolbar button and (when open) the menu, from the plot state.
+    // ── View menu ──
+
+    // How the panel's axes read its data: log scales, stacking, the right
+    // axis, the line shape. Each mode lists what applies to it; the modes with
+    // nothing to offer (heatmap, profile, integral) get a disabled button.
+    proto._viewMenuModel = function(panelId, plot) {
+        const mode = plot?.mode;
+        const has = !!this._hasContent?.(plot);
+        if (mode === 'timeseries') {
+            return [
+                { key: 'ylog', label: 'viewLogY', title: 'viewLogYTitle', checked: !!plot.timeseriesYLog, disabled: !has, run: () => this._toggleTimeseriesLogAxis(panelId, 'y') },
+                { key: 'y2log', label: 'viewLogY2', title: plot.timeseriesY2Enabled ? 'viewLogY2Title' : 'viewLogY2Off', checked: !!(plot.timeseriesY2Enabled && plot.timeseriesY2Log), disabled: !has || !plot.timeseriesY2Enabled, run: () => this._toggleTimeseriesLogAxis(panelId, 'y2') },
+                { divider: true },
+                { key: 'stack', label: 'timeseriesStackLabel', title: 'timeseriesStackToggle', checked: !!plot.timeseriesStacked, disabled: !has, run: () => this._toggleTimeseriesStack(panelId) },
+                { key: 'y2', label: 'timeseriesY2Label', title: 'timeseriesY2Toggle', checked: !!plot.timeseriesY2Enabled, disabled: !has, run: () => this._toggleTimeseriesY2(panelId) },
+                { divider: true },
+                { key: 'line', radio: true, label: 'lineShapeLabel', value: this._panelLineShapeState(plot), disabled: !has },
+            ];
+        }
+        if (mode === 'phase2d') {
+            return [
+                { key: 'xlog', label: 'viewLogX', title: 'viewLogXTitle', checked: !!plot.phase2dXLog, disabled: !has, run: () => this._togglePhase2dLogAxis(panelId, 'x') },
+                { key: 'ylog', label: 'viewLogY', title: 'viewLogYTitle', checked: !!plot.phase2dYLog, disabled: !has, run: () => this._togglePhase2dLogAxis(panelId, 'y') },
+            ];
+        }
+        if (mode === 'fft') {
+            const state = this._ensureFftState(plot);
+            const period = state.xAxisMode === 'period';
+            return [
+                { key: 'freqlog', label: 'viewLogFrequency', title: period ? 'viewLogFrequencyPeriod' : 'viewLogFrequencyTitle', checked: period || !!state.freqLog, disabled: !has || period, run: () => this._toggleFftFrequencyLog(panelId) },
+            ];
+        }
+        if (mode === 'histogram') {
+            const state = this._ensureHistogramState(plot);
+            return [
+                { key: 'countlog', label: 'viewLogCounts', title: 'viewLogCountsTitle', checked: state.yScale === 'log', disabled: !has, run: () => this._toggleHistogramLogY(panelId) },
+            ];
+        }
+        return [];
+    };
+
+    proto._viewActiveCount = function(plot) {
+        return this._viewMenuModel(null, plot)
+            .filter(item => item.checked && !item.disabled).length;
+    };
+
+    proto._createViewButton = function(panelId, plot) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn panel-view-btn';
+        button.setAttribute('aria-haspopup', 'menu');
+        button.setAttribute('aria-expanded', 'false');
+        button.title = i18n.t('viewMenuTitle');
+        this._applyViewButtonState(plot, button);
+        button.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (this._viewMenuEl(panelId)) this._closeMarksMenu();
+            else this._openPanelDropdown(panelId, button, 'view');
+        });
+        return button;
+    };
+
+    proto._applyViewButtonState = function(plot, button) {
+        if (!button) return;
+        const items = this._viewMenuModel(null, plot);
+        const count = items.filter(item => item.checked && !item.disabled).length;
+        const label = i18n.t('viewMenuLabel');
+        button.textContent = count ? `${label} (${count}) ▾` : `${label} ▾`;
+        button.classList.toggle('active', count > 0);
+        button.disabled = !(this._hasContent?.(plot) && items.length);
+    };
+
+    proto._viewMenuEl = function(panelId) {
+        return document.querySelector(`.panel-view-menu[data-panel-id="${panelId}"]`);
+    };
+
+    proto._renderViewMenu = function(panelId, menu = this._viewMenuEl(panelId)) {
+        if (!menu) return;
+        const plot = this.plots.get(panelId);
+        this._renderPanelMenuItems(panelId, menu, this._viewMenuModel(panelId, plot));
+    };
+
+    // Toolbar buttons and (when open) the menus, from the plot state.
     proto._syncMarksControls = function(panelId) {
         const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
         const plot = this.plots.get(panelId);
         this._applyMarksButtonState(plot, panelEl?.querySelector('.timeseries-marks-btn'));
+        this._applyViewButtonState(plot, panelEl?.querySelector('.panel-view-btn'));
         this._renderMarksMenu(panelId);
+        this._renderViewMenu(panelId);
         // A mode change or a cleared panel turns Gaps off without its toggle.
         if (!(plot?.mode === 'timeseries' && plot.showGaps)) this._closeGapsPanel(panelId);
+        this._refreshLogAxisNotice?.(plot);
     };
 
     // The same, from a plot (the refresh paths have the plot, not the id).
@@ -891,7 +988,7 @@ export function installPlotMarksMethods(TargetClass) {
     proto._syncMarksControlsForPlot = function(plot) {
         const panelId = plot?.div?.closest?.('.layout-panel')?.dataset?.id;
         if (panelId === undefined || panelId === null) return;
-        const menu = document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]`);
+        const menu = document.querySelector(`.timeseries-marks-menu[data-panel-id="${panelId}"]:not(.panel-view-menu)`);
         if (menu) this._renderMarksMenu(panelId, menu);
     };
 
