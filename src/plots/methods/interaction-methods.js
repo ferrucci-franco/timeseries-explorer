@@ -2640,10 +2640,11 @@ proto._traceInterpolationMode = function(trace) {
     // ('hv' holds the left value, exactly what 'step' interpolation returns)
     // instead of floating on a linear chord.
     if (trace.lineShape) return trace.lineShape === 'hv' ? 'step' : 'linear';
+    // Otherwise the variable decides, by the same rule the drawing uses: a
+    // time-axis sample index is drawn as stairs too, not only a boolean, and
+    // the cursor used to read it on a linear chord across the step.
     const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
-    if (!variable) return 'linear';
-    if (variable.dataType === 'boolean') return 'step';
-    return 'linear';
+    return this._variableDefaultsToStairs(variable) ? 'step' : 'linear';
 };
 
 proto._findNextExtremum = function(times, values, fromX, type, direction = 'next') {
