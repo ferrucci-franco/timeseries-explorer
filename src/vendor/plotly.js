@@ -3,6 +3,7 @@ import spanishLocale from 'plotly.js-locales/es.js';
 import frenchLocale from 'plotly.js-locales/fr.js';
 import italianLocale from 'plotly.js-locales/it.js';
 import { installTouchPlotGestures } from '../ui/plot-touch-gestures.js';
+import { install3DSceneGestures } from '../ui/plot-3d-gestures.js';
 
 const Plotly = globalThis.Plotly;
 
@@ -18,8 +19,12 @@ for (const locale of [spanishLocale, frenchLocale, italianLocale]) {
 // is only ever reacted into existence needs them just as much.
 //
 // See ui/plot-touch-gestures.js for what they are.
+// A 3D scene gets its own pinch and wheel zoom (ui/plot-3d-gestures.js); it
+// looks for a scene under the pointer on every event, so a plot that only
+// later switches to 3D is covered too.
 const withTouchGestures = (drawn, div) => {
     installTouchPlotGestures(drawn || div, Plotly);
+    install3DSceneGestures(drawn || div);
     return drawn;
 };
 const nativeNewPlot = Plotly.newPlot.bind(Plotly);

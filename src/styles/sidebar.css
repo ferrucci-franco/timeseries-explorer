@@ -326,6 +326,12 @@
     color: var(--text-secondary);
 }
 
+/* The "#" button in the Variables header hides the "[N pts]" of every leaf;
+   the unit and type that follow it stay. */
+.sidebar.hide-point-counts .tree-info-count {
+    display: none;
+}
+
 .tree-sign-toggle {
     width: 20px;
     height: 20px;

@@ -2393,9 +2393,8 @@ proto._buildPhase2DtTraces = function(plot) {
             y: visual.x,
             z: visual.y,
             name,
-            type: 'scatter3d', mode: 'lines',
+            ...this._phase3dDisplayProps(plot, pt.color),
             visible: pt.visible ?? true,
-            line: { color: pt.color, width: 3 },
             ...highResolutionHover,
         };
     }).filter(Boolean);
@@ -2411,11 +2410,24 @@ proto._buildPhase3DTraces = function(plot) {
             y: visual.y,
             z: visual.z,
             name: this._phaseTraceName(plot, pt),
-            type: 'scatter3d', mode: 'lines',
+            ...this._phase3dDisplayProps(plot, pt.color),
             visible: pt.visible ?? true,
-            line: { color: pt.color, width: 3 },
         };
     }).filter(Boolean);
+};
+
+// Trace type/mode/line/marker for a 3D pair trace. The Lines / Points /
+// Lines+points display and the marker size/opacity are shared with 2D
+// (plot.phase2d), so the choice follows the panel across modes.
+proto._phase3dDisplayProps = function(plot, color) {
+    const state = this._ensurePhase2dState ? this._ensurePhase2dState(plot) : null;
+    const mode = this._phase2dPlotlyMode ? this._phase2dPlotlyMode(state) : 'lines';
+    const showMarkers = this._phase2dShowsMarkers ? this._phase2dShowsMarkers(state) : false;
+    const props = { type: 'scatter3d', mode, line: { color, width: 3 } };
+    if (showMarkers) {
+        props.marker = { color, size: state?.markerSize ?? 4, opacity: state?.markerOpacity ?? 0.65 };
+    }
+    return props;
 };
 
 proto._buildPhase3DLayout = function(plot, isTimez) {

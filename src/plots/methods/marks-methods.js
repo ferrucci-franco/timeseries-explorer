@@ -1011,28 +1011,33 @@ export function installPlotMarksMethods(TargetClass) {
             const allowed = this._equalAspectAllowed?.(plot) !== false;
             return { key: 'aspect', label: 'viewEqualAspect', title: allowed ? 'equalAspect2D' : 'equalAspect2DMixedLog', checked: !!plot.equalAspect2D, disabled: !has || !allowed, run: () => this._toggleEqualAspect2D(panelId) };
         };
-        if (mode === 'phase2d') {
+        // Lines / Points / Lines+points, and the marker size and opacity while
+        // points are drawn. The 2D and 3D pair views share this (plot.phase2d).
+        const displayItems = () => {
             const state = this._ensurePhase2dState(plot);
-            const items = [
-                lastView,
-                { divider: true },
-                {
-                    key: 'display', radio: true, label: 'phase2dDisplayLabel', value: state.displayMode, disabled: !has,
-                    options: [
-                        ['lines', 'phase2dDisplayLines', 'phase2dDisplayTooltip'],
-                        ['markers', 'phase2dDisplayPoints', 'phase2dDisplayTooltip'],
-                        ['lines+markers', 'phase2dDisplayLinesPoints', 'phase2dDisplayTooltip'],
-                    ],
-                    onSelect: (value) => this._setPhase2dDisplayMode(panelId, value),
-                },
-            ];
-            // Marker size and opacity only mean something while points are drawn.
+            const items = [{
+                key: 'display', radio: true, label: 'phase2dDisplayLabel', value: state.displayMode, disabled: !has,
+                options: [
+                    ['lines', 'phase2dDisplayLines', 'phase2dDisplayTooltip'],
+                    ['markers', 'phase2dDisplayPoints', 'phase2dDisplayTooltip'],
+                    ['lines+markers', 'phase2dDisplayLinesPoints', 'phase2dDisplayTooltip'],
+                ],
+                onSelect: (value) => this._setPhase2dDisplayMode(panelId, value),
+            }];
             if (this._phase2dShowsMarkers(state)) {
                 items.push(
                     { key: 'marker-size', number: true, label: 'phase2dMarkerSize', min: MARKER_SIZE_MIN, max: MARKER_SIZE_MAX, step: 1, value: state.markerSize, disabled: !has, onChange: (value) => this._setPhase2dMarkerSetting(panelId, 'markerSize', value) },
                     { key: 'marker-opacity', number: true, label: 'phase2dMarkerOpacity', min: MARKER_OPACITY_MIN, max: MARKER_OPACITY_MAX, step: 0.05, value: state.markerOpacity, disabled: !has, onChange: (value) => this._setPhase2dMarkerSetting(panelId, 'markerOpacity', value) },
                 );
             }
+            return items;
+        };
+        if (mode === 'phase2d') {
+            const items = [
+                lastView,
+                { divider: true },
+                ...displayItems(),
+            ];
             items.push(
                 { divider: true },
                 aspectItem(),
@@ -1058,9 +1063,11 @@ export function installPlotMarksMethods(TargetClass) {
             }));
             // The camera is part of the view: Ctrl+Z brings the last one back
             // (the state animation builds its chart elsewhere, without history).
-            const undo = (mode === 'phase2dt' || mode === 'phase3d') ? [lastView, { divider: true }] : [];
+            const isPair3D = mode === 'phase2dt' || mode === 'phase3d';
+            const undo = isPair3D ? [lastView, { divider: true }] : [];
             return [
                 ...undo,
+                ...(isPair3D ? [...displayItems(), { divider: true }] : []),
                 {
                     key: 'proj', radio: true, label: 'viewProjection', value: plot.projection === 'perspective' ? 'perspective' : 'orthographic', disabled: !has,
                     options: [

@@ -102,6 +102,11 @@ proto.initEventListeners = function() {
         this.toggleDescriptions(this.showDescriptions);
     });
 
+    document.getElementById('toggle-point-counts').addEventListener('click', () => {
+        this.showPointCounts = !this.showPointCounts;
+        this.togglePointCounts(this.showPointCounts);
+    });
+
     // 📂 — just open file picker, no confirmation
     document.getElementById('load-new-file').addEventListener('click', () => {
         this._openResultFilesFromUser().catch(err => {

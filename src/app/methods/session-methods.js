@@ -268,6 +268,7 @@ proto._captureSessionSettings = function() {
         theme: this.theme,
         language: this.language,
         showDescriptions: !!this.showDescriptions,
+        showPointCounts: this.showPointCounts !== false,
         sortAlphabetical: !!this.sortAlphabetical,
         scrollablePlotArea: !!this.scrollablePlotArea,
         mouseWheelZoom: !!this.mouseWheelZoom,
@@ -645,6 +646,7 @@ proto._applySessionSettings = function(settings) {
     if (settings.language) this.setLanguage(settings.language);
     if (settings.theme) this.applyTheme(settings.theme);
     this.showDescriptions = !!settings.showDescriptions;
+    this.showPointCounts = settings.showPointCounts !== false;
     this.sortAlphabetical = settings.sortAlphabetical !== false;
     this.reloadAsNewVersionMode = !!settings.reloadAsNewVersionMode;
     this.mouseWheelZoom = settings.mouseWheelZoom !== false;
@@ -746,6 +748,7 @@ proto._syncSessionSettingsUI = function() {
         input.checked = input.value === this.plotManager.legendPosition;
     });
     document.getElementById('toggle-descriptions')?.classList.toggle('active', this.showDescriptions);
+    this.togglePointCounts?.(this.showPointCounts !== false);
     document.getElementById('toggle-sort')?.classList.toggle('active', this.sortAlphabetical);
     const variableFilter = document.getElementById('variable-filter');
     if (variableFilter) variableFilter.value = this._filterText;

@@ -126,6 +126,7 @@ const i18n = {
             'theme-toggle':       'toggleTheme',
             'toggle-sort':        'sortAZ',
             'toggle-descriptions':'toggleDescriptions',
+            'toggle-point-counts':'togglePointCounts',
             'derived-help-toggle':'derivedFormulaHelp',
             'outlier-help-toggle':'outlierHelpTitle',
             'expand-all':         'expandAll',

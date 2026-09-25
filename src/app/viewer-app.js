@@ -28,6 +28,7 @@ class OpenModelicaViewer {
         this.theme       = OpenModelicaViewer.getStartupTheme();
         this.language    = 'en';
         this.showDescriptions = false;
+        this.showPointCounts = true;
         this.sortAlphabetical = true;
         this._currentTree     = null;
         this._filterText      = '';
