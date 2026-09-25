@@ -2537,11 +2537,6 @@ class PlotManager {
             statsBtn.disabled = !has || plot?.mode === 'heatmap' || plot?.mode === 'temporal-profile' || plot?.mode === 'integral';
             if (plot?.mode === 'heatmap') statsBtn.title = i18n.t('heatmapStatsPending');
         }
-        const equalAspectBtn = panelEl.querySelector('.equal-aspect-btn');
-        if (equalAspectBtn) {
-            equalAspectBtn.classList.toggle('active', !!plot?.equalAspect2D);
-            equalAspectBtn.setAttribute('aria-pressed', String(!!plot?.equalAspect2D));
-        }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {
             compareBtn.disabled = !(has && plot?.mode !== 'state-anim' && plot?.mode !== 'fft' && plot?.mode !== 'heatmap' && plot?.mode !== 'temporal-profile' && plot?.mode !== 'integral' && plot?.mode !== 'correlation' && this.files.size > 1);
@@ -2552,13 +2547,9 @@ class PlotManager {
             cursorBtn.disabled = !enabled;
             cursorBtn.classList.toggle('active', !!this._anyCursorEnabled?.(plot));
         }
-        // NaN/Inf, Gaps, Repeated, Samples (Marks); log axes, Stack, Y2 (View).
+        // NaN/Inf, Gaps, Repeated, Samples (Marks); how the axes and camera read the data (View).
         this._syncMarksControls?.(panelId);
-        panelEl.querySelectorAll('.timeseries-analysis-btn').forEach(btn => {
-            const active = btn.dataset.mode === plot?.mode;
-            btn.classList.toggle('active', active);
-            btn.setAttribute('aria-pressed', String(active));
-        });
+        this._applyAnalysisButtonState?.(plot, panelEl.querySelector('.timeseries-analysis-menu-btn'));
         panelEl.querySelectorAll('.panel-autoscale-btn, .panel-autoscale-axis-btn').forEach(btn => {
             btn.disabled = !has;
         });
@@ -2569,13 +2560,9 @@ class PlotManager {
         const isPhase2dFamilyMode = plot?.mode === 'phase2d' || plot?.mode === 'correlation';
         const showGroup = is3DMode || isAnim || this._supportsEqualAspect2D(plot) || isPhase2dFamilyMode;
         const viewGroup = panelEl.querySelector('.view-btn-group');
-        if (viewGroup) {
-            viewGroup.style.display = showGroup ? '' : 'none';
-            // Hide plane/Iso buttons for 2D state-anim (only Home stays)
-            viewGroup.querySelectorAll('.view-btn-3d-only').forEach(btn => {
-                btn.style.display = is3DMode ? '' : 'none';
-            });
-        }
+        // 1:1, projection, camera presets and rotations are in the View menu,
+        // which _syncMarksControls keeps in step.
+        if (viewGroup) viewGroup.style.display = showGroup ? '' : 'none';
     }
 
     // options.fileName / options.baseName carry the name chosen in the export
