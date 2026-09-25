@@ -2541,6 +2541,9 @@ class PlotManager {
         if (equalAspectBtn) {
             equalAspectBtn.classList.toggle('active', !!plot?.equalAspect2D);
             equalAspectBtn.setAttribute('aria-pressed', String(!!plot?.equalAspect2D));
+            const allowed = this._equalAspectAllowed?.(plot) !== false;
+            equalAspectBtn.disabled = !allowed;
+            equalAspectBtn.title = i18n.t(allowed ? 'equalAspect2D' : 'equalAspect2DMixedLog');
         }
         const compareBtn = panelEl.querySelector('.compare-files-btn');
         if (compareBtn) {

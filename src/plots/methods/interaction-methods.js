@@ -4637,7 +4637,10 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         const equalAspectBtn = document.createElement('button');
         equalAspectBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn equal-aspect-btn' + (plot?.equalAspect2D ? ' active' : '');
         equalAspectBtn.textContent = '1:1';
-        equalAspectBtn.title = i18n.t('equalAspect2D');
+        // One log axis and one linear: a decade and a unit have no common scale.
+        const equalAspectAllowed = this._equalAspectAllowed?.(plot) !== false;
+        equalAspectBtn.disabled = !equalAspectAllowed;
+        equalAspectBtn.title = i18n.t(equalAspectAllowed ? 'equalAspect2D' : 'equalAspect2DMixedLog');
         equalAspectBtn.setAttribute('aria-pressed', String(!!plot?.equalAspect2D));
         equalAspectBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -5024,6 +5027,8 @@ proto._togglePhase2dLogAxis = function(panelId, axis = 'y') {
     if (!plot || plot.mode !== 'phase2d') return;
     const key = axis === 'x' ? 'phase2dXLog' : 'phase2dYLog';
     plot[key] = !plot[key];
+    // 1:1 cannot hold between a log axis and a linear one.
+    if (plot.equalAspect2D && !this._equalAspectAllowed(plot)) plot.equalAspect2D = false;
     if (plot.div) this._rebuildPanel(panelId);
     else this._refreshActionBtns(panelId);
     this._syncMarksControls(panelId);
@@ -5033,68 +5038,139 @@ proto._togglePhase2dLogAxis = function(panelId, axis = 'y') {
  * How many finite values the panel's log axes cannot draw (0 or below), over
  * everything the panel shows. The data is not changed; the notice says so
  * and points at abs() for the magnitude.
+ *
+ * In-memory files are counted here. A memory-saving (DuckDB) file only holds
+ * an overview sample in memory, so its rows are returned as `lazy` items for
+ * an exact count in SQL (see _refreshLogAxisNotice); `approx` is what the
+ * overview says, the fallback when that query cannot run.
  */
 proto._logAxisHiddenCount = function(plot) {
-    if (!plot) return 0;
-    const countNonPositive = (values) => {
-        let n = 0;
-        if (!values) return 0;
-        for (const value of values) {
-            const v = Number(value);
-            if (Number.isFinite(v) && v <= 0) n++;
-        }
-        return n;
+    const out = { hidden: 0, approx: 0, lazy: new Map() };
+    if (!plot) return out;
+    const sign = (fileId, name) => (this.isVariableSignInverted?.(fileId, name) ? -1 : 1);
+    const lazyItem = (fileId, item) => {
+        if (!out.lazy.has(fileId)) out.lazy.set(fileId, []);
+        out.lazy.get(fileId).push(item);
     };
-    let hidden = 0;
+    const isLazy = (fileId) => !!this.files.get(fileId)?.data?._duckdb;
     if (plot.mode === 'timeseries') {
         for (const trace of plot.traces || []) {
             if (!this._isVisible(trace)) continue;
             if (!this._axisIsLog(plot, this._traceYAxis(trace, plot))) continue;
             const variable = this.files.get(trace.fileId)?.data?.variables?.[trace.varName];
             if (!variable || variable.kind === 'parameter') continue;
-            hidden += countNonPositive(this._getTransformedVariableData(trace.fileId, trace.varName));
+            const values = this._getTransformedVariableData(trace.fileId, trace.varName);
+            let n = 0;
+            for (const value of values || []) {
+                const v = Number(value);
+                if (Number.isFinite(v) && v <= 0) n++;
+            }
+            if (isLazy(trace.fileId)) {
+                out.approx += n;
+                const term = { name: trace.varName, sign: sign(trace.fileId, trace.varName) };
+                lazyItem(trace.fileId, { finite: [term], nonPositive: [term] });
+            } else {
+                out.hidden += n;
+            }
         }
     } else if (plot.mode === 'phase2d') {
         const xLog = this._axisIsLog(plot, 'x');
         const yLog = this._axisIsLog(plot, 'y');
-        if (!xLog && !yLog) return 0;
+        if (!xLog && !yLog) return out;
         for (const pt of plot.phaseTraces || []) {
             if (!this._isVisible(pt)) continue;
             // Every row, not the drawn (decimated) points: the note counts values.
             const xs = this._getTransformedVariableData(pt.fileId, pt.x);
             const ys = this._getTransformedVariableData(pt.fileId, pt.y);
             const n = Math.min(xs?.length || 0, ys?.length || 0);
+            let count = 0;
             for (let i = 0; i < n; i++) {
                 const x = Number(xs[i]);
                 const y = Number(ys[i]);
                 if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-                if ((xLog && x <= 0) || (yLog && y <= 0)) hidden++;
+                if ((xLog && x <= 0) || (yLog && y <= 0)) count++;
+            }
+            if (isLazy(pt.fileId)) {
+                out.approx += count;
+                const tx = { name: pt.x, sign: sign(pt.fileId, pt.x) };
+                const ty = { name: pt.y, sign: sign(pt.fileId, pt.y) };
+                lazyItem(pt.fileId, {
+                    finite: [tx, ty],
+                    nonPositive: [...(xLog ? [tx] : []), ...(yLog ? [ty] : [])],
+                });
+            } else {
+                out.hidden += count;
             }
         }
     }
-    return hidden;
+    return out;
 };
 
 /**
  * The "N values ≤ 0 not shown" pill over a panel with a log axis. Called from
  * every time-series refresh, so the count is only taken again when what it
  * depends on — the log axes, the traces on them, their data — has changed.
+ * A memory-saving file is counted exactly in DuckDB; until that answer is in
+ * (or if the query cannot run) the overview's count is shown as approximate.
  */
 proto._refreshLogAxisNotice = function(plot) {
     const panelEl = plot?.div?.closest?.('.layout-panel');
     if (!panelEl) return;
+    const signOf = (fileId, name) => (this.isVariableSignInverted?.(fileId, name) ? '-' : '+');
     const onLog = (plot.mode === 'timeseries'
         ? (plot.traces || []).filter(t => this._isVisible(t) && this._axisIsLog(plot, this._traceYAxis(t, plot)))
-            .map(t => `${t.fileId}/${t.varName}:${this._getTransformedVariableData(t.fileId, t.varName)?.length ?? 0}`)
+            .map(t => `${t.fileId}/${t.varName}:${this._getTransformedVariableData(t.fileId, t.varName)?.length ?? 0}:${signOf(t.fileId, t.varName)}`)
         : (plot.mode === 'phase2d' && (this._axisIsLog(plot, 'x') || this._axisIsLog(plot, 'y'))
             ? [`x${+this._axisIsLog(plot, 'x')}y${+this._axisIsLog(plot, 'y')}`,
-                ...(plot.phaseTraces || []).filter(pt => this._isVisible(pt)).map(pt => `${pt.fileId}/${pt.x}/${pt.y}`)]
+                ...(plot.phaseTraces || []).filter(pt => this._isVisible(pt))
+                    .map(pt => `${pt.fileId}/${pt.x}${signOf(pt.fileId, pt.x)}/${pt.y}${signOf(pt.fileId, pt.y)}`)]
             : []));
-    const signature = `${plot.mode}|${onLog.join(',')}`;
+    // A transform (gain, offset, sign) changes which values are ≤ 0.
+    const transforms = [...new Set((plot.traces || []).map(t => t.fileId).concat((plot.phaseTraces || []).map(p => p.fileId)))]
+        .map(fileId => JSON.stringify(this._fileTransform?.(fileId) || null));
+    const signature = `${plot.mode}|${onLog.join(',')}|${transforms.join(',')}`;
     if (plot._logAxisNotice?.signature !== signature) {
-        plot._logAxisNotice = { signature, hidden: onLog.length ? this._logAxisHiddenCount(plot) : 0 };
+        const counted = onLog.length ? this._logAxisHiddenCount(plot) : { hidden: 0, approx: 0, lazy: new Map() };
+        const notice = {
+            signature,
+            hidden: counted.hidden + counted.approx,
+            approximate: counted.lazy.size > 0,
+        };
+        plot._logAxisNotice = notice;
+        if (counted.lazy.size) this._countLazyLogAxisHidden(plot, notice, counted);
     }
-    const hidden = plot._logAxisNotice.hidden;
+    this._renderLogAxisNotice(plot);
+};
+
+// The exact count for memory-saving files, one query per file. Only lands if
+// nothing changed in the meantime.
+proto._countLazyLogAxisHidden = function(plot, notice, counted) {
+    const jobs = [...counted.lazy.entries()].map(([fileId, items]) => {
+        const data = this.files.get(fileId)?.data;
+        const source = data?._duckdb?.source;
+        if (!source?.countNonPositiveRows) return Promise.reject(new Error('noSql'));
+        const transform = this._fileTransform?.(fileId) || {};
+        // A crop narrows the rows the plot shows; the whole-table count would
+        // overstate it, so a cropped file keeps the overview's estimate.
+        if (transform.cropStart !== null && transform.cropStart !== undefined) return Promise.reject(new Error('cropped'));
+        if (transform.cropEnd !== null && transform.cropEnd !== undefined) return Promise.reject(new Error('cropped'));
+        return source.countNonPositiveRows(data, items, { gain: transform.gain, yOffset: transform.yOffset })
+            .then(counts => counts.reduce((sum, n) => sum + n, 0));
+    });
+    Promise.all(jobs).then((sums) => {
+        if (plot._logAxisNotice !== notice) return;
+        notice.hidden = counted.hidden + sums.reduce((sum, n) => sum + n, 0);
+        notice.approximate = false;
+        this._renderLogAxisNotice(plot);
+    }).catch(() => {
+        // The overview's count stays, marked as approximate.
+    });
+};
+
+proto._renderLogAxisNotice = function(plot) {
+    const panelEl = plot?.div?.closest?.('.layout-panel');
+    if (!panelEl) return;
+    const { hidden = 0, approximate = false } = plot._logAxisNotice || {};
     let pill = panelEl.querySelector('.log-axis-notice');
     if (!hidden) {
         pill?.remove();
@@ -5106,11 +5182,13 @@ proto._refreshLogAxisNotice = function(plot) {
         pill.setAttribute('role', 'status');
         panelEl.appendChild(pill);
     }
-    const text = hidden === 1
+    const count = `${approximate ? '≈ ' : ''}${i18n.formatNumber(hidden)}`;
+    const text = hidden === 1 && !approximate
         ? i18n.t('logAxisHiddenValue')
-        : i18n.t('logAxisHiddenValues').replace('{count}', i18n.formatNumber(hidden));
+        : i18n.t('logAxisHiddenValues').replace('{count}', count);
     pill.textContent = text;
-    pill.title = `${text}. ${i18n.t('logAxisHiddenHint')}`;
+    pill.title = `${text}. ${i18n.t('logAxisHiddenHint')}`
+        + (approximate ? ` ${i18n.t('logAxisHiddenApprox')}` : '');
 };
 
 proto._toggleCorrelationMode = function(panelId) {
@@ -5358,9 +5436,20 @@ proto._supportsEqualAspect2D = function(plot) {
     return !!plot && (plot.mode === 'phase2d' || (plot.mode === 'state-anim' && (plot.stateAnimDim || 2) === 2));
 };
 
+/**
+ * 1:1 needs the two axes on the same scale. Both linear: a unit is a unit.
+ * Both log: a decade is a decade — slopes then read true in a log-log plot.
+ * One of each has no common scale.
+ */
+proto._equalAspectAllowed = function(plot) {
+    if (plot?.mode !== 'phase2d') return true;
+    return !!plot.phase2dXLog === !!plot.phase2dYLog;
+};
+
 proto._toggleEqualAspect2D = function(panelId) {
     const plot = this.plots.get(panelId);
     if (!this._supportsEqualAspect2D(plot)) return;
+    if (!plot.equalAspect2D && !this._equalAspectAllowed(plot)) return;
     plot.equalAspect2D = !plot.equalAspect2D;
     if (plot.div) {
         const update = plot.equalAspect2D

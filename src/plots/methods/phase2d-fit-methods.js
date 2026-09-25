@@ -258,6 +258,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     proto._computePhase2dFits = function(plot) {
         const state = this._ensurePhase2dState(plot);
         if (!state.fitEnabled) { plot._phase2dFits = []; return plot._phase2dFits; }
+        // On a log X axis the curve is sampled in decades, or its first decade
+        // would be drawn from a couple of points.
+        const curveOptions = { logX: !!this._axisIsLog?.(plot, 'x') };
         const results = [];
         (plot.phaseTraces || []).forEach((pair, index) => {
             if (pair.visible === false) return;
@@ -276,7 +279,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
                 const key = this._phase2dLazyFitKey(plot, pair);
                 const cached = plot._phase2dLazyFits?.get(this._phase2dPairId(pair));
                 if (cached && cached.key === key && cached.fit) {
-                    const curve = cached.fit.status === 'ok' ? buildFitCurve(cached.fit) : { x: [], y: [] };
+                    const curve = cached.fit.status === 'ok' ? buildFitCurve(cached.fit, undefined, curveOptions) : { x: [], y: [] };
                     results.push({ pair, index, label, model, fit: cached.fit, curve, nScope: cached.nScope, lazy: true });
                 } else {
                     results.push({ pair, index, label, model, fit: null, curve: null, nScope: NaN, lazy: true, lazyStatus: cached?.status });
@@ -285,7 +288,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             }
             const series = this._phase2dPairSeries(plot, pair);
             const fit = fitPair(model, series.x, series.y);
-            const curve = fit && fit.status === 'ok' ? buildFitCurve(fit) : { x: [], y: [] };
+            const curve = fit && fit.status === 'ok' ? buildFitCurve(fit, undefined, curveOptions) : { x: [], y: [] };
             results.push({ pair, index, label, model, fit, curve, nScope: series.nScope, lazy: false });
         });
         plot._phase2dFits = results;
@@ -394,8 +397,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const traces = [];
         for (const r of results) {
             if (!r.curve || !r.curve.x.length) continue;
-            const modelWord = r.model === 'quadratic'
-                ? i18n.t('phase2dFitQuadratic') : i18n.t('phase2dFitLinear');
+            const modelWord = r.model === 'quadratic' ? i18n.t('phase2dFitQuadratic')
+                : (r.model === 'power' ? i18n.t('phase2dFitPower') : i18n.t('phase2dFitLinear'));
             traces.push({
                 x: r.curve.x,
                 y: r.curve.y,
@@ -1122,6 +1125,10 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (fit.model === 'linear') {
             return { generic: 'y = a·x + b', coeffs: [['a', g(fit.b1)], ['b', g(fit.b0)]] };
         }
+        if (fit.model === 'power') {
+            // b is the slope of the line a log-log plot shows.
+            return { generic: 'y = a·xᵇ', coeffs: [['a', g(fit.a)], ['b', g(fit.b)]] };
+        }
         return { generic: 'y = a·x² + b·x + c', coeffs: [['a', g(fit.a)], ['b', g(fit.b)], ['c', g(fit.c)]] };
     };
 
@@ -1350,7 +1357,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         const typeSelect = document.createElement('select');
         typeSelect.className = 'phase2d-fit-type-select';
         typeSelect.setAttribute('aria-label', i18n.t('phase2dFitType'));
-        [['none', 'phase2dFitOff'], ['linear', 'phase2dFitLinear'], ['quadratic', 'phase2dFitQuadratic']].forEach(([m, key]) => {
+        [['none', 'phase2dFitOff'], ['linear', 'phase2dFitLinear'], ['quadratic', 'phase2dFitQuadratic'], ['power', 'phase2dFitPower']].forEach(([m, key]) => {
             const opt = document.createElement('option');
             opt.value = m;
             opt.textContent = i18n.t(key);
@@ -1422,9 +1429,12 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             const stats = document.createElement('dl');
             stats.className = 'phase2d-fit-stats';
             const rows = [];
-            if (r.fit.model === 'linear') rows.push([i18n.t('phase2dFitPearsonR'), fmt(r.fit.r)]);
-            rows.push([i18n.t('phase2dFitRSquared'), fmt(r.fit.r2)]);
-            rows.push([i18n.t('phase2dFitRmse'), fmt(r.fit.rmse)]);
+            // A power fit is a line in log-log: its r, R² and RMSE are that
+            // line's, and say so (RMSE in decades).
+            const logLog = r.fit.model === 'power';
+            if (r.fit.model === 'linear' || logLog) rows.push([i18n.t(logLog ? 'phase2dFitPearsonRLog' : 'phase2dFitPearsonR'), fmt(r.fit.r)]);
+            rows.push([i18n.t(logLog ? 'phase2dFitRSquaredLog' : 'phase2dFitRSquared'), fmt(r.fit.r2)]);
+            rows.push([i18n.t(logLog ? 'phase2dFitRmseLog' : 'phase2dFitRmse'), fmt(r.fit.rmse)]);
             rows.push([i18n.t('phase2dFitN'), `${r.fit.n}${r.fit.nExcluded ? ` (−${r.fit.nExcluded})` : ''}`]);
             for (const [k, v] of rows) {
                 const dt = document.createElement('dt'); dt.textContent = k;
@@ -1563,9 +1573,12 @@ export function installPlotPhase2dFitMethods(TargetClass) {
             ['quadratic_a', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'a')) : '')],
             ['quadratic_b', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'b')) : '')],
             ['quadratic_c', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'c')) : '')],
+            ['power_a', (r) => (r.model === 'power' ? num(fitOf(r, 'a')) : '')],
+            ['power_b', (r) => (r.model === 'power' ? num(fitOf(r, 'b')) : '')],
             ['center_x', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'centerX')) : '')],
             ['scale_x', (r) => (r.model === 'quadratic' ? num(fitOf(r, 'scaleX')) : '')],
-            ['pearson_r', (r) => (r.model === 'linear' ? num(fitOf(r, 'r')) : '')],
+            // For a power fit, r / R² / RMSE are those of the log-log line.
+            ['pearson_r', (r) => (r.model === 'linear' || r.model === 'power' ? num(fitOf(r, 'r')) : '')],
             ['r_squared', (r) => num(fitOf(r, 'r2'))],
             ['rmse', (r) => num(fitOf(r, 'rmse'))],
             ['status', (r) => (r.lazy ? 'lazy-unsupported' : (r.model === 'none' ? 'none' : (r.fit?.status ?? ''))),],

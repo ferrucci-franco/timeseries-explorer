@@ -767,7 +767,11 @@ proto._toggleFftFrequencyLog = function(panelId) {
     state.freqLog = !state.freqLog;
     // The live window is in the other scale's units: do not carry it over.
     plot._fftRecomputeView = { ...(plot._fftRecomputeView || {}), preserveX: false };
-    Promise.resolve(this._refreshFftSpectrumPlot(panelId, plot)).then(() => this._fitFftXAxis(plot));
+    Promise.resolve(this._refreshFftSpectrumPlot(panelId, plot)).then(() => {
+        this._fitFftXAxis(plot);
+        // The frequency sliders change scale with the axis.
+        this._renderFftOptionsPanel(panelId, plot);
+    });
     this._syncMarksControls?.(panelId);
 };
 
@@ -891,7 +895,12 @@ proto._fftAxisLimitSliderDomain = function(plot, key) {
             max = Math.max(max, value);
         }
     }
-    if (!isY) { if (!this._fftXAxisIsPeriod(plot)) min = Math.min(0, min); }
+    if (!isY) {
+        if (!this._fftXAxisIsLog(plot)) min = Math.min(0, min);
+        // A log frequency axis starts at the first bin above DC, and so does
+        // its slider: a logarithm of 0 is nowhere.
+        else if (!(min > 0) && !this._fftXAxisIsPeriod(plot)) min = this._fftLowestPositiveFrequency(plot) ?? min;
+    }
     else if (state.amplitudeScale === 'normal') min = Math.min(0, min);
     if (!Number.isFinite(min) || !Number.isFinite(max)) {
         min = isY ? 0 : 0;
@@ -1099,11 +1108,12 @@ proto._fftAxisLimitLabel = function(plot, key) {
 /**
  * Does this slider move in ratios rather than in steps?
  *
- * Only the x pair, and only on a period axis: that is the one that spans
- * decades, and the one drawn logarithmically.
+ * Only the x pair, and only on a log axis — the period one, or frequency read
+ * in decades: those span decades and are drawn logarithmically, so a slider
+ * in steps would spend nearly all its travel on the last decade.
  */
 proto._fftAxisLimitSliderIsLog = function(plot, key) {
-    return (key === 'fMin' || key === 'fMax') && this._fftXAxisIsPeriod(plot);
+    return (key === 'fMin' || key === 'fMax') && this._fftXAxisIsLog(plot);
 };
 
 proto._configureFftAxisLimitSlider = function(input, plot, key) {

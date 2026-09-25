@@ -34,7 +34,7 @@ import {
     buildRegressionPass2Sql,
     parseRegressionPass2,
 } from './pair-regression-sql.js';
-import { linearFromMoments, quadraticFromMoments } from '../utils/regression.js';
+import { linearFromMoments, quadraticFromMoments, powerFromMoments } from '../utils/regression.js';
 import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } from './missing-buckets-sql.js';
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
@@ -1314,6 +1314,40 @@ export default class DuckDbSource {
         return Number(result.getChild('n')?.get(0) ?? 0);
     }
 
+    /**
+     * Rows a log axis cannot draw, counted over the whole table (the overview in
+     * memory is only a sample). Each item counts the rows where every `finite`
+     * variable is finite and at least one `nonPositive` variable is ≤ 0, with
+     * gain, per-variable sign and offset applied as the plot applies them
+     * (transformed = raw · gain · sign + yOffset). Returns one count per item.
+     */
+    async countNonPositiveRows(legacyData, items, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('countNonPositiveRows: data is not DuckDB-backed (eager mode)');
+        const list = Array.isArray(items) ? items : [];
+        if (!list.length) return [];
+        const gain = Number.isFinite(Number(options.gain)) ? Number(options.gain) : 1;
+        const yOffset = Number.isFinite(Number(options.yOffset)) ? Number(options.yOffset) : 0;
+        const oLit = this._numericLiteral(yOffset);
+        const valueExpr = ({ name, sign }) => {
+            const variable = legacyData.variables?.[name];
+            if (!variable) throw new Error(`countNonPositiveRows: unknown variable "${name}"`);
+            const gLit = this._numericLiteral(gain * (sign < 0 ? -1 : 1));
+            return `(${this._valueExpressionSql(variable, name, { castDouble: true })} * ${gLit} + ${oLit})`;
+        };
+        const isFinite = (e) => `(${e} IS NOT NULL AND NOT isnan(${e}) AND NOT isinf(${e}))`;
+        const cols = list.map((item, i) => {
+            const finite = (item.finite || []).map(v => isFinite(valueExpr(v))).join(' AND ') || 'TRUE';
+            const nonPositive = (item.nonPositive || []).map(v => `${valueExpr(v)} <= 0`).join(' OR ') || 'FALSE';
+            return `COALESCE(SUM(CASE WHEN ${finite} AND (${nonPositive}) THEN 1 ELSE 0 END), 0)::BIGINT AS c${i}`;
+        }).join(',\n                   ');
+        const result = await this._interactiveQuery(`
+            SELECT ${cols}
+            FROM ${meta.tableName};
+        `);
+        return list.map((_, i) => Number(result.getChild(`c${i}`)?.get(0) ?? 0));
+    }
+
     async refreshOverview(legacyData) {
         const meta = legacyData?._duckdb;
         if (!meta) return;
@@ -2483,7 +2517,7 @@ export default class DuckDbSource {
         const resolved = list.map(p => {
             const vx = legacyData.variables?.[p?.x];
             const vy = legacyData.variables?.[p?.y];
-            const model = (p?.model === 'linear' || p?.model === 'quadratic') ? p.model : 'none';
+            const model = (p?.model === 'linear' || p?.model === 'quadratic' || p?.model === 'power') ? p.model : 'none';
             return { pair: p, vx, vy, model, ok: !!(vx && vy) && model !== 'none' };
         });
         const active = resolved.filter(r => r.ok);
@@ -2519,11 +2553,15 @@ export default class DuckDbSource {
             const gLit = this._numericLiteral(gain * (sign < 0 ? -1 : 1));
             return `(${this._valueExpressionSql(variable, name, { castDouble: true })} * ${gLit} + ${oLit})`;
         };
-        const pairExprs = active.map((r, i) => ({
-            i,
-            vx: valueExpr(r.vx, r.pair.x, r.pair.signX),
-            vy: valueExpr(r.vy, r.pair.y, r.pair.signY),
-        }));
+        // A power fit is a straight line through (log10 x, log10 y). Rows
+        // without a logarithm (≤ 0) become NULL, which the paired CTE drops
+        // and counts as excluded, exactly as the eager kernel does.
+        const logOf = (expr) => `(CASE WHEN ${expr} > 0 THEN log10(${expr}) END)`;
+        const pairExprs = active.map((r, i) => {
+            const vx = valueExpr(r.vx, r.pair.x, r.pair.signX);
+            const vy = valueExpr(r.vy, r.pair.y, r.pair.signY);
+            return r.model === 'power' ? { i, vx: logOf(vx), vy: logOf(vy) } : { i, vx, vy };
+        });
 
         const promise = this._runRegressionQueries(meta.tableName, where, pairExprs, active);
         if (cacheKey) this._rememberRegressionCache(cacheKey, promise);
@@ -2568,6 +2606,9 @@ export default class DuckDbSource {
             const { nScope, moments, centerX, scaleX } = pass1[i];
             if (r.model === 'linear') {
                 return { status: 'ok', model: 'linear', nScope, fit: linearFromMoments(moments) };
+            }
+            if (r.model === 'power') {
+                return { status: 'ok', model: 'power', nScope, fit: powerFromMoments(moments) };
             }
             // quadratic
             const stats = pass2.get(i);

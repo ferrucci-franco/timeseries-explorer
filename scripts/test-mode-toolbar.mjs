@@ -644,6 +644,8 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(toolbar.querySelector('.panel-view-btn').textContent, 'viewMenuLabel (3) ▾', 'log Y, log Y2 and Y2 count');
     const view = renderViewMenu(manager);
     assert.equal(marksItem(view, 'ylog').getAttribute('aria-checked'), 'true', 'log Y renders checked');
+    assert.equal(marksItem(view, 'stack').title, 'timeseriesStackLogTitle',
+        'on a log axis, Stack says its bands no longer read as their signals');
     assert.equal(marksItem(view, 'y2log').getAttribute('aria-checked'), 'true', 'log Y2 renders checked');
 }
 

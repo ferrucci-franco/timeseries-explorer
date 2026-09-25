@@ -900,7 +900,8 @@ export function installPlotMarksMethods(TargetClass) {
                 { key: 'ylog', label: 'viewLogY', title: 'viewLogYTitle', checked: !!plot.timeseriesYLog, disabled: !has, run: () => this._toggleTimeseriesLogAxis(panelId, 'y') },
                 { key: 'y2log', label: 'viewLogY2', title: plot.timeseriesY2Enabled ? 'viewLogY2Title' : 'viewLogY2Off', checked: !!(plot.timeseriesY2Enabled && plot.timeseriesY2Log), disabled: !has || !plot.timeseriesY2Enabled, run: () => this._toggleTimeseriesLogAxis(panelId, 'y2') },
                 { divider: true },
-                { key: 'stack', label: 'timeseriesStackLabel', title: 'timeseriesStackToggle', checked: !!plot.timeseriesStacked, disabled: !has, run: () => this._toggleTimeseriesStack(panelId) },
+                // On a log axis a band's thickness no longer reads as its signal: say so.
+                { key: 'stack', label: 'timeseriesStackLabel', title: plot.timeseriesYLog ? 'timeseriesStackLogTitle' : 'timeseriesStackToggle', checked: !!plot.timeseriesStacked, disabled: !has, run: () => this._toggleTimeseriesStack(panelId) },
                 { key: 'y2', label: 'timeseriesY2Label', title: 'timeseriesY2Toggle', checked: !!plot.timeseriesY2Enabled, disabled: !has, run: () => this._toggleTimeseriesY2(panelId) },
                 { divider: true },
                 { key: 'line', radio: true, label: 'lineShapeLabel', value: this._panelLineShapeState(plot), disabled: !has },

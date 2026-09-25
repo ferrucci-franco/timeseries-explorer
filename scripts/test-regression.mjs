@@ -8,8 +8,11 @@ import {
     buildFitCurve,
     predict,
     fitPair,
+    powerFit,
+    powerFromMoments,
     FIT_CURVE_POINTS,
 } from '../src/utils/regression.js';
+import { pairwiseMoments } from '../src/utils/correlation.js';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -315,6 +318,61 @@ const close = (actual, expected, tolerance, label) => {
     assert.match(source, /_renderPhase2dFitDrawer\(panelId, plot, \{ results: plot\._phase2dFits \|\| \[\] \}\)/);
     assert.match(source, /state\.timeSeriesHidden = false/);
     assert.match(source, /_clearPhase2dAutoRangeNotice[\s\S]*state\.autoRangeLimited = false/);
+}
+
+// ── Power: y = a·x^b as a straight line in log-log ──
+{
+    // y = 5·x^-1.5 exactly, over three decades.
+    const x = [0.1, 0.3, 1, 3, 10, 30, 100];
+    const y = x.map(v => 5 * v ** -1.5);
+    const f = powerFit(x, y);
+    assert.equal(f.status, 'ok', 'exact power law is ok');
+    close(f.a, 5, 1e-9, 'power a');
+    close(f.b, -1.5, 1e-12, 'power b (slope in decades per decade)');
+    close(f.r2, 1, 1e-12, 'exact: R² (log-log) is 1');
+    close(f.r, -1, 1e-12, 'decreasing: r (log-log) is -1');
+    close(f.minX, 0.1, 1e-12, 'minX back in data units');
+    close(f.maxX, 100, 1e-9, 'maxX back in data units');
+    close(predict(f, 4), 5 * 4 ** -1.5, 1e-12, 'predict a·x^b');
+    assert.ok(Number.isNaN(predict(f, 0)), 'no prediction at x = 0');
+    assert.deepEqual(fitPair('power', x, y).b, f.b, 'fitPair dispatches power');
+
+    // Rows without a logarithm are excluded and counted, like non-finite ones.
+    const xs = [-1, 0, ...x, NaN];
+    const ys = [2, 3, ...y, 1];
+    const g = powerFit(xs, ys);
+    assert.equal(g.n, x.length, 'x ≤ 0 and NaN rows are left out');
+    assert.equal(g.nExcluded, 3, 'and counted');
+    close(g.b, -1.5, 1e-12, 'without changing the fit');
+
+    // The lazy path aggregates the same logarithms: same result from moments.
+    const lx = x.map(Math.log10);
+    const ly = y.map(Math.log10);
+    const m = powerFromMoments(pairwiseMoments(lx, ly));
+    close(m.a, f.a, 1e-12, 'moments path: same a');
+    close(m.b, f.b, 1e-12, 'moments path: same b');
+
+    // Fewer than two usable rows: undefined, not invented.
+    assert.equal(powerFit([1, -2], [1, 3]).status, 'undefined', 'one usable row is not a fit');
+
+    // The curve is sampled evenly in decades, and spans only the fitted X.
+    const curve = buildFitCurve(f, 7);
+    close(curve.x[0], 0.1, 1e-12, 'curve starts at minX');
+    close(curve.x[6], 100, 1e-9, 'curve ends at maxX');
+    close(curve.x[2] / curve.x[1], curve.x[1] / curve.x[0], 1e-9, 'power curve: equal ratios between samples');
+    close(curve.y[3], predict(f, curve.x[3]), 1e-12, 'curve samples the prediction');
+}
+
+// ── Any fit on a log X axis: samples evenly spaced in decades ──
+{
+    const x = [1, 10, 100, 1000];
+    const f = linearFit(x, x.map(v => 2 * v + 1));
+    const linearSpaced = buildFitCurve(f, 4);
+    close(linearSpaced.x[1], 334, 1e-9, 'default: evenly spaced in x');
+    const logSpaced = buildFitCurve(f, 4, { logX: true });
+    assert.deepEqual(logSpaced.x.map(v => Math.round(v)), [1, 10, 100, 1000], 'log X: one sample per decade');
+    const negative = linearFit([-5, 5], [0, 10]);
+    close(buildFitCurve(negative, 3, { logX: true }).x[1], 0, 1e-12, 'a span through 0 stays linear');
 }
 
 console.log('test-regression: all assertions passed');
