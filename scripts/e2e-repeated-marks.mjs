@@ -2,13 +2,14 @@
 // (docs/repeated-timestamps-indicator-design.md) in a real browser.
 //
 // 1. A clean file: the button is disabled and says there is nothing to mark.
-// 2. Numeric time, 10 000 rows, two bursts (t = 20 and t = 70): zoomed out,
-//    one mark per burst on the top strip, with a hover; zoomed in, a guide line
-//    too; with Samples on as well, the burst's dots get rings.
+// 2. Numeric time, 10 000 rows, two bursts (t = 20 and t = 70). Turning
+//    Repeated on turns Samples on with it. Zoomed out: a red bar per burst on
+//    the top strip, with a hover. Zoomed in: the dots are drawn, the burst's
+//    rows get red rings, and the strip is gone. Turning Repeated off turns the
+//    Samples it switched on off again.
 // 3. A datetime logger stamped to the second, ten rows a second (the case that
-//    prompted the feature): zoomed out, too dense to mark — the strip is washed,
-//    the button waits and the pill shows once; zoomed in, one mark per second,
-//    placed on the date axis where the rows are.
+//    prompted the feature): zoomed out, one bar across the strip; zoomed in,
+//    every row ringed, no bars.
 //
 // Needs a Chromium for Playwright. Run with `npm run e2e:repeated-marks`.
 // Not part of test:release, which stays offline and browser-free.
@@ -85,20 +86,18 @@ async function state(page, panelId) {
         const btn = panelEl.querySelector('.timeseries-repeated-btn');
         const pill = panelEl.querySelector('.repeated-hint-indicator.active');
         const trace = plot.div.data[0];
-        const symbols = Array.isArray(trace.marker?.symbol) ? trace.marker.symbol : [];
+        const ringWidths = Array.isArray(trace.marker?.line?.width) ? trace.marker.line.width : [];
+        const samplesBtn = panelEl.querySelector('.timeseries-samples-btn');
         return {
             disabled: !!btn?.disabled,
             pressed: btn?.getAttribute('aria-pressed'),
+            samplesPressed: samplesBtn?.getAttribute('aria-pressed'),
             waiting: !!btn?.classList.contains('repeated-waiting'),
             title: btn?.title,
             pill: pill ? pill.textContent : null,
-            marks: (layout.shapes || []).filter(sh => sh.type === 'path').map((sh) => ({
-                x: sh.xanchor,
-                hover: (plot._repeatedHoverMarks || []).find(m => m.x === sh.xanchor)?.text || '',
-            })),
-            guides: (layout.shapes || []).filter(s => s.type === 'line').length,
-            washes: (layout.shapes || []).filter(s => s.type === 'rect' && s.y0 > 0.9).length,
-            rings: symbols.filter(s => s === 'circle-open-dot').length,
+            bars: (layout.shapes || []).filter(sh => sh.type === 'rect' && sh.y0 > 0.9).length,
+            hovers: (plot._repeatedHoverMarks || []).map(m => ({ x: m.x, text: m.text })),
+            rings: ringWidths.filter(w => w > 0).length,
             mode: trace.mode,
         };
     }, panelId);
@@ -137,14 +136,17 @@ try {
     await click(page, panelId, '.timeseries-repeated-btn');
     s = await state(page, panelId);
     assert.equal(s.pressed, 'true');
-    assert.deepEqual(s.marks.map(m => m.x), [20, 70], 'zoomed out: one mark per burst, at its instant');
-    assert.ok(s.marks.every(m => m.hover), 'every mark has a hover text');
-    assert.ok(s.marks[1].hover.includes('4'), `the t = 70 mark says 4 rows (${s.marks[1].hover})`);
+    assert.equal(s.samplesPressed, 'true', 'Repeated turns Samples on with it');
+    assert.equal(s.bars, 2, 'zoomed out: a red bar per burst on the strip');
+    assert.deepEqual(s.hovers.map(m => m.x), [20, 70], 'each with a hover at its instant');
+    assert.ok(s.hovers[1].text.includes('4'), `the t = 70 hover says 4 rows (${s.hovers[1].text})`);
+    assert.equal(s.rings, 0, 'no dots zoomed out, so no rings');
     assert.equal(s.waiting, false);
-    assert.equal(s.pill, null, 'marks drawn: no pill');
+    assert.equal(s.pill, null, 'no Repeated pill: something is drawn');
+    await page.waitForTimeout(3200);
     if (shots) await page.screenshot({ path: `${shots}/repeated-zoomed-out.png` });
 
-    // Hover over a mark shows its label (our own: shapes have no Plotly hover).
+    // Hover over a bar shows its label (our own: shapes have no Plotly hover).
     const box = await page.evaluate((id) => {
         const div = window.app.plotManager.plots.get(id).div;
         const layout = div._fullLayout;
@@ -158,7 +160,7 @@ try {
         const label = document.querySelector('.repeated-hover-label');
         return label && label.style.display !== 'none' ? label.textContent : '';
     });
-    assert.ok(hoverText.includes('3'), `hovering a mark shows its label (${hoverText})`);
+    assert.ok(hoverText.includes('3'), `hovering a bar shows its label (${hoverText})`);
     await page.mouse.move(box.x, box.y + 200);
     await page.waitForTimeout(100);
     const hidden = await page.evaluate(() => document.querySelector('.repeated-hover-label')?.style.display);
@@ -166,36 +168,37 @@ try {
 
     await zoom(page, panelId, [19.7, 20.3]);
     s = await state(page, panelId);
-    assert.deepEqual(s.marks.map(m => m.x), [20]);
-    assert.equal(s.guides, 1, 'zoomed in: a guide line down from the mark');
-
-    await click(page, panelId, '.timeseries-samples-btn');
-    await zoom(page, panelId, [19.7, 20.3]);
-    s = await state(page, panelId);
-    assert.equal(s.mode, 'lines+markers', 'Samples: dots');
+    assert.equal(s.mode, 'lines+markers', 'zoomed in: dots');
     assert.equal(s.rings, 3, 'the three rows at t = 20 are ringed');
+    assert.equal(s.bars, 0, 'and the strip gives way to the rings');
     if (shots) await page.screenshot({ path: `${shots}/repeated-rings.png` });
+
+    await click(page, panelId, '.timeseries-repeated-btn');
+    s = await state(page, panelId);
+    assert.equal(s.pressed, 'false');
+    assert.equal(s.samplesPressed, 'false', 'turning Repeated off turns off the Samples it turned on');
+    assert.equal(s.bars, 0);
+
+    // Samples the user had on stays on.
+    await click(page, panelId, '.timeseries-samples-btn');
+    await click(page, panelId, '.timeseries-repeated-btn');
+    await click(page, panelId, '.timeseries-repeated-btn');
+    s = await state(page, panelId);
+    assert.equal(s.samplesPressed, 'true', 'Samples switched on by the user is left alone');
 
     // 3. Datetime logger, ten rows a second.
     ({ page, panelId } = await openPanel(context, errors, loggerCsv(), 'I'));
     await click(page, panelId, '.timeseries-repeated-btn');
     s = await state(page, panelId);
-    assert.ok(s.washes >= 1, 'zoomed out on 600 repeated seconds: a wash on the strip');
-    assert.equal(s.marks.length, 0, 'no individual marks');
-    assert.equal(s.waiting, true, 'the button waits');
-    assert.ok(s.pill, 'and the pill says why, once');
+    assert.equal(s.bars, 1, 'zoomed out on 600 repeated seconds: one bar across the strip');
+    assert.equal(s.waiting, false, 'the Repeated button does not wait: the bar says it');
     if (shots) await page.screenshot({ path: `${shots}/repeated-dense.png` });
 
     await zoom(page, panelId, ['2026-06-10 14:02:00', '2026-06-10 14:02:30']);
     s = await state(page, panelId);
-    assert.equal(s.washes, 0);
-    assert.ok(s.marks.length >= 29 && s.marks.length <= 31, `zoomed in: one mark per second (${s.marks.length})`);
-    assert.equal(s.waiting, false, 'not waiting any more');
-    assert.equal(s.pill, null, 'and the pill does not come back');
-    const first = String(s.marks[0].x);
-    assert.ok(first.startsWith('2026-06-10') && first.includes('14:02:0'), `marks sit on the date axis (${first})`);
-    assert.ok(s.marks[0].hover.includes('10'), 'each second holds ten rows');
-    assert.equal(s.guides, 0, 'a repeat every second: no guide lines, they would hide the curve');
+    assert.equal(s.mode, 'lines+markers', 'zoomed in on 30 s: dots');
+    assert.ok(s.rings >= 290, `every row shares its second with nine others: all ringed (${s.rings})`);
+    assert.equal(s.bars, 0, 'no bars');
     if (shots) await page.screenshot({ path: `${shots}/repeated-logger.png` });
 
     assert.deepEqual(errors, [], 'no page errors');

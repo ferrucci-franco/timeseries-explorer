@@ -1,8 +1,9 @@
 # Repeated Timestamps Indicator Design ("Repeated" toggle)
 
 Status: v1 built for in-memory files. Memory-saving (DuckDB) files are not marked
-yet (see "Lazy (DuckDB) files"). Uses the **Samples** toggle
-([sample-markers-design.md](sample-markers-design.md)) for the rings when zoomed in.
+yet (see "Lazy (DuckDB) files"). Turns the **Samples** toggle
+([sample-markers-design.md](sample-markers-design.md)) on with it, for the rings when
+zoomed in.
 
 Where the build departs from the first draft of this spec, the section says so.
 
@@ -53,77 +54,64 @@ A **repeat run** is a maximal sequence of ≥ 2 consecutive rows with the same t
     time).*
 - **Off by default.** State `plot.showRepeated`, saved/restored with the session like
   `showMissingData`.
+- **Turning it on turns Samples on** (changed after use, see "Presentation"), since
+  zoomed in the repeats are shown on the Samples dots. Turning Repeated off turns
+  Samples off again — but only if Repeated is what turned it on and the user has not
+  touched Samples since (`plot._samplesAutoOn`). In a stacked panel Samples stays off.
 - **Disabled** when no file on the panel has a repeat run, with the tooltip *No
   repeated timestamps in the files on this panel* — the button itself answers "are
   there any?". Runs are computed on first need and cached per time array
   (`_repeatedRunsForTimes`), so this costs one O(n) scan per file.
 - Toggling rebuilds the panel keeping the view, same pattern as `_toggleMissingData`.
-- **Same convention as Samples** for "nothing to draw here": the button stays pressed
-  but *waits* (dashed border, `.repeated-waiting`) with the reason in its tooltip —
-  too dense here, or memory-saving files only — and a pill with that reason appears
-  **once**, for 3 s, after the click that turns the toggle on. Later zooms never bring
-  the pill back.
+- Same convention as Samples when nothing can be drawn: the button stays pressed but
+  *waits* (dashed border, `.repeated-waiting`) with the reason in its tooltip, and a
+  pill says it once, for 3 s, after the click. For Repeated that only happens when
+  memory-saving files are all that could hold repeats. "Too far out to see the rings"
+  is the Samples button's to say.
 
 ## Presentation
 
-A repeat has zero width in time, so a band (as Missing/NaN draws) has nothing to cover.
-Instead, **marks on a thin strip along the top of the plot area** (a "rug"), which never
-cover the data.
+**Changed after use.** The first build drew a triangle per repeat on the top strip,
+guide lines down to the curve when zoomed in, a separate wash when too dense, and rings
+on the Samples dots. It worked, but it was a lot of marks for one fact, and the
+triangles made panning slow. Simplified to two presentations, by zoom:
 
-### Zoomed out (many repeats per pixel)
+### Zoomed in: rings on the dots
 
-- Runs are **coalesced per pixel column** of the visible range: one mark per column
-  that holds at least one run. Clip to the visible range *before* coalescing, as
-  `_adaptiveGapBandShapes` does, so the marks line up with what is on screen.
-- Hover on a mark: *12 repeated instants, longest ×4* (and the file name when the panel
-  holds several files).
-- **Dense view**: when more than half of the columns carry a mark, individual marks
-  carry no information. A thin wash on the strip covers the stretches that hold repeats
-  (adjacent marked columns merged), and the button waits with *Repeated timestamps too
-  dense to resolve here — zoom in for detail* (see UI).
-- Columns are 3 px wide (`REPEATED_MARK_COLUMN_PX`): at most one mark per column, so the
-  count is bounded by the plot width.
+Where a trace draws its Samples dots, each repeated sample keeps its filled dot in the
+trace colour and gets a **red ring** around it (larger marker, 2 px red border). The
+hover of the sample says *×k at this instant* — needed because Plotly's hover picks
+only one of several coincident points. Runs are counted in the whole column, so a run
+cut by the edge of the view still reads its full length. No strip is drawn for a file
+whose trace shows its dots.
 
-### Zoomed in (runs are resolved individually)
+### Zoomed out: red bars on the top strip
 
-- One mark per run, at its exact time, hover *×k at this instant* (+ file name).
-- A faint thin vertical guide line from the mark down through the plot area, drawn
-  below the traces, so the eye finds the matching place on the curve — only while there
-  are at most `REPEATED_GUIDE_MAX` (10) marks. A logger that repeats every second would
-  otherwise put a line on every second, which hides the curve (first value was 40).
-- If **Samples** is also on and the trace has dots (both of its conditions hold), the
-  repeated samples of that trace get a **ring**: open circle, ≈ 10 px, one fixed
-  contrasting colour valid in light and dark themes (symbol `circle-open-dot`, which
-  replaces the dot with a ring around a centre dot). A burst of
-  identical (x, y) is thus visible even though its dots overlap exactly. Hover on the
-  sample appends *×k at this instant* — needed because Plotly's hover picks only one of
-  several coincident points.
+Where no dots can be drawn, the repeats show as **red bars** on a thin strip along the
+top of the plot area (`y0: 0.985` to `1` in paper coordinates):
 
-### Marks: rendering
+- Runs are grouped by 3 px screen column (`REPEATED_MARK_COLUMN_PX`) of the visible
+  range, and adjacent marked columns merge into one bar. So what is drawn is bounded by
+  the plot width, whatever the file holds: a single repeat is a thin bar, a logger that
+  repeats every second is one bar across.
+- Hover on the strip: *12 repeated instants, longest ×4* for the column under the
+  pointer (plus the file names when the panel holds several files). Plotly gives shapes
+  no hover, so this is a small label of our own (`_ensureRepeatedHover`,
+  `.repeated-hover-label`) that names the nearest marked column within 7 px.
 
-- **Changed twice from the draft.** The draft had a helper trace; it would have had to
-  be skipped by every piece of code that maps Plotly trace indexes back to
-  `plot.traces` (hover, cursors, autoscale, export). The first build used layout
-  **annotations** (`▼` with `hovertext`) instead — but redrawing ~120 of them cost
-  ~230 ms per frame and made panning crawl. Marks are now small **path shapes**: a
-  triangle sized in pixels (`xsizemode`/`ysizemode: 'pixel'`) anchored at its instant
-  (`xanchor`) and hanging from the top edge (`yref: 'paper'`, `yanchor: 1`).
-- Their hover is a small label of our own (`_ensureRepeatedHover`, `.repeated-hover-label`):
-  Plotly gives shapes none. It follows the pointer along the top strip and names the
-  nearest mark within 7 px.
-- **Pan and zoom.** Being anchored in data coordinates, marks, guides and wash follow the
-  axis by themselves, so they are recomputed only when the view settles, not on every
-  frame of a drag (`_refreshTimeseriesVisuals(..., { live: true })`). Measured on a
-  60 000-row logger with ten rows a second, 2 min in view: 229 → 43 ms at settle,
-  229 → 31 ms per drag frame (16 ms with the toggle off). With Samples also on, the
-  ~1 200 dots and rings cost ~65 ms per drag frame; that is SVG drawing one element per
-  point (Samples alone: ~43 ms).
-- Colour: magenta (`_repeatedColor`), apart from the amber of Missing/NaN. With several
-  files on the panel, a mark from one file takes that file's trace colour and its hover
-  names the file(s).
-- Guide lines and the dense wash are layout shapes as well. All share `layout.shapes`
-  with the Missing/NaN bands, so every place that relayouts the bands appends
-  `plot._repeatedShapes`, and the refresh sends both in one relayout.
+### Rendering and cost
+
+- Bars are layout shapes and share `layout.shapes` with the Missing/NaN bands; every
+  place that relayouts the bands appends `plot._repeatedShapes`, and the refresh sends
+  both in one relayout.
+- Being anchored in data coordinates, bars follow a pan by themselves, so they are
+  recomputed only when the view settles, not on every frame of a drag
+  (`_refreshTimeseriesVisuals(..., { live: true })`).
+- History: marks were first annotations (`▼` with `hovertext`). Redrawing ~120 of them
+  cost ~230 ms per frame on a 60 000-row logger; pixel-sized path shapes brought that to
+  ~31 ms per drag frame, and the bars replace them now. With Samples on, the cost that
+  remains is the dots themselves (SVG, one element per point).
+- Colour: red (`_repeatedColor`), apart from the amber of Missing/NaN.
 
 ## Data
 
@@ -194,13 +182,14 @@ the comparison point (b) of the bug report wants in the same panel.
 
 - `npm run test:repeated-marks`: `repeatedTimestampRuns` (edges, NaN ending a run,
   unsorted columns, the minimum run, agreement with `repeatedTimestampSummary`),
-  `repeatedMarksForView` (per-column grouping, the dense rule and its wash regions,
-  bounded by width, several files), and the panel overlay through the real mixin
-  (marks, guides, dense state, availability, rings with runs cut by the window edge).
-- `test:mode-toolbar`: the button — placement, disabled with no repeats, waiting states.
+  `repeatedMarksForView` (per-column grouping, bars merging adjacent columns, bounded by
+  width, several files), and the panel overlay through the real mixin (bars, hover
+  marks, no bars for a file showing its dots, availability, rings with runs cut by the
+  window edge).
+- `test:mode-toolbar`: the button — placement, disabled with no repeats, waiting state.
 - `test:session-state-roundtrip`: `showRepeated` saved and restored.
 - `npm run e2e:repeated-marks` (Chromium): a clean file disables the button; numeric
-  bursts get one mark each with a working hover, a guide when zoomed in, and rings with
-  Samples on; a datetime logger stamped to the second (ten rows a second) is too dense
-  zoomed out — wash, waiting button, pill once — and gets one mark per second on the
-  date axis when zoomed in, without guide lines.
+  bursts — Repeated turns Samples on, a bar per burst with a working hover zoomed out,
+  red rings and no bars zoomed in, and turning Repeated off turns that Samples off (but
+  leaves a Samples the user switched on); a datetime logger stamped to the second is
+  one bar zoomed out and every row ringed zoomed in.

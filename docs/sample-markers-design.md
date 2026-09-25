@@ -130,18 +130,18 @@ also bounds the rendering cost (see Performance).
 
 ## Repeated timestamps
 
-Not this feature's job. Where a file repeats timestamps is a property of the file and
-must be findable at any zoom, whereas dots exist only when zoomed in. That is specified
-in [repeated-timestamps-indicator-design.md](repeated-timestamps-indicator-design.md)
-(the **Repeated** toggle).
+Where a file repeats timestamps is a property of the file and must be findable at any
+zoom, whereas dots exist only when zoomed in. That is the **Repeated** toggle
+([repeated-timestamps-indicator-design.md](repeated-timestamps-indicator-design.md)).
 
-The two toggles meet in one place: when both are on and a trace has dots, the
-**Repeated** feature draws its ring on the repeated samples. *Samples* alone draws only
-plain dots — with different y, repeats already show as a vertical column of dots; with
-identical y they overlap, which is why the ring belongs to **Repeated**.
+The two meet on the dots: turning Repeated on turns Samples on with it, and where a
+trace has dots, Repeated puts a red ring on each repeated sample (with identical y,
+the dots of a burst overlap exactly, so the ring is what shows it). *Samples* alone
+draws only plain dots.
 
-The only contract *Samples* owes **Repeated**: expose, per trace, whether dots are
-currently drawn and the visible raw slice `[start, end)` they were drawn from.
+What *Samples* owes **Repeated**: `plot._sampleMarkerState` says, per trace, whether
+dots are drawn now (Repeated leaves such a file off its zoomed-out strip), and the trace
+builder hands Repeated the exact window the dots were drawn from.
 
 ## Scope
 

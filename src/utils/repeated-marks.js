@@ -2,22 +2,19 @@
 // (docs/repeated-timestamps-indicator-design.md).
 //
 // A repeated instant has no width in time, so there is no band to shade the way
-// Missing/NaN does. Each one is a mark on a thin strip along the top of the
-// plot. Zoomed out, many fall on one pixel, so the runs are grouped by screen
-// column first: one mark per column that holds any, carrying how many instants
-// it stands for and the longest run among them. That bounds the marks by the
-// plot width, whatever the file holds.
+// Missing/NaN does. Where the samples themselves are not drawn (zoomed out),
+// the repeats show as red bars on a thin strip along the top of the plot. Many
+// fall on one pixel, so the runs are grouped by screen column first: one mark
+// per column that holds any, carrying how many instants it stands for and the
+// longest run among them (for the hover), and adjacent marked columns merge
+// into one bar. That bounds what is drawn by the plot width, whatever the file
+// holds. Zoomed in, the Samples dots take over: each repeated sample gets a red
+// ring, and the strip is not drawn.
 
 /** Shortest run marked. 2 marks every repeat (a Modelica event is a 2-row run). */
 export const REPEATED_MARK_MIN_RUN = 2;
 /** Width of the screen column runs are grouped into, in pixels. */
 export const REPEATED_MARK_COLUMN_PX = 3;
-/**
- * Beyond this many marks, no guide line is drawn down the plot for each. Guides
- * help find a handful of repeats on the curve; a logger that repeats every
- * second would put a line on every second, which only hides the curve.
- */
-export const REPEATED_GUIDE_MAX = 10;
 
 /**
  * @param {Array<{key: string, times: ArrayLike<number>, runs: {starts: Int32Array, lengths: Int32Array, count: number}}>} sources
@@ -30,16 +27,13 @@ export const REPEATED_GUIDE_MAX = 10;
  * @returns {{
  *   marks: Array<{t: number, instants: number, longest: number, keys: string[]}>,
  *   regions: Array<{t0: number, t1: number}>,
- *   dense: boolean,
- *   resolved: boolean,
  * }}
- *   `t` is a real repeated instant: the one with the longest run in its column.
- *   `dense`: more than half the columns carry a mark, so single marks say
- *   nothing and `regions` (runs of adjacent marked columns) are drawn instead.
- *   `resolved`: every mark is a single instant.
+ *   `marks`: one per marked column, for the hover; `t` is a real repeated
+ *   instant, the one with the longest run in its column. `regions`: the bars —
+ *   runs of adjacent marked columns, as time spans.
  */
 export function repeatedMarksForView(sources, lo, hi, widthPx, columnPx = REPEATED_MARK_COLUMN_PX) {
-    const none = { marks: [], regions: [], dense: false, resolved: true };
+    const none = { marks: [], regions: [] };
     let a = Number(lo);
     let b = Number(hi);
     const width = Number(widthPx);
@@ -83,22 +77,19 @@ export function repeatedMarksForView(sources, lo, hi, widthPx, columnPx = REPEAT
 
     const sorted = [...byColumn.values()].sort((m, n) => m.column - n.column);
     const marks = sorted.map(m => ({ t: m.t, instants: m.instants, longest: m.longest, keys: [...m.keys] }));
-    const dense = sorted.length > columns * 0.5;
+    const at = (column) => a + (column / columns) * span;
     const regions = [];
-    if (dense) {
-        const at = (column) => a + (column / columns) * span;
-        let first = sorted[0].column;
-        let last = first;
-        for (let i = 1; i <= sorted.length; i++) {
-            const column = i < sorted.length ? sorted[i].column : Infinity;
-            if (column === last + 1) {
-                last = column;
-                continue;
-            }
-            regions.push({ t0: at(first), t1: at(last + 1) });
-            first = column;
+    let first = sorted[0].column;
+    let last = first;
+    for (let i = 1; i <= sorted.length; i++) {
+        const column = i < sorted.length ? sorted[i].column : Infinity;
+        if (column === last + 1) {
             last = column;
+            continue;
         }
+        regions.push({ t0: at(first), t1: at(last + 1) });
+        first = column;
+        last = column;
     }
-    return { marks, regions, dense, resolved: marks.every(m => m.instants === 1) };
+    return { marks, regions };
 }

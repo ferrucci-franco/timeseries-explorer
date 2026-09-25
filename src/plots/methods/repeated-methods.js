@@ -2,23 +2,22 @@
 // where a panel's time axis holds one instant on several consecutive rows, at
 // any zoom.
 //
-// Marks are small layout shapes (triangles sized in pixels, anchored at their
-// instant), not a trace and not annotations. A helper trace would have to be
-// skipped by every piece of code that maps Plotly trace indexes back to
-// plot.traces — hover, cursors, autoscale, export. Annotations were the first
-// build: they carry a hover, but redrawing a hundred of them cost ~200 ms per
-// frame and made panning crawl. Shapes cost a fraction of that and, being
-// anchored in data coordinates, follow a pan by themselves, so they are only
-// recomputed when it settles. Their hover is a small label of our own
-// (_ensureRepeatedHover). Guide lines and the dense wash are shapes too; all of
-// them share `layout.shapes` with the Missing/NaN bands.
+// Two presentations, by zoom. Zoomed in, where the Samples dots are drawn (the
+// toggle turns Samples on with it), each repeated sample gets a red ring and
+// its hover says how many rows share the instant. Zoomed out, where no dots
+// can be drawn, the repeats show as red bars on a strip along the top of the
+// plot, with a hover label of our own (_ensureRepeatedHover): Plotly gives
+// shapes none.
+//
+// The bars are layout shapes, sharing `layout.shapes` with the Missing/NaN
+// bands. Earlier builds drew a triangle per repeat — first as annotations,
+// whose redraw cost ~230 ms a frame and made panning crawl, then as pixel
+// shapes — plus guide lines; the rings made both redundant. Being in data
+// coordinates, the bars follow a pan by themselves and are recomputed only
+// when it settles.
 import i18n from '../../i18n/index.js';
 import { repeatedTimestampRuns } from '../../utils/repeated-timestamps.js';
-import {
-    REPEATED_GUIDE_MAX,
-    REPEATED_MARK_MIN_RUN,
-    repeatedMarksForView,
-} from '../../utils/repeated-marks.js';
+import { REPEATED_MARK_MIN_RUN, repeatedMarksForView } from '../../utils/repeated-marks.js';
 
 export function installPlotRepeatedMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -72,12 +71,11 @@ export function installPlotRepeatedMethods(TargetClass) {
         return lazy ? 'lazy' : 'none';
     };
 
-    // Magenta: apart from the amber of Missing/NaN and from the default trace
-    // palette's first colours, and readable on both themes.
+    // Red: apart from the amber of Missing/NaN, and readable on both themes.
     proto._repeatedColor = function(alpha = 1) {
         return this.theme === 'dark'
-            ? `rgba(240, 98, 146, ${alpha})`
-            : `rgba(194, 24, 91, ${alpha})`;
+            ? `rgba(255, 82, 82, ${alpha})`
+            : `rgba(211, 47, 47, ${alpha})`;
     };
 
     proto._repeatedHoverText = function(mark, names) {
@@ -90,9 +88,10 @@ export function installPlotRepeatedMethods(TargetClass) {
         return `${text}<br>${mark.keys.map(key => this._escapeHTML(names.get(key) || key)).join(', ')}`;
     };
 
-    // What to draw for the current view. `state`: null (marks drawn), 'dense'
-    // (too many to resolve: a wash on the strip instead), 'lazy' (only
-    // memory-saving files on the panel have unread repeats) or 'none'.
+    // What to draw for the current view: the bars, and what their hover says.
+    // A file whose trace shows its dots right now is left off the strip — its
+    // repeats are ringed on the curve instead. `state` is 'lazy' when only
+    // memory-saving files on the panel could hold repeats, else null.
     proto._repeatedOverlay = function(plot) {
         const empty = { shapes: [], hoverMarks: [], state: null };
         if (plot?.mode !== 'timeseries' || !plot.showRepeated || !plot.div) return empty;
@@ -101,67 +100,32 @@ export function installPlotRepeatedMethods(TargetClass) {
         const lo = this._coerceAxisValue(xa.range[0]);
         const hi = this._coerceAxisValue(xa.range[1]);
         const { sources, lazy } = this._repeatedSources(plot);
-        const view = repeatedMarksForView(sources, lo, hi, xa._length);
+        const dotted = new Set(plot.traces
+            .filter(t => plot._sampleMarkerState?.get(t) === true)
+            .map(t => t.fileId));
+        const undotted = sources.filter(source => !dotted.has(source.key));
+        const view = repeatedMarksForView(undotted, lo, hi, xa._length);
 
         const names = sources.length > 1
             ? new Map(sources.map(source => [source.key, this.files.get(source.key)?.name || source.key]))
             : null;
-        const colorOf = new Map(sources.map(source => [source.key, source.color]));
-        const markColor = (mark) => (names && mark.keys.length === 1 && colorOf.get(mark.keys[0])) || this._repeatedColor(1);
-        const xOf = (mark) => this._plotlyTimeValue(mark.keys[0], mark.t, this._getTimeVar(mark.keys[0]));
-
-        const shapes = [];
-        const hoverMarks = [];
-        if (view.dense) {
-            // Individual marks would touch: shade the stretches of strip that
-            // hold repeats, so it still shows where they are and where not.
-            const key = sources.find(source => source.runs.count)?.key;
-            const timeVar = key ? this._getTimeVar(key) : null;
-            for (const region of view.regions) {
-                shapes.push({
-                    type: 'rect', xref: 'x', yref: 'paper',
-                    x0: this._plotlyTimeValue(key, region.t0, timeVar),
-                    x1: this._plotlyTimeValue(key, region.t1, timeVar),
-                    y0: 0.985, y1: 1,
-                    fillcolor: this._repeatedColor(0.45),
-                    line: { width: 0 },
-                    layer: 'above',
-                });
-            }
-        } else {
-            for (const mark of view.marks) {
-                const color = markColor(mark);
-                const x = xOf(mark);
-                // A small triangle hanging from the top edge, sized in pixels
-                // but anchored at its instant, so it rides along with a pan
-                // without being redrawn.
-                shapes.push({
-                    type: 'path', xref: 'x', yref: 'paper',
-                    xsizemode: 'pixel', ysizemode: 'pixel',
-                    xanchor: x, yanchor: 1,
-                    path: 'M-4.5,0 L4.5,0 L0,-8 Z',
-                    fillcolor: color,
-                    line: { width: 0 },
-                    layer: 'above',
-                });
-                hoverMarks.push({ x, color, text: this._repeatedHoverText(mark, names) });
-            }
-            // Zoomed in far enough that each mark is one instant, and few of
-            // them: a faint line takes the eye from the mark down to the curve.
-            if (view.resolved && view.marks.length <= REPEATED_GUIDE_MAX) {
-                for (const { x } of hoverMarks) {
-                    shapes.push({
-                        type: 'line', xref: 'x', yref: 'paper',
-                        x0: x, x1: x, y0: 0, y1: 1,
-                        line: { color: this._repeatedColor(0.35), width: 1, dash: 'dot' },
-                        layer: 'below',
-                    });
-                }
-            }
-        }
-        let state = null;
-        if (view.dense) state = 'dense';
-        else if (!view.marks.length && lazy && !sources.some(source => source.runs.count)) state = 'lazy';
+        const key = undotted.find(source => source.runs.count)?.key;
+        const timeVar = key ? this._getTimeVar(key) : null;
+        const shapes = view.regions.map(region => ({
+            type: 'rect', xref: 'x', yref: 'paper',
+            x0: this._plotlyTimeValue(key, region.t0, timeVar),
+            x1: this._plotlyTimeValue(key, region.t1, timeVar),
+            y0: 0.985, y1: 1,
+            fillcolor: this._repeatedColor(0.85),
+            line: { width: 0 },
+            layer: 'above',
+        }));
+        const hoverMarks = view.marks.map(mark => ({
+            x: this._plotlyTimeValue(mark.keys[0], mark.t, this._getTimeVar(mark.keys[0])),
+            color: this._repeatedColor(1),
+            text: this._repeatedHoverText(mark, names),
+        }));
+        const state = !view.marks.length && lazy && !sources.some(source => source.runs.count) ? 'lazy' : null;
         return { shapes, hoverMarks, state };
     };
 
@@ -228,8 +192,8 @@ export function installPlotRepeatedMethods(TargetClass) {
         return lengths;
     };
 
-    // Per-point marker for a trace with dots: plain dots, and a ring (open
-    // circle with a centre dot, in the Repeated colour) on repeated samples.
+    // Per-point marker for a trace with dots: every sample keeps its filled dot
+    // in the trace colour, and a repeated one gets a red ring around it.
     // `text` feeds the hover, since Plotly's hover picks only one of several
     // coincident points and cannot say how many there are.
     proto._repeatedSampleDecoration = function(t, lengths) {
@@ -238,10 +202,13 @@ export function installPlotRepeatedMethods(TargetClass) {
         const size = PlotManager.SAMPLE_MARKER_SIZE;
         return {
             marker: {
-                color: lengths.map(k => (k ? ring : t.color)),
-                size: lengths.map(k => (k ? size * 2 : size)),
-                symbol: lengths.map(k => (k ? 'circle-open-dot' : 'circle')),
-                line: { color: lengths.map(k => (k ? ring : t.color)), width: 1.5 },
+                color: t.color,
+                size: lengths.map(k => (k ? size + 5 : size)),
+                symbol: 'circle',
+                line: {
+                    color: lengths.map(k => (k ? ring : t.color)),
+                    width: lengths.map(k => (k ? 2 : 0)),
+                },
             },
             text: lengths.map(k => (k
                 ? `<br>${this._escapeHTML(i18n.t('timeseriesRepeatedOne').replace('{count}', String(k)))}`

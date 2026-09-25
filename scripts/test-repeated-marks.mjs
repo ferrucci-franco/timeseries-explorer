@@ -2,11 +2,7 @@
 // runs are, how they become marks for a view, and the overlay the panel draws.
 import assert from 'node:assert/strict';
 import { repeatedTimestampRuns, repeatedTimestampSummary } from '../src/utils/repeated-timestamps.js';
-import {
-    REPEATED_GUIDE_MAX,
-    REPEATED_MARK_MIN_RUN,
-    repeatedMarksForView,
-} from '../src/utils/repeated-marks.js';
+import { REPEATED_MARK_MIN_RUN, repeatedMarksForView } from '../src/utils/repeated-marks.js';
 import { installPlotRepeatedMethods } from '../src/plots/methods/repeated-methods.js';
 
 const runsOf = (values, minRun) => {
@@ -53,10 +49,11 @@ const runsOf = (values, minRun) => {
     const source = { key: 'f', times, runs: repeatedTimestampRuns(times) };
 
     const wide = repeatedMarksForView([source], 0, 100, 300);
-    assert.equal(wide.dense, false);
-    assert.equal(wide.resolved, true, 'each mark one instant');
     assert.deepEqual(wide.marks.map(m => [m.t, m.instants, m.longest]), [[1, 1, 2], [3, 1, 3], [50, 1, 2], [99, 1, 2]]);
     assert.deepEqual(wide.marks[0].keys, ['f']);
+    // 100 columns of 3 px: 1 and 3 fall in columns 1 and 3, not adjacent.
+    assert.equal(wide.regions.length, 4, 'one bar per isolated marked column');
+    assert.deepEqual(wide.regions[0], { t0: 1, t1: 2 }, 'a bar spans its column');
 
     const zoomed = repeatedMarksForView([source], 0, 10, 300);
     assert.deepEqual(zoomed.marks.map(m => m.t), [1, 3], 'only the runs in view');
@@ -69,9 +66,7 @@ const runsOf = (values, minRun) => {
     assert.equal(narrow.marks[0].instants, 2, 'one column, two instants');
     assert.equal(narrow.marks[0].t, 3, 'placed on the instant with the longest run');
     assert.equal(narrow.marks[0].longest, 3);
-    assert.equal(narrow.resolved, false);
-    assert.equal(narrow.dense, true, 'every column marked: dense');
-    assert.deepEqual(narrow.regions, [{ t0: 0, t1: 100 }], 'adjacent marked columns merge into one wash');
+    assert.deepEqual(narrow.regions, [{ t0: 0, t1: 100 }], 'adjacent marked columns merge into one bar');
 
     assert.equal(repeatedMarksForView([source], 0, 100, 0).marks.length, 0, 'no width, no marks');
     assert.equal(repeatedMarksForView([source], 200, 300, 300).marks.length, 0, 'nothing in view');
@@ -87,8 +82,7 @@ const runsOf = (values, minRun) => {
     const huge = Float64Array.from({ length: 200000 }, (_, i) => Math.floor(i / 2));
     const bounded = repeatedMarksForView([{ key: 'h', times: huge, runs: repeatedTimestampRuns(huge) }], 0, 100000, 900);
     assert.ok(bounded.marks.length <= 300, `at most one mark per 3 px column (${bounded.marks.length})`);
-    assert.equal(bounded.dense, true);
-    assert.ok(REPEATED_GUIDE_MAX > 0);
+    assert.equal(bounded.regions.length, 1, 'every column marked: one bar across');
 }
 
 // ── The panel overlay, through the real mixin ──
@@ -124,15 +118,15 @@ installPlotRepeatedMethods(Manager);
 
     const overlay = m._repeatedOverlay(plot);
     assert.equal(overlay.state, null);
-    const markShapes = overlay.shapes.filter(shape => shape.type === 'path');
-    assert.deepEqual(markShapes.map(shape => shape.xanchor), [2, 5], 'one mark per repeated instant');
-    assert.equal(markShapes[0].xsizemode, 'pixel', 'marks are sized in pixels');
-    assert.equal(markShapes[0].yanchor, 1, 'and hang from the top edge');
-    assert.deepEqual(overlay.hoverMarks.map(mark => mark.x), [2, 5], 'each mark has a hover');
+    assert.ok(overlay.shapes.length >= 1 && overlay.shapes.every(sh => sh.type === 'rect' && sh.y0 > 0.9),
+        'bars on the top strip');
+    assert.deepEqual(overlay.hoverMarks.map(mark => mark.x), [2, 5], 'a hover per repeated instant');
     assert.ok(overlay.hoverMarks[0].text.length > 0);
-    const guides = overlay.shapes.filter(shape => shape.type === 'line');
-    assert.equal(guides.length, 2, 'zoomed in, few marks: a guide line each');
-    assert.equal(guides[0].layer, 'below');
+
+    // A trace showing its dots takes its file off the strip: the rings say it.
+    const dotted = { ...plot, _sampleMarkerState: new WeakMap([[plot.traces[0], true]]) };
+    assert.equal(m._repeatedOverlay(dotted).shapes.length, 0, 'dots on screen: no bars');
+    assert.equal(m._repeatedOverlay(dotted).hoverMarks.length, 0);
 
     assert.equal(m._repeatedOverlay({ ...plot, showRepeated: false }).shapes.length, 0, 'off: nothing');
     assert.equal(m._repeatedOverlay({ ...plot, mode: 'fft' }).shapes.length, 0, 'time-series panels only');
@@ -154,14 +148,16 @@ installPlotRepeatedMethods(Manager);
     assert.deepEqual(m._repeatedRunLengthsForPoints(time, [2, 3, 4, 5]), [3, 0, 0, 2],
         'a run cut by either edge of the window still reads its whole length');
     const decoration = m._repeatedSampleDecoration({ color: '#123' }, [0, 3, 3, 3, 0]);
-    assert.deepEqual(decoration.marker.symbol, ['circle', 'circle-open-dot', 'circle-open-dot', 'circle-open-dot', 'circle']);
-    assert.equal(decoration.marker.size[1], 10, 'rings are twice the dot');
+    assert.equal(decoration.marker.color, '#123', 'every sample keeps its filled dot');
+    assert.deepEqual(decoration.marker.line.width, [0, 2, 2, 2, 0], 'repeated ones get a ring');
+    assert.equal(decoration.marker.line.color[1], 'rgba(211, 47, 47, 1)', 'in red');
+    assert.ok(decoration.marker.size[1] > decoration.marker.size[0], 'the ring sits around the dot');
     assert.equal(decoration.text[0], '');
     assert.ok(decoration.text[1].includes('3'), 'hover says how many rows');
     assert.equal(m._repeatedSampleDecoration({ color: '#123' }, [0, 0]), null, 'nothing repeated: plain dots');
 }
 
-// Dense: many repeats per pixel become a wash, not marks, and say so.
+// Zoomed out on many repeats: bars, bounded by the width, never one per repeat.
 {
     const time = Float64Array.from({ length: 20000 }, (_, i) => Math.floor(i / 2));
     const m = new Manager({ a: { name: 'a.csv', data: { time } } });
@@ -171,9 +167,9 @@ installPlotRepeatedMethods(Manager);
         traces: [{ fileId: 'a' }],
     };
     const overlay = m._repeatedOverlay(plot);
-    assert.equal(overlay.state, 'dense');
-    assert.equal(overlay.hoverMarks.length, 0, 'no individual marks');
-    assert.ok(overlay.shapes.length >= 1 && overlay.shapes.every(s => s.type === 'rect'), 'a wash on the strip');
+    assert.equal(overlay.state, null);
+    assert.equal(overlay.shapes.length, 1, '10 000 repeats across the view: one bar');
+    assert.ok(overlay.hoverMarks.length <= 200, 'hover marks bounded by the columns');
 }
 
 console.log('repeated marks tests passed');

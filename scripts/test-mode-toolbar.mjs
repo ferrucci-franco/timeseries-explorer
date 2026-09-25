@@ -539,19 +539,12 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
 }
 
 // Repeated: disabled when no file on the panel repeats an instant (the button
-// answers "are there any?"), waiting when too dense or memory-saving.
+// answers "are there any?"), waiting when only memory-saving files could hold them.
 {
     const { toolbar } = renderToolbar('timeseries', 2, { _testRepeatedAvailability: 'none' });
     const button = toolbar.querySelector('.timeseries-repeated-btn');
     assert.equal(button.disabled, true, 'no repeats anywhere: Repeated is disabled');
     assert.equal(button.title, 'timeseriesRepeatedNone', 'and says why');
-}
-{
-    const { toolbar } = renderToolbar('timeseries', 2, { showRepeated: true, _repeatedWaiting: 'dense' });
-    const button = toolbar.querySelector('.timeseries-repeated-btn');
-    assert.equal(button.disabled, false);
-    assert.ok(button.classList.contains('repeated-waiting'), 'too dense here: waiting');
-    assert.equal(button.title, 'timeseriesRepeatedDense');
 }
 {
     const { toolbar } = renderToolbar('timeseries', 2, { showRepeated: true, _testRepeatedAvailability: 'lazy' });

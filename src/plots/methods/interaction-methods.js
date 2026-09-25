@@ -5109,6 +5109,7 @@ proto._toggleSamples = function(panelId) {
     if (!plot || plot.mode !== 'timeseries') return;
     const capturedView = plot.div ? this._capturePlotView(plot) : null;
     plot.showSamples = !plot.showSamples;
+    plot._samplesAutoOn = false;
     plot._sampleMarkerState = null;
     plot._samplesWaiting = null;
     // The pill is shown once, for the refresh this click causes — never on a
@@ -5229,6 +5230,23 @@ proto._toggleRepeated = function(panelId) {
     plot._repeatedWaiting = null;
     plot._repeatedShapes = [];
     plot._repeatedHintPending = !!plot.showRepeated;
+    // Repeated works through the Samples dots when zoomed in (a red ring on
+    // each repeated sample), so it turns Samples on with it — and off again
+    // with it, unless the user had Samples on already or has touched it since.
+    if (plot.showRepeated && !plot.showSamples && !plot.timeseriesStacked) {
+        plot.showSamples = true;
+        plot._samplesAutoOn = true;
+        plot._sampleMarkerState = null;
+        plot._samplesWaiting = null;
+        plot._samplesHintPending = true;
+    } else if (!plot.showRepeated && plot._samplesAutoOn) {
+        plot.showSamples = false;
+        plot._samplesAutoOn = false;
+        plot._sampleMarkerState = null;
+        plot._samplesWaiting = null;
+        plot._samplesHintPending = false;
+        this._setSamplesNotice(plot, null);
+    }
 
     const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
     const btn = panelEl?.querySelector('.timeseries-repeated-btn');
@@ -5248,30 +5266,29 @@ proto._toggleRepeated = function(panelId) {
 // Same convention as Samples: the button carries the state. Disabled when no
 // file on the panel repeats an instant — the button itself then answers "are
 // there any?" — and "waiting" (pressed, dashed, reason in the tooltip) while
-// the marks are too dense to draw or only memory-saving files are on the panel.
-// `enabledBase` is the caller's own condition (content, time-series mode); the
-// panel's files are checked here.
+// only memory-saving files on the panel could hold repeats. `enabledBase` is
+// the caller's own condition (content, time-series mode); the panel's files
+// are checked here.
 proto._applyRepeatedButtonState = function(plot, btn, enabledBase = null) {
     if (!btn) return;
     const base = enabledBase ?? (this._hasContent?.(plot) && plot?.mode === 'timeseries');
     const availability = base ? this._repeatedAvailability(plot) : 'some';
     btn.disabled = !base || availability === 'none';
     const waiting = plot?.showRepeated && !btn.disabled
-        ? (plot._repeatedWaiting || (availability === 'lazy' ? 'lazy' : null))
-        : null;
+        && (plot._repeatedWaiting === 'lazy' || availability === 'lazy');
     btn.classList.toggle('repeated-waiting', !!waiting);
     let key = 'timeseriesRepeatedToggle';
     if (base && availability === 'none') key = 'timeseriesRepeatedNone';
-    else if (waiting === 'dense') key = 'timeseriesRepeatedDense';
-    else if (waiting === 'lazy') key = 'timeseriesRepeatedLazy';
+    else if (waiting) key = 'timeseriesRepeatedLazy';
     const label = i18n.t(key);
     btn.title = label;
     if (waiting) btn.setAttribute('aria-description', label);
     else btn.removeAttribute?.('aria-description');
 };
 
-// The Repeated one-off pill, shown after the click that turns it on when the
-// marks cannot be drawn (too dense here, or a memory-saving file).
+// The Repeated one-off pill, shown after the click that turns it on when only
+// memory-saving files on the panel could hold repeats. (Too far out to see
+// the rings is the Samples pill's to say.)
 proto._setRepeatedNotice = function(plot, state) {
     if (plot?._repeatedHintTimer) {
         clearTimeout(plot._repeatedHintTimer);
@@ -5280,7 +5297,7 @@ proto._setRepeatedNotice = function(plot, state) {
     const panelEl = plot?.div?.closest('.layout-panel');
     if (!panelEl) return;
     let pill = panelEl.querySelector('.repeated-hint-indicator');
-    if (state === 'dense' || state === 'lazy') {
+    if (state === 'lazy') {
         if (!pill) {
             pill = document.createElement('div');
             pill.className = 'lazy-detail-indicator repeated-hint-indicator';
@@ -5288,7 +5305,7 @@ proto._setRepeatedNotice = function(plot, state) {
             pill.innerHTML = '<span class="lazy-detail-text"></span>';
             panelEl.appendChild(pill);
         }
-        const label = i18n.t(state === 'lazy' ? 'timeseriesRepeatedLazy' : 'timeseriesRepeatedDense');
+        const label = i18n.t('timeseriesRepeatedLazy');
         const text = pill.querySelector('.lazy-detail-text');
         if (text) text.textContent = label;
         pill.title = label;
