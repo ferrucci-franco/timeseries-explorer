@@ -688,8 +688,12 @@ class PlotManager {
     _getPlotlyConfig(overrides = {}) {
         return {
             responsive: true,
-            displayModeBar: true,
+            // The modebar and Plotly's "double-click to zoom back out" notifier
+            // are hidden: zoom, pan and reset are reachable from the mouse and
+            // the app's own controls.
+            displayModeBar: false,
             displaylogo: false,
+            showTips: false,
             scrollZoom: this.mouseWheelZoom,
             locale: getPlotlyLocale(this.language),
             ...overrides,
