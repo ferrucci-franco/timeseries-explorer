@@ -855,6 +855,39 @@ export function installPlotMarksMethods(TargetClass) {
                 menu.appendChild(row);
                 continue;
             }
+            if (item.action) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = `marks-menu-item marks-menu-command marks-item-${item.key}`;
+                button.dataset.mark = item.key;
+                button.setAttribute('role', 'menuitem');
+                button.disabled = !!item.disabled;
+                button.title = i18n.t(item.title);
+                if (item.shortcut) button.setAttribute('aria-keyshortcuts', item.shortcut.replace('⌘', 'Meta+').replace('Ctrl', 'Control'));
+                const icon = document.createElement('span');
+                icon.className = 'marks-menu-action-icon';
+                icon.setAttribute('aria-hidden', 'true');
+                icon.textContent = '↶';
+                const text = document.createElement('span');
+                text.className = 'marks-menu-text';
+                text.textContent = i18n.t(item.label);
+                button.append(icon, text);
+                if (item.shortcut) {
+                    const kbd = document.createElement('kbd');
+                    kbd.className = 'marks-menu-shortcut';
+                    kbd.textContent = item.shortcut;
+                    button.appendChild(kbd);
+                }
+                button.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    item.run();
+                });
+                const row = document.createElement('div');
+                row.className = 'marks-menu-row';
+                row.appendChild(button);
+                menu.appendChild(row);
+                continue;
+            }
             if (item.number) {
                 // A small numeric setting (2D marker size / opacity), applied on change.
                 const row = document.createElement('label');
@@ -957,8 +990,12 @@ export function installPlotMarksMethods(TargetClass) {
     proto._viewMenuModel = function(panelId, plot) {
         const mode = plot?.mode;
         const has = !!this._hasContent?.(plot);
+        // Back to the previous zoom/pan. Also where the shortcut is written.
+        const lastView = { key: 'lastview', action: true, label: 'viewLastView', title: 'viewLastViewTitle', shortcut: this._viewUndoShortcutLabel?.() || 'Ctrl+Z', disabled: !has || !this._canUndoView?.(panelId), run: () => this.undoView(panelId) };
         if (mode === 'timeseries') {
             return [
+                lastView,
+                { divider: true },
                 { key: 'ylog', label: 'viewLogY', title: 'viewLogYTitle', checked: !!plot.timeseriesYLog, disabled: !has, run: () => this._toggleTimeseriesLogAxis(panelId, 'y') },
                 { key: 'y2log', label: 'viewLogY2', title: plot.timeseriesY2Enabled ? 'viewLogY2Title' : 'viewLogY2Off', checked: !!(plot.timeseriesY2Enabled && plot.timeseriesY2Log), disabled: !has || !plot.timeseriesY2Enabled, run: () => this._toggleTimeseriesLogAxis(panelId, 'y2') },
                 { divider: true },
@@ -977,6 +1014,8 @@ export function installPlotMarksMethods(TargetClass) {
         if (mode === 'phase2d') {
             const state = this._ensurePhase2dState(plot);
             const items = [
+                lastView,
+                { divider: true },
                 {
                     key: 'display', radio: true, label: 'phase2dDisplayLabel', value: state.displayMode, disabled: !has,
                     options: [
@@ -1017,7 +1056,11 @@ export function installPlotMarksMethods(TargetClass) {
                 title: i18n.t('viewRotateAround').replace('{axis}', axis.toUpperCase()),
                 run: () => this._animateRotation(panelId, axis, Math.PI / 2, 400),
             }));
+            // The camera is part of the view: Ctrl+Z brings the last one back
+            // (the state animation builds its chart elsewhere, without history).
+            const undo = (mode === 'phase2dt' || mode === 'phase3d') ? [lastView, { divider: true }] : [];
             return [
+                ...undo,
                 {
                     key: 'proj', radio: true, label: 'viewProjection', value: plot.projection === 'perspective' ? 'perspective' : 'orthographic', disabled: !has,
                     options: [
