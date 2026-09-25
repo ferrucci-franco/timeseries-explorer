@@ -680,22 +680,13 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(marksItem(view, 'y2log').getAttribute('aria-checked'), 'true', 'log Y2 renders checked');
 }
 
-// View in the analysis modes: what each has to offer.
+// View in the analysis modes: what each has to offer. Fourier's log frequency
+// sits in its own options panel, beside the X axis reading, not here.
 {
     const { manager } = renderToolbar('fft', 2, {});
-    manager.plot.fft = { xAxisMode: 'frequency', freqLog: false };
-    let view = renderViewMenu(manager);
-    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview', 'freqlog'], 'Fourier: Last view, log frequency');
-    assert.equal(marksItem(view, 'freqlog').disabled, false);
-    const calls = [];
-    manager._toggleFftFrequencyLog = (panelId) => calls.push(panelId);
-    marksItem(view, 'freqlog').click();
-    assert.deepEqual(calls, ['panel'], 'it toggles the spectrum axis');
-    manager.plot.fft = { xAxisMode: 'period', freqLog: false };
-    view = renderViewMenu(manager);
-    assert.equal(marksItem(view, 'freqlog').getAttribute('aria-checked'), 'true', 'a period axis is always log');
-    assert.equal(marksItem(view, 'freqlog').disabled, true, 'and cannot be switched off');
-    assert.equal(marksItem(view, 'freqlog').title, 'viewLogFrequencyPeriod');
+    manager.plot.fft = { xAxisMode: 'frequency', freqLog: true };
+    assert.deepEqual(renderViewMenu(manager).querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview'],
+        'Fourier: only Last view (log frequency is in its options panel)');
 }
 {
     const { manager } = renderToolbar('histogram', 2, {});

@@ -102,7 +102,9 @@ assert.match(fft, /plot\.cursorsSpectrum\[key\] = invertAxisValue\(value\)/,
 assert.match(fft, /\.\.\.\(this\._fftXAxisIsLog\(plot\) \? \{ type: 'log' \} : \{ type: 'linear' \}\)/,
     'the period axis is logarithmic — the bins crowd into its short end otherwise');
 assert.match(fft, /return state\.xAxisMode === 'period' \|\| !!state\.freqLog;/,
-    'period is always log; frequency on request (View menu)');
+    'period is always log; frequency on request');
+assert.match(fft, /if \(!this\._fftXAxisIsPeriod\(plot\)\) \{[\s\S]{0,400}logInput\.dataset\.fftKey = 'freqLog';[\s\S]{0,400}makeRow\(i18n\.t\('fftLogScale'\)/,
+    'the log frequency box sits in the options panel, on the frequency reading only');
 assert.match(fft, /return this\._fftXAxisIsLog\(plot\) \? \[10 \*\* lo, 10 \*\* hi\] : \[lo, hi\];/,
     'a range read back from the layout comes home in data units');
 assert.match(fft, /return \[Math\.log10\(lo\), Math\.log10\(hi\)\];/, 'and a range written out goes in log10');

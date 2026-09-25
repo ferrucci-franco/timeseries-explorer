@@ -761,7 +761,7 @@ proto._fftLowestPositiveFrequency = function(plot) {
     return Number.isFinite(lowest) ? lowest : null;
 };
 
-/** Toggle the log frequency axis (View menu). The window is refitted: a linear zoom means nothing in decades. */
+/** Toggle the log frequency axis (options panel). The window is refitted: a linear zoom means nothing in decades. */
 proto._toggleFftFrequencyLog = function(panelId) {
     const plot = this.plots.get(panelId);
     if (!plot || plot.mode !== 'fft') return;
@@ -774,7 +774,6 @@ proto._toggleFftFrequencyLog = function(panelId) {
         // The frequency sliders change scale with the axis.
         this._renderFftOptionsPanel(panelId, plot);
     });
-    this._syncMarksControls?.(panelId);
 };
 
 /**
@@ -3072,6 +3071,21 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
         { value: 'frequency', label: i18n.t('fftXAxisFrequency') },
         { value: 'period', label: i18n.t('fftXAxisPeriod') },
     ]), i18n.t('fftXAxisTooltip')));
+
+    // Frequency in decades, as in a Bode plot. Offered on the frequency reading
+    // only: the period axis is logarithmic already.
+    if (!this._fftXAxisIsPeriod(plot)) {
+        const logInput = document.createElement('input');
+        logInput.type = 'checkbox';
+        logInput.className = 'fft-checkbox';
+        logInput.checked = !!state.freqLog;
+        logInput.dataset.fftKey = 'freqLog';
+        // Not a recompute: the same bins, read on another scale (and refitted).
+        logInput.addEventListener('change', () => {
+            if (!!this._ensureFftState(plot).freqLog !== logInput.checked) this._toggleFftFrequencyLog(panelId);
+        });
+        options.appendChild(makeRow(i18n.t('fftLogScale'), logInput, i18n.t('fftLogScaleTooltip')));
+    }
 
     // A period of 86400 is a day, and a series that oscillates with the day is
     // exactly what a period axis is for. Offered only where the axis is in

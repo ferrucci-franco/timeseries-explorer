@@ -118,8 +118,11 @@ try {
     await page.waitForTimeout(800);
     s = await axisOf(page, panelId, 'fftDiv', 'xaxis');
     assert.equal(s.type, 'linear', 'the frequency axis starts linear');
-    await toggleView(page, panelId, 'freqlog');
-    await page.waitForTimeout(800);
+    // Log frequency is in Fourier's options panel, beside the X axis reading.
+    await page.locator(`.layout-panel[data-id="${panelId}"] input[data-fft-key="freqLog"]`).check();
+    await page.waitForTimeout(1200);
+    assert.equal(await page.locator(`.layout-panel[data-id="${panelId}"] input[data-fft-key="freqLog"]`).isChecked(), true,
+        'the Log scale box stays checked after the panel is redrawn');
     s = await axisOf(page, panelId, 'fftDiv', 'xaxis');
     assert.equal(s.type, 'log', 'log frequency: a log axis');
     // 2000 samples at 200 Hz: bins from 0.1 Hz to 100 Hz → -1 … 2 decades.
