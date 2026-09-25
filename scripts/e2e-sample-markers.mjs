@@ -36,17 +36,24 @@ async function state(page, panelId) {
         const trace = plot.div.data[0];
         const panelEl = plot.div.closest('.layout-panel');
         const pill = panelEl.querySelector('.samples-zoom-indicator.active');
-        const btn = panelEl.querySelector('.timeseries-samples-btn');
+        // Samples is an item of the Marks menu: open it to read it, then close it.
+        const pm = window.app.plotManager;
+        pm._openMarksMenu(id, panelEl.querySelector('.timeseries-marks-btn'));
+        const btn = document.querySelector(`.timeseries-marks-menu[data-panel-id="${id}"] .marks-item-samples`);
+        const item = {
+            pressed: btn?.getAttribute('aria-checked'),
+            waiting: !!btn?.classList.contains('marks-waiting'),
+            title: btn?.title,
+            disabled: !!btn?.disabled,
+        };
+        pm._closeMarksMenu();
         return {
+            ...item,
             mode: trace.mode,
             points: trace.x.length,
             burstRows: Array.from(trace.x).filter(x => Math.abs(x - 50.3) < 1e-9).length,
             dots: plot.div.querySelectorAll('.scatterlayer .trace .points path').length,
             pill: pill ? pill.textContent : null,
-            pressed: btn?.getAttribute('aria-pressed'),
-            waiting: !!btn?.classList.contains('samples-waiting'),
-            title: btn?.title,
-            disabled: !!btn?.disabled,
         };
     }, panelId);
 }
@@ -86,14 +93,16 @@ try {
     assert.equal(s.pressed, 'false', 'Samples starts off');
     assert.equal(s.mode, 'lines', 'off: a plain line');
 
-    await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-samples-btn`).click();
+    await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-marks-btn`).click();
+    await page.locator(`.timeseries-marks-menu[data-panel-id="${panelId}"] .marks-item-samples`).click();
+    await page.keyboard.press('Escape');
     await page.waitForFunction(id => window.app.plotManager.plots.get(id).showSamples, panelId);
     await page.waitForTimeout(600);
     s = await state(page, panelId);
     assert.equal(s.pressed, 'true', 'Samples turned on');
     assert.equal(s.mode, 'lines', 'zoomed out: 10 000 samples are decimated, so no dots');
     assert.ok(s.pill, 'right after the click: the pill says to zoom in');
-    assert.equal(s.waiting, true, 'and the button reads as waiting');
+    assert.equal(s.waiting, true, 'and the item reads as waiting');
     assert.equal(s.title, s.pill, 'with the same reason in its tooltip');
     if (shots) await page.screenshot({ path: `${shots}/samples-zoomed-out.png` });
     await page.waitForTimeout(3200);
@@ -117,10 +126,12 @@ try {
     assert.equal(s.waiting, true, 'the button is waiting again');
     assert.equal(s.pill, null, 'but the pill does not come back on a zoom');
 
-    await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-stack-btn`).click();
+    await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-marks-btn`).click();
+    await page.locator(`.timeseries-marks-menu[data-panel-id="${panelId}"] .marks-item-stack`).click();
+    await page.keyboard.press('Escape');
     await page.waitForTimeout(600);
     s = await state(page, panelId);
-    assert.equal(s.disabled, true, 'stacked: the Samples button is disabled');
+    assert.equal(s.disabled, true, 'stacked: the Samples item is disabled');
     assert.equal(s.pill, null, 'stacked: no pill either');
 
     assert.deepEqual(errors, [], 'no page errors');

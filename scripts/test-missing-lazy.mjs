@@ -5,8 +5,21 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import duckdbPkg from 'duckdb';
 import { closeDuckDbConnection, closeDuckDbDatabase, runDuckDb } from '../src/data/csv-to-parquet-core.js';
-import { buildMissingBucketsSql, missingBucketsToIntervals } from '../src/data/missing-buckets-sql.js';
-import { detectNaNRuns, detectSamplingGaps } from '../src/utils/sampling-gaps.js';
+import {
+    buildGapSummarySql,
+    buildMissingBucketsSql,
+    buildStepHistogramSql,
+    lazyGapsFromBuckets,
+    missingBucketsToIntervals,
+} from '../src/data/missing-buckets-sql.js';
+import {
+    STEP_BINS_PER_EFOLD,
+    detectGapIndices,
+    detectNaNRuns,
+    detectSamplingGaps,
+    estimateNominalStep,
+    nominalStepFromHistogram,
+} from '../src/utils/sampling-gaps.js';
 
 const lit = (v) => (Number.isFinite(v) ? String(v) : 'NULL');
 
@@ -270,10 +283,11 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
         metadata: { timeStart: 0, timeEnd: 100 },
     };
     const div = { _fullLayout: { xaxis: { _length: 100 } } };
+    // The FFT time pane's coordinator (the time-series NaN/Inf and Gaps marks
+    // have their own, covered in test-nan-gaps-marks).
     const plot = {
         div,
-        mode: 'timeseries',
-        showMissingData: true,
+        mode: 'fft',
         traces: [{ fileId: 'f', varName: 'v' }],
     };
     const manager = {
@@ -282,9 +296,9 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
         _zoomTokens: new Map([['p', 1]]),
         _isVisible: () => true,
         _getTimeVar: () => ({ timeKind: 'datetime' }),
-        _missingDataInfo: () => ({ bandItems: [], stepIssues: [] }),
+        _missingDataInfo: () => ({ bandItems: [] }),
         _missingViewIsDense: () => false,
-        _missingStepNotice: () => null,
+        _fftTimePaneShapes: () => [],
         _sourceRangeForDisplayRange: (_fid, range) => range,
         _lazyMissingBucketCount: () => 10,
         _displayTimeForFetchedSourceTime: (_fid, value) => value,
@@ -504,6 +518,57 @@ const opts = (extra = {}) => ({ t0: 0, t1: 1000, nBuckets: 10, fileId: 'f', time
             const lazy = await lazyMissing(times, clean(times.length));
             assert.equal(eager.reason, 'nonMonotonic', 'eager reports the disorder');
             assert.equal(lazy.hasNominalStep, true, 'lazy cannot see it: buckets are keyed by time');
+        }
+
+        // ── Gaps tool (docs/marks-menu-nan-gaps-design.md) ──
+        // The automatic step from the SQL step histogram equals the in-memory
+        // estimate, and the gaps for that step agree between the two paths —
+        // at any zoom, since neither depends on the viewport.
+        {
+            const times = [];
+            let t = start;
+            for (let i = 0; i < 600; i++) {
+                if (i % 10 < 3) t += (2 + (i % 4)) * minute;   // 30 % dropouts
+                else t += minute;
+                times.push(t);
+            }
+            const values = clean(times.length);
+            await lazyMissing(times, values); // (re)creates missing_data
+            const rows = await runDuckDb(connection,
+                buildStepHistogramSql('epoch_ms("ts")::DOUBLE', 'missing_data', STEP_BINS_PER_EFOLD));
+            const bins = rows.map(r => ({ key: Number(r.k), count: Number(r.c), sum: Number(r.s) }));
+            const lazyStep = nominalStepFromHistogram(bins);
+            const eagerStep = estimateNominalStep(times);
+            assert.ok(Math.abs(lazyStep.dt - eagerStep.dt) < 1e-6 * minute, 'SQL histogram step = in-memory step');
+            assert.ok(Math.abs(lazyStep.agreement - eagerStep.agreement) < 1e-12, 'with the same agreement');
+            assert.ok(Math.abs(eagerStep.dt - minute) < 1e-6, 'and it is the 1-minute step, despite 30 % dropouts');
+
+            const eagerGaps = detectGapIndices(times, eagerStep.dt, 1.5);
+            const summary = (await runDuckDb(connection,
+                buildGapSummarySql('epoch_ms("ts")::DOUBLE', 'missing_data', lit, eagerStep.dt, 1.5)))[0];
+            assert.equal(Number(summary.gaps), eagerGaps.count, 'SQL gap count = in-memory gap count');
+            assert.equal(Number(summary.missing), eagerGaps.totalMissing, 'and the same missing samples');
+
+            // Bands from buckets at two zooms cover every in-memory gap.
+            for (const bucketFactor of [4, 1 / 4]) {
+                const lo = times[0];
+                const hi = times[times.length - 1];
+                const nBuckets = Math.max(1, Math.round(times.length * bucketFactor));
+                const sql = buildMissingBucketsSql('epoch_ms("ts")::DOUBLE', 'missing_data',
+                    ['try_cast("v" AS DOUBLE)'], lit, lo, hi, nBuckets);
+                const bucketRows = (await runDuckDb(connection, sql)).map(r => ({
+                    b: Number(r.b), nTotal: Number(r.n_total), nMissing: Number(r.n_missing),
+                    tMin: Number(r.t_min), tMax: Number(r.t_max),
+                }));
+                const bands = lazyGapsFromBuckets(bucketRows, {
+                    t0: lo, t1: hi, nBuckets, nominalStep: eagerStep.dt, factor: 1.5,
+                });
+                for (let k = 0; k < eagerGaps.count; k++) {
+                    const i = eagerGaps.ends[k];
+                    assert.ok(covers(bands, times[i - 1], times[i]),
+                        `bucket factor ${bucketFactor}: gap ${k} is banded`);
+                }
+            }
         }
     } finally {
         await closeDuckDbConnection(connection);

@@ -2440,11 +2440,10 @@ proto._applyLineBreaks = function(trace, intervals) {
     if (broke && trace.type === 'scattergl') trace.type = 'scatter';
 };
 
-// ── Missing-data bands (sampling gaps + NaN runs) ──
-// Shared by the FFT time pane (always on) and the timeseries "show missing
-// data" overlay (opt-in). The per-trace break-interval map (traceIntervals)
-// is only consumed by the timeseries overlay's line-cutting.
-// Trace identity for the per-trace break-interval map.
+// ── Missing-data bands (sampling gaps + NaN runs) of the FFT time pane ──
+// Always on there, with the classic detector the FFT's uniformity checks rely
+// on. (The time-series NaN/Inf and Gaps tools are separate: marks-methods.js.)
+// The per-trace interval map (traceIntervals) feeds the clean-range search.
 // Sampling-gap and NaN-run detection read the in-memory time/value arrays. For
 // a lazy file in view mode those are a RESERVOIR SAMPLE of the rows: the times
 // are irregularly spaced by construction and the sampled NaNs are sparse, so
@@ -2461,10 +2460,9 @@ proto._missTraceKey = function(t) {
 };
 
 // Union of time gaps (per file) and NaN runs (per visible trace), memoized by
-// a cheap signature. In FFT mode it runs on the same in-memory / overview
-// arrays the time pane already builds; in timeseries mode it is behind the
-// opt-in flag so large files pay nothing by default. Either way it is one
-// cached O(n) pass — recomputed only when the signature changes.
+// a cheap signature. It runs on the same in-memory arrays the time pane
+// already builds: one cached O(n) pass, recomputed only when the signature
+// changes.
 proto._missingDataInfo = function(plot) {
     const visible = (plot?.traces || []).filter(t => this._isVisible(t));
     const sig = visible.map(t => {
@@ -2477,11 +2475,6 @@ proto._missingDataInfo = function(plot) {
     const fileGaps = new Map();       // fileId -> { timeVar, gaps: [{t0,t1}] }
     const traceIntervals = new Map(); // missTraceKey -> sorted [{t0,t1}]
     const bandItems = [];
-    // Files whose time vector has no nominal step (irregular or out of order).
-    // Their `gaps` come back empty by construction; the reason travels with them
-    // so the overlay can say WHY no sampling gaps are marked instead of letting
-    // the user read the absence of bands as "nothing is missing".
-    const stepIssues = [];
     for (const t of visible) {
         // A reservoir-sampled overview has no truthful time spacing or NaN runs.
         if (!this._hasTruthfulGapSeries(t.fileId)) continue;
@@ -2491,13 +2484,6 @@ proto._missingDataInfo = function(plot) {
             const info = detectSamplingGaps(times);
             const gaps = info.gaps.map(g => ({ t0: g.t0, t1: g.t1 }));
             fileGaps.set(t.fileId, { timeVar, gaps });
-            if (!info.hasNominalStep && info.reason && info.reason !== 'tooFewSamples') {
-                stepIssues.push({
-                    fileId: t.fileId,
-                    reason: info.reason,
-                    stepAgreement: info.stepAgreement,
-                });
-            }
             for (const g of gaps) bandItems.push({ fileId: t.fileId, timeVar, t0: g.t0, t1: g.t1 });
         }
         const entry = fileGaps.get(t.fileId);
@@ -2509,28 +2495,10 @@ proto._missingDataInfo = function(plot) {
             .sort((p, q) => p.t0 - q.t0);
         traceIntervals.set(this._missTraceKey(t), merged);
     }
-    const result = { fileGaps, traceIntervals, bandItems, stepIssues };
+    const result = { fileGaps, traceIntervals, bandItems };
     plot._missSig = sig;
     plot._missCache = result;
     return result;
-};
-
-// The notice to show instead of the "zoom in" hint when a visible file has no
-// nominal step. Out-of-order timestamps outrank an irregular step: they are the
-// more fundamental defect, and fixing them may well make the step regular.
-proto._missingStepNotice = function(stepIssues) {
-    if (!stepIssues?.length) return null;
-    const unsorted = stepIssues.find(issue => issue.reason === 'nonMonotonic');
-    if (unsorted) return { mode: 'unsorted', label: i18n.t('timeseriesMissingUnsorted') };
-    const irregular = stepIssues.find(issue => issue.reason === 'irregularStep');
-    if (!irregular) return null;
-    const percent = Number.isFinite(irregular.stepAgreement)
-        ? Math.round(irregular.stepAgreement * 100)
-        : 0;
-    return {
-        mode: 'irregular',
-        label: i18n.t('timeseriesMissingIrregular').replace('{percent}', String(percent)),
-    };
 };
 
 proto._missingDataBandShapes = function(plot) {

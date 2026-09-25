@@ -337,23 +337,19 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     // Samples toggle: whether a trace has dots depends on the zoom, so `mode`
     // travels with the data. Off, the restyle stays exactly what it was.
     const samplesEnabled = this._timeseriesSamplesEnabled(plot);
-    // Line breaks across missing data must be re-applied here: this restyle is
-    // the authoritative data path (runs after create and on every zoom), so it
-    // would otherwise overwrite the breaks. The FFT pane always breaks across
-    // sampling gaps; timeseries mode does so only under the opt-in flag, where
-    // each trace also breaks across its own NaN runs.
-    const showMissing = plot.mode === 'timeseries' && plot.showMissingData;
+    // Line breaks must be re-applied here: this restyle is the authoritative
+    // data path (runs after create and on every zoom), so it would otherwise
+    // overwrite them. A time-series trace always breaks across its own NaN runs,
+    // and across its file's gaps while Gaps is on (_traceBreakIntervals, which
+    // also drops a kind too dense to draw usefully). The FFT pane always breaks
+    // across sampling gaps.
+    const tsMode = plot.mode === 'timeseries';
+    const [viewLo, viewHi] = (range || []).map(v => this._coerceAxisValue(v));
     const fftMode = plot.mode === 'fft';
     // Autoscale restores the complete FFT time domain, and a range covering every
     // sample must reuse the cached overview rather than rescan the source. The
     // rule lives in _fftNormalizeBuildRange so the rebuild path agrees with it.
     const traceBuildRange = fftMode ? this._fftNormalizeBuildRange(plot, range) : range;
-    const missInfo = showMissing ? this._missingDataInfo(plot) : null;
-    // When the view is too dense to resolve gaps, per-gap line breaks would
-    // shred the downsampled trace into invisible fragments — skip them (and the
-    // bands) and let the "zoom in" pill carry the message, keeping the signal
-    // envelope intact. Bands/breaks return in step once the user zooms in.
-    const missDense = showMissing ? this._missingViewIsDense(plot, missInfo.bandItems) : false;
     // An auto-limited FFT span was already checked for finite, uniform samples.
     // Do not rediscover line-break decorations by scanning the complete source:
     // for decoded multi-GB audio this used to allocate/sort hundreds of millions
@@ -361,11 +357,12 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
     const fftSkipGlobalGaps = fftMode && this._fftShouldSkipGlobalGapScan(plot);
     const fftGapInfo = fftMode && !fftSkipGlobalGaps ? this._fftGapInfo(plot) : null;
     const fftGapsByFile = fftGapInfo ? new Map(fftGapInfo.perFile.map(f => [f.fileId, f])) : null;
-    const attachSourceX = showMissing || fftMode;
     plot.traces.forEach((t, idx) => {
+        const breaks = tsMode ? this._traceBreakIntervals(plot, t, viewLo, viewHi) : null;
+        const attachSourceX = !!breaks || fftMode;
         const built = this._buildTimeTrace(t, traceBuildRange, plot, idx, attachSourceX ? { attachSourceX: true } : {});
         if (!built) return;
-        if (showMissing && !missDense) this._applyLineBreaks(built, missInfo.traceIntervals.get(this._missTraceKey(t)));
+        if (breaks) this._applyLineBreaks(built, breaks);
         else if (fftMode && fftGapsByFile) this._applyLineBreaks(built, fftGapsByFile.get(t.fileId)?.gaps);
         xs.push(built.x);
         ys.push(built.y);
@@ -392,46 +389,36 @@ proto._refreshTimeseriesVisuals = function(panelId, plot = this.plots.get(panelI
         Plotly.restyle(plot.div, update, indices);
     }
     if (plot.mode === 'timeseries') this._refreshSamplesNotice(plot);
-    // Keep the bands' adaptive width in step with the zoom. A shapes-only
-    // relayout is ignored by _onRelayout (no x-axis change), so this cannot loop.
-    // _missingDataBandShapes sets plot._missingTooDense for the current view;
-    // surface the "zoom in" hint accordingly.
-    // Repeated marks share layout.shapes with the bands, so both go in one
-    // relayout. The marks are shapes too (see repeated-methods.js).
+    // Keep the overlays in step with the zoom: gap bands (adaptive width),
+    // the NaN/Inf strip (per-column density) and the Repeated bars all live in
+    // layout.shapes, so they go in one relayout. A shapes-only relayout is
+    // ignored by _onRelayout (no x-axis change), so this cannot loop. Mid-pan,
+    // the Repeated bars already drawn stay: they follow the axis.
+    const marksOn = tsMode && (plot.showNaN || plot.showGaps);
+    const gapsDense = marksOn && plot.div ? this._updateTimeseriesMarks(plot) : false;
     const repeatedUpdate = plot.div && !options.live ? this._repeatedOverlayUpdate(plot) : null;
-    if ((showMissing || repeatedUpdate) && plot.div) {
-        Plotly.relayout(plot.div, {
-            shapes: [
-                ...(showMissing ? this._missingDataBandShapes(plot) : []),
-                // Mid-pan, the marks already drawn stay: they follow the axis.
-                ...(repeatedUpdate?.shapes || (plot.showRepeated ? (plot._repeatedShapes || []) : [])),
-            ],
-        });
+    if ((marksOn || repeatedUpdate) && plot.div) {
+        Plotly.relayout(plot.div, { shapes: this._timeseriesOverlayShapes(plot) });
     }
-    if (showMissing && plot.div) {
-        // A file with no nominal step marks no sampling gaps at all, so "zoom in
-        // for detail" would be a lie: zooming reveals nothing. Explain the
-        // absence instead — it outranks the density hint.
-        this._setMissingDensityNotice(plot, this._missingStepNotice(missInfo.stepIssues) || missDense);
-    }
+    if (tsMode && plot.div) this._refreshGapsNotice(plot, gapsDense);
     if (plot.mode === 'timeseries' && !options.live) this._refreshRepeatedNotice(plot);
     this._refreshElapsedDateTimeAxisTicks(plot, range);
 };
 
-// Repaint the Missing/NaN overlay after a legend visibility change.
+// Repaint the NaN/Inf and Gaps overlays after a legend visibility change.
 //
-// The amber bands are layout SHAPES, not trace data, so Plotly's own show/hide
-// leaves them exactly as they were: hiding the trace that owned a NaN run left
-// its band on screen until some later pan or zoom happened to repaint. The
-// overlay is the union over VISIBLE traces (and _missingDataInfo keys its cache
-// on them), so a visibility change is a content change and has to go through the
-// authoritative refresh — which also covers the lazy path and the notice.
+// The strip and the bands are layout SHAPES, not trace data, so Plotly's own
+// show/hide leaves them exactly as they were: hiding the trace that owned a NaN
+// run left its mark on screen until some later pan or zoom happened to repaint.
+// The overlays are over VISIBLE traces, so a visibility change is a content
+// change and has to go through the authoritative refresh — which also covers
+// the lazy path and the notice.
 //
-// Gated on the opt-in flag: with the overlay off there is nothing on screen that
-// depends on which traces are visible, and rebuilding every trace on each legend
-// click would be pure cost.
+// Gated on the toggles: with both off there is nothing on screen that depends
+// on which traces are visible, and rebuilding every trace on each legend click
+// would be pure cost.
 proto._refreshMissingOverlayForVisibility = function(panelId, plot) {
-    if (plot?.mode !== 'timeseries' || !plot.showMissingData || !plot.div) return;
+    if (plot?.mode !== 'timeseries' || !(plot.showNaN || plot.showGaps) || !plot.div) return;
     this._refreshTimeseriesVisuals(panelId, plot);
 };
 
@@ -446,8 +433,8 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
     const target = targetInfo.limit;
     const [t0, t1] = range.map(v => this._coerceAxisValue(v));
     if (!Number.isFinite(t0) || !Number.isFinite(t1)) return Promise.resolve();
-    // Truthful Missing/NaN bands for the visible range (opt-in; its own async
-    // DuckDB query, token-guarded, independent of the trace-data queries).
+    // Truthful NaN/Inf and Gaps marks for the visible range (opt-in; their own
+    // async DuckDB query, token-guarded, independent of the trace-data queries).
     this._refreshLazyMissingBands(panelId, plot, t0, t1, token);
     const perf = this._beginLazyPerf(panelId, plot, {
         token,
@@ -564,12 +551,7 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
         this._refreshSamplesNotice(plot);
         const repeatedUpdate = options.live ? null : this._repeatedOverlayUpdate(plot);
         if (repeatedUpdate && plot.div) {
-            Plotly.relayout(plot.div, {
-                shapes: [
-                    ...(plot.showMissingData ? this._lazyMissingShapes(plot) : []),
-                    ...repeatedUpdate.shapes,
-                ],
-            });
+            Plotly.relayout(plot.div, { shapes: this._timeseriesOverlayShapes(plot) });
         }
         if (!options.live) this._refreshRepeatedNotice(plot);
     }
@@ -1072,8 +1054,8 @@ proto._applyBatchedTimeseriesRestyle = function(plot, results = []) {
     const samplesEnabled = this._timeseriesSamplesEnabled?.(plot);
     // Cut the min/max envelope across real time gaps (empty buckets) so it never
     // draws a diagonal across a hole — same intent as the eager line breaks.
-    // FFT pane: always; timeseries: only under the Missing/NaN opt-in.
-    const breakGaps = plot.mode === 'fft' || (plot.mode === 'timeseries' && plot.showMissingData);
+    // FFT pane: always; timeseries: only while Gaps is on.
+    const breakGaps = plot.mode === 'fft' || (plot.mode === 'timeseries' && plot.showGaps);
     for (const result of valid) {
         const trace = result.trace || plot.traces[result.idx];
         const prepared = result.prepared
@@ -1592,16 +1574,16 @@ proto._setLazyDetailLoading = function(plot, loading, targetInfo = null, kind = 
     }
 };
 
-// Non-blocking "missing data too dense — zoom in" hint over the timeseries
-// plot, shown when _adaptiveGapBandShapes flagged plot._missingTooDense for the
-// current view. Reuses the lazy-detail pill styling (pointer-events:none) but
-// without a spinner. Toggled from the authoritative restyle path so it tracks
-// zoom, and cleared when the Missing/NaN overlay is turned off.
+// Non-blocking "gaps too dense — zoom in" hint over the timeseries plot, shown
+// when the Gaps bands are denser than the pixels for the current view. Reuses
+// the lazy-detail pill styling (pointer-events:none) but without a spinner.
+// Toggled from the authoritative restyle path so it tracks zoom, and cleared
+// when Gaps is turned off.
 // `state`: false/null → hide; true/'dense' → "too dense, zoom in"; 'loading' →
-// a spinner + "Searching for missing data…" while the lazy DuckDB query runs
-// (so the user knows something is happening before the bands appear); or an
-// object `{ mode, label }` carrying its own text — used for the no-nominal-step
-// notices, whose wording depends on the measured step agreement.
+// a spinner + "Searching for NaN/Inf and gaps…" while the lazy DuckDB query
+// runs (so the user knows something is happening before the marks appear); or
+// an object `{ mode, label }` carrying its own text — used for the step
+// notices (unsorted timestamps, weak agreement with Δt).
 proto._setMissingDensityNotice = function(plot, state) {
     const panelEl = plot?.div?.closest('.layout-panel');
     if (!panelEl) return;
@@ -1618,7 +1600,7 @@ proto._setMissingDensityNotice = function(plot, state) {
         }
         const label = custom
             ? custom.label
-            : i18n.t(mode === 'loading' ? 'timeseriesMissingSearching' : 'timeseriesMissingDense');
+            : i18n.t(mode === 'loading' ? 'timeseriesMarksSearching' : 'timeseriesGapsDense');
         const text = pill.querySelector('.lazy-detail-text');
         if (text) text.textContent = label;
         const spinner = pill.querySelector('.missing-notice-spinner');
@@ -1632,20 +1614,21 @@ proto._setMissingDensityNotice = function(plot, state) {
     }
 };
 
-// Truthful Missing/NaN bands for a LAZY (DuckDB) timeseries view. The eager
+// Truthful missing-data bands for a LAZY (DuckDB) view. The eager
 // _refreshTimeseriesVisuals path never runs for a lazy panel (it returns early
 // to _refreshTimeseriesVisualsLazy), and the in-memory overview is a reservoir
 // sample that can't reveal real gaps — so query DuckDB for per-pixel-bucket
-// missing counts over the visible range, reduce to coalesced intervals, and
-// render exactly like eager (bands + faint wash + "zoom in" pill). Eager files
+// missing counts over the visible range and reduce them. The time-series
+// NaN/Inf strip and Gaps bands have their own reducer
+// (_refreshLazyTimeseriesMarks, marks-methods.js); what follows is the FFT time
+// pane's, which draws gaps and NaN runs together as bands, always. Eager files
 // sharing the panel keep their sync detection (they are view-mode-gated out of
 // the query but flow through _missingDataInfo here).
 proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
-    // Timeseries: opt-in via the Missing/NaN button. FFT time pane: always on
-    // (the bands tell the user which spans are clean enough to select for the
-    // FFT). Other modes: nothing.
-    const active = plot?.div
-        && (plot.mode === 'fft' || (plot.mode === 'timeseries' && plot.showMissingData));
+    if (plot?.mode === 'timeseries') return this._refreshLazyTimeseriesMarks(panelId, plot, t0, t1, token);
+    // FFT time pane: always on (the bands tell the user which spans are clean
+    // enough to select for the FFT). Other modes: nothing.
+    const active = plot?.div && plot.mode === 'fft';
     if (!active) {
         this._cancelLazyMissingRequest(panelId);
         return Promise.resolve([]);
@@ -1679,19 +1662,8 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
         plot._lazyMissItems = allItems;
         plot._lazyMissSolid = solidItems;
         plot._lazyMissDense = dense;
-        if (plot.mode === 'fft') {
-            this._setMissingDensityNotice(plot, false); // no pill on the FFT pane
-            Plotly.relayout(plot.div, { shapes: this._fftTimePaneShapes(plot) });
-            return;
-        }
-        if (!plot.showMissingData) return;
-        Plotly.relayout(plot.div, {
-            shapes: [
-                ...this._lazyMissingShapes(plot),
-                ...(plot.showRepeated ? (plot._repeatedShapes || []) : []),
-            ],
-        });
-        this._setMissingDensityNotice(plot, this._missingStepNotice(eagerInfo.stepIssues) || dense);
+        this._setMissingDensityNotice(plot, false); // no pill on the FFT pane
+        Plotly.relayout(plot.div, { shapes: this._fftTimePaneShapes(plot) });
     };
 
     if (!perFile.size) {
@@ -1709,9 +1681,6 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
         render(plot._lazyMissItems, plot._lazyMissSolid || [], plot._lazyMissDense);
         return Promise.resolve(plot._lazyMissItems);
     }
-
-    // Immediate feedback: a spinner pill while the query runs.
-    if (plot.mode === 'timeseries') this._setMissingDensityNotice(plot, 'loading');
 
     const controller = new AbortController();
     const request = { controller, token, plot };
@@ -1750,8 +1719,7 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
             return { intervals: [], solidIntervals: [], dense: false };
         });
     })).then(perFileResults => {
-        const stillActive = plot.mode === 'fft'
-            || (plot.mode === 'timeseries' && plot.showMissingData);
+        const stillActive = plot.mode === 'fft';
         if (this._lazyMissingRequests?.get(panelId) !== request
             || this._zoomTokens?.get(panelId) !== token
             || !plot.div
@@ -1771,11 +1739,6 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
         return items;
     }).catch(err => {
         if (err?.name !== 'AbortError') console.warn('[missing] lazy refresh failed:', err);
-        if (this._lazyMissingRequests?.get(panelId) === request
-            && this._zoomTokens?.get(panelId) === token
-            && plot.mode === 'timeseries') {
-            this._setMissingDensityNotice(plot, false);
-        }
         return [];
     }).finally(() => {
         if (this._lazyMissingRequests?.get(panelId) === request) {
@@ -1787,7 +1750,7 @@ proto._refreshLazyMissingBands = function(panelId, plot, t0, t1, token) {
     return settled;
 };
 
-// Shapes for the cached lazy Missing/NaN verdict: the wash (any-missing,
+// Shapes for the FFT time pane's cached lazy missing-data verdict: the wash (any-missing,
 // dense-aware, wall-suppressed) with fully-missing gaps/blocks always on top.
 proto._lazyMissingShapes = function(plot) {
     const items = plot?._lazyMissItems || [];
@@ -4617,65 +4580,9 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
             timeseriesToolsGroup.appendChild(createAutoscaleAxisButton('y'));
         }
 
-        const stackBtn = document.createElement('button');
-        stackBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-stack-btn' + (plot?.timeseriesStacked ? ' active' : '');
-        stackBtn.textContent = i18n.t('timeseriesStackLabel');
-        stackBtn.title = i18n.t('timeseriesStackToggle');
-        stackBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
-        stackBtn.setAttribute('aria-pressed', plot?.timeseriesStacked ? 'true' : 'false');
-        stackBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._toggleTimeseriesStack(panelId);
-        });
-        timeseriesToolsGroup.appendChild(stackBtn);
-
-        const y2Btn = document.createElement('button');
-        y2Btn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-y2-btn' + (plot?.timeseriesY2Enabled ? ' active' : '');
-        y2Btn.textContent = i18n.t('timeseriesY2Label');
-        y2Btn.title = i18n.t('timeseriesY2Toggle');
-        y2Btn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
-        y2Btn.setAttribute('aria-pressed', plot?.timeseriesY2Enabled ? 'true' : 'false');
-        y2Btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._toggleTimeseriesY2(panelId);
-        });
-        timeseriesToolsGroup.appendChild(y2Btn);
-
-        const missingBtn = document.createElement('button');
-        missingBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-missing-btn' + (plot?.showMissingData ? ' active' : '');
-        missingBtn.textContent = i18n.t('timeseriesMissingLabel');
-        missingBtn.title = i18n.t('timeseriesMissingToggle');
-        missingBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries');
-        missingBtn.setAttribute('aria-pressed', plot?.showMissingData ? 'true' : 'false');
-        missingBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._toggleMissingData(panelId);
-        });
-        timeseriesToolsGroup.appendChild(missingBtn);
-
-        const samplesBtn = document.createElement('button');
-        samplesBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-samples-btn' + (plot?.showSamples ? ' active' : '');
-        samplesBtn.textContent = i18n.t('timeseriesSamplesLabel');
-        samplesBtn.title = i18n.t('timeseriesSamplesToggle');
-        samplesBtn.disabled = !(this._hasContent(plot) && plot?.mode === 'timeseries' && !plot?.timeseriesStacked);
-        samplesBtn.setAttribute('aria-pressed', plot?.showSamples ? 'true' : 'false');
-        this._applySamplesButtonState(plot, samplesBtn);
-        samplesBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._toggleSamples(panelId);
-        });
-        timeseriesToolsGroup.appendChild(samplesBtn);
-
-        const repeatedBtn = document.createElement('button');
-        repeatedBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn timeseries-repeated-btn' + (plot?.showRepeated ? ' active' : '');
-        repeatedBtn.textContent = i18n.t('timeseriesRepeatedLabel');
-        repeatedBtn.setAttribute('aria-pressed', plot?.showRepeated ? 'true' : 'false');
-        this._applyRepeatedButtonState(plot, repeatedBtn, this._hasContent(plot) && plot?.mode === 'timeseries');
-        repeatedBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._toggleRepeated(panelId);
-        });
-        timeseriesToolsGroup.appendChild(repeatedBtn);
+        // Stack, Y2, NaN/Inf, Gaps, Repeated, Samples and the line shape live in
+        // one dropdown (docs/marks-menu-nan-gaps-design.md).
+        timeseriesToolsGroup.appendChild(this._createMarksButton(panelId, plot));
 
         const analysisModes = [
             { id: 'fft', label: 'Fourier', titleKey: 'modeFFT', className: 'timeseries-fourier-btn' },
@@ -5051,23 +4958,13 @@ proto._toggleTimeseriesStack = function(panelId) {
         };
     }
 
-    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-    const btn = panelEl?.querySelector('.timeseries-stack-btn');
-    if (btn) {
-        btn.classList.toggle('active', !!plot.timeseriesStacked);
-        btn.setAttribute('aria-pressed', plot.timeseriesStacked ? 'true' : 'false');
-    }
-    const y2Btn = panelEl?.querySelector('.timeseries-y2-btn');
-    if (y2Btn) {
-        y2Btn.classList.toggle('active', !!plot.timeseriesY2Enabled);
-        y2Btn.setAttribute('aria-pressed', plot.timeseriesY2Enabled ? 'true' : 'false');
-    }
 
     if (plot.div) {
         this._rebuildPanel(panelId, { restoreView: restoreView || capturedView });
     } else {
         this._refreshActionBtns(panelId);
     }
+    this._syncMarksControls(panelId);
 };
 
 proto._toggleCorrelationMode = function(panelId) {
@@ -5076,33 +4973,6 @@ proto._toggleCorrelationMode = function(panelId) {
     if (plot.mode !== 'phase2d' && plot.mode !== 'correlation') return;
     // _setMode preserves phaseTraces/pending across the phase2d↔correlation pair family.
     this._setMode(panelId, plot.mode === 'correlation' ? 'phase2d' : 'correlation');
-};
-
-proto._toggleMissingData = function(panelId) {
-    const plot = this.plots.get(panelId);
-    if (!plot || plot.mode !== 'timeseries') return;
-    const capturedView = plot.div ? this._capturePlotView(plot) : null;
-    plot.showMissingData = !plot.showMissingData;
-
-    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-    const btn = panelEl?.querySelector('.timeseries-missing-btn');
-    if (btn) {
-        btn.classList.toggle('active', !!plot.showMissingData);
-        btn.setAttribute('aria-pressed', plot.showMissingData ? 'true' : 'false');
-    }
-
-    // Turning the flag off must also drop the "too dense" hint. Either way,
-    // invalidate the lazy Missing/NaN cache so a re-enable re-queries fresh.
-    plot._lazyMissSig = null;
-    if (!plot.showMissingData) {
-        this._cancelLazyMissingRequest(panelId);
-        this._setMissingDensityNotice(plot, false);
-    }
-
-    // Rebuild rather than restyle: turning the flag off must both remove the
-    // bands (layout shapes) and reconnect the line (drop the NaN breaks).
-    if (plot.div) this._rebuildPanel(panelId, { restoreView: capturedView });
-    else this._refreshActionBtns(panelId);
 };
 
 proto._toggleSamples = function(panelId) {
@@ -5117,41 +4987,25 @@ proto._toggleSamples = function(panelId) {
     // later zoom. See _refreshSamplesNotice.
     plot._samplesHintPending = !!plot.showSamples;
 
-    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-    const btn = panelEl?.querySelector('.timeseries-samples-btn');
-    if (btn) {
-        btn.classList.toggle('active', !!plot.showSamples);
-        btn.setAttribute('aria-pressed', plot.showSamples ? 'true' : 'false');
-        this._applySamplesButtonState(plot, btn);
-    }
     if (!plot.showSamples) this._setSamplesNotice(plot, null);
 
-    // Rebuild rather than restyle, like Missing/NaN: the rebuilt panel runs the
-    // authoritative refresh, which decides the dots against the laid-out axis.
+    // Rebuild rather than restyle, like NaN/Inf and Gaps: the rebuilt panel runs
+    // the authoritative refresh, which decides the dots against the laid-out axis.
     if (plot.div) this._rebuildPanel(panelId, { restoreView: capturedView });
     else this._refreshActionBtns(panelId);
+    this._syncMarksControls(panelId);
 };
 
 // How long the Samples pill stays after the click that turned the toggle on.
 const SAMPLES_HINT_MS = 3000;
 
-// Why a switched-on Samples toggle has nothing on screen lives on the button,
-// not over the plot: a pill that stayed for as long as the view was zoomed out
-// covered the curve the user was looking at. `plot._samplesWaiting` is null
-// (dots shown, or toggle off), 'zoom' (zoom in to see them) or 'lazy' (a
-// memory-saving file: zooming would not help). The button stays pressed but
-// reads as "waiting", and its tooltip gives the reason.
-proto._applySamplesButtonState = function(plot, btn) {
-    if (!btn) return;
-    const waiting = plot?.showSamples ? plot._samplesWaiting : null;
-    btn.classList.toggle('samples-waiting', !!waiting);
-    const label = waiting
-        ? i18n.t(waiting === 'lazy' ? 'timeseriesSamplesLazy' : 'timeseriesSamplesZoomIn')
-        : i18n.t('timeseriesSamplesToggle');
-    btn.title = label;
-    if (waiting) btn.setAttribute('aria-description', label);
-    else btn.removeAttribute?.('aria-description');
-};
+// Why a switched-on Samples toggle has nothing on screen lives on its item in
+// the Marks menu, not over the plot: a pill that stayed for as long as the view
+// was zoomed out covered the curve the user was looking at.
+// `plot._samplesWaiting` is null (dots shown, or toggle off), 'zoom' (zoom in to
+// see them) or 'lazy' (a memory-saving file: zooming would not help). The item
+// stays checked but reads as "waiting", and its tooltip gives the reason
+// (_marksMenuModel).
 
 // The Samples pill. `state`: null → hide; 'zoom' / 'lazy' → as above. Shown
 // only right after the click, and it goes by itself after SAMPLES_HINT_MS.
@@ -5192,11 +5046,9 @@ proto._setSamplesNotice = function(plot, state) {
 // that can never have dots — unless they are all there is (then the reason is
 // the memory-saving file, not the zoom).
 proto._refreshSamplesNotice = function(plot) {
-    const panelEl = plot?.div?.closest('.layout-panel');
-    const btn = panelEl?.querySelector('.timeseries-samples-btn');
     if (!this._timeseriesSamplesEnabled?.(plot)) {
         if (plot) plot._samplesWaiting = null;
-        this._applySamplesButtonState(plot, btn);
+        this._syncMarksControlsForPlot(plot);
         this._setSamplesNotice(plot, null);
         return;
     }
@@ -5209,8 +5061,9 @@ proto._refreshSamplesNotice = function(plot) {
         if (eligible.length) state = 'zoom';
         else if (anyLazy) state = 'lazy';
     }
+    const changed = plot._samplesWaiting !== state;
     plot._samplesWaiting = state;
-    this._applySamplesButtonState(plot, btn);
+    if (changed) this._syncMarksControlsForPlot(plot);
 
     // The one-off pill: consumed by the first refresh that could judge the
     // dots — one with a laid-out axis, since before that nothing qualifies and
@@ -5249,43 +5102,20 @@ proto._toggleRepeated = function(panelId) {
         this._setSamplesNotice(plot, null);
     }
 
-    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-    const btn = panelEl?.querySelector('.timeseries-repeated-btn');
-    if (btn) {
-        btn.classList.toggle('active', !!plot.showRepeated);
-        btn.setAttribute('aria-pressed', plot.showRepeated ? 'true' : 'false');
-        this._applyRepeatedButtonState(plot, btn);
-    }
     if (!plot.showRepeated) this._setRepeatedNotice(plot, null);
 
     // Rebuild, like Samples: the marks are laid out against the settled axis
     // by the refresh that follows, and the rings are part of the traces.
     if (plot.div) this._rebuildPanel(panelId, { restoreView: capturedView });
     else this._refreshActionBtns(panelId);
+    this._syncMarksControls(panelId);
 };
 
-// Same convention as Samples: the button carries the state. Disabled when no
-// file on the panel repeats an instant — the button itself then answers "are
-// there any?" — and "waiting" (pressed, dashed, reason in the tooltip) while
-// only memory-saving files on the panel could hold repeats. `enabledBase` is
-// the caller's own condition (content, time-series mode); the panel's files
-// are checked here.
-proto._applyRepeatedButtonState = function(plot, btn, enabledBase = null) {
-    if (!btn) return;
-    const base = enabledBase ?? (this._hasContent?.(plot) && plot?.mode === 'timeseries');
-    const availability = base ? this._repeatedAvailability(plot) : 'some';
-    btn.disabled = !base || availability === 'none';
-    const waiting = plot?.showRepeated && !btn.disabled
-        && (plot._repeatedWaiting === 'lazy' || availability === 'lazy');
-    btn.classList.toggle('repeated-waiting', !!waiting);
-    let key = 'timeseriesRepeatedToggle';
-    if (base && availability === 'none') key = 'timeseriesRepeatedNone';
-    else if (waiting) key = 'timeseriesRepeatedLazy';
-    const label = i18n.t(key);
-    btn.title = label;
-    if (waiting) btn.setAttribute('aria-description', label);
-    else btn.removeAttribute?.('aria-description');
-};
+// Same convention as Samples: the Marks menu item carries the state. Disabled
+// when no file on the panel repeats an instant — the item itself then answers
+// "are there any?" — and "waiting" (checked, dashed, reason in the tooltip)
+// while only memory-saving files on the panel could hold repeats. See
+// _marksMenuModel.
 
 // The Repeated one-off pill, shown after the click that turns it on when only
 // memory-saving files on the panel could hold repeats. (Too far out to see
@@ -5342,9 +5172,7 @@ proto._repeatedOverlayUpdate = function(plot) {
 };
 
 proto._refreshRepeatedNotice = function(plot) {
-    const panelEl = plot?.div?.closest('.layout-panel');
-    const btn = panelEl?.querySelector('.timeseries-repeated-btn');
-    this._applyRepeatedButtonState(plot, btn);
+    this._syncMarksControlsForPlot(plot);
     if (plot?.mode !== 'timeseries' || !plot.showRepeated) {
         this._setRepeatedNotice(plot, null);
         return;
@@ -5370,23 +5198,12 @@ proto._toggleTimeseriesY2 = function(panelId) {
         plot.traces.forEach(trace => { trace.axis = 'y'; });
     }
 
-    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-    const y2Btn = panelEl?.querySelector('.timeseries-y2-btn');
-    if (y2Btn) {
-        y2Btn.classList.toggle('active', !!plot.timeseriesY2Enabled);
-        y2Btn.setAttribute('aria-pressed', plot.timeseriesY2Enabled ? 'true' : 'false');
-    }
-    const stackBtn = panelEl?.querySelector('.timeseries-stack-btn');
-    if (stackBtn) {
-        stackBtn.classList.toggle('active', !!plot.timeseriesStacked);
-        stackBtn.setAttribute('aria-pressed', plot.timeseriesStacked ? 'true' : 'false');
-    }
-
     if (plot.div) {
         this._rebuildPanel(panelId, { restoreView: capturedView });
     } else {
         this._refreshActionBtns(panelId);
     }
+    this._syncMarksControls(panelId);
 };
 
 proto._supportsEqualAspect2D = function(plot) {

@@ -1,7 +1,7 @@
 // End-to-end check of the Repeated toggle
 // (docs/repeated-timestamps-indicator-design.md) in a real browser.
 //
-// 1. A clean file: the button is disabled and says there is nothing to mark.
+// 1. A clean file: the Marks item is disabled and says there is nothing to mark.
 // 2. Numeric time, 10 000 rows, two bursts (t = 20 and t = 70). Turning
 //    Repeated on turns Samples on with it. Zoomed out: a red bar per burst on
 //    the top strip, with a hover. Zoomed in: the dots are drawn, the burst's
@@ -83,17 +83,26 @@ async function state(page, panelId) {
         const plot = window.app.plotManager.plots.get(id);
         const layout = plot.div.layout;
         const panelEl = plot.div.closest('.layout-panel');
-        const btn = panelEl.querySelector('.timeseries-repeated-btn');
+        // Repeated and Samples are items of the Marks menu: open it to read
+        // them, and close it again so it covers nothing.
+        const pm = window.app.plotManager;
+        pm._openMarksMenu(id, panelEl.querySelector('.timeseries-marks-btn'));
+        const menu = document.querySelector(`.timeseries-marks-menu[data-panel-id="${id}"]`);
+        const btn = menu.querySelector('.marks-item-repeated');
+        const samplesBtn = menu.querySelector('.marks-item-samples');
+        const read = {
+            disabled: !!btn?.disabled,
+            pressed: btn?.getAttribute('aria-checked'),
+            samplesPressed: samplesBtn?.getAttribute('aria-checked'),
+            waiting: !!btn?.classList.contains('marks-waiting'),
+            title: btn?.title,
+        };
+        pm._closeMarksMenu();
         const pill = panelEl.querySelector('.repeated-hint-indicator.active');
         const trace = plot.div.data[0];
         const ringWidths = Array.isArray(trace.marker?.line?.width) ? trace.marker.line.width : [];
-        const samplesBtn = panelEl.querySelector('.timeseries-samples-btn');
         return {
-            disabled: !!btn?.disabled,
-            pressed: btn?.getAttribute('aria-pressed'),
-            samplesPressed: samplesBtn?.getAttribute('aria-pressed'),
-            waiting: !!btn?.classList.contains('repeated-waiting'),
-            title: btn?.title,
+            ...read,
             pill: pill ? pill.textContent : null,
             bars: (layout.shapes || []).filter(sh => sh.type === 'rect' && sh.y0 > 0.9).length,
             hovers: (plot._repeatedHoverMarks || []).map(m => ({ x: m.x, text: m.text })),
@@ -103,8 +112,12 @@ async function state(page, panelId) {
     }, panelId);
 }
 
-async function click(page, panelId, selector) {
-    await page.locator(`.layout-panel[data-id="${panelId}"] ${selector}`).click();
+// Toggle one item of the panel's Marks menu the way a user does: open the
+// menu, click the item, close the menu.
+async function mark(page, panelId, key) {
+    await page.locator(`.layout-panel[data-id="${panelId}"] .timeseries-marks-btn`).click();
+    await page.locator(`.timeseries-marks-menu[data-panel-id="${panelId}"] .marks-item-${key}`).click();
+    await page.keyboard.press('Escape');
     await page.waitForTimeout(700);
 }
 
@@ -133,7 +146,7 @@ try {
     ({ page, panelId } = await openPanel(context, errors, burstCsv(), 'v'));
     s = await state(page, panelId);
     assert.equal(s.disabled, false, 'bursts: Repeated is available');
-    await click(page, panelId, '.timeseries-repeated-btn');
+    await mark(page, panelId, 'repeated');
     s = await state(page, panelId);
     assert.equal(s.pressed, 'true');
     assert.equal(s.samplesPressed, 'true', 'Repeated turns Samples on with it');
@@ -173,22 +186,22 @@ try {
     assert.equal(s.bars, 0, 'and the strip gives way to the rings');
     if (shots) await page.screenshot({ path: `${shots}/repeated-rings.png` });
 
-    await click(page, panelId, '.timeseries-repeated-btn');
+    await mark(page, panelId, 'repeated');
     s = await state(page, panelId);
     assert.equal(s.pressed, 'false');
     assert.equal(s.samplesPressed, 'false', 'turning Repeated off turns off the Samples it turned on');
     assert.equal(s.bars, 0);
 
     // Samples the user had on stays on.
-    await click(page, panelId, '.timeseries-samples-btn');
-    await click(page, panelId, '.timeseries-repeated-btn');
-    await click(page, panelId, '.timeseries-repeated-btn');
+    await mark(page, panelId, 'samples');
+    await mark(page, panelId, 'repeated');
+    await mark(page, panelId, 'repeated');
     s = await state(page, panelId);
     assert.equal(s.samplesPressed, 'true', 'Samples switched on by the user is left alone');
 
     // 3. Datetime logger, ten rows a second.
     ({ page, panelId } = await openPanel(context, errors, loggerCsv(), 'I'));
-    await click(page, panelId, '.timeseries-repeated-btn');
+    await mark(page, panelId, 'repeated');
     s = await state(page, panelId);
     assert.equal(s.bars, 1, 'zoomed out on 600 repeated seconds: one bar across the strip');
     assert.equal(s.waiting, false, 'the Repeated button does not wait: the bar says it');

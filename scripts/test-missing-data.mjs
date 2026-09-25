@@ -66,7 +66,6 @@ vm.runInNewContext([
     methodSource('_applyLineBreaks'),
     methodSource('_missTraceKey'),
     methodSource('_missingDataInfo'),
-    methodSource('_missingStepNotice'),
     methodSource('_coalesceGapItems'),
     methodSource('_missingViewIsDense'),
     methodSource('_adaptiveGapBandShapes'),
@@ -153,12 +152,9 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     ] });
     assert.equal(info2.bandItems.length, 0, 'hidden traces are ignored');
 
-    // A series with a nominal step raises no step issue and shows no notice.
-    assert.deepEqual(plain(info.stepIssues), [], 'a uniform series reports no step issue');
-    assert.equal(h._missingStepNotice(info.stepIssues), null, 'and gets no notice');
 }
 
-// ── No nominal step: NaN bands survive, gap bands do not, and the notice says why ──
+// ── FFT pane, no nominal step: NaN bands survive, gap bands do not ──
 {
     // Aperiodic sampling with a NaN run. Nothing is "missing" in the time axis —
     // every row is a real measurement — so no sampling-gap band may be drawn,
@@ -177,28 +173,16 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
         'the NaN band still spans last-good to first-good',
     );
 
-    assert.equal(info.stepIssues.length, 1, 'the file is reported as having no nominal step');
-    assert.equal(info.stepIssues[0].reason, 'irregularStep', 'with the irregular-step reason');
-    const notice = h._missingStepNotice(info.stepIssues);
-    assert.equal(notice.mode, 'irregular', 'the notice is the irregular-step one');
-    assert.match(notice.label, /^«timeseriesMissingIrregular:\d+»$/, 'it interpolates the measured agreement');
-    assert.ok(!notice.label.includes('{percent}'), 'the placeholder is filled in');
 }
 
-// Out-of-order timestamps produce their own notice, which outranks irregularity.
+// Out-of-order timestamps: the FFT pane's classic detector marks no gaps.
 {
     const h = new Harness({
         times: { f1: [0, 60, 120, 300, 240, 180, 360, 420, 480] },
         values: { 'f1|a': [1, 2, 3, 4, 5, 6, 7, 8, 9] },
     });
     const info = h._missingDataInfo({ traces: [{ fileId: 'f1', varName: 'a' }] });
-    assert.equal(info.stepIssues[0].reason, 'nonMonotonic', 'disorder is reported as its own reason');
-    assert.deepEqual(plain(info.bandItems), [], 'and no bands are invented from the forward jumps');
-    assert.equal(h._missingStepNotice(info.stepIssues).mode, 'unsorted', 'the notice names the disorder');
-
-    // Precedence: disorder wins over an irregular-step issue from another file.
-    const mixed = [{ reason: 'irregularStep', stepAgreement: 0.4 }, { reason: 'nonMonotonic' }];
-    assert.equal(h._missingStepNotice(mixed).mode, 'unsorted', 'disorder outranks irregularity');
+    assert.deepEqual(plain(info.bandItems), [], 'no bands are invented from the forward jumps');
 }
 
 // A perfectly clean series yields no missing-data intervals.
@@ -342,9 +326,9 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     assert.ok(fftWall.length > 0, 'the FFT pane still washes a full wall (no pill to fall back on)');
 }
 
-// ── Gating: with the flag off, nothing changes ──
-// Behavioural guard: a trace built without the opt-in (no __srcX attached) is a
-// no-op through the break helper, so the "off" path can never alter the line.
+// ── Gating: without break intervals, nothing changes ──
+// Behavioural guard: a trace built without breaks (no __srcX attached) is a
+// no-op through the break helper, so that path can never alter the line.
 {
     const h = new Harness();
     const trace = { x: [0, 1, 2], y: [10, 20, 30], type: 'scattergl' };
@@ -353,47 +337,34 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     assert.equal(trace.type, 'scattergl', 'no __srcX (flag off) leaves the renderer untouched');
 }
 
-// Structural guard on the three wiring sites: bands and breaks are reached only
-// under `plot.mode === 'timeseries' && plot.showMissingData` (default false),
-// so the whole feature is inert unless the user turns it on.
+// Structural guard on the wiring sites (docs/marks-menu-nan-gaps-design.md):
+// gap bands are reached only while Gaps is on; line breaks come from
+// _traceBreakIntervals, which breaks across NaN runs always and across gaps
+// only while Gaps is on (its own behaviour is covered by test-nan-gaps-marks).
 assert.match(
     dataMethodsSource,
-    /if \(plot\.mode === 'timeseries' && plot\.showMissingData\) \{\s*layout\.shapes = this\._missingDataBandShapes\(plot\);/,
-    'timeseries layout adds missing-data bands only under the opt-in flag',
+    /if \(plot\.mode === 'timeseries' && plot\.showGaps\) \{\s*const \{ items, overflow \} = this\._gapBandItemsForView\(plot, null\);/,
+    'timeseries layout adds gap bands only while Gaps is on',
 );
 assert.match(
     dataMethodsSource,
-    /const showMissing = plot\.mode === 'timeseries' && plot\.showMissingData;/,
-    'timeseries trace build gates the line breaks behind the opt-in flag',
+    /const breaks = tsMode \? this\._traceBreakIntervals\(plot, t\) : null;/,
+    'timeseries trace build takes its line breaks from _traceBreakIntervals',
 );
 assert.match(
     interactionMethodsSource,
-    /const showMissing = plot\.mode === 'timeseries' && plot\.showMissingData;/,
-    'the authoritative restyle path gates missing-data work behind the opt-in flag',
+    /const breaks = tsMode \? this\._traceBreakIntervals\(plot, t, viewLo, viewHi\) : null;/,
+    'the authoritative restyle path re-applies the breaks for the view',
 );
 assert.match(
     interactionMethodsSource,
-    /if \(showMissing && !missDense\) this\._applyLineBreaks\(built, missInfo\.traceIntervals\.get/,
-    'restyle applies line breaks only when the flag is on AND the view can resolve gaps',
+    /Plotly\.relayout\(plot\.div, \{ shapes: this\._timeseriesOverlayShapes\(plot\) \}\);/,
+    'restyle re-applies the overlays (gaps, NaN strip, Repeated) in one relayout',
 );
 assert.match(
     interactionMethodsSource,
-    /\.\.\.\(showMissing \? this\._missingDataBandShapes\(plot\) : \[\]\),/,
-    'restyle re-applies bands (adaptive width) only when the flag is on',
-);
-
-// The notice must outrank the density hint at BOTH paint sites: without a
-// nominal step there are no gap bands to resolve, so "zoom in for detail" would
-// send the user looking for something that will never appear.
-assert.match(
-    interactionMethodsSource,
-    /this\._setMissingDensityNotice\(plot, this\._missingStepNotice\(missInfo\.stepIssues\) \|\| missDense\)/,
-    'the eager restyle path prefers the no-nominal-step notice over the density hint',
-);
-assert.match(
-    interactionMethodsSource,
-    /this\._setMissingDensityNotice\(plot, this\._missingStepNotice\(eagerInfo\.stepIssues\) \|\| dense\)/,
-    'the lazy render path prefers it too',
+    /if \(tsMode && plot\.div\) this\._refreshGapsNotice\(plot, gapsDense\);/,
+    'the eager restyle path refreshes the Gaps pill',
 );
 
 // Hiding a trace changes WHICH bands belong on screen, but the bands are layout
@@ -414,8 +385,8 @@ assert.match(
 // rebuild is warranted on every legend click.
 assert.match(
     interactionMethodsSource,
-    /_refreshMissingOverlayForVisibility = function[\s\S]{0,240}?if \(plot\?\.mode !== 'timeseries' \|\| !plot\.showMissingData/,
-    'the repaint is gated behind the opt-in flag',
+    /_refreshMissingOverlayForVisibility = function[\s\S]{0,240}?if \(plot\?\.mode !== 'timeseries' \|\| !\(plot\.showNaN \|\| plot\.showGaps\)/,
+    'the repaint is gated behind the NaN/Inf and Gaps toggles',
 );
 
 console.log('Missing-data tests passed');

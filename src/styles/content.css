@@ -1776,15 +1776,225 @@
     box-shadow: inset 0 1px 2px color-mix(in srgb, var(--primary-color) 20%, transparent);
 }
 
-/* Samples is on but nothing on screen can show its dots (zoomed out, or a
-   memory-saving file): still pressed, but waiting. The tooltip says why. */
-.panel-toggle-btn.active.samples-waiting,
-.panel-toggle-btn.active.samples-waiting:hover:not(:disabled),
-.panel-toggle-btn.active.repeated-waiting,
-.panel-toggle-btn.active.repeated-waiting:hover:not(:disabled) {
+/* Marks dropdown (docs/marks-menu-nan-gaps-design.md): the toggles of a
+   time-series panel. It stays open while toggling; Escape or a click outside
+   closes it. */
+.timeseries-marks-menu {
+    position: fixed;
+    z-index: 5200;
+    display: grid;
+    grid-template-columns: max-content;
+    min-width: 180px;
+    max-width: calc(100vw - 16px);
+    padding: 4px;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+    font-size: 0.78rem;
+}
+
+.marks-menu-row {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+}
+
+.timeseries-marks-menu button {
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    font: inherit;
+    white-space: nowrap;
+}
+
+.timeseries-marks-menu button:hover:not(:disabled),
+.timeseries-marks-menu button:focus-visible {
+    background-color: var(--hover-bg);
+}
+
+.timeseries-marks-menu button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.marks-menu-item {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    text-align: left;
+}
+
+.marks-menu-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    color: var(--primary-color);
+    font-size: 11px;
+    line-height: 1;
+}
+
+.marks-menu-item.checked .marks-menu-check {
+    border-color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
+}
+
+/* Samples or Repeated is on but nothing on screen can show it (zoomed out, or a
+   memory-saving file): still checked, but waiting. The tooltip says why. */
+.marks-menu-item.checked.marks-waiting .marks-menu-check {
     border-style: dashed;
     background: var(--bg-primary);
-    box-shadow: none;
+}
+
+.marks-menu-settings {
+    padding: 0 8px;
+    font-size: 0.9rem !important;
+}
+
+.marks-menu-divider {
+    margin: 4px 2px;
+    border-top: 1px solid var(--border-color);
+}
+
+.marks-menu-radio-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 4px 2px 8px;
+}
+
+.marks-menu-radio-caption {
+    margin-right: 6px;
+    color: var(--text-secondary, var(--text-primary));
+}
+
+.marks-menu-radio {
+    padding: 4px 8px;
+}
+
+.marks-menu-radio.checked,
+.marks-menu-radio.checked:hover:not(:disabled) {
+    border-color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
+    color: var(--primary-color);
+}
+
+/* Gaps settings: Δt and threshold per file, over the top-right of the plot,
+   below Plotly's modebar. */
+.gaps-panel {
+    position: absolute;
+    top: 76px;
+    right: 12px;
+    z-index: 9;
+    width: max-content;
+    min-width: 220px;
+    max-width: calc(100% - 24px);
+    padding: 8px 10px 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.gaps-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+.gaps-panel-close,
+.gaps-panel-auto {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font: inherit;
+    padding: 2px 8px;
+}
+
+.gaps-panel-close {
+    border-color: transparent;
+    padding: 0 4px;
+}
+
+.gaps-panel-auto.active {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 12%, var(--bg-primary));
+}
+
+.gaps-panel-file + .gaps-panel-file {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.gaps-panel-file-name {
+    margin-bottom: 4px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gaps-panel-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.gaps-panel-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.gaps-panel-row input,
+.gaps-panel-row select {
+    padding: 2px 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.gaps-panel-step {
+    width: 7em;
+}
+
+.gaps-panel-factor {
+    width: 4.5em;
+}
+
+.gaps-panel-note {
+    margin-top: 2px;
+    color: var(--text-secondary, var(--text-primary));
+    opacity: 0.85;
+}
+
+.gaps-panel-warning {
+    color: #b26a00;
+    opacity: 1;
+}
+
+.gaps-panel-result {
+    margin-top: 6px;
+    font-weight: 600;
 }
 
 /* Hover label of a Repeated mark (shapes have no Plotly hover of their own). */

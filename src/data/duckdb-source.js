@@ -35,7 +35,8 @@ import {
     parseRegressionPass2,
 } from './pair-regression-sql.js';
 import { linearFromMoments, quadraticFromMoments } from '../utils/regression.js';
-import { buildMissingBucketsSql } from './missing-buckets-sql.js';
+import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } from './missing-buckets-sql.js';
+import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
 import {
@@ -716,6 +717,48 @@ export default class DuckDbSource {
             };
         }
         return { buckets };
+    }
+
+    /**
+     * Step histogram of the whole file for the Gaps tool's automatic step
+     * (utils/sampling-gaps.js nominalStepFromHistogram). Source time units.
+     * Returns `{ bins: [{ key, count, sum }], positive }`.
+     */
+    async getStepHistogram(legacyData, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getStepHistogram: data is not DuckDB-backed (eager mode)');
+        const sql = buildStepHistogramSql(this._timeExpressionSql(legacyData, meta), meta.tableName, STEP_BINS_PER_EFOLD);
+        const result = await this._interactiveQuery(sql, { signal: options?.signal });
+        const keys = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+        const counts = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
+        const sums = this._extractColumnAsFloat64(result, 2, 'DOUBLE');
+        const n = Math.min(keys.length, counts.length, sums.length);
+        const bins = [];
+        let positive = 0;
+        for (let i = 0; i < n; i++) {
+            bins.push({ key: keys[i], count: counts[i], sum: sums[i] });
+            positive += counts[i];
+        }
+        return { bins, positive };
+    }
+
+    /**
+     * Gap count and estimated missing samples over the whole file, for a step
+     * and threshold factor in source time units. Returns `{ gaps, missing }`.
+     */
+    async getGapSummary(legacyData, dt, factor, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('getGapSummary: data is not DuckDB-backed (eager mode)');
+        const step = Number(dt);
+        const f = Number(factor);
+        if (!(step > 0) || !(f > 0)) return { gaps: 0, missing: 0 };
+        const sql = buildGapSummarySql(
+            this._timeExpressionSql(legacyData, meta), meta.tableName, (v) => this._numericLiteral(v), step, f);
+        const result = await this._interactiveQuery(sql, { signal: options?.signal });
+        return {
+            gaps: this._extractColumnAsFloat64(result, 0, 'DOUBLE')[0] || 0,
+            missing: this._extractColumnAsFloat64(result, 1, 'DOUBLE')[0] || 0,
+        };
     }
 
     // The time expression used by the diagnostics queries — identical to the one
