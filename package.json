@@ -195,6 +195,7 @@
     "e2e:cursor-stairs": "node scripts/e2e-cursor-stairs.mjs",
     "e2e:nan-gaps": "node scripts/e2e-nan-gaps.mjs",
     "e2e:log-axes": "node scripts/e2e-log-axes.mjs",
+    "e2e:view-undo": "node scripts/e2e-view-undo.mjs",
     "bench:data-tools": "node scripts/bench-data-tools.mjs",
     "bench:zoom": "node scripts/bench-zoom.mjs",
     "bench:parse": "node --max-old-space-size=8192 scripts/bench-parse.mjs",

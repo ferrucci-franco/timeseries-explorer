@@ -607,11 +607,15 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(viewButton.textContent, 'viewMenuLabel (2) ▾', 'View counts Stack and Y2');
     const view = renderViewMenu(manager);
     assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark),
-        ['ylog', 'y2log', 'stack', 'y2'], 'View: log Y, log Y2, then Stack and Y2');
+        ['lastview', 'ylog', 'y2log', 'stack', 'y2'], 'View: Last view, log Y, log Y2, then Stack and Y2');
+    const lastView = marksItem(view, 'lastview');
+    assert.equal(lastView.getAttribute('role'), 'menuitem', 'Last view is an action, not a checkbox');
+    assert.equal(lastView.disabled, true, 'Last view waits for a zoom/pan to go back from');
+    assert.match(lastView.querySelector('.marks-menu-shortcut')?.textContent || '', /Ctrl\+Z|⌘Z/, 'Last view shows its keyboard shortcut');
     assert.equal(marksItem(view, 'stack').getAttribute('aria-checked'), 'true', 'Stack renders checked');
     assert.equal(marksItem(view, 'y2').getAttribute('aria-checked'), 'true', 'Y2 renders checked');
     assert.equal(marksItem(view, 'y2log').disabled, false, 'log Y2 is available with the right axis on');
-    assert.equal(view.querySelectorAll('.marks-menu-divider').length, 2, 'log scales, layout, line shape');
+    assert.equal(view.querySelectorAll('.marks-menu-divider').length, 3, 'last view, log scales, layout, line shape');
 }
 {
     const { manager } = renderToolbar('timeseries', 2, {});
@@ -677,7 +681,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.ok(viewBtn, '2D: View sits in the view group');
     assert.equal(viewBtn.textContent, 'viewMenuLabel (1) ▾');
     const view = renderViewMenu(manager);
-    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['xlog', 'ylog'], '2D: log X and log Y');
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview', 'xlog', 'ylog'], '2D: Last view, log X and log Y');
     const calls = [];
     manager._togglePhase2dLogAxis = (panelId, axis) => calls.push(axis);
     marksItem(view, 'xlog').click();

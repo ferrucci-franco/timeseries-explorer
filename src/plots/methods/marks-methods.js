@@ -843,6 +843,39 @@ export function installPlotMarksMethods(TargetClass) {
                 menu.appendChild(row);
                 continue;
             }
+            if (item.action) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = `marks-menu-item marks-menu-action marks-item-${item.key}`;
+                button.dataset.mark = item.key;
+                button.setAttribute('role', 'menuitem');
+                button.disabled = !!item.disabled;
+                button.title = i18n.t(item.title);
+                if (item.shortcut) button.setAttribute('aria-keyshortcuts', item.shortcut.replace('⌘', 'Meta+').replace('Ctrl', 'Control'));
+                const icon = document.createElement('span');
+                icon.className = 'marks-menu-action-icon';
+                icon.setAttribute('aria-hidden', 'true');
+                icon.textContent = '↶';
+                const text = document.createElement('span');
+                text.className = 'marks-menu-text';
+                text.textContent = i18n.t(item.label);
+                button.append(icon, text);
+                if (item.shortcut) {
+                    const kbd = document.createElement('kbd');
+                    kbd.className = 'marks-menu-shortcut';
+                    kbd.textContent = item.shortcut;
+                    button.appendChild(kbd);
+                }
+                button.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    item.run();
+                });
+                const row = document.createElement('div');
+                row.className = 'marks-menu-row';
+                row.appendChild(button);
+                menu.appendChild(row);
+                continue;
+            }
             const row = document.createElement('div');
             row.className = 'marks-menu-row';
             const button = document.createElement('button');
@@ -895,8 +928,12 @@ export function installPlotMarksMethods(TargetClass) {
     proto._viewMenuModel = function(panelId, plot) {
         const mode = plot?.mode;
         const has = !!this._hasContent?.(plot);
+        // Back to the previous zoom/pan. Also where the shortcut is written.
+        const lastView = { key: 'lastview', action: true, label: 'viewLastView', title: 'viewLastViewTitle', shortcut: this._viewUndoShortcutLabel?.() || 'Ctrl+Z', disabled: !has || !this._canUndoView?.(panelId), run: () => this.undoView(panelId) };
         if (mode === 'timeseries') {
             return [
+                lastView,
+                { divider: true },
                 { key: 'ylog', label: 'viewLogY', title: 'viewLogYTitle', checked: !!plot.timeseriesYLog, disabled: !has, run: () => this._toggleTimeseriesLogAxis(panelId, 'y') },
                 { key: 'y2log', label: 'viewLogY2', title: plot.timeseriesY2Enabled ? 'viewLogY2Title' : 'viewLogY2Off', checked: !!(plot.timeseriesY2Enabled && plot.timeseriesY2Log), disabled: !has || !plot.timeseriesY2Enabled, run: () => this._toggleTimeseriesLogAxis(panelId, 'y2') },
                 { divider: true },
@@ -908,6 +945,8 @@ export function installPlotMarksMethods(TargetClass) {
         }
         if (mode === 'phase2d') {
             return [
+                lastView,
+                { divider: true },
                 { key: 'xlog', label: 'viewLogX', title: 'viewLogXTitle', checked: !!plot.phase2dXLog, disabled: !has, run: () => this._togglePhase2dLogAxis(panelId, 'x') },
                 { key: 'ylog', label: 'viewLogY', title: 'viewLogYTitle', checked: !!plot.phase2dYLog, disabled: !has, run: () => this._togglePhase2dLogAxis(panelId, 'y') },
             ];

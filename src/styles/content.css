@@ -1854,6 +1854,27 @@
     background: var(--bg-primary);
 }
 
+/* An action, not a toggle (Last view): an icon where the box would be, and
+   the keyboard shortcut on the right — the menu is where it is learned. */
+.marks-menu-action-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    color: var(--primary-color);
+    font-size: 13px;
+    line-height: 1;
+}
+
+.marks-menu-shortcut {
+    margin-left: auto;
+    padding-left: 16px;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 0.85em;
+}
+
 .marks-menu-settings {
     padding: 0 8px;
     font-size: 0.9rem !important;

@@ -16,6 +16,7 @@ import { installPlotTemporalProfileMethods } from './methods/temporal-profile-me
 import { installPlotIntegralMethods } from './methods/integral-methods.js';
 import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
+import { installPlotViewHistoryMethods } from './methods/view-history-methods.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 import { dropMissingVariablesFromPanels } from '../utils/panel-variables.js';
 import { formatMissingCount, seriesStats } from '../utils/series-stats.js';
@@ -84,6 +85,8 @@ class PlotManager {
         // Given { title, hint, token }, returns { progress(text), close() }.
         // When absent the work still runs; it just runs silently.
         this.onBusyOverlay = null;
+        // Ctrl+Z: back to the previous zoom/pan view (view-history-methods.js).
+        this._installViewUndoShortcut();
     }
 
     // ─── Public API ────────────────────────────────────────────────
@@ -1708,6 +1711,7 @@ class PlotManager {
         const config = this._getPlotlyConfig();
 
         Plotly.newPlot(div, traces, layout, config).then(() => {
+            this._installViewHistory(panelId, plot, div);
             if (plot._eagerInitialDetailReady) {
                 delete plot._eagerInitialDetailReady;
                 plot._eagerInitialDetailToken = null;
@@ -1737,6 +1741,8 @@ class PlotManager {
                     }
                 }
                 finish3DSetup();
+                // The view the chart opens with is the baseline, not a step.
+                this._markViewHistoryDirty(panelId);
             });
             if (plot.mode !== 'timeseries') {
                 div.on('plotly_doubleclick', () => {
@@ -4565,5 +4571,6 @@ installPlotTemporalProfileMethods(PlotManager);
 installPlotIntegralMethods(PlotManager);
 installPlotExportMethods(PlotManager);
 installPlotAudioMethods(PlotManager);
+installPlotViewHistoryMethods(PlotManager);
 
 export default PlotManager;
