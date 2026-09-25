@@ -605,7 +605,18 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 
         const info = document.createElement('span');
         info.className = 'tree-info';
-        info.textContent = this.parser.getVariableInfo(variable);
+        // The "[N pts]" prefix gets its own span, so the sidebar's point-count
+        // toggle can hide it and leave the unit and type in view.
+        const infoText = this.parser.getVariableInfo(variable);
+        const countMatch = /^\[\d+ pts\]/.exec(infoText);
+        if (countMatch) {
+            const count = document.createElement('span');
+            count.className = 'tree-info-count';
+            count.textContent = countMatch[0];
+            info.append(count, infoText.slice(countMatch[0].length));
+        } else {
+            info.textContent = infoText;
+        }
 
         itemDiv.append(spacer, icon, label, info);
         if (canPlot && variable.kind !== 'abscissa') {
@@ -787,6 +798,13 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 
         parentElement.appendChild(nodeDiv);
     }
+};
+
+// Point counts are hidden with one class on the sidebar, so the tree does not
+// have to be rebuilt and newly rendered leaves follow the setting on their own.
+proto.togglePointCounts = function(show) {
+    document.getElementById('sidebar')?.classList.toggle('hide-point-counts', !show);
+    document.getElementById('toggle-point-counts')?.classList.toggle('active', !!show);
 };
 
 proto.toggleDescriptions = function(show) {

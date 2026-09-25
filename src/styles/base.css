@@ -1198,10 +1198,13 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--border-color);
+    /* A touch of the accent colour, so the pill reads as a control against
+       the panel border in both themes without shouting. */
+    border: 1px solid color-mix(in srgb, var(--primary-color) 40%, var(--border-color));
     border-radius: 999px;
-    background: var(--bg-primary);
-    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--primary-color) 8%, var(--bg-primary));
+    color: color-mix(in srgb, var(--primary-color) 45%, var(--text-secondary));
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
     cursor: pointer;
     /* The sidebar animates its width; the pill rides along instead of jumping
        to the new edge while the panel is still moving. */
@@ -1220,7 +1223,7 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
 .edge-toggle:focus-visible {
     color: var(--primary-color);
     border-color: var(--primary-color);
-    background: color-mix(in srgb, var(--primary-color) 10%, var(--bg-primary));
+    background: color-mix(in srgb, var(--primary-color) 16%, var(--bg-primary));
 }
 
 .edge-toggle:focus-visible {

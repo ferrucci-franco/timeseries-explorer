@@ -79,9 +79,13 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return phase2dShowsMarkers(state);
     };
 
-    // ── Display + marker toolbar controls (phase2d only) ────────────
+    // Modes that offer the Lines / Points / Lines+points display. The 3D views
+    // share the 2D state (plot.phase2d), so the choice carries across modes.
+    const DISPLAY_MODES = new Set(['phase2d', 'phase2dt', 'phase3d']);
+
+    // ── Display + marker toolbar controls (2D and 3D pair views) ────
     proto._injectPhase2dDisplayControls = function(panelId, toolbar, plot) {
-        if (!toolbar || plot?.mode !== 'phase2d') return;
+        if (!toolbar || !DISPLAY_MODES.has(plot?.mode)) return;
         const state = this._ensurePhase2dState(plot);
 
         const group = document.createElement('div');
@@ -168,7 +172,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
     proto._setPhase2dDisplayMode = function(panelId, displayMode) {
         const plot = this.plots.get(panelId);
-        if (!plot || plot.mode !== 'phase2d') return;
+        if (!plot || !DISPLAY_MODES.has(plot.mode)) return;
         const state = this._ensurePhase2dState(plot);
         state.displayMode = PHASE2D_DISPLAY_MODES.has(displayMode) ? displayMode : 'lines';
         // Show/hide the compact marker controls without a full toolbar rebuild.
@@ -180,7 +184,7 @@ export function installPlotPhase2dFitMethods(TargetClass) {
 
     proto._setPhase2dMarkerSetting = function(panelId, key, rawValue) {
         const plot = this.plots.get(panelId);
-        if (!plot || plot.mode !== 'phase2d') return;
+        if (!plot || !DISPLAY_MODES.has(plot.mode)) return;
         const state = this._ensurePhase2dState(plot);
         if (key === 'markerSize') state.markerSize = clampNumber(rawValue, MARKER_SIZE_MIN, MARKER_SIZE_MAX, state.markerSize);
         else if (key === 'markerOpacity') state.markerOpacity = clampNumber(rawValue, MARKER_OPACITY_MIN, MARKER_OPACITY_MAX, state.markerOpacity);
@@ -191,7 +195,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
     // Display change is a pure restyle over the SAME visual data — no query, no
     // pair change, no fitting recompute (that matters for the lazy path).
     proto._restylePhase2dDisplay = function(panelId, plot = this.plots.get(panelId)) {
-        if (!plot?.div || plot.mode !== 'phase2d') return;
+        if (!plot?.div || !DISPLAY_MODES.has(plot.mode)) return;
+        const is3d = plot.mode !== 'phase2d';
         const state = this._ensurePhase2dState(plot);
         const mode = this._phase2dPlotlyMode(state);
         const showMarkers = this._phase2dShowsMarkers(state);
@@ -204,13 +209,16 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         data.forEach((tr, i) => {
             // Leave the origin cross, transient hover markers, and fit curves
             // alone — fit lines must stay dashed lines regardless of Display.
+            // In 3D the origin axes (__axis__) and other helpers are skipped too.
             if (!tr || tr.name === '__origin__' || tr.name === '__hover__' || tr._phase2dFit) return;
+            if (is3d && typeof tr.name === 'string' && tr.name.startsWith('__')) return;
             indices.push(i);
             modes.push(mode);
             const color = tr.line?.color || tr.marker?.color;
             markers.push(showMarkers
                 ? { color, size: state.markerSize, opacity: state.markerOpacity }
                 : { color });
+            if (is3d) return; // scatter3d is always WebGL: no type switch
             // Toggling markers on/off can switch the trace into/out of WebGL, so
             // a Points display doesn't crawl in SVG. Only send `type` when it
             // actually changes — restyling `type` forces a replot, and marker

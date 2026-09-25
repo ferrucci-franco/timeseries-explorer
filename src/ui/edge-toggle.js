@@ -18,7 +18,7 @@ import i18n from '../i18n/index.js';
 // One chevron, pointing left, turned by CSS for the other three cases: a rail
 // on the right points the other way, and collapsing flips it again.
 const CHEVRON = '<svg class="edge-toggle-chevron" viewBox="0 0 8 16" aria-hidden="true" focusable="false">'
-    + '<path d="M6 2.5 1.8 8 6 13.5" fill="none" stroke="currentColor" stroke-width="1.6"'
+    + '<path d="M6 2.5 1.8 8 6 13.5" fill="none" stroke="currentColor" stroke-width="1.9"'
     + ' stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 function applyState(button, collapsed) {
