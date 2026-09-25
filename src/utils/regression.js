@@ -16,6 +16,7 @@ export const FIT_CURVE_POINTS = 200;
 // Rows below these counts cannot define the corresponding model.
 export const LINEAR_MIN_N = 2;
 export const QUADRATIC_MIN_N = 3;
+export const POWER_MIN_N = 2;
 
 // Derived goodness-of-fit metrics from the residual sum of squares (SSE) and the
 // total sum of squares (SST = Σ(y − meanY)²). SST = 0 ⇒ Y is constant, so R² is
@@ -244,6 +245,51 @@ export function quadraticFromMoments(stats) {
     };
 }
 
+// y = a·x^b, fitted as a straight line in log-log: log10 y = log10 a + b·log10 x.
+// That is the fit a log-log plot shows as a line, and the one read off such a
+// plot by hand (b is the slope in decades per decade). Only rows with x > 0 and
+// y > 0 have a logarithm; the rest are excluded like non-finite rows and
+// counted in nExcluded. R², Pearson r and RMSE are those of the log-log line
+// (RMSE in decades), not of y itself — the fit minimises relative, not
+// absolute, error.
+export function powerFit(x, y) {
+    const len = Math.min(x?.length || 0, y?.length || 0);
+    const lx = new Float64Array(len);
+    const ly = new Float64Array(len);
+    for (let i = 0; i < len; i++) {
+        const xi = Number(x[i]);
+        const yi = Number(y[i]);
+        lx[i] = xi > 0 ? Math.log10(xi) : NaN;
+        ly[i] = yi > 0 ? Math.log10(yi) : NaN;
+    }
+    return powerFromMoments(pairwiseMoments(lx, ly));
+}
+
+// The power fit from pairwise moments of (log10 x, log10 y). Shared by the eager
+// kernel and the lazy DuckDB path, which aggregates the same logarithms in SQL.
+export function powerFromMoments(m) {
+    const line = linearFromMoments(m);
+    const minX = Number.isFinite(m.minX) ? 10 ** m.minX : NaN;
+    const maxX = Number.isFinite(m.maxX) ? 10 ** m.maxX : NaN;
+    return {
+        model: 'power',
+        n: line.n,
+        nExcluded: line.nExcluded,
+        minX,
+        maxX,
+        a: Number.isFinite(line.b0) ? 10 ** line.b0 : NaN,
+        b: line.b1,
+        logA: line.b0,
+        r: line.r,
+        r2: line.r2,
+        rmse: line.rmse,
+        sse: line.sse,
+        sst: line.sst,
+        status: line.n < POWER_MIN_N ? 'undefined' : line.status,
+        warning: line.warning,
+    };
+}
+
 // Predict ŷ at a single x for a fit result. Quadratic is evaluated in the
 // centered coordinate (matching how it was solved) for numerical stability.
 export function predict(fit, x) {
@@ -253,13 +299,19 @@ export function predict(fit, x) {
         const u = (x - fit.centerX) / fit.scaleX;
         return fit.A * u * u + fit.B * u + fit.C;
     }
+    if (fit.model === 'power') return x > 0 ? fit.a * x ** fit.b : NaN;
     return NaN;
 }
 
 // Sampled fit curve over the observed X range only (no extrapolation). Returns
 // { x, y } arrays of `count` points from minX to maxX inclusive. A degenerate
 // or unfitted result yields empty arrays.
-export function buildFitCurve(fit, count = FIT_CURVE_POINTS) {
+//
+// The samples are evenly spaced in log10 x for a power fit, and for any fit
+// drawn on a log X axis (options.logX) when its span is positive: evenly
+// spaced in x, the first decade of a log axis would get a couple of points and
+// the curve would show as a broken line there.
+export function buildFitCurve(fit, count = FIT_CURVE_POINTS, options = {}) {
     if (!fit || fit.status !== 'ok' || !Number.isFinite(fit.minX) || !Number.isFinite(fit.maxX)) {
         return { x: [], y: [] };
     }
@@ -270,9 +322,13 @@ export function buildFitCurve(fit, count = FIT_CURVE_POINTS) {
     }
     const xs = new Array(n);
     const ys = new Array(n);
-    const step = (maxX - minX) / (n - 1);
+    const logSpaced = (fit.model === 'power' || options.logX) && minX > 0 && maxX > 0;
+    const lo = logSpaced ? Math.log10(minX) : minX;
+    const hi = logSpaced ? Math.log10(maxX) : maxX;
+    const step = (hi - lo) / (n - 1);
     for (let i = 0; i < n; i++) {
-        const xi = i === n - 1 ? maxX : minX + step * i;
+        const t = lo + step * i;
+        const xi = i === 0 ? minX : (i === n - 1 ? maxX : (logSpaced ? 10 ** t : t));
         xs[i] = xi;
         ys[i] = predict(fit, xi);
     }
@@ -283,5 +339,6 @@ export function buildFitCurve(fit, count = FIT_CURVE_POINTS) {
 export function fitPair(model, x, y) {
     if (model === 'linear') return linearFit(x, y);
     if (model === 'quadratic') return quadraticFitCentered(x, y);
+    if (model === 'power') return powerFit(x, y);
     return null;
 }

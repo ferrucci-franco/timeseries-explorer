@@ -3,7 +3,7 @@
 // plots/methods/phase2d-fit-methods.js.
 
 export const PHASE2D_DISPLAY_MODES = new Set(['lines', 'markers', 'lines+markers']);
-export const PHASE2D_FIT_MODELS = new Set(['none', 'linear', 'quadratic']);
+export const PHASE2D_FIT_MODELS = new Set(['none', 'linear', 'quadratic', 'power']);
 export const PHASE2D_LAYOUTS = new Set(['horizontal', 'vertical']);
 export const MARKER_SIZE_MIN = 1;
 export const MARKER_SIZE_MAX = 20;

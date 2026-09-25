@@ -53,31 +53,41 @@ try {
     }, panelId, { timeout: 30000 });
     await page.waitForTimeout(800);
 
-    // ── Display: the 2D select is in the 3D toolbar and restyles the traces ──
-    const select = page.locator(`.layout-panel[data-id="${panelId}"] .phase2d-display-select`);
-    assert.equal(await select.count(), 1, 'the 3D toolbar offers Lines / Points / Lines+points');
-    await select.selectOption('markers');
+    // ── Display: the View menu offers the 2D display in 3D and restyles the traces ──
+    const panelSel = `.layout-panel[data-id="${panelId}"]`;
+    const openView = async () => {
+        if (!(await page.locator(`.panel-view-menu[data-panel-id="${panelId}"]`).count())) {
+            await page.locator(`${panelSel} .panel-view-btn`).click();
+        }
+    };
+    const viewMenu = page.locator(`.panel-view-menu[data-panel-id="${panelId}"]`);
+    await openView();
+    assert.equal(await viewMenu.locator('.marks-display-markers').count(), 1, 'the 3D View menu offers Lines / Points / Lines+points');
+    await viewMenu.locator('.marks-display-markers').click();
     await page.waitForTimeout(400);
-    let trace = await page.evaluate(id => {
+    const dataTrace = () => page.evaluate(id => {
         const t = window.app.plotManager.plots.get(id).div.data.find(d => d.type === 'scatter3d' && !String(d.name).startsWith('__'));
         return { mode: t.mode, size: t.marker?.size, opacity: t.marker?.opacity };
     }, panelId);
+    let trace = await dataTrace();
     assert.equal(trace.mode, 'markers', 'Points: markers only');
     assert.equal(trace.size, 4);
-    const sizeInput = page.locator(`.layout-panel[data-id="${panelId}"] .phase2d-marker-input`).first();
+    await openView();
+    const sizeInput = viewMenu.locator('.marks-item-marker-size input');
     await sizeInput.fill('7');
-    await sizeInput.dispatchEvent('change');
+    await sizeInput.press('Enter');
     await page.waitForTimeout(300);
-    trace = await page.evaluate(id => {
-        const t = window.app.plotManager.plots.get(id).div.data.find(d => d.type === 'scatter3d' && !String(d.name).startsWith('__'));
-        return { mode: t.mode, size: t.marker?.size };
-    }, panelId);
+    trace = await dataTrace();
     assert.equal(trace.size, 7, 'the marker size reaches the 3D trace');
     const axisHelpers = await page.evaluate(id => window.app.plotManager.plots.get(id).div.data
         .filter(d => d.name === '__axis__').map(d => d.mode), panelId);
     assert.ok(axisHelpers.every(m => m === 'lines'), 'the origin axes stay lines');
-    await select.selectOption('lines+markers');
+    await openView();
+    await viewMenu.locator('.marks-display-lines\\+markers').click();
     await page.waitForTimeout(300);
+    assert.equal((await dataTrace()).mode, 'lines+markers', 'Lines+points');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
     if (shots) await page.screenshot({ path: `${shots}/3d-lines-points.png` });
 
     // ── Pinch: two fingers spread on the scene ──

@@ -217,6 +217,12 @@ class ToolbarHarness {
     // mixin's business; the toolbar only reads the verdict.
     _repeatedAvailability(plot) { return plot?._testRepeatedAvailability || 'some'; }
     _ensureFftState(plot) { return plot.fft; }
+    _ensurePhase2dState(plot) {
+        plot.phase2d = { displayMode: 'lines', markerSize: 4, markerOpacity: 0.65, ...(plot.phase2d || {}) };
+        return plot.phase2d;
+    }
+    _phase2dShowsMarkers(state) { return state.displayMode !== 'lines'; }
+    _equalAspectAllowed(plot) { return plot?.mode !== 'phase2d' || !!plot.phase2dXLog === !!plot.phase2dYLog; }
     _ensureHistogramState(plot) { return plot.histogram; }
     _is3D(mode) { return mode === 'phase2dt' || mode === 'phase3d'; }
     _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) >= 3; }
@@ -226,6 +232,7 @@ class ToolbarHarness {
     _autoScalePlot(panelId, plot) { this.autoscaleCalls.push({ panelId, plot }); }
     _runWithEagerDetailLoading(_panelId, work) { return work(); }
     _dismissModeChangeWarning() {}
+    _closeMarksMenu() {}
     _showModeChangeWarning(panelId, mode) { this.warnings.push({ panelId, mode }); }
     _setMode(panelId, mode, stateAnimDim, options) {
         this.modeChanges.push({ panelId, mode, stateAnimDim, options });
@@ -235,6 +242,10 @@ class ToolbarHarness {
 
 const sandbox = {
     proto: ToolbarHarness.prototype,
+    MARKER_SIZE_MIN: 1,
+    MARKER_SIZE_MAX: 20,
+    MARKER_OPACITY_MIN: 0.05,
+    MARKER_OPACITY_MAX: 1,
     document: { createElement: tagName => new FakeElement(tagName) },
     i18n: { t: key => key },
 };
@@ -254,7 +265,20 @@ vm.runInNewContext([
     marksMethodAssignment('_createViewButton'),
     marksMethodAssignment('_applyViewButtonState'),
     marksMethodAssignment('_renderViewMenu'),
+    marksMethodAssignment('_analysisModes'),
+    marksMethodAssignment('_analysisMenuModel'),
+    marksMethodAssignment('_createAnalysisButton'),
+    marksMethodAssignment('_applyAnalysisButtonState'),
+    marksMethodAssignment('_renderAnalysisMenu'),
 ].join('\n'), sandbox);
+
+// The Analysis menu of a rendered toolbar, and a pick in it.
+const renderAnalysisMenu = (manager) => {
+    const menu = new FakeElement('div');
+    manager._renderAnalysisMenu('panel', menu);
+    return menu;
+};
+const pickAnalysis = (manager, mode) => marksItem(renderAnalysisMenu(manager), mode).click();
 
 // The Marks menu of a rendered toolbar, rendered into a detached element the
 // way _openMarksMenu does it (minus positioning, which needs a real layout).
@@ -543,35 +567,31 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(marksBtn.classList.contains('active'), false, `${mode}: nothing on, not active`);
     assert.equal(marksBtn.disabled, mode !== 'timeseries', `${mode}: Marks is for the time-series view`);
 
-    const analysisButtons = tools.querySelectorAll('.timeseries-analysis-btn');
-    assert.deepEqual(
-        analysisButtons.map(button => button.dataset.mode).sort(),
-        ['fft', 'heatmap', 'histogram', 'integral', 'temporal-profile'],
-        `${mode}: all time-series analyses share the contextual group beside Marks`,
-    );
-    for (const button of analysisButtons) {
-        assert.ok(
-            button.classList.contains('panel-toggle-btn'),
-            `${mode}: ${button.textContent} uses the common pressed/unpressed button treatment`,
-        );
-        assert.notEqual(
-            button.getAttribute('aria-pressed'),
-            null,
-            `${mode}: ${button.textContent} always exposes its toggle state`,
-        );
-    }
-    for (const button of analysisButtons) {
-        const expectedPressed = button.dataset.mode === mode;
-        assert.equal(
-            button.classList.contains('active'),
-            expectedPressed,
-            `${mode}: ${button.dataset.mode} active class reflects the selected analysis`,
-        );
-        assert.equal(
-            button.getAttribute('aria-pressed'),
-            String(expectedPressed),
-            `${mode}: ${button.dataset.mode} exposes its sticky state to assistive technology`,
-        );
+    // Fourier, Histogram, Heatmap, Profile and Integral: one Analysis dropdown
+    // after View, whose button names the analysis that is on.
+    assert.equal(tools.querySelectorAll('.timeseries-analysis-btn').length, 0, `${mode}: no separate analysis buttons`);
+    const analysisBtn = tools.querySelector('.timeseries-analysis-menu-btn');
+    assert.ok(analysisBtn, `${mode}: the Analysis dropdown shares the contextual group`);
+    assert.equal(tools.children[tools.children.indexOf(tools.querySelector('.panel-view-btn')) + 1], analysisBtn, `${mode}: Analysis follows View`);
+    assert.equal(tools.children[tools.children.length - 1], analysisBtn, `${mode}: and closes the group`);
+    assert.equal(analysisBtn.getAttribute('aria-haspopup'), 'menu', `${mode}: Analysis announces its popup`);
+    const on = mode !== 'timeseries';
+    assert.equal(analysisBtn.classList.contains('active'), on, `${mode}: pressed while an analysis is on`);
+    assert.equal(analysisBtn.getAttribute('aria-pressed'), String(on), `${mode}: and says so`);
+    assert.equal(analysisBtn.dataset.mode, mode, `${mode}: the button knows which analysis is on`);
+    const expectedLabel = {
+        timeseries: 'analysisMenuLabel', fft: 'Fourier', histogram: 'analysisItemHistogram',
+        heatmap: 'modeHeatmapLabel', 'temporal-profile': 'temporalProfileModeLabel', integral: 'integralModeLabel',
+    }[mode];
+    assert.equal(analysisBtn.textContent, `${expectedLabel} ▾`, `${mode}: the button names it`);
+    const menu = renderAnalysisMenu(manager);
+    const items = menu.querySelectorAll('.marks-menu-item');
+    assert.deepEqual(items.map(item => item.dataset.mark),
+        ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral'],
+        `${mode}: None, then every analysis of the family`);
+    for (const item of items) {
+        assert.equal(item.getAttribute('role'), 'menuitemradio', `${mode}: ${item.dataset.mark} is a radio item`);
+        assert.equal(item.getAttribute('aria-checked'), String(item.dataset.mark === mode), `${mode}: ${item.dataset.mark} checked only when on`);
     }
 }
 
@@ -607,11 +627,15 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(viewButton.textContent, 'viewMenuLabel (2) ▾', 'View counts Stack and Y2');
     const view = renderViewMenu(manager);
     assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark),
-        ['ylog', 'y2log', 'stack', 'y2'], 'View: log Y, log Y2, then Stack and Y2');
+        ['lastview', 'ylog', 'y2log', 'stack', 'y2'], 'View: Last view, log Y, log Y2, then Stack and Y2');
+    const lastView = marksItem(view, 'lastview');
+    assert.equal(lastView.getAttribute('role'), 'menuitem', 'Last view is an action, not a checkbox');
+    assert.equal(lastView.disabled, true, 'Last view waits for a zoom/pan to go back from');
+    assert.match(lastView.querySelector('.marks-menu-shortcut')?.textContent || '', /Ctrl\+Z|⌘Z/, 'Last view shows its keyboard shortcut');
     assert.equal(marksItem(view, 'stack').getAttribute('aria-checked'), 'true', 'Stack renders checked');
     assert.equal(marksItem(view, 'y2').getAttribute('aria-checked'), 'true', 'Y2 renders checked');
     assert.equal(marksItem(view, 'y2log').disabled, false, 'log Y2 is available with the right axis on');
-    assert.equal(view.querySelectorAll('.marks-menu-divider').length, 2, 'log scales, layout, line shape');
+    assert.equal(view.querySelectorAll('.marks-menu-divider').length, 3, 'last view, log scales, layout, line shape');
 }
 {
     const { manager } = renderToolbar('timeseries', 2, {});
@@ -644,6 +668,8 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(toolbar.querySelector('.panel-view-btn').textContent, 'viewMenuLabel (3) ▾', 'log Y, log Y2 and Y2 count');
     const view = renderViewMenu(manager);
     assert.equal(marksItem(view, 'ylog').getAttribute('aria-checked'), 'true', 'log Y renders checked');
+    assert.equal(marksItem(view, 'stack').title, 'timeseriesStackLogTitle',
+        'on a log axis, Stack says its bands no longer read as their signals');
     assert.equal(marksItem(view, 'y2log').getAttribute('aria-checked'), 'true', 'log Y2 renders checked');
 }
 
@@ -677,16 +703,17 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.ok(viewBtn, '2D: View sits in the view group');
     assert.equal(viewBtn.textContent, 'viewMenuLabel (1) ▾');
     const view = renderViewMenu(manager);
-    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['xlog', 'ylog'], '2D: log X and log Y');
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview', 'aspect', 'xlog', 'ylog'], '2D: Last view, 1:1, log X and log Y');
     const calls = [];
     manager._togglePhase2dLogAxis = (panelId, axis) => calls.push(axis);
     marksItem(view, 'xlog').click();
     marksItem(view, 'ylog').click();
     assert.deepEqual(calls, ['x', 'y'], 'each toggles its own axis');
 }
-for (const mode of ['correlation', 'state-anim', 'phase3d']) {
-    const { toolbar } = renderToolbar(mode);
-    assert.equal(toolbar.querySelector('.panel-view-btn'), null, `${mode}: no View menu`);
+{
+    // Correlation's axes are fixed by what it shows (r from -1 to 1, pairs).
+    const { toolbar } = renderToolbar('correlation');
+    assert.equal(toolbar.querySelector('.panel-view-btn'), null, 'correlation: no View menu');
 }
 
 // Line shape: a panel-level radio derived from the traces' overrides.
@@ -767,22 +794,19 @@ for (const mode of ['correlation', 'state-anim', 'phase3d']) {
 {
     const { toolbar } = renderToolbar('phase2d');
     assert.equal(toolbar.querySelector('.timeseries-tools-group'), null, 'non-time-series plots hide the contextual options group');
-    assert.equal(findModeButton(toolbar, 'fft'), undefined, 'non-time-series plots do not expose Fourier');
-    assert.equal(findModeButton(toolbar, 'histogram'), undefined, 'non-time-series plots do not expose Histogram');
-    assert.equal(findModeButton(toolbar, 'heatmap'), undefined, 'non-time-series plots do not expose Heatmap');
-    assert.equal(findModeButton(toolbar, 'temporal-profile'), undefined, 'non-time-series plots do not expose Temporal Profile');
-    assert.equal(findModeButton(toolbar, 'integral'), undefined, 'non-time-series plots do not expose Integral');
+    assert.equal(toolbar.querySelector('.timeseries-analysis-menu-btn'), null, 'non-time-series plots do not expose the Analysis menu (Fourier, Histogram, Heatmap, Profile, Integral)');
 }
 
-// Phase/state views use the same contextual Autoscale action. In 2D it owns
-// the first position and 1:1 sits immediately to its right; in 3D/2D+t it
-// replaces the old home glyph ahead of the camera presets.
-for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
-    { mode: 'phase2d', expectsEqualAspect: true },
-    { mode: 'phase2dt', expectsEqualAspect: false },
-    { mode: 'phase3d', expectsEqualAspect: false },
-    { mode: 'state-anim', stateAnimDim: 2, expectsEqualAspect: true },
-    { mode: 'state-anim', stateAnimDim: 3, expectsEqualAspect: false },
+// Phase/state views use the same contextual Autoscale action, first in the
+// view group. How the view reads the data (2D display, 1:1, log axes; 3D
+// projection, cameras, rotations) is in the View menu after it, not in
+// buttons of its own.
+for (const { mode, stateAnimDim = 2 } of [
+    { mode: 'phase2d' },
+    { mode: 'phase2dt' },
+    { mode: 'phase3d' },
+    { mode: 'state-anim', stateAnimDim: 2 },
+    { mode: 'state-anim', stateAnimDim: 3 },
 ]) {
     const label = mode === 'state-anim' ? `${mode}-${stateAnimDim}d` : mode;
     const { manager, toolbar } = renderToolbar(mode, stateAnimDim);
@@ -798,9 +822,7 @@ for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
     assert.equal(autoscaleBtn.textContent, globalAutoscaleIcon, `${label}: Autoscale reuses the global icon`);
     assert.notEqual(autoscaleBtn.textContent, '⌂', `${label}: legacy home glyph is not used`);
 
-    const equalAspectBtn = viewGroup.querySelector('.equal-aspect-btn');
-    // Only 2D scatter (phase2d) gets the per-axis Fit X / Fit Y buttons, right
-    // after Autoscale, so 1:1 shifts two slots over there.
+    // Only 2D scatter (phase2d) gets the per-axis Fit X / Fit Y buttons.
     const viewAxisFitBtns = viewGroup.querySelectorAll('.panel-autoscale-axis-btn');
     if (mode === 'phase2d') {
         assert.equal(viewAxisFitBtns.length, 2, `${label}: 2D scatter adds Fit X / Fit Y after Autoscale`);
@@ -809,31 +831,71 @@ for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
     } else {
         assert.equal(viewAxisFitBtns.length, 0, `${label}: per-axis Fit buttons are 2D-scatter only`);
     }
-    if (expectsEqualAspect) {
-        assert.ok(equalAspectBtn, `${label}: 1:1 is available for the 2D view`);
-        assert.equal(viewGroup.children[mode === 'phase2d' ? 3 : 1], equalAspectBtn, `${label}: 1:1 sits after Autoscale (and the per-axis fits in 2D scatter)`);
-        assert.equal(equalAspectBtn.textContent, '1:1', `${label}: equal-aspect label remains unchanged`);
-        assert.ok(equalAspectBtn.classList.contains('panel-toggle-btn'), `${label}: 1:1 uses the common toggle treatment`);
-        assert.equal(equalAspectBtn.classList.contains('active'), false, `${label}: disabled 1:1 renders released`);
-        assert.equal(equalAspectBtn.getAttribute('aria-pressed'), 'false', `${label}: disabled 1:1 reports released`);
-    } else {
-        assert.equal(equalAspectBtn, null, `${label}: 3D views do not expose the 2D-only 1:1 action`);
+    for (const gone of ['.equal-aspect-btn', '.proj-btn', '.rot-btn', '.view-btn-3d-only', '.phase2d-display-select', '.phase2d-marker-controls']) {
+        assert.equal(toolbar.querySelector(gone), null, `${label}: ${gone} moved into the View menu`);
     }
+    const viewBtn = viewGroup.querySelector('.panel-view-btn');
+    assert.ok(viewBtn, `${label}: View sits in the view group`);
+    assert.equal(viewGroup.children[viewGroup.children.length - 1], viewBtn, `${label}: after Autoscale (and the fits)`);
 
     autoscaleBtn.click();
     assert.equal(manager.autoscaleCalls.length, 1, `${label}: contextual Autoscale triggers one autoscale`);
     assert.equal(manager.autoscaleCalls[0].plot, manager.plot, `${label}: contextual Autoscale targets the current plot`);
 }
 
-for (const { mode, stateAnimDim = 2 } of [
-    { mode: 'phase2d' },
-    { mode: 'state-anim', stateAnimDim: 2 },
-]) {
-    const label = mode === 'state-anim' ? 'state-anim-2d' : mode;
-    const { toolbar } = renderToolbar(mode, stateAnimDim, { equalAspect2D: true });
-    const equalAspectBtn = toolbar.querySelector('.equal-aspect-btn');
-    assert.ok(equalAspectBtn.classList.contains('active'), `${label}: enabled 1:1 renders pressed`);
-    assert.equal(equalAspectBtn.getAttribute('aria-pressed'), 'true', `${label}: enabled 1:1 reports pressed`);
+// 2D View: display, marker settings while points are drawn, 1:1, log axes.
+{
+    const { manager } = renderToolbar('phase2d', 2, { equalAspect2D: true });
+    let view = renderViewMenu(manager);
+    const checked = (menu, cls) => menu.querySelectorAll(cls)
+        .filter(el => el.getAttribute('aria-checked') === 'true').map(el => el.className);
+    assert.deepEqual(checked(view, '.marks-menu-radio'), ['marks-menu-radio marks-display-lines checked'], 'Lines is the default display');
+    assert.equal(view.querySelector('.marks-menu-number'), null, 'lines only: no marker settings');
+    assert.equal(marksItem(view, 'aspect').getAttribute('aria-checked'), 'true', '1:1 renders checked');
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview', 'aspect', 'xlog', 'ylog']);
+    const calls = [];
+    manager._setPhase2dDisplayMode = (panelId, value) => calls.push(['display', value]);
+    manager._toggleEqualAspect2D = (panelId) => calls.push(['aspect', panelId]);
+    view.querySelector('.marks-display-markers').click();
+    marksItem(view, 'aspect').click();
+    assert.deepEqual(calls, [['display', 'markers'], ['aspect', 'panel']], 'each control runs its own setter');
+
+    manager.plot.phase2d.displayMode = 'lines+markers';
+    view = renderViewMenu(manager);
+    const numbers = view.querySelectorAll('.marks-menu-number');
+    assert.equal(numbers.length, 2, 'points drawn: size and opacity');
+    assert.equal(numbers[0].value, '4', 'size from the state');
+    manager._setPhase2dMarkerSetting = (panelId, key, value) => calls.push([key, value]);
+    numbers[1].value = '0.4';
+    for (const handler of numbers[1].listeners.get('change') || []) handler({});
+    assert.deepEqual(calls.at(-1), ['markerOpacity', '0.4'], 'opacity applies on change');
+
+    manager.plot.phase2dYLog = true;
+    view = renderViewMenu(manager);
+    assert.equal(marksItem(view, 'aspect').disabled, true, 'mixed log / linear: 1:1 unavailable');
+    assert.equal(marksItem(view, 'aspect').title, 'equalAspect2DMixedLog', 'and says why');
+}
+// 2D state animation: 1:1 only.
+{
+    const { manager } = renderToolbar('state-anim', 2, {});
+    assert.deepEqual(renderViewMenu(manager).querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['aspect']);
+}
+// 3D: projection, cameras, rotations.
+for (const [mode, dim, cameras] of [['phase3d', 2, ['XY', 'XZ', 'YZ']], ['phase2dt', 2, ['x vs t', 'y vs t', 'y vs x']], ['state-anim', 3, ['XY', 'XZ', 'YZ']]]) {
+    const { manager } = renderToolbar(mode, dim, { projection: 'orthographic' });
+    const view = renderViewMenu(manager);
+    assert.ok(view.querySelector('.marks-proj-orthographic').classList.contains('checked'), `${mode}: Iso checked`);
+    assert.deepEqual(view.querySelectorAll('.marks-menu-action').map(b => b.textContent), [...cameras, '⟳Z', '⟳X', '⟳Y'], `${mode}: cameras and rotations`);
+    const calls = [];
+    manager._setCamera = (panelId, preset) => calls.push(['camera', preset]);
+    manager._animateRotation = (panelId, axis) => calls.push(['rotate', axis]);
+    manager._toggleProjection = (panelId) => calls.push(['projection', panelId]);
+    view.querySelector('.marks-action-camera-front').click();
+    view.querySelector('.marks-action-rotate-x').click();
+    view.querySelector('.marks-proj-orthographic').click();
+    view.querySelector('.marks-proj-perspective').click();
+    assert.deepEqual(calls, [['camera', 'front'], ['rotate', 'x'], ['projection', 'panel']],
+        `${mode}: cameras and rotations act; projection toggles only when it changes`);
 }
 
 // Chart creation calls _refreshActionBtns after injecting the toolbar. Keep
@@ -855,13 +917,13 @@ for (const { mode, stateAnimDim = 2 } of [
     );
     assert.match(
         refreshSource,
-        /querySelectorAll\('\.timeseries-analysis-btn'\)[\s\S]*?btn\.dataset\.mode === plot\?\.mode[\s\S]*?aria-pressed/,
-        'toolbar refresh keeps sticky analysis state synchronized after redraws',
+        /_applyAnalysisButtonState\?\.\(plot, panelEl\.querySelector\('\.timeseries-analysis-menu-btn'\)\)/,
+        'toolbar refresh keeps the Analysis button (which analysis is on) synchronized after redraws',
     );
     assert.match(
         refreshSource,
-        /equalAspectBtn\.classList\.toggle\('active',[\s\S]*?equalAspectBtn\.setAttribute\('aria-pressed'/,
-        'toolbar refresh keeps 1:1 visual and accessibility state synchronized after redraws',
+        /this\._syncMarksControls\?\.\(panelId\)/,
+        'toolbar refresh keeps the Marks and View menus (1:1 among them) synchronized after redraws',
     );
 }
 
@@ -869,14 +931,14 @@ for (const { mode, stateAnimDim = 2 } of [
     const equalAspectToggleSource = methodAssignment('_toggleEqualAspect2D');
     assert.match(
         equalAspectToggleSource,
-        /btn\.classList\.toggle\('active',\s*plot\.equalAspect2D\)[\s\S]*?btn\.setAttribute\('aria-pressed',\s*String\(plot\.equalAspect2D\)\)/,
-        'clicking 1:1 updates active and aria-pressed together',
+        /plot\.equalAspect2D = !plot\.equalAspect2D;[\s\S]*?this\._syncMarksControls\?\.\(panelId\)/,
+        'clicking 1:1 re-renders the View menu and its count from the new state',
     );
 }
 
-// A pressed analysis button returns to the original time-series view. The
-// other analysis button switches directly, and every family transition keeps
-// using the established preserveTimeTraces path.
+// Picking the analysis that is on (or None) returns to the original
+// time-series view. Another analysis switches directly, and every family
+// transition keeps using the established preserveTimeTraces path.
 for (const [from, clicked, expected] of [
     ['timeseries', 'fft', 'fft'],
     ['timeseries', 'histogram', 'histogram'],
@@ -899,13 +961,15 @@ for (const [from, clicked, expected] of [
     ['integral', 'temporal-profile', 'temporal-profile'],
     ['temporal-profile', 'integral', 'integral'],
     ['fft', 'integral', 'integral'],
+    ['fft', 'timeseries', 'timeseries'],
+    ['heatmap', 'timeseries', 'timeseries'],
 ]) {
     const { manager, toolbar } = renderToolbar(from);
     const fftConfig = manager.plot.fft;
     const histogramConfig = manager.plot.histogram;
     const heatmapConfig = manager.plot.heatmap;
     const temporalProfileConfig = manager.plot.temporalProfile;
-    findModeButton(toolbar, clicked).click();
+    pickAnalysis(manager, clicked);
     assert.equal(manager.modeChanges.length, 1, `${from} -> ${clicked}: exactly one mode change is requested`);
     assert.equal(manager.modeChanges[0].mode, expected, `${from} -> ${clicked}: resolves to ${expected}`);
     assert.equal(
