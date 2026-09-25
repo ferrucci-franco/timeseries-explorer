@@ -331,6 +331,8 @@ export function installPlotCorrelationMethods(TargetClass) {
             });
             this._installCorrelationSelectionHandlers(panelId, plot);
             this._installCorrelationSplitterHandlers(panelId, plot);
+            // Ctrl+Z, on the time pane and the results; this is the baseline.
+            this._bindViewHistory(panelId, plot);
             // Same pan gestures as the FFT/Histogram time pane: two-finger
             // trackpad swipe pans horizontally, right-button drag pans too. No
             // finalize: panning is view-only (the analyzed range is the Selection,

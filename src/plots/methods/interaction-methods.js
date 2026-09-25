@@ -4613,8 +4613,9 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
 
     // How the view reads the data — 2D: display, marker size/opacity, 1:1, log
     // axes; 2D animation: 1:1; 3D: projection, camera presets, rotations — all
-    // live in the View menu. Correlation's axes are fixed by what it shows.
-    if (currentMode === 'phase2d' || currentMode === 'state-anim' || this._is3D(currentMode)) {
+    // live in the View menu. Correlation's axes are fixed by what it shows, so
+    // its menu only goes back to the last view.
+    if (currentMode === 'phase2d' || currentMode === 'state-anim' || currentMode === 'correlation' || this._is3D(currentMode)) {
         viewGroup.appendChild(this._createViewButton(panelId, plot));
     }
 

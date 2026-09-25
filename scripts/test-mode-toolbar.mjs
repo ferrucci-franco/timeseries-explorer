@@ -550,8 +550,8 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.equal(tools.children[tools.children.indexOf(marksBtn) + 1], viewBtn, `${mode}: View follows Marks`);
     assert.equal(viewBtn.getAttribute('aria-haspopup'), 'menu', `${mode}: View announces its popup`);
     assert.equal(viewBtn.textContent, 'viewMenuLabel ▾', `${mode}: nothing on, no count`);
-    assert.equal(viewBtn.disabled, !['timeseries', 'fft', 'histogram'].includes(mode),
-        `${mode}: View is enabled where it has something to offer`);
+    // Every mode can go back to its last view, so View is always there.
+    assert.equal(viewBtn.disabled, false, `${mode}: View is enabled (Last view at least)`);
     assert.equal(autoscaleBtn.textContent, globalAutoscaleIcon, `${mode}: contextual Autoscale reuses the global icon`);
     autoscaleBtn.click();
     assert.equal(manager.autoscaleCalls.length, 1, `${mode}: contextual Autoscale triggers one autoscale`);
@@ -678,7 +678,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     const { manager } = renderToolbar('fft', 2, {});
     manager.plot.fft = { xAxisMode: 'frequency', freqLog: false };
     let view = renderViewMenu(manager);
-    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['freqlog'], 'Fourier: log frequency');
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview', 'freqlog'], 'Fourier: Last view, log frequency');
     assert.equal(marksItem(view, 'freqlog').disabled, false);
     const calls = [];
     manager._toggleFftFrequencyLog = (panelId) => calls.push(panelId);
@@ -694,7 +694,7 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     const { manager } = renderToolbar('histogram', 2, {});
     manager.plot.histogram = { yScale: 'log' };
     const view = renderViewMenu(manager);
-    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['countlog'], 'Histogram: log counts');
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview', 'countlog'], 'Histogram: Last view, log counts');
     assert.equal(marksItem(view, 'countlog').getAttribute('aria-checked'), 'true');
 }
 {
@@ -711,9 +711,11 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.deepEqual(calls, ['x', 'y'], 'each toggles its own axis');
 }
 {
-    // Correlation's axes are fixed by what it shows (r from -1 to 1, pairs).
-    const { toolbar } = renderToolbar('correlation');
-    assert.equal(toolbar.querySelector('.panel-view-btn'), null, 'correlation: no View menu');
+    // Correlation's axes are fixed by what it shows (r from -1 to 1, pairs):
+    // its View menu only goes back to the last view.
+    const { manager, toolbar } = renderToolbar('correlation');
+    assert.ok(toolbar.querySelector('.panel-view-btn'), 'correlation: a View menu');
+    assert.deepEqual(renderViewMenu(manager).querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['lastview'], 'correlation: Last view only');
 }
 
 // Line shape: a panel-level radio derived from the traces' overrides.
