@@ -4423,7 +4423,7 @@ proto._setCamera = function(panelId, preset) {
     Plotly.relayout(plot.div, layoutUpdate).then(() => this._updateCameraOverlay(plot));
 };
 
-proto._toggleProjection = function(panelId, panelEl) {
+proto._toggleProjection = function(panelId) {
     const plot = this.plots.get(panelId);
     if (!plot) return;
     plot.projection = plot.projection === 'orthographic' ? 'perspective' : 'orthographic';
@@ -4431,12 +4431,8 @@ proto._toggleProjection = function(panelId, panelEl) {
         Plotly.relayout(plot.div, { 'scene.camera.projection.type': plot.projection })
             .then(() => this._updateCameraOverlay(plot));
     }
-    const projBtn = panelEl.querySelector('.proj-btn');
-    if (projBtn) {
-        const isOrtho = plot.projection === 'orthographic';
-        projBtn.classList.toggle('active', isOrtho);
-        projBtn.title = i18n.t(isOrtho ? 'projIsometric' : 'projPerspective');
-    }
+    // Iso / Persp is a View-menu setting now.
+    this._syncMarksControls?.(panelId);
 };
 
 /**
@@ -4497,7 +4493,7 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
     // Remove existing mode buttons if any (re-render case). The analysis group
     // wraps action buttons, so it must be removed too — otherwise its empty
     // shell (with margin/border) accumulates on every toolbar rebuild.
-    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group, .phase2d-tools-group, .phase2d-analysis-group').forEach(el => el.remove());
+    toolbar.querySelectorAll('.mode-btn-group, .timeseries-tools-group, .view-btn-group, .phase2d-analysis-group').forEach(el => el.remove());
     toolbar.querySelectorAll('.panel-action-btn').forEach(el => el.remove());
 
     const plot = this.plots.get(panelId);
@@ -4633,24 +4629,12 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         }
     }
 
-    if (supportsEqualAspect2D) {
-        const equalAspectBtn = document.createElement('button');
-        equalAspectBtn.className = 'layout-toolbar-btn panel-action-btn panel-toggle-btn equal-aspect-btn' + (plot?.equalAspect2D ? ' active' : '');
-        equalAspectBtn.textContent = '1:1';
-        // One log axis and one linear: a decade and a unit have no common scale.
-        const equalAspectAllowed = this._equalAspectAllowed?.(plot) !== false;
-        equalAspectBtn.disabled = !equalAspectAllowed;
-        equalAspectBtn.title = i18n.t(equalAspectAllowed ? 'equalAspect2D' : 'equalAspect2DMixedLog');
-        equalAspectBtn.setAttribute('aria-pressed', String(!!plot?.equalAspect2D));
-        equalAspectBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._toggleEqualAspect2D(panelId);
-        });
-        viewGroup.appendChild(equalAspectBtn);
+    // How the view reads the data — 2D: display, marker size/opacity, 1:1, log
+    // axes; 2D animation: 1:1; 3D: projection, camera presets, rotations — all
+    // live in the View menu. Correlation's axes are fixed by what it shows.
+    if (currentMode === 'phase2d' || currentMode === 'state-anim' || this._is3D(currentMode)) {
+        viewGroup.appendChild(this._createViewButton(panelId, plot));
     }
-    // 2D: log X / log Y (View menu). Correlation's and the state
-    // animation's axes are fixed by what they show.
-    if (currentMode === 'phase2d') viewGroup.appendChild(this._createViewButton(panelId, plot));
 
     // Correlation is an analysis toggle of the 2D/pair family (shares the pair
     // list). Appended AFTER the 2D Display controls (below) so it reads as its
@@ -4669,62 +4653,8 @@ proto._injectModeButtons = function(panelId, panelEl, currentMode) {
         });
     }
 
-    const is2dt = currentMode === 'phase2dt';
-    const views = [
-        { preset: 'top',   label: is2dt ? 'x vs t' : 'XY', titleKey: is2dt ? 'view2dtXt' : 'viewTop'   },
-        { preset: 'front', label: is2dt ? 'y vs t' : 'XZ', titleKey: is2dt ? 'view2dtYt' : 'viewFront' },
-        { preset: 'yz',    label: is2dt ? 'y vs x' : 'YZ', titleKey: is2dt ? 'view2dtXY' : 'viewSide'  },
-    ];
-
-    views.forEach(v => {
-        const btn = document.createElement('button');
-        btn.className = 'layout-toolbar-btn view-btn view-btn-3d-only';
-        btn.textContent = v.label;
-        btn.title = i18n.t(v.titleKey);
-        btn.style.display = show3DControls ? '' : 'none';
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._setCamera(panelId, v.preset === 'yz' ? 'yz' : v.preset);
-        });
-        viewGroup.appendChild(btn);
-    });
-
-    // Projection toggle button (Iso / Persp)
-    const isOrtho = !plot || plot.projection === 'orthographic';
-    const projBtn = document.createElement('button');
-    projBtn.className = 'layout-toolbar-btn view-btn proj-btn view-btn-3d-only' + (isOrtho ? ' active' : '');
-    projBtn.textContent = 'Iso';
-    projBtn.title = i18n.t(isOrtho ? 'projIsometric' : 'projPerspective');
-    projBtn.style.display = show3DControls ? '' : 'none';
-    projBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._toggleProjection(panelId, panelEl);
-    });
-    viewGroup.appendChild(projBtn);
-
-    // Rotation buttons (90° animated rotation around each axis)
-    const rotAxes = [
-        { axis: 'z', label: '⟳Z', title: 'Rotate 90° around Z' },
-        { axis: 'x', label: '⟳X', title: 'Rotate 90° around X' },
-        { axis: 'y', label: '⟳Y', title: 'Rotate 90° around Y' },
-    ];
-    rotAxes.forEach(r => {
-        const btn = document.createElement('button');
-        btn.className = 'layout-toolbar-btn view-btn view-btn-3d-only rot-btn';
-        btn.textContent = r.label;
-        btn.title = r.title;
-        btn.style.display = show3DControls ? '' : 'none';
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._animateRotation(panelId, r.axis, Math.PI / 2, 400);
-        });
-        viewGroup.appendChild(btn);
-    });
-
     toolbar.appendChild(viewGroup);
 
-    // 2D-only Display (Lines / Points / Lines+points) + marker controls (TODO 10).
-    this._injectPhase2dDisplayControls?.(panelId, toolbar, plot);
     // Analysis toggles (Correlation + Curve Fit) grouped behind their own
     // coloured separator so they read as analyses, not Display options.
     if (isPhase2dFamily) {
@@ -5457,12 +5387,8 @@ proto._toggleEqualAspect2D = function(panelId) {
             : { 'yaxis.scaleanchor': null, 'yaxis.scaleratio': null, 'xaxis.autorange': true, 'yaxis.autorange': true };
         Plotly.relayout(plot.div, update);
     }
-    const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-    const btn = panelEl?.querySelector('.equal-aspect-btn');
-    if (btn) {
-        btn.classList.toggle('active', plot.equalAspect2D);
-        btn.setAttribute('aria-pressed', String(plot.equalAspect2D));
-    }
+    // 1:1 is a View-menu setting: the button count and the open menu follow.
+    this._syncMarksControls?.(panelId);
 };
 
 // ─── Placeholder text ──────────────────────────────────────────

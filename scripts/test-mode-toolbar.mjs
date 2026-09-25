@@ -217,6 +217,12 @@ class ToolbarHarness {
     // mixin's business; the toolbar only reads the verdict.
     _repeatedAvailability(plot) { return plot?._testRepeatedAvailability || 'some'; }
     _ensureFftState(plot) { return plot.fft; }
+    _ensurePhase2dState(plot) {
+        plot.phase2d = { displayMode: 'lines', markerSize: 4, markerOpacity: 0.65, ...(plot.phase2d || {}) };
+        return plot.phase2d;
+    }
+    _phase2dShowsMarkers(state) { return state.displayMode !== 'lines'; }
+    _equalAspectAllowed(plot) { return plot?.mode !== 'phase2d' || !!plot.phase2dXLog === !!plot.phase2dYLog; }
     _ensureHistogramState(plot) { return plot.histogram; }
     _is3D(mode) { return mode === 'phase2dt' || mode === 'phase3d'; }
     _isStateAnim3D(plot) { return plot?.mode === 'state-anim' && (plot.stateAnimDim || 2) >= 3; }
@@ -235,6 +241,10 @@ class ToolbarHarness {
 
 const sandbox = {
     proto: ToolbarHarness.prototype,
+    MARKER_SIZE_MIN: 1,
+    MARKER_SIZE_MAX: 20,
+    MARKER_OPACITY_MIN: 0.05,
+    MARKER_OPACITY_MAX: 1,
     document: { createElement: tagName => new FakeElement(tagName) },
     i18n: { t: key => key },
 };
@@ -679,16 +689,17 @@ for (const mode of ['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profi
     assert.ok(viewBtn, '2D: View sits in the view group');
     assert.equal(viewBtn.textContent, 'viewMenuLabel (1) ▾');
     const view = renderViewMenu(manager);
-    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['xlog', 'ylog'], '2D: log X and log Y');
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['aspect', 'xlog', 'ylog'], '2D: 1:1, log X and log Y');
     const calls = [];
     manager._togglePhase2dLogAxis = (panelId, axis) => calls.push(axis);
     marksItem(view, 'xlog').click();
     marksItem(view, 'ylog').click();
     assert.deepEqual(calls, ['x', 'y'], 'each toggles its own axis');
 }
-for (const mode of ['correlation', 'state-anim', 'phase3d']) {
-    const { toolbar } = renderToolbar(mode);
-    assert.equal(toolbar.querySelector('.panel-view-btn'), null, `${mode}: no View menu`);
+{
+    // Correlation's axes are fixed by what it shows (r from -1 to 1, pairs).
+    const { toolbar } = renderToolbar('correlation');
+    assert.equal(toolbar.querySelector('.panel-view-btn'), null, 'correlation: no View menu');
 }
 
 // Line shape: a panel-level radio derived from the traces' overrides.
@@ -776,15 +787,16 @@ for (const mode of ['correlation', 'state-anim', 'phase3d']) {
     assert.equal(findModeButton(toolbar, 'integral'), undefined, 'non-time-series plots do not expose Integral');
 }
 
-// Phase/state views use the same contextual Autoscale action. In 2D it owns
-// the first position and 1:1 sits immediately to its right; in 3D/2D+t it
-// replaces the old home glyph ahead of the camera presets.
-for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
-    { mode: 'phase2d', expectsEqualAspect: true },
-    { mode: 'phase2dt', expectsEqualAspect: false },
-    { mode: 'phase3d', expectsEqualAspect: false },
-    { mode: 'state-anim', stateAnimDim: 2, expectsEqualAspect: true },
-    { mode: 'state-anim', stateAnimDim: 3, expectsEqualAspect: false },
+// Phase/state views use the same contextual Autoscale action, first in the
+// view group. How the view reads the data (2D display, 1:1, log axes; 3D
+// projection, cameras, rotations) is in the View menu after it, not in
+// buttons of its own.
+for (const { mode, stateAnimDim = 2 } of [
+    { mode: 'phase2d' },
+    { mode: 'phase2dt' },
+    { mode: 'phase3d' },
+    { mode: 'state-anim', stateAnimDim: 2 },
+    { mode: 'state-anim', stateAnimDim: 3 },
 ]) {
     const label = mode === 'state-anim' ? `${mode}-${stateAnimDim}d` : mode;
     const { manager, toolbar } = renderToolbar(mode, stateAnimDim);
@@ -800,9 +812,7 @@ for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
     assert.equal(autoscaleBtn.textContent, globalAutoscaleIcon, `${label}: Autoscale reuses the global icon`);
     assert.notEqual(autoscaleBtn.textContent, '⌂', `${label}: legacy home glyph is not used`);
 
-    const equalAspectBtn = viewGroup.querySelector('.equal-aspect-btn');
-    // Only 2D scatter (phase2d) gets the per-axis Fit X / Fit Y buttons, right
-    // after Autoscale, so 1:1 shifts two slots over there.
+    // Only 2D scatter (phase2d) gets the per-axis Fit X / Fit Y buttons.
     const viewAxisFitBtns = viewGroup.querySelectorAll('.panel-autoscale-axis-btn');
     if (mode === 'phase2d') {
         assert.equal(viewAxisFitBtns.length, 2, `${label}: 2D scatter adds Fit X / Fit Y after Autoscale`);
@@ -811,31 +821,71 @@ for (const { mode, stateAnimDim = 2, expectsEqualAspect } of [
     } else {
         assert.equal(viewAxisFitBtns.length, 0, `${label}: per-axis Fit buttons are 2D-scatter only`);
     }
-    if (expectsEqualAspect) {
-        assert.ok(equalAspectBtn, `${label}: 1:1 is available for the 2D view`);
-        assert.equal(viewGroup.children[mode === 'phase2d' ? 3 : 1], equalAspectBtn, `${label}: 1:1 sits after Autoscale (and the per-axis fits in 2D scatter)`);
-        assert.equal(equalAspectBtn.textContent, '1:1', `${label}: equal-aspect label remains unchanged`);
-        assert.ok(equalAspectBtn.classList.contains('panel-toggle-btn'), `${label}: 1:1 uses the common toggle treatment`);
-        assert.equal(equalAspectBtn.classList.contains('active'), false, `${label}: disabled 1:1 renders released`);
-        assert.equal(equalAspectBtn.getAttribute('aria-pressed'), 'false', `${label}: disabled 1:1 reports released`);
-    } else {
-        assert.equal(equalAspectBtn, null, `${label}: 3D views do not expose the 2D-only 1:1 action`);
+    for (const gone of ['.equal-aspect-btn', '.proj-btn', '.rot-btn', '.view-btn-3d-only', '.phase2d-display-select', '.phase2d-marker-controls']) {
+        assert.equal(toolbar.querySelector(gone), null, `${label}: ${gone} moved into the View menu`);
     }
+    const viewBtn = viewGroup.querySelector('.panel-view-btn');
+    assert.ok(viewBtn, `${label}: View sits in the view group`);
+    assert.equal(viewGroup.children[viewGroup.children.length - 1], viewBtn, `${label}: after Autoscale (and the fits)`);
 
     autoscaleBtn.click();
     assert.equal(manager.autoscaleCalls.length, 1, `${label}: contextual Autoscale triggers one autoscale`);
     assert.equal(manager.autoscaleCalls[0].plot, manager.plot, `${label}: contextual Autoscale targets the current plot`);
 }
 
-for (const { mode, stateAnimDim = 2 } of [
-    { mode: 'phase2d' },
-    { mode: 'state-anim', stateAnimDim: 2 },
-]) {
-    const label = mode === 'state-anim' ? 'state-anim-2d' : mode;
-    const { toolbar } = renderToolbar(mode, stateAnimDim, { equalAspect2D: true });
-    const equalAspectBtn = toolbar.querySelector('.equal-aspect-btn');
-    assert.ok(equalAspectBtn.classList.contains('active'), `${label}: enabled 1:1 renders pressed`);
-    assert.equal(equalAspectBtn.getAttribute('aria-pressed'), 'true', `${label}: enabled 1:1 reports pressed`);
+// 2D View: display, marker settings while points are drawn, 1:1, log axes.
+{
+    const { manager } = renderToolbar('phase2d', 2, { equalAspect2D: true });
+    let view = renderViewMenu(manager);
+    const checked = (menu, cls) => menu.querySelectorAll(cls)
+        .filter(el => el.getAttribute('aria-checked') === 'true').map(el => el.className);
+    assert.deepEqual(checked(view, '.marks-menu-radio'), ['marks-menu-radio marks-display-lines checked'], 'Lines is the default display');
+    assert.equal(view.querySelector('.marks-menu-number'), null, 'lines only: no marker settings');
+    assert.equal(marksItem(view, 'aspect').getAttribute('aria-checked'), 'true', '1:1 renders checked');
+    assert.deepEqual(view.querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['aspect', 'xlog', 'ylog']);
+    const calls = [];
+    manager._setPhase2dDisplayMode = (panelId, value) => calls.push(['display', value]);
+    manager._toggleEqualAspect2D = (panelId) => calls.push(['aspect', panelId]);
+    view.querySelector('.marks-display-markers').click();
+    marksItem(view, 'aspect').click();
+    assert.deepEqual(calls, [['display', 'markers'], ['aspect', 'panel']], 'each control runs its own setter');
+
+    manager.plot.phase2d.displayMode = 'lines+markers';
+    view = renderViewMenu(manager);
+    const numbers = view.querySelectorAll('.marks-menu-number');
+    assert.equal(numbers.length, 2, 'points drawn: size and opacity');
+    assert.equal(numbers[0].value, '4', 'size from the state');
+    manager._setPhase2dMarkerSetting = (panelId, key, value) => calls.push([key, value]);
+    numbers[1].value = '0.4';
+    for (const handler of numbers[1].listeners.get('change') || []) handler({});
+    assert.deepEqual(calls.at(-1), ['markerOpacity', '0.4'], 'opacity applies on change');
+
+    manager.plot.phase2dYLog = true;
+    view = renderViewMenu(manager);
+    assert.equal(marksItem(view, 'aspect').disabled, true, 'mixed log / linear: 1:1 unavailable');
+    assert.equal(marksItem(view, 'aspect').title, 'equalAspect2DMixedLog', 'and says why');
+}
+// 2D state animation: 1:1 only.
+{
+    const { manager } = renderToolbar('state-anim', 2, {});
+    assert.deepEqual(renderViewMenu(manager).querySelectorAll('.marks-menu-item').map(item => item.dataset.mark), ['aspect']);
+}
+// 3D: projection, cameras, rotations.
+for (const [mode, dim, cameras] of [['phase3d', 2, ['XY', 'XZ', 'YZ']], ['phase2dt', 2, ['x vs t', 'y vs t', 'y vs x']], ['state-anim', 3, ['XY', 'XZ', 'YZ']]]) {
+    const { manager } = renderToolbar(mode, dim, { projection: 'orthographic' });
+    const view = renderViewMenu(manager);
+    assert.ok(view.querySelector('.marks-proj-orthographic').classList.contains('checked'), `${mode}: Iso checked`);
+    assert.deepEqual(view.querySelectorAll('.marks-menu-action').map(b => b.textContent), [...cameras, '⟳Z', '⟳X', '⟳Y'], `${mode}: cameras and rotations`);
+    const calls = [];
+    manager._setCamera = (panelId, preset) => calls.push(['camera', preset]);
+    manager._animateRotation = (panelId, axis) => calls.push(['rotate', axis]);
+    manager._toggleProjection = (panelId) => calls.push(['projection', panelId]);
+    view.querySelector('.marks-action-camera-front').click();
+    view.querySelector('.marks-action-rotate-x').click();
+    view.querySelector('.marks-proj-orthographic').click();
+    view.querySelector('.marks-proj-perspective').click();
+    assert.deepEqual(calls, [['camera', 'front'], ['rotate', 'x'], ['projection', 'panel']],
+        `${mode}: cameras and rotations act; projection toggles only when it changes`);
 }
 
 // Chart creation calls _refreshActionBtns after injecting the toolbar. Keep
@@ -862,8 +912,8 @@ for (const { mode, stateAnimDim = 2 } of [
     );
     assert.match(
         refreshSource,
-        /equalAspectBtn\.classList\.toggle\('active',[\s\S]*?equalAspectBtn\.setAttribute\('aria-pressed'/,
-        'toolbar refresh keeps 1:1 visual and accessibility state synchronized after redraws',
+        /this\._syncMarksControls\?\.\(panelId\)/,
+        'toolbar refresh keeps the Marks and View menus (1:1 among them) synchronized after redraws',
     );
 }
 
@@ -871,8 +921,8 @@ for (const { mode, stateAnimDim = 2 } of [
     const equalAspectToggleSource = methodAssignment('_toggleEqualAspect2D');
     assert.match(
         equalAspectToggleSource,
-        /btn\.classList\.toggle\('active',\s*plot\.equalAspect2D\)[\s\S]*?btn\.setAttribute\('aria-pressed',\s*String\(plot\.equalAspect2D\)\)/,
-        'clicking 1:1 updates active and aria-pressed together',
+        /plot\.equalAspect2D = !plot\.equalAspect2D;[\s\S]*?this\._syncMarksControls\?\.\(panelId\)/,
+        'clicking 1:1 re-renders the View menu and its count from the new state',
     );
 }
 

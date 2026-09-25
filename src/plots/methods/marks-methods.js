@@ -13,6 +13,12 @@
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
 import {
+    MARKER_SIZE_MIN,
+    MARKER_SIZE_MAX,
+    MARKER_OPACITY_MIN,
+    MARKER_OPACITY_MAX,
+} from '../phase2d-state.js';
+import {
     GAP_DEFAULT_FACTOR,
     GAP_STEP_MIN_AGREEMENT,
     detectGapIndices,
@@ -819,26 +825,80 @@ export function installPlotMarksMethods(TargetClass) {
                 caption.className = 'marks-menu-radio-caption';
                 caption.textContent = i18n.t(item.label);
                 row.appendChild(caption);
-                for (const [value, key, title] of [
+                // The line shape is the radio this renderer started with; the
+                // others (2D display, 3D projection) bring their own options.
+                const options = item.options || [
                     ['auto', 'lineShapeAuto', 'lineShapeAutoTitle'],
                     ['linear', 'lineShapeLinear', 'lineShapeLinearTitle'],
                     ['hv', 'lineShapeStairs', 'lineShapeStairsTitle'],
-                ]) {
+                ];
+                const select = item.onSelect || ((value) => this._setPanelLineShape(panelId, value));
+                for (const [value, key, title] of options) {
                     const option = document.createElement('button');
                     option.type = 'button';
-                    option.className = `marks-menu-radio marks-line-${value}`;
+                    option.className = `marks-menu-radio marks-${item.key}-${value}`;
                     option.setAttribute('role', 'menuitemradio');
                     const checked = item.value === value;
                     option.setAttribute('aria-checked', String(checked));
                     option.classList.toggle('checked', checked);
                     option.textContent = i18n.t(key);
-                    option.title = i18n.t(title);
+                    if (title) option.title = i18n.t(title);
                     option.disabled = !!item.disabled;
                     option.addEventListener('click', (event) => {
                         event.stopPropagation();
-                        this._setPanelLineShape(panelId, value);
+                        select(value);
                     });
                     row.appendChild(option);
+                }
+                menu.appendChild(row);
+                continue;
+            }
+            if (item.number) {
+                // A small numeric setting (2D marker size / opacity), applied on change.
+                const row = document.createElement('label');
+                row.className = `marks-menu-number-row marks-item-${item.key}`;
+                row.title = i18n.t(item.label);
+                const caption = document.createElement('span');
+                caption.className = 'marks-menu-radio-caption';
+                caption.textContent = i18n.t(item.label);
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.className = 'marks-menu-number';
+                input.min = String(item.min);
+                input.max = String(item.max);
+                input.step = String(item.step);
+                input.value = String(item.value);
+                input.disabled = !!item.disabled;
+                input.setAttribute('aria-label', i18n.t(item.label));
+                input.addEventListener('change', () => item.onChange(input.value));
+                row.append(caption, input);
+                menu.appendChild(row);
+                continue;
+            }
+            if (item.actions) {
+                // One-shot actions (3D camera presets, rotations): buttons that do
+                // something, not settings that stay checked.
+                const row = document.createElement('div');
+                row.className = 'marks-menu-radio-row marks-menu-actions';
+                row.setAttribute('role', 'group');
+                row.setAttribute('aria-label', i18n.t(item.label));
+                const caption = document.createElement('span');
+                caption.className = 'marks-menu-radio-caption';
+                caption.textContent = i18n.t(item.label);
+                row.appendChild(caption);
+                for (const action of item.actions) {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = `marks-menu-radio marks-menu-action marks-action-${item.key}-${action.id}`;
+                    button.setAttribute('role', 'menuitem');
+                    button.textContent = action.text;
+                    button.title = action.title;
+                    button.disabled = !!item.disabled;
+                    button.addEventListener('click', (event) => {
+                        event.stopPropagation();
+                        action.run();
+                    });
+                    row.appendChild(button);
                 }
                 menu.appendChild(row);
                 continue;
@@ -907,12 +967,69 @@ export function installPlotMarksMethods(TargetClass) {
                 { key: 'line', radio: true, label: 'lineShapeLabel', value: this._panelLineShapeState(plot), disabled: !has },
             ];
         }
+        // 1:1 for the 2D views: both axes on one scale (see _equalAspectAllowed).
+        const aspectItem = () => {
+            const allowed = this._equalAspectAllowed?.(plot) !== false;
+            return { key: 'aspect', label: 'viewEqualAspect', title: allowed ? 'equalAspect2D' : 'equalAspect2DMixedLog', checked: !!plot.equalAspect2D, disabled: !has || !allowed, run: () => this._toggleEqualAspect2D(panelId) };
+        };
         if (mode === 'phase2d') {
-            return [
+            const state = this._ensurePhase2dState(plot);
+            const items = [
+                {
+                    key: 'display', radio: true, label: 'phase2dDisplayLabel', value: state.displayMode, disabled: !has,
+                    options: [
+                        ['lines', 'phase2dDisplayLines', 'phase2dDisplayTooltip'],
+                        ['markers', 'phase2dDisplayPoints', 'phase2dDisplayTooltip'],
+                        ['lines+markers', 'phase2dDisplayLinesPoints', 'phase2dDisplayTooltip'],
+                    ],
+                    onSelect: (value) => this._setPhase2dDisplayMode(panelId, value),
+                },
+            ];
+            // Marker size and opacity only mean something while points are drawn.
+            if (this._phase2dShowsMarkers(state)) {
+                items.push(
+                    { key: 'marker-size', number: true, label: 'phase2dMarkerSize', min: MARKER_SIZE_MIN, max: MARKER_SIZE_MAX, step: 1, value: state.markerSize, disabled: !has, onChange: (value) => this._setPhase2dMarkerSetting(panelId, 'markerSize', value) },
+                    { key: 'marker-opacity', number: true, label: 'phase2dMarkerOpacity', min: MARKER_OPACITY_MIN, max: MARKER_OPACITY_MAX, step: 0.05, value: state.markerOpacity, disabled: !has, onChange: (value) => this._setPhase2dMarkerSetting(panelId, 'markerOpacity', value) },
+                );
+            }
+            items.push(
+                { divider: true },
+                aspectItem(),
+                { divider: true },
                 { key: 'xlog', label: 'viewLogX', title: 'viewLogXTitle', checked: !!plot.phase2dXLog, disabled: !has, run: () => this._togglePhase2dLogAxis(panelId, 'x') },
                 { key: 'ylog', label: 'viewLogY', title: 'viewLogYTitle', checked: !!plot.phase2dYLog, disabled: !has, run: () => this._togglePhase2dLogAxis(panelId, 'y') },
+            );
+            return items;
+        }
+        const is3D = this._is3D?.(mode) || this._isStateAnim3D?.(plot);
+        if (is3D) {
+            const is2dt = mode === 'phase2dt';
+            const presets = [
+                { id: 'top', text: is2dt ? 'x vs t' : 'XY', title: i18n.t(is2dt ? 'view2dtXt' : 'viewTop'), run: () => this._setCamera(panelId, 'top') },
+                { id: 'front', text: is2dt ? 'y vs t' : 'XZ', title: i18n.t(is2dt ? 'view2dtYt' : 'viewFront'), run: () => this._setCamera(panelId, 'front') },
+                { id: 'yz', text: is2dt ? 'y vs x' : 'YZ', title: i18n.t(is2dt ? 'view2dtXY' : 'viewSide'), run: () => this._setCamera(panelId, 'yz') },
+            ];
+            const rotations = ['z', 'x', 'y'].map(axis => ({
+                id: axis,
+                text: `⟳${axis.toUpperCase()}`,
+                title: i18n.t('viewRotateAround').replace('{axis}', axis.toUpperCase()),
+                run: () => this._animateRotation(panelId, axis, Math.PI / 2, 400),
+            }));
+            return [
+                {
+                    key: 'proj', radio: true, label: 'viewProjection', value: plot.projection === 'perspective' ? 'perspective' : 'orthographic', disabled: !has,
+                    options: [
+                        ['orthographic', 'viewProjectionIso', 'projIsometric'],
+                        ['perspective', 'viewProjectionPersp', 'projPerspective'],
+                    ],
+                    onSelect: (value) => { if ((plot.projection === 'perspective' ? 'perspective' : 'orthographic') !== value) this._toggleProjection(panelId); },
+                },
+                { divider: true },
+                { key: 'camera', actions: presets, label: 'viewCamera', disabled: !has },
+                { key: 'rotate', actions: rotations, label: 'viewRotate', disabled: !has },
             ];
         }
+        if (mode === 'state-anim') return [aspectItem()];
         if (mode === 'fft') {
             const state = this._ensureFftState(plot);
             const period = state.xAxisMode === 'period';

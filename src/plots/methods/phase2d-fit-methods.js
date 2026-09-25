@@ -79,65 +79,6 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         return phase2dShowsMarkers(state);
     };
 
-    // ── Display + marker toolbar controls (phase2d only) ────────────
-    proto._injectPhase2dDisplayControls = function(panelId, toolbar, plot) {
-        if (!toolbar || plot?.mode !== 'phase2d') return;
-        const state = this._ensurePhase2dState(plot);
-
-        const group = document.createElement('div');
-        group.className = 'phase2d-tools-group';
-
-        // Display: Lines / Points / Lines+points as a compact select.
-        const displaySelect = document.createElement('select');
-        displaySelect.className = 'phase2d-display-select';
-        displaySelect.title = i18n.t('phase2dDisplayTooltip');
-        displaySelect.setAttribute('aria-label', i18n.t('phase2dDisplayLabel'));
-        [
-            ['lines', i18n.t('phase2dDisplayLines')],
-            ['markers', i18n.t('phase2dDisplayPoints')],
-            ['lines+markers', i18n.t('phase2dDisplayLinesPoints')],
-        ].forEach(([value, label]) => {
-            const opt = document.createElement('option');
-            opt.value = value;
-            opt.textContent = label;
-            if (value === state.displayMode) opt.selected = true;
-            displaySelect.appendChild(opt);
-        });
-        displaySelect.addEventListener('change', () => this._setPhase2dDisplayMode(panelId, displaySelect.value));
-        group.appendChild(displaySelect);
-
-        // Compact marker size / opacity — only when points are shown.
-        const markerWrap = document.createElement('div');
-        markerWrap.className = 'phase2d-marker-controls';
-        markerWrap.hidden = !this._phase2dShowsMarkers(state);
-
-        const makeNumber = (key, labelKey, min, max, step, value) => {
-            const label = document.createElement('label');
-            label.className = 'phase2d-marker-field';
-            label.title = i18n.t(labelKey);
-            const span = document.createElement('span');
-            span.textContent = i18n.t(labelKey);
-            const input = document.createElement('input');
-            input.type = 'number';
-            input.className = 'phase2d-marker-input';
-            input.min = String(min);
-            input.max = String(max);
-            input.step = String(step);
-            input.value = String(value);
-            input.setAttribute('aria-label', i18n.t(labelKey));
-            input.addEventListener('change', () => this._setPhase2dMarkerSetting(panelId, key, input.value));
-            label.append(span, input);
-            return label;
-        };
-        markerWrap.append(
-            makeNumber('markerSize', 'phase2dMarkerSize', MARKER_SIZE_MIN, MARKER_SIZE_MAX, 1, state.markerSize),
-            makeNumber('markerOpacity', 'phase2dMarkerOpacity', MARKER_OPACITY_MIN, MARKER_OPACITY_MAX, 0.05, state.markerOpacity),
-        );
-        group.appendChild(markerWrap);
-
-        toolbar.appendChild(group);
-    };
-
     // "Curve Fit" toolbar toggle (TODO 10) — a press/release button like the
     // Correlation toggle (blue when active), not a dropdown. Turning it on opens
     // the FFT-like fit workspace; the per-pair model lives inside the drawer.
@@ -171,11 +112,9 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         if (!plot || plot.mode !== 'phase2d') return;
         const state = this._ensurePhase2dState(plot);
         state.displayMode = PHASE2D_DISPLAY_MODES.has(displayMode) ? displayMode : 'lines';
-        // Show/hide the compact marker controls without a full toolbar rebuild.
-        const panelEl = document.querySelector(`.layout-panel[data-id="${panelId}"]`);
-        const markerWrap = panelEl?.querySelector('.phase2d-marker-controls');
-        if (markerWrap) markerWrap.hidden = !this._phase2dShowsMarkers(state);
         this._restylePhase2dDisplay(panelId, plot);
+        // The View menu shows marker size and opacity only while points are drawn.
+        this._syncMarksControls?.(panelId);
     };
 
     proto._setPhase2dMarkerSetting = function(panelId, key, rawValue) {
@@ -186,6 +125,8 @@ export function installPlotPhase2dFitMethods(TargetClass) {
         else if (key === 'markerOpacity') state.markerOpacity = clampNumber(rawValue, MARKER_OPACITY_MIN, MARKER_OPACITY_MAX, state.markerOpacity);
         else return;
         this._restylePhase2dDisplay(panelId, plot);
+        // The View menu shows the value as clamped.
+        this._syncMarksControls?.(panelId);
     };
 
     // Display change is a pure restyle over the SAME visual data — no query, no

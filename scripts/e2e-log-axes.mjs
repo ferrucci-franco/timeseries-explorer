@@ -168,13 +168,15 @@ try {
     if (shots) await page.screenshot({ path: `${shots}/log-2d.png` });
 
     // 1:1 needs both axes on one scale: log-log is fine, mixed is not.
+    // 1:1 lives in the View menu; its item is read from the menu's model.
     const equalAspect = () => page.evaluate(id => {
-        const btn = document.querySelector(`.layout-panel[data-id="${id}"] .equal-aspect-btn`);
-        return { disabled: btn.disabled, on: window.app.plotManager.plots.get(id).equalAspect2D };
+        const pm = window.app.plotManager;
+        const plot = pm.plots.get(id);
+        const item = pm._viewMenuModel(id, plot).find(entry => entry.key === 'aspect');
+        return { disabled: !!item.disabled, on: !!plot.equalAspect2D };
     }, panelId);
     assert.equal((await equalAspect()).disabled, false, 'log-log: 1:1 is available');
-    await page.locator(`.layout-panel[data-id="${panelId}"] .equal-aspect-btn`).click();
-    await page.waitForTimeout(400);
+    await toggleView(page, panelId, 'aspect');
     assert.equal((await equalAspect()).on, true, 'log-log: 1:1 on (a decade is a decade)');
     await toggleView(page, panelId, 'xlog');
     let ea = await equalAspect();
