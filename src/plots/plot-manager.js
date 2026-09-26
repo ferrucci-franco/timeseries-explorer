@@ -18,6 +18,7 @@ import { installPlotExportMethods } from './methods/export-methods.js';
 import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { installPlotViewHistoryMethods } from './methods/view-history-methods.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
+import { streamColumns } from '../data/column-stream.js';
 import { dropMissingVariablesFromPanels } from '../utils/panel-variables.js';
 import { formatMissingCount, seriesStats } from '../utils/series-stats.js';
 import { SAMPLE_MARKERS_MIN_PX_ON, SAMPLE_MARKERS_MIN_PX_OFF } from '../utils/sample-markers.js';
@@ -2588,6 +2589,19 @@ class PlotManager {
         const columns = [];
 
         if (plot.mode === 'timeseries') {
+            // A lazy file holds only an overview in memory; the panel's traces
+            // are that overview. Exported as they are, a 5 GB file became a
+            // CSV of ten thousand rows that looked complete. When the rows can
+            // be read from the file instead, they are.
+            const lazyPlan = this._lazyTimeseriesCsvPlan(plot);
+            if (lazyPlan?.exact) {
+                return this._exportLazyTimeseriesCsv(plot, lazyPlan, options.fileName || `${plot.mode}_export.csv`);
+            }
+            if (lazyPlan) {
+                // Some traces could not be read in full (below). Said, not
+                // hidden: the file still goes out, and the user knows what it is.
+                Modal.alert(i18n.t('exportDialogTitle'), i18n.t('csvExportOverviewNotice'), { icon: '⚠️' });
+            }
             this._appendTimeseriesExportColumns(plot, headers, columns);
         } else if (plot.mode === 'fft') {
             // The spectrum, not the samples under it: see
@@ -2711,6 +2725,27 @@ class PlotManager {
      */
     async _writeCsvFile(headers, columns, fileName) {
         const nRows = Math.max(...columns.map(c => c.length));
+        return this._writeCsvChunks(headers, [{ columns, rows: nRows }], fileName, { totalRows: nRows });
+    }
+
+    /**
+     * The writer behind _writeCsvFile, fed a sequence of row blocks instead of
+     * whole columns: `{ columns, rows }`, where each block's columns are read
+     * from index 0 to `rows`. An in-memory table is one block; a file too large
+     * to hold arrives as many, from an async iterable, and is written without
+     * ever existing in one piece. Blocks can be of any size — lines are grouped
+     * into chunks of their own regardless.
+     *
+     * `totalRows` is shown in the progress when known. `alwaysReport` shows the
+     * overlay from the start even when the size is unknown, which it always is
+     * for a stream: there is no deciding up front that it will be quick.
+     *
+     * Stopping early — a cancel, or an error from the source — returns from
+     * the loop, which ends the source's iteration too, so a stream reading a
+     * file is told to stop reading it.
+     */
+    async _writeCsvChunks(headers, blocks, fileName, { totalRows = null, alwaysReport = false } = {}) {
+        const nColumns = headers.length;
         // Below this the whole thing is a few milliseconds and an overlay
         // would be a flash with nothing to read. Measured per cell rather than
         // per row: sixty columns of ten thousand rows is not a small export.
@@ -2725,56 +2760,160 @@ class PlotManager {
         // strings until the end is what ran the tab out of memory.
         const SPILL_CHARS = 32 * 1024 * 1024;
         const token = { cancelled: false };
-        const overlay = nRows * columns.length >= CELLS_BEFORE_REPORTING
+        const knownTotal = Number.isFinite(totalRows) && totalRows >= 0;
+        const overlay = alwaysReport || (knownTotal && totalRows * nColumns >= CELLS_BEFORE_REPORTING)
             ? this.onBusyOverlay?.({ title: i18n.t('csvExportBuilding'), token })
             : null;
 
-        const nColumns = columns.length;
-        const spilled = [];
-        let chunks = [headers.join(',')];
-        let chunkChars = chunks[0].length;
-        let pending = [];
-        for (let i = 0; i < nRows; i++) {
-            // Concatenated, not an array joined per row: the same text, without
-            // allocating a row array millions of times.
-            const first = columns[0][i];
-            let line = first !== undefined ? String(first) : '';
-            for (let c = 1; c < nColumns; c++) {
-                const value = columns[c][i];
-                line += value !== undefined ? `,${value}` : ',';
+        try {
+            const spilled = [];
+            let chunks = [headers.join(',')];
+            let chunkChars = chunks[0].length;
+            let pending = [];
+            let done = 0;
+            for await (const { columns, rows } of blocks) {
+                for (let i = 0; i < rows; i++) {
+                    // Concatenated, not an array joined per row: the same text,
+                    // without allocating a row array millions of times.
+                    const first = columns[0][i];
+                    let line = first !== undefined ? String(first) : '';
+                    for (let c = 1; c < nColumns; c++) {
+                        const value = columns[c][i];
+                        line += value !== undefined ? `,${value}` : ',';
+                    }
+                    pending.push(line);
+                    done++;
+                    if (pending.length < ROWS_PER_CHUNK) continue;
+                    const chunk = '\n' + pending.join('\n');
+                    chunks.push(chunk);
+                    chunkChars += chunk.length;
+                    pending = [];
+                    if (chunkChars >= SPILL_CHARS) {
+                        spilled.push(new Blob(chunks));
+                        chunks = [];
+                        chunkChars = 0;
+                    }
+                    if (overlay) {
+                        overlay.progress(knownTotal
+                            ? i18n.t('csvExportProgress')
+                                .replace('{done}', i18n.formatNumber(done))
+                                .replace('{total}', i18n.formatNumber(totalRows))
+                            : i18n.t('csvExportProgressRows')
+                                .replace('{done}', i18n.formatNumber(done)));
+                    }
+                    await this._yieldToPaint();
+                    // Abandoned: nothing has been written anywhere yet, so there
+                    // is nothing to undo — the file simply never appears.
+                    if (token.cancelled) return null;
+                }
             }
-            pending.push(line);
-            if (pending.length < ROWS_PER_CHUNK) continue;
-            const chunk = '\n' + pending.join('\n');
-            chunks.push(chunk);
-            chunkChars += chunk.length;
-            pending = [];
-            if (chunkChars >= SPILL_CHARS) {
-                spilled.push(new Blob(chunks));
-                chunks = [];
-                chunkChars = 0;
-            }
-            if (overlay) {
-                overlay.progress(i18n.t('csvExportProgress')
-                    .replace('{done}', i18n.formatNumber(i + 1))
-                    .replace('{total}', i18n.formatNumber(nRows)));
-            }
-            await this._yieldToPaint();
-            // Abandoned: nothing has been written anywhere yet, so there is
-            // nothing to undo — the file simply never appears.
-            if (token.cancelled) { overlay?.close(); return null; }
-        }
-        if (pending.length) chunks.push('\n' + pending.join('\n'));
+            if (pending.length) chunks.push('\n' + pending.join('\n'));
 
-        const blob = new Blob([...spilled, ...chunks], { type: 'text/csv;charset=utf-8;' });
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href     = url;
-        a.download = fileName;
-        a.click();
-        URL.revokeObjectURL(url);
-        overlay?.close();
-        return fileName;
+            const blob = new Blob([...spilled, ...chunks], { type: 'text/csv;charset=utf-8;' });
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href     = url;
+            a.download = fileName;
+            a.click();
+            URL.revokeObjectURL(url);
+            return fileName;
+        } finally {
+            overlay?.close();
+        }
+    }
+
+    /**
+     * Whether a time-series panel shows a lazy file, and if so whether its
+     * rows can be read from the file for export. Null when no trace is lazy:
+     * the in-memory path is then already exact.
+     *
+     * Exact needs every trace to be a column of ONE lazy file. Two things fall
+     * outside that, and export the overview with a notice instead:
+     *   · traces from several files, which have no row in common to write;
+     *   · variables computed in the app (derived, time-axis index/delta), which
+     *     exist only over the overview and have no column in the file.
+     * A lazy Data Tools result is fine: it is a column plus an expression, and
+     * the file query applies it.
+     */
+    _lazyTimeseriesCsvPlan(plot) {
+        const traces = plot?.traces || [];
+        const lazyFiles = new Set(traces
+            .map(trace => trace.fileId)
+            .filter(fileId => this.files.get(fileId)?.data?._duckdb));
+        if (!lazyFiles.size) return null;
+        const fileId = traces[0]?.fileId;
+        const data = this.files.get(fileId)?.data;
+        const exact = traces.every(trace => trace.fileId === fileId)
+            && traces.every(trace => {
+                const variable = data?.variables?.[trace.varName];
+                return variable
+                    && variable._duckdbCol
+                    && !variable.independentIndex
+                    && variable.kind !== 'parameter'
+                    && variable.kind !== 'abscissa';
+            });
+        return { exact, fileId, data };
+    }
+
+    /**
+     * Every row of a lazy file's traces, read from the file a chunk at a time
+     * and written as the in-memory export would write them: the same header,
+     * the same time column, the same values.
+     *
+     * "The same" is by construction rather than by care. Each chunk goes
+     * through _transformFetchedPhaseTrajectory — the transform already used for
+     * rows read from the file for phase plots — which applies the crop, the
+     * time shift and display mode, the gain, the per-variable sign and the
+     * offset exactly as the in-memory pipeline does; and the time column goes
+     * through the same export formatter.
+     */
+    async _exportLazyTimeseriesCsv(plot, plan, fileName) {
+        const { fileId, data } = plan;
+        const traces = plot.traces.filter(trace => data.variables?.[trace.varName]);
+        const varNames = [...new Set(traces.map(trace => trace.varName))];
+        const timeVar = this._getTimeVar(fileId);
+        const timeUnit = this._timeUnitLabel(fileId) || (timeVar ? this._extractUnit(timeVar.description) : 's');
+        const headers = [csvTextCell(this._isCalendarTime(fileId) ? 'time [datetime UTC]' : `time [${timeUnit}]`)];
+        for (const trace of traces) {
+            const unit = this._extractUnit(data.variables[trace.varName].description);
+            const name = this._traceName(trace.varName, fileId, { units: false });
+            headers.push(csvTextCell(unit ? `${name} [${unit}]` : name));
+        }
+
+        const self = this;
+        async function* blocks() {
+            for await (const chunk of streamColumns(data, varNames)) {
+                // The file row of each value, which a generated time axis is
+                // built from. The stream is the whole file, so it is simply the
+                // running count.
+                const rowIndex = new Float64Array(chunk.x.length);
+                for (let i = 0; i < rowIndex.length; i++) rowIndex[i] = chunk.rowStart + i;
+                const { time, valuesByVar } = self._transformFetchedPhaseTrajectory(
+                    fileId, chunk.x, rowIndex, chunk.yByVar, varNames);
+                if (!time.length) continue;
+                yield {
+                    columns: [
+                        self._formatTimeColumnForExport(fileId, time),
+                        ...traces.map(trace => valuesByVar.get(trace.varName)),
+                    ],
+                    rows: time.length,
+                };
+            }
+        }
+
+        const totalRows = Number(data._duckdb?.totalRows);
+        try {
+            return await this._writeCsvChunks(headers, blocks(), fileName, {
+                totalRows: Number.isFinite(totalRows) && totalRows > 0 ? totalRows : null,
+                alwaysReport: true,
+            });
+        } catch (err) {
+            console.error('[export] could not read the file for export:', err);
+            await Modal.alert(i18n.t('exportDialogTitle'),
+                i18n.t('csvExportReadFailed').replace('{error}', err?.message || String(err)),
+                { icon: '⚠️' });
+            return null;
+        }
     }
 
     // A real frame, not a microtask: setTimeout(0) alone lets the loop continue
