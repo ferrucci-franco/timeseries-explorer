@@ -1,8 +1,10 @@
 # Límites de tamaño de archivo: estudio y opciones
 
-**Estado: estudio verificado, sin implementar.** Este documento describe los
-límites tal como están hoy en el código, qué hace cada uno realmente, y cuatro
-opciones de modificación con sus costos. No se cambió nada de código.
+**Estado: estudio verificado; Opción A implementada, el resto no.** Este
+documento describe los límites tal como estaban en el código al escribirlo, qué
+hace cada uno realmente, y cuatro opciones de modificación con sus costos. La
+sección 6.A dice qué cambió al implementarla; el resto del código sigue como se
+describe.
 
 Tuvo dos pasadas: una primera redacción a partir de la lectura del código, y una
 segunda que verificó cada afirmación contra el código y, donde se pudo, contra el
@@ -404,7 +406,34 @@ capas de la sección 1.E dejen pasar el `0`, o el resultado es peor que hoy.
 Costo: bajo, un par de horas con pruebas. Riesgo: bajo —
 `scripts/test-file-size-limits.mjs` ya cubre que un límite 0 desactiva la
 comprobación—. Deja los números arbitrarios como valor por defecto, pero deja de
-pelear con quien sabe lo que hace. No toca `helpSec11Body`.
+pelear con quien sabe lo que hace.
+
+**Implementada.** Lo que quedó en el código, por capa:
+
+1. `viewer-app.js` → `_advancedSettingRanges()`, una sola tabla de rangos que
+   leen tanto `_normalizeAdvancedSettings` como el panel de Ajustes (antes los
+   mismos números estaban copiados en `ui-methods.js`). Los cinco límites de
+   aviso pasan a `[0, Infinity]`; CSV, Parquet y el umbral de conversión
+   conservan su piso.
+2. `file-methods.js` → `_optionalLimitBytes`, que devuelve 0 cuando el ajuste
+   es exactamente 0 y delega en `_advancedSettingBytes` en cualquier otro caso.
+   Los cinco resolutores (`_matlabEagerLimitBytes`, `_excelEagerLimitBytes`,
+   `_pickleEagerLimitBytes`, `_pypsaNetcdfEagerLimitBytes`,
+   `_audioDecodedLimitBytes`) pasan por ahí.
+3. `file-methods.js` → `readerFileCeiling(limitBytes, options)`, exportada:
+   `Infinity` tanto si el usuario aprobó el archivo como si no hay límite, para
+   que el `maxFileBytes || DEFAULT` de los lectores de pickle y netCDF nunca
+   reciba un 0.
+4. `ui-methods.js` → los campos toman `min`/`max` de la tabla compartida, y un
+   campo sin techo no lleva atributo `max`.
+5. `translations.js` → una frase al final de los cinco textos de ayuda de los
+   campos ("0 = no avisar nunca") y una frase en `helpSec11Body`, en los cuatro
+   idiomas. El resto de esa sección de ayuda no se tocó.
+
+`scripts/test-file-size-limits.mjs` fija las tres capas: un 0 no pregunta para
+ninguno de los cinco formatos, un valor positivo sí, y el lector recibe
+`Infinity`; y verifica por fuente que solo esas cinco claves admiten 0 y que el
+panel ya no lleva su propia copia de los rangos.
 
 ### Opción B — Un solo aviso, sobre memoria estimada *(recomendada)*
 

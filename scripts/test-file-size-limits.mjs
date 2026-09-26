@@ -187,3 +187,57 @@ console.log(`file size limits: ${checks} checks passed`);
     assert.match(finallyBlock, /clear\(\)/, 'cleared however the load ends, including a failure');
     console.log('file size limits: decisions do not outlive their load');
 }
+
+// ─── Zero means "never ask", all the way down ────────────────────────────
+{
+    // Three layers each used to turn a zero back into the default limit: the
+    // Settings normalizer clamped it up to a floor, _advancedSettingMb read it
+    // as "unset", and the pickle/netCDF readers take `maxFileBytes || DEFAULT`.
+    // Any one of them alone reintroduced the warning — or worse, a refusal from
+    // inside the reader about a limit the app never mentioned.
+    const { installFileMethods, readerFileCeiling } = await import('../src/app/methods/file-methods.js');
+    class Harness {
+        constructor(settings, desktop = false) {
+            this.capabilities = { isDesktop: desktop };
+            this.advancedSettings = settings;
+        }
+    }
+    installFileMethods(Harness);
+
+    const hugeSize = 64 * 1024 * MB;
+    assert.ok(new Harness({})._checkFullLoadLimit({ name: 'huge.mat', size: hugeSize }, '.mat'),
+        'with nothing configured the runtime default still asks');
+    assert.ok(new Harness({ matlabFullLoadMb: 1 })._checkFullLoadLimit({ name: 'huge.mat', size: hugeSize }, '.mat'),
+        'a positive limit still asks — zero is the only "off"');
+
+    const off = new Harness({
+        matlabFullLoadMb: 0, excelFullLoadMb: 0, pickleFullLoadMb: 0, pypsaNetcdfFullLoadMb: 0, audioFullLoadMb: 0,
+    });
+    for (const format of EAGER_ONLY_FORMATS) {
+        const extension = format.extensions[0];
+        assert.equal(off._checkFullLoadLimit({ name: `huge${extension}`, size: hugeSize }, extension), null,
+            `${format.id} set to 0 never asks`);
+    }
+    assert.equal(off._audioDecodedLimitBytes(), 0, 'audio set to 0 resolves to no limit');
+    assert.equal(checkDecodedAudioLimit('memo.m4a', hugeSize, off._audioDecodedLimitBytes()), null,
+        'and no decoded size trips it');
+
+    assert.equal(readerFileCeiling(0, {}), Infinity, 'no limit reaches the reader as no ceiling, never as zero');
+    assert.equal(readerFileCeiling(80 * MB, {}), 80 * MB, 'a configured limit reaches the reader as is');
+    assert.equal(readerFileCeiling(80 * MB, { allowOversized: true }), Infinity, 'an approved file has no reader ceiling');
+
+    // The Settings ranges let zero through for exactly the formats that warn,
+    // and for none of the ones that switch modes instead.
+    const viewerApp = readFileSync(new URL('../src/app/viewer-app.js', import.meta.url), 'utf8');
+    for (const key of [...EAGER_ONLY_FORMATS.map(format => format.limitKey), 'audioFullLoadMb']) {
+        assert.match(viewerApp, new RegExp(`${key}: \\[0, Infinity\\]`), `${key} may be 0 and has no ceiling`);
+    }
+    for (const key of ['csvFullLoadMb', 'parquetFullLoadMb', 'csvCompactHintMb']) {
+        assert.doesNotMatch(viewerApp, new RegExp(`${key}: \\[0,`), `${key} keeps its floor: zero means nothing there`);
+    }
+    // And the dialog takes its bounds from that same table, not from a second copy.
+    const uiMethods = readFileSync(new URL('../src/app/methods/ui-methods.js', import.meta.url), 'utf8');
+    assert.match(uiMethods, /this\._advancedSettingRanges\(\)/, 'the Settings fields read the shared ranges');
+    assert.doesNotMatch(uiMethods, /makeNumberField\('[A-Za-z]+',\s*'[A-Za-z]+',\s*'[A-Za-z]+',\s*\d/, 'no field carries its own min/max');
+    console.log('file size limits: zero means never ask');
+}

@@ -1149,7 +1149,9 @@ proto.showDisplaySettings = function() {
     const fileGrid = document.createElement('div');
     fileGrid.className = 'file-limit-grid';
 
-    const makeNumberField = (key, labelKey, helpKey, min, max) => {
+    const ranges = this._advancedSettingRanges();
+    const makeNumberField = (key, labelKey, helpKey) => {
+        const [min, max] = ranges[key];
         const field = document.createElement('label');
         field.className = 'file-limit-field';
         field.setAttribute('for', key);
@@ -1166,7 +1168,9 @@ proto.showDisplaySettings = function() {
         input.className = 'file-limit-input';
         input.type = 'number';
         input.min = String(min);
-        input.max = String(max);
+        // A limit with no ceiling gets no max attribute at all, rather than
+        // one the browser cannot read as a number.
+        if (Number.isFinite(max)) input.max = String(max);
         input.step = '1';
         input.value = String(this.advancedSettings?.[key] ?? this._defaultAdvancedSettings()[key]);
 
@@ -1184,16 +1188,16 @@ proto.showDisplaySettings = function() {
     };
 
     const fileLimitControls = [
-        makeNumberField('csvFullLoadMb', 'csvFullLoadLimit', 'csvFullLoadLimitHelp', 10, 1000),
-        makeNumberField('parquetFullLoadMb', 'parquetFullLoadLimit', 'parquetFullLoadLimitHelp', 10, 1000),
-        makeNumberField('matlabFullLoadMb', 'matlabFullLoadLimit', 'matlabFullLoadLimitHelp', 10, 2048),
-        makeNumberField('excelFullLoadMb', 'excelFullLoadLimit', 'excelFullLoadLimitHelp', 10, 500),
-        makeNumberField('pickleFullLoadMb', 'pickleFullLoadLimit', 'pickleFullLoadLimitHelp', 10, 1000),
-        makeNumberField('pypsaNetcdfFullLoadMb', 'pypsaNetcdfFullLoadLimit', 'pypsaNetcdfFullLoadLimitHelp', 50, 2048),
-        makeNumberField('audioFullLoadMb', 'audioFullLoadLimit', 'audioFullLoadLimitHelp', 50, 4096),
+        makeNumberField('csvFullLoadMb', 'csvFullLoadLimit', 'csvFullLoadLimitHelp'),
+        makeNumberField('parquetFullLoadMb', 'parquetFullLoadLimit', 'parquetFullLoadLimitHelp'),
+        makeNumberField('matlabFullLoadMb', 'matlabFullLoadLimit', 'matlabFullLoadLimitHelp'),
+        makeNumberField('excelFullLoadMb', 'excelFullLoadLimit', 'excelFullLoadLimitHelp'),
+        makeNumberField('pickleFullLoadMb', 'pickleFullLoadLimit', 'pickleFullLoadLimitHelp'),
+        makeNumberField('pypsaNetcdfFullLoadMb', 'pypsaNetcdfFullLoadLimit', 'pypsaNetcdfFullLoadLimitHelp'),
+        makeNumberField('audioFullLoadMb', 'audioFullLoadLimit', 'audioFullLoadLimitHelp'),
     ];
 
-    const compactControl = makeNumberField('csvCompactHintMb', 'csvCompactHintLimit', 'csvCompactHintLimitHelp', 100, 4096);
+    const compactControl = makeNumberField('csvCompactHintMb', 'csvCompactHintLimit', 'csvCompactHintLimitHelp');
     compactControl.field.classList.add('compact-format-limit-field');
 
     const compactHelp = document.createElement('button');
@@ -1224,7 +1228,12 @@ proto.showDisplaySettings = function() {
     const applyFileSettings = () => {
         const next = { ...(this.advancedSettings || {}) };
         for (const control of [...fileLimitControls, compactControl]) {
-            next[control.key] = Number(control.input.value);
+            // An emptied field keeps its previous value. Number('') is 0, and
+            // now that 0 means "never ask", a cleared field would otherwise
+            // switch a warning off without anyone having typed 0.
+            const raw = control.input.value.trim();
+            if (raw === '') continue;
+            next[control.key] = Number(raw);
         }
         this._saveAdvancedSettings(next);
         for (const control of [...fileLimitControls, compactControl]) {
