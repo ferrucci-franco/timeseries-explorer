@@ -326,11 +326,28 @@ async function exportPanel(h, plot = { mode: 'timeseries', traces: [{ fileId: 'f
     assert.notDeepEqual([...after.y].slice(0, 20), [...before.y].slice(0, 20), 'an edited formula is queried afresh');
     assert.ok([...after.y].every(v => Number.isNaN(v) || Math.abs(v) <= 1000), 'with its new values');
 
-    // What has no SQL form stays over the overview, and says so.
-    const running = derive(lazy, 'running', 'cumsum(speed)');
-    assert.equal(running._duckdbExpr, undefined, 'cumsum() is not translated');
-    assert.equal(derive(lazy, 'onRunning', 'running + 1')._duckdbExpr, undefined, 'nor is a formula built on it');
-    assert.equal(lazyH._lazyTimeseriesCsvPlan({ traces: [{ fileId: 'f', varName: 'running' }] }).exact, false,
+    // diff() and cumsum() read the previous rows: window columns over the whole
+    // file, exported exactly as well.
+    const running = derive(lazy, 'running', 'cumsum(speed) + diff(torque)');
+    derive(eager, 'running', 'cumsum(speed) + diff(torque)');
+    assert.ok(running._duckdbExpr && running._duckdbWindows?.length, 'cumsum() and diff() are translated, as window columns');
+    const onRunning = derive(lazy, 'onRunning', 'running * 2');
+    derive(eager, 'onRunning', 'running * 2');
+    assert.ok(onRunning._duckdbWindows?.length, 'a formula built on them carries their windows');
+    const runningPlot = { mode: 'timeseries', traces: [{ fileId: 'f', varName: 'running' }, { fileId: 'f', varName: 'onRunning' }] };
+    assert.equal(lazyH._lazyTimeseriesCsvPlan(runningPlot).exact, true, 'and exports exactly');
+    assert.equal(await exportPanel(lazyH, runningPlot), await exportPanel(harnessWith(eager), runningPlot),
+        'byte for byte what the in-memory export writes');
+
+    // root() with a degree that is a variable is translated too.
+    assert.ok(derive(lazy, 'rooted', 'root(speed, torque)')._duckdbExpr, 'root() with a variable degree is translated');
+
+    // What has no SQL form — a variable that exists only over the overview,
+    // as the time-axis index does — stays over the overview, and says so.
+    lazy.variables.overviewOnly = { ...lazy.variables.speed, name: 'overviewOnly', derived: true, _duckdbCol: undefined };
+    const onOverview = derive(lazy, 'onOverview', 'overviewOnly + 1');
+    assert.equal(onOverview._duckdbExpr, undefined, 'a formula over a variable with no SQL form is not translated');
+    assert.equal(lazyH._lazyTimeseriesCsvPlan({ traces: [{ fileId: 'f', varName: 'onOverview' }] }).exact, false,
         'and its export falls back to the overview, with the notice');
     const derivedSource = readFileSync(new URL('../src/app/methods/derived-methods.js', import.meta.url), 'utf8');
     assert.match(derivedSource, /if \(data\._duckdb && !variable\._duckdbExpr\) \{\s*this\._setDerivedMessage\(i18n\.t\('derivedLazyOverviewOnly'\)/,

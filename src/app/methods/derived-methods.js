@@ -4,7 +4,6 @@ import { emphasize, emphasizeList, emphasizedToHtml, setEmphasizedText } from '.
 import { DERIVED_CONSTANTS, DERIVED_FUNCTIONS } from '../constants.js';
 import { getCompiledFormula } from '../../expr/compile.js';
 import { formulaToSql, FormulaNotTranslatable } from '../../expr/sql.js';
-import { mergeWindows } from '../../data/lazy-tool-sql.js';
 import { normalizeFunctionName, parse as parseExpression, tokenize as tokenizeExpression } from '../../expr/parse.js';
 
 // The derived signals the time-axis inspector can materialize (see the
@@ -258,17 +257,16 @@ proto._evaluateDerivedFormula = function(formula, data) {
 };
 
 // The formula as a DuckDB expression over a lazy file's columns, or null when
-// the file is in memory or the formula has no faithful SQL form (diff and
-// cumsum, a variable that exists only over the overview, …) — see
+// the file is in memory or the formula has no faithful SQL form (root() with a
+// variable degree, a variable that exists only over the overview, …) — see
 // src/expr/sql.js. Null leaves the variable as it was: the formula over the
 // overview. `out.windows` receives the window columns the SQL reads.
 proto._derivedFormulaSql = function(formula, data, out = null) {
     const source = data?._duckdb?.source;
     if (!source?.hasSqlValue) return null;
     const timeName = data.metadata?.timeName;
-    const windows = [];
     try {
-        const sql = formulaToSql(formula, data.variables, (name) => {
+        return formulaToSql(formula, data.variables, (name) => {
             const variable = data.variables[name];
             if (!variable) return null;
             if (variable.kind === 'parameter') return { scalar: Number(variable.data?.[0]) };
@@ -279,11 +277,11 @@ proto._derivedFormulaSql = function(formula, data, out = null) {
                 return sql ? { sql } : null;
             }
             if (!source.hasSqlValue(variable)) return null;
-            windows.push(...(variable._duckdbWindows || []));
-            return { sql: source._valueExpressionSql(variable, name, { castDouble: true }) };
-        });
-        if (out) out.windows = mergeWindows(windows);
-        return sql;
+            return {
+                sql: source._valueExpressionSql(variable, name, { castDouble: true }),
+                windows: variable._duckdbWindows || [],
+            };
+        }, out);
     } catch (err) {
         if (err instanceof FormulaNotTranslatable) return null;
         throw err;
