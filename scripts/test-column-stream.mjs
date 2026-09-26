@@ -158,7 +158,43 @@ assert.ok(lazy._duckdb?.viewMode, 'the fixture is loaded the way a large file is
         new Promise(resolve => setTimeout(() => resolve('blocked'), 5000)),
     ]);
     assert.equal(viewport, 'answered', 'a zoom is answered while a stream is open');
+    assert.equal(source._streamConns.size, 1, 'an open stream holds one connection');
+    assert.ok(!source._streamConns.has(source._conn), 'and it is not the shared one');
     await iterator.return();
-    assert.notEqual(source._streamConn, source._conn, 'streams run on a connection of their own');
+    assert.equal(source._streamConns.size, 0, 'a stream left early closes its connection');
     console.log('column stream: early exit, cancel and concurrency checks passed');
+}
+
+// ── Two streams walked side by side ─────────────────────────────────────────
+// An export of traces from two lazy files reads both a chunk at a time, in
+// step. With one shared stream connection the second stream waited for the
+// first to finish while the first waited for the second to advance: a hang.
+{
+    const other = await source._loadIntoLegacy('fixture.csv', 'omv_stream_fixture_2', { lazy: true, overviewPoints: 100, format: 'csv' });
+    const first = streamColumns(lazy, ['a'], { chunkRows: 7000 })[Symbol.asyncIterator]();
+    const second = streamColumns(other, ['b'], { chunkRows: 11000 })[Symbol.asyncIterator]();
+    const a = [];
+    const b = [];
+    let firstDone = false;
+    let secondDone = false;
+    const walk = (async () => {
+        while (!firstDone || !secondDone) {
+            if (!firstDone) {
+                const step = await first.next();
+                if (step.done) firstDone = true; else a.push(step.value);
+            }
+            if (!secondDone) {
+                const step = await second.next();
+                if (step.done) secondDone = true; else b.push(step.value);
+            }
+        }
+        return 'finished';
+    })();
+    const outcome = await Promise.race([walk, new Promise(resolve => setTimeout(() => resolve('hung'), 20000))]);
+    assert.equal(outcome, 'finished', 'two streams advanced in step both finish');
+    const eagerChunks = await collect(streamEagerColumns(eager, ['a', 'b']));
+    sameValues(concat(a, 'a'), concat(eagerChunks, 'a'), 'the first stream, read in step');
+    sameValues(concat(b, 'b'), concat(eagerChunks, 'b'), 'the second stream, read in step');
+    assert.equal(source._streamConns.size, 0, 'and both connections are closed afterwards');
+    console.log('column stream: two streams read side by side');
 }
