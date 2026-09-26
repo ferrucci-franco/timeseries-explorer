@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1 y 2 implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2 y 3a implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -335,6 +335,57 @@ con un archivo en memoria y dos lazy de longitudes distintas (transformaciones
 en uno, signo invertido en otro) contra los tres en memoria, y contra los tres
 lazy. Verificado que falla si la exportación lazy escribe el tiempo sin
 transformar, o la columna de tiempo de otro archivo.
+
+### Implementado (fase 3a): fórmulas en SQL
+
+El estudio original no incluía las **variables calculadas** (fórmulas), y eran
+la mejor candidata. Sobre un archivo lazy se evaluaban en JS sobre el resumen
+de ~10 000 filas y nada más: el zoom nunca les agregaba detalle
+(`interaction-methods.js` las dibujaba siempre desde el resumen), la
+exportación escribía el resumen, y el heatmap y el perfil temporal las
+rechazaban.
+
+- `src/expr/sql.js` traduce una fórmula a una expresión DuckDB. En un archivo
+  lazy, `_evaluateDerivedFormula` la guarda en la variable (`_duckdbExpr`) y
+  `_valueExpressionSql` la usa: zoom, exportación, heatmap, perfil, integral por
+  día y correlaciones la evalúan sobre el archivo, sin tocarlos (todos pasan
+  por `_valueExpressionSql`, y deciden qué pueden servir con `hasSqlValue`).
+- **Semántica**: SQL y JavaScript difieren en muchos casos límite, medidos en el
+  DuckDB 1.4.3 de la app — `sqrt`/`log`/`asin` fuera de dominio y `sin(∞)` dan
+  **error** (tiraban toda la consulta), `log(0)` da error, `sign(NaN)` es 0,
+  `NaN > 0` es verdadero, `least` ignora NaN y NULL, `pow(1, ∞)` es 1,
+  `min(0, −0)` es +0. La expresión mantiene un invariante: todo valor es un
+  número no-NaN o NULL (NULL hace de NaN), las entradas fuera de dominio se
+  filtran **antes** de cada función, y `min`/`max`/`sign`/`root` respetan el
+  signo del cero. La tabla completa está en la cabecera de `sql.js`.
+- **Rendimiento**: nada de `try()`. Con la mitad de las filas fuera de dominio,
+  `try()` evalúa fila por fila: 14 s para `log(a*b)` sobre 5 M filas, contra
+  0,37 s con la entrada filtrada. Las subexpresiones compuestas se evalúan una
+  vez con una lambda (≈ +25 ms por 5 M filas).
+- **Qué no se traduce** (y sigue sobre el resumen): `diff()` y `cumsum()`
+  (necesitan la fila anterior: una ventana sobre todo el archivo, que
+  DuckDB-WASM materializa — fase 4), `root()` con grado variable, y fórmulas
+  construidas sobre esas. Al crearlas en un archivo lazy la app **avisa**
+  (`derivedLazyOverviewOnly`).
+- Las siete cachés de consultas usan ahora la expresión en su clave: editar una
+  fórmula bajo el mismo nombre no sirve los valores viejos.
+
+Pruebas:
+- `scripts/test-formula-sql.mjs`: paridad contra `compile.js` sobre 1 369
+  combinaciones de valores extremos (±0, ±∞, NaN, celdas vacías, 1e±308…).
+  73 fórmulas escritas y 400 aleatorias de operaciones exactas coinciden **bit
+  a bit**, signo del cero incluido; 674 operaciones de 150 fórmulas aleatorias
+  con trascendentales coinciden **una por una** con ≤ 1 ulp (las bibliotecas
+  matemáticas de V8 y musl no son idénticas; compuestas, las diferencias se
+  amplifican en pasos mal condicionados, por eso se compara operación a
+  operación). La única excepción aceptada y contada es el redondeo de `root()`
+  por encima de 5e11, donde 1 ulp de `pow` cae a un lado u otro del medio.
+- `scripts/test-lazy-csv-export.mjs`: una fórmula creada como la crea la app
+  sobre un archivo lazy real se exporta **byte a byte** igual que en memoria, el
+  zoom trae todas las filas de la ventana, las fórmulas anidadas se traducen,
+  editar una fórmula invalida la caché, y `cumsum` cae al resumen con aviso.
+- Verificado que ambas fallan si se quita la fórmula del token de caché, la
+  comprobación de NULL de `min`/`max`, o la guarda de `log(0)`.
 
 ## 8. Riesgos y decisiones abiertas
 

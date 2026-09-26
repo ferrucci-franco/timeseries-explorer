@@ -101,6 +101,7 @@
     "test:file-size-limits": "node scripts/test-file-size-limits.mjs",
     "test:column-stream": "node scripts/test-column-stream.mjs",
     "test:lazy-csv-export": "node scripts/test-lazy-csv-export.mjs",
+    "test:formula-sql": "node scripts/test-formula-sql.mjs",
     "test:dropped-traces-batch": "node scripts/test-dropped-traces-batch.mjs",
     "test:loading-cancel-button": "node scripts/test-loading-cancel-button.mjs",
     "test:csv-export-progress": "node scripts/test-csv-export-progress.mjs",

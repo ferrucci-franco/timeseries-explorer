@@ -2856,10 +2856,12 @@ class PlotManager {
      * A trace can be written in full when its file is in memory (the arrays
      * are the file) or when it is a column of a lazy file (the column can be
      * read from disk). A lazy Data Tools result counts as a column: it is one
-     * plus an expression, and the file query applies it. What falls outside,
-     * and exports the overview with a notice instead:
-     *   · variables computed in the app over a lazy file's overview (derived,
-     *     time-axis index/delta), which have no column to read;
+     * plus an expression, and the file query applies it; so does a formula
+     * translated to SQL (src/expr/sql.js). What falls outside, and exports the
+     * overview with a notice instead:
+     *   · variables computed in the app over a lazy file's overview with no
+     *     SQL form (formulas using diff() or cumsum(), time-axis index/step),
+     *     which have no column to read;
      *   · independent-index variables, whose own row axis the streamed layout
      *     does not reproduce.
      *
@@ -2877,7 +2879,7 @@ class PlotManager {
             if (!variable) return true;
             if (variable.independentIndex) return false;
             if (!data._duckdb) return true;
-            return !!variable._duckdbCol
+            return !!(variable._duckdbCol || variable._duckdbExpr)
                 && variable.kind !== 'parameter'
                 && variable.kind !== 'abscissa';
         });

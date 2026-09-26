@@ -107,7 +107,9 @@ function flattenInto(node, out) {
     return out;
 }
 
-function flattenLists(node) {
+// Exported for the SQL translator (src/expr/sql.js), which starts from the same
+// flattened tree so the two can never disagree about what a formula means.
+export function flattenLists(node) {
     switch (node.type) {
         case 'number':
         case 'name':
