@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4a implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4a implementadas; 4b diseñada (sección "Diseño (fase 4b)"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -214,18 +214,19 @@ puede correr sobre trozos. Tres familias:
 |---|---|---|---|
 | Outliers por cotas (`detectBoundsOutliers`) | puntual | SQL, **ya hecho** | — |
 | Derivada (`computeDerivative`) | ±1 (centrada), 1 (diferencia) | SQL `LAG`/`LEAD` como columna virtual, **hecho (3b)** | Exacta bit a bit y en streaming (`STREAMING_WINDOW`). Δt = 0 y no finitos replican el kernel. |
-| Media móvil (`computeMovingAverage`) | ventana *w* | stream con solape *w*; o SQL `AVG() OVER (ROWS BETWEEN l PRECEDING AND r FOLLOWING)` | El kernel salta no finitos con una suma corrida cuyo orden de operaciones se preservó a propósito; la SQL no es bit-exacta. Stream para paridad, SQL para cero memoria. |
+| Media móvil (`computeMovingAverage`) | ventana *w* | forma incremental con estado (suma y conteo corridos), **4b-1** | La suma corrida es sensible al orden: se lleva el estado, no se recalcula por trozo. Bit a bit. |
 | Integral (`computeIntegral`) | estado (acumulado) | `SUM() OVER (ROWS UNBOUNDED PRECEDING)` en streaming, **hecho (4a)** salvo la política *interpolar* | Exacta bit a bit. Cada zoom re-escanea desde el inicio del archivo: correcto, y en CSV igual de lento que cualquier zoom. |
-| Picos (`detectSpikeOutliers`) | ventana `half` | stream con solape `half` | `scanSpikeCandidates` ya trabaja con una ventana ordenada incremental; solo hay que alimentarla por trozos. |
+| Picos (`detectSpikeOutliers`) | ventana `half` | trozos con solape 25 (+16 para las rachas), en el pool de workers, **4b-3** | Sin estado: la mediana y la MAD de una ventana no dependen del orden de inserción. 10 s por 20 M en JS: por eso en workers. |
 | Outliers IQR (`detectIqrOutliers`) | global (cuantiles) | cuantiles exactos por pasadas de histograma, luego predicado puntual en SQL, **hecho (3b)** | `quantile_cont` guardaría la columna entera en memoria: no se usa. Exacto bit a bit. |
 | Detrend media / lineal / polinomio (`computeDetrend`) | global (ajuste) + puntual (aplicar) | agregados SQL (`fsum` de potencias), resolver en JS, aplicar como SQL, **hecho (3b)** | El ajuste coincide al redondeo; la resta, bit a bit. |
 | Detrend por primera muestra | puntual | **hecho (3b)** | — |
-| Detrend por media móvil | como media móvil | fase 4 | — |
-| Filtro IIR hacia adelante (`applyFilter`) | estado | stream con estado | Los modos de arranque (`steady`, `zero`, `level`, `past`) se resuelven con el primer trozo. |
-| Filtro IIR de fase cero | dos pasadas, la segunda **al revés** | stream de ida al *sink*; segunda pasada leyendo el sink en orden inverso | Leer un CSV al revés en SQL es `ORDER BY t DESC` = sort completo. Por eso la segunda pasada lee el resultado de la primera, no la fuente. |
-| Rellenar faltantes (`fillMissingValues`) | vecinos a ambos lados del hueco | stream con solape acotado por el hueco más largo | Si un hueco supera un trozo, el ejecutor extiende el solape para ese hueco. Los 7 métodos son locales (`data-tool-sampling.md` §2). |
-| Remuestreo (`runResample`) | bucket (estado en el borde) | stream con estado; o SQL `GROUP BY floor(t/Δt)` | Precedente: *Resample* ya produce **un archivo nuevo**. La semántica de huecos del kernel (§4 de `data-tool-sampling.md`) no es trivial en SQL; stream para paridad. |
-| Correlación cruzada (`runCrossCorrelation`) | global (FFT de ambas) | materializar con presupuesto, o tope como la FFT | Otro estudio si hace falta. |
+| Detrend por media móvil | como media móvil | **4b-1** | — |
+| Filtro IIR hacia adelante (`applyFilter`) | estado | forma incremental con estado, **4b-2** | El umbral de huecos es la pasada de la 4a; el avance `D` retrasa la emisión. |
+| Filtro IIR de fase cero | dos pasadas, la segunda **al revés** | ida a un sumidero de trabajo; vuelta leyéndolo por rangos de `rn` en orden inverso, **4b-2** | Leer un CSV al revés en SQL es `ORDER BY t DESC` = sort completo. Un trozo del sumidero al revés cuesta 11 ms (medido). |
+| Rellenar faltantes (`fillMissingValues`) | vecinos a ambos lados del hueco | trozos con solape, mirada hacia adelante hasta la próxima muestra finita con tope, en workers, **4b-3** | Los 7 métodos son locales (`data-tool-sampling.md` §2). Un hueco más largo que el tope se omite, como uno más largo que `maxGap`. |
+| Remuestreo (`runResample`) | bucket (estado en el borde) | forma incremental con cursor; la salida es un **dataset lazy** cuya tabla es el sumidero, **4b-4** | Precedente: *Resample* ya produce **un archivo nuevo**. El tope de 20 M puntos no aplica: la grilla no se materializa. |
+| Colapsar timestamps repetidos (`runCollapseRepeats`) | racha (estado) | forma incremental; dataset lazy, **4b-4** | — |
+| Correlación cruzada (`runCrossCorrelation`) | global (FFT de ambas) | la selección en memoria hasta un presupuesto, como la FFT, **4b-4** | La ruta directa O(N·L) no se paga a 20 M × 5 M. |
 | FFT | global por definición | tope actual (`_fftHardMaxNfft`), correcto | Para series enormes la respuesta es otra (Welch por trozos), no "más memoria". |
 | Exportar CSV/Parquet exacto | puntual | stream → *sink* | Blueprint §2.5. Cierra el defecto de exportar el resumen. |
 | Guardar proyecto | — | guardar la **definición**, no los bytes (sección 6) | — |
@@ -283,7 +284,8 @@ En orden de valor visible por esfuerzo:
 | 1 | `streamColumns` (lazy por lotes del reader; eager por `slice`), segunda conexión para trabajos largos, pruebas de paridad con DuckDB nativo | 1–2 días | bajo: no cambia nada visible |
 | 2 | **Exportación exacta** para lazy sobre el stream (CSV; Parquet vía `COPY` directo) | 1 día | bajo; cierra el defecto §1.6 del blueprint, visible al usuario desde el primer día |
 | 3 | Herramientas puntuales y de ventana como **columnas virtuales SQL**: derivada, IQR, detrend (tras su pasada de agregados) | 1–2 días + paridad eager/lazy por herramienta | medio: semántica de no finitos y Δt = 0 |
-| 4 | **Ejecutor por trozos** con solape/estado para los kernels JS (integral, media móvil, picos, IIR, relleno, remuestreo) y los sinks (b) y (c) | 1–2 semanas | alto: es la integración con `plot-manager` y la escritura Parquet |
+| 4a | Integral, índice y paso del eje en SQL — **hecha** | 1 día | — |
+| 4b | **Ejecutor por trozos** con solape/estado para los kernels JS (media móvil, IIR, picos, relleno, remuestreo, colapsar) y el **sumidero** (tabla DuckDB con presupuesto; OPFS / Parquet nativo por encima) — diseño abajo | 1,5–2 semanas en cuatro PR | medio: lectura por unión posicional medida; el riesgo que queda es la reescritura de los kernels |
 | 5 | Proyecto por definición para archivos lazy | 2–3 días | medio: formato de sesión, compatibilidad hacia atrás |
 | 6 | Formatos eager-only → Parquet (Excel ya; MAT, pickle, netCDF no). MAT por variable en lazy es otro estudio: el formato lo permite (cada variable es un elemento con desplazamiento conocido), el lector actual no | por formato | — |
 
@@ -561,7 +563,318 @@ el método de rectángulos lee y₁, con la mediana superior en vez del promedio
 sin el refresco del resumen, o si el paso se escala dividiendo por 1000 en vez
 de multiplicar por 0,001. El e2e crea una integral desde el panel.
 
+### Diseño (fase 4b): las herramientas que no se escriben en SQL
+
+**Estado: diseño; nada implementado.** Lo que queda después de la 4a son las
+herramientas cuya salida no es una expresión sobre la fila y sus vecinas
+inmediatas: media móvil (y el detrend por media móvil), filtro digital (hacia
+adelante y de fase cero), picos, rellenar faltantes, las políticas *interpolar*
+de la integral y de los outliers, remuestreo, colapsar timestamps repetidos y
+correlación cruzada. Este diseño las cubre todas, con una excepción explícita
+(la correlación cruzada, sección "Global").
+
+#### Por qué no en SQL
+
+Cada una necesita algo que una ventana en streaming no da:
+
+- **Estado que se arrastra** a lo largo de todo el archivo: el filtro IIR
+  (`y[n]` depende de `y[n−1]…`), la suma corrida de la media móvil (que el
+  kernel mantiene en un orden de sumas y restas fijado a propósito — dos
+  medias móviles escritas de otra forma no son bit a bit iguales).
+- **Un estadístico por ventana**: los picos comparan cada muestra con la
+  mediana y la MAD de sus 51 vecinas. `median() OVER (ROWS BETWEEN 25 PRECEDING
+  AND 25 FOLLOWING)` existe, pero DuckDB no lo evalúa en streaming.
+- **Mirar hacia adelante hasta la próxima muestra finita**: rellenar un hueco,
+  interpolar un outlier, la política *interpolar* de la integral. La distancia
+  no está acotada por una constante sino por el hueco más largo del archivo.
+- **Dos pasadas, la segunda al revés**: el filtro de fase cero recorre cada
+  tramo hacia adelante y después la salida de esa pasada hacia atrás, y el
+  estado inicial de la vuelta es la última muestra de la ida.
+
+En memoria todo esto es un array y un bucle. Sobre un archivo que no entra en
+memoria hace falta (1) un **ejecutor** que recorra el archivo por trozos
+llevando el estado, el solape y la mirada hacia adelante que cada kernel
+necesita, y (2) un **sumidero** donde vive un resultado del tamaño del
+archivo. Las dos piezas se diseñan abajo, y después cómo lee la app un
+resultado que vive en un sumidero.
+
+#### Principio 1: un kernel, dos conductores
+
+Cada kernel de `src/compute/kernels/` que entra en la 4b se reescribe como una
+**forma incremental** — un objeto con `push(chunk)` que devuelve las filas de
+salida que ya puede emitir y `flush()` al final — y la función de array
+completo que existe hoy (`applyFilter`, `computeMovingAverage`, …) pasa a ser
+un conductor que crea el objeto, le hace `push` del array entero y `flush`.
+Así:
+
+- la paridad eager/lazy es **por construcción**: el mismo código, con las
+  mismas sumas en el mismo orden, corre en memoria y por trozos;
+- los tests que ya existen para cada kernel (`test-compute-kernels`,
+  `test-detrend-filter`, `test-interpolate-regrid`, …) siguen protegiendo la
+  forma incremental, porque la conducen;
+- el conductor por trozos solo agrega los tests de **borde de trozo**: correr
+  el mismo kernel con `chunkRows` de 1, 7 y 1000 filas y exigir bit a bit lo
+  que da con un solo trozo.
+
+No todos los kernels tienen el mismo vecindario. Dos familias, que se tratan
+distinto:
+
+| Familia | Herramientas | Cómo corre por trozos | Dónde corre |
+|---|---|---|---|
+| **Sin estado, con solape** — la salida de la fila *i* depende solo de las filas *i ± k* | picos (k = 25 + tolerancia de la expansión de rachas, ≤ 16), rellenar faltantes (k = 3 vecinos válidos por lado en pchip/akima, `ventana/2` en *smooth*; el hueco es la mirada hacia adelante), reemplazo de outliers por interpolación (prev/next válidos) | cada trozo se procesa con *k* filas de solape a cada lado y se descarta el solape; el resultado de una fila no depende de por dónde se cortó, porque el kernel solo mira un multiconjunto de vecinas (la mediana y la MAD de una ventana no dependen del orden en que se insertó) | en el **pool de workers que ya existe** (`dataTool:pipeline` es petición/respuesta sin estado: cada trozo es una petición independiente, y varios trozos corren en paralelo) — necesario para los picos, que cuestan 10 s por 20 M filas |
+| **Con estado** — la salida depende de todo lo anterior | filtro IIR (el vector de estado por sección, `lastValid` para los huecos), media móvil (suma y conteo corridos + las últimas `ventana` filas), integral con *interpolar* (el acumulador), remuestreo (el cursor del par fuente y el bin en curso), colapsar (la racha en curso) | un solo objeto que recibe los trozos en orden y lleva el estado entre uno y otro; la mirada hacia adelante que necesita (`right` de la media móvil, el avance `D` del filtro, el hueco de *interpolar*) la provee el ejecutor | en el **hilo principal**, un `await` por trozo (medido: el IIR cuesta 1,3 s por 20 M filas, 17 ms por trozo de 262 144 — no se nota); un worker con estado es una mejora posterior, no una necesidad |
+
+Lo que se conserva de cada kernel al reescribirlo, con el detalle que decide
+la paridad:
+
+- **Media móvil**: la suma corrida `sum += / -=` en el orden exacto del kernel
+  actual; el estado es `(sum, count)` y las últimas `left` filas (para las
+  restas futuras); la mirada hacia adelante es `right`.
+- **Filtro IIR hacia adelante**: `states` por sección, `lastValid`,
+  `expectedBetween` para los huecos — que necesita `medianDt` del eje entero:
+  es la pasada de `_lazySamplingGapThreshold` de la 4a, ya escrita. El avance
+  `D` retrasa la emisión `D` filas dentro de cada tramo; al cerrar un tramo las
+  últimas `D` salidas son NaN, como hoy.
+- **Filtro de fase cero**: por tramo contiguo de muestras finitas: la ida
+  (con el relleno `oddExtend` de `3 × orden` muestras, que necesita las
+  primeras `3 × orden` filas del tramo como mirada hacia adelante) escribe a un
+  **sumidero de trabajo**; la vuelta lee ese sumidero **al revés**, empezando
+  por la última muestra del tramo (que es su estado inicial). Un archivo sin
+  NaN es un solo tramo del largo del archivo: por eso la vuelta no puede ser
+  "guardar el tramo en memoria".
+- **Picos**: `scanSpikeCandidates` sobre el trozo con solape 25 a cada lado, y
+  `keepReturningOutlierRuns` sobre los candidatos con solape 25 + 16 (la
+  expansión de una racha hasta `maxRun`). Bit a bit: ambas funciones leen
+  ventanas, no historial.
+- **Rellenar faltantes** y **reemplazo por interpolación**: la mirada hacia
+  adelante es "hasta la próxima muestra finita" y por eso el ejecutor la
+  extiende trozo a trozo mientras haga falta, con un **tope**
+  (`LOOKAHEAD_MAX_ROWS`, propuesta 4 M filas ≈ 32 MB por columna): un hueco más
+  largo que el tope no se rellena y se cuenta como *omitido*, igual que uno más
+  largo que `maxGap` — el panel ya sabe decirlo. `edges: hold` al final del
+  archivo es el `flush()`.
+- **Integral con *interpolar***: `bridgeNonFinite` por tramo de NaN, con la
+  misma mirada hacia adelante; el acumulador es el estado. Las políticas *cero*
+  y *propagar* siguen en SQL (4a).
+- **Remuestreo** y **colapsar**: producen **otro eje** (sección "Datasets
+  nuevos"); el kernel es secuencial con un cursor, y la grilla no se
+  materializa (se genera al vuelo), con lo que el tope de 20 M puntos del
+  remuestreo (`RESAMPLE_MAX_POINTS`, que existe para no reservar un array) no
+  aplica en lazy. El paso nominal y el rango (primera y última muestra) salen
+  de las pasadas de agregados de la 4a.
+
+#### Principio 2: el ejecutor
+
+Un módulo, `src/data/chunk-executor.js`, sin DOM, con un contrato:
+
+```
+runChunkedJob({
+    data, sourceNames,          // el archivo lazy y las columnas que lee
+    kernel,                     // la forma incremental: push(chunk) → filas de salida, flush()
+    overlap: { before, after }, // filas de solape (familia sin estado)
+    lookahead: { until, cap },  // mirada hacia adelante variable: predicado sobre la fila, y tope
+    sink,                       // dónde escribir (abajo)
+    chunkRows, signal, onProgress,
+})
+```
+
+- Lee con `streamColumns` (fase 1), que ya recorre el archivo entero en
+  orden físico sin sostenerlo, con una conexión propia para no bloquear el
+  zoom.
+- **Alineación con el archivo.** El stream de un trabajo pide **todas las
+  filas** del relación base — también las que no tienen tiempo y las que el
+  perfil CSV filtra — y el sumidero recibe **una fila por fila del archivo**
+  (NaN donde el kernel no tiene nada que decir). Sin esto la unión posicional
+  de la lectura (abajo) se desalinea. Es una opción nueva del stream
+  (`allRows`), no un cambio del contrato de la fase 1.
+- Solape y mirada hacia adelante son un **anillo** de filas anteriores y una
+  lectura adelantada del trozo siguiente: el ejecutor entrega al kernel el
+  trozo *k* recién cuando tiene el trozo *k+1* (o las filas que `until` pide).
+- Emite las salidas en orden al sumidero, por trozos; un `AbortSignal` corta el
+  stream y descarta el sumidero.
+- **Progreso** por filas cuando el total se conoce (Parquet: `totalRows`) y por
+  filas leídas cuando no (CSV), con el mismo overlay con botón de cancelar que
+  la exportación de la fase 2.
+- **Dos pasadas**: el trabajo de fase cero corre la ida con un sumidero de
+  trabajo y la vuelta como un segundo stream que lee ese sumidero en orden
+  inverso por rangos de `rn` (medido abajo: 11 ms por trozo de 262 144). El
+  sumidero de trabajo se borra al terminar.
+- **Encadenar**: un trabajo cuya fuente es una variable de sumidero (filtrar
+  la señal ya suavizada) lee por el mismo `_fromSql` que todo lo demás: el
+  stream ya lo usa desde la 3b.
+
+#### Principio 3: el sumidero
+
+Un resultado del tamaño del archivo vive en una **tabla de DuckDB** en la
+memoria de wasm, `omv_sink_<archivo>_<n>(rn BIGINT, t DOUBLE, y DOUBLE, …)`,
+escrita por trozos con `insertArrowTable` (medido: 20 M filas en 3,3 s) y
+compactada con `CHECKPOINT` al terminar (369 → 221 MB; en una señal suave,
+80 → 20 MB por 5 M filas). Lleva `rn` (la fila del archivo, para leerse por
+rangos y al revés: los *zone maps* de DuckDB hacen que un trozo cueste 11 ms) y
+`t` (la misma expresión de tiempo que el archivo, `timeValueSql`; en un eje
+generado, la fila), para que el sumidero **se baste solo** en las lecturas más
+frecuentes.
+
+**Presupuesto.** Antes de empezar, `filas × 24 bytes` (medido: 18 B/fila antes
+del `CHECKPOINT` y 11 después, para `(rn, t, y)` con un seno; mucho menos con
+señales suaves) contra un ajuste nuevo, *Resultados en memoria (MB)*, por
+defecto 1024, contando los sumideros ya vivos. El techo de wasm es 4 GiB
+(`docs/file-size-limits.md`, addenda) y lo comparten los búferes de escaneo de
+DuckDB (~300 MB en un CSV de 360 MB, medido). Con 1 GiB entran ~50 M filas de
+salida. Por encima:
+
+1. **Web, con la extensión Parquet disponible**: el sumidero se escribe en
+   **OPFS** con `COPY … TO 'opfs://…' (FORMAT PARQUET)` (DuckDB-WASM 1.32 lo
+   soporta: medido con CSV, 5 M filas en 6,2 s, releído en 3,7 s) y se lee con
+   `read_parquet`, que poda *row groups* por estadísticas de `rn` como la
+   tabla poda por *zone maps* (documentado por DuckDB; **no medido acá**,
+   porque en este entorno la extensión no se descarga — ver §8). Los archivos
+   OPFS son de la app y se borran al cerrar el archivo.
+2. **Escritorio**: los trozos van por IPC al proceso principal, que ya tiene
+   DuckDB nativo (`csv-to-parquet-core.js`) y un directorio de Parquet
+   temporales con limpieza al salir; el archivo resultante se registra en el
+   renderer por el servidor HTTP de rangos local, como cualquier Parquet local.
+3. **Ninguno de los dos**: el trabajo se rechaza antes de empezar, con el
+   tamaño estimado y el ajuste que lo permitiría.
+
+**Ciclo de vida.** Un sumidero se borra al eliminar la variable, al cerrar o
+recargar el archivo, al cancelar el trabajo y al reemplazarlo por una nueva
+edición. **No viaja en la sesión**: viaja la definición (como las `lazyStats`
+de la 3b), y al restaurar, el trabajo se vuelve a correr en segundo plano con
+el overlay — la variable existe desde el primer momento con el resumen vacío,
+como una fórmula con `diff()` en la 3c. En escritorio, un Parquet temporal
+podría reutilizarse si la huella de la fuente coincide (misma ruta, tamaño y
+fecha): es una mejora de la 4b-4, no de la base.
+
+**Actualización en vivo.** Los sumideros son *append-only* y los kernels con
+estado guardan su estado final: cuando el archivo crece, el trabajo **sigue**
+desde ahí sobre las filas nuevas y las agrega (medido: 100 k filas en 15 ms).
+La familia sin estado recalcula la cola con solape. La fase cero recalcula
+entera. Mientras tanto la variable se marca *desactualizada* en la tabla de
+transformaciones.
+
+#### Cómo lee la app una variable de sumidero
+
+La variable lleva `_duckdbSink: { table, column, generation }`, y
+`hasSqlValue` la acepta. Dos caminos, decididos en `_fromSql` como se decide
+hoy la subconsulta de ventanas:
+
+- **Solo variables de un mismo sumidero** (el zoom sobre la señal filtrada,
+  su refresco del resumen, su exportación, su heatmap): la consulta lee **el
+  sumidero solo**, `FROM omv_sink_…`, porque tiene `t` y `y`. Medido: 4 ms
+  por zoom en una tabla de 20 M filas, contra 17 ms del archivo.
+- **Mezcla de columnas del archivo y del sumidero** (una correlación entre la
+  señal cruda y la filtrada, un diagrama de fase con una de cada, una
+  exportación con las dos): `FROM archivo POSITIONAL JOIN sumidero1
+  POSITIONAL JOIN sumidero2`. Medido en DuckDB-WASM sobre 20 M filas: cuando
+  los dos lados son escaneos simples el plan es `POSITIONAL_SCAN` — fila a
+  fila, **sin materializar nada** (la memoria residente no se mueve: 1148 MB
+  contra 1149 del escaneo simple) — y cuesta 2,4–2,7 s contra 2,1 s del
+  escaneo del CSV; sobre una tabla, un zoom pasa de 17 a 93 ms (la unión no
+  deja empujar el filtro de tiempo al escaneo; es el mismo costo que las
+  ventanas de la 3b), con dos sumideros 106 ms.
+
+Una condición que la medición dejó clara: si un lado de la unión posicional
+no es un escaneo simple — una vista con `WHERE` (el filtro de filas del
+perfil CSV), un `UNION ALL` (la vista combinada de un archivo con
+actualización en vivo) — el plan pasa a `POSITIONAL_JOIN`, que **materializa**
+un lado (+155 MB y 4,1 s en la prueba). Por eso el sumidero se alinea con la
+relación de lectura cruda (`readExpr`, que `meta` pasará a guardar) y no con
+la vista: `_fromSql` compone `read_csv(…) POSITIONAL JOIN sumidero` y aplica
+el filtro de la vista **después**. La vista combinada de la actualización en
+vivo queda como el caso que materializa: son archivos chicos por naturaleza, y
+se documenta como costo conocido.
+
+El resto cae por su peso: `_dataToolCacheToken` incluye tabla y generación
+del sumidero; una fórmula sobre una variable de sumidero lleva el sumidero
+consigo (`_duckdbSinks`, como `_duckdbWindows`), y `_fromSql` mezcla ventanas
+y sumideros; una herramienta SQL de la 3b sobre una variable de sumidero (la
+derivada de la señal filtrada) no cambia nada.
+
+#### Datasets nuevos: remuestreo y colapsar
+
+Producen otro eje, y la app ya decidió (`docs/data-tool-sampling.md` §5) que
+eso es **otro archivo**: un *derived dataset* con su receta, su fila en la
+tabla de transformaciones y su lugar en el árbol. En lazy, ese archivo es un
+archivo lazy cuya tabla **es** el sumidero (`t` + las columnas): un
+`DuckDbSource.adoptTable(nombre, tabla, columnaDeTiempo)` construye la forma
+`{variables, metadata}` con el `_overviewSql` que ya existe, y de ahí en
+adelante es un archivo lazy más (zoom, exportación exacta, herramientas SQL,
+sesión por receta). El botón *guardar a disco* del dataset escribe el CSV por
+el stream de la fase 2, no por `syntheticBytes()`.
+
+#### Global: correlación cruzada (y la FFT)
+
+`computeCrossCorrelation` es una FFT de las dos series enteras: O(N) de memoria
+por definición, y la ruta directa O(N·L) no se puede pagar (N = 20 M y
+L = 5 M son 10¹⁴ productos). Igual que la FFT hoy, corre sobre **la selección
+en memoria hasta un presupuesto** (`XCORR_MAX_ROWS`, propuesta 8 M filas por
+serie), leída con `getRawColumnsRange`, y más allá lo dice con el mismo aviso
+que la FFT. No es una herramienta por trozos y no se disfraza de una.
+
+#### Hechos medidos para este diseño
+
+DuckDB-WASM 1.32 (DuckDB 1.4.3); el CSV de 20 M filas / 360 MB de la 3b en
+Node, y 5 M filas en Chromium con el bundle `eh` de la app:
+
+| Qué | Medida |
+|---|---|
+| Escribir un sumidero `(rn, t, y)` por `insertArrowTable`, trozos de 262 144 | 20 M filas en 3,3 s (Node); 5 M en 1,0–1,4 s (Chromium) |
+| Memoria del sumidero | 369 MB por 20 M filas, 221 MB tras `CHECKPOINT` (0,6 s); señal suave: 80 → 20 MB por 5 M |
+| Leer un trozo por `rn` (*zone maps*) | 21 ms antes / 11 ms después del `CHECKPOINT`; 20 trozos al revés, 178 ms |
+| Unión posicional CSV × sumidero, escaneo completo | `POSITIONAL_SCAN`; 2,4–2,7 s contra 2,1 s del escaneo simple; misma memoria |
+| Unión posicional con una vista filtrada | `POSITIONAL_JOIN`: 4,1 s, +155 MB |
+| Zoom sobre tabla × sumidero / dos sumideros / sumidero solo | 93 / 106 / 4 ms (archivo solo: 17 ms) |
+| Agregar 100 k filas a un sumidero | 15 ms |
+| OPFS desde DuckDB (`opfs://`, CSV) | escribir 5 M filas (126 MB) 6,2 s; releer 3,7 s |
+| Kernels en JS, 20 M muestras | IIR adelante 1,3 s; fase cero 1,6 s; media móvil 0,4 s; picos 10,1 s; relleno 0,26 s |
+| Extensión Parquet | **no viene en el bundle**: `duckdb_extensions()` la muestra `NOT_INSTALLED` y el primer `read_parquet`/`COPY … PARQUET` la descarga de `extensions.duckdb.org`; sin red, el motor cae (§8) |
+
+#### Plan por sub-fases
+
+| Sub-fase | Qué | Costo |
+|---|---|---|
+| **4b-1** | El ejecutor, el sumidero en tabla con presupuesto y lectura por `_fromSql`, la forma incremental de la **media móvil** (y el detrend por media móvil), overlay con progreso y cancelación, sesión (re-ejecución), tests de borde de trozo, e2e | 2–3 días |
+| **4b-2** | **Filtro IIR** hacia adelante (estado, huecos con el umbral de la 4a, avance) y de **fase cero** (sumidero de trabajo, vuelta al revés) | 1–2 días |
+| **4b-3** | La familia sin estado en el pool de workers: **picos**, **rellenar faltantes**, reemplazo de outliers por interpolación, política *interpolar* de la integral; el tope de mirada hacia adelante | 2 días |
+| **4b-4** | **Remuestreo** y **colapsar** como datasets lazy (`adoptTable`); correlación cruzada con presupuesto; los sumideros de desborde (OPFS en web, Parquet nativo en escritorio) con sus mediciones; actualización en vivo por continuación | 2–3 días |
+
+Cada sub-fase es un PR con paridad bit a bit contra el kernel en memoria (el
+mismo patrón que `scripts/test-lazy-data-tools.mjs`), y la 4b-1 deja la
+infraestructura que las otras tres solo usan.
+
+#### Riesgos propios de la 4b
+
+- **Orden físico.** Todo — el stream, la alineación del sumidero, la unión
+  posicional — asume que DuckDB devuelve las filas del archivo en su orden,
+  como ya lo asumen la fase y las ventanas de la 3b (§8). En wasm sin hilos se
+  cumple; `preserve_insertion_order=false` está puesto y no lo rompe hoy. Un
+  test que compare `rn` con `ROW_NUMBER() OVER ()` tras la unión lo vigila.
+- **Memoria de wasm.** Sumideros + búferes de DuckDB + el archivo que se
+  escanea comparten 4 GiB. El presupuesto es una estimación; la 4b-1 tiene
+  que medir el residente real en Chromium con un archivo grande y ajustar los
+  24 B/fila.
+- **Parquet y la red.** Los sumideros de desborde en web dependen de la
+  extensión (abajo, §8). En escritorio dependen de ella para *leer*, no para
+  escribir.
+- **Reescribir kernels.** Es la parte con más riesgo de regresión; la
+  mitigación es que la forma incremental conduce también el camino eager, así
+  que los tests existentes fallan si algo cambia.
+
 ## 8. Riesgos y decisiones abiertas
+
+- **Parquet es una extensión que se descarga en tiempo de ejecución.**
+  Encontrado midiendo la 4b: en DuckDB-WASM 1.32 el bundle no incluye el
+  lector ni el escritor de Parquet; `duckdb_extensions()` lo muestra
+  `NOT_INSTALLED`, y el primer `read_parquet` o `COPY … (FORMAT PARQUET)` baja
+  `parquet.duckdb_extension.wasm` de `extensions.duckdb.org`. Sin acceso a ese
+  host, el motor **cae** (`null function or function signature mismatch`) y
+  arrastra todo lo que corra después en la misma instancia. Afecta a lo que ya
+  existe — abrir un Parquet lazy, la conversión CSV → Parquet en el navegador,
+  y el escritorio, que lee Parquet con el mismo wasm — y a los sumideros de
+  desborde de la 4b. Es un trabajo aparte de la 4b: servir la extensión desde
+  la app (DuckDB-WASM admite un repositorio de extensiones propio) o al menos
+  detectar la falta y decirla antes de que el motor caiga.
 
 - **Orden físico ≠ orden temporal.** Toda la sección 5 asume que el archivo está
   ordenado por tiempo, como ya lo asumen `getRawColumnsRange` y la fase. Un
