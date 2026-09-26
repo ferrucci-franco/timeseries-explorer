@@ -24,12 +24,20 @@ const end = source.indexOf(endMarker, start);
 assert.ok(end > start, 'its end is findable');
 const method = source.slice(start, end + endMarker.length)
     .replace(startMarker, 'proto.write = async function(headers, columns, fileName) {');
+// _writeCsvFile hands its columns to _writeCsvChunks as a single block, the
+// same core that writes a lazy file streamed from disk; both are run here.
+const coreMarker = '    async _writeCsvChunks(headers, blocks, fileName, { totalRows = null, alwaysReport = false } = {}) {';
+const coreStart = source.indexOf(coreMarker);
+assert.ok(coreStart >= 0, '_writeCsvChunks is present');
+const coreEnd = source.indexOf(endMarker, coreStart);
+const core = source.slice(coreStart, coreEnd + endMarker.length)
+    .replace(coreMarker, 'proto._writeCsvChunks = async function(headers, blocks, fileName, { totalRows = null, alwaysReport = false } = {}) {');
 
 const proto = {};
 let written = null;
 let downloaded = null;
 let blobs = [];
-vm.runInNewContext(method, {
+vm.runInNewContext(`${method}\n${core}`, {
     proto,
     console,
     i18n: { t: key => key, formatNumber: value => String(value) },
@@ -50,6 +58,7 @@ vm.runInNewContext(method, {
 
 const makeHost = ({ overlay = null } = {}) => ({
     write: proto.write,
+    _writeCsvChunks: proto._writeCsvChunks,
     yields: 0,
     onBusyOverlay: overlay ? (options) => overlay(options) : null,
     _yieldToPaint() { this.yields++; return Promise.resolve(); },

@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fase 1 implementada; el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1 y 2 implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -74,7 +74,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Outliers, métodos que no son cotas (picos, IQR) | deshabilitados | *"Lazy files use hard bounds and replace out-of-bounds values with NaN."* |
 | Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
-| Exportar CSV | escribe las trazas del panel — para lazy, el resumen (`_exportCSV` → `_appendTimeseriesExportColumns`; el blueprint lo señala en §1.6) | — |
+| Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales de un archivo lazy; superposiciones de varios archivos y variables derivadas siguen exportando el resumen, ahora con aviso | `csvExportOverviewNotice` |
 | Guardar proyecto | rechazado | *"A complete project cannot be saved while these files are using memory-saving mode. Increase their full-load limit in Settings and reload them, or save a view instead"* |
 
 La última cadena merece una nota: para un CSV de 5 GB, "subí el límite y
@@ -292,6 +292,34 @@ inversión grande y la que realmente cumple "cualquier tamaño → cualquier
 herramienta → cualquier resultado".
 
 ---
+
+### Implementado (fase 2)
+
+- `_exportCSV` (panel de series temporales): si todas las trazas son columnas
+  de **un** archivo lazy (`_lazyTimeseriesCsvPlan`), `_exportLazyTimeseriesCsv`
+  recorre el archivo con `streamColumns` y escribe **todas** las filas.
+- Cada trozo pasa por `_transformFetchedPhaseTrajectory` — la transformación
+  que ya usaban las filas leídas del archivo para la fase — y la columna de
+  tiempo por `_formatTimeColumnForExport`: mismo recorte, desplazamiento, modo
+  de tiempo, ganancia, signo y offset que la exportación en memoria. La
+  paridad es por construcción y además está probada byte a byte.
+- El escritor se partió en `_writeCsvChunks` (consume bloques de filas, de un
+  iterable asíncrono) y `_writeCsvFile` (un solo bloque, comportamiento
+  idéntico al anterior). Un cancel sale del bucle, lo que termina la iteración
+  y cancela la consulta en DuckDB. El progreso muestra "N filas" cuando el
+  total no se conoce (una `VIEW` de CSV no lo cuenta).
+- Lo que no se puede leer del archivo (varios archivos a la vez, variables
+  calculadas sobre el resumen) exporta el resumen como antes, pero **con
+  aviso** (`csvExportOverviewNotice`). Un error de lectura no escribe nada y lo
+  dice (`csvExportReadFailed`).
+- Pendiente de esta fase, a propósito: **Parquet** como formato de exportación
+  (necesita una opción en el diálogo) y la exportación exacta de paneles de
+  fase (hoy exportan la trayectoria decimada que dibujan).
+
+Prueba: `scripts/test-lazy-csv-export.mjs` carga el mismo CSV lazy (DuckDB-WASM
+real) y eager, exporta ambos y exige el mismo archivo byte a byte, también con
+recorte, desplazamiento, ganancia, offset y signo invertido activos. Verificado
+que falla si la exportación lazy escribe el tiempo sin transformar.
 
 ## 8. Riesgos y decisiones abiertas
 
