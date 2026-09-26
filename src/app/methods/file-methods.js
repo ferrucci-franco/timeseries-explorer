@@ -81,6 +81,18 @@ function detachedCopy(buffer) {
     return buffer instanceof ArrayBuffer ? buffer.slice(0) : new Uint8Array(buffer).slice().buffer;
 }
 
+// The ceiling a reader is told to enforce on the file it is handed.
+//
+// Infinity in two cases that must look the same to the reader: the user saw the
+// warning and chose to open the file anyway, and there is no limit configured
+// to warn about (zero in Settings). The second one cannot be sent as zero. The
+// pickle and netCDF readers take `options.maxFileBytes || DEFAULT`, so a zero
+// would not switch their check off — it would put the default ceiling back,
+// and refuse a file the app never asked about.
+export function readerFileCeiling(limitBytes, options = {}) {
+    return options.allowOversized || !(limitBytes > 0) ? Infinity : limitBytes;
+}
+
 // A sample of a converted sheet for the parsing preview. Cut at the last
 // newline so the preview never has to reason about a half row, and bounded so
 // a million-row sheet does not push its whole CSV form through the dialog.
@@ -1638,7 +1650,7 @@ proto._pypsaNetcdfEagerLimitBytes = function() {
     const fallback = this.capabilities?.isDesktop
         ? PYPSA_NETCDF_DESKTOP_EAGER_LIMIT_BYTES
         : PYPSA_NETCDF_WEB_EAGER_LIMIT_BYTES;
-    return this._advancedSettingBytes('pypsaNetcdfFullLoadMb', fallback);
+    return this._optionalLimitBytes('pypsaNetcdfFullLoadMb', fallback);
 };
 
 // Resolves the configured limit for one of the eager-only formats. Kept as the
@@ -1717,7 +1729,7 @@ proto._pickleEagerLimitBytes = function() {
     const fallback = this.capabilities?.isDesktop
         ? PICKLE_DESKTOP_EAGER_LIMIT_BYTES
         : PICKLE_WEB_EAGER_LIMIT_BYTES;
-    return this._advancedSettingBytes('pickleFullLoadMb', fallback);
+    return this._optionalLimitBytes('pickleFullLoadMb', fallback);
 };
 
 proto._isExcelExtension = function(extension) {
@@ -1731,7 +1743,7 @@ proto._excelEagerLimitBytes = function() {
     const fallback = this.capabilities?.isDesktop
         ? EXCEL_DESKTOP_EAGER_LIMIT_BYTES
         : EXCEL_WEB_EAGER_LIMIT_BYTES;
-    return this._advancedSettingBytes('excelFullLoadMb', fallback);
+    return this._optionalLimitBytes('excelFullLoadMb', fallback);
 };
 
 proto._createDesktopLocalHttpFile = function(filePath, info) {
@@ -2017,7 +2029,7 @@ proto._matlabEagerLimitBytes = function() {
     const fallback = this.capabilities?.isDesktop
         ? MATLAB_MAT_DESKTOP_EAGER_LIMIT_BYTES
         : MATLAB_MAT_WEB_EAGER_LIMIT_BYTES;
-    return this._advancedSettingBytes('matlabFullLoadMb', fallback);
+    return this._optionalLimitBytes('matlabFullLoadMb', fallback);
 };
 
 proto._parseMatlabResultBuffer = async function(filename, buffer, options = {}) {
@@ -2051,10 +2063,10 @@ proto._parseMicroCapResultBuffer = async function(filename, buffer, _options = {
 };
 
 proto._parsePypsaNetcdfResultBuffer = async function(filename, buffer, options = {}) {
-    // Infinity disables the reader's own ceiling: the user already saw the
-    // warning and chose to proceed, so refusing here would be a second veto on
-    // a decision they have made.
-    const maxFileBytes = options.allowOversized ? Infinity : this._pypsaNetcdfEagerLimitBytes();
+    // The reader enforces a ceiling of its own, so both "the user chose to
+    // proceed" and "there is no limit" have to reach it — see readerFileCeiling
+    // for why neither can travel as the number the app holds.
+    const maxFileBytes = readerFileCeiling(this._pypsaNetcdfEagerLimitBytes(), options);
     const workerBuffer = detachedCopy(buffer);
     return parseOffThread(
         'parse:netcdf',
@@ -2185,9 +2197,9 @@ proto._adoptExcelCsvCache = function(entry, data) {
 };
 
 proto._parsePickleResultBuffer = async function(filename, buffer, options = {}) {
-    // See _parsePypsaNetcdfResultBuffer: the reader enforces the same ceiling,
-    // so an override has to reach it too.
-    const maxFileBytes = options.allowOversized ? Infinity : this._pickleEagerLimitBytes();
+    // Same as _parsePypsaNetcdfResultBuffer: the reader enforces the same
+    // ceiling, so the app's answer has to reach it in the reader's own terms.
+    const maxFileBytes = readerFileCeiling(this._pickleEagerLimitBytes(), options);
     const workerBuffer = detachedCopy(buffer);
     try {
         return await parseOffThread(
@@ -2217,7 +2229,7 @@ proto._audioDecodedLimitBytes = function() {
     const fallback = this.capabilities?.isDesktop
         ? AUDIO_DESKTOP_DECODED_LIMIT_BYTES
         : AUDIO_WEB_DECODED_LIMIT_BYTES;
-    return this._advancedSettingBytes('audioFullLoadMb', fallback);
+    return this._optionalLimitBytes('audioFullLoadMb', fallback);
 };
 
 // A recording, read as one signal per channel on a time axis in seconds.
@@ -2311,6 +2323,17 @@ proto._advancedSettingMb = function(key, fallbackMb) {
 proto._advancedSettingBytes = function(key, fallbackBytes) {
     const fallbackMb = fallbackBytes / MB_BYTES;
     return Math.round(this._advancedSettingMb(key, fallbackMb) * MB_BYTES);
+};
+
+// A limit the user may switch off. Zero in Settings means "never ask", which
+// _advancedSettingBytes cannot say: it reads zero as "unset" and hands back the
+// runtime default, so the warning came straight back the moment someone tried
+// to turn it off. Only the formats that WARN resolve through here. CSV and
+// Parquet switch modes at their limit, and zero there is not a request anyone
+// makes, so their floor stays.
+proto._optionalLimitBytes = function(key, fallbackBytes) {
+    if (this.advancedSettings?.[key] === 0) return 0;
+    return this._advancedSettingBytes(key, fallbackBytes);
 };
 
 proto._csvFullLoadLimitBytes = function() {

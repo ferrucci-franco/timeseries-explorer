@@ -276,18 +276,34 @@ class OpenModelicaViewer {
         return this._normalizeAdvancedSettings({ ...defaults, ...(saved || {}) });
     }
 
-    _normalizeAdvancedSettings(settings = {}) {
-        const defaults = this._defaultAdvancedSettings();
-        const ranges = {
+    // What each numeric setting may be set to. The normalizer and the dialog
+    // that edits the settings both read from here, so a field can never offer
+    // a range the normalizer then quietly refuses.
+    //
+    // Two kinds of limit share this table. CSV and Parquet switch a file to
+    // memory-saving mode above theirs; zero there would mean "never hold a
+    // file whole", which nobody asked for, so they keep a floor. The others
+    // only decide when to ASK before a file is loaded whole, and for those
+    // zero means "never ask". They have no ceiling because the ceiling never
+    // protected anything: the warning is the protection, and above it the
+    // decision is the user's. A cap only stopped people who knew what their
+    // machine could hold from saying so.
+    _advancedSettingRanges() {
+        return {
             csvFullLoadMb: [10, 1000],
             parquetFullLoadMb: [10, 1000],
-            matlabFullLoadMb: [10, 2048],
-            excelFullLoadMb: [10, 500],
-            pickleFullLoadMb: [10, 1000],
-            pypsaNetcdfFullLoadMb: [50, 2048],
-            audioFullLoadMb: [50, 4096],
+            matlabFullLoadMb: [0, Infinity],
+            excelFullLoadMb: [0, Infinity],
+            pickleFullLoadMb: [0, Infinity],
+            pypsaNetcdfFullLoadMb: [0, Infinity],
+            audioFullLoadMb: [0, Infinity],
             csvCompactHintMb: [100, 4096],
         };
+    }
+
+    _normalizeAdvancedSettings(settings = {}) {
+        const defaults = this._defaultAdvancedSettings();
+        const ranges = this._advancedSettingRanges();
         const next = {};
         for (const [key, fallback] of Object.entries(defaults)) {
             if (key === 'panZoomRefreshMode') {
@@ -295,7 +311,9 @@ class OpenModelicaViewer {
                 continue;
             }
             const [min, max] = ranges[key] || [1, Number.MAX_SAFE_INTEGER];
-            const raw = Number(settings[key]);
+            // null and '' would coerce to 0, and 0 now means "never ask" for
+            // some keys. Neither is a value anyone set, so both fall back.
+            const raw = settings[key] === null || settings[key] === '' ? NaN : Number(settings[key]);
             const value = Number.isFinite(raw) ? raw : fallback;
             next[key] = Math.round(Math.min(max, Math.max(min, value)));
         }
