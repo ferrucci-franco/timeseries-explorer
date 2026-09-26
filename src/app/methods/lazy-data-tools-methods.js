@@ -1,10 +1,12 @@
 // Data Tools on a file in memory-saving (lazy) mode, beyond hard bounds.
 //
-// The derivative, the IQR outlier filter and the polynomial / first-sample
-// detrend become SQL over the file (src/data/lazy-tool-sql.js): their output is
+// The derivative, the cumulative integral, the IQR outlier filter and the
+// polynomial / first-sample detrend become SQL over the file
+// (src/data/lazy-tool-sql.js): their output is
 // a variable with `_duckdbExpr` — like a translated formula — so every lazy
 // consumer reads it over the whole file at full resolution. What the SQL cannot
-// know by itself (quartiles, a fitted polynomial, the first finite sample) is
+// know by itself (quartiles, a fitted polynomial, the first finite sample, the
+// time axis's nominal step) is
 // computed once, with aggregate passes over the file, and kept on the
 // definition as `lazyStats`, tagged with the source it was computed from.
 //
@@ -15,11 +17,20 @@ import {
     derivativeWindows,
     detrendAnchorSql,
     detrendPolynomialSql,
+    doubleLiteral,
+    integralWindows,
     iqrOutlierSql,
     mergeWindows,
     quoteIdent,
     rowIndexWindow,
+    windowColumn,
 } from '../../data/lazy-tool-sql.js';
+import {
+    GAP_STEP_MIN_AGREEMENT,
+    GAP_STEP_MIN_SAMPLES,
+    GAP_STEP_TOLERANCE,
+    GAP_THRESHOLD_FACTOR,
+} from '../../utils/sampling-gaps.js';
 import {
     DETREND_METHODS,
     detrendRequestedOrder,
@@ -39,6 +50,9 @@ export function installLazyDataToolsMethods(TargetClass) {
 proto._isLazySqlToolConfig = function(config) {
     if (!config) return false;
     if (config.tool === 'derivative') return true;
+    // Bridging a hole ('interpolate') needs the next finite sample: a look
+    // ahead a streaming window cannot make.
+    if (config.tool === 'integrate') return (config.params?.gapPolicy || 'zero') !== 'interpolate';
     if (config.tool === 'removeOutliers') return config.method === 'iqr';
     if (config.tool === 'detrend') {
         const method = config.params?.method ?? config.method;
@@ -80,6 +94,7 @@ proto._computeLazyToolStats = async function(data, definition) {
     const { sourceName, tool, params = {} } = definition;
     const signature = this._lazyToolSourceSignature(data, sourceName);
     if (tool === 'derivative') return { signature };
+    if (tool === 'integrate') return { signature, ...await this._lazyIntegralStats(data, definition) };
 
     if (tool === 'removeOutliers') {
         // The ranks the kernel's interpolated quartiles read, then those values.
@@ -123,6 +138,82 @@ proto._computeLazyToolStats = async function(data, definition) {
     return { signature, mid, half, coefficients, order, fitPoints: sums.fitPoints, slope, usedTimeAxis };
 };
 
+// detectSamplingGaps (src/utils/sampling-gaps.js) over the whole time axis:
+// the nominal step is the median positive step, it holds when at least 80 % of
+// the steps agree with it to 10 %, and a step above 1.5 of it is a gap. The
+// median is an exact order statistic, so the threshold is the kernel's.
+proto._lazySamplingGapThreshold = async function(data, timeSql, timeWindows = []) {
+    const source = data._duckdb.source;
+    const time = windowColumn(timeSql, timeWindows);
+    const t = quoteIdent(time.column);
+    const step = windowColumn(`CASE WHEN LAG(TRUE, 1, FALSE) OVER () THEN ${t} - LAG(${t}) OVER () END`, [...timeWindows, time]);
+    const d = quoteIdent(step.column);
+    const pass = source.passSql(data, [{ _duckdbWindows: mergeWindows(timeWindows, [time, step]) }], `CASE WHEN ${d} > 0 THEN ${d} END`);
+    const none = { gapThreshold: null, hasNominalStep: false };
+    const counts = await source.aggregateOver(pass, [
+        'COUNT(*)::BIGINT AS n',
+        `COUNT(*) FILTER (WHERE ${d} < 0 AND isfinite(${d}))::BIGINT AS neg`,
+        `COUNT(*) FILTER (WHERE ${d} > 0 AND isfinite(${d}))::BIGINT AS pos`,
+    ].join(', '));
+    if (counts.n < 3 || counts.neg > 0 || counts.pos < 2) return none;
+    const mid = counts.pos >> 1;
+    const ranks = counts.pos % 2 ? [mid] : [mid - 1, mid];
+    const { values } = await source.exactOrderStatisticsOver(pass, ranks);
+    const median = counts.pos % 2 ? values.get(mid) : (values.get(mid - 1) + values.get(mid)) / 2;
+    if (!Number.isFinite(median) || median <= 0) return none;
+    const band = median * GAP_STEP_TOLERANCE;
+    const { agree } = await source.aggregateOver(pass,
+        `COUNT(*) FILTER (WHERE ${d} > 0 AND isfinite(${d}) AND abs(${d} - ${doubleLiteral(median)}) <= ${doubleLiteral(band)})::BIGINT AS agree`);
+    if (counts.pos >= GAP_STEP_MIN_SAMPLES && agree / counts.pos < GAP_STEP_MIN_AGREEMENT) return none;
+    return { gapThreshold: median * GAP_THRESHOLD_FACTOR, hasNominalStep: true };
+};
+
+// The integral's gap threshold, and what the panel reports about the holes
+// (_integralWarning): the counts computeIntegral returns.
+proto._lazyIntegralStats = async function(data, definition) {
+    const source = data._duckdb.source;
+    const { sourceName, params = {} } = definition;
+    const sourceVariable = data.variables[sourceName];
+    const valueSql = source._valueExpressionSql(sourceVariable, sourceName, { castDouble: true });
+    const sourceWindows = sourceVariable._duckdbWindows || [];
+    if (params.method === 'sum') {
+        // The running sum never reads time: its holes are non-finite samples,
+        // counted as samples.
+        const pass = source.passSql(data, [sourceVariable], valueSql);
+        const { holes } = await source.aggregateOver(pass,
+            `COUNT(*) FILTER (WHERE NOT COALESCE(isfinite(${valueSql}), FALSE))::BIGINT AS holes`);
+        return {
+            gapThreshold: null, hasNominalStep: false, negativeDtCount: 0, gapCount: 0,
+            nanSegmentCount: holes, uncoveredTime: holes, timeKind: 'index',
+        };
+    }
+    const axis = this._lazyToolTimeAxis(data);
+    const gaps = axis.timeSql && axis.kind !== 'index' && params.detectGaps !== false
+        ? await this._lazySamplingGapThreshold(data, axis.timeSql)
+        : { gapThreshold: null, hasNominalStep: false };
+    const built = integralWindows(valueSql, axis.timeSql, {
+        kind: axis.kind, method: params.method, policy: params.gapPolicy, initial: params.initial,
+        gapThreshold: gaps.gapThreshold, deps: sourceWindows,
+    });
+    const { dt, missing, unusable } = built.steps;
+    const q = (window) => quoteIdent(window.column);
+    const pass = source.passSql(data, [{ _duckdbWindows: mergeWindows(built.windows, [dt, missing, unusable]) }], q(dt));
+    const counts = await source.aggregateOver(pass, [
+        `COUNT(*) FILTER (WHERE ${q(dt)} < 0)::BIGINT AS neg`,
+        `COUNT(*) FILTER (WHERE ${q(missing)})::BIGINT AS gaps`,
+        `COUNT(*) FILTER (WHERE ${q(unusable)})::BIGINT AS holes`,
+        `COALESCE(SUM(${q(dt)}) FILTER (WHERE ${q(missing)} OR ${q(unusable)}), 0) AS uncovered`,
+    ].join(', '));
+    return {
+        ...gaps,
+        negativeDtCount: counts.neg,
+        gapCount: counts.gaps,
+        nanSegmentCount: counts.holes,
+        uncoveredTime: counts.uncovered,
+        timeKind: axis.kind,
+    };
+};
+
 // The output variable, from the definition and its statistics. Null while the
 // source has no SQL of its own (a formula not restored yet).
 proto._lazySqlToolVariable = function(data, name, definition) {
@@ -146,7 +237,16 @@ proto._lazySqlToolVariable = function(data, name, definition) {
         expr = quoteIdent(built.column.column);
         windows = built.windows;
     } else if (stats) {
-        if (definition.tool === 'removeOutliers') {
+        if (definition.tool === 'integrate') {
+            const axis = this._lazyToolTimeAxis(data);
+            const params = definition.params || {};
+            const built = integralWindows(valueSql, axis.timeSql, {
+                kind: axis.kind, method: params.method, policy: params.gapPolicy, initial: params.initial,
+                gapThreshold: stats.gapThreshold, deps: sourceWindows,
+            });
+            expr = quoteIdent(built.column.column);
+            windows = built.windows;
+        } else if (definition.tool === 'removeOutliers') {
             expr = iqrOutlierSql(valueSql, stats.low, stats.high);
         } else if (definition.params?.method === 'firstSample') {
             expr = detrendAnchorSql(valueSql, stats.anchor);
@@ -189,6 +289,18 @@ proto._lazySqlToolVariable = function(data, name, definition) {
                 : {}),
             ...(definition.tool === 'detrend'
                 ? { order: stats?.order ?? null, slope: stats?.slope ?? null, fitPoints: stats?.fitPoints ?? null }
+                : {}),
+            ...(definition.tool === 'integrate'
+                ? {
+                    method: definition.params?.method,
+                    gapPolicy: definition.params?.gapPolicy,
+                    initial: definition.params?.initial,
+                    negativeDtCount: stats?.negativeDtCount ?? null,
+                    gapCount: stats?.gapCount ?? null,
+                    nanSegmentCount: stats?.nanSegmentCount ?? null,
+                    uncoveredTime: stats?.uncoveredTime ?? null,
+                    hasNominalStep: stats?.hasNominalStep ?? false,
+                }
                 : {}),
         },
     };
@@ -235,7 +347,9 @@ proto._applyLazySqlToolCreateMode = async function(context, config, options = {}
     this._renderFilteredTree();
     this._syncDataTools();
     const stats = definition.lazyStats;
-    const warning = tool === 'detrend' ? () => this._detrendNote(stats, config.params) : null;
+    const warning = tool === 'detrend'
+        ? () => this._detrendNote(stats, config.params)
+        : (tool === 'integrate' ? () => this._integralWarning(stats, config.params) : null);
     const result = {
         variable,
         count: tool === 'removeOutliers' ? (stats.count ?? 0) : 0,

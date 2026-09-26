@@ -4,6 +4,7 @@ import { emphasize, emphasizeList, emphasizedToHtml, setEmphasizedText } from '.
 import { DERIVED_CONSTANTS, DERIVED_FUNCTIONS } from '../constants.js';
 import { getCompiledFormula } from '../../expr/compile.js';
 import { formulaToSql, FormulaNotTranslatable } from '../../expr/sql.js';
+import { quoteIdent, rowIndexWindow, timeAxisDeltaWindows } from '../../data/lazy-tool-sql.js';
 import { normalizeFunctionName, parse as parseExpression, tokenize as tokenizeExpression } from '../../expr/parse.js';
 
 // The derived signals the time-axis inspector can materialize (see the
@@ -148,6 +149,7 @@ proto.createDerivedVariable = function() {
             this._rebuildPlotsUsingVariable(fileId, name);
             this._setDerivedMessage(`Created ${name}`, 'ok');
         }
+        if (variable._duckdbWindows?.length) this._refreshLazyOverviewSoon(fileId, data);
         // On a file in memory-saving mode a formula with no SQL form is still
         // created, but it only ever covers the overview. Said here, where it
         // was made, rather than discovered later as a curve that never gains
@@ -161,9 +163,15 @@ proto.createDerivedVariable = function() {
 };
 
 proto._formulaDerivedVariable = function(name, formula, result) {
+    // On a lazy file a formula reading neighbouring rows (diff, cumsum, a
+    // lazy derivative) has no meaning over the overview: its samples are
+    // hundreds of rows apart, so diff() there differences the wrong rows. Its
+    // overview is left empty until refreshOverview reads it from the file
+    // (_refreshLazyOverviewSoon).
+    const windowed = !!(result.sql && result.sqlWindows?.length);
     return {
         name,
-        data: result.values,
+        data: windowed ? new Float64Array(result.values.length).fill(NaN) : result.values,
         description: `Derived: ${formula}`,
         kind: 'variable',
         dataType: this.parser._detectDataType(result.values, 'variable'),
@@ -273,8 +281,8 @@ proto._derivedFormulaSql = function(formula, data, out = null) {
             if (variable.independentIndex) return null;
             if (variable.dataType === 'string' || variable.dataType === 'boolean') return null;
             if (name === timeName || variable.kind === 'abscissa') {
-                const sql = source.timeValueSql(data);
-                return sql ? { sql } : null;
+                // A generated axis is the row number: a window, carried along.
+                return source.timeSqlWithWindows?.(data) || null;
             }
             if (!source.hasSqlValue(variable)) return null;
             return {
@@ -316,9 +324,9 @@ proto._getActiveTimeVar = function(data) {
 //   delta → Δt between consecutive samples, in seconds (flat when equidistant,
 //           0 at repeated timestamps, a spike wherever samples are missing)
 // They reuse the derived-variable machinery (tree row, remove button, Data
-// Tools, session, live-update reapplication) and work for every format,
-// including lazy files (computed over the loaded overview — the inspector's
-// numbers, unlike these traces, are exact).
+// Tools, session, live-update reapplication) and work for every format. On a
+// lazy file they are SQL over the whole file (_timeAxisVariableSql), so they
+// are as exact as the inspector's numbers.
 //
 // Entries carry `timeAxisIndex: true` (the historical marker for "generated
 // from the time axis", kept so old sessions keep loading) plus `timeAxisKind`;
@@ -361,10 +369,29 @@ proto._timeAxisVariableValues = function(kind, timeVar) {
     return values;
 };
 
+// On a lazy file the same signals as SQL over the file: the index is the row
+// number, the step a difference of consecutive rows — both windows over the
+// whole file (src/data/lazy-tool-sql.js), neither of which the overview can
+// give. Null when the file is in memory.
+proto._timeAxisVariableSql = function(kind, timeVar, data) {
+    const time = data?._duckdb?.source?.timeSqlWithWindows?.(data);
+    if (!time) return null;
+    if (kind === 'delta') {
+        const { secondsPerUnit } = this._timeAxisSecondsScale(timeVar);
+        const built = timeAxisDeltaWindows(time.sql, secondsPerUnit, time.windows);
+        return { sql: quoteIdent(built.column.column), windows: built.windows };
+    }
+    const rowIndex = rowIndexWindow();
+    return { sql: quoteIdent(rowIndex.column), windows: [rowIndex] };
+};
+
 // Build the variable object for the current time vector. dataType is forced to
 // 'real' so a 2-sample [0,1] index is not misdetected as boolean.
-proto._buildTimeAxisVariable = function(name, timeVar, kind = 'index') {
-    const values = this._timeAxisVariableValues(kind, timeVar);
+proto._buildTimeAxisVariable = function(name, timeVar, kind = 'index', data = null) {
+    const lazySql = this._timeAxisVariableSql(kind, timeVar, data);
+    const values = lazySql
+        ? new Float64Array(timeVar?.data?.length || 0).fill(NaN)
+        : this._timeAxisVariableValues(kind, timeVar);
     const meta = TIME_AXIS_KIND_META[kind] || TIME_AXIS_KIND_META.index;
     // Units are read back out of the description's trailing bracket
     // (_extractUnit), so that bracket IS how Δt gets its [s] on the Y axis. The
@@ -384,6 +411,7 @@ proto._buildTimeAxisVariable = function(name, timeVar, kind = 'index') {
         derived: true,
         timeAxisIndex: true,
         timeAxisKind: kind,
+        ...(lazySql ? { _duckdbExpr: lazySql.sql, _duckdbWindows: lazySql.windows } : {}),
     };
 };
 
@@ -436,10 +464,11 @@ proto._createOrUpdateTimeAxisVariable = function(fileId, kind = 'index', options
         }
     }
 
-    const variable = this._buildTimeAxisVariable(name, timeVar, kind);
+    const variable = this._buildTimeAxisVariable(name, timeVar, kind, data);
     data.variables[name] = variable;
     if (!this.derivedByFile.has(fileId)) this.derivedByFile.set(fileId, new Map());
     this.derivedByFile.get(fileId).set(name, { name, timeAxisIndex: true, timeAxisKind: kind, variable });
+    if (variable._duckdbExpr) this._refreshLazyOverviewSoon(fileId, data);
 
     this._renderFilteredTree();
     this._rebuildPlotsUsingVariable(fileId, name);
@@ -490,9 +519,42 @@ proto._handleTimeAxisDrop = async function(timeVarName) {
 proto._reapplyDerivedVariables = function(fileId, data) {
     const derived = this.derivedByFile.get(fileId);
     if (!derived) return;
+    let windowed = false;
     for (const [name, entry] of derived) {
         this._reapplyDerivedVariable(fileId, data, name, entry);
+        if (data.variables?.[name]?._duckdbWindows?.length) windowed = true;
     }
+    if (windowed) this._refreshLazyOverviewSoon(fileId, data);
+};
+
+// Read the overview of a lazy file again from the file — every variable with
+// SQL of its own — and redraw. One refresh at a time per file; asking again
+// while one runs queues exactly one more.
+proto._refreshLazyOverviewSoon = function(fileId, data) {
+    const source = data?._duckdb?.source;
+    if (!source?.refreshOverview) return null;
+    if (!this._lazyOverviewRefreshes) this._lazyOverviewRefreshes = new Map();
+    const running = this._lazyOverviewRefreshes.get(fileId);
+    if (running && running.data === data) {
+        running.again = true;
+        return running.promise;
+    }
+    const state = { data, again: false, promise: null };
+    state.promise = (async () => {
+        do {
+            state.again = false;
+            try {
+                await source.refreshOverview(data);
+            } catch (err) {
+                console.warn('[duckdb] could not refresh the overview:', err?.message || err);
+                break;
+            }
+        } while (state.again);
+        if (this._lazyOverviewRefreshes.get(fileId) === state) this._lazyOverviewRefreshes.delete(fileId);
+        if (this.plotManager?.files?.get(fileId)?.data === data) this.plotManager.updateFileData(fileId, data);
+    })();
+    this._lazyOverviewRefreshes.set(fileId, state);
+    return state.promise;
 };
 
 proto._derivedFormulaReferences = function(formula, variableNames = []) {
@@ -511,7 +573,7 @@ proto._reapplyDerivedVariable = function(fileId, data, name, entry) {
         if (entry.timeAxisIndex) {
             const timeVar = this._getActiveTimeVar(data);
             if (!timeVar?.data?.length) return false;
-            const variable = this._buildTimeAxisVariable(name, timeVar, this._timeAxisEntryKind(entry));
+            const variable = this._buildTimeAxisVariable(name, timeVar, this._timeAxisEntryKind(entry), data);
             data.variables[name] = variable;
             entry.variable = variable;
             return true;

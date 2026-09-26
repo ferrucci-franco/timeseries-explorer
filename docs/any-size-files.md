@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2 y 3 (3a, 3b, 3c) implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4a implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -215,7 +215,7 @@ puede correr sobre trozos. Tres familias:
 | Outliers por cotas (`detectBoundsOutliers`) | puntual | SQL, **ya hecho** | — |
 | Derivada (`computeDerivative`) | ±1 (centrada), 1 (diferencia) | SQL `LAG`/`LEAD` como columna virtual, **hecho (3b)** | Exacta bit a bit y en streaming (`STREAMING_WINDOW`). Δt = 0 y no finitos replican el kernel. |
 | Media móvil (`computeMovingAverage`) | ventana *w* | stream con solape *w*; o SQL `AVG() OVER (ROWS BETWEEN l PRECEDING AND r FOLLOWING)` | El kernel salta no finitos con una suma corrida cuyo orden de operaciones se preservó a propósito; la SQL no es bit-exacta. Stream para paridad, SQL para cero memoria. |
-| Integral (`computeIntegral`) | estado (acumulado) | stream con estado | `SUM() OVER (ROWS UNBOUNDED PRECEDING)` es posible pero cada zoom re-escanea desde el inicio del archivo: correcto y lento. |
+| Integral (`computeIntegral`) | estado (acumulado) | `SUM() OVER (ROWS UNBOUNDED PRECEDING)` en streaming, **hecho (4a)** salvo la política *interpolar* | Exacta bit a bit. Cada zoom re-escanea desde el inicio del archivo: correcto, y en CSV igual de lento que cualquier zoom. |
 | Picos (`detectSpikeOutliers`) | ventana `half` | stream con solape `half` | `scanSpikeCandidates` ya trabaja con una ventana ordenada incremental; solo hay que alimentarla por trozos. |
 | Outliers IQR (`detectIqrOutliers`) | global (cuantiles) | cuantiles exactos por pasadas de histograma, luego predicado puntual en SQL, **hecho (3b)** | `quantile_cont` guardaría la columna entera en memoria: no se usa. Exacto bit a bit. |
 | Detrend media / lineal / polinomio (`computeDetrend`) | global (ajuste) + puntual (aplicar) | agregados SQL (`fsum` de potencias), resolver en JS, aplicar como SQL, **hecho (3b)** | El ajuste coincide al redondeo; la resta, bit a bit. |
@@ -509,6 +509,57 @@ hacia adelante de la primera fila, o sin el caso de la constante. `root()` con
 grado variable: 8 fórmulas sobre las combinaciones extremas y grados
 variables en las fórmulas aleatorias, a ≤ 1 ulp por operación; falla sin la
 rama impar, sin la guarda de grado 0/∞, o sin la de `pow(1, ∞)`.
+
+### Implementado (fase 4a): integral, índice y paso del eje de tiempo
+
+**Integral acumulada** en archivos lazy, con sus tres métodos (trapecios,
+rectángulos, suma) y las políticas de huecos *cero* y *propagar*
+(`integralWindows` en `lazy-tool-sql.js`):
+
+- Cada paso del kernel es una columna de ventana: Δt (en segundos en un eje
+  de calendario, 1 en uno de índice; un Δt no finito salta el paso), si el
+  paso es usable, si es un hueco del eje; la suma corrida
+  (`SUM … ROWS UNBOUNDED PRECEDING`) suma en orden de fila como `acc +=`. El
+  primer sumando es el valor inicial; un paso que no suma nada suma NULL (sumar
+  0 convertiría un −0 acumulado en +0); *propagar* es un conteo corrido de
+  pasos malos.
+- **Detección de huecos**: `detectSamplingGaps` sobre todo el eje — la mediana
+  de los pasos positivos es un estadístico de orden exacto (los pases del IQR,
+  generalizados a cualquier expresión: `exactOrderStatisticsOver`), el
+  acuerdo del 80 % al 10 % y el umbral de 1,5 × mediana se cuentan con
+  agregados. El umbral es el del kernel, al bit.
+- Los contadores que muestra el panel (pasos negativos, huecos, celdas vacías,
+  tiempo sin cubrir) salen de otra pasada de agregados.
+- *Interpolar* queda deshabilitada en lazy (`dataToolLazyIntegralInterpolate`):
+  une un hueco hacia la **próxima** muestra finita, una mirada hacia adelante
+  que una ventana en streaming no puede hacer.
+
+**Índice y paso del eje de tiempo** (el inspector del eje): en lazy eran el
+índice y el Δt de las muestras del *resumen* (de ahí filas 0…9 999 y pasos de
+cientos de filas). Ahora son SQL sobre el archivo: el número de fila y la
+diferencia de filas consecutivas, en segundos. Y `time` en una fórmula sobre
+un eje generado (el número de fila) también se traduce.
+
+**Corrección de la 3c**: una fórmula con `diff`/`cumsum` sobre un archivo lazy
+mostraba, sin zoom, su cálculo en JS sobre las muestras del resumen —
+diferencias entre muestras separadas por cientos de filas. Ahora una variable
+que lee filas vecinas empieza con el resumen vacío y la app lo relee del
+archivo (`_refreshLazyOverviewSoon`) al crearla, editarla, restaurarla o
+actualizarla en vivo.
+
+Rendimiento: integral por trapecios sobre 20 M filas / 360 MB de CSV, 27 s en
+crearse (conteos, mediana de los pasos, acuerdo, contadores y resumen), memoria
+residente plana (565 MB).
+
+Pruebas (`scripts/test-lazy-data-tools.mjs`): 3 métodos × 2 políticas × dos
+valores iniciales, sobre una grilla de 10 ms con huecos y celdas vacías en eje
+numérico y de calendario, más eje de índice, eje irregular y un eje de seis
+pasos con medianas distintas: **bit a bit** con el kernel, y los contadores y
+el aviso idénticos. Índice y paso bit a bit sobre ambos ejes, y el resumen
+releído del archivo. Falla si no se saltan los huecos, sin la propagación, si
+el método de rectángulos lee y₁, con la mediana superior en vez del promedio,
+sin el refresco del resumen, o si el paso se escala dividiendo por 1000 en vez
+de multiplicar por 0,001. El e2e crea una integral desde el panel.
 
 ## 8. Riesgos y decisiones abiertas
 

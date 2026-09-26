@@ -39,7 +39,7 @@ import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } fro
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
-import { collectWindows, doubleLiteral, windowedFromSql } from './lazy-tool-sql.js';
+import { collectWindows, doubleLiteral, quoteIdent, rowIndexWindow, windowedFromSql } from './lazy-tool-sql.js';
 import {
     buildTemporalProfileFinalSql,
     buildTemporalProfileTimeStatsSql,
@@ -1469,12 +1469,42 @@ export default class DuckDbSource {
     // FROM and WHERE for a pass over one variable's values: the rows every lazy
     // query serves, with the windows the variable is built on.
     _valuePassSql(legacyData, variable, varName, extraWindows = []) {
+        return this.passSql(legacyData, [variable, { _duckdbWindows: extraWindows }],
+            this._valueExpressionSql(variable, varName, { castDouble: true }));
+    }
+
+    // The same for any expression `value`, reading the window columns the
+    // `variables` carry.
+    passSql(legacyData, variables, value) {
         const tExpr = this.timeValueSql(legacyData);
         return {
-            from: this._fromSql(legacyData, [variable, { _duckdbWindows: extraWindows }]),
+            from: this._fromSql(legacyData, variables),
             valid: tExpr ? `(${tExpr}) IS NOT NULL` : 'TRUE',
-            value: this._valueExpressionSql(variable, varName, { castDouble: true }),
+            value,
         };
+    }
+
+    // One row of aggregates over the rows of a pass; numbers come back as
+    // numbers, NULL as NaN.
+    async aggregateOver(pass, selectSql, { signal } = {}) {
+        const rows = this._arrowRowsToObjects(await this._interactiveQuery(
+            `SELECT ${selectSql} FROM ${pass.from} WHERE ${pass.valid}`, { signal }));
+        return Object.fromEntries(Object.entries(rows[0] || {}).map(([key, value]) => [
+            key, value === null || value === undefined ? NaN : Number(value),
+        ]));
+    }
+
+    // The time axis as SQL, with the window columns it needs: a generated axis
+    // is the row number, which is a window. Null when there is no axis.
+    timeSqlWithWindows(legacyData) {
+        const meta = legacyData?._duckdb;
+        if (!meta) return null;
+        if (meta.generatedTime) {
+            const rowIndex = rowIndexWindow();
+            return { sql: quoteIdent(rowIndex.column), windows: [rowIndex] };
+        }
+        const sql = this.timeValueSql(legacyData);
+        return sql ? { sql, windows: [] } : null;
     }
 
     /**
@@ -1491,10 +1521,15 @@ export default class DuckDbSource {
      *
      * @returns {Promise<{ n: number, values: Map<number, number> }>}
      */
-    async exactOrderStatistics(legacyData, varName, ranks = [], { bins = 1024, fetchLimit = 1 << 20, signal } = {}) {
+    async exactOrderStatistics(legacyData, varName, ranks = [], options = {}) {
         const variable = legacyData?.variables?.[varName];
         if (!legacyData?._duckdb || !variable) throw new Error(`exactOrderStatistics: unknown variable "${varName}"`);
-        const { from, valid, value } = this._valuePassSql(legacyData, variable, varName);
+        return this.exactOrderStatisticsOver(this._valuePassSql(legacyData, variable, varName), ranks, options);
+    }
+
+    // exactOrderStatistics over any pass (see passSql).
+    async exactOrderStatisticsOver(pass, ranks = [], { bins = 1024, fetchLimit = 1 << 20, signal } = {}) {
+        const { from, valid, value } = pass;
         const lit = doubleLiteral;
         const query = async (sql) => this._arrowRowsToObjects(await this._interactiveQuery(sql, { signal }));
         const num = (v) => (v === null || v === undefined ? NaN : Number(v));

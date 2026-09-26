@@ -28,6 +28,7 @@ const { installLazyDataToolsMethods } = await import(new URL('../src/app/methods
 const { installDerivedMethods } = await import(new URL('../src/app/methods/derived-methods.js', import.meta.url));
 const lazySql = await import(new URL('../src/data/lazy-tool-sql.js', import.meta.url));
 const { computeDetrend } = await import(new URL('../src/compute/kernels/detrend.js', import.meta.url));
+const { detectSamplingGaps } = await import(new URL('../src/utils/sampling-gaps.js', import.meta.url));
 
 // ── An app with the Data Tools and derived-variable methods, and no DOM ─────
 class Harness {
@@ -92,6 +93,29 @@ await db.instantiate();
 db.open({});
 db.registerFileText('sig.csv', lines.join('\n') + '\n');
 db.registerFileText('stamps.csv', dtLines.join('\n') + '\n');
+// A regular grid — 10 ms, ±0.4 % jitter — with dropouts (gaps of the time
+// axis) and empty cells: what the integral's gap detection and policies are
+// about. The same instants on a calendar axis, in whole milliseconds.
+const gridLines = ['t,g,h'];
+const gridStampLines = ['stamp,g,h'];
+{
+    let at = 0;
+    for (let i = 0; i < 30011; i++) {
+        // Mostly 10 ms, some 9 ms (9 · 0.001 is not 9 / 1000 in doubles).
+        at += i % 3001 === 1500 ? 80 : (i % 7 === 3 ? 9 : 10);
+        const t = (at + (i % 5) * 0.04) / 1000;
+        const g = i % 997 === 13 ? '' : String(Math.round((Math.sin(i / 400) * 3 + (i % 11) / 10) * 1e4) / 1e4);
+        const hv = String(Math.round(Math.cos(i / 90) * 1e4) / 1e4);
+        gridLines.push(`${t},${g},${hv}`);
+        const iso = new Date(Date.UTC(2024, 2, 1) + at).toISOString().replace('T', ' ').replace('Z', '');
+        gridStampLines.push(`${iso},${g},${hv}`);
+    }
+}
+db.registerFileText('grid.csv', gridLines.join('\n') + '\n');
+db.registerFileText('gridstamps.csv', gridStampLines.join('\n') + '\n');
+// Six steps whose two middle ones differ (1.04, 1.06): the median is their
+// mean, and one step (3.2) is past 1.5 × it.
+db.registerFileText('evensteps.csv', 't,v\n0,1\n1,2\n2.02,4\n3.06,3\n4.12,5\n5.2,6\n8.4,2\n');
 const duck = new DuckDbSource();
 duck._db = db;
 duck._conn = db.connect();
@@ -336,12 +360,123 @@ console.log('lazy data tools: detrend matches the kernel (to rounding in the fit
     console.log('lazy data tools: restored from a session and refreshed after an upstream edit');
 }
 
+// ── Cumulative integral ─────────────────────────────────────────────────────
+// Bit for bit: the running sum adds the kernel's increments in row order. The
+// counts the panel reports (negative steps, gaps, holes) must match too, and
+// the gap threshold is the kernel's own (an exact median).
+{
+    const checkIntegral = async (label, lazyData, eagerData, source, params) => {
+        const lh = app(lazyData);
+        const name = `int_${source}_${Object.values(params).join('_')}`.replace(/\W/g, '_');
+        delete lazyData.variables[name];  // the same settings again, on another axis
+        const result = await create(lh, source, name, { tool: 'integrate', params });
+        const expected = app(eagerData)._computeIntegralValues(eagerData.variables[source].data, eagerData, params);
+        assertBitwise(await readAll(lazyData, name), expected.values, `${label} ${name}`);
+        const stats = lh.dataToolVariablesByFile.get('f').get(name).lazyStats;
+        for (const key of ['negativeDtCount', 'gapCount', 'nanSegmentCount', 'hasNominalStep', 'timeKind']) {
+            assert.equal(stats[key], expected[key], `${label} ${name}: ${key}`);
+        }
+        assert.ok(Math.abs(stats.uncoveredTime - expected.uncoveredTime) <= Math.abs(expected.uncoveredTime) * 1e-9,
+            `${label} ${name}: uncovered time ${stats.uncoveredTime} vs ${expected.uncoveredTime}`);
+        const warning = app(eagerData)._integralWarning(expected, params);
+        assert.equal(typeof result.warning === 'function' ? result.warning() : result.warning, warning, `${label} ${name}: the warning the panel shows`);
+        return stats;
+    };
+    for (const handle of ['grid.csv', 'gridstamps.csv']) {
+        const gridLazy = await loadLazy(handle);
+        const gridEager = await eagerFrom(gridLazy);
+        const kind = gridLazy.metadata.timeKind;
+        for (const method of ['trapezoidal', 'rectangular', 'sum']) {
+            for (const gapPolicy of ['zero', 'propagate']) {
+                for (const initial of [0, 2.5]) {
+                    await checkIntegral(`${kind} axis`, gridLazy, gridEager, 'g', { method, gapPolicy, initial });
+                }
+            }
+            await checkIntegral(`${kind} axis`, gridLazy, gridEager, 'h', { method, gapPolicy: 'propagate', initial: 0 });
+        }
+        // The gap threshold is the kernel's: 1.5 × the exact median step.
+        const stats = await checkIntegral(`${kind} axis`, gridLazy, gridEager, 'h', { method: 'trapezoidal', gapPolicy: 'zero', initial: -1 });
+        const kernelGaps = detectSamplingGaps(gridEager.variables[gridEager.metadata.timeName].data);
+        assert.ok(kernelGaps.hasNominalStep && kernelGaps.count > 0, `${kind} axis: the fixture has a nominal step and gaps`);
+        assert.equal(stats.gapThreshold, kernelGaps.medianDt * 1.5, `${kind} axis: the gap threshold`);
+        assert.equal(stats.gapCount, kernelGaps.count, `${kind} axis: every gap found`);
+        // An index axis counts samples: every step is 1, no gap can be seen.
+        for (const data of [gridLazy, gridEager]) data.variables[data.metadata.timeName].timeStepMode = 'index';
+        await checkIntegral('index axis', gridLazy, gridEager, 'g', { method: 'trapezoidal', gapPolicy: 'zero', initial: 0 });
+    }
+    {
+        const even = await loadLazy('evensteps.csv');
+        const evenEager = await eagerFrom(even);
+        const stats = await checkIntegral('even step count', even, evenEager, 'v', { method: 'trapezoidal', gapPolicy: 'zero', initial: 0 });
+        const kernelGaps = detectSamplingGaps(evenEager.variables.t.data);
+        assert.equal(stats.gapThreshold, kernelGaps.medianDt * 1.5, 'the median of an even count is the mean of the middle two');
+        assert.equal(stats.gapCount, 1, 'and the long step is the one gap');
+    }
+    // An irregular axis (the first fixture) has no nominal step: nothing is a gap.
+    const irregular = await checkIntegral('irregular axis', lazy, eager, 'a', { method: 'trapezoidal', gapPolicy: 'zero', initial: 0 });
+    assert.equal(irregular.hasNominalStep, false, 'an irregular axis has no nominal step');
+    assert.equal(h._isLazySqlToolConfig({ tool: 'integrate', params: { gapPolicy: 'interpolate' } }), false,
+        'bridging a hole needs the next finite sample: not on a lazy file yet');
+    console.log('lazy data tools: the integral matches the kernel bit for bit (3 methods, zero and propagate, gaps, holes, 3 axes)');
+}
+
+// ── Time-axis index and step ────────────────────────────────────────────────
+// SQL over the file, not the overview's samples; the overview itself is read
+// back from the file once they exist.
+{
+    for (const handle of ['grid.csv', 'gridstamps.csv']) {
+        const gridLazy = await loadLazy(handle);
+        const gridEager = await eagerFrom(gridLazy);
+        const gh = app(gridLazy);
+        const eagerTime = gridEager.variables[gridEager.metadata.timeName];
+        for (const kind of ['index', 'delta']) {
+            const variable = gh._createOrUpdateTimeAxisVariable('f', kind);
+            assert.ok(variable._duckdbExpr && variable._duckdbWindows?.length, `${handle} ${kind}: SQL over the file`);
+            assertBitwise(await readAll(gridLazy, variable.name), app(gridEager)._timeAxisVariableValues(kind, eagerTime), `${handle} ${kind}`);
+            await gh._lazyOverviewRefreshes?.get('f')?.promise;
+            // The overview holds the file's values (a min/max per bucket), not a
+            // computation over the overview's own samples — which for a step
+            // would difference samples hundreds of rows apart.
+            const expected = app(gridEager)._timeAxisVariableValues(kind, eagerTime);
+            const exact = new Set(expected);
+            const shown = gridLazy.variables[variable.name].data;
+            assert.ok(shown.length > 100, `${handle} ${kind}: an overview`);
+            for (let k = 0; k < shown.length; k++) assert.ok(exact.has(shown[k]), `${handle} ${kind}: overview sample ${k} is ${shown[k]}`);
+            if (kind === 'index') assert.equal(Math.max(...shown), expected.length - 1, `${handle}: the index reaches the file's last row`);
+        }
+    }
+    // A generated axis is the row number, itself a window.
+    const generated = duck.timeSqlWithWindows({ _duckdb: { generatedTime: true } });
+    assert.equal(generated.windows.length, 1, 'a generated time axis is a row-number window');
+    console.log('lazy data tools: time-axis index and step are exact on a lazy file, overview included');
+}
+
+// ── A formula reading neighbours shows the file's values, not the overview's ─
+{
+    const gridLazy = await loadLazy('grid.csv');
+    const gridEager = await eagerFrom(gridLazy);
+    const gh = app(gridLazy);
+    const result = gh._evaluateDerivedFormula('diff(h) * 100', gridLazy);
+    const variable = gh._formulaDerivedVariable('dh', 'diff(h) * 100', result);
+    assert.ok(Array.from(variable.data).every(Number.isNaN), 'no overview values until the file is read: diff over overview samples would be wrong');
+    gridLazy.variables.dh = variable;
+    gh.derivedByFile.set('f', new Map([['dh', { name: 'dh', formula: 'diff(h) * 100', variable }]]));
+    gh._reapplyDerivedVariables('f', gridLazy);
+    await gh._lazyOverviewRefreshes?.get('f')?.promise;
+    const exact = new Set(app(gridEager)._evaluateDerivedFormula('diff(h) * 100', gridEager).values);
+    const shown = gridLazy.variables.dh.data;
+    assert.ok(shown.length > 100 && shown.every(Number.isFinite), 'the overview is filled in');
+    for (let k = 0; k < shown.length; k++) assert.ok(exact.has(shown[k]), `overview sample ${k} of diff(h) is ${shown[k]}`);
+    console.log('lazy data tools: a diff() formula\'s overview is read from the file');
+}
+
 // ── What stays unavailable says so ──────────────────────────────────────────
 {
     assert.equal(h._isDataToolAvailableForData('movingAverage', lazy), false, 'the moving average waits for the chunked executor');
     assert.equal(h._isDataToolAvailableForData('derivative', lazy), true, 'the derivative is available');
+    assert.equal(h._isDataToolAvailableForData('integrate', lazy), true, 'the integral is available');
     assert.equal(h._isLazySqlToolConfig({ tool: 'detrend', params: { method: 'movingAverage' } }), false,
         'so does the moving-average baseline of a detrend');
     assert.equal(h._isLazySqlToolConfig({ tool: 'removeOutliers', method: 'spike' }), false, 'and the spike detector');
 }
-console.log('lazy data tools: derivative, IQR and detrend run over every row of a lazy file');
+console.log('lazy data tools: derivative, integral, IQR and detrend run over every row of a lazy file');

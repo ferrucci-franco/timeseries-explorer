@@ -63,7 +63,7 @@ export const RESAMPLE_ALL_VARIABLES = '__all_variables__';
 export const DATA_TOOL_PREVIEW_NAME = '__dataToolPreview__';
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
 // What a lazy file offers (see _isDataToolAvailableForData).
-const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'detrend']);
+const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'integrate', 'detrend']);
 const LAZY_OUTLIER_METHODS = new Set(['bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
@@ -394,6 +394,7 @@ proto._syncDataTools = function() {
     });
     this._syncOutlierMethodOptions(lazy && tool === 'removeOutliers');
     this._syncDetrendMethodOptions(lazy && tool === 'detrend');
+    this._syncIntegralPolicyOptions(lazy && tool === 'integrate');
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
@@ -664,6 +665,15 @@ proto._syncOutlierMethodOptions = function(lazy) {
         option.disabled = !!lazy && !LAZY_OUTLIER_METHODS.has(option.value);
     }
     if (lazy && !LAZY_OUTLIER_METHODS.has(methodSelect.value)) methodSelect.value = 'bounds';
+};
+
+// 'interpolate' bridges a hole towards the next finite sample, which the lazy
+// integral (SQL over the file, read once in order) cannot see.
+proto._syncIntegralPolicyOptions = function(lazy) {
+    const policySelect = document.getElementById('integral-gap-policy');
+    if (!policySelect) return;
+    for (const option of policySelect.options) option.disabled = !!lazy && option.value === 'interpolate';
+    if (lazy && policySelect.value === 'interpolate') policySelect.value = 'zero';
 };
 
 proto._syncDetrendMethodOptions = function(lazy) {
@@ -2656,6 +2666,7 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     if (tool === 'integrate') {
         const method = document.getElementById('integral-method')?.value || 'trapezoidal';
         const gapPolicy = document.getElementById('integral-gap-policy')?.value || 'zero';
+        if (lazy && gapPolicy === 'interpolate') throw new Error(i18n.t('dataToolLazyIntegralInterpolate'));
         const initial = Number(document.getElementById('integral-initial')?.value);
         return {
             tool,
@@ -2733,7 +2744,8 @@ proto._isFileDataTool = function(tool = this._getSelectedDataTool()) {
 proto._isDataToolAvailableForData = function(tool, data) {
     if (!this._isDataToolLazyData(data)) return DATA_TOOLS.has(tool) || FILE_DATA_TOOLS.has(tool);
     // A lazy file's variables are DuckDB expressions, not arrays: only the tools
-    // written as SQL over the file (hard bounds, IQR, derivative, detrend) run
+    // written as SQL over the file (hard bounds, IQR, derivative, integral,
+    // detrend) run
     // on one. The rest wait for the chunked executor (docs/any-size-files.md).
     return LAZY_DATA_TOOLS.has(tool);
 };
