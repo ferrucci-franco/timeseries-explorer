@@ -339,11 +339,15 @@ async function exportPanel(h, plot = { mode: 'timeseries', traces: [{ fileId: 'f
     assert.equal(await exportPanel(lazyH, runningPlot), await exportPanel(harnessWith(eager), runningPlot),
         'byte for byte what the in-memory export writes');
 
-    // What has no SQL form stays over the overview, and says so.
-    const rooted = derive(lazy, 'rooted', 'root(speed, torque)');
-    assert.equal(rooted._duckdbExpr, undefined, 'root() with a variable degree is not translated');
-    assert.equal(derive(lazy, 'onRooted', 'rooted + 1')._duckdbExpr, undefined, 'nor is a formula built on it');
-    assert.equal(lazyH._lazyTimeseriesCsvPlan({ traces: [{ fileId: 'f', varName: 'rooted' }] }).exact, false,
+    // root() with a degree that is a variable is translated too.
+    assert.ok(derive(lazy, 'rooted', 'root(speed, torque)')._duckdbExpr, 'root() with a variable degree is translated');
+
+    // What has no SQL form — a variable that exists only over the overview,
+    // as the time-axis index does — stays over the overview, and says so.
+    lazy.variables.overviewOnly = { ...lazy.variables.speed, name: 'overviewOnly', derived: true, _duckdbCol: undefined };
+    const onOverview = derive(lazy, 'onOverview', 'overviewOnly + 1');
+    assert.equal(onOverview._duckdbExpr, undefined, 'a formula over a variable with no SQL form is not translated');
+    assert.equal(lazyH._lazyTimeseriesCsvPlan({ traces: [{ fileId: 'f', varName: 'onOverview' }] }).exact, false,
         'and its export falls back to the overview, with the notice');
     const derivedSource = readFileSync(new URL('../src/app/methods/derived-methods.js', import.meta.url), 'utf8');
     assert.match(derivedSource, /if \(data\._duckdb && !variable\._duckdbExpr\) \{\s*this\._setDerivedMessage\(i18n\.t\('derivedLazyOverviewOnly'\)/,

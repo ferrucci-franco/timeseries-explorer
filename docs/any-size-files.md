@@ -369,8 +369,7 @@ rechazaban.
   *Corrección (fase 3b)*: se escribió aquí que `diff`/`cumsum` necesitaban una
   ventana que DuckDB-WASM materializa. Medido después, es falso: `LAG`, `LEAD`
   y `SUM … ROWS UNBOUNDED PRECEDING` con `OVER ()` corren en streaming. Desde
-  la fase 3c se traducen (abajo); queda sin traducir `root()` con grado
-  variable.
+  la fase 3c se traducen (abajo), y también `root()` con grado variable.
 - Las siete cachés de consultas usan ahora la expresión en su clave: editar una
   fórmula bajo el mismo nombre no sirve los valores viejos.
 
@@ -471,7 +470,7 @@ huecos, valores cerca de ±1e308 y empates:
   se corre un lugar, si `u` se calcula con el recíproco, o si la restauración
   no recalcula.
 
-### Implementado (fase 3c): `diff()` y `cumsum()` en fórmulas
+### Implementado (fase 3c): `diff()`, `cumsum()` y `root()` con grado variable
 
 `diff(x)` es la derivada en modo "diferencia" sin dividir por Δt, y `cumsum`
 una suma corrida: con las columnas de ventana de la 3b, `src/expr/sql.js` las
@@ -491,13 +490,25 @@ en las consultas que las leen.
 - Anidan: `diff(diff(x))`, `cumsum(diff(x) * y)`, fórmulas sobre ellas, y
   derivadas de la 3b sobre ellas.
 
+- `root(x, g)` con un grado que es una variable: las ramas de `nthRoot`
+  (grado entero impar con base negativa, grado cero o no finito) se deciden
+  fila por fila en vez de una vez; un grado subnormal hace 1/g infinito, y ahí
+  `pow(±1, ±∞)` es NaN en JavaScript y 1 en DuckDB, así que se filtra.
+
+Con esto **toda fórmula** se traduce; solo quedan sobre el resumen las
+variables sin SQL propio (índice o paso del eje de tiempo, eje generado) y las
+fórmulas construidas sobre ellas.
+
 Pruebas (`scripts/test-formula-sql.mjs`): 17 fórmulas con `diff`/`cumsum` sobre
 las 1 369 combinaciones de valores extremos, y 4 sobre 50 000 filas
 ordinarias, **bit a bit**; una sola fila; el plan es `STREAMING_WINDOW` sin
 sort. `scripts/test-lazy-csv-export.mjs`: `cumsum(speed) + diff(torque)` y una
 fórmula encima se exportan byte a byte igual que en memoria. Verificado que
 falla sin el conteo de NULL, sin el 0 de una sola fila, sin la diferencia
-hacia adelante de la primera fila, o sin el caso de la constante.
+hacia adelante de la primera fila, o sin el caso de la constante. `root()` con
+grado variable: 8 fórmulas sobre las combinaciones extremas y grados
+variables en las fórmulas aleatorias, a ≤ 1 ulp por operación; falla sin la
+rama impar, sin la guarda de grado 0/∞, o sin la de `pow(1, ∞)`.
 
 ## 8. Riesgos y decisiones abiertas
 

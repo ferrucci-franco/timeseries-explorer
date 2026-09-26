@@ -51,8 +51,6 @@
 //     every later sample in JavaScript, so a NULL so far gives NULL.
 //
 // What cannot be translated says so and the caller keeps the overview:
-//   · root() with a degree that is not a number written in the formula: its
-//     branches depend on the degree's value, decided here, once.
 //   · a variable with no SQL form of its own — a formula that itself could not
 //     be translated, a time axis generated from the row number, an
 //     independent-index variable.
@@ -288,18 +286,33 @@ export function formulaToSql(formula, variables, resolve, out = null) {
 
     // nthRoot() in compile.js: an odd integer degree takes the real root of a
     // negative value, and a result within 1e-12 (relative) of an integer is
-    // snapped to it. The degree's branches are decided here, so the degree has
-    // to be a number written in the formula.
+    // snapped to it. A degree written in the formula decides its branches
+    // here, once; a degree that is a variable decides them row by row.
     function root(n) {
         const d = constantValue(n.args[1]);
-        if (d === null) throw new FormulaNotTranslatable('root() with a degree that is not a number');
-        if (!Number.isFinite(d) || d === 0) return node(NULL_DOUBLE, true);
-        const rounded = Math.round(d);
-        const oddInteger = Math.abs(d - rounded) <= 1e-12 && rounded % 2 !== 0;
         const x = emit(n.args[0]);
-        const raw = oddInteger
-            ? share(x, v => `(CASE WHEN ${v} < 0 THEN -pow(-${v}, ${literal(1 / rounded)}) ELSE pow(${v}, ${literal(1 / d)}) END)`)
-            : `pow(${x.sql}, ${literal(1 / d)})`;
+        let raw;
+        if (d === null) {
+            raw = shareAll([x, emit(n.args[1])], ([v, g]) => {
+                // Math.round and DuckDB's round() differ only at halves, and a
+                // degree within 1e-12 of an integer is nowhere near one.
+                const oddInteger = `(abs(${g} - round(${g})) <= 1e-12 AND fmod(round(${g}), 2) <> 0)`;
+                const inverse = (e) => `(${literal(1)} / ${e})`;
+                // 1/d is infinite only for a subnormal degree; JavaScript's
+                // pow(±1, ±∞) is NaN where DuckDB gives 1.
+                const pow = (base, e) => `(CASE WHEN isinf(${e}) AND abs(${base}) = 1 THEN ${NULL_DOUBLE} ELSE pow(${base}, ${e}) END)`;
+                return `(CASE WHEN ${g} IS NULL OR isinf(${g}) OR ${g} = 0 THEN ${NULL_DOUBLE}`
+                    + ` WHEN ${v} < 0 AND ${oddInteger} THEN -${pow(`-${v}`, inverse(`round(${g})`))}`
+                    + ` ELSE ${pow(v, inverse(g))} END)`;
+            });
+        } else {
+            if (!Number.isFinite(d) || d === 0) return node(NULL_DOUBLE, true);
+            const rounded = Math.round(d);
+            const oddInteger = Math.abs(d - rounded) <= 1e-12 && rounded % 2 !== 0;
+            raw = oddInteger
+                ? share(x, v => `(CASE WHEN ${v} < 0 THEN -pow(-${v}, ${literal(1 / rounded)}) ELSE pow(${v}, ${literal(1 / d)}) END)`)
+                : `pow(${x.sql}, ${literal(1 / d)})`;
+        }
         // Math.round is floor(x + 0.5), except that it gives -0 for x in
         // [-0.5, -0]; DuckDB's round() goes half away from zero. They differ at
         // exact halves (which can snap on very large results) and in the sign

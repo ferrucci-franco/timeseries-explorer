@@ -141,6 +141,10 @@ const handWritten = [
     'sign(a)', 'step(a)', 'step(a - b)', 'sign(a * b)', 'square(a)', 'square(a - b)',
     'min(a, b)', 'max(a, b)', 'min(a, 0)', 'max([a, b, c])', 'min(a, b, c, p)', 'max(a, q)',
     'root(a, 3)', 'root(a, 2)', 'root(a, -3)', 'root(a, 0.5)', 'root(a, 0)', 'root(a * b, 5)', 'root(27, 3)',
+    // A degree that is a variable: the branches are taken row by row.
+    'root(a, b)', 'root(b, a)', 'root(a, c)', 'root(-8, b)', 'root(a, p)', 'root(a, b + 1)', '1 / root(a, b)',
+    // A subnormal degree: 1/d is infinite, and pow(±1, ±∞) is NaN in JavaScript.
+    'root(a, b * 5e-324)',
     'sqrt(a ^ 2 + b ^ 2)', 'log(log(log(a)))', 'sqrt(sqrt(sqrt(a * b)))', 'atan(a / b) * 180 / pi',
     'p * a + q', 'p', 'q * z', 'min(max(a, -1), 1)', 'step(sin(a)) * cos(b)', 'a * e',
     // Minus zero, followed through a division that exposes its sign.
@@ -238,8 +242,13 @@ function randomTree(depth, exactOnly) {
         return { text: `${fn}(${x.text}, ${y.text})`, children: [x, y], shape: (u, v) => `${fn}(${u}, ${v})` };
     }
     if (r < 0.92 && !exactOnly) {
-        const degree = pick(['2', '3', '-3', '0.5']);
+        const degree = pick(['2', '3', '-3', '0.5', 'b', 'c']);
         const x = child();
+        if (degree === 'b' || degree === 'c') {
+            // A degree that is a variable is an operand of its own.
+            const g = { text: degree, children: [] };
+            return { text: `root(${x.text}, ${degree})`, children: [x, g], shape: (u, v) => `root(${u}, ${v})` };
+        }
         return { text: `root(${x.text}, ${degree})`, children: [x], shape: u => `root(${u}, ${degree})` };
     }
     const x = child();
@@ -313,9 +322,6 @@ console.log(`  worst difference of a single operation: ${maxUlps} ulp${worst ? `
 console.log(`  root() results past 5e11 rounded to a neighbouring integer: ${rootRoundingFlips}`);
 
 // ── What has no SQL form says so ────────────────────────────────────────────
-for (const formula of ['root(a, b)', 'root(diff(a), b)']) {
-    assert.throws(() => formulaToSql(formula, variables, resolve), FormulaNotTranslatable, `${formula} is not translated`);
-}
 assert.throws(() => formulaToSql('a + b', variables, name => (name === 'b' ? null : resolve(name))), FormulaNotTranslatable,
     'a formula over a variable with no SQL form is not translated');
 console.log(`formula SQL: ${checked} formulas checked over ${N} rows each; untranslatable ones refused`);
