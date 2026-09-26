@@ -3,6 +3,7 @@ import Modal from '../../ui/modal.js';
 import { emphasize, emphasizeList, emphasizedToHtml, setEmphasizedText } from '../../ui/emphasis.js';
 import { DERIVED_CONSTANTS, DERIVED_FUNCTIONS } from '../constants.js';
 import { getCompiledFormula } from '../../expr/compile.js';
+import { formulaToSql, FormulaNotTranslatable } from '../../expr/sql.js';
 import { normalizeFunctionName, parse as parseExpression, tokenize as tokenizeExpression } from '../../expr/parse.js';
 
 // The derived signals the time-axis inspector can materialize (see the
@@ -147,6 +148,13 @@ proto.createDerivedVariable = function() {
             this._rebuildPlotsUsingVariable(fileId, name);
             this._setDerivedMessage(`Created ${name}`, 'ok');
         }
+        // On a file in memory-saving mode a formula with no SQL form is still
+        // created, but it only ever covers the overview. Said here, where it
+        // was made, rather than discovered later as a curve that never gains
+        // detail when zoomed.
+        if (data._duckdb && !variable._duckdbExpr) {
+            this._setDerivedMessage(i18n.t('derivedLazyOverviewOnly').replace('{name}', emphasize(name)), 'warn');
+        }
     } catch (err) {
         this._setDerivedMessage(err?.message || String(err), 'error');
     }
@@ -163,6 +171,7 @@ proto._formulaDerivedVariable = function(name, formula, result) {
         interpolation: 'linear',
         derived: true,
         formula,
+        ...(result.sql ? { _duckdbExpr: result.sql } : {}),
         ...(result.independentIndex ? { independentIndex: true, sampleIndexLength: result.values.length } : {}),
     };
 };
@@ -234,7 +243,42 @@ proto._evaluateDerivedFormula = function(formula, data) {
         columns[name] = variable.data;
     }
 
-    return { values: compiled.run(columns, scalars, n), independentIndex };
+    return {
+        values: compiled.run(columns, scalars, n),
+        independentIndex,
+        // On a lazy file the values above are the formula over the overview.
+        // As SQL it is evaluated over the file wherever the file is read.
+        sql: independentIndex ? null : this._derivedFormulaSql(formula, data),
+    };
+};
+
+// The formula as a DuckDB expression over a lazy file's columns, or null when
+// the file is in memory or the formula has no faithful SQL form (diff and
+// cumsum, a variable that exists only over the overview, …) — see
+// src/expr/sql.js. Null leaves the variable as it was: the formula over the
+// overview.
+proto._derivedFormulaSql = function(formula, data) {
+    const source = data?._duckdb?.source;
+    if (!source?.hasSqlValue) return null;
+    const timeName = data.metadata?.timeName;
+    try {
+        return formulaToSql(formula, data.variables, (name) => {
+            const variable = data.variables[name];
+            if (!variable) return null;
+            if (variable.kind === 'parameter') return { scalar: Number(variable.data?.[0]) };
+            if (variable.independentIndex) return null;
+            if (variable.dataType === 'string' || variable.dataType === 'boolean') return null;
+            if (name === timeName || variable.kind === 'abscissa') {
+                const sql = source.timeValueSql(data);
+                return sql ? { sql } : null;
+            }
+            if (!source.hasSqlValue(variable)) return null;
+            return { sql: source._valueExpressionSql(variable, name, { castDouble: true }) };
+        });
+    } catch (err) {
+        if (err instanceof FormulaNotTranslatable) return null;
+        throw err;
+    }
 };
 
 // The grammar moved to src/expr/parse.js so the compiler and the app share one

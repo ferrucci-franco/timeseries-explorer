@@ -639,14 +639,9 @@ export default class DuckDbSource {
      */
     _rawRowsSql(legacyData, requested, { lo = null, hi = null, limit = null, withRowIndex = false } = {}) {
         const meta = legacyData._duckdb;
-        const timeCol = meta.timeColumn;
-        const escTime = timeCol.replace(/"/g, '""');
         const tableName = meta.tableName;
         const lit = (v) => this._numericLiteral(v);
-        const timeKind = legacyData?.metadata?.timeKind;
-        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
-            ? `epoch_ms("${escTime}")::DOUBLE`
-            : `"${escTime}"::DOUBLE`);
+        const tExpr = this.timeValueSql(legacyData);
         const valueSelect = requested
             .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
             .join(',\n                               ');
@@ -1506,7 +1501,7 @@ export default class DuckDbSource {
             .filter(([, variable]) => {
                 if (!variable || variable.kind === 'abscissa' || variable.kind === 'parameter') return false;
                 if (variable.dataType === 'string' || variable.dataType === 'boolean') return false;
-                return !!(variable._duckdbCol || variable._duckdbDataTool);
+                return this.hasSqlValue(variable);
             })
             .map(([name]) => name);
         if (!timeVar || !varNames.length) return;
@@ -1817,7 +1812,7 @@ export default class DuckDbSource {
         const usable = [];
         const blocked = [];
         for (const item of requested) {
-            if (item.variable._duckdbCol || item.variable._duckdbDataTool) usable.push(item);
+            if (this.hasSqlValue(item.variable)) usable.push(item);
             else blocked.push(item.varName);
         }
         if (!usable.length) return { ok: true, calendarMode, blocked, traces: [] };
@@ -2166,7 +2161,7 @@ export default class DuckDbSource {
         const usable = [];
         const blocked = [];
         for (const item of requested) {
-            if (item.variable._duckdbCol || item.variable._duckdbDataTool) usable.push(item);
+            if (this.hasSqlValue(item.variable)) usable.push(item);
             else blocked.push(item.varName);
         }
         if (!usable.length) return { ok: true, blocked, traces: [] };
@@ -2412,7 +2407,7 @@ export default class DuckDbSource {
         const usable = [];
         const blocked = [];
         for (const item of requested) {
-            if (item.variable._duckdbCol || item.variable._duckdbDataTool) usable.push(item);
+            if (this.hasSqlValue(item.variable)) usable.push(item);
             else blocked.push(item.varName);
         }
         if (!usable.length) return { ok: true, blocked, traces: [], medianStepMs: null };
@@ -3540,7 +3535,32 @@ export default class DuckDbSource {
         return `"${String(name ?? '').replace(/"/g, '""')}"`;
     }
 
+    // Whether a variable's values can be read from the file: a column, a lazy
+    // Data Tools result over one, or a formula translated to SQL. Anything else
+    // exists only over the overview.
+    hasSqlValue(variable) {
+        return !!(variable?._duckdbCol || variable?._duckdbDataTool || variable?._duckdbExpr);
+    }
+
+    // The time axis as the raw values the file's time column holds — what
+    // variables[timeName].data holds for the overview. Null when the axis is
+    // generated from the row number, which only a window over the whole file
+    // could reproduce.
+    timeValueSql(legacyData) {
+        const meta = legacyData?._duckdb;
+        if (!meta || meta.generatedTime) return null;
+        const escTime = String(meta.timeColumn || '').replace(/"/g, '""');
+        return meta.timeExprSql || (legacyData?.metadata?.timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`);
+    }
+
     _valueExpressionSql(variable, fallbackName = '', options = {}) {
+        // A formula translated to SQL is its own expression over the file's
+        // columns (src/expr/sql.js), already a DOUBLE or NULL.
+        if (variable?._duckdbExpr) {
+            return options.castDouble ? `try_cast((${variable._duckdbExpr}) AS DOUBLE)` : variable._duckdbExpr;
+        }
         const base = this._quoteIdent(variable?._duckdbCol || fallbackName || variable?.name);
         const definition = variable?._duckdbDataTool;
         let expr = base;
@@ -3564,7 +3584,10 @@ export default class DuckDbSource {
         return clauses.join(' AND ');
     }
 
+    // What, beyond its name, decides a variable's values in a cached query.
+    // A formula edited under the same name must not be served its old values.
     _dataToolCacheToken(variable) {
+        if (variable?._duckdbExpr) return `expr:${variable._duckdbExpr}`;
         const definition = variable?._duckdbDataTool;
         if (!definition) return '';
         return JSON.stringify({

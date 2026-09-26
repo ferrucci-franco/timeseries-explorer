@@ -23,6 +23,7 @@ const DuckDbSource = (await import(new URL('../src/data/duckdb-source.js', impor
 const { streamColumns } = await import(new URL('../src/data/column-stream.js', import.meta.url));
 const { installPlotDataMethods } = await import(new URL('../src/plots/methods/data-methods.js', import.meta.url));
 const { csvTextCell } = await import(new URL('../src/utils/csv-cell.js', import.meta.url));
+const { installDerivedMethods } = await import(new URL('../src/app/methods/derived-methods.js', import.meta.url));
 
 // ── The PlotManager methods under test, and the ones they call ──────────────
 // Flattened where it is read, so the slicing below holds on a CRLF checkout.
@@ -72,7 +73,10 @@ class Harness {
     _yieldToPaint() { return Promise.resolve(); }
 }
 installPlotDataMethods(Harness);
+installDerivedMethods(Harness);
 Object.assign(Harness.prototype, proto);
+// What the derived-variable methods need of the app's parser.
+Harness.prototype.parser = { _detectDataType: () => 'real', _isConstantValues: () => false };
 
 // ── The fixtures ────────────────────────────────────────────────────────────
 // A drive log: a time column, a smooth signal and one with holes in it. `rate`
@@ -138,9 +142,8 @@ function harnessWith(data, transform = {}, inverted = []) {
     h.files.set('f', { data, transform, invertedVariables: new Set(inverted) });
     return h;
 }
-async function exportPanel(h) {
+async function exportPanel(h, plot = { mode: 'timeseries', traces: [{ fileId: 'f', varName: 'speed' }, { fileId: 'f', varName: 'torque' }] }) {
     downloads = [];
-    const plot = { mode: 'timeseries', traces: [{ fileId: 'f', varName: 'speed' }, { fileId: 'f', varName: 'torque' }] };
     const plan = h._lazyTimeseriesCsvPlan(plot);
     if (plan?.exact) {
         await h._exportLazyTimeseriesCsv(plot, plan, 'out.csv');
@@ -268,5 +271,70 @@ async function exportPanel(h) {
     const allLazyCsv = await run(await build(['drive', 'bench', 'road']));
     assert.equal(allLazyCsv, inMemoryCsv, 'and so is a panel of lazy files only');
     assert.equal(duck._streamConns.size, 0, 'every stream the export opened is closed');
+}
+// ── Formulas on a lazy file ─────────────────────────────────────────────────
+// Created as the app creates them, on the lazy file and on the same file in
+// memory, and exported: the formula translated to SQL is evaluated over every
+// row of the file, and must give the numbers the compiler gives in memory.
+// Arithmetic only, so the comparison can be byte for byte (the transcendental
+// functions differ by at most 1 ulp between the two maths libraries; see
+// test-formula-sql.mjs).
+{
+    const derive = (data, name, formula) => {
+        const h = harnessWith(data);
+        const result = h._evaluateDerivedFormula(formula, data);
+        data.variables[name] = h._formulaDerivedVariable(name, formula, result);
+        return data.variables[name];
+    };
+    const FORMULA = '(speed * 3 - torque) / 2 + max(speed, 0) * t - min(torque, 1)';
+    const lazy = await loadLazy();
+    const eager = eagerFrom(lazy);
+    const lazyVar = derive(lazy, 'mix', FORMULA);
+    const eagerVar = derive(eager, 'mix', FORMULA);
+    assert.ok(lazyVar._duckdbExpr, 'a formula on a lazy file is translated to SQL');
+    assert.equal(eagerVar._duckdbExpr, undefined, 'and on a file in memory it is not');
+    assert.equal(lazyVar.data.length, lazy.variables.speed.data.length, 'in memory it still covers the overview, as before');
+    assert.ok(duck.hasSqlValue(lazyVar), 'it can be read from the file');
+
+    const plot = { mode: 'timeseries', traces: [{ fileId: 'f', varName: 'speed' }, { fileId: 'f', varName: 'mix' }] };
+    const lazyH = harnessWith(lazy);
+    assert.equal(lazyH._lazyTimeseriesCsvPlan(plot).exact, true, 'a panel with the formula exports exactly');
+    const lazyCsv = await exportPanel(lazyH, plot);
+    const eagerCsv = await exportPanel(harnessWith(eager), plot);
+    assert.equal(lazyCsv.split('\n').length, ROWS + 1, 'every row of the file, formula included');
+    assert.equal(lazyCsv, eagerCsv, 'byte for byte what the in-memory export writes');
+
+    // A zoom reads it from the file too, at full resolution.
+    const raw = await duck.getRawColumnsRange(lazy, ['mix'], 300, 301, 1e6);
+    const from = t.findIndex(v => v >= 300);
+    const to = t.findIndex(v => v > 301);
+    assert.equal(raw.x.length, to - from, 'every row of the window, not the overview');
+    for (let i = 0; i < raw.x.length; i++) {
+        assert.ok(Object.is(raw.yByVar.get('mix')[i], eagerVar.data[from + i]) || (Number.isNaN(raw.yByVar.get('mix')[i]) && Number.isNaN(eagerVar.data[from + i])),
+            `row ${from + i} of the zoomed window`);
+    }
+
+    // A formula built on another formula is translated through it.
+    const nested = derive(lazy, 'twice', 'mix * 2 + speed');
+    assert.ok(nested._duckdbExpr, 'a formula over a translated formula is translated too');
+
+    // Editing a formula under the same name must not be served its old values
+    // from the query cache.
+    const before = await duck.getColumnRange(lazy, 'mix', 0, 1200, 400);
+    derive(lazy, 'mix', 'speed * 1000');
+    const after = await duck.getColumnRange(lazy, 'mix', 0, 1200, 400);
+    assert.notDeepEqual([...after.y].slice(0, 20), [...before.y].slice(0, 20), 'an edited formula is queried afresh');
+    assert.ok([...after.y].every(v => Number.isNaN(v) || Math.abs(v) <= 1000), 'with its new values');
+
+    // What has no SQL form stays over the overview, and says so.
+    const running = derive(lazy, 'running', 'cumsum(speed)');
+    assert.equal(running._duckdbExpr, undefined, 'cumsum() is not translated');
+    assert.equal(derive(lazy, 'onRunning', 'running + 1')._duckdbExpr, undefined, 'nor is a formula built on it');
+    assert.equal(lazyH._lazyTimeseriesCsvPlan({ traces: [{ fileId: 'f', varName: 'running' }] }).exact, false,
+        'and its export falls back to the overview, with the notice');
+    const derivedSource = readFileSync(new URL('../src/app/methods/derived-methods.js', import.meta.url), 'utf8');
+    assert.match(derivedSource, /if \(data\._duckdb && !variable\._duckdbExpr\) \{\s*this\._setDerivedMessage\(i18n\.t\('derivedLazyOverviewOnly'\)/,
+        'creating such a formula on a lazy file warns that it covers the overview only');
+    console.log('lazy CSV export: formulas on a lazy file are evaluated over every row');
 }
 console.log('lazy CSV export: every row, byte-identical to the in-memory export');

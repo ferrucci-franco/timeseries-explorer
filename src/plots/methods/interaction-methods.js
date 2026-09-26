@@ -458,13 +458,14 @@ proto._refreshTimeseriesVisualsLazy = function(panelId, plot, range, options = {
             if (perf) perf.eagerTraces++;
             return;
         }
-        // Generated series computed in JS (the time-axis "sample index" or a
-        // formula-derived variable) have no DuckDB column to range-query, so
-        // render them eagerly from their in-memory (overview-length) data. Lazy
-        // Data Tools variables are also `derived` but carry a real `_duckdbCol`
-        // and must keep using the DuckDB path — hence the column check.
+        // Generated series computed in JS (the time-axis "sample index", or a
+        // formula with no SQL form such as one using diff()) have no DuckDB
+        // column to range-query, so render them eagerly from their in-memory
+        // (overview-length) data. Lazy Data Tools variables and formulas
+        // translated to SQL are also `derived` but can be read from the file,
+        // and must keep using the DuckDB path — hence the check.
         const droppedVar = data?.variables?.[t.varName];
-        if (droppedVar?.derived && !droppedVar._duckdbCol) {
+        if (droppedVar?.derived && !droppedVar._duckdbCol && !droppedVar._duckdbExpr) {
             const built = this._buildTimeTrace(t, range, plot, idx);
             if (built) immediateResults.push({ idx, x: built.x, y: built.y, customdata: built.customdata, mode: built.mode, marker: built.marker, prepared: true });
             if (perf) perf.eagerTraces++;
