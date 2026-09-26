@@ -57,6 +57,10 @@ const DUCKDB_DEFAULT_PRESERVE_INSERTION_ORDER = false;
 const DUCKDB_PHASE_THREADS = 1;
 const DUCKDB_PHASE_PRESERVE_INSERTION_ORDER = true;
 const PARQUET_COMPRESSIONS = new Set(['zstd', 'snappy', 'gzip', 'lz4', 'none']);
+// A quarter-million rows: 2 MB per column as Float64, large enough that the
+// per-chunk overhead of a consumer disappears, small enough that fifty columns
+// still fit comfortably in one chunk.
+const STREAM_DEFAULT_CHUNK_ROWS = 262144;
 
 export default class DuckDbSource {
     constructor(structureParser = null) {
@@ -604,60 +608,7 @@ export default class DuckDbSource {
         if (lo > hi) [lo, hi] = [hi, lo];
 
         const limit = Math.max(1, Math.round(Number(maxRows) || 1)) + 1;
-        const timeCol = meta.timeColumn;
-        const escTime = timeCol.replace(/"/g, '""');
-        const tableName = meta.tableName;
-        const lit = (v) => this._numericLiteral(v);
-        const timeKind = legacyData?.metadata?.timeKind;
-        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
-            ? `epoch_ms("${escTime}")::DOUBLE`
-            : `"${escTime}"::DOUBLE`);
-        const valueSelect = requested
-            .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
-            .join(',\n                               ');
-        const valueNames = requested.map((_, index) => `v${index}`).join(', ');
-
-        // `rn` (the file-absolute row index) is only consumed downstream for
-        // GENERATED-time files (_transformFetchedPhaseTrajectory maps rn ->
-        // display time). For a real time column it is unused, so we must NOT pay
-        // for `ROW_NUMBER() OVER (ORDER BY t)` — that is a full-table sort of
-        // every row and OOMs DuckDB-WASM on multi-million-row files (surfacing
-        // as "Could not fetch raw samples"). Generated time gets its index from
-        // the cheap physical-order ROW_NUMBER() OVER () that also defines t.
-        // No ORDER BY: a full sort of every matching row (up to millions) is what
-        // OOMs DuckDB-WASM in the browser (LIMIT is far above the row count, so
-        // top-N never kicks in). Rows come back in physical storage order, which
-        // for a time-sorted file IS time order; the FFT's own monotonicity gate
-        // catches any file that is not sorted. Same precedent as getPhaseTrajectory.
-        let sql;
-        if (meta.generatedTime) {
-            sql = `
-                WITH base AS (
-                    SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
-                           ${valueSelect}
-                    FROM ${tableName}
-                )
-                SELECT t,
-                       t AS rn,
-                       ${valueNames}
-                FROM base
-                WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}
-                LIMIT ${limit};
-            `;
-        } else {
-            sql = `
-                SELECT t,
-                       CAST(NULL AS DOUBLE) AS rn,
-                       ${valueNames}
-                FROM (
-                    SELECT ${tExpr} AS t,
-                           ${valueSelect}
-                    FROM ${tableName}
-                )
-                WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}
-                LIMIT ${limit};
-            `;
-        }
+        const sql = this._rawRowsSql(legacyData, requested, { lo, hi, limit, withRowIndex: true });
         const result = await this._interactiveQuery(sql);
         const xFull = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
         const rowIndexFull = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
@@ -671,6 +622,203 @@ export default class DuckDbSource {
             yByVar.set(varName, truncated ? values.slice(0, keep) : values);
         });
         return { x, rowIndex, yByVar, truncated };
+    }
+
+    /**
+     * The row query behind getRawColumnsRange and streamColumns, kept in one
+     * place so the two can never disagree about which rows a range holds.
+     *
+     * Rows come back in physical storage order, with no ORDER BY — see the
+     * comments inside for why a sort is not an option on a large file. `lo`
+     * and `hi` are optional: without them the whole table is returned, minus
+     * rows with no time (the same rows every other lazy query skips). `limit`
+     * is optional too. `withRowIndex` adds the `rn` column getRawColumnsRange
+     * hands to the phase code; a stream leaves it out, because for a real
+     * time column it is all NULL and costs a slow per-row extraction for
+     * nothing, and for generated time it equals `t`.
+     */
+    _rawRowsSql(legacyData, requested, { lo = null, hi = null, limit = null, withRowIndex = false } = {}) {
+        const meta = legacyData._duckdb;
+        const timeCol = meta.timeColumn;
+        const escTime = timeCol.replace(/"/g, '""');
+        const tableName = meta.tableName;
+        const lit = (v) => this._numericLiteral(v);
+        const timeKind = legacyData?.metadata?.timeKind;
+        const tExpr = meta.timeExprSql || (timeKind === 'datetime'
+            ? `epoch_ms("${escTime}")::DOUBLE`
+            : `"${escTime}"::DOUBLE`);
+        const valueSelect = requested
+            .map(({ variable, varName }, index) => `${this._valueExpressionSql(variable, varName, { castDouble: true })} AS v${index}`)
+            .join(',\n                               ');
+        const valueNames = requested.map((_, index) => `v${index}`).join(', ');
+        const ranged = Number.isFinite(lo) && Number.isFinite(hi);
+        const limitSql = Number.isFinite(limit) ? `LIMIT ${Math.max(1, Math.round(limit))}` : '';
+
+        // `rn` (the file-absolute row index) is only consumed downstream for
+        // GENERATED-time files (_transformFetchedPhaseTrajectory maps rn ->
+        // display time). For a real time column it is unused, so we must NOT pay
+        // for `ROW_NUMBER() OVER (ORDER BY t)` — that is a full-table sort of
+        // every row and OOMs DuckDB-WASM on multi-million-row files (surfacing
+        // as "Could not fetch raw samples"). Generated time gets its index from
+        // the cheap physical-order ROW_NUMBER() OVER () that also defines t.
+        // No ORDER BY: a full sort of every matching row (up to millions) is what
+        // OOMs DuckDB-WASM in the browser (LIMIT is far above the row count, so
+        // top-N never kicks in). Rows come back in physical storage order, which
+        // for a time-sorted file IS time order; the FFT's own monotonicity gate
+        // catches any file that is not sorted. Same precedent as getPhaseTrajectory.
+        if (meta.generatedTime) {
+            const where = ranged ? `WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}` : '';
+            return `
+                WITH base AS (
+                    SELECT (ROW_NUMBER() OVER () - 1)::DOUBLE AS t,
+                           ${valueSelect}
+                    FROM ${tableName}
+                )
+                SELECT t,${withRowIndex ? '\n                       t AS rn,' : ''}
+                       ${valueNames}
+                FROM base
+                ${where}
+                ${limitSql};
+            `;
+        }
+        const where = ranged ? `WHERE t BETWEEN ${lit(lo)} AND ${lit(hi)}` : 'WHERE t IS NOT NULL';
+        return `
+            SELECT t,${withRowIndex ? '\n                   CAST(NULL AS DOUBLE) AS rn,' : ''}
+                   ${valueNames}
+            FROM (
+                SELECT ${tExpr} AS t,
+                       ${valueSelect}
+                FROM ${tableName}
+            )
+            ${where}
+            ${limitSql};
+        `;
+    }
+
+    /**
+     * Every row of the requested columns, a chunk at a time, without ever
+     * holding the whole result.
+     *
+     *   for await (const { x, yByVar, rowStart } of source.streamColumns(data, names)) { … }
+     *
+     * The rows are the ones getRawColumnsRange would return for the same range,
+     * in the same physical order, but with no row cap: this is how a tool gets
+     * at a multi-GB file that could never be materialized in one piece. Each
+     * chunk holds roughly `chunkRows` rows (whole Arrow batches, so a little
+     * more); `rowStart` is the position of its first row in the stream. Memory
+     * held at any moment is one chunk plus the batches DuckDB has in flight.
+     *
+     * Options: `t0`/`t1` to stream a range instead of the whole file,
+     * `chunkRows` (default 262,144), and `signal` to cancel. A cancelled stream
+     * throws an AbortError; a consumer that simply stops iterating (break,
+     * return, an exception of its own) cancels the query behind it too.
+     *
+     * It runs on a connection of its own. A stream over a large CSV can take
+     * minutes, and on the shared connection every zoom and every overview
+     * refresh would queue behind it for all that time. Streams do queue behind
+     * each other: DuckDB-WASM evaluates one query per connection at a time.
+     */
+    async *streamColumns(legacyData, varNames, options = {}) {
+        const meta = legacyData?._duckdb;
+        if (!meta) throw new Error('streamColumns: data is not DuckDB-backed (eager mode)');
+        const requested = [...new Set(varNames || [])]
+            .map(varName => ({ varName, variable: legacyData.variables?.[varName] }))
+            .filter(item => item.variable);
+        if (!requested.length) return;
+
+        let lo = Number(options.t0);
+        let hi = Number(options.t1);
+        const ranged = options.t0 != null && options.t1 != null && Number.isFinite(lo) && Number.isFinite(hi);
+        if (ranged && lo > hi) [lo, hi] = [hi, lo];
+        const chunkRows = Math.max(1, Math.round(Number(options.chunkRows) || STREAM_DEFAULT_CHUNK_ROWS));
+        const signal = options.signal;
+        if (signal?.aborted) throw this._queryAbortError();
+
+        const sql = this._rawRowsSql(legacyData, requested, ranged ? { lo, hi } : {});
+        const release = await this._acquireStreamLock();
+        let reader = null;
+        let done = false;
+        let aborted = false;
+        const cancel = () => {
+            aborted = true;
+            if (reader?.cancel) Promise.resolve().then(() => reader.cancel()).catch(() => null);
+        };
+        signal?.addEventListener?.('abort', cancel, { once: true });
+        try {
+            if (signal?.aborted) throw this._queryAbortError();
+            const conn = await this._streamConnection();
+            reader = await conn.send(sql);
+            if (signal?.aborted) throw this._queryAbortError();
+
+            let pending = [];
+            let pendingRows = 0;
+            let rowStart = 0;
+            for await (const batch of reader) {
+                if (aborted || signal?.aborted) throw this._queryAbortError();
+                if (!batch?.numRows) continue;
+                pending.push(batch);
+                pendingRows += batch.numRows;
+                if (pendingRows >= chunkRows) {
+                    const chunk = this._streamChunk(pending, requested, rowStart);
+                    rowStart += pendingRows;
+                    pending = [];
+                    pendingRows = 0;
+                    yield chunk;
+                    if (aborted || signal?.aborted) throw this._queryAbortError();
+                }
+            }
+            if (aborted || signal?.aborted) throw this._queryAbortError();
+            if (pendingRows) yield this._streamChunk(pending, requested, rowStart);
+            done = true;
+        } finally {
+            signal?.removeEventListener?.('abort', cancel);
+            // A consumer that stopped early leaves DuckDB mid-query. The
+            // connection is ours alone, so interrupting it cannot hit anyone
+            // else's work, and the next stream must not find it busy.
+            if (!done && reader) {
+                try { await reader.cancel?.(); } catch (_) { /* already finished */ }
+                try { await this._streamConn?.cancelSent?.(); } catch (_) { /* nothing running */ }
+            }
+            release();
+        }
+    }
+
+    // Each batch is read on its own (a RecordBatch answers getChildAt like a
+    // Table does) and the pieces are joined, rather than building an Arrow
+    // Table first. Same result, one intermediate object fewer, and no reliance
+    // on the batches passing `instanceof` for this module's copy of Arrow —
+    // which they do not when the engine was loaded as a separate bundle.
+    _streamChunk(batches, requested, rowStart) {
+        const column = (idx) => {
+            const parts = batches.map(batch => this._extractColumnAsFloat64(batch, idx, 'DOUBLE'));
+            if (parts.length === 1) return parts[0];
+            const out = new Float64Array(parts.reduce((n, part) => n + part.length, 0));
+            let at = 0;
+            for (const part of parts) { out.set(part, at); at += part.length; }
+            return out;
+        };
+        const x = column(0);
+        const yByVar = new Map();
+        requested.forEach(({ varName }, index) => yByVar.set(varName, column(index + 1)));
+        return { x, yByVar, rowStart };
+    }
+
+    async _streamConnection() {
+        await this.init();
+        if (!this._streamConn) this._streamConn = await this._db.connect();
+        return this._streamConn;
+    }
+
+    // Same queue shape as _withConnectionLock, for the stream connection. A
+    // generator cannot wrap its body in a callback, so this hands back the
+    // release function instead.
+    async _acquireStreamLock() {
+        const previous = this._streamQueue || Promise.resolve();
+        let release;
+        const current = new Promise(resolve => { release = resolve; });
+        this._streamQueue = previous.catch(() => null).then(() => current);
+        await previous.catch(() => null);
+        return release;
     }
 
     /**
@@ -3706,8 +3854,10 @@ export default class DuckDbSource {
 
     async shutdown() {
         for (const name of [...this._registered]) await this.unregisterFile(name);
+        try { await this._streamConn?.close(); } catch (_) { /* ignore */ }
         try { await this._conn?.close(); } catch (_) { /* ignore */ }
         try { await this._db?.terminate(); } catch (_) { /* ignore */ }
+        this._streamConn = null;
         this._conn = null;
         this._db = null;
         this._initPromise = null;

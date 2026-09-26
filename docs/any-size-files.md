@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: estudio, sin implementar.** Continúa `docs/file-size-limits.md`.
+**Estado: fase 1 implementada; el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -125,7 +125,7 @@ trozos**.
 ```js
 // src/data/column-stream.js  (nombre tentativo)
 for await (const chunk of streamColumns(data, varNames, options)) {
-    // chunk = { x: Float64Array, yByVar: Map<name, Float64Array>, rowStart, last }
+    // chunk = { x: Float64Array, yByVar: Map<name, Float64Array>, rowStart }
 }
 ```
 
@@ -156,9 +156,39 @@ responde. Dos salidas: ceder el lock entre lotes (cada lote es una consulta
 DuckDB para trabajos largos**, que duckdb-wasm permite. La segunda es la
 correcta; la primera es lo que se haría si no existiera.
 
+### Implementado (fase 1)
+
+- `DuckDBSource.streamColumns(data, vars, { t0, t1, chunkRows, signal })` en
+  `src/data/duckdb-source.js`: generador asíncrono que itera el
+  `RecordBatchReader` y agrupa lotes en trozos de ~262 144 filas. Corre en una
+  **conexión propia** (`_streamConnection`, con su cola `_acquireStreamLock`),
+  así que un recorrido largo no bloquea los zoom. Un consumidor que corta antes
+  (`break`, `return`, una excepción) cancela la consulta; un `signal` abortado
+  lanza `AbortError`.
+- La SQL de filas se extrajo a `_rawRowsSql`, que ahora comparten
+  `getRawColumnsRange` y el stream: no pueden discrepar sobre qué filas caen en
+  un rango. El stream omite la columna `rn` (toda NULL con tiempo real, y
+  su extracción es fila a fila).
+- `src/data/column-stream.js`: `streamColumns(data, …)` elige el camino; la
+  versión eager trocea los arrays en memoria (vistas `subarray` cuando el
+  trozo no salta filas) con las mismas reglas que la lazy.
+- Cada lote se extrae por separado y se concatena, en vez de construir una
+  `arrow.Table`: no depende de que los lotes pasen `instanceof` contra la copia
+  de Arrow del módulo.
+
 ### Pruebas
 
-Mismo patrón que `scripts/test-missing-lazy.mjs`: los constructores de SQL como
+`scripts/test-column-stream.mjs` corre el `DuckDBSource` real contra
+**DuckDB-WASM en Node** (la build `duckdb-node-blocking` del mismo paquete que
+usa la app), no contra DuckDB nativo: es el mismo lector por lotes que recibe
+el navegador, y además funciona donde el binario nativo no se puede instalar.
+Verifica paridad valor a valor lazy/eager y contra `getRawColumnsRange` sobre
+un CSV de 100 003 filas con huecos, cancelación, salida temprana y que un zoom
+responde con un stream abierto. Una trampa del entorno de prueba, documentada
+en la prueba: en Node la build CJS del motor carga otra copia de Arrow que la
+app, y hay que unificarlas en la caché de `require`.
+
+Para las fases siguientes, mismo patrón que `scripts/test-missing-lazy.mjs`: los constructores de SQL como
 funciones puras (como `missing-buckets-sql.js`) probados con DuckDB nativo
 (`runDuckDb` de `csv-to-parquet-core.js`), y la iteración por lotes probada con
 un CSV generado (`scripts/gen-*-large-csv.py` ya existen) contra la lectura
