@@ -38,6 +38,7 @@ import { normalizeFilterDesign } from '../../compute/kernels/filter-design.js';
 import { FILTER_DESIGN_FIELD_IDS, formatCoefficientBox } from './filter-methods.js';
 import { XCORR_FIELD_IDS } from './xcorr-methods.js';
 import { COLLAPSE_FIELD_IDS } from './collapse-methods.js';
+import { LAZY_DETREND_METHODS } from './lazy-data-tools-methods.js';
 // Seconds → "22 min" / "1 h 20 min" / "2 d 5 h". Already the FFT's ladder, so
 // the two features spell a duration the same way.
 import { formatNaturalDuration } from '../../utils/fft.js';
@@ -61,6 +62,9 @@ export const RESAMPLE_ALL_VARIABLES = '__all_variables__';
 // consumer of the variable map skips entries flagged `previewOnly`.
 export const DATA_TOOL_PREVIEW_NAME = '__dataToolPreview__';
 const OUTLIER_METHODS = new Set(['spike', 'bounds', 'iqr']);
+// What a lazy file offers (see _isDataToolAvailableForData).
+const LAZY_DATA_TOOLS = new Set(['removeOutliers', 'derivative', 'detrend']);
+const LAZY_OUTLIER_METHODS = new Set(['bounds', 'iqr']);
 const OUTLIER_REPLACEMENTS = new Set(['nan', 'interpolate']);
 const DERIVATIVE_METHODS = new Set(['centered', 'forward', 'backward', 'difference']);
 const INTEGRAL_METHODS = kernelShared.CUMULATIVE_INTEGRAL_METHODS;
@@ -389,6 +393,7 @@ proto._syncDataTools = function() {
         el.classList.toggle('collapsed', el.dataset.toolKind !== tool);
     });
     this._syncOutlierMethodOptions(lazy && tool === 'removeOutliers');
+    this._syncDetrendMethodOptions(lazy && tool === 'detrend');
     this._syncOutlierMethodControls();
     this._syncMovingAverageControls();
     this._syncInterpolateControls();
@@ -468,7 +473,7 @@ proto._syncDataTools = function() {
 
     sourceSelect.disabled = !hasTool || !allowed || !entries.length;
     outputInput.disabled = !hasSource || (!!editing && !this._dataToolRenameUnlocked);
-    methodSelect.disabled = !hasSource || tool !== 'removeOutliers' || lazy;
+    methodSelect.disabled = !hasSource || tool !== 'removeOutliers';
     this._dataToolParameterInputs().forEach(input => { input.disabled = !hasSource || (lazy && input.id !== 'outlier-lower-bound' && input.id !== 'outlier-upper-bound'); });
     document.getElementById('derivative-method')?.toggleAttribute('disabled', !hasSource || tool !== 'derivative');
     document.getElementById('integral-method')?.toggleAttribute('disabled', !hasSource || tool !== 'integrate');
@@ -645,20 +650,29 @@ proto._syncDataToolPickerOptions = function(lazy) {
     if (!toolSelect) return;
     for (const option of toolSelect.options) {
         if (!option.value) continue;
-        option.disabled = !!lazy && option.value !== 'removeOutliers';
+        option.disabled = !!lazy && !LAZY_DATA_TOOLS.has(option.value);
     }
     if (toolSelect.value && toolSelect.options[toolSelect.selectedIndex]?.disabled) {
         toolSelect.value = '';
     }
 };
 
-proto._syncOutlierMethodOptions = function(lazyBoundsOnly) {
+proto._syncOutlierMethodOptions = function(lazy) {
     const methodSelect = document.getElementById('outlier-method');
     if (!methodSelect) return;
     for (const option of methodSelect.options) {
-        option.disabled = !!lazyBoundsOnly && option.value !== 'bounds';
+        option.disabled = !!lazy && !LAZY_OUTLIER_METHODS.has(option.value);
     }
-    if (lazyBoundsOnly && methodSelect.value !== 'bounds') methodSelect.value = 'bounds';
+    if (lazy && !LAZY_OUTLIER_METHODS.has(methodSelect.value)) methodSelect.value = 'bounds';
+};
+
+proto._syncDetrendMethodOptions = function(lazy) {
+    const methodSelect = document.getElementById('detrend-method');
+    if (!methodSelect) return;
+    for (const option of methodSelect.options) {
+        option.disabled = !!lazy && !LAZY_DETREND_METHODS.has(option.value);
+    }
+    if (lazy && !LAZY_DETREND_METHODS.has(methodSelect.value)) methodSelect.value = 'linear';
 };
 
 proto._syncOutlierMethodControls = function() {
@@ -940,7 +954,14 @@ proto._getDataToolSourceEntries = function(data, tool = this._getSelectedDataToo
             if (!variable || variable.kind === 'abscissa' || variable.kind === 'parameter') return false;
             if (variable.plottable === false) return false;
             if (variable.dataType === 'string' || variable.dataType === 'boolean') return false;
-            if (lazy) return tool === 'removeOutliers' && !!variable._duckdbCol;
+            // Hard bounds and IQR read a column of the file; the derivative and
+            // detrend read anything with SQL of its own — a column, a formula,
+            // another tool's output.
+            if (lazy) {
+                return tool === 'removeOutliers'
+                    ? !!variable._duckdbCol
+                    : !!data?._duckdb?.source?.hasSqlValue?.(variable);
+            }
             return this._isDataToolDataSeries(variable.data, tool);
         })
         .sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
@@ -1311,6 +1332,9 @@ proto._renameDataToolVariable = function(fileId, data, oldName, newName, options
 };
 
 proto._applyLazyDataToolCreateMode = async function(context, config, options = {}) {
+    // The derivative, IQR and detrend are SQL over the file
+    // (lazy-data-tools-methods.js); hard bounds keep the path below.
+    if (this._isLazySqlToolConfig(config)) return this._applyLazySqlToolCreateMode(context, config, options);
     const { fileId, data, sourceName, sourceVariable, outputName, tool } = context;
     if (!this._isLazyBoundsConfig(config)) throw new Error(i18n.t('dataToolLazyDisabled'));
     const definitions = this.dataToolVariablesByFile?.get(fileId);
@@ -2663,6 +2687,7 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     }
     if (tool === 'detrend') {
         const method = document.getElementById('detrend-method')?.value;
+        if (lazy && !LAZY_DETREND_METHODS.has(method)) throw new Error(i18n.t('dataToolLazyDetrendMethod'));
         return {
             tool,
             params: normalizeDetrendParams({
@@ -2678,7 +2703,7 @@ proto._getDataToolConfig = function(tool = this._getSelectedDataTool(), context 
     if (tool === 'collapse') return this._getCollapseConfig();
 
     const method = this._getOutlierDetectorMethod();
-    if (lazy && method !== 'bounds') throw new Error(i18n.t('dataToolLazyBoundsOnly'));
+    if (lazy && !LAZY_OUTLIER_METHODS.has(method)) throw new Error(i18n.t('dataToolLazyBoundsOnly'));
     const params = this._getOutlierParams(method);
     const replacement = lazy ? 'nan' : this._getOutlierReplacementMethod();
     return { tool: 'removeOutliers', method, params, replacement };
@@ -2707,10 +2732,10 @@ proto._isFileDataTool = function(tool = this._getSelectedDataTool()) {
 
 proto._isDataToolAvailableForData = function(tool, data) {
     if (!this._isDataToolLazyData(data)) return DATA_TOOLS.has(tool) || FILE_DATA_TOOLS.has(tool);
-    // A lazy file's variables are DuckDB column references, not arrays: nothing
-    // in here can read a series out of one, so only the bounds filter — which the
-    // lazy path implements in SQL — survives.
-    return tool === 'removeOutliers';
+    // A lazy file's variables are DuckDB expressions, not arrays: only the tools
+    // written as SQL over the file (hard bounds, IQR, derivative, detrend) run
+    // on one. The rest wait for the chunked executor (docs/any-size-files.md).
+    return LAZY_DATA_TOOLS.has(tool);
 };
 
 proto._getOutlierDetectorMethod = function() {
@@ -2936,6 +2961,9 @@ proto._reapplyDataToolDefinition = function(fileId, data, name, definition) {
         if (!sourceVariable) throw new Error(`Unknown source variable "${definition.sourceName}".`);
         const targetMode = definition.targetMode || 'create';
         if (this._isDataToolLazyData(data)) {
+            if (targetMode === 'create' && this._isLazySqlToolConfig(definition)) {
+                return this._reapplyLazySqlTool(fileId, data, name, definition);
+            }
             if (definition.tool !== 'removeOutliers' || definition.method !== 'bounds') return false;
             const lazyDefinition = this._lazyDataToolDefinition(name, definition, definition.sourceName, targetMode);
             if (targetMode === 'modify') {

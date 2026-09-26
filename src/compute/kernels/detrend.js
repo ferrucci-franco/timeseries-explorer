@@ -83,6 +83,44 @@ function solve(matrix, rhs) {
     return out.every(Number.isFinite) ? out : null;
 }
 
+// The scaled abscissa u = (x − mid) / half of every polynomial fit. Exported so
+// the lazy path (src/data/lazy-tool-sql.js) scales exactly as this kernel does.
+export function detrendScale(min, max) {
+    return { mid: (min + max) / 2, half: (max - min) / 2 || 1 };
+}
+
+// The order a polynomial method fits: the one it asks for, capped by the points
+// there are (a fit needs one more point than its order). `fitPoints` is how
+// many samples have a finite value and a finite abscissa.
+export function detrendRequestedOrder(params, fitPoints) {
+    return Math.min(polynomialOrder(normalizeDetrendParams(params)), Math.max(0, fitPoints - 1));
+}
+
+// Solve the normal equations from their sums of powers (`powerSums[p]` = Σ uᵖ
+// for p ≤ 2·order, `rhs[p]` = Σ uᵖ·y for p ≤ order).
+//
+// Step the order down until the system solves. A singular one means the
+// abscissa carries no information at THAT order — every sample at the same
+// instant makes a line undetermined — but the orders below it may still be
+// perfectly determined, and the mean always is. Refusing outright would hand
+// back the signal untouched when there was something real to remove.
+export function solveDetrendFit(powerSums, rhs, requested) {
+    let order = requested;
+    let coefficients = null;
+    while (order >= 0) {
+        const matrix = [];
+        for (let r = 0; r <= order; r++) {
+            const row = new Array(order + 1);
+            for (let c = 0; c <= order; c++) row[c] = powerSums[r + c];
+            matrix.push(row);
+        }
+        coefficients = solve(matrix, rhs.slice(0, order + 1));
+        if (coefficients) break;
+        order--;
+    }
+    return { order, coefficients };
+}
+
 /**
  * @returns {{
  *   values: Float64Array,
@@ -165,8 +203,7 @@ export function computeDetrend(sourceValues, time, params = {}) {
         return report;
     }
 
-    const mid = (min + max) / 2;
-    const half = (max - min) / 2 || 1;
+    const { mid, half } = detrendScale(min, max);
     const scale = (xi) => (xi - mid) / half;
 
     // Normal equations over the scaled abscissa. Sums of powers up to 2·order,
@@ -187,24 +224,7 @@ export function computeDetrend(sourceValues, time, params = {}) {
         }
     }
 
-    // Step the order down until the system solves. A singular one means the
-    // abscissa carries no information at THAT order — every sample at the same
-    // instant makes a line undetermined — but the orders below it may still be
-    // perfectly determined, and the mean always is. Refusing outright would
-    // hand back the signal untouched when there was something real to remove.
-    let order = requested;
-    let coefficients = null;
-    while (order >= 0) {
-        const matrix = [];
-        for (let r = 0; r <= order; r++) {
-            const row = new Array(order + 1);
-            for (let c = 0; c <= order; c++) row[c] = powerSums[r + c];
-            matrix.push(row);
-        }
-        coefficients = solve(matrix, rhs.slice(0, order + 1));
-        if (coefficients) break;
-        order--;
-    }
+    const { order, coefficients } = solveDetrendFit(powerSums, rhs, requested);
     report.order = order;
     if (!coefficients) {
         out.set(values);

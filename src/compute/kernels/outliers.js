@@ -212,6 +212,29 @@ export function detectBoundsOutliers(values, params = {}) {
     return indexes;
 }
 
+// Tukey's fences from the quartiles. Exported so the lazy path, which finds the
+// quartiles with SQL (DuckDbSource.exactOrderStatistics), draws the same ones.
+export function iqrFences(q1, q3, params = {}) {
+    const factor = positiveNumber(params.factor ?? params.iqrFactor, 1.5);
+    const iqr = q3 - q1;
+    return {
+        low: iqr > 0 ? q1 - factor * iqr : q1,
+        high: iqr > 0 ? q3 + factor * iqr : q3,
+    };
+}
+
+// The quantile the IQR detector reads, from the two order statistics around it.
+// `lower` is the value of rank floor((n−1)·p), `upper` the next one (undefined
+// when there is none) — the arithmetic of quantileTyped, which it must match.
+export function interpolatedQuantile(n, p, valueAtRank) {
+    const pos = (n - 1) * p;
+    const base = Math.floor(pos);
+    const rest = pos - base;
+    const lower = valueAtRank(base);
+    const next = base + 1 < n ? valueAtRank(base + 1) : undefined;
+    return next === undefined ? lower : lower + rest * (next - lower);
+}
+
 export function detectIqrOutliers(values, params = {}) {
     const src = asFloat64(values);
     // Typed sort with no comparator: TypedArray#sort is numeric by definition,
@@ -227,12 +250,7 @@ export function detectIqrOutliers(values, params = {}) {
     const sorted = finite.subarray(0, m);
     sorted.sort();
 
-    const factor = positiveNumber(params.factor ?? params.iqrFactor, 1.5);
-    const q1 = quantileTyped(sorted, 0.25, m);
-    const q3 = quantileTyped(sorted, 0.75, m);
-    const iqr = q3 - q1;
-    const low = iqr > 0 ? q1 - factor * iqr : q1;
-    const high = iqr > 0 ? q3 + factor * iqr : q3;
+    const { low, high } = iqrFences(quantileTyped(sorted, 0.25, m), quantileTyped(sorted, 0.75, m), params);
 
     const indexes = [];
     for (let i = 0; i < src.length; i++) {

@@ -4,6 +4,7 @@ import { emphasize, emphasizeList, emphasizedToHtml, setEmphasizedText } from '.
 import { DERIVED_CONSTANTS, DERIVED_FUNCTIONS } from '../constants.js';
 import { getCompiledFormula } from '../../expr/compile.js';
 import { formulaToSql, FormulaNotTranslatable } from '../../expr/sql.js';
+import { mergeWindows } from '../../data/lazy-tool-sql.js';
 import { normalizeFunctionName, parse as parseExpression, tokenize as tokenizeExpression } from '../../expr/parse.js';
 
 // The derived signals the time-axis inspector can materialize (see the
@@ -172,6 +173,7 @@ proto._formulaDerivedVariable = function(name, formula, result) {
         derived: true,
         formula,
         ...(result.sql ? { _duckdbExpr: result.sql } : {}),
+        ...(result.sql && result.sqlWindows?.length ? { _duckdbWindows: result.sqlWindows } : {}),
         ...(result.independentIndex ? { independentIndex: true, sampleIndexLength: result.values.length } : {}),
     };
 };
@@ -243,12 +245,15 @@ proto._evaluateDerivedFormula = function(formula, data) {
         columns[name] = variable.data;
     }
 
+    const sqlInfo = {};
     return {
         values: compiled.run(columns, scalars, n),
         independentIndex,
         // On a lazy file the values above are the formula over the overview.
         // As SQL it is evaluated over the file wherever the file is read.
-        sql: independentIndex ? null : this._derivedFormulaSql(formula, data),
+        sql: independentIndex ? null : this._derivedFormulaSql(formula, data, sqlInfo),
+        // Window columns (a lazy derivative) the SQL reads; see _fromSql.
+        sqlWindows: sqlInfo.windows || [],
     };
 };
 
@@ -256,13 +261,14 @@ proto._evaluateDerivedFormula = function(formula, data) {
 // the file is in memory or the formula has no faithful SQL form (diff and
 // cumsum, a variable that exists only over the overview, …) — see
 // src/expr/sql.js. Null leaves the variable as it was: the formula over the
-// overview.
-proto._derivedFormulaSql = function(formula, data) {
+// overview. `out.windows` receives the window columns the SQL reads.
+proto._derivedFormulaSql = function(formula, data, out = null) {
     const source = data?._duckdb?.source;
     if (!source?.hasSqlValue) return null;
     const timeName = data.metadata?.timeName;
+    const windows = [];
     try {
-        return formulaToSql(formula, data.variables, (name) => {
+        const sql = formulaToSql(formula, data.variables, (name) => {
             const variable = data.variables[name];
             if (!variable) return null;
             if (variable.kind === 'parameter') return { scalar: Number(variable.data?.[0]) };
@@ -273,8 +279,11 @@ proto._derivedFormulaSql = function(formula, data) {
                 return sql ? { sql } : null;
             }
             if (!source.hasSqlValue(variable)) return null;
+            windows.push(...(variable._duckdbWindows || []));
             return { sql: source._valueExpressionSql(variable, name, { castDouble: true }) };
         });
+        if (out) out.windows = mergeWindows(windows);
+        return sql;
     } catch (err) {
         if (err instanceof FormulaNotTranslatable) return null;
         throw err;

@@ -39,6 +39,7 @@ import { buildGapSummarySql, buildMissingBucketsSql, buildStepHistogramSql } fro
 import { STEP_BINS_PER_EFOLD } from '../utils/sampling-gaps.js';
 import { buildTimeAxisSummarySql, buildTimeAxisStepsSql, rawFromTimeAxisSummary } from './time-axis-diagnostics.js';
 import { pandasColumnPaths } from './parquet-pandas-metadata.js';
+import { collectWindows, doubleLiteral, windowedFromSql } from './lazy-tool-sql.js';
 import {
     buildTemporalProfileFinalSql,
     buildTemporalProfileTimeStatsSql,
@@ -639,7 +640,7 @@ export default class DuckDbSource {
      */
     _rawRowsSql(legacyData, requested, { lo = null, hi = null, limit = null, withRowIndex = false } = {}) {
         const meta = legacyData._duckdb;
-        const tableName = meta.tableName;
+        const tableName = this._fromSql(legacyData, requested.map(item => item.variable));
         const lit = (v) => this._numericLiteral(v);
         const tExpr = this.timeValueSql(legacyData);
         const valueSelect = requested
@@ -842,7 +843,8 @@ export default class DuckDbSource {
             this._valueExpressionSql(variable, varName, { castDouble: true }));
 
         const sql = buildMissingBucketsSql(
-            baseTime, meta.tableName, valueExprs, (v) => this._numericLiteral(v), lo, hi, nBuckets, !!meta.generatedTime);
+            baseTime, this._fromSql(legacyData, requested.map(item => item.variable)), valueExprs,
+            (v) => this._numericLiteral(v), lo, hi, nBuckets, !!meta.generatedTime);
         const result = await this._interactiveQuery(sql, { signal: options?.signal });
         const b = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
         const nTotal = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
@@ -967,7 +969,7 @@ export default class DuckDbSource {
         const queryStartedAt = this._now();
         const timeCol = meta.timeColumn;
         const escTime = timeCol.replace(/"/g, '""');
-        const tableName = meta.tableName;
+        const tableName = this._fromSql(legacyData, requested.map(item => item.variable));
         const lit = (v) => this._numericLiteral(v);
         // Express the time column in the same units the rest of the app uses
         // (Unix milliseconds for datetime, raw numeric otherwise) so the JS
@@ -1318,7 +1320,7 @@ export default class DuckDbSource {
         if (!variable) throw new Error(`fetchSourceWindow: unknown variable "${varName}"`);
         const timeCol = meta.timeColumn;
         const escTime = timeCol.replace(/"/g, '""');
-        const tableName = meta.tableName;
+        const tableName = this._fromSql(legacyData, [variable]);
         const valueExpr = this._valueExpressionSql(variable, varName, { castDouble: true });
         const lit = (v) => this._numericLiteral(v);
         const timeKind = legacyData?.metadata?.timeKind;
@@ -1458,6 +1460,194 @@ export default class DuckDbSource {
         return Number(result.getChild('n')?.get(0) ?? 0);
     }
 
+    // ─── Statistics for the lazy Data Tools (src/data/lazy-tool-sql.js) ──────
+    //
+    // A tool that needs the whole series before it can write one sample — the
+    // quartiles of an IQR filter, the fit of a detrend — gets it here, from
+    // aggregate queries that stream the file and hold nothing of it.
+
+    // FROM and WHERE for a pass over one variable's values: the rows every lazy
+    // query serves, with the windows the variable is built on.
+    _valuePassSql(legacyData, variable, varName, extraWindows = []) {
+        const tExpr = this.timeValueSql(legacyData);
+        return {
+            from: this._fromSql(legacyData, [variable, { _duckdbWindows: extraWindows }]),
+            valid: tExpr ? `(${tExpr}) IS NOT NULL` : 'TRUE',
+            value: this._valueExpressionSql(variable, varName, { castDouble: true }),
+        };
+    }
+
+    /**
+     * Exact order statistics of a variable's finite values, without sorting
+     * the file: rank r (0-based) of the ascending finite values, for each r in
+     * `ranks`. quantile_cont() would do it in one query but keeps every value
+     * of the column in memory — the one thing the lazy path exists to avoid.
+     * `ranks` may be a function of the count of finite values.
+     *
+     * Instead the range is cut into `bins` buckets, one GROUP BY pass counts
+     * them, and only the bucket holding a wanted rank is looked at again; once a
+     * bucket is down to `fetchLimit` values those are fetched and sorted here.
+     * A few passes over the file, each a plain streaming aggregate.
+     *
+     * @returns {Promise<{ n: number, values: Map<number, number> }>}
+     */
+    async exactOrderStatistics(legacyData, varName, ranks = [], { bins = 1024, fetchLimit = 1 << 20, signal } = {}) {
+        const variable = legacyData?.variables?.[varName];
+        if (!legacyData?._duckdb || !variable) throw new Error(`exactOrderStatistics: unknown variable "${varName}"`);
+        const { from, valid, value } = this._valuePassSql(legacyData, variable, varName);
+        const lit = doubleLiteral;
+        const query = async (sql) => this._arrowRowsToObjects(await this._interactiveQuery(sql, { signal }));
+        const num = (v) => (v === null || v === undefined ? NaN : Number(v));
+        const base = `SELECT ${value} AS y FROM ${from} WHERE ${valid}`;
+        const finite = `isfinite(y)`;
+
+        const [total] = await query(`SELECT COUNT(*)::BIGINT AS n, MIN(y) AS lo, MAX(y) AS hi FROM (${base}) WHERE ${finite}`);
+        const n = num(total?.n) || 0;
+        const values = new Map();
+        const asked = typeof ranks === 'function' ? ranks(n) : ranks;
+        const wanted = [...new Set(asked)].filter(r => Number.isInteger(r) && r >= 0 && r < n).sort((a, b) => a - b);
+        if (!wanted.length) return { n, values };
+
+        // A group is a slice [lo, hi] of the values with `below` values under it,
+        // selected by `filter`, whose `count` values include some wanted ranks.
+        // Each pass settles or narrows every group at once: one query for the
+        // groups small enough to fetch, one for those still to be cut.
+        let groups = [{ filter: finite, below: 0, count: n, lo: num(total.lo), hi: num(total.hi), ranks: wanted }];
+        const tagged = (list) => {
+            const cases = list.map((group, g) => `WHEN ${group.filter} THEN ${g}`).join(' ');
+            return `SELECT y, (CASE ${cases} END)::DOUBLE AS g FROM (${base}) WHERE ${list.map(group => `(${group.filter})`).join(' OR ')}`;
+        };
+        for (let pass = 0; groups.length && pass < 16; pass++) {
+            const toFetch = [];
+            const toCut = [];
+            for (const group of groups) {
+                if (group.lo === group.hi) {
+                    for (const r of group.ranks) values.set(r, group.lo);
+                    continue;
+                }
+                // Width from the halves: hi − lo itself overflows for ±1e308.
+                group.width = group.hi / bins - group.lo / bins;
+                if (group.count <= fetchLimit || !(group.width > 0) || !Number.isFinite(group.width)) toFetch.push(group);
+                else toCut.push(group);
+            }
+            if (toFetch.length) {
+                const result = await this._interactiveQuery(tagged(toFetch), { signal });
+                const ys = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+                const gs = this._extractColumnAsFloat64(result, 1, 'DOUBLE');
+                toFetch.forEach((group, g) => {
+                    const sorted = ys.filter((_, i) => gs[i] === g).sort();
+                    for (const r of group.ranks) values.set(r, sorted[r - group.below]);
+                });
+            }
+            const next = [];
+            if (toCut.length) {
+                const bucketOf = (group) => `LEAST(${bins - 1}, GREATEST(0, FLOOR((y - ${lit(group.lo)}) / ${lit(group.width)})))::BIGINT`;
+                const bucket = `CASE g ${toCut.map((group, g) => `WHEN ${g} THEN ${bucketOf(group)}`).join(' ')} END`;
+                const rows = await query(`
+                    SELECT g, ${bucket} AS b, COUNT(*)::BIGINT AS n, MIN(y) AS lo, MAX(y) AS hi
+                    FROM (${tagged(toCut)})
+                    GROUP BY g, b ORDER BY g, b`);
+                toCut.forEach((group, g) => {
+                    let below = group.below;
+                    for (const row of rows.filter(r => num(r.g) === g)) {
+                        const count = num(row.n);
+                        const inside = group.ranks.filter(r => r >= below && r < below + count);
+                        if (inside.length) {
+                            next.push({
+                                filter: `${group.filter} AND ${bucketOf(group)} = ${Math.round(num(row.b))}`,
+                                below,
+                                count,
+                                lo: num(row.lo),
+                                hi: num(row.hi),
+                                ranks: inside,
+                            });
+                        }
+                        below += count;
+                    }
+                });
+            }
+            groups = next;
+        }
+        if (groups.length) throw new Error('exactOrderStatistics: did not converge');
+        return { n, values };
+    }
+
+    // How many finite values fall outside [low, high] — the samples an IQR
+    // filter removes.
+    async countOutsideRange(legacyData, varName, low, high, { signal } = {}) {
+        const variable = legacyData?.variables?.[varName];
+        const { from, valid, value } = this._valuePassSql(legacyData, variable, varName);
+        const lit = doubleLiteral;
+        const [row] = this._arrowRowsToObjects(await this._interactiveQuery(`
+            SELECT COUNT(*)::BIGINT AS n FROM (SELECT ${value} AS y FROM ${from} WHERE ${valid})
+            WHERE isfinite(y) AND (y < ${lit(low)} OR y > ${lit(high)})`, { signal }));
+        return Number(row?.n ?? 0);
+    }
+
+    // The first finite value in row order (first-sample detrend). LIMIT with no
+    // ORDER BY returns rows in the file's order — DuckDB preserves insertion
+    // order unless told not to — and stops reading at the first one.
+    async firstFiniteValue(legacyData, varName, { signal } = {}) {
+        const variable = legacyData?.variables?.[varName];
+        const { from, valid, value } = this._valuePassSql(legacyData, variable, varName);
+        const result = await this._interactiveQuery(`
+            SELECT y FROM (SELECT ${value} AS y FROM ${from} WHERE ${valid}) WHERE isfinite(y) LIMIT 1`, { signal });
+        const column = this._extractColumnAsFloat64(result, 0, 'DOUBLE');
+        return column.length ? column[0] : NaN;
+    }
+
+    /**
+     * The sums a polynomial detrend solves, over the samples whose value and
+     * abscissa are both finite: first the abscissa's range (to centre and
+     * scale it exactly as the kernel does), then Σuᵖ and Σuᵖ·y.
+     *
+     * @param {string} xSql the abscissa: the time axis, or a row-index window
+     * @param {Array} xWindows window columns `xSql` reads
+     * @param {(min: number, max: number) => { mid: number, half: number }} scale
+     * @param {(fitPoints: number) => number} orderFor the order to fit
+     */
+    async detrendSums(legacyData, varName, { xSql, xWindows = [], scale, orderFor, signal }) {
+        const variable = legacyData?.variables?.[varName];
+        const { from, valid, value } = this._valuePassSql(legacyData, variable, varName, xWindows);
+        const lit = doubleLiteral;
+        const points = `SELECT ${value} AS y, (${xSql})::DOUBLE AS x FROM ${from} WHERE ${valid}`;
+        const query = async (sql) => this._arrowRowsToObjects(await this._interactiveQuery(sql, { signal }));
+        const [range] = await query(`
+            SELECT COUNT(*)::BIGINT AS n, MIN(x) AS lo, MAX(x) AS hi
+            FROM (${points}) WHERE isfinite(y) AND isfinite(x)`);
+        const fitPoints = Number(range?.n ?? 0);
+        if (!fitPoints) return { fitPoints, min: NaN, max: NaN, order: 0, powerSums: [], rhs: [] };
+        const min = Number(range.lo);
+        const max = Number(range.hi);
+        const { mid, half } = scale(min, max);
+        const order = orderFor(fitPoints);
+        // uᵖ as the kernel builds it: 1, then one more factor of u each step.
+        const powers = [];
+        let power = 'CAST(1 AS DOUBLE)';
+        for (let p = 0; p <= 2 * order; p++) {
+            powers.push(power);
+            power = `(${power} * u)`;
+        }
+        // fsum: compensated summation. The kernel adds in row order; no SQL
+        // aggregate promises an order, so the sums agree to rounding, not bit
+        // for bit (checked in scripts/test-lazy-data-tools.mjs).
+        const select = [
+            ...powers.map((sql, p) => `fsum(${sql}) AS s${p}`),
+            ...powers.slice(0, order + 1).map((sql, p) => `fsum(${sql} * y) AS r${p}`),
+        ].join(', ');
+        const [sums] = await query(`
+            SELECT ${select}
+            FROM (SELECT y, (x - ${lit(mid)}) / ${lit(half)} AS u FROM (${points}) WHERE isfinite(y) AND isfinite(x))`);
+        return {
+            fitPoints,
+            min,
+            max,
+            order,
+            powerSums: powers.map((_, p) => Number(sums[`s${p}`])),
+            rhs: powers.slice(0, order + 1).map((_, p) => Number(sums[`r${p}`])),
+        };
+    }
+
     /**
      * Rows a log axis cannot draw, counted over the whole table (the overview in
      * memory is only a sample). Each item counts the rows where every `finite`
@@ -1485,9 +1675,10 @@ export default class DuckDbSource {
             const nonPositive = (item.nonPositive || []).map(v => `${valueExpr(v)} <= 0`).join(' OR ') || 'FALSE';
             return `COALESCE(SUM(CASE WHEN ${finite} AND (${nonPositive}) THEN 1 ELSE 0 END), 0)::BIGINT AS c${i}`;
         }).join(',\n                   ');
+        const names = list.flatMap(item => [...(item.finite || []), ...(item.nonPositive || [])].map(v => v.name));
         const result = await this._interactiveQuery(`
             SELECT ${cols}
-            FROM ${meta.tableName};
+            FROM ${this._fromSql(legacyData, names.map(name => legacyData.variables?.[name]))};
         `);
         return list.map((_, i) => Number(result.getChild(`c${i}`)?.get(0) ?? 0));
     }
@@ -1890,7 +2081,7 @@ export default class DuckDbSource {
 
     async _queryCalendarHeatmapAggregates(meta, legacyData, usable, opts) {
         const { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked } = opts;
-        const tableName = meta.tableName;
+        const tableName = this._fromSql(legacyData, usable.map(item => item.variable));
         // epoch-ms in display space (pre-shift); crop compares against this.
         const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
         // Shifted epoch-ms drives bucketing and the selection filter.
@@ -1987,7 +2178,7 @@ export default class DuckDbSource {
     // the JS kernel (fine + coarse sampling, gaps, week-day, pre-1970).
     async _queryCalendarHeatmapIntegral(meta, legacyData, usable, opts) {
         const { calendarMode, shiftMs, cropRange, selectionRange, transforms, blocked } = opts;
-        const tableName = meta.tableName;
+        const tableName = this._fromSql(legacyData, usable.map(item => item.variable));
         const cm = calendarMode === 'day-hour' ? 3600000 : 86400000;
         const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
         const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
@@ -2177,7 +2368,7 @@ export default class DuckDbSource {
         // costs one WHERE instead of four window functions.
         const bridge = options.missingPolicy === 'interpolate';
 
-        const tableName = meta.tableName;
+        const tableName = this._fromSql(legacyData, usable.map(item => item.variable));
         const lit = (value) => this._numericLiteral(value);
         const baseMsExpr = `CAST((${meta.timeExprSql}) AS HUGEINT)`;
         const tExpr = shiftMs ? `(${baseMsExpr} + ${shiftMs})` : baseMsExpr;
@@ -2462,7 +2653,7 @@ export default class DuckDbSource {
             const scopeEnd = selectionRange?.[1] ?? (stats.max_t == null ? null : Number(stats.max_t));
             const boundaryToleranceMs = Number.isFinite(medianStepMs) ? medianStepMs * 1.5 : 0;
             const aggregate = buildTemporalProfileFinalSql({
-                tableName: meta.tableName,
+                tableName: this._fromSql(legacyData, usable.map(item => item.variable)),
                 timeExpression: tExpr,
                 whereSql,
                 valueExpressions,
@@ -2627,7 +2818,7 @@ export default class DuckDbSource {
         // it does on screen; positive gain/offset leave r unchanged.
         const valueExpr = (variable, name) => `(${this._valueExpressionSql(variable, name, { castDouble: true })} * ${gLit} + ${oLit})`;
         const pairExprs = active.map((r, i) => ({ i, vx: valueExpr(r.vx, r.pair.x), vy: valueExpr(r.vy, r.pair.y) }));
-        const sql = buildPairCorrelationSql(tExpr, meta.tableName, where, pairExprs);
+        const sql = buildPairCorrelationSql(tExpr, this._fromSql(legacyData, active.flatMap(r => [r.vx, r.vy])), where, pairExprs);
 
         const promise = (async () => {
             const result = await this._interactiveQuery(sql);
@@ -2707,7 +2898,8 @@ export default class DuckDbSource {
             return r.model === 'power' ? { i, vx: logOf(vx), vy: logOf(vy) } : { i, vx, vy };
         });
 
-        const promise = this._runRegressionQueries(meta.tableName, where, pairExprs, active);
+        const promise = this._runRegressionQueries(
+            this._fromSql(legacyData, active.flatMap(r => [r.vx, r.vy])), where, pairExprs, active);
         if (cacheKey) this._rememberRegressionCache(cacheKey, promise);
         try {
             const activeResults = await promise;
@@ -2858,7 +3050,7 @@ export default class DuckDbSource {
         const tExpr = meta.timeExprSql || (timeKind === 'datetime'
             ? `epoch_ms("${escTime}")::DOUBLE`
             : `"${escTime}"::DOUBLE`);
-        const tableName = meta.tableName;
+        const tableName = this._fromSql(legacyData, requested.map(item => item.variable));
         const where = this._phaseWhereSql(tExpr, sourceRange);
 
         return this._withConnectionLock(async () => {
@@ -3553,6 +3745,20 @@ export default class DuckDbSource {
         return meta.timeExprSql || (legacyData?.metadata?.timeKind === 'datetime'
             ? `epoch_ms("${escTime}")::DOUBLE`
             : `"${escTime}"::DOUBLE`);
+    }
+
+    // The FROM item a query reading `variables` must select from. The file
+    // itself, unless one of them is built on a window over the file's rows
+    // (a lazy derivative, src/data/lazy-tool-sql.js): then a subquery that
+    // computes those windows over every row first, so a time filter in the
+    // query narrows the result, not the rows the window sees. Only such queries
+    // pay for it — the subquery keeps DuckDB from filtering inside the scan.
+    _fromSql(legacyData, variables = []) {
+        const meta = legacyData?._duckdb;
+        const windows = collectWindows(variables);
+        if (!windows.length) return meta.tableName;
+        const tExpr = this.timeValueSql(legacyData);
+        return windowedFromSql(meta.tableName, tExpr ? `${tExpr} IS NOT NULL` : 'TRUE', windows);
     }
 
     _valueExpressionSql(variable, fallbackName = '', options = {}) {

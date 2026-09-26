@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2 y 3a implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3a y 3b implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -70,8 +70,8 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 
 | Función | En lazy | Cadena |
 |---|---|---|
-| Herramientas de datos (derivada, integral, media móvil, picos, relleno, detrend, filtro, remuestreo) | deshabilitadas (`_syncDataToolPickerOptions`) | *"Data tools are disabled for lazy DuckDB-backed files. Load an eager file to edit signal values."* |
-| Outliers, métodos que no son cotas (picos, IQR) | deshabilitados | *"Lazy files use hard bounds and replace out-of-bounds values with NaN."* |
+| Herramientas de datos (integral, media móvil, picos, relleno, filtro, remuestreo) | deshabilitadas (`_syncDataToolPickerOptions`); ~~derivada y detrend~~ **resueltas en la fase 3b** (salvo detrend por media móvil) | `dataToolLazyDisabled` |
+| Outliers por picos | deshabilitados (IQR: calculado en la fase 3b, pero el menú no lo ofrece para ningún archivo) | `dataToolLazyBoundsOnly` |
 | Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
 | Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
@@ -213,13 +213,14 @@ puede correr sobre trozos. Tres familias:
 | Herramienta (kernel) | Vecindario | Estrategia | Nota |
 |---|---|---|---|
 | Outliers por cotas (`detectBoundsOutliers`) | puntual | SQL, **ya hecho** | — |
-| Derivada (`computeDerivative`) | ±1 (centrada), 1 (diferencia) | SQL `LAG`/`LEAD` como columna virtual; o stream con solape 1 | La SQL es exacta y no materializa nada. Δt = 0 y no finitos: replicar la semántica del kernel en el `CASE`. |
+| Derivada (`computeDerivative`) | ±1 (centrada), 1 (diferencia) | SQL `LAG`/`LEAD` como columna virtual, **hecho (3b)** | Exacta bit a bit y en streaming (`STREAMING_WINDOW`). Δt = 0 y no finitos replican el kernel. |
 | Media móvil (`computeMovingAverage`) | ventana *w* | stream con solape *w*; o SQL `AVG() OVER (ROWS BETWEEN l PRECEDING AND r FOLLOWING)` | El kernel salta no finitos con una suma corrida cuyo orden de operaciones se preservó a propósito; la SQL no es bit-exacta. Stream para paridad, SQL para cero memoria. |
 | Integral (`computeIntegral`) | estado (acumulado) | stream con estado | `SUM() OVER (ROWS UNBOUNDED PRECEDING)` es posible pero cada zoom re-escanea desde el inicio del archivo: correcto y lento. |
 | Picos (`detectSpikeOutliers`) | ventana `half` | stream con solape `half` | `scanSpikeCandidates` ya trabaja con una ventana ordenada incremental; solo hay que alimentarla por trozos. |
-| Outliers IQR (`detectIqrOutliers`) | global (cuantiles) | dos pasadas: `quantile_cont` en SQL, luego predicado puntual en SQL | Termina siendo una columna virtual. |
-| Detrend media / lineal / polinomio (`computeDetrend`) | global (ajuste) + puntual (aplicar) | dos pasadas: agregados o ajuste por mínimos cuadrados sobre el stream; aplicar como SQL | El ajuste polinómico acumula momentos por trozo: una pasada. |
-| Detrend por media móvil / primera muestra | como media móvil / puntual | idem | — |
+| Outliers IQR (`detectIqrOutliers`) | global (cuantiles) | cuantiles exactos por pasadas de histograma, luego predicado puntual en SQL, **hecho (3b)** | `quantile_cont` guardaría la columna entera en memoria: no se usa. Exacto bit a bit. |
+| Detrend media / lineal / polinomio (`computeDetrend`) | global (ajuste) + puntual (aplicar) | agregados SQL (`fsum` de potencias), resolver en JS, aplicar como SQL, **hecho (3b)** | El ajuste coincide al redondeo; la resta, bit a bit. |
+| Detrend por primera muestra | puntual | **hecho (3b)** | — |
+| Detrend por media móvil | como media móvil | fase 4 | — |
 | Filtro IIR hacia adelante (`applyFilter`) | estado | stream con estado | Los modos de arranque (`steady`, `zero`, `level`, `past`) se resuelven con el primer trozo. |
 | Filtro IIR de fase cero | dos pasadas, la segunda **al revés** | stream de ida al *sink*; segunda pasada leyendo el sink en orden inverso | Leer un CSV al revés en SQL es `ORDER BY t DESC` = sort completo. Por eso la segunda pasada lee el resultado de la primera, no la fuente. |
 | Rellenar faltantes (`fillMissingValues`) | vecinos a ambos lados del hueco | stream con solape acotado por el hueco más largo | Si un hueco supera un trozo, el ejecutor extiende el solape para ese hueco. Los 7 métodos son locales (`data-tool-sampling.md` §2). |
@@ -362,11 +363,13 @@ rechazaban.
   `try()` evalúa fila por fila: 14 s para `log(a*b)` sobre 5 M filas, contra
   0,37 s con la entrada filtrada. Las subexpresiones compuestas se evalúan una
   vez con una lambda (≈ +25 ms por 5 M filas).
-- **Qué no se traduce** (y sigue sobre el resumen): `diff()` y `cumsum()`
-  (necesitan la fila anterior: una ventana sobre todo el archivo, que
-  DuckDB-WASM materializa — fase 4), `root()` con grado variable, y fórmulas
-  construidas sobre esas. Al crearlas en un archivo lazy la app **avisa**
-  (`derivedLazyOverviewOnly`).
+- **Qué no se traduce** (y sigue sobre el resumen): `diff()` y `cumsum()`,
+  `root()` con grado variable, y fórmulas construidas sobre esas. Al crearlas
+  en un archivo lazy la app **avisa** (`derivedLazyOverviewOnly`).
+  *Corrección (fase 3b)*: se escribió aquí que `diff`/`cumsum` necesitaban una
+  ventana que DuckDB-WASM materializa. Medido después, es falso: `LAG`, `LEAD`
+  y `SUM … ROWS UNBOUNDED PRECEDING` con `OVER ()` corren en streaming. Con las
+  columnas de ventana de la fase 3b ya se pueden traducir; queda pendiente.
 - Las siete cachés de consultas usan ahora la expresión en su clave: editar una
   fórmula bajo el mismo nombre no sirve los valores viejos.
 
@@ -386,6 +389,86 @@ Pruebas:
   editar una fórmula invalida la caché, y `cumsum` cae al resumen con aviso.
 - Verificado que ambas fallan si se quita la fórmula del token de caché, la
   comprobación de NULL de `min`/`max`, o la guarda de `log(0)`.
+
+### Implementado (fase 3b): derivada, IQR y detrend en SQL
+
+Tres herramientas más corren sobre archivos lazy, en todas las filas, sin un
+solo array: su salida es una variable con `_duckdbExpr` (como una fórmula de la
+3a), así que zoom, exportación exacta, heatmap, perfil y correlaciones la leen
+sin cambios. El núcleo es `src/data/lazy-tool-sql.js`; la app,
+`src/app/methods/lazy-data-tools-methods.js`.
+
+- **Ventanas en streaming.** Medido en DuckDB-WASM 1.4.3 con un CSV de 20 M
+  filas: `LAG`, `LEAD` y la suma acumulada con `OVER ()` (sin partición ni
+  orden) son `STREAMING_WINDOW` — memoria residente igual a un escaneo simple,
+  orden de filas conservado (`t − LAG(t)` = 1 en las 20 M filas), +50 % de
+  tiempo. Con `ORDER BY` sí sería un sort completo.
+- **Pero una ventana no se puede mezclar con el filtro de tiempo**: en el mismo
+  `SELECT` que un `WHERE t BETWEEN …` vería solo las filas del zoom. Por eso es
+  una **columna de una subconsulta** sobre todo el archivo
+  (`windowedFromSql`), por niveles (una derivada de derivada está un nivel
+  arriba), y `DuckDbSource._fromSql(data, variables)` la usa solo en las
+  consultas que leen esas variables. El resto no paga nada: la subconsulta
+  impide que DuckDB empuje el filtro al escaneo — en una tabla de 20 M filas un
+  zoom pasa de 17 ms a 137 ms; en CSV no cambia (se escanea igual). Las
+  fórmulas sobre una derivada heredan sus columnas (`_duckdbWindows`).
+- **Derivada**: los 4 métodos, eje numérico, calendario (por segundo) e índice
+  (cuenta muestras); Δt = 0 o no finito da NaN como el kernel, `difference` no
+  divide.
+- **IQR**: `quantile_cont` guardaría toda la columna en memoria. En su lugar,
+  `exactOrderStatistics` corta el rango en 1024 cubetas, cuenta con un
+  `GROUP BY` y solo vuelve a mirar la cubeta que contiene el rango buscado;
+  cuando queda ≤ 1 M de valores, los trae y los ordena. Cuartiles exactos →
+  mismas vallas (`iqrFences`, exportada del kernel) → mismo resultado bit a bit.
+- **Detrend** media / lineal / polinomio: una pasada para el rango de la
+  abscisa, otra para Σuᵖ y Σuᵖ·y (`fsum`, suma compensada), el sistema se
+  resuelve con el mismo código del kernel (`solveDetrendFit`, exportado). La
+  resta se escribe operación por operación como el kernel. Primera muestra:
+  `LIMIT 1` en orden de archivo. Media móvil: fase 4.
+- **Estadísticas y sesión.** Lo que la SQL no puede saber sola (vallas,
+  coeficientes, ancla) se guarda en la definición (`lazyStats`) con la firma de
+  la fuente (su SQL y el eje). Al restaurar una sesión o editar la fuente, la
+  herramienta se reconstruye al instante y, si la firma cambió, las
+  estadísticas se recalculan en segundo plano y se refrescan sus dependientes.
+- **Fuentes**: derivada y detrend aceptan cualquier variable con SQL (columna,
+  fórmula, otra herramienta); cotas e IQR, columnas del archivo.
+- **IQR y el menú**: el detector IQR existe en el kernel y en las sesiones,
+  pero el menú no lo ofrece para ningún archivo (solo picos y cotas). En lazy
+  se calcula cuando una sesión lo trae; agregarlo al menú es otra decisión.
+
+Rendimiento, 20 M filas / 360 MB de CSV en Node (DuckDB-WASM), memoria
+residente plana (~570 MB, la de un escaneo simple) en todos los casos:
+
+| Crear | Tiempo | Pasadas |
+|---|---|---|
+| Derivada | 7,8 s | refresco del resumen |
+| IQR | 27 s | conteo, histograma, valores de 2 cubetas, conteo de outliers, resumen |
+| Detrend lineal | 19 s | rango, sumas, resumen |
+
+Pruebas: `scripts/test-lazy-data-tools.mjs`, sobre un CSV lazy real con Δt = 0,
+huecos, valores cerca de ±1e308 y empates:
+- derivada: 4 métodos × eje numérico / índice × dos columnas, y dos métodos en
+  eje calendario, **bit a bit** con el kernel; un zoom al medio del archivo trae
+  la derivada centrada correcta en su primera fila; el plan tiene
+  `STREAMING_WINDOW` y ningún sort; derivada de derivada, derivada de fórmula y
+  fórmula de derivada, bit a bit.
+- IQR con 5 combinaciones (incluido un valor justo en la valla): **bit a bit**,
+  y el conteo que informa el panel; estadísticos de orden con cubetas mínimas
+  (8 cubetas, 50 valores) para forzar varias pasadas.
+- detrend: media, lineal y cúbico en eje numérico e índice, al redondeo
+  (1e−9 relativo); con los coeficientes del kernel, la resta es bit a bit;
+  primera muestra, bit a bit.
+- sesión restaurada (estadísticas recalculadas en segundo plano) y edición de
+  la fuente (el detrend sobre la derivada se reajusta).
+- `scripts/e2e-lazy-data-tools.mjs` (Chromium, en la cadena `npm run e2e`):
+  un CSV de 12 MB abre en lazy; el selector ofrece derivada, detrend y
+  outliers (solo cotas), detrend sin media móvil; una derivada y un detrend
+  creados con "Crear y graficar" se dibujan y un zoom de 10 s trae las 1001
+  filas.
+- Verificado que falla si se quita la guarda de Δt = 0, si la ventana no se
+  agrega al `FROM`, si la valla IQR es inclusiva, si un estadístico de orden
+  se corre un lugar, si `u` se calcula con el recíproco, o si la restauración
+  no recalcula.
 
 ## 8. Riesgos y decisiones abiertas
 

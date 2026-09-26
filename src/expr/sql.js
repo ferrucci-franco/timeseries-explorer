@@ -39,10 +39,11 @@
 // back to evaluating row by row and took 14 s; the guarded form takes 0.1 s.
 //
 // What cannot be translated says so and the caller keeps the overview:
-//   · diff() and cumsum() need the previous row. In SQL that is a window over
-//     the whole file, which DuckDB-WASM materializes; on a multi-GB file that
-//     is the memory the lazy path exists to avoid. They wait for the chunked
-//     executor (docs/any-size-files.md, phase 4).
+//   · diff() and cumsum() need the previous row: a window over the whole
+//     file. DuckDB streams `OVER ()` windows (measured, see
+//     src/data/lazy-tool-sql.js), but a window cannot sit in the same SELECT
+//     as a time filter; it needs the window columns of lazy-tool-sql.js, which
+//     this translator does not produce yet.
 //   · root() with a degree that is not a number written in the formula: its
 //     branches depend on the degree's value, decided here, once.
 //   · a variable with no SQL form of its own — a formula that itself could not
