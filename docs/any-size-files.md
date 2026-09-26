@@ -74,7 +74,7 @@ Verificado en `src/data/duckdb-source.js`, `src/app/methods/data-tools-methods.j
 | Outliers, métodos que no son cotas (picos, IQR) | deshabilitados | *"Lazy files use hard bounds and replace out-of-bounds values with NaN."* |
 | Derivadas del eje de tiempo (`index`, `delta`) | calculadas **sobre el overview**, no exactas (`derived-methods.js`, comentario en la cabecera) | — |
 | FFT | filas crudas hasta `_fftHardMaxNfft` vía `getRawColumnsRange` | *"Selection is too large for FFT (live limit {live} NFFT; hard limit {hard})"* |
-| Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales de un archivo lazy; superposiciones de varios archivos y variables derivadas siguen exportando el resumen, ahora con aviso | `csvExportOverviewNotice` |
+| Exportar CSV | ~~escribe el resumen~~ **resuelto en la fase 2** para series temporales, también con varios archivos lazy y en memoria mezclados; las variables calculadas sobre el resumen siguen exportándolo, ahora con aviso | `csvExportOverviewNotice` |
 | Guardar proyecto | rechazado | *"A complete project cannot be saved while these files are using memory-saving mode. Increase their full-load limit in Settings and reload them, or save a view instead"* |
 
 La última cadena merece una nota: para un CSV de 5 GB, "subí el límite y
@@ -308,8 +308,20 @@ herramienta → cualquier resultado".
   idéntico al anterior). Un cancel sale del bucle, lo que termina la iteración
   y cancela la consulta en DuckDB. El progreso muestra "N filas" cuando el
   total no se conoce (una `VIEW` de CSV no lo cuenta).
-- Lo que no se puede leer del archivo (varios archivos a la vez, variables
-  calculadas sobre el resumen) exporta el resumen como antes, pero **con
+- **Varios archivos** (fase 2b): un panel que mezcla archivos lazy y en
+  memoria también sale exacto. Cada archivo lazy se lee con su propio stream
+  para todas sus trazas, cada archivo en memoria desde sus arrays, y el CSV se
+  arma de a bloques de 65 536 filas tomando las filas siguientes de cada
+  archivo a la par (`_lazyCsvRowFeeder`, `_memoryCsvRowFeeder`). Mismo formato
+  que en memoria: una columna de tiempo por traza, y las columnas del archivo
+  más corto quedan vacías debajo de su última fila.
+- Para eso el lector pasó a abrir **una conexión por stream** en vez de una
+  conexión de streams compartida con cola: con la cola, dos streams avanzados a
+  la par se esperaban mutuamente y la exportación quedaba colgada. Verificado
+  con el motor que dos lecturas intercaladas en conexiones distintas dan los
+  datos correctos.
+- Lo que no se puede leer del archivo (variables calculadas sobre el resumen,
+  variables con eje de filas propio) exporta el resumen como antes, pero **con
   aviso** (`csvExportOverviewNotice`). Un error de lectura no escribe nada y lo
   dice (`csvExportReadFailed`).
 - Pendiente de esta fase, a propósito: **Parquet** como formato de exportación
@@ -318,8 +330,11 @@ herramienta → cualquier resultado".
 
 Prueba: `scripts/test-lazy-csv-export.mjs` carga el mismo CSV lazy (DuckDB-WASM
 real) y eager, exporta ambos y exige el mismo archivo byte a byte, también con
-recorte, desplazamiento, ganancia, offset y signo invertido activos. Verificado
-que falla si la exportación lazy escribe el tiempo sin transformar.
+recorte, desplazamiento, ganancia, offset y signo invertido activos; y un panel
+con un archivo en memoria y dos lazy de longitudes distintas (transformaciones
+en uno, signo invertido en otro) contra los tres en memoria, y contra los tres
+lazy. Verificado que falla si la exportación lazy escribe el tiempo sin
+transformar, o la columna de tiempo de otro archivo.
 
 ## 8. Riesgos y decisiones abiertas
 

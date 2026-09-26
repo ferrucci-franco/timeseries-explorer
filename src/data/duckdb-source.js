@@ -713,10 +713,14 @@ export default class DuckDbSource {
      * throws an AbortError; a consumer that simply stops iterating (break,
      * return, an exception of its own) cancels the query behind it too.
      *
-     * It runs on a connection of its own. A stream over a large CSV can take
-     * minutes, and on the shared connection every zoom and every overview
-     * refresh would queue behind it for all that time. Streams do queue behind
-     * each other: DuckDB-WASM evaluates one query per connection at a time.
+     * Each stream runs on a connection of its own, opened for it and closed
+     * when it ends. Not the shared connection: a stream over a large CSV can
+     * take minutes, and every zoom and overview refresh would queue behind it.
+     * Not one shared stream connection either: DuckDB-WASM evaluates one query
+     * per connection at a time, so two streams on it run one after the other —
+     * and a consumer that walks two files side by side (an export of traces
+     * from two lazy files) waits on the second while the first waits on it.
+     * Separate connections serve interleaved batch reads without trouble.
      */
     async *streamColumns(legacyData, varNames, options = {}) {
         const meta = legacyData?._duckdb;
@@ -735,7 +739,7 @@ export default class DuckDbSource {
         if (signal?.aborted) throw this._queryAbortError();
 
         const sql = this._rawRowsSql(legacyData, requested, ranged ? { lo, hi } : {});
-        const release = await this._acquireStreamLock();
+        let conn = null;
         let reader = null;
         let done = false;
         let aborted = false;
@@ -746,7 +750,7 @@ export default class DuckDbSource {
         signal?.addEventListener?.('abort', cancel, { once: true });
         try {
             if (signal?.aborted) throw this._queryAbortError();
-            const conn = await this._streamConnection();
+            conn = await this._openStreamConnection();
             reader = await conn.send(sql);
             if (signal?.aborted) throw this._queryAbortError();
 
@@ -773,13 +777,13 @@ export default class DuckDbSource {
         } finally {
             signal?.removeEventListener?.('abort', cancel);
             // A consumer that stopped early leaves DuckDB mid-query. The
-            // connection is ours alone, so interrupting it cannot hit anyone
-            // else's work, and the next stream must not find it busy.
+            // connection is this stream's alone, so interrupting it cannot hit
+            // anyone else's work; closing it is what frees it.
             if (!done && reader) {
                 try { await reader.cancel?.(); } catch (_) { /* already finished */ }
-                try { await this._streamConn?.cancelSent?.(); } catch (_) { /* nothing running */ }
+                try { await conn?.cancelSent?.(); } catch (_) { /* nothing running */ }
             }
-            release();
+            await this._closeStreamConnection(conn);
         }
     }
 
@@ -803,22 +807,19 @@ export default class DuckDbSource {
         return { x, yByVar, rowStart };
     }
 
-    async _streamConnection() {
+    // Connections opened for streams, tracked so shutdown() can close any that
+    // a stream still holds.
+    async _openStreamConnection() {
         await this.init();
-        if (!this._streamConn) this._streamConn = await this._db.connect();
-        return this._streamConn;
+        const conn = await this._db.connect();
+        (this._streamConns ||= new Set()).add(conn);
+        return conn;
     }
 
-    // Same queue shape as _withConnectionLock, for the stream connection. A
-    // generator cannot wrap its body in a callback, so this hands back the
-    // release function instead.
-    async _acquireStreamLock() {
-        const previous = this._streamQueue || Promise.resolve();
-        let release;
-        const current = new Promise(resolve => { release = resolve; });
-        this._streamQueue = previous.catch(() => null).then(() => current);
-        await previous.catch(() => null);
-        return release;
+    async _closeStreamConnection(conn) {
+        if (!conn) return;
+        this._streamConns?.delete(conn);
+        try { await conn.close(); } catch (_) { /* already gone */ }
     }
 
     /**
@@ -3854,10 +3855,9 @@ export default class DuckDbSource {
 
     async shutdown() {
         for (const name of [...this._registered]) await this.unregisterFile(name);
-        try { await this._streamConn?.close(); } catch (_) { /* ignore */ }
+        for (const conn of [...(this._streamConns || [])]) await this._closeStreamConnection(conn);
         try { await this._conn?.close(); } catch (_) { /* ignore */ }
         try { await this._db?.terminate(); } catch (_) { /* ignore */ }
-        this._streamConn = null;
         this._conn = null;
         this._db = null;
         this._initPromise = null;

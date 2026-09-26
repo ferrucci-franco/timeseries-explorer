@@ -19,6 +19,32 @@ import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { installPlotViewHistoryMethods } from './methods/view-history-methods.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 import { streamColumns } from '../data/column-stream.js';
+
+// Pieces of transformed chunks, joined into one block of rows. A time column
+// may be formatted text (a plain Array) or numbers (a Float64Array); values are
+// always numbers. A block that is one piece of one chunk is served as a view.
+function joinCsvRowPieces(pieces, varNames, rows) {
+    if (pieces.length === 1) {
+        const { chunk, from, to } = pieces[0];
+        const view = column => (ArrayBuffer.isView(column) ? column.subarray(from, to) : column.slice(from, to));
+        return { rows, time: view(chunk.time), values: new Map(varNames.map(name => [name, view(chunk.values.get(name))])) };
+    }
+    const joinColumn = (select) => {
+        const typed = pieces.every(piece => select(piece.chunk) instanceof Float64Array);
+        const out = typed ? new Float64Array(rows) : new Array(rows);
+        let at = 0;
+        for (const { chunk, from, to } of pieces) {
+            const column = select(chunk);
+            for (let i = from; i < to; i++) out[at++] = column[i];
+        }
+        return out;
+    };
+    return {
+        rows,
+        time: joinColumn(chunk => chunk.time),
+        values: new Map(varNames.map(name => [name, joinColumn(chunk => chunk.values.get(name))])),
+    };
+}
 import { dropMissingVariablesFromPanels } from '../utils/panel-variables.js';
 import { formatMissingCount, seriesStats } from '../utils/series-stats.js';
 import { SAMPLE_MARKERS_MIN_PX_ON, SAMPLE_MARKERS_MIN_PX_OFF } from '../utils/sample-markers.js';
@@ -2823,90 +2849,128 @@ class PlotManager {
     }
 
     /**
-     * Whether a time-series panel shows a lazy file, and if so whether its
-     * rows can be read from the file for export. Null when no trace is lazy:
-     * the in-memory path is then already exact.
+     * Whether a time-series panel shows a lazy file, and if so whether every
+     * trace can be written in full. Null when no trace is lazy: the in-memory
+     * path is then already exact.
      *
-     * Exact needs every trace to be a column of ONE lazy file. Two things fall
-     * outside that, and export the overview with a notice instead:
-     *   · traces from several files, which have no row in common to write;
-     *   · variables computed in the app (derived, time-axis index/delta), which
-     *     exist only over the overview and have no column in the file.
-     * A lazy Data Tools result is fine: it is a column plus an expression, and
-     * the file query applies it.
+     * A trace can be written in full when its file is in memory (the arrays
+     * are the file) or when it is a column of a lazy file (the column can be
+     * read from disk). A lazy Data Tools result counts as a column: it is one
+     * plus an expression, and the file query applies it. What falls outside,
+     * and exports the overview with a notice instead:
+     *   · variables computed in the app over a lazy file's overview (derived,
+     *     time-axis index/delta), which have no column to read;
+     *   · independent-index variables, whose own row axis the streamed layout
+     *     does not reproduce.
+     *
+     * `sharedTime` is the layout decision the in-memory export makes: one time
+     * column when every trace comes from one file, one per trace otherwise.
      */
     _lazyTimeseriesCsvPlan(plot) {
         const traces = plot?.traces || [];
-        const lazyFiles = new Set(traces
-            .map(trace => trace.fileId)
-            .filter(fileId => this.files.get(fileId)?.data?._duckdb));
-        if (!lazyFiles.size) return null;
-        const fileId = traces[0]?.fileId;
-        const data = this.files.get(fileId)?.data;
-        const exact = traces.every(trace => trace.fileId === fileId)
-            && traces.every(trace => {
-                const variable = data?.variables?.[trace.varName];
-                return variable
-                    && variable._duckdbCol
-                    && !variable.independentIndex
-                    && variable.kind !== 'parameter'
-                    && variable.kind !== 'abscissa';
-            });
-        return { exact, fileId, data };
+        const fileIds = [...new Set(traces.map(trace => trace.fileId))];
+        if (!fileIds.some(fileId => this.files.get(fileId)?.data?._duckdb)) return null;
+        const exact = traces.every(trace => {
+            const data = this.files.get(trace.fileId)?.data;
+            const variable = data?.variables?.[trace.varName];
+            // Absent variables are skipped by the export, as in memory.
+            if (!variable) return true;
+            if (variable.independentIndex) return false;
+            if (!data._duckdb) return true;
+            return !!variable._duckdbCol
+                && variable.kind !== 'parameter'
+                && variable.kind !== 'abscissa';
+        });
+        return { exact, sharedTime: fileIds.length === 1 };
     }
 
     /**
-     * Every row of a lazy file's traces, read from the file a chunk at a time
-     * and written as the in-memory export would write them: the same header,
-     * the same time column, the same values.
+     * Every row of a time-series panel whose traces come from lazy files —
+     * alone, or alongside files held in memory — written as the in-memory
+     * export would write it had every file fitted in memory: the same headers,
+     * the same columns in the same order, the same values.
      *
-     * "The same" is by construction rather than by care. Each chunk goes
-     * through _transformFetchedPhaseTrajectory — the transform already used for
-     * rows read from the file for phase plots — which applies the crop, the
-     * time shift and display mode, the gain, the per-variable sign and the
-     * offset exactly as the in-memory pipeline does; and the time column goes
-     * through the same export formatter.
+     * Each lazy file is read once, through its own stream, for all of its
+     * traces; each file in memory is read from the arrays it has. The CSV is
+     * then assembled a block of rows at a time by taking the next rows from
+     * every file in step, so a panel over a 5 GB file and a 50 MB one never
+     * holds more than a block of either. Files of different lengths leave the
+     * shorter file's columns empty below its last row, as the in-memory export
+     * does.
+     *
+     * "The same" is by construction rather than by care. Rows read from a lazy
+     * file go through _transformFetchedPhaseTrajectory — the transform already
+     * used for rows read from the file for phase plots — which applies the
+     * crop, the time shift and display mode, the gain, the per-variable sign
+     * and the offset exactly as the in-memory pipeline does; files in memory go
+     * through that pipeline itself; and every time column goes through the same
+     * export formatter.
      */
     async _exportLazyTimeseriesCsv(plot, plan, fileName) {
-        const { fileId, data } = plan;
-        const traces = plot.traces.filter(trace => data.variables?.[trace.varName]);
-        const varNames = [...new Set(traces.map(trace => trace.varName))];
-        const timeVar = this._getTimeVar(fileId);
-        const timeUnit = this._timeUnitLabel(fileId) || (timeVar ? this._extractUnit(timeVar.description) : 's');
-        const headers = [csvTextCell(this._isCalendarTime(fileId) ? 'time [datetime UTC]' : `time [${timeUnit}]`)];
+        const traces = plot.traces.filter(trace => this.files.get(trace.fileId)?.data?.variables?.[trace.varName]);
+        const fileIds = [...new Set(traces.map(trace => trace.fileId))];
+
+        const headers = [];
+        if (plan.sharedTime) {
+            const firstFid = plot.traces[0]?.fileId;
+            headers.push(csvTextCell(this._isCalendarTime(firstFid)
+                ? 'time [datetime UTC]'
+                : `time [${this._timeUnitLabel(firstFid)}]`));
+        }
         for (const trace of traces) {
-            const unit = this._extractUnit(data.variables[trace.varName].description);
-            const name = this._traceName(trace.varName, fileId, { units: false });
+            const variable = this.files.get(trace.fileId).data.variables[trace.varName];
+            const unit = this._extractUnit(variable.description);
+            const name = this._traceName(trace.varName, trace.fileId, { units: false });
+            if (!plan.sharedTime) {
+                headers.push(csvTextCell(this._isCalendarTime(trace.fileId)
+                    ? `${name} time [datetime UTC]`
+                    : `${name} time [${this._timeUnitLabel(trace.fileId) || 's'}]`));
+            }
             headers.push(csvTextCell(unit ? `${name} [${unit}]` : name));
         }
 
-        const self = this;
+        const feeders = new Map(fileIds.map(fileId => {
+            const varNames = [...new Set(traces.filter(trace => trace.fileId === fileId).map(trace => trace.varName))];
+            const data = this.files.get(fileId).data;
+            return [fileId, data._duckdb
+                ? this._lazyCsvRowFeeder(fileId, data, varNames)
+                : this._memoryCsvRowFeeder(fileId, varNames)];
+        }));
+
+        // Rows per block, per file. A block is what the writer turns into text
+        // before asking for the next, so this bounds what is held at once.
+        const BLOCK_ROWS = 65536;
         async function* blocks() {
-            for await (const chunk of streamColumns(data, varNames)) {
-                // The file row of each value, which a generated time axis is
-                // built from. The stream is the whole file, so it is simply the
-                // running count.
-                const rowIndex = new Float64Array(chunk.x.length);
-                for (let i = 0; i < rowIndex.length; i++) rowIndex[i] = chunk.rowStart + i;
-                const { time, valuesByVar } = self._transformFetchedPhaseTrajectory(
-                    fileId, chunk.x, rowIndex, chunk.yByVar, varNames);
-                if (!time.length) continue;
-                yield {
-                    columns: [
-                        self._formatTimeColumnForExport(fileId, time),
-                        ...traces.map(trace => valuesByVar.get(trace.varName)),
-                    ],
-                    rows: time.length,
-                };
+            try {
+                for (;;) {
+                    const taken = new Map();
+                    let rows = 0;
+                    for (const [fileId, feeder] of feeders) {
+                        const part = await feeder.take(BLOCK_ROWS);
+                        taken.set(fileId, part);
+                        rows = Math.max(rows, part.rows);
+                    }
+                    if (!rows) return;
+                    const columns = [];
+                    if (plan.sharedTime) columns.push(taken.get(fileIds[0]).time);
+                    for (const trace of traces) {
+                        const part = taken.get(trace.fileId);
+                        if (!plan.sharedTime) columns.push(part.time);
+                        columns.push(part.values.get(trace.varName));
+                    }
+                    yield { columns, rows };
+                }
+            } finally {
+                // Stopped early — a cancel, or a failed read — or finished: in
+                // every case, no lazy file is left mid-query.
+                for (const feeder of feeders.values()) await feeder.close();
             }
         }
 
-        const totalRows = Number(data._duckdb?.totalRows);
+        const totals = [...feeders.values()].map(feeder => feeder.totalRows);
+        const totalRows = totals.every(Number.isFinite) ? Math.max(0, ...totals) : null;
         try {
-            return await this._writeCsvChunks(headers, blocks(), fileName, {
-                totalRows: Number.isFinite(totalRows) && totalRows > 0 ? totalRows : null,
-                alwaysReport: true,
-            });
+            return await this._writeCsvChunks(headers, blocks(), fileName, { totalRows, alwaysReport: true });
         } catch (err) {
             console.error('[export] could not read the file for export:', err);
             await Modal.alert(i18n.t('exportDialogTitle'),
@@ -2914,6 +2978,82 @@ class PlotManager {
                 { icon: '⚠️' });
             return null;
         }
+    }
+
+    // The next rows of a lazy file, transformed and with its time formatted,
+    // served in blocks of whatever size is asked for regardless of the size of
+    // the chunks the stream reads. `totalRows` is the file's row count when
+    // DuckDB knows it (Parquet), before any crop; it only feeds the progress.
+    _lazyCsvRowFeeder(fileId, data, varNames) {
+        const self = this;
+        const iterator = streamColumns(data, varNames)[Symbol.asyncIterator]();
+        let pending = null;     // the transformed chunk being served
+        let offset = 0;         // rows of it already served
+        let exhausted = false;
+        const nextChunk = async () => {
+            for (;;) {
+                const step = await iterator.next();
+                if (step.done) { exhausted = true; return null; }
+                const chunk = step.value;
+                // The file row of each value, which a generated time axis is
+                // built from. The stream is the whole file, so it is simply the
+                // running count.
+                const rowIndex = new Float64Array(chunk.x.length);
+                for (let i = 0; i < rowIndex.length; i++) rowIndex[i] = chunk.rowStart + i;
+                const { time, valuesByVar } = self._transformFetchedPhaseTrajectory(
+                    fileId, chunk.x, rowIndex, chunk.yByVar, varNames);
+                if (time.length) {
+                    return { time: self._formatTimeColumnForExport(fileId, time), values: valuesByVar, rows: time.length };
+                }
+            }
+        };
+        const totalRows = Number(data._duckdb?.totalRows);
+        return {
+            totalRows: Number.isFinite(totalRows) && totalRows > 0 ? totalRows : NaN,
+            async take(n) {
+                const pieces = [];
+                let rows = 0;
+                while (rows < n && !exhausted) {
+                    if (!pending || offset >= pending.rows) {
+                        pending = await nextChunk();
+                        offset = 0;
+                        if (!pending) break;
+                    }
+                    const count = Math.min(n - rows, pending.rows - offset);
+                    pieces.push({ chunk: pending, from: offset, to: offset + count });
+                    offset += count;
+                    rows += count;
+                }
+                return joinCsvRowPieces(pieces, varNames, rows);
+            },
+            async close() {
+                try { await iterator.return?.(); } catch (_) { /* already closed */ }
+            },
+        };
+    }
+
+    // A file held in memory, served in blocks through the same interface. The
+    // columns are the in-memory export's own, computed the same way.
+    _memoryCsvRowFeeder(fileId, varNames) {
+        const time = this._formatTimeColumnForExport(fileId, this._getTransformedTimeDataForVariable(fileId, varNames[0]));
+        const values = new Map(varNames.map(name => [name, this._getTransformedVariableData(fileId, name)]));
+        const length = Math.max(time.length, ...[...values.values()].map(column => column.length));
+        let offset = 0;
+        return {
+            totalRows: length,
+            async take(n) {
+                const from = offset;
+                const to = Math.min(length, from + n);
+                offset = to;
+                const view = column => (ArrayBuffer.isView(column) ? column.subarray(from, to) : column.slice(from, to));
+                return {
+                    rows: to - from,
+                    time: view(time),
+                    values: new Map([...values].map(([name, column]) => [name, view(column)])),
+                };
+            },
+            async close() {},
+        };
     }
 
     // A real frame, not a microtask: setTimeout(0) alone lets the loop continue
