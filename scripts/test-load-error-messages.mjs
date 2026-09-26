@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 
 import { describeLoadError, formatLoadErrorMessage } from '../src/app/load-error-messages.js';
 import translations from '../src/i18n/translations.js';
+import { PARQUET_EXTENSION_UNAVAILABLE, parquetUnavailableError } from '../src/data/duckdb-extensions.js';
 
 let checks = 0;
 const check = (fn) => { fn(); checks++; };
@@ -30,6 +31,8 @@ const RECOGNISED = [
     ['allocation size overflow', 'loadErrorOutOfMemory'],
     ['OutOfMemoryException: failed to allocate data of size 2.1GB', 'loadErrorQueryEngineMemory'],
     ['Out of Memory Error: could not allocate block', 'loadErrorQueryEngineMemory'],
+    // The engine loading its Parquet module on its own, offline.
+    ["IO Error: Failed to execute 'send' on 'XMLHttpRequest': Failed to load 'https://extensions.duckdb.org/v1.4.3/wasm_eh/parquet.duckdb_extension.wasm'.", 'loadErrorParquetUnavailable'],
 ];
 
 for (const [message, expectedKey] of RECOGNISED) {
@@ -52,6 +55,26 @@ check(() => {
     // wording comes from the browser and is not ours to rely on.
     assert.equal(describeLoadError(Object.assign(new Error(''), { name: 'WorkerDiedError' })).key, 'loadErrorReaderCrashed');
     assert.equal(describeLoadError(Object.assign(new Error('boom'), { workerCrashed: true })).key, 'loadErrorReaderCrashed');
+});
+
+check(() => {
+    // The typed error DuckDbSource.ensureParquet throws when no copy of the
+    // Parquet module loads. Its text carries the engine's own messages, which
+    // mention memory-like words in no case; the code decides, not the wording.
+    const err = parquetUnavailableError([
+        new Error('Failed to download extension'),
+        new Error("IO Error: Failed to execute 'send' on 'XMLHttpRequest'\nsecond line"),
+    ]);
+    assert.equal(err.code, PARQUET_EXTENSION_UNAVAILABLE);
+    assert.match(err.message, /Failed to download extension \| IO Error/, 'first line of each attempt, in order');
+    assert.doesNotMatch(err.message, /second line/);
+    const described = describeLoadError(err);
+    assert.equal(described.key, 'loadErrorParquetUnavailable');
+    assert.equal(described.raw, err.message, 'the engine text stays in the details pane');
+    // It wins over the memory rules even when an attempt said "out of memory".
+    assert.equal(describeLoadError(parquetUnavailableError([new Error('out of memory')])).key, 'loadErrorParquetUnavailable');
+    // The engine's bare words alone are too generic to claim.
+    assert.equal(describeLoadError(new Error('null function or function signature mismatch')).key, null);
 });
 
 // ─── Cancellation is not a failure ────────────────────────────────────────

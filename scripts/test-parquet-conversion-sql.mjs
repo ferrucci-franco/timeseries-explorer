@@ -47,6 +47,9 @@ function makeSource({ describeColumns }) {
     const statements = [];
     source._nextTableId = 0;
     source.init = async () => {};
+    // The Parquet module is the browser's to load (e2e-parquet-offline.mjs);
+    // here it counts as loaded, and the last check below takes it away.
+    source._parquetLoaded = true;
     // The COPY goes out through send(), not query(): that is what makes the
     // Cancel button able to interrupt it.
     source._conn = {
@@ -304,6 +307,23 @@ await check('an already-aborted signal produces no file', async () => {
         }),
         (err) => err?.cancelled === true,
     );
+});
+
+await check('no Parquet module: a typed error before anything is read', async () => {
+    // Reaching the COPY with no module froze the page instead of failing.
+    const source = makeSource({ describeColumns: VARCHAR_COLUMNS });
+    source._parquetLoaded = false;
+    const unavailable = Object.assign(new Error('The Parquet reader could not be loaded'), { code: 'PARQUET_EXTENSION_UNAVAILABLE' });
+    source._loadParquet = async () => { throw unavailable; };
+    let registered = false;
+    source._db.registerFileBuffer = () => { registered = true; };
+    await assert.rejects(convert(source, profile()), err => err === unavailable, 'the typed error reaches the caller');
+    assert.equal(registered, false, 'the CSV was not handed to the engine');
+    assert.deepEqual(source.statements, [], 'no SQL ran');
+    // And once the module loads, a later conversion goes through.
+    source._loadParquet = async () => {};
+    await convert(source, profile());
+    assert.ok(source.copySql(), 'the next attempt converts');
 });
 
 console.log(`parquet conversion SQL: ${checks} checks passed`);

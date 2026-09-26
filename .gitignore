@@ -89,3 +89,6 @@
 # Generated download artifacts stay local.
 /public/downloads/*.zip
 /public/downloads/standalone.json
+
+# DuckDB's Parquet module, fetched at build time (scripts/fetch-duckdb-extensions.mjs).
+/public/duckdb-extensions/
