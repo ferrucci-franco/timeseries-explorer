@@ -592,3 +592,37 @@ verificación:
   señalado.
 - Se añadieron la ruta de escritorio con sus copias extra (2), el costo de
   guardar el proyecto (2), y la opción 7.1, que es nueva.
+
+---
+
+## Addenda (tras implementar la Opción A)
+
+Hechos medidos después de cerrar el estudio, que corrigen o completan lo de
+arriba. Ninguno cambia las conclusiones; dos cambian justificaciones escritas
+en el código.
+
+- **Los dos motores wasm tienen techo de 4 GiB, en escritorio igual que en
+  Chrome.** Leído del binario: `duckdb-mvp.wasm` declara memoria máxima de
+  4,00 GiB y `duckdb-eh.wasm` (el que Chromium elige) no declara máximo, es
+  decir, el tope de wasm32. Los "3 GiB" de `docs/large-files.md` son de
+  Firefox y no aplican a Electron. h5wasm (netCDF) comparte el techo de
+  wasm32.
+- **netCDF paga una copia más que no estaba en la sección 2.** Tanto
+  `pypsa-netcdf-parser.js` como `netcdf-parser.js` copian el buffer entero al
+  sistema de archivos de WASM (`FS.writeFile`) antes de abrirlo, porque h5wasm
+  no lee rangos. Un netCDF tiene que caber en esos 4 GiB junto con la memoria
+  de trabajo del lector.
+- **El comentario de `matlab-mat-limits.js` sobre "el tope de ~2 GiB de un
+  array de JS" está desactualizado.** En el V8 de Node 22 se crean
+  `ArrayBuffer` de 3, 5 y 9 GiB sin error (con RAM para respaldarlos). El tope
+  sigue existiendo para arrays *planos* (`new Array(n)`, 2³²−1 elementos y el
+  heap), que es lo que usa el relleno de matrices sparse. El techo de 1536 MB
+  sigue siendo defendible como freno a bombas; su justificación escrita, no.
+- **El parser CSV antiguo está limitado por el string de V8**: 536 870 888
+  caracteres (~512 MiB), medido. `LEGACY_CSV_FALLBACK_MAX_BYTES` (450 MB) lo
+  frena antes, correctamente.
+- **Un CSV de 5 GB no se puede abrir eager hoy** por tres barreras en cascada
+  (el techo de 1000 MB de `csvFullLoadMb`, el `CREATE TABLE` dentro de los
+  4 GiB de WASM, y el string de 512 MiB del respaldo), y no conviene que se
+  pueda: ver `docs/any-size-files.md`, que continúa este estudio por el lado
+  que sí escala.
