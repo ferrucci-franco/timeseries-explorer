@@ -48,10 +48,22 @@ jobs:
       - name: Install Chromium for Playwright
         run: npx playwright install --with-deps chromium
 
+      # The browser checks serve public/ as it is, so DuckDB's Parquet module
+      # has to be there before they run: they open Parquet with the public
+      # download blocked (scripts/e2e-parquet-offline.mjs).
+      - name: Fetch DuckDB's Parquet module
+        env:
+          OMV_REQUIRE_DUCKDB_EXTENSIONS: '1'
+        run: npm run fetch:duckdb-extensions
+
       - name: Run browser end-to-end checks
+        env:
+          OMV_REQUIRE_DUCKDB_EXTENSIONS: '1'
         run: npm run e2e
 
       # The web bundle is what main deploys, so a build failure has to be caught
       # here rather than by the Pages workflow after the merge.
       - name: Build web bundle
+        env:
+          OMV_REQUIRE_DUCKDB_EXTENSIONS: '1'
         run: npm run build

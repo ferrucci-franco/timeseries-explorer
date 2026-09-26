@@ -92,6 +92,10 @@ jobs:
             artifact_suffix: linux-x64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      # The desktop app must open Parquet with no network: the build fails
+      # rather than ship without DuckDB's Parquet module.
+      OMV_REQUIRE_DUCKDB_EXTENSIONS: '1'
     steps:
       - name: Checkout tagged source
         uses: actions/checkout@v4

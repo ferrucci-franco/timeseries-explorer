@@ -25,6 +25,12 @@ import ehWasmUrl from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorkerUrl from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 import { customDatetimePatternInfo, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 import { registerDuckDbFile } from './duckdb-file-registration.js';
+import {
+    DUCKDB_EXTENSIONS_DIR,
+    DUCKDB_EXTENSIONS_MANIFEST,
+    localExtensionRepository,
+    parquetUnavailableError,
+} from './duckdb-extensions.js';
 import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
 import { duckDbAppendGrowthLimitError } from './duckdb-live-limits.js';
 import { buildPairCorrelationSql, parsePairCorrelations } from './pair-correlation-sql.js';
@@ -81,6 +87,8 @@ export default class DuckDbSource {
         this._regrCapable = null; // cached "does DuckDB expose regr_*()" probe
         this._activeInteractiveQuery = null;
         this._connectionQueue = Promise.resolve();
+        this._parquetLoaded = false;
+        this._parquetPromise = null;
     }
 
     static isAvailable() {
@@ -143,6 +151,92 @@ export default class DuckDbSource {
         } catch (_) { /* tuning is best-effort */ }
     }
 
+    /**
+     * Make sure the Parquet reader is loaded, from the copy the app ships when
+     * there is one. Everything that reads or writes Parquet calls this first.
+     *
+     * Three tries, in order: the app's own copy (listed in its manifest), then
+     * DuckDB's public download, then a typed error the load dialog explains in
+     * the user's language. A failed attempt leaves the engine usable (CSV keeps
+     * working) and is not remembered, so the next Parquet file tries again.
+     */
+    async ensureParquet() {
+        if (this._parquetLoaded) return;
+        if (!this._parquetPromise) {
+            this._parquetPromise = this._loadParquet()
+                .then(() => { this._parquetLoaded = true; })
+                .finally(() => { this._parquetPromise = null; });
+        }
+        await this._parquetPromise;
+    }
+
+    async _loadParquet() {
+        await this.init();
+        const failures = [];
+        const local = await this._localExtensionRepository('parquet');
+        if (local) {
+            try {
+                await this._loadExtensionFrom('parquet', local);
+                return;
+            } catch (err) {
+                failures.push(err);
+            }
+        }
+        try {
+            await this._loadExtensionFrom('parquet', null);
+            return;
+        } catch (err) {
+            failures.push(err);
+        }
+        throw parquetUnavailableError(failures);
+    }
+
+    // `repository` null means DuckDB's default one. The setting is global to
+    // the engine, so it is pointed at the app's copy only for this LOAD and put
+    // back right after: anything else the engine loads on its own later still
+    // comes from where it always did.
+    async _loadExtensionFrom(name, repository) {
+        return this._withConnectionLock(async () => {
+            if (!repository) {
+                await this._conn.query(`LOAD ${name}`);
+                return;
+            }
+            await this._conn.query(`SET custom_extension_repository = '${repository.replace(/'/g, "''")}'`);
+            try {
+                await this._conn.query(`LOAD ${name}`);
+            } finally {
+                try { await this._conn.query('RESET custom_extension_repository'); } catch (_) { /* best effort */ }
+            }
+        });
+    }
+
+    // The app's own copy of a module, as a repository URL, or null when this
+    // build does not ship it (no manifest, an older one, or a dev server that
+    // answers with the app's page instead).
+    async _localExtensionRepository(name) {
+        const baseUrl = globalThis.document?.baseURI || globalThis.location?.href || '';
+        if (!baseUrl || typeof fetch !== 'function') return null;
+        let manifest = null;
+        try {
+            const response = await fetch(new URL(`${DUCKDB_EXTENSIONS_DIR}/${DUCKDB_EXTENSIONS_MANIFEST}`, baseUrl).href);
+            if (response.ok) manifest = await response.json();
+        } catch (_) {
+            return null;
+        }
+        if (!manifest) return null;
+        let version = '';
+        let platform = '';
+        try {
+            const versionRows = (await this.query('SELECT version() AS v')).toArray();
+            version = String(versionRows[0]?.v ?? '');
+            const platformRows = (await this.query('PRAGMA platform')).toArray();
+            platform = String(platformRows[0]?.platform ?? '');
+        } catch (_) {
+            return null;
+        }
+        return localExtensionRepository(manifest, { version, platform, name, baseUrl });
+    }
+
     async registerFile(name, file) {
         await this.init();
         if (this._registered.has(name)) {
@@ -187,6 +281,7 @@ export default class DuckDbSource {
      * cheaper than the CSV path. Use this for GB-scale workflows.
      */
     async parseParquetFile(file, displayName = file.name, opts = {}) {
+        await this.ensureParquet();
         return this._parseFile(file, displayName, { ...opts, format: 'parquet' });
     }
 
@@ -237,6 +332,9 @@ export default class DuckDbSource {
 
     async _convertToParquet(registerInput, { csvProfile, compression, extension, signal = null }) {
         await this.init();
+        // Before the input is registered: a missing Parquet writer is found out
+        // in a second, not after the CSV has been scanned.
+        await this.ensureParquet();
         // Unique per call: a failed conversion must not leave a name behind
         // that the next one would silently read instead of its own input.
         const stamp = `${Date.now()}_${++this._nextTableId}`;
@@ -4125,6 +4223,8 @@ export default class DuckDbSource {
         this._conn = null;
         this._db = null;
         this._initPromise = null;
+        // A new engine starts without the Parquet reader.
+        this._parquetLoaded = false;
     }
 }
 

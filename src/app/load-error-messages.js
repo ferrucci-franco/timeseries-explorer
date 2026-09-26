@@ -15,10 +15,22 @@
 // Pure on purpose — no i18n, no DOM — so the table can be tested directly and
 // so the same mapping can be reused anywhere a load can fail.
 
+import { PARQUET_EXTENSION_UNAVAILABLE } from '../data/duckdb-extensions.js';
+
 // Ordered: the first match wins, so put the specific patterns above the
 // general ones. `test` gets the error itself, not just its message, because
 // some cases are identified by `name` or `code`.
 const RULES = [
+    {
+        key: 'loadErrorParquetUnavailable',
+        // Parquet support is a separate module the engine loads on first use
+        // (see src/data/duckdb-extensions.js). With no copy of it available the
+        // engine's own words were "null function or function signature
+        // mismatch". The typed error comes from DuckDbSource.ensureParquet; the
+        // file name catches the engine loading it on its own and failing.
+        test: err => err.code === PARQUET_EXTENSION_UNAVAILABLE
+            || /parquet\.duckdb_extension/i.test(err.message),
+    },
     {
         key: 'loadErrorTextTooLarge',
         // V8 caps a single string at 2^29-24 characters (~512 MB). The legacy

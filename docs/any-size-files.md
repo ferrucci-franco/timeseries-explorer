@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4a implementadas; 4b diseñada (sección "Diseño (fase 4b)"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4a implementadas; Parquet sin red resuelto (§8); 4b diseñada (sección "Diseño (fase 4b)"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -728,7 +728,8 @@ salida. Por encima:
    soporta: medido con CSV, 5 M filas en 6,2 s, releído en 3,7 s) y se lee con
    `read_parquet`, que poda *row groups* por estadísticas de `rn` como la
    tabla poda por *zone maps* (documentado por DuckDB; **no medido acá**,
-   porque en este entorno la extensión no se descarga — ver §8). Los archivos
+   porque en este entorno de desarrollo la extensión no se puede bajar — ver
+   §8; el build de CI sí la trae). Los archivos
    OPFS son de la app y se borran al cerrar el archivo.
 2. **Escritorio**: los trozos van por IPC al proceso principal, que ya tiene
    DuckDB nativo (`csv-to-parquet-core.js`) y un directorio de Parquet
@@ -828,7 +829,7 @@ Node, y 5 M filas en Chromium con el bundle `eh` de la app:
 | Agregar 100 k filas a un sumidero | 15 ms |
 | OPFS desde DuckDB (`opfs://`, CSV) | escribir 5 M filas (126 MB) 6,2 s; releer 3,7 s |
 | Kernels en JS, 20 M muestras | IIR adelante 1,3 s; fase cero 1,6 s; media móvil 0,4 s; picos 10,1 s; relleno 0,26 s |
-| Extensión Parquet | **no viene en el bundle**: `duckdb_extensions()` la muestra `NOT_INSTALLED` y el primer `read_parquet`/`COPY … PARQUET` la descarga de `extensions.duckdb.org`; sin red, el motor cae (§8) |
+| Extensión Parquet | **no viene en el bundle de DuckDB-WASM**: `duckdb_extensions()` la muestra `NOT_INSTALLED`; la app la sirve ella misma desde el build (§8) |
 
 #### Plan por sub-fases
 
@@ -855,26 +856,57 @@ infraestructura que las otras tres solo usan.
   que medir el residente real en Chromium con un archivo grande y ajustar los
   24 B/fila.
 - **Parquet y la red.** Los sumideros de desborde en web dependen de la
-  extensión (abajo, §8). En escritorio dependen de ella para *leer*, no para
-  escribir.
+  extensión Parquet, que la app ya sirve ella misma (§8). En escritorio
+  dependen de ella para *leer*, no para escribir.
 - **Reescribir kernels.** Es la parte con más riesgo de regresión; la
   mitigación es que la forma incremental conduce también el camino eager, así
   que los tests existentes fallan si algo cambia.
 
 ## 8. Riesgos y decisiones abiertas
 
-- **Parquet es una extensión que se descarga en tiempo de ejecución.**
-  Encontrado midiendo la 4b: en DuckDB-WASM 1.32 el bundle no incluye el
-  lector ni el escritor de Parquet; `duckdb_extensions()` lo muestra
-  `NOT_INSTALLED`, y el primer `read_parquet` o `COPY … (FORMAT PARQUET)` baja
+- **Parquet es una extensión que se descarga en tiempo de ejecución.
+  Resuelto: la app la sirve ella misma.** Encontrado midiendo la 4b: en
+  DuckDB-WASM 1.32 (DuckDB v1.4.3) el bundle no incluye el lector ni el
+  escritor de Parquet; `duckdb_extensions()` lo muestra `NOT_INSTALLED`, y el
+  primer `read_parquet` o `COPY … (FORMAT PARQUET)` bajaba
   `parquet.duckdb_extension.wasm` de `extensions.duckdb.org`. Sin acceso a ese
-  host, el motor **cae** (`null function or function signature mismatch`) y
-  arrastra todo lo que corra después en la misma instancia. Afecta a lo que ya
-  existe — abrir un Parquet lazy, la conversión CSV → Parquet en el navegador,
-  y el escritorio, que lee Parquet con el mismo wasm — y a los sumideros de
-  desborde de la 4b. Es un trabajo aparte de la 4b: servir la extensión desde
-  la app (DuckDB-WASM admite un repositorio de extensiones propio) o al menos
-  detectar la falta y decirla antes de que el motor caiga.
+  host, **solo fallaban las operaciones con Parquet**, con errores crípticos:
+  `read_parquet` daba `null function or function signature mismatch`, el
+  `COPY` daba `table index is out of bounds`, y la conversión CSV → Parquet del
+  navegador dejaba la página colgada. La misma instancia seguía leyendo CSV
+  (medido en Chromium: un `COPY` a CSV después del fallo funciona). Una
+  versión anterior de este documento decía que el motor caía entero; era
+  incorrecto.
+
+  Lo que se hizo:
+  - `scripts/fetch-duckdb-extensions.mjs` baja el módulo en el build (lo
+    llama `build:web`), para `wasm_eh` y `wasm_mvp`, con la versión que
+    reporta el propio motor (`SELECT version()`), a
+    `public/duckdb-extensions/<versión>/<plataforma>/`, con un
+    `manifest.json` que lista archivo, tamaño y sha256. No se versiona en
+    git. CI, Pages y el release de escritorio lo exigen
+    (`OMV_REQUIRE_DUCKDB_EXTENSIONS=1`): sin módulo no hay deploy.
+  - `DuckDbSource.ensureParquet()` corre antes de abrir un Parquet y antes de
+    convertir: lee el manifiesto, y si lista el módulo para esta versión y
+    plataforma, apunta `custom_extension_repository` a la copia de la app
+    (URL absoluta: el motor pide desde su worker) solo durante el `LOAD
+    parquet`, y lo restaura. Si no está o falla, prueba la descarga pública
+    (así un checkout de desarrollo sin el módulo sigue como antes). Si
+    también falla, lanza un error con `code =
+    PARQUET_EXTENSION_UNAVAILABLE`, que el diálogo de carga traduce a los
+    cuatro idiomas; el texto del motor queda en "Detalles técnicos".
+  - La firma no se desactiva: el archivo servido es byte a byte el que
+    publica DuckDB y el motor sigue rechazando módulos sin firma.
+  - Pruebas: `test:fetch-duckdb-extensions` (servidor local en lugar de
+    `extensions.duckdb.org`: ubicación, manifiesto, caché, versión vieja
+    borrada, respuesta que no es wasm, fallo que corta un build exigente) y
+    `e2e:parquet-offline` (Chromium con `extensions.duckdb.org` sin resolver:
+    con el módulo, convertir y abrir Parquet sin pedir nada afuera; sin el
+    módulo, el mensaje traducido y el CSV que sigue abriendo). En este
+    entorno el módulo real no se puede bajar, así que acá se verificó el
+    cableado (el motor pide exactamente
+    `<app>/duckdb-extensions/v1.4.3/wasm_eh/parquet.duckdb_extension.wasm`) y
+    el camino sin módulo; la carga real la verifica CI.
 
 - **Orden físico ≠ orden temporal.** Toda la sección 5 asume que el archivo está
   ordenado por tiempo, como ya lo asumen `getRawColumnsRange` y la fase. Un

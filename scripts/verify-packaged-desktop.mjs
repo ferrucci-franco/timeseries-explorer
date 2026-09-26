@@ -40,6 +40,10 @@ const required = [
   /electron\/navigation-policy\.cjs$/,
   /electron\/preload\.cjs$/,
   /node_modules\/duckdb\/lib\/binding\/duckdb\.node$/,
+  // Parquet support for the in-app engine, so Parquet opens with no network
+  // (scripts/fetch-duckdb-extensions.mjs).
+  /dist\/duckdb-extensions\/manifest\.json$/,
+  /dist\/duckdb-extensions\/v[^/]+\/wasm_eh\/parquet\.duckdb_extension\.wasm$/,
 ];
 for (const pattern of required) {
   assert.ok(normalizedFiles.some(file => pattern.test(file)), `Missing packaged runtime file matching ${pattern}`);
