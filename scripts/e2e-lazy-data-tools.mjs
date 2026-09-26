@@ -3,9 +3,10 @@
 //
 // A 12 MB CSV (above the 10 MB full-load limit set here) opens lazily. Through
 // the panel's own controls: the tool picker offers derivative, detrend and
-// outliers and nothing else; the outlier method is hard bounds; the detrend
-// methods leave out the moving-average baseline. A derivative and a linear
-// detrend are created with "Create and plot", and each is
+// integral and outliers and nothing else; the outlier method is hard bounds;
+// the integral leaves out interpolating across holes; the detrend methods
+// leave out the moving-average baseline. A derivative, an integral and a
+// linear detrend are created with "Create and plot", and each is
 // drawn from SQL over the file (a zoom returns full resolution), with no page
 // error.
 //
@@ -68,7 +69,7 @@ try {
 
     const picker = await page.evaluate(() => Object.fromEntries(
         [...document.querySelectorAll('#data-tool-select option')].filter(o => o.value).map(o => [o.value, !o.disabled])));
-    assert.deepEqual(Object.keys(picker).filter(k => picker[k]).sort(), ['derivative', 'detrend', 'removeOutliers'],
+    assert.deepEqual(Object.keys(picker).filter(k => picker[k]).sort(), ['derivative', 'detrend', 'integrate', 'removeOutliers'],
         'a lazy file offers the tools written as SQL');
 
     await createAndPlot(page, 'derivative', 'a', 'da', () => pick(page, 'derivative-method', 'centered'));
@@ -80,6 +81,14 @@ try {
     const outlierMethods = await page.evaluate(() => Object.fromEntries(
         [...document.querySelectorAll('#outlier-method option')].map(o => [o.value, !o.disabled])));
     assert.deepEqual(Object.keys(outlierMethods).filter(k => outlierMethods[k]), ['bounds'], 'outliers: hard bounds');
+
+    await createAndPlot(page, 'integrate', 'a', 'ia', async () => {
+        const policies = await page.evaluate(() => Object.fromEntries(
+            [...document.querySelectorAll('#integral-gap-policy option')].map(o => [o.value, !o.disabled])));
+        assert.equal(policies.interpolate, false, 'interpolating across holes is not offered on a lazy file');
+        assert.equal(policies.zero && policies.propagate, true, 'the other two policies are');
+        await pick(page, 'integral-method', 'trapezoidal');
+    });
 
     await createAndPlot(page, 'detrend', 'b', 'lb', async () => {
         const methods = await page.evaluate(() => Object.fromEntries(
@@ -95,20 +104,20 @@ try {
         const data = [...window.app.plotManager.files.values()][0].data;
         const source = data._duckdb.source;
         const out = {};
-        for (const name of ['da', 'lb']) {
+        for (const name of ['da', 'ia', 'lb']) {
             const raw = await source.getRawColumnsRange(data, [name], 1000, 1010, 1e6);
             out[name] = { rows: raw.x.length, finite: [...raw.yByVar.get(name)].filter(Number.isFinite).length };
         }
         const traced = [...window.app.plotManager.plots.values()].flatMap(p => p.traces.map(t => t.varName));
         return { out, traced, message: document.getElementById('outlier-message')?.textContent || '' };
     });
-    for (const name of ['da', 'lb']) {
+    for (const name of ['da', 'ia', 'lb']) {
         assert.equal(zoom.out[name].rows, 1001, `${name}: a 10 s zoom returns all 1001 rows`);
         assert.ok(zoom.out[name].finite > 990, `${name}: with values`);
         assert.ok(zoom.traced.includes(name), `${name} is plotted`);
     }
     assert.deepEqual(errors, [], 'no page error');
-    console.log('e2e lazy data tools: derivative and detrend created from the panel on a lazy file');
+    console.log('e2e lazy data tools: derivative, integral and detrend created from the panel on a lazy file');
 } finally {
     await browser.close();
     await server.close();

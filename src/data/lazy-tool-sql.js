@@ -238,3 +238,112 @@ export function detrendAnchorSql(valueSql, anchor) {
     if (!Number.isFinite(anchor)) return 'CAST(NULL AS DOUBLE)';
     return `(${valueSql} - ${doubleLiteral(anchor)})`;
 }
+
+// ─── Time-axis variables ────────────────────────────────────────────────────
+
+/**
+ * The time-axis step (derived-methods.js, _timeAxisVariableValues 'delta'):
+ * Δt between consecutive samples in seconds, (t[i] − t[i−1]) · secondsPerUnit;
+ * the first sample takes the forward difference, a single sample gives 0.
+ * @param {string} timeSql the time axis as the overview holds it
+ * @returns {{ column: object, windows: Array }}
+ */
+export function timeAxisDeltaWindows(timeSql, secondsPerUnit, deps = []) {
+    const time = windowColumn(timeSql, deps);
+    const t = quoteIdent(time.column);
+    const scaled = (sql) => `((${sql}) * ${doubleLiteral(secondsPerUnit)})`;
+    const own = windowColumn(
+        `CASE WHEN LAG(TRUE, 1, FALSE) OVER () THEN ${scaled(`${t} - LAG(${t}) OVER ()`)}`
+        + ` WHEN LEAD(TRUE, 1, FALSE) OVER () THEN ${scaled(`LEAD(${t}) OVER () - ${t}`)}`
+        + ` ELSE ${doubleLiteral(0)} END`,
+        [...deps, time],
+    );
+    return { column: own, windows: mergeWindows(deps, [time, own]) };
+}
+
+// ─── Cumulative integral ────────────────────────────────────────────────────
+
+/**
+ * computeIntegral (src/compute/kernels/integral.js) as window columns, for the
+ * 'zero' and 'propagate' gap policies. ('interpolate' bridges a hole towards
+ * the next finite sample — a look ahead no streaming window can make.)
+ *
+ * The kernel's loop, per step i ≥ 1:
+ *   dt = Δt (seconds on a calendar axis, 1 on an index one); a step whose dt
+ *   is not finite is skipped outright.
+ *   usable = y[i−1] finite (rectangular) / both finite (trapezoidal);
+ *   missing = the step is a gap of the time axis (dt_raw > threshold).
+ *   Unusable or missing: 'zero' adds nothing, 'propagate' makes the rest NaN.
+ *   Otherwise acc += y0·dt (rectangular) / 0.5·(y0 + y1)·dt (trapezoidal).
+ * out[0] = initial. The running sum adds in row order, as `acc +=` does: the
+ * first row's addend is the initial value, and a step that adds nothing adds
+ * NULL, which SUM skips — adding 0 would turn an accumulated −0 into +0.
+ *
+ * 'sum' is cumulativeSum: acc = initial, then acc += y[i] for every finite
+ * sample (row 0 included), with the same policies over non-finite samples.
+ *
+ * @param {object} options
+ * @param {string} options.kind 'datetime' | 'numeric' | 'index'
+ * @param {number|null} options.gapThreshold dt_raw above which a step is a gap
+ *   (null: no gap detection)
+ * @returns {{ column: object, windows: Array, steps: object }} `steps` names
+ *   the per-step columns, for the pass that counts what the panel reports
+ */
+export function integralWindows(valueSql, timeSql, {
+    kind = 'numeric', method = 'trapezoidal', policy = 'zero', initial = 0, gapThreshold = null, deps = [],
+} = {}) {
+    const operand = windowColumn(finiteOrNull(valueSql), deps);
+    const y = quoteIdent(operand.column);
+    const lower = [operand];
+    const hasPrev = 'LAG(TRUE, 1, FALSE) OVER ()';
+    const start = doubleLiteral(Number.isFinite(Number(initial)) ? Number(initial) : 0);
+    let inc;
+    let bad;
+    const steps = {};
+    if (method === 'sum') {
+        inc = `CASE WHEN NOT ${hasPrev} THEN (CASE WHEN ${y} IS NULL THEN ${start} ELSE ${start} + ${y} END) ELSE ${y} END`;
+        bad = `CASE WHEN ${y} IS NULL THEN 1 ELSE 0 END`;
+    } else {
+        let dtRaw = null;
+        let dt;
+        if (timeSql && kind !== 'index') {
+            const time = windowColumn(timeSql, deps);
+            lower.push(time);
+            const t = quoteIdent(time.column);
+            dtRaw = `(${t} - LAG(${t}) OVER ())`;
+            dt = kind === 'datetime' ? `(${dtRaw} / ${doubleLiteral(1000)})` : dtRaw;
+        } else {
+            dt = doubleLiteral(1);
+        }
+        const y0 = `LAG(${y}) OVER ()`;
+        const usable = method === 'rectangular' ? `(${y0} IS NOT NULL)` : `(${y0} IS NOT NULL AND ${y} IS NOT NULL)`;
+        const missing = dtRaw && Number.isFinite(gapThreshold)
+            ? `COALESCE(${dtRaw} > ${doubleLiteral(gapThreshold)}, FALSE)`
+            : 'FALSE';
+        const dtOk = `COALESCE(isfinite(${dt}), FALSE)`;
+        const area = method === 'rectangular'
+            ? `(${y0} * ${dt})`
+            : `((${doubleLiteral(0.5)} * (${y0} + ${y})) * ${dt})`;
+        inc = `CASE WHEN NOT ${hasPrev} THEN ${start} WHEN ${dtOk} AND ${usable} AND NOT ${missing} THEN ${area} END`;
+        bad = `CASE WHEN ${hasPrev} AND ${dtOk} AND (NOT ${usable} OR ${missing}) THEN 1 ELSE 0 END`;
+        // What the panel reports, per step (see DuckDbSource.integralCounts).
+        steps.dt = windowColumn(`CASE WHEN ${hasPrev} AND ${dtOk} THEN ${dt} END`, [...deps, ...lower]);
+        steps.missing = windowColumn(`${hasPrev} AND ${dtOk} AND ${missing}`, [...deps, ...lower]);
+        steps.unusable = windowColumn(`${hasPrev} AND ${dtOk} AND NOT ${usable}`, [...deps, ...lower]);
+    }
+    const incColumn = windowColumn(inc, [...deps, ...lower]);
+    const badColumn = windowColumn(bad, [...deps, ...lower]);
+    const running = 'OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)';
+    const sum = `NULLIF(SUM(${quoteIdent(incColumn.column)}) ${running}, CAST('NaN' AS DOUBLE))`;
+    const out = policy === 'propagate'
+        ? `CASE WHEN SUM(${quoteIdent(badColumn.column)}) ${running} > 0 THEN CAST(NULL AS DOUBLE) ELSE ${sum} END`
+        : sum;
+    const own = windowColumn(out, [...deps, ...lower, incColumn, badColumn]);
+    return {
+        column: own,
+        // The step columns are not part of the variable: only the counting
+        // pass reads them, and a window nobody reads is still computed.
+        windows: mergeWindows(deps, lower, [incColumn, badColumn, own]),
+        steps,
+    };
+}

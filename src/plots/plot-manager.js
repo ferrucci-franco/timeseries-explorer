@@ -2860,8 +2860,8 @@ class PlotManager {
      * translated to SQL (src/expr/sql.js). What falls outside, and exports the
      * overview with a notice instead:
      *   · variables computed in the app over a lazy file's overview with no
-     *     SQL form (formulas using diff() or cumsum(), time-axis index/step),
-     *     which have no column to read;
+     *     SQL form (a formula over a variable that has none), which have no
+     *     column to read;
      *   · independent-index variables, whose own row axis the streamed layout
      *     does not reproduce.
      *
