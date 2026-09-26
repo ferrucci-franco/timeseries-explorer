@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3a y 3b implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2 y 3 (3a, 3b, 3c) implementadas; el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -368,8 +368,9 @@ rechazaban.
   en un archivo lazy la app **avisa** (`derivedLazyOverviewOnly`).
   *Corrección (fase 3b)*: se escribió aquí que `diff`/`cumsum` necesitaban una
   ventana que DuckDB-WASM materializa. Medido después, es falso: `LAG`, `LEAD`
-  y `SUM … ROWS UNBOUNDED PRECEDING` con `OVER ()` corren en streaming. Con las
-  columnas de ventana de la fase 3b ya se pueden traducir; queda pendiente.
+  y `SUM … ROWS UNBOUNDED PRECEDING` con `OVER ()` corren en streaming. Desde
+  la fase 3c se traducen (abajo); queda sin traducir `root()` con grado
+  variable.
 - Las siete cachés de consultas usan ahora la expresión en su clave: editar una
   fórmula bajo el mismo nombre no sirve los valores viejos.
 
@@ -469,6 +470,34 @@ huecos, valores cerca de ±1e308 y empates:
   agrega al `FROM`, si la valla IQR es inclusiva, si un estadístico de orden
   se corre un lugar, si `u` se calcula con el recíproco, o si la restauración
   no recalcula.
+
+### Implementado (fase 3c): `diff()` y `cumsum()` en fórmulas
+
+`diff(x)` es la derivada en modo "diferencia" sin dividir por Δt, y `cumsum`
+una suma corrida: con las columnas de ventana de la 3b, `src/expr/sql.js` las
+traduce como tales. El traductor devuelve, además de la expresión, las columnas
+de ventana que lee (`out.windows`), y la variable las lleva en
+`_duckdbWindows`, igual que una derivada: `_fromSql` las agrega al `FROM` solo
+en las consultas que las leen.
+
+- `diff`: `x[i] − x[i−1]`; la primera muestra toma la diferencia hacia
+  adelante, una sola fila da 0, y `diff` de una constante es una serie de
+  ceros (también `diff(1/0)`), como en `compile.js`.
+- `cumsum`: `SUM(x) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
+  suma en orden de fila, secuencialmente — medido: −0 da +0, el desborde da ∞
+  sin error, ∞ − ∞ da NaN y queda NaN, como en JavaScript. La única diferencia
+  es que `SUM` salta los NULL, mientras que en JavaScript un NaN contamina todo
+  lo que sigue: un conteo corrido de NULL lo corrige.
+- Anidan: `diff(diff(x))`, `cumsum(diff(x) * y)`, fórmulas sobre ellas, y
+  derivadas de la 3b sobre ellas.
+
+Pruebas (`scripts/test-formula-sql.mjs`): 17 fórmulas con `diff`/`cumsum` sobre
+las 1 369 combinaciones de valores extremos, y 4 sobre 50 000 filas
+ordinarias, **bit a bit**; una sola fila; el plan es `STREAMING_WINDOW` sin
+sort. `scripts/test-lazy-csv-export.mjs`: `cumsum(speed) + diff(torque)` y una
+fórmula encima se exportan byte a byte igual que en memoria. Verificado que
+falla sin el conteo de NULL, sin el 0 de una sola fila, sin la diferencia
+hacia adelante de la primera fila, o sin el caso de la constante.
 
 ## 8. Riesgos y decisiones abiertas
 

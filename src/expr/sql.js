@@ -38,12 +38,19 @@
 // try(). Measured on 5M rows where half of them are out of domain: try() fell
 // back to evaluating row by row and took 14 s; the guarded form takes 0.1 s.
 //
+// diff() and cumsum() read the previous row: a window over the whole file.
+// DuckDB streams `OVER ()` windows, but a window cannot sit in the SELECT that
+// filters the zoomed rows, or it would see only those. So each becomes a
+// window column (src/data/lazy-tool-sql.js): its SQL is a reference to the
+// column, and the columns the formula needs are handed back in `out.windows`
+// for the query to select FROM (DuckDbSource._fromSql).
+//   · diff: x[i] − x[i−1]; the first sample takes the forward difference, a
+//     single row gives 0, and diff of a constant is a zero series.
+//   · cumsum: the running sum in row order — the order compile.js adds in, so
+//     the sums are the same doubles. SUM() skips NULLs where a NaN poisons
+//     every later sample in JavaScript, so a NULL so far gives NULL.
+//
 // What cannot be translated says so and the caller keeps the overview:
-//   · diff() and cumsum() need the previous row: a window over the whole
-//     file. DuckDB streams `OVER ()` windows (measured, see
-//     src/data/lazy-tool-sql.js), but a window cannot sit in the same SELECT
-//     as a time filter; it needs the window columns of lazy-tool-sql.js, which
-//     this translator does not produce yet.
 //   · root() with a degree that is not a number written in the formula: its
 //     branches depend on the degree's value, decided here, once.
 //   · a variable with no SQL form of its own — a formula that itself could not
@@ -52,6 +59,7 @@
 
 import { parse, tokenize } from './parse.js';
 import { flattenLists } from './compile.js';
+import { quoteIdent, windowColumn } from '../data/lazy-tool-sql.js';
 
 // A formula this long in SQL has nested enough shared subexpressions that it
 // is not worth sending: the overview is the honest answer then.
@@ -61,6 +69,8 @@ const NAN = "CAST('NaN' AS DOUBLE)";
 const MINUS_ZERO = "CAST('-0.0' AS DOUBLE)";
 const PLUS_ZERO = "CAST('0' AS DOUBLE)";
 const NULL_DOUBLE = 'CAST(NULL AS DOUBLE)';
+const WINDOW_REF = /__omv_w_[0-9a-f]{16}/g;
+const RUNNING = 'OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)';
 
 export class FormulaNotTranslatable extends Error {
     constructor(reason) {
@@ -101,15 +111,46 @@ function constantValue(n) {
 /**
  * @param {string} formula
  * @param {object} variables the file's variables, as the tokenizer needs them
- * @param {(name: string) => ({ scalar: number } | { sql: string } | null)} resolve
+ * @param {(name: string) => ({ scalar: number } | { sql: string, windows?: Array } | null)} resolve
  *   how a name reads: a scalar value, the SQL of a column (any SQL giving a
- *   DOUBLE or NULL), or null when it has no SQL form
+ *   DOUBLE or NULL, with the window columns it reads), or null when it has no
+ *   SQL form
+ * @param {{ windows?: Array }} [out] receives the window columns the SQL reads
  * @returns {string} the SQL expression
  * @throws {FormulaNotTranslatable} when the formula has no faithful SQL form
  */
-export function formulaToSql(formula, variables, resolve) {
+export function formulaToSql(formula, variables, resolve, out = null) {
     const ast = flattenLists(parse(tokenize(formula, variables)));
     let lambdaId = 0;
+
+    // Every window column met so far, by name: those of the variables read,
+    // and those diff() and cumsum() create.
+    const registry = new Map();
+    const windowsIn = (text) => {
+        const found = new Map();
+        const visit = (sql) => {
+            for (const name of sql.match(WINDOW_REF) || []) {
+                const window = registry.get(name);
+                if (!window || found.has(name)) continue;
+                found.set(name, window);
+                visit(window.sql);
+            }
+        };
+        visit(text);
+        return [...found.values()];
+    };
+    const asColumn = (sql) => {
+        const window = windowColumn(sql, windowsIn(sql));
+        registry.set(window.column, window);
+        return quoteIdent(window.column);
+    };
+    const hasSeries = (n) => {
+        if (n.type === 'name') return !!resolve(n.value)?.sql;
+        if (n.type === 'unary') return hasSeries(n.expr);
+        if (n.type === 'binary') return hasSeries(n.left) || hasSeries(n.right);
+        if (n.type === 'func') return n.args.some(hasSeries);
+        return false;
+    };
 
     const share = (value, body) => {
         if (value.cheap) return body(value.sql);
@@ -135,6 +176,7 @@ export function formulaToSql(formula, variables, resolve) {
                 const resolved = resolve(n.value);
                 if (!resolved) throw new FormulaNotTranslatable(`"${n.value}" has no SQL form`);
                 if ('scalar' in resolved) return node(literal(Number(resolved.scalar)), true);
+                for (const window of resolved.windows || []) registry.set(window.column, window);
                 return node(settle(resolved.sql), true);
             }
             case 'unary': {
@@ -174,8 +216,20 @@ export function formulaToSql(formula, variables, resolve) {
 
     function func(n) {
         const name = n.name;
-        if (name === 'diff' || name === 'cumsum') {
-            throw new FormulaNotTranslatable(`${name}() needs the previous row`);
+        if (name === 'diff') {
+            if (!hasSeries(n.args[0])) return node(literal(0), true);
+            // The operand one level down, so LAG reads a column.
+            const v = asColumn(emit(n.args[0]).sql);
+            return node(asColumn(
+                `(CASE WHEN LAG(TRUE, 1, FALSE) OVER () THEN ${settle(`${v} - LAG(${v}) OVER ()`)}`
+                + ` WHEN LEAD(TRUE, 1, FALSE) OVER () THEN ${settle(`LEAD(${v}) OVER () - ${v}`)}`
+                + ` ELSE ${literal(0)} END)`), true);
+        }
+        if (name === 'cumsum') {
+            const v = asColumn(emit(n.args[0]).sql);
+            return node(asColumn(
+                `(CASE WHEN COUNT(*) ${RUNNING} > COUNT(${v}) ${RUNNING} THEN ${NULL_DOUBLE}`
+                + ` ELSE ${settle(`SUM(${v}) ${RUNNING}`)} END)`), true);
         }
         if (name === 'power') return power(emit(n.args[0]), n.args[1]);
         if (name === 'root') return root(n);
@@ -260,6 +314,9 @@ export function formulaToSql(formula, variables, resolve) {
     }
 
     const sql = emit(ast).sql;
-    if (sql.length > MAX_SQL_LENGTH) throw new FormulaNotTranslatable('the formula is too large to evaluate in SQL');
+    const windows = windowsIn(sql);
+    const length = windows.reduce((total, window) => total + window.sql.length, sql.length);
+    if (length > MAX_SQL_LENGTH) throw new FormulaNotTranslatable('the formula is too large to evaluate in SQL');
+    if (out) out.windows = windows.sort((a, b) => a.level - b.level || (a.column < b.column ? -1 : 1));
     return sql;
 }

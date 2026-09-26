@@ -27,6 +27,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { compileFormula } from '../src/expr/compile.js';
 import { formulaToSql, FormulaNotTranslatable } from '../src/expr/sql.js';
+import { windowedFromSql } from '../src/data/lazy-tool-sql.js';
 
 const require = createRequire(import.meta.url);
 const duckdb = require('@duckdb/duckdb-wasm/dist/duckdb-node-blocking.cjs');
@@ -73,7 +74,7 @@ const ulps = (x, y) => {
     buf.setFloat64(0, x); buf.setFloat64(8, y);
     return Number(buf.getBigInt64(0) - buf.getBigInt64(8) < 0n ? buf.getBigInt64(8) - buf.getBigInt64(0) : buf.getBigInt64(0) - buf.getBigInt64(8));
 };
-const EXACT_ONLY = /^[\sabcpqz0-9.+\-*/(),]*$|^(?:[\sabcpqz0-9.+\-*/(),]|sqrt|abs|sign|step|min|max|square)*$/;
+const EXACT_ONLY = /^[\sabcpqz0-9.+\-*/(),]*$|^(?:[\sabcpqz0-9.+\-*/(),]|sqrt|abs|sign|step|min|max|square|diff|cumsum)*$/;
 
 let maxUlps = 0;
 let worst = '';
@@ -83,13 +84,16 @@ let checked = 0;
 const SINGLE_CALL = /^\s*[a-z0-9]+\(\s*[abc]\s*(?:,\s*[abc0-9.\-]+\s*)?\)\s*$|^\s*[abc]\s*\^\s*[abc0-9.\-]+\s*$/;
 function check(formula) {
     const expected = compileFormula(formula, variables, classify).run(columns, PARAMS, N);
-    const sql = formulaToSql(formula, variables, resolve);
+    const out = {};
+    const sql = formulaToSql(formula, variables, resolve, out);
     // Never try(): on rows that error it drops to row-by-row evaluation — 14 s
     // instead of 0.1 s over 5M rows. Domains are guarded before the call.
     assert.ok(!/\btry\(/.test(sql), `${formula}: the SQL must not rely on try()`);
     let result;
     try {
-        result = conn.query(`SELECT ${sql} AS v FROM t ORDER BY id`).getChildAt(0);
+        // diff() and cumsum() are window columns of a subquery over the table,
+        // as DuckDbSource._fromSql selects them.
+        result = conn.query(`SELECT ${sql} AS v FROM ${windowedFromSql('t', 'TRUE', out.windows)} ORDER BY id`).getChildAt(0);
     } catch (err) {
         assert.fail(`${formula}: the SQL failed — ${err.message.split('\n')[0]}`);
     }
@@ -144,6 +148,65 @@ const handWritten = [
 ];
 for (const formula of handWritten) check(formula);
 console.log(`formula SQL: ${handWritten.length} hand-written formulas agree`);
+
+// ── diff() and cumsum(): the previous rows, as window columns ───────────────
+// Bit for bit: a difference is one subtraction, and the running sum adds in
+// row order as compile.js does. NaN poisons a running sum from there on in
+// JavaScript; SUM() would skip it.
+const neighbours = [
+    'diff(a)', 'cumsum(a)', 'a + diff(b)', 'diff(diff(a))', 'cumsum(diff(a) * b)', 'diff(cumsum(b))',
+    'diff(p)', 'diff(3)', 'diff(p / z)', 'cumsum(p)', 'cumsum(z - 1)', 'diff(a) / diff(b)', 'max(diff(a), cumsum(c))',
+    'cumsum(a + b) - diff(c)', '1 / diff(a)', 'diff(a * p) + cumsum(q)', 'min(diff(a), diff(a))',
+];
+for (const formula of neighbours) {
+    const out = {};
+    formulaToSql(formula, variables, resolve, out);
+    // diff of a constant is a zero series and needs no window.
+    if (!['diff(p)', 'diff(3)', 'diff(p / z)'].includes(formula)) assert.ok(out.windows.length >= 2, `${formula}: its window columns are handed back`);
+    check(formula);
+}
+{
+    // A table of ordinary values, long enough for many chunks: the running
+    // sum over 50 000 rows must be the very same doubles.
+    const R = 50000;
+    let s2 = 99;
+    const rnd = () => ((s2 = (s2 * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const x = Float64Array.from({ length: R }, () => (rnd() - 0.3) * 10 ** Math.floor(rnd() * 12 - 4));
+    conn.query('CREATE TABLE big (id INTEGER, x DOUBLE)');
+    for (let at = 0; at < R; at += 5000) {
+        conn.query(`INSERT INTO big VALUES ${Array.from({ length: 5000 }, (_, k) => `(${at + k}, CAST('${x[at + k]}' AS DOUBLE))`).join(',')}`);
+    }
+    const bigVariables = { x: { data: x } };
+    for (const formula of ['cumsum(x)', 'diff(x)', 'cumsum(diff(x) * 2)', 'diff(cumsum(x))']) {
+        const expected = compileFormula(formula, bigVariables, () => 'series').run({ x }, {}, R);
+        const out = {};
+        const sql = formulaToSql(formula, bigVariables, () => ({ sql: '"x"' }), out);
+        const vector = conn.query(`SELECT ${sql} AS v FROM ${windowedFromSql('big', 'TRUE', out.windows)} ORDER BY id`).getChildAt(0);
+        for (let i = 0; i < R; i++) {
+            const got = vector.get(i);
+            if (!Object.is(got === null ? NaN : got, expected[i])) assert.fail(`${formula} row ${i}: ${got} vs ${expected[i]}`);
+        }
+    }
+    // Nothing is sorted or held: every window streams.
+    const out = {};
+    const sql = formulaToSql('cumsum(diff(x))', bigVariables, () => ({ sql: '"x"' }), out);
+    const plan = conn.query(`EXPLAIN SELECT ${sql} FROM ${windowedFromSql('big', 'TRUE', out.windows)}`)
+        .toArray().map(row => Object.values(row.toJSON()).join('\n')).join('\n');
+    assert.match(plan, /STREAMING_WINDOW/, 'diff and cumsum are streaming windows');
+    assert.doesNotMatch(plan.replace(/STREAMING_WINDOW/g, ''), /WINDOW|ORDER_BY/, 'with no materializing window and no sort');
+    // One row: diff has no neighbour and gives 0 (a zero-filled array in
+    // compile.js); cumsum is the value itself.
+    conn.query(`CREATE TABLE one AS SELECT 0 AS id, CAST('5' AS DOUBLE) AS x`);
+    for (const [formula, want] of [['diff(x)', 0], ['cumsum(x)', 5]]) {
+        const out = {};
+        const sql = formulaToSql(formula, bigVariables, () => ({ sql: '"x"' }), out);
+        const got = conn.query(`SELECT ${sql} AS v FROM ${windowedFromSql('one', 'TRUE', out.windows)}`).getChildAt(0).get(0);
+        assert.equal(got, want, `${formula} over a single row`);
+        assert.equal(compileFormula(formula, { x: { data: [5] } }, () => 'series').run({ x: Float64Array.of(5) }, {}, 1)[0], want,
+            `${formula} over a single row, in memory`);
+    }
+    console.log(`formula SQL: diff and cumsum agree bit for bit, over the corners and 50 000 ordinary rows`);
+}
 console.log(`  single calls: worst ${maxUlps} ulp${worst ? ` (${worst})` : ''}`);
 
 // ── And random ones ─────────────────────────────────────────────────────────
@@ -195,7 +258,7 @@ console.log(`formula SQL: ${RANDOM_EXACT} random formulas of exact operations ag
 // values DuckDB computed for its children, fed to compile.js and to the
 // translation of that single operation alike.
 const readColumn = (sql) => {
-    const vector = conn.query(`SELECT ${sql} AS v FROM t ORDER BY id`).getChildAt(0);
+    const vector = conn.query(`SELECT ${sql} AS v FROM t ORDER BY id`).getChildAt(0);  // no windows here
     return Float64Array.from({ length: N }, (_, i) => { const v = vector.get(i); return v === null ? NaN : Number(v); });
 };
 let operations = 0;
@@ -250,7 +313,7 @@ console.log(`  worst difference of a single operation: ${maxUlps} ulp${worst ? `
 console.log(`  root() results past 5e11 rounded to a neighbouring integer: ${rootRoundingFlips}`);
 
 // ── What has no SQL form says so ────────────────────────────────────────────
-for (const formula of ['diff(a)', 'cumsum(a)', 'a + diff(b)', 'root(a, b)']) {
+for (const formula of ['root(a, b)', 'root(diff(a), b)']) {
     assert.throws(() => formulaToSql(formula, variables, resolve), FormulaNotTranslatable, `${formula} is not translated`);
 }
 assert.throws(() => formulaToSql('a + b', variables, name => (name === 'b' ? null : resolve(name))), FormulaNotTranslatable,
