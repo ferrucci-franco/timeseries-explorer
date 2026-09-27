@@ -475,6 +475,9 @@ hacerse pronto. La 7b (modo lazy) depende del orden estable de la etapa 2.
 
 ## 10. Nueva función: tipo y unidad por columna
 
+Especificación detallada con requisitos y criterios de aceptación:
+[`spec-text-labels-and-column-types.md`](spec-text-labels-and-column-types.md).
+
 ### 10.1 Lo que ya existe
 
 - En el diálogo de vista previa, la casilla **"Show column options"**
@@ -568,6 +571,8 @@ tipos de la columna completa, y la recarga y el live-append usan los del diálog
 - i18n: claves nuevas en EN/FR/ES (`test-i18n-consistency`).
 
 ## 11. Columnas de texto y etiqueta en el hover
+
+Especificación detallada: [`spec-text-labels-and-column-types.md`](spec-text-labels-and-column-types.md).
 
 ### 11.1 ¿Se cargan o se descartan las columnas de texto?
 
