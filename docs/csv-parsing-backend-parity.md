@@ -31,8 +31,8 @@ el momento del análisis).
 - Nuevas funciones propuestas:
   - **tipo por columna elegido por el usuario** (§10); la unidad por columna ya
     existe;
-  - **una columna de texto como etiqueta del hover** en series temporales y 2D
-    (§11). Hoy las columnas de texto se cargan, pero no se muestran en ninguna
+  - **columnas de texto arrastradas sobre un gráfico**, que se muestran como
+    etiquetas en el hover de series temporales y 2D; se admiten varias (§11). Hoy las columnas de texto se cargan, pero no se muestran en ninguna
     parte, y en el zoom lazy ni siquiera se consultan.
 
 ## 1. Método y niveles de evidencia
@@ -450,8 +450,12 @@ hacerse pronto. La 7b (modo lazy) depende del orden estable de la etapa 2.
 4. ¿Coma decimal por celda (JS) o por archivo (DuckDB)?
 5. ¿La caída a JS debe mostrarse al usuario?
 6. Tipo por columna (§10): ¿solo Numérico/Texto, o también Booleano?
-7. Etiqueta de hover (§11): ¿por archivo (propuesto) o por traza? ¿Largo máximo
-   de la etiqueta?
+7. Etiqueta de hover (§11). **Decidido:** arrastrar columnas de texto sobre el
+   gráfico, admitiendo varias. Pendiente:
+   - largo máximo de cada valor;
+   - número máximo de columnas por gráfico;
+   - si también debe funcionar en más tipos de gráfico, además de series
+     temporales y 2D.
 
 ## 9. Guía para verificar este documento
 
@@ -620,16 +624,46 @@ columnas "de texto" y en JS 10. Las 17 de diferencia son numéricas mal tipadas.
 - **Cursores A|B** (`interaction-methods.js:2290+`): interpolan el valor en la x
   del cursor. En modo completo usan la serie fuente sin diezmar.
 
-### 11.3 Diseño propuesto: "Usar como etiqueta del hover"
+### 11.3 Diseño propuesto: arrastrar columnas de texto sobre un gráfico
 
-- **Dónde vive:** por archivo. Se guarda como `fileEntry.hoverLabelVar` (nombre
-  de una columna de texto, o `null`) y se persiste en la sesión. Se activa desde
-  el menú contextual de una fila 🔤 de la barra lateral. Todas las trazas de ese
-  archivo, en series temporales y en 2D, muestran la etiqueta. Hacerlo por
-  gráfico no sirve, porque un gráfico puede mezclar archivos.
-- **Cómo mostrarla:** en `hovertext`, añadiendo al `hovertemplate` una línea
-  `%{hovertext}`. No toca `customdata` ni `text`. Truncar a unos 80 caracteres y
-  escapar HTML. Si la etiqueta está vacía, no se muestra la línea.
+**Gesto (decisión del autor):** la columna de texto se **arrastra y suelta
+sobre un gráfico**, igual que una numérica. En vez de crear una traza, se añade
+como **etiqueta del hover** de ese gráfico. **Se admiten varias columnas.**
+
+- **Arrastre.**
+  - Hoy las filas 🔤 tienen `draggable=false` (`tree-methods.js:588-590`) y la
+    selección múltiple las excluye (`_selectedVariableNamesForDrag`,
+    `tree-methods.js:~116`).
+  - Pasarían a ser arrastrables, conservando su aspecto distinto.
+  - Una selección mixta (numéricas + texto) haría ambas cosas a la vez: trazas
+    para las numéricas, etiquetas para las de texto.
+  - El camino táctil (`dropVariablesAtPoint`) debe comportarse igual.
+- **Aviso al pasar por encima.**
+  - Mientras se arrastra sobre el panel, el aviso existente (`showDragHint`,
+    `plot-manager.js:~1049`, compartido con el camino táctil) muestra un texto
+    indicativo, por ejemplo: *"Soltar para mostrar «descripcion» en el hover"*.
+  - En los tipos de gráfico que no lo admiten (FFT, histograma, mapa de calor,
+    etc.) dice por qué no: *"Las columnas de texto solo se pueden usar como
+    etiqueta en series temporales y 2D"*.
+  - Tras soltar, un aviso breve confirma lo que pasó.
+- **Dónde vive:** en el gráfico. Se guarda como
+  `plot.hoverLabels = [{ fileId, varName }, …]`, en el orden en que se soltaron,
+  y se persiste en layout y sesión.
+  - Cada etiqueta se aplica solo a las trazas **del mismo archivo**, porque un
+    gráfico puede mezclar archivos y la etiqueta necesita la misma fila.
+  - Soltar la misma columna dos veces no la duplica.
+- **Cómo se ve y se quita.**
+  - Chips en la cabecera o leyenda del gráfico, del tipo `🔤 descripcion ×`.
+  - Se quitan con la ×, o desde el menú contextual del gráfico.
+- **Cómo se muestra en el hover.**
+  - En `hovertext`, con una línea por columna: `<b>descripcion</b>: …`,
+    `<b>cuenta</b>: …`, añadidas al `hovertemplate` mediante `%{hovertext}`.
+    No toca `customdata` ni `text`.
+  - Cada valor se trunca a unos 80 caracteres y se escapa el HTML. Las
+    columnas vacías en esa fila no se muestran.
+- **Límite razonable:** unas 3–5 columnas por gráfico. Cada columna extra
+  multiplica el trabajo de las consultas `arg_min`/`arg_max` en modo lazy y
+  alarga el hover.
 - **Cómo mantener una etiqueta por punto dibujado:**
   - modo completo, series temporales:
     - que el diezmado devuelva los índices elegidos;
@@ -675,3 +709,9 @@ columnas "de texto" y en JS 10. Las 17 de diferencia son numéricas mal tipadas.
   general, zoom en bruto y zoom agregado): la etiqueta de cada punto dibujado
   coincide con la columna de texto en la fila fuente de ese punto.
 - Mismo resultado con DuckDB y con JS (§7.0).
+- Con varias columnas: el orden y el contenido de las líneas del hover son
+  correctos, y las celdas vacías se omiten.
+- Arrastre con ratón y con dedo, y selección mixta (numéricas + texto).
+- Aviso correcto en los gráficos que no admiten etiquetas.
+- Ida y vuelta de `plot.hoverLabels` en layout y sesión.
+- Una etiqueta de otro archivo no se aplica a las trazas de este.
