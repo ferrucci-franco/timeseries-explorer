@@ -406,15 +406,15 @@ que empieza lejos de la cabecera), se pierde de vista qué es cada columna.
 - **PRV-5** La columna "DateTime parsed" DEBE seguir fija a la izquierda
   **siempre**, como hoy, sin casilla (decisión del autor). Las columnas de
   tiempo de origen (`is-time-column`) no se fijan.
-- **PRV-7** Valor por defecto de la casilla "Fijar fila de títulos":
+- **PRV-6** Valor por defecto de la casilla "Fijar fila de títulos":
   **activada (provisional)**. DEBE recordarse entre aperturas del diálogo como
   preferencia del usuario (no por archivo). NO DEBE guardarse en el perfil CSV,
   porque no afecta al parsing.
-- **PRV-8** Las filas y columnas fijas DEBEN conservar sus colores actuales
+- **PRV-7** Las filas y columnas fijas DEBEN conservar sus colores actuales
   (título azul, unidades verde, "DateTime parsed" azul claro). La esquina
   (intersección de fila fija y columna fija) DEBE quedar por encima de ambas,
   como ya se hace hoy con la esquina de la cabecera (`z-index`).
-- **PRV-9** El texto de la casilla y su tooltip DEBEN existir en EN, FR y ES.
+- **PRV-8** El texto de la casilla y su tooltip DEBEN existir en EN, FR y ES.
 
 Nota de implementación (no normativa):
 
