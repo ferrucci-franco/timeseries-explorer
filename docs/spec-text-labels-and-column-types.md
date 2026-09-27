@@ -1,4 +1,4 @@
-# Especificación: etiquetas de texto en el hover y tipo por columna
+# Especificación: etiquetas de texto en el hover, tipo por columna y vista previa CSV
 
 - **Estado:** borrador para revisión. No hay nada implementado.
 - **Fecha:** 2026-09-27.
@@ -9,7 +9,7 @@
 
 Convenciones:
 
-- Cada requisito tiene un identificador (`LBL-…`, `TYP-…`, `PAR-…`) para
+- Cada requisito tiene un identificador (`LBL-…`, `TYP-…`, `PRV-…`, `PAR-…`) para
   poder citarlo en PRs y tests.
 - **DEBE** = obligatorio. **DEBERÍA** = recomendado, se puede omitir si se
   justifica. **PUEDE** = opcional.
@@ -365,6 +365,86 @@ Con `finanzas_unificadas_2016-2026.csv` y un gráfico de `debito_marara_xpf`:
 
 ---
 
+## 4bis. Parte D: fijar filas y columnas en la vista previa CSV
+
+### 4bis.1 Estado actual [código]
+
+En la tabla de la vista previa (`_renderGrid`, `csv-parsing-preview-dialog.js:~2176`;
+estilos en `src/styles/overlays.css:2106-2160`):
+
+| Elemento | ¿Fijo al desplazar? |
+|---|---|
+| Cabecera de la tabla (`thead`: letras de columna, "Fila", "DateTime parsed") | **sí**, arriba, siempre |
+| Columna de número de fila (`.csv-preview-row-head`) | **sí**, a la izquierda, siempre |
+| Columna **"DateTime parsed"** (`.csv-preview-parsed-cell`) | **sí**, a la izquierda, **siempre, sin casilla** |
+| **Fila de títulos del archivo** (`tr.is-header-row`) | **no**: está en `tbody` y se desplaza con los datos |
+| Fila de unidades (`is-units-row`), "Detected units", "New names" | **no** |
+| Columna(s) de tiempo de origen (`td.is-time-column`) | **no** |
+
+Consecuencia: al desplazarse hacia los datos (o con la ventana de la etapa 3b,
+que empieza lejos de la cabecera), se pierde de vista qué es cada columna.
+
+### 4bis.2 Requisitos
+
+- **PRV-1** El panel de opciones del diálogo DEBE ofrecer una casilla **"Fijar
+  fila de títulos"**. Activada, la fila de títulos del archivo queda fija
+  arriba, justo debajo de la cabecera de la tabla, al desplazarse
+  verticalmente.
+- **PRV-2** Con PRV-1 activa, también DEBEN quedar fijas, en este orden, las
+  filas que describen columnas y que existan: fila de unidades del archivo,
+  "Detected units" y "New names". Sin ellas, el título fijo no dice la unidad
+  ni el nombre final.
+- **PRV-3** La fila de títulos fija DEBE mostrarse aunque no esté entre las
+  filas cargadas o visibles:
+  - con la ventana de la etapa 3b;
+  - con "Hide preamble rows";
+  - con "Hide invalid lines".
+
+  Es la forma de ver las columnas cuando los datos empiezan en la fila 2000.
+- **PRV-4** Si el archivo no tiene fila de títulos (`hasHeader = false`), la
+  casilla DEBE aparecer desactivada, con un tooltip que lo explique.
+- **PRV-5** El panel DEBE ofrecer una casilla **"Fijar columna de fecha/hora"**
+  que controle la columna "DateTime parsed", que hoy está fija siempre.
+  - Activada (valor por defecto) = comportamiento actual.
+  - Desactivada = la columna se desplaza como las demás.
+- **PRV-6** Con PRV-5 activa, la(s) columna(s) de tiempo de origen
+  (`is-time-column`) PUEDEN fijarse también, a continuación de "DateTime
+  parsed". Esto es útil para comparar el texto original con el valor
+  interpretado. **(Provisional:** no en esta versión si complica el cálculo de
+  desplazamientos horizontales).
+- **PRV-7** Valores por defecto: las dos casillas **activadas (provisional)**.
+  Los dos DEBEN recordarse entre aperturas del diálogo como preferencia del
+  usuario (no por archivo). NO DEBEN guardarse en el perfil CSV, porque no
+  afectan al parsing.
+- **PRV-8** Las filas y columnas fijas DEBEN conservar sus colores actuales
+  (título azul, unidades verde, "DateTime parsed" azul claro). La esquina
+  (intersección de fila fija y columna fija) DEBE quedar por encima de ambas,
+  como ya se hace hoy con la esquina de la cabecera (`z-index`).
+- **PRV-9** Los textos de las dos casillas y sus tooltips DEBEN existir en EN, FR
+  y ES.
+
+Nota de implementación (no normativa):
+
+- Varias filas fijas apiladas necesitan desplazamientos `top` acumulados.
+- La forma más simple es renderizar esas filas dentro de `thead`, que ya es
+  fijo, en lugar de calcular `top` a mano.
+- PRV-3 sale casi gratis así: la fila de títulos se toma de
+  `state.headerIndex`, no de las filas visibles.
+
+### 4bis.3 Criterios de aceptación
+
+1. Con "Fijar fila de títulos" activa, al desplazarse hasta el final de la
+   tabla, los títulos `fecha, tipo_fila, …` del CSV del usuario siguen
+   visibles.
+2. Con la primera fila de datos en 2000 (etapa 3b), la fila de títulos aparece
+   fija sobre las filas de datos.
+3. Con "Fijar columna de fecha/hora" desactivada, "DateTime parsed" se
+   desplaza horizontalmente como el resto. Al reabrir el diálogo, la casilla
+   sigue desactivada.
+4. Un archivo sin fila de títulos muestra la casilla desactivada.
+
+---
+
 ## 5. Parte C: paridad y tests
 
 - **PAR-1** Antes de cualquier cambio de Parte A o B DEBE existir la batería de
@@ -430,6 +510,7 @@ Con `finanzas_unificadas_2016-2026.csv` y un gráfico de `debito_marara_xpf`:
 | 5 | Parte A, cursores (LBL-50) | 4 |
 | 6 | Etapa 2: orden estable y fechas SQL | 1 |
 | 7 | Parte A, modo lazy (LBL-43…47) | 4, 6 |
+| 8 | Parte D: fijar fila de títulos y columna de fecha/hora (PRV-*), junto con la etapa 3 del plan | — (PRV-3 se completa con la etapa 3b) |
 
 Cada paso es un PR independiente, con su test y su criterio de aceptación.
 
@@ -443,3 +524,5 @@ Cada paso es un PR independiente, con su test y su criterio de aceptación.
 | 4 | ¿Tipo Booleano en el selector? | No en esta versión |
 | 5 | Criterio "auto" de la etapa 1 para columnas con mayoría de `N/A` | Tratar `N/A`, `NA`, `-`, `null` y `#N/A` como vacíos, y no como texto |
 | 6 | ¿Chips reordenables? | No en esta versión (orden de inserción) |
+| 7 | Vista previa: ¿fijar también la(s) columna(s) de tiempo de origen? (PRV-6) | No en esta versión |
+| 8 | Vista previa: valores por defecto de las casillas de fijar | Ambas activadas |
