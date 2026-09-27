@@ -60,12 +60,14 @@ fuente del punto.
 
 ### 3.2 Gráficos admitidos
 
+**Decisión del autor: solo series temporales y 2D.**
+
 | Modo (`mode`) | ¿Admite etiquetas? |
 |---|---|
 | `timeseries` | **sí** |
 | `phase2d` | **sí** |
-| `phase2dt` | **sí** |
-| `phase3d` | no en esta versión (PUEDE añadirse después) |
+| `phase2dt` (2D+t) | **no** |
+| `phase3d` | **no** |
 | `fft`, `histogram`, `heatmap`, `correlation` | no: sus puntos no corresponden a filas fuente |
 
 ### 3.3 Arrastre
@@ -194,7 +196,7 @@ se derivan de ella.
   (`interaction-methods.js:~323-390`) como el por lotes
   (`_applyBatchedTimeseriesRestyle`, `~1036-1082`), DEBEN enviar `hovertext` y
   `hovertemplate` cuando haya etiquetas, y limpiarlos cuando se quiten.
-- **2D (`phase2d`, `phase2dt`):** mismos índices de paso que los puntos
+- **2D (`phase2d`):** mismos índices de paso que los puntos
   (`_downsampleStrideIndexes` / `_pickIndexed`).
 
 **Modo lazy:**
@@ -245,7 +247,7 @@ se derivan de ella.
 
 - Graficar columnas de texto como trazas (categóricas).
 - Filtrar o colorear puntos por el valor de una columna de texto.
-- Etiquetas en `phase3d`, `fft`, `histogram`, `heatmap` y `correlation`.
+- Etiquetas en `phase2dt`, `phase3d`, `fft`, `histogram`, `heatmap` y `correlation`.
 - Una tabla de datos o inspector de filas.
 
 ### 3.12 Criterios de aceptación
@@ -437,7 +439,7 @@ Cada paso es un PR independiente, con su test y su criterio de aceptación.
 |---|---|---|
 | 1 | Largo máximo de cada valor en el hover | 80 caracteres |
 | 2 | Máximo de etiquetas por gráfico | 5 (confirmar con la medición de LBL-61) |
-| 3 | ¿Etiquetas también en `phase3d`? | No en esta versión |
+| 3 | ¿En qué gráficos? | **Decidido:** solo `timeseries` y `phase2d` |
 | 4 | ¿Tipo Booleano en el selector? | No en esta versión |
 | 5 | Criterio "auto" de la etapa 1 para columnas con mayoría de `N/A` | Tratar `N/A`, `NA`, `-`, `null` y `#N/A` como vacíos, y no como texto |
 | 6 | ¿Chips reordenables? | No en esta versión (orden de inserción) |

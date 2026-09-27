@@ -454,8 +454,7 @@ hacerse pronto. La 7b (modo lazy) depende del orden estable de la etapa 2.
    gráfico, admitiendo varias. Pendiente:
    - largo máximo de cada valor;
    - número máximo de columnas por gráfico;
-   - si también debe funcionar en más tipos de gráfico, además de series
-     temporales y 2D.
+   - **decidido:** solo en series temporales (`timeseries`) y 2D (`phase2d`).
 
 ## 9. Guía para verificar este documento
 
