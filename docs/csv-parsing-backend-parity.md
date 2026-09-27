@@ -280,6 +280,39 @@ Cada etapa es un PR independiente y reversible. El test de la etapa 0 debe
 seguir pasando, o su lista de diferencias esperadas debe cambiar
 explícitamente en el PR.
 
+### 7.0 Requisito transversal: tests de paridad entre los dos parsers
+
+**Objetivo final: que ambos parsers funcionen de manera idéntica.** Para el
+mismo archivo y el mismo perfil, DuckDB y el parser JS deben producir las mismas
+variables, los mismos tipos, las mismas unidades, los mismos valores (NaN
+incluidos) y el mismo orden. Los tests que lo verifican son obligatorios y
+cubren **todos los modos**, no solo la carga inicial:
+
+| Modo | Qué se compara |
+|---|---|
+| DuckDB carga completa vs. JS (worker) | todas las variables: `dataType`, longitud, valores (hash exacto, NaN por posición), orden, nombre, unidad, descripción |
+| DuckDB lazy vs. JS | vista general + una consulta de zoom sobre una ventana fija: mismos valores en esa ventana |
+| JS en worker vs. JS en hilo principal | resultado idéntico (hoy se asume) |
+| Perfil automático vs. perfil revisado por el usuario sin cambios | resultado idéntico |
+| Perfil del usuario con cambios (nombre, filtro, primera fila, y tipo/unidad de la §10) | ambos parsers respetan el perfil del mismo modo |
+| Live-append (DuckDB `appendCsvDelta` vs. JS `parseRowsWithProfile`) | las filas añadidas tienen el mismo tipo y valor que en una carga completa del archivo final |
+| Recarga (Reload) | igual a una carga nueva |
+| Conversión a Parquet (navegador y escritorio) → carga del Parquet | igual a la carga del CSV |
+
+Reglas:
+
+- Cada fixture nuevo (§5, etapa 0) entra en la batería. **Cada bug de parsing
+  corregido añade un fixture que lo reproduce.**
+- Las diferencias conocidas y aceptadas quedan en una lista explícita
+  (`backend-parity-expected.json`) con su motivo. El objetivo es que esa lista
+  quede vacía.
+- Un PR que toque `csv-parser.js`, `csv-time-detection.js`, `duckdb-source.js`
+  (parte CSV), `csv-to-parquet-core.js` o el diálogo de vista previa debe
+  ejecutar la batería y no puede introducir diferencias nuevas.
+- Se comprueban además, sin comparar entre parsers, los casos que hoy solo
+  existen en un camino: separador de espacios variables y windows-1252 (solo
+  JS). El test verifica que la caída a JS ocurre y queda visible.
+
 ### Etapa 0: test de paridad DuckDB vs. JS (sin cambiar comportamiento)
 
 - Script `scripts/e2e-csv-backend-parity.mjs`, con el patrón de
