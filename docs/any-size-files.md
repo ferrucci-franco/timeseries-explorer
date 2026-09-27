@@ -1,6 +1,6 @@
 # Archivos de cualquier tamaño: qué falta y cómo cerrarlo
 
-**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4a implementadas; Parquet sin red resuelto (§8); 4b diseñada (sección "Diseño (fase 4b)"); el resto, estudio.** Continúa `docs/file-size-limits.md`.
+**Estado: fases 1, 2, 3 (3a, 3b, 3c) y 4a implementadas; Parquet sin red resuelto (§8); 4b diseñada (sección "Diseño (fase 4b)"), con la base en OPFS medida como alternativa al presupuesto en memoria (§10); el resto, estudio.** Continúa `docs/file-size-limits.md`.
 Aquel documento estudió los *límites*; este estudia lo que la pregunta de fondo
 pedía en realidad: *que la herramienta lea archivos de cualquier tamaño*. Todo lo
 que afirma sobre el código fue verificado en la fuente; lo que es propuesta está
@@ -721,7 +721,17 @@ señales suaves) contra un ajuste nuevo, *Resultados en memoria (MB)*, por
 defecto 1024, contando los sumideros ya vivos. El techo de wasm es 4 GiB
 (`docs/file-size-limits.md`, addenda) y lo comparten los búferes de escaneo de
 DuckDB (~300 MB en un CSV de 360 MB, medido). Con 1 GiB entran ~50 M filas de
-salida. Por encima:
+salida.
+
+**Medido después de escribir esto (§10): si la base de DuckDB se abre en OPFS
+en vez de en memoria, el motor pagina solo los sumideros a disco.** Una tabla
+de 431 MB se escribió y leyó con `memory_limit` de 190 MB; en la base en
+memoria, la misma tabla falla con *Out of Memory*. Eso convierte el
+presupuesto en un `memory_limit` del motor y hace innecesario el desborde a
+Parquet en la web (punto 1 de abajo), que queda como respaldo para cuando OPFS
+no está. El diseño con la base en memoria sigue valiendo tal cual; §10 dice qué
+cambia, qué cuesta y qué hay que medir en la 4b-1 antes de elegir. Con la base
+en memoria, por encima del presupuesto:
 
 1. **Web, con la extensión Parquet disponible**: el sumidero se escribe en
    **OPFS** con `COPY … TO 'opfs://…' (FORMAT PARQUET)` (DuckDB-WASM 1.32 lo
@@ -827,7 +837,7 @@ Node, y 5 M filas en Chromium con el bundle `eh` de la app:
 | Unión posicional con una vista filtrada | `POSITIONAL_JOIN`: 4,1 s, +155 MB |
 | Zoom sobre tabla × sumidero / dos sumideros / sumidero solo | 93 / 106 / 4 ms (archivo solo: 17 ms) |
 | Agregar 100 k filas a un sumidero | 15 ms |
-| OPFS desde DuckDB (`opfs://`, CSV) | escribir 5 M filas (126 MB) 6,2 s; releer 3,7 s |
+| OPFS desde DuckDB (`opfs://`, CSV) | escribir 5 M filas (126 MB) 6,2 s; releer 3,7 s. La base entera en OPFS: §10 |
 | Kernels en JS, 20 M muestras | IIR adelante 1,3 s; fase cero 1,6 s; media móvil 0,4 s; picos 10,1 s; relleno 0,26 s |
 | Extensión Parquet | **no viene en el bundle de DuckDB-WASM**: `duckdb_extensions()` la muestra `NOT_INSTALLED`; la app la sirve ella misma desde el build (§8) |
 
@@ -835,10 +845,10 @@ Node, y 5 M filas en Chromium con el bundle `eh` de la app:
 
 | Sub-fase | Qué | Costo |
 |---|---|---|
-| **4b-1** | El ejecutor, el sumidero en tabla con presupuesto y lectura por `_fromSql`, la forma incremental de la **media móvil** (y el detrend por media móvil), overlay con progreso y cancelación, sesión (re-ejecución), tests de borde de trozo, e2e | 2–3 días |
+| **4b-1** | El ejecutor, el sumidero en tabla con presupuesto y lectura por `_fromSql`, la forma incremental de la **media móvil** (y el detrend por media móvil), overlay con progreso y cancelación, sesión (re-ejecución), tests de borde de trozo, e2e. **Decidir base en OPFS o en memoria** midiendo las pasadas de la 3b y el escaneo de CSV bajo `memory_limit` (§10) | 2–3 días |
 | **4b-2** | **Filtro IIR** hacia adelante (estado, huecos con el umbral de la 4a, avance) y de **fase cero** (sumidero de trabajo, vuelta al revés) | 1–2 días |
 | **4b-3** | La familia sin estado en el pool de workers: **picos**, **rellenar faltantes**, reemplazo de outliers por interpolación, política *interpolar* de la integral; el tope de mirada hacia adelante | 2 días |
-| **4b-4** | **Remuestreo** y **colapsar** como datasets lazy (`adoptTable`); correlación cruzada con presupuesto; los sumideros de desborde (OPFS en web, Parquet nativo en escritorio) con sus mediciones; actualización en vivo por continuación | 2–3 días |
+| **4b-4** | **Remuestreo** y **colapsar** como datasets lazy (`adoptTable`); correlación cruzada con presupuesto; los sumideros de desborde (Parquet en OPFS en web si la base quedó en memoria, Parquet nativo en escritorio) con sus mediciones; actualización en vivo por continuación | 2–3 días |
 
 Cada sub-fase es un PR con paridad bit a bit contra el kernel en memoria (el
 mismo patrón que `scripts/test-lazy-data-tools.mjs`), y la 4b-1 deja la
@@ -854,10 +864,13 @@ infraestructura que las otras tres solo usan.
 - **Memoria de wasm.** Sumideros + búferes de DuckDB + el archivo que se
   escanea comparten 4 GiB. El presupuesto es una estimación; la 4b-1 tiene
   que medir el residente real en Chromium con un archivo grande y ajustar los
-  24 B/fila.
-- **Parquet y la red.** Los sumideros de desborde en web dependen de la
-  extensión Parquet, que la app ya sirve ella misma (§8). En escritorio
-  dependen de ella para *leer*, no para escribir.
+  24 B/fila. Con la base en OPFS (§10) el presupuesto lo aplica DuckDB
+  (`memory_limit`) y los sumideros dejan de contar contra los 4 GiB; a cambio,
+  ese límite acota también los escaneos y las pasadas de estadísticas, que hoy
+  usan lo que haya.
+- **Parquet y la red.** Los sumideros de desborde en web (si la base queda en
+  memoria) dependen de la extensión Parquet, que la app ya sirve ella misma
+  (§8). En escritorio dependen de ella para *leer*, no para escribir.
 - **Reescribir kernels.** Es la parte con más riesgo de regresión; la
   mitigación es que la forma incremental conduce también el camino eager, así
   que los tests existentes fallan si algo cambia.
@@ -908,6 +921,16 @@ infraestructura que las otras tres solo usan.
     `<app>/duckdb-extensions/v1.4.3/wasm_eh/parquet.duckdb_extension.wasm`) y
     el camino sin módulo; la carga real la verifica CI.
 
+- **La base de DuckDB en OPFS.** Medido (§10): con la base en el disco del
+  navegador, DuckDB pagina solo las tablas que no entran en `memory_limit`,
+  y lo demás (archivos registrados, tablas temporales, vistas) sigue igual.
+  Es la alternativa al presupuesto en memoria y al desborde a Parquet de la
+  4b. Lo que decide es qué hace un `memory_limit` con las pasadas de la 3b y
+  con el escaneo de CSV, y eso se mide en la 4b-1. Un archivo OPFS lo tiene
+  una sola pestaña a la vez, así que la base es por pestaña y los huérfanos
+  se borran al arrancar. `ATTACH` a OPFS no funciona en 1.32, así que es la
+  base principal la que va a OPFS, no una segunda.
+
 - **Orden físico ≠ orden temporal.** Toda la sección 5 asume que el archivo está
   ordenado por tiempo, como ya lo asumen `getRawColumnsRange` y la fase. Un
   archivo desordenado se detecta sobre la marcha y se rechaza con mensaje; no
@@ -939,6 +962,118 @@ infraestructura que las otras tres solo usan.
    herramientas (fases 3–4)?
 2. **Presupuesto en memoria** para el sink (b): ¿un ajuste más, o directamente
    "todo lo que no sea columna virtual va a Parquet"? Lo segundo es más simple y
-   más honesto; lo primero es más rápido para archivos medianos.
+   más honesto; lo primero es más rápido para archivos medianos. (§10 cambia
+   la pregunta: con la base en OPFS el presupuesto es el `memory_limit` del
+   motor y el desborde lo hace DuckDB, sin Parquet ni ajuste nuevo.)
 3. **Web**: ¿vale la pena el sink (c) como descarga, o las fases 4–5 son de
    escritorio y la web se queda en 1–3?
+
+---
+
+## 10. OPFS: la base de DuckDB en el disco del navegador
+
+Los navegadores traen desde marzo de 2023 el *Origin Private File System*
+(OPFS): un sistema de archivos por origen, aislado, con lectura y escritura por
+posición. DuckDB-WASM lo usa de dos maneras: como destino de archivos
+(`COPY … TO 'opfs://…'`, medido más arriba con CSV) y como **respaldo de la
+base entera** (`open({ path: 'opfs://x.db' })`): la base sobrevive a recargas
+y a cerrar el navegador. Para esta app la persistencia importa poco (los datos
+son del archivo del usuario, no de una base); lo que importa es lo otro que
+trae una base en disco: **DuckDB puede sacar de memoria lo que no entra**.
+
+**Hoy no lo usamos.** `DuckDbSource._bootstrap` abre la base en memoria, no
+fija `memory_limit`, y nada de la app escribe en OPFS.
+
+### Medido
+
+Chromium headless (Playwright) con el bundle `eh` de la app, DuckDB-WASM
+1.32.0 (DuckDB v1.4.3), un hilo, `preserve_insertion_order=false`. Tabla
+`(rn BIGINT, t DOUBLE, y DOUBLE)` con `y = sin(rn)`, como el sumidero de la
+4b. Se reproduce con `node bench/opfs-database.mjs [--rows N] [--limit 100MB]`.
+
+| Qué | Medida |
+|---|---|
+| Base en OPFS, `memory_limit` 100 MB, `CREATE TABLE AS` de 20 M filas | 6,7 s; archivo 144 MB (7 B/fila); memoria del motor 100 MB (= el límite); `count + sum` 0,8 s; zoom de 1001 filas por `rn` 8 ms |
+| Ídem, 60 M filas, límite 190 MB | 20 s; 431 MB; `count + sum` 2,3 s; zoom 11 ms; memoria 200 MB |
+| La misma tabla en la base **en memoria**, mismo límite | *Out of Memory Error* al llegar al límite (con 95 MB y con 190 MB) |
+| Recargar la página y reabrir el mismo archivo | 35–40 ms; la tabla está; `count + sum` 1,1 s (20 M) / 2,7 s (60 M) |
+| Escritura por trozos (77 × 262 144 filas: tabla temporal en memoria → `INSERT INTO`), límite 100 MB | 8,4 s; `CHECKPOINT` 3,4 s; 397 MB en disco (20 B/fila: los bloques escritos durante la transacción no se recomprimen en el `CHECKPOINT`); orden físico = `rn`, 0 filas fuera de lugar |
+| Archivo × sumidero por rangos de `rn` (unión posicional, **los dos lados filtrados**) | zoom de 1001 filas 70–117 ms; el archivo entero en 77 trozos 7,6–8,0 s |
+| Archivo × sumidero, unión posicional **sin filtrar** | *Out of Memory*: el plan materializa un lado (sección "Cómo lee la app una variable de sumidero") y el límite no lo deja |
+| Archivo del navegador registrado (`read_csv` sobre un `File`) con la base en OPFS | funciona igual |
+| Tabla `TEMP` | queda en el catálogo `temp`, en memoria, no en el archivo |
+| `ATTACH 'opfs://…'` (una segunda base, la principal en memoria) | **no funciona en 1.32.0**: con registro manual del nombre, "exists, but it is not a valid DuckDB database file"; con `opfs.fileHandling: 'auto'`, "No OPFS access handle registered" |
+| Segunda pestaña sobre el mismo archivo | falla al abrir: `createSyncAccessHandle` → "another open Access Handle" |
+| Reabrir en el mismo *worker* un nombre ya abierto antes (tras pasar por memoria) | abre, pero **en solo lectura**: "Failed to commit: File is not opened in write mode"; con un nombre nuevo, todo normal |
+| Borrar el archivo | imposible mientras la pestaña dueña lo tiene abierto; posible tras volver a memoria (`open({})`) más `dropFile`, y desde otra pestaña cuando la dueña se cerró |
+| Cuota (`navigator.storage.estimate()`) | ~1 GB en el Chromium headless de este entorno; depende del navegador y del disco libre |
+
+Lo que no se pudo medir acá: `COPY … TO 'opfs://…' (FORMAT PARQUET)`, porque
+en este entorno de desarrollo la extensión Parquet no se puede bajar (§8).
+
+### Qué cambia para la 4b (propuesta)
+
+- **La base principal se abre en `opfs://omv-<pestaña>.db`** cuando OPFS
+  está disponible, con un `memory_limit` explícito. Los sumideros son tablas
+  normales y DuckDB los pagina; el ajuste *Resultados en memoria* deja de ser
+  un tope duro y pasa a ser ese `memory_limit`; el desborde a Parquet en la
+  web (Principio 3, punto 1) deja de hacer falta. Antes de empezar un trabajo
+  se compara el tamaño estimado con la cuota de OPFS, no con la memoria.
+- **Un archivo por apertura, y limpieza al arrancar.** Un archivo OPFS lo
+  tiene una sola pestaña a la vez, y un nombre ya abierto en el mismo *worker*
+  vuelve en solo lectura, así que cada apertura usa un nombre nuevo (pestaña
+  más contador). Al cerrar el archivo o la pestaña, la base vuelve a memoria
+  (`open({})`) y se borra el archivo con `dropFile`; al arrancar, se borran
+  los que quedaron de pestañas que murieron (los que una pestaña viva tiene
+  abiertos no se dejan borrar, y eso es justo la señal para dejarlos).
+- **Lo que hoy es `CREATE TABLE` transitorio pasa a `TEMP`.** El camino eager
+  de `_loadIntoLegacy` crea una tabla y la borra al terminar; con la base en
+  disco tiene que ser temporal para no pasar por OPFS. Las vistas y los
+  archivos registrados no cambian.
+- **Sin OPFS** (navegador que lo niega, cuota chica, versión vieja) queda el
+  diseño tal como está: base en memoria y presupuesto.
+- **La lectura por rangos con los dos lados filtrados es obligatoria**, no una
+  optimización: bajo `memory_limit` una unión posicional del archivo entero
+  falla en vez de crecer. El ejecutor ya lee por trozos; lo que hay que
+  vigilar son las consultas globales (correlación cruzada, exportación con
+  columnas de las dos fuentes), que tienen que ir por trozos también.
+
+### Lo que hay que medir en la 4b-1 antes de elegir
+
+- **`memory_limit` contra lo que ya funciona.** Hoy el motor usa hasta el
+  *heap* de wasm; con un límite, las pasadas de estadísticas de la 3b
+  (histogramas de refinamiento), la comprobación de monotonía y los búferes
+  del escaneo de CSV (~300 MB medidos en un archivo de 360 MB) tienen que
+  caber. Un límite alto (2 GiB, por ejemplo) los deja como están y sigue
+  sacando los sumideros a disco; hay que confirmarlo con un CSV de varios GB.
+- **El costo de la base en disco para lo que no es sumidero.** Los catálogos
+  y las vistas escriben en OPFS; debería ser despreciable, pero no está
+  medido.
+- **Cuota y comportamiento bajo presión de disco.** El almacenamiento de OPFS
+  es *temporal* salvo que se pida persistencia: el navegador puede borrarlo si
+  le falta espacio. Para sumideros es aceptable (se recalculan de la
+  definición, como al restaurar una sesión), pero la app tiene que detectar
+  el archivo perdido y volver a correr el trabajo, no fallar.
+
+### Otros usos, fuera de la 4b
+
+- **Convertir CSV a Parquet en el navegador sin techo de tamaño.** Hoy
+  `_convertToParquet` escribe el Parquet en el sistema de archivos en memoria
+  del motor, lo copia a JS (`copyFileToBuffer`) y de ahí a un `Blob` o
+  `File`: dos o tres copias del Parquet en memoria, y por eso el botón
+  *convertir temporalmente* no existe en la web. Escribiendo
+  `COPY … TO 'opfs://…'` y copiando por streaming al destino elegido, el
+  techo desaparece y el Parquet temporal puede abrirse desde OPFS. Requiere
+  la extensión Parquet (la app ya la sirve, §8). Sin medir.
+- **Caché de conversiones.** La persistencia entre recargas serviría para
+  guardar el Parquet de un CSV ya convertido, con la huella del archivo
+  (nombre, tamaño, fecha) como clave. Es la mejora que la 4b-4 propone para
+  escritorio, en la web. Depende de la cuota.
+
+### Lo que OPFS no cambia
+
+- El techo de 4 GiB de memoria de DuckDB-WASM: OPFS es disco, no memoria.
+- La lectura de archivos: ya recorre el archivo sin que la memoria crezca con
+  el tamaño.
+- El escritorio, donde el plan es DuckDB nativo escribiendo al disco.
+
