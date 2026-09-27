@@ -438,7 +438,7 @@ proto.loadFiles = async function(items = []) {
 
     for (const result of loaded) {
         await this._showDatetimeAxisWarningIfNeeded(result.fileId, result.data);
-        if (result.data?._duckdb) this._showLazyFileNotice(result.fileId);
+        if (result.data?._duckdb) this._showLazyFileNotice(result.fileId, result.data);
         this._showNetcdfPartialLoadNotice(result.fileId);
     }
 
@@ -936,7 +936,7 @@ proto._hideFileLoadingOverlay = function(loadToken = null) {
     setTimeout(() => overlay.remove(), 220);
 };
 
-proto._showLazyFileNotice = function(fileId) {
+proto._showLazyFileNotice = function(fileId, data = null) {
     const entry = this.files.get(fileId);
     if (!entry) return;
     const noticeId = `lazy-file-notice-${fileId}`;
@@ -955,7 +955,10 @@ proto._showLazyFileNotice = function(fileId) {
     title.textContent = i18n.t('lazyFileNoticeTitle');
     const body = document.createElement('div');
     body.className = 'dismissible-notice-body';
-    body.textContent = i18n.t('lazyFileNoticeBody').replace('{file}', this._fileDisplayName(entry));
+    // A file can be here for two reasons, and they call for different advice:
+    // over the limit is a setting; not fitting whole is this machine.
+    const bodyKey = data?.metadata?.lazyReason === 'memory' ? 'lazyFileNoticeBodyMemory' : 'lazyFileNoticeBody';
+    body.textContent = i18n.t(bodyKey).replace('{file}', this._fileDisplayName(entry));
     const actions = document.createElement('div');
     actions.className = 'dismissible-notice-actions';
     // Dismiss first, and styled as the primary action. With "Open Settings"
@@ -2303,7 +2306,7 @@ function translateAudioError(err, filename) {
 
 // Files bigger than this threshold (bytes) trigger DuckDB lazy mode: the
 // in-memory copy holds a downsampled overview, and zoom queries hit DuckDB.
-const DUCKDB_LAZY_THRESHOLD_BYTES = 150 * 1024 * 1024;
+const DUCKDB_LAZY_THRESHOLD_BYTES = 300 * 1024 * 1024;
 const PARQUET_LAZY_THRESHOLD_BYTES = 100 * 1024 * 1024;
 // CSV files larger than this should ideally be pre-converted to Parquet
 // (`node bench/csv-to-parquet.mjs file.csv`) — the WASM heap ceiling makes
@@ -2325,24 +2328,51 @@ proto._advancedSettingBytes = function(key, fallbackBytes) {
     return Math.round(this._advancedSettingMb(key, fallbackMb) * MB_BYTES);
 };
 
-// A limit the user may switch off. Zero in Settings means "never ask", which
+// A limit the user may switch off. Zero in Settings means "no limit", which
 // _advancedSettingBytes cannot say: it reads zero as "unset" and hands back the
-// runtime default, so the warning came straight back the moment someone tried
-// to turn it off. Only the formats that WARN resolve through here. CSV and
-// Parquet switch modes at their limit, and zero there is not a request anyone
-// makes, so their floor stays.
+// runtime default, so the limit came straight back the moment someone tried
+// to turn it off. Every size limit resolves through here. For the formats
+// that warn, zero means never ask; for CSV and Parquet, which switch modes at
+// their limit, it means load whole whatever the size (_loadWholeOrLazy).
 proto._optionalLimitBytes = function(key, fallbackBytes) {
     if (this.advancedSettings?.[key] === 0) return 0;
     return this._advancedSettingBytes(key, fallbackBytes);
 };
 
 proto._csvFullLoadLimitBytes = function() {
-    return this._advancedSettingBytes('csvFullLoadMb', DUCKDB_LAZY_THRESHOLD_BYTES);
+    return this._optionalLimitBytes('csvFullLoadMb', DUCKDB_LAZY_THRESHOLD_BYTES);
 };
 
 proto._parquetFullLoadLimitBytes = function() {
-    return this._advancedSettingBytes('parquetFullLoadMb', PARQUET_LAZY_THRESHOLD_BYTES);
+    return this._optionalLimitBytes('parquetFullLoadMb', PARQUET_LAZY_THRESHOLD_BYTES);
 };
+
+// Whole below the limit, memory-saving mode at or above it, and whole at any
+// size when the limit is 0. A whole load that runs out of memory is retried in
+// memory-saving mode instead of failing: at 0 that is what "whole while it
+// fits" means, and under any limit it rescues a file this machine cannot hold
+// after all. Anything else that goes wrong is not a question of size and is
+// thrown as it came.
+//
+// `parse(lazy)` runs one attempt. The retry marks the result, so the notice
+// can say why this file is in memory-saving mode.
+proto._loadWholeOrLazy = async function(parse, { size = 0, limitBytes = 0 } = {}) {
+    if (limitBytes > 0 && size >= limitBytes) return parse(true);
+    try {
+        return await parse(false);
+    } catch (err) {
+        if (!isMemoryError(err)) throw err;
+        console.warn('[duckdb] the whole file did not fit in memory; opening it in memory-saving mode:', err?.message || err);
+        const data = await parse(true);
+        if (data?.metadata) data.metadata.lazyReason = 'memory';
+        return data;
+    }
+};
+
+function isMemoryError(err) {
+    const key = describeLoadError(err).key;
+    return key === 'loadErrorQueryEngineMemory' || key === 'loadErrorOutOfMemory';
+}
 
 proto._csvCompactHintBytes = function() {
     return this._advancedSettingBytes('csvCompactHintMb', PARQUET_HINT_THRESHOLD_BYTES);
@@ -3702,8 +3732,10 @@ proto._parseParquetResult = async function(filename, file) {
     if (!file) throw new Error(`Parquet files must be loaded via a File handle (got buffer-only for ${filename}).`);
     if (!this._canUseDuckDb()) throw new Error(`Parquet support requires DuckDB-WASM (current page does not allow Workers).`);
     const source = await this._getDuckDbSource();
-    const lazy = (file.size ?? 0) >= this._parquetFullLoadLimitBytes();
-    const data = await source.parseParquetFile(file, filename, { lazy });
+    const data = await this._loadWholeOrLazy(
+        lazy => source.parseParquetFile(file, filename, { lazy }),
+        { size: file.size ?? 0, limitBytes: this._parquetFullLoadLimitBytes() },
+    );
     data.filename = filename;
     return data;
 };
@@ -3736,8 +3768,10 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null, opti
     if (file && this._canUseDuckDb() && duckDbCsvCompatible) {
         try {
             const source = await this._getDuckDbSource();
-            const lazy = (file.size ?? 0) >= this._csvFullLoadLimitBytes();
-            const data = await source.parseCsvFile(file, filename, { lazy, csvProfile });
+            const data = await this._loadWholeOrLazy(
+                lazy => source.parseCsvFile(file, filename, { lazy, csvProfile }),
+                { size: file.size ?? 0, limitBytes: this._csvFullLoadLimitBytes() },
+            );
             data.filename = filename;
             return attachCsvProfile(data);
         } catch (err) {

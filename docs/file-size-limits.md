@@ -626,3 +626,48 @@ en el código.
   4 GiB de WASM, y el string de 512 MiB del respaldo), y no conviene que se
   pueda: ver `docs/any-size-files.md`, que continúa este estudio por el lado
   que sí escala.
+
+## Addenda 2: CSV a 300 MB y el cero en todos los límites
+
+Cambios posteriores, que dejan desactualizadas la tabla de la sección 1.E y la
+barrera "techo de 1000 MB" de la addenda anterior.
+
+- **`csvFullLoadMb` pasó de 150 a 300 MB por defecto**, en web y en
+  escritorio. Entre 150 y 300 MB el modo de ahorro relee el CSV entero en cada
+  zoom, y la carga completa entra con holgura en una máquina actual. 300 queda
+  por debajo del respaldo del parser antiguo (`LEGACY_CSV_FALLBACK_MAX_BYTES`,
+  450 MB), así que una carga completa que falle todavía tiene a dónde ir. **No
+  es un valor medido**: es un orden de magnitud, como los demás.
+- **Migración.** Los ajustes se guardan enteros, con los valores por defecto
+  incluidos, así que un cambio de valor por defecto no llegaba a nadie que
+  hubiera guardado algún ajuste. Ahora el objeto guardado lleva
+  `settingsVersion`; un `csvFullLoadMb` de 150 sin versión se toma como el
+  valor viejo por defecto y se descarta (`src/app/advanced-settings-migration.js`).
+  Quien hubiera elegido 150 a propósito pasa a 300 y puede volver a ponerlo.
+- **`0` significa "sin límite" en todos los límites de tamaño.** En CSV y
+  Parquet: siempre carga completa, y si la carga completa se queda sin
+  memoria (error de memoria del motor o de JavaScript) se reintenta en modo de
+  ahorro (`_loadWholeOrLazy` en `file-methods.js`); el aviso dice entonces que
+  el archivo no entró, no que superó el límite. En los formatos que avisan:
+  nunca se pregunta, y el límite es la memoria. Los rangos de CSV y Parquet
+  pasaron de 10–1000 a 0–∞.
+- **El reintento vale con cualquier límite, no solo con 0.** Un archivo por
+  debajo del límite que no entra en esta máquina abre igual en modo de ahorro.
+  Antes caía al parser antiguo (hasta 450 MB), que necesita más memoria que el
+  motor, no menos.
+- **Medido en Chromium** (`scripts/e2e-full-load-fallback.mjs`): con el motor
+  limitado a 128 MB, un CSV de 48 MB con 22 M valores (unos 180 MB como tabla)
+  falla la carga completa y abre en modo de ahorro, con el aviso nuevo. El modo
+  de ahorro necesita dos búferes de lectura del tamaño del archivo, hasta
+  32 MB cada uno: con un CSV de 31 MB y el motor en 56 MB ni el modo de ahorro
+  entra, y el respaldo vuelve a ser el parser antiguo.
+- **Techos que el 0 no levanta**, y que la ayuda ahora nombra: 1,5 GB de
+  contenido descomprimido en un MAT (`MATLAB_MAT_MAX_INFLATED_BYTES`), 512 MB
+  por arreglo en un pickle (`PICKLE_DEFAULT_INTERNAL_LIMITS.maxArrayBytes`), y
+  2 GB por archivo al abrir por ruta en escritorio (`fsp.readFile` en
+  `omv:read-file`).
+- **La ayuda** (`helpSec11Body`, cuatro idiomas) dice ahora qué límites son
+  cambios de modo y cuáles son solo avisos, qué hace el 0 en cada caso, y qué
+  herramientas de datos funcionan en modo de ahorro (derivada, integral, quitar
+  tendencia y atípicos por límites, desde las fases 3b y 4a de
+  `docs/any-size-files.md`); antes decía que solo la última.
