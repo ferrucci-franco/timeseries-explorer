@@ -226,18 +226,115 @@ console.log(`file size limits: ${checks} checks passed`);
     assert.equal(readerFileCeiling(80 * MB, {}), 80 * MB, 'a configured limit reaches the reader as is');
     assert.equal(readerFileCeiling(80 * MB, { allowOversized: true }), Infinity, 'an approved file has no reader ceiling');
 
-    // The Settings ranges let zero through for exactly the formats that warn,
-    // and for none of the ones that switch modes instead.
+    // The Settings ranges let zero through for every size limit: the formats
+    // that warn and the two that switch modes. Only the conversion suggestion
+    // keeps its floor, because zero means nothing there.
     const viewerApp = readFileSync(new URL('../src/app/viewer-app.js', import.meta.url), 'utf8');
-    for (const key of [...EAGER_ONLY_FORMATS.map(format => format.limitKey), 'audioFullLoadMb']) {
+    for (const key of [...EAGER_ONLY_FORMATS.map(format => format.limitKey), 'audioFullLoadMb', 'csvFullLoadMb', 'parquetFullLoadMb']) {
         assert.match(viewerApp, new RegExp(`${key}: \\[0, Infinity\\]`), `${key} may be 0 and has no ceiling`);
     }
-    for (const key of ['csvFullLoadMb', 'parquetFullLoadMb', 'csvCompactHintMb']) {
-        assert.doesNotMatch(viewerApp, new RegExp(`${key}: \\[0,`), `${key} keeps its floor: zero means nothing there`);
-    }
+    assert.doesNotMatch(viewerApp, /csvCompactHintMb: \[0,/, 'the conversion suggestion keeps its floor');
     // And the dialog takes its bounds from that same table, not from a second copy.
     const uiMethods = readFileSync(new URL('../src/app/methods/ui-methods.js', import.meta.url), 'utf8');
     assert.match(uiMethods, /this\._advancedSettingRanges\(\)/, 'the Settings fields read the shared ranges');
     assert.doesNotMatch(uiMethods, /makeNumberField\('[A-Za-z]+',\s*'[A-Za-z]+',\s*'[A-Za-z]+',\s*\d/, 'no field carries its own min/max');
     console.log('file size limits: zero means never ask');
+}
+
+// ─── CSV and Parquet: whole below the limit, and whole while it fits at 0 ─
+{
+    const { installFileMethods } = await import('../src/app/methods/file-methods.js');
+    class Harness {
+        constructor(settings) {
+            this.capabilities = { isDesktop: false };
+            this.advancedSettings = settings;
+        }
+    }
+    installFileMethods(Harness);
+
+    // The default moved from 150 to 300 MB, in both runtimes.
+    const unset = new Harness({});
+    assert.equal(unset._csvFullLoadLimitBytes(), 300 * MB, 'CSV defaults to 300 MB');
+    assert.equal(new Harness({ csvFullLoadMb: 0 })._csvFullLoadLimitBytes(), 0, 'CSV 0 reaches the loader as no limit');
+    assert.equal(new Harness({ parquetFullLoadMb: 0 })._parquetFullLoadLimitBytes(), 0, 'Parquet 0 reaches the loader as no limit');
+    assert.equal(new Harness({ csvFullLoadMb: 450 })._csvFullLoadLimitBytes(), 450 * MB, 'a configured value is used as is');
+
+    const memoryErrors = [
+        new Error('Out of Memory Error: could not allocate block of size 256.0 KiB (95.1 MiB/95.3 MiB used)'),
+        new RangeError('Array buffer allocation failed'),
+    ];
+    const run = async (limitBytes, size, attempt) => {
+        const calls = [];
+        const data = await unset._loadWholeOrLazy(async lazy => {
+            calls.push(lazy);
+            return attempt(lazy);
+        }, { size, limitBytes });
+        return { calls, data };
+    };
+    const ok = lazy => ({ metadata: {}, lazy });
+
+    let r = await run(300 * MB, 300 * MB, ok);
+    assert.deepEqual(r.calls, [true], 'at the limit: memory-saving mode, one attempt');
+    r = await run(300 * MB, 300 * MB - 1, ok);
+    assert.deepEqual(r.calls, [false], 'one byte under: whole');
+    r = await run(0, 50 * 1024 * MB, ok);
+    assert.deepEqual(r.calls, [false], 'limit 0: whole, whatever the size');
+    assert.equal(r.data.metadata.lazyReason, undefined, 'and nothing to explain');
+
+    for (const error of memoryErrors) {
+        for (const limit of [0, 300 * MB]) {
+            r = await run(limit, 10 * MB, lazy => { if (!lazy) throw error; return ok(lazy); });
+            assert.deepEqual(r.calls, [false, true], `"${error.message.slice(0, 30)}" at limit ${limit}: retried in memory-saving mode`);
+            assert.equal(r.data.lazy, true);
+            assert.equal(r.data.metadata.lazyReason, 'memory', 'marked, so the notice can say why');
+        }
+    }
+
+    // Anything that is not about size goes up as it came: the legacy reader
+    // and the Parquet-reader message both depend on seeing it.
+    for (const error of [
+        new Error('Invalid Input Error: CSV Error on Line: 12'),
+        Object.assign(new Error('The Parquet reader could not be loaded'), { code: 'PARQUET_EXTENSION_UNAVAILABLE' }),
+    ]) {
+        const calls = [];
+        await assert.rejects(unset._loadWholeOrLazy(async lazy => { calls.push(lazy); throw error; }, { size: 1, limitBytes: 0 }),
+            err => err === error, `${error.message.slice(0, 30)} is not retried`);
+        assert.deepEqual(calls, [false]);
+    }
+
+    // A memory-saving attempt that fails too is not retried again.
+    const lazyFailure = new Error('Out of Memory Error: even the overview');
+    await assert.rejects(unset._loadWholeOrLazy(async () => { throw lazyFailure; }, { size: 10, limitBytes: 1 }),
+        err => err === lazyFailure, 'already in memory-saving mode: the failure stands');
+
+    // Both loaders go through it.
+    const fileMethods = readFileSync(new URL('../src/app/methods/file-methods.js', import.meta.url), 'utf8');
+    const csvPath = fileMethods.slice(fileMethods.indexOf('proto._parseCsvResultBuffer ='), fileMethods.indexOf('proto._largeCsvDuckDbError'));
+    const parquetPath = fileMethods.slice(fileMethods.indexOf('proto._parseParquetResult ='), fileMethods.indexOf('proto._parseCsvResultBuffer ='));
+    assert.match(csvPath, /_loadWholeOrLazy\([\s\S]*parseCsvFile[\s\S]*_csvFullLoadLimitBytes\(\)/, 'CSV loads through it');
+    assert.match(parquetPath, /_loadWholeOrLazy\([\s\S]*parseParquetFile[\s\S]*_parquetFullLoadLimitBytes\(\)/, 'Parquet loads through it');
+    assert.doesNotMatch(fileMethods, /size \?\? 0\) >= this\._(csv|parquet)FullLoadLimitBytes\(\)/, 'no loader compares against the limit by itself');
+    console.log('file size limits: CSV and Parquet load whole while they fit');
+}
+
+// ─── Stored settings from before the new CSV default ─────────────────────
+{
+    const { ADVANCED_SETTINGS_VERSION, migrateAdvancedSettings } = await import('../src/app/advanced-settings-migration.js');
+    assert.equal(ADVANCED_SETTINGS_VERSION, 2);
+    assert.deepEqual(migrateAdvancedSettings({ csvFullLoadMb: 150, excelFullLoadMb: 50 }), { excelFullLoadMb: 50 },
+        'an unversioned 150 is the old default: dropped, so 300 applies');
+    assert.deepEqual(migrateAdvancedSettings({ csvFullLoadMb: 150, settingsVersion: 1 }), {}, 'version 1 too');
+    assert.deepEqual(migrateAdvancedSettings({ csvFullLoadMb: 150, settingsVersion: 2 }), { csvFullLoadMb: 150 },
+        'a 150 saved under version 2 is a choice');
+    assert.deepEqual(migrateAdvancedSettings({ csvFullLoadMb: 400 }), { csvFullLoadMb: 400 }, 'any other value is a choice');
+    assert.deepEqual(migrateAdvancedSettings({ csvFullLoadMb: 0 }), { csvFullLoadMb: 0 }, 'and so is 0');
+    for (const nothing of [null, undefined, 'x', 42, []]) {
+        assert.deepEqual(migrateAdvancedSettings(nothing), {}, `${JSON.stringify(nothing)} is nothing stored`);
+    }
+    assert.ok(!('settingsVersion' in migrateAdvancedSettings({ settingsVersion: 2 })), 'the version never reaches the settings');
+
+    const viewerApp = readFileSync(new URL('../src/app/viewer-app.js', import.meta.url), 'utf8');
+    assert.match(viewerApp, /migrateAdvancedSettings\(saved\)/, 'loading goes through the migration');
+    assert.match(viewerApp, /settingsVersion: ADVANCED_SETTINGS_VERSION/, 'saving records the version');
+    console.log('file size limits: an old stored default gives way to the new one');
 }

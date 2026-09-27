@@ -19,6 +19,7 @@ import { installTreeMethods } from './methods/tree-methods.js';
 import { installSessionMethods } from './methods/session-methods.js';
 import { installLiveUpdateMethods } from './methods/live-update-methods.js';
 import { initialCapabilities, resolveCapabilities } from './capabilities.js';
+import { ADVANCED_SETTINGS_VERSION, migrateAdvancedSettings } from './advanced-settings-migration.js';
 
 class OpenModelicaViewer {
     constructor() {
@@ -252,7 +253,9 @@ class OpenModelicaViewer {
     _defaultAdvancedSettings() {
         const desktop = !!this.capabilities?.isDesktop;
         return {
-            csvFullLoadMb: 150,
+            // 300 MB in both runtimes: the whole-file path parses in the same
+            // engine either way, and its fallback reader stops at 450 MB.
+            csvFullLoadMb: 300,
             parquetFullLoadMb: desktop ? 200 : 100,
             matlabFullLoadMb: desktop ? 1024 : 250,
             excelFullLoadMb: desktop ? 150 : 50,
@@ -274,25 +277,29 @@ class OpenModelicaViewer {
         } catch (_) {
             saved = null;
         }
-        return this._normalizeAdvancedSettings({ ...defaults, ...(saved || {}) });
+        // Stored settings carry the defaults they were saved under; the
+        // migration drops the ones a later version changed.
+        return this._normalizeAdvancedSettings({ ...defaults, ...migrateAdvancedSettings(saved) });
     }
 
     // What each numeric setting may be set to. The normalizer and the dialog
     // that edits the settings both read from here, so a field can never offer
     // a range the normalizer then quietly refuses.
     //
-    // Two kinds of limit share this table. CSV and Parquet switch a file to
-    // memory-saving mode above theirs; zero there would mean "never hold a
-    // file whole", which nobody asked for, so they keep a floor. The others
-    // only decide when to ASK before a file is loaded whole, and for those
-    // zero means "never ask". They have no ceiling because the ceiling never
-    // protected anything: the warning is the protection, and above it the
-    // decision is the user's. A cap only stopped people who knew what their
-    // machine could hold from saying so.
+    // Two kinds of limit share this table, and zero means "no limit" in both.
+    // CSV and Parquet switch a file to memory-saving mode above theirs; at
+    // zero a file is loaded whole whatever its size, and one that does not fit
+    // falls back to memory-saving mode (_loadWholeOrLazy in file-methods.js).
+    // The others only decide when to ASK before a file is loaded whole; at
+    // zero the question never comes, and memory is the only limit left.
+    // None has a ceiling because the ceiling never protected anything: the
+    // mode switch or the warning is the protection, and above it the decision
+    // is the user's. A cap only stopped people who knew what their machine
+    // could hold from saying so.
     _advancedSettingRanges() {
         return {
-            csvFullLoadMb: [10, 1000],
-            parquetFullLoadMb: [10, 1000],
+            csvFullLoadMb: [0, Infinity],
+            parquetFullLoadMb: [0, Infinity],
             matlabFullLoadMb: [0, Infinity],
             excelFullLoadMb: [0, Infinity],
             pickleFullLoadMb: [0, Infinity],
@@ -312,8 +319,8 @@ class OpenModelicaViewer {
                 continue;
             }
             const [min, max] = ranges[key] || [1, Number.MAX_SAFE_INTEGER];
-            // null and '' would coerce to 0, and 0 now means "never ask" for
-            // some keys. Neither is a value anyone set, so both fall back.
+            // null and '' would coerce to 0, and 0 means "no limit" for every
+            // size limit. Neither is a value anyone set, so both fall back.
             const raw = settings[key] === null || settings[key] === '' ? NaN : Number(settings[key]);
             const value = Number.isFinite(raw) ? raw : fallback;
             next[key] = Math.round(Math.min(max, Math.max(min, value)));
@@ -324,7 +331,10 @@ class OpenModelicaViewer {
     _saveAdvancedSettings(settings = this.advancedSettings) {
         this.advancedSettings = this._normalizeAdvancedSettings(settings);
         try {
-            globalThis.localStorage?.setItem('omv_advanced_settings', JSON.stringify(this.advancedSettings));
+            globalThis.localStorage?.setItem('omv_advanced_settings', JSON.stringify({
+                ...this.advancedSettings,
+                settingsVersion: ADVANCED_SETTINGS_VERSION,
+            }));
         } catch (_) {}
         return this.advancedSettings;
     }

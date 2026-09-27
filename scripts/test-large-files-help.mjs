@@ -68,16 +68,18 @@ check(() => {
 });
 
 check(() => {
-    // The CSV limit is 150 MB in BOTH runtimes. The old text implied desktop
+    // The CSV limit is 300 MB in BOTH runtimes. The old text implied desktop
     // raises everything.
     for (const lang of LANGS) {
-        assert.match(bodies[lang], /150 MB[\s\S]{0,80}150 MB/, `${lang} shows the CSV limit as equal in both runtimes`);
+        assert.match(bodies[lang], /<td>CSV and text files<\/td><td>300 MB<\/td><td>300 MB<\/td>/, `${lang} shows the CSV limit as equal in both runtimes`);
+        assert.match(bodies[lang], /300 MB/, `${lang} quotes it in the desktop section too`);
+        assert.doesNotMatch(bodies[lang], /<td>CSV and text files<\/td><td>150 MB/, `${lang} no longer quotes the old default`);
     }
 });
 
 check(() => {
-    // Data Tools being cut down to one operation in memory-saving mode was
-    // documented nowhere at all.
+    // What Data Tools offers in memory-saving mode, which used to be one
+    // operation and was documented nowhere; now four, and the help says which.
     const expected = {
         en: /outliers by upper and lower bounds/i,
         fr: /valeurs aberrantes par bornes haute et basse/i,
@@ -86,6 +88,44 @@ check(() => {
     };
     for (const lang of LANGS) {
         assert.match(bodies[lang], expected[lang], `${lang} states the Data Tools restriction`);
+    }
+    // And no longer claims derivative and integral are missing there.
+    const stale = {
+        en: /Derivative, integral, moving average and the automatic spike detectors all need every point/,
+        fr: /Derivee, integrale, moyenne glissante et les detecteurs automatiques de pics ont besoin/,
+        es: /Derivada, integral, media movil y los detectores automaticos de picos necesitan/,
+        it: /Derivata, integrale, media mobile e i rilevatori automatici di picchi hanno bisogno/,
+    };
+    const offered = { en: /Derivative, Integral, Detrend/, fr: /Derivee, Integrale, Detendancer/, es: /Derivada, Integral, Quitar tendencia/, it: /Derivata, Integrale, Rimuovere la tendenza/ };
+    for (const lang of LANGS) {
+        assert.doesNotMatch(bodies[lang], stale[lang], `${lang} drops the outdated list of missing tools`);
+        assert.match(bodies[lang], offered[lang], `${lang} names the tools that do work`);
+    }
+});
+
+check(() => {
+    // Which limits are warnings and which are not, said in so many words.
+    const notWarning = { en: /the limit is not a warning/, fr: /la limite n est pas un avertissement/, es: /el limite no es un aviso/, it: /il limite non e un avviso/ };
+    const onlyWarning = { en: /the limit is only a warning/, fr: /la limite n est qu un avertissement/, es: /el limite es solo un aviso/, it: /il limite e solo un avviso/ };
+    for (const lang of LANGS) {
+        assert.match(bodies[lang], notWarning[lang], `${lang} says text and Parquet are not warned about`);
+        assert.match(bodies[lang], onlyWarning[lang], `${lang} says the other formats' limit is only a warning`);
+    }
+});
+
+check(() => {
+    // Zero: no limit, for both kinds, with what each does when the file does
+    // not fit — and the ceilings zero does not lift.
+    const zero = { en: /<b>0 means no limit<\/b>/, fr: /<b>0 veut dire aucune limite<\/b>/, es: /<b>0 significa sin limite<\/b>/, it: /<b>0 significa nessun limite<\/b>/ };
+    const fallsBack = { en: /if it does not fit, the app opens it a piece at a time/, fr: /s il ne tient pas, l app l ouvre d elle-meme morceau par morceau/, es: /si no entra, la app lo abre sola de a partes/, it: /se non entra, l app lo apre da sola un pezzo alla volta/ };
+    const onlyMemory = { en: /the only limit left is your computer's memory/, fr: /la seule limite restante est la memoire/, es: /el unico limite que queda es la memoria/, it: /l unico limite che resta e la memoria/ };
+    for (const lang of LANGS) {
+        assert.match(bodies[lang], zero[lang], `${lang} says what 0 means`);
+        assert.match(bodies[lang], fallsBack[lang], `${lang} says text and Parquet fall back when they do not fit`);
+        assert.match(bodies[lang], onlyMemory[lang], `${lang} says memory is the only limit left for the others`);
+        assert.match(bodies[lang], /1[.,]5 G[Bo]/, `${lang} names the MAT ceiling`);
+        assert.match(bodies[lang], /512 M[Bo]/, `${lang} names the pickle array ceiling`);
+        assert.match(bodies[lang], /2 G[Bo]/, `${lang} names the desktop read ceiling`);
     }
 });
 
@@ -122,7 +162,7 @@ check(() => {
     assert.ok(from > 0 && to > from, 'located the defaults block');
     const defaults = viewerApp.slice(from, to);
     const expected = [
-        ['csvFullLoadMb', '150'],
+        ['csvFullLoadMb', '300'],
         ['parquetFullLoadMb', "desktop ? 200 : 100"],
         ['matlabFullLoadMb', "desktop ? 1024 : 250"],
         ['excelFullLoadMb', "desktop ? 150 : 50"],
@@ -134,7 +174,7 @@ check(() => {
         assert.ok(defaults.includes(`${key}: ${value}`), `${key} default is still ${value} — update the help table if this changed`);
     }
     // And the numbers the help quotes.
-    for (const mb of ['150 MB', '100 MB', '200 MB', '250 MB', '1024 MB', '50 MB', '80 MB', '400 MB']) {
+    for (const mb of ['300 MB', '150 MB', '100 MB', '200 MB', '250 MB', '1024 MB', '50 MB', '80 MB', '400 MB']) {
         assert.ok(bodies.en.includes(mb), `the help table quotes ${mb}`);
     }
 });
@@ -214,7 +254,15 @@ check(() => {
     for (const lang of LANGS) {
         for (const key of switching) {
             assert.match(translations[lang][key], stillOpens[lang], `${lang}.${key} says the file still opens`);
+            assert.match(translations[lang][key], /\b0\b/, `${lang}.${key} says what 0 does`);
         }
+        for (const key of warning) {
+            assert.match(translations[lang][key], /\b0\b/, `${lang}.${key} says what 0 does`);
+        }
+        for (const key of ['fileOverLimitBody', 'fileOverLimitAudioBody']) {
+            assert.match(translations[lang][key], /\{setting\}, [^"]*\b0\b/, `${lang}.${key} offers 0 at the moment of the warning`);
+        }
+        assert.match(translations[lang].lazyFileNoticeBodyMemory, /\{file\}/, `${lang} has the notice for a file that did not fit`);
         for (const key of warning) {
             assert.match(translations[lang][key], warns[lang], `${lang}.${key} says the user is warned, not refused`);
         }
