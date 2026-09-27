@@ -365,7 +365,7 @@ Con `finanzas_unificadas_2016-2026.csv` y un gráfico de `debito_marara_xpf`:
 
 ---
 
-## 4bis. Parte D: fijar filas y columnas en la vista previa CSV
+## 4bis. Parte D: fijar la fila de títulos en la vista previa CSV
 
 ### 4bis.1 Estado actual [código]
 
@@ -403,25 +403,18 @@ que empieza lejos de la cabecera), se pierde de vista qué es cada columna.
   Es la forma de ver las columnas cuando los datos empiezan en la fila 2000.
 - **PRV-4** Si el archivo no tiene fila de títulos (`hasHeader = false`), la
   casilla DEBE aparecer desactivada, con un tooltip que lo explique.
-- **PRV-5** El panel DEBE ofrecer una casilla **"Fijar columna de fecha/hora"**
-  que controle la columna "DateTime parsed", que hoy está fija siempre.
-  - Activada (valor por defecto) = comportamiento actual.
-  - Desactivada = la columna se desplaza como las demás.
-- **PRV-6** Con PRV-5 activa, la(s) columna(s) de tiempo de origen
-  (`is-time-column`) PUEDEN fijarse también, a continuación de "DateTime
-  parsed". Esto es útil para comparar el texto original con el valor
-  interpretado. **(Provisional:** no en esta versión si complica el cálculo de
-  desplazamientos horizontales).
-- **PRV-7** Valores por defecto: las dos casillas **activadas (provisional)**.
-  Los dos DEBEN recordarse entre aperturas del diálogo como preferencia del
-  usuario (no por archivo). NO DEBEN guardarse en el perfil CSV, porque no
-  afectan al parsing.
+- **PRV-5** La columna "DateTime parsed" DEBE seguir fija a la izquierda
+  **siempre**, como hoy, sin casilla (decisión del autor). Las columnas de
+  tiempo de origen (`is-time-column`) no se fijan.
+- **PRV-7** Valor por defecto de la casilla "Fijar fila de títulos":
+  **activada (provisional)**. DEBE recordarse entre aperturas del diálogo como
+  preferencia del usuario (no por archivo). NO DEBE guardarse en el perfil CSV,
+  porque no afecta al parsing.
 - **PRV-8** Las filas y columnas fijas DEBEN conservar sus colores actuales
   (título azul, unidades verde, "DateTime parsed" azul claro). La esquina
   (intersección de fila fija y columna fija) DEBE quedar por encima de ambas,
   como ya se hace hoy con la esquina de la cabecera (`z-index`).
-- **PRV-9** Los textos de las dos casillas y sus tooltips DEBEN existir en EN, FR
-  y ES.
+- **PRV-9** El texto de la casilla y su tooltip DEBEN existir en EN, FR y ES.
 
 Nota de implementación (no normativa):
 
@@ -438,10 +431,10 @@ Nota de implementación (no normativa):
    visibles.
 2. Con la primera fila de datos en 2000 (etapa 3b), la fila de títulos aparece
    fija sobre las filas de datos.
-3. Con "Fijar columna de fecha/hora" desactivada, "DateTime parsed" se
-   desplaza horizontalmente como el resto. Al reabrir el diálogo, la casilla
-   sigue desactivada.
+3. Con la casilla desactivada, la fila de títulos se desplaza como hoy. Al
+   reabrir el diálogo, la casilla sigue desactivada.
 4. Un archivo sin fila de títulos muestra la casilla desactivada.
+5. "DateTime parsed" sigue fija a la izquierda en todos los casos.
 
 ---
 
@@ -510,7 +503,7 @@ Nota de implementación (no normativa):
 | 5 | Parte A, cursores (LBL-50) | 4 |
 | 6 | Etapa 2: orden estable y fechas SQL | 1 |
 | 7 | Parte A, modo lazy (LBL-43…47) | 4, 6 |
-| 8 | Parte D: fijar fila de títulos y columna de fecha/hora (PRV-*), junto con la etapa 3 del plan | — (PRV-3 se completa con la etapa 3b) |
+| 8 | Parte D: fijar la fila de títulos (PRV-*), junto con la etapa 3 del plan | — (PRV-3 se completa con la etapa 3b) |
 
 Cada paso es un PR independiente, con su test y su criterio de aceptación.
 
@@ -524,5 +517,4 @@ Cada paso es un PR independiente, con su test y su criterio de aceptación.
 | 4 | ¿Tipo Booleano en el selector? | No en esta versión |
 | 5 | Criterio "auto" de la etapa 1 para columnas con mayoría de `N/A` | Tratar `N/A`, `NA`, `-`, `null` y `#N/A` como vacíos, y no como texto |
 | 6 | ¿Chips reordenables? | No en esta versión (orden de inserción) |
-| 7 | Vista previa: ¿fijar también la(s) columna(s) de tiempo de origen? (PRV-6) | No en esta versión |
-| 8 | Vista previa: valores por defecto de las casillas de fijar | Ambas activadas |
+| 7 | Vista previa: valor por defecto de "Fijar fila de títulos" | Activada |

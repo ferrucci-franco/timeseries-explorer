@@ -408,8 +408,8 @@ Reglas:
 
   Las entradas ya distinguen `logicalIndex` / `sourceIndex`.
 - Riesgo: bajo (solo UI del diálogo), salvo 3b, que toca `inspectPreview`.
-- 3c. Casillas para fijar la fila de títulos y la columna de fecha/hora al
-  desplazarse (especificación: Parte D, `PRV-*`, en
+- 3c. Casilla para fijar la fila de títulos al desplazarse (la columna de
+  fecha/hora ya está fija siempre y así queda) (especificación: Parte D, `PRV-*`, en
   [`spec-text-labels-and-column-types.md`](spec-text-labels-and-column-types.md)).
 - Aceptación: con primera fila de datos = 2000 en `finanzas`, con los valores
   por defecto, se ven las filas de datos y Apply se habilita.
