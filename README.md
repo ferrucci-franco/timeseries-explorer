@@ -256,6 +256,20 @@ portable builds never load it. Deployments that want no measurement at all can
 clear `window.__OMV_ANALYTICS_CONFIG__` in [index.html](index.html); the app
 behaves identically without it.
 
+## History
+
+Development has been public since April 2026. The app started as
+`openmodelica-viewer/`, a folder in the public
+[ferrucci-franco/electronics](https://github.com/ferrucci-franco/electronics)
+repository of course material, with the first commit on 4 April 2026
+([8a3458e](https://github.com/ferrucci-franco/electronics/commit/8a3458e)). The
+folder was renamed `timeseries-explorer/` on 20 June 2026
+([7c8d97b](https://github.com/ferrucci-franco/electronics/commit/7c8d97b)) and
+moved to this repository on 14 July 2026
+([f1ddddc](https://github.com/ferrucci-franco/electronics/commit/f1ddddc)),
+keeping its full commit history. The earlier commits can be browsed here or in
+the [folder's history in the original repository](https://github.com/ferrucci-franco/electronics/commits/main/openmodelica-viewer).
+
 ## License
 
 Time Series Explorer's own source code is licensed under the permissive
