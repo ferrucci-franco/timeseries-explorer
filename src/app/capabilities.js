@@ -9,9 +9,13 @@ function isLocalhost() {
     return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
+// The hosted web version: its custom domain. github.io stays recognized too:
+// it serves the app until the domain is set, and redirects to it afterwards.
+const PUBLISHED_HOSTS = ['www.unditas.com', 'unditas.com'];
+
 function isStaticPublishedPage() {
     const host = globalThis.location?.hostname || '';
-    return host.endsWith('.github.io') || host.includes('github.io');
+    return host.endsWith('.github.io') || PUBLISHED_HOSTS.includes(host);
 }
 
 async function hasLocalApi() {

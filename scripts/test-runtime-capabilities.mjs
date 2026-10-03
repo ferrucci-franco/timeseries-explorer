@@ -56,6 +56,14 @@ try {
     assert.equal(caps.canUseLocalPath, false);
   });
 
+  await withRuntime({ hostname: 'www.unditas.com', fetch: 'missing' }, async () => {
+    const caps = await resolveCapabilities(initialCapabilities());
+    assert.equal(caps.runtime, 'light-web');
+    assert.equal(caps.isPublishedLight, true);
+    assert.equal(caps.canUseLiveUpdate, false);
+    assert.equal(caps.canUseLocalPath, false);
+  });
+
   await withRuntime({ hostname: 'localhost', protocol: 'http:', fetch: 'local-api-missing' }, async () => {
     const caps = await resolveCapabilities(initialCapabilities());
     assert.equal(caps.runtime, 'light-web');

@@ -5,7 +5,7 @@
   "description": "Desktop and web time-series explorer for MATLAB, Modelica, tabular, netCDF, and Micro-Cap data.",
   "author": "Franco Ferrucci",
   "license": "MIT",
-  "homepage": "https://ferrucci-franco.github.io/timeseries-explorer/",
+  "homepage": "https://www.unditas.com/",
   "repository": {
     "type": "git",
     "url": "https://github.com/ferrucci-franco/timeseries-explorer.git"
