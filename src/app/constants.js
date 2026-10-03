@@ -131,7 +131,7 @@ const BUILD_SHA = typeof __GIT_SHA__ !== 'undefined' ? __GIT_SHA__ : 'dev';
 const BUILD_DATE = typeof __BUILD_DATE__ !== 'undefined' ? __BUILD_DATE__ : '';
 const FEEDBACK_ISSUES_URL = 'https://github.com/ferrucci-franco/timeseries-explorer/issues/new';
 const FEEDBACK_EMAIL = 'ferruccifranco@gmail.com';
-const ONLINE_VERSION_URL = 'https://ferrucci-franco.github.io/timeseries-explorer/';
+const ONLINE_VERSION_URL = 'https://www.unditas.com/';
 const DESKTOP_MANIFEST_PATH = './downloads/desktop.json';
 const DESKTOP_PLATFORM_ICON_PATHS = {
     windows: `${PUBLIC_BASE}images/platforms/windows.svg`,
