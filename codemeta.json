@@ -1,0 +1,46 @@
+{
+  "@context": "https://w3id.org/codemeta/3.0",
+  "type": "SoftwareSourceCode",
+  "name": "Time Series Explorer",
+  "description": "Browser and desktop application to explore time series locally: MATLAB .mat (including OpenModelica and Dymola results), CSV, Excel, Parquet, netCDF, pandas pickle, Micro-Cap and audio files, with time, frequency, distribution, correlation and phase-space views. Files are processed on the user's computer and never uploaded.",
+  "version": "0.3.0",
+  "license": "https://spdx.org/licenses/MIT",
+  "codeRepository": "https://github.com/ferrucci-franco/timeseries-explorer",
+  "url": "https://www.unditas.com/",
+  "issueTracker": "https://github.com/ferrucci-franco/timeseries-explorer/issues",
+  "dateCreated": "2026-04-04",
+  "programmingLanguage": [
+    "JavaScript"
+  ],
+  "runtimePlatform": [
+    "Web browser",
+    "Electron"
+  ],
+  "operatingSystem": [
+    "Windows",
+    "macOS",
+    "Linux"
+  ],
+  "applicationCategory": "Data visualization",
+  "keywords": [
+    "time series",
+    "data visualization",
+    "Modelica",
+    "OpenModelica",
+    "simulation results",
+    "signal processing"
+  ],
+  "developmentStatus": "active",
+  "author": [
+    {
+      "type": "Person",
+      "id": "https://orcid.org/0000-0003-4065-5944",
+      "givenName": "Franco",
+      "familyName": "Ferrucci",
+      "affiliation": {
+        "type": "Organization",
+        "name": "GEPASUD Laboratory, University of French Polynesia, Tahiti, French Polynesia"
+      }
+    }
+  ]
+}

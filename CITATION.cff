@@ -6,7 +6,21 @@ authors:
   - family-names: "Ferrucci"
     given-names: "Franco"
     orcid: "https://orcid.org/0000-0003-4065-5944"
+    affiliation: "GEPASUD Laboratory, University of French Polynesia, Tahiti, French Polynesia"
 version: 0.3.0
 repository-code: "https://github.com/ferrucci-franco/timeseries-explorer"
 url: "https://www.unditas.com/"
 license: MIT
+abstract: >-
+  Browser and desktop application to explore time series locally: MATLAB .mat
+  (including OpenModelica and Dymola results), CSV, Excel, Parquet, netCDF,
+  pandas pickle, Micro-Cap and audio files, with time, frequency, distribution,
+  correlation and phase-space views. Files are processed on the user's computer
+  and never uploaded.
+keywords:
+  - time series
+  - data visualization
+  - Modelica
+  - OpenModelica
+  - simulation results
+  - signal processing

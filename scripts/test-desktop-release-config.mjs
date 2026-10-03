@@ -24,6 +24,10 @@ const dotted = version.replace(/\./g, '\\.');
 const releaseNotes = await readText(`docs/releases/v${version}.md`);
 
 assert.match(constants, new RegExp(`APP_VERSION = '${dotted}'`), 'the in-app version matches package.json');
+// Zenodo reads CITATION.cff and HAL/Software Heritage read codemeta.json, so a
+// stale version there mislabels every archived release.
+assert.match(await readText('CITATION.cff'), new RegExp(`^version: ${dotted}$`, 'm'), 'CITATION.cff version matches package.json');
+assert.equal(JSON.parse(await readText('codemeta.json')).version, version, 'codemeta.json version matches package.json');
 assert.deepEqual(pkg.build.win.target, ['nsis', 'portable']);
 assert.equal(pkg.build.nsis.oneClick, false);
 assert.equal(pkg.build.nsis.allowToChangeInstallationDirectory, true);
