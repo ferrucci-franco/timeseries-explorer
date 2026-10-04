@@ -217,6 +217,70 @@ Hidden in compact mode, because they are desktop-only or meaningless on a phone:
 - Inline help popovers (`?` buttons) open as a sub-page or an expandable block. They
   are never floating boxes positioned with fixed coordinates.
 
+### 5.6 Per-file actions and the CSV parsing dialog
+
+**Per-file actions.** On the desktop, each file row in the sidebar carries small icon
+buttons:
+
+- ▦ CSV parsing;
+- ⛭ transform (time shift, gain, offset, crop);
+- save;
+- MAT arrays;
+- remove.
+
+In compact mode the row shows the file name, its badges and one **⋯** button. That
+button opens a **file page** inside the Data sheet, listing every action that applies
+to that file as a full-width touch target:
+
+- Adjust parsing (CSV and text only);
+- Transform;
+- Time-axis inspector;
+- Reload;
+- Convert to Parquet;
+- Save;
+- Remove.
+
+**The CSV parsing dialog** (`src/ui/csv-parsing-preview-dialog.js`) is reached from
+four places:
+
+- the file page;
+- the large-CSV preflight ("Review / adjust structure…");
+- Convert to Parquet, from the menu, for both text files and spreadsheets;
+- the large-CSV conversion notice.
+
+In compact mode it behaves the same from all four.
+
+- **Full-screen layer**, not a sheet, because it is an Apply/Cancel workflow.
+  - At the top: **✕** (cancel), the title, and **⋮** with *Reset auto* and
+    *Re-detect*.
+  - At the bottom: a sticky primary **Apply parsing** button.
+- **Portrait: two tabs, Preview and Options.**
+  - A **status strip** sits between the tabs and the content and is always visible.
+    It shows valid time rows, the column count, or the reason Apply is blocked, so
+    the effect of an option is seen without switching tabs.
+  - In landscape, the preview and the options sit side by side.
+- **Options are grouped in collapsible sections**, each with a one-line summary when
+  collapsed:
+  - **File**: delimiter, decimal separator, encoding, sample, and lines shown.
+  - **Structure**: header row, units, first data row, and row filter.
+  - **Time axis**: mode, columns, format or pattern, and date order.
+  - **Columns**: a list with a checkbox, an editable name and an editable unit per
+    column. It replaces the inputs placed in the grid header on the desktop.
+- **Preview grid.**
+  - The grid scrolls on both axes inside itself, with the row-number column and the
+    header row sticky.
+  - **Tapping a row** opens an action list: *Use as header row / units row / first
+    data row*. It replaces the desktop's click-to-assign.
+  - Long-pressing a cell shows its full text.
+- **Help** (time-axis modes, the pattern reference, date order) opens as sub-pages
+  with Back.
+  - System Back closes the help first, then the dialog.
+  - If edits have not been applied, closing the dialog asks for confirmation first.
+- **Keyboard.**
+  - The focused input stays visible above the on-screen keyboard.
+  - Row numbers use `inputmode="numeric"`.
+  - Choices use native `<select>`.
+
 ## 6. Touch
 
 ### 6.1 Ownership
