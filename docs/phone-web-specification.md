@@ -16,7 +16,10 @@ Built:
 - 2D (x–y) plots: the plot type in the Plot sheet, x then y by tapping in Data,
   the pairs listed with removal, and the 1:1 aspect;
 - the More sheet: layout, language, theme, examples and menu;
-- the CSV parsing dialog of §5.6.
+- the CSV parsing dialog of §5.6;
+- on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
+  zoom of §6.1 (a slow double tap);
+- help full screen, and the bottom bar's icons each in their own colour.
 
 The code is in `src/app/methods/compact-methods.js`, `src/ui/compact-layout.js` and
 `src/styles/compact.css`. The tests are `npm run test:compact-layout` and
@@ -321,6 +324,11 @@ In compact mode it behaves the same from all four.
   finger pans, two fingers pinch, a tap selects. This already exists in
   `src/ui/plot-touch-gestures.js` and `src/ui/plot-3d-gestures.js` and is reused as
   is.
+- Window zoom, the box zoom a mouse draws: tap, then touch again within 0.7 s. If
+  that second touch drags (or is held), the drag draws a horizontal window and the
+  plot zooms to it. If it is a slow tap (0.3 s or more after the first), the plot
+  says "drag across the plot…" and the next drag draws the window. A quick double
+  tap stays Plotly's reset. Time series and FFT panes only.
 - A touch that starts on a sheet's handle moves the sheet. Inside a sheet, vertical
   drag scrolls its content.
 - **No edge-swipe gestures.** Android's gesture navigation and Safari both reserve

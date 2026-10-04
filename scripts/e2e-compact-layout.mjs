@@ -131,6 +131,59 @@ try {
     assert.equal(await page.evaluate(() => window.app.plotManager.files.size), 1, 'Back did not leave the app');
     assert.equal(await page.locator('#sidebar').isVisible(), false, 'the sidebar went back where it came from');
 
+    // ── On the plot: fit buttons and the slow double tap ────────────────────
+    {
+        await page.waitForTimeout(400);
+        const fitButtons = page.locator('.compact-active-panel .compact-fit-group:not([hidden]) .compact-fit-btn');
+        assert.equal(await fitButtons.count(), 3, 'a plot with signals has fit X, fit Y and fit both');
+        const xRange = () => page.evaluate(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return plot.div._fullLayout.xaxis.range.map(Number);
+        });
+        const full = await xRange();
+        const area = await page.evaluate(() => {
+            const div = window.app.plotManager.plots.get(window.app._compactActivePanelId()).div;
+            const r = div.getBoundingClientRect();
+            const { xaxis, yaxis } = div._fullLayout;
+            return { left: r.left + xaxis._offset, width: xaxis._length, top: r.top + yaxis._offset, height: yaxis._length };
+        });
+        const cdp = await context.newCDPSession(page);
+        const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+        const x0 = area.left + area.width * 0.3;
+        const y0 = area.top + area.height * 0.6;
+        // Tap … tap (slowly) … drag.
+        await touch('touchStart', x0, y0); await page.waitForTimeout(60); await touch('touchEnd');
+        await page.waitForTimeout(420);
+        await touch('touchStart', x0, y0); await page.waitForTimeout(60); await touch('touchEnd');
+        await page.waitForSelector('.touch-window-zoom-hint');
+        await touch('touchStart', x0, y0);
+        for (let i = 1; i <= 8; i++) { await touch('touchMove', x0 + i * 15, y0); await page.waitForTimeout(16); }
+        assert.equal(await page.locator('.touch-window-zoom-band').count(), 1, 'the drag draws the window');
+        await touch('touchEnd');
+        await page.waitForFunction(() => !document.querySelector('.touch-window-zoom-band'));
+        await page.waitForTimeout(300);
+        const zoomed = await xRange();
+        assert.ok(zoomed[0] > full[0] && zoomed[1] < full[1], `the plot zoomed into the window (${zoomed} within ${full})`);
+        assert.ok(zoomed[1] - zoomed[0] < (full[1] - full[0]) * 0.6, 'to about the width that was drawn');
+        await shot(page, 'window-zoom');
+        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="x"]').click();
+        await page.waitForFunction(([lo, hi]) => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            const range = plot.div._fullLayout.xaxis.range.map(Number);
+            return Math.abs(range[0] - lo) < 1e-6 && Math.abs(range[1] - hi) < 1e-6;
+        }, full);
+        // One finger alone still pans.
+        await page.waitForTimeout(800);
+        await touch('touchStart', x0, y0);
+        for (let i = 1; i <= 6; i++) { await touch('touchMove', x0 + i * 12, y0); await page.waitForTimeout(16); }
+        await touch('touchEnd');
+        await page.waitForTimeout(300);
+        const panned = await xRange();
+        assert.ok(panned[0] < full[0] && Math.abs((panned[1] - panned[0]) - (full[1] - full[0])) < 1e-6, 'one finger pans, the width unchanged');
+        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="all"]').click();
+        await cdp.detach();
+    }
+
     // ── Analyze: FFT, with its options in the sheet ─────────────────────────
     await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
     await page.locator('.compact-radio', { hasText: 'FFT' }).click();
@@ -142,7 +195,7 @@ try {
     }, null, { timeout: 30000 });
     await shot(page, 'analyze-fft');
     // Sizes a finger and an eye can use: no control under 40 px tall, no text
-    // under 13 px, in the sheet with the most desktop pieces in it (the FFT
+    // under 14 px, in the sheet with the most desktop pieces in it (the FFT
     // options) and in the Data sheet.
     const sizeProblems = () => page.evaluate(() => {
         const visible = el => {
@@ -163,7 +216,7 @@ try {
             const parent = walker.currentNode.parentElement;
             if (!text || !visible(parent) || parent.closest('svg, .tree-time-axis-inspect')) continue;
             const size = parseFloat(getComputedStyle(parent).fontSize);
-            if (size < 13) problems.push(`"${text.slice(0, 30)}" is ${size} px`);
+            if (size < 14) problems.push(`"${text.slice(0, 30)}" is ${size} px`);
         }
         return problems;
     });
@@ -177,6 +230,11 @@ try {
     );
     s = await state();
     assert.deepEqual(s.traces, ['voltage', 'current'], 'switching to FFT kept the signals');
+    assert.equal(
+        await page.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(),
+        2,
+        'the time pane and the spectrum each have their fit buttons',
+    );
 
     // ── Rotation keeps the session ──────────────────────────────────────────
     await page.setViewportSize({ width: 844, height: 390 });
@@ -288,6 +346,24 @@ try {
     assert.equal(await page.locator('.feedback-file-button').isVisible(), true, 'the file chooser stays');
     await page.locator('.feedback-overlay .compact-dialog-close').click();
     await page.waitForFunction(() => !document.querySelector('.feedback-overlay.show'));
+
+    // ── Help takes the whole screen ─────────────────────────────────────────
+    await page.evaluate(() => window.app.showHelp());
+    await page.waitForSelector('.help-modal');
+    await page.waitForTimeout(400); // its entrance animation
+    {
+        const helpBox = await page.locator('.help-modal').boundingBox();
+        assert.ok(helpBox.x <= 0.5 && helpBox.y <= 0.5 && helpBox.width >= 389 && helpBox.height >= 843, 'help fills the screen');
+    }
+    await page.locator('.help-modal-close').click();
+    await page.waitForFunction(() => !document.querySelector('.help-modal'));
+
+    // ── The navigation's icons are in colour ────────────────────────────────
+    {
+        const colours = await page.evaluate(() => [...document.querySelectorAll('.compact-nav-btn .compact-btn-icon')]
+            .map(icon => getComputedStyle(icon).color));
+        assert.equal(new Set(colours).size, 4, `each destination has its own colour (${colours.join(', ')})`);
+    }
 
     // ── The user can ask for the full layout, and back ──────────────────────
     await page.evaluate(() => window.app._setCompactLayoutOverride('full'));

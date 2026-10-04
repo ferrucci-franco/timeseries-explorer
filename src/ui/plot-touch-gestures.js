@@ -18,13 +18,26 @@
 //                              moment at which the hand has to be exact
 //   a tap         Plotly's     nothing is prevented, so it still becomes a
 //                              click, and two of them its own reset
+//   tap, then     window       where the plot asks for it: the second touch
+//   touch again   zoom         draws a horizontal window and zooms to it (see
+//                              utils/touch-plot-gestures.js for its timing)
 //
 // The arithmetic is in utils/pinch-zoom.js; what is here is the plumbing: who
 // the touches belong to, which axes they are over, and how often the plot is
 // asked to redraw.
 
 import { panZoomRange, pinchScales } from '../utils/pinch-zoom.js';
-import { gestureCentre, movedBeyondSlop, touchGestureOwnsDrag } from '../utils/touch-plot-gestures.js';
+import {
+    QUICK_DOUBLE_TAP_MS,
+    TAP_MAX_DURATION_MS,
+    WINDOW_ZOOM_ARMED_MS,
+    WINDOW_ZOOM_HOLD_MS,
+    gestureCentre,
+    isFollowUpTap,
+    movedBeyondSlop,
+    touchGestureOwnsDrag,
+    windowZoomRange,
+} from '../utils/touch-plot-gestures.js';
 import { isTouchCapable } from './touch-drag.js';
 
 // Plotly's drag layer is the set of invisible rectangles it lays over the plot
@@ -38,6 +51,12 @@ const onPlotSurface = (target) => typeof target?.closest === 'function' && !!tar
 // The label belongs to the last tap, and a redraw brings it back mid-gesture,
 // at a point nobody is touching.
 const GESTURE_CLASS = 'touch-gesture';
+
+// The window a slow double tap draws, and the line that says it is waiting
+// for one. Both are on <body> at fixed positions: nothing the plot redraws can
+// take them away mid-gesture.
+const WINDOW_BAND_CLASS = 'touch-window-zoom-band';
+const WINDOW_HINT_CLASS = 'touch-window-zoom-hint';
 
 /**
  * Speak for a touch on this plot, before its own gestures act on it.
@@ -110,6 +129,10 @@ function axisValueAt(axis, clientPixel, rect, vertical = false) {
 }
 
 /**
+ * A plot that wants the window zoom says so with `div._touchWindowZoom`: a
+ * function answering, at the moment of the touch, null (not now) or
+ * `{ hint }`, the line shown while it waits for the drag.
+ *
  * @param {HTMLElement} div a Plotly graph div
  * @param {{relayout: Function}} plotly
  * @returns {boolean} whether it was installed
@@ -126,6 +149,121 @@ export function installTouchPlotGestures(div, plotly) {
     let frame = 0;
     let frameIsAnimation = false;
     let pending = null;
+
+    // The window zoom. `lastTap` is the tap a second touch may follow;
+    // `followUp` is that second touch while it is still deciding what it is;
+    // `armedUntil` is set by a slow double tap, waiting for the drag.
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    let lastTap = null;
+    let touchStartedAt = 0;
+    let fingersSeen = 0;
+    let followUp = null;
+    let holdTimer = 0;
+    let armedUntil = 0;
+    let armedTimer = 0;
+    let hintEl = null;
+    let windowSel = null;
+
+    const windowZoomOptions = () => {
+        const ask = div._touchWindowZoom;
+        if (typeof ask !== 'function') return null;
+        try { return ask() || null; } catch { return null; }
+    };
+
+    const clearHold = () => {
+        if (holdTimer) clearTimeout(holdTimer);
+        holdTimer = 0;
+    };
+
+    const disarm = () => {
+        armedUntil = 0;
+        if (armedTimer) clearTimeout(armedTimer);
+        armedTimer = 0;
+        hintEl?.remove();
+        hintEl = null;
+    };
+
+    // The plotting area, on screen.
+    const plotArea = () => {
+        const xa = div._fullLayout?.xaxis;
+        const ya = div._fullLayout?.yaxis;
+        if (!xa?._length || !ya?._length || typeof xa.p2l !== 'function') return null;
+        const rect = div.getBoundingClientRect();
+        const left = rect.left + (xa._offset || 0);
+        return { xa, left, right: left + xa._length, top: rect.top + (ya._offset || 0), height: ya._length };
+    };
+
+    const arm = (options) => {
+        disarm();
+        const area = plotArea();
+        if (!area) return;
+        armedUntil = now() + WINDOW_ZOOM_ARMED_MS;
+        armedTimer = setTimeout(disarm, WINDOW_ZOOM_ARMED_MS);
+        if (!options?.hint || typeof document === 'undefined') return;
+        hintEl = document.createElement('div');
+        hintEl.className = WINDOW_HINT_CLASS;
+        hintEl.textContent = options.hint;
+        hintEl.style.left = `${(area.left + area.right) / 2}px`;
+        // Low in the plot: the legend and the fit buttons are at the top.
+        hintEl.style.top = `${area.top + Math.max(8, area.height - 64)}px`;
+        document.body.appendChild(hintEl);
+    };
+
+    const startWindow = (clientX) => {
+        clearHold();
+        disarm();
+        followUp = null;
+        const area = plotArea();
+        if (!area || typeof document === 'undefined') return false;
+        const x = Math.min(area.right, Math.max(area.left, clientX));
+        const band = document.createElement('div');
+        band.className = WINDOW_BAND_CLASS;
+        band.style.top = `${area.top}px`;
+        band.style.height = `${area.height}px`;
+        band.style.left = `${x}px`;
+        band.style.width = '0px';
+        document.body.appendChild(band);
+        windowSel = { area, from: x, to: x, band };
+        // Whatever pan had begun under this finger stops where it is.
+        flush();
+        gesture = null;
+        div.classList.add(GESTURE_CLASS);
+        return true;
+    };
+
+    const updateWindow = (clientX) => {
+        if (!windowSel) return;
+        const { area, from, band } = windowSel;
+        const to = Math.min(area.right, Math.max(area.left, clientX));
+        windowSel.to = to;
+        band.style.left = `${Math.min(from, to)}px`;
+        band.style.width = `${Math.abs(to - from)}px`;
+    };
+
+    const finishWindow = (commit) => {
+        const selection = windowSel;
+        windowSel = null;
+        if (!selection) return;
+        selection.band.remove();
+        settle(true);
+        if (!commit) return;
+        const { area } = selection;
+        const xa = area.xa;
+        const range = windowZoomRange(selection.from - area.left, selection.to - area.left, pixel => xa.p2l(pixel));
+        if (!range) return;
+        plotly.relayout(div, {
+            'xaxis.range': rangeFromLinear(xa, range),
+            'xaxis.autorange': false,
+        }).catch(() => {});
+    };
+
+    const forgetWindowZoom = () => {
+        clearHold();
+        followUp = null;
+        lastTap = null;
+        disarm();
+        if (windowSel) finishWindow(false);
+    };
 
     const axes = () => {
         const layout = div._fullLayout;
@@ -211,6 +349,32 @@ export function installTouchPlotGestures(div, plotly) {
         // Plotly is not told: one gesture, one handler, whatever the hand does
         // from here.
         event.stopPropagation();
+        if (!gesture && !windowSel) {
+            touchStartedAt = now();
+            fingersSeen = 0;
+        }
+        fingersSeen = Math.max(fingersSeen, points.length);
+        if (points.length > 1) {
+            // A second finger is a pinch, whatever the first one was doing.
+            forgetWindowZoom();
+        } else if (!windowSel) {
+            const options = windowZoomOptions();
+            const [point] = points;
+            const time = now();
+            if (options && armedUntil && time < armedUntil) {
+                // The drag a slow double tap was waiting for.
+                event.preventDefault();
+                if (startWindow(point.x)) return;
+            } else if (options && isFollowUpTap(lastTap, { time, ...point })) {
+                followUp = { x: point.x, gap: time - lastTap.time };
+                clearHold();
+                holdTimer = setTimeout(() => {
+                    holdTimer = 0;
+                    if (followUp && gesture && !gesture.moved) startWindow(followUp.x);
+                }, WINDOW_ZOOM_HOLD_MS);
+            }
+            lastTap = null;
+        }
         gesture = baseline(points, gesture?.moved ?? false);
     };
 
@@ -218,6 +382,13 @@ export function installTouchPlotGestures(div, plotly) {
         // Only stepping aside: the drag that claimed this touch follows it on
         // document listeners, and stopping the event here would starve them.
         if (claimed) return;
+        if (windowSel) {
+            const touches = gestureTouches(event);
+            event.stopPropagation();
+            event.preventDefault();
+            if (touches.length === 1) updateWindow(touches[0].x);
+            return;
+        }
         if (!gesture) return;
         const points = gestureTouches(event);
         if (!points.length) { gesture = null; return; }
@@ -227,6 +398,16 @@ export function installTouchPlotGestures(div, plotly) {
         // click. Nothing scrolls in the meantime — the plot's touch-action says
         // the browser has no gesture of its own here.
         if (!gesture.moved && !movedBeyondSlop(gesture.points, points)) return;
+        // A second touch that drags draws the window instead of panning.
+        if (!gesture.moved && followUp && points.length === 1) {
+            event.preventDefault();
+            if (startWindow(followUp.x)) {
+                updateWindow(points[0].x);
+                return;
+            }
+        }
+        clearHold();
+        followUp = null;
         if (!gesture.moved) {
             gesture.moved = true;
             div.classList.add(GESTURE_CLASS);
@@ -266,6 +447,12 @@ export function installTouchPlotGestures(div, plotly) {
             if ((event.touches?.length || 0) === 0) claimed = false;
             return;
         }
+        if (windowSel) {
+            // No click after it: Plotly would read the lifted finger as a tap.
+            event.preventDefault();
+            if ((event.touches?.length || 0) === 0) finishWindow(true);
+            return;
+        }
         if (!gesture) return;
         const points = gestureTouches(event);
         if (points.length) {
@@ -275,15 +462,35 @@ export function installTouchPlotGestures(div, plotly) {
             return;
         }
         const { moved } = gesture;
+        const [landed] = gesture.points;
         gesture = null;
         flush();
         settle(moved);
+        clearHold();
+        const time = now();
+        if (followUp) {
+            // The second touch was a tap. Quick, it is Plotly's double tap and
+            // its reset; slow, the plot waits for the drag that draws the window.
+            const { gap } = followUp;
+            followUp = null;
+            const options = !moved && gap >= QUICK_DOUBLE_TAP_MS ? windowZoomOptions() : null;
+            if (options) {
+                event.preventDefault();
+                arm(options);
+            }
+            lastTap = null;
+        } else if (!moved && fingersSeen === 1 && landed && time - touchStartedAt <= TAP_MAX_DURATION_MS) {
+            lastTap = { time, x: landed.x, y: landed.y };
+        } else {
+            lastTap = null;
+        }
     };
 
     // A cancelled touch is not the end of the gesture — a palm can be rejected,
     // or the browser can take one finger back — so what is left carries on.
     const onTouchCancel = (event) => {
         if ((event.touches?.length || 0) === 0) claimed = false;
+        forgetWindowZoom();
         if (!gesture) return;
         const points = gestureTouches(event);
         const { moved } = gesture;
@@ -295,7 +502,7 @@ export function installTouchPlotGestures(div, plotly) {
     // Capture, so this is decided before Plotly's own handlers see anything.
     div.addEventListener('touchstart', onTouchStart, { capture: true, passive: false });
     div.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
-    div.addEventListener('touchend', onTouchEnd, { capture: true });
+    div.addEventListener('touchend', onTouchEnd, { capture: true, passive: false });
     div.addEventListener('touchcancel', onTouchCancel, { capture: true });
     return true;
 }

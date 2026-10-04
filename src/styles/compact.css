@@ -93,6 +93,12 @@ html.compact .plots-area {
     touch-action: none;
 }
 
+/* A touch larger than the desktop's 16 px: every size given in rem — the
+   sheets' own text and the desktop pieces they borrow — grows with it. */
+html.compact {
+    font-size: 17px;
+}
+
 /* Below 16px, iOS zooms the page in when a field takes focus and leaves it
    zoomed, the layout cut off at the right. Every field, everywhere — the
    animation speed, the FFT options, the filters, the dialogs. */
@@ -268,6 +274,34 @@ html.compact.compact-landscape .compact-nav {
 
 .compact-nav-btn:active .compact-btn-icon {
     background: var(--hover-bg);
+}
+
+/* Each destination has its own colour, so the bar reads at a glance and the
+   icons do not fade into the grey around them. */
+.compact-nav-btn[data-sheet="data"] { --compact-nav-accent: #1e88e5; }
+.compact-nav-btn[data-sheet="plot"] { --compact-nav-accent: #2e9d4f; }
+.compact-nav-btn[data-sheet="analyze"] { --compact-nav-accent: #e8710a; }
+.compact-nav-btn[data-sheet="more"] { --compact-nav-accent: #8e5bd6; }
+
+.theme-dark .compact-nav-btn[data-sheet="data"] { --compact-nav-accent: #64b5f6; }
+.theme-dark .compact-nav-btn[data-sheet="plot"] { --compact-nav-accent: #66cc85; }
+.theme-dark .compact-nav-btn[data-sheet="analyze"] { --compact-nav-accent: #ffa64d; }
+.theme-dark .compact-nav-btn[data-sheet="more"] { --compact-nav-accent: #b994f0; }
+
+.compact-nav-btn .compact-btn-icon {
+    color: var(--compact-nav-accent, currentColor);
+}
+
+.compact-nav-btn .compact-btn-label {
+    color: var(--text-primary);
+}
+
+.compact-nav-btn[aria-pressed="true"] .compact-btn-label {
+    color: var(--compact-nav-accent, var(--primary-color));
+}
+
+.compact-nav-btn[aria-pressed="true"] .compact-btn-icon {
+    background: color-mix(in srgb, var(--compact-nav-accent, var(--primary-color)) 20%, transparent);
 }
 
 /* ── Sheet ───────────────────────────────────────────────────────────── */
@@ -930,6 +964,12 @@ html.compact .plots-area .layout-scroll-resize-handle {
     display: none !important;
 }
 
+/* Room under the plot: the horizontal axis's title sat on the navigation
+   bar's edge (or the screen's, sideways). */
+html.compact .plots-area .layout-panel.compact-active-panel {
+    padding-bottom: 12px;
+}
+
 html.compact .plots-area .layout-split-child.compact-path {
     flex: 1 1 auto !important;
     min-width: 0;
@@ -953,6 +993,72 @@ html.compact .layout-panel-toolbar {
    A finger pans, pinches to zoom and double-taps to reset. */
 html.compact .plots-area .modebar-container {
     display: none;
+}
+
+/* Fit X, fit Y, fit both: faint until pressed, so the curve under them stays
+   readable. Only the phone layout makes them. */
+.compact-fit-group {
+    display: none;
+}
+
+html.compact .plots-area .js-plotly-plot {
+    position: relative;
+}
+
+html.compact .plots-area .compact-fit-group {
+    position: absolute;
+    z-index: 5;
+    display: flex;
+    gap: 6px;
+    pointer-events: none;
+}
+
+html.compact .plots-area .compact-fit-group[hidden] {
+    display: none;
+}
+
+html.compact .compact-fit-btn {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--bg-primary) 45%, transparent);
+    color: var(--text-primary);
+    opacity: 0.55;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+    transition: opacity 0.12s ease, background-color 0.12s ease;
+}
+
+/* Sideways, a pane is short: smaller buttons leave more of the curve. */
+html.compact.compact-landscape .compact-fit-btn {
+    width: 32px;
+    height: 32px;
+}
+
+html.compact .compact-fit-btn .compact-btn-icon {
+    display: flex;
+}
+
+html.compact .compact-fit-btn svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+html.compact .compact-fit-btn:active {
+    opacity: 1;
+    background: color-mix(in srgb, var(--primary-color) 22%, var(--bg-primary));
 }
 
 /* FFT: the status stays on the plot; its buttons and options live in the
@@ -1402,7 +1508,7 @@ html.compact .compact-sheet-body button:not(.compact-icon-btn):not(.tree-sign-to
 html.compact .compact-fullscreen-dialog button:not(.compact-icon-btn):not(.fft-help-btn),
 html.compact .compact-fullscreen-dialog .modal-btn {
     min-height: 44px;
-    font-size: 15px;
+    font-size: 16px;
 }
 
 html.compact .compact-sheet-body input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
@@ -1431,7 +1537,7 @@ html.compact .fft-help-btn {
 /* (The transform panel's warning button draws its icon itself and hides
    its text: it keeps its own font size.) */
 html.compact .fft-help-btn:not(.file-transform-warning-btn) {
-    font-size: 15px;
+    font-size: 16px;
 }
 
 /* An example's whole row loads it, not the 16 px line of its name. */
@@ -1453,18 +1559,18 @@ html.compact .file-transform-panel {
 }
 
 html.compact .file-transform-title {
-    font-size: 15px;
+    font-size: 16px;
 }
 
 html.compact .file-transform-field,
 html.compact .file-transform-hint,
 html.compact .file-transform-panel span {
-    font-size: 14px;
+    font-size: 15px;
 }
 
 html.compact .file-transform-panel button:not(.file-transform-warning-btn) {
     min-height: 40px;
-    font-size: 15px;
+    font-size: 16px;
 }
 
 html.compact .file-transform-wide-action {
@@ -1474,7 +1580,7 @@ html.compact .file-transform-wide-action {
 /* FFT options, as lent to the Analyze sheet. */
 html.compact .compact-sheet .fft-options,
 html.compact .compact-sheet .fft-options-subtitle {
-    font-size: 15px;
+    font-size: 16px;
 }
 
 html.compact .compact-sheet .fft-options button {
@@ -1489,7 +1595,7 @@ html.compact .tree-info-count,
 html.compact .light-version-notice .light-notice-analytics,
 html.compact .extra-version-badge,
 html.compact .extra-version-build {
-    font-size: 13px;
+    font-size: 14px;
 }
 
 html.compact .file-entry-name,
@@ -1499,15 +1605,15 @@ html.compact .plot-settings-help,
 html.compact .feedback-dialog p,
 html.compact .feedback-dialog label span,
 html.compact .feedback-file-list {
-    font-size: 14px;
-}
-
-html.compact .compact-plot-selector-label {
     font-size: 15px;
 }
 
+html.compact .compact-plot-selector-label {
+    font-size: 16px;
+}
+
 html.compact .compact-nav-btn {
-    font-size: 12.5px;
+    font-size: 13.5px;
 }
 
 html.compact .compact-plot-selector {
@@ -1524,19 +1630,40 @@ html.compact .help-modal-close {
     min-height: 44px;
 }
 
+/* Help takes the whole screen, like every other long dialog on a phone: a
+   card with a margin round it only shows the page behind as a frame. */
+html.compact .help-backdrop {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+html.compact .help-modal {
+    width: 100vw;
+    height: 100dvh;
+    min-height: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: var(--sat) var(--sar) var(--sab) var(--sal);
+    box-sizing: border-box;
+}
+
 /* CSV parsing: the preview grid, its section titles and notes. */
 html.compact .csv-preview-compact .csv-preview-grid th,
 html.compact .csv-preview-compact .csv-preview-grid td {
-    font-size: 14px;
+    font-size: 15px;
 }
 
 html.compact .csv-preview-compact .csv-preview-side-title {
-    font-size: 15px;
+    font-size: 16px;
 }
 
 html.compact .csv-preview-compact .csv-preview-side-note,
 html.compact .csv-preview-compact .csv-preview-status {
-    font-size: 13.5px;
+    font-size: 14.5px;
 }
 
 html.compact .csv-preview-compact .csv-preview-mode-help,

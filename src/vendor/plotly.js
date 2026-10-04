@@ -22,9 +22,20 @@ for (const locale of [spanishLocale, frenchLocale, italianLocale]) {
 // A 3D scene gets its own pinch and wheel zoom (ui/plot-3d-gestures.js); it
 // looks for a scene under the pointer on every event, so a plot that only
 // later switches to 3D is covered too.
+// Anything else that has to follow every plot as it is drawn — the phone
+// layout's fit buttons — listens here rather than in each of those calls.
+const drawnListeners = new Set();
+export function onPlotDrawn(listener) {
+    drawnListeners.add(listener);
+    return () => drawnListeners.delete(listener);
+}
+
 const withTouchGestures = (drawn, div) => {
     installTouchPlotGestures(drawn || div, Plotly);
     install3DSceneGestures(drawn || div);
+    for (const listener of drawnListeners) {
+        try { listener(drawn || div); } catch (error) { console.error(error); }
+    }
     return drawn;
 };
 const nativeNewPlot = Plotly.newPlot.bind(Plotly);

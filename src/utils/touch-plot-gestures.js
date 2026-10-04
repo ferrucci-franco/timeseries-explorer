@@ -85,3 +85,62 @@ export function movedBeyondSlop(from, to, slop = TOUCH_GESTURE_SLOP_PX) {
     }
     return false;
 }
+
+// ── Window zoom: a slow double tap ──────────────────────────────────────────
+//
+// A mouse draws a box to zoom; a finger pans instead, so the box needs a
+// gesture of its own. It starts with a tap and a second touch soon after,
+// close to the first:
+//
+//   second touch drags or is held   the drag draws the window at once
+//   second touch is a slow tap      the plot waits for one drag to draw it
+//   second touch is a quick tap     Plotly's own double-tap reset, as before
+//
+// The window spans the whole height and zooms the horizontal axis only.
+
+/** The longest a touch may last and still be a tap. */
+export const TAP_MAX_DURATION_MS = 350;
+/** How soon after a tap a second touch still belongs to it. */
+export const FOLLOW_UP_TAP_MS = 700;
+/** How far from the first tap the second may land. */
+export const FOLLOW_UP_TAP_DISTANCE_PX = 60;
+/** Faster than this, two taps are Plotly's double click: its reset. */
+export const QUICK_DOUBLE_TAP_MS = 300;
+/** A second touch held this long starts the window without moving. */
+export const WINDOW_ZOOM_HOLD_MS = 280;
+/** After a slow double tap, how long the plot waits for the drag. */
+export const WINDOW_ZOOM_ARMED_MS = 4000;
+/** A window narrower than this is a slip, not a zoom. */
+export const WINDOW_ZOOM_MIN_WIDTH_PX = 10;
+
+/**
+ * Does this touch follow the last tap closely enough to be its second?
+ *
+ * @param {{time: number, x: number, y: number}|null} lastTap
+ * @param {{time: number, x: number, y: number}} touch
+ * @returns {boolean}
+ */
+export function isFollowUpTap(lastTap, touch) {
+    if (!lastTap || !touch) return false;
+    const gap = Number(touch.time) - Number(lastTap.time);
+    if (!Number.isFinite(gap) || gap < 0 || gap > FOLLOW_UP_TAP_MS) return false;
+    const distance = Math.hypot(Number(touch.x) - Number(lastTap.x), Number(touch.y) - Number(lastTap.y));
+    return Number.isFinite(distance) && distance <= FOLLOW_UP_TAP_DISTANCE_PX;
+}
+
+/**
+ * The horizontal range a finger drew, in the axis's own linear units.
+ *
+ * @param {number} fromPx where the window started, in pixels along the axis
+ * @param {number} toPx where it ends
+ * @param {(pixel: number) => number} pixelToLinear the axis's p2l
+ * @returns {[number, number]|null} lowest first; null for a slip
+ */
+export function windowZoomRange(fromPx, toPx, pixelToLinear) {
+    const a = Number(fromPx);
+    const b = Number(toPx);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(b - a) < WINDOW_ZOOM_MIN_WIDTH_PX) return null;
+    const ends = [pixelToLinear(Math.min(a, b)), pixelToLinear(Math.max(a, b))].map(Number);
+    if (!ends.every(Number.isFinite) || ends[0] === ends[1]) return null;
+    return ends[0] < ends[1] ? ends : [ends[1], ends[0]];
+}
