@@ -8,6 +8,7 @@
 // is open and put back where they came from when it closes, so every action
 // keeps one code path.
 import i18n from '../../i18n/index.js';
+import Modal from '../../ui/modal.js';
 import {
     LAYOUT_OVERRIDE_STORAGE_KEY,
     effectiveViewportSize,
@@ -23,8 +24,13 @@ const SVG = {
     more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>',
     close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
     back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
-    expand: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>',
-    shrink: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>',
+    // Full height / half height: corners out, corners in.
+    expand: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+    shrink: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>',
+    // Hiding a sheet is not closing anything: it goes back where it came
+    // from, down (or right, when the phone is sideways), and keeps its state.
+    hideDown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>',
+    hideRight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
     caret: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>',
 };
 
@@ -41,6 +47,14 @@ const COMPACT_ANALYSES = [
     { mode: 'timeseries', labelKey: 'compactAnalysisNone' },
     { mode: 'fft', labelKey: 'analysisItemFft' },
 ];
+
+// Plot types the phone layout sets up end to end.
+const COMPACT_PLOT_TYPES = [
+    { mode: 'timeseries', labelKey: 'modeTimeseries' },
+    { mode: 'phase2d', labelKey: 'compactPlotType2d' },
+];
+
+const TIME_FAMILY = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
 
 const MODE_LABEL_KEYS = {
     timeseries: 'modeTimeseries',
@@ -255,7 +269,7 @@ export function installCompactMethods(ViewerClass) {
         this._compactSheetTitle.tabIndex = -1;
         sheet.setAttribute('aria-labelledby', this._compactSheetTitle.id);
         this._compactSizeBtn = button('compact-icon-btn compact-sheet-size', '', () => this._toggleCompactSheetSize(), { icon: SVG.expand, title: i18n.t('compactExpand') });
-        this._compactCloseBtn = button('compact-icon-btn compact-sheet-close', '', () => this._closeCompactSheet(), { icon: SVG.close, title: i18n.t('compactClose') });
+        this._compactCloseBtn = button('compact-icon-btn compact-sheet-close', '', () => this._closeCompactSheet(), { icon: SVG.hideDown, title: i18n.t('compactHide') });
         header.append(this._compactBackBtn, this._compactSheetTitle, this._compactSizeBtn, this._compactCloseBtn);
         this._compactSheetBody = el('div', 'compact-sheet-body');
         sheet.append(handle, header, this._compactSheetBody);
@@ -328,6 +342,7 @@ export function installCompactMethods(ViewerClass) {
         const turned = landscape !== this._compact.landscape;
         this._compact.landscape = landscape;
         root.classList.toggle('compact-landscape', want && landscape);
+        this._syncCompactSizeButton?.();
         if (!changed) {
             if (want && turned) {
                 this._resetCompactZoom();
@@ -441,8 +456,8 @@ export function installCompactMethods(ViewerClass) {
         this._compactNav.setAttribute('aria-label', i18n.t('compactNavigation'));
         this._compactBackBtn.title = i18n.t('compactBack');
         this._compactBackBtn.setAttribute('aria-label', i18n.t('compactBack'));
-        this._compactCloseBtn.title = i18n.t('compactClose');
-        this._compactCloseBtn.setAttribute('aria-label', i18n.t('compactClose'));
+        this._compactCloseBtn.title = i18n.t('compactHide');
+        this._compactCloseBtn.setAttribute('aria-label', i18n.t('compactHide'));
         this._syncCompactSizeButton();
         const exampleLabel = this._compactEmptyExample?.querySelector('.compact-btn-label');
         if (exampleLabel) exampleLabel.textContent = i18n.t('compactTryExample');
@@ -603,6 +618,8 @@ export function installCompactMethods(ViewerClass) {
     };
 
     proto._syncCompactSizeButton = function() {
+        const hideIcon = this._compactCloseBtn?.querySelector('.compact-btn-icon');
+        if (hideIcon) hideIcon.innerHTML = this._compact?.landscape ? SVG.hideRight : SVG.hideDown;
         if (!this._compactSizeBtn) return;
         const full = this._compact?.sheetSize === 'full';
         this._compactSizeBtn.querySelector('.compact-btn-icon').innerHTML = full ? SVG.shrink : SVG.expand;
@@ -730,6 +747,72 @@ export function installCompactMethods(ViewerClass) {
         }
     };
 
+    // Switching a plot's type. Within the time-series family the signals are
+    // kept; across families they are not, and the user is asked first, in a
+    // dialog rather than the desktop's in-panel banner.
+    proto._compactSetPlotMode = async function(mode) {
+        const pm = this.plotManager;
+        const panelId = this._compactActivePanelId();
+        const plot = panelId ? pm.plots.get(panelId) : null;
+        if (!plot || plot.mode === mode) return;
+        if (TIME_FAMILY.has(plot.mode) && TIME_FAMILY.has(mode)) {
+            pm._requestModeChange(panelId, mode);
+        } else {
+            if (pm._hasContent(plot)) {
+                const ok = await Modal.confirm(i18n.t('modeChangeClearsTracesWarning'), { icon: '⚠' });
+                if (!ok) return;
+            }
+            pm._setMode(panelId, mode);
+        }
+        this._compactSyncTreeMarks();
+        this._compactUpdateAppBar();
+        // The new chart is built asynchronously.
+        setTimeout(() => {
+            if (this._compact.sheet === 'plot' || this._compact.sheet === 'analyze') this._renderCompactSheetContent();
+        }, 60);
+    };
+
+    // What a 2D plot is waiting for, in words: an X signal, or the Y to pair
+    // with the X already chosen.
+    proto._compactPhaseHint = function(plot) {
+        const pending = plot?.phasePending?.x;
+        return pending
+            ? i18n.t('compactPendingY').replace('{x}', this._compactVarLabel(pending, plot.phasePending.fileId))
+            : i18n.t('compactPhaseHint');
+    };
+
+    proto._compactVarLabel = function(varName, fileId) {
+        const variable = this.plotManager.files.get(fileId || this.activeFileId)?.data?.variables?.[varName];
+        return variable?.displayName || varName;
+    };
+
+    proto._compactSyncPhaseBanner = function() {
+        const banner = this._compactPhaseBanner;
+        if (!banner) return;
+        const plot = this.plotManager.plots.get(this._compactActivePanelId());
+        const show = plot?.mode === 'phase2d';
+        banner.hidden = !show;
+        if (!show) return;
+        banner.querySelector('.compact-phase-text').textContent = this._compactPhaseHint(plot);
+        banner.querySelector('.compact-phase-cancel').hidden = !plot.phasePending?.x;
+    };
+
+    proto._compactCancelPhasePending = function() {
+        const pm = this.plotManager;
+        const panelId = this._compactActivePanelId();
+        const plot = pm.plots.get(panelId);
+        if (!plot) return;
+        plot.phasePending = { x: null, y: null, z: null, fileId: null };
+        const panelEl = this._compactActivePanelEl();
+        if (panelEl) {
+            pm._setPendingOverlay?.(panelId, panelEl, false);
+            pm._updatePlaceholder?.(panelId, panelEl);
+        }
+        this._compactSyncTreeMarks();
+        this._compactSyncPhaseBanner();
+        if (this._compact.sheet === 'plot') this._renderCompactSheetContent();
+    };
+
     proto._compactHelpBox = function() {
         const box = el('div', 'compact-help-box');
         box.appendChild(el('h4', '', i18n.t('compactHelpTitle')));
@@ -750,9 +833,17 @@ export function installCompactMethods(ViewerClass) {
             document.getElementById('load-new-file')?.click();
         }));
         node.appendChild(actions);
+        // In a 2D plot a tap is an X, then a Y: the banner says which comes next.
+        const banner = el('div', 'compact-phase-banner');
+        banner.setAttribute('aria-live', 'polite');
+        banner.appendChild(el('span', 'compact-phase-text'));
+        banner.appendChild(button('compact-link-btn compact-phase-cancel', i18n.t('cancel'), () => this._compactCancelPhasePending()));
+        node.appendChild(banner);
+        this._compactPhaseBanner = banner;
         const sidebar = document.getElementById('sidebar');
         const restore = this._lendToCompact(sidebar, node);
         this._compactSyncTreeMarks();
+        this._compactSyncPhaseBanner();
         return {
             title: i18n.t('compactNavData'),
             node,
@@ -769,6 +860,12 @@ export function installCompactMethods(ViewerClass) {
         const plot = pm.plots.get(panelId);
         const ownerId = fileId || this.activeFileId;
         const index = (plot?.traces || []).findIndex(trace => trace.varName === varName && trace.fileId === ownerId);
+        const pending = plot?.phasePending;
+        if (plot?.mode === 'phase2d' && pending?.x === varName && (pending.fileId || this.activeFileId) === ownerId) {
+            // The X waiting for its Y, tapped again: changed one's mind.
+            this._compactCancelPhasePending();
+            return;
+        }
         if (plot && index >= 0 && (plot.mode === 'timeseries' || plot.mode === 'fft')) {
             if (plot.mode === 'timeseries') pm.removeTrace(panelId, varName, ownerId);
             else pm._removeFftTraceFromLegend(panelId, plot, plot.traces[index]);
@@ -777,6 +874,7 @@ export function installCompactMethods(ViewerClass) {
         }
         requestAnimationFrame(() => {
             this._compactSyncTreeMarks();
+            this._compactSyncPhaseBanner();
             this._compactUpdateAppBar();
         });
     };
@@ -786,9 +884,32 @@ export function installCompactMethods(ViewerClass) {
         const panelId = this._compactActivePanelId();
         const plot = panelId ? this.plotManager.plots.get(panelId) : null;
         const onPlot = new Set((plot?.traces || []).map(trace => `${trace.fileId}\u0000${trace.varName}`));
+        // A 2D plot uses a signal as x or y (or both, in different pairs).
+        const roles = new Map();
+        const addRole = (fileId, name, role) => {
+            if (!name) return;
+            const key = `${fileId || this.activeFileId}\u0000${name}`;
+            const list = roles.get(key) || [];
+            if (!list.includes(role)) list.push(role);
+            roles.set(key, list);
+        };
+        if (plot?.mode === 'phase2d') {
+            for (const pair of plot.phaseTraces || []) {
+                addRole(pair.fileId, pair.x, 'x');
+                addRole(pair.fileId, pair.y, 'y');
+            }
+        }
+        const pendingKey = plot?.mode === 'phase2d' && plot.phasePending?.x
+            ? `${plot.phasePending.fileId || this.activeFileId}\u0000${plot.phasePending.x}`
+            : null;
         document.querySelectorAll('#variables-tree .tree-item[data-var-name]').forEach(item => {
-            const fileId = item.dataset.fileId || this.activeFileId;
-            item.classList.toggle('compact-on-plot', onPlot.has(`${fileId}\u0000${item.dataset.varName}`));
+            const key = `${item.dataset.fileId || this.activeFileId}\u0000${item.dataset.varName}`;
+            const role = roles.get(key);
+            item.classList.toggle('compact-on-plot', onPlot.has(key) || !!role);
+            item.classList.toggle('compact-pending', key === pendingKey);
+            if (key === pendingKey) item.dataset.compactRole = 'x …';
+            else if (role) item.dataset.compactRole = role.join(', ');
+            else delete item.dataset.compactRole;
         });
     };
 
@@ -886,6 +1007,22 @@ export function installCompactMethods(ViewerClass) {
         plots.appendChild(plotActions);
         node.appendChild(plots);
 
+        const typeSection = section(i18n.t('compactPlotType'));
+        const typeRow = el('div', 'compact-segmented');
+        typeRow.setAttribute('role', 'radiogroup');
+        const currentMode = plot?.mode || 'timeseries';
+        for (const type of COMPACT_PLOT_TYPES) {
+            const selected = type.mode === 'timeseries' ? TIME_FAMILY.has(currentMode) : currentMode === type.mode;
+            const btn = button(`compact-segment${selected ? ' is-active' : ''}`, i18n.t(type.labelKey), () => {
+                if (!selected) this._compactSetPlotMode(type.mode);
+            });
+            btn.setAttribute('role', 'radio');
+            btn.setAttribute('aria-checked', String(selected));
+            typeRow.appendChild(btn);
+        }
+        typeSection.appendChild(typeRow);
+        node.appendChild(typeSection);
+
         const hasContent = !!plot && pm._hasContent(plot);
         const view = section(i18n.t('compactView'));
         const viewRow = el('div', 'compact-action-row');
@@ -912,7 +1049,9 @@ export function installCompactMethods(ViewerClass) {
 
         const signals = section(i18n.t('compactSignalsOnPlot'));
         const traces = plot?.traces || [];
-        if (mode !== 'timeseries' && mode !== 'fft') {
+        if (mode === 'phase2d') {
+            this._buildCompactPhasePairs(signals, panelId, plot);
+        } else if (mode !== 'timeseries' && mode !== 'fft') {
             // Phase plots and animations pair their signals in roles (x, y,
             // z, dx/dt) that the phone layout does not edit yet.
             const summary = this._compactPanelSummary(panelId);
@@ -958,6 +1097,62 @@ export function installCompactMethods(ViewerClass) {
         return { title: i18n.t('compactNavPlot'), node };
     };
 
+    // A 2D plot's curves are x–y pairs: listed with a way to remove each, the
+    // X still waiting for its Y, the 1:1 aspect, and the way to add a pair.
+    proto._buildCompactPhasePairs = function(container, panelId, plot) {
+        const pm = this.plotManager;
+        const pairs = plot?.phaseTraces || [];
+        const pendingX = plot?.phasePending?.x;
+        if (pairs.length || pendingX) {
+            const list = el('div', 'compact-list');
+            for (const pair of [...pairs]) {
+                const row = el('div', 'compact-trace-row');
+                const swatch = el('span', 'compact-swatch');
+                swatch.style.background = pair.color || 'currentColor';
+                const label = `${this._compactVarLabel(pair.x, pair.fileId)} / ${this._compactVarLabel(pair.y, pair.fileId)}`;
+                const name = el('span', 'compact-trace-name', label);
+                const remove = button('compact-icon-btn compact-trace-remove', '', async () => {
+                    await pm._removePhaseTraceFromLegend(panelId, plot, pair);
+                    this._compactSyncTreeMarks();
+                    this._compactUpdateAppBar();
+                    this._renderCompactSheetContent();
+                }, { icon: SVG.close, title: i18n.t('compactRemoveSignal').replace('{name}', label) });
+                row.append(swatch, name, remove);
+                list.appendChild(row);
+            }
+            if (pendingX) {
+                const row = el('div', 'compact-trace-row compact-trace-pending');
+                row.appendChild(el('span', 'compact-trace-name', this._compactPhaseHint(plot)));
+                row.appendChild(button('compact-link-btn', i18n.t('cancel'), () => this._compactCancelPhasePending()));
+                list.appendChild(row);
+            }
+            container.appendChild(list);
+        } else {
+            container.appendChild(el('p', 'compact-note', i18n.t('compactPhaseHint')));
+        }
+        const actions = el('div', 'compact-action-row');
+        actions.appendChild(button('compact-secondary-btn', i18n.t('compactChooseSignals'), () => this._openCompactSheet('data', { toggle: false })));
+        if (pairs.length) {
+            actions.appendChild(button('compact-secondary-btn compact-danger-btn', i18n.t('clearPlot'), () => {
+                pm._clearPanel(panelId);
+                this._compactSyncTreeMarks();
+                this._compactUpdateAppBar();
+                this._renderCompactSheetContent();
+            }));
+        }
+        container.appendChild(actions);
+        if (pairs.length) {
+            const aspect = el('label', 'compact-switch-row');
+            const input = el('input');
+            input.type = 'checkbox';
+            input.checked = !!plot.equalAspect2D;
+            input.disabled = !pm._equalAspectAllowed(plot);
+            input.addEventListener('change', () => pm._toggleEqualAspect2D(panelId));
+            aspect.append(el('span', '', i18n.t('viewEqualAspect')), input);
+            container.appendChild(aspect);
+        }
+    };
+
     // ─── Analyze ──────────────────────────────────────────────────
 
     proto._buildCompactAnalyzePage = function() {
@@ -987,12 +1182,9 @@ export function installCompactMethods(ViewerClass) {
                 if (!panelId || selected) return;
                 restoreOptions?.();
                 restoreOptions = null;
-                pm._requestModeChange(panelId, analysis.mode);
-                // The new chart is built asynchronously; the options panel it
-                // lends to this sheet exists only once it is.
-                setTimeout(() => {
-                    if (this._compact.sheet === 'analyze') this._renderCompactSheetContent();
-                }, 60);
+                // The new chart, and the options panel it lends to this
+                // sheet, are built asynchronously; the switch re-renders.
+                this._compactSetPlotMode(analysis.mode);
             });
             item.setAttribute('role', 'radio');
             item.setAttribute('aria-checked', String(selected));

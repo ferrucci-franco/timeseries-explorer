@@ -1305,7 +1305,15 @@ class PlotManager {
         const overlay = panelEl.querySelector('.drop-overlay');
         if (!overlay) return;
         if (show) {
-            overlay.innerHTML = `<span>${this._dropMessage(panelId)}</span>`;
+            // On the phone layout nothing is dropped: the X is chosen, the Y is next.
+            const pendingX = this.plots.get(panelId)?.phasePending?.x;
+            const message = this.compactLayout && pendingX
+                ? i18n.t('compactPendingY').replace('{x}', pendingX)
+                : this._dropMessage(panelId);
+            overlay.innerHTML = '';
+            const span = document.createElement('span');
+            span.textContent = message;
+            overlay.appendChild(span);
             overlay.classList.add('active', 'pending');
         } else {
             overlay.classList.remove('active', 'pending');

@@ -13,6 +13,8 @@ Built:
 - the Data sheet, with tap-to-plot and the per-file page;
 - the Plot sheet: view and signals;
 - the Analyze sheet: time series and FFT, with the FFT options;
+- 2D (x–y) plots: the plot type in the Plot sheet, x then y by tapping in Data,
+  the pairs listed with removal, and the 1:1 aspect;
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6.
 
@@ -22,7 +24,7 @@ The code is in `src/app/methods/compact-methods.js`, `src/ui/compact-layout.js` 
 
 Not built yet:
 
-- the other analyses and plot modes;
+- the other analyses and plot modes (2D + t, 3D, state animation, correlation);
 - View and Marks;
 - cursors and tap readouts;
 - export through Web Share;
