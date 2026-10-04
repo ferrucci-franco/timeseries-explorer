@@ -240,7 +240,7 @@ class OpenModelicaViewer {
             <p>${this._escapeHtml(body)}</p>
             <p class="light-notice-privacy">${this._escapeHtml(privacy)}</p>
             ${analytics ? `<p>${this._escapeHtml(analytics)}</p>` : ''}
-            ${desktop ? `<p>${desktopHtml}</p>` : ''}
+            ${desktop ? `<p class="light-notice-desktop">${desktopHtml}</p>` : ''}
             ${features ? `<ul>${features}</ul>` : ''}
         `;
     }

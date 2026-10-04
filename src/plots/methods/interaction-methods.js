@@ -5381,6 +5381,24 @@ proto._updatePlaceholder = function(panelId, panelEl) {
     // If plot has content, placeholder is hidden — nothing to update
     if (plot && this._hasContent(plot)) return;
 
+    // Phone layout: nothing is dragged, and there is no Ctrl key or legend
+    // Shift+click to explain. One sentence and the way to the signals.
+    if (this.compactLayout) {
+        placeholder.innerHTML = '';
+        const text = document.createElement('span');
+        text.textContent = i18n.t('compactPlaceholderEmpty');
+        const choose = document.createElement('button');
+        choose.type = 'button';
+        choose.className = 'compact-placeholder-btn';
+        choose.textContent = i18n.t('compactChooseSignals');
+        choose.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.onCompactChooseSignals?.(panelId);
+        });
+        placeholder.append(text, choose);
+        return;
+    }
+
     const mode = plot ? plot.mode : 'timeseries';
     const pp   = plot ? plot.phasePending : { x: null, y: null, z: null };
 
