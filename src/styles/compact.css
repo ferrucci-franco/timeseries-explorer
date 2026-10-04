@@ -1163,6 +1163,16 @@ html.compact .compact-sheet .fft-option-row input[type="checkbox"] {
     opacity: 0.85;
 }
 
+/* Feedback: nothing is pasted or dragged on a phone; files are chosen. */
+html.compact .feedback-paste-zone {
+    display: none;
+}
+
+html.compact .feedback-file-button {
+    width: 100%;
+    min-height: 44px;
+}
+
 /* ── Empty plot ──────────────────────────────────────────────────────── */
 html.compact .layout-panel-placeholder {
     font-size: 1rem;

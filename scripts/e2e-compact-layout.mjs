@@ -254,6 +254,14 @@ try {
     );
     await page.locator('.compact-sheet-close').click();
 
+    // ── Feedback: files are chosen, not pasted or dragged ───────────────────
+    await page.evaluate(() => window.app.showFeedbackForm());
+    await page.waitForSelector('.feedback-overlay .feedback-file-button');
+    assert.equal(await page.locator('.feedback-paste-zone').isVisible(), false, 'no paste-or-drag zone on a phone');
+    assert.equal(await page.locator('.feedback-file-button').isVisible(), true, 'the file chooser stays');
+    await page.locator('.feedback-overlay .compact-dialog-close').click();
+    await page.waitForFunction(() => !document.querySelector('.feedback-overlay.show'));
+
     // ── The user can ask for the full layout, and back ──────────────────────
     await page.evaluate(() => window.app._setCompactLayoutOverride('full'));
     assert.equal(await page.evaluate(() => document.documentElement.classList.contains('compact')), false, 'Full overrides the phone layout');
@@ -320,14 +328,14 @@ try {
 
     // ── From the desktop to the phone layout, and back ──────────────────────
     await dpage.locator('#extra-menu-btn').click();
-    await dpage.locator('#extra-menu .extra-menu-item', { hasText: 'Phone layout' }).click();
+    await dpage.locator('#extra-menu .extra-menu-item', { hasText: 'Mobile version' }).click();
     await dpage.waitForFunction(() => document.documentElement.classList.contains('compact'));
     assert.equal(await dpage.locator('#compact-nav').isVisible(), true, 'the menu switches a desktop window to the phone layout');
     assert.equal(await dpage.locator('.top-bar').isVisible(), false);
     if (shots) await dpage.screenshot({ path: `${shots}/compact-desktop-switched.png` });
     await dpage.locator('.compact-nav-btn[data-sheet="more"]').click();
     assert.equal(
-        await dpage.locator('.compact-sheet #extra-menu .extra-menu-item', { hasText: 'Phone layout' }).count(),
+        await dpage.locator('.compact-sheet #extra-menu .extra-menu-item', { hasText: 'Mobile version' }).count(),
         0,
         'the phone layout does not offer itself',
     );
