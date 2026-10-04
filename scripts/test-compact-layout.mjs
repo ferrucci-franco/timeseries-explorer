@@ -1,7 +1,9 @@
 // When the app switches to its phone layout (docs/phone-web-specification.md §3).
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
+    LAYOUT_OVERRIDE_STORAGE_KEY,
     COMPACT_MAX_HEIGHT,
     COMPACT_MAX_WIDTH,
     effectiveViewportSize,
@@ -61,5 +63,46 @@ assert.deepEqual(effectiveViewportSize({ innerWidth: 700, innerHeight: 400 }), {
 
 assert.equal(isLandscapeViewport(844, 390), true);
 assert.equal(isLandscapeViewport(390, 844), false);
+
+// ── The boot script in index.html decides the same way ──────────────────────
+// It runs before the first paint, so a phone never sees the desktop layout;
+// the app then takes over with the module above. If the two ever disagreed,
+// the layout would flip once the app started.
+{
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const match = html.match(/<script id="compact-boot">([\s\S]*?)<\/script>/);
+    assert.ok(match, 'index.html decides the layout before the first paint');
+    assert.ok(match[1].includes(`'${LAYOUT_OVERRIDE_STORAGE_KEY}'`), 'with the same remembered choice');
+    const boot = new Function('window', 'document', match[1]);
+    const runBoot = ({ innerWidth, innerHeight, screenWidth, screenHeight, override = null }) => {
+        const classes = new Set();
+        boot(
+            {
+                innerWidth,
+                innerHeight,
+                screen: { width: screenWidth, height: screenHeight },
+                localStorage: { getItem: () => override },
+            },
+            { documentElement: { classList: { add: name => classes.add(name) } } },
+        );
+        return classes;
+    };
+    const sizes = [
+        [390, 844, 390, 844], [844, 390, 390, 844], [810, 1753, 390, 844], [320, 568, 320, 568],
+        [412, 915, 412, 915], [915, 412, 412, 915], [768, 1024, 768, 1024], [1024, 768, 768, 1024],
+        [1400, 900, 1920, 1080], [500, 800, 1920, 1080], [1200, 450, 1920, 1080], [599, 900, 1920, 1080],
+        [600, 900, 1920, 1080], [1200, 499, 1920, 1080], [1200, 500, 1920, 1080],
+    ];
+    for (const [innerWidth, innerHeight, screenWidth, screenHeight] of sizes) {
+        for (const override of [null, 'auto', 'compact', 'full']) {
+            const size = effectiveViewportSize({ innerWidth, innerHeight, screenWidth, screenHeight });
+            const want = shouldUseCompactLayout({ ...size, override: override || 'auto' });
+            const classes = runBoot({ innerWidth, innerHeight, screenWidth, screenHeight, override });
+            const label = `${innerWidth}×${innerHeight} on ${screenWidth}×${screenHeight}, ${override}`;
+            assert.equal(classes.has('compact'), want, `boot and app agree on ${label}`);
+            assert.equal(classes.has('compact-landscape'), want && isLandscapeViewport(size.width, size.height), `and on its orientation, ${label}`);
+        }
+    }
+}
 
 console.log('compact layout rules: ok');

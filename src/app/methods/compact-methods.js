@@ -321,7 +321,10 @@ export function installCompactMethods(ViewerClass) {
         const want = shouldUseCompactLayout({ width, height, override: this._compact.override });
         const landscape = isLandscapeViewport(width, height);
         const root = document.documentElement;
-        const changed = want !== this._compact.active;
+        // The first run always applies: the boot script in index.html may
+        // already have set the classes, but not built anything else.
+        const changed = !this._compact.applied || want !== this._compact.active;
+        this._compact.applied = true;
         const turned = landscape !== this._compact.landscape;
         this._compact.landscape = landscape;
         root.classList.toggle('compact-landscape', want && landscape);

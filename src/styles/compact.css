@@ -925,10 +925,41 @@ html.compact .light-version-notice {
     box-sizing: border-box;
 }
 
-/* "Download the desktop version from the Menu": nothing a phone installs,
-   and the phone's menu does not offer it. */
-html.compact .light-notice-desktop {
+/* The web-version notice is a boxed paragraph on the desktop. On a phone it
+   is the two lines that matter, under the buttons, without a box: the files
+   stay on the device, and what the page counts. "Download the desktop
+   version from the Menu" goes: nothing a phone installs, nor offered there. */
+html.compact .light-version-notice {
+    width: 100%;
+    max-width: 100%;
+    max-height: none;
+    overflow: visible;
+    margin: 18px 0 0;
+    padding: 0;
+    border: none;
+    background: none;
+    box-shadow: none;
+    text-align: center;
+}
+
+html.compact .light-version-notice h3,
+html.compact .light-version-notice .light-notice-body,
+html.compact .light-version-notice .light-notice-desktop,
+html.compact .light-version-notice ul {
     display: none;
+}
+
+html.compact .light-version-notice .light-notice-privacy {
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.4;
+}
+
+html.compact .light-version-notice .light-notice-analytics {
+    margin: 8px 0 0;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
 }
 
 html.compact #file-select-btn {

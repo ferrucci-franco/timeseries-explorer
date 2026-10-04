@@ -237,9 +237,9 @@ class OpenModelicaViewer {
         const features = (Array.isArray(featureList) ? featureList : []).map(feature => `<li>${this._escapeHtml(feature)}</li>`).join('');
         return `
             <h3>${title}</h3>
-            <p>${this._escapeHtml(body)}</p>
+            <p class="light-notice-body">${this._escapeHtml(body)}</p>
             <p class="light-notice-privacy">${this._escapeHtml(privacy)}</p>
-            ${analytics ? `<p>${this._escapeHtml(analytics)}</p>` : ''}
+            ${analytics ? `<p class="light-notice-analytics">${this._escapeHtml(analytics)}</p>` : ''}
             ${desktop ? `<p class="light-notice-desktop">${desktopHtml}</p>` : ''}
             ${features ? `<ul>${features}</ul>` : ''}
         `;
