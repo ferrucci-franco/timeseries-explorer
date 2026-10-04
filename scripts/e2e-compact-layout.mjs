@@ -166,6 +166,44 @@ try {
     assert.deepEqual(errors, [], 'no page errors on the phone');
     await context.close();
 
+    // ── iOS: nothing may zoom the page in ───────────────────────────────────
+    // Safari zooms in when a field under 16 px takes focus and stays zoomed,
+    // the layout cut at the right (seen on an iPhone with the animation speed
+    // selector). WebKit's GestureEvent is what the app detects iOS by.
+    const ios = await browser.newContext({
+        viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,
+    });
+    await ios.addInitScript(() => { window.GestureEvent = function GestureEvent() {}; });
+    const ipage = await ios.newPage();
+    const ierrors = [];
+    ipage.on('pageerror', e => ierrors.push(e.message));
+    await ipage.goto(baseUrl);
+    await ipage.waitForFunction(() => window.app?.plotManager && document.documentElement.classList.contains('compact'));
+    assert.match(
+        await ipage.evaluate(() => document.querySelector('meta[name="viewport"]').content),
+        /maximum-scale=1/,
+        'on iOS the phone layout stops the zoom on focus',
+    );
+    // The Lorenz example: a 3D state animation, with its speed selector.
+    await ipage.locator('.compact-try-example').click();
+    await ipage.locator('.compact-sheet .example-load-btn', { hasText: 'Lorenz' }).first().click();
+    await ipage.waitForFunction(() => document.querySelector('.state-anim-controls .sa-speed'), null, { timeout: 60000 });
+    await ipage.waitForTimeout(800);
+    const small = await ipage.evaluate(() => [...document.querySelectorAll('input, select, textarea')]
+        .filter(el => !['checkbox', 'radio', 'range', 'color', 'file', 'hidden'].includes(el.type))
+        .filter(el => parseFloat(getComputedStyle(el).fontSize) < 16)
+        .map(el => el.className || el.id || el.tagName));
+    assert.deepEqual(small, [], 'no field is small enough for iOS to zoom into');
+    assert.equal(
+        await ipage.evaluate(() => getComputedStyle(document.querySelector('.plots-area')).touchAction),
+        'none',
+        'a pinch on the plot is the plot\'s, not the page\'s',
+    );
+    assert.equal(await ipage.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+    if (shots) await ipage.screenshot({ path: `${shots}/compact-ios-lorenz.png` });
+    assert.deepEqual(ierrors, [], 'no page errors on iOS');
+    await ios.close();
+
     // ── Desktop: untouched ──────────────────────────────────────────────────
     const desktop = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     const dpage = await desktop.newPage();
@@ -174,6 +212,7 @@ try {
     await dpage.goto(baseUrl);
     await dpage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
     assert.equal(await dpage.evaluate(() => document.documentElement.classList.contains('compact')), false, 'a desktop window keeps the desktop layout');
+    assert.doesNotMatch(await dpage.evaluate(() => document.querySelector('meta[name="viewport"]').content), /maximum-scale/);
     assert.equal(await dpage.locator('#compact-nav').isVisible(), false);
     assert.equal(await dpage.locator('#compact-appbar').isVisible(), false);
     assert.equal(await dpage.locator('.top-bar').isVisible(), true);
