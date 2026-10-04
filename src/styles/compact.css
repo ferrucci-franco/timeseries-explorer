@@ -913,7 +913,8 @@ html.compact .compact-sheet .fft-options {
 
 html.compact .compact-sheet .fft-options input,
 html.compact .compact-sheet .fft-options select {
-    min-height: 36px;
+    height: auto;
+    min-height: 44px;
     font-size: 16px;
 }
 
@@ -1389,6 +1390,160 @@ html.compact-landscape .csv-preview-compact .csv-preview-header {
 
 html.compact-landscape .csv-preview-compact .csv-preview-subtitle {
     display: none;
+}
+
+/* ── Minimum sizes on a phone ──────────────────────────────────────────
+   Pieces borrowed from the desktop UI carry desktop sizes: 26 px buttons,
+   11 px labels. Inside the phone's sheets and dialogs, a button is at least
+   44 px tall (40 px for the small icon actions beside a row), a field 44 px,
+   and text 14 px; section labels and metadata at least 13 px. Measured by
+   e2e:compact-layout. */
+html.compact .compact-sheet-body button:not(.compact-icon-btn):not(.tree-sign-toggle):not(.tree-time-axis-inspect):not(.fft-help-btn):not(.tree-control-btn):not(.example-action-btn):not(.file-entry-more):not(.compact-link-btn),
+html.compact .compact-fullscreen-dialog button:not(.compact-icon-btn):not(.fft-help-btn),
+html.compact .compact-fullscreen-dialog .modal-btn {
+    min-height: 44px;
+    font-size: 15px;
+}
+
+html.compact .compact-sheet-body input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html.compact .compact-sheet-body select,
+html.compact .compact-fullscreen-dialog input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html.compact .compact-fullscreen-dialog select,
+html.compact .plot-settings-dialog select {
+    min-height: 44px;
+    box-sizing: border-box;
+}
+
+/* Small icon actions beside a row: ± sign, the time-axis clock, ? help,
+   download/copy an example. */
+html.compact .tree-sign-toggle,
+html.compact .tree-time-axis-inspect,
+html.compact .example-action-btn {
+    min-width: 40px;
+    min-height: 40px;
+}
+
+html.compact .fft-help-btn {
+    min-width: 32px;
+    min-height: 32px;
+}
+
+/* (The transform panel's warning button draws its icon itself and hides
+   its text: it keeps its own font size.) */
+html.compact .fft-help-btn:not(.file-transform-warning-btn) {
+    font-size: 15px;
+}
+
+/* An example's whole row loads it, not the 16 px line of its name. */
+html.compact .compact-sheet .example-menu-item-row {
+    align-items: center;
+}
+
+html.compact .compact-sheet .example-load-btn {
+    flex: 1 1 auto;
+    min-height: 48px;
+    font-size: 16px;
+    text-align: left;
+}
+
+/* The file's transform panel (shift, scale, crop, gain), at phone size. */
+html.compact .file-transform-panel {
+    gap: 10px;
+    padding: 12px;
+}
+
+html.compact .file-transform-title {
+    font-size: 15px;
+}
+
+html.compact .file-transform-field,
+html.compact .file-transform-hint,
+html.compact .file-transform-panel span {
+    font-size: 14px;
+}
+
+html.compact .file-transform-panel button:not(.file-transform-warning-btn) {
+    min-height: 40px;
+    font-size: 15px;
+}
+
+html.compact .file-transform-wide-action {
+    min-height: 44px;
+}
+
+/* FFT options, as lent to the Analyze sheet. */
+html.compact .compact-sheet .fft-options,
+html.compact .compact-sheet .fft-options-subtitle {
+    font-size: 15px;
+}
+
+html.compact .compact-sheet .fft-options button {
+    padding: 0 14px;
+}
+
+/* Text that was 11–13 px. */
+html.compact .compact-section-title,
+html.compact .compact-plot-mode,
+html.compact .tree-info,
+html.compact .tree-info-count,
+html.compact .light-version-notice .light-notice-analytics,
+html.compact .extra-version-badge,
+html.compact .extra-version-build {
+    font-size: 13px;
+}
+
+html.compact .file-entry-name,
+html.compact .compact-plot-number,
+html.compact .compact-note,
+html.compact .plot-settings-help,
+html.compact .feedback-dialog p,
+html.compact .feedback-dialog label span,
+html.compact .feedback-file-list {
+    font-size: 14px;
+}
+
+html.compact .compact-plot-selector-label {
+    font-size: 15px;
+}
+
+html.compact .compact-nav-btn {
+    font-size: 12.5px;
+}
+
+html.compact .compact-plot-selector {
+    min-height: 40px;
+}
+
+html.compact .compact-sheet .fft-select {
+    height: auto;
+    min-height: 44px;
+}
+
+html.compact .help-modal-close {
+    min-width: 44px;
+    min-height: 44px;
+}
+
+/* CSV parsing: the preview grid, its section titles and notes. */
+html.compact .csv-preview-compact .csv-preview-grid th,
+html.compact .csv-preview-compact .csv-preview-grid td {
+    font-size: 14px;
+}
+
+html.compact .csv-preview-compact .csv-preview-side-title {
+    font-size: 15px;
+}
+
+html.compact .csv-preview-compact .csv-preview-side-note,
+html.compact .csv-preview-compact .csv-preview-status {
+    font-size: 13.5px;
+}
+
+html.compact .csv-preview-compact .csv-preview-mode-help,
+html.compact .csv-preview-compact .csv-preview-pattern-help,
+html.compact .csv-preview-compact .csv-preview-date-order-help {
+    min-width: 36px;
+    min-height: 36px;
 }
 
 @media (prefers-reduced-motion: reduce) {

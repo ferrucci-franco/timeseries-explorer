@@ -141,6 +141,33 @@ try {
         return plot?.fftDiv?.data?.length > 0;
     }, null, { timeout: 30000 });
     await shot(page, 'analyze-fft');
+    // Sizes a finger and an eye can use: no control under 40 px tall, no text
+    // under 13 px, in the sheet with the most desktop pieces in it (the FFT
+    // options) and in the Data sheet.
+    const sizeProblems = () => page.evaluate(() => {
+        const visible = el => {
+            const r = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none';
+        };
+        const sheet = document.querySelector('.compact-sheet-body');
+        const problems = [];
+        for (const el of sheet.querySelectorAll('button, select, input:not([type=checkbox]):not([type=radio]):not([type=range])')) {
+            if (!visible(el) || el.matches('.fft-help-btn, .compact-icon-btn')) continue;
+            const h = el.getBoundingClientRect().height;
+            if (h < 40) problems.push(`${el.className || el.tagName} is ${Math.round(h)} px tall`);
+        }
+        const walker = document.createTreeWalker(sheet, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+            const text = walker.currentNode.textContent.trim();
+            const parent = walker.currentNode.parentElement;
+            if (!text || !visible(parent) || parent.closest('svg, .tree-time-axis-inspect')) continue;
+            const size = parseFloat(getComputedStyle(parent).fontSize);
+            if (size < 13) problems.push(`"${text.slice(0, 30)}" is ${size} px`);
+        }
+        return problems;
+    });
+    assert.deepEqual(await sizeProblems(), [], 'the FFT options are phone-sized');
     await page.locator('.compact-sheet-close').click();
     await page.waitForFunction(() => window.app._compact.sheet === null);
     assert.equal(
