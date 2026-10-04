@@ -86,6 +86,23 @@ const spokenFor = (div, event) => {
 };
 
 /**
+ * Take a plot's hover label away, for good.
+ *
+ * Unhovering alone does not last: Plotly remembers which subplot the pointer
+ * was over and draws the label again after every redraw, until a mouseout
+ * says the pointer left — and a finger never sends one. So after a pan, a
+ * window zoom or a fit, the label of a tap made long before came back, over a
+ * point nobody was touching.
+ *
+ * @param {HTMLElement} div a Plotly graph div
+ * @param {{Fx?: {unhover?: Function}}} plotly
+ */
+export function clearPlotHover(div, plotly) {
+    if (div?._fullLayout) div._fullLayout._hoversubplot = null;
+    plotly?.Fx?.unhover?.(div);
+}
+
+/**
  * An axis range as numbers the arithmetic can move, and back.
  *
  * Plotly keeps a date axis's range as date strings ('2024-03-01 12:00'), which
@@ -195,6 +212,8 @@ export function installTouchPlotGestures(div, plotly) {
 
     const arm = (options) => {
         disarm();
+        // The first tap's label: what is wanted now is a window, not a value.
+        clearPlotHover(div, plotly);
         const area = plotArea();
         if (!area) return;
         armedUntil = now() + WINDOW_ZOOM_ARMED_MS;
@@ -226,6 +245,7 @@ export function installTouchPlotGestures(div, plotly) {
         windowSel = { area, from: x, to: x, band };
         // Whatever pan had begun under this finger stops where it is.
         flush();
+        clearPlotHover(div, plotly);
         gesture = null;
         div.classList.add(GESTURE_CLASS);
         return true;
@@ -323,12 +343,25 @@ export function installTouchPlotGestures(div, plotly) {
         };
     };
 
+    // A tap reads the value under it. The browser's compatibility mouse
+    // events usually do this for Plotly, but only with a mousemove, and none
+    // is sent when the finger lands where the last tap did: the second tap on
+    // the same spot showed nothing. So the tap asks Plotly itself.
+    const showTapValue = (event, point) => {
+        const target = event.changedTouches?.[0]?.target;
+        if (!target || !onPlotSurface(target) || typeof plotly.Fx?.hover !== 'function') return;
+        if (div._fullLayout?.hovermode === false) return;
+        try {
+            plotly.Fx.hover(div, { clientX: point.x, clientY: point.y, target }, 'xy');
+        } catch { /* a plot with no x–y subplot has nothing to read here */ }
+    };
+
     const settle = (moved) => {
         div.classList.remove(GESTURE_CLASS);
         // A finger never leaves the plot, so nothing ever takes the hover
         // label away by itself. After a gesture it is about somewhere the
         // reader has not been for a while.
-        if (moved) plotly.Fx?.unhover?.(div);
+        if (moved) clearPlotHover(div, plotly);
     };
 
     const onTouchStart = (event) => {
@@ -481,6 +514,7 @@ export function installTouchPlotGestures(div, plotly) {
             lastTap = null;
         } else if (!moved && fingersSeen === 1 && landed && time - touchStartedAt <= TAP_MAX_DURATION_MS) {
             lastTap = { time, x: landed.x, y: landed.y };
+            showTapValue(event, landed);
         } else {
             lastTap = null;
         }

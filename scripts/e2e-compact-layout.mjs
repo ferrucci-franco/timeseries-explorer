@@ -113,8 +113,10 @@ try {
     await page.locator('.compact-nav-btn[data-sheet="data"]').click();
     await page.waitForFunction(() => document.querySelector('.compact-sheet #sidebar'));
     const leaf = name => page.locator(`#variables-tree .tree-item[data-var-name="${name}"]`);
+    assert.match(await page.locator('.compact-data-target').innerText(), /Signals you tap go to:\s*Plot 1/, 'Data says which plot a tap goes to');
     await leaf('voltage').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
+    assert.equal(await page.locator('.compact-toast.is-shown').innerText(), 'Added to plot 1: voltage', 'and what a tap did');
     await page.waitForFunction(() => document.querySelector('#variables-tree .tree-item[data-var-name="voltage"]')?.classList.contains('compact-on-plot'));
     await leaf('voltage').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 0);
@@ -165,8 +167,14 @@ try {
         const zoomed = await xRange();
         assert.ok(zoomed[0] > full[0] && zoomed[1] < full[1], `the plot zoomed into the window (${zoomed} within ${full})`);
         assert.ok(zoomed[1] - zoomed[0] < (full[1] - full[0]) * 0.6, 'to about the width that was drawn');
+        await page.waitForTimeout(400);
+        assert.equal(
+            await page.locator('.compact-active-panel .hoverlayer .hovertext').count(),
+            0,
+            'the first tap\'s value label does not come back after the zoom',
+        );
         await shot(page, 'window-zoom');
-        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="x"]').click();
+        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="x"]').tap();
         await page.waitForFunction(([lo, hi]) => {
             const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
             const range = plot.div._fullLayout.xaxis.range.map(Number);
@@ -180,9 +188,21 @@ try {
         await page.waitForTimeout(300);
         const panned = await xRange();
         assert.ok(panned[0] < full[0] && Math.abs((panned[1] - panned[0]) - (full[1] - full[0])) < 1e-6, 'one finger pans, the width unchanged');
-        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="all"]').click();
+        // A single tap reads a value.
+        await page.waitForTimeout(800);
+        await touch('touchStart', x0, y0); await page.waitForTimeout(60); await touch('touchEnd');
+        await page.waitForSelector('.compact-active-panel .hoverlayer .hovertext');
+        await page.waitForTimeout(800);
+        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="all"]').tap();
         await cdp.detach();
     }
+
+    // ── Plot sheet: more signals come from Data ─────────────────────────────
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    await page.locator('.compact-add-signals-btn').click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'data');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
 
     // ── Analyze: FFT, with its options in the sheet ─────────────────────────
     await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
@@ -261,6 +281,19 @@ try {
     assert.equal(s.panels, 2, 'a new plot was added');
     assert.equal(s.appBar, 'Plot 2 of 2', 'and it is the one on screen');
     assert.equal(await page.locator('#plots-area .layout-panel:visible').count(), 1, 'one plot is shown at a time');
+    // Data offers both plots as targets; choosing one there makes it the plot on screen.
+    await page.locator('.compact-page-plot .compact-primary-btn', { hasText: 'Choose signals' }).click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'data');
+    assert.equal(await page.locator('.compact-target-chip').count(), 2, 'Data offers both plots');
+    assert.equal(await page.locator('.compact-target-chip.is-active').innerText(), 'Plot 2');
+    await page.locator('.compact-target-chip', { hasText: 'Plot 1' }).click();
+    s = await state();
+    assert.equal(s.appBar, 'Plot 1 of 2', 'choosing a target in Data puts that plot on screen');
+    assert.equal(await page.locator('#variables-tree .tree-item[data-var-name="voltage"]').evaluate(n => n.classList.contains('compact-on-plot')), true,
+        'and the marks follow it');
+    await page.locator('.compact-target-chip', { hasText: 'Plot 2' }).click();
+    await page.locator('.compact-data-done').click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'plot');
     await page.locator('.compact-page-plot .compact-secondary-btn', { hasText: 'Remove this plot' }).click();
     s = await state();
     assert.equal(s.panels, 1);

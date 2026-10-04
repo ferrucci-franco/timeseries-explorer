@@ -627,6 +627,110 @@ html.compact.compact-landscape .compact-sheet-size {
     background: radial-gradient(circle, var(--primary-color) 0 4px, transparent 5px);
 }
 
+/* Data: which plot a tap goes to. It stays at the top while the tree
+   scrolls under it. */
+.compact-data-target {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    margin: -10px -12px 10px;
+    padding: 6px 12px 10px;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.compact-data-target-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.compact-data-target-head + .compact-data-target-plots {
+    margin-top: 8px;
+}
+
+.compact-data-target-name {
+    color: var(--text-primary);
+}
+
+.compact-data-target-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 15px;
+    color: var(--text-secondary);
+}
+
+.compact-data-done {
+    flex: 0 0 auto;
+    min-height: 40px;
+    font-weight: 600;
+}
+
+.compact-data-target-plots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.compact-target-chip {
+    min-height: 40px;
+    padding: 0 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 15px;
+    cursor: pointer;
+}
+
+.compact-target-chip.is-active {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+    color: #fff;
+    font-weight: 600;
+}
+
+.compact-target-chip:disabled {
+    opacity: 1;
+    cursor: default;
+}
+
+/* A short line over the plot after a tap in Data: what changed, and where. */
+.compact-toast {
+    display: none;
+}
+
+html.compact .compact-toast {
+    position: fixed;
+    left: 50%;
+    top: calc(var(--compact-chrome-top) + 10px);
+    z-index: 1300;
+    display: block;
+    max-width: calc(100vw - 32px);
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-primary) 88%, transparent);
+    color: var(--bg-primary);
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -6px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+html.compact .compact-toast.is-shown {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+html.compact.compact-landscape .compact-toast {
+    left: calc(50% + var(--compact-chrome-left) / 2);
+}
+
 .compact-phase-banner {
     display: flex;
     align-items: center;
