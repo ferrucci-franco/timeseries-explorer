@@ -113,8 +113,10 @@ try {
     await page.locator('.compact-nav-btn[data-sheet="data"]').click();
     await page.waitForFunction(() => document.querySelector('.compact-sheet #sidebar'));
     const leaf = name => page.locator(`#variables-tree .tree-item[data-var-name="${name}"]`);
+    assert.match(await page.locator('.compact-data-target').innerText(), /Signals you tap go to:\s*Plot 1/, 'Data says which plot a tap goes to');
     await leaf('voltage').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
+    assert.equal(await page.locator('.compact-toast.is-shown').innerText(), 'Added to plot 1: voltage', 'and what a tap did');
     await page.waitForFunction(() => document.querySelector('#variables-tree .tree-item[data-var-name="voltage"]')?.classList.contains('compact-on-plot'));
     await leaf('voltage').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 0);
@@ -279,6 +281,19 @@ try {
     assert.equal(s.panels, 2, 'a new plot was added');
     assert.equal(s.appBar, 'Plot 2 of 2', 'and it is the one on screen');
     assert.equal(await page.locator('#plots-area .layout-panel:visible').count(), 1, 'one plot is shown at a time');
+    // Data offers both plots as targets; choosing one there makes it the plot on screen.
+    await page.locator('.compact-page-plot .compact-primary-btn', { hasText: 'Choose signals' }).click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'data');
+    assert.equal(await page.locator('.compact-target-chip').count(), 2, 'Data offers both plots');
+    assert.equal(await page.locator('.compact-target-chip.is-active').innerText(), 'Plot 2');
+    await page.locator('.compact-target-chip', { hasText: 'Plot 1' }).click();
+    s = await state();
+    assert.equal(s.appBar, 'Plot 1 of 2', 'choosing a target in Data puts that plot on screen');
+    assert.equal(await page.locator('#variables-tree .tree-item[data-var-name="voltage"]').evaluate(n => n.classList.contains('compact-on-plot')), true,
+        'and the marks follow it');
+    await page.locator('.compact-target-chip', { hasText: 'Plot 2' }).click();
+    await page.locator('.compact-data-done').click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'plot');
     await page.locator('.compact-page-plot .compact-secondary-btn', { hasText: 'Remove this plot' }).click();
     s = await state();
     assert.equal(s.panels, 1);

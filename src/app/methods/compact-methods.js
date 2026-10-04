@@ -654,7 +654,7 @@ export function installCompactMethods(ViewerClass) {
 
     // ─── Sheets ───────────────────────────────────────────────────
 
-    proto._openCompactSheet = function(id, { toggle = true, focus = null } = {}) {
+    proto._openCompactSheet = function(id, { toggle = true, focus = null, returnTo = null } = {}) {
         if (!this._compact?.active) return;
         if (this._compact.sheet === id && toggle) {
             this._closeCompactSheet();
@@ -664,6 +664,8 @@ export function installCompactMethods(ViewerClass) {
         this._releaseCompactPages();
         this._compact.sheet = id;
         this._compact.focus = focus;
+        // Where "Done" goes: back to the sheet that sent the user here.
+        this._compact.returnTo = returnTo;
         this._compact.opener = document.activeElement;
         if (!wasOpen) {
             this._compact.sheetSize = 'half';
@@ -933,6 +935,13 @@ export function installCompactMethods(ViewerClass) {
 
     proto._buildCompactDataPage = function() {
         const node = el('div', 'compact-page compact-page-data');
+        // Which plot a tap goes to. Without it, the ✓ beside a signal said
+        // "on a plot" without saying which, and with two plots a tap seemed
+        // to act on nothing in particular.
+        const target = el('div', 'compact-data-target');
+        target.setAttribute('aria-live', 'polite');
+        node.appendChild(target);
+        this._compactDataTarget = target;
         const actions = el('div', 'compact-action-row');
         actions.appendChild(button('compact-primary-btn', i18n.t('compactOpenFile'), () => {
             document.getElementById('load-new-file')?.click();
@@ -949,6 +958,7 @@ export function installCompactMethods(ViewerClass) {
         const restore = this._lendToCompact(sidebar, node);
         this._compactSyncTreeMarks();
         this._compactSyncPhaseBanner();
+        this._compactSyncDataTarget();
         return {
             title: i18n.t('compactNavData'),
             node,
@@ -971,11 +981,23 @@ export function installCompactMethods(ViewerClass) {
             this._compactCancelPhasePending();
             return;
         }
-        if (plot && index >= 0 && (plot.mode === 'timeseries' || plot.mode === 'fft')) {
+        const removing = !!plot && index >= 0 && (plot.mode === 'timeseries' || plot.mode === 'fft');
+        if (removing) {
             if (plot.mode === 'timeseries') pm.removeTrace(panelId, varName, ownerId);
             else pm._removeFftTraceFromLegend(panelId, plot, plot.traces[index]);
         } else {
             await pm._handleVariableDrop(panelId, [varName], panelEl, { fileId });
+        }
+        // Say what happened, and to which plot. A 2D plot has its banner.
+        const after = pm.plots.get(panelId);
+        if (after && (after.mode === 'timeseries' || after.mode === 'fft')) {
+            const nowOn = (after.traces || []).some(trace => trace.varName === varName && trace.fileId === ownerId);
+            if (nowOn !== removing) {
+                const n = this._compactPanelIds().indexOf(panelId) + 1;
+                this._compactToast(i18n.t(removing ? 'compactRemovedFrom' : 'compactAddedTo')
+                    .replace('{n}', String(n))
+                    .replace('{name}', this._compactVarLabel(varName, ownerId)));
+            }
         }
         requestAnimationFrame(() => {
             this._compactSyncTreeMarks();
@@ -984,8 +1006,64 @@ export function installCompactMethods(ViewerClass) {
         });
     };
 
+    // The bar at the top of Data: "a tap adds to, or removes from: plot n",
+    // with the other plots one tap away, and Done to go back.
+    proto._compactSyncDataTarget = function() {
+        // Built with its page, before the page is in the sheet; a stale one
+        // (the page closed) is harmless to refill.
+        const bar = this._compactDataTarget;
+        if (!bar) return;
+        bar.replaceChildren();
+        const ids = this._compactPanelIds();
+        const activeId = this._compactActivePanelId();
+        const plot = activeId ? this.plotManager.plots.get(activeId) : null;
+        const head = el('div', 'compact-data-target-head');
+        const text = el('span', 'compact-data-target-text', i18n.t(plot?.mode === 'phase2d' ? 'compactTapTargetPhase' : 'compactTapTarget'));
+        // One plot: its name ends the sentence. Several: they are chips below.
+        if (ids.length === 1) {
+            text.append(' ', el('strong', 'compact-data-target-name', i18n.t('compactPlotN').replace('{n}', '1')));
+        }
+        head.appendChild(text);
+        head.appendChild(button('compact-link-btn compact-data-done', i18n.t('compactDone'), () => {
+            if (this._compact.returnTo) this._openCompactSheet(this._compact.returnTo, { toggle: false });
+            else this._closeCompactSheet();
+        }));
+        bar.appendChild(head);
+        if (ids.length === 1) return;
+        const chips = el('div', 'compact-data-target-plots');
+        chips.setAttribute('role', 'radiogroup');
+        ids.forEach((id, index) => {
+            const selected = id === activeId;
+            const summary = this._compactPanelSummary(id);
+            const chip = button(`compact-target-chip${selected ? ' is-active' : ''}`, i18n.t('compactPlotN').replace('{n}', String(index + 1)), () => {
+                if (id !== this._compactActivePanelId()) this._setCompactActivePanel(id);
+            }, { title: summary.text ? `${summary.modeLabel} · ${summary.text}` : summary.modeLabel });
+            chip.setAttribute('role', 'radio');
+            chip.setAttribute('aria-checked', String(selected));
+            chips.appendChild(chip);
+        });
+        bar.appendChild(chips);
+    };
+
+    // A short line over the plot, then gone.
+    proto._compactToast = function(text) {
+        if (!text) return;
+        let toast = this._compactToastEl;
+        if (!toast?.isConnected) {
+            toast = el('div', 'compact-toast');
+            toast.setAttribute('role', 'status');
+            document.body.appendChild(toast);
+            this._compactToastEl = toast;
+        }
+        toast.textContent = text;
+        toast.classList.add('is-shown');
+        clearTimeout(this._compactToastTimer);
+        this._compactToastTimer = setTimeout(() => toast.classList.remove('is-shown'), 1800);
+    };
+
     proto._compactSyncTreeMarks = function() {
         if (!this._compact?.active) return;
+        this._compactSyncDataTarget();
         const panelId = this._compactActivePanelId();
         const plot = panelId ? this.plotManager.plots.get(panelId) : null;
         const onPlot = new Set((plot?.traces || []).map(trace => `${trace.fileId}\u0000${trace.varName}`));
@@ -1174,7 +1252,7 @@ export function installCompactMethods(ViewerClass) {
         } else if (!traces.length) {
             signals.appendChild(el('p', 'compact-note', i18n.t('compactNoSignals')));
             const addRow = el('div', 'compact-action-row');
-            addRow.appendChild(button('compact-primary-btn', i18n.t('compactChooseSignals'), () => this._openCompactSheet('data', { toggle: false })));
+            addRow.appendChild(button('compact-primary-btn', i18n.t('compactChooseSignals'), () => this._openCompactSheet('data', { toggle: false, returnTo: 'plot' })));
             signals.appendChild(addRow);
         } else {
             const traceList = el('div', 'compact-list');
@@ -1193,7 +1271,7 @@ export function installCompactMethods(ViewerClass) {
             signals.appendChild(traceList);
             // More signals come from Data, where a tap adds one to this plot.
             const addRow = el('div', 'compact-action-row');
-            addRow.appendChild(button('compact-primary-btn compact-add-signals-btn', '+ ' + i18n.t('compactAddMoreSignals'), () => this._openCompactSheet('data', { toggle: false })));
+            addRow.appendChild(button('compact-primary-btn compact-add-signals-btn', '+ ' + i18n.t('compactAddMoreSignals'), () => this._openCompactSheet('data', { toggle: false, returnTo: 'plot' })));
             signals.appendChild(addRow);
             const clearRow = el('div', 'compact-action-row');
             clearRow.appendChild(button('compact-secondary-btn compact-danger-btn', i18n.t('clearPlot'), () => {
@@ -1243,7 +1321,7 @@ export function installCompactMethods(ViewerClass) {
             container.appendChild(el('p', 'compact-note', i18n.t('compactPhaseHint')));
         }
         const actions = el('div', 'compact-action-row');
-        actions.appendChild(button('compact-secondary-btn', i18n.t('compactChooseSignals'), () => this._openCompactSheet('data', { toggle: false })));
+        actions.appendChild(button('compact-secondary-btn', i18n.t('compactChooseSignals'), () => this._openCompactSheet('data', { toggle: false, returnTo: 'plot' })));
         if (pairs.length) {
             actions.appendChild(button('compact-secondary-btn compact-danger-btn', i18n.t('clearPlot'), () => {
                 pm._clearPanel(panelId);
