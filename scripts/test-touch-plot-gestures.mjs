@@ -28,10 +28,16 @@ import {
     zoomRangeAbout,
 } from '../src/utils/pinch-zoom.js';
 import {
+    FOLLOW_UP_TAP_DISTANCE_PX,
+    FOLLOW_UP_TAP_MS,
+    QUICK_DOUBLE_TAP_MS,
     TOUCH_GESTURE_SLOP_PX,
+    WINDOW_ZOOM_MIN_WIDTH_PX,
     gestureCentre,
+    isFollowUpTap,
     movedBeyondSlop,
     touchGestureOwnsDrag,
+    windowZoomRange,
 } from '../src/utils/touch-plot-gestures.js';
 import { rangeFromLinear, rangeToLinear } from '../src/ui/plot-touch-gestures.js';
 
@@ -200,5 +206,25 @@ for (const line of translations.split('\n')) {
     assert.doesNotMatch(line, /zoom into a range|zoomer sur une plage|acercarte a un rango|zoomare su un intervallo/,
         'the hint no longer describes the gesture one finger used to have');
 }
+
+// ── A slow double tap draws a window ────────────────────────────────────────
+{
+    const tap = { time: 1000, x: 100, y: 200 };
+    assert.equal(isFollowUpTap(tap, { time: 1400, x: 110, y: 205 }), true, 'a second touch soon after, close by, follows the tap');
+    assert.equal(isFollowUpTap(tap, { time: 1000 + FOLLOW_UP_TAP_MS + 1, x: 100, y: 200 }), false, 'too late is a new touch');
+    assert.equal(isFollowUpTap(tap, { time: 1200, x: 100 + FOLLOW_UP_TAP_DISTANCE_PX + 5, y: 200 }), false, 'too far is a new touch');
+    assert.equal(isFollowUpTap(tap, { time: 900, x: 100, y: 200 }), false, 'and time does not run backwards');
+    assert.equal(isFollowUpTap(null, { time: 1200, x: 100, y: 200 }), false, 'nothing to follow');
+    assert.ok(QUICK_DOUBLE_TAP_MS < FOLLOW_UP_TAP_MS, 'a quick double tap (the reset) fits inside the window a slow one has');
+
+    const p2l = (px) => px / 10;
+    assert.deepEqual(windowZoomRange(50, 150, p2l), [5, 15], 'the window, in the axis units');
+    assert.deepEqual(windowZoomRange(150, 50, p2l), [5, 15], 'drawn either way');
+    assert.equal(windowZoomRange(100, 100 + WINDOW_ZOOM_MIN_WIDTH_PX - 1, p2l), null, 'a slip is not a zoom');
+    assert.equal(windowZoomRange(NaN, 100, p2l), null);
+    assert.deepEqual(windowZoomRange(0, 100, px => 100 - px), [0, 100], 'an axis running the other way still gives lowest first');
+}
+assert.match(installer, /div\._touchWindowZoom/, 'only where a plot asks for it');
+assert.match(installer, /'xaxis\.range': rangeFromLinear\(xa, range\),/, 'and it zooms the horizontal axis alone');
 
 console.log('Touch plot-gesture checks passed.');

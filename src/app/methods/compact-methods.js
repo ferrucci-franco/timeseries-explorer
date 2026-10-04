@@ -9,6 +9,7 @@
 // keeps one code path.
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
+import Plotly, { onPlotDrawn } from '../../vendor/plotly.js';
 import {
     LAYOUT_OVERRIDE_STORAGE_KEY,
     effectiveViewportSize,
@@ -32,7 +33,14 @@ const SVG = {
     hideDown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>',
     hideRight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
     caret: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>',
+    // The plot's own fit buttons: the same drawings as the desktop toolbar's.
+    fitX: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5v14M20 5v14"/><path d="M8 12h8M8 12l3-3M8 12l3 3M16 12l-3-3M16 12l-3 3"/></svg>',
+    fitY: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14M5 20h14"/><path d="M12 8v8M12 8l-3 3M12 8l3 3M12 16l-3-3M12 16l3-3"/></svg>',
+    fitAll: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>',
 };
+
+// Modes whose plots carry the fit buttons: the ones the phone layout drives.
+const FIT_BUTTON_MODES = new Set(['timeseries', 'phase2d', 'fft']);
 
 const NAV_ITEMS = [
     { id: 'data', labelKey: 'compactNavData' },
@@ -147,6 +155,7 @@ export function installCompactMethods(ViewerClass) {
         };
         this._buildCompactChrome();
         this.layoutManager.onAfterRender = () => this._compactAfterLayoutRender();
+        onPlotDrawn(div => { if (this._compact.active) this._compactSyncFitButtons(div); });
         this.plotManager.onCompactChooseSignals = () => this._openCompactSheet('data', { toggle: false });
         // Dialogs are appended to <body>; the large ones go full screen.
         if (typeof MutationObserver !== 'undefined') {
@@ -505,6 +514,95 @@ export function installCompactMethods(ViewerClass) {
         this._compactUpdateAppBar();
     };
 
+    // ── Fit buttons on the plot ─────────────────────────────────────────
+    // Three faint buttons in the plot's top-right corner: fit X, fit Y, fit
+    // both. A double tap fits everything too, but nobody finds it, and the
+    // Plot sheet is a sheet away. They sit inside the plot's own div (Plotly
+    // keeps what it did not draw), outside its drag layer, so a finger on them
+    // is a press and never a pan.
+    proto._compactPlotForDiv = function(div) {
+        for (const [panelId, plot] of this.plotManager.plots) {
+            if (plot.div === div) return { panelId, plot, pane: 'main' };
+            if (plot.fftDiv === div) return { panelId, plot, pane: 'spectrum' };
+        }
+        return null;
+    };
+
+    proto._compactSyncAllFitButtons = function() {
+        if (!this._compact?.active) return;
+        for (const plot of this.plotManager.plots.values()) {
+            if (plot.div) this._compactSyncFitButtons(plot.div);
+            if (plot.fftDiv) this._compactSyncFitButtons(plot.fftDiv);
+        }
+    };
+
+    proto._compactSyncFitButtons = function(div) {
+        if (!div?.isConnected) return;
+        const owner = this._compactPlotForDiv(div);
+        // A slow double tap draws a time (or frequency) window and zooms to
+        // it: the phone's box zoom, where a finger otherwise pans.
+        if (owner && !div._touchWindowZoom) {
+            div._touchWindowZoom = () => {
+                const current = this._compactPlotForDiv(div);
+                if (!this._compact.active || !current) return null;
+                if (current.plot.mode !== 'timeseries' && current.plot.mode !== 'fft') return null;
+                return { hint: i18n.t('compactWindowZoomHint') };
+            };
+        }
+        let group = div._compactFitGroup;
+        const wanted = !!owner
+            && FIT_BUTTON_MODES.has(owner.plot.mode)
+            && (owner.pane === 'main' || owner.plot.mode === 'fft')
+            && this.plotManager._hasContent(owner.plot)
+            && !!div._fullLayout;
+        if (!wanted) {
+            if (group) group.hidden = true;
+            return;
+        }
+        if (!group || group.parentNode !== div) {
+            group = el('div', 'compact-fit-group');
+            for (const [axis, icon, titleKey] of [['x', SVG.fitX, 'autoScaleXTitle'], ['y', SVG.fitY, 'autoScaleYTitle'], ['all', SVG.fitAll, 'viewHome']]) {
+                const btn = button('compact-fit-btn', '', () => this._compactFit(div, axis), { icon, title: i18n.t(titleKey) });
+                btn.dataset.axis = axis;
+                group.appendChild(btn);
+            }
+            div.appendChild(group);
+            div._compactFitGroup = group;
+        }
+        group.hidden = false;
+        // The corner of the plotting area, not of the div: clear of the axis
+        // labels on the right and of a legend placed above the plot.
+        const size = div._fullLayout._size || {};
+        group.style.top = `${Math.max(0, Number(size.t) || 0) + 6}px`;
+        group.style.right = `${Math.max(0, Number(size.r) || 0) + 6}px`;
+    };
+
+    proto._compactFit = function(div, axis) {
+        const owner = this._compactPlotForDiv(div);
+        if (!owner) return;
+        const pm = this.plotManager;
+        const { panelId, plot, pane } = owner;
+        const relayout = (update) => (update && Object.keys(update).length ? Plotly.relayout(div, update) : Promise.resolve());
+        let work;
+        if (plot.mode === 'fft' && pane === 'spectrum') {
+            // The spectrum alone: its own limits (fMin/fMax, yMin/yMax) still
+            // hold, as they do for its desktop reset.
+            work = axis === 'all'
+                ? () => pm._applyFftAxisLimits(plot)
+                : () => relayout(pm._fftAxisLimitUpdate(plot, axis, { visibleOnly: true }));
+        } else if (plot.mode === 'fft') {
+            // The time pane above the spectrum is the timeseries chart.
+            work = axis === 'all'
+                ? () => pm._autoScalePlotTimeOnly(plot)
+                : () => relayout(pm._autoScaleAxisUpdate(plot, axis, { treatAsTimeseries: true }));
+        } else {
+            work = axis === 'all'
+                ? () => pm._autoScalePlot(panelId, plot)
+                : () => pm._autoScalePlotAxis(panelId, plot, axis);
+        }
+        pm._runWithEagerDetailLoading(panelId, work);
+    };
+
     proto._setCompactActivePanel = function(panelId) {
         this._compact.activePanelId = panelId;
         this._compactSyncPanels();
@@ -536,6 +634,9 @@ export function installCompactMethods(ViewerClass) {
 
     proto._compactUpdateAppBar = function() {
         if (!this._compact?.active) return;
+        // Traces come and go without a redraw of their own (a cleared plot):
+        // the fit buttons follow whatever the app bar follows.
+        this._compactSyncAllFitButtons();
         const ids = this._compactPanelIds();
         const activeId = this._compactActivePanelId();
         const index = Math.max(0, ids.indexOf(activeId));

@@ -2196,7 +2196,7 @@ const translations = {
             compactHelpPlot: 'Plot: choose which plot is on screen, add or remove plots, and fit the view.',
             compactHelpAnalyze: 'Analyze: switch the plot to its Fourier spectrum (FFT) and set its options.',
             compactHelpMore: 'More: language, theme, examples, settings and help. Layout → Full shows the desktop layout.',
-            compactHelpGestures: 'On the plot: one finger pans, two fingers zoom, a double tap resets the view.',
+            compactHelpGestures: 'On the plot: one finger pans, two fingers zoom, a quick double tap resets the view. A slow double tap, then a drag, zooms into a time window. The faint buttons in the corner fit X, Y or both.',
             compactHelpBelow: 'The sections below describe the full layout, used on larger screens.',
             compactPlotModeNote: 'This plot mode pairs its signals in roles (x, y, z…); they are changed in the full layout (More → Layout → Full).',
             compactHide: 'Hide',
@@ -2205,6 +2205,7 @@ const translations = {
             compactPlaceholderPhase2d: '2D plot: choose an X signal, then a Y signal.',
             compactPendingY: 'x = {x}. Now choose the Y signal.',
             compactPhaseHint: 'Tap the X signal, then the Y signal. Each pair draws one curve.',
+            compactWindowZoomHint: 'Drag across the plot to zoom into that range',
             compactMoreActions: 'More actions',
         },
         fr: {
@@ -4405,7 +4406,7 @@ const translations = {
             compactHelpPlot: 'Graphique : choisissez le graphique affiché, ajoutez-en ou supprimez-en, et ajustez la vue.',
             compactHelpAnalyze: 'Analyser : passez le graphique à son spectre de Fourier (FFT) et réglez ses options.',
             compactHelpMore: 'Plus : langue, thème, exemples, réglages et aide. Disposition → Complète affiche la disposition de bureau.',
-            compactHelpGestures: 'Sur le graphique : un doigt déplace, deux doigts zooment, un double appui réinitialise la vue.',
+            compactHelpGestures: 'Sur le graphique : un doigt déplace, deux doigts zooment, un double appui rapide réinitialise la vue. Un double appui lent, puis un glissement, zoome sur une fenêtre de temps. Les boutons discrets dans le coin ajustent X, Y ou les deux.',
             compactHelpBelow: 'Les sections ci-dessous décrivent la disposition complète, utilisée sur les grands écrans.',
             compactPlotModeNote: 'Ce mode associe ses signaux à des rôles (x, y, z…) ; on les modifie dans la disposition complète (Plus → Disposition → Complète).',
             compactHide: 'Masquer',
@@ -4414,6 +4415,7 @@ const translations = {
             compactPlaceholderPhase2d: 'Graphique 2D : choisissez un signal X, puis un signal Y.',
             compactPendingY: 'x = {x}. Choisissez maintenant le signal Y.',
             compactPhaseHint: 'Touchez le signal X, puis le signal Y. Chaque paire trace une courbe.',
+            compactWindowZoomHint: 'Faites glisser sur le graphique pour zoomer sur cet intervalle',
             compactMoreActions: 'Plus d’actions',
         },
         es: {
@@ -6583,7 +6585,7 @@ const translations = {
             compactHelpPlot: 'Gráfico: elige qué gráfico se ve, agrega o quita gráficos y ajusta la vista.',
             compactHelpAnalyze: 'Analizar: cambia el gráfico a su espectro de Fourier (FFT) y ajusta sus opciones.',
             compactHelpMore: 'Más: idioma, tema, ejemplos, configuración y ayuda. Diseño → Completo muestra el diseño de escritorio.',
-            compactHelpGestures: 'En el gráfico: un dedo desplaza, dos dedos hacen zoom y un doble toque restablece la vista.',
+            compactHelpGestures: 'En el gráfico: un dedo desplaza, dos dedos hacen zoom y un doble toque rápido restablece la vista. Un doble toque lento y luego arrastrar amplía una ventana de tiempo. Los botones tenues de la esquina ajustan X, Y o ambos.',
             compactHelpBelow: 'Las secciones de abajo describen el diseño completo, el de las pantallas grandes.',
             compactPlotModeNote: 'Este modo asigna sus señales a roles (x, y, z…); se cambian en el diseño completo (Más → Diseño → Completo).',
             compactHide: 'Ocultar',
@@ -6592,6 +6594,7 @@ const translations = {
             compactPlaceholderPhase2d: 'Gráfico 2D: elige una señal X y luego una señal Y.',
             compactPendingY: 'x = {x}. Ahora elige la señal Y.',
             compactPhaseHint: 'Toca la señal X y luego la señal Y. Cada par dibuja una curva.',
+            compactWindowZoomHint: 'Arrastra sobre el gráfico para ampliar ese tramo',
             compactMoreActions: 'Más acciones',
         },
         it: {
@@ -8761,7 +8764,7 @@ const translations = {
             compactHelpPlot: 'Grafico: scegli quale grafico è sullo schermo, aggiungi o rimuovi grafici e adatta la vista.',
             compactHelpAnalyze: 'Analizza: passa il grafico al suo spettro di Fourier (FFT) e imposta le opzioni.',
             compactHelpMore: 'Altro: lingua, tema, esempi, impostazioni e aiuto. Layout → Completo mostra il layout desktop.',
-            compactHelpGestures: 'Sul grafico: un dito sposta, due dita zoomano, un doppio tocco ripristina la vista.',
+            compactHelpGestures: 'Sul grafico: un dito sposta, due dita zoomano, un doppio tocco rapido ripristina la vista. Un doppio tocco lento, poi un trascinamento, ingrandisce una finestra di tempo. I pulsanti tenui nell’angolo adattano X, Y o entrambi.',
             compactHelpBelow: 'Le sezioni qui sotto descrivono il layout completo, usato sugli schermi grandi.',
             compactPlotModeNote: 'Questa modalità assegna i segnali a ruoli (x, y, z…); si modificano nel layout completo (Altro → Layout → Completo).',
             compactHide: 'Nascondi',
@@ -8770,6 +8773,7 @@ const translations = {
             compactPlaceholderPhase2d: 'Grafico 2D: scegli un segnale X, poi un segnale Y.',
             compactPendingY: 'x = {x}. Ora scegli il segnale Y.',
             compactPhaseHint: 'Tocca il segnale X, poi il segnale Y. Ogni coppia traccia una curva.',
+            compactWindowZoomHint: 'Trascina sul grafico per ingrandire quell’intervallo',
             compactMoreActions: 'Altre azioni',
         }
 };
