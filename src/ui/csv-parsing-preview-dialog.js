@@ -778,6 +778,10 @@ export default class CsvParsingPreviewDialog {
 
             this.dialog = document.createElement('div');
             this.dialog.className = 'csv-preview-dialog';
+            // The phone layout (docs/phone-web-specification.md §5.6): full
+            // screen, preview and options on two tabs when upright.
+            this.compact = document.documentElement.classList.contains('compact');
+            this.overlay.classList.toggle('csv-preview-compact', this.compact);
 
             this._renderShell();
             this.overlay.appendChild(this.dialog);
@@ -936,7 +940,78 @@ export default class CsvParsingPreviewDialog {
         right.append(cancel, this.applyButton);
         footer.append(left, right);
 
-        this.dialog.append(header, toolbar, body, footer);
+        if (this.compact) {
+            this._renderCompactShell({ header, toolbar, body, footer });
+        } else {
+            this.dialog.append(header, toolbar, body, footer);
+        }
+    }
+
+    // Upright, a phone has room for the grid or the options, not both: they
+    // take turns on two tabs. The status strip stays between them and the tabs
+    // so the effect of an option is seen without going back to the preview.
+    // Sideways, both panes sit side by side and the tabs hide (CSS).
+    _renderCompactShell({ header, toolbar, body, footer }) {
+        this.dialog.classList.add('is-compact');
+        const tabs = document.createElement('div');
+        tabs.className = 'csv-preview-tabs';
+        tabs.setAttribute('role', 'tablist');
+        this.compactTabButtons = new Map();
+        for (const [id, label] of [['preview', i18n.t('compactPreview')], ['options', i18n.t('options')]]) {
+            const tab = document.createElement('button');
+            tab.type = 'button';
+            tab.className = 'csv-preview-tab';
+            tab.setAttribute('role', 'tab');
+            tab.textContent = label;
+            tab.addEventListener('click', () => this._setCompactTab(id));
+            this.compactTabButtons.set(id, tab);
+            tabs.appendChild(tab);
+        }
+        this.statusStrip = document.createElement('div');
+        this.statusStrip.className = 'csv-preview-status-strip';
+        this.statusStrip.setAttribute('aria-live', 'polite');
+        this.optionsPane = document.createElement('div');
+        this.optionsPane.className = 'csv-preview-options-pane';
+        this.optionsPane.append(toolbar, this.sidePanel);
+        body.replaceChildren(this.gridWrap, this.optionsPane);
+        this.dialog.append(header, tabs, this.statusStrip, body, footer);
+        this._setCompactTab(this.compactTab || 'preview');
+    }
+
+    _setCompactTab(tab) {
+        this.compactTab = tab === 'options' ? 'options' : 'preview';
+        this.dialog.dataset.tab = this.compactTab;
+        this.compactTabButtons?.forEach((button, id) => {
+            button.setAttribute('aria-selected', String(id === this.compactTab));
+            button.classList.toggle('is-active', id === this.compactTab);
+        });
+    }
+
+    // Tapping a row of the preview assigns it, instead of reading its number
+    // and typing it into the options.
+    async _compactRowActions(logicalIndex, sourceIndex) {
+        const choices = [];
+        if (!this.headerlessProfileLocked) choices.push({ value: 'header', text: i18n.t('csvPreviewHeaderRow'), className: 'modal-btn-confirm' });
+        choices.push({ value: 'units', text: i18n.t('csvPreviewUnitsRowLabel') });
+        choices.push({ value: 'data', text: i18n.t('csvPreviewFirstDataRow') });
+        choices.push({ value: null, text: i18n.t('cancel') });
+        const choice = await Modal.choice(i18n.t('compactRowActionsBody'), {
+            title: i18n.t('compactRowActionsTitle').replace('{n}', String(sourceIndex + 1)),
+            icon: false,
+            className: 'modal-dialog-csv-row-actions',
+            choices,
+        });
+        if (!choice || !this.overlay?.isConnected) return;
+        if (choice === 'header') {
+            this.state.hasHeader = true;
+            this.state.headerIndex = logicalIndex;
+        } else if (choice === 'units') {
+            this.state.unitsMode = 'row';
+            this.state.unitRowIndex = logicalIndex;
+        } else if (choice === 'data') {
+            this.state.dataStartIndex = logicalIndex;
+        }
+        this._rebuildAndRender();
     }
 
     _field(labelText, control) {
@@ -2218,6 +2293,11 @@ export default class CsvParsingPreviewDialog {
             if (isInvalid) tr.classList.add('is-invalid-row');
             if (hasInvalidNumericCell) tr.classList.add('is-invalid-row');
 
+            if (this.compact && isStartSample && !isEmpty) {
+                tr.classList.add('is-tappable');
+                tr.addEventListener('click', () => this._compactRowActions(logicalIndex, sourceIndex));
+            }
+
             const rowHead = document.createElement('th');
             rowHead.className = 'csv-preview-row-head';
             rowHead.textContent = isStartSample ? String(sourceIndex + 1) : `~${r + 1}`;
@@ -2334,6 +2414,11 @@ export default class CsvParsingPreviewDialog {
             item.className = 'csv-preview-note';
             item.textContent = message;
             this.statusBox.appendChild(item);
+        }
+        if (this.statusStrip) {
+            const first = !this.validation.ok ? this.validation.messages[0] : '';
+            this.statusStrip.textContent = first ? `${summary.textContent} ${first}` : summary.textContent;
+            this.statusStrip.classList.toggle('is-error', !this.validation.ok);
         }
     }
 

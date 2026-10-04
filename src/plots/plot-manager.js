@@ -775,17 +775,23 @@ class PlotManager {
     }
 
     resizeAll() {
+        // Plotly rejects a chart that is not displayed — a panel the phone
+        // layout is not showing, a pane folded away. It is resized when shown.
+        const resize = (div) => {
+            if (!div || !div.isConnected || div.offsetParent === null) return null;
+            return Promise.resolve(Plotly.Plots.resize(div)).catch(() => {});
+        };
         for (const [, plot] of this.plots) {
             if (!plot.div) continue;
-            Promise.resolve(Plotly.Plots.resize(plot.div)).then(() => {
+            resize(plot.div)?.then(() => {
                 this._refreshPanelDomOverlays(plot);
             });
-            if (plot.fftDiv) Plotly.Plots.resize(plot.fftDiv);
-            if (plot.histogramDiv) Plotly.Plots.resize(plot.histogramDiv);
-            if (plot.heatmapDiv) Plotly.Plots.resize(plot.heatmapDiv);
-            if (plot.temporalProfileDiv) Plotly.Plots.resize(plot.temporalProfileDiv);
-            if (plot.integralDiv) Plotly.Plots.resize(plot.integralDiv);
-            if (plot.integralPieDiv) Plotly.Plots.resize(plot.integralPieDiv);
+            resize(plot.fftDiv);
+            resize(plot.histogramDiv);
+            resize(plot.heatmapDiv);
+            resize(plot.temporalProfileDiv);
+            resize(plot.integralDiv);
+            resize(plot.integralPieDiv);
         }
     }
 
@@ -1887,9 +1893,12 @@ class PlotManager {
             const ro = new ResizeObserver(() => {
                 clearTimeout(timer);
                 timer = setTimeout(() => {
+                    // Hidden (the phone layout shows one panel at a time): Plotly
+                    // rejects it, and the panel is resized when it is shown.
+                    if (!div.isConnected || div.offsetParent === null) return;
                     Promise.resolve(Plotly.Plots.resize(div)).then(() => {
                         requestAnimationFrame(() => this._refreshPanelDomOverlays(plot));
-                    });
+                    }).catch(() => {});
                 }, 50);
             });
             ro.observe(panelEl);
@@ -2333,9 +2342,12 @@ class PlotManager {
                 if (plot.fftDiv) Plotly.purge(plot.fftDiv);
                 Plotly.purge(plot.div);
                 fftContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the container.
+                plot.fftOptionsEl?.remove();
                 plot.div = null;
                 plot.fftDiv = null;
                 plot.fftContainer = null;
+                plot.fftOptionsEl = null;
             } else {
                 // Remove state-anim container if present (wraps the plot div)
                 const saContainer = plot.div.closest('.state-anim-container');

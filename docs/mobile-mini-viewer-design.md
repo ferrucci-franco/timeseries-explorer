@@ -1,6 +1,8 @@
 # Mobile MINI Viewer Design
 
-Status: requirements agreed, not implemented. Nothing here is built yet.
+Status: **superseded** by `docs/phone-web-specification.md` (2026-10-04). The phone
+experience is now a compact mode of the full app, not a separate MINI entry point.
+The "iOS traps found the hard way" section below is still valid and referenced there.
 
 ## Goal
 

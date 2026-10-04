@@ -4045,7 +4045,9 @@ proto.setActiveFile = function(fileId) {
 };
 
 proto._updateTopBar = function() {
-    // The active file is shown in the sidebar, so the top bar no longer mirrors it.
+    // The active file is shown in the sidebar, so the top bar no longer mirrors
+    // it. The phone layout has no sidebar on screen, so its app bar does.
+    this._compactUpdateAppBar?.();
 };
 
 proto._updateActionButtons = function() {
@@ -4303,6 +4305,18 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
         liveIndicator.setAttribute('aria-label', 'This file is being polled in real time');
         liveIndicator.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h8V3l-3.35 3.35Z"/></svg>';
 
+        // Phone layout only: the row's small buttons are gathered on one page.
+        const moreBtn = document.createElement('button');
+        moreBtn.type = 'button';
+        moreBtn.className = 'file-entry-more';
+        moreBtn.textContent = '⋯';
+        moreBtn.title = i18n.t('compactFileActions');
+        moreBtn.setAttribute('aria-label', i18n.t('compactFileActions'));
+        moreBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._compactOpenFileActions?.(fileId, entry);
+        });
+
         const closeBtn = document.createElement('button');
         closeBtn.className = 'file-entry-close';
         closeBtn.textContent = 'x';
@@ -4323,6 +4337,7 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
         entry.appendChild(matArraysBtn);
         entry.appendChild(transformBtn);
         entry.appendChild(closeBtn);
+        entry.appendChild(moreBtn);
         item.appendChild(entry);
         if (this._expandedFileTransforms.has(fileId)) {
             item.appendChild(this._renderFileTransformPanel(fileId, entryData));

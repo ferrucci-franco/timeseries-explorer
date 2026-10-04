@@ -24,6 +24,7 @@ export default class LayoutManager {
         this.onPanelMount   = null;  // (panelId, panelEl) => void
         this.onPanelUnmount = null;  // (panelId) => void
         this.onPanelDetach  = null;  // (panelId) => void — panel element is about to be discarded
+        this.onAfterRender  = null;  // () => void — the whole tree has been drawn again
 
         this._bindGlobalEvents();
     }
@@ -48,6 +49,7 @@ export default class LayoutManager {
         this.container.innerHTML = '';
         this._renderNode(this.root, this.container);
         this._applyScrollableLayout();
+        if (this.onAfterRender) this.onAfterRender();
         if (restoreScrollTop != null) {
             this.container.scrollTop = Math.min(restoreScrollTop, this.container.scrollHeight);
             requestAnimationFrame(() => {
