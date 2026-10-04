@@ -824,6 +824,14 @@ html.compact .drop-zone-content {
     box-sizing: border-box;
 }
 
+/* The notice sizes itself to the window; in this column it follows the
+   column, which on a large screen switched to the phone layout is narrower. */
+html.compact .light-version-notice {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
 html.compact #file-select-btn {
     width: 100%;
     min-height: 48px;

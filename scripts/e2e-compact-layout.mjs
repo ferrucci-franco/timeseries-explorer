@@ -180,6 +180,24 @@ try {
     assert.equal(await dpage.locator('#sidebar').isVisible(), true);
     assert.equal(await dpage.locator('.layout-panel-toolbar').first().isVisible(), true);
     assert.equal(await dpage.locator('.compact-try-example').isVisible(), false);
+
+    // ── From the desktop to the phone layout, and back ──────────────────────
+    await dpage.locator('#extra-menu-btn').click();
+    await dpage.locator('#extra-menu .extra-menu-item', { hasText: 'Phone layout' }).click();
+    await dpage.waitForFunction(() => document.documentElement.classList.contains('compact'));
+    assert.equal(await dpage.locator('#compact-nav').isVisible(), true, 'the menu switches a desktop window to the phone layout');
+    assert.equal(await dpage.locator('.top-bar').isVisible(), false);
+    if (shots) await dpage.screenshot({ path: `${shots}/compact-desktop-switched.png` });
+    await dpage.locator('.compact-nav-btn[data-sheet="more"]').click();
+    assert.equal(
+        await dpage.locator('.compact-sheet #extra-menu .extra-menu-item', { hasText: 'Phone layout' }).count(),
+        0,
+        'the phone layout does not offer itself',
+    );
+    await dpage.locator('.compact-segment', { hasText: 'Automatic' }).click();
+    await dpage.waitForFunction(() => !document.documentElement.classList.contains('compact'));
+    assert.equal(await dpage.locator('.top-bar').isVisible(), true, 'Automatic brings the desktop layout back');
+    assert.equal(await dpage.locator('#sidebar').isVisible(), true, 'with its sidebar where it was');
     assert.deepEqual(derrors, [], 'no page errors on the desktop');
     await desktop.close();
 

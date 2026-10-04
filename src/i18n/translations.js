@@ -2187,6 +2187,8 @@ const translations = {
             compactRowActionsTitle: 'Row {n}',
             compactRowActionsBody: 'Use this row as:',
             compactShowVariables: 'Show its variables',
+            extraPhoneLayout: 'Phone layout',
+            extraPhoneLayoutTooltip: 'Switch to the layout made for phones: one plot at a time, controls in sheets. Switch back from More → Layout.',
             compactMoreActions: 'More actions',
         },
         fr: {
@@ -4378,6 +4380,8 @@ const translations = {
             compactRowActionsTitle: 'Ligne {n}',
             compactRowActionsBody: 'Utiliser cette ligne comme :',
             compactShowVariables: 'Afficher ses variables',
+            extraPhoneLayout: 'Disposition téléphone',
+            extraPhoneLayoutTooltip: 'Passer à la disposition conçue pour les téléphones : un graphique à la fois, commandes dans des panneaux. Pour revenir : Plus → Disposition.',
             compactMoreActions: 'Plus d’actions',
         },
         es: {
@@ -6538,6 +6542,8 @@ const translations = {
             compactRowActionsTitle: 'Fila {n}',
             compactRowActionsBody: 'Usar esta fila como:',
             compactShowVariables: 'Mostrar sus variables',
+            extraPhoneLayout: 'Diseño para teléfono',
+            extraPhoneLayoutTooltip: 'Cambiar al diseño pensado para teléfonos: un gráfico a la vez y los controles en paneles. Para volver: Más → Diseño.',
             compactMoreActions: 'Más acciones',
         },
         it: {
@@ -8698,6 +8704,8 @@ const translations = {
             compactRowActionsTitle: 'Riga {n}',
             compactRowActionsBody: 'Usa questa riga come:',
             compactShowVariables: 'Mostra le sue variabili',
+            extraPhoneLayout: 'Layout per telefono',
+            extraPhoneLayoutTooltip: 'Passa al layout pensato per i telefoni: un grafico alla volta, comandi in pannelli. Per tornare: Altro → Layout.',
             compactMoreActions: 'Altre azioni',
         }
 };
