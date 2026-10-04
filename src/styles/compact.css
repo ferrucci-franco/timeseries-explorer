@@ -1,0 +1,1055 @@
+/* ============================================
+   Phone layout (compact mode)
+   docs/phone-web-specification.md
+
+   Everything here is scoped to html.compact, set by
+   src/app/methods/compact-methods.js from the viewport size. The desktop
+   layout is untouched while it is off.
+   ============================================ */
+
+/* Phone-only controls stay out of the desktop layout. */
+.file-entry-more,
+.compact-empty-extra {
+    display: none;
+}
+
+.compact-appbar[hidden],
+.compact-nav[hidden],
+.compact-sheet[hidden] {
+    display: none !important;
+}
+
+html.compact {
+    --compact-appbar-h: 44px;
+    --compact-nav-h: 58px;
+    --compact-rail-w: 76px;
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+    --compact-chrome-top: calc(var(--compact-appbar-h) + var(--sat));
+    --compact-chrome-bottom: calc(var(--compact-nav-h) + var(--sab));
+    --compact-chrome-left: var(--sal);
+    --compact-chrome-right: var(--sar);
+    --compact-usable-h: calc(100dvh - var(--compact-chrome-top) - var(--compact-chrome-bottom));
+    --compact-sheet-half: calc(var(--compact-usable-h) * 0.5);
+    --compact-sheet-push-bottom: 0px;
+    --compact-sheet-push-right: 0px;
+    overscroll-behavior: none;
+}
+
+/* Sideways: the navigation becomes a rail on the left, and the app bar sits
+   beside it. There is little height to spare. */
+html.compact.compact-landscape {
+    --compact-appbar-h: 38px;
+    --compact-chrome-bottom: var(--sab);
+    --compact-chrome-left: calc(var(--compact-rail-w) + var(--sal));
+    --compact-usable-h: calc(100dvh - var(--compact-chrome-top) - var(--compact-chrome-bottom));
+    --compact-sheet-side: min(50vw, 420px);
+}
+
+/* A half sheet pushes the plot instead of covering it, so the curve stays
+   readable while signals are ticked. A full sheet covers it. */
+html.compact.compact-sheet-open:not(.compact-sheet-full) {
+    --compact-sheet-push-bottom: var(--compact-sheet-half);
+}
+
+html.compact.compact-landscape.compact-sheet-open:not(.compact-sheet-full) {
+    --compact-sheet-push-bottom: 0px;
+    --compact-sheet-push-right: var(--compact-sheet-side);
+}
+
+html.compact body {
+    height: 100dvh;
+    overscroll-behavior: none;
+}
+
+/* The desktop chrome goes; the app bar, navigation and sheets replace it.
+   The sidebar is shown only inside the Data sheet, which borrows it. */
+html.compact .main-container > #sidebar,
+html.compact .top-bar,
+html.compact .top-bar + .edge-toggle-rail,
+html.compact .main-container > .edge-toggle-rail {
+    display: none !important;
+}
+
+html.compact .main-container {
+    position: fixed;
+    top: var(--compact-chrome-top);
+    left: var(--compact-chrome-left);
+    right: calc(var(--compact-chrome-right) + var(--compact-sheet-push-right));
+    bottom: calc(var(--compact-chrome-bottom) + var(--compact-sheet-push-bottom));
+    flex-direction: column;
+}
+
+html.compact .content-area {
+    min-height: 0;
+    min-width: 0;
+}
+
+/* ── App bar ─────────────────────────────────────────────────────────── */
+html.compact .compact-appbar {
+    position: fixed;
+    top: 0;
+    left: var(--compact-chrome-left);
+    right: 0;
+    height: var(--compact-chrome-top);
+    padding: var(--sat) calc(10px + var(--sar)) 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    z-index: 1150;
+    box-sizing: border-box;
+}
+
+.compact-plot-selector {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 36px;
+    padding: 0 8px 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.86rem;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.compact-plot-selector-caret svg,
+.compact-btn-icon svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    display: block;
+}
+
+.compact-btn-icon svg circle {
+    fill: currentColor;
+    stroke: none;
+}
+
+.compact-appbar-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    text-align: right;
+}
+
+/* ── Navigation: bottom bar, or a rail when sideways ─────────────────── */
+html.compact .compact-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--compact-chrome-bottom);
+    padding: 0 var(--sar) var(--sab) var(--sal);
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    z-index: 1150;
+    box-sizing: border-box;
+}
+
+html.compact.compact-landscape .compact-nav {
+    top: 0;
+    right: auto;
+    width: var(--compact-chrome-left);
+    height: auto;
+    padding: calc(var(--sat) + 6px) 0 calc(var(--sab) + 6px) var(--sal);
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(56px, auto);
+    align-content: center;
+    border-top: none;
+    border-right: 1px solid var(--border-color);
+}
+
+.compact-nav-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 4px 2px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.compact-nav-btn .compact-btn-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 28px;
+    border-radius: 14px;
+    transition: background-color 0.15s ease;
+}
+
+.compact-nav-btn .compact-btn-icon svg {
+    width: 22px;
+    height: 22px;
+}
+
+.compact-nav-btn .compact-btn-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-nav-btn[aria-pressed="true"] {
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.compact-nav-btn[aria-pressed="true"] .compact-btn-icon {
+    background: color-mix(in srgb, var(--primary-color) 18%, transparent);
+}
+
+.compact-nav-btn:active .compact-btn-icon {
+    background: var(--hover-bg);
+}
+
+/* ── Sheet ───────────────────────────────────────────────────────────── */
+html.compact .compact-sheet {
+    position: fixed;
+    left: var(--sal);
+    right: var(--sar);
+    bottom: var(--compact-chrome-bottom);
+    height: var(--compact-sheet-half);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border-top: 1px solid var(--border-color);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.16);
+    z-index: 1100;
+    transform: translateY(16px);
+    opacity: 0;
+    transition: transform 0.2s ease, opacity 0.2s ease, height 0.2s ease;
+    box-sizing: border-box;
+}
+
+html.compact .compact-sheet.is-shown {
+    transform: none;
+    opacity: 1;
+}
+
+html.compact.compact-sheet-full .compact-sheet {
+    height: var(--compact-usable-h);
+    border-radius: 0;
+}
+
+html.compact.compact-landscape .compact-sheet {
+    top: var(--compact-chrome-top);
+    left: auto;
+    right: 0;
+    bottom: 0;
+    width: calc(var(--compact-sheet-side) + var(--sar));
+    height: auto;
+    padding-right: var(--sar);
+    padding-bottom: var(--sab);
+    border-top: none;
+    border-left: 1px solid var(--border-color);
+    border-radius: 0;
+    box-shadow: -4px 0 18px rgba(0, 0, 0, 0.16);
+    transform: translateX(16px);
+}
+
+html.compact.compact-landscape .compact-sheet.is-shown {
+    transform: none;
+}
+
+.compact-sheet-handle {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+    padding: 6px 0 2px;
+    touch-action: none;
+    cursor: grab;
+}
+
+html.compact.compact-landscape .compact-sheet-handle {
+    display: none;
+}
+
+.compact-sheet-grip {
+    width: 40px;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--border-color);
+}
+
+.compact-sheet-header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px 4px 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.compact-sheet-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 1.02rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    outline: none;
+}
+
+.compact-sheet-back[hidden] {
+    display: none;
+}
+
+.compact-sheet-back + .compact-sheet-title {
+    margin-left: -4px;
+}
+
+.compact-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    border: none;
+    border-radius: 22px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.compact-icon-btn:active {
+    background: var(--hover-bg);
+}
+
+html.compact.compact-landscape .compact-sheet-size {
+    display: none;
+}
+
+.compact-sheet-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+.compact-page {
+    padding: 10px 12px 18px;
+}
+
+.compact-page[hidden] {
+    display: none;
+}
+
+.compact-section + .compact-section {
+    margin-top: 16px;
+}
+
+.compact-section-title {
+    margin: 0 0 8px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.compact-note {
+    margin: 10px 0 0;
+    font-size: 0.86rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+}
+
+.compact-note-muted {
+    font-size: 0.8rem;
+    opacity: 0.85;
+}
+
+.compact-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.compact-action-row:first-child {
+    margin-top: 0;
+}
+
+.compact-primary-btn,
+.compact-secondary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 0 16px;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 0.92rem;
+    cursor: pointer;
+}
+
+.compact-primary-btn {
+    flex: 1 1 100%;
+    border: none;
+    background: var(--primary-color);
+    color: #fff;
+    font-weight: 600;
+}
+
+.compact-secondary-btn {
+    flex: 1 1 auto;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.compact-secondary-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.compact-danger-btn {
+    color: var(--danger-color);
+}
+
+.compact-list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.compact-list-btn {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 8px 14px;
+    border: none;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.95rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.compact-list-btn:last-child {
+    border-bottom: none;
+}
+
+.compact-list-btn:active {
+    background: var(--hover-bg);
+}
+
+.compact-list-btn .compact-btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    flex: 0 0 24px;
+    font-size: 1.05rem;
+    color: var(--text-secondary);
+}
+
+.compact-list-btn .compact-btn-icon svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+}
+
+.compact-list-btn-danger {
+    color: var(--danger-color);
+}
+
+.compact-list-btn-danger .compact-btn-icon {
+    color: var(--danger-color);
+}
+
+.compact-list-btn.is-active {
+    background: color-mix(in srgb, var(--primary-color) 12%, var(--bg-primary));
+}
+
+.compact-plot-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    border-radius: 14px;
+    background: var(--bg-tertiary);
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.compact-plot-item.is-active .compact-plot-number {
+    background: var(--primary-color);
+    color: #fff;
+}
+
+.compact-plot-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.compact-plot-mode {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.compact-plot-names {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-radio::before {
+    content: '';
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    border: 2px solid var(--text-secondary);
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+
+.compact-radio.is-active::before {
+    border-color: var(--primary-color);
+    background: radial-gradient(circle, var(--primary-color) 0 4px, transparent 5px);
+}
+
+.compact-trace-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 2px 4px 2px 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.compact-trace-row:last-child {
+    border-bottom: none;
+}
+
+.compact-swatch {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+    border-radius: 3px;
+}
+
+.compact-trace-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-segmented {
+    display: flex;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.compact-segment {
+    flex: 1 1 0;
+    min-height: 44px;
+    border: none;
+    border-right: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.compact-segment:last-child {
+    border-right: none;
+}
+
+.compact-segment.is-active {
+    background: var(--primary-color);
+    color: #fff;
+    font-weight: 600;
+}
+
+.compact-switch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 48px;
+    margin-top: 8px;
+    font-size: 0.95rem;
+}
+
+.compact-switch-row input {
+    width: 22px;
+    height: 22px;
+}
+
+/* ── Lent desktop pieces, restyled for the sheet ─────────────────────── */
+
+/* The sidebar, as the Data sheet. Only files and variables for now; the
+   other sections move to their own sheets as they are migrated. */
+html.compact .compact-sheet #sidebar,
+html.compact .compact-sheet #sidebar.hidden {
+    position: static;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    border: none;
+    background: transparent;
+    transition: none;
+    display: block;
+}
+
+html.compact .compact-sheet #sidebar .sidebar-resize-handle,
+html.compact .compact-sheet #sidebar .derived-section,
+html.compact .compact-sheet #sidebar .data-tools-section,
+html.compact .compact-sheet #sidebar .sidebar-options-section,
+html.compact .compact-sheet #sidebar .sidebar-layout-section,
+html.compact .compact-sheet #sidebar .sidebar-author {
+    display: none !important;
+}
+
+html.compact .compact-sheet #sidebar .sidebar-section {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+html.compact .compact-page-data .compact-action-row {
+    margin-bottom: 4px;
+}
+
+html.compact .variable-filter {
+    min-height: 40px;
+    font-size: 16px; /* below 16px, iOS zooms the page on focus */
+}
+
+html.compact .tree-item {
+    min-height: 44px;
+    align-items: center;
+}
+
+html.compact .tree-control-btn {
+    min-width: 40px;
+    min-height: 40px;
+}
+
+/* A variable on the plot on screen carries a check. */
+html.compact .tree-item.compact-on-plot {
+    background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+}
+
+html.compact .tree-item.compact-on-plot::after {
+    content: '✓';
+    margin-left: auto;
+    padding: 0 6px 0 10px;
+    color: var(--primary-color);
+    font-weight: 700;
+}
+
+/* The file row: name, badges and one ⋯ for everything else (§5.6). */
+html.compact .file-entry {
+    min-height: 44px;
+}
+
+html.compact .file-entry-save,
+html.compact .file-entry-csv-parsing,
+html.compact .file-entry-mat-arrays,
+html.compact .file-entry-transform,
+html.compact .file-entry-close {
+    display: none !important;
+}
+
+html.compact .file-entry-more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 40px;
+    margin-left: auto;
+    flex: 0 0 auto;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+html.compact .file-entry-more:active {
+    background: var(--hover-bg);
+}
+
+/* The examples and main menus, as lists inside the More sheet. */
+html.compact .compact-sheet .example-menu {
+    position: static;
+    min-width: 0;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: none;
+    overflow: hidden;
+}
+
+html.compact .compact-sheet .example-menu-item {
+    min-height: 48px;
+}
+
+/* The FFT options panel, as the content of the Analyze sheet. */
+html.compact .compact-sheet .fft-options {
+    position: static;
+    width: auto;
+    max-width: none;
+    height: auto;
+    max-height: none;
+    border: none;
+    padding: 0;
+    overflow: visible;
+    display: block;
+}
+
+html.compact .compact-sheet .fft-options input,
+html.compact .compact-sheet .fft-options select {
+    min-height: 36px;
+    font-size: 16px;
+}
+
+/* ── One plot at a time (§4.4) ───────────────────────────────────────── */
+html.compact .plots-area {
+    overflow: hidden !important;
+}
+
+html.compact .plots-area .layout-panel:not(.compact-active-panel),
+html.compact .plots-area .layout-split-child:not(.compact-path),
+html.compact .plots-area .layout-resize-handle,
+html.compact .plots-area .layout-scroll-resize-handle {
+    display: none !important;
+}
+
+html.compact .plots-area .layout-split-child.compact-path {
+    flex: 1 1 auto !important;
+    min-width: 0;
+    min-height: 0;
+}
+
+html.compact .plots-area .layout-split,
+html.compact .plots-area .layout-panel {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    flex: 1 1 auto;
+}
+
+/* The panel's toolbar lives in the Plot and Analyze sheets. */
+html.compact .layout-panel-toolbar {
+    display: none !important;
+}
+
+/* Plotly's button bar lands on the legend and the axis labels at this size.
+   A finger pans, pinches to zoom and double-taps to reset. */
+html.compact .plots-area .modebar-container {
+    display: none;
+}
+
+/* FFT: the status stays on the plot; its buttons and options live in the
+   Analyze sheet. */
+html.compact .fft-topbar-group,
+html.compact .fft-workspace > .fft-options,
+html.compact .fft-workspace > .edge-toggle-rail {
+    display: none !important;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+html.compact .drop-zone {
+    border: none;
+}
+
+html.compact .drop-zone-content h2,
+html.compact .drop-zone-content > p,
+html.compact .drop-zone-content > .icon {
+    display: none;
+}
+
+html.compact .drop-zone-content {
+    width: min(100%, 360px);
+    padding: 16px;
+    box-sizing: border-box;
+}
+
+html.compact #file-select-btn {
+    width: 100%;
+    min-height: 48px;
+    font-size: 1rem;
+}
+
+html.compact .compact-empty-extra {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 12px 0;
+}
+
+html.compact .compact-empty-extra .compact-secondary-btn {
+    width: 100%;
+}
+
+/* ── Dialogs fit the screen ──────────────────────────────────────────── */
+html.compact .modal-dialog {
+    max-width: calc(100vw - 16px - var(--sal) - var(--sar));
+    max-height: calc(100dvh - 16px - var(--sat) - var(--sab));
+    overflow-y: auto;
+}
+
+/* ── CSV parsing dialog (§5.6) ───────────────────────────────────────── */
+.csv-preview-overlay.csv-preview-compact {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+}
+
+.csv-preview-compact .csv-preview-dialog {
+    width: 100vw;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    padding: var(--sat, 0px) var(--sar, 0px) 0 var(--sal, 0px);
+    border: none;
+    border-radius: 0;
+    box-sizing: border-box;
+}
+
+.csv-preview-compact .csv-preview-header {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 0.5rem;
+    padding: 0.4rem 0.4rem 0.4rem 0.9rem;
+}
+
+.csv-preview-compact .csv-preview-title {
+    font-size: 1rem;
+}
+
+.csv-preview-compact .csv-preview-subtitle {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.csv-preview-compact .csv-preview-close {
+    width: 44px;
+    height: 44px;
+    font-size: 1.1rem;
+}
+
+.csv-preview-tabs {
+    display: flex;
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.csv-preview-tab {
+    flex: 1 1 0;
+    min-height: 44px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 0.95rem;
+    cursor: pointer;
+}
+
+.csv-preview-tab.is-active {
+    border-bottom-color: var(--primary-color);
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.csv-preview-status-strip {
+    flex: 0 0 auto;
+    padding: 0.45rem 0.9rem;
+    font-size: 0.84rem;
+    line-height: 1.35;
+    color: var(--success-color);
+    background: color-mix(in srgb, var(--success-color) 10%, var(--bg-primary));
+    border-bottom: 1px solid var(--border-color);
+}
+
+.csv-preview-status-strip.is-error {
+    color: var(--danger-color);
+    background: color-mix(in srgb, var(--danger-color) 10%, var(--bg-primary));
+}
+
+.csv-preview-compact .csv-preview-body {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.csv-preview-compact .csv-preview-grid-wrap,
+.csv-preview-compact .csv-preview-options-pane {
+    height: 100%;
+    overflow: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+.csv-preview-compact [data-tab="preview"] .csv-preview-options-pane,
+.csv-preview-compact [data-tab="options"] .csv-preview-grid-wrap {
+    display: none;
+}
+
+.csv-preview-compact .csv-preview-options-pane {
+    background: var(--bg-secondary);
+}
+
+.csv-preview-compact .csv-preview-toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.csv-preview-compact .csv-preview-field {
+    display: grid;
+    grid-template-columns: minmax(7rem, 1fr) minmax(9rem, 1.4fr);
+    font-size: 0.86rem;
+}
+
+.csv-preview-compact .csv-preview-side {
+    max-height: none;
+    overflow: visible;
+}
+
+.csv-preview-compact .csv-preview-side .csv-preview-field {
+    grid-template-columns: minmax(7rem, 1fr) minmax(9rem, 1.4fr);
+}
+
+/* Below 16px, iOS zooms the page in on focus and leaves it zoomed. */
+.csv-preview-compact input,
+.csv-preview-compact select {
+    min-height: 40px;
+    font-size: 16px;
+}
+
+.csv-preview-compact .csv-preview-check {
+    min-height: 40px;
+    font-size: 0.9rem;
+}
+
+.csv-preview-compact .csv-preview-grid tr.is-tappable {
+    cursor: pointer;
+}
+
+.csv-preview-compact .csv-preview-grid tr.is-tappable:active td,
+.csv-preview-compact .csv-preview-grid tr.is-tappable:active th {
+    background: var(--hover-bg);
+}
+
+.csv-preview-compact .csv-preview-footer {
+    flex: 0 0 auto;
+    padding: 0.5rem 0.75rem calc(0.5rem + var(--sab, 0px));
+    gap: 0.5rem;
+}
+
+/* ✕ cancels; the footer keeps Re-detect and the primary action. */
+.csv-preview-compact .csv-preview-footer-right .modal-btn-cancel {
+    display: none;
+}
+
+.csv-preview-compact .csv-preview-footer-right {
+    flex: 1 1 auto;
+}
+
+.csv-preview-compact .csv-preview-footer-right .modal-btn-confirm {
+    flex: 1 1 auto;
+    min-height: 46px;
+}
+
+.csv-preview-compact .csv-preview-footer-left button {
+    min-height: 46px;
+}
+
+/* Sideways: both panes, side by side; no tabs. */
+html.compact-landscape .csv-preview-compact .csv-preview-tabs {
+    display: none;
+}
+
+html.compact-landscape .csv-preview-compact .csv-preview-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 42%);
+}
+
+html.compact-landscape .csv-preview-compact .csv-preview-dialog .csv-preview-grid-wrap,
+html.compact-landscape .csv-preview-compact .csv-preview-dialog .csv-preview-options-pane {
+    display: block;
+}
+
+html.compact-landscape .csv-preview-compact .csv-preview-options-pane {
+    border-left: 1px solid var(--border-color);
+}
+
+html.compact-landscape .csv-preview-compact .csv-preview-header {
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+}
+
+html.compact-landscape .csv-preview-compact .csv-preview-subtitle {
+    display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.compact .compact-sheet {
+        transition: none;
+    }
+}

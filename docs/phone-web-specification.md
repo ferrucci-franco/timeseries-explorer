@@ -1,6 +1,34 @@
 # Phone Web Specification
 
-Status: requirements draft, under discussion. Nothing here is built yet.
+Status: first slice built (2026-10-04). It covers time series and FFT, plus CSV
+parsing.
+
+Built:
+
+- compact-mode activation, with the Automatic / Phone / Full override in More;
+- the app bar, the bottom navigation and the landscape rail;
+- sheets with Back integration;
+- one plot at a time, with the plot list in the Plot sheet;
+- the Data sheet, with tap-to-plot and the per-file page;
+- the Plot sheet: view and signals;
+- the Analyze sheet: time series and FFT, with the FFT options;
+- the More sheet: layout, language, theme, examples and menu;
+- the CSV parsing dialog of §5.6.
+
+The code is in `src/app/methods/compact-methods.js`, `src/ui/compact-layout.js` and
+`src/styles/compact.css`. The tests are `npm run test:compact-layout` and
+`npm run e2e:compact-layout`.
+
+Not built yet:
+
+- the other analyses and plot modes;
+- View and Marks;
+- cursors and tap readouts;
+- export through Web Share;
+- derived variables and data tools on the phone;
+- the web manifest and the service worker (§8);
+- deferring Plotly;
+- the phone file-size defaults (§9).
 
 This document replaces `docs/portable-phone-app-specification.md` (deleted) and
 supersedes `docs/mobile-mini-viewer-design.md`. The MINI document's scope, routing and

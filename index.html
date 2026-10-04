@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Time Series Explorer</title>
     <meta name="description" content="Free browser app to plot and explore time series: MATLAB .mat, OpenModelica and Dymola results, CSV, Excel, Parquet, netCDF, pandas pickle, Micro-Cap and audio files. Files stay on your computer; nothing is uploaded.">
     <link rel="canonical" href="https://www.unditas.com/">
@@ -115,7 +115,7 @@
             </div>
 
             <!-- Variables Panel -->
-            <div class="sidebar-section">
+            <div class="sidebar-section sidebar-variables-section">
                 <div class="variable-filter-wrap">
                     <input id="variable-filter" class="variable-filter" type="text" placeholder="Filter variables…" data-i18n="filterVariables">
                     <button id="clear-variable-filter" class="variable-filter-clear" type="button" data-i18n-title="clearVariableFilter" data-i18n-aria-label="clearVariableFilter">×</button>
@@ -1033,7 +1033,7 @@
             </div>
 
             <!-- Options -->
-            <div class="sidebar-section">
+            <div class="sidebar-section sidebar-options-section">
                 <h3 data-i18n="options">Options</h3>
                 <label class="checkbox-label">
                     <input type="checkbox" id="link-time-axes" checked>
@@ -1106,7 +1106,7 @@
             </div>
 
             <!-- Layout Configuration -->
-            <div class="sidebar-section">
+            <div class="sidebar-section sidebar-layout-section">
                 <h3 data-i18n="layout">Layout</h3>
                 <p class="layout-hint" data-i18n="layoutHint">Hover a panel to split or close it.</p>
             </div>

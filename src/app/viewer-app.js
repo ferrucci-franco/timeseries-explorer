@@ -18,6 +18,7 @@ import { installFilterMethods } from './methods/filter-methods.js';
 import { installTreeMethods } from './methods/tree-methods.js';
 import { installSessionMethods } from './methods/session-methods.js';
 import { installLiveUpdateMethods } from './methods/live-update-methods.js';
+import { installCompactMethods } from './methods/compact-methods.js';
 import { initialCapabilities, resolveCapabilities } from './capabilities.js';
 import { ADVANCED_SETTINGS_VERSION, migrateAdvancedSettings } from './advanced-settings-migration.js';
 
@@ -75,6 +76,8 @@ class OpenModelicaViewer {
         i18n.setLanguage('en');
         this._syncSpellcheckLanguage();
         this._setDropZoneStatus(false);
+        // Before the first render, which it has to see to show one plot at a time.
+        this.initCompactLayout();
 
         this.layoutManager.render();
         this._updateActionButtons();
@@ -141,6 +144,7 @@ class OpenModelicaViewer {
         this._renderFilesList();
         if (this._currentTree) this._renderFilteredTree();
         this.layoutManager.render();
+        this._compactRefreshTexts?.();
     }
 
     toggleTheme() {
@@ -362,5 +366,6 @@ installFilterMethods(OpenModelicaViewer);
 installTreeMethods(OpenModelicaViewer);
 installSessionMethods(OpenModelicaViewer);
 installLiveUpdateMethods(OpenModelicaViewer);
+installCompactMethods(OpenModelicaViewer);
 
 export default OpenModelicaViewer;

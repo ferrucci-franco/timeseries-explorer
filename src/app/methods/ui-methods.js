@@ -912,6 +912,9 @@ const TOUCH_HINT_KEY = 'omv_touch_hint_seen';
 
 proto._showTouchHintIfNeeded = function() {
     if (!isTouchCapable()) return;
+    // The phone layout puts a variable on the plot with a tap; the hint is
+    // about dragging, which it does not need.
+    if (this._compactIsActive?.()) return;
     // A laptop with a touch screen has a mouse too, and knows all of this.
     if (typeof window !== 'undefined' && !window.matchMedia?.('(pointer: coarse)')?.matches) return;
     let seen = false;

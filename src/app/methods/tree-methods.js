@@ -726,6 +726,12 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 
         itemDiv.addEventListener('click', (e) => {
             if (e.target.closest('.tree-derived-remove, .tree-derived-edit, .tree-sign-toggle')) return;
+            // Phone layout: there is no panel beside the tree to drag onto. A tap
+            // puts the variable on the plot on screen, or takes it off.
+            if (this._compactIsActive?.()) {
+                if (canPlot) this._compactToggleVariable(variable.name, foreign ? leafFileId : null);
+                return;
+            }
             if (!canPlot) {
                 if (this.selectedVariables.size > 0) this._clearVariableSelection();
                 return;

@@ -272,6 +272,7 @@ proto._createFftChart = function(panelId, panelEl) {
     panelEl.appendChild(container);
 
     plot.fftContainer = container;
+    plot.fftOptionsEl = options;
     plot.fftDiv = spectrumDiv;
     plot.div = timeDiv;
 
@@ -2058,7 +2059,7 @@ proto._toggleFftOptions = function(panelId) {
     const state = this._ensureFftState(plot);
     state.optionsVisible = !state.optionsVisible;
     syncEdgeToggle(plot.fftContainer, !state.optionsVisible);
-    const options = plot.fftContainer.querySelector('.fft-options');
+    const options = this._fftOptionsPanel(plot);
     if (options) options.hidden = !state.optionsVisible;
     const optionsBtn = plot.fftContainer.querySelector('.fft-options-btn');
     if (optionsBtn) {
@@ -2791,9 +2792,15 @@ proto._installFftSplitterHandlers = function(panelId, plot) {
     void panelId;
 };
 
+// The options panel is held by reference, not looked up inside the panel: on a
+// phone it is lent to the Analyze sheet, outside the panel, while it is shown.
+proto._fftOptionsPanel = function(plot) {
+    return plot?.fftOptionsEl || plot?.fftContainer?.querySelector('.fft-options') || null;
+};
+
 proto._renderFftOptionsPanel = function(panelId, plot) {
     const state = this._ensureFftState(plot);
-    const options = plot?.fftContainer?.querySelector('.fft-options');
+    const options = this._fftOptionsPanel(plot);
     if (!options) return;
     const domain = this._fftDomain(plot);
     const fmt = value => Number.isFinite(Number(value)) ? String(Number(Number(value).toPrecision(12))) : '';
@@ -3154,10 +3161,11 @@ proto._renderFftOptionsPanel = function(panelId, plot) {
 proto._installFftHelpDismissHandlers = function(plot) {
     if (!plot || plot._fftHelpDocListeners) return;
     const closeHelp = () => {
-        const popover = plot.fftContainer?.querySelector('.fft-help-popover');
+        const options = this._fftOptionsPanel(plot);
+        const popover = options?.querySelector('.fft-help-popover');
         if (!popover || popover.hidden) return false;
         popover.hidden = true;
-        plot.fftContainer?.querySelector('.fft-help-btn')?.setAttribute('aria-expanded', 'false');
+        options.querySelector('.fft-help-btn')?.setAttribute('aria-expanded', 'false');
         return true;
     };
     const onClick = (event) => {
@@ -3183,7 +3191,7 @@ proto._fftAxisLimitTooltip = function(key, plot = null) {
 
 proto._syncFftOptionsPanel = function(plot, options = {}) {
     const state = this._ensureFftState(plot);
-    const panel = plot?.fftContainer?.querySelector('.fft-options');
+    const panel = this._fftOptionsPanel(plot);
     if (!panel) return;
     const fmt = value => Number.isFinite(Number(value)) ? String(Number(Number(value).toPrecision(12))) : '';
     panel.querySelectorAll('[data-fft-range-full]').forEach(btn => {
@@ -3254,7 +3262,7 @@ proto._setFftStatus = function(plot, message, type = 'muted') {
 };
 
 proto._syncFftMessage = function(plot) {
-    const box = plot?.fftContainer?.querySelector('.fft-message');
+    const box = this._fftOptionsPanel(plot)?.querySelector('.fft-message');
     if (!box) return;
     const message = plot._fftStatusMessage || '';
     const type = plot._fftStatusType || 'muted';
