@@ -165,7 +165,9 @@ assert.match(installer, /if \(\(event\.touches\?\.length \|\| 0\) === 0\) claime
 // The hover label a tap leaves behind, which nothing on a touch screen ever
 // clears, and which a redraw brings back in the middle of a gesture.
 assert.match(installer, /div\.classList\.add\(GESTURE_CLASS\);/, 'a moving gesture hides the hover label');
-assert.match(installer, /if \(moved\) plotly\.Fx\?\.unhover\?\.\(div\);/, 'and clears it when it is over');
+assert.match(installer, /if \(moved\) clearPlotHover\(div, plotly\);/, 'and clears it when it is over');
+assert.match(installer, /div\._fullLayout\._hoversubplot = null;/,
+    'for good: Plotly redraws the last label after every redraw until a mouseout, which a finger never sends');
 assert.doesNotMatch(installer, /if \(!moved\) plotly/, 'a tap is left to put one there, which is how a finger reads a value');
 
 // ── Every kind of axis moves, the calendar one included ─────────────────────

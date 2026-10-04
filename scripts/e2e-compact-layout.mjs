@@ -165,8 +165,14 @@ try {
         const zoomed = await xRange();
         assert.ok(zoomed[0] > full[0] && zoomed[1] < full[1], `the plot zoomed into the window (${zoomed} within ${full})`);
         assert.ok(zoomed[1] - zoomed[0] < (full[1] - full[0]) * 0.6, 'to about the width that was drawn');
+        await page.waitForTimeout(400);
+        assert.equal(
+            await page.locator('.compact-active-panel .hoverlayer .hovertext').count(),
+            0,
+            'the first tap\'s value label does not come back after the zoom',
+        );
         await shot(page, 'window-zoom');
-        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="x"]').click();
+        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="x"]').tap();
         await page.waitForFunction(([lo, hi]) => {
             const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
             const range = plot.div._fullLayout.xaxis.range.map(Number);
@@ -180,9 +186,21 @@ try {
         await page.waitForTimeout(300);
         const panned = await xRange();
         assert.ok(panned[0] < full[0] && Math.abs((panned[1] - panned[0]) - (full[1] - full[0])) < 1e-6, 'one finger pans, the width unchanged');
-        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="all"]').click();
+        // A single tap reads a value.
+        await page.waitForTimeout(800);
+        await touch('touchStart', x0, y0); await page.waitForTimeout(60); await touch('touchEnd');
+        await page.waitForSelector('.compact-active-panel .hoverlayer .hovertext');
+        await page.waitForTimeout(800);
+        await page.locator('.compact-active-panel .compact-fit-btn[data-axis="all"]').tap();
         await cdp.detach();
     }
+
+    // ── Plot sheet: more signals come from Data ─────────────────────────────
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    await page.locator('.compact-add-signals-btn').click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'data');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
 
     // ── Analyze: FFT, with its options in the sheet ─────────────────────────
     await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();

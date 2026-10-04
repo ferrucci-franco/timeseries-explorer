@@ -10,6 +10,7 @@
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
 import Plotly, { onPlotDrawn } from '../../vendor/plotly.js';
+import { clearPlotHover } from '../../ui/plot-touch-gestures.js';
 import {
     LAYOUT_OVERRIDE_STORAGE_KEY,
     effectiveViewportSize,
@@ -600,6 +601,9 @@ export function installCompactMethods(ViewerClass) {
                 ? () => pm._autoScalePlot(panelId, plot)
                 : () => pm._autoScalePlotAxis(panelId, plot, axis);
         }
+        // The label of the last tap would come back after the fit, over a
+        // point that has moved.
+        clearPlotHover(div, Plotly);
         pm._runWithEagerDetailLoading(panelId, work);
     };
 
@@ -1169,6 +1173,9 @@ export function installCompactMethods(ViewerClass) {
             }
         } else if (!traces.length) {
             signals.appendChild(el('p', 'compact-note', i18n.t('compactNoSignals')));
+            const addRow = el('div', 'compact-action-row');
+            addRow.appendChild(button('compact-primary-btn', i18n.t('compactChooseSignals'), () => this._openCompactSheet('data', { toggle: false })));
+            signals.appendChild(addRow);
         } else {
             const traceList = el('div', 'compact-list');
             for (const trace of [...traces]) {
@@ -1184,6 +1191,10 @@ export function installCompactMethods(ViewerClass) {
                 traceList.appendChild(row);
             }
             signals.appendChild(traceList);
+            // More signals come from Data, where a tap adds one to this plot.
+            const addRow = el('div', 'compact-action-row');
+            addRow.appendChild(button('compact-primary-btn compact-add-signals-btn', '+ ' + i18n.t('compactAddMoreSignals'), () => this._openCompactSheet('data', { toggle: false })));
+            signals.appendChild(addRow);
             const clearRow = el('div', 'compact-action-row');
             clearRow.appendChild(button('compact-secondary-btn compact-danger-btn', i18n.t('clearPlot'), () => {
                 pm._clearPanel(panelId);
