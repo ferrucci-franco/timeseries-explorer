@@ -1674,6 +1674,15 @@ proto._renderExtraMenu = function() {
         this.showHelp();
     });
 
+    // The phone layout on a large screen: to try it, or for a touch screen
+    // that prefers it. The way back is in its More sheet (Layout), which is
+    // why the item is not offered while that layout is on.
+    const phoneLayoutItem = this._compactIsActive?.()
+        ? null
+        : makeAction('📱', 'extraPhoneLayout', () => {
+            this._setCompactLayoutOverride?.('compact');
+        }, { titleKey: 'extraPhoneLayoutTooltip' });
+
     const desktopDownloadItem = this.capabilities?.isDesktop
         ? makeAction('🌐', 'extraOnlineVersion', () => {
             window.open(ONLINE_VERSION_URL, '_blank', 'noopener');
@@ -1738,6 +1747,7 @@ proto._renderExtraMenu = function() {
     if (buildText) versionRow.append(versionBuild);
 
     const items = [saveViewItem, saveProjectItem, loadSessionItem, convertParquetItem, displaySettingsItem];
+    if (phoneLayoutItem) items.push(phoneLayoutItem);
     const zoomRow = this._createZoomRow();
     if (zoomRow) items.push(zoomRow);
     if (this.capabilities?.canUseLocalPath) {

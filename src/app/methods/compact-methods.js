@@ -151,6 +151,11 @@ export function installCompactMethods(ViewerClass) {
         window.addEventListener('orientationchange', schedule);
         window.visualViewport?.addEventListener('resize', schedule);
         window.addEventListener('popstate', () => this._onCompactPopState());
+        // iOS leaves the page zoomed in after a field it zoomed into loses
+        // focus; the layout is then wider than the screen and its edges are cut.
+        document.addEventListener('focusout', () => {
+            if (this._compact.active) setTimeout(() => this._resetCompactZoom(), 0);
+        });
         document.addEventListener('keydown', (event) => {
             if (event.key !== 'Escape' || !this._compact.active || !this._compact.sheet) return;
             // A dialog on top handles its own Escape.
@@ -291,6 +296,7 @@ export function installCompactMethods(ViewerClass) {
         root.classList.toggle('compact-landscape', want && landscape);
         if (!changed) {
             if (want && turned) {
+                this._resetCompactZoom();
                 if (this._compact.sheet) this._applyCompactSheetSize();
                 this._scheduleCompactResize();
             }
@@ -298,6 +304,7 @@ export function installCompactMethods(ViewerClass) {
         }
         this._compact.active = want;
         root.classList.toggle('compact', want);
+        this._syncCompactViewportMeta();
         this._compactAppBar.hidden = !want;
         this._compactNav.hidden = !want;
         if (want) {
@@ -310,6 +317,41 @@ export function installCompactMethods(ViewerClass) {
             document.querySelectorAll('.layout-split-child.compact-path').forEach(node => node.classList.remove('compact-path'));
         }
         this._scheduleCompactResize(0);
+    };
+
+    // iOS Safari zooms the page in when a field with text under 16 px takes
+    // focus, and does not zoom back out: the phone layout then overflows the
+    // screen, its right edge and one of its bars cut off. maximum-scale=1 stops
+    // that zoom. iOS ignores it for pinch gestures (accessibility), so pinch
+    // zoom stays available there; other mobile browsers obey it and would lose
+    // pinch zoom, so it is only set where WebKit's touch gesture events exist.
+    // Detected by feature, not by user agent.
+    proto._compactIsIosWebKit = function() {
+        return typeof window.GestureEvent !== 'undefined' && (navigator.maxTouchPoints || 0) > 0;
+    };
+
+    proto._syncCompactViewportMeta = function({ force = false } = {}) {
+        const meta = document.querySelector('meta[name="viewport"]');
+        if (!meta) return;
+        if (this._compact.baseViewport == null) this._compact.baseViewport = meta.getAttribute('content') || '';
+        const base = this._compact.baseViewport;
+        const want = this._compact.active && this._compactIsIosWebKit()
+            ? `${base}, maximum-scale=1`
+            : base;
+        if (force || meta.getAttribute('content') !== want) meta.setAttribute('content', want);
+    };
+
+    // Rewriting the viewport tag is the only way a page can bring iOS back to
+    // scale 1. Only when it is off: a zoom the user pinched is not undone while
+    // they are using it, only after a field or a rotation.
+    proto._resetCompactZoom = function() {
+        if (!this._compact?.active || !this._compactIsIosWebKit()) return;
+        const scale = window.visualViewport?.scale ?? 1;
+        if (scale <= 1.01) return;
+        const meta = document.querySelector('meta[name="viewport"]');
+        if (!meta) return;
+        meta.setAttribute('content', `${this._compact.baseViewport}, maximum-scale=1, minimum-scale=1`);
+        requestAnimationFrame(() => this._syncCompactViewportMeta({ force: true }));
     };
 
     proto._scheduleCompactResize = function(delay = SHEET_SETTLE_MS) {

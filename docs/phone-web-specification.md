@@ -5,7 +5,8 @@ parsing.
 
 Built:
 
-- compact-mode activation, with the Automatic / Phone / Full override in More;
+- compact-mode activation, with the Automatic / Phone / Full override in More, and a
+  **Phone layout** entry in the desktop ☰ menu to switch a large screen to it;
 - the app bar, the bottom navigation and the landscape rail;
 - sheets with Back integration;
 - one plot at a time, with the plot list in the Plot sheet;
@@ -82,8 +83,9 @@ desktop layout.
 
 The state is a single class on the root element (`html.compact`) set by one module
 that listens to viewport changes. CSS and JS read that class; no other code measures
-the screen to decide layout. Settings offers **Layout: Automatic / Compact / Full** so
-a user can override in either direction; the choice is remembered per device.
+the screen to decide layout. More offers **Layout: Automatic / Phone / Full** so a
+user can override in either direction, and the desktop ☰ menu offers **Phone layout**
+to reach it from a large screen; the choice is remembered per device.
 
 ### 3.2 One mobile strategy
 
