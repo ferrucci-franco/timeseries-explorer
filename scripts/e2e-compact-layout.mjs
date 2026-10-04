@@ -26,6 +26,29 @@ const shots = process.env.SHOTS_DIR;
 const shot = async (page, name) => { if (shots) await page.screenshot({ path: `${shots}/compact-${name}.png` }); };
 
 try {
+    // ── No desktop flash while the app loads ────────────────────────────────
+    // The app's code (Plotly included) takes a moment on a phone; until it
+    // runs, the page must already be the phone layout, not the desktop one.
+    {
+        const boot = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+        const bootPage = await boot.newPage();
+        await bootPage.route('**/app.js', async route => {
+            await new Promise(resolve => setTimeout(resolve, 2500));
+            await route.continue();
+        });
+        await bootPage.goto(baseUrl, { waitUntil: 'commit' });
+        await bootPage.waitForSelector('#drop-zone', { state: 'attached' });
+        await bootPage.waitForTimeout(300);
+        assert.equal(await bootPage.evaluate(() => typeof window.app), 'undefined', 'the app has not started yet');
+        assert.equal(await bootPage.evaluate(() => document.documentElement.classList.contains('compact')), true, 'yet the page is already the phone layout');
+        assert.equal(await bootPage.locator('.top-bar').isVisible(), false, 'no desktop top bar flashes');
+        assert.equal(await bootPage.locator('#sidebar').isVisible(), false, 'no desktop sidebar flashes');
+        if (shots) await bootPage.screenshot({ path: `${shots}/compact-boot.png` });
+        await bootPage.waitForFunction(() => window.app?.plotManager, null, { timeout: 60000 });
+        assert.equal(await bootPage.locator('#compact-nav').isVisible(), true, 'and the app takes over without a flip');
+        await boot.close();
+    }
+
     // ── Phone, upright ──────────────────────────────────────────────────────
     const context = await browser.newContext({
         viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2,

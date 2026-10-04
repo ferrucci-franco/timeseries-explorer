@@ -11,6 +11,32 @@
     <meta property="og:description" content="Free browser app to plot and explore time series: MATLAB .mat, OpenModelica and Dymola results, CSV, Excel, Parquet, netCDF, pandas pickle, Micro-Cap and audio files. Files stay on your computer; nothing is uploaded.">
     <meta property="og:url" content="https://www.unditas.com/">
     <link rel="stylesheet" href="styles.css">
+    <script id="compact-boot">
+        // The phone layout is decided here, before the first paint, so a phone
+        // never sees the desktop layout while the app's code loads. Mirrors
+        // shouldUseCompactLayout() and effectiveViewportSize() in
+        // src/ui/compact-layout.js; scripts/test-compact-layout.mjs runs both and
+        // checks they agree. The app takes over from here once it starts.
+        (function () {
+            try {
+                var override = null;
+                try { override = window.localStorage.getItem('omv_layout_override'); } catch (e) {}
+                var w = window.innerWidth, h = window.innerHeight;
+                var sw = window.screen && window.screen.width, sh = window.screen && window.screen.height;
+                if (sw > 0 && sh > 0 && w > 0 && h > 0) {
+                    var landscape = w > h, long = Math.max(sw, sh), short = Math.min(sw, sh);
+                    w = Math.min(w, landscape ? long : short);
+                    h = Math.min(h, landscape ? short : long);
+                }
+                var compact = override === 'compact'
+                    || (override !== 'full' && w > 0 && h > 0 && (w < 600 || h < 500));
+                if (compact) {
+                    document.documentElement.classList.add('compact');
+                    if (w > h) document.documentElement.classList.add('compact-landscape');
+                }
+            } catch (e) { /* the app decides once it starts */ }
+        })();
+    </script>
 </head>
 <body class="theme-light">
     <script>
