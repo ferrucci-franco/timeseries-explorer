@@ -6,13 +6,15 @@ parsing.
 Built:
 
 - compact-mode activation, with the Automatic / Phone / Full override in More, and a
-  **Phone layout** entry in the desktop ☰ menu to switch a large screen to it;
+  **Mobile version** entry in the desktop ☰ menu to switch a large screen to it;
 - the app bar, the bottom navigation and the landscape rail;
 - sheets with Back integration;
 - one plot at a time, with the plot list in the Plot sheet;
 - the Data sheet, with tap-to-plot and the per-file page;
 - the Plot sheet: view and signals;
 - the Analyze sheet: time series and FFT, with the FFT options;
+- 2D (x–y) plots: the plot type in the Plot sheet, x then y by tapping in Data,
+  the pairs listed with removal, and the 1:1 aspect;
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6.
 
@@ -22,7 +24,7 @@ The code is in `src/app/methods/compact-methods.js`, `src/ui/compact-layout.js` 
 
 Not built yet:
 
-- the other analyses and plot modes;
+- the other analyses and plot modes (2D + t, 3D, state animation, correlation);
 - View and Marks;
 - cursors and tap readouts;
 - export through Web Share;
@@ -83,8 +85,8 @@ desktop layout.
 
 The state is a single class on the root element (`html.compact`) set by one module
 that listens to viewport changes. CSS and JS read that class; no other code measures
-the screen to decide layout. More offers **Layout: Automatic / Phone / Full** so a
-user can override in either direction, and the desktop ☰ menu offers **Phone layout**
+the screen to decide layout. More offers **Layout: Automatic / Mobile / Full** so a
+user can override in either direction, and the desktop ☰ menu offers **Mobile version**
 to reach it from a large screen; the choice is remembered per device.
 
 ### 3.2 One mobile strategy

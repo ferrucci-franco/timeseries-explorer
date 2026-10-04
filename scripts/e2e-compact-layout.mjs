@@ -203,6 +203,44 @@ try {
     await page.waitForFunction(() => !document.querySelector('.csv-preview-overlay'));
     if (await page.evaluate(() => window.app._compact.sheet)) await page.locator('.compact-sheet-close').click();
 
+    // ── 2D (x–y): a tap is an X, then a Y ───────────────────────────────────
+    await page.locator('.compact-plot-selector').click();
+    assert.equal(await page.locator('.compact-sheet-close').getAttribute('aria-label'), 'Hide', 'a sheet is hidden, not closed');
+    await page.locator('.compact-page-plot .compact-segment', { hasText: '2D' }).click();
+    // The time series on it would be lost: asked first.
+    await page.locator('.modal-overlay .modal-btn-confirm').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'phase2d');
+    assert.match(await page.locator('.compact-active-panel .layout-panel-placeholder').innerText(), /X signal/, 'the empty 2D plot says what it needs');
+    await page.locator('.compact-nav-btn[data-sheet="data"]').click();
+    assert.match(await page.locator('.compact-phase-banner').innerText(), /X signal, then the Y/, 'the Data sheet explains the order');
+    await leaf('voltage').click();
+    await page.waitForFunction(() => /x = voltage/.test(document.querySelector('.compact-phase-banner')?.textContent || ''));
+    assert.equal(await leaf('voltage').getAttribute('data-compact-role'), 'x …', 'the chosen X is marked as waiting');
+    await leaf('current').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.phaseTraces?.length === 1);
+    assert.deepEqual(
+        await page.evaluate(() => window.app.plotManager.plots.get(window.app._compactActivePanelId()).phaseTraces.map(p => [p.x, p.y])),
+        [['voltage', 'current']],
+        'the second tap completes the pair',
+    );
+    await page.waitForFunction(() => document.querySelector('#variables-tree .tree-item[data-var-name="current"]')?.dataset.compactRole === 'y');
+    assert.equal(await leaf('voltage').getAttribute('data-compact-role'), 'x');
+    // An X chosen by mistake is taken back by tapping it again.
+    await leaf('temp').click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.phasePending?.x === 'temp');
+    await leaf('temp').click();
+    await page.waitForFunction(() => !window.app.plotManager.plots.get(window.app._compactActivePanelId())?.phasePending?.x);
+    await shot(page, '2d-data');
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    assert.equal(await page.locator('.compact-page-plot .compact-trace-name', { hasText: 'voltage / current' }).count(), 1, 'the Plot sheet lists the pair');
+    await shot(page, '2d-plot-sheet');
+    await page.locator('.compact-page-plot .compact-trace-remove').first().click();
+    await page.waitForFunction(() => !window.app.plotManager.plots.get(window.app._compactActivePanelId())?.phaseTraces?.length);
+    // Back to a time series, empty: nothing to confirm.
+    await page.locator('.compact-page-plot .compact-segment', { hasText: 'Time series' }).click();
+    await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'timeseries');
+    await page.locator('.compact-sheet-close').click();
+
     // ── More: the menus survive taps inside the sheet ───────────────────────
     await page.locator('.compact-nav-btn[data-sheet="more"]').click();
     await page.locator('.compact-switch-row input').click();
@@ -215,6 +253,14 @@ try {
         'a phone is not offered a desktop application',
     );
     await page.locator('.compact-sheet-close').click();
+
+    // ── Feedback: files are chosen, not pasted or dragged ───────────────────
+    await page.evaluate(() => window.app.showFeedbackForm());
+    await page.waitForSelector('.feedback-overlay .feedback-file-button');
+    assert.equal(await page.locator('.feedback-paste-zone').isVisible(), false, 'no paste-or-drag zone on a phone');
+    assert.equal(await page.locator('.feedback-file-button').isVisible(), true, 'the file chooser stays');
+    await page.locator('.feedback-overlay .compact-dialog-close').click();
+    await page.waitForFunction(() => !document.querySelector('.feedback-overlay.show'));
 
     // ── The user can ask for the full layout, and back ──────────────────────
     await page.evaluate(() => window.app._setCompactLayoutOverride('full'));
@@ -282,14 +328,14 @@ try {
 
     // ── From the desktop to the phone layout, and back ──────────────────────
     await dpage.locator('#extra-menu-btn').click();
-    await dpage.locator('#extra-menu .extra-menu-item', { hasText: 'Phone layout' }).click();
+    await dpage.locator('#extra-menu .extra-menu-item', { hasText: 'Mobile version' }).click();
     await dpage.waitForFunction(() => document.documentElement.classList.contains('compact'));
     assert.equal(await dpage.locator('#compact-nav').isVisible(), true, 'the menu switches a desktop window to the phone layout');
     assert.equal(await dpage.locator('.top-bar').isVisible(), false);
     if (shots) await dpage.screenshot({ path: `${shots}/compact-desktop-switched.png` });
     await dpage.locator('.compact-nav-btn[data-sheet="more"]').click();
     assert.equal(
-        await dpage.locator('.compact-sheet #extra-menu .extra-menu-item', { hasText: 'Phone layout' }).count(),
+        await dpage.locator('.compact-sheet #extra-menu .extra-menu-item', { hasText: 'Mobile version' }).count(),
         0,
         'the phone layout does not offer itself',
     );

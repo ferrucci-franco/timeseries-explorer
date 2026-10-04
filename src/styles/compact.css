@@ -593,6 +593,47 @@ html.compact.compact-landscape .compact-sheet-size {
     background: radial-gradient(circle, var(--primary-color) 0 4px, transparent 5px);
 }
 
+.compact-phase-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
+    border: 1px solid color-mix(in srgb, var(--primary-color) 40%, var(--border-color));
+    font-size: 0.92rem;
+}
+
+.compact-phase-banner[hidden] {
+    display: none;
+}
+
+.compact-phase-text {
+    flex: 1 1 auto;
+}
+
+.compact-link-btn {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 0 8px;
+    border: none;
+    background: none;
+    color: var(--primary-color);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.compact-link-btn[hidden] {
+    display: none;
+}
+
+.compact-trace-pending {
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
 .compact-radio-static {
     cursor: default;
 }
@@ -768,6 +809,27 @@ html.compact .tree-control-btn {
 /* A variable on the plot on screen carries a check. */
 html.compact .tree-item.compact-on-plot {
     background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+}
+
+/* In a 2D plot the mark says the role instead: x, y, or the x waiting for
+   its y. */
+html.compact .tree-item.compact-on-plot[data-compact-role]::after,
+html.compact .tree-item.compact-pending[data-compact-role]::after {
+    content: attr(data-compact-role);
+    font-size: 0.85rem;
+}
+
+html.compact .tree-item.compact-pending {
+    outline: 2px dashed var(--primary-color);
+    outline-offset: -2px;
+    background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+}
+
+html.compact .tree-item.compact-pending::after {
+    margin-left: auto;
+    padding: 0 6px 0 10px;
+    color: var(--primary-color);
+    font-weight: 700;
 }
 
 html.compact .tree-item.compact-on-plot::after {
@@ -1099,6 +1161,16 @@ html.compact .compact-sheet .fft-option-row input[type="checkbox"] {
     margin: 0;
     font-size: 0.88em;
     opacity: 0.85;
+}
+
+/* Feedback: nothing is pasted or dragged on a phone; files are chosen. */
+html.compact .feedback-paste-zone {
+    display: none;
+}
+
+html.compact .feedback-file-button {
+    width: 100%;
+    min-height: 44px;
 }
 
 /* ── Empty plot ──────────────────────────────────────────────────────── */

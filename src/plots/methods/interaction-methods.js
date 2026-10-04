@@ -5386,7 +5386,11 @@ proto._updatePlaceholder = function(panelId, panelEl) {
     if (this.compactLayout) {
         placeholder.innerHTML = '';
         const text = document.createElement('span');
-        text.textContent = i18n.t('compactPlaceholderEmpty');
+        // A 2D plot is built from x–y pairs: say which signal comes next.
+        const pending = plot?.phasePending?.x;
+        text.textContent = plot?.mode === 'phase2d'
+            ? (pending ? i18n.t('compactPendingY').replace('{x}', pending) : i18n.t('compactPlaceholderPhase2d'))
+            : i18n.t('compactPlaceholderEmpty');
         const choose = document.createElement('button');
         choose.type = 'button';
         choose.className = 'compact-placeholder-btn';
