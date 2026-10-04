@@ -1753,7 +1753,9 @@ proto._renderExtraMenu = function() {
     if (this.capabilities?.canUseLocalPath) {
         items.push(openTempItem, dymolaDirItem);
     }
-    items.push(desktopDownloadItem, feedbackItem, versionRow, helpItem);
+    // A desktop application is nothing a phone can install.
+    if (!this._compactIsActive?.()) items.push(desktopDownloadItem);
+    items.push(feedbackItem, versionRow, helpItem);
     menu.append(...items);
 };
 
@@ -3001,6 +3003,9 @@ proto.showHelp = function() {
         const content = document.createElement('div');
         content.className = 'help-section-content';
         content.innerHTML = i18n.t(`helpSec${topic.section}Body`);
+        // The help describes the full layout: drag and drop, panel toolbars.
+        // On the phone layout the first topic opens with how that one works.
+        if (index === 0 && this._compactIsActive?.()) content.prepend(this._compactHelpBox());
         sec.append(sectionHeading, content);
         sidebar.appendChild(tab);
         body.appendChild(sec);

@@ -55,6 +55,25 @@ const MODE_LABEL_KEYS = {
     correlation: 'modeCorrelationLabel',
 };
 
+const FULLSCREEN_DIALOGS = [
+    '.modal-dialog-checklist',
+    '.modal-dialog-wide',
+    '.modal-dialog-stats',
+    '.modal-dialog-excel-sheets',
+    '.modal-dialog-mat-variables',
+    '.modal-dialog-plot-export',
+    '.modal-dialog-csv-pattern-help',
+    '.plot-settings-dialog',
+    '.feedback-dialog',
+    '.desktop-download-dialog',
+].join(', ');
+
+// Dialogs whose own ✕ already sits where a finger finds it.
+const OWN_CLOSE_BUTTONS = '.plot-settings-header-close, .help-modal-close, .compact-dialog-close';
+// Dialogs with a ✕ of their own that the phone layout replaces (it is lost
+// in their narrow header): the new ✕ presses it.
+const REPLACED_CLOSE_BUTTONS = '.feedback-close, .desktop-download-close';
+
 // After a sheet settles: Plotly measures its container, so resizing during the
 // slide would redraw every frame.
 const SHEET_SETTLE_MS = 240;
@@ -114,6 +133,18 @@ export function installCompactMethods(ViewerClass) {
         };
         this._buildCompactChrome();
         this.layoutManager.onAfterRender = () => this._compactAfterLayoutRender();
+        this.plotManager.onCompactChooseSignals = () => this._openCompactSheet('data', { toggle: false });
+        // Dialogs are appended to <body>; the large ones go full screen.
+        if (typeof MutationObserver !== 'undefined') {
+            new MutationObserver(records => {
+                if (!this._compact.active) return;
+                for (const record of records) {
+                    for (const node of record.addedNodes) {
+                        if (node.nodeType === 1 && node.classList.contains('modal-overlay')) this._compactDecorateDialog(node);
+                    }
+                }
+            }).observe(document.body, { childList: true });
+        }
         // Picking an example or a menu entry from the More sheet starts
         // something that wants the screen: the sheet gets out of the way.
         const closeAfterPick = (event) => {
@@ -305,6 +336,11 @@ export function installCompactMethods(ViewerClass) {
         this._compact.active = want;
         root.classList.toggle('compact', want);
         this._syncCompactViewportMeta();
+        // Empty panels say how to fill them, which differs between layouts.
+        this.plotManager.compactLayout = want;
+        document.querySelectorAll('#plots-area .layout-panel').forEach(panel => {
+            this.plotManager._updatePlaceholder?.(panel.dataset.id, panel);
+        });
         this._compactAppBar.hidden = !want;
         this._compactNav.hidden = !want;
         if (want) {
@@ -352,6 +388,37 @@ export function installCompactMethods(ViewerClass) {
         if (!meta) return;
         meta.setAttribute('content', `${this._compact.baseViewport}, maximum-scale=1, minimum-scale=1`);
         requestAnimationFrame(() => this._syncCompactViewportMeta({ force: true }));
+    };
+
+    // A dialog with more than a short question in it takes the whole screen,
+    // with a ✕ that stays at the top while its content scrolls. Short choices
+    // (a confirmation, "use this row as") stay a centred card.
+    proto._compactDecorateDialog = function(overlay) {
+        const dialog = overlay.querySelector('.modal-dialog');
+        if (!dialog || dialog.classList.contains('modal-dialog-csv-row-actions')) return;
+        requestAnimationFrame(() => {
+            if (!overlay.isConnected) return;
+            const large = dialog.matches(FULLSCREEN_DIALOGS)
+                || dialog.scrollHeight > window.innerHeight * 0.55;
+            if (!large) return;
+            overlay.classList.add('compact-fullscreen-overlay');
+            dialog.classList.add('compact-fullscreen-dialog');
+            if (overlay.querySelector(OWN_CLOSE_BUTTONS)) return;
+            const close = button('compact-icon-btn compact-dialog-close', '', () => {
+                // The dialog's own way out: its ✕, its Cancel, its only button,
+                // or Escape.
+                const own = dialog.querySelector(REPLACED_CLOSE_BUTTONS);
+                const cancel = dialog.querySelector('.modal-buttons .modal-btn-cancel');
+                const buttons = dialog.querySelectorAll('.modal-buttons .modal-btn');
+                if (own) own.click();
+                else if (cancel) cancel.click();
+                else if (buttons.length === 1) buttons[0].click();
+                else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            }, { icon: SVG.close, title: i18n.t('compactClose') });
+            // On the overlay, which does not scroll: it stays put while the
+            // dialog's content scrolls under it, and takes no room from it.
+            overlay.appendChild(close);
+        });
     };
 
     proto._scheduleCompactResize = function(delay = SHEET_SETTLE_MS) {
@@ -432,6 +499,9 @@ export function installCompactMethods(ViewerClass) {
         const names = (plot?.traces || []).map(trace => this._compactTraceLabel(trace));
         if (!names.length && plot?.phaseTraces?.length) {
             names.push(...plot.phaseTraces.map(pair => [pair.x, pair.y, pair.z].filter(Boolean).join(' / ')));
+        }
+        if (!names.length && plot?.mode === 'state-anim' && plot.stateSlots?.x?.length) {
+            names.push(plot.stateSlots.x.join(', '));
         }
         const mode = plot?.mode || 'timeseries';
         const key = mode === 'state-anim'
@@ -657,6 +727,17 @@ export function installCompactMethods(ViewerClass) {
         }
     };
 
+    proto._compactHelpBox = function() {
+        const box = el('div', 'compact-help-box');
+        box.appendChild(el('h4', '', i18n.t('compactHelpTitle')));
+        const list = el('ul');
+        for (const key of ['compactHelpData', 'compactHelpPlot', 'compactHelpAnalyze', 'compactHelpMore', 'compactHelpGestures']) {
+            list.appendChild(el('li', '', i18n.t(key)));
+        }
+        box.append(list, el('p', '', i18n.t('compactHelpBelow')));
+        return box;
+    };
+
     // ─── Data: files and signals ──────────────────────────────────
 
     proto._buildCompactDataPage = function() {
@@ -809,8 +890,14 @@ export function installCompactMethods(ViewerClass) {
             if (!panelId) return;
             pm._runWithEagerDetailLoading(panelId, work);
         };
-        if (plot?.mode === 'fft') {
+        const mode = plot?.mode || 'timeseries';
+        if (mode === 'fft') {
             viewRow.appendChild(button('compact-secondary-btn', i18n.t('fftResetLabel'), () => pm._resetFftView(panelId), { title: i18n.t('fftResetView') }));
+        } else if (mode !== 'timeseries') {
+            // Fitting X and Y apart means nothing in a phase plot or a 3D scene.
+            const autoBtn = button('compact-secondary-btn', '⛶ ' + i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))));
+            autoBtn.disabled = !hasContent;
+            viewRow.appendChild(autoBtn);
         } else {
             const autoBtn = button('compact-secondary-btn', '⛶ ' + i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))));
             const xBtn = button('compact-secondary-btn', i18n.t('autoScaleXTitle'), () => run(() => pm._autoScalePlotAxis(panelId, pm.plots.get(panelId), 'x')));
@@ -822,7 +909,22 @@ export function installCompactMethods(ViewerClass) {
 
         const signals = section(i18n.t('compactSignalsOnPlot'));
         const traces = plot?.traces || [];
-        if (!traces.length) {
+        if (mode !== 'timeseries' && mode !== 'fft') {
+            // Phase plots and animations pair their signals in roles (x, y,
+            // z, dx/dt) that the phone layout does not edit yet.
+            const summary = this._compactPanelSummary(panelId);
+            if (summary.names.length) signals.appendChild(el('p', 'compact-plot-signals', summary.names.join(' · ')));
+            signals.appendChild(el('p', 'compact-note', i18n.t('compactPlotModeNote')));
+            if (hasContent) {
+                const clearRow = el('div', 'compact-action-row');
+                clearRow.appendChild(button('compact-secondary-btn compact-danger-btn', i18n.t('clearPlot'), () => {
+                    pm._clearPanel(panelId);
+                    this._compactUpdateAppBar();
+                    this._renderCompactSheetContent();
+                }));
+                signals.appendChild(clearRow);
+            }
+        } else if (!traces.length) {
             signals.appendChild(el('p', 'compact-note', i18n.t('compactNoSignals')));
         } else {
             const traceList = el('div', 'compact-list');
@@ -866,6 +968,16 @@ export function installCompactMethods(ViewerClass) {
         const choose = section(i18n.t('compactAnalysis'));
         const list = el('div', 'compact-list compact-radio-list');
         list.setAttribute('role', 'radiogroup');
+        if (!COMPACT_ANALYSES.some(analysis => analysis.mode === mode)) {
+            // The plot is in a mode set up on the full layout (an example's
+            // phase plot, a 3D animation): say so, selected, instead of
+            // showing two options neither of which is true.
+            const current = el('div', 'compact-list-btn compact-radio is-active compact-radio-static');
+            current.setAttribute('role', 'radio');
+            current.setAttribute('aria-checked', 'true');
+            current.appendChild(el('span', 'compact-btn-label', this._compactPanelSummary(panelId).modeLabel));
+            list.appendChild(current);
+        }
         for (const analysis of COMPACT_ANALYSES) {
             const selected = mode === analysis.mode;
             const item = button(`compact-list-btn compact-radio${selected ? ' is-active' : ''}`, i18n.t(analysis.labelKey), () => {

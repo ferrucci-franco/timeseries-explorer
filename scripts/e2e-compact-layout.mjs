@@ -59,8 +59,32 @@ try {
     assert.equal(await page.locator('#sidebar').isVisible(), false, 'the sidebar waits for the Data sheet');
     assert.equal(await page.locator('.compact-try-example').isVisible(), true, 'the empty state offers an example');
 
+    assert.equal(
+        await page.evaluate(() => getComputedStyle(document.body).userSelect || getComputedStyle(document.body).webkitUserSelect),
+        'none',
+        'a finger held down does not select text',
+    );
+
     await page.setInputFiles('#file-input', [makeCsv()]);
     await page.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
+
+    // ── The empty plot speaks the phone's language ──────────────────────────
+    const placeholderText = await page.locator('.compact-active-panel .layout-panel-placeholder').innerText();
+    assert.doesNotMatch(placeholderText, /Ctrl|Shift|[Dd]rop/, 'no drag, Ctrl or Shift instructions on a phone');
+    await page.locator('.compact-active-panel .compact-placeholder-btn').click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'data');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+
+    // ── A large dialog takes the screen, with a ✕ ───────────────────────────
+    await page.locator('.compact-nav-btn[data-sheet="data"]').click();
+    await page.locator('#variables-tree .tree-item[data-var-name="time"]').click();
+    await page.waitForSelector('.modal-overlay.compact-fullscreen-overlay .compact-dialog-close');
+    const box = await page.locator('.compact-fullscreen-dialog').boundingBox();
+    assert.ok(box.width >= 389 && box.height >= 843, 'the time-axis inspector fills the screen');
+    await page.locator('.compact-dialog-close').click();
+    await page.waitForFunction(() => !document.querySelector('.modal-overlay'));
+    await page.locator('.compact-sheet-close').click();
 
     // ── Data: tap to plot, tap again to remove ──────────────────────────────
     await page.locator('.compact-nav-btn[data-sheet="data"]').click();
@@ -155,6 +179,19 @@ try {
     await page.locator('.csv-preview-close').click();
     await page.waitForFunction(() => !document.querySelector('.csv-preview-overlay'));
     if (await page.evaluate(() => window.app._compact.sheet)) await page.locator('.compact-sheet-close').click();
+
+    // ── More: the menus survive taps inside the sheet ───────────────────────
+    await page.locator('.compact-nav-btn[data-sheet="more"]').click();
+    await page.locator('.compact-switch-row input').click();
+    await page.locator('.compact-switch-row input').click();
+    assert.equal(await page.locator('.compact-sheet #example-menu').isVisible(), true, 'the examples stay listed after a tap elsewhere in the sheet');
+    assert.equal(await page.locator('.compact-sheet #extra-menu').isVisible(), true, 'and so does the menu');
+    assert.equal(
+        await page.locator('.compact-sheet #extra-menu .extra-menu-item', { hasText: /desktop|standalone/i }).count(),
+        0,
+        'a phone is not offered a desktop application',
+    );
+    await page.locator('.compact-sheet-close').click();
 
     // ── The user can ask for the full layout, and back ──────────────────────
     await page.evaluate(() => window.app._setCompactLayoutOverride('full'));

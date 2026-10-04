@@ -64,6 +64,23 @@ html.compact body {
     overscroll-behavior: none;
 }
 
+/* A finger held down is a press, not the start of a text selection or the
+   iOS callout. Fields stay selectable. */
+html.compact body {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+html.compact input,
+html.compact textarea,
+html.compact [contenteditable="true"] {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+}
+
 /* No double-tap zoom: a tap is a tap. Pinch zoom of the page stays possible
    outside the plot. */
 html.compact {
@@ -576,6 +593,15 @@ html.compact.compact-landscape .compact-sheet-size {
     background: radial-gradient(circle, var(--primary-color) 0 4px, transparent 5px);
 }
 
+.compact-radio-static {
+    cursor: default;
+}
+
+.compact-plot-signals {
+    margin: 0;
+    font-size: 0.95rem;
+}
+
 .compact-trace-row {
     display: flex;
     align-items: center;
@@ -642,9 +668,49 @@ html.compact.compact-landscape .compact-sheet-size {
     font-size: 0.95rem;
 }
 
+/* A switch, not a desktop checkbox. */
 .compact-switch-row input {
-    width: 22px;
-    height: 22px;
+    -webkit-appearance: none;
+    appearance: none;
+    position: relative;
+    width: 50px;
+    height: 30px;
+    flex: 0 0 50px;
+    margin: 0;
+    border-radius: 15px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.compact-switch-row input::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    transition: transform 0.15s ease;
+}
+
+.compact-switch-row input:checked {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.compact-switch-row input:checked::after {
+    transform: translateX(20px);
+}
+
+.compact-switch-row {
+    padding: 0 2px;
+    border-top: 1px solid var(--border-color);
+    margin-top: 12px;
+    padding-top: 6px;
 }
 
 /* ── Lent desktop pieces, restyled for the sheet ─────────────────────── */
@@ -764,6 +830,12 @@ html.compact .compact-sheet .example-menu-item {
     min-height: 48px;
 }
 
+/* Lent to the More sheet, the menus stay open: their own outside-tap close
+   (meant for a dropdown) would empty the sheet at the first tap. */
+html.compact .compact-sheet .example-menu[hidden] {
+    display: flex !important;
+}
+
 /* The FFT options panel, as the content of the Analyze sheet. */
 html.compact .compact-sheet .fft-options {
     position: static;
@@ -853,6 +925,12 @@ html.compact .light-version-notice {
     box-sizing: border-box;
 }
 
+/* "Download the desktop version from the Menu": nothing a phone installs,
+   and the phone's menu does not offer it. */
+html.compact .light-notice-desktop {
+    display: none;
+}
+
 html.compact #file-select-btn {
     width: 100%;
     min-height: 48px;
@@ -875,6 +953,139 @@ html.compact .modal-dialog {
     max-width: calc(100vw - 16px - var(--sal) - var(--sar));
     max-height: calc(100dvh - 16px - var(--sat) - var(--sab));
     overflow-y: auto;
+}
+
+/* A large dialog takes the whole screen, its ✕ pinned at the top. */
+html.compact .modal-overlay.compact-fullscreen-overlay {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+}
+
+html.compact .modal-dialog.compact-fullscreen-dialog {
+    position: relative;
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    padding-top: var(--sat);
+    padding-bottom: var(--sab);
+    padding-left: var(--sal);
+    padding-right: var(--sar);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    box-sizing: border-box;
+}
+
+.compact-dialog-close {
+    position: absolute;
+    top: calc(var(--sat) + 6px);
+    right: calc(var(--sar) + 6px);
+    z-index: 3;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+html.compact .compact-fullscreen-dialog .feedback-close,
+html.compact .compact-fullscreen-dialog .desktop-download-close {
+    display: none;
+}
+
+/* One scroll container, the dialog: content blocks that scroll on their own
+   inside it would trap the finger. */
+html.compact .compact-fullscreen-dialog .modal-content {
+    max-height: none;
+    overflow: visible;
+    padding: 12px 1.25rem 0;
+}
+
+/* Its buttons stay reachable at the bottom while the content scrolls. */
+html.compact .compact-fullscreen-dialog .modal-buttons {
+    position: sticky;
+    bottom: calc(-1 * var(--sab));
+    margin-left: -1.25rem;
+    margin-right: -1.25rem;
+    padding: 10px 1.25rem calc(10px + var(--sab));
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-color);
+}
+
+html.compact .compact-fullscreen-dialog .modal-btn {
+    min-height: 44px;
+}
+
+/* A touch screen has no hover: a :hover style stays on whatever was tapped
+   last, which reads as a selection. */
+@media (hover: none) {
+    html.compact .tree-item:not(.compact-on-plot):hover,
+    html.compact .example-menu-item:hover,
+    html.compact .file-entry:not(.active):hover {
+        background: transparent;
+    }
+}
+
+/* FFT options in the sheet: a checkbox sits at the end of its row, like the
+   other controls, and is large enough for a finger. */
+html.compact .compact-sheet .fft-option-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 44px;
+    font-size: 0.9rem;
+}
+
+html.compact .compact-sheet .fft-option-row input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    justify-self: end;
+}
+
+/* The help's phone box, ahead of the desktop-oriented sections. */
+.compact-help-box {
+    margin: 0 0 1.2rem;
+    padding: 0.8rem 1rem;
+    border: 1px solid color-mix(in srgb, var(--primary-color) 45%, var(--border-color));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--primary-color) 9%, var(--bg-primary));
+}
+
+.compact-help-box h4 {
+    margin: 0 0 0.4rem;
+}
+
+.compact-help-box ul {
+    margin: 0 0 0.5rem;
+    padding-left: 1.1rem;
+}
+
+.compact-help-box li + li {
+    margin-top: 0.3rem;
+}
+
+.compact-help-box p {
+    margin: 0;
+    font-size: 0.88em;
+    opacity: 0.85;
+}
+
+/* ── Empty plot ──────────────────────────────────────────────────────── */
+html.compact .layout-panel-placeholder {
+    font-size: 1rem;
+    gap: 14px;
+}
+
+.compact-placeholder-btn {
+    min-height: 44px;
+    padding: 0 20px;
+    border: none;
+    border-radius: 10px;
+    background: var(--primary-color);
+    color: #fff;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
 }
 
 /* ── CSV parsing dialog (§5.6) ───────────────────────────────────────── */
