@@ -9,7 +9,7 @@
 // keeps one code path.
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
-import Plotly, { onPlotDrawn } from '../../vendor/plotly.js';
+import Plotly, { onPlotDrawn, setLargerPlotFonts } from '../../vendor/plotly.js';
 import { clearPlotHover } from '../../ui/plot-touch-gestures.js';
 import {
     LAYOUT_OVERRIDE_STORAGE_KEY,
@@ -208,6 +208,7 @@ export function installCompactMethods(ViewerClass) {
         this._buildCompactChrome();
         this.layoutManager.onAfterRender = () => this._compactAfterLayoutRender();
         onPlotDrawn(div => { if (this._compact.active) this._compactSyncFitButtons(div); });
+        setLargerPlotFonts(() => this._compact.active);
         this.plotManager.onCompactChooseSignals = () => this._openCompactSheet('data', { toggle: false });
         // Dialogs are appended to <body>; the large ones go full screen.
         if (typeof MutationObserver !== 'undefined') {

@@ -128,6 +128,14 @@ try {
     s = await state();
     assert.deepEqual(s.traces, ['voltage', 'current'], 'a tap puts a signal on the plot, a second tap takes it off');
     {
+        const fonts = await page.evaluate(() => {
+            const div = document.querySelector('.compact-active-panel .js-plotly-plot');
+            const size = sel => parseFloat(div?.querySelector(sel)?.style.fontSize);
+            return { tick: size('.xtick text'), xTitle: size('.g-xtitle text') };
+        });
+        assert.deepEqual(fonts, { tick: 12, xTitle: 12 }, 'plot text is a little larger on a phone');
+    }
+    {
         const edge = await page.evaluate(() => {
             const panel = document.querySelector('.compact-active-panel');
             const r = panel.getBoundingClientRect();
@@ -696,6 +704,10 @@ try {
     // The Lorenz example: a 3D state animation, with its speed selector.
     await ipage.locator('.compact-try-example').click();
     await ipage.locator('.compact-sheet .compact-menu-btn', { hasText: 'Lorenz' }).first().click();
+    // Loading says how to stop it with a button: a phone has no Escape key.
+    await ipage.waitForSelector('#example-loading-overlay #example-loading-cancel', { state: 'visible' });
+    assert.equal(await ipage.locator('#example-loading-overlay .overlay-escape-hint').isVisible(), false,
+        'no "press Escape" on a phone');
     await ipage.waitForFunction(() => document.querySelector('.state-anim-controls .sa-speed'), null, { timeout: 60000 });
     await ipage.waitForTimeout(800);
     const small = await ipage.evaluate(() => [...document.querySelectorAll('input, select, textarea')]
