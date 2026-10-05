@@ -288,6 +288,20 @@ export function installCompactMethods(ViewerClass) {
         if (this._compact.active && this._compact.sheet === 'more') this._renderCompactSheetContent();
     };
 
+    // The desktop layout has every feature but was not drawn for a phone, so
+    // leaving the phone layout for it says so first.
+    proto._chooseCompactLayout = async function(value) {
+        if (value === 'full' && this._compact.active && this._compact.override !== 'full') {
+            const ok = await Modal.confirm(i18n.t('compactLayoutDesktopWarning'), {
+                icon: '⚠',
+                title: i18n.t('compactLayoutDesktopTitle'),
+                confirmText: i18n.t('compactLayoutDesktopConfirm'),
+            });
+            if (!ok) return;
+        }
+        this._setCompactLayoutOverride(value);
+    };
+
     // ─── Chrome: app bar, navigation, sheet ───────────────────────
 
     proto._buildCompactChrome = function() {
@@ -1835,7 +1849,7 @@ export function installCompactMethods(ViewerClass) {
         layoutRow.setAttribute('role', 'radiogroup');
         for (const [value, key] of [['auto', 'compactLayoutAuto'], ['compact', 'compactLayoutCompact'], ['full', 'compactLayoutFull']]) {
             const selected = this._compact.override === value;
-            const btn = button(`compact-segment${selected ? ' is-active' : ''}`, i18n.t(key), () => this._setCompactLayoutOverride(value));
+            const btn = button(`compact-segment${selected ? ' is-active' : ''}`, i18n.t(key), () => this._chooseCompactLayout(value));
             btn.setAttribute('role', 'radio');
             btn.setAttribute('aria-checked', String(selected));
             layoutRow.appendChild(btn);
