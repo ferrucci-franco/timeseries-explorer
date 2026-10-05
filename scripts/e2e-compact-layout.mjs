@@ -370,7 +370,33 @@ try {
     await page.locator('.csv-preview-tab').nth(1).click();
     assert.equal(await page.locator('.csv-preview-options-pane').isVisible(), true);
     assert.equal(await page.locator('.csv-preview-grid-wrap').isVisible(), false);
+    assert.deepEqual(
+        await page.evaluate(() => [...document.querySelectorAll('.csv-preview-options-pane input[type=checkbox]')]
+            .filter(el => el.getBoundingClientRect().width > 0 && getComputedStyle(el).appearance !== 'none')
+            .map(el => el.parentElement.textContent.trim())),
+        [],
+        'the CSV options are switches too',
+    );
     await page.locator('.csv-preview-tab').nth(0).click();
+    // The parsed time column scrolls with the others unless pinned.
+    const parsedLeft = () => page.evaluate(() => getComputedStyle(document.querySelector('.csv-preview-parsed-cell')).position);
+    assert.equal(await parsedLeft(), 'static', 'on a phone the time column is not pinned at first, so the file\'s columns have room');
+    await page.locator('.csv-preview-pin-time').click();
+    assert.equal(await parsedLeft(), 'sticky', 'its pin keeps it in view');
+    await page.locator('.csv-preview-pin-time').click();
+    assert.equal(await parsedLeft(), 'static');
+    // Sideways, the grid has the whole width; Options brings them in beside it.
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.waitForFunction(() => document.documentElement.classList.contains('compact-landscape'));
+    assert.equal(await page.locator('.csv-preview-options-pane').isVisible(), false, 'sideways, the options wait behind a button');
+    assert.equal(await page.locator('.csv-preview-grid-wrap').isVisible(), true);
+    await page.locator('.csv-preview-options-toggle').click();
+    assert.equal(await page.locator('.csv-preview-options-pane').isVisible(), true, 'and come in beside the grid');
+    assert.equal(await page.locator('.csv-preview-grid-wrap').isVisible(), true);
+    await page.locator('.csv-preview-options-toggle').click();
+    assert.equal(await page.locator('.csv-preview-options-pane').isVisible(), false);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => !document.documentElement.classList.contains('compact-landscape'));
     await page.locator('.csv-preview-grid tr.is-tappable').nth(3).click();
     await page.locator('.modal-dialog-csv-row-actions .modal-btn', { hasText: 'First data row' }).click();
     await page.waitForFunction(() => /\b7\/7\b/.test(document.querySelector('.csv-preview-status-strip')?.textContent || ''));
@@ -378,6 +404,28 @@ try {
     await page.locator('.csv-preview-close').click();
     await page.waitForFunction(() => !document.querySelector('.csv-preview-overlay'));
     if (await page.evaluate(() => window.app._compact.sheet)) await page.locator('.compact-sheet-close').click();
+
+    // ── File page → its time axis, as a page of its own ─────────────────────
+    await page.locator('.compact-nav-btn[data-sheet="data"]').click();
+    await page.locator('.file-entry-more').first().click();
+    await page.waitForFunction(() => window.app._compact.pages.length === 2);
+    await page.locator('.compact-page-file .compact-list-btn', { hasText: /reindex/i }).click();
+    await page.waitForSelector('.compact-page-time-axis .file-transform-panel');
+    assert.equal(await page.locator('#files-list .file-transform-panel').count(), 0, 'not unfolded inside the file list');
+    assert.equal(await page.locator('.compact-sheet-title').innerText(), 'Time axis and scale');
+    assert.equal(
+        await page.evaluate(() => getComputedStyle(document.querySelector('.compact-page-time-axis .file-transform-panel')).borderTopStyle),
+        'none',
+        'without the desktop panel\'s box',
+    );
+    await page.locator('.compact-page-time-axis label', { hasText: 'Create a row index vector' }).locator('input').click();
+    await page.waitForFunction(() => window.app.plotManager._getTimeVar?.(window.app.activeFileId)?.timeKind === 'index'
+        || window.app.files.get(window.app.activeFileId)?.transform?.timeDisplayMode === 'index');
+    assert.equal(await page.locator('.compact-page-time-axis .file-transform-panel').count(), 1, 'a reindex keeps the page, rebuilt in place');
+    await page.locator('.compact-page-time-axis label', { hasText: 'Use time vector from file' }).locator('input').click();
+    await page.locator('.compact-sheet-back').click();
+    await page.waitForFunction(() => window.app._compact.pages.length === 2 && !window.app._compact.timeAxisPage);
+    await page.locator('.compact-sheet-close').click();
 
     // ── 2D (x–y): a tap is an X, then a Y ───────────────────────────────────
     await page.locator('.compact-plot-selector').click();
