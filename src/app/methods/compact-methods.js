@@ -386,7 +386,19 @@ export function installCompactMethods(ViewerClass) {
 
     // ─── Activation ───────────────────────────────────────────────
 
+    // Sideways, iOS reports the same safe-area inset on both sides, though
+    // the notch (or the island) is on one only: the plot gave up ~50 pt on
+    // the side without it. The way the phone is turned says which side it is.
+    proto._syncCompactNotchSide = function() {
+        const angle = Number(window.screen?.orientation?.angle ?? window.orientation);
+        // 90: turned anticlockwise, the top of the phone (and its notch) is on
+        // the left; 270 / -90: on the right. Anything else: keep both insets.
+        const notch = angle === 90 ? 'left' : (angle === 270 || angle === -90) ? 'right' : '';
+        document.documentElement.dataset.compactNotch = notch;
+    };
+
     proto._applyCompactLayout = function() {
+        this._syncCompactNotchSide();
         const { width, height } = effectiveViewportSize({
             innerWidth: window.innerWidth,
             innerHeight: window.innerHeight,

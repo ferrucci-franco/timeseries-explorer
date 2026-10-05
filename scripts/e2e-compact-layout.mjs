@@ -127,6 +127,14 @@ try {
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 2);
     s = await state();
     assert.deepEqual(s.traces, ['voltage', 'current'], 'a tap puts a signal on the plot, a second tap takes it off');
+    {
+        const edge = await page.evaluate(() => {
+            const panel = document.querySelector('.compact-active-panel');
+            const r = panel.getBoundingClientRect();
+            return { left: r.left, right: r.right, width: innerWidth, radius: getComputedStyle(panel).borderTopLeftRadius };
+        });
+        assert.ok(edge.left === 0 && edge.right === edge.width && edge.radius === '0px', `the plot runs edge to edge (${JSON.stringify(edge)})`);
+    }
     await shot(page, 'data');
 
     // ── Back closes the sheet and stays on the page ─────────────────────────
