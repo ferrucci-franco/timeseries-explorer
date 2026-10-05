@@ -363,13 +363,30 @@ try {
     await page.locator('.compact-nav-btn[data-sheet="more"]').click();
     await page.locator('.compact-switch-row input').click();
     await page.locator('.compact-switch-row input').click();
-    assert.equal(await page.locator('.compact-sheet #example-menu').isVisible(), true, 'the examples stay listed after a tap elsewhere in the sheet');
-    assert.equal(await page.locator('.compact-sheet #extra-menu').isVisible(), true, 'and so does the menu');
+    // Examples and the menu are phone lists, not the desktop dropdowns.
+    assert.equal(await page.locator('.compact-sheet #example-menu, .compact-sheet #extra-menu').count(), 0, 'the desktop menus are not lent');
+    assert.equal(await page.locator('.compact-sheet .compact-menu-btn', { hasText: 'Lorenz Attractor' }).isVisible(), true, 'the examples stay listed after a tap elsewhere in the sheet');
+    for (const title of ['Project', 'Tools', 'Help and feedback']) {
+        assert.equal(await page.locator('.compact-page-more .compact-section-title', { hasText: title }).count(), 1, `the menu has its ${title} group`);
+    }
+    assert.match(await page.locator('.compact-menu-btn', { hasText: 'Save view' }).innerText(), /visual configuration/,
+        'each item says what it does, as a tooltip would on the desktop');
     assert.equal(
-        await page.locator('.compact-sheet #extra-menu .extra-menu-item', { hasText: /desktop|standalone/i }).count(),
+        await page.locator('.compact-sheet .compact-menu-btn', { hasText: /desktop|standalone/i }).count(),
         0,
         'a phone is not offered a desktop application',
     );
+    // An example's model actions are one level below loading it.
+    const pendulum = page.locator('.compact-menu-item', { hasText: 'Simple Pendulum' });
+    assert.equal(await pendulum.locator('.compact-menu-subactions').isVisible(), false);
+    await pendulum.locator('.compact-menu-more').click();
+    assert.equal(await pendulum.locator('.compact-menu-subactions .compact-menu-btn').count(), 2, 'download and copy the model');
+    await page.locator('.compact-menu-btn', { hasText: /^Help$/ }).click();
+    await page.waitForSelector('.help-modal');
+    await page.locator('.help-modal-close').click();
+    await page.waitForFunction(() => !document.querySelector('.help-modal'));
+    await page.locator('.compact-nav-btn[data-sheet="more"]').click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'more');
     await page.locator('.compact-sheet-close').click();
 
     // ── Feedback: files are chosen, not pasted or dragged ───────────────────
@@ -487,7 +504,7 @@ try {
     );
     // The Lorenz example: a 3D state animation, with its speed selector.
     await ipage.locator('.compact-try-example').click();
-    await ipage.locator('.compact-sheet .example-load-btn', { hasText: 'Lorenz' }).first().click();
+    await ipage.locator('.compact-sheet .compact-menu-btn', { hasText: 'Lorenz' }).first().click();
     await ipage.waitForFunction(() => document.querySelector('.state-anim-controls .sa-speed'), null, { timeout: 60000 });
     await ipage.waitForTimeout(800);
     const small = await ipage.evaluate(() => [...document.querySelectorAll('input, select, textarea')]
@@ -530,7 +547,7 @@ try {
     if (shots) await dpage.screenshot({ path: `${shots}/compact-desktop-switched.png` });
     await dpage.locator('.compact-nav-btn[data-sheet="more"]').click();
     assert.equal(
-        await dpage.locator('.compact-sheet #extra-menu .extra-menu-item', { hasText: 'Mobile version' }).count(),
+        await dpage.locator('.compact-sheet .compact-menu-btn', { hasText: 'Mobile version' }).count(),
         0,
         'the phone layout does not offer itself',
     );

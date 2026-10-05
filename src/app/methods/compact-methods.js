@@ -38,7 +38,39 @@ const SVG = {
     fitX: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5v14M20 5v14"/><path d="M8 12h8M8 12l3-3M8 12l3 3M16 12l-3-3M16 12l-3 3"/></svg>',
     fitY: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14M5 20h14"/><path d="M12 8v8M12 8l-3 3M12 8l3 3M12 16l-3-3M12 16l3-3"/></svg>',
     fitAll: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>',
+    // The More sheet's menu, drawn like the rest of the phone layout.
+    play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z"/></svg>',
+    save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h8V3M8 21v-7h8v7"/></svg>',
+    archive: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v4H3z"/><path d="M5 8v12h14V8"/><path d="M10 12h4"/></svg>',
+    folder: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3z"/><path d="M3 11h18"/></svg>',
+    convert: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h14l-3-3M20 16H6l3 3"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>',
+    help: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5v.01"/></svg>',
+    chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>',
+    download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h11v12H8z"/><path d="M5 16V4h11"/></svg>',
 };
+
+// The main menu on a phone: its items by what they are for, each with its
+// own icon. An item the desktop menu adds later and this table does not know
+// still shows, at the end of Tools, with the desktop's own icon.
+const MENU_GROUPS = [
+    { titleKey: 'compactMenuProject', items: [
+        { action: 'extraSaveViewJson', icon: 'save' },
+        { action: 'extraSaveProjectZip', icon: 'archive' },
+        { action: 'extraLoadSessionProject', icon: 'folder' },
+    ] },
+    { titleKey: 'compactMenuTools', items: [
+        { action: 'extraConvertToParquet', icon: 'convert' },
+        { action: 'extraDisplaySettings', icon: 'gear' },
+    ] },
+    { titleKey: 'compactMenuHelp', items: [
+        { action: 'help', icon: 'help' },
+        { action: 'extraFeedback', icon: 'chat' },
+    ] },
+];
+// Desktop-only items: an application to download, folders of a local tool.
+const MENU_HIDDEN = new Set(['extraStandalone', 'extraOnlineVersion', 'extraPhoneLayout', 'openOpenModelicaTemp', 'openDymolaDirectory']);
 
 // Modes whose plots carry the fit buttons: the ones the phone layout drives.
 const FIT_BUTTON_MODES = new Set(['timeseries', 'phase2d', 'fft', 'temporal-profile']);
@@ -1486,6 +1518,116 @@ export function installCompactMethods(ViewerClass) {
 
     // ─── More ─────────────────────────────────────────────────────
 
+    // A row of a phone menu: icon, label, and the line a desktop tooltip
+    // would have said, since there is no hover to show it.
+    const menuRow = (icon, label, subtitle, onClick) => {
+        const row = el('button', 'compact-menu-btn');
+        row.type = 'button';
+        const iconSpan = el('span', 'compact-btn-icon compact-menu-icon');
+        iconSpan.innerHTML = icon;
+        const text = el('span', 'compact-menu-text');
+        text.appendChild(el('span', 'compact-menu-label', label));
+        if (subtitle) text.appendChild(el('span', 'compact-menu-subtitle', subtitle));
+        row.append(iconSpan, text);
+        row.addEventListener('click', (event) => {
+            event.stopPropagation();
+            onClick(event);
+        });
+        return row;
+    };
+
+    proto._buildCompactExampleList = function() {
+        const list = el('div', 'compact-list compact-menu-list');
+        const menu = document.getElementById('example-menu');
+        if (!menu) return list;
+        this._renderExampleMenu?.();
+        for (const source of menu.querySelectorAll('.example-menu-item-row')) {
+            const load = source.querySelector('.example-load-btn');
+            if (!load) continue;
+            const name = load.querySelector('.example-name')?.textContent || load.textContent;
+            const item = el('div', 'compact-menu-item');
+            const head = el('div', 'compact-menu-row');
+            const main = menuRow(SVG.play, name, '', () => {
+                // Loading replaces the plot under the sheet: show it.
+                this._closeCompactSheet();
+                load.click();
+            });
+            main.disabled = load.disabled;
+            if (load.disabled) {
+                main.querySelector('.compact-menu-text')
+                    .appendChild(el('span', 'compact-menu-subtitle', i18n.t('exampleComingSoon')));
+            }
+            head.appendChild(main);
+            const actions = [...source.querySelectorAll('.example-action-btn')];
+            if (actions.length) {
+                // Download the model, copy it: a level below loading it.
+                const extra = el('div', 'compact-menu-subactions');
+                extra.hidden = true;
+                for (const action of actions) {
+                    const icon = action.classList.contains('example-action-download') ? SVG.download : SVG.copy;
+                    extra.appendChild(menuRow(icon, action.title || action.textContent, '', () => action.click()));
+                }
+                const more = button('compact-icon-btn compact-menu-more', '', () => {
+                    extra.hidden = !extra.hidden;
+                    more.setAttribute('aria-expanded', String(!extra.hidden));
+                }, { icon: SVG.more, title: i18n.t('compactMoreActions') });
+                more.setAttribute('aria-expanded', 'false');
+                head.appendChild(more);
+                item.append(head, extra);
+            } else {
+                item.appendChild(head);
+            }
+            list.appendChild(item);
+        }
+        return list;
+    };
+
+    proto._buildCompactMenuGroups = function() {
+        const menu = document.getElementById('extra-menu');
+        if (!menu) return [];
+        this._renderExtraMenu?.();
+        const sources = new Map();
+        for (const item of menu.querySelectorAll('.extra-menu-item[data-action]')) {
+            if (!MENU_HIDDEN.has(item.dataset.action)) sources.set(item.dataset.action, item);
+        }
+        const row = (source, icon) => menuRow(
+            icon,
+            source.querySelector('.example-name')?.textContent || source.textContent,
+            source.title || '',
+            () => source.click(),
+        );
+        const sections = [];
+        const known = new Set(MENU_GROUPS.flatMap(group => group.items.map(entry => entry.action)));
+        MENU_GROUPS.forEach((group, index) => {
+            const list = el('div', 'compact-list compact-menu-list');
+            for (const entry of group.items) {
+                const source = sources.get(entry.action);
+                if (source) list.appendChild(row(source, SVG[entry.icon]));
+            }
+            // Anything new lands in Tools, with the desktop menu's own icon.
+            if (index === 1) {
+                for (const [action, source] of sources) {
+                    if (known.has(action)) continue;
+                    const glyph = el('span', 'compact-menu-emoji', source.querySelector('.extra-menu-icon')?.textContent || '•');
+                    list.appendChild(row(source, glyph.outerHTML));
+                }
+            }
+            if (!list.children.length) return;
+            const wrap = section(i18n.t(group.titleKey));
+            wrap.appendChild(list);
+            sections.push(wrap);
+        });
+        return sections;
+    };
+
+    proto._compactVersionText = function() {
+        const row = document.querySelector('#extra-menu .extra-version-row');
+        if (!row) return '';
+        const version = [row.querySelector('.example-name')?.textContent, row.querySelector('.extra-version-badge')?.textContent]
+            .filter(Boolean).join(' ');
+        return [version, row.querySelector('.extra-version-build')?.textContent].filter(Boolean).join(' · ');
+    };
+
     proto._buildCompactMorePage = function() {
         const node = el('div', 'compact-page compact-page-more');
         const restores = [];
@@ -1521,30 +1663,19 @@ export function installCompactMethods(ViewerClass) {
         language.appendChild(themeLabel);
         node.appendChild(language);
 
-        // The desktop menus themselves, lent while the sheet is open: one list
-        // of examples and one main menu, whichever layout shows them.
+        // The examples and the main menu, as phone lists. Each row presses the
+        // desktop menu's own item (rendered, not shown), so every action
+        // keeps one code path — and runs inside the tap, which a file picker
+        // or the clipboard needs.
         const examples = section(i18n.t('compactExamples'));
         examples.dataset.compactFocus = 'examples';
-        const exampleMenu = document.getElementById('example-menu');
-        if (exampleMenu) {
-            this._renderExampleMenu?.();
-            const wasHidden = exampleMenu.hidden;
-            exampleMenu.hidden = false;
-            const restore = this._lendToCompact(exampleMenu, examples);
-            restores.push(() => { restore(); exampleMenu.hidden = wasHidden; });
-        }
+        examples.appendChild(this._buildCompactExampleList());
         node.appendChild(examples);
 
-        const menuSection = section(i18n.t('extraMenu'));
-        const extraMenu = document.getElementById('extra-menu');
-        if (extraMenu) {
-            this._renderExtraMenu?.();
-            const wasHidden = extraMenu.hidden;
-            extraMenu.hidden = false;
-            const restore = this._lendToCompact(extraMenu, menuSection);
-            restores.push(() => { restore(); extraMenu.hidden = wasHidden; });
-        }
-        node.appendChild(menuSection);
+        for (const group of this._buildCompactMenuGroups()) node.appendChild(group);
+
+        const version = this._compactVersionText();
+        if (version) node.appendChild(el('p', 'compact-note compact-note-muted compact-version', version));
 
         return {
             title: i18n.t('compactNavMore'),

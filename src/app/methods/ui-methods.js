@@ -938,6 +938,11 @@ proto._showTouchHintIfNeeded = function() {
 
 proto._showTransientStatus = function(message) {
     if (!message) return;
+    // The phone layout says it where it says everything else of the kind.
+    if (this._compactIsActive?.() && this._compactToast) {
+        this._compactToast(message);
+        return;
+    }
     let toast = document.getElementById('transient-status');
     if (!toast) {
         toast = document.createElement('div');
@@ -1599,6 +1604,8 @@ proto._renderExtraMenu = function() {
         item.className = 'example-menu-item extra-menu-item';
         item.type = 'button';
         item.setAttribute('role', 'menuitem');
+        // What the phone layout's own menu finds it by.
+        item.dataset.action = labelKey;
         if (options.titleKey) item.title = i18n.t(options.titleKey);
 
         const iconSpan = document.createElement('span');
