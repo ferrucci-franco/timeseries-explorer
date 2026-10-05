@@ -2081,8 +2081,8 @@ html.compact .csv-preview-column-control {
 
 /* The time axis as a page of its own (Data → file → Time axis and scale):
    the desktop panel without its box, in the sheets' own sections. */
-.compact-page-time-axis .file-transform-panel,
-.compact-page-time-axis .file-transform-panel-active {
+html.compact .compact-page-time-axis .file-transform-panel,
+html.compact .compact-page-time-axis .file-transform-panel-active {
     gap: 10px 12px;
     padding: 0;
     border: none;
@@ -2090,14 +2090,14 @@ html.compact .csv-preview-column-control {
     background: transparent;
 }
 
-.compact-page-time-axis .file-transform-box {
+html.compact .compact-page-time-axis .file-transform-box {
     padding: 0;
     border: none;
     border-radius: 0;
     gap: 10px 12px;
 }
 
-.compact-page-time-axis .file-transform-title {
+html.compact .compact-page-time-axis .file-transform-title {
     margin-top: 14px;
     padding-top: 12px;
     border-top: 1px solid var(--border-color);
@@ -2108,14 +2108,14 @@ html.compact .csv-preview-column-control {
     color: var(--text-secondary);
 }
 
-.compact-page-time-axis .file-transform-panel > .file-transform-title:first-child {
+html.compact .compact-page-time-axis .file-transform-panel > .file-transform-title:first-child {
     margin-top: 0;
     padding-top: 0;
     border-top: none;
 }
 
 /* The source is a choice of two: a list of rows, like the analyses. */
-.compact-page-time-axis .file-transform-field-wide > div:has(> label > input[type="radio"]) {
+html.compact .compact-page-time-axis .file-transform-field-wide > div:has(> label > input[type="radio"]) {
     display: flex;
     flex-direction: column;
     border: 1px solid var(--border-color);
@@ -2123,7 +2123,7 @@ html.compact .csv-preview-column-control {
     overflow: hidden;
 }
 
-.compact-page-time-axis label:has(> input[type="radio"]) {
+html.compact .compact-page-time-axis label:has(> input[type="radio"]) {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -2133,28 +2133,28 @@ html.compact .csv-preview-column-control {
     color: var(--text-primary);
 }
 
-.compact-page-time-axis label:has(> input[type="radio"]) + label {
+html.compact .compact-page-time-axis label:has(> input[type="radio"]) + label {
     border-top: 1px solid var(--border-color);
 }
 
-.compact-page-time-axis label:has(> input[type="radio"]:checked) {
+html.compact .compact-page-time-axis label:has(> input[type="radio"]:checked) {
     background: color-mix(in srgb, var(--primary-color) 12%, transparent);
 }
 
-.compact-page-time-axis input[type="radio"] {
+html.compact .compact-page-time-axis input[type="radio"] {
     width: 22px;
     height: 22px;
     margin: 0;
     flex: 0 0 22px;
 }
 
-.compact-page-time-axis .file-transform-field > span,
-.compact-page-time-axis .file-transform-field {
+html.compact .compact-page-time-axis .file-transform-field > span,
+html.compact .compact-page-time-axis .file-transform-field {
     font-size: 15px;
 }
 
-.compact-page-time-axis .file-transform-field input,
-.compact-page-time-axis .file-transform-field select {
+html.compact .compact-page-time-axis .file-transform-field input,
+html.compact .compact-page-time-axis .file-transform-field select {
     min-height: 44px;
     font-size: 16px;
     box-sizing: border-box;
@@ -2162,11 +2162,11 @@ html.compact .csv-preview-column-control {
 }
 
 /* Gain on its own line, and the last action full width. */
-.compact-page-time-axis .file-transform-panel > label.file-transform-field:not(.file-transform-field-wide) {
+html.compact .compact-page-time-axis .file-transform-panel > label.file-transform-field:not(.file-transform-field-wide) {
     grid-column: 1 / -1;
 }
 
-.compact-page-time-axis .file-transform-panel > .file-transform-actions:last-child button {
+html.compact .compact-page-time-axis .file-transform-panel > .file-transform-actions:last-child button {
     flex: 1 1 auto;
     min-height: 44px;
 }
@@ -2217,4 +2217,163 @@ html.compact .csv-preview-column-control {
 
 .csv-preview-pin-time[aria-pressed="true"] svg {
     fill: currentColor;
+}
+
+/* A file's actions: a phone list with no box around it. Each row has a
+   coloured icon tile; a chevron marks the actions that open a page. */
+.compact-action-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0 -12px;
+}
+
+.compact-action-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 56px;
+    padding: 6px 16px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 16px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.compact-action-row:active {
+    background: var(--hover-bg);
+}
+
+/* The divider starts after the icon, as in the phone's own settings. */
+.compact-action-row + .compact-action-row {
+    background-image: linear-gradient(var(--border-color), var(--border-color));
+    background-size: calc(100% - 66px) 1px;
+    background-position: 66px 0;
+    background-repeat: no-repeat;
+}
+
+.compact-action-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    color: #fff;
+}
+
+.compact-action-icon svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.compact-action-icon.tone-blue { background: #1e88e5; }
+.compact-action-icon.tone-teal { background: #00897b; }
+.compact-action-icon.tone-purple { background: #7e57c2; }
+.compact-action-icon.tone-orange { background: #ef6c00; }
+.compact-action-icon.tone-green { background: #2e9d4f; }
+.compact-action-icon.tone-red { background: #e53935; }
+
+.compact-action-label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.compact-action-row.is-danger .compact-action-label {
+    color: var(--danger-color, #e53935);
+}
+
+.compact-action-chevron {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+}
+
+.compact-action-chevron svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* Time axis page: one field per line, so labels and boxes line up. */
+html.compact .compact-page-time-axis .file-transform-field,
+html.compact .compact-page-time-axis .file-transform-box > .file-transform-field {
+    grid-column: 1 / -1;
+}
+
+html.compact .compact-page-time-axis .file-transform-label-with-help {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+}
+
+html.compact .compact-page-time-axis .file-transform-panel .file-transform-help-btn {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    min-height: 28px;
+    border-radius: 14px;
+    padding: 0;
+    font-size: 14px !important;
+}
+
+/* iOS draws date fields at a width of their own; this makes them fill
+   the line like every other field. */
+html.compact .compact-page-time-axis input[type="datetime-local"],
+html.compact .compact-page-time-axis input[type="date"],
+html.compact .compact-page-time-axis input[type="time"] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    text-align: left;
+}
+
+/* Phone buttons, not desktop outlines: the action filled, the others tinted. */
+html.compact .compact-page-time-axis .file-transform-actions {
+    gap: 10px;
+}
+
+html.compact .compact-page-time-axis .file-transform-actions button,
+html.compact .compact-page-time-axis .file-transform-wide-action {
+    flex: 1 1 0;
+    min-height: 46px;
+    border: none;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+html.compact .compact-page-time-axis .file-transform-crop-actions button:first-child {
+    background: var(--primary-color);
+    color: #fff;
+}
+
+html.compact .compact-page-time-axis .file-transform-panel > .file-transform-actions:last-child button {
+    color: var(--danger-color, #e53935);
+}
+
+html.compact .compact-page-time-axis .file-transform-actions button:disabled {
+    opacity: 0.45;
+}
+
+html.compact .compact-page-time-axis .file-transform-wide-action {
+    width: 100%;
+    color: var(--primary-color);
 }
