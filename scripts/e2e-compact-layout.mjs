@@ -113,7 +113,9 @@ try {
     await page.locator('.compact-nav-btn[data-sheet="data"]').click();
     await page.waitForFunction(() => document.querySelector('.compact-sheet #sidebar'));
     const leaf = name => page.locator(`#variables-tree .tree-item[data-var-name="${name}"]`);
-    assert.match(await page.locator('.compact-data-target').innerText(), /Signals you tap go to:\s*Plot 1/, 'Data says which plot a tap goes to');
+    assert.match(await page.locator('.compact-data-target').innerText(), /Signals you tap go to:/, 'Data says which plot a tap goes to');
+    assert.equal(await page.locator('.compact-target-chip.is-active').innerText(), 'Plot 1', 'as a chip, even when it is the only plot');
+    assert.equal(await page.locator('.compact-target-chip').count(), 1);
     await leaf('voltage').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
     assert.equal(await page.locator('.compact-toast.is-shown').innerText(), 'Added to plot 1: voltage', 'and what a tap did');

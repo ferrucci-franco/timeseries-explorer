@@ -1150,18 +1150,14 @@ export function installCompactMethods(ViewerClass) {
             : plot?.mode === 'phase3d' ? 'compactTapTargetPhase3d'
             : plot?.mode === 'state-anim' ? 'compactTapTargetState'
             : 'compactTapTarget';
-        const text = el('span', 'compact-data-target-text', i18n.t(targetKey));
-        // One plot: its name ends the sentence. Several: they are chips below.
-        if (ids.length === 1) {
-            text.append(' ', el('strong', 'compact-data-target-name', i18n.t('compactPlotN').replace('{n}', '1')));
-        }
-        head.appendChild(text);
+        // The same chips whether there is one plot or several: the line reads
+        // the same either way, and a second plot only adds a chip.
+        head.appendChild(el('span', 'compact-data-target-text', i18n.t(targetKey)));
         head.appendChild(button('compact-link-btn compact-data-done', i18n.t('compactDone'), () => {
             if (this._compact.returnTo) this._openCompactSheet(this._compact.returnTo, { toggle: false });
             else this._closeCompactSheet();
         }));
         bar.appendChild(head);
-        if (ids.length === 1) return;
         const chips = el('div', 'compact-data-target-plots');
         chips.setAttribute('role', 'radiogroup');
         ids.forEach((id, index) => {
@@ -1172,6 +1168,8 @@ export function installCompactMethods(ViewerClass) {
             }, { title: summary.text ? `${summary.modeLabel} · ${summary.text}` : summary.modeLabel });
             chip.setAttribute('role', 'radio');
             chip.setAttribute('aria-checked', String(selected));
+            // Alone, it is the target and there is nothing to choose.
+            chip.disabled = ids.length === 1;
             chips.appendChild(chip);
         });
         bar.appendChild(chips);

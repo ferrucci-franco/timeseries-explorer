@@ -760,9 +760,6 @@ html.compact.compact-landscape .compact-sheet-size {
     margin-top: 8px;
 }
 
-.compact-data-target-name {
-    color: var(--text-primary);
-}
 
 .compact-data-target-text {
     flex: 1 1 auto;
