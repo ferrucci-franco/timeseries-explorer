@@ -995,41 +995,76 @@ html.compact.compact-landscape .compact-toast {
     font-size: 0.95rem;
 }
 
-/* A switch, not a desktop checkbox. */
-.compact-switch-row input {
-    -webkit-appearance: none;
-    appearance: none;
+/* On/off settings are switches, not desktop checkboxes: everywhere in the
+   phone layout — sheets, lent desktop panels and dialogs. A checkbox that
+   picks items from a list (a checklist, a table of variables) stays a
+   checkbox: that is a selection, not a setting. */
+html.compact input[type="checkbox"]:not(.modal-checklist-box):not(td *):not(th *) {
+    -webkit-appearance: none !important;
+    appearance: none !important;
     position: relative;
-    width: 50px;
-    height: 30px;
-    flex: 0 0 50px;
+    width: 46px !important;
+    height: 28px !important;
+    min-width: 46px;
+    min-height: 0 !important;
+    flex: 0 0 46px;
     margin: 0;
-    border-radius: 15px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
+    padding: 0;
+    border-radius: 14px !important;
+    background: var(--bg-tertiary) !important;
+    border: 1px solid var(--border-color) !important;
+    vertical-align: middle;
     cursor: pointer;
     transition: background-color 0.15s ease;
 }
 
-.compact-switch-row input::after {
+html.compact input[type="checkbox"]:not(.modal-checklist-box):not(td *):not(th *)::after {
     content: '';
     position: absolute;
     top: 2px;
     left: 2px;
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
     border-radius: 50%;
     background: #fff;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     transition: transform 0.15s ease;
 }
 
-.compact-switch-row input:checked {
-    background: var(--primary-color);
-    border-color: var(--primary-color);
+html.compact input[type="checkbox"]:not(.modal-checklist-box):not(td *):not(th *):checked {
+    background: var(--primary-color) !important;
+    border-color: var(--primary-color) !important;
 }
 
-.compact-switch-row input:checked::after {
+html.compact input[type="checkbox"]:not(.modal-checklist-box):not(td *):not(th *):checked::after {
+    transform: translateX(18px);
+}
+
+html.compact input[type="checkbox"]:not(.modal-checklist-box):not(td *):not(th *):disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+html.compact input[type="checkbox"]:not(.modal-checklist-box):not(td *):not(th *):focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+/* The phone layout's own rows: a little larger, at the row's end. */
+html.compact .compact-switch-row input[type="checkbox"]:not(.modal-checklist-box) {
+    width: 50px !important;
+    height: 30px !important;
+    min-width: 50px;
+    flex-basis: 50px;
+    border-radius: 15px !important;
+}
+
+html.compact .compact-switch-row input[type="checkbox"]:not(.modal-checklist-box)::after {
+    width: 24px;
+    height: 24px;
+}
+
+html.compact .compact-switch-row input[type="checkbox"]:not(.modal-checklist-box):checked::after {
     transform: translateX(20px);
 }
 
@@ -1500,8 +1535,6 @@ html.compact .compact-sheet .fft-option-row {
 }
 
 html.compact .compact-sheet .fft-option-row input[type="checkbox"] {
-    width: 22px;
-    height: 22px;
     justify-self: end;
 }
 
@@ -2014,4 +2047,9 @@ html.compact .csv-preview-compact .csv-preview-date-order-help {
 html.compact #file-loading-cancel-hint,
 html.compact .overlay-escape-hint {
     display: none !important;
+}
+
+/* The CSV dialog's column list: room for a switch ahead of the name. */
+html.compact .csv-preview-column-control {
+    grid-template-columns: 46px minmax(0, 1fr) 5.5rem;
 }
