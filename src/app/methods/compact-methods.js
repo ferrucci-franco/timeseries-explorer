@@ -609,6 +609,16 @@ export function installCompactMethods(ViewerClass) {
         const owner = this._compactPlotForDiv(div);
         // A slow double tap draws a time (or frequency) window and zooms to
         // it: the phone's box zoom, where a finger otherwise pans.
+        // A 3D scene: a slow double tap, then a drag, pans it.
+        if (owner && !div._touchScenePan) {
+            div._touchScenePan = () => {
+                const current = this._compactPlotForDiv(div);
+                if (!this._compact.active || !current) return null;
+                const { plot } = current;
+                const is3D = plot.mode === 'phase3d' || (plot.mode === 'state-anim' && (plot.stateAnimDim || 2) === 3);
+                return is3D ? { hint: i18n.t('compactPanHint') } : null;
+            };
+        }
         if (owner && !div._touchWindowZoom) {
             div._touchWindowZoom = () => {
                 const current = this._compactPlotForDiv(div);

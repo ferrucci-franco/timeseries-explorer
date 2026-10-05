@@ -565,6 +565,55 @@ try {
         await rolesPage.waitForFunction(() => !!window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div);
         assert.deepEqual((await rolesState()).curves, ['x/y/z'], 'x, y, z: one 3D curve');
 
+        // A slow double tap, then a drag, pans the scene; one finger alone
+        // still orbits it.
+        await rolesPage.locator('.compact-sheet-close').click();
+        await rolesPage.waitForFunction(() => window.app._compact.sheet === null);
+        await rolesPage.waitForTimeout(600);
+        const sceneBox = await rolesPage.evaluate(() => {
+            const r = window.app.plotManager.plots.get(window.app._compactActivePanelId()).div._fullLayout.scene._scene.container.getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        });
+        const camera = () => rolesPage.evaluate(() => {
+            const { eye, center } = window.app.plotManager.plots.get(window.app._compactActivePanelId()).div._fullLayout.scene._scene.getCamera();
+            return { eye, center };
+        });
+        const sceneCdp = await rolesContext.newCDPSession(rolesPage);
+        const finger = (type, x, y) => sceneCdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+        const lookOf = (cam) => [cam.eye.x - cam.center.x, cam.eye.y - cam.center.y, cam.eye.z - cam.center.z];
+        const cosine = (a, b) => (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (Math.hypot(...a) * Math.hypot(...b));
+        const panOnce = async (slow) => {
+            const before = await camera();
+            await finger('touchStart', sceneBox.x, sceneBox.y); await rolesPage.waitForTimeout(60); await finger('touchEnd');
+            await rolesPage.waitForTimeout(420);
+            if (slow) {
+                await finger('touchStart', sceneBox.x, sceneBox.y); await rolesPage.waitForTimeout(60); await finger('touchEnd');
+                await rolesPage.waitForSelector('.touch-window-zoom-hint');
+            }
+            await finger('touchStart', sceneBox.x, sceneBox.y);
+            for (let i = 1; i <= 8; i++) { await finger('touchMove', sceneBox.x + i * 8, sceneBox.y + i * 4); await rolesPage.waitForTimeout(16); }
+            await finger('touchEnd');
+            await rolesPage.waitForTimeout(400);
+            const after = await camera();
+            const moved = Math.hypot(after.center.x - before.center.x, after.center.y - before.center.y, after.center.z - before.center.z);
+            return { moved, cos: cosine(lookOf(before), lookOf(after)) };
+        };
+        for (const slow of [false, true]) {
+            const { moved, cos } = await panOnce(slow);
+            assert.ok(moved > 1e-3, `${slow ? 'two slow taps, then a drag' : 'a tap, then a drag'}: the 3D scene pans`);
+            assert.ok(cos > 0.9999, `and does not rotate (cos = ${cos})`);
+        }
+        await rolesPage.waitForTimeout(800);
+        const beforeOrbit = await camera();
+        await finger('touchStart', sceneBox.x, sceneBox.y);
+        for (let i = 1; i <= 8; i++) { await finger('touchMove', sceneBox.x + i * 10, sceneBox.y); await rolesPage.waitForTimeout(16); }
+        await finger('touchEnd');
+        await rolesPage.waitForTimeout(400);
+        assert.ok(cosine(lookOf(beforeOrbit), lookOf(await camera())) < 0.9999, 'one finger alone still orbits');
+        await sceneCdp.detach();
+        await rolesPage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await rolesPage.waitForFunction(() => window.app._compact.sheet === 'data');
+
         // 2D animation: x₁, x₂; a third tap is refused, a tap on one takes it off.
         await choosePlotType('state-anim-2d');
         assert.equal((await rolesState()).mode, 'state-anim');

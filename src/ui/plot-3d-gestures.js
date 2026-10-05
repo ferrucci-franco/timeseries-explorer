@@ -1,4 +1,4 @@
-// Two fingers on a 3D plot: zoom and pan, as on a map.
+// Fingers on a 3D plot: orbit, zoom, and pan after a slow double tap.
 //
 // Plotly's gl3d camera reads a touch as a mouse with one button: every
 // touchmove rotates by how far `changedTouches[0]` moved since the last event.
@@ -14,10 +14,14 @@
 // So on a 3D scene this module takes:
 //
 //   two fingers   pinch zoom   the scene scales by how far the fingers spread;
-//                 and pan      and slides with them as they move together, the
-//                              view under the fingers staying under them.
 //                              Plotly sees nothing until the last finger lifts,
 //                              so a finger left behind never turns into a jump
+//   tap, then     pan          where the plot asks for it (div._touchScenePan):
+//   touch again                a tap and a second touch soon after slide the
+//                              scene with one finger instead of orbiting it; a
+//                              slow second tap waits for the drag. Two fingers
+//                              moving together were tried first, and did not
+//                              work on an iPhone.
 //   the wheel     zoom         proportional to the delta, so a trackpad pinch
 //                              and a mouse notch both feel continuous
 //
@@ -51,10 +55,16 @@ function sceneAt(div, target) {
     return null;
 }
 
-const midpoint = (touches) => ({
-    x: (touches[0].clientX + touches[1].clientX) / 2,
-    y: (touches[0].clientY + touches[1].clientY) / 2,
-});
+import {
+    QUICK_DOUBLE_TAP_MS,
+    TAP_MAX_DURATION_MS,
+    TOUCH_GESTURE_SLOP_PX,
+    WINDOW_ZOOM_ARMED_MS,
+    WINDOW_ZOOM_HOLD_MS,
+    isFollowUpTap,
+} from '../utils/touch-plot-gestures.js';
+
+const HINT_CLASS = 'touch-window-zoom-hint';
 
 /**
  * Scene units per screen pixel, at the depth of what the camera looks at:
@@ -233,7 +243,6 @@ export function install3DSceneGestures(div) {
         if ((event.touches?.length || 0) >= 2) {
             pinch.start = separation(event.touches);
             pinch.base = zoomBase(pinch.scene);
-            pinch.mid = midpoint(event.touches);
         }
     };
 
@@ -242,19 +251,6 @@ export function install3DSceneGestures(div) {
         event.stopPropagation();
         event.preventDefault();
         if ((event.touches?.length || 0) < 2 || !pinch.base) return;
-        // Pan: the fingers' midpoint since the last move, the same way Plotly
-        // pans for a right-button drag (camera.pan, in view space).
-        const mid = midpoint(event.touches);
-        if (pinch.mid) {
-            const dx = mid.x - pinch.mid.x;
-            const dy = mid.y - pinch.mid.y;
-            const perPx = panScale(pinch.scene);
-            if (perPx > 0 && (dx || dy) && typeof pinch.scene.camera.pan === 'function') {
-                try { pinch.scene.camera.pan(-dx * perPx, dy * perPx, 0); } catch (_) { /* scene disposed */ }
-                pinch.moved = true;
-            }
-        }
-        pinch.mid = mid;
         const now = separation(event.touches);
         if (pinch.start < MIN_SEPARATION_PX || now < MIN_SEPARATION_PX) return;
         const scale = clamp(now / pinch.start, 1 / MAX_GESTURE_SCALE, MAX_GESTURE_SCALE);
@@ -278,12 +274,134 @@ export function install3DSceneGestures(div) {
             // A third finger lifted: carry on from here.
             pinch.start = separation(event.touches);
             pinch.base = zoomBase(pinch.scene);
-            pinch.mid = midpoint(event.touches);
         } else {
             // Down to one finger: hold still until it lifts or a second one
             // lands, rather than handing a stale drag back to the orbit.
             pinch.base = null;
         }
+    };
+
+    // ── Pan: a slow double tap, then one finger ──────────────────────────
+    // The first tap is an ordinary one (Plotly's, a tap does not orbit). A
+    // second touch soon after, close by, is ours: dragged (or held), it pans;
+    // lifted after a slow gap, the scene waits for the drag that will.
+    const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const panOptions = () => {
+        try { return typeof div._touchScenePan === 'function' ? div._touchScenePan() : null; } catch (_) { return null; }
+    };
+    let lastTap = null;     // { time, x, y } of the last one-finger tap
+    let oneFinger = null;   // { time, x, y, moved } of the touch in progress
+    let pan = null;         // { scene, x, y, panning, followUpGap, holdTimer }
+    let armedUntil = 0;
+    let armedTimer = 0;
+    let hintEl = null;
+
+    const disarm = () => {
+        armedUntil = 0;
+        clearTimeout(armedTimer);
+        armedTimer = 0;
+        hintEl?.remove();
+        hintEl = null;
+    };
+    const arm = (scene, options) => {
+        disarm();
+        armedUntil = nowMs() + WINDOW_ZOOM_ARMED_MS;
+        armedTimer = setTimeout(disarm, WINDOW_ZOOM_ARMED_MS);
+        if (!options?.hint || typeof document === 'undefined') return;
+        const rect = scene.container?.getBoundingClientRect?.();
+        if (!rect) return;
+        hintEl = document.createElement('div');
+        hintEl.className = HINT_CLASS;
+        hintEl.textContent = options.hint;
+        hintEl.style.left = `${rect.left + rect.width / 2}px`;
+        hintEl.style.top = `${rect.top + Math.max(8, rect.height - 64)}px`;
+        document.body.appendChild(hintEl);
+    };
+    const panBy = (dx, dy) => {
+        const perPx = panScale(pan.scene);
+        const view = pan.scene.camera?.view;
+        if (!(perPx > 0) || (!dx && !dy) || typeof view?.pan !== 'function') return;
+        // camera.pan() replays at the camera's last keyframe time, which the
+        // turntable ignores outside a Plotly drag; stamp it now instead.
+        try { view.pan(performance.now(), -dx * perPx, dy * perPx, 0); } catch (_) { /* scene disposed */ }
+        pan.moved = true;
+    };
+
+    const onPanTouchStart = (event) => {
+        const count = event.touches?.length || 0;
+        if (count !== 1) {
+            // A second finger: a pinch, whatever the first was doing.
+            if (pan) { clearTimeout(pan.holdTimer); pan = null; }
+            oneFinger = null;
+            disarm();
+            return;
+        }
+        const touch = event.touches[0];
+        const time = nowMs();
+        oneFinger = { time, x: touch.clientX, y: touch.clientY, moved: false };
+        const scene = sceneAt(div, event.target);
+        const options = scene ? panOptions() : null;
+        const armed = armedUntil > 0 && time < armedUntil;
+        const followUp = !armed && isFollowUpTap(lastTap, { time, x: touch.clientX, y: touch.clientY });
+        const gap = followUp ? time - lastTap.time : 0;
+        lastTap = null;
+        if (!options || !(armed || followUp)) return;
+        // Ours from here: Plotly would orbit under this finger.
+        event.stopPropagation();
+        event.preventDefault();
+        disarm();
+        pan = {
+            scene, options, x: touch.clientX, y: touch.clientY, moved: false,
+            // Armed, the drag pans at once; a follow-up touch pans once it
+            // moves, or once it has been held.
+            panning: armed,
+            followUp,
+            slow: gap >= QUICK_DOUBLE_TAP_MS,
+            holdTimer: 0,
+        };
+        if (followUp) pan.holdTimer = setTimeout(() => { if (pan) pan.panning = true; }, WINDOW_ZOOM_HOLD_MS);
+    };
+
+    const onPanTouchMove = (event) => {
+        const touch = event.touches?.[0];
+        if (oneFinger && touch && Math.hypot(touch.clientX - oneFinger.x, touch.clientY - oneFinger.y) > TOUCH_GESTURE_SLOP_PX) {
+            oneFinger.moved = true;
+        }
+        if (!pan || !touch || (event.touches?.length || 0) !== 1) return;
+        event.stopPropagation();
+        event.preventDefault();
+        if (!pan.panning) {
+            if (Math.hypot(touch.clientX - pan.x, touch.clientY - pan.y) <= TOUCH_GESTURE_SLOP_PX) return;
+            pan.panning = true;
+            clearTimeout(pan.holdTimer);
+        }
+        panBy(touch.clientX - pan.x, touch.clientY - pan.y);
+        pan.x = touch.clientX;
+        pan.y = touch.clientY;
+    };
+
+    const onPanTouchEnd = (event) => {
+        if ((event.touches?.length || 0) > 0) return;
+        const time = nowMs();
+        if (pan) {
+            const finished = pan;
+            pan = null;
+            clearTimeout(finished.holdTimer);
+            event.stopPropagation();
+            // A pan is written to the layout with the touch session's end
+            // (onTouchSessionEnd, which sees the camera changed). A second
+            // touch that was a tap: slow, the scene waits for the drag;
+            // quick, it was a double tap, and nothing pans.
+            if (!finished.moved && finished.followUp && !finished.panning && finished.slow) arm(finished.scene, finished.options);
+            oneFinger = null;
+            return;
+        }
+        if (oneFinger && !oneFinger.moved && time - oneFinger.time <= TAP_MAX_DURATION_MS) {
+            lastTap = { time, x: oneFinger.x, y: oneFinger.y };
+        } else {
+            lastTap = null;
+        }
+        oneFinger = null;
     };
 
     let wheelTimer = 0;
@@ -323,5 +441,9 @@ export function install3DSceneGestures(div) {
     div.addEventListener('touchend', onTouchSessionEnd, { capture: true });
     div.addEventListener('touchcancel', onTouchSessionEnd, { capture: true });
     div.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    div.addEventListener('touchstart', onPanTouchStart, { capture: true, passive: false });
+    div.addEventListener('touchmove', onPanTouchMove, { capture: true, passive: false });
+    div.addEventListener('touchend', onPanTouchEnd, { capture: true, passive: false });
+    div.addEventListener('touchcancel', onPanTouchEnd, { capture: true, passive: false });
     return true;
 }
