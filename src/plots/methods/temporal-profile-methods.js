@@ -409,6 +409,9 @@ proto._createTemporalProfileChart = function(panelId, panelEl) {
 
     plot.temporalProfileContainer = container;
     plot.temporalProfileDiv = profileDiv;
+    // Kept by reference: the phone layout lends this panel to its Analyze
+    // sheet, where a lookup inside the container would no longer find it.
+    plot.temporalProfileOptionsEl = options;
     plot.div = timeDiv;
     this._renderTemporalProfileOptionsPanel(panelId, plot);
     // Show progress from the very first empty frame. The exact lazy query starts
@@ -1005,7 +1008,7 @@ proto._setTemporalProfileComputing = function(plot, loading) {
 };
 
 proto._syncTemporalProfileMessage = function(plot) {
-    const box = plot?.temporalProfileContainer?.querySelector('.temporal-profile-message');
+    const box = this._temporalProfileOptionsPanel(plot)?.querySelector('.temporal-profile-message');
     if (!box) return;
     const message = plot._temporalProfileStatusMessage || '';
     const kind = plot._temporalProfileStatusKind || 'muted';
@@ -1210,7 +1213,7 @@ proto._toggleTemporalProfileOptions = function(panelId) {
     const state = this._ensureTemporalProfileState(plot);
     state.optionsVisible = !state.optionsVisible;
     syncEdgeToggle(plot.temporalProfileContainer, !state.optionsVisible);
-    const options = plot.temporalProfileContainer.querySelector('.hist-options');
+    const options = this._temporalProfileOptionsPanel(plot);
     if (options) options.hidden = !state.optionsVisible;
     const button = plot.temporalProfileContainer.querySelector('.hist-options-btn');
     if (button) {
@@ -1294,9 +1297,13 @@ proto._installTemporalProfileSplitterHandlers = function(panelId, plot) {
     void panelId;
 };
 
+proto._temporalProfileOptionsPanel = function(plot) {
+    return plot?.temporalProfileOptionsEl || plot?.temporalProfileContainer?.querySelector('.hist-options') || null;
+};
+
 proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
     const state = this._ensureTemporalProfileState(plot);
-    const options = plot?.temporalProfileContainer?.querySelector('.hist-options');
+    const options = this._temporalProfileOptionsPanel(plot);
     if (!options) return;
     options.innerHTML = '';
     const message = document.createElement('div');
@@ -1579,7 +1586,7 @@ proto._renderTemporalProfileOptionsPanel = function(panelId, plot) {
 };
 
 proto._syncTemporalProfileOptionsPanel = function(plot) {
-    const options = plot?.temporalProfileContainer?.querySelector('.hist-options');
+    const options = this._temporalProfileOptionsPanel(plot);
     if (!options) return;
     const [lo, hi] = this._activeTemporalProfileRange(plot);
     const values = { x1: lo, x2: hi };
@@ -1592,7 +1599,7 @@ proto._syncTemporalProfileOptionsPanel = function(plot) {
 };
 
 proto._syncTemporalProfileSummary = function(plot) {
-    const box = plot?.temporalProfileContainer?.querySelector('.temporal-profile-summary');
+    const box = this._temporalProfileOptionsPanel(plot)?.querySelector('.temporal-profile-summary');
     if (!box) return;
     const state = this._ensureTemporalProfileState(plot);
     const rows = [];

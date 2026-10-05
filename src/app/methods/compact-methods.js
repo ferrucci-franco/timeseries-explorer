@@ -41,7 +41,11 @@ const SVG = {
 };
 
 // Modes whose plots carry the fit buttons: the ones the phone layout drives.
-const FIT_BUTTON_MODES = new Set(['timeseries', 'phase2d', 'fft']);
+const FIT_BUTTON_MODES = new Set(['timeseries', 'phase2d', 'fft', 'temporal-profile']);
+// An analysis's own pane, next to its time pane: which mode draws it.
+const ANALYSIS_PANE_MODE = { spectrum: 'fft', profile: 'temporal-profile' };
+// Where a slow double tap draws a window: the modes with a time axis.
+const WINDOW_ZOOM_MODES = new Set(['timeseries', 'fft', 'temporal-profile']);
 
 const NAV_ITEMS = [
     { id: 'data', labelKey: 'compactNavData' },
@@ -55,7 +59,12 @@ const NAV_ITEMS = [
 const COMPACT_ANALYSES = [
     { mode: 'timeseries', labelKey: 'compactAnalysisNone' },
     { mode: 'fft', labelKey: 'analysisItemFft' },
+    { mode: 'temporal-profile', labelKey: 'analysisItemProfile' },
 ];
+
+// The analyses whose signals the phone layout lists and edits like a time
+// series: a tap in Data adds or removes one.
+const SIGNAL_LIST_MODES = new Set(['timeseries', 'fft', 'temporal-profile']);
 
 // Plot types the phone layout sets up end to end.
 const COMPACT_PLOT_TYPES = [
@@ -525,6 +534,7 @@ export function installCompactMethods(ViewerClass) {
         for (const [panelId, plot] of this.plotManager.plots) {
             if (plot.div === div) return { panelId, plot, pane: 'main' };
             if (plot.fftDiv === div) return { panelId, plot, pane: 'spectrum' };
+            if (plot.temporalProfileDiv === div) return { panelId, plot, pane: 'profile' };
         }
         return null;
     };
@@ -534,6 +544,7 @@ export function installCompactMethods(ViewerClass) {
         for (const plot of this.plotManager.plots.values()) {
             if (plot.div) this._compactSyncFitButtons(plot.div);
             if (plot.fftDiv) this._compactSyncFitButtons(plot.fftDiv);
+            if (plot.temporalProfileDiv) this._compactSyncFitButtons(plot.temporalProfileDiv);
         }
     };
 
@@ -546,14 +557,14 @@ export function installCompactMethods(ViewerClass) {
             div._touchWindowZoom = () => {
                 const current = this._compactPlotForDiv(div);
                 if (!this._compact.active || !current) return null;
-                if (current.plot.mode !== 'timeseries' && current.plot.mode !== 'fft') return null;
+                if (!WINDOW_ZOOM_MODES.has(current.plot.mode)) return null;
                 return { hint: i18n.t('compactWindowZoomHint') };
             };
         }
         let group = div._compactFitGroup;
         const wanted = !!owner
             && FIT_BUTTON_MODES.has(owner.plot.mode)
-            && (owner.pane === 'main' || owner.plot.mode === 'fft')
+            && (owner.pane === 'main' || ANALYSIS_PANE_MODE[owner.pane] === owner.plot.mode)
             && this.plotManager._hasContent(owner.plot)
             && !!div._fullLayout;
         if (!wanted) {
@@ -591,8 +602,13 @@ export function installCompactMethods(ViewerClass) {
             work = axis === 'all'
                 ? () => pm._applyFftAxisLimits(plot)
                 : () => relayout(pm._fftAxisLimitUpdate(plot, axis, { visibleOnly: true }));
-        } else if (plot.mode === 'fft') {
-            // The time pane above the spectrum is the timeseries chart.
+        } else if (plot.mode === 'temporal-profile' && pane === 'profile') {
+            // X goes back to the whole period (0–24 h, a week…), Y fits.
+            work = axis === 'all'
+                ? () => pm._resetTemporalProfileAnalysisView(plot)
+                : () => pm._autoScaleTemporalProfileAxis(plot, axis);
+        } else if (plot.mode === 'fft' || plot.mode === 'temporal-profile') {
+            // The time pane beside the analysis is the timeseries chart.
             work = axis === 'all'
                 ? () => pm._autoScalePlotTimeOnly(plot)
                 : () => relayout(pm._autoScaleAxisUpdate(plot, axis, { treatAsTimeseries: true }));
@@ -981,16 +997,17 @@ export function installCompactMethods(ViewerClass) {
             this._compactCancelPhasePending();
             return;
         }
-        const removing = !!plot && index >= 0 && (plot.mode === 'timeseries' || plot.mode === 'fft');
+        const removing = !!plot && index >= 0 && SIGNAL_LIST_MODES.has(plot.mode);
         if (removing) {
             if (plot.mode === 'timeseries') pm.removeTrace(panelId, varName, ownerId);
-            else pm._removeFftTraceFromLegend(panelId, plot, plot.traces[index]);
+            else if (plot.mode === 'fft') pm._removeFftTraceFromLegend(panelId, plot, plot.traces[index]);
+            else pm._removeTemporalProfileTraceFromLegend(panelId, plot, plot.traces[index]);
         } else {
             await pm._handleVariableDrop(panelId, [varName], panelEl, { fileId });
         }
         // Say what happened, and to which plot. A 2D plot has its banner.
         const after = pm.plots.get(panelId);
-        if (after && (after.mode === 'timeseries' || after.mode === 'fft')) {
+        if (after && SIGNAL_LIST_MODES.has(after.mode)) {
             const nowOn = (after.traces || []).some(trace => trace.varName === varName && trace.fileId === ownerId);
             if (nowOn !== removing) {
                 const n = this._compactPanelIds().indexOf(panelId) + 1;
@@ -1216,6 +1233,8 @@ export function installCompactMethods(ViewerClass) {
         const mode = plot?.mode || 'timeseries';
         if (mode === 'fft') {
             viewRow.appendChild(button('compact-secondary-btn', i18n.t('fftResetLabel'), () => pm._resetFftView(panelId), { title: i18n.t('fftResetView') }));
+        } else if (mode === 'temporal-profile') {
+            viewRow.appendChild(button('compact-secondary-btn', i18n.t('temporalProfileReset'), () => pm._resetTemporalProfileView(panelId), { title: i18n.t('temporalProfileResetTip') }));
         } else if (mode !== 'timeseries') {
             // Fitting X and Y apart means nothing in a phase plot or a 3D scene.
             const autoBtn = button('compact-secondary-btn', '⛶ ' + i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))));
@@ -1234,7 +1253,7 @@ export function installCompactMethods(ViewerClass) {
         const traces = plot?.traces || [];
         if (mode === 'phase2d') {
             this._buildCompactPhasePairs(signals, panelId, plot);
-        } else if (mode !== 'timeseries' && mode !== 'fft') {
+        } else if (!SIGNAL_LIST_MODES.has(mode)) {
             // Phase plots and animations pair their signals in roles (x, y,
             // z, dx/dt) that the phone layout does not edit yet.
             const summary = this._compactPanelSummary(panelId);
@@ -1345,6 +1364,46 @@ export function installCompactMethods(ViewerClass) {
 
     // ─── Analyze ──────────────────────────────────────────────────
 
+    // What an analysis offers in the Analyze sheet: the buttons of its own
+    // top bar (hidden on the plot), and its options panel, lent here.
+    proto._compactAnalysisControls = function(mode, panelId, plot) {
+        const pm = this.plotManager;
+        if (mode === 'fft') {
+            return {
+                titleKey: 'compactFftOptions',
+                options: () => pm._fftOptionsPanel(plot),
+                actions: [
+                    { label: i18n.t('fftResetLabel'), title: i18n.t('fftResetView'), run: () => pm._resetFftView(panelId) },
+                    { label: 'V/H', title: i18n.t('fftLayoutToggle'), run: () => {
+                        const current = pm._ensureFftState(plot).layout;
+                        pm._setFftLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
+                    } },
+                    { label: i18n.t('hideTimeSeries'), title: i18n.t('hideTimeSeriesTooltip'), run: () => pm._toggleFftTimeSeries(panelId) },
+                ],
+            };
+        }
+        if (mode === 'temporal-profile') {
+            const hidden = !!pm._ensureTemporalProfileState(plot).timeSeriesHidden;
+            const timeLabel = i18n.t(hidden ? 'temporalProfileShowTime' : 'temporalProfileHideTime');
+            return {
+                titleKey: 'compactProfileOptions',
+                options: () => pm._temporalProfileOptionsPanel(plot),
+                actions: [
+                    { label: i18n.t('temporalProfileReset'), title: i18n.t('temporalProfileResetTip'), run: () => pm._resetTemporalProfileView(panelId) },
+                    { label: 'V/H', title: i18n.t('fftLayoutToggle'), run: () => {
+                        const current = pm._ensureTemporalProfileState(plot).layout;
+                        pm._setTemporalProfileLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
+                    } },
+                    { label: timeLabel, title: timeLabel, run: () => {
+                        pm._toggleTemporalProfileTimeSeries(panelId);
+                        this._renderCompactSheetContent();
+                    } },
+                ],
+            };
+        }
+        return null;
+    };
+
     proto._buildCompactAnalyzePage = function() {
         const pm = this.plotManager;
         const node = el('div', 'compact-page compact-page-analyze');
@@ -1383,26 +1442,24 @@ export function installCompactMethods(ViewerClass) {
         choose.appendChild(list);
         node.appendChild(choose);
 
-        if (mode === 'fft' && plot) {
+        const controls = plot ? this._compactAnalysisControls(mode, panelId, plot) : null;
+        if (controls) {
             const actions = el('div', 'compact-action-row');
-            actions.appendChild(button('compact-secondary-btn', i18n.t('fftResetLabel'), () => pm._resetFftView(panelId), { title: i18n.t('fftResetView') }));
-            actions.appendChild(button('compact-secondary-btn', 'V/H', () => {
-                const current = pm._ensureFftState(plot).layout;
-                pm._setFftLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
-            }, { title: i18n.t('fftLayoutToggle') }));
-            actions.appendChild(button('compact-secondary-btn', i18n.t('hideTimeSeries'), () => pm._toggleFftTimeSeries(panelId), { title: i18n.t('hideTimeSeriesTooltip') }));
+            for (const action of controls.actions) {
+                actions.appendChild(button('compact-secondary-btn', action.label, action.run, { title: action.title }));
+            }
             choose.appendChild(actions);
 
-            const optionsEl = pm._fftOptionsPanel(plot);
+            const optionsEl = controls.options();
             if (optionsEl) {
-                const optionsSection = section(i18n.t('compactFftOptions'));
+                const optionsSection = section(i18n.t(controls.titleKey));
                 optionsSection.classList.add('compact-fft-options');
                 const wasHidden = optionsEl.hidden;
                 optionsEl.hidden = false;
                 const restore = this._lendToCompact(optionsEl, optionsSection);
                 restoreOptions = () => {
                     // Rebuilt or torn down meanwhile: the chart owns it again.
-                    if (plot.fftOptionsEl !== optionsEl) {
+                    if (controls.options() !== optionsEl) {
                         optionsEl.remove();
                         return;
                     }

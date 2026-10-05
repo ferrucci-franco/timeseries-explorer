@@ -1165,11 +1165,14 @@ html.compact .compact-fit-btn:active {
     background: color-mix(in srgb, var(--primary-color) 22%, var(--bg-primary));
 }
 
-/* FFT: the status stays on the plot; its buttons and options live in the
-   Analyze sheet. */
+/* FFT and the temporal profile: the status stays on the plot; their buttons
+   and options live in the Analyze sheet. */
 html.compact .fft-topbar-group,
 html.compact .fft-workspace > .fft-options,
-html.compact .fft-workspace > .edge-toggle-rail {
+html.compact .fft-workspace > .edge-toggle-rail,
+html.compact .temporal-profile-container .hist-topbar-group,
+html.compact .temporal-profile-container .hist-workspace > .hist-options,
+html.compact .temporal-profile-container .hist-workspace > .edge-toggle-rail {
     display: none !important;
 }
 
@@ -1727,6 +1730,12 @@ html.compact .compact-plot-selector {
 html.compact .compact-sheet .fft-select {
     height: auto;
     min-height: 44px;
+}
+
+/* The profile's summary under its options (periods, per-trace counts). */
+html.compact .compact-sheet .hist-summary,
+html.compact .compact-sheet .hist-summary * {
+    font-size: 14px;
 }
 
 html.compact .help-modal-close {

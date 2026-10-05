@@ -217,7 +217,7 @@ try {
     // Sizes a finger and an eye can use: no control under 40 px tall, no text
     // under 14 px, in the sheet with the most desktop pieces in it (the FFT
     // options) and in the Data sheet.
-    const sizeProblems = () => page.evaluate(() => {
+    const sizeProblems = (target = page) => target.evaluate(() => {
         const visible = el => {
             const r = el.getBoundingClientRect();
             const cs = getComputedStyle(el);
@@ -407,6 +407,65 @@ try {
 
     assert.deepEqual(errors, [], 'no page errors on the phone');
     await context.close();
+
+    // ── Temporal profile, like FFT: chosen in Analyze, options in the sheet ─
+    {
+        const profileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+        const profilePage = await profileContext.newPage();
+        const profileErrors = [];
+        profilePage.on('pageerror', e => profileErrors.push(e.message));
+        await profilePage.goto(baseUrl);
+        await profilePage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+        // Hourly, two months, calendar time: what a temporal profile is for.
+        const rows = ['timestamp,load,temp'];
+        const start = Date.UTC(2024, 0, 1);
+        for (let i = 0; i < 24 * 60; i++) {
+            const date = new Date(start + i * 3600e3);
+            const hour = date.getUTCHours();
+            rows.push(`${date.toISOString().slice(0, 19).replace('T', ' ')},${(50 + 30 * Math.sin((hour - 6) / 24 * 2 * Math.PI)).toFixed(2)},${(15 + 8 * Math.sin((hour - 9) / 24 * 2 * Math.PI)).toFixed(2)}`);
+        }
+        await profilePage.setInputFiles('#file-input', [{ name: 'load.csv', mimeType: 'text/csv', buffer: Buffer.from(rows.join('\n') + '\n') }]);
+        await profilePage.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
+        const profilePlot = () => profilePage.evaluate(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return { mode: plot?.mode, traces: (plot?.traces || []).map(t => t.varName) };
+        });
+        await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
+        await profilePage.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+        await profilePage.locator('.compact-radio', { hasText: 'Temporal profile' }).click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'temporal-profile');
+        await profilePage.waitForFunction(() => document.querySelector('.compact-sheet .temporal-profile-options'), null, { timeout: 15000 });
+        await profilePage.waitForFunction(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return plot?.temporalProfileDiv?.data?.length > 0;
+        }, null, { timeout: 30000 });
+        assert.equal(await profilePage.locator('.temporal-profile-container .hist-topbar-group').first().isVisible(), false,
+            'the profile\'s own buttons are in the sheet, not over the plot');
+        assert.ok(await profilePage.locator('.compact-page-analyze .compact-secondary-btn', { hasText: 'V/H' }).isVisible(), 'its layout switch is');
+        assert.deepEqual(await sizeProblems(profilePage), [], 'the profile options are phone-sized');
+        await shot(profilePage, 'analyze-profile');
+        await profilePage.locator('.compact-sheet-close').click();
+        await profilePage.waitForFunction(() => window.app._compact.sheet === null);
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.temporal-profile-container .hist-workspace > .hist-options')), true,
+            'closing the sheet gives the profile its options panel back');
+        await profilePage.waitForTimeout(400);
+        assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
+            'the time pane and the profile each have their fit buttons');
+        await shot(profilePage, 'profile');
+        // Signals come and go from Data as on a time series.
+        await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await profilePage.locator('#variables-tree .tree-item[data-var-name="temp"]').click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 2);
+        await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
+        assert.deepEqual(await profilePlot(), { mode: 'temporal-profile', traces: ['temp'] }, 'a tap adds to the profile and takes off it');
+        await profilePage.locator('.compact-nav-btn[data-sheet="plot"]').click();
+        assert.equal(await profilePage.locator('.compact-trace-row').count(), 1, 'the Plot sheet lists the profile\'s signals');
+        assert.deepEqual(profileErrors, [], 'no page errors with the temporal profile');
+        await profileContext.close();
+    }
 
     // ── iOS: nothing may zoom the page in ───────────────────────────────────
     // Safari zooms in when a field under 16 px takes focus and stays zoomed,
