@@ -2696,7 +2696,7 @@ proto.loadExample = async function(exampleId = 'pendulum') {
         if (isCancelled()) return;
 
         if (ex.projectPath) {
-            token.committed = true;
+            this._commitExampleLoad(token);
             await this._loadProjectExample(ex, { replaceConfirmed: true, silent: true, preserveTheme: true });
             return;
         }
@@ -2718,7 +2718,7 @@ proto.loadExample = async function(exampleId = 'pendulum') {
         await this._yieldToBrowser();
         if (isCancelled()) return;
 
-        token.committed = true;
+        this._commitExampleLoad(token);
         const baseName   = ex.baseName;
         const existingId = [...this.files.entries()].find(([,e]) => e.name === baseName)?.[0];
         let fileId = existingId;
@@ -2818,11 +2818,19 @@ proto._showExampleLoadingOverlay = function(message, token) {
     title.className = 'example-loading-title';
     title.textContent = message;
 
+    // A visible way out, like the file-loading overlay: "Press Esc" means
+    // nothing on a phone, and on a desktop it is a footnote to the button.
+    const cancel = this._buildOverlayCancelButton(() => {
+        if (this._exampleLoadToken !== token || token.committed) return;
+        token.cancelled = true;
+        this._setExampleLoading(false);
+    });
+    cancel.id = 'example-loading-cancel';
     const hint = document.createElement('div');
-    hint.className = 'example-loading-hint';
-    hint.textContent = i18n.t('loadingExampleCancelHint');
+    hint.className = 'example-loading-hint overlay-escape-hint';
+    hint.textContent = i18n.t('loadingFilesCancelHint');
 
-    dialog.append(spinner, title, hint);
+    dialog.append(spinner, title, cancel, hint);
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
@@ -2831,13 +2839,21 @@ proto._showExampleLoadingOverlay = function(message, token) {
         if (token.committed) return;
         e.preventDefault();
         e.stopPropagation();
-        token.cancelled = true;
-        this._setExampleLoading(false);
+        cancel.click();
     };
     document.addEventListener('keydown', this._exampleLoadingEscHandler, true);
     requestAnimationFrame(() => overlay.classList.add('show'));
     overlay.tabIndex = -1;
     overlay.focus({ preventScroll: true });
+};
+
+// Past this point the example is being applied and cannot be undone, so the
+// Cancel button and its hint go rather than offering a cancel that is ignored.
+proto._commitExampleLoad = function(token) {
+    token.committed = true;
+    const overlay = document.getElementById('example-loading-overlay');
+    overlay?.querySelector('#example-loading-cancel')?.remove();
+    overlay?.querySelector('.overlay-escape-hint')?.remove();
 };
 
 proto._hideExampleLoadingOverlay = function() {

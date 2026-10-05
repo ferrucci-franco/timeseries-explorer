@@ -1990,3 +1990,10 @@ html.compact .csv-preview-compact .csv-preview-date-order-help {
         transition: none;
     }
 }
+
+/* A loading overlay's "or press Escape" is a footnote to its Cancel button
+   for a keyboard; a phone has no Escape key, so the button stands alone. */
+html.compact #file-loading-cancel-hint,
+html.compact .overlay-escape-hint {
+    display: none !important;
+}

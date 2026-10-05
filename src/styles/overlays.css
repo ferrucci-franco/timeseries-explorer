@@ -3598,6 +3598,7 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
 
 /* The Escape hint is a footnote to the button above it, not a paragraph of
    its own: close enough to read as one thing, and out of the way. */
+.example-loading-cancel + .overlay-escape-hint,
 .example-loading-cancel + #file-loading-cancel-hint {
     margin-top: 0.45rem;
     font-size: 0.76rem;

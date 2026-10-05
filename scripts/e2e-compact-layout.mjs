@@ -128,6 +128,23 @@ try {
     s = await state();
     assert.deepEqual(s.traces, ['voltage', 'current'], 'a tap puts a signal on the plot, a second tap takes it off');
     {
+        const fonts = await page.evaluate(() => {
+            const div = document.querySelector('.compact-active-panel .js-plotly-plot');
+            const size = sel => parseFloat(div?.querySelector(sel)?.style.fontSize);
+            return { tick: size('.xtick text'), xTitle: size('.g-xtitle text') };
+        });
+        assert.deepEqual(fonts, { tick: 12, xTitle: 12 }, 'plot text is a little larger on a phone');
+        const gap = await page.evaluate(() => {
+            const div = document.querySelector('.compact-active-panel .js-plotly-plot');
+            const r = el => el.getBoundingClientRect();
+            const tickBottom = Math.max(...[...div.querySelectorAll('.xtick text')].map(el => r(el).bottom));
+            const title = r(div.querySelector('.g-xtitle text'));
+            return { below: title.top - tickBottom, edge: r(div).bottom - title.bottom };
+        });
+        assert.ok(gap.below >= 6, `the X title stands clear of the tick labels (${gap.below} px)`);
+        assert.ok(gap.edge >= 0, 'and stays inside the plot');
+    }
+    {
         const edge = await page.evaluate(() => {
             const panel = document.querySelector('.compact-active-panel');
             const r = panel.getBoundingClientRect();
@@ -565,6 +582,55 @@ try {
         await rolesPage.waitForFunction(() => !!window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div);
         assert.deepEqual((await rolesState()).curves, ['x/y/z'], 'x, y, z: one 3D curve');
 
+        // A slow double tap, then a drag, pans the scene; one finger alone
+        // still orbits it.
+        await rolesPage.locator('.compact-sheet-close').click();
+        await rolesPage.waitForFunction(() => window.app._compact.sheet === null);
+        await rolesPage.waitForTimeout(600);
+        const sceneBox = await rolesPage.evaluate(() => {
+            const r = window.app.plotManager.plots.get(window.app._compactActivePanelId()).div._fullLayout.scene._scene.container.getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        });
+        const camera = () => rolesPage.evaluate(() => {
+            const { eye, center } = window.app.plotManager.plots.get(window.app._compactActivePanelId()).div._fullLayout.scene._scene.getCamera();
+            return { eye, center };
+        });
+        const sceneCdp = await rolesContext.newCDPSession(rolesPage);
+        const finger = (type, x, y) => sceneCdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+        const lookOf = (cam) => [cam.eye.x - cam.center.x, cam.eye.y - cam.center.y, cam.eye.z - cam.center.z];
+        const cosine = (a, b) => (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (Math.hypot(...a) * Math.hypot(...b));
+        const panOnce = async (slow) => {
+            const before = await camera();
+            await finger('touchStart', sceneBox.x, sceneBox.y); await rolesPage.waitForTimeout(60); await finger('touchEnd');
+            await rolesPage.waitForTimeout(420);
+            if (slow) {
+                await finger('touchStart', sceneBox.x, sceneBox.y); await rolesPage.waitForTimeout(60); await finger('touchEnd');
+                await rolesPage.waitForSelector('.touch-window-zoom-hint');
+            }
+            await finger('touchStart', sceneBox.x, sceneBox.y);
+            for (let i = 1; i <= 8; i++) { await finger('touchMove', sceneBox.x + i * 8, sceneBox.y + i * 4); await rolesPage.waitForTimeout(16); }
+            await finger('touchEnd');
+            await rolesPage.waitForTimeout(400);
+            const after = await camera();
+            const moved = Math.hypot(after.center.x - before.center.x, after.center.y - before.center.y, after.center.z - before.center.z);
+            return { moved, cos: cosine(lookOf(before), lookOf(after)) };
+        };
+        for (const slow of [false, true]) {
+            const { moved, cos } = await panOnce(slow);
+            assert.ok(moved > 1e-3, `${slow ? 'two slow taps, then a drag' : 'a tap, then a drag'}: the 3D scene pans`);
+            assert.ok(cos > 0.9999, `and does not rotate (cos = ${cos})`);
+        }
+        await rolesPage.waitForTimeout(800);
+        const beforeOrbit = await camera();
+        await finger('touchStart', sceneBox.x, sceneBox.y);
+        for (let i = 1; i <= 8; i++) { await finger('touchMove', sceneBox.x + i * 10, sceneBox.y); await rolesPage.waitForTimeout(16); }
+        await finger('touchEnd');
+        await rolesPage.waitForTimeout(400);
+        assert.ok(cosine(lookOf(beforeOrbit), lookOf(await camera())) < 0.9999, 'one finger alone still orbits');
+        await sceneCdp.detach();
+        await rolesPage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await rolesPage.waitForFunction(() => window.app._compact.sheet === 'data');
+
         // 2D animation: x₁, x₂; a third tap is refused, a tap on one takes it off.
         await choosePlotType('state-anim-2d');
         assert.equal((await rolesState()).mode, 'state-anim');
@@ -647,6 +713,10 @@ try {
     // The Lorenz example: a 3D state animation, with its speed selector.
     await ipage.locator('.compact-try-example').click();
     await ipage.locator('.compact-sheet .compact-menu-btn', { hasText: 'Lorenz' }).first().click();
+    // Loading says how to stop it with a button: a phone has no Escape key.
+    await ipage.waitForSelector('#example-loading-overlay #example-loading-cancel', { state: 'visible' });
+    assert.equal(await ipage.locator('#example-loading-overlay .overlay-escape-hint').isVisible(), false,
+        'no "press Escape" on a phone');
     await ipage.waitForFunction(() => document.querySelector('.state-anim-controls .sa-speed'), null, { timeout: 60000 });
     await ipage.waitForTimeout(800);
     const small = await ipage.evaluate(() => [...document.querySelectorAll('input, select, textarea')]

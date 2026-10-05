@@ -9,7 +9,7 @@
 // keeps one code path.
 import i18n from '../../i18n/index.js';
 import Modal from '../../ui/modal.js';
-import Plotly, { onPlotDrawn } from '../../vendor/plotly.js';
+import Plotly, { onPlotDrawn, setLargerPlotFonts } from '../../vendor/plotly.js';
 import { clearPlotHover } from '../../ui/plot-touch-gestures.js';
 import {
     LAYOUT_OVERRIDE_STORAGE_KEY,
@@ -208,6 +208,7 @@ export function installCompactMethods(ViewerClass) {
         this._buildCompactChrome();
         this.layoutManager.onAfterRender = () => this._compactAfterLayoutRender();
         onPlotDrawn(div => { if (this._compact.active) this._compactSyncFitButtons(div); });
+        setLargerPlotFonts(() => this._compact.active);
         this.plotManager.onCompactChooseSignals = () => this._openCompactSheet('data', { toggle: false });
         // Dialogs are appended to <body>; the large ones go full screen.
         if (typeof MutationObserver !== 'undefined') {
@@ -609,6 +610,16 @@ export function installCompactMethods(ViewerClass) {
         const owner = this._compactPlotForDiv(div);
         // A slow double tap draws a time (or frequency) window and zooms to
         // it: the phone's box zoom, where a finger otherwise pans.
+        // A 3D scene: a slow double tap, then a drag, pans it.
+        if (owner && !div._touchScenePan) {
+            div._touchScenePan = () => {
+                const current = this._compactPlotForDiv(div);
+                if (!this._compact.active || !current) return null;
+                const { plot } = current;
+                const is3D = plot.mode === 'phase3d' || (plot.mode === 'state-anim' && (plot.stateAnimDim || 2) === 3);
+                return is3D ? { hint: i18n.t('compactPanHint') } : null;
+            };
+        }
         if (owner && !div._touchWindowZoom) {
             div._touchWindowZoom = () => {
                 const current = this._compactPlotForDiv(div);

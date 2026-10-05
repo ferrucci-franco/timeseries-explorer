@@ -118,9 +118,9 @@ assert.equal(panZoomRange([0, 10], 5, 0.5, 0), null, 'a scale of nothing is not 
 
 // ── Wired in once, for every plot the app makes ─────────────────────────────
 const vendor = readFileSync(new URL('../src/vendor/plotly.js', import.meta.url), 'utf8');
-assert.match(vendor, /Plotly\.newPlot = \(div, \.\.\.rest\) => nativeNewPlot\(div, \.\.\.rest\)\.then\(drawn => withTouchGestures\(drawn, div\)\);/,
+assert.match(vendor, /Plotly\.newPlot = \(div, data, layout, \.\.\.rest\) => nativeNewPlot\(div, data, layoutFor\(layout\), \.\.\.rest\)\s*\.then\(drawn => withTouchGestures\(drawn, div\)\);/,
     'a plot created with newPlot gets the gestures');
-assert.match(vendor, /Plotly\.react = \(div, \.\.\.rest\) => nativeReact\(div, \.\.\.rest\)\.then\(drawn => withTouchGestures\(drawn, div\)\);/,
+assert.match(vendor, /Plotly\.react = \(div, data, layout, \.\.\.rest\) => nativeReact\(div, data, layoutFor\(layout\), \.\.\.rest\)\s*\.then\(drawn => withTouchGestures\(drawn, div\)\);/,
     'and so does a pane that only ever exists through react, which is how the analysis panes redraw');
 assert.doesNotMatch(vendor, /dragmode/, 'nothing about the drag mode is written into a layout any more');
 
