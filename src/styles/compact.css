@@ -441,8 +441,26 @@ html.compact.compact-landscape .compact-sheet-size {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+    /* Up and down only. Anything a few pixels too wide — on iOS a date field
+       keeps a width of its own — would otherwise let a finger that drifts
+       on the way down slide the whole sheet sideways, its left edge cut off.
+       A wide table keeps its own sideways scroll inside its wrapper. */
+    overflow-x: hidden;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
+}
+
+.compact-sheet-body input:not([type="checkbox"]):not([type="radio"]),
+.compact-sheet-body select,
+.compact-sheet-body textarea {
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.compact-sheet-body input[type="date"],
+.compact-sheet-body input[type="datetime-local"],
+.compact-sheet-body input[type="time"] {
+    min-width: 0;
 }
 
 .compact-page {

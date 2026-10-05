@@ -18,6 +18,26 @@ function makeCsv() {
     return { name: 'signals.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') };
 }
 
+// A sheet scrolls up and down, never sideways: a finger that drifts on the way
+// down should not slide the whole sheet off the screen's edge. Lists what pokes
+// out past the sheet's right edge, and whether the body can scroll sideways.
+const sidewaysProblems = page => page.evaluate(() => {
+    const body = document.querySelector('.compact-sheet-body');
+    if (!body) return ['no sheet'];
+    const problems = [];
+    if (body.scrollWidth > body.clientWidth + 1) problems.push(`the sheet is ${body.scrollWidth - body.clientWidth} px wider than the screen`);
+    const right = body.getBoundingClientRect().right;
+    for (const el of body.querySelectorAll('*')) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0 || el.closest('svg')) continue;
+        // Report where it starts: the first one out past a parent that fits.
+        if (r.right > right + 1 && el.parentElement.getBoundingClientRect().right <= right + 1) {
+            problems.push(`${el.tagName}.${el.className} ends ${Math.round(r.right - right)} px past the edge`);
+        }
+    }
+    return problems.slice(0, 12);
+});
+
 const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: false } });
 await server.listen();
 const baseUrl = `http://127.0.0.1:${server.httpServer.address().port}/`;
@@ -268,6 +288,9 @@ try {
         return problems;
     });
     assert.deepEqual(await sizeProblems(), [], 'the FFT options are phone-sized');
+    assert.deepEqual(await sidewaysProblems(page), [], 'the FFT options fit the width: nothing to scroll sideways');
+    assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.compact-sheet-body')).overflowX), 'hidden',
+        'and should anything be a pixel too wide on some phone, the sheet still never scrolls sideways');
     await page.locator('.compact-sheet-close').click();
     await page.waitForFunction(() => window.app._compact.sheet === null);
     assert.equal(
@@ -442,9 +465,20 @@ try {
         assert.equal(new Set(colours).size, 4, `each destination has its own colour (${colours.join(', ')})`);
     }
 
-    // ── The user can ask for the full layout, and back ──────────────────────
-    await page.evaluate(() => window.app._setCompactLayoutOverride('full'));
-    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('compact')), false, 'Full overrides the phone layout');
+    // ── The user can ask for the desktop layout, warned, and back ───────────
+    await page.locator('.compact-nav-btn[data-sheet="more"]').click();
+    const desktopSegment = page.locator('.compact-page-more .compact-segment', { hasText: 'Desktop' });
+    await desktopSegment.click();
+    await page.waitForSelector('.modal-overlay .modal-message');
+    assert.match(await page.locator('.modal-overlay .modal-message').innerText(), /every feature.*not adapted to small screens/s,
+        'leaving for the desktop layout warns that it is not made for a phone');
+    await page.locator('.modal-overlay .modal-btn-cancel').click();
+    await page.waitForFunction(() => !document.querySelector('.modal-overlay'));
+    assert.equal(await page.evaluate(() => window.app._compact.override), 'auto', 'and Cancel stays');
+    await desktopSegment.click();
+    await page.locator('.modal-overlay .modal-btn-confirm').click();
+    await page.waitForFunction(() => !document.documentElement.classList.contains('compact'));
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('compact')), false, 'Desktop overrides the phone layout');
     assert.equal(await page.locator('.top-bar').isVisible(), true);
     await page.evaluate(() => window.app._setCompactLayoutOverride('auto'));
     assert.equal(await page.evaluate(() => document.documentElement.classList.contains('compact')), true);
