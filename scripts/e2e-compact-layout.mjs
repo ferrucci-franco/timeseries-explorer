@@ -401,13 +401,20 @@ try {
     await page.locator('.modal-dialog-csv-row-actions .modal-btn', { hasText: 'First data row' }).click();
     await page.waitForFunction(() => /\b7\/7\b/.test(document.querySelector('.csv-preview-status-strip')?.textContent || ''));
     await shot(page, 'csv');
-    await page.locator('.csv-preview-close').click();
+    // Its way out is Back, at the left, and it lands on the file's page.
+    {
+        const back = page.locator('.csv-preview-header .csv-preview-back');
+        const header = await page.locator('.csv-preview-header').boundingBox();
+        const box = await back.boundingBox();
+        assert.ok(box.x - header.x < 20, 'Back sits at the left of the header, like the sheets\' pages');
+        assert.equal(await back.getAttribute('aria-label'), 'Back');
+        await back.click();
+    }
     await page.waitForFunction(() => !document.querySelector('.csv-preview-overlay'));
-    if (await page.evaluate(() => window.app._compact.sheet)) await page.locator('.compact-sheet-close').click();
+    assert.equal(await page.evaluate(() => window.app._compact.sheet), 'data', 'Back returns to the Data sheet');
+    assert.equal(await page.locator('.compact-page-file').isVisible(), true, 'on the file\'s page it was opened from');
 
     // ── File page → its time axis, as a page of its own ─────────────────────
-    await page.locator('.compact-nav-btn[data-sheet="data"]').click();
-    await page.locator('.file-entry-more').first().click();
     await page.waitForFunction(() => window.app._compact.pages.length === 2);
     await page.locator('.compact-page-file .compact-action-row', { hasText: 'Time axis and scale' }).click();
     await page.waitForSelector('.compact-page-time-axis .file-transform-panel');

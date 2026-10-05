@@ -1304,8 +1304,9 @@ export function installCompactMethods(ViewerClass) {
             addAction({ label: i18n.t('compactShowVariables'), icon: SVG.data, tone: 'blue', onClick: () => this.setActiveFile(fileId) });
         }
         const actions = [
-            { selector: '.file-entry-csv-parsing', icon: SVG.table, tone: 'teal', opens: true },
-            { selector: '.file-entry-mat-arrays', icon: SVG.layers, tone: 'purple', opens: true },
+            // Dialogs: the file page stays underneath, so their Back lands here.
+            { selector: '.file-entry-csv-parsing', icon: SVG.table, tone: 'teal', opens: true, keepPage: true },
+            { selector: '.file-entry-mat-arrays', icon: SVG.layers, tone: 'purple', opens: true, keepPage: true },
             // The time axis opens as a page of its own, one level below this one.
             { selector: '.file-entry-transform', icon: SVG.clock, tone: 'orange', opens: true, label: i18n.t('compactTimeAxisPage'), page: () => this._openCompactTimeAxisPage(fileId) },
             { selector: '.file-entry-save', icon: SVG.download, tone: 'green' },
@@ -1321,8 +1322,13 @@ export function installCompactMethods(ViewerClass) {
                 tone: action.tone,
                 opens: action.opens,
                 danger: action.danger,
-                keepPage: !!action.page,
-                onClick: action.page || (() => source.click()),
+                keepPage: !!action.page || !!action.keepPage,
+                // The row's button as it is now: the list may have been
+                // rebuilt (a reparse) since this page was opened.
+                onClick: action.page || (() => {
+                    const current = document.querySelector(`#files-list .file-entry[data-file-id="${CSS.escape(fileId)}"] ${action.selector}`);
+                    (current || source).click();
+                }),
             });
         }
         node.appendChild(list);

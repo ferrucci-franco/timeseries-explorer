@@ -819,7 +819,17 @@ export default class CsvParsingPreviewDialog {
         closeBtn.title = i18n.t('cancel');
         closeBtn.setAttribute('aria-label', i18n.t('cancel'));
         closeBtn.addEventListener('click', () => this._finish(null));
-        header.append(heading, subtitle, this.confidence, closeBtn);
+        if (this.compact) {
+            // On a phone the way out is Back, at the left like every page of
+            // the phone layout: it returns to where the dialog was opened from.
+            closeBtn.classList.add('csv-preview-back');
+            closeBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
+            closeBtn.title = i18n.t('compactBack');
+            closeBtn.setAttribute('aria-label', i18n.t('compactBack'));
+            header.append(closeBtn, heading, this.confidence, subtitle);
+        } else {
+            header.append(heading, subtitle, this.confidence, closeBtn);
+        }
 
         const toolbar = document.createElement('div');
         toolbar.className = 'csv-preview-toolbar';

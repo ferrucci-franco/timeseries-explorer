@@ -144,10 +144,15 @@ proto._computeEagerTimeAxisDiagnostics = function(fileId) {
 // count, a generated calendar is epoch-ms (except the high-resolution one, which
 // stays in seconds), and everything else is seconds. Read off the canonical
 // model rather than re-deriving the branches of _getTransformIndexData.
+//
+// It is the RENDERED axis that decides, not the stored column: a datetime file
+// shown as elapsed time, or reindexed with a step, is drawn in seconds even
+// though its column is a date. Asking the stored kind ("datetime") read those
+// seconds as milliseconds, and an 11 ms step was reported as 11 µs, 1 h as 3.6 s.
 proto._transformedTimeAxisScale = function(fileId) {
     const model = this.plotManager._timeAxisModel(fileId);
     if (model.semantic === 'count') return { secondsPerUnit: 1, unitless: true };
-    if (model.legacyKind === 'datetime' && !model.highResGeneratedCalendar) {
+    if (model.display === 'calendar' && !model.highResGeneratedCalendar) {
         return { secondsPerUnit: 1e-3, unitless: false };
     }
     return { secondsPerUnit: 1, unitless: false };
