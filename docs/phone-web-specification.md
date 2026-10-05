@@ -15,8 +15,11 @@ Built:
 - the Analyze sheet: time series, FFT and temporal profile, each analysis with its
   options lent to the sheet and its top-bar buttons (reset, V/H, hide the time
   series) as buttons there;
-- 2D (x–y) plots: the plot type in the Plot sheet, x then y by tapping in Data,
-  the pairs listed with removal, and the 1:1 aspect;
+- 2D (x–y) and 3D (x–y–z) plots: the plot type in the Plot sheet, x then y (then z)
+  by tapping in Data, the curves listed with removal, and the 1:1 aspect in 2D;
+- 2D and 3D state animations: x₁, x₂ (x₃) by tapping in Data, a tap on one
+  assigned takes it off; play, time slider, time and speed on the plot, what it
+  draws as switches in the Plot sheet;
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
@@ -29,8 +32,7 @@ The code is in `src/app/methods/compact-methods.js`, `src/ui/compact-layout.js` 
 
 Not built yet:
 
-- the other analyses (histogram, heatmap, integral, correlation) and plot modes
-  (2D + t, 3D, state animation);
+- the other analyses (histogram, heatmap, integral, correlation) and 2D + t;
 - View and Marks;
 - cursors and tap readouts;
 - export through Web Share;

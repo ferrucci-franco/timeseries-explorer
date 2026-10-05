@@ -818,15 +818,16 @@ html.compact .compact-toast {
     top: calc(var(--compact-chrome-top) + 10px);
     z-index: 1300;
     display: block;
-    max-width: calc(100vw - 32px);
-    padding: 8px 14px;
-    border-radius: 999px;
+    width: max-content;
+    max-width: min(calc(100vw - 32px), 420px);
+    box-sizing: border-box;
+    padding: 8px 16px;
+    border-radius: 18px;
     background: color-mix(in srgb, var(--text-primary) 88%, transparent);
     color: var(--bg-primary);
     font-size: 15px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.35;
+    text-align: center;
     pointer-events: none;
     opacity: 0;
     transform: translate(-50%, -6px);
@@ -1841,6 +1842,62 @@ html.compact .compact-plot-selector {
 html.compact .compact-sheet .fft-select {
     height: auto;
     min-height: 44px;
+}
+
+/* An animation on a phone: play, the time slider, the time and the speed,
+   at finger size. What it draws (trajectory, trace, vectors…) is set with
+   switches in the Plot sheet. */
+html.compact .state-anim-controls {
+    flex-wrap: nowrap;
+    gap: 10px;
+    padding: 8px 10px;
+}
+
+html.compact .state-anim-controls .sa-toggle {
+    display: none !important;
+}
+
+html.compact .state-anim-controls .sa-play-btn {
+    flex: 0 0 auto;
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    font-size: 18px;
+    padding: 0;
+}
+
+html.compact .state-anim-controls .sa-scrubber {
+    min-width: 0;
+    height: 32px;
+}
+
+html.compact .state-anim-controls .sa-time-label {
+    flex: 0 0 auto;
+    min-width: 0;
+    font-size: 14px;
+}
+
+html.compact .state-anim-controls .sa-speed {
+    flex: 0 0 auto;
+    min-height: 40px;
+    border-radius: 8px;
+    padding: 0 6px;
+}
+
+html.compact .state-anim-slots {
+    font-size: 14px;
+}
+
+/* An animation's state variable in the Plot sheet: its role, then its name. */
+.compact-state-role {
+    flex: 0 0 auto;
+    min-width: 28px;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.compact-state-display {
+    margin-top: 16px;
 }
 
 /* The profile's summary under its options (periods, per-trace counts). */

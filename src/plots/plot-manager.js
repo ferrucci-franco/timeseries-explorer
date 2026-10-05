@@ -1306,10 +1306,10 @@ class PlotManager {
         if (!overlay) return;
         if (show) {
             // On the phone layout nothing is dropped: the X is chosen, the Y is next.
-            const pendingX = this.plots.get(panelId)?.phasePending?.x;
-            const message = this.compactLayout && pendingX
-                ? i18n.t('compactPendingY').replace('{x}', pendingX)
-                : this._dropMessage(panelId);
+            const pending = this.plots.get(panelId)?.phasePending || {};
+            const message = !this.compactLayout || !pending.x ? this._dropMessage(panelId)
+                : pending.y ? i18n.t('compactPendingZ').replace('{x}', pending.x).replace('{y}', pending.y)
+                : i18n.t('compactPendingY').replace('{x}', pending.x);
             overlay.innerHTML = '';
             const span = document.createElement('span');
             span.textContent = message;

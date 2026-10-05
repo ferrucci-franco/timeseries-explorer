@@ -324,7 +324,7 @@ try {
     // ── 2D (x–y): a tap is an X, then a Y ───────────────────────────────────
     await page.locator('.compact-plot-selector').click();
     assert.equal(await page.locator('.compact-sheet-close').getAttribute('aria-label'), 'Hide', 'a sheet is hidden, not closed');
-    await page.locator('.compact-page-plot .compact-segment', { hasText: '2D' }).click();
+    await page.locator('.compact-plot-types [data-plot-type="phase2d"]').click();
     // The time series on it would be lost: asked first.
     await page.locator('.modal-overlay .modal-btn-confirm').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'phase2d');
@@ -355,7 +355,7 @@ try {
     await page.locator('.compact-page-plot .compact-trace-remove').first().click();
     await page.waitForFunction(() => !window.app.plotManager.plots.get(window.app._compactActivePanelId())?.phaseTraces?.length);
     // Back to a time series, empty: nothing to confirm.
-    await page.locator('.compact-page-plot .compact-segment', { hasText: 'Time series' }).click();
+    await page.locator('.compact-plot-types [data-plot-type="timeseries"]').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'timeseries');
     await page.locator('.compact-sheet-close').click();
 
@@ -482,6 +482,93 @@ try {
         assert.equal(await profilePage.locator('.compact-trace-row').count(), 1, 'the Plot sheet lists the profile\'s signals');
         assert.deepEqual(profileErrors, [], 'no page errors with the temporal profile');
         await profileContext.close();
+    }
+
+    // ── 3D, and 2D and 3D animations: signals in roles, one tap each ───────
+    {
+        const rolesContext = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+        const rolesPage = await rolesContext.newPage();
+        const rolesErrors = [];
+        rolesPage.on('pageerror', e => rolesErrors.push(e.message));
+        await rolesPage.goto(baseUrl);
+        await rolesPage.waitForFunction(() => window.app?.plotManager && document.querySelector('.layout-panel'));
+        const rows = ['time,x,y,z'];
+        for (let i = 0; i < 1500; i++) { const t = i / 100; rows.push(`${t},${Math.sin(t)},${Math.sin(2 * t)},${Math.cos(3 * t)}`); }
+        await rolesPage.setInputFiles('#file-input', [{ name: 'xyz.csv', mimeType: 'text/csv', buffer: Buffer.from(rows.join('\n') + '\n') }]);
+        await rolesPage.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
+        const rolesState = () => rolesPage.evaluate(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return {
+                mode: plot.mode,
+                dim: plot.mode === 'state-anim' ? plot.stateAnimDim : undefined,
+                curves: (plot.phaseTraces || []).map(t => [t.x, t.y, t.z].filter(Boolean).join('/')),
+                slots: plot.stateSlots?.x || [],
+                drawn: !!plot.div,
+            };
+        });
+        const tapSignal = async (name) => {
+            await rolesPage.locator(`#variables-tree .tree-item[data-var-name="${name}"]`).click();
+            await rolesPage.waitForTimeout(250);
+        };
+        const choosePlotType = async (type) => {
+            await rolesPage.locator('.compact-nav-btn[data-sheet="plot"]').click();
+            await rolesPage.locator(`.compact-plot-types [data-plot-type="${type}"]`).click();
+            if (await rolesPage.locator('.modal-overlay .modal-btn-confirm').count()) await rolesPage.locator('.modal-overlay .modal-btn-confirm').click();
+            await rolesPage.locator('.compact-nav-btn[data-sheet="data"]').click();
+            await rolesPage.waitForFunction(() => window.app._compact.sheet === 'data');
+        };
+
+        // 3D: x, y, z make one curve.
+        await choosePlotType('phase3d');
+        await tapSignal('x');
+        await tapSignal('y');
+        assert.equal(await rolesPage.locator('#variables-tree .tree-item[data-var-name="y"]').getAttribute('data-compact-role'), 'y …',
+            'the curve being chosen marks its signals');
+        assert.match(await rolesPage.locator('.compact-phase-text').innerText(), /Z signal/, 'and says the Z is next');
+        await tapSignal('z');
+        await rolesPage.waitForFunction(() => !!window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div);
+        assert.deepEqual((await rolesState()).curves, ['x/y/z'], 'x, y, z: one 3D curve');
+
+        // 2D animation: x₁, x₂; a third tap is refused, a tap on one takes it off.
+        await choosePlotType('state-anim-2d');
+        assert.equal((await rolesState()).mode, 'state-anim');
+        await tapSignal('x');
+        await tapSignal('y');
+        await rolesPage.waitForFunction(() => !!window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div);
+        assert.deepEqual((await rolesState()).slots, ['x', 'y'], 'x₁ and x₂, in the order tapped');
+        assert.equal(await rolesPage.locator('#variables-tree .tree-item[data-var-name="x"]').getAttribute('data-compact-role'), 'x₁');
+        await tapSignal('z');
+        assert.match(await rolesPage.locator('.compact-toast').innerText(), /2 state variables/, 'a full state says so');
+        assert.deepEqual((await rolesState()).slots, ['x', 'y']);
+        await rolesPage.locator('.compact-sheet-close').click();
+        await rolesPage.waitForFunction(() => window.app._compact.sheet === null);
+        const play = rolesPage.locator('.compact-active-panel .sa-play-btn');
+        assert.ok((await play.boundingBox()).height >= 44, 'play is finger-sized');
+        assert.equal(await rolesPage.locator('.compact-active-panel .sa-toggle').first().isVisible(), false,
+            'the display checkboxes leave the bar');
+        await shot(rolesPage, 'anim-2d');
+        // …for switches in the Plot sheet, which set the animation's own.
+        await rolesPage.locator('.compact-nav-btn[data-sheet="plot"]').click();
+        const fullSwitch = rolesPage.locator('.compact-state-display .compact-switch-row', { hasText: 'full trajectory' }).locator('input');
+        assert.equal(await fullSwitch.isChecked(), true);
+        await fullSwitch.click();
+        assert.equal(await rolesPage.evaluate(() => document.querySelector('.compact-active-panel .sa-chk-full').checked), false,
+            'a switch sets the animation\'s own checkbox');
+        await rolesPage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await tapSignal('x');
+        assert.deepEqual((await rolesState()).slots, ['y'], 'a tap on an assigned signal takes it off');
+
+        // 3D animation: x₁, x₂, x₃.
+        await choosePlotType('state-anim-3d');
+        await tapSignal('x');
+        await tapSignal('y');
+        await tapSignal('z');
+        await rolesPage.waitForFunction(() => !!window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div);
+        const anim3 = await rolesState();
+        assert.equal(anim3.dim, 3);
+        assert.deepEqual(anim3.slots, ['x', 'y', 'z'], 'a 3D animation from three taps');
+        assert.deepEqual(rolesErrors, [], 'no page errors with 3D and the animations');
+        await rolesContext.close();
     }
 
     // ── iOS: nothing may zoom the page in ───────────────────────────────────
