@@ -289,6 +289,14 @@ try {
     });
     assert.deepEqual(await sizeProblems(), [], 'the FFT options are phone-sized');
     assert.deepEqual(await sidewaysProblems(page), [], 'the FFT options fit the width: nothing to scroll sideways');
+    assert.deepEqual(
+        await page.evaluate(() => [...document.querySelectorAll('.compact-sheet-body input[type=checkbox]')]
+            .filter(el => el.getBoundingClientRect().width > 0)
+            .map(el => { const r = el.getBoundingClientRect(); return [getComputedStyle(el).appearance, Math.round(r.width), Math.round(r.height)]; })
+            .filter(([appearance, w, h]) => appearance !== 'none' || w !== 46 || h !== 28)),
+        [],
+        'an on/off option is a switch, not a desktop checkbox',
+    );
     assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.compact-sheet-body')).overflowX), 'hidden',
         'and should anything be a pixel too wide on some phone, the sheet still never scrolls sideways');
     await page.locator('.compact-sheet-close').click();
