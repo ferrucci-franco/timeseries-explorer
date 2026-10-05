@@ -40,6 +40,7 @@ import {
     windowZoomRange,
 } from '../src/utils/touch-plot-gestures.js';
 import { rangeFromLinear, rangeToLinear } from '../src/ui/plot-touch-gestures.js';
+import { panUnitsPerPixel } from '../src/ui/plot-3d-gestures.js';
 
 // ── Whose gesture is it ─────────────────────────────────────────────────────
 assert.equal(touchGestureOwnsDrag('zoom'), true, 'the box zoom is the default nobody chose');
@@ -228,5 +229,15 @@ for (const line of translations.split('\n')) {
 }
 assert.match(installer, /div\._touchWindowZoom/, 'only where a plot asks for it');
 assert.match(installer, /'xaxis\.range': rangeFromLinear\(xa, range\),/, 'and it zooms the horizontal axis alone');
+
+// ── Two fingers pan a 3D scene: how far per pixel ───────────────────────────
+// Read off the projection, so what is under the fingers stays under them.
+assert.equal(panUnitsPerPixel({ ortho: true, projectionYScale: 0.5, distance: 9, heightPx: 400 }), 0.01,
+    'orthographic: the visible height (2 / P[5]) over the pixels, whatever the distance');
+assert.equal(panUnitsPerPixel({ ortho: false, projectionYScale: 2, distance: 4, heightPx: 400 }), 0.01,
+    'perspective: the visible height at the centre\'s depth (2·d / P[5]) over the pixels');
+assert.equal(panUnitsPerPixel({ ortho: false, projectionYScale: 2, distance: 8, heightPx: 400 }), 0.02, 'twice as far, twice as much');
+assert.equal(panUnitsPerPixel({ ortho: true, projectionYScale: 0, distance: 1, heightPx: 400 }), 0, 'no projection yet: no pan');
+assert.equal(panUnitsPerPixel({ ortho: true, projectionYScale: 1, distance: 1, heightPx: 0 }), 0);
 
 console.log('Touch plot-gesture checks passed.');

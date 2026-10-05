@@ -3,6 +3,7 @@
 import i18n from '../../i18n/index.js';
 import Plotly from '../../vendor/plotly.js';
 import { SCENE_GESTURE_END, SCENE_GESTURE_START, settleSceneCamera } from '../../ui/plot-3d-gestures.js';
+import { animHeldByTouch, installAnimTouchHold, nextFrameAt } from '../../ui/anim-pacing.js';
 
 export function installPlotStateMethods(TargetClass) {
     const proto = TargetClass.prototype;
@@ -525,8 +526,12 @@ proto._stateAnimUpdateFrame = function(plot, frame) {
         // The redraw re-applies the turntable mode, which parks the camera
         // half a second in the future; settle it, or a drag started while the
         // animation plays waits that long to move anything.
+        // The redraw finishes after this returns: until it has, the next frame
+        // waits (see the pacing in _stateAnimTogglePlay).
         const div = plot.div;
-        Promise.resolve(Plotly.redraw(div)).then(() => settleSceneCamera(div)).catch(() => {});
+        plot._animFrameBusy = true;
+        Promise.resolve(Plotly.redraw(div)).then(() => settleSceneCamera(div)).catch(() => {})
+            .finally(() => { plot._animFrameBusy = false; });
 
     } else {
         // ── 2D path ──
@@ -755,10 +760,25 @@ proto._stateAnimTogglePlay = function(panelId) {
         // Base wall-clock duration for a full playthrough at ×1 speed (Tend-independent)
         const BASE_WALLCLOCK_SEC = 20;
 
+        // Paced for the hand using the page (ui/anim-pacing.js): still while a
+        // finger is down, and never more than half the main thread.
+        installAnimTouchHold();
+        plot._animNextFrameAt = 0;
         let lastT = performance.now();
         const step = () => {
             if (!plot.animPlaying || !plot.div) return;
             const now = performance.now();
+            if (animHeldByTouch(now)) {
+                // Time stands still too: no jump when the finger lifts.
+                lastT = now;
+                plot.animRAF = requestAnimationFrame(step);
+                return;
+            }
+            if (plot._animFrameBusy || now < plot._animNextFrameAt) {
+                // Simulated time keeps running; the frame is only not drawn.
+                plot.animRAF = requestAnimationFrame(step);
+                return;
+            }
             const dt = (now - lastT) / 1000; // seconds elapsed
             lastT = now;
 
@@ -778,6 +798,8 @@ proto._stateAnimTogglePlay = function(panelId) {
             }
 
             this._stateAnimUpdateFrame(plot, nextFrame);
+            const renderedAt = performance.now();
+            plot._animNextFrameAt = nextFrameAt(renderedAt, renderedAt - now);
             plot.animRAF = requestAnimationFrame(step);
         };
         plot.animRAF = requestAnimationFrame(step);

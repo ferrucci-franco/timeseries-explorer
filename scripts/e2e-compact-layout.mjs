@@ -113,7 +113,9 @@ try {
     await page.locator('.compact-nav-btn[data-sheet="data"]').click();
     await page.waitForFunction(() => document.querySelector('.compact-sheet #sidebar'));
     const leaf = name => page.locator(`#variables-tree .tree-item[data-var-name="${name}"]`);
-    assert.match(await page.locator('.compact-data-target').innerText(), /Signals you tap go to:\s*Plot 1/, 'Data says which plot a tap goes to');
+    assert.match(await page.locator('.compact-data-target').innerText(), /Signals you tap go to:/, 'Data says which plot a tap goes to');
+    assert.equal(await page.locator('.compact-target-chip.is-active').innerText(), 'Plot 1', 'as a chip, even when it is the only plot');
+    assert.equal(await page.locator('.compact-target-chip').count(), 1);
     await leaf('voltage').click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 1);
     assert.equal(await page.locator('.compact-toast.is-shown').innerText(), 'Added to plot 1: voltage', 'and what a tap did');
@@ -125,6 +127,14 @@ try {
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 2);
     s = await state();
     assert.deepEqual(s.traces, ['voltage', 'current'], 'a tap puts a signal on the plot, a second tap takes it off');
+    {
+        const edge = await page.evaluate(() => {
+            const panel = document.querySelector('.compact-active-panel');
+            const r = panel.getBoundingClientRect();
+            return { left: r.left, right: r.right, width: innerWidth, radius: getComputedStyle(panel).borderTopLeftRadius };
+        });
+        assert.ok(edge.left === 0 && edge.right === edge.width && edge.radius === '0px', `the plot runs edge to edge (${JSON.stringify(edge)})`);
+    }
     await shot(page, 'data');
 
     // ── Back closes the sheet and stays on the page ─────────────────────────
@@ -573,6 +583,25 @@ try {
         assert.equal(await rolesPage.locator('.compact-active-panel .sa-toggle').first().isVisible(), false,
             'the display checkboxes leave the bar');
         await shot(rolesPage, 'anim-2d');
+        // Playing, it keeps still under a finger (Safari drops a tap's click
+        // when the page changes during it), and pause stops it at one tap.
+        const animFrame = () => rolesPage.evaluate(() => window.app.plotManager.plots.get(window.app._compactActivePanelId()).animFrame);
+        const animPlaying = () => rolesPage.evaluate(() => !!window.app.plotManager.plots.get(window.app._compactActivePanelId()).animPlaying);
+        if (!(await animPlaying())) await play.tap();
+        await rolesPage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId()).animFrame > 5);
+        const touchCdp = await rolesContext.newCDPSession(rolesPage);
+        await touchCdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 300, y: 300 }] });
+        const heldAt = await animFrame();
+        await rolesPage.waitForTimeout(500);
+        assert.equal(await animFrame(), heldAt, 'a finger on the screen holds the animation still');
+        await touchCdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await rolesPage.waitForFunction((at) => window.app.plotManager.plots.get(window.app._compactActivePanelId()).animFrame !== at, heldAt, { timeout: 5000 });
+        await touchCdp.detach();
+        await play.tap();
+        assert.equal(await animPlaying(), false, 'pause stops it at the first tap');
+        const pausedAt = await animFrame();
+        await rolesPage.waitForTimeout(400);
+        assert.equal(await animFrame(), pausedAt, 'and it stays stopped');
         // …for switches in the Plot sheet, which set the animation's own.
         await rolesPage.locator('.compact-nav-btn[data-sheet="plot"]').click();
         const fullSwitch = rolesPage.locator('.compact-state-display .compact-switch-row', { hasText: 'full trajectory' }).locator('input');

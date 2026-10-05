@@ -52,6 +52,9 @@ const onPlotSurface = (target) => typeof target?.closest === 'function' && !!tar
 // at a point nobody is touching.
 const GESTURE_CLASS = 'touch-gesture';
 
+// How long after a touch a mouseout from the plot is the touch's own echo.
+const TAP_MOUSEOUT_GRACE_MS = 700;
+
 // The window a slow double tap draws, and the line that says it is waiting
 // for one. Both are on <body> at fixed positions: nothing the plot redraws can
 // take them away mid-gesture.
@@ -475,7 +478,18 @@ export function installTouchPlotGestures(div, plotly) {
         if (Object.keys(update).length) schedule(update);
     };
 
+    // A tap's compatibility mouse events can end with a mouseout from the
+    // plot (measured in Chromium's touch emulation, one tap in eight), and
+    // Plotly answers a mouseout by taking the hover label away: the value the
+    // tap just showed vanished. A finger has no pointer to leave with, so a
+    // mouseout this soon after a touch is not passed on.
+    let lastTouchEndAt = -Infinity;
+    const onMouseOut = (event) => {
+        if (now() - lastTouchEndAt < TAP_MOUSEOUT_GRACE_MS && onPlotSurface(event.target)) event.stopPropagation();
+    };
+
     const onTouchEnd = (event) => {
+        lastTouchEndAt = now();
         if (claimed) {
             if ((event.touches?.length || 0) === 0) claimed = false;
             return;
@@ -538,5 +552,6 @@ export function installTouchPlotGestures(div, plotly) {
     div.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
     div.addEventListener('touchend', onTouchEnd, { capture: true, passive: false });
     div.addEventListener('touchcancel', onTouchCancel, { capture: true });
+    div.addEventListener('mouseout', onMouseOut, { capture: true });
     return true;
 }

@@ -40,6 +40,17 @@ html.compact {
 
 /* Sideways: the navigation becomes a rail on the left, and the app bar sits
    beside it. There is little height to spare. */
+/* The notch's side, when known (compact-methods: _syncCompactNotchSide):
+   the other side's inset only rounds a corner, which the plot and the
+   rail can use. */
+html.compact[data-compact-notch="left"] {
+    --sar: 0px;
+}
+
+html.compact[data-compact-notch="right"] {
+    --sal: 0px;
+}
+
 html.compact.compact-landscape {
     --compact-appbar-h: 38px;
     --compact-chrome-bottom: var(--sab);
@@ -760,9 +771,6 @@ html.compact.compact-landscape .compact-sheet-size {
     margin-top: 8px;
 }
 
-.compact-data-target-name {
-    color: var(--text-primary);
-}
 
 .compact-data-target-text {
     flex: 1 1 auto;
@@ -771,10 +779,20 @@ html.compact.compact-landscape .compact-sheet-size {
     color: var(--text-secondary);
 }
 
-.compact-data-done {
+/* Done: the way back, an orange pill so it does not read as a label. */
+html.compact .compact-data-target .compact-data-done {
     flex: 0 0 auto;
-    min-height: 40px;
-    font-weight: 600;
+    min-height: 44px;
+    padding: 0 22px;
+    border-radius: 999px;
+    background: #d9650a;
+    color: #fff;
+    font-weight: 700;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+html.compact .compact-data-target .compact-data-done:active {
+    background: #b85407;
 }
 
 .compact-data-target-plots {
@@ -1198,6 +1216,11 @@ html.compact .plots-area .layout-panel {
     height: 100% !important;
     min-height: 0 !important;
     flex: 1 1 auto;
+    /* Edge to edge: the desktop's margin, border and rounded corners
+       frame one panel among several; here the plot is the screen. */
+    margin: 0;
+    border: none;
+    border-radius: 0;
 }
 
 /* The panel's toolbar lives in the Plot and Analyze sheets. */

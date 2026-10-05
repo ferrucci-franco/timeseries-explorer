@@ -95,6 +95,7 @@
     "test:data-tool-preview": "node scripts/test-data-tool-preview-in-place.mjs",
     "test:touch-drag": "node scripts/test-touch-drag.mjs",
     "test:touch-plot-gestures": "node scripts/test-touch-plot-gestures.mjs",
+    "test:anim-pacing": "node scripts/test-anim-pacing.mjs",
     "test:compact-layout": "node scripts/test-compact-layout.mjs",
     "test:fft-clean-range": "node scripts/test-fft-clean-range.mjs",
     "test:time-axis-after-transform": "node scripts/test-time-axis-after-transform.mjs",
