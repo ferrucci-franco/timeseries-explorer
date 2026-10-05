@@ -2316,9 +2316,12 @@ class PlotManager {
                 if (plot.temporalProfileDiv) Plotly.purge(plot.temporalProfileDiv);
                 Plotly.purge(plot.div);
                 temporalProfileContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the container.
+                plot.temporalProfileOptionsEl?.remove();
                 plot.div = null;
                 plot.temporalProfileDiv = null;
                 plot.temporalProfileContainer = null;
+                plot.temporalProfileOptionsEl = null;
             } else if (heatmapContainer) {
                 this._cleanupHeatmapChart?.(panelId, plot);
                 if (plot.heatmapDiv) Plotly.purge(plot.heatmapDiv);

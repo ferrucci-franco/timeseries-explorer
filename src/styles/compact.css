@@ -524,6 +524,117 @@ html.compact.compact-landscape .compact-sheet-size {
     overflow: hidden;
 }
 
+/* More: examples and the main menu, as phone lists. */
+.compact-menu-item + .compact-menu-item,
+.compact-menu-list > .compact-menu-btn + .compact-menu-btn {
+    border-top: 1px solid var(--border-color);
+}
+
+.compact-menu-row {
+    display: flex;
+    align-items: center;
+}
+
+.compact-menu-btn {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    min-height: 56px;
+    padding: 8px 14px;
+    border: none;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.compact-menu-btn:active:not(:disabled) {
+    background: var(--hover-bg);
+}
+
+.compact-menu-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.compact-menu-icon {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    color: var(--primary-color);
+}
+
+.compact-menu-icon svg {
+    width: 20px;
+    height: 20px;
+}
+
+.compact-menu-emoji {
+    font-size: 18px;
+    line-height: 1;
+}
+
+.compact-menu-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.compact-menu-label {
+    font-size: 16px;
+}
+
+.compact-menu-subtitle {
+    font-size: 14px;
+    line-height: 1.35;
+    color: var(--text-secondary);
+}
+
+.compact-menu-more {
+    flex: 0 0 auto;
+    margin-right: 6px;
+}
+
+.compact-menu-more[aria-expanded="true"] {
+    background: var(--hover-bg);
+}
+
+.compact-menu-subactions {
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
+.compact-menu-subactions[hidden] {
+    display: none;
+}
+
+.compact-menu-subactions .compact-menu-btn {
+    min-height: 48px;
+    padding-left: 30px;
+    background: transparent;
+}
+
+.compact-menu-subactions .compact-menu-icon {
+    width: 30px;
+    height: 30px;
+    background: transparent;
+}
+
+.compact-version {
+    margin-top: 18px;
+    text-align: center;
+}
+
 .compact-list-btn {
     display: flex;
     align-items: center;
@@ -1165,11 +1276,14 @@ html.compact .compact-fit-btn:active {
     background: color-mix(in srgb, var(--primary-color) 22%, var(--bg-primary));
 }
 
-/* FFT: the status stays on the plot; its buttons and options live in the
-   Analyze sheet. */
+/* FFT and the temporal profile: the status stays on the plot; their buttons
+   and options live in the Analyze sheet. */
 html.compact .fft-topbar-group,
 html.compact .fft-workspace > .fft-options,
-html.compact .fft-workspace > .edge-toggle-rail {
+html.compact .fft-workspace > .edge-toggle-rail,
+html.compact .temporal-profile-container .hist-topbar-group,
+html.compact .temporal-profile-container .hist-workspace > .hist-options,
+html.compact .temporal-profile-container .hist-workspace > .edge-toggle-rail {
     display: none !important;
 }
 
@@ -1727,6 +1841,12 @@ html.compact .compact-plot-selector {
 html.compact .compact-sheet .fft-select {
     height: auto;
     min-height: 44px;
+}
+
+/* The profile's summary under its options (periods, per-trace counts). */
+html.compact .compact-sheet .hist-summary,
+html.compact .compact-sheet .hist-summary * {
+    font-size: 14px;
 }
 
 html.compact .help-modal-close {
