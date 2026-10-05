@@ -1,7 +1,7 @@
 # Phone Web Specification
 
-Status: first slice built (2026-10-04). It covers time series, FFT and the temporal
-profile, plus CSV parsing.
+Status: first slice built (2026-10-04). It covers time series, FFT, the temporal
+profile and the integral, 2D and 3D plots and state animations, plus CSV parsing.
 
 Built:
 
@@ -12,11 +12,14 @@ Built:
 - one plot at a time, with the plot list in the Plot sheet;
 - the Data sheet, with tap-to-plot and the per-file page;
 - the Plot sheet: view and signals;
-- the Analyze sheet: time series, FFT and temporal profile, each analysis with its
+- the Analyze sheet: time series, FFT, temporal profile and integral, each analysis with its
   options lent to the sheet and its top-bar buttons (reset, V/H, hide the time
   series) as buttons there;
-- 2D (x–y) plots: the plot type in the Plot sheet, x then y by tapping in Data,
-  the pairs listed with removal, and the 1:1 aspect;
+- 2D (x–y) and 3D (x–y–z) plots: the plot type in the Plot sheet, x then y (then z)
+  by tapping in Data, the curves listed with removal, and the 1:1 aspect in 2D;
+- 2D and 3D state animations: x₁, x₂ (x₃) by tapping in Data, a tap on one
+  assigned takes it off; play, time slider, time and speed on the plot, what it
+  draws as switches in the Plot sheet;
 - the More sheet: layout, language, theme, examples and menu;
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
@@ -29,8 +32,7 @@ The code is in `src/app/methods/compact-methods.js`, `src/ui/compact-layout.js` 
 
 Not built yet:
 
-- the other analyses (histogram, heatmap, integral, correlation) and plot modes
-  (2D + t, 3D, state animation);
+- the other analyses (histogram, heatmap, correlation) and 2D + t;
 - View and Marks;
 - cursors and tap readouts;
 - export through Web Share;

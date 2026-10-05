@@ -73,11 +73,12 @@ const MENU_GROUPS = [
 const MENU_HIDDEN = new Set(['extraStandalone', 'extraOnlineVersion', 'extraPhoneLayout', 'openOpenModelicaTemp', 'openDymolaDirectory']);
 
 // Modes whose plots carry the fit buttons: the ones the phone layout drives.
-const FIT_BUTTON_MODES = new Set(['timeseries', 'phase2d', 'fft', 'temporal-profile']);
-// An analysis's own pane, next to its time pane: which mode draws it.
-const ANALYSIS_PANE_MODE = { spectrum: 'fft', profile: 'temporal-profile' };
+const FIT_BUTTON_MODES = new Set(['timeseries', 'phase2d', 'fft', 'temporal-profile', 'integral']);
+// An analysis's own pane, next to its time pane: which mode draws it. (The
+// integral's pie has no axes to fit.)
+const ANALYSIS_PANE_MODE = { spectrum: 'fft', profile: 'temporal-profile', integral: 'integral' };
 // Where a slow double tap draws a window: the modes with a time axis.
-const WINDOW_ZOOM_MODES = new Set(['timeseries', 'fft', 'temporal-profile']);
+const WINDOW_ZOOM_MODES = new Set(['timeseries', 'fft', 'temporal-profile', 'integral']);
 
 const NAV_ITEMS = [
     { id: 'data', labelKey: 'compactNavData' },
@@ -92,17 +93,26 @@ const COMPACT_ANALYSES = [
     { mode: 'timeseries', labelKey: 'compactAnalysisNone' },
     { mode: 'fft', labelKey: 'analysisItemFft' },
     { mode: 'temporal-profile', labelKey: 'analysisItemProfile' },
+    { mode: 'integral', labelKey: 'analysisItemIntegral' },
 ];
 
 // The analyses whose signals the phone layout lists and edits like a time
 // series: a tap in Data adds or removes one.
-const SIGNAL_LIST_MODES = new Set(['timeseries', 'fft', 'temporal-profile']);
+const SIGNAL_LIST_MODES = new Set(['timeseries', 'fft', 'temporal-profile', 'integral']);
 
 // Plot types the phone layout sets up end to end.
 const COMPACT_PLOT_TYPES = [
     { mode: 'timeseries', labelKey: 'modeTimeseries' },
     { mode: 'phase2d', labelKey: 'compactPlotType2d' },
+    { mode: 'phase3d', labelKey: 'compactPlotType3d' },
+    { mode: 'state-anim', dim: 2, labelKey: 'compactPlotTypeAnim2d' },
+    { mode: 'state-anim', dim: 3, labelKey: 'compactPlotTypeAnim3d' },
 ];
+
+// Plots built from signals in roles, one tap per role: x then y (then z)
+// for a curve, x₁ x₂ (x₃) for an animation's state.
+const PHASE_MODES = new Set(['phase2d', 'phase3d']);
+const STATE_SLOT_LABELS = ['x₁', 'x₂', 'x₃'];
 
 const TIME_FAMILY = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
 
@@ -567,6 +577,7 @@ export function installCompactMethods(ViewerClass) {
             if (plot.div === div) return { panelId, plot, pane: 'main' };
             if (plot.fftDiv === div) return { panelId, plot, pane: 'spectrum' };
             if (plot.temporalProfileDiv === div) return { panelId, plot, pane: 'profile' };
+            if (plot.integralDiv === div) return { panelId, plot, pane: 'integral' };
         }
         return null;
     };
@@ -577,6 +588,7 @@ export function installCompactMethods(ViewerClass) {
             if (plot.div) this._compactSyncFitButtons(plot.div);
             if (plot.fftDiv) this._compactSyncFitButtons(plot.fftDiv);
             if (plot.temporalProfileDiv) this._compactSyncFitButtons(plot.temporalProfileDiv);
+            if (plot.integralDiv) this._compactSyncFitButtons(plot.integralDiv);
         }
     };
 
@@ -590,6 +602,8 @@ export function installCompactMethods(ViewerClass) {
                 const current = this._compactPlotForDiv(div);
                 if (!this._compact.active || !current) return null;
                 if (!WINDOW_ZOOM_MODES.has(current.plot.mode)) return null;
+                // The integral's bars are per period, not a time axis to window.
+                if (current.pane === 'integral') return null;
                 return { hint: i18n.t('compactWindowZoomHint') };
             };
         }
@@ -639,7 +653,11 @@ export function installCompactMethods(ViewerClass) {
             work = axis === 'all'
                 ? () => pm._resetTemporalProfileAnalysisView(plot)
                 : () => pm._autoScaleTemporalProfileAxis(plot, axis);
-        } else if (plot.mode === 'fft' || plot.mode === 'temporal-profile') {
+        } else if (plot.mode === 'integral' && pane === 'integral') {
+            work = axis === 'all'
+                ? () => pm._resetIntegralAnalysisView(plot)
+                : () => pm._autoScaleIntegralAxis(plot, axis);
+        } else if (plot.mode === 'fft' || plot.mode === 'temporal-profile' || plot.mode === 'integral') {
             // The time pane beside the analysis is the timeseries chart.
             work = axis === 'all'
                 ? () => pm._autoScalePlotTimeOnly(plot)
@@ -905,11 +923,13 @@ export function installCompactMethods(ViewerClass) {
     // Switching a plot's type. Within the time-series family the signals are
     // kept; across families they are not, and the user is asked first, in a
     // dialog rather than the desktop's in-panel banner.
-    proto._compactSetPlotMode = async function(mode) {
+    proto._compactSetPlotMode = async function(mode, stateAnimDim = null) {
         const pm = this.plotManager;
         const panelId = this._compactActivePanelId();
         const plot = panelId ? pm.plots.get(panelId) : null;
-        if (!plot || plot.mode === mode) return;
+        if (!plot) return;
+        const sameAnim = mode !== 'state-anim' || (plot.stateAnimDim || 2) === (stateAnimDim || 2);
+        if (plot.mode === mode && sameAnim) return;
         if (TIME_FAMILY.has(plot.mode) && TIME_FAMILY.has(mode)) {
             pm._requestModeChange(panelId, mode);
         } else {
@@ -917,7 +937,7 @@ export function installCompactMethods(ViewerClass) {
                 const ok = await Modal.confirm(i18n.t('modeChangeClearsTracesWarning'), { icon: '⚠' });
                 if (!ok) return;
             }
-            pm._setMode(panelId, mode);
+            pm._setMode(panelId, mode, mode === 'state-anim' ? (stateAnimDim || 2) : null);
         }
         this._compactSyncTreeMarks();
         this._compactUpdateAppBar();
@@ -930,11 +950,25 @@ export function installCompactMethods(ViewerClass) {
     // What a 2D plot is waiting for, in words: an X signal, or the Y to pair
     // with the X already chosen.
     proto._compactPhaseHint = function(plot) {
-        const pending = plot?.phasePending?.x;
-        return pending
-            ? i18n.t('compactPendingY').replace('{x}', this._compactVarLabel(pending, plot.phasePending.fileId))
-            : i18n.t('compactPhaseHint');
+        if (plot?.mode === 'state-anim') {
+            const dim = plot.stateAnimDim || 2;
+            const filled = plot.stateSlots?.x?.length || 0;
+            return filled < dim
+                ? i18n.t('compactStateNext').replace('{slot}', STATE_SLOT_LABELS[filled])
+                : i18n.t('compactStateFull').replace('{n}', String(dim));
+        }
+        const pending = plot?.phasePending;
+        if (pending?.x && plot.mode === 'phase3d' && pending.y) {
+            return i18n.t('compactPendingZ')
+                .replace('{x}', this._compactVarLabel(pending.x, pending.fileId))
+                .replace('{y}', this._compactVarLabel(pending.y, pending.fileId));
+        }
+        if (pending?.x) return i18n.t('compactPendingY').replace('{x}', this._compactVarLabel(pending.x, pending.fileId));
+        return i18n.t(plot?.mode === 'phase3d' ? 'compactPhaseHint3d' : 'compactPhaseHint');
     };
+
+    // Does this plot take its signals in roles (x, y, z; x₁, x₂, x₃)?
+    const usesRoles = (plot) => PHASE_MODES.has(plot?.mode) || plot?.mode === 'state-anim';
 
     proto._compactVarLabel = function(varName, fileId) {
         const variable = this.plotManager.files.get(fileId || this.activeFileId)?.data?.variables?.[varName];
@@ -945,11 +979,11 @@ export function installCompactMethods(ViewerClass) {
         const banner = this._compactPhaseBanner;
         if (!banner) return;
         const plot = this.plotManager.plots.get(this._compactActivePanelId());
-        const show = plot?.mode === 'phase2d';
+        const show = usesRoles(plot);
         banner.hidden = !show;
         if (!show) return;
         banner.querySelector('.compact-phase-text').textContent = this._compactPhaseHint(plot);
-        banner.querySelector('.compact-phase-cancel').hidden = !plot.phasePending?.x;
+        banner.querySelector('.compact-phase-cancel').hidden = !(PHASE_MODES.has(plot.mode) && plot.phasePending?.x);
     };
 
     proto._compactCancelPhasePending = function() {
@@ -1024,15 +1058,23 @@ export function installCompactMethods(ViewerClass) {
         const ownerId = fileId || this.activeFileId;
         const index = (plot?.traces || []).findIndex(trace => trace.varName === varName && trace.fileId === ownerId);
         const pending = plot?.phasePending;
-        if (plot?.mode === 'phase2d' && pending?.x === varName && (pending.fileId || this.activeFileId) === ownerId) {
-            // The X waiting for its Y, tapped again: changed one's mind.
+        if (PHASE_MODES.has(plot?.mode) && pending?.x
+            && (pending.x === varName || pending.y === varName)
+            && (pending.fileId || this.activeFileId) === ownerId) {
+            // A signal of the curve still being chosen, tapped again: changed
+            // one's mind.
             this._compactCancelPhasePending();
+            return;
+        }
+        if (plot?.mode === 'state-anim') {
+            await this._compactToggleStateVar(panelId, panelEl, plot, varName, ownerId);
             return;
         }
         const removing = !!plot && index >= 0 && SIGNAL_LIST_MODES.has(plot.mode);
         if (removing) {
             if (plot.mode === 'timeseries') pm.removeTrace(panelId, varName, ownerId);
             else if (plot.mode === 'fft') pm._removeFftTraceFromLegend(panelId, plot, plot.traces[index]);
+            else if (plot.mode === 'integral') pm._removeIntegralTraceFromLegend(panelId, plot, plot.traces[index]);
             else pm._removeTemporalProfileTraceFromLegend(panelId, plot, plot.traces[index]);
         } else {
             await pm._handleVariableDrop(panelId, [varName], panelEl, { fileId });
@@ -1055,6 +1097,43 @@ export function installCompactMethods(ViewerClass) {
         });
     };
 
+    // An animation's state: a tap assigns the next of x₁, x₂ (x₃), a tap on
+    // one assigned takes it off, and a full state says so instead of
+    // silently ignoring the tap.
+    proto._compactToggleStateVar = async function(panelId, panelEl, plot, varName, ownerId) {
+        const pm = this.plotManager;
+        const slots = plot.stateSlots || (plot.stateSlots = { x: [], dx: [], fileId: null });
+        const dim = plot.stateAnimDim || 2;
+        const sameFile = !slots.fileId || slots.fileId === ownerId;
+        if (sameFile && slots.x.includes(varName)) {
+            slots.x = slots.x.filter(name => name !== varName);
+            if (!slots.x.length) {
+                pm._clearPanel(panelId);
+            } else {
+                const data = pm.files.get(slots.fileId)?.data;
+                slots.dx = data ? slots.x.map(name => pm.parser.findDerivative(name, data.variables)) : [];
+                pm._destroyChart(panelId);
+                const placeholder = panelEl.querySelector('.layout-panel-placeholder');
+                if (placeholder) placeholder.style.display = '';
+                pm._updatePlaceholder(panelId, panelEl);
+            }
+        } else if (slots.x.length >= dim) {
+            this._compactToast(this._compactPhaseHint(plot));
+            return;
+        } else if (!sameFile) {
+            // One file's state at a time: its derivatives come from it.
+            this._compactToast(i18n.t('compactStateOneFile'));
+            return;
+        } else {
+            await pm._handleVariableDrop(panelId, [varName], panelEl, { fileId: ownerId === this.activeFileId ? null : ownerId });
+        }
+        requestAnimationFrame(() => {
+            this._compactSyncTreeMarks();
+            this._compactSyncPhaseBanner();
+            this._compactUpdateAppBar();
+        });
+    };
+
     // The bar at the top of Data: "a tap adds to, or removes from: plot n",
     // with the other plots one tap away, and Done to go back.
     proto._compactSyncDataTarget = function() {
@@ -1067,7 +1146,11 @@ export function installCompactMethods(ViewerClass) {
         const activeId = this._compactActivePanelId();
         const plot = activeId ? this.plotManager.plots.get(activeId) : null;
         const head = el('div', 'compact-data-target-head');
-        const text = el('span', 'compact-data-target-text', i18n.t(plot?.mode === 'phase2d' ? 'compactTapTargetPhase' : 'compactTapTarget'));
+        const targetKey = plot?.mode === 'phase2d' ? 'compactTapTargetPhase'
+            : plot?.mode === 'phase3d' ? 'compactTapTargetPhase3d'
+            : plot?.mode === 'state-anim' ? 'compactTapTargetState'
+            : 'compactTapTarget';
+        const text = el('span', 'compact-data-target-text', i18n.t(targetKey));
         // One plot: its name ends the sentence. Several: they are chips below.
         if (ids.length === 1) {
             text.append(' ', el('strong', 'compact-data-target-name', i18n.t('compactPlotN').replace('{n}', '1')));
@@ -1125,21 +1208,28 @@ export function installCompactMethods(ViewerClass) {
             if (!list.includes(role)) list.push(role);
             roles.set(key, list);
         };
-        if (plot?.mode === 'phase2d') {
-            for (const pair of plot.phaseTraces || []) {
-                addRole(pair.fileId, pair.x, 'x');
-                addRole(pair.fileId, pair.y, 'y');
+        if (PHASE_MODES.has(plot?.mode)) {
+            for (const curve of plot.phaseTraces || []) {
+                addRole(curve.fileId, curve.x, 'x');
+                addRole(curve.fileId, curve.y, 'y');
+                if (plot.mode === 'phase3d') addRole(curve.fileId, curve.z, 'z');
             }
+        } else if (plot?.mode === 'state-anim') {
+            (plot.stateSlots?.x || []).forEach((name, index) => addRole(plot.stateSlots.fileId, name, STATE_SLOT_LABELS[index]));
         }
-        const pendingKey = plot?.mode === 'phase2d' && plot.phasePending?.x
-            ? `${plot.phasePending.fileId || this.activeFileId}\u0000${plot.phasePending.x}`
-            : null;
+        // The curve still being chosen: its signals, marked as waiting.
+        const pending = new Map();
+        if (PHASE_MODES.has(plot?.mode) && plot.phasePending?.x) {
+            const fileId = plot.phasePending.fileId || this.activeFileId;
+            pending.set(`${fileId}\u0000${plot.phasePending.x}`, 'x …');
+            if (plot.phasePending.y) pending.set(`${fileId}\u0000${plot.phasePending.y}`, 'y …');
+        }
         document.querySelectorAll('#variables-tree .tree-item[data-var-name]').forEach(item => {
             const key = `${item.dataset.fileId || this.activeFileId}\u0000${item.dataset.varName}`;
             const role = roles.get(key);
             item.classList.toggle('compact-on-plot', onPlot.has(key) || !!role);
-            item.classList.toggle('compact-pending', key === pendingKey);
-            if (key === pendingKey) item.dataset.compactRole = 'x …';
+            item.classList.toggle('compact-pending', pending.has(key));
+            if (pending.has(key)) item.dataset.compactRole = pending.get(key);
             else if (role) item.dataset.compactRole = role.join(', ');
             else delete item.dataset.compactRole;
         });
@@ -1240,14 +1330,17 @@ export function installCompactMethods(ViewerClass) {
         node.appendChild(plots);
 
         const typeSection = section(i18n.t('compactPlotType'));
-        const typeRow = el('div', 'compact-segmented');
+        const typeRow = el('div', 'compact-list compact-radio-list compact-plot-types');
         typeRow.setAttribute('role', 'radiogroup');
         const currentMode = plot?.mode || 'timeseries';
         for (const type of COMPACT_PLOT_TYPES) {
-            const selected = type.mode === 'timeseries' ? TIME_FAMILY.has(currentMode) : currentMode === type.mode;
-            const btn = button(`compact-segment${selected ? ' is-active' : ''}`, i18n.t(type.labelKey), () => {
-                if (!selected) this._compactSetPlotMode(type.mode);
+            const selected = type.mode === 'timeseries' ? TIME_FAMILY.has(currentMode)
+                : type.mode === 'state-anim' ? currentMode === 'state-anim' && (plot?.stateAnimDim || 2) === type.dim
+                : currentMode === type.mode;
+            const btn = button(`compact-list-btn compact-radio${selected ? ' is-active' : ''}`, i18n.t(type.labelKey), () => {
+                if (!selected) this._compactSetPlotMode(type.mode, type.dim || null);
             });
+            btn.dataset.plotType = type.dim ? `${type.mode}-${type.dim}d` : type.mode;
             btn.setAttribute('role', 'radio');
             btn.setAttribute('aria-checked', String(selected));
             typeRow.appendChild(btn);
@@ -1267,6 +1360,8 @@ export function installCompactMethods(ViewerClass) {
             viewRow.appendChild(button('compact-secondary-btn', i18n.t('fftResetLabel'), () => pm._resetFftView(panelId), { title: i18n.t('fftResetView') }));
         } else if (mode === 'temporal-profile') {
             viewRow.appendChild(button('compact-secondary-btn', i18n.t('temporalProfileReset'), () => pm._resetTemporalProfileView(panelId), { title: i18n.t('temporalProfileResetTip') }));
+        } else if (mode === 'integral') {
+            viewRow.appendChild(button('compact-secondary-btn', i18n.t('integralReset'), () => pm._resetIntegralView(panelId), { title: i18n.t('integralResetTip') }));
         } else if (mode !== 'timeseries') {
             // Fitting X and Y apart means nothing in a phase plot or a 3D scene.
             const autoBtn = button('compact-secondary-btn', '⛶ ' + i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))));
@@ -1283,8 +1378,10 @@ export function installCompactMethods(ViewerClass) {
 
         const signals = section(i18n.t('compactSignalsOnPlot'));
         const traces = plot?.traces || [];
-        if (mode === 'phase2d') {
+        if (PHASE_MODES.has(mode)) {
             this._buildCompactPhasePairs(signals, panelId, plot);
+        } else if (mode === 'state-anim') {
+            this._buildCompactStateSlots(signals, panelId, plot);
         } else if (!SIGNAL_LIST_MODES.has(mode)) {
             // Phase plots and animations pair their signals in roles (x, y,
             // z, dx/dt) that the phone layout does not edit yet.
@@ -1350,7 +1447,8 @@ export function installCompactMethods(ViewerClass) {
                 const row = el('div', 'compact-trace-row');
                 const swatch = el('span', 'compact-swatch');
                 swatch.style.background = pair.color || 'currentColor';
-                const label = `${this._compactVarLabel(pair.x, pair.fileId)} / ${this._compactVarLabel(pair.y, pair.fileId)}`;
+                const label = [pair.x, pair.y, plot.mode === 'phase3d' ? pair.z : null]
+                    .filter(Boolean).map(name => this._compactVarLabel(name, pair.fileId)).join(' / ');
                 const name = el('span', 'compact-trace-name', label);
                 const remove = button('compact-icon-btn compact-trace-remove', '', async () => {
                     await pm._removePhaseTraceFromLegend(panelId, plot, pair);
@@ -1369,7 +1467,7 @@ export function installCompactMethods(ViewerClass) {
             }
             container.appendChild(list);
         } else {
-            container.appendChild(el('p', 'compact-note', i18n.t('compactPhaseHint')));
+            container.appendChild(el('p', 'compact-note', this._compactPhaseHint(plot)));
         }
         const actions = el('div', 'compact-action-row');
         actions.appendChild(button('compact-secondary-btn', i18n.t('compactChooseSignals'), () => this._openCompactSheet('data', { toggle: false, returnTo: 'plot' })));
@@ -1382,7 +1480,7 @@ export function installCompactMethods(ViewerClass) {
             }));
         }
         container.appendChild(actions);
-        if (pairs.length) {
+        if (pairs.length && plot.mode === 'phase2d') {
             const aspect = el('label', 'compact-switch-row');
             const input = el('input');
             input.type = 'checkbox';
@@ -1392,6 +1490,66 @@ export function installCompactMethods(ViewerClass) {
             aspect.append(el('span', '', i18n.t('viewEqualAspect')), input);
             container.appendChild(aspect);
         }
+    };
+
+    // An animation's state variables, each with its role and a way off; then
+    // what the animation draws, as switches (its checkboxes, under the plot
+    // on the desktop, are too small and too many for a phone's bar).
+    proto._buildCompactStateSlots = function(container, panelId, plot) {
+        const pm = this.plotManager;
+        const slots = plot?.stateSlots || { x: [], fileId: null };
+        if (slots.x.length) {
+            const list = el('div', 'compact-list');
+            slots.x.forEach((name, index) => {
+                const row = el('div', 'compact-trace-row');
+                row.appendChild(el('span', 'compact-state-role', STATE_SLOT_LABELS[index]));
+                const label = this._compactVarLabel(name, slots.fileId);
+                row.appendChild(el('span', 'compact-trace-name', label));
+                row.appendChild(button('compact-icon-btn compact-trace-remove', '', async () => {
+                    const panelEl = this._compactActivePanelEl();
+                    if (panelEl) await this._compactToggleStateVar(panelId, panelEl, plot, name, slots.fileId);
+                    this._renderCompactSheetContent();
+                }, { icon: SVG.close, title: i18n.t('compactRemoveSignal').replace('{name}', label) }));
+                list.appendChild(row);
+            });
+            container.appendChild(list);
+        }
+        if (slots.x.length < (plot?.stateAnimDim || 2)) container.appendChild(el('p', 'compact-note', this._compactPhaseHint(plot)));
+        const actions = el('div', 'compact-action-row');
+        actions.appendChild(button('compact-secondary-btn', i18n.t('compactChooseSignals'), () => this._openCompactSheet('data', { toggle: false, returnTo: 'plot' })));
+        if (slots.x.length) {
+            actions.appendChild(button('compact-secondary-btn compact-danger-btn', i18n.t('clearPlot'), () => {
+                pm._clearPanel(panelId);
+                this._compactSyncTreeMarks();
+                this._compactUpdateAppBar();
+                this._renderCompactSheetContent();
+            }));
+        }
+        container.appendChild(actions);
+
+        const controls = this._compactActivePanelEl()?.querySelector('.state-anim-controls');
+        if (!controls) return;
+        const display = el('div', 'compact-state-display');
+        display.appendChild(el('h3', 'compact-section-title', i18n.t('compactAnimation')));
+        for (const [selector, key] of [
+            ['.sa-chk-full', 'saFull'], ['.sa-chk-trace', 'saTrace'], ['.sa-chk-arrow', 'saArrowX'],
+            ['.sa-chk-dx', 'saArrowDx'], ['.sa-chk-norm', 'saNorm'], ['.sa-chk-dzoom', 'saDZoom'],
+        ]) {
+            const source = controls.querySelector(selector);
+            const holder = source?.closest('.sa-toggle');
+            if (!source || holder?.style.display === 'none') continue;
+            const row = el('label', 'compact-switch-row');
+            const input = el('input');
+            input.type = 'checkbox';
+            input.checked = source.checked;
+            input.addEventListener('change', () => {
+                source.checked = input.checked;
+                source.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            row.append(el('span', '', i18n.t(key)), input);
+            display.appendChild(row);
+        }
+        container.appendChild(display);
     };
 
     // ─── Analyze ──────────────────────────────────────────────────
@@ -1428,6 +1586,25 @@ export function installCompactMethods(ViewerClass) {
                     } },
                     { label: timeLabel, title: timeLabel, run: () => {
                         pm._toggleTemporalProfileTimeSeries(panelId);
+                        this._renderCompactSheetContent();
+                    } },
+                ],
+            };
+        }
+        if (mode === 'integral') {
+            const hidden = !!pm._ensureIntegralState(plot).timeSeriesHidden;
+            const timeLabel = i18n.t(hidden ? 'integralShowTime' : 'integralHideTime');
+            return {
+                titleKey: 'compactIntegralOptions',
+                options: () => pm._integralOptionsPanel(plot),
+                actions: [
+                    { label: i18n.t('integralReset'), title: i18n.t('integralResetTip'), run: () => pm._resetIntegralView(panelId) },
+                    { label: 'V/H', title: i18n.t('fftLayoutToggle'), run: () => {
+                        const current = pm._ensureIntegralState(plot).layout;
+                        pm._setIntegralLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
+                    } },
+                    { label: timeLabel, title: timeLabel, run: () => {
+                        pm._toggleIntegralTimeSeries(panelId);
                         this._renderCompactSheetContent();
                     } },
                 ],

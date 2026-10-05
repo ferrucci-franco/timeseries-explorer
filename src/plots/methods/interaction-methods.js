@@ -5386,11 +5386,24 @@ proto._updatePlaceholder = function(panelId, panelEl) {
     if (this.compactLayout) {
         placeholder.innerHTML = '';
         const text = document.createElement('span');
-        // A 2D plot is built from x–y pairs: say which signal comes next.
-        const pending = plot?.phasePending?.x;
-        text.textContent = plot?.mode === 'phase2d'
-            ? (pending ? i18n.t('compactPendingY').replace('{x}', pending) : i18n.t('compactPlaceholderPhase2d'))
-            : i18n.t('compactPlaceholderEmpty');
+        // A 2D or 3D plot is built from signals in roles, an animation from
+        // its state variables: say which signal comes next.
+        const pending = plot?.phasePending || {};
+        const mode = plot?.mode;
+        if (mode === 'phase3d' && pending.x && pending.y) {
+            text.textContent = i18n.t('compactPendingZ').replace('{x}', pending.x).replace('{y}', pending.y);
+        } else if ((mode === 'phase2d' || mode === 'phase3d') && pending.x) {
+            text.textContent = i18n.t('compactPendingY').replace('{x}', pending.x);
+        } else if (mode === 'phase2d') {
+            text.textContent = i18n.t('compactPlaceholderPhase2d');
+        } else if (mode === 'phase3d') {
+            text.textContent = i18n.t('compactPlaceholderPhase3d');
+        } else if (mode === 'state-anim') {
+            const filled = plot.stateSlots?.x?.length || 0;
+            text.textContent = i18n.t('compactStateNext').replace('{slot}', ['x₁', 'x₂', 'x₃'][filled] || 'x₁');
+        } else {
+            text.textContent = i18n.t('compactPlaceholderEmpty');
+        }
         const choose = document.createElement('button');
         choose.type = 'button';
         choose.className = 'compact-placeholder-btn';
