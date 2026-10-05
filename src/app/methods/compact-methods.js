@@ -49,6 +49,10 @@ const SVG = {
     chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>',
     download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
     copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h11v12H8z"/><path d="M5 16V4h11"/></svg>',
+    // A file's actions.
+    table: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 9v11"/></svg>',
+    layers: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>',
+    clock: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 7v5l3 2"/></svg>',
 };
 
 // The main menu on a phone: its items by what they are for, each with its
@@ -1276,48 +1280,50 @@ export function installCompactMethods(ViewerClass) {
         if (!this._compact?.active || !entry) return;
         const entryData = this.files.get(fileId);
         const node = el('div', 'compact-page compact-page-file');
-        const list = el('div', 'compact-list');
-        const addAction = (label, icon, onClick, className = '') => {
-            const btn = button(`compact-list-btn ${className}`, label, () => {
-                this._popCompactPage();
+        // A phone list, not the desktop row's small glyph buttons: one row per
+        // action, each with its own coloured icon, and a chevron where the
+        // action opens a page or dialog rather than acting at once.
+        const list = el('div', 'compact-action-list');
+        const addAction = ({ label, icon, tone, onClick, opens = false, keepPage = false, danger = false }) => {
+            const btn = button(`compact-action-row${danger ? ' is-danger' : ''}`, '', () => {
+                if (!keepPage) this._popCompactPage();
                 onClick();
             });
-            if (icon) {
-                const iconSpan = el('span', 'compact-btn-icon');
-                if (icon instanceof Element) iconSpan.appendChild(icon);
-                else iconSpan.textContent = icon;
-                btn.prepend(iconSpan);
+            const tile = el('span', `compact-action-icon tone-${tone}`);
+            tile.innerHTML = icon;
+            const text = el('span', 'compact-action-label', label.replace(/\.\.\.$|…$/, ''));
+            btn.append(tile, text);
+            if (opens) {
+                const chevron = el('span', 'compact-action-chevron');
+                chevron.innerHTML = SVG.hideRight;
+                btn.appendChild(chevron);
             }
             list.appendChild(btn);
         };
         if (fileId !== this.activeFileId) {
-            addAction(i18n.t('compactShowVariables'), '☰', () => this.setActiveFile(fileId));
+            addAction({ label: i18n.t('compactShowVariables'), icon: SVG.data, tone: 'blue', onClick: () => this.setActiveFile(fileId) });
         }
-        const rowButtons = [
-            '.file-entry-csv-parsing',
-            '.file-entry-mat-arrays',
-            '.file-entry-transform',
-            '.file-entry-save',
-            '.file-entry-close',
+        const actions = [
+            { selector: '.file-entry-csv-parsing', icon: SVG.table, tone: 'teal', opens: true },
+            { selector: '.file-entry-mat-arrays', icon: SVG.layers, tone: 'purple', opens: true },
+            // The time axis opens as a page of its own, one level below this one.
+            { selector: '.file-entry-transform', icon: SVG.clock, tone: 'orange', opens: true, label: i18n.t('compactTimeAxisPage'), page: () => this._openCompactTimeAxisPage(fileId) },
+            { selector: '.file-entry-save', icon: SVG.download, tone: 'green' },
+            { selector: '.file-entry-close', icon: SVG.close, tone: 'red', danger: true },
         ];
-        for (const selector of rowButtons) {
-            const source = entry.querySelector(selector);
+        for (const action of actions) {
+            const source = entry.querySelector(action.selector);
             if (!source || source.hidden) continue;
-            // The time axis opens as a page of its own, one level below this
-            // one, instead of unfolding the desktop panel inside the list.
-            if (selector === '.file-entry-transform') {
-                const btn = button('compact-list-btn', (source.getAttribute('aria-label') || source.title).replace(/\.\.\.$|…$/, ''),
-                    () => this._openCompactTimeAxisPage(fileId));
-                const iconSpan = el('span', 'compact-btn-icon', (source.textContent || '').trim());
-                btn.prepend(iconSpan);
-                list.appendChild(btn);
-                continue;
-            }
-            const label = source.getAttribute('aria-label') || source.title || source.textContent;
-            const svg = source.querySelector('svg');
-            const icon = svg ? svg.cloneNode(true) : (source.textContent || '').trim();
-            addAction(label.replace(/\.\.\.$|…$/, ''), selector === '.file-entry-close' ? '✕' : icon, () => source.click(),
-                selector === '.file-entry-close' ? 'compact-list-btn-danger' : '');
+            const label = action.label || source.getAttribute('aria-label') || source.title || source.textContent || '';
+            addAction({
+                label,
+                icon: action.icon,
+                tone: action.tone,
+                opens: action.opens,
+                danger: action.danger,
+                keepPage: !!action.page,
+                onClick: action.page || (() => source.click()),
+            });
         }
         node.appendChild(list);
         this._pushCompactPage({
