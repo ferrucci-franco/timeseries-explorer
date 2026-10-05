@@ -768,10 +768,20 @@ html.compact.compact-landscape .compact-sheet-size {
     color: var(--text-secondary);
 }
 
-.compact-data-done {
+/* Done: the way back, an orange pill so it does not read as a label. */
+html.compact .compact-data-target .compact-data-done {
     flex: 0 0 auto;
-    min-height: 40px;
-    font-weight: 600;
+    min-height: 44px;
+    padding: 0 22px;
+    border-radius: 999px;
+    background: #d9650a;
+    color: #fff;
+    font-weight: 700;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+html.compact .compact-data-target .compact-data-done:active {
+    background: #b85407;
 }
 
 .compact-data-target-plots {
