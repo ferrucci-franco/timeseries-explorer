@@ -185,6 +185,31 @@ try {
     assert.ok(cosP > 0.999, `perspective: no rotation (cos = ${cosP})`);
     assert.ok(dist(afterPersp) < dist(beforePersp) / 1.5, `perspective: the camera moved closer (${dist(beforePersp).toFixed(2)} → ${dist(afterPersp).toFixed(2)})`);
 
+    // ── Two fingers moving together pan, as on a map ──
+    // The point the camera looks at slides with the fingers; the camera turns
+    // no more and comes no closer than the fingers ask (they keep their gap).
+    const readCamera = () => page.evaluate(id => {
+        const scene = window.app.plotManager.plots.get(id).div._fullLayout.scene._scene;
+        const { eye, center } = scene.getCamera();
+        return { eye, center };
+    }, panelId);
+    const camBefore = await readCamera();
+    await touch('touchStart', [[box.cx - 40, box.cy], [box.cx + 40, box.cy]]);
+    for (let step = 1; step <= 10; step++) {
+        await touch('touchMove', [[box.cx - 40 + step * 6, box.cy + step * 3], [box.cx + 40 + step * 6, box.cy + step * 3]]);
+    }
+    await touch('touchEnd', []);
+    await page.waitForTimeout(400);
+    const camAfter = await readCamera();
+    const sub = (p, q) => ({ x: p.x - q.x, y: p.y - q.y, z: p.z - q.z });
+    const norm = (v) => Math.hypot(v.x, v.y, v.z);
+    const look = (cam) => sub(cam.eye, cam.center);
+    const [lb, la] = [look(camBefore), look(camAfter)];
+    const cosPan = (lb.x * la.x + lb.y * la.y + lb.z * la.z) / (norm(lb) * norm(la));
+    assert.ok(norm(sub(camAfter.center, camBefore.center)) > 1e-3, 'two fingers moving together pan the scene');
+    assert.ok(cosPan > 0.9999, `the pan does not rotate (cos = ${cosPan})`);
+    assert.ok(Math.abs(norm(la) / norm(lb) - 1) < 0.02, `nor zoom (${norm(lb).toFixed(3)} → ${norm(la).toFixed(3)})`);
+
     // ── Each pair mode keeps its own display, and starts on Lines ──
     const displayOf = (mode) => page.evaluate(({ id, mode }) => {
         const pm = window.app.plotManager;

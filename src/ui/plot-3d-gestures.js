@@ -1,4 +1,4 @@
-// Two fingers on a 3D plot: zoom, and nothing else.
+// Two fingers on a 3D plot: zoom and pan, as on a map.
 //
 // Plotly's gl3d camera reads a touch as a mouse with one button: every
 // touchmove rotates by how far `changedTouches[0]` moved since the last event.
@@ -14,6 +14,8 @@
 // So on a 3D scene this module takes:
 //
 //   two fingers   pinch zoom   the scene scales by how far the fingers spread;
+//                 and pan      and slides with them as they move together, the
+//                              view under the fingers staying under them.
 //                              Plotly sees nothing until the last finger lifts,
 //                              so a finger left behind never turns into a jump
 //   the wheel     zoom         proportional to the delta, so a trackpad pinch
@@ -47,6 +49,34 @@ function sceneAt(div, target) {
         if (scene?.container?.contains?.(target) && scene.glplot && scene.camera) return scene;
     }
     return null;
+}
+
+const midpoint = (touches) => ({
+    x: (touches[0].clientX + touches[1].clientX) / 2,
+    y: (touches[0].clientY + touches[1].clientY) / 2,
+});
+
+/**
+ * Scene units per screen pixel, at the depth of what the camera looks at:
+ * how far the camera moves for the view to slide by one pixel. Read off the
+ * projection, so it holds in both projections and at any zoom.
+ */
+export function panUnitsPerPixel({ ortho, projectionYScale, distance, heightPx }) {
+    if (!(projectionYScale > 0) || !(heightPx > 0)) return 0;
+    // Perspective: the visible half-height at depth d is d / P[5]; ortho: 1 / P[5].
+    const halfHeight = ortho ? 1 / projectionYScale : distance / projectionYScale;
+    return Number.isFinite(halfHeight) ? (2 * halfHeight) / heightPx : 0;
+}
+
+function panScale(scene) {
+    const projection = scene.glplot?.cameraParams?.projection;
+    const canvas = scene.glplot?.canvas || scene.container;
+    return panUnitsPerPixel({
+        ortho: !!scene.camera._ortho,
+        projectionYScale: Number(projection?.[5]),
+        distance: Number(scene.camera.distance),
+        heightPx: canvas?.clientHeight || 0,
+    });
 }
 
 const separation = (touches) => {
@@ -203,6 +233,7 @@ export function install3DSceneGestures(div) {
         if ((event.touches?.length || 0) >= 2) {
             pinch.start = separation(event.touches);
             pinch.base = zoomBase(pinch.scene);
+            pinch.mid = midpoint(event.touches);
         }
     };
 
@@ -211,6 +242,19 @@ export function install3DSceneGestures(div) {
         event.stopPropagation();
         event.preventDefault();
         if ((event.touches?.length || 0) < 2 || !pinch.base) return;
+        // Pan: the fingers' midpoint since the last move, the same way Plotly
+        // pans for a right-button drag (camera.pan, in view space).
+        const mid = midpoint(event.touches);
+        if (pinch.mid) {
+            const dx = mid.x - pinch.mid.x;
+            const dy = mid.y - pinch.mid.y;
+            const perPx = panScale(pinch.scene);
+            if (perPx > 0 && (dx || dy) && typeof pinch.scene.camera.pan === 'function') {
+                try { pinch.scene.camera.pan(-dx * perPx, dy * perPx, 0); } catch (_) { /* scene disposed */ }
+                pinch.moved = true;
+            }
+        }
+        pinch.mid = mid;
         const now = separation(event.touches);
         if (pinch.start < MIN_SEPARATION_PX || now < MIN_SEPARATION_PX) return;
         const scale = clamp(now / pinch.start, 1 / MAX_GESTURE_SCALE, MAX_GESTURE_SCALE);
@@ -234,6 +278,7 @@ export function install3DSceneGestures(div) {
             // A third finger lifted: carry on from here.
             pinch.start = separation(event.touches);
             pinch.base = zoomBase(pinch.scene);
+            pinch.mid = midpoint(event.touches);
         } else {
             // Down to one finger: hold still until it lifts or a second one
             // lands, rather than handing a stale drag back to the orbit.
