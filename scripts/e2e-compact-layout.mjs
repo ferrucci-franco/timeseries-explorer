@@ -573,6 +573,25 @@ try {
         assert.equal(await rolesPage.locator('.compact-active-panel .sa-toggle').first().isVisible(), false,
             'the display checkboxes leave the bar');
         await shot(rolesPage, 'anim-2d');
+        // Playing, it keeps still under a finger (Safari drops a tap's click
+        // when the page changes during it), and pause stops it at one tap.
+        const animFrame = () => rolesPage.evaluate(() => window.app.plotManager.plots.get(window.app._compactActivePanelId()).animFrame);
+        const animPlaying = () => rolesPage.evaluate(() => !!window.app.plotManager.plots.get(window.app._compactActivePanelId()).animPlaying);
+        if (!(await animPlaying())) await play.tap();
+        await rolesPage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId()).animFrame > 5);
+        const touchCdp = await rolesContext.newCDPSession(rolesPage);
+        await touchCdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 300, y: 300 }] });
+        const heldAt = await animFrame();
+        await rolesPage.waitForTimeout(500);
+        assert.equal(await animFrame(), heldAt, 'a finger on the screen holds the animation still');
+        await touchCdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await rolesPage.waitForFunction((at) => window.app.plotManager.plots.get(window.app._compactActivePanelId()).animFrame !== at, heldAt, { timeout: 5000 });
+        await touchCdp.detach();
+        await play.tap();
+        assert.equal(await animPlaying(), false, 'pause stops it at the first tap');
+        const pausedAt = await animFrame();
+        await rolesPage.waitForTimeout(400);
+        assert.equal(await animFrame(), pausedAt, 'and it stays stopped');
         // …for switches in the Plot sheet, which set the animation's own.
         await rolesPage.locator('.compact-nav-btn[data-sheet="plot"]').click();
         const fullSwitch = rolesPage.locator('.compact-state-display .compact-switch-row', { hasText: 'full trajectory' }).locator('input');
