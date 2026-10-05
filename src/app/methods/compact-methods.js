@@ -73,11 +73,12 @@ const MENU_GROUPS = [
 const MENU_HIDDEN = new Set(['extraStandalone', 'extraOnlineVersion', 'extraPhoneLayout', 'openOpenModelicaTemp', 'openDymolaDirectory']);
 
 // Modes whose plots carry the fit buttons: the ones the phone layout drives.
-const FIT_BUTTON_MODES = new Set(['timeseries', 'phase2d', 'fft', 'temporal-profile']);
-// An analysis's own pane, next to its time pane: which mode draws it.
-const ANALYSIS_PANE_MODE = { spectrum: 'fft', profile: 'temporal-profile' };
+const FIT_BUTTON_MODES = new Set(['timeseries', 'phase2d', 'fft', 'temporal-profile', 'integral']);
+// An analysis's own pane, next to its time pane: which mode draws it. (The
+// integral's pie has no axes to fit.)
+const ANALYSIS_PANE_MODE = { spectrum: 'fft', profile: 'temporal-profile', integral: 'integral' };
 // Where a slow double tap draws a window: the modes with a time axis.
-const WINDOW_ZOOM_MODES = new Set(['timeseries', 'fft', 'temporal-profile']);
+const WINDOW_ZOOM_MODES = new Set(['timeseries', 'fft', 'temporal-profile', 'integral']);
 
 const NAV_ITEMS = [
     { id: 'data', labelKey: 'compactNavData' },
@@ -92,11 +93,12 @@ const COMPACT_ANALYSES = [
     { mode: 'timeseries', labelKey: 'compactAnalysisNone' },
     { mode: 'fft', labelKey: 'analysisItemFft' },
     { mode: 'temporal-profile', labelKey: 'analysisItemProfile' },
+    { mode: 'integral', labelKey: 'analysisItemIntegral' },
 ];
 
 // The analyses whose signals the phone layout lists and edits like a time
 // series: a tap in Data adds or removes one.
-const SIGNAL_LIST_MODES = new Set(['timeseries', 'fft', 'temporal-profile']);
+const SIGNAL_LIST_MODES = new Set(['timeseries', 'fft', 'temporal-profile', 'integral']);
 
 // Plot types the phone layout sets up end to end.
 const COMPACT_PLOT_TYPES = [
@@ -575,6 +577,7 @@ export function installCompactMethods(ViewerClass) {
             if (plot.div === div) return { panelId, plot, pane: 'main' };
             if (plot.fftDiv === div) return { panelId, plot, pane: 'spectrum' };
             if (plot.temporalProfileDiv === div) return { panelId, plot, pane: 'profile' };
+            if (plot.integralDiv === div) return { panelId, plot, pane: 'integral' };
         }
         return null;
     };
@@ -585,6 +588,7 @@ export function installCompactMethods(ViewerClass) {
             if (plot.div) this._compactSyncFitButtons(plot.div);
             if (plot.fftDiv) this._compactSyncFitButtons(plot.fftDiv);
             if (plot.temporalProfileDiv) this._compactSyncFitButtons(plot.temporalProfileDiv);
+            if (plot.integralDiv) this._compactSyncFitButtons(plot.integralDiv);
         }
     };
 
@@ -598,6 +602,8 @@ export function installCompactMethods(ViewerClass) {
                 const current = this._compactPlotForDiv(div);
                 if (!this._compact.active || !current) return null;
                 if (!WINDOW_ZOOM_MODES.has(current.plot.mode)) return null;
+                // The integral's bars are per period, not a time axis to window.
+                if (current.pane === 'integral') return null;
                 return { hint: i18n.t('compactWindowZoomHint') };
             };
         }
@@ -647,7 +653,11 @@ export function installCompactMethods(ViewerClass) {
             work = axis === 'all'
                 ? () => pm._resetTemporalProfileAnalysisView(plot)
                 : () => pm._autoScaleTemporalProfileAxis(plot, axis);
-        } else if (plot.mode === 'fft' || plot.mode === 'temporal-profile') {
+        } else if (plot.mode === 'integral' && pane === 'integral') {
+            work = axis === 'all'
+                ? () => pm._resetIntegralAnalysisView(plot)
+                : () => pm._autoScaleIntegralAxis(plot, axis);
+        } else if (plot.mode === 'fft' || plot.mode === 'temporal-profile' || plot.mode === 'integral') {
             // The time pane beside the analysis is the timeseries chart.
             work = axis === 'all'
                 ? () => pm._autoScalePlotTimeOnly(plot)
@@ -1064,6 +1074,7 @@ export function installCompactMethods(ViewerClass) {
         if (removing) {
             if (plot.mode === 'timeseries') pm.removeTrace(panelId, varName, ownerId);
             else if (plot.mode === 'fft') pm._removeFftTraceFromLegend(panelId, plot, plot.traces[index]);
+            else if (plot.mode === 'integral') pm._removeIntegralTraceFromLegend(panelId, plot, plot.traces[index]);
             else pm._removeTemporalProfileTraceFromLegend(panelId, plot, plot.traces[index]);
         } else {
             await pm._handleVariableDrop(panelId, [varName], panelEl, { fileId });
@@ -1349,6 +1360,8 @@ export function installCompactMethods(ViewerClass) {
             viewRow.appendChild(button('compact-secondary-btn', i18n.t('fftResetLabel'), () => pm._resetFftView(panelId), { title: i18n.t('fftResetView') }));
         } else if (mode === 'temporal-profile') {
             viewRow.appendChild(button('compact-secondary-btn', i18n.t('temporalProfileReset'), () => pm._resetTemporalProfileView(panelId), { title: i18n.t('temporalProfileResetTip') }));
+        } else if (mode === 'integral') {
+            viewRow.appendChild(button('compact-secondary-btn', i18n.t('integralReset'), () => pm._resetIntegralView(panelId), { title: i18n.t('integralResetTip') }));
         } else if (mode !== 'timeseries') {
             // Fitting X and Y apart means nothing in a phase plot or a 3D scene.
             const autoBtn = button('compact-secondary-btn', '⛶ ' + i18n.t('viewHome'), () => run(() => pm._autoScalePlot(panelId, pm.plots.get(panelId))));
@@ -1573,6 +1586,25 @@ export function installCompactMethods(ViewerClass) {
                     } },
                     { label: timeLabel, title: timeLabel, run: () => {
                         pm._toggleTemporalProfileTimeSeries(panelId);
+                        this._renderCompactSheetContent();
+                    } },
+                ],
+            };
+        }
+        if (mode === 'integral') {
+            const hidden = !!pm._ensureIntegralState(plot).timeSeriesHidden;
+            const timeLabel = i18n.t(hidden ? 'integralShowTime' : 'integralHideTime');
+            return {
+                titleKey: 'compactIntegralOptions',
+                options: () => pm._integralOptionsPanel(plot),
+                actions: [
+                    { label: i18n.t('integralReset'), title: i18n.t('integralResetTip'), run: () => pm._resetIntegralView(panelId) },
+                    { label: 'V/H', title: i18n.t('fftLayoutToggle'), run: () => {
+                        const current = pm._ensureIntegralState(plot).layout;
+                        pm._setIntegralLayout(panelId, current === 'horizontal' ? 'vertical' : 'horizontal');
+                    } },
+                    { label: timeLabel, title: timeLabel, run: () => {
+                        pm._toggleIntegralTimeSeries(panelId);
                         this._renderCompactSheetContent();
                     } },
                 ],

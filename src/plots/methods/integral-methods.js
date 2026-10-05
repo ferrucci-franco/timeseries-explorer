@@ -381,6 +381,9 @@ proto._createIntegralChart = function(panelId, panelEl) {
 
     plot.integralContainer = container;
     plot.integralDiv = integralDiv;
+    // Kept by reference: the phone layout lends this panel to its Analyze
+    // sheet, where a lookup inside the container would no longer find it.
+    plot.integralOptionsEl = options;
     plot.integralPieDiv = pieDiv;
     plot.div = timeDiv;
     container.style.setProperty('--integral-pie-split', `${Math.round(state.pieSplit * 1000) / 10}%`);
@@ -751,7 +754,7 @@ proto._toggleIntegralOptions = function(panelId) {
     const state = this._ensureIntegralState(plot);
     state.optionsVisible = !state.optionsVisible;
     syncEdgeToggle(plot.integralContainer, !state.optionsVisible);
-    const options = plot.integralContainer.querySelector('.hist-options');
+    const options = this._integralOptionsPanel(plot);
     if (options) options.hidden = !state.optionsVisible;
     const button = plot.integralContainer.querySelector('.hist-options-btn');
     if (button) {
@@ -1419,7 +1422,7 @@ proto._setIntegralStatus = function(plot, summary, warnings = [], kind = 'muted'
 };
 
 proto._syncIntegralMessage = function(plot) {
-    const box = plot?.integralContainer?.querySelector('.integral-message');
+    const box = this._integralOptionsPanel(plot)?.querySelector('.integral-message');
     if (!box) return;
     const warning = plot._integralWarningMessage || '';
     const note = plot._integralNoteMessage || '';
@@ -1442,7 +1445,7 @@ proto._syncIntegralMessage = function(plot) {
 };
 
 proto._renderIntegralSummary = function(plot, models = []) {
-    const host = plot?.integralContainer?.querySelector('.integral-summary');
+    const host = this._integralOptionsPanel(plot)?.querySelector('.integral-summary');
     if (!host) return;
     const view = this._integralPresentation(plot, models);
     if (!view.rows.length) {
@@ -1493,9 +1496,13 @@ proto._integralExportTable = function(plot) {
 
 // ─── Options panel ────────────────────────────────────────────────────────
 
+proto._integralOptionsPanel = function(plot) {
+    return plot?.integralOptionsEl || plot?.integralContainer?.querySelector('.hist-options') || null;
+};
+
 proto._renderIntegralOptionsPanel = function(panelId, plot) {
     const state = this._ensureIntegralState(plot);
-    const options = plot?.integralContainer?.querySelector('.hist-options');
+    const options = this._integralOptionsPanel(plot);
     if (!options) return;
     options.innerHTML = '';
     const message = document.createElement('div');
@@ -1777,7 +1784,7 @@ proto._integralHasCalendarAxis = function(plot) {
 };
 
 proto._syncIntegralOptionsPanel = function(plot) {
-    const options = plot?.integralContainer?.querySelector('.hist-options');
+    const options = this._integralOptionsPanel(plot);
     if (!options) return;
     const state = this._ensureIntegralState(plot);
     const calendar = this._integralHasCalendarAxis(plot);

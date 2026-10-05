@@ -480,6 +480,32 @@ try {
         assert.deepEqual(await profilePlot(), { mode: 'temporal-profile', traces: ['temp'] }, 'a tap adds to the profile and takes off it');
         await profilePage.locator('.compact-nav-btn[data-sheet="plot"]').click();
         assert.equal(await profilePage.locator('.compact-trace-row').count(), 1, 'the Plot sheet lists the profile\'s signals');
+
+        // The integral, the same way: chosen in Analyze, options in the sheet.
+        await profilePage.locator('.compact-nav-btn[data-sheet="analyze"]').click();
+        await profilePage.locator('.compact-radio', { hasText: 'Integral' }).click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'integral');
+        await profilePage.waitForFunction(() => document.querySelector('.compact-sheet .integral-options'), null, { timeout: 15000 });
+        await profilePage.waitForFunction(() => {
+            const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+            return plot?.integralDiv?.data?.length > 0;
+        }, null, { timeout: 30000 });
+        assert.equal(await profilePage.locator('.integral-container .hist-topbar-group').first().isVisible(), false,
+            'the integral\'s own buttons are in the sheet, not over the plot');
+        assert.deepEqual(await sizeProblems(profilePage), [], 'the integral options are phone-sized');
+        await shot(profilePage, 'analyze-integral');
+        await profilePage.locator('.compact-sheet-close').click();
+        await profilePage.waitForFunction(() => window.app._compact.sheet === null);
+        assert.equal(await profilePage.evaluate(() => !!document.querySelector('.integral-container .hist-workspace > .hist-options')), true,
+            'closing the sheet gives the integral its options panel back');
+        await profilePage.waitForTimeout(400);
+        assert.equal(await profilePage.locator('.compact-active-panel .compact-fit-group:not([hidden])').count(), 2,
+            'the time pane and the bars each have their fit buttons');
+        await shot(profilePage, 'integral');
+        await profilePage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await profilePage.locator('#variables-tree .tree-item[data-var-name="load"]').click();
+        await profilePage.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.traces.length === 2);
+        assert.deepEqual(await profilePlot(), { mode: 'integral', traces: ['temp', 'load'] }, 'a tap adds to the integral');
         assert.deepEqual(profileErrors, [], 'no page errors with the temporal profile');
         await profileContext.close();
     }

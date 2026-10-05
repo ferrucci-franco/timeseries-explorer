@@ -1,7 +1,7 @@
 # Phone Web Specification
 
-Status: first slice built (2026-10-04). It covers time series, FFT and the temporal
-profile, plus CSV parsing.
+Status: first slice built (2026-10-04). It covers time series, FFT, the temporal
+profile and the integral, 2D and 3D plots and state animations, plus CSV parsing.
 
 Built:
 
@@ -12,7 +12,7 @@ Built:
 - one plot at a time, with the plot list in the Plot sheet;
 - the Data sheet, with tap-to-plot and the per-file page;
 - the Plot sheet: view and signals;
-- the Analyze sheet: time series, FFT and temporal profile, each analysis with its
+- the Analyze sheet: time series, FFT, temporal profile and integral, each analysis with its
   options lent to the sheet and its top-bar buttons (reset, V/H, hide the time
   series) as buttons there;
 - 2D (x–y) and 3D (x–y–z) plots: the plot type in the Plot sheet, x then y (then z)
@@ -32,7 +32,7 @@ The code is in `src/app/methods/compact-methods.js`, `src/ui/compact-layout.js` 
 
 Not built yet:
 
-- the other analyses (histogram, heatmap, integral, correlation) and 2D + t;
+- the other analyses (histogram, heatmap, correlation) and 2D + t;
 - View and Marks;
 - cursors and tap readouts;
 - export through Web Share;

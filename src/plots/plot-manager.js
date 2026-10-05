@@ -2307,10 +2307,13 @@ class PlotManager {
                 if (plot.integralPieDiv) Plotly.purge(plot.integralPieDiv);
                 Plotly.purge(plot.div);
                 integralContainer.remove();
+                // Lent to the phone's Analyze sheet, it is outside the container.
+                plot.integralOptionsEl?.remove();
                 plot.div = null;
                 plot.integralDiv = null;
                 plot.integralPieDiv = null;
                 plot.integralContainer = null;
+                plot.integralOptionsEl = null;
                 plot._integralPieVisible = undefined;
             } else if (temporalProfileContainer) {
                 if (plot.temporalProfileDiv) Plotly.purge(plot.temporalProfileDiv);
