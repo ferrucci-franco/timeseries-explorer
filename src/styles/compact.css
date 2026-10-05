@@ -1612,10 +1612,13 @@ html.compact .layout-panel-placeholder {
     box-sizing: border-box;
 }
 
+/* Back at the left, as on the sheets' pages; the file name under the title. */
 .csv-preview-compact .csv-preview-header {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    gap: 0.5rem;
-    padding: 0.4rem 0.4rem 0.4rem 0.9rem;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 0.25rem;
+    row-gap: 0;
+    padding: 0.4rem 0.9rem 0.4rem 0.4rem;
+    align-items: center;
 }
 
 .csv-preview-compact .csv-preview-title {
@@ -1623,7 +1626,7 @@ html.compact .layout-panel-placeholder {
 }
 
 .csv-preview-compact .csv-preview-subtitle {
-    grid-column: 1 / -1;
+    grid-column: 2 / -1;
     grid-row: 2;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1634,6 +1637,24 @@ html.compact .layout-panel-placeholder {
     width: 44px;
     height: 44px;
     font-size: 1.1rem;
+}
+
+.csv-preview-compact .csv-preview-back {
+    grid-row: 1 / span 2;
+    align-self: center;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+}
+
+.csv-preview-compact .csv-preview-back svg {
+    width: 24px;
+    height: 24px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .csv-preview-tabs {
