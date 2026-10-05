@@ -1766,19 +1766,44 @@ html.compact .layout-panel-placeholder {
     min-height: 46px;
 }
 
-/* Sideways: both panes, side by side; no tabs. */
+/* Sideways: no tabs. The grid takes the whole width; the footer's Options
+   button brings the options in beside it, and takes them away again. */
 html.compact-landscape .csv-preview-compact .csv-preview-tabs {
     display: none;
 }
 
-html.compact-landscape .csv-preview-compact .csv-preview-body {
+.csv-preview-compact .csv-preview-options-toggle {
+    display: none;
+}
+
+html.compact-landscape .csv-preview-compact .csv-preview-options-toggle {
+    display: inline-flex;
+    align-items: center;
+}
+
+html.compact-landscape .csv-preview-compact .csv-preview-options-toggle[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--primary-color) 18%, var(--bg-tertiary));
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+html.compact-landscape .csv-preview-compact [data-tab="options"] .csv-preview-body {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(260px, 42%);
 }
 
-html.compact-landscape .csv-preview-compact .csv-preview-dialog .csv-preview-grid-wrap,
-html.compact-landscape .csv-preview-compact .csv-preview-dialog .csv-preview-options-pane {
+html.compact-landscape .csv-preview-compact .csv-preview-dialog[data-tab="options"] .csv-preview-grid-wrap {
     display: block;
+}
+
+/* The primary action no longer needs the whole width beside the table. */
+html.compact-landscape .csv-preview-compact .csv-preview-footer-right {
+    flex: 0 1 auto;
+    margin-left: auto;
+}
+
+html.compact-landscape .csv-preview-compact .csv-preview-footer-right .modal-btn-confirm {
+    min-width: 12rem;
 }
 
 html.compact-landscape .csv-preview-compact .csv-preview-options-pane {
@@ -2052,4 +2077,144 @@ html.compact .overlay-escape-hint {
 /* The CSV dialog's column list: room for a switch ahead of the name. */
 html.compact .csv-preview-column-control {
     grid-template-columns: 46px minmax(0, 1fr) 5.5rem;
+}
+
+/* The time axis as a page of its own (Data → file → Time axis and scale):
+   the desktop panel without its box, in the sheets' own sections. */
+.compact-page-time-axis .file-transform-panel,
+.compact-page-time-axis .file-transform-panel-active {
+    gap: 10px 12px;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
+
+.compact-page-time-axis .file-transform-box {
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    gap: 10px 12px;
+}
+
+.compact-page-time-axis .file-transform-title {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.compact-page-time-axis .file-transform-panel > .file-transform-title:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+}
+
+/* The source is a choice of two: a list of rows, like the analyses. */
+.compact-page-time-axis .file-transform-field-wide > div:has(> label > input[type="radio"]) {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.compact-page-time-axis label:has(> input[type="radio"]) {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 4px 12px;
+    font-size: 16px;
+    color: var(--text-primary);
+}
+
+.compact-page-time-axis label:has(> input[type="radio"]) + label {
+    border-top: 1px solid var(--border-color);
+}
+
+.compact-page-time-axis label:has(> input[type="radio"]:checked) {
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+}
+
+.compact-page-time-axis input[type="radio"] {
+    width: 22px;
+    height: 22px;
+    margin: 0;
+    flex: 0 0 22px;
+}
+
+.compact-page-time-axis .file-transform-field > span,
+.compact-page-time-axis .file-transform-field {
+    font-size: 15px;
+}
+
+.compact-page-time-axis .file-transform-field input,
+.compact-page-time-axis .file-transform-field select {
+    min-height: 44px;
+    font-size: 16px;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+/* Gain on its own line, and the last action full width. */
+.compact-page-time-axis .file-transform-panel > label.file-transform-field:not(.file-transform-field-wide) {
+    grid-column: 1 / -1;
+}
+
+.compact-page-time-axis .file-transform-panel > .file-transform-actions:last-child button {
+    flex: 1 1 auto;
+    min-height: 44px;
+}
+
+/* The CSV preview's parsed time column scrolls with the others on a phone,
+   unless its pin is on (csv-parsing-preview-dialog.js). The row numbers stay. */
+.csv-preview-compact .csv-preview-dialog:not(.is-time-pinned) .csv-preview-grid .csv-preview-parsed-head,
+.csv-preview-compact .csv-preview-dialog:not(.is-time-pinned) .csv-preview-grid .csv-preview-parsed-cell {
+    left: auto;
+}
+
+.csv-preview-compact .csv-preview-dialog:not(.is-time-pinned) .csv-preview-grid .csv-preview-parsed-cell {
+    position: static;
+}
+
+.csv-preview-compact .csv-preview-grid .csv-preview-parsed-head {
+    white-space: nowrap;
+}
+
+.csv-preview-pin-time {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin: -8px -6px -8px 6px;
+    padding: 0;
+    vertical-align: middle;
+    border: none;
+    border-radius: 18px;
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.csv-preview-pin-time svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linejoin: round;
+}
+
+.csv-preview-pin-time[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--primary-color) 18%, transparent);
+    color: var(--primary-color);
+}
+
+.csv-preview-pin-time[aria-pressed="true"] svg {
+    fill: currentColor;
 }

@@ -950,7 +950,9 @@ export default class CsvParsingPreviewDialog {
     // Upright, a phone has room for the grid or the options, not both: they
     // take turns on two tabs. The status strip stays between them and the tabs
     // so the effect of an option is seen without going back to the preview.
-    // Sideways, both panes sit side by side and the tabs hide (CSS).
+    // Sideways the tabs hide (CSS): the grid has the whole width, and an
+    // Options button in the footer brings the options in beside it, so their
+    // effect is still seen on the grid while they are open.
     _renderCompactShell({ header, toolbar, body, footer }) {
         this.dialog.classList.add('is-compact');
         const tabs = document.createElement('div');
@@ -974,6 +976,14 @@ export default class CsvParsingPreviewDialog {
         this.optionsPane.className = 'csv-preview-options-pane';
         this.optionsPane.append(toolbar, this.sidePanel);
         body.replaceChildren(this.gridWrap, this.optionsPane);
+        this.compactOptionsToggle = document.createElement('button');
+        this.compactOptionsToggle.type = 'button';
+        this.compactOptionsToggle.className = 'csv-preview-options-toggle';
+        this.compactOptionsToggle.textContent = i18n.t('options');
+        this.compactOptionsToggle.addEventListener('click', () => {
+            this._setCompactTab(this.compactTab === 'options' ? 'preview' : 'options');
+        });
+        footer.querySelector('.csv-preview-footer-left')?.append(this.compactOptionsToggle);
         this.dialog.append(header, tabs, this.statusStrip, body, footer);
         this._setCompactTab(this.compactTab || 'preview');
     }
@@ -985,6 +995,29 @@ export default class CsvParsingPreviewDialog {
             button.setAttribute('aria-selected', String(id === this.compactTab));
             button.classList.toggle('is-active', id === this.compactTab);
         });
+        this.compactOptionsToggle?.setAttribute('aria-pressed', String(this.compactTab === 'options'));
+    }
+
+    // On a phone the parsed time column does not stay pinned at the left by
+    // default: pinned, it and the row numbers take most of the screen and the
+    // file's own columns have no room to scroll through. A pin in its header
+    // keeps it in view when wanted; the choice lasts for the dialog.
+    _compactPinTimeButton() {
+        const pin = document.createElement('button');
+        pin.type = 'button';
+        pin.className = 'csv-preview-pin-time';
+        pin.title = i18n.t('csvPreviewPinTimeColumn');
+        pin.setAttribute('aria-label', i18n.t('csvPreviewPinTimeColumn'));
+        pin.setAttribute('aria-pressed', String(!!this.compactTimePinned));
+        pin.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l-1 6 4 4v2h-5v6l-1 1-1-1v-6H6v-2l4-4z"/></svg>';
+        pin.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.compactTimePinned = !this.compactTimePinned;
+            this.dialog.classList.toggle('is-time-pinned', this.compactTimePinned);
+            this.dialog.querySelectorAll('.csv-preview-pin-time')
+                .forEach(button => button.setAttribute('aria-pressed', String(this.compactTimePinned)));
+        });
+        return pin;
     }
 
     // Tapping a row of the preview assigns it, instead of reading its number
@@ -2264,6 +2297,7 @@ export default class CsvParsingPreviewDialog {
         parsedHead.className = 'csv-preview-parsed-head';
         parsedHead.textContent = i18n.t('csvPreviewDateTimeParsed');
         parsedHead.title = `${i18n.t('csvPreviewDateTimeParsed')} (${PARSED_DATETIME_FORMAT_LABEL})`;
+        if (this.compact) parsedHead.appendChild(this._compactPinTimeButton());
         headRow.appendChild(parsedHead);
         for (let c = 0; c < maxColumns; c++) {
             const th = document.createElement('th');

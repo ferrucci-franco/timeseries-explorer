@@ -4174,6 +4174,8 @@ proto._renderFilesList = function() {
         if (recipe && this.files.has(recipe.sourceFileId)) continue;
         renderWithDatasets(fileId, entryData, 0);
     }
+    // On a phone the time-axis panel is a page of its own, outside the list.
+    this._compactRefreshTimeAxisPage?.();
 };
 
 proto._renderFileListItem = function(fileId, entryData, depth = 0) {
@@ -4339,7 +4341,7 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
         entry.appendChild(closeBtn);
         entry.appendChild(moreBtn);
         item.appendChild(entry);
-        if (this._expandedFileTransforms.has(fileId)) {
+        if (this._expandedFileTransforms.has(fileId) && !this._compactIsActive?.()) {
             item.appendChild(this._renderFileTransformPanel(fileId, entryData));
         }
         return item;
@@ -5558,7 +5560,7 @@ proto._appendTimeAxisSummaryLines = function(fileId, parent, anchor = null) {
 // reindex they were the only thing in the panel still describing the old axis
 // (#107) — so they are the one part replaced in place.
 proto._refreshTimeAxisSummary = function(fileId) {
-    const panel = [...document.querySelectorAll('#files-list .file-transform-panel')]
+    const panel = [...document.querySelectorAll('#files-list .file-transform-panel, .compact-page-time-axis .file-transform-panel')]
         .find(node => node.dataset.fileId === fileId);
     const button = panel?.querySelector('.file-transform-wide-action');
     if (!button) return;

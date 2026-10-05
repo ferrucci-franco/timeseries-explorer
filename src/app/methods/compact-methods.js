@@ -1303,6 +1303,16 @@ export function installCompactMethods(ViewerClass) {
         for (const selector of rowButtons) {
             const source = entry.querySelector(selector);
             if (!source || source.hidden) continue;
+            // The time axis opens as a page of its own, one level below this
+            // one, instead of unfolding the desktop panel inside the list.
+            if (selector === '.file-entry-transform') {
+                const btn = button('compact-list-btn', (source.getAttribute('aria-label') || source.title).replace(/\.\.\.$|…$/, ''),
+                    () => this._openCompactTimeAxisPage(fileId));
+                const iconSpan = el('span', 'compact-btn-icon', (source.textContent || '').trim());
+                btn.prepend(iconSpan);
+                list.appendChild(btn);
+                continue;
+            }
             const label = source.getAttribute('aria-label') || source.title || source.textContent;
             const svg = source.querySelector('svg');
             const icon = svg ? svg.cloneNode(true) : (source.textContent || '').trim();
@@ -1314,6 +1324,43 @@ export function installCompactMethods(ViewerClass) {
             title: entryData ? this._fileDisplayName(entryData) : i18n.t('compactFileActions'),
             node,
         });
+    };
+
+    // The file's time axis (source, format, crop, shift, reindex) as a page.
+    // The panel is the desktop one, built by the same code; only its frame and
+    // sizes change (compact.css). It is rebuilt where the desktop rebuilds its
+    // copy in the files list, keeping the page's scroll position.
+    proto._openCompactTimeAxisPage = function(fileId) {
+        const node = el('div', 'compact-page compact-page-time-axis');
+        const page = {
+            title: i18n.t('compactTimeAxisPage'),
+            node,
+            fileId,
+            onClose: () => {
+                document.querySelectorAll('.file-transform-help-popover').forEach(pop => pop.remove());
+                if (this._compact.timeAxisPage === page) this._compact.timeAxisPage = null;
+            },
+        };
+        this._compact.timeAxisPage = page;
+        this._renderCompactTimeAxisPanel(page);
+        this._pushCompactPage(page);
+    };
+
+    proto._renderCompactTimeAxisPanel = function(page) {
+        const entryData = this.files.get(page.fileId);
+        if (!entryData) return false;
+        const body = this._compactSheetBody;
+        const top = body && page.node.isConnected ? body.scrollTop : null;
+        page.node.replaceChildren(this._renderFileTransformPanel(page.fileId, entryData));
+        if (top != null) body.scrollTop = top;
+        return true;
+    };
+
+    proto._compactRefreshTimeAxisPage = function() {
+        const page = this._compact?.timeAxisPage;
+        if (!page || !this._compact.pages.includes(page)) return;
+        // Closed file: nothing left to show.
+        if (!this._renderCompactTimeAxisPanel(page)) this._popCompactPage();
     };
 
     // ─── Plot ─────────────────────────────────────────────────────
