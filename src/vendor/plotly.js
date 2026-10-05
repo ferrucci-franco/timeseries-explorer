@@ -4,7 +4,7 @@ import frenchLocale from 'plotly.js-locales/fr.js';
 import italianLocale from 'plotly.js-locales/it.js';
 import { installTouchPlotGestures } from '../ui/plot-touch-gestures.js';
 import { install3DSceneGestures } from '../ui/plot-3d-gestures.js';
-import { enlargeLayoutFonts, enlargeRelayoutFonts } from '../utils/compact-plot-fonts.js';
+import { compactPlotLayout, compactPlotRelayout } from '../utils/compact-plot-layout.js';
 
 const Plotly = globalThis.Plotly;
 
@@ -40,14 +40,15 @@ const withTouchGestures = (drawn, div) => {
     return drawn;
 };
 
-// The phone layout draws plot text a little larger (utils/compact-plot-fonts.js).
+// The phone layout draws plot text a little larger, with the X title clear of
+// the tick labels (utils/compact-plot-layout.js).
 // It says whether it is on; the sizes themselves are bumped on the way past,
 // for every layout and every relayout that carries a size.
 let largerFonts = () => false;
 export function setLargerPlotFonts(isOn) {
     largerFonts = typeof isOn === 'function' ? isOn : () => false;
 }
-const layoutFor = layout => (largerFonts() ? enlargeLayoutFonts(layout) : layout);
+const layoutFor = layout => (largerFonts() ? compactPlotLayout(layout) : layout);
 
 const nativeNewPlot = Plotly.newPlot.bind(Plotly);
 Plotly.newPlot = (div, data, layout, ...rest) => nativeNewPlot(div, data, layoutFor(layout), ...rest)
@@ -57,6 +58,6 @@ Plotly.react = (div, data, layout, ...rest) => nativeReact(div, data, layoutFor(
     .then(drawn => withTouchGestures(drawn, div));
 const nativeRelayout = Plotly.relayout.bind(Plotly);
 Plotly.relayout = (div, update, ...rest) => nativeRelayout(div,
-    largerFonts() && update && typeof update === 'object' ? enlargeRelayoutFonts(update) : update, ...rest);
+    largerFonts() && update && typeof update === 'object' ? compactPlotRelayout(update) : update, ...rest);
 
 export default Plotly;

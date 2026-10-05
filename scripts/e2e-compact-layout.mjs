@@ -134,6 +134,15 @@ try {
             return { tick: size('.xtick text'), xTitle: size('.g-xtitle text') };
         });
         assert.deepEqual(fonts, { tick: 12, xTitle: 12 }, 'plot text is a little larger on a phone');
+        const gap = await page.evaluate(() => {
+            const div = document.querySelector('.compact-active-panel .js-plotly-plot');
+            const r = el => el.getBoundingClientRect();
+            const tickBottom = Math.max(...[...div.querySelectorAll('.xtick text')].map(el => r(el).bottom));
+            const title = r(div.querySelector('.g-xtitle text'));
+            return { below: title.top - tickBottom, edge: r(div).bottom - title.bottom };
+        });
+        assert.ok(gap.below >= 6, `the X title stands clear of the tick labels (${gap.below} px)`);
+        assert.ok(gap.edge >= 0, 'and stays inside the plot');
     }
     {
         const edge = await page.evaluate(() => {

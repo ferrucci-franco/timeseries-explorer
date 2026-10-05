@@ -12,7 +12,7 @@ import {
     shouldUseCompactLayout,
     viewportWantsCompact,
 } from '../src/ui/compact-layout.js';
-import { enlargeLayoutFonts, enlargeRelayoutFonts } from '../src/utils/compact-plot-fonts.js';
+import { compactPlotLayout, compactPlotRelayout } from '../src/utils/compact-plot-layout.js';
 
 // ── Phones, upright and sideways ────────────────────────────────────────────
 for (const [width, height] of [[320, 568], [360, 800], [390, 844], [412, 915]]) {
@@ -117,7 +117,7 @@ assert.equal(isLandscapeViewport(390, 844), false);
         legend: { font: { size: 10 } },
     };
     const before = JSON.stringify(layout);
-    const big = enlargeLayoutFonts(layout);
+    const big = compactPlotLayout(layout);
     assert.equal(JSON.stringify(layout), before, 'the builder’s layout is left alone, or every redraw would grow it');
     assert.equal(big.font.size, 12, 'tick labels, which inherit the base font, one pixel up');
     assert.equal(big.font.color, '#ddd');
@@ -127,18 +127,24 @@ assert.equal(isLandscapeViewport(390, 844), false);
     assert.equal(big.yaxis2.tickfont.size, 10);
     assert.deepEqual(big.yaxis.title, { text: '' }, 'a title without a size inherits the bigger base font');
     assert.equal(big.scene, layout.scene, '3D titles are already large');
-    assert.equal(enlargeLayoutFonts({}).font.size, 13, 'Plotly’s 12 px default, one up');
+    assert.equal(big.xaxis.title.standoff, 12, 'the X title keeps a gap below the tick labels');
+    assert.equal(big.xaxis.automargin, true, 'with room made for it');
+    assert.equal(big.yaxis2.automargin, undefined, 'Y axes keep their margins');
+    assert.equal(compactPlotLayout({ xaxis: { title: { text: '' } } }).xaxis.automargin, undefined, 'no title, no gap');
+    assert.equal(compactPlotLayout({ xaxis: { title: { text: 't' }, automargin: false } }).xaxis.automargin, false, 'a builder’s own choice stands');
+    assert.equal(compactPlotLayout({}).font.size, 13, 'Plotly’s 12 px default, one up');
 
     const update = { 'xaxis.title': { text: 'a', font: { size: 10 } }, 'xaxis.range': [0, 1], margin: { l: 4 } };
-    const bigUpdate = enlargeRelayoutFonts(update);
+    const bigUpdate = compactPlotRelayout(update);
     assert.equal(update['xaxis.title'].font.size, 10, 'the update is left alone');
     assert.equal(bigUpdate['xaxis.title'].font.size, 12, 'a relayout that resets a title keeps it larger');
+    assert.equal(bigUpdate['xaxis.title'].standoff, 12, 'and keeps its gap');
     assert.equal(bigUpdate['xaxis.range'], update['xaxis.range']);
     const plain = { 'xaxis.range': [0, 1] };
-    assert.equal(enlargeRelayoutFonts(plain), plain, 'an update with no sizes passes through untouched');
-    assert.equal(enlargeRelayoutFonts({ 'yaxis.title.font.size': 10 })['yaxis.title.font.size'], 12);
-    assert.equal(enlargeRelayoutFonts({ 'font.size': 11 })['font.size'], 12);
-    assert.deepEqual(enlargeRelayoutFonts({ font: { color: '#fff' } }), { font: { color: '#fff' } }, 'a colour change is only a colour change');
+    assert.equal(compactPlotRelayout(plain), plain, 'an update with no sizes passes through untouched');
+    assert.equal(compactPlotRelayout({ 'yaxis.title.font.size': 10 })['yaxis.title.font.size'], 12);
+    assert.equal(compactPlotRelayout({ 'font.size': 11 })['font.size'], 12);
+    assert.deepEqual(compactPlotRelayout({ font: { color: '#fff' } }), { font: { color: '#fff' } }, 'a colour change is only a colour change');
 }
 
 console.log('compact layout rules: ok');
