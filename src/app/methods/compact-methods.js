@@ -118,6 +118,9 @@ const COMPACT_PLOT_TYPES = [
 const PHASE_MODES = new Set(['phase2d', 'phase3d']);
 const STATE_SLOT_LABELS = ['x₁', 'x₂', 'x₃'];
 
+// What a plot is, rather than an analysis of it.
+const PLOT_TYPE_MODES = new Set(['timeseries', 'phase2d', 'phase2dt', 'phase3d', 'state-anim']);
+
 const TIME_FAMILY = new Set(['timeseries', 'fft', 'histogram', 'heatmap', 'temporal-profile', 'integral']);
 
 const MODE_LABEL_KEYS = {
@@ -211,7 +214,11 @@ export function installCompactMethods(ViewerClass) {
         };
         this._buildCompactChrome();
         this.layoutManager.onAfterRender = () => this._compactAfterLayoutRender();
-        onPlotDrawn(div => { if (this._compact.active) this._compactSyncFitButtons(div); });
+        onPlotDrawn(div => {
+            if (!this._compact.active) return;
+            this._compactSyncFitButtons(div);
+            this._compactSyncAnalyzeHalo();
+        });
         setLargerPlotFonts(() => this._compact.active);
         this.plotManager.onCompactChooseSignals = () => this._openCompactSheet('data', { toggle: false });
         // Dialogs are appended to <body>; the large ones go full screen.
@@ -506,6 +513,18 @@ export function installCompactMethods(ViewerClass) {
     proto._compactDecorateDialog = function(overlay) {
         const dialog = overlay.querySelector('.modal-dialog');
         if (!dialog || dialog.classList.contains('modal-dialog-csv-row-actions')) return;
+        // A question or a notice — words and buttons, nothing to fill in — is
+        // a phone alert whatever its length: a centred card, its buttons
+        // stacked full width, the action on top. It scrolls inside the card
+        // if it ever has to, rather than turning into a page with a ✕.
+        const isAlert = !!dialog.querySelector('.modal-message')
+            && !dialog.matches(FULLSCREEN_DIALOGS)
+            && !dialog.querySelector('input:not([type="checkbox"]):not([type="radio"]), select, textarea, table, .modal-checklist');
+        if (isAlert) {
+            overlay.classList.add('compact-alert-overlay');
+            dialog.classList.add('compact-alert-dialog');
+            return;
+        }
         requestAnimationFrame(() => {
             if (!overlay.isConnected) return;
             const large = dialog.matches(FULLSCREEN_DIALOGS)
@@ -757,6 +776,21 @@ export function installCompactMethods(ViewerClass) {
         const activeFile = this.activeFileId != null ? this.files.get(this.activeFileId) : null;
         this._compactTitle.textContent = activeFile ? this._fileDisplayName(activeFile) : i18n.t('appTitle');
         this._compactTitle.title = this._compactTitle.textContent;
+        this._compactSyncAnalyzeHalo();
+    };
+
+    // An analysis on the plot on screen (FFT, profile, integral…) puts a halo
+    // on Analyze: the plot no longer shows its signals as they are, and the
+    // place to see why, or to go back, is that button.
+    proto._compactSyncAnalyzeHalo = function() {
+        const btn = this._compactNavButtons?.get('analyze');
+        if (!btn) return;
+        const plot = this.plotManager.plots.get(this._compactActivePanelId());
+        const mode = plot?.mode;
+        const active = !!mode && !PLOT_TYPE_MODES.has(mode);
+        btn.classList.toggle('has-active-analysis', active);
+        const label = MODE_LABEL_KEYS[mode] ? i18n.t(MODE_LABEL_KEYS[mode]) : '';
+        btn.title = active && label ? `${i18n.t('compactNavAnalyze')}: ${label}` : i18n.t('compactNavAnalyze');
     };
 
     // ─── Sheets ───────────────────────────────────────────────────

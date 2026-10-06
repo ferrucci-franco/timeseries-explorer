@@ -252,9 +252,17 @@ try {
     await page.waitForFunction(() => window.app._compact.sheet === null);
 
     // ── Analyze: FFT, with its options in the sheet ─────────────────────────
+    const analyzeHalo = () => page.evaluate(() => document.querySelector('.compact-nav-btn[data-sheet="analyze"]').classList.contains('has-active-analysis'));
+    assert.equal(await analyzeHalo(), false, 'no analysis, no halo on Analyze');
     await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
     await page.locator('.compact-radio', { hasText: 'FFT' }).click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'fft');
+    await page.waitForFunction(() => document.querySelector('.compact-nav-btn[data-sheet="analyze"]').classList.contains('has-active-analysis'));
+    assert.notEqual(
+        await page.evaluate(() => getComputedStyle(document.querySelector('.compact-nav-btn[data-sheet="analyze"] .compact-btn-icon')).boxShadow),
+        'none',
+        'an analysis on the plot puts a halo on Analyze',
+    );
     await page.waitForFunction(() => document.querySelector('.compact-sheet .fft-options'), null, { timeout: 15000 });
     await page.waitForFunction(() => {
         const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
@@ -329,6 +337,7 @@ try {
     await page.locator('.compact-nav-btn[data-sheet="analyze"]').click();
     await page.locator('.compact-radio').first().click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'timeseries');
+    assert.equal(await analyzeHalo(), false, "back to the signals, the halo goes");
     await page.locator('.compact-sheet-close').click();
 
     // ── Plots: one at a time, chosen from the Plot sheet ────────────────────
@@ -540,6 +549,25 @@ try {
     const desktopSegment = page.locator('.compact-page-more .compact-segment', { hasText: 'Desktop' });
     await desktopSegment.click();
     await page.waitForSelector('.modal-overlay .modal-message');
+    {
+        // A phone alert, not a desktop dialog turned into a page.
+        const look = await page.evaluate(() => {
+            const dialog = document.querySelector('.modal-overlay .modal-dialog');
+            const r = el => el.getBoundingClientRect();
+            const confirm = r(dialog.querySelector('.modal-btn-confirm'));
+            const cancel = r(dialog.querySelector('.modal-btn-cancel'));
+            return {
+                alert: dialog.classList.contains('compact-alert-dialog'),
+                fullscreen: dialog.classList.contains('compact-fullscreen-dialog'),
+                closeX: !!document.querySelector('.modal-overlay .compact-dialog-close'),
+                width: Math.round(r(dialog).width),
+                stacked: confirm.bottom <= cancel.top + 1 && Math.abs(confirm.width - cancel.width) < 2,
+            };
+        });
+        assert.deepEqual(look, { alert: true, fullscreen: false, closeX: false, width: look.width, stacked: true },
+            'a confirmation is a phone alert: a card, buttons stacked, the action on top');
+        assert.ok(look.width <= 340, `and a card, not the screen (${look.width} px)`);
+    }
     assert.match(await page.locator('.modal-overlay .modal-message').innerText(), /every feature.*not adapted to small screens/s,
         'leaving for the desktop layout warns that it is not made for a phone');
     await page.locator('.modal-overlay .modal-btn-cancel').click();

@@ -2398,3 +2398,105 @@ html.compact .compact-page-time-axis .file-transform-wide-action {
     width: 100%;
     color: var(--primary-color);
 }
+
+/* A question or a notice on a phone: an alert card, not a desktop dialog.
+   Centred, a little narrower than the screen, the icon smaller, the text
+   left to breathe, and the buttons stacked full width with the action on
+   top (they come Cancel-first in the markup). */
+html.compact .modal-overlay.compact-alert-overlay {
+    padding: 16px;
+    align-items: center;
+    justify-content: center;
+}
+
+html.compact .modal-dialog.compact-alert-dialog {
+    width: min(340px, 100%);
+    max-width: 340px;
+    border-radius: 16px;
+    border: none;
+    background: var(--bg-secondary);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+html.compact .compact-alert-dialog .modal-content {
+    padding: 22px 18px 14px;
+}
+
+html.compact .compact-alert-dialog .modal-icon {
+    font-size: 2rem;
+    margin-bottom: 0.4rem;
+}
+
+html.compact .compact-alert-dialog .modal-icon img,
+html.compact .compact-alert-dialog .modal-icon svg {
+    width: 2rem;
+    height: 2rem;
+}
+
+html.compact .compact-alert-dialog .modal-title {
+    font-size: 17px;
+    margin-bottom: 0.4rem;
+}
+
+html.compact .compact-alert-dialog .modal-message {
+    font-size: 15px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    margin-bottom: 1.1rem;
+}
+
+html.compact .compact-alert-dialog .modal-buttons {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 8px;
+    border-top: none;
+    padding: 0;
+    margin: 0;
+}
+
+html.compact .compact-alert-dialog .modal-btn {
+    width: 100%;
+    min-height: 48px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+}
+
+html.compact .compact-alert-dialog .modal-btn-cancel {
+    border: none;
+    background: var(--bg-tertiary);
+    color: var(--primary-color);
+}
+
+/* An analysis on the plot on screen: Analyze glows in its own colour, so
+   the change from plain signals is noticed and its way back found. A slow
+   breath, still when the user asks for less motion. */
+.compact-nav-btn.has-active-analysis .compact-btn-icon {
+    background: color-mix(in srgb, var(--compact-nav-accent) 22%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--compact-nav-accent) 70%, transparent),
+        0 0 14px 2px color-mix(in srgb, var(--compact-nav-accent) 55%, transparent);
+    animation: compact-analysis-halo 2.4s ease-in-out infinite;
+}
+
+.compact-nav-btn.has-active-analysis .compact-btn-label {
+    color: var(--compact-nav-accent);
+    font-weight: 600;
+}
+
+@keyframes compact-analysis-halo {
+    0%, 100% {
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--compact-nav-accent) 70%, transparent),
+            0 0 10px 1px color-mix(in srgb, var(--compact-nav-accent) 40%, transparent);
+    }
+    50% {
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--compact-nav-accent) 85%, transparent),
+            0 0 18px 4px color-mix(in srgb, var(--compact-nav-accent) 65%, transparent);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .compact-nav-btn.has-active-analysis .compact-btn-icon {
+        animation: none;
+    }
+}
