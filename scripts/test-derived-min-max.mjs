@@ -255,10 +255,10 @@ for (const n of [1, 2, 3, 40, 5000]) {
         ['min([x])', /min\(\) expects at least 2 operands/],
         ['max([])', /max\(\) expects at least 2 operands/],
         // A list is not a value: it only means "these operands".
-        ['[x, y]', /list can only be used inside min\(\) and max\(\)/],
-        ['sqrt([x, y])', /list can only be used inside min\(\) and max\(\)/],
-        ['x + [y, z]', /list can only be used inside min\(\) and max\(\)/],
-        ['power([x, y], 2)', /list can only be used inside min\(\) and max\(\)/],
+        ['[x, y]', /list can only be used inside min\(\), max\(\), sum\(\) and mean\(\)/],
+        ['sqrt([x, y])', /list can only be used inside min\(\), max\(\), sum\(\) and mean\(\)/],
+        ['x + [y, z]', /list can only be used inside min\(\), max\(\), sum\(\) and mean\(\)/],
+        ['power([x, y], 2)', /list can only be used inside min\(\), max\(\), sum\(\) and mean\(\)/],
         // Malformed lists.
         ['min([x, y)', /Missing closing bracket "\]"\./],
         ['min([x, ])', /Unexpected "\]"\./],

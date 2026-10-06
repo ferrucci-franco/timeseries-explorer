@@ -157,6 +157,7 @@ proto.initEventListeners = function() {
     document.getElementById('derived-name').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') this.createDerivedVariable();
     });
+    this._installFormulaEditorButton?.();
     this.initDataTools?.();
     document.addEventListener('click', (e) => {
         if (!e.target.closest('.derived-formula-wrap')) this._hideDerivedSuggestions();

@@ -231,6 +231,11 @@ export function formulaToSql(formula, variables, resolve, out = null) {
         }
         if (name === 'power') return power(emit(n.args[0]), n.args[1]);
         if (name === 'root') return root(n);
+        if (name === 'sum' || name === 'mean') {
+            // The + chain it stands for, NULL (NaN) in, NULL out.
+            const terms = n.args.map(arg => emit(arg).sql).join(' + ');
+            return node(settle(name === 'sum' ? `(${terms})` : `((${terms}) / ${literal(n.args.length)})`));
+        }
         if (name === 'min' || name === 'max') {
             // Math.min/max: NaN as soon as any operand is NaN — least/greatest
             // skip NULLs, so the NULL test comes first — and -0 below +0: when

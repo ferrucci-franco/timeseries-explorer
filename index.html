@@ -179,9 +179,6 @@
                         <button id="derived-help-toggle" class="tree-control-btn derived-help-toggle" title="Formula help" aria-haspopup="dialog" aria-expanded="false" aria-controls="derived-help-popover">
                             <span>?</span>
                         </button>
-                        <button id="derived-toggle" class="tree-control-btn" title="Create derived variable">
-                            <span>+</span>
-                        </button>
                     </div>
                 </div>
                 <div id="derived-help-popover" class="derived-help-popover derived-help-popover-wide" role="dialog" aria-labelledby="derived-help-title" hidden>
@@ -193,7 +190,7 @@
                         </div>
                         <div class="derived-help-row">
                             <span class="derived-help-label" data-i18n="derivedHelpFunctions">Functions</span>
-                            <code>sqrt(x), abs(x), log(x), log10(x), power(x,n), root(x,n), diff(x), cumsum(x), min(...), max(...)</code>
+                            <code>sqrt(x), abs(x), log(x), log10(x), power(x,n), root(x,n), diff(x), cumsum(x), min(...), max(...), sum(...), mean(...)</code>
                             <code>sin(x), cos(x), tan(x), asin(x), acos(x), atan(x)</code>
                             <span data-i18n="derivedHelpRadians">Angles are in radians.</span>
                             <code>sinh(x), cosh(x), tanh(x)</code>
@@ -207,6 +204,14 @@
                                 <div class="derived-help-example"><code>min(x, 0)</code><span data-i18n="derivedHelpMinMaxConstant">a variable and a constant</span></div>
                                 <div class="derived-help-example"><code>max(x, y)</code><span data-i18n="derivedHelpMinMaxPair">two variables</span></div>
                                 <div class="derived-help-example"><code>min([x, y, z])</code><span data-i18n="derivedHelpMinMaxList">a list of variables in square brackets</span></div>
+                            </div>
+                        </div>
+                        <div class="derived-help-row">
+                            <span class="derived-help-label" data-i18n="derivedHelpSumMean">Sum / mean</span>
+                            <span data-i18n="derivedHelpSumMeanText">Added sample by sample, without typing every +:</span>
+                            <div class="derived-help-examples">
+                                <div class="derived-help-example"><code>sum(x, y, z)</code><span data-i18n="derivedHelpSumMeanSum">x + y + z</span></div>
+                                <div class="derived-help-example"><code>mean([x, y, z])</code><span data-i18n="derivedHelpSumMeanMean">(x + y + z) / 3</span></div>
                             </div>
                         </div>
                         <div class="derived-help-row">
@@ -231,7 +236,7 @@
                         </div>
                         <div class="derived-help-row">
                             <span class="derived-help-label" data-i18n="derivedHelpVariables">Variables</span>
-                            <span data-i18n="derivedHelpVariablesText">Start typing to autocomplete variable and function names.</span>
+                            <span data-i18n="derivedHelpVariablesText">Start typing to autocomplete variable and function names — or open the ⤢ formula editor to click or drag them in, and sum a selection of variables at once.</span>
                         </div>
                         <div class="derived-help-row">
                             <span class="derived-help-label" data-i18n="derivedHelpExample">Example</span>
@@ -239,6 +244,10 @@
                         </div>
                     </div>
                 </div>
+                <button id="derived-toggle" class="derived-new-btn" type="button" title="Create a variable from a formula over this file’s signals" data-i18n-title="derivedNewVariableTitle">
+                    <span class="derived-new-icon" aria-hidden="true">+</span>
+                    <span data-i18n="derivedNewVariable">New variable…</span>
+                </button>
                 <div id="derived-form" class="derived-form collapsed">
                     <input id="derived-name" class="derived-input" type="text" placeholder="name">
                     <div class="derived-formula-wrap">

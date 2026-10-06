@@ -7,6 +7,7 @@ import PlotManager from '../plots/plot-manager.js';
 import { installFileMethods } from './methods/file-methods.js';
 import { installUiMethods } from './methods/ui-methods.js';
 import { installDerivedMethods } from './methods/derived-methods.js';
+import { installFormulaEditorMethods } from './methods/formula-editor-methods.js';
 import { installTimeAxisInspectorMethods } from './methods/time-axis-inspector-methods.js';
 import { installDataToolsMethods } from './methods/data-tools-methods.js';
 import { installLazyDataToolsMethods } from './methods/lazy-data-tools-methods.js';
@@ -355,6 +356,7 @@ class OpenModelicaViewer {
 installFileMethods(OpenModelicaViewer);
 installUiMethods(OpenModelicaViewer);
 installDerivedMethods(OpenModelicaViewer);
+installFormulaEditorMethods(OpenModelicaViewer);
 installTimeAxisInspectorMethods(OpenModelicaViewer);
 installDataToolsMethods(OpenModelicaViewer);
 installLazyDataToolsMethods(OpenModelicaViewer);

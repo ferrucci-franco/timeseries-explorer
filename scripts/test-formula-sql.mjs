@@ -140,6 +140,7 @@ const handWritten = [
     'sin(a)', 'cos(a)', 'tan(a)', 'asin(a)', 'acos(a)', 'atan(a)', 'sinh(a)', 'cosh(a)', 'tanh(a)',
     'sign(a)', 'step(a)', 'step(a - b)', 'sign(a * b)', 'square(a)', 'square(a - b)',
     'min(a, b)', 'max(a, b)', 'min(a, 0)', 'max([a, b, c])', 'min(a, b, c, p)', 'max(a, q)',
+    'sum(a, b)', 'sum([a, b, c])', 'sum(a)', 'sum(a, b, c, p)', 'mean(a, b)', 'mean([a, b, c])', 'mean(a, q)', '1 / sum(a, b)',
     'root(a, 3)', 'root(a, 2)', 'root(a, -3)', 'root(a, 0.5)', 'root(a, 0)', 'root(a * b, 5)', 'root(27, 3)',
     // A degree that is a variable: the branches are taken row by row.
     'root(a, b)', 'root(b, a)', 'root(a, c)', 'root(-8, b)', 'root(a, p)', 'root(a, b + 1)', '1 / root(a, b)',
