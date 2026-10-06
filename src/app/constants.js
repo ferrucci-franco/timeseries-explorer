@@ -82,6 +82,10 @@ const DERIVED_FUNCTIONS = [
     { name: 'step', arity: 1 },
     { name: 'min', minArity: 2 },
     { name: 'max', minArity: 2 },
+    // Sample by sample over any number of operands: sum(a, b, c) = a + b + c,
+    // mean(a, b, c) = (a + b + c) / 3. A list works too: sum([a, b, c]).
+    { name: 'sum', minArity: 1 },
+    { name: 'mean', minArity: 1 },
     { name: 'power', arity: 2 },
     { name: 'root', arity: 2 },
     { name: 'diff', arity: 1 },
@@ -100,6 +104,8 @@ const DERIVED_FUNCTION_ALIASES = new Map([
     ['sgn', 'sign'],
     ['signum', 'sign'],
     ['heaviside', 'step'],
+    ['avg', 'mean'],
+    ['average', 'mean'],
 ]);
 
 // Named numbers, so a formula can be written the way it is written on paper:

@@ -70,16 +70,21 @@ const ARITY = {
 };
 
 // min/max take two operands or more instead of a fixed count, which is what lets
-// one function cover `min(x, 0)`, `min(x, y)` and `min([x, y, z])`.
-const MIN_ARITY = { min: 2, max: 2 };
+// one function cover `min(x, 0)`, `min(x, y)` and `min([x, y, z])`. sum/mean
+// are variadic the same way — `sum(a, b, c)` is a + b + c without typing the
+// pluses, which is what a formula over ten long names needs — and take one
+// operand or more.
+const MIN_ARITY = { min: 2, max: 2, sum: 1, mean: 1 };
 
-const LIST_ONLY_IN_MIN_MAX = 'A [a, b] list can only be used inside min() and max().';
+const LIST_ONLY_IN_MIN_MAX = 'A [a, b] list can only be used inside min(), max(), sum() and mean().';
 
 function requireArity(name, got) {
     const least = MIN_ARITY[name];
     if (least !== undefined) {
         if (got < least) {
-            throw new Error(`${name}() expects at least ${least} operands: a variable and a constant, two variables, or a list like [a, b, c].`);
+            throw new Error(least === 1
+                ? `${name}() expects at least one operand: a variable, several separated by commas, or a list like [a, b, c].`
+                : `${name}() expects at least ${least} operands: a variable and a constant, two variables, or a list like [a, b, c].`);
         }
         return;
     }
@@ -211,6 +216,12 @@ function makeEmitter(classify) {
                     const v = `v${tempId++}`;
                     lines.push(`const ${v} = ${emit(node.args[0], lines)};`);
                     return `(${v} >= 0 ? 1 : (${v} < 0 ? 0 : NaN))`;
+                }
+                if (name === 'sum' || name === 'mean') {
+                    // Sample by sample, exactly as the + chain it stands for:
+                    // NaN in any operand gives NaN, as it does through +.
+                    const terms = node.args.map(arg => emit(arg, lines)).join(' + ');
+                    return name === 'sum' ? `(${terms})` : `((${terms}) / ${node.args.length})`;
                 }
                 if (MIN_ARITY[name] !== undefined) {
                     // Sample by sample across every operand, so a constant, a
