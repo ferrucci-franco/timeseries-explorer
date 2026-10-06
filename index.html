@@ -179,9 +179,6 @@
                         <button id="derived-help-toggle" class="tree-control-btn derived-help-toggle" title="Formula help" aria-haspopup="dialog" aria-expanded="false" aria-controls="derived-help-popover">
                             <span>?</span>
                         </button>
-                        <button id="derived-toggle" class="tree-control-btn" title="Create derived variable">
-                            <span>+</span>
-                        </button>
                     </div>
                 </div>
                 <div id="derived-help-popover" class="derived-help-popover derived-help-popover-wide" role="dialog" aria-labelledby="derived-help-title" hidden>
@@ -247,6 +244,10 @@
                         </div>
                     </div>
                 </div>
+                <button id="derived-toggle" class="derived-new-btn" type="button" title="Create a variable from a formula over this file’s signals" data-i18n-title="derivedNewVariableTitle">
+                    <span class="derived-new-icon" aria-hidden="true">+</span>
+                    <span data-i18n="derivedNewVariable">New variable…</span>
+                </button>
                 <div id="derived-form" class="derived-form collapsed">
                     <input id="derived-name" class="derived-input" type="text" placeholder="name">
                     <div class="derived-formula-wrap">

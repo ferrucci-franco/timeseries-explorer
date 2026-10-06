@@ -34,7 +34,11 @@ try {
     const formula = () => page.locator('.formula-editor-formula').inputValue();
     const side = () => page.locator('#derived-formula').inputValue();
 
+    // A real button, not a "+" beside the help: it says what it does.
+    assert.equal((await page.locator('#derived-toggle').innerText()).replace(/\s+/g, ' ').trim(), '+ New variable…',
+        'the side panel says "New variable…"');
     await page.locator('#derived-toggle').click();
+    assert.equal(await page.locator('#derived-toggle').isHidden(), true, 'and steps aside while its form is open');
     assert.equal(await page.locator('#derived-expand').isVisible(), true, 'the side panel offers the full editor');
     await page.locator('#derived-name').fill('total');
     await page.locator('#derived-expand').click();
@@ -101,6 +105,7 @@ try {
     const values = await page.evaluate(() => Array.from(window.app.plotManager.files.get(window.app.activeFileId).data.variables.total.data.slice(0, 3)));
     // Feeder i holds (i + 1) * 10 + row: the ten add up to 550 + 10 * row.
     assert.deepEqual(values, [550, 560, 570], 'the variable is the sum of the ten');
+    assert.equal(await page.locator('#derived-toggle').isVisible(), true, 'created: "New variable…" is back');
 
     // ── Escape goes back; an error is said in the editor ──
     await page.locator('#derived-toggle').click();

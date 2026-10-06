@@ -449,6 +449,52 @@
     position: relative;
 }
 
+/* "New variable…": a real button, full width, in the section's own colour —
+   the "+" it replaces sat beside the help "?" and went unnoticed. */
+.derived-new-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    width: 100%;
+    margin-top: 0.15rem;
+    padding: 0.45rem 0.7rem;
+    border: 1px dashed color-mix(in srgb, var(--derived-color) 70%, transparent);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--derived-color) 9%, transparent);
+    color: var(--derived-color);
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.derived-new-btn:hover,
+.derived-new-btn:focus-visible {
+    border-style: solid;
+    background: color-mix(in srgb, var(--derived-color) 16%, transparent);
+    outline: none;
+}
+
+.derived-new-btn[hidden] {
+    display: none;
+}
+
+.derived-new-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.15rem;
+    height: 1.15rem;
+    border-radius: 50%;
+    background: var(--derived-color);
+    color: #fff;
+    font-size: 0.95rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
 .derived-header-controls {
     display: flex;
     align-items: center;

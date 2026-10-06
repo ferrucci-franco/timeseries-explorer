@@ -750,6 +750,10 @@ proto._toggleDerivedForm = function(show, options = {}) {
     }
     const editing = !!this._derivedEditing;
     form.classList.toggle('collapsed', !show);
+    // The form has its own Create and Cancel; while it is open the button
+    // that opened it would only be a second way to the same place.
+    const newButton = document.getElementById('derived-toggle');
+    if (newButton) newButton.hidden = !!show;
     form.classList.toggle('editing', editing);
     const submit = document.getElementById('derived-create');
     if (submit) submit.textContent = i18n.t(editing ? 'derivedUpdate' : 'derivedCreate');
