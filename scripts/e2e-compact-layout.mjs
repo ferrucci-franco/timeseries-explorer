@@ -227,6 +227,35 @@ try {
             const range = plot.div._fullLayout.xaxis.range.map(Number);
             return Math.abs(range[0] - lo) < 1e-6 && Math.abs(range[1] - hi) < 1e-6;
         }, full);
+        // Up or down instead: the same gesture zooms Y.
+        {
+            const yRange = () => page.evaluate(() => {
+                const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+                return plot.div._fullLayout.yaxis.range.map(Number);
+            });
+            const xBefore = await xRange();
+            const yFull = await yRange();
+            const yx = area.left + area.width * 0.5;
+            const yy = area.top + area.height * 0.25;
+            await touch('touchStart', yx, yy); await page.waitForTimeout(60); await touch('touchEnd');
+            await page.waitForTimeout(420);
+            await touch('touchStart', yx, yy); await page.waitForTimeout(60); await touch('touchEnd');
+            await page.waitForSelector('.touch-window-zoom-hint');
+            assert.match(await page.locator('.touch-window-zoom-hint').innerText(), /up or down to zoom on Y/, 'the hint says both');
+            await touch('touchStart', yx, yy);
+            for (let i = 1; i <= 8; i++) { await touch('touchMove', yx + i * 2, yy + i * 18); await page.waitForTimeout(16); }
+            assert.equal(await page.locator('.touch-window-zoom-band.is-vertical').count(), 1, 'dragged down, the window is a band across');
+            await touch('touchEnd');
+            await page.waitForFunction(() => !document.querySelector('.touch-window-zoom-band'));
+            await page.waitForTimeout(300);
+            const yZoomed = await yRange();
+            const lo = Math.min(...yFull), hi = Math.max(...yFull);
+            assert.ok(Math.min(...yZoomed) > lo && Math.max(...yZoomed) < hi, `Y zoomed into the window (${yZoomed} within ${yFull})`);
+            assert.ok(Math.abs(yZoomed[1] - yZoomed[0]) < (hi - lo) * 0.6, 'to about the height that was drawn');
+            assert.deepEqual(await xRange(), xBefore, 'and X stays as it was');
+            await page.locator('.compact-active-panel .compact-fit-btn[data-axis="y"]').tap();
+            await page.waitForTimeout(300);
+        }
         // One finger alone still pans.
         await page.waitForTimeout(800);
         await touch('touchStart', x0, y0);

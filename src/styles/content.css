@@ -2553,6 +2553,14 @@ body.cursor-box-dragging {
     border-right: 2px solid var(--primary-color);
 }
 
+/* Dragged up or down, the window is a span of Y: a band across the plot. */
+.touch-window-zoom-band.is-vertical {
+    border-left: none;
+    border-right: none;
+    border-top: 2px solid var(--primary-color);
+    border-bottom: 2px solid var(--primary-color);
+}
+
 .touch-window-zoom-hint {
     position: fixed;
     z-index: 2000;

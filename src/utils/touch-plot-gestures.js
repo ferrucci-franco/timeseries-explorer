@@ -136,6 +136,13 @@ export function isFollowUpTap(lastTap, touch) {
  * @param {(pixel: number) => number} pixelToLinear the axis's p2l
  * @returns {[number, number]|null} lowest first; null for a slip
  */
+// Which axis a window drag means: X while it goes more sideways than up or
+// down, Y once it goes more up or down. Ties (a drag that has not moved yet)
+// stay X, the window zoom as it always was.
+export function windowZoomAxis(dx, dy) {
+    return Math.abs(Number(dy) || 0) > Math.abs(Number(dx) || 0) ? 'y' : 'x';
+}
+
 export function windowZoomRange(fromPx, toPx, pixelToLinear) {
     const a = Number(fromPx);
     const b = Number(toPx);

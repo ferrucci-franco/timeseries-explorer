@@ -4311,7 +4311,8 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
         const moreBtn = document.createElement('button');
         moreBtn.type = 'button';
         moreBtn.className = 'file-entry-more';
-        moreBtn.textContent = '⋯';
+        // Three drawn dots: the ⋯ character is a hairline at any size.
+        moreBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/></svg>';
         moreBtn.title = i18n.t('compactFileActions');
         moreBtn.setAttribute('aria-label', i18n.t('compactFileActions'));
         moreBtn.addEventListener('click', (e) => {
