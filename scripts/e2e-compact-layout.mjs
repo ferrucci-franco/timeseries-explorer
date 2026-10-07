@@ -275,6 +275,10 @@ try {
 
     // ── Plot sheet: more signals come from Data ─────────────────────────────
     await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    // The rows of buttons draw no divider (the file menu's list rows do).
+    const rowLines = await page.evaluate(() => [...document.querySelectorAll('.compact-sheet .compact-action-row')]
+        .filter(row => getComputedStyle(row).backgroundImage !== 'none').length);
+    assert.equal(rowLines, 0, 'no divider line between the plot sheet buttons');
     await page.locator('.compact-add-signals-btn').click();
     await page.waitForFunction(() => window.app._compact.sheet === 'data');
     await page.locator('.compact-sheet-close').click();
@@ -401,7 +405,7 @@ try {
     await page.locator('.file-entry-more').first().click();
     await page.waitForFunction(() => window.app._compact.pages.length === 2);
     assert.equal(await page.locator('.compact-sheet-back').isVisible(), true, 'a sub-page has a Back control');
-    await page.locator('.compact-page-file .compact-action-row', { hasText: 'Adjust CSV parsing' }).click();
+    await page.locator('.compact-page-file .compact-file-action', { hasText: 'Adjust CSV parsing' }).click();
     await page.waitForSelector('.csv-preview-compact.show');
     assert.equal(await page.locator('.csv-preview-tab').count(), 2, 'upright, preview and options are tabs');
     assert.equal(await page.locator('.csv-preview-options-pane').isVisible(), false, 'the preview tab comes first');
@@ -454,7 +458,7 @@ try {
 
     // ── File page → its time axis, as a page of its own ─────────────────────
     await page.waitForFunction(() => window.app._compact.pages.length === 2);
-    await page.locator('.compact-page-file .compact-action-row', { hasText: 'Time axis and scale' }).click();
+    await page.locator('.compact-page-file .compact-file-action', { hasText: 'Time axis and scale' }).click();
     await page.waitForSelector('.compact-page-time-axis .file-transform-panel');
     assert.equal(await page.locator('#files-list .file-transform-panel').count(), 0, 'not unfolded inside the file list');
     assert.equal(await page.locator('.compact-sheet-title').innerText(), 'Time axis and scale');

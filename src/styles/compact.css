@@ -2255,7 +2255,7 @@ html.compact .compact-page-time-axis .file-transform-panel > .file-transform-act
     margin: 0 -12px;
 }
 
-.compact-action-row {
+.compact-file-action {
     display: flex;
     align-items: center;
     gap: 14px;
@@ -2270,12 +2270,12 @@ html.compact .compact-page-time-axis .file-transform-panel > .file-transform-act
     cursor: pointer;
 }
 
-.compact-action-row:active {
+.compact-file-action:active {
     background: var(--hover-bg);
 }
 
 /* The divider starts after the icon, as in the phone's own settings. */
-.compact-action-row + .compact-action-row {
+.compact-file-action + .compact-file-action {
     background-image: linear-gradient(var(--border-color), var(--border-color));
     background-size: calc(100% - 66px) 1px;
     background-position: 66px 0;
@@ -2315,7 +2315,7 @@ html.compact .compact-page-time-axis .file-transform-panel > .file-transform-act
     min-width: 0;
 }
 
-.compact-action-row.is-danger .compact-action-label {
+.compact-file-action.is-danger .compact-action-label {
     color: var(--danger-color, #e53935);
 }
 
