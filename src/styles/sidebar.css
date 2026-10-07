@@ -449,20 +449,21 @@
     position: relative;
 }
 
-/* "New variable…": a real button, full width, in the section's own colour —
-   the "+" it replaces sat beside the help "?" and went unnoticed. */
+/* "New variable…": a real button, full width, like the side panel's other
+   actions — the "+" it replaces sat beside the help "?" and went unnoticed.
+   The plus is drawn, not typed, so it sits in the middle of its circle. */
 .derived-new-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 0.45rem;
+    gap: 0.5rem;
     width: 100%;
     margin-top: 0.15rem;
     padding: 0.45rem 0.7rem;
-    border: 1px dashed color-mix(in srgb, var(--derived-color) 70%, transparent);
+    border: 1px solid var(--border-color);
     border-radius: 7px;
-    background: color-mix(in srgb, var(--derived-color) 9%, transparent);
-    color: var(--derived-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
     font: inherit;
     font-size: 0.85rem;
     font-weight: 600;
@@ -472,8 +473,8 @@
 
 .derived-new-btn:hover,
 .derived-new-btn:focus-visible {
-    border-style: solid;
-    background: color-mix(in srgb, var(--derived-color) 16%, transparent);
+    border-color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 8%, var(--bg-primary));
     outline: none;
 }
 
@@ -482,17 +483,29 @@
 }
 
 .derived-new-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.15rem;
-    height: 1.15rem;
+    position: relative;
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
-    background: var(--derived-color);
-    color: #fff;
-    font-size: 0.95rem;
-    font-weight: 700;
-    line-height: 1;
+    background: var(--primary-color);
+}
+
+.derived-new-icon::before,
+.derived-new-icon::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 10px;
+    height: 2px;
+    border-radius: 1px;
+    background: #fff;
+    transform: translate(-50%, -50%);
+}
+
+.derived-new-icon::after {
+    transform: translate(-50%, -50%) rotate(90deg);
 }
 
 .derived-header-controls {
@@ -2228,31 +2241,30 @@
     font-size: 0.85rem;
 }
 
-.formula-editor-modes {
-    display: inline-flex;
+.formula-editor-combine {
     margin-left: auto;
-    border: 1px solid var(--border-color);
+    padding: 0.35rem 0.85rem;
+    border: 1px solid var(--primary-color);
     border-radius: 8px;
-    overflow: hidden;
-}
-
-.formula-editor-mode {
-    padding: 0.32rem 0.8rem;
-    border: none;
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
+    background: transparent;
+    color: var(--primary-color);
     font: inherit;
-    font-size: 0.82rem;
+    font-size: 0.85rem;
+    font-weight: 600;
     cursor: pointer;
 }
 
-.formula-editor-mode + .formula-editor-mode {
-    border-left: 1px solid var(--border-color);
+.formula-editor-combine:hover {
+    background: color-mix(in srgb, var(--primary-color) 10%, transparent);
 }
 
-.formula-editor-mode.is-active {
-    background: color-mix(in srgb, var(--primary-color) 16%, var(--bg-secondary));
-    color: var(--primary-color);
+.formula-editor-combine.is-active {
+    background: var(--primary-color);
+    color: #fff;
+}
+
+.formula-editor-selection-lead {
+    font-size: 0.85rem;
     font-weight: 600;
 }
 
@@ -2277,8 +2289,8 @@
 
 .formula-editor-selection-count {
     margin-right: 0.4rem;
-    font-size: 0.85rem;
-    font-weight: 600;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
 }
 
 .formula-editor-list-btn {
