@@ -446,6 +446,37 @@ try {
         || window.app.files.get(window.app.activeFileId)?.transform?.timeDisplayMode === 'index');
     assert.equal(await page.locator('.compact-page-time-axis .file-transform-panel').count(), 1, 'a reindex keeps the page, rebuilt in place');
     await page.locator('.compact-page-time-axis label', { hasText: 'Use time vector from file' }).locator('input').click();
+    {
+        // The on-screen keyboard: a field takes the focus and the viewport
+        // loses its bottom half — on an upright phone, wider than tall. That
+        // is not the phone turning, and the layout must not flip sideways
+        // under the field being typed into (the global gain, as reported).
+        const sideways = () => page.evaluate(() => document.documentElement.classList.contains('compact-landscape'));
+        const gain = page.locator('.compact-page-time-axis .file-transform-field', { hasText: /gain/i }).locator('input');
+        await gain.focus();
+        // As iOS does it: the viewport shrinks and a resize fires, with no
+        // orientation change (a resized emulated phone would report one).
+        const keyboard = up => page.evaluate((up) => {
+            if (up) {
+                window.__realInnerHeight = window.innerHeight;
+                Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => 340 });
+            } else {
+                const real = window.__realInnerHeight;
+                Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => real });
+            }
+            window.dispatchEvent(new Event('resize'));
+        }, up);
+        await keyboard(true);
+        await page.waitForTimeout(250);
+        assert.equal(await page.evaluate(() => window.innerWidth > window.innerHeight), true, 'setup: the viewport reads wider than tall');
+        assert.equal(await sideways(), false, 'the keyboard coming up does not flip the layout sideways');
+        assert.equal(await page.evaluate(() => document.activeElement?.closest('.compact-page-time-axis') !== null), true,
+            'and the field keeps its focus');
+        await keyboard(false);
+        await gain.blur();
+        await page.waitForTimeout(250);
+        assert.equal(await sideways(), false, 'keyboard gone: still upright');
+    }
     await page.locator('.compact-sheet-back').click();
     await page.waitForFunction(() => window.app._compact.pages.length === 2 && !window.app._compact.timeAxisPage);
     await page.locator('.compact-sheet-close').click();

@@ -266,8 +266,24 @@ export function installCompactMethods(ViewerClass) {
             });
         };
         window.addEventListener('resize', schedule);
-        window.addEventListener('orientationchange', schedule);
+        // A real turn of the phone may change the layout even while a field
+        // has the keyboard up (see _compactKeyboardUp).
+        window.addEventListener('orientationchange', () => {
+            this._compact.turnRequested = true;
+            schedule();
+        });
         window.visualViewport?.addEventListener('resize', schedule);
+        // The keyboard going away gives the field's layout back.
+        document.addEventListener('focusout', () => setTimeout(schedule, 0));
+        // A field that opens the keyboard is brought into view above it.
+        document.addEventListener('focusin', (event) => {
+            if (!this._compact.active || !this._compactIsTextField(event.target)) return;
+            setTimeout(() => {
+                if (document.activeElement === event.target) {
+                    event.target.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+                }
+            }, 350);
+        });
         window.addEventListener('popstate', () => this._onCompactPopState());
         // iOS leaves the page zoomed in after a field it zoomed into loses
         // focus; the layout is then wider than the screen and its edges are cut.
@@ -423,8 +439,31 @@ export function installCompactMethods(ViewerClass) {
         document.documentElement.dataset.compactNotch = notch;
     };
 
+    // A field that brings up the on-screen keyboard.
+    proto._compactIsTextField = function(node) {
+        if (!node || node.nodeType !== 1) return false;
+        if (node.isContentEditable) return true;
+        if (node.tagName === 'TEXTAREA') return true;
+        if (node.tagName !== 'INPUT') return false;
+        return !['checkbox', 'radio', 'range', 'button', 'submit', 'reset', 'color', 'file', 'image', 'hidden'].includes(node.type);
+    };
+
+    // The on-screen keyboard is up: a text field has the focus. On iOS it
+    // takes the bottom half of the viewport away, and an upright phone then
+    // reports a viewport wider than tall — read as sideways, it flipped the
+    // whole layout to the rail and the side sheet under the user's finger,
+    // with the field they were typing into in a sliver. While it is up, the
+    // layout stays as it was; it follows the viewport again when the field
+    // lets go, or when the phone is really turned.
+    proto._compactKeyboardUp = function() {
+        return !!this._compact?.active && this._compactIsTextField(document.activeElement);
+    };
+
     proto._applyCompactLayout = function() {
         this._syncCompactNotchSide();
+        const turnRequested = !!this._compact.turnRequested;
+        this._compact.turnRequested = false;
+        if (this._compact.applied && !turnRequested && this._compactKeyboardUp()) return;
         const { width, height } = effectiveViewportSize({
             innerWidth: window.innerWidth,
             innerHeight: window.innerHeight,

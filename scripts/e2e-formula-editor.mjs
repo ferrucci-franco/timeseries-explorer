@@ -77,12 +77,27 @@ try {
     assert.equal(await side(), 'sqrt(`ambient temperature`)', 'minimising keeps the formula');
     assert.equal(await page.locator('#derived-name').inputValue(), 'total');
 
-    // ── Click selects: the sum of ten, without typing a name ──
+    // ── Σ Combine several: the sum of ten, without typing a name ──
     await page.locator('#derived-expand').click();
     await page.waitForSelector(`${editor}.show`);
     await page.locator('.formula-editor-formula').fill('');
-    await page.locator('.formula-editor-mode[data-mode="select"]').click();
-    assert.equal(await page.locator('.formula-editor-selection-bar').isVisible(), true);
+    const combine = page.locator('.formula-editor-combine');
+    assert.equal(await page.locator('.formula-editor-selection-bar').isVisible(), false, 'combining is a step, off at first');
+    assert.match(await combine.getAttribute('title'), /sum\(…\), mean\(…\), min\(…\) or max\(…\)/, 'its tooltip says what it is for');
+    assert.match(await page.locator('.formula-editor-pill', { hasText: 'ambient temperature' }).getAttribute('title'), /write it at the cursor/,
+        'a pill says what its click does');
+    // Its Cancel leaves without writing anything.
+    await combine.click();
+    await page.locator('.formula-editor-pill', { hasText: NAMES[3] }).click();
+    await page.locator('.formula-editor-combine-cancel').click();
+    assert.equal(await page.locator('.formula-editor-selection-bar').isVisible(), false);
+    assert.equal(await page.locator('.formula-editor-pill.is-selected').count(), 0);
+    assert.equal(await formula(), '', 'cancelled: nothing written');
+    await combine.click();
+    assert.equal(await combine.getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('.formula-editor-selection-bar').isVisible(), true, 'combining says so, in its own bar');
+    assert.match(await page.locator('.formula-editor-pill', { hasText: 'ambient temperature' }).getAttribute('title'), /include it/,
+        'while combining, a pill says its click includes it');
     await page.locator('.formula-editor-filter').fill('feeder');
     assert.equal(await page.locator('.formula-editor-pill:visible').count(), 10, 'the filter narrows the pills');
     await page.locator('.formula-editor-link-btn', { hasText: 'Select all shown' }).click();
@@ -97,6 +112,8 @@ try {
     const written = await formula();
     assert.ok(written.startsWith('sum(') && written.endsWith(`\`${NAMES[0]}\`)`), `sum over the selection, in order (${written})`);
     assert.equal(await page.locator('.formula-editor-pill.is-selected').count(), 0, 'the selection is used up');
+    assert.equal(await combine.getAttribute('aria-pressed'), 'false', 'writing the function ends the step');
+    assert.equal(await page.locator('.formula-editor-selection-bar').isVisible(), false);
     await page.waitForFunction(() => document.querySelector('.formula-editor-status').classList.contains('ok'));
 
     // Ctrl+Enter creates, and the editor goes with the side panel's form.
