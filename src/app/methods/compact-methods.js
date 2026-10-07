@@ -1358,7 +1358,7 @@ export function installCompactMethods(ViewerClass) {
         // action opens a page or dialog rather than acting at once.
         const list = el('div', 'compact-action-list');
         const addAction = ({ label, icon, tone, onClick, opens = false, keepPage = false, danger = false }) => {
-            const btn = button(`compact-action-row${danger ? ' is-danger' : ''}`, '', () => {
+            const btn = button(`compact-file-action${danger ? ' is-danger' : ''}`, '', () => {
                 if (!keepPage) this._popCompactPage();
                 onClick();
             });
