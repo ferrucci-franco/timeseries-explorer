@@ -1179,20 +1179,27 @@ html.compact .file-entry-more {
     align-items: center;
     justify-content: center;
     width: 44px;
-    height: 40px;
+    height: 36px;
     margin-left: auto;
     flex: 0 0 auto;
-    border: none;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text-primary);
-    font-size: 1.3rem;
+    /* A chip in the row's own colour — white on the active file's blue, the
+       text colour on the others — so it reads as a button, not a glyph. */
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    border-radius: 18px;
+    background: color-mix(in srgb, currentColor 20%, transparent);
+    color: inherit;
     line-height: 1;
     cursor: pointer;
 }
 
+html.compact .file-entry-more svg {
+    width: 22px;
+    height: 22px;
+    fill: currentColor;
+}
+
 html.compact .file-entry-more:active {
-    background: var(--hover-bg);
+    background: color-mix(in srgb, currentColor 35%, transparent);
 }
 
 /* The examples and main menus, as lists inside the More sheet. */

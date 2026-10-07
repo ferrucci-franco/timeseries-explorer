@@ -37,6 +37,7 @@ import {
     isFollowUpTap,
     movedBeyondSlop,
     touchGestureOwnsDrag,
+    windowZoomAxis,
     windowZoomRange,
 } from '../src/utils/touch-plot-gestures.js';
 import { rangeFromLinear, rangeToLinear } from '../src/ui/plot-touch-gestures.js';
@@ -228,7 +229,16 @@ for (const line of translations.split('\n')) {
     assert.deepEqual(windowZoomRange(0, 100, px => 100 - px), [0, 100], 'an axis running the other way still gives lowest first');
 }
 assert.match(installer, /div\._touchWindowZoom/, 'only where a plot asks for it');
-assert.match(installer, /'xaxis\.range': rangeFromLinear\(xa, range\),/, 'and it zooms the horizontal axis alone');
+assert.match(installer, /'xaxis\.range': rangeFromLinear\(xa, range\),/, 'sideways, it zooms the horizontal axis alone');
+// Up or down, the same window is a span of Y — and of the right-hand axis,
+// which shares the plot's height.
+assert.equal(windowZoomAxis(80, 10), 'x', 'sideways is X');
+assert.equal(windowZoomAxis(-80, 30), 'x');
+assert.equal(windowZoomAxis(10, 80), 'y', 'up or down is Y');
+assert.equal(windowZoomAxis(20, -60), 'y');
+assert.equal(windowZoomAxis(0, 0), 'x', 'before it moves, X, as it always was');
+assert.equal(windowZoomAxis(40, 40), 'x', 'a tie stays X');
+assert.match(installer, /put\('yaxis', area\.ya\);[\s\S]{0,200}if \(area\.y2\) put\('yaxis2', area\.y2\);/, 'Y zooms both left and right axes');
 
 // ── Two fingers pan a 3D scene: how far per pixel ───────────────────────────
 // Read off the projection, so what is under the fingers stays under them.
