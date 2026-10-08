@@ -177,6 +177,9 @@ export function installPlotExportMethods(TargetClass) {
             return;
         }
 
+        // A time-series panel over several files: whether its CSV can join
+        // them in time, one time column for all (the default when it can).
+        const concat = !csvBlockedReason ? this._timeseriesConcatPlan?.(plot) : null;
         const result = await PlotExportDialog.open({
             contextLabel: charts.map(chart => chart.label).join(' · '),
             charts: charts.map(({ id, label, width, height }) => ({ id, label, width, height })),
@@ -188,6 +191,12 @@ export function installPlotExportMethods(TargetClass) {
                 chart ? charts.find(entry => entry.id === chart.id) : null,
                 charts.length,
             ),
+            csvLayout: concat ? {
+                available: concat.available,
+                reason: concat.reason,
+                fileCount: concat.fileCount,
+                boundaryInstants: concat.boundaryInstants,
+            } : null,
         });
         if (!result) return;
 
@@ -195,7 +204,13 @@ export function installPlotExportMethods(TargetClass) {
             // Awaited: a large table is now written in chunks, and the caller
             // going on while it does would leave the dialog's own teardown
             // racing the overlay that reports it.
-            await this._exportCSV(panelId, { fileName: result.fileName, baseName: result.baseName });
+            await this._exportCSV(panelId, {
+                fileName: result.fileName,
+                baseName: result.baseName,
+                timeLayout: result.timeLayout,
+                boundaryMode: result.boundaryMode,
+                sourceColumn: result.sourceColumn,
+            });
             return;
         }
         const chart = charts.find(entry => entry.id === result.chartId) || charts[0];

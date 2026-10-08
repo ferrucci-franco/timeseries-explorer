@@ -3773,6 +3773,12 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
     color: var(--text-secondary);
 }
 
+/* A line that introduces the controls under it rather than following them. */
+.export-hint-line-lead {
+    margin-top: 0;
+    margin-bottom: 0.4rem;
+}
+
 .export-name-row {
     display: flex;
     align-items: center;
