@@ -92,6 +92,18 @@ body {
     height: 100vh;
     display: flex;
     flex-direction: column;
+    /* The app is driven by clicks and drags: a press that slides off a
+       variable's name is meant to drag it, not to select text. Only what can
+       be typed in stays selectable. */
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+    -webkit-user-select: text;
+    user-select: text;
 }
 
 /* ============================================

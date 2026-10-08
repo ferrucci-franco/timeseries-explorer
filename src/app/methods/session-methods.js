@@ -269,6 +269,7 @@ proto._captureSessionSettings = function() {
         language: this.language,
         showDescriptions: !!this.showDescriptions,
         showPointCounts: this.showPointCounts !== false,
+        numericVariablesOnly: !!this.numericVariablesOnly,
         sortAlphabetical: !!this.sortAlphabetical,
         scrollablePlotArea: !!this.scrollablePlotArea,
         mouseWheelZoom: !!this.mouseWheelZoom,
@@ -648,6 +649,7 @@ proto._applySessionSettings = function(settings) {
     if (settings.theme) this.applyTheme(settings.theme);
     this.showDescriptions = !!settings.showDescriptions;
     this.showPointCounts = settings.showPointCounts !== false;
+    this.numericVariablesOnly = !!settings.numericVariablesOnly;
     this.sortAlphabetical = settings.sortAlphabetical !== false;
     this.reloadAsNewVersionMode = !!settings.reloadAsNewVersionMode;
     this.mouseWheelZoom = settings.mouseWheelZoom !== false;
@@ -750,6 +752,7 @@ proto._syncSessionSettingsUI = function() {
     });
     document.getElementById('toggle-descriptions')?.classList.toggle('active', this.showDescriptions);
     this.togglePointCounts?.(this.showPointCounts !== false);
+    this._syncNumericOnlyButton?.();
     document.getElementById('toggle-sort')?.classList.toggle('active', this.sortAlphabetical);
     const variableFilter = document.getElementById('variable-filter');
     if (variableFilter) variableFilter.value = this._filterText;

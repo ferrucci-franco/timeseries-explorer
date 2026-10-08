@@ -33,6 +33,7 @@ class OpenModelicaViewer {
         this.language    = 'en';
         this.showDescriptions = false;
         this.showPointCounts = true;
+        this.numericVariablesOnly = false;
         this.sortAlphabetical = true;
         this._currentTree     = null;
         this._filterText      = '';

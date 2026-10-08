@@ -22,11 +22,12 @@ import { formulaNameLiteral } from './derived-methods.js';
 //     with " + ", so clicking ten pills in a row writes a sum;
 //   · "Σ Combine several…" is the other way to use the pills, and an explicit
 //     step rather than a mode to remember: while it is on (a banner says so,
-//     with its own Cancel), a click includes a variable, a second click leaves
-//     it out, the order is numbered, and one button writes sum(…), mean(…),
-//     min(…) or max(…) over all of them — which also ends the step. Two
-//     segmented "Click inserts / Click selects" buttons did the same job and
-//     read as a riddle;
+//     and the button gives way to Cancel and Done), a click includes a
+//     variable, a second click leaves it out, the order is numbered, and one
+//     of sum, mean, min or max is chosen — variables and function in either
+//     order, nothing written until Done. Function buttons that wrote at once
+//     asked for the variables first while showing above them, and read as
+//     actions to take before anything was picked;
 //   · pills already in the formula are marked, and a filter narrows the list.
 //
 // It never holds a formula of its own: the side panel's name and formula
@@ -117,6 +118,7 @@ export function installFormulaEditorMethods(TargetClass) {
         const state = {
             mode: 'insert',
             selection: [],
+            combineFn: null,
             filter: '',
             pills: new Map(),
             validateTimer: null,
@@ -234,24 +236,29 @@ export function installFormulaEditorMethods(TargetClass) {
         combine.type = 'button';
         combine.title = i18n.t('formulaEditorCombineTitle');
         combine.setAttribute('aria-pressed', 'false');
-        combine.addEventListener('click', () => this._formulaEditorSetMode(state.mode === 'select' ? 'insert' : 'select'));
+        combine.addEventListener('click', () => this._formulaEditorSetMode('select'));
+        // While combining, the button that started it gives way to the two
+        // that end it: Cancel writes nothing, Done writes the function.
+        const cancelCombine = el('button', 'formula-editor-combine-cancel', i18n.t('cancel'));
+        cancelCombine.type = 'button';
+        cancelCombine.title = i18n.t('formulaEditorCombineCancel');
+        cancelCombine.addEventListener('click', () => this._formulaEditorSetMode('insert'));
+        const doneCombine = el('button', 'formula-editor-combine-done', i18n.t('formulaEditorCombineDone'));
+        doneCombine.type = 'button';
+        doneCombine.addEventListener('click', () => this._formulaEditorCombineDone());
         state.combineButton = combine;
-        varBar.append(varTitle, filter, combine);
+        state.cancelCombineButton = cancelCombine;
+        state.doneButton = doneCombine;
+        varBar.append(varTitle, filter, combine, cancelCombine, doneCombine);
         const hint = el('div', 'formula-editor-hint');
+
+        // The combine step: variables and a function, picked in either order.
         const selectionBar = el('div', 'formula-editor-selection-bar');
-        const selectionLead = el('span', 'formula-editor-selection-lead', i18n.t('formulaEditorCombineLead'));
+        const selectionLead = el('div', 'formula-editor-selection-lead', i18n.t('formulaEditorCombineLead'));
+        const choices = el('div', 'formula-editor-combine-choices');
+        const varGroup = el('div', 'formula-editor-combine-group');
+        varGroup.appendChild(el('span', 'formula-editor-combine-label', i18n.t('formulaEditorCombineVariables')));
         const selectionCount = el('span', 'formula-editor-selection-count');
-        selectionBar.append(selectionLead, selectionCount);
-        state.listButtons = [];
-        for (const name of LIST_FUNCTIONS.filter(fn => available.includes(fn))) {
-            const btn = el('button', 'formula-editor-list-btn', `${name}(…)`);
-            btn.type = 'button';
-            btn.dataset.fn = name;
-            btn.title = i18n.t('formulaEditorInsertList').replace('{fn}', name);
-            btn.addEventListener('click', () => this._formulaEditorInsertSelection(name));
-            state.listButtons.push(btn);
-            selectionBar.appendChild(btn);
-        }
         const selectShown = el('button', 'formula-editor-link-btn', i18n.t('formulaEditorSelectShown'));
         selectShown.type = 'button';
         selectShown.addEventListener('click', () => this._formulaEditorSelectShown());
@@ -261,14 +268,31 @@ export function installFormulaEditorMethods(TargetClass) {
             state.selection = [];
             this._formulaEditorSyncSelection();
         });
-        const cancelCombine = el('button', 'formula-editor-link-btn formula-editor-combine-cancel', i18n.t('cancel'));
-        cancelCombine.type = 'button';
-        cancelCombine.title = i18n.t('formulaEditorCombineCancel');
-        cancelCombine.addEventListener('click', () => {
-            state.selection = [];
-            this._formulaEditorSetMode('insert');
-        });
-        selectionBar.append(selectShown, clear, cancelCombine);
+        varGroup.append(selectionCount, selectShown, clear);
+        const fnGroup = el('div', 'formula-editor-combine-group');
+        fnGroup.setAttribute('role', 'radiogroup');
+        fnGroup.setAttribute('aria-label', i18n.t('formulaEditorCombineFunction'));
+        fnGroup.appendChild(el('span', 'formula-editor-combine-label', i18n.t('formulaEditorCombineFunction')));
+        state.listButtons = [];
+        for (const name of LIST_FUNCTIONS.filter(fn => available.includes(fn))) {
+            const btn = el('button', 'formula-editor-list-btn', `${name}(…)`);
+            btn.type = 'button';
+            btn.dataset.fn = name;
+            btn.setAttribute('role', 'radio');
+            btn.title = i18n.t('formulaEditorInsertList').replace('{fn}', name);
+            btn.addEventListener('click', () => {
+                state.combineFn = name;
+                this._formulaEditorSyncSelection();
+            });
+            state.listButtons.push(btn);
+            fnGroup.appendChild(btn);
+        }
+        choices.append(varGroup, fnGroup);
+        // What Done will write, or what it still waits for.
+        const preview = el('div', 'formula-editor-combine-preview');
+        preview.setAttribute('aria-live', 'polite');
+        selectionBar.append(selectionLead, choices, preview);
+        state.combinePreview = preview;
         const pills = el('div', 'formula-editor-pills');
         vars.append(varBar, hint, selectionBar, pills);
         state.varTitle = varTitle;
@@ -346,7 +370,9 @@ export function installFormulaEditorMethods(TargetClass) {
             if (event.key === 'Escape') {
                 event.preventDefault();
                 event.stopPropagation();
-                this._closeFormulaEditor();
+                // Combining is a step inside the editor: Escape ends it first.
+                if (state.mode === 'select') this._formulaEditorSetMode('insert');
+                else this._closeFormulaEditor();
             } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                 event.preventDefault();
                 this._formulaEditorCreate();
@@ -508,15 +534,16 @@ export function installFormulaEditorMethods(TargetClass) {
         this._formulaEditorInsertOperand(formulaNameLiteral(name));
     };
 
-    proto._formulaEditorInsertSelection = function(fn) {
+    // Done: the chosen function over the chosen variables, written at the
+    // cursor; the step ends.
+    proto._formulaEditorCombineDone = function() {
         const state = this._formulaEditor;
-        if (!state || !state.selection.length) return;
+        if (!state || !state.combineFn || !state.selection.length) return;
         const input = state.formulaInput;
         const [start] = state.caret || [input.value.length];
         const before = input.value.slice(0, start);
         const lead = endsWithOperand(before) ? ' + ' : '';
-        this._formulaEditorInsert(lead + listCall(fn, state.selection));
-        // Done: the step ends, and a click on a pill writes it again.
+        this._formulaEditorInsert(lead + listCall(state.combineFn, state.selection));
         this._formulaEditorSetMode('insert');
     };
 
@@ -540,15 +567,22 @@ export function installFormulaEditorMethods(TargetClass) {
         if (!state) return;
         state.mode = mode === 'select' ? 'select' : 'insert';
         const combining = state.mode === 'select';
-        state.combineButton.classList.toggle('is-active', combining);
+        // Entered or left, the step starts from nothing.
+        state.selection = [];
+        state.combineFn = null;
+        state.combineButton.hidden = combining;
         state.combineButton.setAttribute('aria-pressed', String(combining));
-        if (!combining) state.selection = [];
+        state.cancelCombineButton.hidden = !combining;
+        state.doneButton.hidden = !combining;
         state.overlay.classList.toggle('is-selecting', combining);
         // What a click on a pill will do, said on the pill itself.
         state.pills.forEach((pill) => {
             pill.title = `${pill.dataset.title}\n${i18n.t(combining ? 'formulaEditorPillCombineTip' : 'formulaEditorPillInsertTip')}`;
         });
-        state.hint.textContent = i18n.t(state.mode === 'select' ? 'formulaEditorSelectHint' : 'formulaEditorInsertHint');
+        // The combine bar says what to do while it is open; the hint is for
+        // the other way to use the pills.
+        state.hint.hidden = combining;
+        state.hint.textContent = i18n.t('formulaEditorInsertHint');
         this._formulaEditorSyncSelection();
     };
 
@@ -564,7 +598,23 @@ export function installFormulaEditorMethods(TargetClass) {
         });
         state.selectionBar.hidden = state.mode !== 'select';
         state.selectionCount.textContent = i18n.t('formulaEditorSelected').replace('{count}', String(count));
-        state.listButtons.forEach(btn => { btn.disabled = count === 0; });
+        state.listButtons.forEach(btn => {
+            const chosen = btn.dataset.fn === state.combineFn;
+            btn.classList.toggle('is-chosen', chosen);
+            btn.setAttribute('aria-checked', String(chosen));
+        });
+        const missing = !count && !state.combineFn ? 'formulaEditorCombineNeedBoth'
+            : !count ? 'formulaEditorCombineNeedVariables'
+                : !state.combineFn ? 'formulaEditorCombineNeedFunction'
+                    : '';
+        state.doneButton.disabled = !!missing;
+        state.doneButton.title = missing
+            ? i18n.t(missing)
+            : i18n.t('formulaEditorCombineDoneTitle').replace('{fn}', state.combineFn);
+        state.combinePreview.classList.toggle('is-ready', !missing);
+        state.combinePreview.textContent = missing
+            ? i18n.t(missing)
+            : `→ ${listCall(state.combineFn, state.selection)}`;
     };
 
     proto._formulaEditorApplyFilter = function() {
