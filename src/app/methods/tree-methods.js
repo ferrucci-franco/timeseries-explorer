@@ -11,6 +11,12 @@ export function transposeMatrixSeries(series) {
         Float64Array.from(series, values => values[sample]));
 }
 
+// Text columns (a CSV of labels, a status string) are listed but never
+// plotted; the sidebar's 🔢 button leaves them out of the tree.
+export function isNumericVariable(variable) {
+    return variable?.dataType !== 'string';
+}
+
 export function installTreeMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.renderVariablesTree = function(tree) {
@@ -270,6 +276,7 @@ proto._renderDerivedDatasetsSection = function(parentElement, filter, autoExpand
  * full name matches the filter text (substring, case-insensitive).
  */
 proto._variableMatchesFilter = function(name, variable, filter) {
+    if (this.numericVariablesOnly && !isNumericVariable(variable)) return false;
     if (!filter) return true;
     const haystack = [
         name,
@@ -284,7 +291,7 @@ proto._variableMatchesFilter = function(name, variable, filter) {
 };
 
 proto._nodeMatchesFilter = function(node, filter) {
-    if (!filter) return true;
+    if (!filter && !this.numericVariablesOnly) return true;
     for (const [name, variable] of Object.entries(node._variables || {})) {
         if (this._variableMatchesFilter(name, variable, filter)) return true;
     }
@@ -465,7 +472,7 @@ proto._renderTreeNode = function(node, parentElement, level, filter, autoExpand)
     let allVarEntries = Object.entries(node._variables || {});
 
     // Filter children and variables
-    if (filter) {
+    if (filter || this.numericVariablesOnly) {
         childrenEntries = childrenEntries.filter(([, child]) => this._nodeMatchesFilter(child, filter));
         allVarEntries = allVarEntries.filter(([name, v]) => this._variableMatchesFilter(name, v, filter));
     }
@@ -811,6 +818,19 @@ proto._renderVarLeaves = function(entries, parentElement, options = {}) {
 proto.togglePointCounts = function(show) {
     document.getElementById('sidebar')?.classList.toggle('hide-point-counts', !show);
     document.getElementById('toggle-point-counts')?.classList.toggle('active', !!show);
+};
+
+proto.setNumericVariablesOnly = function(on) {
+    this.numericVariablesOnly = !!on;
+    this._syncNumericOnlyButton();
+    if (this._currentTree) this._renderFilteredTree();
+};
+
+proto._syncNumericOnlyButton = function() {
+    const button = document.getElementById('toggle-numeric-only');
+    if (!button) return;
+    button.classList.toggle('active', !!this.numericVariablesOnly);
+    button.setAttribute('aria-pressed', String(!!this.numericVariablesOnly));
 };
 
 proto.toggleDescriptions = function(show) {

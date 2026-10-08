@@ -2258,9 +2258,45 @@
     background: color-mix(in srgb, var(--primary-color) 10%, transparent);
 }
 
-.formula-editor-combine.is-active {
+/* While combining, Cancel and Done take the place of the button that
+   started it. */
+.formula-editor-combine-cancel,
+.formula-editor-combine-done {
+    padding: 0.35rem 0.85rem;
+    border-radius: 8px;
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.formula-editor-combine-cancel {
+    margin-left: auto;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-primary);
+}
+
+.formula-editor-combine-cancel:hover {
+    border-color: var(--text-secondary);
+}
+
+.formula-editor-combine-done {
+    border: 1px solid var(--primary-color);
     background: var(--primary-color);
     color: #fff;
+}
+
+.formula-editor-combine-done:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.formula-editor-combine[hidden],
+.formula-editor-combine-cancel[hidden],
+.formula-editor-combine-done[hidden],
+.formula-editor-hint[hidden] {
+    display: none;
 }
 
 .formula-editor-selection-lead {
@@ -2275,10 +2311,9 @@
 
 .formula-editor-selection-bar {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.4rem 0.6rem;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0.55rem 0.7rem;
     border-radius: 8px;
     background: color-mix(in srgb, var(--primary-color) 9%, var(--bg-secondary));
 }
@@ -2287,27 +2322,67 @@
     display: none;
 }
 
-.formula-editor-selection-count {
-    margin-right: 0.4rem;
+.formula-editor-combine-choices {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1.5rem;
+}
+
+.formula-editor-combine-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.formula-editor-combine-label {
+    margin-right: 0.15rem;
     font-size: 0.82rem;
+    font-weight: 600;
     color: var(--text-secondary);
 }
 
+.formula-editor-selection-count {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* A choice, not an action: neutral until picked, filled once picked. */
 .formula-editor-list-btn {
-    padding: 0.3rem 0.75rem;
-    border: none;
-    border-radius: 7px;
-    background: var(--primary-color);
-    color: #fff;
+    padding: 0.25rem 0.7rem;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.85rem;
-    font-weight: 600;
     cursor: pointer;
 }
 
-.formula-editor-list-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
+.formula-editor-list-btn:hover {
+    border-color: var(--primary-color);
+}
+
+.formula-editor-list-btn.is-chosen {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+    color: #fff;
+    font-weight: 600;
+}
+
+.formula-editor-combine-preview {
+    overflow: hidden;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.formula-editor-combine-preview.is-ready {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--text-primary);
 }
 
 .formula-editor-link-btn {
@@ -2318,10 +2393,6 @@
     font: inherit;
     font-size: 0.82rem;
     cursor: pointer;
-}
-
-.formula-editor-link-btn:first-of-type {
-    margin-left: auto;
 }
 
 .formula-editor-pills {
