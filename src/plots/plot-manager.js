@@ -19,15 +19,22 @@ import { installPlotAudioMethods } from './methods/audio-methods.js';
 import { installPlotViewHistoryMethods } from './methods/view-history-methods.js';
 import { csvTextCell, csvValueCell } from '../utils/csv-cell.js';
 import { streamColumns } from '../data/column-stream.js';
+import { concatenatedCsvBlocks, planTimeConcat } from './timeseries-concat.js';
 
 // Pieces of transformed chunks, joined into one block of rows. A time column
-// may be formatted text (a plain Array) or numbers (a Float64Array); values are
-// always numbers. A block that is one piece of one chunk is served as a view.
+// may be formatted text (a plain Array) or numbers (a Float64Array); `rawTime`
+// is that same time as numbers, for comparing instants; values are always
+// numbers. A block that is one piece of one chunk is served as a view.
 function joinCsvRowPieces(pieces, varNames, rows) {
     if (pieces.length === 1) {
         const { chunk, from, to } = pieces[0];
         const view = column => (ArrayBuffer.isView(column) ? column.subarray(from, to) : column.slice(from, to));
-        return { rows, time: view(chunk.time), values: new Map(varNames.map(name => [name, view(chunk.values.get(name))])) };
+        return {
+            rows,
+            time: view(chunk.time),
+            rawTime: view(chunk.rawTime),
+            values: new Map(varNames.map(name => [name, view(chunk.values.get(name))])),
+        };
     }
     const joinColumn = (select) => {
         const typed = pieces.every(piece => select(piece.chunk) instanceof Float64Array);
@@ -42,6 +49,7 @@ function joinCsvRowPieces(pieces, varNames, rows) {
     return {
         rows,
         time: joinColumn(chunk => chunk.time),
+        rawTime: joinColumn(chunk => chunk.rawTime),
         values: new Map(varNames.map(name => [name, joinColumn(chunk => chunk.values.get(name))])),
     };
 }
@@ -2641,6 +2649,17 @@ class PlotManager {
         const columns = [];
 
         if (plot.mode === 'timeseries') {
+            // Files that follow one another in time (one per day, overlaid)
+            // are written as one record: a time column and a column per
+            // variable. That is the default; the dialog can ask for the
+            // trace-by-trace layout below instead.
+            if (options.timeLayout !== 'per-trace') {
+                const concat = this._timeseriesConcatPlan(plot);
+                if (concat?.available) {
+                    return this._exportConcatenatedTimeseriesCsv(
+                        plot, concat, options.fileName || `${plot.mode}_export.csv`, options);
+                }
+            }
             // A lazy file holds only an overview in memory; the panel's traces
             // are that overview. Exported as they are, a 5 GB file became a
             // CSV of ten thousand rows that looked complete. When the rows can
@@ -3008,6 +3027,219 @@ class PlotManager {
         }
     }
 
+    /**
+     * Whether a time-series panel's files can be written one after another in
+     * time, as one record (see timeseries-concat.js). Null when there is
+     * nothing to join: the panel draws from a single file.
+     *
+     * Otherwise `available` says whether they can, and `reason` why not. The
+     * files are compared by their time ranges as plotted — crop, time shift
+     * and display mode applied — because that is the time the CSV writes: in
+     * relative time every day starts at zero, and they all overlap. A lazy
+     * file's range comes from its true first and last instants (see
+     * _concatTimeRange), not from its overview alone.
+     *
+     * `segments` are the files in the order they are written, each with the
+     * panel's variables it has; `varNames` are the value columns, in the order
+     * the panel first shows them.
+     */
+    _timeseriesConcatPlan(plot) {
+        if (plot?.mode !== 'timeseries') return null;
+        const traces = (plot.traces || []).filter(trace => this.files.get(trace.fileId)?.data?.variables?.[trace.varName]);
+        const fileIds = [...new Set(traces.map(trace => trace.fileId))];
+        if (fileIds.length < 2) return null;
+        const varNames = [...new Set(traces.map(trace => trace.varName))];
+        const unavailable = reason => ({
+            available: false, reason, fileCount: fileIds.length, varNames, segments: [], boundaryInstants: 0,
+        });
+
+        const ownIndex = traces.find(trace => this.files.get(trace.fileId).data.variables[trace.varName].independentIndex);
+        if (ownIndex) {
+            return unavailable(i18n.t('exportCsvLayoutIndependentIndex')
+                .replace('{name}', this._variableLabel(ownIndex.varName, ownIndex.fileId)));
+        }
+        const clocks = new Set(fileIds.map(fileId => (this._isCalendarTime(fileId)
+            ? 'datetime'
+            : (this._timeUnitLabel(fileId) || 's'))));
+        if (clocks.size > 1) return unavailable(i18n.t('exportCsvLayoutTimeUnits'));
+
+        const segments = fileIds.map((fileId) => {
+            const names = varNames.filter(name => traces.some(trace => trace.fileId === fileId && trace.varName === name));
+            const { start, end } = this._concatTimeRange(fileId, names[0]);
+            return {
+                fileId,
+                label: this.files.get(fileId)?.name || String(fileId),
+                varNames: names,
+                start,
+                end,
+            };
+        });
+        const plan = planTimeConcat(segments);
+        if (plan.overlaps) {
+            // One example, however many overlaps: thirty days in relative time
+            // overlap every one of the others, and listing them is no answer.
+            const { earlier, later } = plan.firstOverlap;
+            const key = plan.overlaps === 1 ? 'exportCsvLayoutOverlapOne' : 'exportCsvLayoutOverlapMany';
+            return unavailable(i18n.t(key)
+                .replace('{count}', String(plan.overlaps))
+                .replace('{earlier}', segments[earlier].label)
+                .replace('{later}', segments[later].label));
+        }
+        return {
+            available: true,
+            reason: '',
+            fileCount: fileIds.length,
+            varNames,
+            segments: plan.order.map(index => segments[index]),
+            boundaryInstants: plan.boundaryInstants,
+        };
+    }
+
+    /**
+     * The first and last instants of a file as plotted, NaN when it has none.
+     *
+     * In memory, the transformed time column itself. A lazy file holds only an
+     * overview, a sample of the file that need not include its first or last
+     * row, so its range is widened to the file's true extremes — the MIN and
+     * MAX DuckDB measured when it opened the file, or the row count for a
+     * generated axis — taken through the same display transform, and held
+     * inside the crop. A crop edge falling between two samples makes that end
+     * a bound rather than a sample: the files may then be judged to touch or
+     * overlap when they do not quite, never the other way round, and the rows
+     * themselves are merged only where their instants are really equal.
+     */
+    _concatTimeRange(fileId, varName) {
+        const times = this._getTransformedTimeDataForVariable(fileId, varName) || [];
+        let start = Infinity;
+        let end = -Infinity;
+        for (let i = 0; i < times.length; i++) {
+            const value = Number(times[i]);
+            if (!Number.isFinite(value)) continue;
+            if (value < start) start = value;
+            if (value > end) end = value;
+        }
+        const data = this.files.get(fileId)?.data;
+        const duck = data?._duckdb;
+        if (duck) {
+            const totalRows = Number(duck.totalRows);
+            const rawStart = duck.generatedTime ? 0 : Number(data.metadata?.timeStart);
+            const rawEnd = duck.generatedTime ? totalRows - 1 : Number(data.metadata?.timeEnd);
+            if (Number.isFinite(rawStart) && Number.isFinite(rawEnd)) {
+                const a = this._displayTimeForFetchedSourceTime(fileId, rawStart, 0);
+                const b = this._displayTimeForFetchedSourceTime(fileId, rawEnd, Number.isFinite(totalRows) ? totalRows - 1 : null);
+                if (Number.isFinite(a) && Number.isFinite(b)) {
+                    const transform = this._fileTransform(fileId);
+                    let lo = this._parseTimeBoundary(fileId, transform.cropStart) ?? -Infinity;
+                    let hi = this._parseTimeBoundary(fileId, transform.cropEnd) ?? Infinity;
+                    if (lo > hi) [lo, hi] = [hi, lo];
+                    start = Math.min(start, Math.max(lo, Math.min(a, b)));
+                    end = Math.max(end, Math.min(hi, Math.max(a, b)));
+                }
+            }
+        }
+        return {
+            start: start === Infinity ? NaN : start,
+            end: end === -Infinity ? NaN : end,
+        };
+    }
+
+    /**
+     * A time-series panel written as one record: the files one after another
+     * in time, one time column, one column per variable, and — when asked —
+     * a last column naming the file each row comes from.
+     *
+     * Each file is read through the same feeders the other exports use, one
+     * file at a time: a lazy file streams its rows from disk, a file in memory
+     * serves its arrays. So the values are the ones the trace-by-trace export
+     * writes, only placed differently.
+     *
+     * `options.boundaryMode` decides the rows at an instant where one file
+     * ends and the next begins: kept, or merged into one (see
+     * concatenatedCsvBlocks). `options.sourceColumn` adds the file column.
+     */
+    async _exportConcatenatedTimeseriesCsv(plot, concat, fileName, options = {}) {
+        const lazyPlan = this._lazyTimeseriesCsvPlan(plot);
+        if (lazyPlan && !lazyPlan.exact) {
+            // The same notice, for the same reason, as the per-trace layout.
+            Modal.alert(i18n.t('exportDialogTitle'), i18n.t('csvExportOverviewNotice'), { icon: '⚠️' });
+        }
+        const readsFromDisk = (fileId) => !!(lazyPlan?.exact && this.files.get(fileId)?.data?._duckdb);
+
+        const firstFid = concat.segments[0].fileId;
+        const headers = [csvTextCell(this._isCalendarTime(firstFid)
+            ? 'time [datetime UTC]'
+            : `time [${this._timeUnitLabel(firstFid) || 's'}]`)];
+        for (const name of concat.varNames) {
+            // The first file that has the variable names it. No file name in
+            // the header: the column is that variable from every file.
+            const owner = concat.segments.find(segment => segment.varNames.includes(name)).fileId;
+            const variable = this.files.get(owner).data.variables[name];
+            const unit = this._extractUnit(variable.description);
+            const label = this._variableLabel(name, owner);
+            headers.push(csvTextCell(unit ? `${label} [${unit}]` : label));
+        }
+        if (options.sourceColumn) headers.push('source_file');
+
+        // Feeders open as their file's turn comes, so thirty lazy files are
+        // never thirty open queries; each is closed once read, and every one
+        // opened is closed again on the way out, whatever ends the export.
+        const opened = [];
+        const segments = concat.segments.map((segment) => {
+            let feeder = null;
+            return {
+                label: segment.label,
+                varNames: segment.varNames,
+                take: async (n) => {
+                    if (!feeder) {
+                        const data = this.files.get(segment.fileId).data;
+                        feeder = readsFromDisk(segment.fileId)
+                            ? this._lazyCsvRowFeeder(segment.fileId, data, segment.varNames)
+                            : this._memoryCsvRowFeeder(segment.fileId, segment.varNames);
+                        opened.push(feeder);
+                    }
+                    const part = await feeder.take(n);
+                    if (!part.rows) await feeder.close();
+                    return part;
+                },
+            };
+        });
+        const source = concatenatedCsvBlocks({
+            segments,
+            varNames: concat.varNames,
+            boundaryMode: options.boundaryMode,
+            // File names are text a file system chose: escaped like any header.
+            sourceCell: options.sourceColumn ? csvTextCell : null,
+        });
+        async function* blocks() {
+            try {
+                yield* source;
+            } finally {
+                for (const feeder of opened) await feeder.close();
+            }
+        }
+
+        // Only the progress reads this. A lazy file's count is the file's,
+        // before any crop, as in _exportLazyTimeseriesCsv.
+        const totals = concat.segments.map((segment) => {
+            if (readsFromDisk(segment.fileId)) {
+                const rows = Number(this.files.get(segment.fileId).data._duckdb?.totalRows);
+                return rows > 0 ? rows : NaN;
+            }
+            return (this._getTransformedTimeDataForVariable(segment.fileId, segment.varNames[0]) || []).length;
+        });
+        const totalRows = totals.every(Number.isFinite) ? totals.reduce((sum, rows) => sum + rows, 0) : null;
+        const alwaysReport = concat.segments.some(segment => readsFromDisk(segment.fileId));
+        try {
+            return await this._writeCsvChunks(headers, blocks(), fileName, { totalRows, alwaysReport });
+        } catch (err) {
+            console.error('[export] could not read the file for export:', err);
+            await Modal.alert(i18n.t('exportDialogTitle'),
+                i18n.t('csvExportReadFailed').replace('{error}', err?.message || String(err)),
+                { icon: '⚠️' });
+            return null;
+        }
+    }
+
     // The next rows of a lazy file, transformed and with its time formatted,
     // served in blocks of whatever size is asked for regardless of the size of
     // the chunks the stream reads. `totalRows` is the file's row count when
@@ -3031,7 +3263,12 @@ class PlotManager {
                 const { time, valuesByVar } = self._transformFetchedPhaseTrajectory(
                     fileId, chunk.x, rowIndex, chunk.yByVar, varNames);
                 if (time.length) {
-                    return { time: self._formatTimeColumnForExport(fileId, time), values: valuesByVar, rows: time.length };
+                    return {
+                        time: self._formatTimeColumnForExport(fileId, time),
+                        rawTime: time,
+                        values: valuesByVar,
+                        rows: time.length,
+                    };
                 }
             }
         };
@@ -3063,7 +3300,8 @@ class PlotManager {
     // A file held in memory, served in blocks through the same interface. The
     // columns are the in-memory export's own, computed the same way.
     _memoryCsvRowFeeder(fileId, varNames) {
-        const time = this._formatTimeColumnForExport(fileId, this._getTransformedTimeDataForVariable(fileId, varNames[0]));
+        const rawTime = this._getTransformedTimeDataForVariable(fileId, varNames[0]);
+        const time = this._formatTimeColumnForExport(fileId, rawTime);
         const values = new Map(varNames.map(name => [name, this._getTransformedVariableData(fileId, name)]));
         const length = Math.max(time.length, ...[...values.values()].map(column => column.length));
         let offset = 0;
@@ -3077,6 +3315,7 @@ class PlotManager {
                 return {
                     rows: to - from,
                     time: view(time),
+                    rawTime: view(rawTime),
                     values: new Map([...values].map(([name, column]) => [name, view(column)])),
                 };
             },

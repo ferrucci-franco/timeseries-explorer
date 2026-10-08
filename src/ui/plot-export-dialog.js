@@ -23,7 +23,19 @@ const THEMES = ['current', 'light', 'dark', 'light-transparent'];
 
 // Format, quality and theme survive between openings: producing the figures of
 // one report means making the same three choices every time.
-const remembered = { format: 'csv', scale: 2, theme: 'current' };
+const remembered = {
+    format: 'csv',
+    scale: 2,
+    theme: 'current',
+    // The CSV of a time-series panel over several files. Joining them in time
+    // is the default; the source column is off so the plain table stays plain.
+    timeLayout: 'concat',
+    boundaryMode: 'keep',
+    sourceColumn: false,
+};
+
+const TIME_LAYOUTS = ['concat', 'per-trace'];
+const BOUNDARY_MODES = ['keep', 'mean', 'first', 'last'];
 
 const IMAGE_FORMATS = new Set(['png', 'svg']);
 
@@ -46,8 +58,12 @@ export default class PlotExportDialog {
      *   table to export; the CSV option is then offered as disabled with this
      *   explanation rather than silently missing
      * @param {(format: string, chart: object|null) => string} [options.defaultBaseName]
+     * @param {{available: boolean, reason: string, fileCount: number, boundaryInstants: number}|null} [options.csvLayout]
+     *   a time-series panel drawn from several files: whether its CSV can join
+     *   them in time (one time column) and, if not, why. Null hides the choice.
      * @returns {Promise<null|{format: string, chartId: string, scale: number,
-     *   theme: string, baseName: string, fileName: string}>}
+     *   theme: string, baseName: string, fileName: string, timeLayout: string,
+     *   boundaryMode: string, sourceColumn: boolean}>}
      */
     static open({
         contextLabel = '',
@@ -55,6 +71,7 @@ export default class PlotExportDialog {
         defaultChartId = '',
         csvBlockedReason = '',
         defaultBaseName = () => 'export',
+        csvLayout = null,
     } = {}) {
         return new Promise((resolve) => {
             const previousActive = document.activeElement;
@@ -77,6 +94,11 @@ export default class PlotExportDialog {
                 chartId: defaultChartId || charts[0]?.id || '',
                 scale: SCALES.includes(remembered.scale) ? remembered.scale : 2,
                 theme: THEMES.includes(remembered.theme) ? remembered.theme : 'current',
+                timeLayout: csvLayout?.available && TIME_LAYOUTS.includes(remembered.timeLayout)
+                    ? remembered.timeLayout
+                    : 'per-trace',
+                boundaryMode: BOUNDARY_MODES.includes(remembered.boundaryMode) ? remembered.boundaryMode : 'keep',
+                sourceColumn: !!remembered.sourceColumn,
             };
             if (!charts.length) state.format = 'csv';
 
@@ -171,6 +193,107 @@ export default class PlotExportDialog {
                 return input;
             });
             formatSection.appendChild(formatGroup);
+
+            // Table layout (CSV of a time-series panel over several files)
+            const layoutSection = makeSection(i18n.t('exportCsvLayout'));
+            const layoutGroup = radioGroup('layout');
+            const layoutCards = TIME_LAYOUTS.map((layout) => {
+                const concat = layout === 'concat';
+                const hint = concat
+                    ? (csvLayout?.available
+                        ? i18n.t('exportCsvLayoutConcatHint').replace('{count}', String(csvLayout.fileCount))
+                        : (csvLayout?.reason || ''))
+                    : i18n.t('exportCsvLayoutPerTraceHint');
+                const { row, input } = radioCard(
+                    'layout',
+                    layout,
+                    i18n.t(concat ? 'exportCsvLayoutConcat' : 'exportCsvLayoutPerTrace'),
+                    hint,
+                    { disabled: concat && !csvLayout?.available },
+                );
+                input.addEventListener('change', () => {
+                    if (!input.checked) return;
+                    state.timeLayout = layout;
+                    sync();
+                });
+                layoutGroup.appendChild(row);
+                return input;
+            });
+            layoutSection.appendChild(layoutGroup);
+
+            // The file each row comes from: one more column, off by default.
+            const sourceRow = document.createElement('label');
+            sourceRow.className = 'export-option export-option-check';
+            const sourceInput = document.createElement('input');
+            sourceInput.type = 'checkbox';
+            sourceInput.name = 'omv-export-source-column';
+            const sourceText = document.createElement('div');
+            sourceText.className = 'export-option-text';
+            const sourceLabel = document.createElement('div');
+            sourceLabel.className = 'export-option-label';
+            sourceLabel.textContent = i18n.t('exportCsvSourceColumn');
+            const sourceHint = document.createElement('div');
+            sourceHint.className = 'export-option-hint';
+            sourceText.append(sourceLabel, sourceHint);
+            sourceRow.append(sourceInput, sourceText);
+            sourceInput.addEventListener('change', () => {
+                state.sourceColumn = sourceInput.checked;
+                sync();
+            });
+
+            // Instants where one file ends and the next begins
+            const boundarySection = makeSection(i18n.t('exportCsvBoundary'));
+            const boundaryCount = document.createElement('div');
+            boundaryCount.className = 'export-hint-line export-hint-line-lead';
+            const boundaryCountValue = Number(csvLayout?.boundaryInstants) || 0;
+            boundaryCount.textContent = boundaryCountValue === 1
+                ? i18n.t('exportCsvBoundaryCountOne')
+                : i18n.t('exportCsvBoundaryCount').replace('{count}', String(boundaryCountValue));
+            boundarySection.appendChild(boundaryCount);
+            const boundaryRow = document.createElement('div');
+            boundaryRow.className = 'export-chip-row';
+            boundaryRow.setAttribute('role', 'radiogroup');
+            const boundaryLabels = {
+                keep: i18n.t('exportCsvBoundaryKeep'),
+                mean: i18n.t('exportCsvBoundaryMean'),
+                first: i18n.t('exportCsvBoundaryFirst'),
+                last: i18n.t('exportCsvBoundaryLast'),
+            };
+            const boundaryHints = {
+                keep: i18n.t('exportCsvBoundaryKeepHint'),
+                mean: i18n.t('exportCsvBoundaryMeanHint'),
+                first: i18n.t('exportCsvBoundaryFirstHint'),
+                last: i18n.t('exportCsvBoundaryLastHint'),
+            };
+            const boundaryInputs = BOUNDARY_MODES.map((mode) => {
+                const chip = document.createElement('label');
+                chip.className = 'export-chip';
+                const input = document.createElement('input');
+                input.type = 'radio';
+                input.name = 'omv-export-boundary';
+                input.value = mode;
+                const span = document.createElement('span');
+                span.textContent = boundaryLabels[mode];
+                chip.append(input, span);
+                input.addEventListener('change', () => {
+                    if (!input.checked) return;
+                    state.boundaryMode = mode;
+                    sync();
+                });
+                boundaryRow.appendChild(chip);
+                return input;
+            });
+            boundarySection.appendChild(boundaryRow);
+            const boundaryHint = document.createElement('div');
+            boundaryHint.className = 'export-hint-line';
+            boundarySection.appendChild(boundaryHint);
+
+            // After the shared instants, whose merged rows its hint describes.
+            // No heading of its own: it belongs to the layout above.
+            const sourceSection = document.createElement('div');
+            sourceSection.className = 'export-section';
+            sourceSection.appendChild(sourceRow);
+            content.appendChild(sourceSection);
 
             // Which chart (only when the panel holds more than one)
             const chartSection = makeSection(i18n.t('exportChart'));
@@ -290,6 +413,18 @@ export default class PlotExportDialog {
                 qualitySection.hidden = state.format !== 'png';
                 themeSection.hidden = !isImage;
 
+                const concat = !!csvLayout?.available && state.timeLayout === 'concat';
+                const merges = concat && boundaryCountValue > 0 && state.boundaryMode !== 'keep';
+                layoutSection.hidden = state.format !== 'csv' || !csvLayout;
+                layoutCards.forEach((input, index) => { input.checked = TIME_LAYOUTS[index] === state.timeLayout; });
+                sourceSection.hidden = state.format !== 'csv' || !concat;
+                sourceInput.checked = state.sourceColumn;
+                sourceHint.textContent = i18n.t('exportCsvSourceColumnHint')
+                    + (merges ? ` ${i18n.t('exportCsvSourceColumnMergedHint')}` : '');
+                boundarySection.hidden = state.format !== 'csv' || !concat || boundaryCountValue === 0;
+                boundaryInputs.forEach((input, index) => { input.checked = BOUNDARY_MODES[index] === state.boundaryMode; });
+                boundaryHint.textContent = boundaryHints[state.boundaryMode];
+
                 const chart = currentChart();
                 if (chart) {
                     const width = Math.max(1, Math.round(chart.width * state.scale));
@@ -322,6 +457,10 @@ export default class PlotExportDialog {
                 remembered.format = state.format;
                 remembered.scale = state.scale;
                 remembered.theme = state.theme;
+                // A layout chosen where only one was possible is no choice.
+                if (csvLayout?.available) remembered.timeLayout = state.timeLayout;
+                remembered.boundaryMode = state.boundaryMode;
+                remembered.sourceColumn = state.sourceColumn;
                 finish({
                     format: state.format,
                     chartId: state.chartId,
@@ -329,6 +468,9 @@ export default class PlotExportDialog {
                     theme: state.theme,
                     baseName,
                     fileName: `${baseName}.${format.ext}`,
+                    timeLayout: csvLayout?.available ? state.timeLayout : 'per-trace',
+                    boundaryMode: state.boundaryMode,
+                    sourceColumn: state.sourceColumn,
                 });
             };
 
