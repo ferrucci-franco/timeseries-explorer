@@ -111,16 +111,32 @@ export function plainTimeUnitScaleMs(units) {
     return TIME_UNIT_SCALES_MS[unit] || null;
 }
 
+// Called on every map, column and region the gridded view reads (a global
+// ERA5 map is a million values), so it is a plain loop: the closure-per-value
+// form it replaced spent more time here than the file read itself.
 export function decodeNumeric(values, attrs) {
-    const fillValues = [attrValue(attrs, ['_FillValue']), attrValue(attrs, ['missing_value'])]
+    const fills = [attrValue(attrs, ['_FillValue']), attrValue(attrs, ['missing_value'])]
         .flatMap(value => Array.isArray(value) ? value : [value])
         .filter(value => value !== undefined && value !== null)
-        .map(Number);
-    const scale = Number(attrValue(attrs, ['scale_factor']) ?? 1);
-    const offset = Number(attrValue(attrs, ['add_offset']) ?? 0);
-    return Float64Array.from(values, raw => {
-        const value = Number(raw);
-        if (fillValues.some(fill => (Number.isNaN(fill) && Number.isNaN(value)) || value === fill)) return NaN;
-        return value * (Number.isFinite(scale) ? scale : 1) + (Number.isFinite(offset) ? offset : 0);
-    });
+        .map(Number)
+        .filter(fill => !Number.isNaN(fill));
+    const rawScale = Number(attrValue(attrs, ['scale_factor']) ?? 1);
+    const rawOffset = Number(attrValue(attrs, ['add_offset']) ?? 0);
+    const scale = Number.isFinite(rawScale) ? rawScale : 1;
+    const offset = Number.isFinite(rawOffset) ? rawOffset : 0;
+    const count = values.length;
+    const out = new Float64Array(count);
+    const fillCount = fills.length;
+    const fill0 = fills[0];
+    for (let index = 0; index < count; index++) {
+        const raw = values[index];
+        const value = typeof raw === 'number' ? raw : Number(raw);
+        // A NaN fill needs no test: NaN stays NaN through the scaling.
+        if (fillCount === 1 ? value === fill0 : (fillCount > 1 && fills.includes(value))) {
+            out[index] = NaN;
+        } else {
+            out[index] = value * scale + offset;
+        }
+    }
+    return out;
 }

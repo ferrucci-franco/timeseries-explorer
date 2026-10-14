@@ -1097,20 +1097,63 @@ resumen de buscador):
   - slider con reproducción y teclado (← → espacio);
   - decimación de dibujo por encima de 400.000 celdas (el zoom lee la
     resolución completa).
-- **Herramientas** (dentro de una caja cuentan las celdas cuyo centro cae
-  adentro):
-  - **Punto:** serie de la celda más cercana.
-  - **Caja:** media ponderada por área (cos φ, o área de celda si hay
-    `lat_bnds`), mínimo y máximo, cada uno con su ubicación, en cada instante;
-    las celdas faltantes se excluyen y se cuentan.
-- **Integración:** las extracciones son variables del archivo en el explorador
-  (nodo "Extracciones"), con vista previa bajo el mapa y "Graficar en el
-  explorador". El botón del globo en la lista de archivos reabre el mapa.
+- **Panel de análisis** a la derecha del mapa, que se lee como el flujo de
+  trabajo (rediseñado tras la primera prueba con datos reales):
+  1. **Extraer una serie temporal.** Tres modos:
+     - **Navegar:** arrastrar mueve el mapa.
+     - **Punto:** un clic coloca un marcador y llena latitud y longitud, que
+       también se pueden escribir. Nada se lee hasta pulsar "Extraer serie
+       temporal" (o Enter). Se toma la celda más cercana.
+     - **Región:** se dibuja un rectángulo o se escriben sus límites
+       Norte/Oeste/Este/Sur, como en el formulario del CDS (Oeste > Este cruza el
+       meridiano 180°). El recuadro naranja se puede arrastrar y redimensionar,
+       y los campos lo siguen. "Calcular" da la media ponderada por área (cos φ,
+       o área de celda si hay `lat_bnds`), el mínimo y el máximo en cada
+       instante; las celdas faltantes se excluyen y se cuentan.
+
+     En los modos Punto y Región el cursor es una cruz. Un recuadro de alcance
+     dice qué se usa: la variable, el nivel elegido en la barra y todos los
+     instantes.
+  2. **Series extraídas:** una fila por punto (P1, P2…) o región (R1…), con el
+     mismo color de su marcador o recuadro en el mapa y de sus curvas en la
+     vista previa. Cada fila tiene una casilla para la vista previa y la
+     exportación, y ✕ para quitarla junto con sus variables. "Abrir las series
+     marcadas en los gráficos" cierra el mapa y las grafica en el explorador.
+- **Barra superior en una sola fila:** variable, nivel y escala a la izquierda;
+  exportar y "Cerrar mapa" a la derecha. La barra de colores tiene el título
+  arriba, un formato de etiquetas acotado y un margen fijo: cambiar de instante
+  ya no cambia el ancho del mapa.
+- **Escala de colores fija en el tiempo.** Al reproducir, un color significa el
+  mismo valor en todos los instantes:
+  - Al abrir, o al cambiar de variable o de nivel, la escala se ajusta a **todo
+    el período** con una muestra de instantes. Si los bloques comprimidos del
+    archivo agrupan varios instantes, se toman bloques enteros repartidos en el
+    período, que cuestan lo mismo y ven más datos. Medido: 0,7 s en un día
+    global a 0,25° y 0,5 s en un año 6-horario regional.
+  - El mínimo y el máximo son editables a mano.
+  - El menú **"Autoajustar"** reajusta a todo el período, exacto (lee todos los
+    instantes, con progreso y cancelación), al instante en pantalla o a la zona
+    visible. Tiene tres opciones:
+    - ignorar extremos (percentiles 1–99);
+    - centrar en cero;
+    - "reajustar en cada instante" (el comportamiento anterior, desmarcado por
+      defecto).
+  - El menú también contiene la paleta y dice de dónde sale la escala actual.
+- **Divisor arrastrable** entre el mapa y la vista previa de las series (mouse
+  o flechas; doble clic vuelve al valor por defecto).
+- **Volver al mapa:** con un archivo grillado activo y el mapa cerrado, aparece
+  sobre los gráficos un botón verde "Volver al mapa · archivo". En la fila del
+  archivo, el globo pasó a ser un botón con texto, "Mapa".
+- **Encuadre:** grados iguales en ambos ejes. Una franja larga (una banda de
+  latitudes) se muestra con la geografía de alrededor, sin pasar nunca de los
+  polos.
 - **Apertura** (§4.4.0): diálogo de ZIP con la opción de abrir como un solo
   dataset, y oferta de unir en el tiempo varios archivos compatibles. "Abrir
   como series" vuelve al comportamiento anterior.
-- **Exportar:** PNG del mapa, CSV del mapa (latitud × longitud, resolución
-  completa) y CSV de las extracciones.
+- **Exportar:** el mismo diálogo que el botón de descarga de cada panel.
+  - Mapa: CSV latitud × longitud a resolución completa, PNG o SVG, con calidad
+    y tema.
+  - Series extraídas: CSV de las marcadas, PNG o SVG de la vista previa.
 - **Electron:** el netCDF abierto por ruta se pide al servidor local como Blob
   (sin la pregunta de tamaño ni la copia por IPC) y se lee por partes.
 

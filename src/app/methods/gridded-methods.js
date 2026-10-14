@@ -24,6 +24,13 @@ const COASTLINE_FILES = { coarse: 'geo/natural-earth-110m.json', fine: 'geo/natu
 // Zoomed in past this longitude span, the 1:50m coastline replaces the 1:110m one.
 const FINE_COAST_SPAN_DEGREES = 70;
 
+// The export button of every plot panel, so the map's reads the same.
+const EXPORT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>';
+const GLOBE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="8.5" stroke-width="1.8"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17" stroke-width="1.6"/></svg>';
+// One colour per extraction, shared by its marker or box on the map, its row
+// in the panel and its curves in the preview.
+const SERIES_COLORS = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#ff7f0e', '#17becf', '#8c564b', '#e377c2'];
+
 const coastlineCache = new Map();
 
 function loadCoastlines(scale) {
@@ -101,6 +108,45 @@ export function drawableGrid(map, xRange = null, yRange = null, maxCells = MAX_D
         z,
         stride,
     };
+}
+
+// A drawn box or a click lands between pixels; two decimals of a degree is
+// about a kilometre, finer than any reanalysis grid.
+function roundCoordinate(value) {
+    return Math.round(value * 100) / 100;
+}
+
+/**
+ * Minimum, maximum and the 1st/99th percentiles of a map (or of the part of
+ * it inside a zoom window), the latter from a bounded subsample.
+ */
+export function mapStats(map, zoom = null) {
+    const inRange = (value, range) => !range || (value >= Math.min(range[0], range[1]) && value <= Math.max(range[0], range[1]));
+    const rows = [];
+    for (let row = 0; row < map.ny; row++) if (inRange(map.lat[row], zoom?.y)) rows.push(row);
+    const columns = [];
+    for (let column = 0; column < map.nx; column++) if (inRange(map.lon[column], zoom?.x)) columns.push(column);
+    const cells = rows.length * columns.length;
+    const stride = Math.max(1, Math.floor(cells / 100000));
+    const kept = [];
+    let min = Infinity;
+    let max = -Infinity;
+    let index = 0;
+    for (const row of rows) {
+        const base = row * map.nx;
+        for (const column of columns) {
+            const value = map.values[base + column];
+            index += 1;
+            if (!Number.isFinite(value)) continue;
+            if (value < min) min = value;
+            if (value > max) max = value;
+            if (index % stride === 0) kept.push(value);
+        }
+    }
+    if (!Number.isFinite(min)) return { min: NaN, max: NaN, p01: NaN, p99: NaN, steps: 1, total: 1 };
+    const sorted = Float64Array.from(kept).sort();
+    const quantile = q => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))];
+    return { min, max, p01: quantile(0.01), p99: quantile(0.99), steps: 1, total: 1 };
 }
 
 function formatCoordinate(value, positive, negative) {
@@ -480,10 +526,17 @@ export function installGriddedMethods(TargetClass) {
             variableKey: first?.key || null,
             selection: {},
             palette: 'Viridis',
-            rangeMode: 'auto',
-            fixedRange: null,
-            manualRange: null,
-            tool: 'point',
+            // The colour scale stays fixed while the time slider moves, so a
+            // colour means the same value at every step. It is fitted to the
+            // whole period (a sample of steps) when the variable or the level
+            // changes; "follow" re-fits it to every step instead.
+            scale: { range: null, stats: null, source: 'sample', robust: false, symmetric: false, follow: false },
+            // 'navigate', 'point' or 'region' (the panel's three buttons).
+            mode: 'point',
+            pendingPoint: null,
+            pendingBox: null,
+            groups: [],
+            groupCount: 0,
             playing: false,
             speed: 2,
             map: null,
@@ -491,7 +544,6 @@ export function installGriddedMethods(TargetClass) {
             requestedMap: null,
             mapInFlight: false,
             job: null,
-            lastExtraction: [],
             extractionCount: 0,
         };
     };
@@ -564,6 +616,12 @@ export function installGriddedMethods(TargetClass) {
     };
 
     // ─── The view ─────────────────────────────────────────────────────────
+    //
+    // Layout, left to right: the map (with its time bar and, when there are
+    // extractions, their preview below it) and the analysis panel. The panel
+    // reads top to bottom as the workflow: choose a tool, set a point or a box
+    // (by clicking/drawing or by typing coordinates), compute, then work with
+    // the extracted series. Nothing is computed until the user asks.
 
     proto._griddedEnsureDom = function() {
         let root = document.getElementById('gridded-view');
@@ -577,52 +635,106 @@ export function installGriddedMethods(TargetClass) {
                 <div class="gridded-title" data-role="title"></div>
                 <label class="gridded-field"><span data-role="variable-label"></span><select data-role="variable"></select></label>
                 <span class="gridded-dims" data-role="dims"></span>
-                <label class="gridded-field"><span data-role="palette-label"></span><select data-role="palette"></select></label>
-                <label class="gridded-field"><span data-role="range-label"></span><select data-role="range"></select></label>
-                <span class="gridded-manual-range" data-role="manual-range" hidden>
-                    <input type="number" step="any" data-role="range-min" aria-label="min">
-                    <input type="number" step="any" data-role="range-max" aria-label="max">
-                </span>
-                <span class="gridded-tools" role="group" data-role="tools">
-                    <button type="button" class="gridded-tool" data-tool="pan"></button>
-                    <button type="button" class="gridded-tool" data-tool="point"></button>
-                    <button type="button" class="gridded-tool" data-tool="box"></button>
-                </span>
-                <span class="gridded-actions">
-                    <button type="button" class="gridded-action" data-action="export-png"></button>
-                    <button type="button" class="gridded-action" data-action="export-csv"></button>
-                    <button type="button" class="gridded-action" data-action="as-series"></button>
-                    <button type="button" class="gridded-action gridded-close" data-action="close"></button>
-                </span>
-            </div>
-            <div class="gridded-body">
-                <div class="gridded-map" data-role="map"></div>
-            </div>
-            <div class="gridded-status" data-role="status" aria-live="polite"></div>
-            <div class="gridded-timebar" data-role="timebar">
-                <button type="button" class="gridded-step" data-step="first">⏮</button>
-                <button type="button" class="gridded-step" data-step="prev">◀</button>
-                <button type="button" class="gridded-step gridded-play" data-step="play">▶</button>
-                <button type="button" class="gridded-step" data-step="next">▶|</button>
-                <button type="button" class="gridded-step" data-step="last">⏭</button>
-                <input type="range" min="0" max="0" step="1" value="0" data-role="time">
-                <span class="gridded-time-label" data-role="time-label"></span>
-                <select data-role="speed" class="gridded-speed"></select>
-            </div>
-            <div class="gridded-progress" data-role="progress" hidden>
-                <span data-role="progress-label"></span>
-                <progress max="1" value="0" data-role="progress-bar"></progress>
-                <button type="button" data-action="cancel"></button>
-            </div>
-            <div class="gridded-preview" data-role="preview" hidden>
-                <div class="gridded-preview-head">
-                    <span data-role="preview-title"></span>
-                    <span class="gridded-preview-actions">
-                        <button type="button" data-action="plot"></button>
-                        <button type="button" data-action="export-series"></button>
+                <span class="gridded-field gridded-scale">
+                    <span data-role="range-label"></span>
+                    <input type="number" step="any" data-role="range-min">
+                    <span aria-hidden="true">–</span>
+                    <input type="number" step="any" data-role="range-max">
+                    <span class="gridded-autofit">
+                        <button type="button" data-action="autofit-menu" aria-haspopup="true" aria-expanded="false"><span data-role="autofit-label"></span> ▾</button>
+                        <div class="gridded-menu" data-role="autofit-menu" hidden>
+                            <label class="gridded-menu-palette"><span data-role="palette-label"></span><select data-role="palette"></select></label>
+                            <hr>
+                            <div class="gridded-menu-title" data-role="autofit-title"></div>
+                            <button type="button" data-autofit="sample"></button>
+                            <button type="button" data-autofit="all"></button>
+                            <button type="button" data-autofit="step"></button>
+                            <button type="button" data-autofit="visible"></button>
+                            <hr>
+                            <label><input type="checkbox" data-scale-option="robust"><span data-role="opt-robust"></span></label>
+                            <label><input type="checkbox" data-scale-option="symmetric"><span data-role="opt-symmetric"></span></label>
+                            <label><input type="checkbox" data-scale-option="follow"><span data-role="opt-follow"></span></label>
+                            <p class="gridded-menu-note" data-role="scale-source"></p>
+                        </div>
                     </span>
+                </span>
+                <span class="gridded-toolbar-end">
+                    <button type="button" class="gridded-icon-btn" data-action="export-map">${EXPORT_ICON}</button>
+                    <button type="button" class="gridded-close" data-action="close"></button>
+                </span>
+            </div>
+            <div class="gridded-main">
+                <div class="gridded-map-column">
+                    <div class="gridded-body"><div class="gridded-map" data-role="map"></div></div>
+                    <div class="gridded-status" data-role="status" aria-live="polite"></div>
+                    <div class="gridded-timebar" data-role="timebar">
+                        <button type="button" class="gridded-step" data-step="first">⏮</button>
+                        <button type="button" class="gridded-step" data-step="prev">◀</button>
+                        <button type="button" class="gridded-step gridded-play" data-step="play">▶</button>
+                        <button type="button" class="gridded-step" data-step="next">▶|</button>
+                        <button type="button" class="gridded-step" data-step="last">⏭</button>
+                        <input type="range" min="0" max="0" step="1" value="0" data-role="time">
+                        <span class="gridded-time-label" data-role="time-label"></span>
+                        <select data-role="speed" class="gridded-speed"></select>
+                    </div>
+                    <div class="gridded-progress" data-role="progress" hidden>
+                        <span data-role="progress-label"></span>
+                        <progress max="1" value="0" data-role="progress-bar"></progress>
+                        <button type="button" data-action="cancel"></button>
+                    </div>
+                    <div class="gridded-splitter" data-role="splitter" role="separator" aria-orientation="horizontal" tabindex="0" hidden></div>
+                    <div class="gridded-preview" data-role="preview" hidden>
+                        <div class="gridded-preview-head" data-role="preview-title"></div>
+                        <div class="gridded-preview-chart" data-role="preview-chart"></div>
+                    </div>
                 </div>
-                <div class="gridded-preview-chart" data-role="preview-chart"></div>
+                <aside class="gridded-panel" data-role="panel">
+                    <section class="gridded-panel-section">
+                        <h3 data-role="tools-heading"></h3>
+                        <div class="gridded-modes" role="radiogroup" data-role="modes">
+                            <button type="button" class="gridded-mode" data-mode="navigate"></button>
+                            <button type="button" class="gridded-mode" data-mode="point"></button>
+                            <button type="button" class="gridded-mode" data-mode="region"></button>
+                        </div>
+                        <p class="gridded-help" data-role="mode-help"></p>
+                        <div class="gridded-form" data-form="point" hidden>
+                            <div class="gridded-coords gridded-coords-point">
+                                <label><span data-role="lat-label"></span><input type="number" step="any" min="-90" max="90" data-input="lat"></label>
+                                <label><span data-role="lon-label"></span><input type="number" step="any" min="-180" max="360" data-input="lon"></label>
+                            </div>
+                            <div class="gridded-form-actions">
+                                <button type="button" class="gridded-primary" data-action="extract-point"></button>
+                                <button type="button" data-action="clear-point"></button>
+                            </div>
+                        </div>
+                        <div class="gridded-form" data-form="region" hidden>
+                            <div class="gridded-coords gridded-coords-box">
+                                <label class="gridded-north"><span data-role="north-label"></span><input type="number" step="any" min="-90" max="90" data-input="north"></label>
+                                <label class="gridded-west"><span data-role="west-label"></span><input type="number" step="any" min="-180" max="360" data-input="west"></label>
+                                <label class="gridded-east"><span data-role="east-label"></span><input type="number" step="any" min="-180" max="360" data-input="east"></label>
+                                <label class="gridded-south"><span data-role="south-label"></span><input type="number" step="any" min="-90" max="90" data-input="south"></label>
+                            </div>
+                            <div class="gridded-form-actions">
+                                <button type="button" class="gridded-primary" data-action="extract-region"></button>
+                                <button type="button" data-action="clear-region"></button>
+                            </div>
+                        </div>
+                        <p class="gridded-scope" data-role="scope"></p>
+                    </section>
+                    <section class="gridded-panel-section gridded-results">
+                        <div class="gridded-results-head">
+                            <h3 data-role="results-heading"></h3>
+                            <button type="button" class="gridded-icon-btn" data-action="export-series">${EXPORT_ICON}</button>
+                        </div>
+                        <p class="gridded-help" data-role="results-empty"></p>
+                        <ul class="gridded-results-list" data-role="results"></ul>
+                        <button type="button" class="gridded-primary gridded-plot-btn" data-action="plot"></button>
+                        <p class="gridded-help" data-role="plot-help"></p>
+                    </section>
+                    <section class="gridded-panel-section gridded-panel-footer">
+                        <button type="button" class="gridded-link" data-action="as-series"></button>
+                    </section>
+                </aside>
             </div>`;
         const host = document.querySelector('.content-area') || document.body;
         host.appendChild(root);
@@ -648,6 +760,10 @@ export function installGriddedMethods(TargetClass) {
         return document.querySelector(`#gridded-view [data-role="${role}"]`);
     };
 
+    proto._griddedInput = function(name) {
+        return document.querySelector(`#gridded-view [data-input="${name}"]`);
+    };
+
     proto._griddedVisibleView = function() {
         const state = this._griddedState();
         return state.visibleFileId ? state.views.get(state.visibleFileId) || null : null;
@@ -659,10 +775,10 @@ export function installGriddedMethods(TargetClass) {
             const current = view();
             if (!current) return;
             current.variableKey = event.target.value;
-            current.fixedRange = null;
             current.zoom = null;
             this._griddedRenderControls(current);
             this._griddedRequestMap(current);
+            this._griddedRefitScale(current);
         });
         root.querySelector('[data-role="palette"]').addEventListener('change', event => {
             const current = view();
@@ -670,15 +786,7 @@ export function installGriddedMethods(TargetClass) {
             current.palette = event.target.value;
             this._griddedDrawMap(current);
         });
-        root.querySelector('[data-role="range"]').addEventListener('change', event => {
-            const current = view();
-            if (!current) return;
-            current.rangeMode = event.target.value;
-            if (current.rangeMode === 'fixed') current.fixedRange = this._griddedCurrentRange(current, 'auto');
-            if (current.rangeMode === 'manual') current.manualRange = this._griddedCurrentRange(current, 'auto');
-            this._griddedRenderControls(current);
-            this._griddedDrawMap(current);
-        });
+        // Typing a bound makes the scale manual; it stays until re-fitted.
         for (const role of ['range-min', 'range-max']) {
             root.querySelector(`[data-role="${role}"]`).addEventListener('change', () => {
                 const current = view();
@@ -686,17 +794,76 @@ export function installGriddedMethods(TargetClass) {
                 const min = Number(this._griddedEl('range-min').value);
                 const max = Number(this._griddedEl('range-max').value);
                 if (Number.isFinite(min) && Number.isFinite(max) && max > min) {
-                    current.manualRange = [min, max];
+                    current.scale.range = [min, max];
+                    current.scale.source = 'manual';
+                    current.scale.follow = false;
+                    this._griddedSyncScale(current);
                     this._griddedDrawMap(current);
                 }
             });
         }
-        root.querySelectorAll('.gridded-tool').forEach(button => {
+        const menu = root.querySelector('[data-role="autofit-menu"]');
+        const menuButton = root.querySelector('[data-action="autofit-menu"]');
+        const closeMenu = () => {
+            menu.hidden = true;
+            menuButton.setAttribute('aria-expanded', 'false');
+        };
+        menuButton.addEventListener('click', event => {
+            event.stopPropagation();
+            menu.hidden = !menu.hidden;
+            menuButton.setAttribute('aria-expanded', String(!menu.hidden));
+        });
+        document.addEventListener('click', event => {
+            if (!menu.hidden && !event.target.closest('.gridded-autofit')) closeMenu();
+        });
+        menu.addEventListener('keydown', event => {
+            if (event.key === 'Escape') { closeMenu(); menuButton.focus(); }
+        });
+        menu.querySelectorAll('[data-autofit]').forEach(button => {
             button.addEventListener('click', () => {
                 const current = view();
+                closeMenu();
+                if (current) this._griddedAutofit(current, button.dataset.autofit);
+            });
+        });
+        menu.querySelectorAll('[data-scale-option]').forEach(input => {
+            input.addEventListener('change', () => {
+                const current = view();
                 if (!current) return;
-                current.tool = button.dataset.tool;
-                this._griddedSyncTools(current);
+                current.scale[input.dataset.scaleOption] = input.checked;
+                if (input.dataset.scaleOption === 'follow' && !input.checked && !current.scale.range) {
+                    this._griddedAutofit(current, 'sample');
+                    return;
+                }
+                if (current.scale.stats && current.scale.source !== 'manual') current.scale.range = this._griddedRangeFromStats(current.scale);
+                this._griddedSyncScale(current);
+                this._griddedDrawMap(current);
+            });
+        });
+        this._griddedBindSplitter(root);
+        root.querySelectorAll('.gridded-mode').forEach(button => {
+            button.addEventListener('click', () => {
+                const current = view();
+                if (current) this._griddedSetMode(current, button.dataset.mode);
+            });
+        });
+        // Typing coordinates moves the marker or the box as the numbers change;
+        // nothing is read from the file until the action button is pressed.
+        root.querySelectorAll('[data-input]').forEach(input => {
+            input.addEventListener('input', () => {
+                const current = view();
+                if (!current) return;
+                if (input.dataset.input === 'lat' || input.dataset.input === 'lon') current.pendingPoint = this._griddedReadPointInputs();
+                else current.pendingBox = this._griddedReadBoxInputs();
+                this._griddedSyncActions(current);
+                this._griddedDrawOverlaysSoon(current);
+            });
+            input.addEventListener('keydown', event => {
+                if (event.key !== 'Enter') return;
+                const current = view();
+                if (!current) return;
+                if (input.dataset.input === 'lat' || input.dataset.input === 'lon') this._griddedExtractPoint(current);
+                else this._griddedExtractRegion(current);
             });
         });
         root.querySelector('[data-role="time"]').addEventListener('input', event => {
@@ -715,23 +882,89 @@ export function installGriddedMethods(TargetClass) {
             const current = view();
             if (current) current.speed = Number(event.target.value) || 2;
         });
+        root.querySelector('[data-role="results"]').addEventListener('change', event => {
+            const current = view();
+            const id = event.target.closest('[data-group]')?.dataset.group;
+            if (!current || !id) return;
+            const group = current.groups.find(item => item.id === id);
+            if (group) group.checked = event.target.checked;
+            this._griddedSyncActions(current);
+            this._griddedDrawPreview(current);
+        });
         root.addEventListener('click', event => {
-            const action = event.target.closest('[data-action]')?.dataset.action;
+            const target = event.target.closest('[data-action]');
+            const action = target?.dataset.action;
             if (!action) return;
             const current = view();
             if (action === 'close') this._hideGriddedView();
-            else if (action === 'cancel' && current?.job) griddedClient().cancel(current.job.id);
-            else if (action === 'export-png' && current) this._griddedExportPng(current);
-            else if (action === 'export-csv' && current) this._griddedExportMapCsv(current);
-            else if (action === 'export-series' && current) this._griddedExportExtractionsCsv(current);
-            else if (action === 'plot' && current) this._griddedPlotLastExtraction(current);
-            else if (action === 'as-series' && current) this._griddedOpenAsSeries(current.fileId);
+            else if (!current) return;
+            else if (action === 'cancel' && current.job) griddedClient().cancel(current.job.id);
+            else if (action === 'extract-point') this._griddedExtractPoint(current);
+            else if (action === 'extract-region') this._griddedExtractRegion(current);
+            else if (action === 'clear-point') this._griddedClearPending(current, 'point');
+            else if (action === 'clear-region') this._griddedClearPending(current, 'region');
+            else if (action === 'remove-group') this._griddedRemoveGroup(current, target.closest('[data-group]')?.dataset.group);
+            else if (action === 'export-map') this._griddedExportMap(current);
+            else if (action === 'export-series') this._griddedExportSeries(current);
+            else if (action === 'plot') this._griddedPlotChecked(current);
+            else if (action === 'as-series') this._griddedOpenAsSeries(current.fileId);
         });
         root.addEventListener('keydown', event => {
-            if (event.target.closest('input[type="number"], select')) return;
+            if (event.target.closest('input, select, textarea')) return;
             if (event.key === 'ArrowRight') { this._griddedStep('next'); event.preventDefault(); }
             else if (event.key === 'ArrowLeft') { this._griddedStep('prev'); event.preventDefault(); }
             else if (event.key === ' ' && !event.target.closest('button')) { this._griddedStep('play'); event.preventDefault(); }
+        });
+    };
+
+    // The boundary between the map and the preview is dragged with the mouse
+    // (or moved with the arrow keys); double-click goes back to the default.
+    // The height is a per-viewer convenience kept in localStorage.
+    proto._griddedBindSplitter = function(root) {
+        const splitter = root.querySelector('[data-role="splitter"]');
+        const preview = root.querySelector('[data-role="preview"]');
+        const column = root.querySelector('.gridded-map-column');
+        const storageKey = 'omv.gridded.previewHeight';
+        const apply = height => {
+            const max = Math.max(120, column.clientHeight - 220);
+            const clamped = Math.round(Math.max(90, Math.min(max, height)));
+            preview.style.height = `${clamped}px`;
+            splitter.setAttribute('aria-valuenow', String(clamped));
+            return clamped;
+        };
+        try {
+            const saved = Number(localStorage.getItem(storageKey));
+            if (saved > 0) preview.style.height = `${saved}px`;
+        } catch { /* storage unavailable: default height */ }
+        const save = height => {
+            try { localStorage.setItem(storageKey, String(height)); } catch { /* ignore */ }
+        };
+        splitter.addEventListener('pointerdown', event => {
+            event.preventDefault();
+            splitter.setPointerCapture(event.pointerId);
+            splitter.classList.add('dragging');
+            const bottom = preview.getBoundingClientRect().bottom;
+            const move = moveEvent => apply(bottom - moveEvent.clientY);
+            const up = () => {
+                splitter.classList.remove('dragging');
+                splitter.removeEventListener('pointermove', move);
+                splitter.removeEventListener('pointerup', up);
+                splitter.removeEventListener('pointercancel', up);
+                save(preview.getBoundingClientRect().height);
+            };
+            splitter.addEventListener('pointermove', move);
+            splitter.addEventListener('pointerup', up);
+            splitter.addEventListener('pointercancel', up);
+        });
+        splitter.addEventListener('dblclick', () => {
+            preview.style.height = '';
+            try { localStorage.removeItem(storageKey); } catch { /* ignore */ }
+        });
+        splitter.addEventListener('keydown', event => {
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+            event.preventDefault();
+            const height = preview.getBoundingClientRect().height + (event.key === 'ArrowUp' ? 24 : -24);
+            save(apply(height));
         });
     };
 
@@ -745,22 +978,47 @@ export function installGriddedMethods(TargetClass) {
         set('[data-role="variable-label"]', 'griddedVariable');
         set('[data-role="palette-label"]', 'griddedPalette');
         set('[data-role="range-label"]', 'griddedColorRange');
-        set('[data-tool="pan"]', 'griddedToolPan');
-        set('[data-tool="point"]', 'griddedToolPoint');
-        set('[data-tool="box"]', 'griddedToolBox');
-        set('[data-tool="pan"]', 'griddedToolPanTitle', 'title');
-        set('[data-tool="point"]', 'griddedToolPointTitle', 'title');
-        set('[data-tool="box"]', 'griddedToolBoxTitle', 'title');
-        set('[data-action="export-png"]', 'griddedExportPng');
-        set('[data-action="export-csv"]', 'griddedExportMapCsv');
-        set('[data-action="export-csv"]', 'griddedExportMapCsvTitle', 'title');
+        set('[data-role="range-min"]', 'griddedRangeMin', 'ariaLabel');
+        set('[data-role="range-max"]', 'griddedRangeMax', 'ariaLabel');
+        set('[data-role="autofit-label"]', 'griddedAutofit');
+        set('[data-action="autofit-menu"]', 'griddedAutofitTitle', 'title');
+        set('[data-role="autofit-title"]', 'griddedAutofitMenuTitle');
+        set('[data-autofit="sample"]', 'griddedAutofitSample');
+        set('[data-autofit="all"]', 'griddedAutofitAll');
+        set('[data-autofit="step"]', 'griddedAutofitStep');
+        set('[data-autofit="visible"]', 'griddedAutofitVisible');
+        set('[data-role="opt-robust"]', 'griddedScaleRobust');
+        set('[data-role="opt-symmetric"]', 'griddedScaleSymmetric');
+        set('[data-role="opt-follow"]', 'griddedScaleFollow');
+        set('[data-role="splitter"]', 'griddedSplitterTitle', 'title');
+        set('[data-role="splitter"]', 'griddedSplitterTitle', 'ariaLabel');
+        set('[data-action="export-map"]', 'griddedExportMapTitle', 'title');
+        set('[data-action="export-map"]', 'griddedExportMapTitle', 'ariaLabel');
+        set('[data-action="close"]', 'griddedCloseMap');
+        set('[data-action="close"]', 'griddedCloseMapTitle', 'title');
+        set('[data-action="cancel"]', 'griddedCancel');
+        set('[data-role="tools-heading"]', 'griddedToolsHeading');
+        set('[data-mode="navigate"]', 'griddedModeNavigate');
+        set('[data-mode="point"]', 'griddedModePoint');
+        set('[data-mode="region"]', 'griddedModeRegion');
+        set('[data-role="lat-label"]', 'griddedLatitude');
+        set('[data-role="lon-label"]', 'griddedLongitude');
+        set('[data-role="north-label"]', 'griddedNorth');
+        set('[data-role="south-label"]', 'griddedSouth');
+        set('[data-role="west-label"]', 'griddedWest');
+        set('[data-role="east-label"]', 'griddedEast');
+        set('[data-action="extract-point"]', 'griddedExtractPoint');
+        set('[data-action="extract-region"]', 'griddedExtractRegion');
+        set('[data-action="clear-point"]', 'griddedClear');
+        set('[data-action="clear-region"]', 'griddedClear');
+        set('[data-role="results-heading"]', 'griddedResultsHeading');
+        set('[data-role="results-empty"]', 'griddedResultsEmpty');
+        set('[data-action="export-series"]', 'griddedExportSeriesTitle', 'title');
+        set('[data-action="export-series"]', 'griddedExportSeriesTitle', 'ariaLabel');
+        set('[data-action="plot"]', 'griddedPlotChecked');
+        set('[data-role="plot-help"]', 'griddedPlotHelp');
         set('[data-action="as-series"]', 'griddedOpenAsSeries');
         set('[data-action="as-series"]', 'griddedOpenAsSeriesTitle', 'title');
-        set('[data-action="close"]', 'griddedShowPlots');
-        set('[data-action="close"]', 'griddedShowPlotsTitle', 'title');
-        set('[data-action="cancel"]', 'griddedCancel');
-        set('[data-action="plot"]', 'griddedPlotInExplorer');
-        set('[data-action="export-series"]', 'griddedExportSeriesCsv');
         set('[data-step="first"]', 'griddedFirstStep', 'title');
         set('[data-step="prev"]', 'griddedPrevStep', 'title');
         set('[data-step="play"]', 'griddedPlay', 'title');
@@ -770,11 +1028,6 @@ export function installGriddedMethods(TargetClass) {
         const palette = root.querySelector('[data-role="palette"]');
         palette.innerHTML = '';
         for (const name of PALETTES) palette.add(new Option(name, name));
-        const range = root.querySelector('[data-role="range"]');
-        range.innerHTML = '';
-        for (const [value, key] of [['auto', 'griddedRangeAuto'], ['fixed', 'griddedRangeFixed'], ['manual', 'griddedRangeManual']]) {
-            range.add(new Option(i18n.t(key), value));
-        }
         const speed = root.querySelector('[data-role="speed"]');
         speed.innerHTML = '';
         for (const value of PLAY_SPEEDS) speed.add(new Option(i18n.t('griddedSpeedValue').replace('{fps}', String(value)), String(value)));
@@ -803,6 +1056,7 @@ export function installGriddedMethods(TargetClass) {
         this._griddedDrawPreview(view);
         if (view.map) this._griddedDrawMap(view);
         else this._griddedRequestMap(view);
+        if (!view.scale.range && !view.scale.follow && !view.scaleToken) this._griddedAutofit(view, 'sample');
         this._renderFilesList();
     };
 
@@ -830,8 +1084,9 @@ export function installGriddedMethods(TargetClass) {
         const root = document.getElementById('gridded-view');
         if (!root) return;
         const model = view.model;
-        root.querySelector('[data-role="title"]').textContent = this.files.get(view.fileId)?.name || model.title;
-        root.querySelector('[data-role="title"]').title = model.members.map(member => `${member.filename} (${member.storageFormat})`).join('\n');
+        const title = root.querySelector('[data-role="title"]');
+        title.textContent = this.files.get(view.fileId)?.name || model.title;
+        title.title = model.members.map(member => `${member.filename} (${member.storageFormat})`).join('\n');
         const select = root.querySelector('[data-role="variable"]');
         select.innerHTML = '';
         for (const variable of model.variables.filter(item => item.mapable)) {
@@ -860,21 +1115,16 @@ export function installGriddedMethods(TargetClass) {
                 dimSelect.value = String(view.selection[name] || 0);
                 dimSelect.addEventListener('change', () => {
                     view.selection[name] = Number(dimSelect.value);
-                    view.fixedRange = view.rangeMode === 'fixed' ? null : view.fixedRange;
+                    this._griddedSyncScope(view);
                     this._griddedRequestMap(view);
+                    this._griddedRefitScale(view);
                 });
                 wrap.append(caption, dimSelect);
                 dims.appendChild(wrap);
             });
         }
         root.querySelector('[data-role="palette"]').value = view.palette;
-        root.querySelector('[data-role="range"]').value = view.rangeMode;
-        const manual = root.querySelector('[data-role="manual-range"]');
-        manual.hidden = view.rangeMode !== 'manual';
-        if (view.rangeMode === 'manual' && view.manualRange) {
-            this._griddedEl('range-min').value = String(Number(view.manualRange[0].toPrecision(6)));
-            this._griddedEl('range-max').value = String(Number(view.manualRange[1].toPrecision(6)));
-        }
+        this._griddedSyncScale(view);
         root.querySelector('[data-role="speed"]').value = String(view.speed);
         const timeDim = variable?.timeDim;
         const timebar = root.querySelector('[data-role="timebar"]');
@@ -885,7 +1135,24 @@ export function installGriddedMethods(TargetClass) {
         slider.value = String(timeDim ? view.selection[timeDim] || 0 : 0);
         slider.disabled = !timeDim || size < 2;
         this._griddedSyncTimeLabel(view);
-        this._griddedSyncTools(view);
+        this._griddedSyncMode(view);
+        this._griddedSyncInputs(view);
+        this._griddedSyncScope(view);
+        this._griddedRenderResults(view);
+    };
+
+    // What an extraction will use, said before it runs: the variable, the
+    // level (or other dimensions) chosen in the toolbar, and every time step.
+    proto._griddedSyncScope = function(view) {
+        const element = this._griddedEl('scope');
+        const variable = this._griddedVariable(view);
+        if (!element || !variable) return;
+        const fixed = this._griddedSelectionSuffix(view, variable).replace(/^ @ /, '');
+        const steps = variable.timeDim ? view.model.axes[variable.timeDim]?.size || 1 : 1;
+        element.textContent = i18n.t('griddedScope')
+            .replace('{variable}', variable.name)
+            .replace('{level}', fixed ? ` · ${fixed}` : '')
+            .replace('{steps}', String(steps));
     };
 
     proto._griddedSyncTimeLabel = function(view) {
@@ -906,18 +1173,82 @@ export function installGriddedMethods(TargetClass) {
         label.textContent = `${axis.labels[index] ?? index}  (${index + 1}/${axis.size})`;
     };
 
-    proto._griddedSyncTools = function(view) {
-        document.querySelectorAll('#gridded-view .gridded-tool').forEach(button => {
-            const active = button.dataset.tool === view.tool;
+    proto._griddedSetMode = function(view, mode) {
+        view.mode = mode;
+        this._griddedSyncMode(view);
+        const div = this._griddedEl('map');
+        if (div?._fullLayout) Plotly.relayout(div, { dragmode: mode === 'region' ? 'drawrect' : 'pan' });
+    };
+
+    proto._griddedSyncMode = function(view) {
+        const root = document.getElementById('gridded-view');
+        if (!root) return;
+        root.querySelectorAll('.gridded-mode').forEach(button => {
+            const active = button.dataset.mode === view.mode;
             button.classList.toggle('active', active);
             button.setAttribute('aria-pressed', String(active));
         });
-        const div = this._griddedEl('map');
-        if (div?._fullLayout) {
-            Plotly.relayout(div, { dragmode: view.tool === 'box' ? 'drawrect' : 'pan' });
-        }
-        this._griddedSetStatus(view.tool === 'point' ? i18n.t('griddedHintPoint')
-            : view.tool === 'box' ? i18n.t('griddedHintBox') : i18n.t('griddedHintPan'));
+        root.querySelector('[data-form="point"]').hidden = view.mode !== 'point';
+        root.querySelector('[data-form="region"]').hidden = view.mode !== 'region';
+        const map = root.querySelector('[data-role="map"]');
+        map.classList.toggle('gridded-cursor-point', view.mode === 'point');
+        map.classList.toggle('gridded-cursor-region', view.mode === 'region');
+        const help = { navigate: 'griddedHelpNavigate', point: 'griddedHelpPoint', region: 'griddedHelpRegion' }[view.mode];
+        this._griddedEl('mode-help').textContent = i18n.t(help || 'griddedHelpNavigate');
+        this._griddedSyncActions(view);
+    };
+
+    proto._griddedSyncInputs = function(view) {
+        const set = (name, value) => {
+            const input = this._griddedInput(name);
+            if (input && document.activeElement !== input) input.value = Number.isFinite(value) ? String(Math.round(value * 1000) / 1000) : '';
+        };
+        set('lat', view.pendingPoint?.lat);
+        set('lon', view.pendingPoint?.lon);
+        set('north', view.pendingBox?.latMax);
+        set('south', view.pendingBox?.latMin);
+        set('west', view.pendingBox?.lonMin);
+        set('east', view.pendingBox?.lonMax);
+        this._griddedSyncActions(view);
+    };
+
+    proto._griddedReadPointInputs = function() {
+        const lat = Number(this._griddedInput('lat')?.value);
+        const lon = Number(this._griddedInput('lon')?.value);
+        const filled = this._griddedInput('lat')?.value !== '' && this._griddedInput('lon')?.value !== '';
+        if (!filled || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90) return null;
+        return { lat, lon };
+    };
+
+    proto._griddedReadBoxInputs = function() {
+        const values = ['north', 'south', 'west', 'east'].map(name => {
+            const input = this._griddedInput(name);
+            return input?.value === '' ? NaN : Number(input?.value);
+        });
+        const [north, south, west, east] = values;
+        if (!values.every(Number.isFinite) || north <= south || Math.abs(north) > 90 || Math.abs(south) > 90 || west === east) return null;
+        // West > east is a box across the antimeridian, as in the CDS form.
+        return { latMax: north, latMin: south, lonMin: west, lonMax: east };
+    };
+
+    proto._griddedSyncActions = function(view) {
+        const root = document.getElementById('gridded-view');
+        if (!root) return;
+        const busy = !!view.job;
+        root.querySelector('[data-action="extract-point"]').disabled = busy || !view.pendingPoint;
+        root.querySelector('[data-action="extract-region"]').disabled = busy || !view.pendingBox;
+        root.querySelector('[data-action="clear-point"]').disabled = !view.pendingPoint;
+        root.querySelector('[data-action="clear-region"]').disabled = !view.pendingBox;
+        const checked = (view.groups || []).filter(group => group.checked).length;
+        root.querySelector('[data-action="plot"]').disabled = !checked;
+        root.querySelector('[data-action="export-series"]').disabled = !(view.groups || []).length;
+    };
+
+    proto._griddedClearPending = function(view, kind) {
+        if (kind === 'point') view.pendingPoint = null;
+        else view.pendingBox = null;
+        this._griddedSyncInputs(view);
+        this._griddedDrawMap(view);
     };
 
     proto._griddedSetStatus = function(text, isError = false) {
@@ -980,7 +1311,8 @@ export function installGriddedMethods(TargetClass) {
                         const map = await griddedClient().request('map', { datasetId: view.datasetId, ...request }).promise;
                         view.map = map;
                         view.mapFor = request;
-                        if (this._griddedVisibleView() === view) this._griddedDrawMap(view);
+                        if (view.scale.follow || !view.scale.range) this._griddedSyncScale(view);
+                        if (this._griddedVisibleView() === view) await this._griddedDrawMap(view);
                     } catch (error) {
                         this._griddedSetStatus(this._griddedErrorText(error, ''), true);
                         view.playing = false;
@@ -994,33 +1326,188 @@ export function installGriddedMethods(TargetClass) {
         return view.mapInFlight;
     };
 
-    proto._griddedCurrentRange = function(view, mode = view.rangeMode) {
-        if (mode === 'fixed' && view.fixedRange) return view.fixedRange;
-        if (mode === 'manual' && view.manualRange) return view.manualRange;
-        const map = view.map;
-        if (!map || !Number.isFinite(map.min)) return [0, 1];
-        if (map.max === map.min) return [map.min - 0.5, map.max + 0.5];
-        return [map.min, map.max];
+    proto._griddedRangeFromStats = function(scale) {
+        const stats = scale.stats;
+        if (!stats || !Number.isFinite(stats.min)) return null;
+        let low = scale.robust ? stats.p01 : stats.min;
+        let high = scale.robust ? stats.p99 : stats.max;
+        if (scale.symmetric) {
+            const extent = Math.max(Math.abs(low), Math.abs(high));
+            low = -extent;
+            high = extent;
+        }
+        if (!(high > low)) return [low - 0.5, high + 0.5];
+        return [low, high];
     };
 
-    proto._griddedColors = function() {
-        const dark = this.theme === 'dark';
+    // The range the map is drawn with. Until the period's range arrives (it
+    // is read in the background), the current step's own.
+    proto._griddedCurrentRange = function(view) {
+        const scale = view.scale;
+        if (!scale.follow && scale.range) return scale.range;
+        const stats = view.map ? mapStats(view.map) : null;
+        return this._griddedRangeFromStats({ ...scale, stats }) || [0, 1];
+    };
+
+    proto._griddedRefitScale = function(view) {
+        if (view.scale.follow) {
+            this._griddedSyncScale(view);
+            return;
+        }
+        view.scale.range = null;
+        view.scale.stats = null;
+        this._griddedAutofit(view, 'sample');
+    };
+
+    /**
+     * Fit the colour scale: to the whole period (a sample of steps, or every
+     * step), to the step on screen, or to the part of the map in view.
+     */
+    proto._griddedAutofit = async function(view, source) {
+        const variable = this._griddedVariable(view);
+        if (!variable) return;
+        let stats = null;
+        if (source === 'step' || source === 'visible') {
+            if (!view.map) return;
+            stats = mapStats(view.map, source === 'visible' ? view.zoom : null);
+        } else {
+            const token = (view.scaleToken || 0) + 1;
+            view.scaleToken = token;
+            const selection = { ...view.selection };
+            const payload = { variable: variable.key, selection, options: { scope: source === 'all' ? 'all' : 'sample' } };
+            if (source === 'all') {
+                stats = await this._griddedRunJob(view, 'range', payload, i18n.t('griddedReadingRange'));
+            } else {
+                this._griddedSetStatus(i18n.t('griddedFittingScale'));
+                try {
+                    stats = await griddedClient().request('range', { datasetId: view.datasetId, ...payload }).promise;
+                } catch (error) {
+                    this._griddedSetStatus(this._griddedErrorText(error, ''), true);
+                    return;
+                }
+                this._griddedSetStatus('');
+            }
+            // A newer fit (another variable or level) has started meanwhile.
+            if (!stats || token !== view.scaleToken || variable.key !== view.variableKey) return;
+        }
+        if (!stats || !Number.isFinite(stats.min)) return;
+        view.scale.stats = stats;
+        view.scale.source = source;
+        view.scale.follow = false;
+        view.scale.range = this._griddedRangeFromStats(view.scale);
+        this._griddedSyncScale(view);
+        this._griddedDrawMap(view);
+    };
+
+    proto._griddedSyncScale = function(view) {
+        const root = document.getElementById('gridded-view');
+        if (!root) return;
+        const [low, high] = this._griddedCurrentRange(view);
+        const format = value => (Number.isFinite(value) ? String(Number(value.toPrecision(5))) : '');
+        for (const [role, value] of [['range-min', low], ['range-max', high]]) {
+            const input = this._griddedEl(role);
+            if (input && document.activeElement !== input) input.value = format(value);
+            if (input) input.disabled = view.scale.follow;
+        }
+        root.querySelectorAll('[data-scale-option]').forEach(input => {
+            input.checked = !!view.scale[input.dataset.scaleOption];
+        });
+        const stats = view.scale.stats;
+        const key = view.scale.follow ? 'griddedScaleSourceFollow' : {
+            sample: 'griddedScaleSourceSample',
+            all: 'griddedScaleSourceAll',
+            step: 'griddedScaleSourceStep',
+            visible: 'griddedScaleSourceVisible',
+            manual: 'griddedScaleSourceManual',
+        }[view.scale.source] || 'griddedScaleSourceSample';
+        const text = i18n.t(key)
+            .replace('{steps}', String(stats?.steps ?? '…'))
+            .replace('{total}', String(stats?.total ?? '…'));
+        const note = this._griddedEl('scale-source');
+        if (note) note.textContent = text;
+        const button = root.querySelector('[data-action="autofit-menu"]');
+        if (button) button.title = `${i18n.t('griddedAutofitTitle')}\n${text}`;
+    };
+
+    proto._griddedColors = function(theme = this.theme) {
+        const dark = theme === 'dark';
         return {
             bg: dark ? '#2d2d2d' : '#ffffff',
             font: dark ? '#d0d0d0' : '#333333',
             grid: dark ? '#4a4a4a' : '#e3e3e3',
             coast: dark ? '#f2f2f2' : '#1a1a1a',
             border: dark ? 'rgba(240,240,240,0.55)' : 'rgba(30,30,30,0.45)',
-            box: dark ? '#ff8a65' : '#d84315',
+            pending: dark ? '#ff8a65' : '#d84315',
         };
     };
 
-    proto._griddedDrawMap = async function(view) {
-        const div = this._griddedEl('map');
+    proto._griddedDrawOverlaysSoon = function(view) {
+        clearTimeout(view.overlayTimer);
+        view.overlayTimer = setTimeout(() => this._griddedDrawMap(view), 60);
+    };
+
+    /**
+     * The point and box being set up (orange, the box editable) and the ones
+     * already extracted (in their series' colour, numbered like the list).
+     */
+    proto._griddedOverlays = function(view, colors) {
+        const traces = [];
+        const shapes = [];
+        const annotations = [];
+        const points = (view.groups || []).filter(group => group.kind === 'point');
+        if (points.length) {
+            traces.push({
+                type: 'scatter', mode: 'markers',
+                x: points.map(group => group.geometry.lon), y: points.map(group => group.geometry.lat),
+                marker: { symbol: 'circle', size: 11, color: points.map(group => group.color), line: { color: '#ffffff', width: 2 } },
+                hoverinfo: 'skip', showlegend: false,
+            });
+            for (const group of points) {
+                annotations.push({
+                    x: group.geometry.lon, y: group.geometry.lat, xref: 'x', yref: 'y', text: `<b>${group.tag}</b>`,
+                    showarrow: false, xanchor: 'left', yanchor: 'bottom', xshift: 6, yshift: 4,
+                    font: { color: '#ffffff', size: 11 }, bgcolor: group.color, borderpad: 2,
+                });
+            }
+        }
+        for (const group of (view.groups || []).filter(item => item.kind === 'region')) {
+            const box = group.geometry;
+            shapes.push({
+                type: 'rect', xref: 'x', yref: 'y', editable: false,
+                x0: box.lonMin, x1: box.lonMax, y0: box.latMin, y1: box.latMax,
+                line: { color: group.color, width: 1.5, dash: 'dash' }, fillcolor: 'rgba(0,0,0,0)',
+            });
+            annotations.push({
+                x: box.lonMin, y: box.latMax, xref: 'x', yref: 'y', text: `<b>${group.tag}</b>`, showarrow: false,
+                xanchor: 'left', yanchor: 'bottom', font: { color: '#ffffff', size: 11 }, bgcolor: group.color, borderpad: 2,
+            });
+        }
+        if (view.pendingPoint) {
+            traces.push({
+                type: 'scatter', mode: 'markers',
+                x: [view.pendingPoint.lon], y: [view.pendingPoint.lat],
+                marker: { symbol: 'circle-open', size: 16, color: colors.pending, line: { width: 3 } },
+                hoverinfo: 'skip', showlegend: false,
+            });
+        }
+        if (view.pendingBox) {
+            const box = view.pendingBox;
+            // First, so its index (0) identifies it in Plotly's edit events.
+            shapes.unshift({
+                type: 'rect', xref: 'x', yref: 'y', editable: true,
+                x0: box.lonMin, x1: box.lonMax, y0: box.latMin, y1: box.latMax,
+                line: { color: colors.pending, width: 2.5 }, fillcolor: 'rgba(216,67,21,0.10)',
+            });
+        }
+        return { traces, shapes, annotations };
+    };
+
+    proto._griddedDrawMap = async function(view, { theme = this.theme, transparent = false, target = null } = {}) {
+        const div = target || this._griddedEl('map');
         const map = view.map;
-        if (!div || !map || this._griddedVisibleView() !== view) return;
+        if (!div || !map || (!target && this._griddedVisibleView() !== view)) return;
         const variable = this._griddedVariable(view);
-        const colors = this._griddedColors();
+        const colors = this._griddedColors(theme);
         const grid = drawableGrid(map, view.zoom?.x, view.zoom?.y);
         const [zmin, zmax] = this._griddedCurrentRange(view);
         const lonMin = map.lon[0];
@@ -1028,7 +1515,7 @@ export function installGriddedMethods(TargetClass) {
         const span = view.zoom?.x ? Math.abs(view.zoom.x[1] - view.zoom.x[0]) : Math.abs(lonMax - lonMin);
         const coast = await loadCoastlines(span < FINE_COAST_SPAN_DEGREES ? 'fine' : 'coarse')
             || await loadCoastlines('coarse');
-        if (this._griddedVisibleView() !== view) return;
+        if (!target && this._griddedVisibleView() !== view) return;
         const units = variable?.units ? ` ${variable.units}` : '';
         const traces = [{
             type: 'heatmap',
@@ -1040,7 +1527,14 @@ export function installGriddedMethods(TargetClass) {
             zauto: false,
             colorscale: view.palette,
             reversescale: view.palette === 'RdBu',
-            colorbar: { title: { text: variable?.units || '', side: 'right' }, thickness: 14, outlinewidth: 0, tickfont: { color: colors.font } },
+            // Title above the bar and a bounded tick format, inside a right
+            // margin that is already wide enough: the bar never pushes the map
+            // as its labels change from one time step to the next.
+            colorbar: {
+                title: { text: variable?.units || '', side: 'top', font: { size: 11 } },
+                thickness: 12, len: 0.9, outlinewidth: 0, x: 1.01, xanchor: 'left', xpad: 6,
+                tickformat: '.4~g', nticks: 8, tickfont: { color: colors.font, size: 10 },
+            },
             hovertemplate: `%{y:.2f}°, %{x:.2f}°<br>%{z:.5~g}${units}<extra></extra>`,
             hoverongaps: false,
         }];
@@ -1050,52 +1544,90 @@ export function installGriddedMethods(TargetClass) {
             traces.push({ type: 'scattergl', mode: 'lines', x: borders.x, y: borders.y, line: { color: colors.border, width: 0.6 }, hoverinfo: 'skip', showlegend: false });
             traces.push({ type: 'scattergl', mode: 'lines', x: coastline.x, y: coastline.y, line: { color: colors.coast, width: 1 }, hoverinfo: 'skip', showlegend: false });
         }
-        const pad = (low, high, extra) => [low - extra, high + extra];
-        const dx = map.lon.length > 1 ? Math.abs(map.lon[1] - map.lon[0]) / 2 : 0.5;
-        const dy = map.lat.length > 1 ? Math.abs(map.lat[1] - map.lat[0]) / 2 : 0.5;
+        const overlays = this._griddedOverlays(view, colors);
+        traces.push(...overlays.traces);
+        const ranges = view.zoom || this._griddedFittedRanges(map, div);
+        const paper = transparent ? 'rgba(0,0,0,0)' : colors.bg;
+        const titleText = grid.stride > 1
+            ? `${this._griddedMapTitle(view)}  <span style="font-size:10px;opacity:0.7">(${i18n.t('griddedDecimatedShort').replace('{stride}', String(grid.stride))})</span>`
+            : this._griddedMapTitle(view);
         const layout = {
-            paper_bgcolor: colors.bg,
-            plot_bgcolor: colors.bg,
+            paper_bgcolor: paper,
+            plot_bgcolor: paper,
             font: { color: colors.font, size: 11, family: 'system-ui, sans-serif' },
-            margin: { l: 52, r: 10, t: 28, b: 40 },
+            margin: { l: 56, r: 96, t: 30, b: 44 },
             showlegend: false,
-            dragmode: view.tool === 'box' ? 'drawrect' : 'pan',
+            dragmode: view.mode === 'region' ? 'drawrect' : 'pan',
             uirevision: `${view.fileId}|${view.variableKey}`,
-            // A decimated drawing says so in the title, where it stays visible,
-            // rather than in the status line that reports extractions.
-            title: {
-                text: grid.stride > 1
-                    ? `${this._griddedMapTitle(view)}  <span style="font-size:10px;opacity:0.7">(${i18n.t('griddedDecimatedShort').replace('{stride}', String(grid.stride))})</span>`
-                    : this._griddedMapTitle(view),
-                font: { size: 12 }, x: 0.01, xanchor: 'left',
-            },
+            title: { text: titleText, font: { size: 12 }, x: 0.01, xanchor: 'left' },
             xaxis: {
-                range: view.zoom?.x || pad(lonMin, lonMax, dx),
+                range: ranges.x,
                 title: { text: i18n.t('griddedLongitude') },
                 gridcolor: colors.grid,
                 zeroline: false,
                 ticksuffix: '°',
+                // Equal degrees on both axes by shrinking the drawing area,
+                // never by stretching the latitude axis past the poles.
+                constrain: 'domain',
             },
             yaxis: {
-                range: view.zoom?.y || pad(map.lat[0], map.lat[map.lat.length - 1], dy),
+                range: ranges.y,
                 title: { text: i18n.t('griddedLatitude') },
                 gridcolor: colors.grid,
                 zeroline: false,
                 ticksuffix: '°',
                 scaleanchor: 'x',
                 scaleratio: 1,
+                constrain: 'domain',
             },
-            newshape: { line: { color: colors.box, width: 2 }, fillcolor: 'rgba(216,67,21,0.08)' },
-            shapes: view.box ? [{
-                type: 'rect', xref: 'x', yref: 'y',
-                x0: view.box.lonMin, x1: view.box.lonMax, y0: view.box.latMin, y1: view.box.latMax,
-                line: { color: colors.box, width: 2 }, fillcolor: 'rgba(216,67,21,0.08)',
-            }] : [],
+            newshape: { line: { color: colors.pending, width: 2.5 }, fillcolor: 'rgba(216,67,21,0.10)' },
+            shapes: overlays.shapes,
+            annotations: overlays.annotations,
         };
-        const config = { ...(this.plotManager._getPlotlyConfig?.() || {}), displayModeBar: false, scrollZoom: true, responsive: true };
+        const config = {
+            ...(this.plotManager._getPlotlyConfig?.() || {}),
+            displayModeBar: false,
+            scrollZoom: true,
+            responsive: true,
+            edits: { shapePosition: true },
+        };
         const first = !div._fullLayout;
         await Plotly.react(div, traces, layout, config);
-        if (first) this._griddedBindPlot(div);
+        if (first && !target) this._griddedBindPlot(div);
+    };
+
+    /**
+     * The view that shows the whole grid with equal degrees on both axes and
+     * fills the drawing area: a long thin region (a band of latitudes) gets
+     * the geography above and below it rather than a sliver of a map, and a
+     * tall one gets the longitudes either side — but never past the poles or
+     * round the globe a second time. What cannot be filled is left to
+     * Plotly's `constrain: 'domain'`, which shrinks the drawing area instead.
+     */
+    proto._griddedFittedRanges = function(map, div) {
+        const dx = map.lon.length > 1 ? Math.abs(map.lon[1] - map.lon[0]) / 2 : 0.5;
+        const dy = map.lat.length > 1 ? Math.abs(map.lat[1] - map.lat[0]) / 2 : 0.5;
+        let x = [map.lon[0] - dx, map.lon[map.lon.length - 1] + dx];
+        let y = [map.lat[0] - dy, map.lat[map.lat.length - 1] + dy];
+        const width = Math.max(1, (div?.clientWidth || 800) - 56 - 96);
+        const height = Math.max(1, (div?.clientHeight || 500) - 30 - 44);
+        const spanX = x[1] - x[0];
+        const spanY = y[1] - y[0];
+        const grow = (range, span, limits) => {
+            const centre = (range[0] + range[1]) / 2;
+            let low = centre - span / 2;
+            let high = centre + span / 2;
+            if (low < limits[0]) { high += limits[0] - low; low = limits[0]; }
+            if (high > limits[1]) { low -= high - limits[1]; high = limits[1]; }
+            return [Math.max(limits[0], low), Math.min(limits[1], high)];
+        };
+        if (spanX / spanY > width / height) {
+            y = grow(y, spanX * height / width, [Math.min(-90, y[0]), Math.max(90, y[1])]);
+        } else {
+            const limits = x[1] > 180 ? [Math.min(0, x[0]), Math.max(360, x[1])] : [Math.min(-180, x[0]), Math.max(180, x[1])];
+            x = grow(x, spanY * width / height, limits);
+        }
+        return { x, y };
     };
 
     proto._griddedMapTitle = function(view) {
@@ -1116,35 +1648,40 @@ export function installGriddedMethods(TargetClass) {
     proto._griddedBindPlot = function(div) {
         div.on('plotly_click', event => {
             const view = this._griddedVisibleView();
-            if (!view || view.tool !== 'point') return;
+            if (!view || view.mode !== 'point') return;
             const point = (event?.points || []).find(item => item.data?.type === 'heatmap') || event?.points?.[0];
             if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
-            this._griddedExtractPoint(view, point.y, point.x);
+            // A click places the point; the button (or Enter) extracts it.
+            view.pendingPoint = { lat: roundCoordinate(point.y), lon: roundCoordinate(point.x) };
+            this._griddedSyncInputs(view);
+            this._griddedDrawMap(view);
         });
         div.on('plotly_relayout', update => {
             const view = this._griddedVisibleView();
             if (!view || !update) return;
-            if (update.shapes || Object.keys(update).some(key => key.startsWith('shapes['))) {
+            const keys = Object.keys(update);
+            if (update.shapes || keys.some(key => key.startsWith('shapes['))) {
                 const shapes = div.layout.shapes || [];
-                const shape = shapes[shapes.length - 1];
+                // A new drawing is the last shape; an edit of the pending box is shape 0.
+                const shape = update.shapes ? shapes[shapes.length - 1] : shapes[0];
                 if (!shape) return;
-                const box = {
-                    lonMin: Math.min(shape.x0, shape.x1),
-                    lonMax: Math.max(shape.x0, shape.x1),
-                    latMin: Math.min(shape.y0, shape.y1),
-                    latMax: Math.max(shape.y0, shape.y1),
+                view.pendingBox = {
+                    lonMin: roundCoordinate(Math.min(shape.x0, shape.x1)),
+                    lonMax: roundCoordinate(Math.max(shape.x0, shape.x1)),
+                    latMin: roundCoordinate(Math.max(-90, Math.min(shape.y0, shape.y1))),
+                    latMax: roundCoordinate(Math.min(90, Math.max(shape.y0, shape.y1))),
                 };
-                const same = view.box && ['lonMin', 'lonMax', 'latMin', 'latMax'].every(key => Math.abs(view.box[key] - box[key]) < 1e-9);
-                if (same) return;
-                view.box = box;
-                this._griddedExtractRegion(view, box);
+                if (view.mode !== 'region') {
+                    view.mode = 'region';
+                    this._griddedSyncMode(view);
+                }
+                this._griddedSyncInputs(view);
+                this._griddedDrawOverlaysSoon(view);
                 return;
             }
-            const x0 = update['xaxis.range[0]'];
-            const y0 = update['yaxis.range[0]'];
             if (update['xaxis.autorange'] || update.autosize) {
                 view.zoom = null;
-            } else if (x0 !== undefined || y0 !== undefined) {
+            } else if (update['xaxis.range[0]'] !== undefined || update['yaxis.range[0]'] !== undefined) {
                 const layout = div._fullLayout;
                 view.zoom = { x: [...layout.xaxis.range], y: [...layout.yaxis.range] };
             } else {
@@ -1193,6 +1730,7 @@ export function installGriddedMethods(TargetClass) {
             onProgress: value => { bar.value = value; },
         });
         view.job = request;
+        this._griddedSyncActions(view);
         try {
             return await request.promise;
         } catch (error) {
@@ -1201,28 +1739,38 @@ export function installGriddedMethods(TargetClass) {
         } finally {
             view.job = null;
             progressEl.hidden = true;
+            this._griddedSyncActions(view);
         }
     };
 
-    proto._griddedExtractPoint = async function(view, lat, lon) {
+    proto._griddedExtractPoint = async function(view, at = view.pendingPoint) {
         const variable = this._griddedVariable(view);
-        if (!this._griddedCanExtract(view, variable)) return;
+        if (!at || !this._griddedCanExtract(view, variable)) return;
+        const { lat, lon } = at;
         const result = await this._griddedRunJob(view, 'point', {
             variable: variable.key, selection: view.selection, lat, lon,
         }, i18n.t('griddedReadingPoint').replace('{lat}', formatCoordinate(lat, 'N', 'S')).replace('{lon}', formatCoordinate(lon, 'E', 'W')));
         if (!result) return;
         const where = `${formatCoordinate(result.cell.lat, 'N', 'S')} ${formatCoordinate(result.cell.lon, 'E', 'W')}`;
-        const displayName = `${variable.name} · ${where}${this._griddedSelectionSuffix(view, variable)}`;
+        const suffix = this._griddedSelectionSuffix(view, variable);
+        const displayName = `${variable.name} · ${where}${suffix}`;
         const description = i18n.t('griddedPointDescription')
             .replace('{variable}', variable.longName || variable.name)
             .replace('{where}', where);
-        this._griddedAddExtractions(view, [{ displayName, values: result.values, units: variable.units, description }]);
-        this._griddedSetStatus(i18n.t('griddedPointDone').replace('{name}', displayName));
+        view.pendingPoint = null;
+        this._griddedSyncInputs(view);
+        const group = this._griddedAddGroup(view, {
+            kind: 'point',
+            geometry: { lat: result.cell.lat, lon: result.cell.lon },
+            label: displayName,
+            items: [{ displayName, values: result.values, units: variable.units, description, role: 'value' }],
+        });
+        this._griddedSetStatus(i18n.t('griddedPointDone').replace('{name}', `${group.tag} ${displayName}`));
     };
 
-    proto._griddedExtractRegion = async function(view, box) {
+    proto._griddedExtractRegion = async function(view, box = view.pendingBox) {
         const variable = this._griddedVariable(view);
-        if (!this._griddedCanExtract(view, variable)) return;
+        if (!box || !this._griddedCanExtract(view, variable)) return;
         const where = `${formatCoordinate(box.latMin, 'N', 'S')}–${formatCoordinate(box.latMax, 'N', 'S')}, ${formatCoordinate(box.lonMin, 'E', 'W')}–${formatCoordinate(box.lonMax, 'E', 'W')}`;
         const result = await this._griddedRunJob(view, 'region', {
             variable: variable.key, selection: view.selection, box,
@@ -1235,39 +1783,73 @@ export function installGriddedMethods(TargetClass) {
             .replace('{where}', where)
             .replace('{cells}', String(result.cells))
             .replace('{weighting}', weighting);
-        this._griddedAddExtractions(view, [
-            { displayName: `${variable.name} · ${i18n.t('griddedMean')} [${where}]${suffix}`, values: result.mean, units: variable.units, description: describe('griddedMeanDescription') },
-            { displayName: `${variable.name} · ${i18n.t('griddedMin')} [${where}]${suffix}`, values: result.min, units: variable.units, description: describe('griddedMinDescription') },
-            { displayName: `${variable.name} · ${i18n.t('griddedMax')} [${where}]${suffix}`, values: result.max, units: variable.units, description: describe('griddedMaxDescription') },
-        ]);
+        view.pendingBox = null;
+        this._griddedSyncInputs(view);
+        const group = this._griddedAddGroup(view, {
+            kind: 'region',
+            geometry: { ...box },
+            label: `${variable.name} · [${where}]${suffix}`,
+            note: i18n.t('griddedRegionNote').replace('{cells}', String(result.cells)).replace('{weighting}', weighting),
+            items: [
+                { displayName: `${variable.name} · ${i18n.t('griddedMean')} [${where}]${suffix}`, values: result.mean, units: variable.units, description: describe('griddedMeanDescription'), role: 'mean' },
+                { displayName: `${variable.name} · ${i18n.t('griddedMin')} [${where}]${suffix}`, values: result.min, units: variable.units, description: describe('griddedMinDescription'), role: 'min' },
+                { displayName: `${variable.name} · ${i18n.t('griddedMax')} [${where}]${suffix}`, values: result.max, units: variable.units, description: describe('griddedMaxDescription'), role: 'max' },
+            ],
+        });
         const missing = Array.from(result.validFraction).some(value => value < 1);
         this._griddedSetStatus(i18n.t('griddedRegionDone')
+            .replace('{tag}', group.tag)
             .replace('{cells}', String(result.cells))
             .replace('{weighting}', weighting)
             + (missing ? ` ${i18n.t('griddedRegionMissing')}` : ''));
     };
 
-    proto._griddedAddExtractions = function(view, items) {
-        const entry = this.plotManager.files.get(view.fileId);
-        const data = entry?.data;
-        if (!data) return;
+    proto._griddedExtractionNode = function(data) {
         let node = Object.values(data.tree._children).find(child => child._griddedExtractions);
         if (!node) {
             node = treeNode(i18n.t('griddedExtractionsNode'));
             node._griddedExtractions = true;
             data.tree._children[node._name] = node;
         }
-        const names = [];
+        return node;
+    };
+
+    /**
+     * One extraction (a point, or a box with its mean, min and max) becomes
+     * one row of the panel's list and one or three variables of the file.
+     */
+    proto._griddedAddGroup = function(view, { kind, geometry, label, note = '', items }) {
+        const entry = this.plotManager.files.get(view.fileId);
+        const data = entry?.data;
+        if (!data) return null;
+        const node = this._griddedExtractionNode(data);
+        view.groupCount = (view.groupCount || 0) + 1;
+        const counters = view.tagCounters || (view.tagCounters = { point: 0, region: 0 });
+        counters[kind] += 1;
+        const tag = `${kind === 'point' ? 'P' : 'R'}${counters[kind]}`;
+        const group = {
+            id: `g${view.groupCount}`,
+            kind,
+            tag,
+            geometry,
+            label,
+            note,
+            color: SERIES_COLORS[(view.groupCount - 1) % SERIES_COLORS.length],
+            checked: true,
+            names: [],
+            roles: [],
+        };
         for (const item of items) {
             view.extractionCount += 1;
             const name = `grid:x${view.extractionCount}`;
-            let label = item.displayName;
+            const display = `${tag} · ${item.displayName}`;
+            let leaf = display;
             let suffix = 2;
-            while (node._variables[label]) label = `${item.displayName} (${suffix++})`;
+            while (node._variables[leaf]) leaf = `${display} (${suffix++})`;
             const values = Float64Array.from(item.values);
             data.variables[name] = {
                 name,
-                displayName: label,
+                displayName: leaf,
                 data: values,
                 description: item.description,
                 units: item.units || '',
@@ -1278,56 +1860,139 @@ export function installGriddedMethods(TargetClass) {
                 negate: false,
                 source: 'netcdf-gridded',
             };
-            node._variables[label] = data.variables[name];
-            names.push(name);
+            node._variables[leaf] = data.variables[name];
+            group.names.push(name);
+            group.roles.push(item.role);
         }
+        this._griddedCommitData(view, data);
+        view.groups.push(group);
+        this._griddedRenderResults(view);
+        this._griddedDrawPreview(view);
+        this._griddedDrawMap(view);
+        return group;
+    };
+
+    proto._griddedCommitData = function(view, data) {
         data.metadata.numVariables = Object.values(data.variables).filter(variable => variable.kind === 'variable').length;
         data.metadata.numTimevarying = data.metadata.numVariables;
         this.plotManager.updateFileData(view.fileId, data);
         if (this.plotManager.activeFileId === view.fileId) this._renderFilteredTree?.();
-        view.lastExtraction = names;
+    };
+
+    proto._griddedRemoveGroup = function(view, id) {
+        const index = view.groups.findIndex(group => group.id === id);
+        if (index < 0) return;
+        const [group] = view.groups.splice(index, 1);
+        const data = this.plotManager.files.get(view.fileId)?.data;
+        if (data) {
+            const node = this._griddedExtractionNode(data);
+            for (const name of group.names) {
+                delete data.variables[name];
+                for (const [leaf, variable] of Object.entries(node._variables)) {
+                    if (variable?.name === name) delete node._variables[leaf];
+                }
+            }
+            this._griddedCommitData(view, data);
+        }
+        this._griddedRenderResults(view);
         this._griddedDrawPreview(view);
+        this._griddedDrawMap(view);
+    };
+
+    proto._griddedRenderResults = function(view) {
+        const list = this._griddedEl('results');
+        if (!list) return;
+        list.innerHTML = '';
+        for (const group of view.groups || []) {
+            const item = document.createElement('li');
+            item.className = 'gridded-result';
+            item.dataset.group = group.id;
+            const label = document.createElement('label');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = group.checked;
+            const swatch = document.createElement('span');
+            swatch.className = 'gridded-swatch';
+            swatch.style.background = group.color;
+            swatch.textContent = group.tag;
+            const text = document.createElement('span');
+            text.className = 'gridded-result-text';
+            text.textContent = group.label;
+            if (group.note) {
+                const note = document.createElement('small');
+                note.textContent = group.note;
+                text.appendChild(note);
+            }
+            label.append(checkbox, swatch, text);
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'gridded-remove';
+            remove.dataset.action = 'remove-group';
+            remove.textContent = '✕';
+            remove.title = i18n.t('griddedRemoveExtraction');
+            remove.setAttribute('aria-label', i18n.t('griddedRemoveExtraction'));
+            item.append(label, remove);
+            list.appendChild(item);
+        }
+        const empty = this._griddedEl('results-empty');
+        if (empty) empty.hidden = !!(view.groups || []).length;
+        this._griddedSyncActions(view);
+    };
+
+    proto._griddedCheckedSeries = function(view) {
+        const data = this.plotManager.files.get(view.fileId)?.data;
+        const out = [];
+        for (const group of (view.groups || []).filter(item => item.checked)) {
+            group.names.forEach((name, index) => {
+                const variable = data?.variables?.[name];
+                if (variable) out.push({ group, variable, role: group.roles[index] });
+            });
+        }
+        return out;
     };
 
     proto._griddedDrawPreview = function(view) {
         const panel = this._griddedEl('preview');
         const chart = this._griddedEl('preview-chart');
         if (!panel || !chart) return;
-        const data = this.plotManager.files.get(view.fileId)?.data;
-        const variables = (view.lastExtraction || []).map(name => data?.variables?.[name]).filter(Boolean);
-        if (!variables.length) {
+        const series = this._griddedCheckedSeries(view);
+        const splitter = this._griddedEl('splitter');
+        if (!series.length) {
             panel.hidden = true;
+            if (splitter) splitter.hidden = true;
             return;
         }
         panel.hidden = false;
-        this._griddedEl('preview-title').textContent = variables.map(variable => variable.displayName).join('  |  ');
+        if (splitter) splitter.hidden = false;
+        this._griddedEl('preview-title').textContent = i18n.t('griddedPreviewTitle');
+        const data = this.plotManager.files.get(view.fileId).data;
         const time = data.variables[data.metadata.timeName];
         const datetime = time?.timeKind === 'datetime';
         const colors = this._griddedColors();
-        const palette = ['#1f77b4', '#2ca02c', '#d62728'];
-        const traces = variables.map((variable, index) => ({
+        const x = datetime ? Array.from(time.data, value => new Date(value)) : Array.from(time.data);
+        const traces = series.map(({ group, variable, role }) => ({
             type: 'scatter',
-            mode: time.data.length > 400 ? 'lines' : 'lines+markers',
-            x: datetime ? Array.from(time.data, value => new Date(value)) : Array.from(time.data),
+            mode: 'lines',
+            x,
             y: Array.from(variable.data),
-            name: variable.displayName,
-            line: { width: index === 0 ? 2 : 1.2, color: palette[index % palette.length] },
-            marker: { size: 3 },
+            name: `${group.tag} ${role === 'value' ? '' : i18n.t(role === 'mean' ? 'griddedMean' : role === 'min' ? 'griddedMin' : 'griddedMax')}`.trim(),
+            line: { width: role === 'min' || role === 'max' ? 1 : 1.8, color: group.color, dash: role === 'min' ? 'dot' : role === 'max' ? 'dash' : 'solid' },
+            hovertemplate: `${variable.displayName}<br>%{y:.5~g}${variable.units ? ` ${variable.units}` : ''}<extra></extra>`,
         }));
         Plotly.react(chart, traces, {
             paper_bgcolor: colors.bg,
             plot_bgcolor: colors.bg,
             font: { color: colors.font, size: 10, family: 'system-ui, sans-serif' },
-            margin: { l: 52, r: 10, t: 6, b: 28 },
-            showlegend: variables.length > 1,
-            legend: { orientation: 'h', y: 1.15, x: 0, font: { size: 9 } },
+            margin: { l: 56, r: 96, t: 6, b: 28 },
+            showlegend: true,
+            legend: { x: 1.01, xanchor: 'left', y: 1, font: { size: 10 } },
             xaxis: { gridcolor: colors.grid, type: datetime ? 'date' : 'linear', title: { text: datetime ? '' : (time.units || time.displayName) } },
-            yaxis: { gridcolor: colors.grid, title: { text: variables[0].units || '' } },
+            yaxis: { gridcolor: colors.grid, title: { text: series[0].variable.units || '' } },
         }, { displayModeBar: false, responsive: true });
     };
 
-    proto._griddedPlotLastExtraction = function(view) {
-        const names = view.lastExtraction || [];
+    proto._griddedPlotChecked = function(view) {
+        const names = this._griddedCheckedSeries(view).map(item => item.variable.name);
         if (!names.length) return;
         this._hideGriddedView();
         // One curve at a time, each after the previous panel has drawn: the
@@ -1346,15 +2011,84 @@ export function installGriddedMethods(TargetClass) {
     };
 
     // ─── Export ───────────────────────────────────────────────────────────
+    // The same dialog as every plot panel's download button: CSV for the
+    // numbers, PNG or SVG for the figure, with quality and theme.
 
-    proto._griddedExportPng = function(view) {
+    proto._griddedExportMap = async function(view) {
         const div = this._griddedEl('map');
-        if (!div?._fullLayout) return;
-        const name = `${safeFileStem(this.files.get(view.fileId)?.name)}_${safeFileStem(this._griddedMapTitle(view))}`;
-        Plotly.downloadImage(div, { format: 'png', filename: name, width: div.clientWidth * 2, height: div.clientHeight * 2, scale: 1 });
+        if (!view.map || !div?._fullLayout) return;
+        const { default: PlotExportDialog } = await import('../../ui/plot-export-dialog.js');
+        const stem = `${safeFileStem(this.files.get(view.fileId)?.name)}_${safeFileStem(this._griddedMapTitle(view))}`;
+        const result = await PlotExportDialog.open({
+            contextLabel: this._griddedMapTitle(view),
+            charts: [{ id: 'map', label: i18n.t('griddedExportMapChart'), width: div.clientWidth, height: div.clientHeight }],
+            defaultChartId: 'map',
+            defaultBaseName: () => stem,
+        });
+        if (!result) return;
+        if (result.format === 'csv') {
+            this._griddedExportMapCsv(view, result.fileName);
+            return;
+        }
+        await this._griddedExportImage(div, result, theme => this._griddedDrawMap(view, theme), () => this._griddedDrawMap(view));
     };
 
-    proto._griddedExportMapCsv = function(view) {
+    proto._griddedExportSeries = async function(view) {
+        if (!(view.groups || []).length) return;
+        const chart = this._griddedEl('preview-chart');
+        const { default: PlotExportDialog } = await import('../../ui/plot-export-dialog.js');
+        const drawn = !this._griddedEl('preview').hidden && chart?._fullLayout;
+        const stem = `${safeFileStem(this.files.get(view.fileId)?.name)}_series`;
+        const result = await PlotExportDialog.open({
+            contextLabel: i18n.t('griddedResultsHeading'),
+            charts: drawn ? [{ id: 'series', label: i18n.t('griddedPreviewTitle'), width: chart.clientWidth, height: chart.clientHeight }] : [],
+            defaultChartId: 'series',
+            defaultBaseName: () => stem,
+        });
+        if (!result) return;
+        if (result.format === 'csv') {
+            this._griddedExportSeriesCsv(view, result.fileName);
+            return;
+        }
+        const redraw = () => this._griddedDrawPreview(view);
+        await this._griddedExportImage(chart, result, ({ theme, transparent }) => {
+            const realTheme = this.theme;
+            this.theme = theme;
+            try { this._griddedDrawPreview(view); } finally { this.theme = realTheme; }
+            if (transparent) return Plotly.relayout(chart, { paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)' });
+            return null;
+        }, redraw);
+    };
+
+    proto._griddedExportImage = async function(div, { format, scale, theme, fileName }, drawAs, restore) {
+        const preset = {
+            current: { theme: this.theme, transparent: false },
+            light: { theme: 'light', transparent: false },
+            dark: { theme: 'dark', transparent: false },
+            'light-transparent': { theme: 'light', transparent: true },
+        }[theme] || { theme: this.theme, transparent: false };
+        const changed = preset.theme !== this.theme || preset.transparent;
+        try {
+            if (changed) await drawAs({ theme: preset.theme, transparent: preset.transparent });
+            const dataUrl = await Plotly.toImage(div, {
+                format,
+                width: div.clientWidth,
+                height: div.clientHeight,
+                scale: format === 'png' ? scale : 1,
+            });
+            const blob = await (await fetch(dataUrl)).blob();
+            downloadBlob(blob, fileName);
+        } catch (error) {
+            Modal.alert(i18n.t('exportFailedTitle'), i18n.t('exportFailedBody'), {
+                details: error?.message || String(error),
+                detailsLabel: i18n.t('exportFailedDetails'),
+            });
+        } finally {
+            if (changed) await restore();
+        }
+    };
+
+    proto._griddedExportMapCsv = function(view, fileName) {
         const map = view.map;
         if (!map) return;
         const variable = this._griddedVariable(view);
@@ -1370,15 +2104,15 @@ export function installGriddedMethods(TargetClass) {
             }
             rows.push(values.join(','));
         }
-        const name = `${safeFileStem(this.files.get(view.fileId)?.name)}_${safeFileStem(this._griddedMapTitle(view))}.csv`;
-        downloadBlob(new Blob([rows.join('\n') + '\n'], { type: 'text/csv' }), name);
+        downloadBlob(new Blob([rows.join('\n') + '\n'], { type: 'text/csv' }), fileName);
     };
 
-    proto._griddedExportExtractionsCsv = function(view) {
+    proto._griddedExportSeriesCsv = function(view, fileName) {
         const data = this.plotManager.files.get(view.fileId)?.data;
         if (!data) return;
         const time = data.variables[data.metadata.timeName];
-        const columns = Object.values(data.variables).filter(variable => variable.kind === 'variable');
+        const checked = this._griddedCheckedSeries(view).map(item => item.variable);
+        const columns = checked.length ? checked : (view.groups || []).flatMap(group => group.names.map(name => data.variables[name]).filter(Boolean));
         if (!columns.length) return;
         const datetime = time.timeKind === 'datetime';
         const header = [time.displayName, ...columns.map(variable => `${variable.displayName}${variable.units ? ` [${variable.units}]` : ''}`)];
@@ -1391,7 +2125,7 @@ export function installGriddedMethods(TargetClass) {
             }
             lines.push(cells.map(csvCell).join(','));
         }
-        downloadBlob(new Blob([lines.join('\n') + '\n'], { type: 'text/csv' }), `${safeFileStem(this.files.get(view.fileId)?.name)}_extractions.csv`);
+        downloadBlob(new Blob([lines.join('\n') + '\n'], { type: 'text/csv' }), fileName);
     };
 
     proto._griddedOpenAsSeries = async function(fileId) {
@@ -1402,6 +2136,40 @@ export function installGriddedMethods(TargetClass) {
         if (!ok) return;
         this._hideGriddedView();
         await this.loadFile(file, { netcdfAsSeries: true, fileHandle: entry.fileHandle || null, localPath: entry.localPath || '' });
+    };
+
+    /**
+     * With a gridded file active and its map closed, a button over the plots
+     * says the map is still there and brings it back — the globe on the
+     * file's row alone was too easy to miss.
+     */
+    proto._griddedSyncReturnButton = function() {
+        const host = document.querySelector('.content-area');
+        if (!host) return;
+        let button = document.getElementById('gridded-return');
+        const state = this._griddedState();
+        const activeId = this.plotManager?.activeFileId;
+        const entry = activeId ? this.files.get(activeId) : null;
+        const show = !!entry?.gridded && state.visibleFileId !== activeId;
+        if (!show) {
+            if (button) button.hidden = true;
+            return;
+        }
+        if (!button) {
+            button = document.createElement('button');
+            button.type = 'button';
+            button.id = 'gridded-return';
+            button.className = 'gridded-return';
+            button.addEventListener('click', () => {
+                const fileId = this.plotManager.activeFileId;
+                if (this.files.get(fileId)?.gridded) this._showGriddedView(fileId);
+            });
+            host.appendChild(button);
+        }
+        button.innerHTML = `${GLOBE_ICON}<span></span>`;
+        button.querySelector('span').textContent = i18n.t('griddedReturnToMap').replace('{file}', this._fileDisplayName(entry));
+        button.title = i18n.t('griddedReturnToMapTitle');
+        button.hidden = false;
     };
 
     proto._griddedApplyTheme = function() {

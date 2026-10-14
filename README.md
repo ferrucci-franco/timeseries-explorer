@@ -210,16 +210,25 @@ reported as what it is, with what to do about it.
 **Gridded files** (ERA5, CMIP, regular lat/lon grids) open on a map, read by
 parts in a worker, so their size is not limited by memory (a multi-GB ERA5
 month opens in a couple of seconds). The map view has offline Natural Earth
-coastlines, a time slider with playback, a level selector, palettes and colour
-ranges. Two tools turn the map into series:
+coastlines, a time slider with playback, a level selector and palettes. Its
+colour scale is fitted to the whole period and stays fixed while the time
+moves, so colours compare across steps; "Auto-fit" re-fits it (whole period,
+exact period, current step, visible area; optional percentile clipping and
+centring on zero). An analysis panel next to the map turns it into series:
 
-- **Point**: a click extracts the time series of the nearest grid cell.
-- **Box**: area-weighted (cos latitude, or cell area when the file has latitude
-  bounds) mean, minimum and maximum for every time step.
+- **Point**: click the map or type a latitude and longitude, then extract the
+  time series of the nearest grid cell.
+- **Region**: draw a box or type its North/West/East/South limits (as in the
+  Copernicus CDS form), adjust it on the map, then compute the area-weighted
+  (cos latitude, or cell area when the file has latitude bounds) mean, minimum
+  and maximum for every time step.
+
+Each extraction gets a colour and a tag (P1, R1…) shared by the map, the panel
+list and the preview, and can be removed.
 
 Extractions become variables of the file in the explorer, where FFT, integrals,
-heatmaps and cursors work on them. The map and the extractions export as PNG
-and CSV. The ZIP the Copernicus CDS sends for mixed instantaneous/accumulated
+heatmaps and cursors work on them. The map and the extractions export through
+the same dialog as the plot panels (CSV, PNG, SVG). The ZIP the Copernicus CDS sends for mixed instantaneous/accumulated
 requests is listed and can be opened as one dataset, and several files with
 the same grid (consecutive months) can be joined in time. CF calendars
 `noleap`, `all_leap`, `360_day` and `julian` are decoded.

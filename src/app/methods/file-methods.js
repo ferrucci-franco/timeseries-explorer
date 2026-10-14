@@ -4289,6 +4289,7 @@ proto._renderFilesList = function() {
     }
     // On a phone the time-axis panel is a page of its own, outside the list.
     this._compactRefreshTimeAxisPage?.();
+    this._griddedSyncReturnButton?.();
 };
 
 proto._renderFileListItem = function(fileId, entryData, depth = 0) {
@@ -4437,7 +4438,8 @@ proto._renderFileListItem = function(fileId, entryData, depth = 0) {
         const mapBtn = document.createElement('button');
         mapBtn.type = 'button';
         mapBtn.className = 'file-entry-map';
-        mapBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5" fill="none" stroke-width="1.8"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17" fill="none" stroke-width="1.6"/></svg>';
+        mapBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5" fill="none" stroke-width="1.8"/><path d="M3.5 12h17M12 3.5c2.6 2.6 2.6 14.4 0 17M12 3.5c-2.6 2.6-2.6 14.4 0 17" fill="none" stroke-width="1.6"/></svg><span></span>';
+        mapBtn.querySelector('span').textContent = i18n.t('griddedMapButton');
         mapBtn.title = i18n.t('griddedShowMap');
         mapBtn.setAttribute('aria-label', i18n.t('griddedShowMap'));
         mapBtn.hidden = !entryData.gridded;
