@@ -239,6 +239,13 @@ try {
         // back the ranges it started from, and a grid this small is drawn
         // whole once, never again for a zoom. The pointer is over the region
         // drawn above, which must not swallow the wheel.
+        // The map was just reopened: let its own redraws (the colour scale
+        // arriving, the preview resizing it) finish before measuring.
+        await page.waitForFunction(() => new Promise(resolve => {
+            const view = window.app._griddedVisibleView();
+            const drawn = view.drawn;
+            setTimeout(() => resolve(view.drawn === drawn && !view.job), 800);
+        }), null, { timeout: 30000, polling: 100 });
         await page.evaluate(() => {
             const div = document.querySelector('#gridded-view .gridded-map');
             window.__zoom = { spans: [], drawn: window.app._griddedVisibleView().drawn, stop: false };
@@ -262,14 +269,14 @@ try {
         const zoom = await page.evaluate(() => {
             window.__zoom.stop = true;
             const view = window.app._griddedVisibleView();
-            return { spans: window.__zoom.spans, sameDrawing: view.drawn === window.__zoom.drawn, zoomed: !!view.zoom };
+            return { spans: window.__zoom.spans, sameDrawing: view.drawn === window.__zoom.drawn, zoomed: !!view.zoom, drawn: [window.__zoom.drawn, view.drawn] };
         });
         assert.equal(zoom.zoomed, true, 'the wheel zooms the map');
         assert.ok(zoom.spans.at(-1) < zoom.spans[0] * 0.8, `the map zoomed in (${zoom.spans[0]} → ${zoom.spans.at(-1)})`);
         zoom.spans.forEach((span, index) => {
             if (index) assert.ok(span <= zoom.spans[index - 1] + 1e-9, `zooming in never widens the view (${zoom.spans.join(', ')})`);
         });
-        assert.equal(zoom.sameDrawing, true, 'a small grid is not redrawn for a zoom');
+        assert.equal(zoom.sameDrawing, true, `a small grid is not redrawn for a zoom (${JSON.stringify(zoom.drawn)})`);
         // Points and boxes on the map. A click places the ring where it lands
         // (from the pixel, not from a lagging hover); the ring drags; the
         // right button opens a menu that removes it; a box drawn after the
