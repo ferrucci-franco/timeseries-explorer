@@ -471,7 +471,7 @@
     transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
-.derived-new-btn:hover,
+.derived-new-btn:hover:not(:disabled),
 .derived-new-btn:focus-visible {
     border-color: var(--primary-color);
     background: color-mix(in srgb, var(--primary-color) 8%, var(--bg-primary));
@@ -480,6 +480,12 @@
 
 .derived-new-btn[hidden] {
     display: none;
+}
+
+/* No file loaded: nothing to build a formula from. */
+.derived-new-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 .derived-new-icon {

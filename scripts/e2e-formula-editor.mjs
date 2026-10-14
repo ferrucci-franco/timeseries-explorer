@@ -27,12 +27,18 @@ try {
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(baseUrl);
     await page.waitForFunction(() => window.app?.plotManager);
+    // No file, nothing to build a formula from: the button waits for one.
+    assert.equal(await page.locator('#derived-toggle').isDisabled(), true, '"New variable…" is off with no file loaded');
+    assert.match(await page.locator('#derived-toggle').getAttribute('title'), /Load a file first/,
+        'and its tooltip says why');
     await page.setInputFiles('#file-input', [{ name: 'feeders.csv', mimeType: 'text/csv', buffer: Buffer.from(lines.join('\n') + '\n') }]);
     await page.waitForFunction(() => window.app.plotManager.files.size === 1, null, { timeout: 60000 });
 
     const editor = '.formula-editor-overlay';
     const formula = () => page.locator('.formula-editor-formula').inputValue();
     const side = () => page.locator('#derived-formula').inputValue();
+
+    assert.equal(await page.locator('#derived-toggle').isEnabled(), true, 'a loaded file turns it on');
 
     // A real button, not a "+" beside the help: it says what it does.
     assert.equal((await page.locator('#derived-toggle').innerText()).replace(/\s+/g, ' ').trim(), '+ New variable…',

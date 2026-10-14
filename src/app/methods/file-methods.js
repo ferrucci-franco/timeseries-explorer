@@ -4079,6 +4079,19 @@ proto._updateActionButtons = function() {
     // Nothing to reset while the app is empty (#49): every panel is already
     // blank, so the button only offered a confirmation with no work behind it.
     document.getElementById('reset-layout').disabled = !hasFiles;
+    // A derived variable is a formula over a file's signals: with no file the
+    // form could only be filled with names that do not exist. Its tooltip says
+    // what is missing, and a form left open when the last file closes goes.
+    const derivedButton = document.getElementById('derived-toggle');
+    if (derivedButton) {
+        derivedButton.disabled = !hasFiles;
+        const titleKey = hasFiles ? 'derivedNewVariableTitle' : 'derivedNewVariableNeedsFile';
+        derivedButton.setAttribute('data-i18n-title', titleKey);
+        derivedButton.title = i18n.t(titleKey);
+    }
+    if (!hasFiles && document.getElementById('derived-form')?.classList.contains('collapsed') === false) {
+        this._toggleDerivedForm?.(false);
+    }
     this._updateLiveUpdateTopBar?.();
     const reloadModeToggle = document.getElementById('reload-as-version-toggle');
     const reloadModeSwitch = document.getElementById('reload-as-version-switch');
