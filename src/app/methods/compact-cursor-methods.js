@@ -22,6 +22,9 @@ import { copyTextToClipboard, cursorReadoutText } from '../../utils/clipboard.js
 import { button, el, section } from './compact-dom.js';
 
 const ICONS = {
+    // A finger tapping: on the app bar's reading while the sheet is hidden, to
+    // say that a tap there brings it back.
+    tap: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 12V6.5a1.5 1.5 0 0 1 3 0V11"/><path d="M12 10.5a1.5 1.5 0 0 1 3 0V12"/><path d="M15 11.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-.8a5 5 0 0 1-3.7-1.7l-3-3.3a1.4 1.4 0 0 1 2-2L9 16.5"/><path d="M6.6 5.2A4.5 4.5 0 0 1 8.5 2.6M14.4 5.2a4.5 4.5 0 0 0-1.9-2.6"/></svg>',
     prev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
     next: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>',
 };
@@ -172,15 +175,38 @@ export function installCompactCursorMethods(ViewerClass) {
             readout = this._compactCursorReadouts.get(plot)?.[view.id];
         }
         const open = this._compact.sheet === 'cursors';
+        // Built once: the reading changes with every move of a cursor, and the
+        // finger's nudge must not restart with it.
+        if (!chip._parts) {
+            const tap = el('span', 'compact-cursor-chip-tap');
+            tap.setAttribute('aria-hidden', 'true');
+            tap.innerHTML = ICONS.tap;
+            tap.addEventListener('animationend', () => tap.classList.remove('is-nudging'));
+            const ab = el('span', 'compact-cursor-chip-ab');
+            ab.setAttribute('aria-hidden', 'true');
+            const letterA = el('b', '', 'A');
+            const letterB = el('b', '', 'B');
+            ab.append(letterA, letterB);
+            const text = el('span', 'compact-cursor-chip-text');
+            chip.replaceChildren(tap, ab, text);
+            chip._parts = { tap, letterA, letterB, text };
+        }
+        const { tap, letterA, letterB, text } = chip._parts;
+        // The sheet just went away: the finger shows once where it comes back.
+        if (!open && chip._wasOpen) {
+            tap.classList.remove('is-nudging');
+            void tap.offsetWidth;
+            tap.classList.add('is-nudging');
+        }
+        chip._wasOpen = open;
         chip.classList.toggle('is-open', open);
         chip.setAttribute('aria-expanded', String(open));
-        const colorA = pm._escapeHTML(readout?.colorA || '#ff9800');
-        const colorB = pm._escapeHTML(readout?.colorB || '#2196f3');
-        const text = !readout ? ''
+        letterA.style.color = readout?.colorA || '#ff9800';
+        letterB.style.color = readout?.colorB || '#2196f3';
+        // The reading is HTML the desktop box escaped (interaction-methods).
+        text.innerHTML = !readout ? ''
             : readout.empty ? pm._escapeHTML(readout.message || '')
             : `<span>${readout.dxHTML}</span> <span>${readout.dyHTML}</span>`;
-        // The reading is HTML the desktop box escaped (interaction-methods).
-        chip.innerHTML = `<span class="compact-cursor-chip-ab" aria-hidden="true"><b style="color:${colorA}">A</b><b style="color:${colorB}">B</b></span><span class="compact-cursor-chip-text">${text}</span>`;
     };
 
     // The A|B button among the plot's corner buttons (compact-methods:
@@ -360,13 +386,10 @@ export function installCompactCursorMethods(ViewerClass) {
         this._compactCursorPage = current;
         page.onClose = () => {
             if (this._compactCursorPage === current) this._compactCursorPage = null;
-            this._compactSyncCursorChip();
         };
         const readout = this._compactCursorReadouts.get(plot)?.[view.id];
         if (readout) this._compactFillCursorValues(current, readout);
         else pm._syncCursorDisplay(panelId, plot);
-        // The chip says the sheet is open.
-        requestAnimationFrame(() => this._compactSyncCursorChip());
         return page;
     };
 
