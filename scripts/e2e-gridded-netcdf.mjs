@@ -239,6 +239,13 @@ try {
         // back the ranges it started from, and a grid this small is drawn
         // whole once, never again for a zoom. The pointer is over the region
         // drawn above, which must not swallow the wheel.
+        // The map was just reopened: let its own redraws (the colour scale
+        // arriving, the preview resizing it) finish before measuring.
+        await page.waitForFunction(() => new Promise(resolve => {
+            const view = window.app._griddedVisibleView();
+            const drawn = view.drawn;
+            setTimeout(() => resolve(view.drawn === drawn && !view.job), 800);
+        }), null, { timeout: 30000, polling: 100 });
         await page.evaluate(() => {
             const div = document.querySelector('#gridded-view .gridded-map');
             window.__zoom = { spans: [], drawn: window.app._griddedVisibleView().drawn, stop: false };
@@ -262,14 +269,122 @@ try {
         const zoom = await page.evaluate(() => {
             window.__zoom.stop = true;
             const view = window.app._griddedVisibleView();
-            return { spans: window.__zoom.spans, sameDrawing: view.drawn === window.__zoom.drawn, zoomed: !!view.zoom };
+            return { spans: window.__zoom.spans, sameDrawing: view.drawn === window.__zoom.drawn, zoomed: !!view.zoom, drawn: [window.__zoom.drawn, view.drawn] };
         });
         assert.equal(zoom.zoomed, true, 'the wheel zooms the map');
         assert.ok(zoom.spans.at(-1) < zoom.spans[0] * 0.8, `the map zoomed in (${zoom.spans[0]} → ${zoom.spans.at(-1)})`);
         zoom.spans.forEach((span, index) => {
             if (index) assert.ok(span <= zoom.spans[index - 1] + 1e-9, `zooming in never widens the view (${zoom.spans.join(', ')})`);
         });
-        assert.equal(zoom.sameDrawing, true, 'a small grid is not redrawn for a zoom');
+        assert.equal(zoom.sameDrawing, true, `a small grid is not redrawn for a zoom (${JSON.stringify(zoom.drawn)})`);
+        // Points and boxes on the map. A click places the ring where it lands
+        // (from the pixel, not from a lagging hover); the ring drags; the
+        // right button opens a menu that removes it; a box drawn after the
+        // ring has been on the map is still in degrees; a click on an
+        // extraction selects it and its row, Delete removes it; the trash
+        // empties the list.
+        await page.evaluate(async () => {
+            const view = window.app._griddedVisibleView();
+            view.zoom = null;
+            await window.app._griddedDrawMap(view);
+        });
+        const toPage = (lon, lat) => page.evaluate(([lon, lat]) => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            const rect = div.getBoundingClientRect();
+            const { xaxis, yaxis } = div._fullLayout;
+            return [rect.left + xaxis._offset + xaxis.l2p(lon), rect.top + yaxis._offset + yaxis.l2p(lat)];
+        }, [lon, lat]);
+        const objects = () => page.evaluate(() => {
+            const view = window.app._griddedVisibleView();
+            return {
+                point: view.pendingPoint,
+                box: view.pendingBox,
+                selected: view.selected,
+                groups: view.groups.map(group => ({ id: group.id, kind: group.kind, tag: group.tag, geometry: group.geometry })),
+                rows: [...document.querySelectorAll('#gridded-view .gridded-result.selected')].map(row => row.dataset.group),
+                menu: [...document.querySelectorAll('.gridded-context-menu button')].map(button => button.textContent),
+            };
+        });
+        const near = (a, b, tolerance = 1.5) => Math.abs(a - b) <= tolerance;
+        const mouseDrag = async (from, to) => {
+            await page.mouse.move(...from);
+            await page.mouse.down();
+            for (let step = 1; step <= 8; step++) await page.mouse.move(from[0] + (to[0] - from[0]) * step / 8, from[1] + (to[1] - from[1]) * step / 8);
+            await page.mouse.up();
+            await page.waitForTimeout(400);
+        };
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.mouse.click(...await toPage(-30, 20));
+        let objectsNow = await objects();
+        assert.ok(near(objectsNow.point?.lon, -30) && near(objectsNow.point?.lat, 20), `the ring lands where clicked (${JSON.stringify(objectsNow.point)})`);
+        await mouseDrag(await toPage(-30, 20), await toPage(10, -10));
+        objectsNow = await objects();
+        assert.ok(near(objectsNow.point?.lon, 10) && near(objectsNow.point?.lat, -10), `the ring follows a drag (${JSON.stringify(objectsNow.point)})`);
+        assert.equal(await page.inputValue('#gridded-view [data-input="lon"]'), String(objectsNow.point.lon), 'the coordinates follow the ring');
+        await page.mouse.click(...await toPage(10, -10), { button: 'right' });
+        await page.waitForSelector('.gridded-context-menu');
+        assert.equal((await objects()).menu.length, 2, 'the ring\'s menu: extract, remove');
+        await page.click('.gridded-context-menu button:last-child');
+        objectsNow = await objects();
+        assert.equal(objectsNow.point, null, 'the menu removes the ring');
+        assert.equal(objectsNow.menu.length, 0, 'and closes');
+
+        await page.mouse.click(...await toPage(-30, 20));
+        await page.click('#gridded-view [data-mode="region"]');
+        if ((await objects()).box) await page.click('#gridded-view [data-action="clear-region"]');
+        await mouseDrag(await toPage(-60, -30), await toPage(-20, 10));
+        objectsNow = await objects();
+        assert.ok(objectsNow.box && near(objectsNow.box.lonMin, -60) && near(objectsNow.box.lonMax, -20)
+            && near(objectsNow.box.latMin, -30) && near(objectsNow.box.latMax, 10), `a box drawn after the ring is in degrees (${JSON.stringify(objectsNow.box)})`);
+        const groupsBefore = objectsNow.groups.length;
+        await page.click('#gridded-view [data-action="extract-region"]');
+        await page.waitForFunction(count => window.app._griddedVisibleView().groups.length === count, groupsBefore + 1, { timeout: 60000 });
+        await page.waitForTimeout(500);
+        const region = (await objects()).groups.at(-1);
+        // A plain click inside a box does not select it (a point may be wanted
+        // there); a click on its edge does, and marks its row.
+        await page.mouse.click(...await toPage(region.geometry.lonMin, (region.geometry.latMin + region.geometry.latMax) / 2));
+        objectsNow = await objects();
+        assert.deepEqual(objectsNow.selected, { kind: 'group', id: region.id }, 'a click on a box\'s edge selects it');
+        assert.deepEqual(objectsNow.rows, [region.id], 'and marks its row');
+        await page.keyboard.press('Delete');
+        objectsNow = await objects();
+        assert.ok(!objectsNow.groups.some(group => group.id === region.id), 'Delete removes the selected box');
+        assert.equal(objectsNow.selected, null);
+
+        // An extracted point: its row selects it on the map; the right
+        // button removes it.
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.mouse.click(...await toPage(90, 45));
+        await page.click('#gridded-view [data-action="extract-point"]');
+        await page.waitForFunction(count => window.app._griddedVisibleView().groups.length === count, objectsNow.groups.length + 1, { timeout: 60000 });
+        await page.waitForTimeout(500);
+        const extracted = (await objects()).groups.at(-1);
+        await page.click(`#gridded-view .gridded-result[data-group="${extracted.id}"] .gridded-result-text`);
+        assert.deepEqual((await objects()).selected, { kind: 'group', id: extracted.id }, 'a row selects its point');
+        await page.mouse.click(...await toPage(extracted.geometry.lon, extracted.geometry.lat), { button: 'right' });
+        await page.waitForSelector('.gridded-context-menu');
+        assert.match((await objects()).menu[0], new RegExp(extracted.tag), 'the menu names the extraction');
+        await page.click('.gridded-context-menu button');
+        assert.ok(!(await objects()).groups.some(group => group.id === extracted.id), 'the menu removes the point and its series');
+
+        // The trash empties the list, after asking.
+        await page.click('#gridded-view [data-action="remove-all"]');
+        await page.click('.modal-overlay .modal-btn-confirm');
+        await page.waitForFunction(() => window.app._griddedVisibleView().groups.length === 0);
+        assert.equal((await extractions(page)).length, 0, 'their variables leave the file too');
+
+        // The time bar's buttons are drawn icons of one size; play turns into pause.
+        const steps = await page.$$eval('#gridded-view .gridded-step', buttons => buttons.map(button => {
+            const rect = button.getBoundingClientRect();
+            return { w: Math.round(rect.width), h: Math.round(rect.height), centre: Math.round(rect.top + rect.height / 2), svg: !!button.querySelector('svg') };
+        }));
+        assert.ok(steps.every(step => step.svg && step.w === steps[0].w && step.h === steps[0].h && step.centre === steps[0].centre), `aligned time buttons (${JSON.stringify(steps)})`);
+        await page.click('#gridded-view [data-step="play"]');
+        assert.equal(await page.getAttribute('#gridded-view [data-step="play"]', 'data-icon'), 'pause');
+        await page.click('#gridded-view [data-step="play"]');
+        assert.equal(await page.getAttribute('#gridded-view [data-step="play"]', 'data-icon'), 'play');
+
         // Reload reopens the dataset on its map; it is never reparsed as series.
         await page.evaluate(() => window.app.reloadActiveFile());
         await mapShown(page);
