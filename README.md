@@ -216,6 +216,10 @@ eagerly. CDF-5 is not supported, and non-standard CF calendars such as
 `360_day` remain numeric rather than being converted to calendar timestamps;
 use netCDF4/HDF5 or netCDF3 Classic for maximum compatibility.
 
+Gridded files (ERA5, CMIP, WRF) are only partly usable today. The diagnosis and
+the specification of a map-based gridded viewer are in
+[`docs/netcdf-gridded-viewer-spec.md`](docs/netcdf-gridded-viewer-spec.md).
+
 ## Production build
 
 Create a production bundle with:
