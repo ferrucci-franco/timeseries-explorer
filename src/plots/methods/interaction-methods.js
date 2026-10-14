@@ -5392,10 +5392,12 @@ proto._updatePlaceholder = function(panelId, panelEl) {
         const mode = plot?.mode;
         if (mode === 'phase3d' && pending.x && pending.y) {
             text.textContent = i18n.t('compactPendingZ').replace('{x}', pending.x).replace('{y}', pending.y);
-        } else if ((mode === 'phase2d' || mode === 'phase3d') && pending.x) {
+        } else if ((mode === 'phase2d' || mode === 'phase2dt' || mode === 'phase3d') && pending.x) {
             text.textContent = i18n.t('compactPendingY').replace('{x}', pending.x);
         } else if (mode === 'phase2d') {
             text.textContent = i18n.t('compactPlaceholderPhase2d');
+        } else if (mode === 'phase2dt') {
+            text.textContent = i18n.t('compactPlaceholderPhase2dt');
         } else if (mode === 'phase3d') {
             text.textContent = i18n.t('compactPlaceholderPhase3d');
         } else if (mode === 'state-anim') {

@@ -109,14 +109,16 @@ const SIGNAL_LIST_MODES = new Set(['timeseries', 'fft', 'temporal-profile', 'int
 const COMPACT_PLOT_TYPES = [
     { mode: 'timeseries', labelKey: 'modeTimeseries' },
     { mode: 'phase2d', labelKey: 'compactPlotType2d' },
+    { mode: 'phase2dt', labelKey: 'compactPlotType2dt' },
     { mode: 'phase3d', labelKey: 'compactPlotType3d' },
     { mode: 'state-anim', dim: 2, labelKey: 'compactPlotTypeAnim2d' },
     { mode: 'state-anim', dim: 3, labelKey: 'compactPlotTypeAnim3d' },
 ];
 
 // Plots built from signals in roles, one tap per role: x then y (then z)
-// for a curve, x₁ x₂ (x₃) for an animation's state.
-const PHASE_MODES = new Set(['phase2d', 'phase3d']);
+// for a curve, x₁ x₂ (x₃) for an animation's state. 2D + t pairs x and y
+// like 2D, and draws them in a 3D scene along time.
+const PHASE_MODES = new Set(['phase2d', 'phase2dt', 'phase3d']);
 const STATE_SLOT_LABELS = ['x₁', 'x₂', 'x₃'];
 
 // What a plot is, rather than an analysis of it.
@@ -703,7 +705,7 @@ export function installCompactMethods(ViewerClass) {
                 const current = this._compactPlotForDiv(div);
                 if (!this._compact.active || !current) return null;
                 const { plot } = current;
-                const is3D = plot.mode === 'phase3d' || (plot.mode === 'state-anim' && (plot.stateAnimDim || 2) === 3);
+                const is3D = plot.mode === 'phase3d' || plot.mode === 'phase2dt' || (plot.mode === 'state-anim' && (plot.stateAnimDim || 2) === 3);
                 return is3D ? { hint: i18n.t('compactPanHint') } : null;
             };
         }
@@ -1089,7 +1091,9 @@ export function installCompactMethods(ViewerClass) {
                 .replace('{y}', this._compactVarLabel(pending.y, pending.fileId));
         }
         if (pending?.x) return i18n.t('compactPendingY').replace('{x}', this._compactVarLabel(pending.x, pending.fileId));
-        return i18n.t(plot?.mode === 'phase3d' ? 'compactPhaseHint3d' : 'compactPhaseHint');
+        return i18n.t(plot?.mode === 'phase3d' ? 'compactPhaseHint3d'
+            : plot?.mode === 'phase2dt' ? 'compactPhaseHint2dt'
+            : 'compactPhaseHint');
     };
 
     // Does this plot take its signals in roles (x, y, z; x₁, x₂, x₃)?
@@ -1271,7 +1275,7 @@ export function installCompactMethods(ViewerClass) {
         const activeId = this._compactActivePanelId();
         const plot = activeId ? this.plotManager.plots.get(activeId) : null;
         const head = el('div', 'compact-data-target-head');
-        const targetKey = plot?.mode === 'phase2d' ? 'compactTapTargetPhase'
+        const targetKey = plot?.mode === 'phase2d' || plot?.mode === 'phase2dt' ? 'compactTapTargetPhase'
             : plot?.mode === 'phase3d' ? 'compactTapTargetPhase3d'
             : plot?.mode === 'state-anim' ? 'compactTapTargetState'
             : 'compactTapTarget';
