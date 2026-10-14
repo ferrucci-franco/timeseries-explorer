@@ -206,6 +206,20 @@ function csvProfileWithoutRowFilter(csvProfile) {
     return clone;
 }
 
+// The token a file load can be cancelled with. Every place that cancels still
+// just sets `cancelled = true`; doing so also aborts the signal, which is what
+// reaches into DuckDB and interrupts the query reading the file. A plain flag
+// was only looked at between files, so Cancel waited for the file being read
+// to finish first — tens of seconds on "Cancelling…" for a large CSV.
+export function createLoadToken() {
+    const controller = new AbortController();
+    return {
+        get cancelled() { return controller.signal.aborted; },
+        set cancelled(value) { if (value) controller.abort(); },
+        signal: controller.signal,
+    };
+}
+
 export function installFileMethods(TargetClass) {
     const proto = TargetClass.prototype;
 proto.loadFile = async function(file, options = {}) {
@@ -276,6 +290,7 @@ proto.loadFile = async function(file, options = {}) {
                     matInspection: options.matInspection || null,
                     matSelection: options.matSelection || null,
                     allowOversized: options.allowOversized === true,
+                    signal: options.loadToken?.signal || null,
                 });
                 if (isCancelled()) {
                     await data?._duckdb?.source?.release?.(data);
@@ -385,7 +400,7 @@ proto.loadFiles = async function(items = []) {
     if (!entries.length) return [];
 
     const loaded = [];
-    const loadToken = { cancelled: false };
+    const loadToken = createLoadToken();
     this._showFileLoadingOverlay(entries.length, loadToken);
     await this._yieldToBrowser();
     try {
@@ -910,6 +925,9 @@ proto._updateFileLoadingOverlay = function(current, total, filename = '', size =
 };
 
 proto._formatFileSize = function(size) {
+    // Unknown (a file opened from a handle has no size until it is read):
+    // nothing, rather than Number(null), which reads as "0 B".
+    if (size === null || size === undefined || size === '') return '';
     const bytes = Number(size);
     if (!Number.isFinite(bytes) || bytes < 0) return '';
     const units = ['B', 'kB', 'MB', 'GB', 'TB'];
@@ -2006,7 +2024,7 @@ proto._fileEntryTooltip = function(entry) {
 
 proto._parseResultBuffer = async function(filename, buffer, file = null, options = {}) {
     const extension = this._fileExtension(filename);
-    if (extension === '.parquet') return this._parseParquetResult(filename, file);
+    if (extension === '.parquet') return this._parseParquetResult(filename, file, options);
     if (extension === '.nc' || extension === '.netcdf') return this._parsePypsaNetcdfResultBuffer(filename, buffer, options);
     if (this._isPickleExtension(extension)) return this._parsePickleResultBuffer(filename, buffer, options);
     if (this._isExcelExtension(extension)) return this._parseExcelResultBuffer(filename, buffer, options);
@@ -3728,12 +3746,12 @@ proto._convertLargeCsvNoticeToParquet = async function({ filename, file, csvProf
     }
 };
 
-proto._parseParquetResult = async function(filename, file) {
+proto._parseParquetResult = async function(filename, file, { signal = null } = {}) {
     if (!file) throw new Error(`Parquet files must be loaded via a File handle (got buffer-only for ${filename}).`);
     if (!this._canUseDuckDb()) throw new Error(`Parquet support requires DuckDB-WASM (current page does not allow Workers).`);
     const source = await this._getDuckDbSource();
     const data = await this._loadWholeOrLazy(
-        lazy => source.parseParquetFile(file, filename, { lazy }),
+        lazy => source.parseParquetFile(file, filename, { lazy, signal }),
         { size: file.size ?? 0, limitBytes: this._parquetFullLoadLimitBytes() },
     );
     data.filename = filename;
@@ -3769,12 +3787,15 @@ proto._parseCsvResultBuffer = async function(filename, buffer, file = null, opti
         try {
             const source = await this._getDuckDbSource();
             const data = await this._loadWholeOrLazy(
-                lazy => source.parseCsvFile(file, filename, { lazy, csvProfile }),
+                lazy => source.parseCsvFile(file, filename, { lazy, csvProfile, signal: options.signal || null }),
                 { size: file.size ?? 0, limitBytes: this._csvFullLoadLimitBytes() },
             );
             data.filename = filename;
             return attachCsvProfile(data);
         } catch (err) {
+            // Cancelled, not failed: reading the file again with the legacy
+            // parser is the opposite of what was asked.
+            if (options.signal?.aborted) throw err;
             if (legacyFallbackUnsafe) {
                 throw this._largeCsvDuckDbError(filename, fileSize, err);
             }

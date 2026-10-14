@@ -111,6 +111,7 @@
     "test:lazy-data-tools": "node scripts/test-lazy-data-tools.mjs",
     "test:dropped-traces-batch": "node scripts/test-dropped-traces-batch.mjs",
     "test:loading-cancel-button": "node scripts/test-loading-cancel-button.mjs",
+    "test:loading-cancel-interrupts": "node scripts/test-loading-cancel-interrupts.mjs",
     "test:csv-export-progress": "node scripts/test-csv-export-progress.mjs",
     "test:variable-range-selection": "node scripts/test-variable-range-selection.mjs",
     "test:column-units": "node scripts/test-column-units.mjs",
