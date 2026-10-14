@@ -4079,6 +4079,37 @@ proto._updateActionButtons = function() {
     // Nothing to reset while the app is empty (#49): every panel is already
     // blank, so the button only offered a confirmation with no work behind it.
     document.getElementById('reset-layout').disabled = !hasFiles;
+    // A derived variable is a formula over a file's signals: with no file the
+    // form could only be filled with names that do not exist. Its tooltip says
+    // what is missing, and a form left open when the last file closes goes.
+    const derivedButton = document.getElementById('derived-toggle');
+    if (derivedButton) {
+        derivedButton.disabled = !hasFiles;
+        const titleKey = hasFiles ? 'derivedNewVariableTitle' : 'derivedNewVariableNeedsFile';
+        derivedButton.setAttribute('data-i18n-title', titleKey);
+        derivedButton.title = i18n.t(titleKey);
+    }
+    if (!hasFiles && document.getElementById('derived-form')?.classList.contains('collapsed') === false) {
+        this._toggleDerivedForm?.(false);
+    }
+    // The data tools too: every one of them works on a file's signals. A tool
+    // left open when the last file closes is put away with its draft.
+    const toolSelect = document.getElementById('data-tool-select');
+    if (toolSelect) {
+        toolSelect.disabled = !hasFiles;
+        if (hasFiles) {
+            toolSelect.removeAttribute('data-i18n-title');
+            toolSelect.removeAttribute('title');
+        } else {
+            toolSelect.setAttribute('data-i18n-title', 'dataToolNeedsFile');
+            toolSelect.title = i18n.t('dataToolNeedsFile');
+            if (toolSelect.value) {
+                this._exitDataToolEditing?.();
+                this._clearDataToolDraft?.();
+                this._syncDataTools?.();
+            }
+        }
+    }
     this._updateLiveUpdateTopBar?.();
     const reloadModeToggle = document.getElementById('reload-as-version-toggle');
     const reloadModeSwitch = document.getElementById('reload-as-version-switch');
