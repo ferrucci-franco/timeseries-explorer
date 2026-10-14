@@ -35,7 +35,11 @@
     text-align: center;
     padding: 2rem;
     width: min(1040px, calc(100vw - 3rem));
-    max-width: 1040px;
+    /* The drop zone is the content area, not the window: with the sidebar
+       open it is narrower than 100vw, and the notice used to spill under the
+       sidebar on both sides. */
+    max-width: min(1040px, 100%);
+    box-sizing: border-box;
 }
 
 .drop-zone-content .icon {
@@ -101,7 +105,7 @@
 
 .light-version-notice {
     width: min(920px, calc(100vw - 7rem));
-    max-width: 920px;
+    max-width: min(920px, 100%);
     max-height: min(56vh, 520px);
     overflow: auto;
     margin: 1.25rem auto 0;

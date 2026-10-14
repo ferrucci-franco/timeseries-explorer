@@ -3561,11 +3561,13 @@ body.sync-hover-active .plotly-mode-timeseries .hoverlayer .hovertext {
    Responsive
    ============================================ */
 @media (max-width: 768px) {
+    /* The sidebar stays beside the content, not over it: floated over the
+       content it hid the drop zone and its notice, and left the pill on its
+       edge stranded at the window's left border. The pill puts it away when
+       the plots need the whole width. A wide saved width is capped so the
+       content keeps a usable share of a small window. */
     html:not(.compact) .sidebar {
-        position: absolute;
-        height: 100%;
-        z-index: 100;
-        box-shadow: 2px 0 8px rgba(0,0,0,0.1);
+        max-width: min(600px, 55vw);
     }
 
     .top-bar {

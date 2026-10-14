@@ -138,7 +138,24 @@ textarea,
     align-items: center;
     gap: 0.8rem;
     min-width: 0;
-    flex: 1 1 auto;
+    /* The brand gives way first when the window is too narrow for both
+       halves, and is clipped rather than drawn under the controls. */
+    flex: 1 1000 auto;
+    overflow: hidden;
+}
+
+.top-bar-left.is-squeezed {
+    position: absolute;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.top-bar-left.without-badge .runtime-badge {
+    display: none;
+}
+
+.top-bar-left.is-squeezed + .top-bar-right {
+    margin-left: auto;
 }
 
 .app-brand {
@@ -228,7 +245,60 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    /* A window narrower than the row of controls (a small laptop at 125 %,
+       a half-screen window) scrolls the row instead of pushing the last
+       buttons out of reach. The menus it opens are placed with fixed
+       coordinates (placeTopBarMenu) so this does not clip them. */
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    /* Room for the focus ring and the switch's shadow, which overflow-y
+       would otherwise clip. */
+    padding: 3px 2px;
+}
+
+.top-bar-right::-webkit-scrollbar {
+    display: none;
+}
+
+/* Only while the row actually scrolls: a fade on the side that hides more
+   buttons says there is more to see. Sticky pseudo-elements rather than a
+   mask, which would also hide the menus the row opens. */
+.top-bar-right::before,
+.top-bar-right::after {
+    content: '';
+    position: sticky;
+    z-index: 2;
+    flex: 0 0 28px;
+    align-self: stretch;
+    margin: -3px 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.top-bar-right::before {
+    left: 0;
+    margin-right: calc(-28px - 0.5rem);
+    background: linear-gradient(to right, var(--bg-secondary), transparent);
+}
+
+.top-bar-right::after {
+    right: 0;
+    margin-left: calc(-28px - 0.5rem);
+    background: linear-gradient(to left, var(--bg-secondary), transparent);
+}
+
+.top-bar-right.can-scroll-left::before,
+.top-bar-right.can-scroll-right::after {
+    opacity: 1;
+}
+
+.top-bar-right > * {
+    flex-shrink: 0;
 }
 
 /* Language Selector */
@@ -1262,6 +1332,11 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     width: auto;
     height: 0;
     z-index: 1310;
+}
+
+/* A menu open from the top bar drops over the pill, not under it. */
+.top-bar:has(.example-menu:not([hidden])) + .edge-toggle-rail-top {
+    z-index: 1290;
 }
 
 .edge-toggle-rail-top .edge-toggle {
