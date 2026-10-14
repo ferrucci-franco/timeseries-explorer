@@ -74,24 +74,40 @@ export function coastlineTrace(lines, lonMin, lonMax) {
 }
 
 /**
- * The part of a map to draw for a given view window, decimated by an integer
- * stride so the browser never paints more than MAX_DRAWN_CELLS bricks.
+ * Which cells of a map to draw for a view window, and with what stride. A map
+ * small enough to draw whole is drawn whole whatever the zoom, so panning
+ * never shows an empty edge and zooming never needs a redraw. A larger one
+ * is cut to the window plus half of it on every side (room to pan), then
+ * decimated by an integer stride so the browser never paints more than
+ * MAX_DRAWN_CELLS bricks.
  */
-export function drawableGrid(map, xRange = null, yRange = null, maxCells = MAX_DRAWN_CELLS) {
-    const window = (axis, range) => {
+export function gridWindow(map, xRange = null, yRange = null, maxCells = MAX_DRAWN_CELLS) {
+    const strideFor = (width, height) => Math.max(1, Math.ceil(Math.sqrt((width * height) / maxCells)));
+    const whole = { x0: 0, x1: map.lon.length - 1, y0: 0, y1: map.lat.length - 1, windowed: false };
+    if (strideFor(map.lon.length, map.lat.length) === 1 || (!xRange && !yRange)) {
+        return { ...whole, stride: strideFor(map.lon.length, map.lat.length) };
+    }
+    const cut = (axis, range) => {
         if (!range) return [0, axis.length - 1];
-        const [low, high] = range[0] <= range[1] ? range : [range[1], range[0]];
+        let [low, high] = range[0] <= range[1] ? range : [range[1], range[0]];
+        const pad = (high - low) / 2;
+        low -= pad;
+        high += pad;
         let start = 0;
         while (start < axis.length - 1 && axis[start + 1] < low) start += 1;
         let stop = axis.length - 1;
         while (stop > 0 && axis[stop - 1] > high) stop -= 1;
         return stop >= start ? [start, stop] : [0, axis.length - 1];
     };
-    const [x0, x1] = window(map.lon, xRange);
-    const [y0, y1] = window(map.lat, yRange);
-    const width = x1 - x0 + 1;
-    const height = y1 - y0 + 1;
-    const stride = Math.max(1, Math.ceil(Math.sqrt((width * height) / maxCells)));
+    const [x0, x1] = cut(map.lon, xRange);
+    const [y0, y1] = cut(map.lat, yRange);
+    const windowed = x0 > 0 || y0 > 0 || x1 < map.lon.length - 1 || y1 < map.lat.length - 1;
+    return { x0, x1, y0, y1, windowed, stride: strideFor(x1 - x0 + 1, y1 - y0 + 1) };
+}
+
+/** The cells gridWindow chose, as heatmap x/y/z arrays. */
+export function drawableGrid(map, xRange = null, yRange = null, maxCells = MAX_DRAWN_CELLS) {
+    const { x0, x1, y0, y1, stride, windowed } = gridWindow(map, xRange, yRange, maxCells);
     const xs = [];
     for (let column = x0; column <= x1; column += stride) xs.push(column);
     const ys = [];
@@ -107,6 +123,8 @@ export function drawableGrid(map, xRange = null, yRange = null, maxCells = MAX_D
         y: Float64Array.from(ys, row => map.lat[row]),
         z,
         stride,
+        // The lon/lat extent drawn, when it is not the whole map.
+        extent: windowed ? { x: [map.lon[x0], map.lon[x1]], y: [map.lat[y0], map.lat[y1]] } : null,
     };
 }
 
@@ -1506,15 +1524,27 @@ export function installGriddedMethods(TargetClass) {
         const div = target || this._griddedEl('map');
         const map = view.map;
         if (!div || !map || (!target && this._griddedVisibleView() !== view)) return;
+        if (!target) {
+            // Never redraw under a wheel or a drag: Plotly is moving the plot
+            // itself, and a redraw would put back the ranges it started from.
+            const wait = this._griddedInteractionWait(div);
+            if (wait > 0) {
+                clearTimeout(view.drawTimer);
+                view.drawTimer = setTimeout(() => this._griddedDrawMap(view), wait);
+                return;
+            }
+            clearTimeout(view.drawTimer);
+            // The ranges on screen, not the ones remembered at the last event.
+            if (view.zoom && div._fullLayout) view.zoom = this._griddedShownRanges(div);
+        }
         const variable = this._griddedVariable(view);
         const colors = this._griddedColors(theme);
         const grid = drawableGrid(map, view.zoom?.x, view.zoom?.y);
         const [zmin, zmax] = this._griddedCurrentRange(view);
         const lonMin = map.lon[0];
         const lonMax = map.lon[map.lon.length - 1];
-        const span = view.zoom?.x ? Math.abs(view.zoom.x[1] - view.zoom.x[0]) : Math.abs(lonMax - lonMin);
-        const coast = await loadCoastlines(span < FINE_COAST_SPAN_DEGREES ? 'fine' : 'coarse')
-            || await loadCoastlines('coarse');
+        const coastScale = this._griddedCoastScale(view);
+        const coast = await loadCoastlines(coastScale) || await loadCoastlines('coarse');
         if (!target && this._griddedVisibleView() !== view) return;
         const units = variable?.units ? ` ${variable.units}` : '';
         const traces = [{
@@ -1558,10 +1588,10 @@ export function installGriddedMethods(TargetClass) {
             margin: { l: 56, r: 96, t: 30, b: 44 },
             showlegend: false,
             dragmode: view.mode === 'region' ? 'drawrect' : 'pan',
-            uirevision: `${view.fileId}|${view.variableKey}`,
             title: { text: titleText, font: { size: 12 }, x: 0.01, xanchor: 'left' },
             xaxis: {
-                range: ranges.x,
+                // Copies: Plotly writes into the range arrays it is given.
+                range: [...ranges.x],
                 title: { text: i18n.t('griddedLongitude') },
                 gridcolor: colors.grid,
                 zeroline: false,
@@ -1571,7 +1601,7 @@ export function installGriddedMethods(TargetClass) {
                 constrain: 'domain',
             },
             yaxis: {
-                range: ranges.y,
+                range: [...ranges.y],
                 title: { text: i18n.t('griddedLatitude') },
                 gridcolor: colors.grid,
                 zeroline: false,
@@ -1593,7 +1623,50 @@ export function installGriddedMethods(TargetClass) {
         };
         const first = !div._fullLayout;
         await Plotly.react(div, traces, layout, config);
-        if (first && !target) this._griddedBindPlot(div);
+        if (target) return;
+        view.drawn = { stride: grid.stride, extent: grid.extent, coastScale };
+        if (first) this._griddedBindPlot(div);
+    };
+
+    proto._griddedShownRanges = function(div) {
+        const layout = div._fullLayout;
+        return { x: [...layout.xaxis.range], y: [...layout.yaxis.range] };
+    };
+
+    proto._griddedCoastScale = function(view) {
+        const map = view.map;
+        const span = view.zoom?.x ? Math.abs(view.zoom.x[1] - view.zoom.x[0]) : Math.abs(map.lon[map.lon.length - 1] - map.lon[0]);
+        return span < FINE_COAST_SPAN_DEGREES ? 'fine' : 'coarse';
+    };
+
+    /**
+     * Milliseconds until the user has stopped moving the map: a button held
+     * down on it (pan, box drawing, shape editing) or a wheel turned in the
+     * last moments. Plotly applies a wheel zoom 50 ms after the last notch.
+     */
+    proto._griddedInteractionWait = function(div) {
+        const state = div._griddedInteraction;
+        if (!state) return 0;
+        if (state.pressed) return 150;
+        return Math.max(0, state.wheelAt + 250 - Date.now());
+    };
+
+    /**
+     * Whether the map on screen no longer serves the current zoom: a finer
+     * or coarser coastline, a different decimation, or a pan or zoom that
+     * left the part of a large grid that was drawn. A grid drawn whole at
+     * full resolution needs nothing.
+     */
+    proto._griddedZoomNeedsRedraw = function(view) {
+        const drawn = view.drawn;
+        if (!drawn || !view.map) return true;
+        if (this._griddedCoastScale(view) !== drawn.coastScale) return true;
+        const wanted = gridWindow(view.map, view.zoom?.x, view.zoom?.y);
+        if (wanted.stride !== drawn.stride) return true;
+        if (!drawn.extent) return wanted.windowed;
+        if (!view.zoom) return true;
+        const inside = (range, extent) => Math.min(...range) >= Math.min(...extent) && Math.max(...range) <= Math.max(...extent);
+        return !inside(view.zoom.x, drawn.extent.x) || !inside(view.zoom.y, drawn.extent.y);
     };
 
     /**
@@ -1646,6 +1719,23 @@ export function installGriddedMethods(TargetClass) {
     };
 
     proto._griddedBindPlot = function(div) {
+        const interaction = { pressed: false, wheelAt: 0 };
+        div._griddedInteraction = interaction;
+        div.addEventListener('wheel', event => {
+            interaction.wheelAt = Date.now();
+            // A box drawn on the map takes the wheel, which then neither zooms
+            // nor scrolls: hand it to the plot area underneath.
+            if (!event.target?.closest?.('.shapelayer')) return;
+            const area = div.querySelector('.nsewdrag');
+            if (!area) return;
+            event.preventDefault();
+            event.stopPropagation();
+            area.dispatchEvent(new WheelEvent('wheel', event));
+        }, { capture: true, passive: false });
+        div.addEventListener('pointerdown', () => { interaction.pressed = true; }, { capture: true });
+        const release = () => { interaction.pressed = false; };
+        window.addEventListener('pointerup', release, { capture: true });
+        window.addEventListener('pointercancel', release, { capture: true });
         div.on('plotly_click', event => {
             const view = this._griddedVisibleView();
             if (!view || view.mode !== 'point') return;
@@ -1679,16 +1769,20 @@ export function installGriddedMethods(TargetClass) {
                 this._griddedDrawOverlaysSoon(view);
                 return;
             }
-            if (update['xaxis.autorange'] || update.autosize) {
+            if (update['xaxis.autorange']) {
                 view.zoom = null;
-            } else if (update['xaxis.range[0]'] !== undefined || update['yaxis.range[0]'] !== undefined) {
-                const layout = div._fullLayout;
-                view.zoom = { x: [...layout.xaxis.range], y: [...layout.yaxis.range] };
+            } else if (update.autosize) {
+                // A resize keeps the zoom; only the whole-map framing depends
+                // on the size of the plot.
+                if (view.zoom) return;
+            } else if (update['xaxis.range[0]'] !== undefined || update['yaxis.range[0]'] !== undefined
+                || update['xaxis.range'] !== undefined || update['yaxis.range'] !== undefined) {
+                view.zoom = this._griddedShownRanges(div);
+                if (!this._griddedZoomNeedsRedraw(view)) return;
             } else {
                 return;
             }
-            clearTimeout(view.zoomTimer);
-            view.zoomTimer = setTimeout(() => this._griddedDrawMap(view), 120);
+            this._griddedDrawMap(view);
         });
     };
 
