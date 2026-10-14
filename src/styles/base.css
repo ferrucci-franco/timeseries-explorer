@@ -264,37 +264,31 @@ body[data-omv-runtime="full-desktop"] .runtime-badge {
     display: none;
 }
 
-/* Only while the row actually scrolls: a fade on the side that hides more
-   buttons says there is more to see. Sticky pseudo-elements rather than a
-   mask, which would also hide the menus the row opens. */
-.top-bar-right::before,
-.top-bar-right::after {
-    content: '';
-    position: sticky;
+/* Only while the row actually scrolls: a fade over the end that hides more
+   buttons says there is more to see. Elements of the top bar laid over the
+   row (src/ui/top-bar-scroll.js), not part of it: as flex items inside the
+   row, Firefox counted them into the row's width differently from Chrome and
+   the row overflowed with room to spare. Not a mask either, which would also
+   hide the menus the row opens. */
+.top-bar-fade {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 28px;
     z-index: 2;
-    flex: 0 0 28px;
-    align-self: stretch;
-    margin: -3px 0;
     pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.15s;
 }
 
-.top-bar-right::before {
-    left: 0;
-    margin-right: calc(-28px - 0.5rem);
+.top-bar-fade[hidden] {
+    display: none;
+}
+
+.top-bar-fade-start {
     background: linear-gradient(to right, var(--bg-secondary), transparent);
 }
 
-.top-bar-right::after {
-    right: 0;
-    margin-left: calc(-28px - 0.5rem);
+.top-bar-fade-end {
     background: linear-gradient(to left, var(--bg-secondary), transparent);
-}
-
-.top-bar-right.can-scroll-left::before,
-.top-bar-right.can-scroll-right::after {
-    opacity: 1;
 }
 
 .top-bar-right > * {
