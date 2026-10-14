@@ -2614,6 +2614,8 @@ class PlotManager {
             cursorBtn.disabled = !enabled;
             cursorBtn.classList.toggle('active', !!this._anyCursorEnabled?.(plot));
         }
+        // The phone layout keeps its own A|B button and readout in step.
+        this.onCursorsChanged?.(panelId, plot);
         // NaN/Inf, Gaps, Repeated, Samples (Marks); how the axes and camera read the data (View).
         this._syncMarksControls?.(panelId);
         this._applyAnalysisButtonState?.(plot, panelEl.querySelector('.timeseries-analysis-menu-btn'));

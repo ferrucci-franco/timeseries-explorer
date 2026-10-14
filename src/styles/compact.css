@@ -2507,3 +2507,235 @@ html.compact .compact-alert-dialog .modal-btn-cancel {
         animation: none;
     }
 }
+
+/* ── Measurement cursors (compact-cursor-methods) ────────────────────── */
+/* The desktop's floating box, with its 18 px buttons and Shift and Ctrl
+   hints, is not shown: its reading is in the Cursors sheet. */
+html.compact .cursor-info-box {
+    display: none !important;
+}
+
+/* A tab at the foot of each line, a finger's target (utils/cursor-handles.js).
+   Only the phone layout draws them; the touch is tested in JS, so the tab
+   itself never takes a pointer from the plot. */
+.cursor-overlay-handle {
+    position: absolute;
+    box-sizing: border-box;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 5px;
+    transform: translate(-50%, -50%);
+    border-radius: 14px;
+    background: var(--cursor-color, #888888);
+    color: #fff;
+    font: 700 14px/28px system-ui, -apple-system, "Segoe UI", sans-serif;
+    text-align: center;
+    text-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 0 0 2px var(--bg-primary), 0 2px 6px rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+}
+
+/* A cursor out of view: its tab waits at the edge, lighter, to be dragged in. */
+.cursor-overlay-handle.is-edge {
+    min-width: 38px;
+    opacity: 0.8;
+}
+
+/* Both cursors moving together (a tab held still, then dragged). */
+body.cursor-pair-dragging .cursor-overlay-handle {
+    transform: translate(-50%, -50%) scale(1.15);
+}
+
+/* A|B among the plot's corner buttons: lit while the cursors are on. */
+html.compact .compact-fit-btn.compact-cursor-btn {
+    width: auto;
+    min-width: 44px;
+    padding: 0 8px;
+    margin-right: 4px;
+    font: 700 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+    letter-spacing: 0.02em;
+}
+
+html.compact.compact-landscape .compact-fit-btn.compact-cursor-btn {
+    min-width: 40px;
+}
+
+html.compact .compact-fit-btn.compact-cursor-btn[hidden] {
+    display: none;
+}
+
+html.compact .compact-fit-btn.compact-cursor-btn.is-active {
+    opacity: 1;
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+    color: #fff;
+}
+
+/* In the app bar, while the cursors are on: their Δx and Δy, in the file
+   name's place. A tap opens or hides their sheet. */
+.compact-cursor-chip {
+    display: none;
+}
+
+html.compact .compact-appbar.has-cursor-chip .compact-appbar-title {
+    display: none;
+}
+
+html.compact .compact-cursor-chip:not([hidden]) {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    min-height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+}
+
+html.compact .compact-cursor-chip.is-open {
+    border-color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 14%, var(--bg-primary));
+}
+
+.compact-cursor-chip-ab {
+    flex: 0 0 auto;
+    display: inline-flex;
+    gap: 2px;
+    font-weight: 800;
+}
+
+.compact-cursor-chip-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.compact-cursor-chip-text b {
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+/* A narrow phone keeps the numbers rather than the letters. */
+@media (max-width: 359px) {
+    .compact-cursor-chip-ab {
+        display: none;
+    }
+}
+
+/* The Cursors sheet. The reading comes first: it is what is watched while a
+   tab is dragged, and in a half sheet it must not scroll away. */
+.compact-page-cursors .compact-cursor-views {
+    margin-bottom: 10px;
+}
+
+.compact-cursor-values {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    font-size: 0.9rem;
+    line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+/* A's and B's own lines span the box; the differences pair up below them. */
+.compact-cursor-values > div:nth-child(-n+2),
+.compact-cursor-values.is-spectrum > div:nth-child(-n+4),
+.compact-cursor-values > .cursor-inverse-spacing-note,
+.compact-cursor-values > .cursor-help-popover {
+    grid-column: 1 / -1;
+}
+
+.compact-cursor-values .cursor-inverse-spacing-note {
+    font-size: 0.86rem;
+    margin-top: 2px;
+}
+
+.compact-cursor-values .cursor-help-popover {
+    margin: 4px 0 0;
+    font-size: 0.86rem;
+}
+
+.compact-cursor-values .cursor-help-popover[hidden] {
+    display: none;
+}
+
+.compact-cursor-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.compact-cursor-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.compact-cursor-badge {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    background: var(--text-secondary);
+    color: #fff;
+    font-weight: 700;
+    line-height: 28px;
+    text-align: center;
+    text-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+}
+
+.compact-cursor-trace {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.compact-cursor-step-btn {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    touch-action: manipulation;
+}
+
+.compact-cursor-step-btn:active {
+    background: color-mix(in srgb, var(--primary-color) 22%, var(--bg-secondary));
+}
+
+.compact-cursor-step {
+    margin-top: 12px;
+}
+
+.compact-cursor-step-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.86rem;
+    color: var(--text-secondary);
+}
+
+.compact-cursor-targets .compact-segment {
+    padding: 0 4px;
+    font-size: 0.86rem;
+}

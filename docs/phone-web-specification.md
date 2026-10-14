@@ -1,8 +1,8 @@
 # Phone Web Specification
 
 Status: first slice built (2026-10-04). It covers time series, FFT, the temporal
-profile and the integral, 2D, 2D + t and 3D plots and state animations, plus CSV
-parsing.
+profile and the integral, 2D, 2D + t and 3D plots and state animations, the
+measurement cursors, plus CSV parsing.
 
 Built:
 
@@ -27,17 +27,23 @@ Built:
 - the CSV parsing dialog of §5.6;
 - on the plot: faint fit X / fit Y / fit both buttons in its corner, and the window
   zoom of §6.1 (a slow double tap);
+- the measurement cursors (§6.4): A|B in the plot's corner and a switch in the Plot
+  sheet; a tab at the foot of each line to drag it, waiting at the edge when the
+  cursor is out of view; their reading in a Cursors sheet, with step arrows; Δx and
+  Δy in the app bar while that sheet is hidden;
 - help full screen, and the bottom bar's icons each in their own colour.
 
-The code is in `src/app/methods/compact-methods.js`, `src/ui/compact-layout.js` and
-`src/styles/compact.css`. The tests are `npm run test:compact-layout` and
+The code is in `src/app/methods/compact-methods.js`,
+`src/app/methods/compact-cursor-methods.js`, `src/ui/compact-layout.js`,
+`src/utils/cursor-handles.js` and `src/styles/compact.css`. The tests are
+`npm run test:compact-layout`, `npm run test:cursor-handles` and
 `npm run e2e:compact-layout`.
 
 Not built yet:
 
 - the other analyses (histogram, heatmap, correlation);
 - View and Marks;
-- cursors and tap readouts;
+- tap readouts beyond Plotly's own;
 - export through Web Share;
 - derived variables and data tools on the phone;
 - the web manifest and the service worker (§8);
@@ -348,13 +354,43 @@ Phones have no hover, so anything that depends on it needs a tap equivalent:
 
 - hover readouts and hover sync become **tap to show the value at that point**;
 - tooltips on icons become labels or long-press hints;
-- cursors are placed by tap and moved by dragging a handle at least 44 px wide.
+- cursors are moved by dragging a tab with a 44 px reach (§6.4).
 
 ### 6.3 Back behaves like Back
 
 Opening a sheet or a sub-page adds a browser history entry. The system Back gesture
 (Android) and the edge swipe (Safari) then close the top layer instead of leaving the
 site. Back from the bare plot behaves normally.
+
+### 6.4 Measurement cursors
+
+The cursors are the desktop's A and B: the same state on the plot and the same
+measurements. Only how they are reached and read changes.
+
+- **On and off**: A|B among the plot's corner buttons (on the time pane, or on
+  FFT's spectrum when its time pane is hidden), and a switch in the Plot sheet.
+  Turning them on opens their sheet.
+- **Moving one**: each line has a tab at its foot, 28 px drawn and 44 px to the
+  touch, so a finger grabs the cursor and not the pan; the line itself still takes
+  a finger within 18 px. Two tabs closer than a tab's width are not drawn on top of
+  each other: B's goes one row up. The dot that reads the curve is drawn over the
+  tabs.
+- **Out of view**: a cursor past an edge leaves its tab at that edge (‹A, B›).
+  Dragging it brings the cursor to the finger.
+- **Both together**: a tab (or line) held still for 0.45 s, then dragged, moves A
+  and B together, as Ctrl and drag does with a mouse.
+- **The reading**: the desktop's floating box is not shown. Its values go to a
+  Cursors sheet, which behaves like the others: half the screen under the plot when
+  upright, beside it when sideways, the whole screen on request. From the top: in FFT
+  a Time / Spectrum switch; the values; for each cursor its trace and ◀ ▶ arrows;
+  what the arrows step to (sample, peak, trough, zero; sample by default, the fine
+  adjustment a finger cannot make by dragging); the A–B line; Copy and Turn off. An
+  arrow held down keeps stepping.
+- **Small screens**: hidden, the sheet leaves Δx and Δy in the app bar, in the file
+  name's place; a tap there opens it again. The plot then has the whole screen and
+  the measurement is still read.
+- Rotation keeps the cursors, like everything else (§7). A new analysis closes them,
+  as on the desktop.
 
 ## 7. Viewport, orientation and lifecycle
 

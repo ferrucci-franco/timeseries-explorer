@@ -45,8 +45,10 @@ assert.match(source, /if \(Math\.min\(da, db\) > reachPx\) return null;/,
     'and the hit test takes the reach it is given — in pixels, which is what it always was (#108)');
 
 // ── The touch path ──────────────────────────────────────────────────────────
-assert.match(source, /const hit = cursorNearPointer\(event, CURSOR_TOUCH_GRAB_PX\);/,
+assert.match(source, /const which = handle\?\.which \|\| cursorNearPointer\(event, event\.touches \? CURSOR_TOUCH_GRAB_PX : CURSOR_GRAB_PX\);/,
     'a touch is tested against the wider reach');
+assert.match(source, /div\.addEventListener\('touchstart', \(event\) => \{\s+if \(event\.touches\.length !== 1\) return;\s+const hit = grab\(event\);/,
+    'and that is the test a finger gets');
 assert.match(source, /div\.addEventListener\('touchstart', \(event\) => \{/, 'a finger can start a cursor drag');
 assert.match(source, /document\.addEventListener\('touchmove', onDocTouchMove, \{ passive: false \}\);/,
     'and carry it, without the page scrolling under it');
@@ -60,8 +62,8 @@ assert.match(source, /const x = this\._eventToXValue\(div, pointerPoint\(event\)
 // ui/plot-touch-gestures.js).
 assert.match(source, /claimTouchGestures\(div, \(event\) => !!dragging/,
     'a drag already under way keeps the touch, whatever else lands');
-assert.match(source, /\|\| \(event\.touches\?\.length === 1 && !!cursorNearPointer\(event, CURSOR_TOUCH_GRAB_PX\)\)\);/,
-    'and a first finger on a cursor claims it');
+assert.match(source, /\|\| \(event\.touches\?\.length === 1 && \(!!handleNearPointer\(event\) \|\| !!cursorNearPointer\(event, CURSOR_TOUCH_GRAB_PX\)\)\)\);/,
+    'and a first finger on a cursor, or on its tab in the phone layout, claims it');
 
 // ── Held still: both cursors, which is Ctrl and drag for a mouse ───────────
 assert.ok(grab('CURSOR_PAIR_HOLD_MS') >= 300 && grab('CURSOR_PAIR_HOLD_MS') <= 700,

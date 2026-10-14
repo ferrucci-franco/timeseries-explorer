@@ -6,6 +6,7 @@ import { visualPairForRange } from '../../compute/kernels/resample.js';
 import { claimTouchGestures } from '../../ui/plot-touch-gestures.js';
 import { movedBeyondSlop } from '../../utils/touch-plot-gestures.js';
 import { copyTextToClipboard, cursorReadoutText } from '../../utils/clipboard.js';
+import { cursorHandleAt, cursorHandleLayout } from '../../utils/cursor-handles.js';
 
 const CURSOR_COPY_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2"/></svg>`;
 const CURSOR_COPIED_ICON = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -2861,14 +2862,19 @@ proto._panelGuideShapes = function(plot, extra = []) {
     return extra;
 };
 
+// An analysis can hide its time pane; the cursors of that pane go with it.
+proto._cursorTimePaneHidden = function(plot) {
+    return (plot?.mode === 'fft' && plot.fft?.timeSeriesHidden === true)
+        || (plot?.mode === 'histogram' && plot.histogram?.timeSeriesHidden === true)
+        || (plot?.mode === 'heatmap' && plot.heatmap?.timeSeriesHidden === true)
+        || (plot?.mode === 'temporal-profile' && plot.temporalProfile?.timeSeriesHidden === true)
+        || (plot?.mode === 'integral' && plot.integral?.timeSeriesHidden === true);
+};
+
 proto._syncCursorDisplay = function(panelId, plot, options = {}) {
     if (!plot?.div || !this._plotSupportsCursors(plot)) return;
     const panelEl = plot.div.closest('.layout-panel');
-    const timeSeriesHidden = (plot.mode === 'fft' && plot.fft?.timeSeriesHidden === true)
-        || (plot.mode === 'histogram' && plot.histogram?.timeSeriesHidden === true)
-        || (plot.mode === 'heatmap' && plot.heatmap?.timeSeriesHidden === true)
-        || (plot.mode === 'temporal-profile' && plot.temporalProfile?.timeSeriesHidden === true)
-        || (plot.mode === 'integral' && plot.integral?.timeSeriesHidden === true);
+    const timeSeriesHidden = this._cursorTimePaneHidden(plot);
     for (const view of this._cursorViews(panelId, plot)) {
         if (timeSeriesHidden && !view.isSpectrum) {
             this._hideCursorOverlay(view);
@@ -3029,10 +3035,17 @@ proto._renderCursorViewOverlay = function(view, options = {}) {
         { key: 'b', trace: traceB, x: cursors.b, color: traceB?.color || '#2196f3', dash: this._sameCursorTrace(traceA, traceB) },
     ];
     const parts = [];
+    const dots = [];
     const geometries = {};
+    // Every cursor's pixel, on screen or not: the phone layout's tabs say
+    // where an off-screen one went.
+    const pixels = {};
+    let frame = null;
     for (const item of items) {
         const g = this._cursorOverlayGeometry(view, item.trace, item.x, options);
         if (!g) continue;
+        pixels[item.key] = g.left;
+        frame = g;
         if (g.left < g.leftAxis || g.left > g.rightAxis) continue;
         geometries[item.key] = g;
         const lineStyle = [
@@ -3044,7 +3057,7 @@ proto._renderCursorViewOverlay = function(view, options = {}) {
         ].filter(Boolean).join(';');
         parts.push(`<div class="cursor-overlay-line cursor-overlay-line-${item.key}" style="${lineStyle}"></div>`);
         if (!options.lightweight && Number.isFinite(g.top) && g.top >= g.topAxis && g.top <= g.bottomAxis) {
-            parts.push(`<div class="cursor-overlay-dot cursor-overlay-dot-${item.key}" style="left:${g.left}px;top:${g.top}px;background:${item.color};border-color:${item.color}"></div>`);
+            dots.push(`<div class="cursor-overlay-dot cursor-overlay-dot-${item.key}" style="left:${g.left}px;top:${g.top}px;background:${item.color};border-color:${item.color}"></div>`);
         }
     }
     if (!options.lightweight && !view.isSpectrum && cursors.showSecant && geometries.a && geometries.b) {
@@ -3058,12 +3071,40 @@ proto._renderCursorViewOverlay = function(view, options = {}) {
             );
         }
     }
+    // The dots last: a tab at the foot of a line must not hide the value it
+    // reads when the curve runs low.
+    parts.push(...this._cursorHandlesHTML(view, div, frame, pixels, items), ...dots);
     overlay.innerHTML = parts.join('');
     overlay.style.display = parts.length ? 'block' : 'none';
 };
 
+// The phone layout's A and B tabs (utils/cursor-handles.js): drawn with the
+// lines, and remembered on the pane so a touch can be tested against them.
+proto._cursorHandlesHTML = function(view, div, frame, pixels, items) {
+    div._cursorHandles = [];
+    if (!this.compactLayout || !frame) return [];
+    const handles = cursorHandleLayout({
+        left: frame.leftAxis,
+        right: frame.rightAxis,
+        bottom: frame.bottomAxis,
+        a: pixels.a,
+        b: pixels.b,
+    });
+    div._cursorHandles = handles;
+    return handles.map(handle => {
+        const item = items.find(candidate => candidate.key === handle.which);
+        const letter = handle.which.toUpperCase();
+        const label = handle.side === 'left' ? `\u2039${letter}` : handle.side === 'right' ? `${letter}\u203a` : letter;
+        const color = this._escapeHTML(item?.color || '#888888');
+        const edge = handle.side ? ` is-edge is-${handle.side}` : '';
+        return `<div class="cursor-overlay-handle cursor-overlay-handle-${handle.which}${edge}" data-cursor="${handle.which}" style="left:${this._svgNumber(handle.x)}px;top:${this._svgNumber(handle.y)}px;--cursor-color:${color}">${label}</div>`;
+    });
+};
+
 proto._hideCursorOverlay = function(view) {
-    const overlay = this._viewDiv(view)?.querySelector('.cursor-plot-overlay');
+    const div = this._viewDiv(view);
+    if (div) div._cursorHandles = [];
+    const overlay = div?.querySelector('.cursor-plot-overlay');
     if (overlay) {
         overlay.style.display = 'none';
         overlay.innerHTML = '';
@@ -3631,10 +3672,32 @@ proto._installCursorViewHandlers = function(view) {
         return da <= db ? 'a' : 'b';
     };
 
+    // The phone layout's tabs at the foot of each line (_cursorHandlesHTML).
+    const handleNearPointer = (event) => {
+        if (!this.compactLayout || !this._viewCursors(view).enabled) return null;
+        const point = pointerPoint(event);
+        const rect = div.getBoundingClientRect();
+        return cursorHandleAt(div._cursorHandles, point.clientX - rect.left, point.clientY - rect.top);
+    };
+    // A tab waiting at an edge stands for a cursor out of view: grabbing it
+    // brings the cursor to the finger, and the drag goes on from there.
+    const grab = (event) => {
+        const handle = handleNearPointer(event);
+        const which = handle?.which || cursorNearPointer(event, event.touches ? CURSOR_TOUCH_GRAB_PX : CURSOR_GRAB_PX);
+        if (handle?.side) {
+            const x = this._eventToXValue(div, pointerPoint(event));
+            if (Number.isFinite(x)) {
+                this._viewCursors(view)[which] = this._clampCursorX(view, which, x);
+                this._syncCursorDisplay(panelId, plot, { force: true });
+            }
+        }
+        return which;
+    };
+
     div.addEventListener('mousedown', (event) => {
         if (event.button !== 0) return;
         const cursors = this._viewCursors(view);
-        const hit = cursorNearPointer(event);
+        const hit = grab(event);
         if (!hit) {
             if (cursors.enabled
                 && div?._fullLayout?.dragmode !== 'pan'
@@ -3659,7 +3722,7 @@ proto._installCursorViewHandlers = function(view) {
     // A drag already under way keeps the claim whatever else lands: a second
     // finger arriving mid-drag would otherwise start a pinch on top of it.
     claimTouchGestures(div, (event) => !!dragging
-        || (event.touches?.length === 1 && !!cursorNearPointer(event, CURSOR_TOUCH_GRAB_PX)));
+        || (event.touches?.length === 1 && (!!handleNearPointer(event) || !!cursorNearPointer(event, CURSOR_TOUCH_GRAB_PX))));
 
     let holdTimer = null;
     let holdFrom = null;     // where the finger landed, in pixels
@@ -3672,7 +3735,7 @@ proto._installCursorViewHandlers = function(view) {
 
     div.addEventListener('touchstart', (event) => {
         if (event.touches.length !== 1) return;
-        const hit = cursorNearPointer(event, CURSOR_TOUCH_GRAB_PX);
+        const hit = grab(event);
         if (!hit) return;
         const point = pointerPoint(event);
         dragging = { mode: 'single', which: hit };
@@ -3700,7 +3763,7 @@ proto._installCursorViewHandlers = function(view) {
 
     div.addEventListener('mousemove', (event) => {
         if (dragging || !this._viewCursors(view).enabled) return;
-        const near = !!cursorNearPointer(event);
+        const near = !!cursorNearPointer(event) || !!handleNearPointer(event);
         div.style.cursor = near ? 'ew-resize' : '';
         div.closest('.layout-panel')?.classList.toggle('cursor-near', near);
     });
@@ -3803,6 +3866,7 @@ proto._updateCursorBox = function(view) {
     const traceB = this._resolveCursorTrace(view, 'b');
     if (!traceA && !traceB) {
         this._showCursorBox(view, i18n.t('cursorsNoTrace'));
+        this.onCursorReadout?.(view, { empty: true, message: i18n.t('cursorsNoTrace') });
         return;
     }
     const aX = cursors.a;
@@ -3997,6 +4061,15 @@ proto._updateCursorBox = function(view) {
             <div><b>${invDxLabel}=</b>${inverseDxText}</div>
             ${inverseSpacingHTML}
     `;
+    // The phone layout shows the same reading in a sheet of its own, and its
+    // differences in the app bar (compact-methods). HTML escaped as above.
+    this.onCursorReadout?.(view, {
+        valuesHTML,
+        dxHTML: `<b>${dxLabel}=</b>${dxText}`,
+        dyHTML: `<b>${labelDy}=</b>${this._formatHTMLNumber(dy)}${sameUnit ? unit(a.yUnit) : ''}`,
+        colorA,
+        colorB,
+    });
     const existingBox = this._cursorViewBoxElement(panelEl, view.id);
     if (existingBox?.dataset.cursorSignature === boxSignature) {
         const valuesEl = existingBox.querySelector('.cursor-info-values');
@@ -4127,16 +4200,12 @@ proto._showCursorBox = function(view, html) {
         };
         syncSelectColor();
         select.addEventListener('change', (event) => {
-            const cursors = this._viewCursors(view);
             const visibleTraces = plot.traces
                 .filter(t => t.visible !== false && t.visible !== 'legendonly');
             const selectedTrace = visibleTraces[Number(event.target.value)];
             if (!selectedTrace) return;
-            const key = which === 'b' ? 'traceB' : 'traceA';
-            cursors[key] = { fileId: selectedTrace.fileId, varName: selectedTrace.varName };
-            cursors[which] = this._clampCursorX(view, which, cursors[which]);
             syncSelectColor();
-            this._syncCursorDisplay(panelId, plot);
+            this._setCursorTrace(view, which, selectedTrace);
         });
     });
     box.querySelectorAll('.cursor-extremum-btn').forEach(btn => {
@@ -4211,6 +4280,15 @@ proto._showCursorBox = function(view, html) {
     box.style.display = 'block';
     this._applyCursorBoxPosition(panelEl, box, view);
     return box;
+};
+
+// Which trace a cursor reads; it stays inside that trace's time span.
+proto._setCursorTrace = function(view, which, trace) {
+    if (!trace || (which !== 'a' && which !== 'b')) return;
+    const cursors = this._viewCursors(view);
+    cursors[which === 'b' ? 'traceB' : 'traceA'] = { fileId: trace.fileId, varName: trace.varName };
+    cursors[which] = this._clampCursorX(view, which, cursors[which]);
+    this._syncCursorDisplay(view.panelId, view.plot);
 };
 
 proto._applyCursorBoxPosition = function(panelEl, box, view) {

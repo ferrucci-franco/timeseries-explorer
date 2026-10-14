@@ -183,8 +183,10 @@ try {
     // ── On the plot: fit buttons and the slow double tap ────────────────────
     {
         await page.waitForTimeout(400);
-        const fitButtons = page.locator('.compact-active-panel .compact-fit-group:not([hidden]) .compact-fit-btn');
+        const fitButtons = page.locator('.compact-active-panel .compact-fit-group:not([hidden]) .compact-fit-btn[data-axis]');
         assert.equal(await fitButtons.count(), 3, 'a plot with signals has fit X, fit Y and fit both');
+        assert.equal(await page.locator('.compact-active-panel .compact-fit-group:not([hidden]) .compact-cursor-btn:not([hidden])').count(), 1,
+            'and A|B for the cursors');
         const xRange = () => page.evaluate(() => {
             const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
             return plot.div._fullLayout.xaxis.range.map(Number);
@@ -284,6 +286,134 @@ try {
     await page.locator('.compact-sheet-close').click();
     await page.waitForFunction(() => window.app._compact.sheet === null);
 
+    // ── Cursors: A|B on the plot, a tab on each line, the reading in a sheet ─
+    const cursorState = () => page.evaluate(() => {
+        const app = window.app;
+        const plot = app.plotManager.plots.get(app._compactActivePanelId());
+        const r = plot.div.getBoundingClientRect();
+        return {
+            on: app.plotManager._anyCursorEnabled(plot),
+            a: plot.cursors?.a,
+            b: plot.cursors?.b,
+            sheet: app._compact.sheet,
+            handles: (plot.div._cursorHandles || []).map(h => ({ ...h })),
+            rect: { left: r.left, top: r.top },
+            chip: document.querySelector('.compact-cursor-chip:not([hidden])')?.innerText ?? null,
+            range: plot.div._fullLayout.xaxis.range.map(Number),
+        };
+    });
+    const cursorTouch = await context.newCDPSession(page);
+    const touchAt = (type, x, y) => cursorTouch.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+    const dragTab = async (tab, rect, dx) => {
+        const x = rect.left + tab.x;
+        const y = rect.top + tab.y;
+        await touchAt('touchStart', x, y);
+        for (let i = 1; i <= 10; i++) { await touchAt('touchMove', x + (dx * i) / 10, y); await page.waitForTimeout(16); }
+        await touchAt('touchEnd');
+        await page.waitForTimeout(250);
+    };
+    assert.equal(await page.locator('.compact-cursor-chip').isVisible(), false, 'no cursors, no reading in the app bar');
+    const abButton = page.locator('.compact-active-panel .compact-cursor-btn:not([hidden])');
+    assert.equal(await abButton.count(), 1, 'an A|B button among the plot’s corner buttons');
+    assert.ok((await abButton.boundingBox()).width >= 44, 'finger-sized');
+    await abButton.click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'cursors');
+    // The plot makes room for the half sheet, then its tabs are where they stay.
+    await page.waitForTimeout(700);
+    let cursors = await cursorState();
+    assert.equal(cursors.on, true, 'A|B turns the cursors on');
+    assert.equal(await abButton.getAttribute('aria-pressed'), 'true', 'and shows it');
+    assert.deepEqual(cursors.handles.map(h => h.which), ['a', 'b'], 'each line has its tab');
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('compact-sheet-full')), false,
+        'the reading opens at half height, the plot above it');
+    assert.equal(await page.locator('.compact-active-panel .cursor-info-box').evaluateAll(boxes => boxes.some(b => b.offsetWidth > 0)), false,
+        'the desktop’s floating box is not shown');
+    assert.match(await page.locator('.compact-cursor-values').innerText(), /ΔX=.*\n?.*ΔY=/s, 'the sheet reads the cursors');
+    assert.match(cursors.chip, /ΔX=.*ΔY=/, 'and the app bar has Δx and Δy');
+    await shot(page, 'cursors');
+
+    // A finger on A's tab drags A, and only A; the plot does not pan.
+    await dragTab(cursors.handles.find(h => h.which === 'a'), cursors.rect, 60);
+    let moved = await cursorState();
+    assert.ok(moved.a > cursors.a, 'dragging A’s tab moves A');
+    assert.equal(moved.b, cursors.b, 'and only A');
+    assert.deepEqual(moved.range, cursors.range, 'the plot does not pan under the tab');
+    assert.notEqual(moved.chip, cursors.chip, 'the app bar follows');
+
+    // A tab held still, then dragged, moves both: the measurement slides along.
+    {
+        const tabB = moved.handles.find(h => h.which === 'b');
+        const x = moved.rect.left + tabB.x;
+        const y = moved.rect.top + tabB.y;
+        await touchAt('touchStart', x, y);
+        await page.waitForTimeout(650);
+        for (let i = 1; i <= 8; i++) { await touchAt('touchMove', x - i * 5, y); await page.waitForTimeout(16); }
+        await touchAt('touchEnd');
+        await page.waitForTimeout(250);
+        const slid = await cursorState();
+        assert.ok(slid.b < moved.b, 'B moved');
+        assert.ok(Math.abs((slid.a - moved.a) - (slid.b - moved.b)) < 1e-6, 'and A with it, by as much');
+        cursors = slid;
+    }
+
+    // The arrows: one sample at a time, or on to the next peak.
+    const stepA = async (direction) => {
+        const from = (await cursorState()).a;
+        await page.locator(`.compact-cursor-row-a .compact-cursor-step-btn.is-${direction}`).click();
+        await page.waitForFunction(x => window.app.plotManager.plots.get(window.app._compactActivePanelId()).cursors.a !== x, from);
+        return (await cursorState()).a - from;
+    };
+    let step = await stepA('next');
+    assert.ok(step > 0 && step <= 0.0101, `▶ moves A one sample on (${step})`);
+    step = await stepA('prev');
+    assert.ok(step < 0 && step >= -0.0101, `◀ one sample back (${step})`);
+    await page.locator('.compact-cursor-targets .compact-segment[data-target="max"]').click();
+    await stepA('next');
+    assert.match(await page.locator('.compact-cursor-values > div').first().innerText(), /y=(0\.99|1\.0)/, 'Peak: A on the next maximum of the voltage');
+    await page.locator('.compact-cursor-targets .compact-segment[data-target="sample"]').click();
+
+    // Hidden, the sheet leaves the reading in the app bar; a tap there brings it back.
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+    cursors = await cursorState();
+    assert.equal(cursors.on, true, 'hiding the sheet keeps the cursors');
+    assert.match(cursors.chip, /ΔX=/, 'their reading stays in the app bar');
+    await page.locator('.compact-cursor-chip').click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'cursors');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+
+    // A cursor out of view leaves its tab at the edge, and is dragged back in by it.
+    await page.evaluate(async () => {
+        const plot = window.app.plotManager.plots.get(window.app._compactActivePanelId());
+        const b = plot.cursors.b;
+        const { default: Plotly } = await import('/src/vendor/plotly.js');
+        await Plotly.relayout(plot.div, { 'xaxis.range': [b - 8, b - 4] });
+    });
+    await page.waitForTimeout(400);
+    cursors = await cursorState();
+    const edgeTab = cursors.handles.find(h => h.which === 'b');
+    assert.equal(edgeTab?.side, 'right', 'B, out of view, waits at the right edge');
+    await shot(page, 'cursors-edge');
+    await dragTab(edgeTab, cursors.rect, -80);
+    moved = await cursorState();
+    assert.ok(moved.b >= cursors.range[0] && moved.b <= cursors.range[1], 'dragging its tab brings B back into view');
+    await page.locator('.compact-active-panel .compact-fit-btn[data-axis="all"]').click();
+    await page.waitForTimeout(400);
+
+    // The Plot sheet has the same switch.
+    await page.locator('.compact-nav-btn[data-sheet="plot"]').click();
+    const cursorSwitch = page.locator('.compact-cursor-switch input');
+    assert.equal(await cursorSwitch.isChecked(), true, 'the Plot sheet says the cursors are on');
+    await cursorSwitch.click();
+    await page.waitForFunction(() => !window.app.plotManager._anyCursorEnabled(window.app.plotManager.plots.get(window.app._compactActivePanelId())));
+    assert.equal(await page.locator('.compact-cursor-chip').isVisible(), false, 'off, the app bar’s reading goes');
+    assert.equal((await cursorState()).handles.length, 0, 'and so do the tabs');
+    assert.equal(await page.locator('.compact-active-panel .compact-cursor-btn').getAttribute('aria-pressed'), 'false');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+    await cursorTouch.detach();
+
     // ── Analyze: FFT, with its options in the sheet ─────────────────────────
     const analyzeHalo = () => page.evaluate(() => document.querySelector('.compact-nav-btn[data-sheet="analyze"]').classList.contains('has-active-analysis'));
     assert.equal(await analyzeHalo(), false, 'no analysis, no halo on Analyze');
@@ -355,6 +485,21 @@ try {
         'the time pane and the spectrum each have their fit buttons',
     );
 
+    // ── Cursors in FFT: the time pane's and the spectrum's ──────────────────
+    const fftCursorButtons = page.locator('.compact-active-panel .compact-cursor-btn:not([hidden])');
+    assert.equal(await fftCursorButtons.count(), 1, 'one A|B for the plot, not one per pane');
+    await fftCursorButtons.click();
+    await page.waitForFunction(() => window.app._compact.sheet === 'cursors');
+    const viewTabs = page.locator('.compact-cursor-views .compact-segment');
+    assert.equal(await viewTabs.count(), 2, 'the sheet offers the time pane and the spectrum');
+    await viewTabs.nth(1).click();
+    await page.waitForFunction(() => /f=/.test(document.querySelector('.compact-cursor-values')?.innerText || ''));
+    assert.deepEqual(await sizeProblems(), [], 'the cursor sheet is phone-sized');
+    assert.deepEqual(await sidewaysProblems(page), [], 'and fits the width');
+    await shot(page, 'cursors-spectrum');
+    await page.locator('.compact-sheet-close').click();
+    await page.waitForFunction(() => window.app._compact.sheet === null);
+
     // ── Rotation keeps the session ──────────────────────────────────────────
     await page.setViewportSize({ width: 844, height: 390 });
     await page.waitForFunction(() => document.documentElement.classList.contains('compact-landscape'));
@@ -363,6 +508,9 @@ try {
     assert.deepEqual(s.traces, ['voltage', 'current'], 'rotating kept the signals');
     assert.equal(s.overflow, false, 'sideways, nothing is wider than the screen');
     await shot(page, 'landscape');
+    assert.equal(await page.evaluate(() => window.app.plotManager._anyCursorEnabled(window.app.plotManager.plots.get(window.app._compactActivePanelId()))), true,
+        'rotating kept the cursors');
+    assert.match(await page.locator('.compact-cursor-chip').innerText(), /Δ/, 'and their reading');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForFunction(() => !document.documentElement.classList.contains('compact-landscape'));
 
@@ -371,6 +519,7 @@ try {
     await page.locator('.compact-radio').first().click();
     await page.waitForFunction(() => window.app.plotManager.plots.get(window.app._compactActivePanelId())?.mode === 'timeseries');
     assert.equal(await analyzeHalo(), false, "back to the signals, the halo goes");
+    assert.equal(await page.locator('.compact-cursor-chip').isVisible(), false, 'a new analysis closes the cursors, and their reading');
     await page.locator('.compact-sheet-close').click();
 
     // ── Plots: one at a time, chosen from the Plot sheet ────────────────────
