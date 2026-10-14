@@ -124,6 +124,52 @@
     line-height: 1.3;
 }
 
+/* The system's unchecked box is a pale grey outline that reads as disabled
+   next to this text: a firmer one, the app's accent when ticked. */
+.gridded-menu input[type="checkbox"] {
+    appearance: none;
+    flex-shrink: 0;
+    width: 1rem;
+    height: 1rem;
+    margin: 0.1rem 0 0;
+    border: 1.5px solid var(--text-primary);
+    border-radius: 0.2rem;
+    background: var(--bg-primary);
+    cursor: pointer;
+    display: grid;
+    place-content: center;
+}
+
+.gridded-menu input[type="checkbox"]::after {
+    content: '';
+    width: 0.3rem;
+    height: 0.55rem;
+    margin-top: -0.1rem;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+    visibility: hidden;
+}
+
+.gridded-menu input[type="checkbox"]:checked {
+    border-color: var(--primary-color);
+    background: var(--primary-color);
+}
+
+.gridded-menu input[type="checkbox"]:checked::after {
+    visibility: visible;
+}
+
+.gridded-menu input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
+.gridded-menu label:hover {
+    background: var(--bg-secondary);
+    border-radius: 0.25rem;
+}
+
 .gridded-view .gridded-menu-palette {
     align-items: center;
     justify-content: space-between;
@@ -438,7 +484,8 @@
     border-radius: 0 0.3rem 0.3rem 0;
 }
 
-.gridded-view .gridded-mode.active {
+.gridded-view .gridded-mode.active,
+.gridded-view .gridded-mode.active:hover:not(:disabled) {
     position: relative;
     background: var(--primary-color);
     border-color: var(--primary-color);
@@ -607,20 +654,6 @@
     width: 100%;
 }
 
-.gridded-panel-footer {
-    border-bottom: none;
-}
-
-.gridded-view .gridded-link {
-    border: none;
-    background: none;
-    padding: 0;
-    color: var(--text-secondary);
-    text-decoration: underline;
-    white-space: normal;
-    text-align: left;
-}
-
 .gridded-zip-together {
     display: flex;
     align-items: center;
@@ -665,9 +698,11 @@
 }
 
 .file-entry.active .file-entry-map:not(.active) {
+    /* The same green as the map's way back, so it stands out of the blue
+       row rather than melting into it. */
     color: #fff;
-    border-color: rgba(255, 255, 255, 0.6);
-    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.75);
+    background: #0f9d8a;
 }
 
 /* Over the plots, while a gridded file is active and its map is closed. */
@@ -767,4 +802,34 @@ html.compact .gridded-time-label {
 .gridded-context-menu button:focus-visible {
     background: var(--bg-secondary);
     outline: none;
+}
+
+/* A click on a button's text must not leave a text caret or a selection in
+   it (caret browsing, a double click). */
+.gridded-view button,
+.gridded-return,
+.gridded-context-menu button {
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
+}
+
+/* Over the orange box: its edges resize it, its inside moves it. */
+.gridded-map.gridded-over-box-move .nsewdrag { cursor: move !important; }
+.gridded-map.gridded-over-box-n .nsewdrag,
+.gridded-map.gridded-over-box-s .nsewdrag { cursor: ns-resize !important; }
+.gridded-map.gridded-over-box-e .nsewdrag,
+.gridded-map.gridded-over-box-w .nsewdrag { cursor: ew-resize !important; }
+.gridded-map.gridded-over-box-ne .nsewdrag,
+.gridded-map.gridded-over-box-sw .nsewdrag { cursor: nesw-resize !important; }
+.gridded-map.gridded-over-box-nw .nsewdrag,
+.gridded-map.gridded-over-box-se .nsewdrag { cursor: nwse-resize !important; }
+.gridded-map.gridded-panning .nsewdrag { cursor: grabbing !important; }
+
+/* The boxes on the map take no pointer events: what is under the pointer is
+   worked out from the coordinates (selection, the orange box's edges), and a
+   shape redrawn while it is being dragged would otherwise take the touch
+   with it out of the page, ending the drag. */
+.gridded-map .shapelayer path {
+    pointer-events: none !important;
 }

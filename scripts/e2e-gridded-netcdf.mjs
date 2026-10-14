@@ -6,6 +6,8 @@
 //    the same; extractions can be removed; the colour bar never resizes the
 //    map; export uses the panels' dialog; the checked series plot in the
 //    explorer; reload reopens the map.
+// 1b. On a touch screen a tap places the point, a finger drags the ring, and
+//    a finger elsewhere pans the map.
 // 2. The CDS ZIP (instant + accumulated variables) is listed and opened as
 //    one dataset.
 // 3. A station file stays with the series reader, unchanged.
@@ -111,16 +113,21 @@ try {
         assert.equal(state.level, '850 hPa');
         assert.match(state.time, /^2024-01-01 00:00 +\(1\/4\)$/);
         assert.equal(state.abscissa, 'valid_time');
-        assert.equal(state.mode, 'point', 'the point tool is the starting tool');
-        assert.equal(state.cursor, true, 'the point tool shows a crosshair, not the move cursor');
+        assert.equal(state.mode, 'navigate', 'the map opens in Navigate: a click places nothing before a tool is picked');
+        assert.equal(state.cursor, false);
         assert.match(state.scope, /t · 850 hPa · .*4/, 'the panel says which level and how many steps an extraction uses');
         assert.equal(state.toolbarRows, 1, 'the toolbar is one row at this width');
 
-        // A click places a marker and fills the coordinates; nothing is read yet.
+        // In the point tool (a crosshair, not the move cursor) a click places
+        // a marker and fills the coordinates; nothing is read yet.
         const plot = await page.$eval('#gridded-view .gridded-map .nsewdrag', el => {
             const rect = el.getBoundingClientRect();
             return { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
         });
+        await page.mouse.click(plot.x + plot.w * 0.55, plot.y + plot.h * 0.35);
+        assert.equal(await page.evaluate(() => window.app._griddedVisibleView().pendingPoint), null, 'Navigate places nothing');
+        await page.click('#gridded-view [data-mode="point"]');
+        assert.equal(await page.evaluate(() => document.querySelector('#gridded-view .gridded-map').classList.contains('gridded-cursor-point')), true);
         await page.mouse.click(plot.x + plot.w * 0.55, plot.y + plot.h * 0.35);
         await page.waitForFunction(() => document.querySelector('#gridded-view [data-input="lat"]').value !== '');
         assert.equal((await extractions(page)).length, 0, 'a click alone extracts nothing');
@@ -136,7 +143,7 @@ try {
         await page.waitForFunction(() => document.querySelectorAll('#gridded-view .gridded-result').length === 2, null, { timeout: 60000 });
         let all = await extractions(page);
         const point = all[1];
-        assert.match(point.label, /^P2 · t2m · 45°N 90°E$/);
+        assert.match(point.label, /^P2 · 2 metre temperature \(t2m\) · 45°N 90°E$/, "the name says what the quantity is, not only its short name");
         point.values.forEach((value, step) => assert(Math.abs(value - field(45, 90, step, 5)) < 1e-3, `point value at step ${step}`));
 
         // A region typed like the CDS form: North, West, East, South.
@@ -146,8 +153,8 @@ try {
         await page.fill('#gridded-view [data-input="south"]', '0');
         await page.fill('#gridded-view [data-input="west"]', '-50');
         await page.fill('#gridded-view [data-input="east"]', '50');
-        // The box is on the map, editable, before anything is computed.
-        await page.waitForFunction(() => (document.querySelector('#gridded-view .gridded-map').layout.shapes || []).some(shape => shape.editable));
+        // The box is on the map before anything is computed.
+        await page.waitForFunction(() => (document.querySelector('#gridded-view .gridded-map').layout.shapes || []).some(shape => shape.name === 'pending-box'));
         await page.click('#gridded-view [data-action="extract-region"]');
         await page.waitForFunction(() => document.querySelectorAll('#gridded-view .gridded-result').length === 3, null, { timeout: 60000 });
         all = await extractions(page);
@@ -166,9 +173,9 @@ try {
         mean.values.forEach((value, step) => assert(Math.abs(value - expected(step)) < 1e-3, `area-weighted mean at step ${step}`));
         const overlays = await page.evaluate(() => {
             const div = document.querySelector('#gridded-view .gridded-map');
-            return { shapes: (div.layout.shapes || []).length, editable: (div.layout.shapes || []).filter(shape => shape.editable).length };
+            return { shapes: (div.layout.shapes || []).length, pending: (div.layout.shapes || []).filter(shape => shape.name === 'pending-box').length };
         });
-        assert.deepEqual(overlays, { shapes: 1, editable: 0 }, 'the computed region stays on the map, dashed and fixed');
+        assert.deepEqual(overlays, { shapes: 1, pending: 0 }, 'the computed region stays on the map, dashed and fixed');
 
         // Removing an extraction removes its variables.
         await page.click('#gridded-view .gridded-result[data-group="g1"] [data-action="remove-group"]');
@@ -231,10 +238,50 @@ try {
         await page.click('#gridded-return');
         await mapShown(page);
         assert.equal(await page.evaluate(() => document.getElementById('gridded-return').hidden), true);
-        // So does the labelled "Map" button on the file row.
+        // A second trip goes to the same panel, brought up to date (P2
+        // unchecked leaves it), instead of a new panel every time.
+        const extractionPanels = () => page.evaluate(() => [...window.app.plotManager.plots.values()]
+            .filter(plot => plot.traces.some(trace => String(trace.varName).startsWith('grid:x')))
+            .map(plot => plot.traces.length));
+        const p2Box = '#gridded-view .gridded-result:first-child input[type="checkbox"]';
+        await page.uncheck(p2Box);
+        await page.click('#gridded-view [data-action="plot"]');
+        await page.waitForSelector('#gridded-return:not([hidden])');
+        await page.waitForFunction(() => [...window.app.plotManager.plots.values()].some(plot => plot.traces.length === 3), null, { timeout: 30000 });
+        await page.waitForTimeout(500);
+        assert.deepEqual(await extractionPanels(), [3], 'the same panel, without the unchecked curve');
+        await page.click('#gridded-return');
+        await mapShown(page);
+        await page.check(p2Box);
+        // The preview pans with the right button, like the explorer's plots.
+        const previewRange = () => page.evaluate(() => [...document.querySelector('#gridded-view [data-role="preview-chart"]')._fullLayout.xaxis.range]);
+        const previewBefore = await previewRange();
+        const preview = await page.$eval('#gridded-view [data-role="preview-chart"] .nsewdrag', el => {
+            const rect = el.getBoundingClientRect();
+            return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        });
+        await page.mouse.move(preview.x, preview.y);
+        await page.mouse.down({ button: 'right' });
+        for (let step = 1; step <= 6; step++) await page.mouse.move(preview.x - step * 20, preview.y);
+        await page.mouse.up({ button: 'right' });
+        await page.waitForTimeout(200);
+        assert.notDeepEqual(await previewRange(), previewBefore, 'a right-button drag pans the preview');
+        // The "Map" button on the file row opens the map again. A map closed
+        // with "Close map" does not put a button over the plots asking to
+        // come back.
         await page.click('#gridded-view [data-action="close"]');
+        assert.equal(await page.evaluate(() => document.getElementById('gridded-return')?.hidden !== false), true, 'no way-back button after Close map');
         await page.click('.file-entry-map');
         await mapShown(page);
+        // The scale's controls explain themselves; the bounded "Open as
+        // series" is gone.
+        const tips = await page.evaluate(() => [
+            ...[...document.querySelectorAll('#gridded-view [data-autofit]')].map(button => button.title),
+            ...[...document.querySelectorAll('#gridded-view [data-scale-option]')].map(input => input.closest('label').title),
+            document.querySelector('#gridded-view [data-role="range-label"]').title,
+        ]);
+        assert.ok(tips.length === 8 && tips.every(tip => tip.length > 30), `every scale option has a tooltip (${JSON.stringify(tips)})`);
+        assert.equal(await page.$('#gridded-view [data-action="as-series"]'), null);
         // A wheel zoom only ever moves one way: no redraw between notches puts
         // back the ranges it started from, and a grid this small is drawn
         // whole once, never again for a zoom. The pointer is over the region
@@ -336,6 +383,45 @@ try {
         objectsNow = await objects();
         assert.ok(objectsNow.box && near(objectsNow.box.lonMin, -60) && near(objectsNow.box.lonMax, -20)
             && near(objectsNow.box.latMin, -30) && near(objectsNow.box.latMax, 10), `a box drawn after the ring is in degrees (${JSON.stringify(objectsNow.box)})`);
+        // The orange box moves from inside (also from a quarter of its width
+        // in, where Plotly would have resized it) and resizes only from a
+        // thin band along an edge.
+        const boxPixels = () => page.evaluate(() => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            const box = window.app._griddedVisibleView().pendingBox;
+            const rect = div.getBoundingClientRect();
+            const { xaxis, yaxis } = div._fullLayout;
+            const x = lon => rect.left + xaxis._offset + xaxis.l2p(lon);
+            const y = lat => rect.top + yaxis._offset + yaxis.l2p(lat);
+            return { box, left: x(box.lonMin), right: x(box.lonMax), top: y(box.latMax), bottom: y(box.latMin) };
+        });
+        let pixels = await boxPixels();
+        const boxWidth = pixels.box.lonMax - pixels.box.lonMin;
+        const middleY = (pixels.top + pixels.bottom) / 2;
+        const quarterX = pixels.left + (pixels.right - pixels.left) / 4;
+        await mouseDrag([quarterX, middleY], [quarterX + 30, middleY]);
+        const moved = (await boxPixels()).box;
+        assert.ok(moved.lonMin > pixels.box.lonMin + 1 && near(moved.lonMax - moved.lonMin, boxWidth, 0.05), `a drag a quarter in moves the box (${JSON.stringify([pixels.box, moved])})`);
+        pixels = await boxPixels();
+        await mouseDrag([pixels.right - 3, middleY], [pixels.right + 40, middleY]);
+        const resized = (await boxPixels()).box;
+        assert.ok(near(resized.lonMin, moved.lonMin, 0.05) && resized.lonMax > moved.lonMax + 5, `the east edge resizes it (${JSON.stringify([moved, resized])})`);
+        // The right button drags the map; it opens no menu after a drag.
+        const mapRange = () => page.evaluate(() => [...document.querySelector('#gridded-view .gridded-map')._fullLayout.xaxis.range]);
+        const rangeBefore = await mapRange();
+        const empty = await toPage(100, -60);
+        await page.mouse.move(...empty);
+        await page.mouse.down({ button: 'right' });
+        for (let step = 1; step <= 6; step++) await page.mouse.move(empty[0] - step * 15, empty[1]);
+        await page.mouse.up({ button: 'right' });
+        await page.waitForTimeout(300);
+        assert.ok((await mapRange())[0] > rangeBefore[0] + 1, `a right-button drag pans the map (${rangeBefore} → ${await mapRange()})`);
+        assert.equal((await objects()).menu.length, 0, 'no menu after a right-button drag');
+        await page.evaluate(async () => {
+            const view = window.app._griddedVisibleView();
+            view.zoom = null;
+            await window.app._griddedDrawMap(view);
+        });
         const groupsBefore = objectsNow.groups.length;
         await page.click('#gridded-view [data-action="extract-region"]');
         await page.waitForFunction(count => window.app._griddedVisibleView().groups.length === count, groupsBefore + 1, { timeout: 60000 });
@@ -395,6 +481,65 @@ try {
         }));
         assert.deepEqual(reloaded, { format: 'gridded-netcdf', files: 1, variable: '/t2m' });
         assert.equal((await extractions(page)).length, 0, 'extractions from the old data are dropped');
+        assert.deepEqual(errors, []);
+        await context.close();
+    }
+
+    // 1b. A touch screen: a tap in the point tool places the ring, a finger
+    // drags it, and a finger elsewhere pans the map as on every plot.
+    {
+        const context = await browser.newContext({ viewport: { width: 1400, height: 860 }, hasTouch: true });
+        // The one-time touch tips are not what this checks.
+        await context.addInitScript(() => localStorage.setItem('omv_touch_hint_seen', '1'));
+        const page = await context.newPage();
+        const errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        await page.goto(baseUrl);
+        await page.waitForFunction(() => window.app?.plotManager, null, { timeout: 60000 });
+        await page.setInputFiles('#file-input', resolve(FIXTURES, 'era5-like-new-cds.nc'));
+        await mapShown(page);
+        await page.waitForTimeout(800);
+        const toPage = (lon, lat) => page.evaluate(([lon, lat]) => {
+            const div = document.querySelector('#gridded-view .gridded-map');
+            const rect = div.getBoundingClientRect();
+            const { xaxis, yaxis } = div._fullLayout;
+            return [rect.left + xaxis._offset + xaxis.l2p(lon), rect.top + yaxis._offset + yaxis.l2p(lat)];
+        }, [lon, lat]);
+        const cdp = await context.newCDPSession(page);
+        const fingerDrag = async (from, to) => {
+            const point = ([x, y]) => [{ x, y, id: 1 }];
+            await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(from) });
+            for (let step = 1; step <= 8; step++) {
+                await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: point([from[0] + (to[0] - from[0]) * step / 8, from[1] + (to[1] - from[1]) * step / 8]) });
+            }
+            await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+            await page.waitForTimeout(400);
+        };
+        await page.click('#gridded-view [data-mode="point"]');
+        await page.touchscreen.tap(...await toPage(-30, 20));
+        await page.waitForTimeout(400);
+        let ring = await page.evaluate(() => window.app._griddedVisibleView().pendingPoint);
+        assert.ok(ring && Math.abs(ring.lon + 30) < 2 && Math.abs(ring.lat - 20) < 2, `a tap places the ring (${JSON.stringify(ring)})`);
+        const rangeBefore = await page.evaluate(() => [...document.querySelector('#gridded-view .gridded-map')._fullLayout.xaxis.range]);
+        await fingerDrag(await toPage(-30, 20), await toPage(30, -20));
+        ring = await page.evaluate(() => window.app._griddedVisibleView().pendingPoint);
+        assert.ok(Math.abs(ring.lon - 30) < 2 && Math.abs(ring.lat + 20) < 2, `a finger drags the ring (${JSON.stringify(ring)})`);
+        assert.deepEqual(await page.evaluate(() => [...document.querySelector('#gridded-view .gridded-map')._fullLayout.xaxis.range]), rangeBefore, 'dragging the ring does not pan the map');
+        await fingerDrag(await toPage(100, -60), await toPage(60, -60));
+        const rangeAfter = await page.evaluate(() => [...document.querySelector('#gridded-view .gridded-map')._fullLayout.xaxis.range]);
+        assert.ok(rangeAfter[0] > rangeBefore[0] + 1, `a finger elsewhere pans the map (${rangeBefore} → ${rangeAfter})`);
+        // In Region, a finger on the orange box moves it; Plotly does not
+        // start drawing a new one under it.
+        await page.click('#gridded-view [data-mode="region"]');
+        await page.fill('#gridded-view [data-input="north"]', '40');
+        await page.fill('#gridded-view [data-input="south"]', '-20');
+        await page.fill('#gridded-view [data-input="west"]', '-40');
+        await page.fill('#gridded-view [data-input="east"]', '40');
+        await page.waitForTimeout(500);
+        await fingerDrag(await toPage(0, 10), await toPage(20, 20));
+        const box = await page.evaluate(() => window.app._griddedVisibleView().pendingBox);
+        assert.ok(Math.abs(box.lonMin + 20) < 3 && Math.abs(box.lonMax - 60) < 3 && Math.abs(box.latMax - 50) < 3, `a finger moves the box (${JSON.stringify(box)})`);
+        assert.equal(await page.evaluate(() => (document.querySelector('#gridded-view .gridded-map').layout.shapes || []).filter(shape => !shape.name).length), 0, 'no new box drawn under the finger');
         assert.deepEqual(errors, []);
         await context.close();
     }

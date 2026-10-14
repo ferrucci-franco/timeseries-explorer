@@ -459,6 +459,10 @@ Diálogos solo cuando hay una decisión real:
 | Contenido ambiguo (paso 3) | "¿Mapa o series?" |
 | Archivo que hoy no se puede leer por partes, y es grande (netCDF3 antes del lector perezoso, en web) | Igual que hoy: aviso de tamaño, con la opción de continuar |
 
+> **Retirado tras la tercera prueba con datos reales.** Con el punto, la región
+> y el envío de las series a los gráficos, "Abrir como series" no aportaba nada
+> y confundía: se quitó del panel. Queda descrito abajo como estaba previsto.
+
 **"Abrir como series"** está siempre disponible desde el panel del dataset. Abre
 un diálogo con la misma lógica que el selector del `.mat`:
 
@@ -1137,6 +1141,35 @@ resumen de buscador):
      siguiente como un nuevo contorno de esa forma; la app nunca deja una
      forma activa. El anillo no es una forma de tamaño en píxeles: con una de
      esas en el mapa, Plotly convierte mal el rectángulo siguiente.
+  4. **Tercera prueba:**
+     - el mapa abre en **Navegar**: un clic no coloca nada hasta elegir
+       herramienta;
+     - el recuadro naranja ya no es "editable" para Plotly (cuya franja de
+       redimensionado es un tercio del recuadro por lado): se mueve desde
+       adentro y se redimensiona desde una franja de 6 px por borde (16 px
+       con el dedo);
+     - el **botón derecho arrastra** el mapa y la vista previa, como en los
+       gráficos del explorador; un clic derecho sin arrastre abre el menú.
+       En Linux y macOS el evento del menú llega al apretar, así que se
+       espera a soltar; en Windows llega después, y un arrastre recién
+       terminado lo descarta;
+     - **pantallas táctiles:** un dedo mueve y dos hacen zoom (los gestos de
+       todos los gráficos); un toque coloca el punto; el anillo y el recuadro
+       se arrastran con el dedo; en Región se dibuja con el dedo;
+     - "Abrir las series marcadas en los gráficos" **reutiliza el mismo
+       panel** en los viajes siguientes: entran las nuevas y salen las
+       desmarcadas o quitadas, sin tocar otras curvas;
+     - "Volver al mapa" aparece solo después de enviar series a los
+       gráficos, no tras "Cerrar mapa"; el botón "Mapa" de la fila del
+       archivo es verde sobre la fila azul;
+     - las series se nombran con el nombre largo y el corto:
+       "2 metre temperature (t2m) · 45°N 90°E";
+     - **unidades:** los exponentes se muestran como superíndices
+       ("m s**-1" y "m s-1" → m s⁻¹). Un número sin `**` solo es exponente
+       tras un símbolo de unidad conocido, así que "CO2 ppm" o "PM10" no se
+       tocan. La grafía del archivo queda en `unitsRaw`;
+     - "Escala" pasa a "Rango de colores"; el rango, la paleta y cada opción
+       de Autoajustar tienen un tooltip que dice qué hacen y cuándo usarlas.
 - **Barra superior en una sola fila:** variable, nivel y escala a la izquierda;
   exportar y "Cerrar mapa" a la derecha. La barra de colores tiene el título
   arriba, un formato de etiquetas acotado y un margen fijo: cambiar de instante
@@ -1190,6 +1223,6 @@ resumen de buscador):
   vuelve a abrir en el mapa.
 - No probado dentro de Electron mismo: el camino del renderer sí, contra el
   servidor de archivos de Electron.
-- El diálogo acotado de "Abrir como series" (§4.4.0) todavía abre la
-  submuestra de siempre.
+- "Abrir como series" se retiró del panel (§4.4.0); un archivo de grilla
+  ya no se abre como series.
 
