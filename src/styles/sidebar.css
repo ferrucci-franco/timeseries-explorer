@@ -316,12 +316,20 @@
 
 .tree-label {
     flex: 1;
+    /* The name is what a leaf is for: a long unit ("[kWh/kWp]") beside it
+       used to squeeze it to nothing. Below this width the info gives way. */
+    min-width: min(5.5em, 45%);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .tree-info {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 0.75rem;
     color: var(--text-secondary);
 }

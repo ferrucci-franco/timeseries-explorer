@@ -171,6 +171,43 @@ export function makeExcelFixtures() {
         XLSX.utils.book_append_sheet(workbook, sheetFromAoa(rows), 'Registro');
         writeBook(workbook, 'microgrid-demo.xlsx', 'xlsx');
     }
+
+    // A PV-monitoring daily report as such portals export it: dates written as
+    // text "dd.MM.yyyy HH:mm", units in a row of their own, every column named
+    // "Quantity | Device (1)" with the device AFTER the separator, one column
+    // with no device at all, and an empty trailing column.
+    {
+        const devices = ['Primo 5.0-1 (1)', 'Primo 6.0-1 (1)'];
+        const quantities = [['Courant AC L1', '[A]'], ['Énergie', '[Wh]'], ['Tension DC MPP1', '[V]']];
+        const header = ['Date et heure', 'Température ambiante | Sensor Card / Box (1)', 'Isolation | Sensor Card / Box (1)', 'Production photovoltaïque'];
+        const units = ['[dd.MM.yyyy HH:mm]', '[°C]', '[W/m²]', '[Wh]'];
+        for (const [quantity, unit] of quantities) {
+            for (const device of devices) {
+                header.push(`${quantity} | ${device}`);
+                units.push(unit);
+            }
+        }
+        header.push(null);
+        units.push(null);
+        const rows = [header, units];
+        const pad = value => String(value).padStart(2, '0');
+        for (let i = 0; i < 288; i++) {
+            const h = Math.floor(i / 12);
+            const m = (i % 12) * 5;
+            const sun = Math.max(0, Math.sin(((h + m / 60 - 7) / 12) * Math.PI));
+            const row = [`08.10.2026 ${pad(h)}:${pad(m)}`, 23 + sun * 4, Math.round(sun * 700), Math.round(sun * 900)];
+            for (let q = 0; q < quantities.length; q++) {
+                for (let d = 0; d < devices.length; d++) {
+                    row.push(Math.round(sun * (q + 1) * (d + 5) * 10) / 10);
+                }
+            }
+            row.push(null);
+            rows.push(row);
+        }
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, sheetFromAoa(rows), 'UserCustom');
+        writeBook(workbook, 'units-row-dotted-dates-device-suffix.xlsx', 'xlsx');
+    }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import CsvParser from '../parsers/csv-parser.js';
 import MatParser from '../parsers/mat-parser.js';
-import { customDatetimePatternInfo, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
+import { customDatetimePatternInfo, dateSeparatorForStrategy, parseCsvNumber, parseCsvTimeValue } from '../parsers/csv-time-detection.js';
 
 const require = createRequire(import.meta.url);
 const duckDbModulePath = (() => {
@@ -204,15 +204,15 @@ export function datetimeSqlFromProfile(timeSource, sourceNames, profile = null) 
     }
 
     const order = timeSource.format?.dateOrder || 'YMD';
-    if (strategy === 'slash-date' || strategy === 'dash-date') {
-        const formats = dateTimeFormats(order, strategy === 'dash-date' ? '-' : '/');
+    if (strategy === 'slash-date' || strategy === 'dash-date' || strategy === 'dot-date') {
+        const formats = dateTimeFormats(order, dateSeparatorForStrategy(strategy));
         return tryStrptimeSql(`CAST(${first} AS VARCHAR)`, formats);
     }
 
     if (timeSource.mode === 'split' && sourceNames.length >= 2) {
         const dateCol = quoteIdent(sourceNames[0]);
         const timeCol = quoteIdent(sourceNames[1]);
-        const sep = timeSource.format?.dashSeparator ? '-' : '/';
+        const sep = timeSource.format?.dotSeparator ? '.' : timeSource.format?.dashSeparator ? '-' : '/';
         const formats = timeSource.format?.monthName
             ? monthNameFormats()
             : dateTimeFormats(order, sep);

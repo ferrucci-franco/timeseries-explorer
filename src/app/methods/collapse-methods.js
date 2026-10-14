@@ -22,6 +22,7 @@ import {
     timestampRuns,
 } from '../../compute/kernels/collapse-repeats.js';
 import { RESAMPLE_ALL_VARIABLES } from './data-tools-methods.js';
+import { treeForDerivedData } from '../../parsers/csv-tree-grouping.js';
 
 export const COLLAPSE_FIELD_IDS = ['collapse-aggregate'];
 
@@ -180,7 +181,7 @@ proto._buildCollapsedData = function(sourceData, time, names, result) {
         collapse: { aggregate: result.aggregate, collapsed: result.collapsed, sourceRows: time.values.length },
     };
 
-    return { filename: '', metadata, variables, tree: this.parser._buildTree(variables) };
+    return { filename: '', metadata, variables, tree: treeForDerivedData(sourceData, metadata, variables, vars => this.parser._buildTree(vars)) };
 };
 
 proto.commitCollapseTool = async function(options = {}) {

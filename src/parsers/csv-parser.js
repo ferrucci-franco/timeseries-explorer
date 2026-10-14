@@ -14,9 +14,17 @@
 import MatParser from './mat-parser.js';
 import { detectCsvTimeAxis, parseCsvNumber, parseCsvTimeValue } from './csv-time-detection.js';
 import { inlineUnitSplitCollides } from '../utils/inline-unit-headers.js';
+import { buildCsvTree, resolveCsvGrouping } from './csv-tree-grouping.js';
 import { repeatedTimestampSummary } from '../utils/repeated-timestamps.js';
 
 const NUMERIC_COLUMN_MIN_RATIO = 0.5;
+
+// "[m/s]" -> "m/s": a units row that writes its units in brackets would
+// otherwise become "[[m/s]]" in the description.
+export function stripUnitBrackets(unit) {
+    const match = String(unit).match(/^\[([^\[\]]+)\]$|^\(([^()]+)\)$|^\{([^{}]+)\}$/);
+    return match ? (match[1] ?? match[2] ?? match[3]).trim() : unit;
+}
 
 function isMostlyNumericColumn(column) {
     if (!column || column.nonEmptyCount <= 0) return true;
@@ -79,7 +87,7 @@ export default class CsvParser {
         if (dataRows.length < 1) {
             throw new Error('CSV must contain at least one data row.');
         }
-        const headers = this._makeUniqueHeaders(rawHeaders);
+        const headers = this._detectedHeaders(rawHeaders, rows, table);
         const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
         if (!timeSource.ok) throw new Error(timeSource.reason);
         const variableHeaders = headers
@@ -216,10 +224,42 @@ export default class CsvParser {
             timeSourceColumns: timeSource.sourceIndexes.map(index => rawHeaders[index] || `column_${index + 1}`),
             datetimeRepeats,
             numericColumnIndexes,
+            unitRowIndex: table.unitRowIndex ?? null,
         };
 
-        result.tree = this.structureParser._buildTree(result.variables);
+        this._attachTree(result, null);
         return result;
+    }
+
+    /**
+     * The sidebar tree for a parsed table, and the folders it was cut into
+     * (metadata.csvGrouping), from the profile's `grouping` setting — auto
+     * when there is none, which is every file nobody has adjusted.
+     */
+    _attachTree(result, grouping) {
+        const timeName = result.metadata?.timeName;
+        const names = Object.keys(result.variables).filter(name => name !== timeName);
+        const resolved = resolveCsvGrouping(grouping, names);
+        result.tree = buildCsvTree(result.variables, resolved);
+        result.metadata.csvGrouping = resolved;
+        return result;
+    }
+
+    /**
+     * Headers for an automatically detected table. A units row of its own
+     * means the titles are names and nothing more — a "(1)" in
+     * "Box (1)" is part of the device, not a unit to cut out — so they are
+     * kept whole and the units come from that row, as the parsing dialog does
+     * for "Units: row".
+     */
+    _detectedHeaders(rawHeaders, rows, table) {
+        const unitRowIndex = table?.hasHeader ? table.unitRowIndex : null;
+        if (!Number.isInteger(unitRowIndex)) return this._makeUniqueHeaders(rawHeaders);
+        const unitRow = rows[unitRowIndex] || [];
+        return this._makeUniquePlainHeaders(rawHeaders).map((header, index) => {
+            const unit = String(unitRow[index] ?? '').trim();
+            return unit ? { ...header, description: `[${stripUnitBrackets(unit)}]` } : header;
+        });
     }
 
     inspectSample(buffer, options = {}) {
@@ -248,9 +288,10 @@ export default class CsvParser {
             throw new Error('CSV sample must contain at least one data row.');
         }
 
-        const headers = this._makeUniqueHeaders(rawHeaders);
+        const headers = this._detectedHeaders(rawHeaders, rows, table);
         const timeSource = detectCsvTimeAxis(rawHeaders, dataRows, { delimiter });
         if (!timeSource.ok) throw new Error(timeSource.reason);
+        const unitRowIndex = hasHeader && Number.isInteger(table.unitRowIndex) ? table.unitRowIndex : null;
 
         return {
             delimiter,
@@ -262,6 +303,9 @@ export default class CsvParser {
             skippedRowsAfterHeader: Math.max(0, table.dataStartIndex - table.headerIndex - (hasHeader ? 1 : 0)),
             rawHeaders,
             headers,
+            // Only said when found: a profile without unitsMode keeps the
+            // legacy header rules (see _normalizeProfileHeaders).
+            ...(unitRowIndex !== null ? { unitsMode: 'row', unitRowIndex } : {}),
             timeSource: this._serializeTimeSource(timeSource),
             sampleRows: dataRows.slice(0, Math.min(dataRows.length, 100)),
         };
@@ -516,7 +560,7 @@ export default class CsvParser {
             csvProfile: { ...profile, delimiter, decimalSeparator, hasHeader, headerIndex, dataStartIndex, rawHeaders, headers, rowFilter, numericColumnIndexes },
         };
 
-        result.tree = this.structureParser._buildTree(result.variables);
+        this._attachTree(result, profile.grouping || null);
         return result;
     }
 
@@ -866,7 +910,10 @@ export default class CsvParser {
             }
         }
 
-        if (best) return best;
+        if (best) {
+            best.unitRowIndex = this._findUnitRowIndex(rows, best, delimiter);
+            return best;
+        }
         const fallbackHeaderIndex = rows.findIndex(row =>
             (row || []).length >= 2 && row.some(cell => String(cell ?? '').trim() !== '')
         );
@@ -888,6 +935,20 @@ export default class CsvParser {
         };
     }
 
+    // A units row sits between the header and the data: right under the
+    // header, or right above the first data row.
+    _findUnitRowIndex(rows, table, delimiter = ',') {
+        if (!table?.hasHeader) return null;
+        const width = rows[table.headerIndex]?.length || 0;
+        const candidates = [table.headerIndex + 1, table.dataStartIndex - 1];
+        for (const index of candidates) {
+            if (index <= table.headerIndex || index >= table.dataStartIndex) continue;
+            const row = rows[index];
+            if (row?.length === width && this._isUnitLikeRow(row, delimiter)) return index;
+        }
+        return null;
+    }
+
     _isDataLikeRow(row, delimiter = ',') {
         const cells = row || [];
         const nonEmpty = cells.filter(cell => String(cell ?? '').trim() !== '');
@@ -902,7 +963,8 @@ export default class CsvParser {
         const text = String(value ?? '').trim();
         return /^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+\-]\d{2}:?\d{2})?)?$/.test(text)
             || /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(text)
-            || /^\d{1,2}[-/]\d{1,2}[ T]+\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text);
+            || /^\d{1,2}[-/]\d{1,2}[ T]+\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)
+            || /^(?:\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})|\d{4}\.\d{1,2}\.\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.test(text);
     }
 
     _isUnitLikeRow(row, delimiter = ',') {
@@ -913,6 +975,10 @@ export default class CsvParser {
         const unitish = cells.filter(cell =>
             /^(?:no\.?|time|ms|s|sec|min|h|hr|degc|degf|k|v|a|w|kw|pa|bar|m\/s|%|ao\d+|a\d+)$/i.test(cell)
             || /^[a-zA-Z%°µ\/\-\d]+$/.test(cell)
+            || /^[a-zA-Z%°µΩ\/\-\d²³·^*.]+$/u.test(cell)
+            // "[m/s]", "(°C)", "[kWh/kWp]", "[1]" — and the time column's
+            // "[dd.MM.yyyy HH:mm]" — as logger exports write a units row.
+            || /^\[[^\[\]]{1,32}\]$|^\([^()]{1,32}\)$|^\{[^{}]{1,32}\}$/.test(cell)
         ).length;
         return unitish / cells.length >= 0.7;
     }
