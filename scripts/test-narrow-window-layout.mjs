@@ -66,4 +66,12 @@ assert.doesNotMatch(narrow[1], /\.sidebar\s*\{[^}]*position:\s*absolute/, 'the s
 assert.match(rule(content, '.drop-zone-content'), /max-width:\s*min\(1040px, 100%\)/, 'the drop zone content fits beside the sidebar');
 assert.match(rule(content, '.light-version-notice'), /max-width:\s*min\(920px, 100%\)/, 'the notice fits beside the sidebar');
 
+// A window too short for the welcome content scrolls it: centring it with
+// align-items cut the folder off at the top and the notice at the bottom,
+// with no way to reach either. Auto margins centre it while it fits and let
+// it start at the top once it does not.
+assert.match(rule(content, '.drop-zone'), /overflow-y:\s*auto/, 'the drop zone scrolls when its content is taller');
+assert.match(rule(content, '.drop-zone-content'), /margin:\s*auto/, 'its content is centred by its margins');
+assert.doesNotMatch(rule(content, '.light-version-notice'), /max-height/, 'one scroll, not a second one inside the notice');
+
 console.log('Narrow window layout regression tests passed.');
