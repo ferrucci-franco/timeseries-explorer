@@ -767,6 +767,27 @@ try {
             await rolesPage.waitForFunction(() => window.app._compact.sheet === 'data');
         };
 
+        // 2D + t: x, y make one curve, drawn in a 3D scene along time.
+        await choosePlotType('phase2dt');
+        assert.equal((await rolesState()).mode, 'phase2dt');
+        assert.match(await rolesPage.locator('.compact-data-target-text').innerText(), /pair up/, 'Data says taps pair up');
+        assert.match(await rolesPage.locator('.compact-phase-text').innerText(), /along time/, 'the banner says what a pair draws');
+        await tapSignal('x');
+        assert.equal(await rolesPage.locator('#variables-tree .tree-item[data-var-name="x"]').getAttribute('data-compact-role'), 'x …');
+        assert.match(await rolesPage.locator('.compact-phase-text').innerText(), /Y signal/, 'and that the Y is next');
+        await tapSignal('y');
+        await rolesPage.waitForFunction(() => !!window.app.plotManager.plots.get(window.app._compactActivePanelId())?.div?._fullLayout?.scene);
+        assert.deepEqual((await rolesState()).curves, ['x/y'], 'x, y: one 2D + t curve');
+        assert.equal(await rolesPage.locator('#variables-tree .tree-item[data-var-name="y"]').getAttribute('data-compact-role'), 'y');
+        assert.ok(await rolesPage.evaluate(() => !!window.app.plotManager.plots.get(window.app._compactActivePanelId()).div._touchScenePan?.()),
+            'a slow double tap then a drag pans its scene, as in 3D');
+        await rolesPage.locator('.compact-nav-btn[data-sheet="plot"]').click();
+        assert.equal(await rolesPage.locator('.compact-plot-types [data-plot-type="phase2dt"]').getAttribute('aria-checked'), 'true');
+        assert.match(await rolesPage.locator('.compact-page-plot .compact-trace-name').first().innerText(), /x \/ y/, 'the Plot sheet lists the pair');
+        await shot(rolesPage, 'phase-2dt');
+        await rolesPage.locator('.compact-nav-btn[data-sheet="data"]').click();
+        await rolesPage.waitForFunction(() => window.app._compact.sheet === 'data');
+
         // 3D: x, y, z make one curve.
         await choosePlotType('phase3d');
         await tapSignal('x');
