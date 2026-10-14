@@ -5,6 +5,7 @@ import Modal from '../ui/modal.js';
 import LayoutManager from '../ui/layout-manager.js';
 import PlotManager from '../plots/plot-manager.js';
 import { installFileMethods } from './methods/file-methods.js';
+import { installGriddedMethods } from './methods/gridded-methods.js';
 import { installUiMethods } from './methods/ui-methods.js';
 import { installDerivedMethods } from './methods/derived-methods.js';
 import { installFormulaEditorMethods } from './methods/formula-editor-methods.js';
@@ -148,6 +149,7 @@ class OpenModelicaViewer {
         if (this._currentTree) this._renderFilteredTree();
         this.layoutManager.render();
         this._compactRefreshTexts?.();
+        this._griddedRefreshTexts?.();
     }
 
     toggleTheme() {
@@ -161,6 +163,7 @@ class OpenModelicaViewer {
         document.body.classList.add(`theme-${this.theme}`);
         document.querySelector('#theme-toggle .icon').textContent = this.theme === 'light' ? '🌙' : '☀️';
         this.plotManager.setTheme(this.theme);
+        this._griddedApplyTheme?.();
         globalThis.omvDesktop?.setTheme?.(this.theme);
     }
 
@@ -356,6 +359,7 @@ class OpenModelicaViewer {
 }
 
 installFileMethods(OpenModelicaViewer);
+installGriddedMethods(OpenModelicaViewer);
 installUiMethods(OpenModelicaViewer);
 installDerivedMethods(OpenModelicaViewer);
 installFormulaEditorMethods(OpenModelicaViewer);

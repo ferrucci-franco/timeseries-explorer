@@ -23,3 +23,12 @@ copyright and license notices must be preserved as required by each package.
 
 This overview is provided for convenience. The license text distributed with
 each dependency is authoritative for that component.
+
+## Natural Earth coastlines and borders (`public/geo/natural-earth-*.json`)
+
+Coastline and country-border lines at 1:110m and 1:50m, derived from
+[Natural Earth](https://www.naturalearthdata.com/) vector data (public domain)
+through the TopoJSON redistribution [world-atlas](https://github.com/topojson/world-atlas)
+2.0.2 (ISC license, Copyright 2013-2019 Michael Bostock). Converted to plain
+polylines for the gridded netCDF map view.
+

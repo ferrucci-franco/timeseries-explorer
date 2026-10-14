@@ -1,0 +1,288 @@
+/* ============================================
+   Gridded dataset view (netCDF maps)
+   Covers the plot area, like the drop zone, and leaves the sidebar in place:
+   the extractions it makes appear there as the file's variables.
+   ============================================ */
+.gridded-view {
+    position: absolute;
+    inset: 0;
+    z-index: 9;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 0;
+}
+
+.gridded-view[hidden] {
+    display: none;
+}
+
+.gridded-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.6rem;
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 0.8rem;
+}
+
+.gridded-title {
+    font-weight: 600;
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gridded-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.gridded-field > span {
+    color: var(--text-secondary);
+}
+
+.gridded-view select,
+.gridded-view input[type="number"] {
+    font: inherit;
+    font-size: 0.8rem;
+    padding: 0.15rem 0.3rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.3rem;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    max-width: 22rem;
+}
+
+.gridded-view input[type="number"] {
+    width: 6.5rem;
+}
+
+.gridded-dims {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.gridded-manual-range[hidden] {
+    display: none;
+}
+
+.gridded-tools,
+.gridded-actions {
+    display: inline-flex;
+    gap: 0.25rem;
+}
+
+.gridded-actions {
+    margin-left: auto;
+}
+
+.gridded-view button {
+    font: inherit;
+    font-size: 0.78rem;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.3rem;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.gridded-view button:hover {
+    background: var(--hover-bg);
+}
+
+.gridded-view button:focus-visible,
+.gridded-view select:focus-visible,
+.gridded-view input:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
+.gridded-tool.active {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+}
+
+.gridded-close {
+    font-weight: 600;
+}
+
+.gridded-body {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.gridded-map {
+    position: absolute;
+    inset: 0;
+}
+
+.gridded-status {
+    padding: 0.15rem 0.6rem;
+    border-top: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    min-height: 1.4rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gridded-status.error {
+    color: var(--danger-color);
+}
+
+.gridded-timebar {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.6rem;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 0.8rem;
+}
+
+.gridded-timebar input[type="range"] {
+    flex: 1;
+    min-width: 6rem;
+}
+
+.gridded-timebar-static .gridded-step,
+.gridded-timebar-static input[type="range"],
+.gridded-timebar-static .gridded-speed {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.gridded-time-label {
+    min-width: 13rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.gridded-step {
+    min-width: 2rem;
+}
+
+.gridded-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.35rem 0.6rem;
+    border-top: 1px solid var(--border-color);
+    font-size: 0.8rem;
+}
+
+.gridded-progress[hidden] {
+    display: none;
+}
+
+.gridded-progress progress {
+    flex: 1;
+}
+
+.gridded-preview {
+    height: 30%;
+    min-height: 9rem;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border-color);
+}
+
+.gridded-preview[hidden] {
+    display: none;
+}
+
+.gridded-preview-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.78rem;
+}
+
+.gridded-preview-head > span:first-child {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gridded-preview-actions {
+    display: inline-flex;
+    gap: 0.3rem;
+}
+
+.gridded-preview-chart {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.gridded-zip-together {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 0.6rem;
+}
+
+/* The globe button on a gridded file's row: brings its map back. */
+.file-entry-map {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 1.55rem;
+    height: 1.45rem;
+    padding: 0.15rem;
+    border: 1px solid transparent;
+    border-radius: 0.35rem;
+    background: color-mix(in srgb, #0f9d8a 14%, var(--bg-primary));
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.file-entry-map[hidden] {
+    display: none;
+}
+
+.file-entry-map svg {
+    display: block;
+    width: 1.05rem;
+    height: 1.05rem;
+    stroke: currentColor;
+}
+
+.file-entry-map:hover,
+.file-entry-map.active {
+    border-color: color-mix(in srgb, #0f9d8a 62%, var(--border-color));
+    background: color-mix(in srgb, #0f9d8a 26%, var(--bg-primary));
+}
+
+.file-entry.active .file-entry-map {
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.42);
+    background: rgba(255, 255, 255, 0.14);
+}
+
+html.compact .gridded-toolbar {
+    font-size: 0.75rem;
+}
+
+html.compact .gridded-time-label {
+    min-width: 0;
+}
+
+html.compact .gridded-actions {
+    margin-left: 0;
+}

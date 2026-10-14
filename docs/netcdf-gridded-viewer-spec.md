@@ -1,6 +1,7 @@
 # Visor de datos grillados netCDF (ERA5 y afines): estado actual y especificación
 
-Estado: **especificación, nada implementado** (2026-10-14).
+Estado (2026-10-14): **Fase 0 y Fase 1 implementadas**, ver §11. Las fases 2–4
+siguen siendo especificación.
 Alcance: el lector netCDF *genérico* (`src/parsers/netcdf-parser.js`). Los
 archivos **PyPSA quedan fuera** de este documento: su lector
 (`pypsa-netcdf-parser.js`) funciona bien y no se toca. Cualquier cambio que salga
@@ -1045,3 +1046,89 @@ resumen de buscador):
 - `docs/netcdf-gridded-subsampling.md`: submuestreo actual y sus mediciones.
 - `docs/large-files.md`, `docs/file-size-limits.md`: límites actuales.
 - `docs/phone-web-specification.md`: patrones de UI móvil.
+
+---
+
+## 11. Implementado (fases 0 y 1)
+
+**Fase 0, lector de series** (`src/parsers/netcdf-parser.js`):
+
+- Detección por contenido (`src/parsers/netcdf-sniff.js`): ZIP, GRIB, gzip,
+  HTML/JSON, PDF e imágenes dan un mensaje traducido y accionable.
+- Las series se recortan de lecturas completas o por bloques a lo largo del eje
+  de muestras, nunca punto a punto. Medido con los archivos sintéticos de §1.2:
+
+  | Archivo | Antes | Ahora |
+  |---|---:|---:|
+  | Europa, nuevo CDS (3,6 MB) | 75 s | 0,42 s |
+  | Niveles de presión (7,4 MB) | 80 s | 0,44 s |
+  | Global, 24 h (110 MB) | > 25 min | 3,6 s |
+
+- Chequeo numérico por `dtype`, sin leer los datos.
+- Un eje de tiempo de un solo paso sigue siendo el eje de tiempo.
+- Etiquetas de tiempo decodificadas en los selectores.
+- Escalares y variables de texto (`number`, `expver`) como metadatos, no como
+  "no soportadas".
+- **netCDF3 con un lector propio por partes** (`src/gridded/nc3-reader.js`), que
+  también lee CDF-5. `netcdfjs` conservaba el relleno entre registros como si
+  fueran datos y desplazaba un valor por registro en las variables de registro
+  cuyo tamaño no es múltiplo de 4 bytes. Es exactamente el caso de los ERA5 del
+  CDS legacy (int16 en grillas de tamaño impar): **la app mostraba valores
+  corridos**.
+
+**Fase 1, modo dataset grillado** (`src/gridded/`,
+`src/app/methods/gridded-methods.js`, `src/workers/gridded-worker.js`):
+
+- **Lectura en un Worker**, que mantiene abiertos los archivos por partes:
+  - h5wasm sobre WORKERFS para netCDF4;
+  - el lector propio para netCDF3.
+  - Sin Worker (build portable en `file://`), las mismas operaciones corren en
+    la página, sobre el archivo en memoria.
+- **Modelo del dataset:**
+  - roles de ejes (T/Z/Y/X) por `axis`, `standard_name`, unidades y nombre;
+  - latitud descendente presentada ascendente;
+  - longitud 0..360 rotada a −180..180 cuando la grilla lo permite;
+  - calendarios CF (`noleap`, `all_leap`, `360_day`, `julian`).
+- **Vista de mapa** sobre el área de gráficos:
+  - Plotly `heatmap` con costas y fronteras Natural Earth 1:110m y 1:50m,
+    empaquetadas offline en `public/geo/`;
+  - variable, nivel y otras dimensiones;
+  - paletas, y escala automática, fija o manual;
+  - slider con reproducción y teclado (← → espacio);
+  - decimación de dibujo por encima de 400.000 celdas (el zoom lee la
+    resolución completa).
+- **Herramientas** (dentro de una caja cuentan las celdas cuyo centro cae
+  adentro):
+  - **Punto:** serie de la celda más cercana.
+  - **Caja:** media ponderada por área (cos φ, o área de celda si hay
+    `lat_bnds`), mínimo y máximo, cada uno con su ubicación, en cada instante;
+    las celdas faltantes se excluyen y se cuentan.
+- **Integración:** las extracciones son variables del archivo en el explorador
+  (nodo "Extracciones"), con vista previa bajo el mapa y "Graficar en el
+  explorador". El botón del globo en la lista de archivos reabre el mapa.
+- **Apertura** (§4.4.0): diálogo de ZIP con la opción de abrir como un solo
+  dataset, y oferta de unir en el tiempo varios archivos compatibles. "Abrir
+  como series" vuelve al comportamiento anterior.
+- **Exportar:** PNG del mapa, CSV del mapa (latitud × longitud, resolución
+  completa) y CSV de las extracciones.
+- **Electron:** el netCDF abierto por ruta se pide al servidor local como Blob
+  (sin la pregunta de tamaño ni la copia por IPC) y se lee por partes.
+
+**Tests:**
+
+- `npm run test:gridded`: motor, lector netCDF3, ZIP, calendarios, regiones y
+  cliente, sobre los fixtures que genera
+  `scripts/generate-gridded-netcdf-fixtures.py`.
+- `npm run e2e:gridded-netcdf`: en Chromium. Mapa, punto, caja, slider,
+  graficar, ZIP del CDS, archivos de series sin cambios, mensaje de GRIB y el
+  camino de escritorio contra `electron/local-file-http.cjs`.
+
+**Pendiente de esta parte:**
+
+- Las extracciones no se guardan en una sesión. El archivo sí, y al restaurarlo
+  vuelve a abrir en el mapa.
+- No probado dentro de Electron mismo: el camino del renderer sí, contra el
+  servidor de archivos de Electron.
+- El diálogo acotado de "Abrir como series" (§4.4.0) todavía abre la
+  submuestra de siempre.
+

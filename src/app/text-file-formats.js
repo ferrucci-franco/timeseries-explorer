@@ -63,7 +63,7 @@ export const BINARY_EXTENSIONS = Object.freeze([
     '.mat',
     '.parquet',
     '.pkl', '.pickle',
-    '.nc', '.netcdf', '.cdf', '.h5', '.hdf5',
+    '.nc', '.nc4', '.netcdf', '.cdf', '.h5', '.hdf5',
     '.xlsx', '.xlsm', '.xlsb', '.xls', '.ods',
     ...AUDIO_EXTENSIONS,
     '.zip', '.gz', '.bz2', '.xz', '.7z', '.rar', '.tar',
